@@ -2995,9 +2995,11 @@ function ifaceOfType(t) {
   const n = typeof t.idlType === "string" ? t.idlType : null;
   return n && IFACE_MEMBERS.has(n) ? n : null;
 }
-/* §2.4's callback FUNCTIONS, which are a declaration kind of their own and are not in the interface map. A
-   callback INTERFACE is (EventListener lives in byName with its one `handleEvent` operation), so the two
-   spellings of "a function the platform will call" are looked up in the two places the parse put them. */
+/* Web IDL §2.10 "Callback functions", which are a declaration kind of their own and are not in the interface
+   map. A callback INTERFACE — §2.4 "Callback interfaces" — is (EventListener lives in byName with its one
+   `handleEvent` operation), so the two spellings of "a function the platform will call" are looked up in the
+   two places the parse put them. §2.4 stood at BOTH halves here, which is the one number the sentence is
+   about telling apart. */
 const CALLBACKS = new Map();
 for (const n of idl.declarations) if (n.type === "callback" && n.name) CALLBACKS.set(n.name, n);
 

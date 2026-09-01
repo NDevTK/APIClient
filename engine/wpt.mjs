@@ -234,10 +234,13 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       expected to be bad, and a bad first number is the honest measurement this gate exists to
                       take rather than a reason to leave the directories out. */
                    "permissions", "storage", "fs", "html/user-activation",
-                   /* HTML §8.1.7.3's rendering loop and §8.9's animation frames — core/rendering. The
+                   /* HTML §8.1.7.3 "Processing model"'s rendering loop and §8.12 "Animation frames" —
+                      core/rendering. §8.9 stood at both numbers here and is "User prompts", which owns
+                      alert/confirm/print and nothing on this row. The
                       component did not exist, so neither did this row; `requestAnimationFrame` was one of the
                       ~1300 names browser/platform_names.h had the engine reporting as honestly ABSENT. Now
-                      that the rendering task source, "update the rendering" and §8.9's map are built, a
+                      that the rendering task source, "update the rendering" and §8.12's map of animation
+                      frame callbacks are built, a
                       directory that is not collected is an EXCLUDED TEST — which this file calls a failure
                       one paragraph up. */
                    "html/webappapis/animation-frames",
