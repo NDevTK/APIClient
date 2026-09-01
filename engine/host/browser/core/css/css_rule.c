@@ -334,6 +334,59 @@ static CssRuleData *rule_of(JSValueConst v)
         cow_record_set((ctx_), (r_), &RULE_REC, (slot_), rule_set_v_);                                          \
     } while (0)
 
+/* THE SAME INVARIANT FOR THE OTHER VESSEL — an ELEMENT of one of the record's collections, which is where the
+   check above cannot reach. `rule_set` tests the ARRAY and says nothing about what is inside it, and by the
+   time an array arrives there the mint has already failed in silence: `JS_SetPropertyUint32` takes ownership
+   of whatever it is handed and STORES it, so a failed `JS_NewString` becomes an ELEMENT, the builder then
+   freezes the array with the failure value in place, and `rule_set` is handed a perfectly good Array. From
+   there the record OUTLIVES THE FRAME exactly as it does above — the COW delta captures it, rule_gc_mark walks
+   it, rule_finalizer frees it — and every later read of the collection meets an exception tag where the string
+   the list is declared to hold belongs, in another function, with nothing pending to say why. `container_part`
+   and its DCHECK are that reader, and they would report a record whose creator filled it wrong.
+   THE STORE'S OWN STATUS IS THE SECOND HALF AND IS THE SAME FAILURE ARRIVING ONE STEP LATER. The publish
+   answers -1 when the array cannot be grown, and DISCARDING that answer leaves the collection SHORTER than the
+   parse that filled it — a `nameList` missing a `<layer-name>`, or a condition list whose pairs no longer
+   pair, which `container_count`'s own even-length assert is the delayed report of. A missing element is a
+   WRONG value rather than an absent one, because nothing downstream can tell it from a prelude that declared
+   fewer.
+   BOTH ARE CHECKs AND THE DISCRIMINATOR IS `rule_set`'s: who owns the exception channel. Every caller of this
+   macro stands in an array builder whose own `JS_NewArray` and freeze are already CHECKed for the same reason
+   — its result is published by a creator, and the one driver over the creators folds `JS_IsException(rule) ||
+   JS_IsUndefined(rule)` into CSS Syntax §8 "CSS stylesheets"'s DROP, so a propagated OOM would be laundered
+   into "this rule was invalid CSS". That is check.h's "memory-allocation success", now asked of the elements
+   and not only of the array they go into.
+   A CALLER THAT HAS A CHANNEL DOES NOT REACH THIS, exactly as above: it tests the mint BEFORE publishing and
+   RETURNS the exception. `js_rule_get`'s `conditions` arm is that caller — it mints its list per get straight
+   to the page, so it propagates rather than aborting.
+   IT IS A MACRO FOR `rule_set`'s REASON: expanded at the site it stamps the mint that failed and `#v_` puts
+   that mint's own source text in the reason, where a check inside a function would name one line for every
+   caller and hand its reader a remedy with no object. Every operand is used exactly once and both the index
+   and the value are bound before they are read, so the mint is evaluated once and the subscript once. */
+#define rule_array_set(ctx_, a_, idx_, v_)                                                                     \
+    do {                                                                                                       \
+        uint32_t rule_array_set_i_ = (idx_);                                                                   \
+        JSValue rule_array_set_v_ = (v_);                                                                      \
+        int rule_array_set_st_;                                                                                \
+                                                                                                               \
+        CHECKF(!JS_IsException(rule_array_set_v_),                                                             \
+               "element %u of a CSS rule's collection was published with the FAILURE VALUE of `%s`, so the "   \
+               "mint that was supposed to fill it failed. NOTHING DOWNSTREAM TESTS AN ELEMENT: the array is "  \
+               "frozen with this value inside it and handed to `rule_set`, whose own check is about the "      \
+               "ARRAY, so the failure rides the record through every park, resume and serialization and "      \
+               "surfaces at a READER as a collection holding something that is not a string. If this call "    \
+               "site DOES have a channel (a getter minting a list for the page), the fix is at the site and "  \
+               "not here: test the mint and RETURN the exception before publishing. If it does not, this is "  \
+               "the allocation wall itself",                                                                   \
+               (unsigned)rule_array_set_i_, #v_);                                                              \
+        rule_array_set_st_ = JS_SetPropertyUint32((ctx_), (a_), rule_array_set_i_, rule_array_set_v_);         \
+        CHECKF(rule_array_set_st_ >= 0,                                                                        \
+               "element %u of a CSS rule's collection could not be STORED, so `%s` was minted and then "       \
+               "dropped. The array is one element SHORT of the parse that filled it and nothing downstream "   \
+               "can tell that from a prelude that declared fewer, which is a wrong collection rather than an " \
+               "incomplete one",                                                                               \
+               (unsigned)rule_array_set_i_, #v_);                                                              \
+    } while (0)
+
 static CssRuleData *rule_here(JSContext *ctx, JSValueConst v)
 {
     CssRuleData *r = rule_of(v);
@@ -698,8 +751,8 @@ static JSValue container_conditions_array(JSContext *ctx, const CssContainerCond
                "an `@container` rule's parsed conditions hold a NULL where §9.1's `name` or `query` belongs — "
                "the one parser writes the EMPTY STRING for a term the condition omits, which is §9.1's own "
                "answer and a different fact from an absent one");
-        JS_SetPropertyUint32(ctx, a, 2 * i, JS_NewString(ctx, c->v[i].name));
-        JS_SetPropertyUint32(ctx, a, 2 * i + 1, JS_NewString(ctx, c->v[i].query));
+        rule_array_set(ctx, a, 2 * i, JS_NewString(ctx, c->v[i].name));
+        rule_array_set(ctx, a, 2 * i + 1, JS_NewString(ctx, c->v[i].query));
     }
     CHECK(idl_freeze_array(ctx, a) == 0, "cssom: an `@container` rule's condition list could not be frozen");
     return a;
@@ -1014,7 +1067,7 @@ static JSValue layer_names_array(JSContext *ctx, const CssLayerNames *names)
         DCHECK(names->v[i] != NULL,
                "an `@layer` rule's parsed name list holds nothing where a `<layer-name>` belongs — the one "
                "parser appends a serialized name per entry and asserts that it is non-empty");
-        JS_SetPropertyUint32(ctx, a, i, JS_NewString(ctx, names->v[i]));
+        rule_array_set(ctx, a, i, JS_NewString(ctx, names->v[i]));
     }
     CHECK(idl_freeze_array(ctx, a) == 0, "cssom: an `@layer` rule's layer name list could not be frozen");
     return a;
@@ -1090,7 +1143,7 @@ static JSValue property_names_array(JSContext *ctx, const CssPropertyNames *name
         DCHECK(names->v[i] != NULL && names->v[i][0] == '-' && names->v[i][1] == '-',
                "an `@property` rule's parsed prelude holds something that is not a `<custom-property-name>` — "
                "CSS Variables §2 makes one a `<dashed-ident>`, and the one parser refuses anything else");
-        JS_SetPropertyUint32(ctx, a, i, JS_NewString(ctx, names->v[i]));
+        rule_array_set(ctx, a, i, JS_NewString(ctx, names->v[i]));
     }
     return a;
 }
@@ -2450,6 +2503,32 @@ static char *container_part(JSContext *ctx, CssRuleData *r, uint32_t i, unsigned
     return out;
 }
 
+/* ONE `CSSContainerCondition` — CSS Conditional 5 §9.1 "The CSSContainerRule interface"'s dictionary, whose
+   two members are both `required`, so each is present on every entry and neither is ever the absence the empty
+   string would otherwise be mistaken for.
+   IT PROPAGATES WHERE `rule_array_set` ABORTS, which is the same discriminator read from the other side: these
+   values are NOT the record's — §9.1's `conditions` is not `[SameObject]` and mints a new list of new
+   dictionaries per get — so the caller has a channel and a failed allocation reaches the page as a throw
+   instead of aborting a process that had somewhere to report it.
+   `JS_SetPropertyStr` CONSUMES its value on every path, its own failures included, so a store that answers -1
+   has already released what it was handed and the dictionary is the only thing left to free — which is why
+   both arms below join at one label rather than unwinding a value each. */
+static JSValue container_condition_dict(JSContext *ctx, const char *name, const char *query)
+{
+    JSValue dict = JS_NewObject(ctx);
+    JSValue text;
+
+    if (JS_IsException(dict)) return dict;
+    text = JS_NewString(ctx, name);
+    if (JS_IsException(text) || JS_SetPropertyStr(ctx, dict, "name", text) < 0) goto failed;
+    text = JS_NewString(ctx, query);
+    if (JS_IsException(text) || JS_SetPropertyStr(ctx, dict, "query", text) < 0) goto failed;
+    return dict;
+failed:
+    JS_FreeValue(ctx, dict);
+    return JS_EXCEPTION;
+}
+
 /* CSS Conditional 5 §9.1's `conditionText`, WHICH IS A CSSContainerRule-SPECIFIC REDEFINITION of §7.2's, given
    there as an algorithm rather than as a stored string: join the conditions with ", ", and within each, emit
    the name if it is not empty, then a single space if the query is also not empty, then the query.
@@ -3176,19 +3255,26 @@ static JSValue js_rule_get(JSContext *ctx, JSValueConst this_val, int magic)
         for (i = 0; i < n; i++) {
             char *name = container_part(ctx, r, i, 0);
             char *query = container_part(ctx, r, i, 1);
-            JSValue dict = JS_NewObject(ctx);
+            JSValue dict;
 
-            if (!name || !query || JS_IsException(dict)) {
-                free(name); free(query); JS_FreeValue(ctx, dict); JS_FreeValue(ctx, a);
+            if (!name || !query) {
+                free(name); free(query); JS_FreeValue(ctx, a);
                 return JS_EXCEPTION;
             }
-            /* Both members are `required` in §9.1's dictionary, so each is present on every entry and neither
-               is ever the absence the empty string would otherwise be mistaken for. */
-            JS_SetPropertyStr(ctx, dict, "name", JS_NewString(ctx, name));
-            JS_SetPropertyStr(ctx, dict, "query", JS_NewString(ctx, query));
+            /* EVERY FAILURE ON THIS PATH IS RETURNED, because this arm has the channel: the two string mints
+               are `container_condition_dict`'s, and the store into the list answers -1 when the array cannot
+               be grown. Publishing either failure instead would hand the page a frozen list holding an
+               exception tag, or a `conditions` one entry shorter than the rule's own prelude with nothing
+               able to tell that from a rule that declared fewer — the same two defects `rule_array_set`
+               aborts on where nothing can report them. `JS_SetPropertyUint32` consumes `dict` on every path,
+               its own failure included. */
+            dict = container_condition_dict(ctx, name, query);
             free(name);
             free(query);
-            JS_SetPropertyUint32(ctx, a, i, dict);
+            if (JS_IsException(dict) || JS_SetPropertyUint32(ctx, a, i, dict) < 0) {
+                JS_FreeValue(ctx, a);
+                return JS_EXCEPTION;
+            }
         }
         if (idl_freeze_array(ctx, a) != 0) { JS_FreeValue(ctx, a); return JS_EXCEPTION; }
         return a;
