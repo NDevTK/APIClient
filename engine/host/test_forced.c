@@ -2903,6 +2903,49 @@ static const char *HTML =
     "  _tdC.disposeAsync().then(function () { fetch('/api/tdprev?d=no'); },"
     "                          function () { fetch('/api/tdprev?d=rej'); });"
     " } catch (_tde) { fetch('/api/tdreach?d=no'); }"
+    /* A BYOB READ WHOSE MINIMUM IS UNKNOWN IS THREE WORLDS AND NOT A RANGE, and the statement exists because
+       nothing in this fixture had ever RUN the arms that say so. Streams §4.5.3 "Constructor, methods, and
+       properties" names `min` in exactly two of the read(view, options) method steps and nowhere else — step
+       4, "If options["min"] is 0, return a promise rejected with a TypeError exception.", and the pair step
+       5.1 / step 6.1, "If options["min"] > view.[[ArrayLength]], return a promise rejected with a RangeError
+       exception." for a typed array and the same over view.[[ByteLength]] for a DataView. Steps 5 and 6 each
+       hold exactly ONE list item, which is why those two sub-numbers are written and are not ambiguous. Over
+       an unknown both completions of each condition are feasible, so the two conditions generate THREE worlds
+       and this one statement must reach all three in ONE run: the TypeError, the RangeError, and the ordinary
+       pull-into that carries on to §4.9.5.
+       THE MINIMUM IS UNKNOWN AND ITS EXAMPLE IS IN RANGE, WHICH ARE TWO DIFFERENT REQUIREMENTS. The FORK
+       condition is that the value is unknown — an example decides only WHICH arm a real session takes, never
+       whether there are two — so a `min` that arrived as a plain number would take neither fork and this
+       statement would assert nothing. The EXAMPLE has a separate job: the arm that survives both conditions
+       needs a number for §4.9.5's minimum fill, and an example that names a world the flow was forced out of
+       is dropped, which is a DFAIL naming §4.9.5's own unbuilt fork. So the example must land in
+       [1, the view's element count] on every flow that can reach here, and `screen.width & 7` is the fixture's
+       existing spelling for exactly that (`var bwm = screen.width & 1023` above): §6.1.6.1.16 NumberBitwiseOp
+       runs on the concolic's real example and the RESULT stays unknown, so the mask bounds the example to
+       [0, 7] while excluding nothing from the domain the forks read.
+       WHY NOT `location.hash`, WHICH IS THIS FIXTURE'S USUAL UNKNOWN: it is an @S SOURCE, and a candidate
+       session substitutes concrete payload bytes at the source read — so `+location.hash.slice(1)` is NaN in
+       that flow, Web IDL §3.3.6 [EnforceRange]'s arm of §3.2.4.9 "Abstract operations"' ConvertToInt refuses a
+       non-finite value at the dictionary conversion, and the read rejects with a TypeError that is NOT §4.5.3
+       step 4's. The world token below would then be satisfied by the wrong mechanism, which is the
+       three-states-behind-one-answer this file's readers exist to refuse. `screen.width` reaches no sink here
+       and is nobody's candidate, so its example is the platform's on every flow.
+       THE VIEW IS EIGHT ELEMENTS AND EIGHT BYTES ARE QUEUED, so the surviving arm's minimum fill is satisfied
+       whatever the example turned out to be and the pulling world SETTLES rather than parking — a parked
+       promise and a lost arm would otherwise read the same. The refusals are REJECTED PROMISES and not throws
+       (Web IDL §3.7.7 "Operations" converts an exception thrown by a promise-returning operation into one), so
+       both handlers are attached in the expression that produced the promise and no world here is an uncaught
+       page error. */
+    " try {"
+    "  var bsSt = new ReadableStream({ type: 'bytes',"
+    "    start: function (bsC) { bsC.enqueue(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8])); } });"
+    "  var bsRd = bsSt.getReader({ mode: 'byob' });"
+    "  var bsMin = (screen.width & 7) + 1;"
+    "  fetch('/api/bsreach?d=ok');"
+    "  bsRd.read(new Uint8Array(8), { min: bsMin }).then("
+    "   function (bsR) { fetch('/api/bsmin?w=read&d=' + bsR.done); },"
+    "   function (bsE) { fetch('/api/bsmin?w=' + bsE.name); });"
+    " } catch (bsX) { fetch('/api/bsreach?d=no&n=' + bsX.name); }"
     "</script>"
     "</body></html>";
 
@@ -9054,6 +9097,43 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        be asserting the bug. */
     int td_prev = param_value_only(js, "/api/tdprev", "d", "rej");
 
+    /* THE BYOB READ'S THREE WORLDS, AND THE ROW THAT SAYS WHETHER THE STATEMENT RAN AT ALL. `bs-reach` is
+       emitted by the statement's own body BEFORE the read, so it separates "the arms answered wrongly" from
+       "the statement never began" — which here is a live possibility and not a formality, since a document
+       reaches the read only if this engine has ReadableStream, its byte controller and a BYOB reader.
+       IT IS ASKED WITH `param_value_only` AND NOT `_has`: `d` is `ok` on one path and `no` on the other, so a
+       containment test would read 1 for a statement that threw before it began. */
+    const char *bs_reach_why = NULL; int bs_reach = 1;
+    fold_row(&bs_reach, &bs_reach_why, param_value_only(js, "/api/bsreach", "d", "ok"),
+             "the BYOB read statement did not begin. /api/bsreach's `d` is not exactly `ok`, and its TWO "
+             "readings are told apart by the record itself: NO /api/bsreach record at all means no flow "
+             "reached this statement in this run, so every `bs-min` clause below is about how far the run got "
+             "and not about Streams §4.5.3; a record whose `d` carries `no` means the try block threw before "
+             "the read, and its `n` param NAMES the constructor that is missing — that is this fixture asking "
+             "for a capability, not §4.5.3 answering wrongly");
+    /* THE THREE WORLDS THEMSELVES, in ONE row, because they are ONE claim: over an unknown `min` Streams
+       §4.5.3's two conditions have both completions feasible, so a run that reaches only one or two of them
+       has LOST a sibling — which is what a collapse of the unknown to its example, or a fork gated on whether
+       an example exists, looks like from outside. The reach clause is folded FIRST so that a run in which the
+       statement never began carries THAT diagnosis rather than FORK_ROW's, which is about the schedule. */
+    const char *bsmin_why = NULL; int bsmin_tt = 1;
+    fold_row(&bsmin_tt, &bsmin_why, bs_reach, bs_reach_why);
+    FORK_ROW(js, &bsmin_tt, &bsmin_why, "/api/bsmin", "w",
+             "Streams §4.5.3's read(view, options) over a `min` that is unknown external input — step 4's "
+             "TypeError, steps 5.1/6.1's RangeError and the pull-into that survives both are three worlds of "
+             "ONE read, and a missing one is an arm this engine did not run",
+             "read", "TypeError", "RangeError");
+    /* AND THE SURVIVING ARM DELIVERED A CHUNK RATHER THAN A CLOSE. `done` is the read result's own field and
+       is DETERMINED — this stream is never closed and eight bytes are queued — so exactly one value is the
+       whole assertion. A 0 here while `w` carries `read` says the pulling world reached §4.9.5 and came back
+       with no fill (or forked downstream of a read this statement does not fork); a 0 here while `w` does NOT
+       carry `read` is that world lost, and the clause above is the one that names it. */
+    fold_row(&bsmin_tt, &bsmin_why, param_value_only(js, "/api/bsmin", "d", "false"),
+             "the pulling world settled without a chunk: /api/bsmin's `d` is not exactly `false`. Read it "
+             "against `w` in the same record — with `read` present this is §4.9.5's fill answering `done` true "
+             "or answering twice, and with `read` absent it is the clause above's lost world showing up a "
+             "second time");
+
     /* EVERY ROW NAMES THE STATEMENT IT IS ABOUT, and the two cold sessions are two answers and not one: they run
        the same document and one is about what a park WROTE while the other is about what a resume REBUILT. */
     Probe probes[] = {
@@ -9087,6 +9167,11 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "td-plain", td_plain, "Symbol.asyncDispose", SESS_EXPLORE },
         { "td-accessor", td_acc, "Object.defineProperty(_tdT", SESS_EXPLORE },
         { "td-preverr", td_prev, "tdboom", SESS_EXPLORE },
+        /* THE BYOB READ'S TWO. The key is the statement's own spelling — `bsMin` is what a reader greps for
+           to find the statement these rows are about — and `bs-reach` is first for `td-reach`'s reason: it is
+           the row that says whether `bs-min`'s 0 is the engine's or this fixture's. */
+        { "bs-reach", bs_reach, "bsMin", SESS_EXPLORE, bs_reach_why },
+        { "bs-min", bsmin_tt, "bsMin", SESS_EXPLORE, bsmin_why },
         { "async", async_tt, "/api/then", SESS_EXPLORE, async_why },
         { "await", await_tt, "/api/await", SESS_EXPLORE, await_why },
         { "asynccall", asynccall_tt, "/api/asynccall", SESS_EXPLORE, asynccall_why },
