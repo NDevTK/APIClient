@@ -208,6 +208,22 @@ static bool css_len_is_viewport_variant(const char *unit)
     return css_len_is_viewport(unit + 1);
 }
 
+/* CSS Conditional 5 §7 Container Relative Lengths: the cqw, cqh, cqi, cqb, cqmin, cqmax units — "Container
+   query length units specify a length relative to the dimensions of a query container." They are a LIST and
+   not the `sv*`/`lv*`/`dv*` prefix test one letter wider, because these six are NOT the viewport names with a
+   prefix: `cqi` and `cqb` are the inline and block sizes of a QUERY CONTAINER, and §7's own table defines
+   `cqmin` and `cqmax` as "The smaller value of cqi or cqb" and "The larger value of cqi or cqb" — never of
+   `cqw` or `cqh`, which is a different pairing from `vmin`/`vmax`'s. Reading them out of one table would be
+   the coincidence of four spellings standing in for a definition. */
+static const char *const CSS_CONTAINER_RELATIVE[] = {
+    "cqw", "cqh", "cqi", "cqb", "cqmin", "cqmax",
+};
+
+static bool css_len_is_container(const char *unit)
+{
+    return css_len_in(CSS_CONTAINER_RELATIVE, CSS_LEN_N(CSS_CONTAINER_RELATIVE), unit);
+}
+
 /* §6.2's SEVEN ABSOLUTE UNITS, ASKED FROM OUTSIDE THE COMPUTED-VALUE CHAIN — see css_length.h for who asks and
    why it is not `css_length_parse`. The unit is compared ASCII-case-insensitively because a CSS unit identifier
    is, and the table's own spellings are lowercase; the comparison is written over a length rather than over a
@@ -255,7 +271,7 @@ static CssPx css_len_viewport(JSContext *realm, const char *unit, double k)
     w = viewport_icb_width(realm);
     h = viewport_icb_height(realm);
     /* §6.1.2.1's ONE DIVERGENCE, asserted rather than assumed: "if the value of overflow or scrollbar-gutter on
-       the root element in either axis would cause scrollbars to appear … unconditionally, the computed values
+       the root element in either axis would cause scrollbars to appear … unconditionally … the computed values
        of the viewport-percentage lengths in that axis are reduced in accordance with the initial containing
        block. Otherwise … the viewport-percentage lengths are sized assuming that scrollbars do not exist (EVEN
        IF THIS DIVERGES FROM THE INITIAL CONTAINING BLOCK)." This user agent renders no scroll bar, so the ICB
@@ -386,6 +402,18 @@ static CssPx css_len_unit_px(JSContext *realm, const CssFontMetrics *font, const
               "sizes as their own PICKED facts in core/frame/viewport.c — a row each in its seam's table, by "
               "the same test viewport.h applies to `innerWidth` and the ICB, which reports the same number "
               "today and is still a separate fact for the same reason");
+    else if (css_len_is_container(unit))
+        DFAIL("a length in one of CSS Conditional 5 §7 Container Relative Lengths' six units (`cqw`, `cqi`, "
+              "`cqmax`, …). §7 states what one is worth in two parts, and this engine has neither: \"container "
+              "query length units are evaluated using the same rules as container size queries on the relevant "
+              "axis (or axes) described by the unit. The query container for each axis is the nearest ancestor "
+              "container that accepts container size queries on that axis. If no eligible query container is "
+              "available, then use the small viewport size for that axis.\" So BUILD, in order: the "
+              "`container-type` cascade and the nearest-ancestor-container walk that decides WHICH element "
+              "answers for each axis, which is CSS Conditional 5 §3's own machinery and is a component of its "
+              "own; and §6.1.2.1's SMALL viewport size as its own picked fact in core/frame/viewport.c, which "
+              "is the same one the `sv*` arm above already names — one fact, two callers, and answering "
+              "either from the default `v*` source key would delete the arm where they differ");
     else
         DFAIL("a length-valued property's value is a DIMENSION in a unit CSS Values §6 does not define as a "
               "length at all — an angle, a time, a frequency or a resolution. A property whose grammar admits "
@@ -406,10 +434,10 @@ static CssPx css_len_math_length(void *ctx, double n, const char *unit, size_t u
     size_t i;
 
     DCHECK(unit_len > 0 && unit_len < CSS_LEN_UNIT_MAX,
-           "a math function's `<length>` leaf carries a unit longer than any CSS Values §6 defines. "
-           "`css_math_eval` reaches this callback only for a unit `css_length_is_length_unit` has already "
-           "admitted, and that entry refuses everything from CSS_LEN_UNIT_MAX bytes up, so one arriving here "
-           "is those two tests having come apart");
+           "a math function's `<length>` leaf carries a unit longer than any specification defines as a "
+           "`<length>`. `css_math_eval` reaches this callback only for a unit `css_length_is_length_unit` "
+           "has already admitted, and that entry refuses everything from CSS_LEN_UNIT_MAX bytes up, so one "
+           "arriving here is those two tests having come apart");
     if (unit_len == 0 || unit_len >= CSS_LEN_UNIT_MAX) return css_px(0.0);
     for (i = 0; i < unit_len; i++) lower[i] = (char)tolower((unsigned char)unit[i]);
     lower[unit_len] = '\0';
@@ -514,9 +542,10 @@ CssLength css_length_parse(JSContext *realm, const CssFontMetrics *font, const c
     return out;
 }
 
-/* Is `unit` (already lowercased) one CSS Values §6 defines as a LENGTH unit — absolute, font-relative or
-   viewport-percentage in any of its four families? All of them, because §6's production admits all of them and
-   the ones this engine cannot absolutize are a missing component rather than a syntax error. */
+/* Is `unit` (already lowercased) a LENGTH unit — CSS Values §6's absolute, font-relative and
+   viewport-percentage families in all four of their spellings, and CSS Conditional 5 §7's six container-
+   relative ones? All of them, because §6's `<length>` production admits every unit a specification defines as
+   one, and the ones this engine cannot absolutize are a missing component rather than a syntax error. */
 static bool css_len_unit_known(const char *unit)
 {
     unsigned i;
@@ -530,7 +559,7 @@ static bool css_len_unit_known(const char *unit)
            font-relative family and there is no second list beside it to fall out of step with. */
         if (css_len_font_metric_of(unit, &metric)) return true;
     }
-    return css_len_is_viewport(unit) || css_len_is_viewport_variant(unit);
+    return css_len_is_viewport(unit) || css_len_is_viewport_variant(unit) || css_len_is_container(unit);
 }
 
 bool css_length_is_length_unit(const char *unit, size_t unit_len)
@@ -541,8 +570,8 @@ bool css_length_is_length_unit(const char *unit, size_t unit_len)
     DCHECK(unit != NULL || unit_len == 0,
            "§6's unit set was asked about through a NULL span with a non-zero length — a dimension token names "
            "its unit inside the buffer it was tokenized from, so an absent pointer is a caller that lost it");
-    /* Every unit §6 defines is at most five bytes (`dvmin`), so one that does not fit is not one of them and
-       the copy the comparison needs is never made for it. */
+    /* Every unit any specification defines as a `<length>` is at most five bytes (`dvmin`, `cqmax`), so one
+       that does not fit is not one of them and the copy the comparison needs is never made for it. */
     if (unit_len == 0 || unit_len >= CSS_LEN_UNIT_MAX) return false;
     for (i = 0; i < unit_len; i++) lower[i] = (char)tolower((unsigned char)unit[i]);
     lower[unit_len] = '\0';

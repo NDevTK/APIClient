@@ -44,9 +44,12 @@ static int g_id[M_N] = { -1, -1 };
  * THE LIST IS THE SPEC'S SET AND NOT THIS ENGINE'S, which is §4.3.5's own instruction and is why nothing here
  * consults the unit tables: the factories are defined as returning a CSSUnitValue whose unit slot is the
  * method's name, with no create-a-type step anywhere in the sentence — only §4.3.3's CONSTRUCTOR has one. So
- * `CSS.cqw(5)` mints a value whose unit is `cqw` exactly as the standard requires, and the six CSS
- * Conditional 5 §7 Container Relative Lengths units are the reason that distinction is load-bearing rather
- * than pedantic. See css_unit_value.h. */
+ * a factory mints for a unit name whatever this engine's unit tables happen to hold, and only §4.3.3's
+ * constructor asks. The six CSS Conditional 5 §7 Container Relative Lengths units used to WITNESS that
+ * difference — `CSS.cqw(5)` answered while `new CSSUnitValue(5, "cqw")` threw — and they no longer do, because
+ * core/css/css_length.h now carries them; the distinction stands because the standard states it, and the next
+ * unit a specification defines before this engine's tables carry it is the next thing to show it. See
+ * core/css/css_numeric_value.h for the create-a-type entry the constructor asks and the factories do not. */
 #define CSS_UNIT_FN_N 63
 
 static const char *const CSS_UNIT_FN[CSS_UNIT_FN_N] = {

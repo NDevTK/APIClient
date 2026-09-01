@@ -1,6 +1,7 @@
 /* CSS TYPED OM — the value objects, and the first three of its class hierarchy: CSS Typed OM Level 1 §2
- * CSSStyleValue objects, §4.3.1 Common Numeric Operations, and the CSSNumericValue Superclass, §4.3.3 Value +
- * Unit: CSSUnitValue objects, and §6.4 CSSUnitValue Serialization.
+ * CSSStyleValue objects, §4.3.3 Value + Unit: CSSUnitValue objects, and §6.4 CSSUnitValue Serialization. §4.3.1
+ * Common Numeric Operations, and the CSSNumericValue Superclass is core/css/css_numeric_value.h's; the
+ * prototype its members land on is built here because §3.7.3 makes the three one object graph.
  *
  * WHY THE TYPE COMES BEFORE THE SIXTY-THREE FACTORIES THAT MOTIVATE IT. §4.3.5 Numeric Factory Functions is by
  * far the largest single family the Web IDL gap audit reports absent from one interface, and it is not
@@ -22,12 +23,12 @@
  * platform owns, so solver/absent.c answers a CONCRETE `undefined` for them rather than unknown input and
  * every `if (window.CSSUnitValue)` in a bundle is decided against the engine today.
  *
- * WHAT IS HONESTLY ABSENT AND WHY THAT IS NOT A STUB. §2's `parse`/`parseAll` and every one of §4.3.1's eleven
- * members (add, sub, mul, div, min, max, equals, to, toSum, type, and the static parse) are NOT installed.
- * They are not noops and not opaque getters — they are not there, so a page that reaches one gets the
- * TypeError a browser missing them would give, which is the forcing function this project runs on. The audit
- * reports them as the gaps they are on two rows that did not exist before this component; that is existing
- * work becoming visible rather than new work appearing.
+ * WHAT IS HONESTLY ABSENT AND WHY THAT IS NOT A STUB. §2's `parse`/`parseAll`, §4.3.1's six arithmetic
+ * operations, its `equals` and `toSum` and its static `parse` are NOT installed. They are not noops and not
+ * opaque getters — they are not there, so a page that reaches one gets the TypeError a browser missing them
+ * would give, which is the forcing function this project runs on. §4.3.1's `type()` and `to()` ARE installed
+ * and live in core/css/css_numeric_value.c, which states why they are the two whose algorithms terminate
+ * inside this subclass and the others are not.
  *
  * THE `value` SLOT IS A JSValue AND NOT A `double`, WHICH IS THE ONE DESIGN DECISION IN THIS FILE.
  * §4.3.3 declares `attribute double value` — WRITABLE — so the slot is mutable shared state that must ride the
@@ -52,39 +53,6 @@
 
 #include "quickjs.h"
 
-/* CSS Typed OM 1 §4.3.2 Numeric Value Typing's "create a type from a string unit", asked only for whether it
- * FAILS — which is the whole of what §4.3.3's constructor needs ("If creating a type from unit returns
- * failure, throw a TypeError and abort this algorithm"). The map itself is CSSNumericValue's `type()` and
- * that member is not built, so answering the exponents here would be a value with no reader.
- *
- * SEVEN OF ITS NINE BRANCHES ARE css_math_unit_base's; the two that are not are "number" and "percent", and
- * they stand here because they are NOT dimension units — see core/css/css_math.h for why answering them there
- * would make `calc(5number)` a `<number>`.
- *
- * THE UNIT IS A SPAN AND IS COMPARED ASCII CASE-INSENSITIVELY, like every other unit question in this engine.
- * §4.3.2's own branches are stated over the unit PRODUCTIONS, and CSS matches unit identifiers
- * case-insensitively, which is why `new CSSUnitValue(1, "PX")` is a length. The two literal branches are the
- * exception the spec writes literally — "unit is "number"" — and are compared as the spec spells them.
- *
- * NAMED RESIDUAL — CSS CONDITIONAL 5 §7's SIX CONTAINER-RELATIVE UNITS ARE NOT IN THIS ENGINE'S `<length>`
- * VOCABULARY, SO THIS ENTRY REFUSES THEM.
- * WHAT IS NOT COVERED: `cqw`, `cqh`, `cqi`, `cqb`, `cqmin` and `cqmax` are `<length>` units that CSS
- * Conditional 5 §7 Container Relative Lengths: the cqw, cqh, cqi, cqb, cqmin, cqmax units defines, and
- * core/css/css_length.h's unit set — css-values-4 §6.2's seven absolute units, §6.1.1's twelve font-relative
- * ones and §6.1.2's viewport-percentage family in its four spellings — does not contain them. So
- * `new CSSUnitValue(5, "cqw")` throws the TypeError §4.3.3 step 1 gives for a unit that has no type, where a
- * browser returns a value.
- * WHAT THE NEXT DIFF BUILDS: the six as members of that set, so `css_length_is_length_unit` admits them and
- * `css_math_unit_base` therefore answers `<length>` for them — which is one table and not seven, since every
- * other question in the engine reads the same set. Absolutizing one is a SECOND thing and is not required for
- * this: a unit value carries a unit and resolves nothing, so the absolutization arm may name the query
- * container it needs and abort there exactly as css-values-4 §6.1.2.1's small, large and dynamic viewport
- * families already do at the same switch.
- * HOW ITS ABSENCE WOULD SHOW: `CSS.cqw(5)` SUCCEEDS while `new CSSUnitValue(5, "cqw")` throws, which is the
- * two spellings of one value disagreeing — §4.3.5's factories are defined with no create-a-type step at all
- * (see css_unit_value.c), so they neither consult this entry nor are fixed by fixing it. */
-bool css_unit_value_type_is_valid(const char *unit, size_t unit_len);
-
 /* §4.3.3's spec-internal "create a CSSUnitValue from a pair (num, unit)" — "return a new CSSUnitValue object
  * with its value internal slot set to num, and its unit internal slot set to unit". `value` is CONSUMED and is
  * either a Number or unknown external input; `unit` is COPIED and must be one of §4.3.5's names or a unit this
@@ -93,11 +61,32 @@ bool css_unit_value_type_is_valid(const char *unit, size_t unit_len);
  * IT RUNS NO TYPE CHECK, AND THAT IS §4.3.5's OWN SHAPE RATHER THAN A SHORTCUT. The constructor's step 1 is
  * the only place §4.3.3 states one; the factory functions are defined as "return a new CSSUnitValue whose …
  * unit internal slot is set to the name of the method", with no create-a-type in the sentence at all. A check
- * here would therefore refuse `CSS.cqw(5)`, which the standard requires to work. */
+ * here would therefore refuse a unit that has no type, and §4.3.5 requires the factory for that unit to work.
+ * WITH EVERY ONE OF §4.3.5's SIXTY-THREE NAMES NOW IN THE UNIT TABLES the two answers coincide, so nothing in
+ * this engine currently WITNESSES the difference. It is the standard's shape and not an accommodation: the day
+ * a specification names a `<length>` unit before core/css/css_length.h carries it, the factory for that unit
+ * must still mint and only the constructor spelling may throw. */
 JSValue css_unit_value_new(JSContext *ctx, JSValue value, const char *unit);
 
 /* Web IDL §3.7.5's BRAND: is this object a CSSUnitValue of this agent? */
 bool css_unit_value_is(JSValueConst v);
+
+/* §4.3.3's TWO INTERNAL SLOTS, for the §4.3.1 algorithms that are stated over them — create a sum value from a
+ * CSSUnitValue, convert a CSSUnitValue to a unit, the type of a CSSUnitValue, and equal numeric values — which
+ * live in core/css/css_numeric_value.c because they belong to the SUPERCLASS. `v` must be a CSSUnitValue; the
+ * caller has already asked css_unit_value_is.
+ *
+ * THE UNIT IS BORROWED AND THE VALUE IS OWNED, and the asymmetry is the slots' own. §4.3.3 declares `unit`
+ * `readonly` and nothing rewrites it after the mint, so a pointer into the record stays valid for as long as
+ * the object does. `value` is a WRITABLE attribute holding a counted reference that the setter may replace,
+ * so it is handed out dup'd — a borrow of it would be a pointer into a slot a page's own assignment can free
+ * while the algorithm that borrowed it is still running.
+ *
+ * BOTH GO THROUGH THIS COMPONENT'S COW CAPTURE, which is solver/cow.h's rule and is why they are entries and
+ * not a struct in the header: a record a flow has REACHED is one it may write, so reaching it through anything
+ * but this file would be a read the delta never saw. */
+const char *css_unit_value_unit(JSValueConst v);
+JSValue     css_unit_value_value(JSContext *ctx, JSValueConst v);
 
 /* CSS Typed OM 1 §6 CSSStyleValue Serialization over one value — §6.4's arm, which is the only one this engine
  * has a subclass for. OWNED: a JS string, or the unknown a §6.4 run over an unknown `value` slot derives.

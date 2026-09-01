@@ -30,7 +30,7 @@
 
 /* ---- CSS Typed OM 1 §4.3.2 "Numeric Value Typing" — the type algebra §10.9 links to by name -------------- */
 
-static CssMathType mth_type_number(void)
+CssMathType css_math_type_number(void)
 {
     CssMathType t;
 
@@ -39,9 +39,9 @@ static CssMathType mth_type_number(void)
     return t;
 }
 
-static CssMathType mth_type_of(CssMathBase base)
+CssMathType css_math_type_of(CssMathBase base)
 {
-    CssMathType t = mth_type_number();
+    CssMathType t = css_math_type_number();
 
     DCHECK((unsigned)base < (unsigned)CSS_MATH_BASE_COUNT,
            "a CSS numeric type was built over a base type outside CSS Typed OM 1 §4.3.2's seven — that section "
@@ -479,14 +479,14 @@ static bool mth_value(Mth *m, MthVal *out)
         /* §10.9: "<number> / <integer>: the type is «[ ]» (empty map)". Its own note is why a bare `0` is not a
            length here: "Because <number-token>s are always interpreted as <number>s or <integer>s, "unitless
            zero" <length>s aren't supported in math functions. That is, width: calc(0 + 5px); is invalid". */
-        *out = mth_val(mth_type_number(), lxb_css_syntax_token_number(t)->num);
+        *out = mth_val(css_math_type_number(), lxb_css_syntax_token_number(t)->num);
         mth_take(m);
         return true;
     case LXB_CSS_SYNTAX_TOKEN_PERCENTAGE: {
         /* §10.9's `<percentage>` terminal rule, under §10.9.1's calculation context. The number is NOT resolved
            — §10.11: "Where percentages are not resolved at computed-value time, they are not resolved in math
            functions" — so it survives as the Sum's percentage term and the hint records what it will become. */
-        CssMathType ty = mth_type_number();
+        CssMathType ty = css_math_type_number();
 
         if (m->pct_base == CSS_MATH_PERCENT) {
             ty.exp[CSS_MATH_PERCENT] = 1;
@@ -509,7 +509,7 @@ static bool mth_value(Mth *m, MthVal *out)
         /* The unit span points into the tokenizer's own buffer and is read BEFORE the token is consumed —
            lexbor keeps a token's cooked string only until the next one is requested. */
         if (!css_math_unit_base((const char *)u->data, u->length, &base)) return false;
-        *out = mth_val(mth_type_of(base), 0.0);
+        *out = mth_val(css_math_type_of(base), 0.0);
         /* §10.9's TYPE is answered for every family; only the VALUE splits. css-grid-2 §7.2.4's `fr` has no
            number outside css-grid-2 §12's track sizing, so it is marked unresolved and carried — the type
            still says `<flex>`, so `width: calc(1fr)` is refused by §10.9's last rule as invalid CSS and the
@@ -535,7 +535,7 @@ static bool mth_value(Mth *m, MthVal *out)
         else if (mth_name_is(k, n, "-infinity")) v = -INFINITY;
         else if (mth_name_is(k, n, "nan"))       v = NAN;
         else return false;
-        *out = mth_val(mth_type_number(), v);
+        *out = mth_val(css_math_type_number(), v);
         mth_take(m);
         return true;
     }
@@ -887,7 +887,7 @@ static bool mth_argument(Mth *m, MthVal *out, bool *last)
    values. `kind` is 0 for min, 1 for max, 2 for hypot. */
 static bool mth_variadic(Mth *m, int kind, MthVal *out)
 {
-    MthVal acc = mth_val(mth_type_number(), 0.0);
+    MthVal acc = mth_val(css_math_type_number(), 0.0);
     unsigned n = 0;
     bool last = false, saw_nan = false, saw_inf = false, any_pct = false;
     double fold = 0.0;
@@ -965,10 +965,10 @@ static bool mth_clamp(Mth *m, MthVal *out)
     bool present[3] = { true, true, true };
     bool last = false;
     unsigned i;
-    CssMathType ty = mth_type_number();
+    CssMathType ty = css_math_type_number();
     bool have_ty = false;
 
-    for (i = 0; i < 3; i++) arg[i] = mth_val(mth_type_number(), 0.0);
+    for (i = 0; i < 3; i++) arg[i] = mth_val(css_math_type_number(), 0.0);
 
     for (i = 0; i < 3; i++) {
         lxb_css_syntax_token_t *t;
@@ -1047,8 +1047,8 @@ static bool mth_clamp(Mth *m, MthVal *out)
 static bool mth_round(Mth *m, MthVal *out)
 {
     MthRounding how = MTH_ROUND_NEAREST;
-    MthVal a = mth_val(mth_type_number(), 0.0);
-    MthVal b = mth_val(mth_type_number(), 0.0);
+    MthVal a = mth_val(css_math_type_number(), 0.0);
+    MthVal b = mth_val(css_math_type_number(), 0.0);
     bool have_b = false, last = false;
     lxb_css_syntax_token_t *t;
     CssMathType ty;
@@ -1142,8 +1142,8 @@ static bool mth_function(Mth *m, MthVal *out)
     MthVal arg[2];
     bool ok = false;
 
-    arg[0] = mth_val(mth_type_number(), 0.0);
-    arg[1] = mth_val(mth_type_number(), 0.0);
+    arg[0] = mth_val(css_math_type_number(), 0.0);
+    arg[1] = mth_val(css_math_type_number(), 0.0);
     DCHECK(t != NULL && t->type == LXB_CSS_SYNTAX_TOKEN_FUNCTION,
            "the math-function production was entered with the cursor off a FUNCTION token — §10.8's grammar "
            "reaches a function only through `<calc-value>`'s own switch, which has just tested for one");
@@ -1196,7 +1196,7 @@ static bool mth_function(Mth *m, MthVal *out)
         /* §10.4: sin/cos/tan "must resolve to either a <number> or an <angle> ... They all represent a
            <number>, with the return type made consistent with the input calculation's type." */
         bool is_angle;
-        CssMathType ty = mth_type_number();
+        CssMathType ty = css_math_type_number();
 
         if (!mth_fixed_args(m, 1, arg)) goto done;
         is_angle = mth_only(&arg[0].type, CSS_MATH_ANGLE);
@@ -1225,7 +1225,7 @@ static bool mth_function(Mth *m, MthVal *out)
         /* §10.4: the arc functions "contain a single calculation which must resolve to a <number>, and compute
            their corresponding function, interpreting their result as a number of radians, representing an
            <angle>". §10.9 gives all three the type «["angle" → 1]». */
-        CssMathType ty = mth_type_of(CSS_MATH_ANGLE);
+        CssMathType ty = css_math_type_of(CSS_MATH_ANGLE);
 
         if (!mth_fixed_args(m, 1, arg)) goto done;
         if (!mth_no_entries(&arg[0].type)) goto done;
@@ -1249,7 +1249,7 @@ static bool mth_function(Mth *m, MthVal *out)
         /* §10.4: "A and B can resolve to any <number>, <dimension>, or <percentage>, but must have a consistent
            type" and the result is an `<angle>` "with the return type made consistent with the input
            calculation's type". §10.4.1's whole table of unusual argument combinations is C's own `atan2`. */
-        CssMathType sum, ty = mth_type_of(CSS_MATH_ANGLE);
+        CssMathType sum, ty = css_math_type_of(CSS_MATH_ANGLE);
 
         if (!mth_fixed_args(m, 2, arg)) goto done;
         if (!mth_type_add(&arg[0].type, &arg[1].type, &sum)) goto done;
@@ -1269,7 +1269,7 @@ static bool mth_function(Mth *m, MthVal *out)
     } else if (mth_name_is(name, nlen, "pow") || mth_name_is(name, nlen, "log")) {
         /* §10.5: pow()'s two calculations and log()'s one-or-two "must resolve to <number>s", and the result is
            a `<number>` "with the return type made consistent with the input calculation's type". */
-        CssMathType ty = mth_type_number();
+        CssMathType ty = css_math_type_number();
         bool is_pow = mth_name_is(name, nlen, "pow");
         bool last = false, have_b = false;
 
@@ -1303,7 +1303,7 @@ static bool mth_function(Mth *m, MthVal *out)
         /* §10.5: both "contain a single calculation which must resolve to a <number>". §10.5.1's cases for both
            — `sqrt(+∞)` is `+∞`, `sqrt(0⁻)` is `0⁻`, `sqrt(A < 0)` is NaN, `exp(+∞)` is `+∞`, `exp(−∞)` is `0⁺`
            — are IEEE-754's own and are C's `sqrt` and `exp` unchanged. */
-        CssMathType ty = mth_type_number();
+        CssMathType ty = css_math_type_number();
 
         if (!mth_fixed_args(m, 1, arg)) goto done;
         if (!mth_no_entries(&arg[0].type)) goto done;
@@ -1332,7 +1332,7 @@ static bool mth_function(Mth *m, MthVal *out)
     } else if (mth_name_is(name, nlen, "sign")) {
         /* §10.6: sign(A) "returns -1 if A's numeric value is negative, +1 if ... positive, 0⁺ if ... 0⁺, and
            0⁻ if ... 0⁻. The return type is a <number>, made consistent with the input calculation's type." */
-        CssMathType ty = mth_type_number();
+        CssMathType ty = css_math_type_number();
 
         if (!mth_fixed_args(m, 1, arg)) goto done;
         if (!mth_make_consistent(&ty, &arg[0].type)) goto done;
@@ -1377,7 +1377,7 @@ static bool mth_top(const char *text, size_t len, const CssMathResolver *res, Cs
 {
     Mth m = { NULL, res, CSS_MATH_HINT_NULL, 0, false };
     lxb_css_syntax_token_t *t;
-    MthVal v = mth_val(mth_type_number(), 0.0);
+    MthVal v = mth_val(css_math_type_number(), 0.0);
     bool ok = false;
 
     DCHECK(text != NULL || len == 0,

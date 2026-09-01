@@ -1,7 +1,9 @@
-/* See css_unit_value.h. CSS Typed OM Level 1 §2 CSSStyleValue objects, §4.3.1 Common Numeric Operations, and
-   the CSSNumericValue Superclass, §4.3.3 Value + Unit: CSSUnitValue objects, and §6.4 CSSUnitValue
-   Serialization. §4.3.5 Numeric Factory Functions is the CSS NAMESPACE's, and lives with the rest of that
-   object's members in core/css/css_namespace.c; what it needs from here is one entry. */
+/* See css_unit_value.h. CSS Typed OM Level 1 §2 CSSStyleValue objects, §4.3.3 Value + Unit: CSSUnitValue
+   objects, and §6.4 CSSUnitValue Serialization — plus the ONE realm install that builds the whole §3.7.3
+   Interface prototype object chain, which is why §4.3.1 Common Numeric Operations, and the CSSNumericValue
+   Superclass is named here at all: its members' BODIES are core/css/css_numeric_value.c's and only their
+   install is this file's. §4.3.5 Numeric Factory Functions is the CSS NAMESPACE's, and lives with the rest of
+   that object's members in core/css/css_namespace.c; what it needs from here is one entry. */
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -14,7 +16,7 @@
 
 #include "core/agent_state.h"
 #include "core/css/css_length.h"
-#include "core/css/css_math.h"
+#include "core/css/css_numeric_value.h"
 #include "core/css/css_unit_value.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
@@ -50,36 +52,6 @@ static int g_id_value_set = -1;
 /* WHICH OF §4.3.3's TWO ATTRIBUTES A GETTER MEANS — one body, magic'd, rather than two that can drift. */
 enum { UV_ATTR_VALUE = 0, UV_ATTR_UNIT };
 
-/* ---- §4.3.2 Numeric Value Typing's "create a type from a string unit", as far as §4.3.3 asks it ------------ */
-
-/* §4.3.2's two LITERAL branches — "unit is "number"" and "unit is "percent"" — compared as the section spells
-   them, by code points and not case-insensitively. That is deliberate and it is the spec's own shape: the
-   other seven branches are stated over unit PRODUCTIONS ("unit is a <length> unit"), and CSS matches unit
-   IDENTIFIERS ASCII case-insensitively, but neither "number" nor "percent" is a unit identifier at all — no
-   CSS dimension token carries them, and §4.3.5 mints them from method names it fixes itself. */
-static bool uv_literal_is(const char *unit, size_t unit_len, const char *lit)
-{
-    size_t n = strlen(lit);
-
-    return unit_len == n && memcmp(unit, lit, n) == 0;
-}
-
-bool css_unit_value_type_is_valid(const char *unit, size_t unit_len)
-{
-    CssMathBase base;
-
-    DCHECK(unit != NULL || unit_len == 0,
-           "§4.3.2's create-a-type was asked about a NULL span with a non-zero length — every caller holds the "
-           "bytes it is asking about, so an absent pointer is a caller that lost the buffer");
-    /* "unit is "number" → Return «[ ]»" and "unit is "percent" → Return «[ "percent" → 1 ]»". Both are types,
-       so both are VALID; only §4.3.2's last branch ("anything else → Return failure") is not. */
-    if (uv_literal_is(unit, unit_len, "number") || uv_literal_is(unit, unit_len, "percent")) return true;
-    /* §4.3.2's six PRODUCTION branches — <length>, <angle>, <time>, <frequency>, <resolution>, <flex> — which
-       are css-values-4 §10.9 Type Checking's terminal rule for a dimension over the same unit tables. See
-       core/css/css_math.h for why the two questions share the table and not the entry. */
-    return css_math_unit_base(unit, unit_len, &base);
-}
-
 /* ---- the record, and the COW capture every member reaches it through -------------------------------------- */
 
 /* THE CAPTURE IS HERE AND NOT AT THE ONE WRITE, which is solver/cow.h's rule: a record a flow has REACHED
@@ -96,6 +68,29 @@ static CssUnitValueData *uv_of(JSValueConst v)
 bool css_unit_value_is(JSValueConst v)
 {
     return g_unit_class != 0 && JS_GetClassID(v) == g_unit_class;
+}
+
+/* §4.3.3's two internal slots for §4.3.1's algorithms — see css_unit_value.h for the borrow/own split and for
+   why they are entries here rather than a struct the superclass reads directly. Both DCHECK the brand instead
+   of answering for a miss: every caller is a §4.3.1 member body that has already thrown the Web IDL §3.7.5
+   TypeError for a `this` that is not one, so an absent record is a body that skipped its own brand check and
+   is about to read a unit off whatever object the page passed. */
+const char *css_unit_value_unit(JSValueConst v)
+{
+    CssUnitValueData *u = uv_of(v);
+
+    DCHECK(u != NULL, "a §4.3.1 algorithm read the `unit` internal slot of something that is not a "
+                      "CSSUnitValue — the member bodies ask their brand first, so this is one that did not");
+    return u->unit;
+}
+
+JSValue css_unit_value_value(JSContext *ctx, JSValueConst v)
+{
+    CssUnitValueData *u = uv_of(v);
+
+    DCHECK(u != NULL, "a §4.3.1 algorithm read the `value` internal slot of something that is not a "
+                      "CSSUnitValue — the member bodies ask their brand first, so this is one that did not");
+    return JS_DupValue(ctx, u->value);
 }
 
 /* WEB IDL §3.7.5's BRAND CHECK. `CSSUnitValue.prototype.value` read off `{}` is a TypeError, and a page tells
@@ -270,6 +265,11 @@ static JSValue js_css_unit_value_ctor(JSContext *ctx, JSValueConst this_val, int
                                       int magic)
 {
     const char *unit;
+    /* STEP 1 reads only whether creating a type FAILS — "If creating a type from unit returns failure, throw a
+       TypeError and abort this algorithm" — and §4.3.3 states no other use for it here: the type of a
+       CSSUnitValue is re-derived from the unit slot wherever it is wanted (§4.3.1's `type()`), so storing it
+       would be a second copy of a fact one entry already answers. */
+    CssMathType type;
     JSValue r;
 
     (void)this_val; (void)magic;
@@ -278,7 +278,7 @@ static JSValue js_css_unit_value_ctor(JSContext *ctx, JSValueConst this_val, int
                       "conversion machine owed this body exactly two arguments");
     unit = concolic_name_cstr(ctx, argv[1]);
     CHECK(unit != NULL, "css-typed-om: OOM encoding the `unit` argument of §4.3.3's constructor");
-    if (!css_unit_value_type_is_valid(unit, strlen(unit))) {
+    if (!css_numeric_type_from_unit(unit, strlen(unit), &type)) {
         r = JS_ThrowTypeError(ctx, "'%s' is not a CSS unit that CSSUnitValue can carry", unit);
         JS_FreeCString(ctx, unit);
         return r;
@@ -348,12 +348,16 @@ static void css_unit_value_install_realm(JSContext *ctx)
     /* §4.3.1's CSSNumericValue. §3.7.3 Interface prototype object: "if interface is declared to inherit from
        another interface, then set proto to the interface prototype object IN REALM of that inherited
        interface" — the object one line up, which core/idl_args.c asserts by reading the §3.7.3 Interface
-       prototype object class string back off it. It carries none of its own eleven members yet, and that is
-       honest absence rather than a stub: a page reaching `add` gets the TypeError a browser without it gives,
-       and engine/idlgen.mjs reports all eleven as the gaps they are. */
+       prototype object class string back off it. Two of its eleven members land on it here — the BODIES are
+       core/css/css_numeric_value.c's, and only the install is this file's, because §3.7.3 makes the chain one
+       object graph and splitting the creation of it across two components would be two files that have to
+       agree about an order. The other nine are honest absence rather than stubs: a page reaching `add` gets
+       the TypeError a browser without it gives, and engine/idlgen.mjs reports all nine as the gaps they are. */
     nv_proto = JS_NewObjectProto(ctx, sv_proto);
     CHECK(!JS_IsException(nv_proto), "CSSNumericValue.prototype could not be allocated");
     idl_interface_tag(ctx, nv_proto, "CSSNumericValue");
+    idl_install_method(ctx, nv_proto, "type", css_numeric_value_member_id(CSS_NUMERIC_MEMBER_TYPE));
+    idl_install_method(ctx, nv_proto, "to", css_numeric_value_member_id(CSS_NUMERIC_MEMBER_TO));
     ctor = idl_interface_object(ctx, "CSSNumericValue", nv_proto);
     CHECK(!JS_IsException(ctor), "the CSSNumericValue interface object could not be allocated");
     JS_SetPropertyStr(ctx, global, "CSSNumericValue", ctor);

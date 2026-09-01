@@ -145,9 +145,21 @@ bool css_math_is_function(const char *name, size_t len);
    are NOT dimension units and must not be answered here: CSS Syntax 3 §4 tokenizes a percentage as its own
    token type, and `calc(5number)` IS a dimension token whose unit is the ident `number`, which §10.9 refuses.
    So the TABLE is one fact and each specification asks its own question of it; §4.3.2's two extra branches
-   stand at ITS site (core/css/css_unit_value.h) and this entry keeps §10.9's answer exactly. A second copy of
-   the table here would be the copy that disagrees about `dvmin` the day one of them is edited. */
+   stand at ITS site (core/css/css_numeric_value.h) and this entry keeps §10.9's answer exactly. A second copy
+   of the table here would be the copy that disagrees about `dvmin` the day one of them is edited. */
 bool css_math_unit_base(const char *unit, size_t len, CssMathBase *base);
+
+/* THE TWO TYPES §4.3.2's create-a-type BRANCHES END AT — a type with no entries at all and a null percent
+   hint (§4.3.2: "unit is "number" → Return «[ ]» (empty map)", and §10.9's own terminal rule for a
+   `<number>`), and a type whose sole entry is one base type at exponent 1 ("unit is a <length> unit → Return
+   «[ "length" → 1 ]»", and the same sentence for the other five productions and for "percent").
+   THEY ARE PUBLIC FOR THE SAME REASON `css_math_unit_base` IS: the algebra below is §4.3.2's, this file is
+   where §10.9 links to it, and CSS Typed OM 1 §4.3.1's `type()` needs the map that the nine-branch entry at
+   core/css/css_numeric_value.h assembles. A second pair of constructors there would be a second statement of
+   "in all cases the associated percent hint is null" — the one sentence every rule in §4.3.2 is written
+   against — in a file that does not own the struct. */
+CssMathType css_math_type_number(void);
+CssMathType css_math_type_of(CssMathBase base);
 
 /* §10.9's LAST RULE, answered over the text of one math function: "A math function resolves to <number>,
    <length>, <angle>, <time>, <frequency>, <resolution>, <flex>, or <percentage> according to which of those

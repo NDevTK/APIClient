@@ -230,11 +230,12 @@ CssPx css_px_div(CssPx a, CssPx b);
    byte length. Answers false for every other unit, writing nothing. */
 bool css_length_absolute_px(const char *unit, size_t unit_len, double n, double *px);
 
-/* IS THIS A `<length>` UNIT AT ALL — §6's whole set: §6.2's seven absolute units, §6.1.1's font-relative ones
-   and §6.1.2.2's viewport-percentage ones in all four of §6.1.2.1's viewport families. ALL of them, because
-   §6's production admits all of them and the ones this engine cannot absolutize are a MISSING COMPONENT (the
-   crash `css_length_parse` owes them) rather than a syntax error — a grammar that answered false for `2em`
-   would report an unbuilt capability as an author's mistake.
+/* IS THIS A `<length>` UNIT AT ALL — §6's whole set (§6.2's seven absolute units, §6.1.1's font-relative ones
+   and §6.1.2.2's viewport-percentage ones in all four of §6.1.2.1's viewport families) PLUS CSS Conditional 5
+   §7 Container Relative Lengths: the cqw, cqh, cqi, cqb, cqmin, cqmax units' six. ALL of them, because §6's
+   production admits every unit a specification defines as a `<length>` and the ones this engine cannot
+   absolutize are a MISSING COMPONENT (the crash `css_length_parse` owes them) rather than a syntax error — a
+   grammar that answered false for `2em` would report an unbuilt capability as an author's mistake.
    IT IS A DIFFERENT QUESTION FROM `css_length_is_length` AND IS THE HALF THAT SET ANSWERS: that one is handed
    a whole serialized VALUE and decides §6's production over it, and it is written in terms of this. A caller
    holding a DIMENSION TOKEN already has the unit split off and must not have to reassemble the value to ask —

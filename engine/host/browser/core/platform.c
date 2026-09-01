@@ -7,6 +7,7 @@
 #include "core/console/console.h"
 #include "core/crypto/crypto.h"
 #include "core/css/css_namespace.h"
+#include "core/css/css_numeric_value.h"
 #include "core/css/css_unit_value.h"
 #include "core/css/media_query_list.h"
 #include "core/dom/abort.h"
@@ -151,6 +152,7 @@ typedef struct {
 
 static void d_console(JSContext *c, const PlatformAgent *a) { (void)a; console_init(c); }
 static void d_css_namespace(JSContext *c, const PlatformAgent *a) { (void)a; css_namespace_init(c); }
+static void d_css_numeric_value(JSContext *c, const PlatformAgent *a) { (void)a; css_numeric_value_init(c); }
 static void d_css_unit_value(JSContext *c, const PlatformAgent *a) { (void)a; css_unit_value_init(c); }
 static void d_url(JSContext *c, const PlatformAgent *a) { (void)a; url_init(c); }
 static void d_usp(JSContext *c, const PlatformAgent *a) { (void)a; usp_init(c); }
@@ -247,6 +249,7 @@ static void d_module_loader(JSContext *c, const PlatformAgent *a) { (void)a; mod
 static void r_input_device_capabilities(JSRuntime *rt) { input_device_capabilities_free(rt); }
 static void r_console(JSRuntime *rt) { (void)rt; console_free(); }
 static void r_css_namespace(JSRuntime *rt) { (void)rt; css_namespace_free(); }
+static void r_css_numeric_value(JSRuntime *rt) { (void)rt; css_numeric_value_free(); }
 static void r_css_unit_value(JSRuntime *rt) { (void)rt; css_unit_value_free(); }
 static void r_hr_time(JSRuntime *rt) { (void)rt; hr_time_free(); }
 static void r_performance(JSRuntime *rt) { (void)rt; performance_free(); }
@@ -939,6 +942,13 @@ static const PlatformComponent PLATFORM[] = {
        browser/platform_names.h already lists as names the platform owns, so an install that silently stopped
        happening would take `x instanceof CSSUnitValue` with it. Its prototypes go on through a realm intrinsic
        like the namespace object's, so a child navigable gets its own three and therefore its own realm. */
+    /* §4.3.1's MEMBER DECLARATIONS, BEFORE the row that installs them. This component owns no realm state at
+       all — the interface prototype object its two members land on is the next row's, for the §3.7.3 Interface
+       prototype object reason that row states — so what it declares is two argument-pool entries, and the
+       ordering is the one thing about it that has to be right: `css_numeric_value_member_id` aborts on a read
+       of an id that has not been declared, which is what makes a reordering here a crash rather than a member
+       silently installed under a pool entry belonging to someone else. */
+    { "css_numeric_value",   d_css_numeric_value,   NULL,        r_css_numeric_value },
     { "css_unit_value",      d_css_unit_value,      NULL,        r_css_unit_value },
     { "css_namespace",       d_css_namespace,       NULL,        r_css_namespace },
     /* INTERSECTION OBSERVER, AFTER `element` and after the two GEOMETRY rows. After element because its

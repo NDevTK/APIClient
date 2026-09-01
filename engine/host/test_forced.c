@@ -45,6 +45,7 @@
 #include "core/css/css_at_rule_prelude.h"
 #include "core/css/css_property_syntax.h"
 #include "core/css/css_math.h"   /* css-values-4 §10's grammar, §10.9's type algebra and §10.10.1's reduction */
+#include "core/css/css_numeric_value.h"   /* CSS Typed OM 1 §4.3.2's create-a-type, and §5.4.1's ratio */
 #include "core/css/css_syntax_match.h"
 #include "core/rendering/rendering.h"
 #include "core/html/trusted_types.h"
@@ -13453,6 +13454,117 @@ static void css_math_selftest(void)
     }
 }
 
+/* CSS TYPED OM 1 §4.3.2 Numeric Value Typing's "create a type from a string unit", and css-values-4 §5.4.1
+ * Compatible Units' conversion ratio — the two PURE FUNCTIONS core/css/css_numeric_value.h's `type()` and
+ * `to()` are built out of, and the only two parts of that component a fixture can hold to a known answer with
+ * no realm, no `this` and no page under it. The member BODIES need all three, so what is checked here is what
+ * a JS-level probe could not separate from the plumbing: the nine branches' own answers.
+ *
+ * IT RUNS AFTER css_math_selftest FOR THE REASON THAT ONE RUNS AFTER THE SYNTAX FIXTURE. Seven of §4.3.2's
+ * nine branches ARE css-values-4 §10.9 Type Checking's terminal rule for a dimension over the same tables, and
+ * the type MAP each branch returns is core/css/css_math.c's — so a failure in the algebra must be read as that
+ * component's, not as this one's, and it is already reported one call earlier. */
+static void css_numeric_type_selftest(void)
+{
+    /* Every row states the type §4.3.2 gives the unit: `exp` is the exponent of `base`, and `base` is
+       CSS_MATH_BASE_COUNT for the "number" branch, which is the empty map and the only one with no entry. */
+    static const struct { const char *unit; bool ok; CssMathBase base; const char *why; } TYPE[] = {
+        { "number", true, CSS_MATH_BASE_COUNT,
+          "\"unit is \"number\" → Return «[ ]» (empty map)\" — a TYPE, so the constructor admits `new "
+          "CSSUnitValue(1, \"number\")`, and an EMPTY one, so `CSS.number(1).type()` is `{}` and not `{number:1}`" },
+        { "percent", true, CSS_MATH_PERCENT,
+          "\"unit is \"percent\" → Return «[ \"percent\" → 1 ]»\" — and it must not come from the dimension "
+          "table, because CSS Syntax 3 §4 tokenizes a percentage as its own token type and no dimension token "
+          "carries the unit `percent`" },
+        { "NUMBER", false, CSS_MATH_BASE_COUNT,
+          "§4.3.2's two literal branches are spelled as literals and are NOT unit identifiers, so the "
+          "ASCII case-insensitive matching that admits `PX` below does not reach them" },
+        { "px", true, CSS_MATH_LENGTH, "\"unit is a <length> unit → Return «[ \"length\" → 1 ]»\"" },
+        { "PX", true, CSS_MATH_LENGTH,
+          "the same branch, ASCII case-insensitively — CSS matches unit IDENTIFIERS that way, which is the "
+          "half the two literal branches above deliberately do not share" },
+        { "em", true, CSS_MATH_LENGTH,
+          "a font-relative length has a TYPE even though this engine cannot absolutize one without an element "
+          "— §4.3.2 asks what the unit IS and never what it is worth" },
+        { "dvmin", true, CSS_MATH_LENGTH, "css-values-4 §6.1.2.1's dynamic viewport family, same branch" },
+        { "cqw", true, CSS_MATH_LENGTH,
+          "CSS Conditional 5 §7 Container Relative Lengths: the cqw, cqh, cqi, cqb, cqmin, cqmax units — the "
+          "six that were NOT in this engine's `<length>` vocabulary, so `new CSSUnitValue(5, \"cqw\")` threw "
+          "where `CSS.cqw(5)` answered. A false here is that set having been lost again, and it shows as those "
+          "two spellings of one value disagreeing" },
+        { "cqmax", true, CSS_MATH_LENGTH,
+          "and this one is the row a `cq` + viewport-name prefix test would MISS: CSS Conditional 5 §7 "
+          "defines `cqmax` as \"The "
+          "larger value of cqi or cqb\", so it is not `vmax` with two letters in front" },
+        { "deg", true, CSS_MATH_ANGLE, "\"unit is an <angle> unit → Return «[ \"angle\" → 1 ]»\"" },
+        { "ms", true, CSS_MATH_TIME, "\"unit is a <time> unit\"" },
+        { "kHz", true, CSS_MATH_FREQUENCY, "\"unit is a <frequency> unit\", matched case-insensitively" },
+        { "dppx", true, CSS_MATH_RESOLUTION, "\"unit is a <resolution> unit\"" },
+        { "fr", true, CSS_MATH_FLEX, "\"unit is a <flex> unit\" — css-grid-2 §7.2.4's one identifier" },
+        { "", false, CSS_MATH_BASE_COUNT, "\"anything else → Return failure\", and the empty unit is one" },
+        { "foo", false, CSS_MATH_BASE_COUNT, "the same last branch, which is what §4.3.3's constructor turns "
+                                             "into a TypeError" },
+    };
+    /* css-values-4 §5.4.1's sets, asked as §4.3.3's convert-a-CSSUnitValue does. `ratio` is how many of `to`
+       one `from` is worth, which is the factor §4.3.3 multiplies the value slot by. */
+    static const struct { const char *from, *to; bool ok; double ratio; const char *why; } CONV[] = {
+        { "px", "in", true, 1.0 / 96.0,
+          "css-values-4 §6.2's anchor: \"1in = 96px\", so `CSS.px(96).to(\"in\")` is 1in" },
+        { "in", "px", true, 96.0, "and the same ratio the other way round, which is the one a single-direction "
+                                  "table gets wrong" },
+        { "px", "px", true, 1.0, "a unit is related to itself by the factor 1, and §4.3.3 still mints a NEW "
+                                 "CSSUnitValue for it" },
+        { "pc", "pt", true, 12.0, "css-values-4 §6.2: \"1pc = 16px\" and \"1pt = 96/72px\", so a pica is "
+                                  "twelve points — a pair whose canonical unit is neither of them" },
+        { "kHz", "Hz", true, 1000.0, "css-values-4 §7.3: \"A kiloHertz is 1000 Hertz\", and the canonical "
+                                     "spelling `hz` is an INTERMEDIATE that never reaches the result's unit "
+                                     "slot" },
+        { "s", "ms", true, 1000.0, "css-values-4 §7.2: \"There are 1000 milliseconds in a second\"" },
+        { "turn", "deg", true, 360.0, "css-values-4 §7.1: \"There are 360 degrees in a full circle\" and \"There "
+                                      "is 1 turn in a full circle\"" },
+        { "em", "em", true, 1.0, "a font-relative length is a compatible set of ONE, so it converts to itself "
+                                 "and to nothing else" },
+        { "em", "px", false, 0.0,
+          "css-values-4 §5.4.1's own parenthetical names \"the computed font-size factor between em and px\" "
+          "as a compatible pair, and that half is stated \"when serializing computed values\" — where an "
+          "element is in hand. §4.3.1's `to()` has none, so this must REFUSE rather than invent a 16" },
+        { "px", "deg", false, 0.0, "two units in different sets — §4.3.1 step 6's TypeError" },
+        { "number", "px", false, 0.0, "\"number\" is in no set at all, so it converts to itself alone" },
+        { "number", "number", true, 1.0, "…and to itself it does convert, which is what `CSS.number(5)."
+                                         "to(\"number\")` needs" },
+        { "percent", "percent", true, 1.0, "the same, for the other literal branch" },
+        { "cqw", "cqw", true, 1.0,
+          "a container-relative length is a set of one for the same reason `em` is: CSS Conditional 5 §7 "
+          "resolves it against a QUERY CONTAINER, which is not a static factor" },
+    };
+    unsigned i;
+
+    for (i = 0; i < sizeof TYPE / sizeof TYPE[0]; i++) {
+        CssMathType t;
+        bool got = css_numeric_type_from_unit(TYPE[i].unit, strlen(TYPE[i].unit), &t);
+        unsigned b;
+
+        CHECK(got == TYPE[i].ok, TYPE[i].why);
+        if (!got) continue;
+        CHECK(t.hint == CSS_MATH_HINT_NULL,
+              "§4.3.2's last sentence is \"In all cases, the associated percent hint is null\", and a type "
+              "created from a unit that carries one would match `<percentage>` in a context that resolves "
+              "percentages against another type");
+        for (b = 0; b < CSS_MATH_BASE_COUNT; b++)
+            CHECK(t.exp[b] == (b == (unsigned)TYPE[i].base ? 1 : 0), TYPE[i].why);
+    }
+    for (i = 0; i < sizeof CONV / sizeof CONV[0]; i++) {
+        double r = 0.0;
+        bool got = css_numeric_convert_ratio(CONV[i].from, CONV[i].to, &r);
+
+        CHECK(got == CONV[i].ok, CONV[i].why);
+        /* The ratios are quotients of the specifications' own exact constants, so they are compared to within
+           a relative epsilon rather than by equality: 1/96 and 96/72 ÷ 16 are not the same arithmetic even
+           where they name the same number. */
+        if (got) CHECK(css_math_close(r / CONV[i].ratio, 1.0), CONV[i].why);
+    }
+}
+
 /* FILE API §6.3 Packaging data — the one part of the FileReader that is a PURE FUNCTION of four values, and
  * therefore the part a fixture can hold to a known answer without an event loop under it. The event ORDER
  * §6.2 produces is exercised by wpt/FileAPI/reading-data-section; what is checked here is what those tests
@@ -14658,6 +14770,11 @@ int main(int argc, char **argv) {
     css_math_selftest();   /* css-values-4 §10's grammar, §10.9's type algebra and §10.10.1's reduction —
                               AFTER the syntax-string fixture, because §5.1's numeric types are matched
                               THROUGH this component now and a failure there must be read as this one's */
+    css_numeric_type_selftest();   /* CSS Typed OM 1 §4.3.2's nine create-a-type branches and css-values-4
+                                      §5.4.1's conversion ratio — AFTER the math fixture, because seven of the
+                                      nine ARE §10.9's terminal rule over the same tables and the type map they
+                                      return is that component's, so a failure in the algebra is reported one
+                                      line earlier and must not be read as this one's */
     xml_char_selftest();   /* XML §2.2's [2] Char, §2.3's [3] S, and §2.11's line-break normalization */
     xml_ref_selftest();    /* XML §4.1's [66] CharRef and [68] EntityRef, and §4.6's five predefined entities */
     xml_markup_selftest(); /* XML §2.5's [15] Comment, §2.6's [16] PI, §2.7's [18] CDSect, and §2.11's
