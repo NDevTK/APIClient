@@ -168,8 +168,15 @@ void      cow_capture_module_eval(JSContext *ctx, void *mod);
    reply consumed for every sibling and the sibling's own first read threw. Called by the component at its
    mutation point, exactly as a DOM write host-edge calls dom_attr_capture — the browser owns the API, the solver
    owns the time travel. `owner` is the JS object the record belongs to and is HELD for the life of the entry,
-   because `p` points into storage that object owns and a parked flow can outlive every other reference to it. */
-void      cow_capture_host_state(JSContext *ctx, JSValueConst owner, void *p, size_t n);
+   because `p` points into storage that object owns and a parked flow can outlive every other reference to it.
+
+   THE ADDRESS IS THE CALLER'S — see THE SITE TRAVELS WITH THE OPERATION below, which governs all three of these
+   entries. This one's asserts name a component's own capture call (`n` is not a scalar, `owner` is not an
+   object), and a component is exactly what a line inside cow.c cannot name. */
+void      cow_capture_host_state_at(JSContext *ctx, JSValueConst owner, void *p, size_t n,
+                                    const char *file, int line);
+#define cow_capture_host_state(ctx_, owner_, p_, n_) \
+    cow_capture_host_state_at((ctx_), (owner_), (p_), (n_), __FILE__, __LINE__)
 
 /* A COMPONENT RECORD THAT OWNS JSValues — the same isolation, for the state that is not a latch.
  *
@@ -191,7 +198,10 @@ void      cow_capture_host_state(JSContext *ctx, JSValueConst owner, void *p, si
  * accessors take only the object, so the context is the session's, stashed by cow_set_ctx exactly as the DOM
  * delta's already is. */
 typedef struct { size_t size; const uint16_t *val_off; int n_val; } CowRecord;
-void      cow_capture_host_record(JSValueConst owner, void *p, const CowRecord *rec);
+void      cow_capture_host_record_at(JSValueConst owner, void *p, const CowRecord *rec,
+                                     const char *file, int line);
+#define cow_capture_host_record(owner_, p_, rec_) \
+    cow_capture_host_record_at((owner_), (p_), (rec_), __FILE__, __LINE__)
 
 /* AND THE WRITE, WHICH THE LAYOUT HAD NO OPERATION FOR — PUBLISH BEFORE RELEASE.
  *
@@ -213,8 +223,28 @@ void      cow_capture_host_record(JSValueConst owner, void *p, const CowRecord *
  * layout makes possible: the slot written must be a slot the layout NAMES, so a field added to the struct and
  * not to `*_VALS[]` crashes at its FIRST write rather than being missed by the walk and the finalizer both.
  * A record's INITIALIZATION is not a write and must not come here — before JS_SetOpaque the collector cannot
- * reach the record and there is no previous value to release. */
-void      cow_record_set(JSContext *ctx, void *p, const CowRecord *rec, JSValue *slot, JSValue v);
+ * reach the record and there is no previous value to release.
+ *
+ * THE SITE TRAVELS WITH THE OPERATION, AND IT GOVERNS THE THREE ENTRIES ABOVE AS WELL AS THIS ONE.
+ * A DCHECK stamps the file and line it is WRITTEN at, so an invariant checked INSIDE a shared helper reports
+ * THE HELPER for every caller — and the three asserts below are all about the SLOT, whose only wrong value is
+ * one a caller passed. Written as a plain function they said "add the field's offsetof to the record's layout"
+ * and named ONE line in cow.c for every component in the tree, which is a correct instruction with no object:
+ * a reader who tries to obey it has nowhere to apply it, and the crash is rediscovered instead of fixed.
+ * So the caller's `__FILE__`/`__LINE__` are captured HERE, at the expansion, and threaded to the check, which
+ * is why each of these is a macro over an `_at` function rather than a function. It is the same mechanism
+ * core/html/sanitizer.c's san_require_known_* pair uses, and for the same reason.
+ * AND AN INTERMEDIATE MUST NOT ABSORB THE ADDRESS. A component that wraps this in a plain function of its own
+ * — binding its record and layout once, which is worth doing — becomes the new single line the abort names,
+ * for every write in that file: the defect one level down, and invisible, because the wrapper supplies its own
+ * `__FILE__`/`__LINE__` and cannot be told from a converted caller. Every such wrapper therefore takes
+ * `file`/`line` and forwards them, behind a macro of its own (`fr_set` over `fr_set_at`), or is a macro
+ * outright (core/css/css_rule.c's `rule_set`, which expands this one at the leaf and needs nothing else).
+ * A wrapper written as a plain function is an unconverted caller, not a supported spelling. */
+void      cow_record_set_at(JSContext *ctx, void *p, const CowRecord *rec, JSValue *slot, JSValue v,
+                            const char *file, int line);
+#define cow_record_set(ctx_, p_, rec_, slot_, v_) \
+    cow_record_set_at((ctx_), (p_), (rec_), (slot_), (v_), __FILE__, __LINE__)
 
 /* The session's context, for the captures that have no call-site one. The DOM delta's twin is dom_cow_set_ctx. */
 void      cow_set_ctx(JSContext *ctx);

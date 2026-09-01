@@ -79,8 +79,14 @@ ReaderData *rs_reader_data(JSValueConst v);
    controller is attached from the other translation unit, and the layout that says what a StreamData owns
    lives with the record: a write spelled by hand over there is a write no layout governs, which is exactly the
    slot a later field addition would be missed at. Passing a slot that is not this record's crashes at the
-   assert inside. */
-void rs_stream_set(JSContext *ctx, StreamData *d, JSValue *slot, JSValue v);
+   assert inside — AND THE ABORT NAMES THE WRITE, which is the whole reason this is a macro over an `_at`
+   function rather than a plain one: the caller is in another translation unit, so a check that stamped its own
+   line would name readable_stream.c for a write made anywhere. See cow.h's THE SITE TRAVELS WITH THE
+   OPERATION. */
+void rs_stream_set_at(JSContext *ctx, StreamData *d, JSValue *slot, JSValue v,
+                      const char *file, int line);
+#define rs_stream_set(ctx_, d_, slot_, v_) \
+    rs_stream_set_at((ctx_), (d_), (slot_), (v_), __FILE__, __LINE__)
 
 /* 7.4.14's CreateIterResultObject — `{ value, done }`, own properties DEFINED and not assigned. `value` is
    CONSUMED. */

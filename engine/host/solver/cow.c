@@ -730,21 +730,26 @@ void cow_capture_module_eval(JSContext *ctx, void *mod) {
    The OWNER is held for the life of the entry, because `p` points INTO the record that object owns and a parked
    flow can outlive every other reference to it — a delta naming freed storage would write those bytes back over
    whatever now occupies them. The flow-private skip is the same generational test every other capture uses. */
-void cow_capture_host_state(JSContext *ctx, JSValueConst owner, void *p, size_t n) {
+void cow_capture_host_state_at(JSContext *ctx, JSValueConst owner, void *p, size_t n,
+                               const char *file, int line) {
     if (cow_hooks_off() || !g_current) return;
     CowDelta *d = g_current;
-    DCHECK(p != NULL && n > 0, "a component asked to capture no state — the call site has nothing to isolate");
+    DCHECKF(p != NULL && n > 0,
+            "a component asked to capture no state, at %s:%d — the call site has nothing to isolate",
+            file, line);
     /* A POD LATCH ONLY, and this is where that is stated rather than only described. The blob is a memcpy, so a
        JSValue inside it becomes a reference nothing counts and the next restore frees a value the blob still
        names — cow.h's whole reason for the record arm below. A latch is a SCALAR; a record with several fields
        goes through cow_capture_host_record, which takes the layout (with n_val 0 when the record owns no value,
        as BroadcastChannel's does). Anything wider than a scalar reaching here is a record captured as bytes. */
-    DCHECK(n == 1 || n == 2 || n == 4 || n == 8,
-           "a component captured MORE THAN A SCALAR through the byte arm — cow_capture_host_state is for a POD "
-           "latch, and a memcpy of a struct makes an uncounted reference out of any JSValue in it; capture the "
-           "record through cow_capture_host_record with a CowRecord layout naming its owned values");
-    DCHECK(JS_IsObject(owner), "a component's state was captured with no owning object — the storage it points "
-                               "into would be freed out from under a parked flow's delta");
+    DCHECKF(n == 1 || n == 2 || n == 4 || n == 8,
+            "a component captured MORE THAN A SCALAR through the byte arm, at %s:%d — cow_capture_host_state is "
+            "for a POD latch, and a memcpy of a struct makes an uncounted reference out of any JSValue in it; "
+            "capture the record through cow_capture_host_record with a CowRecord layout naming its owned values",
+            file, line);
+    DCHECKF(JS_IsObject(owner),
+            "a component's state was captured with no owning object, at %s:%d — the storage it points into "
+            "would be freed out from under a parked flow's delta", file, line);
     if (JS_ObjFlowGen(owner) > d->fork_gen) return;   /* flow-private skip — the O(shared-state) invariant */
     for (int i = 0; i < d->n; i++)                    /* one entry per record: the FIRST baseline is the baseline */
         if (d->e[i].is_state && d->e[i].state_kind == COW_STATE_HOST && d->e[i].target == p) return;
@@ -825,30 +830,40 @@ void cow_capture_obj_state(JSContext *ctx, JSValueConst obj) {
 static JSContext *g_cow_ctx;
 void cow_set_ctx(JSContext *ctx) { g_cow_ctx = ctx; }
 
-void cow_capture_host_record(JSValueConst owner, void *p, const CowRecord *rec) {
+void cow_capture_host_record_at(JSValueConst owner, void *p, const CowRecord *rec,
+                                const char *file, int line) {
     JSContext *ctx = g_cow_ctx;
     if (cow_hooks_off() || !g_current) return;
     CowDelta *d = g_current;
-    DCHECK(ctx != NULL, "a component record was captured before cow_set_ctx named the session's context");
-    DCHECK(p != NULL && rec != NULL && rec->size > 0, "a component record was captured with no layout");
-    DCHECK(JS_IsObject(owner), "a component record was captured with no owning object — the storage it points "
-                               "into would be freed out from under a parked flow's delta");
+    DCHECKF(ctx != NULL,
+            "a component record was captured before cow_set_ctx named the session's context, at %s:%d",
+            file, line);
+    DCHECKF(p != NULL && rec != NULL && rec->size > 0,
+            "a component record was captured with no layout, at %s:%d", file, line);
+    DCHECKF(JS_IsObject(owner),
+            "a component record was captured with no owning object, at %s:%d — the storage it points into "
+            "would be freed out from under a parked flow's delta", file, line);
     /* THE LAYOUT IS A REFERENCE-COUNT CONTRACT, so its shape is asserted where it is used and not left to the
        reader of the offset list. Each entry names a JSValue this capture will DUP and this delta will later
        FREE, so an offset that runs off the end of the record dups whatever is next in memory, an unaligned one
        reads a value that is not there, and a DUPLICATED offset dups one field twice and frees it twice — which
        is the failure a hand-written `*_VALS[]` produces when a field is added by copying the line above it. */
     for (int vi = 0; vi < rec->n_val; vi++) {
-        DCHECK((size_t)rec->val_off[vi] + sizeof(JSValue) <= rec->size,
-               "a component record's layout names an owned value PAST THE END of the record — the capture would "
-               "dup whatever follows it in memory and the restore would free it");
-        DCHECK(rec->val_off[vi] % _Alignof(JSValue) == 0,
-               "a component record's layout names an owned value at an offset no JSValue can sit at — the field "
-               "named is not the field the finalizer frees");
+        DCHECKF((size_t)rec->val_off[vi] + sizeof(JSValue) <= rec->size,
+                "a component record's layout names an owned value PAST THE END of the record — entry %d, offset "
+                "%u, in a record of %zu bytes, captured at %s:%d. The capture would dup whatever follows it in "
+                "memory and the restore would free it",
+                vi, (unsigned)rec->val_off[vi], rec->size, file, line);
+        DCHECKF(rec->val_off[vi] % _Alignof(JSValue) == 0,
+                "a component record's layout names an owned value at an offset no JSValue can sit at — entry "
+                "%d, offset %u, captured at %s:%d. The field named is not the field the finalizer frees",
+                vi, (unsigned)rec->val_off[vi], file, line);
         for (int vj = 0; vj < vi; vj++)
-            DCHECK(rec->val_off[vj] != rec->val_off[vi],
-                   "a component record's layout names one owned value TWICE — the capture dups it twice and the "
-                   "delta frees it twice, which is a refcount underflow on a value the page still holds");
+            DCHECKF(rec->val_off[vj] != rec->val_off[vi],
+                    "a component record's layout names one owned value TWICE — entries %d and %d both name "
+                    "offset %u, captured at %s:%d. The capture dups it twice and the delta frees it twice, "
+                    "which is a refcount underflow on a value the page still holds",
+                    vj, vi, (unsigned)rec->val_off[vi], file, line);
     }
     if (JS_ObjFlowGen(owner) > d->fork_gen) return;   /* flow-private skip — the O(shared-state) invariant */
     for (int i = 0; i < d->n; i++)
@@ -877,23 +892,28 @@ static bool cow_record_names_slot(const void *p, const CowRecord *rec, const JSV
 /* PUBLISH BEFORE RELEASE — see cow.h for the defect this exists to make impossible. It captures NOTHING: the
    isolation is taken where the flow REACHES the record (the component's accessor calls cow_capture_host_record),
    so a second capture here would be the same entry asked for twice. What this owns is the ORDER. */
-void cow_record_set(JSContext *ctx, void *p, const CowRecord *rec, JSValue *slot, JSValue v) {
+void cow_record_set_at(JSContext *ctx, void *p, const CowRecord *rec, JSValue *slot, JSValue v,
+                       const char *file, int line) {
     JSValue old;
 
-    DCHECK(p != NULL && rec != NULL && slot != NULL,
-           "a component record's owned slot was written with no record, no layout or no slot — the write cannot "
-           "be checked against the list the finalizer frees and the gc_mark walks");
-    DCHECK((const char *)slot >= (const char *)p &&
-           (const char *)slot + sizeof(JSValue) <= (const char *)p + rec->size,
-           "a component record's owned slot was written THROUGH A SLOT OUTSIDE THE RECORD — the pointer names "
-           "storage this layout does not describe, so the value published here is one no finalizer will free "
-           "and no gc_mark will walk");
-    DCHECK(cow_record_names_slot(p, rec, slot),
-           "a component record's owned slot was written at an offset the layout does not NAME — the layout is "
-           "the one statement of what the record owns, so a field the write knows about and `*_VALS[]` does not "
-           "is a value the finalizer leaks, the gc_mark misses (leaving the reference gc_decref subtracts, so "
-           "its cycle is never collected) and the COW capture neither dups nor restores; add the field's "
-           "offsetof to the record's layout");
+    DCHECKF(p != NULL && rec != NULL && slot != NULL,
+            "a component record's owned slot was written with no record, no layout or no slot, at %s:%d — the "
+            "write cannot be checked against the list the finalizer frees and the gc_mark walks", file, line);
+    DCHECKF((const char *)slot >= (const char *)p &&
+            (const char *)slot + sizeof(JSValue) <= (const char *)p + rec->size,
+            "a component record's owned slot was written THROUGH A SLOT OUTSIDE THE RECORD, at %s:%d — the "
+            "pointer names storage this layout does not describe, so the value published here is one no "
+            "finalizer will free and no gc_mark will walk", file, line);
+    /* THE OFFSET IS PRINTED BECAUSE THE REMEDY IS AN `offsetof`. The address alone names the write; the number
+       names the FIELD, which is the operand of the instruction this message gives — and a record whose slots
+       are a run of JSValues is one a reader would otherwise have to count by hand to act on. */
+    DCHECKF(cow_record_names_slot(p, rec, slot),
+            "a component record's owned slot was written at an offset the layout does not NAME — offset %zu, "
+            "written at %s:%d. The layout is the one statement of what the record owns, so a field the write "
+            "knows about and `*_VALS[]` does not is a value the finalizer leaks, the gc_mark misses (leaving "
+            "the reference gc_decref subtracts, so its cycle is never collected) and the COW capture neither "
+            "dups nor restores; add the field's offsetof to the record's layout",
+            (size_t)((const char *)slot - (const char *)p), file, line);
     /* PUBLISHED FIRST. From this store on, a collection reaching the record through the component's gc_mark
        reads the new value — so the release below may run a host finalizer, and the caller's construction of
        `v` may have collected, with the slot naming a live value throughout. */

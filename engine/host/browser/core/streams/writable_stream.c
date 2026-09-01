@@ -249,18 +249,26 @@ static WsCtrlData *wc_of(JSValueConst v)
    another — the mistake this shape exists to make impossible when a file holds more than one record.
    The three MINTS do not come here, and that is the one honest exception: each fills its block before
    JS_SetOpaque, where the record is unreachable by the collector and its slots hold no value to release. */
-static void ws_set(JSContext *ctx, WsData *d, JSValue *slot, JSValue v)
+/* THE ADDRESS PASSES THROUGH: the asserts inside are about the SLOT, so they must name the WRITE and not this
+   line — see cow.h's THE SITE TRAVELS WITH THE OPERATION. */
+static void ws_set_at(JSContext *ctx, WsData *d, JSValue *slot, JSValue v,
+                      const char *file, int line)
 {
-    cow_record_set(ctx, d, &WS_REC, slot, v);
+    cow_record_set_at(ctx, d, &WS_REC, slot, v, file, line);
 }
-static void wr_set(JSContext *ctx, WsWriterData *w, JSValue *slot, JSValue v)
+static void wr_set_at(JSContext *ctx, WsWriterData *w, JSValue *slot, JSValue v,
+                      const char *file, int line)
 {
-    cow_record_set(ctx, w, &WR_REC, slot, v);
+    cow_record_set_at(ctx, w, &WR_REC, slot, v, file, line);
 }
-static void wc_set(JSContext *ctx, WsCtrlData *c, JSValue *slot, JSValue v)
+static void wc_set_at(JSContext *ctx, WsCtrlData *c, JSValue *slot, JSValue v,
+                      const char *file, int line)
 {
-    cow_record_set(ctx, c, &WC_REC, slot, v);
+    cow_record_set_at(ctx, c, &WC_REC, slot, v, file, line);
 }
+#define ws_set(ctx_, d_, slot_, v_) ws_set_at((ctx_), (d_), (slot_), (v_), __FILE__, __LINE__)
+#define wr_set(ctx_, w_, slot_, v_) wr_set_at((ctx_), (w_), (slot_), (v_), __FILE__, __LINE__)
+#define wc_set(ctx_, c_, slot_, v_) wc_set_at((ctx_), (c_), (slot_), (v_), __FILE__, __LINE__)
 
 bool writable_stream_is(JSValueConst v)
 {

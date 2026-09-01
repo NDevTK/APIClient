@@ -122,11 +122,15 @@ static FileReaderData *fr_of(JSValueConst v)
    the defect. The record and its layout are bound HERE rather than at each call, so no site can pass a slot
    from one record with the layout of another. Every write of `result` and `error` below goes through it; the
    CONSTRUCTOR does not, and that is the one honest exception: before JS_SetOpaque the record is unreachable by
-   the collector and its calloc'd slots hold no value to release. */
-static void fr_set(JSContext *ctx, FileReaderData *d, JSValue *slot, JSValue v)
+   the collector and its calloc'd slots hold no value to release.
+   THE ADDRESS PASSES THROUGH: the asserts inside are about the SLOT, so they must name the WRITE and not this
+   line — see cow.h's THE SITE TRAVELS WITH THE OPERATION. */
+static void fr_set_at(JSContext *ctx, FileReaderData *d, JSValue *slot, JSValue v,
+                      const char *file, int line)
 {
-    cow_record_set(ctx, d, &FR_REC, slot, v);
+    cow_record_set_at(ctx, d, &FR_REC, slot, v, file, line);
 }
+#define fr_set(ctx_, d_, slot_, v_) fr_set_at((ctx_), (d_), (slot_), (v_), __FILE__, __LINE__)
 
 static void fr_finalizer(JSRuntime *rt, JSValue val)
 {

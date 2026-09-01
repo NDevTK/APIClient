@@ -103,10 +103,14 @@ static CssStyleSheetData *sheet_of(JSValueConst v)
    The record and its layout are bound HERE rather than at each call, so no site can pass a slot from another
    record with this layout. css_style_sheet_new's mint does not come here: before JS_SetOpaque the record is
    unreachable by the collector and its calloc'd slots hold no value to release. */
-static void sheet_set(JSContext *ctx, CssStyleSheetData *s, JSValue *slot, JSValue v)
+/* THE ADDRESS PASSES THROUGH: the asserts inside are about the SLOT, so they must name the WRITE and not this
+   line — see cow.h's THE SITE TRAVELS WITH THE OPERATION. */
+static void sheet_set_at(JSContext *ctx, CssStyleSheetData *s, JSValue *slot, JSValue v,
+                         const char *file, int line)
 {
-    cow_record_set(ctx, s, &SHEET_REC, slot, v);
+    cow_record_set_at(ctx, s, &SHEET_REC, slot, v, file, line);
 }
+#define sheet_set(ctx_, s_, slot_, v_) sheet_set_at((ctx_), (s_), (slot_), (v_), __FILE__, __LINE__)
 
 /* The receiver, brand-checked. Both interfaces declare every member on a PROTOTYPE, so a page can apply one to
    anything at all and §3.7.5's answer is a TypeError rather than a read of nothing. */

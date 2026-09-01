@@ -159,10 +159,14 @@ static IdlAsyncIter *ait_of(JSValueConst v)
    js_idl_async_make's mint does not come here, and that is the one honest exception: it fills the record before
    JS_SetOpaque, where the collector cannot reach it and its js_mallocz'd slots hold no value to release. The
    initialization steps' write to `state` does not either, for the reason stated where they are run. */
-static void ait_set(JSContext *ctx, IdlAsyncIter *rec, JSValue *slot, JSValue v)
+/* THE ADDRESS PASSES THROUGH: the asserts inside are about the SLOT, so they must name the WRITE and not this
+   line — see cow.h's THE SITE TRAVELS WITH THE OPERATION. */
+static void ait_set_at(JSContext *ctx, IdlAsyncIter *rec, JSValue *slot, JSValue v,
+                       const char *file, int line)
 {
-    cow_record_set(ctx, rec, &AIT_REC, slot, v);
+    cow_record_set_at(ctx, rec, &AIT_REC, slot, v, file, line);
 }
+#define ait_set(ctx_, rec_, slot_, v_) ait_set_at((ctx_), (rec_), (slot_), (v_), __FILE__, __LINE__)
 
 JSValue idl_async_iter_end(JSContext *ctx)
 {

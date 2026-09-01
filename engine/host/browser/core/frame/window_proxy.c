@@ -387,10 +387,14 @@ static ProxyData *proxy_of(JSValueConst v)
    with the layout of another. Every write below goes through it; the two MINTS do not, and that is the one
    honest exception: before JS_SetOpaque the record is unreachable by the collector and its slots hold no value
    to release. */
-static void wp_set(JSContext *ctx, ProxyData *p, JSValue *slot, JSValue v)
+/* THE ADDRESS PASSES THROUGH: the asserts inside are about the SLOT, so they must name the WRITE and not this
+   line — see cow.h's THE SITE TRAVELS WITH THE OPERATION. */
+static void wp_set_at(JSContext *ctx, ProxyData *p, JSValue *slot, JSValue v,
+                      const char *file, int line)
 {
-    cow_record_set(ctx, p, &PROXY_REC, slot, v);
+    cow_record_set_at(ctx, p, &PROXY_REC, slot, v, file, line);
 }
+#define wp_set(ctx_, p_, slot_, v_) wp_set_at((ctx_), (p_), (slot_), (v_), __FILE__, __LINE__)
 
 /* §7.2.1's SAME-ORIGIN CHECK — §7.1.1's algorithm over two RECORDS, which is the whole of it: step 1 is the
  * nonce comparison and step 2 is the tuple comparison, both inside origin_same.

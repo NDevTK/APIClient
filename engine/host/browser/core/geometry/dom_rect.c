@@ -96,10 +96,14 @@ static DomRectBox *dr_box(JSValueConst v)
    carries is the only thing that can say the pointer named one of the four the list knows.
    dr_alloc's mint does not come here: it fills the box before JS_SetOpaque, where the collector cannot reach
    it and its slots hold no value to release. */
-static void dr_set(JSContext *ctx, DomRectBox *b, JSValue *slot, JSValue v)
+/* THE ADDRESS PASSES THROUGH: the asserts inside are about the SLOT, so they must name the WRITE and not this
+   line — see cow.h's THE SITE TRAVELS WITH THE OPERATION. */
+static void dr_set_at(JSContext *ctx, DomRectBox *b, JSValue *slot, JSValue v,
+                      const char *file, int line)
 {
-    cow_record_set(ctx, b, &DOM_RECT_REC, slot, v);
+    cow_record_set_at(ctx, b, &DOM_RECT_REC, slot, v, file, line);
 }
+#define dr_set(ctx_, b_, slot_, v_) dr_set_at((ctx_), (b_), (slot_), (v_), __FILE__, __LINE__)
 
 bool dom_rect_is(JSValueConst v)
 {

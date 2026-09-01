@@ -249,10 +249,14 @@ static XhrData *xhr_of(JSValueConst v)
    layout of another. Every write below goes through it; the CONSTRUCTOR does not, and that is the one honest
    exception: before JS_SetOpaque the record is unreachable by the collector and its slots hold no value to
    release. */
-static void xhr_set(JSContext *ctx, XhrData *d, JSValue *slot, JSValue v)
+/* THE ADDRESS PASSES THROUGH: the asserts inside are about the SLOT, so they must name the WRITE and not this
+   line — see cow.h's THE SITE TRAVELS WITH THE OPERATION. */
+static void xhr_set_at(JSContext *ctx, XhrData *d, JSValue *slot, JSValue v,
+                       const char *file, int line)
 {
-    cow_record_set(ctx, d, &XHR_REC, slot, v);
+    cow_record_set_at(ctx, d, &XHR_REC, slot, v, file, line);
 }
+#define xhr_set(ctx_, d_, slot_, v_) xhr_set_at((ctx_), (d_), (slot_), (v_), __FILE__, __LINE__)
 
 /* THE COLLECTOR'S TWO ENTRIES REACH THE RECORD THROUGH JS_GetAnyOpaque, NEVER THROUGH g_xhr_class.
  *

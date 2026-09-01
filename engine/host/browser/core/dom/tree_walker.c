@@ -70,10 +70,14 @@ static WalkerData *walker_of(JSValueConst v)
    another record with this layout.
    tree_walker_new's mint does not come here: before JS_SetOpaque the record is unreachable by the collector
    and its calloc'd slot holds no value to release. */
-static void tw_set(JSContext *ctx, WalkerData *w, JSValue *slot, JSValue v)
+/* THE ADDRESS PASSES THROUGH: the asserts inside are about the SLOT, so they must name the WRITE and not this
+   line — see cow.h's THE SITE TRAVELS WITH THE OPERATION. */
+static void tw_set_at(JSContext *ctx, WalkerData *w, JSValue *slot, JSValue v,
+                      const char *file, int line)
 {
-    cow_record_set(ctx, w, &WALKER_REC, slot, v);
+    cow_record_set_at(ctx, w, &WALKER_REC, slot, v, file, line);
 }
+#define tw_set(ctx_, w_, slot_, v_) tw_set_at((ctx_), (w_), (slot_), (v_), __FILE__, __LINE__)
 
 /* The receiver, brand-checked. Every member of §6.2 is declared on the prototype, so a page can apply one to
    anything at all and the answer is a TypeError rather than a walk of nothing. */

@@ -109,10 +109,14 @@ static IterData *iter_of(JSValueConst v)
    thing that can say the pointer named one of them.
    node_iterator_new's mint does not come here, and that is the one honest exception: before JS_SetOpaque the
    record is unreachable by the collector and its calloc'd slots hold no value to release. */
-static void ni_set(JSContext *ctx, IterData *it, JSValue *slot, JSValue v)
+/* THE ADDRESS PASSES THROUGH: the asserts inside are about the SLOT, so they must name the WRITE and not this
+   line — see cow.h's THE SITE TRAVELS WITH THE OPERATION. */
+static void ni_set_at(JSContext *ctx, IterData *it, JSValue *slot, JSValue v,
+                      const char *file, int line)
 {
-    cow_record_set(ctx, it, &ITER_REC, slot, v);
+    cow_record_set_at(ctx, it, &ITER_REC, slot, v, file, line);
 }
+#define ni_set(ctx_, it_, slot_, v_) ni_set_at((ctx_), (it_), (slot_), (v_), __FILE__, __LINE__)
 
 static IterData *iter_here(JSContext *ctx, JSValueConst v)
 {

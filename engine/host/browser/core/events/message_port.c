@@ -111,10 +111,14 @@ static const CowRecord PORT_REC = { sizeof(PortData), PORT_VALS, 2 };
    A MOVE-OUT does not come here either, and it is not the same operation: §9.4.4's disentangle hands the slot's
    reference to the step state and clears the slot, so there is no release at all and no instant at which the
    slot names storage that has been given back. */
-static void mp_set(JSContext *ctx, PortData *d, JSValue *slot, JSValue v)
+/* THE ADDRESS PASSES THROUGH: the asserts inside are about the SLOT, so they must name the WRITE and not this
+   line — see cow.h's THE SITE TRAVELS WITH THE OPERATION. */
+static void mp_set_at(JSContext *ctx, PortData *d, JSValue *slot, JSValue v,
+                      const char *file, int line)
 {
-    cow_record_set(ctx, d, &PORT_REC, slot, v);
+    cow_record_set_at(ctx, d, &PORT_REC, slot, v, file, line);
 }
+#define mp_set(ctx_, d_, slot_, v_) mp_set_at((ctx_), (d_), (slot_), (v_), __FILE__, __LINE__)
 
 /* HOW MANY MESSAGES THE QUEUE HOLDS, building the Array on first use. Lazy because most ports never receive
    one and an Array per port is not free; the record's slot is JS_UNDEFINED until then. Returns 0 with an

@@ -108,14 +108,20 @@ bool transform_stream_is(JSValueConst v) { return g_ts_class != 0 && JS_GetOpaqu
    Each record binds its layout ONCE, here, so no site can pass a slot from one with the layout of the other.
    The two MINTS do not come here: each fills its block before JS_SetOpaque, where the record is unreachable by
    the collector and its slots hold no value to release. */
-static void tsd_set(JSContext *ctx, TsData *t, JSValue *slot, JSValue v)
+/* THE ADDRESS PASSES THROUGH: the asserts inside are about the SLOT, so they must name the WRITE and not this
+   line — see cow.h's THE SITE TRAVELS WITH THE OPERATION. */
+static void tsd_set_at(JSContext *ctx, TsData *t, JSValue *slot, JSValue v,
+                       const char *file, int line)
 {
-    cow_record_set(ctx, t, &TSD_REC, slot, v);
+    cow_record_set_at(ctx, t, &TSD_REC, slot, v, file, line);
 }
-static void tc_set(JSContext *ctx, TsCtrlData *c, JSValue *slot, JSValue v)
+static void tc_set_at(JSContext *ctx, TsCtrlData *c, JSValue *slot, JSValue v,
+                      const char *file, int line)
 {
-    cow_record_set(ctx, c, &TCD_REC, slot, v);
+    cow_record_set_at(ctx, c, &TCD_REC, slot, v, file, line);
 }
+#define tsd_set(ctx_, t_, slot_, v_) tsd_set_at((ctx_), (t_), (slot_), (v_), __FILE__, __LINE__)
+#define tc_set(ctx_, c_, slot_, v_)  tc_set_at((ctx_), (c_), (slot_), (v_), __FILE__, __LINE__)
 
 static void ts_finalizer(JSRuntime *rt, JSValue val)
 {
