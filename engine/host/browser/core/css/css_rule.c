@@ -80,8 +80,9 @@ enum { RULE_TYPE_STYLE = 1, RULE_TYPE_IMPORT = 3, RULE_TYPE_MEDIA = 4, RULE_TYPE
        what that costs: "no @layer rules are allowed between @import and @namespace rules. Any @layer rule that
        comes after an @import or @namespace rule will cause any subsequent @import or @namespace rules to be
        ignored."
-   Together those are exactly `[@layer statement]* [@import]* [@namespace]* [anything]*`, and §6.4 step 5's
-   "cannot be inserted ... due to constraints specified by CSS" is "the insertion would not match it".
+   Together those are exactly `[@layer statement]* [@import]* [@namespace]* [anything]*`, and §6.4 step 6's
+   "cannot be inserted into list at the zero-indexed position index due to constraints specified by CSS" is,
+   here, that the insertion would not match it.
    IT IS A SET OF ZONES PER RULE TYPE AND NOT A RANK, AND THE `@layer` STATEMENT IS WHY — it is the one type
    with TWO admissible positions, which a single rank per type cannot state. The comment this replaces
    PREDICTED that such a rule would simply take `@import`'s rank, and that was wrong in BOTH directions: a rank
@@ -1979,9 +1980,9 @@ static bool zone_take(unsigned zones, int *pfloor)
     return false;
 }
 
-/* §6.4 STEP 5 — "if new rule cannot be inserted into list at the zero-indexed position index due to
-   constraints specified by CSS, throw a HierarchyRequestError", whose own note is "for example, a CSS style
-   sheet cannot contain an @import at-rule after a style rule".
+/* §6.4 STEP 6 — "If new rule cannot be inserted into list at the zero-indexed position index due to
+   constraints specified by CSS, then throw a HierarchyRequestError exception", whose own note is "For example,
+   a CSS style sheet cannot contain an @import at-rule after a style rule."
      - `nested` set (§6.4.5's insertRule, into a grouping rule): an `@import` and an `@namespace` cannot go
        inside one AT ALL — CSS Cascade §2 and CSS Namespaces §2 both state their position relative to a STYLE
        SHEET, and neither is a rule a conditional group may contain.
@@ -1992,7 +1993,7 @@ static bool zone_take(unsigned zones, int *pfloor)
    CSS Paged Media §4.3's "the @page rule can only contain page properties and margin at-rules" is NOT asked
    here, and that is not an omission: step 3's parse runs with the enclosing rule already in hand (see
    `rule_from_parse`, which is reached from this algorithm and from the sheet parse alike), so a style rule
-   written into an `@page` is dropped by CSS Syntax before step 4 counts the rules and the answer is step 4's
+   written into an `@page` is dropped by CSS Syntax before step 5 counts the rules and the answer is step 5's
    SyntaxError. Asking again here would be an arm no input can reach. */
 static bool insert_position_ok(JSContext *ctx, JSValueConst list, uint32_t index, uint16_t type, bool nested)
 {
@@ -2005,7 +2006,7 @@ static bool insert_position_ok(JSContext *ctx, JSValueConst list, uint32_t index
     if (nested) return type != RULE_TYPE_IMPORT && type != RULE_TYPE_NAMESPACE;
     n = array_len(ctx, list);
     DCHECK(index <= n,
-           "§6.4 step 5 was asked about an index past the end of the rule list — step 2 refuses one before the "
+           "§6.4 step 6 was asked about an index past the end of the rule list — step 2 refuses one before the "
            "parse even runs, and this step runs after it");
     /* THE RESULTING LIST, walked once: position k holds the new rule at `index` and the old list either side. */
     for (k = 0; k <= n; k++) {
@@ -2017,7 +2018,7 @@ static bool insert_position_ok(JSContext *ctx, JSValueConst list, uint32_t index
 }
 
 /* §6.4's "list contains anything other than @import at-rules, and @namespace at-rules" — the condition BOTH
-   step 6 of insert and step 4 of remove are stated over, so it is one function reached from two places rather
+   step 7 of insert and step 4 of remove are stated over, so it is one function reached from two places rather
    than two spellings of one sentence.
    IT IS ASKED OF THE ZONE TABLE AND NOT OF A SECOND ENUMERATION, and that is what makes it right for a rule
    CSSOM's sentence could not name. The two at-rules CSSOM lists ARE the sheet prologue as CSSOM knew it, and
@@ -2071,7 +2072,7 @@ JSValue css_rule_list_insert(JSContext *ctx, JSValueConst list, JSValueConst par
         rule_unbuilt_fail(b.unbuilt);
         return JS_ThrowDOMException(ctx, "SyntaxError", "the rule could not be parsed as a single CSS rule");
     }
-    /* STEP 4 — "if new rule is a syntax error, throw a SyntaxError". Nothing parsed, more than one rule did, or
+    /* STEP 5 — "if new rule is a syntax error, throw a SyntaxError". Nothing parsed, more than one rule did, or
        the one that did was the type the spec itself drops (`@charset`), which is not a rule a page inserts. */
     if (n != 1) {
         JS_FreeValue(ctx, scratch);
@@ -2085,13 +2086,13 @@ JSValue css_rule_list_insert(JSContext *ctx, JSValueConst list, JSValueConst par
         CssRuleData *nr = rule_of(built);
 
         DCHECK(nr != NULL, "§6.4's insert a CSS rule lost the rule it just parsed");
-        if (!insert_position_ok(ctx, list, index, nr->type, nested)) {          /* STEP 5 */
+        if (!insert_position_ok(ctx, list, index, nr->type, nested)) {          /* STEP 6 */
             JS_FreeValue(ctx, built);
             return JS_ThrowDOMException(ctx, "HierarchyRequestError",
                                         "a rule of this type cannot be inserted at this position");
         }
-        /* STEP 6 — "if new rule is an @namespace at-rule, and list contains anything other than @import
-           at-rules, and @namespace at-rules, throw an InvalidStateError". It is NOT step 5 restated: the
+        /* STEP 7 — "if new rule is an @namespace at-rule, and list contains anything other than @import
+           at-rules, and @namespace at-rules, throw an InvalidStateError". It is NOT step 6 restated: the
            position may be perfectly legal (an `@namespace` at index 0 of a sheet whose only other rule is a
            style rule passes the rank test) and the insertion is still refused, which is exactly what
            css/cssom/at-namespace.html asserts. */
@@ -2102,8 +2103,8 @@ JSValue css_rule_list_insert(JSContext *ctx, JSValueConst list, JSValueConst par
                                         "anything other than @import and @namespace rules");
         }
     }
-    rules_insert_at(ctx, list, index, built);            /* STEP 7 */
-    return JS_NewUint32(ctx, index);                     /* STEP 8 */
+    rules_insert_at(ctx, list, index, built);            /* STEP 8 */
+    return JS_NewUint32(ctx, index);                     /* STEP 9 */
 }
 
 JSValue css_rule_list_delete(JSContext *ctx, JSValueConst list, uint32_t index)
@@ -2130,6 +2131,100 @@ JSValue css_rule_list_delete(JSContext *ctx, JSValueConst list, uint32_t index)
     rule_orphan(ctx, old);                           /* STEP 6 */
     JS_FreeValue(ctx, old);
     return JS_UNDEFINED;
+}
+
+/* §6.4's REMOVE A CSS RULE, STEPS 2 AND 3, OVER AN UNKNOWN `index` — see css_rule.h for why the two steps are
+   ONE question here and why each link's key names a NUMBER rather than a rank.
+   THE SHAPE IS core/timing/timer.c's clearTimeout CHAIN and deliberately not a second mechanism: an N-way ask
+   whose completions were positions would file one key per LIST LENGTH and press the return protocol's ceiling
+   for a sheet with many rules, where a chain of two-armed asks forks ONE sibling per link, is drawn lazily as
+   the scheduler picks the machine up again, and keeps `n == 2` at every ask.
+   THE ORDER IS ASCENDING AND THE PARENT SITS ON THE EXAMPLE'S ARM AT EVERY LINK. The sequence is a function of
+   the list length alone, so it is the same sequence in a sibling's snapshot, after a park, and in a session
+   that resumes this flow from the cold tier; the parent answers each question with what its own example says
+   (NO at every position the example is not, YES at the one it is), so the example marks the real arm primary
+   at every link, which is §Learning-from-replies' rule. With NO example the parent walks the whole chain
+   and throws, and one sibling per position carries the removal — neither arm marked forced, because nothing
+   was contradicted.
+   OUTCOME 0 IS "NO" AT EVERY LINK, which is step_fork_run's one numbering rule read against this predicate.
+   A run with no forking policy — the @S candidate re-fire — answers NO all the way down and removes nothing.
+   It must: `deleteRule` DELETES page state, so a numbering that put a removal on the arm a re-fire takes would
+   let a candidate tear out the very rule whose sink it is running to reach. */
+int css_rule_delete_index_run(JSContext *ctx, JSStepHdr *hdr, CssRuleIndexChain *c,
+                              JSValueConst index_v, JSValueConst list, uint32_t *pindex)
+{
+    uint32_t n;
+    double num = 0;
+    int have;
+
+    DCHECK(JS_IsArray(list), "§6.4's remove a CSS rule was given something that is not a CSS rule list");
+    DCHECK(concolic_is(index_v),
+           "§6.4's step 2 elimination chain was asked about an index that is NOT unknown external input — a "
+           "converted `unsigned long` is idl_number_of's to read and reaches its position directly, so a known "
+           "value here means the caller routed the wrong arm and would fork over a number it already has");
+    n = array_len(ctx, list);
+    /* THE EXAMPLE IS READ ONCE PER ENTRY AND ABOVE THE CHAIN, so every question this activation asks is decided
+       against ONE reading of it — taking it again inside the loop would be two reads of one example with
+       nothing forcing them to agree. `have` is 0 for an unknown carrying no example, which is a POSITIVE fact
+       the chain reads as JS_OUTCOME_REAL_UNSTATED and never as a position to fall back on. */
+    have = idl_number_of(ctx, IDL_UNSIGNED_LONG, index_v, &num);
+
+    for (;;) {
+        uint32_t k = c->next;
+        int arm = 0, real, rc, wrote;
+
+        /* EVERY POSITION ELIMINATED, WHICH IS STEP 2'S OWN TRUE ARM: "If index is greater than or equal to
+           length, then throw an "IndexSizeError" exception". §3.2.4.6 unsigned long admits no value below 0,
+           so "none of 0 … length-1" and "greater than or equal to length" are the same statement about this
+           value. It is also the WHOLE answer for an EMPTY list, which is why an empty one asks no question:
+           one feasible completion is not a fork, it is the answer. */
+        if (k >= n) {
+            JS_ThrowDOMException(ctx, "IndexSizeError", "the index is at or past the end of the rule list");
+            return JS_STEP_ABRUPT;
+        }
+        /* THE MACHINE'S SECOND DECLARATION — which completion this operation reaches on the operand's own
+           EXAMPLE, computed by RUNNING the comparison rather than by a rule predicting it. §3.2.4.6's
+           ConvertToInt(V, 32, "unsigned") has already been run on the example above, through the one copy of
+           that arithmetic, so its result is an integer in [0, 2**32-1] and the cast below is exact. */
+        real = have ? ((uint32_t)num == k) : JS_OUTCOME_REAL_UNSTATED;
+        wrote = snprintf(c->op, sizeof c->op,
+                         "CSSOM §6.4 CSS Rules remove a CSS rule steps 2-3 (index is %u)", (unsigned)k);
+        /* A TRUNCATED OPERATION STRING MERGES TWO PREDICATES. The position is the LAST thing in this string, so
+           a buffer one byte short would file two positions under one key and let one link's record decide
+           another's. snprintf reports what it WOULD have written, which is the only way to see it. */
+        DCHECK(wrote > 0 && (size_t)wrote < sizeof c->op,
+               "§6.4's step 2 elimination chain could not spell the position its question is about — the "
+               "operation string is half the constraint key and the position is its tail, so a truncated one "
+               "names a DIFFERENT position's question and the flow answers it with this one's record");
+        rc = step_fork_run(ctx, hdr, index_v, c->op, 2, real, &arm);
+        if (rc)
+            return rc;
+        DCHECK(arm == 0 || arm == 1, "a two-armed outcome fork answered with an arm that is neither of them");
+        /* NAMED RESIDUAL — the DECISION is recorded and the value's DOMAIN is not, which is narrower than
+           §Solver's concretize-on-pin and is not wrong: an unnarrowed value keeps arms, and keeping an arm is
+           the sound direction. WHAT IS NOT COVERED: each link is an equality over `index` — the YES arm proves
+           it IS this position and the NO arm proves it is NOT — and neither fact reaches the value; only the
+           decision vector holds them. WHAT THE NEXT DIFF BUILDS: the pin and the exclusion decide.c already
+           takes at a bytecode equality, taken over the OPERAND's own identity rather than off a comparison
+           RESULT this seam does not have — the same piece core/timing/timer.c's chain names, and one piece for
+           both. HOW ITS ABSENCE SHOWS: a flow that has answered YES at some position and then reaches a second
+           `deleteRule(index)` mints a sibling for every OTHER position the list holds — worlds its own path has
+           already contradicted — and an @H parameter carrying this value renders with no domain beside it
+           where the run observed one. */
+        if (arm == 1) {
+            /* THIS WORLD'S ANSWER: `index` IS this position, so step 3's "the indexth item in list" names it.
+               The length was read at the top of this same entry and nothing has run since — step_fork_run runs
+               none of the page's code and the driver only clones and re-enters — so the caller's own read of
+               the list cannot disagree with the one this chain was drawn against. */
+            *pindex = k;
+            return 0;
+        }
+        /* ELIMINATED: `index` is not this position, so the next question is about the next one. The cursor is
+           advanced AFTER the answer and never before the ask, which is what makes the two arms agree: the
+           sibling's snapshot was taken with the cursor still at `k`, so it re-asks about the same position and
+           answers the other way. */
+        c->next = k + 1;
+    }
 }
 
 /* ---- §6.4's SERIALIZE A CSS RULE ---------------------------------------------------------------------------- */
@@ -3740,9 +3835,13 @@ static JSValue js_rule_insert_rule(JSContext *ctx, JSValueConst this_val, int ar
     (void)magic;
     if (!r) return JS_EXCEPTION;
     DCHECK(argc >= 1, "§6.4.5's insertRule reached its body with no rule — its first IDL argument is required");
-    /* Both arguments arrive CONVERTED: `CSSOMString rule` and `optional unsigned long index = 0` are the
-       declaration's work, so nothing here runs the page's code and the default is the IDL's. */
-    if (argc >= 2) JS_ToUint32(ctx, &index, argv[1]);
+    /* Both arguments arrive CONVERTED — `CSSOMString rule` and `optional unsigned long index = 0` are the
+       declaration's work — OR AS UNKNOWN EXTERNAL INPUT, which crosses a Web IDL §3.2 conversion AS ITSELF so
+       that opacity survives it. This comment used to stop at the first clause and conclude "so nothing here
+       runs the page's code", under which a raw `JS_ToUint32` of the index stood; §3.2's conversion is a
+       BOUNDARY and never a guarantee that what arrives is a Number. CSS_RULE_INSERT_INDEX reads the known
+       value through the one copy of the arithmetic and names the fork it cannot yet perform. */
+    if (argc >= 2) CSS_RULE_INSERT_INDEX(ctx, index, argv[1], "§6.4.5's `insertRule`");
     text = JS_ToCString(ctx, argv[0]);
     if (!text) return JS_EXCEPTION;
     list = rule_child_rules(ctx, this_val);
@@ -3752,22 +3851,103 @@ static JSValue js_rule_insert_rule(JSContext *ctx, JSValueConst this_val, int ar
     return out;
 }
 
-/* §6.4.5: "The deleteRule(index) method must remove a CSS rule from the child CSS rules at index." */
-static JSValue js_rule_delete_rule(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
-                                   int magic)
+/* §6.4.5: "The deleteRule(index) method must remove a CSS rule from the child CSS rules at index."
+ *
+ * IT IS A STEP MACHINE BECAUSE ITS ONE ARGUMENT CAN BE UNKNOWN, AND A PLAIN BODY CANNOT ASK. `JS_ToUint32` on
+ * `argv[0]` stood here under a comment saying the declaration had already converted it — the shape
+ * core/idl_args.h bans by name ("A BODY MAY NOT CALL JS_ToFloat64 ON ITS OWN ARGUMENT") — and Web IDL §3.2's
+ * conversion is a BOUNDARY unknown external input crosses AS ITSELF, so `rule.deleteRule(location.hash.length)`
+ * reached this line still holding the unknown and the coercion owed C a number it cannot have. That coercion
+ * does not return a wrong number: ToNumber hands a concolic straight back and the engine aborts INSIDE it, one
+ * frame below this file, which is why CHECKING THE RETURN IS NO DEFENCE — there is no return to check.
+ * THE KNOWN VALUE IS ANSWERED BY THE ONE COPY OF THE ARITHMETIC (`idl_number_of`), which for an
+ * already-converted argument is exactly the assert pair this site would otherwise write itself: the operand is
+ * a Number, and reading it back cannot throw. So the discarded return is not asserted dead, it is REMOVED.
+ * THE UNKNOWN IS §6.4's OWN FORK and asking it is what a plain body has nowhere to park for: step_fork_run
+ * snapshots the MACHINE, and a C activation has no state to clone. css_rule_delete_index_run holds the
+ * question; this body holds the receiver, the list and the completion. */
+#define RD_STAGES(X)                                                                                          \
+    X(RD_REMOVE,                                                                                              \
+      "CSSOM §6.4.5 The CSSGroupingRule Interface deleteRule(index) (the deleteRule(index) method must "       \
+      "remove a CSS rule from the child CSS rules at index)")
+enum { IDL_STEP_STAGE_BASE(RD_STAGES) RD_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const RD_STEPS[] = { RD_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+/* NOTHING IS OWNED, so the visit names nothing — the state is the chain's cursor and the buffer its key is
+   spelled into, neither of them a JSValue. It is DECLARED rather than omitted because a machine with no
+   `visit` cannot be forked and is refused at registration, and forking is the whole of what this one is for. */
+static void rd_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
+
+static int js_rule_delete_rule(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSValueConst *argv,
+                               JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
+    CssRuleIndexChain *s = state;
     uint32_t index = 0;
     JSValue list, out;
+    int rc;
 
-    (void)magic;
-    if (!rule_here_grouping(ctx, this_val)) return JS_EXCEPTION;
-    DCHECK(argc >= 1, "§6.4.5's deleteRule reached its body with no index — its IDL argument is required");
-    JS_ToUint32(ctx, &index, argv[0]);
-    list = rule_child_rules(ctx, this_val);
+    (void)out_cb; (void)out_argc;
+    /* This machine makes no request that delivers a value, so nothing below reads the answer to one. Freed on
+       every entry, above everything else, because it belongs to no link of the chain. */
+    JS_FreeValue(ctx, cb_result);
+    *presult = JS_UNDEFINED;
+    DCHECK(hdr->stage == RD_REMOVE,
+           "§6.4.5's deleteRule resumed into a stage the algorithm does not have — it is ONE sentence, and the "
+           "chain of questions it may ask is a cursor on this machine's own state rather than a stage apiece, "
+           "so a second stage means a resume landed in another algorithm's numbering");
+    /* §6.4.5 declares no `optional`, so a short call is the DECLARATION's to refuse. An equality and not a
+       `>=`, so the day this member's IDL grows a position the assert names the line below that assumes one. */
+    DCHECK(argc == 1,
+           "§6.4.5's deleteRule reached its body with an argument count its declaration does not produce — its "
+           "one `unsigned long index` is required, so §3.6's argument-count check refuses a shorter call before "
+           "this body is entered");
+    /* Re-derived on every entry rather than held across the fork, for the reason core/timing/timer.c gives for
+       its own global: no line between the entry and the ask runs the page's code — step_fork_run only clones
+       and re-enters — so re-deriving cannot answer differently, and holding a rule record on a state that
+       PARKS would keep a raw C pointer across a park. */
+    if (!rule_here_grouping(ctx, hdr->this_val))
+        return JS_STEP_ABRUPT;   /* §3.7.7 Operations' TypeError on a receiver that is not a grouping rule */
+    list = rule_child_rules(ctx, hdr->this_val);
+    if (concolic_is(argv[0])) {
+        rc = css_rule_delete_index_run(ctx, hdr, s, argv[0], list, &index);
+        if (rc) {
+            JS_FreeValue(ctx, list);
+            return rc;   /* parked at the fork, or step 2's IndexSizeError already thrown */
+        }
+    } else {
+        double d = 0;
+        int have = idl_number_of(ctx, IDL_UNSIGNED_LONG, argv[0], &d);
+
+        DCHECK(have,
+               "§3.2.4.6's conversion produced no number for a position this arm has already established is "
+               "NOT unknown external input — idl_number_of answers 0 only for an unknown carrying no example, "
+               "so a 0 here is a value that is neither a Number nor a concolic reaching a body whose "
+               "declaration converts its one numeric argument");
+        /* §3.2.4.6 `unsigned long`'s own postcondition: §3.2.4.9 Abstract operations' ConvertToInt takes the
+           integer part modulo 2**32, so the result is always an integer in [0, 2**32-1] — NaN and both
+           infinities became +0 in the conversion. */
+        DCHECK(d >= 0 && d <= 4294967295.0 && d == (double)(uint32_t)d,
+               "§3.2.4.6's `unsigned long` conversion answered something that is not an unsigned long — its "
+               "result is the integer part taken modulo 2**32, so a value outside it, or one with a fraction, "
+               "means this position was never converted by anything");
+        index = (uint32_t)d;
+    }
     out = css_rule_list_delete(ctx, list, index);
     JS_FreeValue(ctx, list);
-    return out;
+    if (JS_IsException(out))
+        return JS_STEP_ABRUPT;
+    *presult = out;
+    return JS_STEP_DONE;
 }
+
+/* The last two are STATED rather than left to the initializer, because both are declarations and not padding:
+   `catches_abrupt` 0 says this algorithm does NOT handle an abrupt request result itself — it makes no request
+   that can deliver one, so the epilogue's handling is the right one — and `unforkable` NULL says this machine
+   may ALWAYS be forked, which is the whole of what it exists for. */
+static const IdlStepDecl RD_DECL = {
+    js_rule_delete_rule, sizeof(CssRuleIndexChain), rd_visit, NULL,
+    "CSSOM §6.4.5 The CSSGroupingRule Interface deleteRule(index)", RD_STEPS, 0, NULL
+};
 
 /* ---- §6.4.3's `style`, and the DECLARATIONS behind it ----------------------------------------------------- */
 
@@ -4329,7 +4509,11 @@ void css_rule_init(JSContext *ctx)
 
         g_id_insert_rule = idl_method_id(ctx, INSERT, 2, js_rule_insert_rule, 0);
         idl_optional_from(1);
-        g_id_delete_rule = idl_method_id(ctx, ONE_ULONG, 1, js_rule_delete_rule, 0);
+        /* §6.4.5's `deleteRule` IS A MACHINE, and it is a DECLARATION rather than a dispatch: nothing asks at
+           a call site which implementation to run, because there is no second body for anything to select
+           against. Its one `unsigned long index` can be unknown external input, and asking §6.4's step 2 over
+           one needs a state to snapshot. */
+        g_id_delete_rule = idl_method_id_step(ctx, ONE_ULONG, 1, NULL, 0, &RD_DECL, 0);
         g_id_append_rule = idl_method_id(ctx, ONE_STRING, 1, js_rule_append_rule, 0);
         g_id_kf_delete_rule = idl_method_id(ctx, ONE_STRING, 1, js_rule_kf_delete_rule, 0);
         g_id_find_rule = idl_method_id(ctx, ONE_STRING, 1, js_rule_find_rule, 0);

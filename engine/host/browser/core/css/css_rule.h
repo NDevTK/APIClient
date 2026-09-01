@@ -138,6 +138,7 @@
 #include <stdint.h>
 
 #include "quickjs.h"
+#include "quickjs-step.h"
 #include "core/css/css_layer_order.h"
 
 void css_rule_init(JSContext *ctx);
@@ -169,14 +170,118 @@ void css_rule_set_block_text(JSContext *ctx, JSValueConst rule, const char *text
  *
  * `list` is the Array the rules live in, `parent_sheet` the CSS style sheet every rule in it names, and
  * `parent_rule` the enclosing rule (JS_NULL at a sheet's top level). `nested` is the spec's own flag, and it is
- * what decides step 5: an `@import` or an `@namespace` cannot go inside a conditional group rule AT ALL, while
- * at a SHEET's top level step 5 is the RANK ORDER CSS Cascade §2 and CSS Namespaces §2 state (imports, then
+ * what decides step 6: an `@import` or an `@namespace` cannot go inside a conditional group rule AT ALL, while
+ * at a SHEET's top level step 6 is the RANK ORDER CSS Cascade §2 and CSS Namespaces §2 state (imports, then
  * namespaces, then everything else), asked in BOTH directions — a style rule inserted before an existing
  * `@import` is refused by the same test that refuses an `@import` inserted after one.
- * `css_rule_list_insert` answers §6.4 step 8's index, or an exception with the right DOMException pending. */
+ * `css_rule_list_insert` answers §6.4 step 9's index, or an exception with the right DOMException pending. */
 JSValue css_rule_list_insert(JSContext *ctx, JSValueConst list, JSValueConst parent_sheet,
                              JSValueConst parent_rule, uint32_t index, const char *text, bool nested);
 JSValue css_rule_list_delete(JSContext *ctx, JSValueConst list, uint32_t index);
+
+/* §6.4's "REMOVE A CSS RULE" STEP 2 OVER AN UNKNOWN INDEX, AS AN ELIMINATION CHAIN — the one thing either
+ * `deleteRule` needs that neither of their files can state, because the algorithm the step belongs to lives
+ * here and both members are declared over it.
+ *
+ * BOTH `deleteRule`s TAKE A `unsigned long index` THAT UNKNOWN EXTERNAL INPUT REACHES AS ITSELF. Web IDL
+ * §3.2's conversion is a boundary an unknown CROSSES (core/idl_args.h's `idl_number_of` states the rule and
+ * names the shape that breaks it: "A BODY MAY NOT CALL JS_ToFloat64 ON ITS OWN ARGUMENT"), so
+ * `sheet.deleteRule(location.hash.length - 1)` arrives holding the unknown, and a body owing C a `uint32_t`
+ * for it has no number to give.
+ *
+ * IT IS ONE QUESTION AND THE CHAIN IS ITS DECOMPOSITION. §6.4's remove-a-CSS-rule step 2 is "If index is
+ * greater than or equal to length, then throw an "IndexSizeError" exception", and step 3 is "Set old rule to
+ * the indexth item in list" — so the algorithm needs the comparison AND the position, and answering only the
+ * first would leave step 3 holding an unknown again. §3.2.4.6 unsigned long's ConvertToInt(V, 32, "unsigned")
+ * is TOTAL over [0, 2**32-1], which makes the two questions one: `index >= length` is exactly "index is none
+ * of 0 … length-1", because the type admits no value below 0. So the chain asks `index == k` for each k the
+ * list has, ascending; the arm that says YES pins the position step 3 reads, and EXHAUSTING the chain IS step
+ * 2's own true arm. There is no separate ask for step 2 and no second key over one fact.
+ *
+ * EACH LINK'S KEY NAMES A NUMBER AND NEVER A RANK, which is what makes it survive a park and a mutation.
+ * §the-rule-generalises-to-every-recorded-ordinal is about a completion whose name is a POSITION IN A SET THE
+ * PAGE MUTATES — answer "the entry at rank 0", shorten the set, and the recorded answer names something else.
+ * Here the operand IS the number: `index == 3` is a fact about the value the page computed, true in the same
+ * words after the list grows, shrinks or is rebuilt in another session. That is also why a chain drawn against
+ * a CHANGED length stays sound — a flow that answered NO at 0, 1 and 2 has established `index >= 3`, so a
+ * later shorter list exhausts immediately and throws, which is what step 2 says about that world.
+ *
+ * `c` is the machine's own state and MUST live on it rather than in a C local: `next` is the cursor a park
+ * resumes on, and `op` is read by the DRIVER after this function has returned, so a stack buffer would dangle
+ * exactly where the constraint key is built (core/timing/timer.c's clearTimeout chain says the same of its
+ * own, and this is that shape).
+ *
+ * Returns >0 (the caller returns it — the flow is parked at the fork), 0 with `*pindex` this world's position,
+ * or JS_STEP_ABRUPT with step 2's IndexSizeError live. `index_v` must be unknown external input; the known
+ * value is `idl_number_of`'s and never comes here. */
+typedef struct {
+    uint32_t next;
+    char     op[160];
+} CssRuleIndexChain;
+
+int css_rule_delete_index_run(JSContext *ctx, JSStepHdr *hdr, CssRuleIndexChain *c,
+                              JSValueConst index_v, JSValueConst list, uint32_t *pindex);
+
+/* THE SAME `unsigned long index`, READ BY THE OTHER TWO MEMBERS — §6.1.2's and §6.4.5's `insertRule`, which are
+ * declared over §6.4's INSERT a CSS rule. The KNOWN value is answered here, by the one copy of the arithmetic;
+ * the UNKNOWN is a fork these two bodies cannot yet perform, and it ABORTS naming what to build rather than
+ * coercing.
+ *
+ * THEY ARE NOT MACHINES YET AND THE REASON IS THE STEP THE INDEX SHARES ITS BODY WITH. §6.4's insert-a-CSS-rule
+ * step 2 is "If index is greater than length, then throw an "IndexSizeError" exception" — `>` and not `>=`,
+ * because appending at the very end is legal — so its chain runs over 0 … length, ONE position longer than
+ * remove's; that part is a parameter and not an obstacle. What is an obstacle is that these bodies hold a
+ * SECOND unknown: `CSSOMString rule` reaches the same body and `JS_ToCString` on unknown external input is the
+ * string half of exactly this defect, which is a different question with a different reader
+ * (core/idl_args.h's `concolic_name_cstr`). Converting the index here and not the text would leave a machine
+ * that parks on one argument and aborts on the other one line later — so the two are converted together, in
+ * the diff that answers the string, and until then this states the position honestly.
+ *
+ * WHAT THE NEXT DIFF BUILDS: these two bodies become IdlStepBody machines exactly as the two `deleteRule`s now
+ * are, `css_rule_delete_index_run` gains the `>` / `>=` parameter that is the whole difference between the two
+ * algorithms' step 2, and §6.1.2's own steps 3-5 (parse a rule, then its two SyntaxError arms) become the
+ * stages that precede it — which is the ordering this file does not have today either, since
+ * `css_rule_list_insert` parses AFTER its step 2 and §6.1.2 parses BEFORE reaching it.
+ * HOW ITS ABSENCE SHOWS: `sheet.insertRule(text, location.hash.length)` aborts in a dev build naming this
+ * macro, where the two `deleteRule`s beside it fork; and a page that reaches an `insertRule` behind an unknown
+ * index contributes no rule-list world to the frontier at all.
+ *
+ * A MACRO AND NOT A HELPER, because a should-never-happen stamps the line it is WRITTEN at: one function shared
+ * by two members in two files would report its own line for both. `member` is what lets the abort say which. */
+#define CSS_RULE_INSERT_INDEX(ctx_, dst_, arg_, member_)                                                      \
+    do {                                                                                                      \
+        JSValueConst cri_v_ = (arg_);                                                                         \
+        double cri_n_ = 0;                                                                                    \
+                                                                                                              \
+        if (concolic_is(cri_v_)) {                                                                            \
+            DFAIL("CSSOM " member_ " was given an UNKNOWN `index`. §6.4 CSS Rules' insert a CSS rule step 2 "  \
+                  "is: If index is greater than length, then throw an \"IndexSizeError\" exception. That is a "\
+                  "comparison over this value, and Web IDL §3.2.4.6 unsigned long's ConvertToInt(V, 32, "      \
+                  "\"unsigned\") is total over [0, 2**32-1], so BOTH completions are feasible and neither arm "\
+                  "may be chosen. Deciding it from the unknown's own example would collapse a modelable value "\
+                  "to bare-concrete and delete the other arm. BUILD THE FORK: make this body an IdlStepBody "  \
+                  "(core/idl_args.h, IDL_STEP_FIRST) so it can park, then ask step 2 through the elimination "  \
+                  "chain css_rule_delete_index_run already is — see this macro's own comment in "              \
+                  "core/css/css_rule.h for why the string argument beside this one is converted in the same "  \
+                  "diff and not after it");                                                                   \
+            /* THE MACRO RETURNS, and both bodies that expand it return JSValue. It has to: DFAIL is          \
+               `((void)0)` in a release build, so without this the branch would fall through with `dst_` at   \
+               its initializer and insert at position 0 — a plausible datum for a call whose index nobody     \
+               knows, and one that MUTATES the sheet. Throwing is what the coercion this replaced already did \
+               in release at the same boundary. */                                                            \
+            return JS_ThrowTypeError((ctx_),                                                                  \
+                                     "`insertRule` was given an unknown `index`, and CSSOM §6.4's insert a "   \
+                                     "CSS rule step 2 over it is not modelled yet");                          \
+        } else {                                                                                              \
+            int cri_have_ = idl_number_of((ctx_), IDL_UNSIGNED_LONG, cri_v_, &cri_n_);                        \
+                                                                                                              \
+            DCHECK(cri_have_ == 1,                                                                            \
+                   "idl_number_of found no number for the `index` of " member_ ", which is not unknown "       \
+                   "external input — it answers 0 only for an unknown carrying no example, and that arm "     \
+                   "returned above");                                                                         \
+            (dst_) = (uint32_t)cri_n_;                                                                        \
+        }                                                                                                     \
+    } while (0)
 
 /* CSS Syntax's PARSE A STYLESHEET'S CONTENTS, as §6.4 rule OBJECTS appended to `list` — what HTML §4.2.6's
    sheet creation runs. `parent_sheet` is the sheet every rule in it names. */

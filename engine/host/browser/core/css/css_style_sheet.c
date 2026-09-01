@@ -422,9 +422,13 @@ static JSValue js_sheet_insert_rule(JSContext *ctx, JSValueConst this_val, int a
     (void)magic;
     if (!s) return JS_EXCEPTION;
     DCHECK(argc >= 1, "§6.1.2's insertRule reached its body with no rule — its first IDL argument is required");
-    /* Both arguments arrive CONVERTED: `CSSOMString rule` and `optional unsigned long index = 0` are the
-       declaration's work, so nothing here runs the page's code and the default is the IDL's. */
-    if (argc >= 2) JS_ToUint32(ctx, &index, argv[1]);
+    /* Both arguments arrive CONVERTED — `CSSOMString rule` and `optional unsigned long index = 0` are the
+       declaration's work — OR AS UNKNOWN EXTERNAL INPUT, which crosses a Web IDL §3.2 conversion AS ITSELF so
+       that opacity survives it. This comment used to stop at the first clause and conclude "so nothing here
+       runs the page's code", under which a raw `JS_ToUint32` of the index stood; §3.2's conversion is a
+       BOUNDARY and never a guarantee that what arrives is a Number. CSS_RULE_INSERT_INDEX reads the known
+       value through the one copy of the arithmetic and names the fork it cannot yet perform. */
+    if (argc >= 2) CSS_RULE_INSERT_INDEX(ctx, index, argv[1], "§6.1.2's `insertRule`");
     text = JS_ToCString(ctx, argv[0]);
     if (!text) return JS_EXCEPTION;
     /* A rule at a SHEET's top level has no enclosing rule, which is §6.4.2's parent CSS rule being null. */
@@ -433,19 +437,104 @@ static JSValue js_sheet_insert_rule(JSContext *ctx, JSValueConst this_val, int a
     return out;
 }
 
-/* §6.1.2's `deleteRule(index)`: "remove a CSS rule in the CSS rules at index". */
-static JSValue js_sheet_delete_rule(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
-                                    int magic)
-{
-    CssStyleSheetData *s = sheet_here(ctx, this_val);
-    uint32_t index = 0;
+/* §6.1.2's `deleteRule(index)` STEP 3: "Remove a CSS rule in the CSS rules at index." That is the LAST of its
+ * three steps — step 1 is the origin-clean check and step 2 the disallow-modification flag — and neither of the
+ * first two is modelled: every sheet this build creates is one HTML §4.2.6 sets the origin-clean flag for (see
+ * `js_sheet_css_rules` above, which says the same of its own step 1), and §6.1.2's `replace` — the ONE
+ * algorithm in CSSOM whose steps say "Set the disallow modification flag" — is not a member of this engine at
+ * all, for the reason `css_style_sheet_install` states about the constructor it hangs off.
+ *
+ * IT IS A STEP MACHINE BECAUSE ITS ONE ARGUMENT CAN BE UNKNOWN, AND A PLAIN BODY CANNOT ASK. `JS_ToUint32` on
+ * `argv[0]` stood here — the shape core/idl_args.h bans by name ("A BODY MAY NOT CALL JS_ToFloat64 ON ITS OWN
+ * ARGUMENT") — and Web IDL §3.2's conversion is a BOUNDARY unknown external input crosses AS ITSELF, so
+ * `sheet.deleteRule(location.hash.length)` reached that line still holding the unknown and the coercion owed C
+ * a number it cannot have. ToNumber hands a concolic straight back, so the engine aborts INSIDE the coercion,
+ * one frame below this file: checking its return would have been no defence, because there is no return to
+ * check. The known value now goes through `idl_number_of`, §3.2's one reader for a body that needs a real
+ * number, and the discarded return is REMOVED rather than asserted dead.
+ * THE UNKNOWN IS §6.4's OWN FORK — css_rule_delete_index_run holds the question, and it lives beside the
+ * algorithm in core/css/css_rule.c because §6.4.5's `deleteRule` is stated over the same one. */
+#define SD_STAGES(X)                                                                                          \
+    X(SD_REMOVE,                                                                                              \
+      "CSSOM §6.1.2 The CSSStyleSheet Interface deleteRule(index) step 3 (remove a CSS rule in the CSS rules "  \
+      "at index)")
+enum { IDL_STEP_STAGE_BASE(SD_STAGES) SD_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const SD_STEPS[] = { SD_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-    (void)magic;
-    if (!s) return JS_EXCEPTION;
-    DCHECK(argc >= 1, "§6.1.2's deleteRule reached its body with no index — its IDL argument is required");
-    JS_ToUint32(ctx, &index, argv[0]);
-    return css_rule_list_delete(ctx, s->rules, index);
+/* NOTHING IS OWNED, so the visit names nothing — the state is the chain's cursor and the buffer its key is
+   spelled into, neither of them a JSValue. It is DECLARED rather than omitted because a machine with no
+   `visit` cannot be forked and is refused at registration, and forking is the whole of what this one is for. */
+static void sd_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
+
+static int js_sheet_delete_rule(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSValueConst *argv,
+                                JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    CssRuleIndexChain *c = state;
+    CssStyleSheetData *s;
+    uint32_t index = 0;
+    JSValue out;
+    int rc;
+
+    (void)out_cb; (void)out_argc;
+    /* This machine makes no request that delivers a value, so nothing below reads the answer to one. Freed on
+       every entry, above everything else, because it belongs to no link of the chain. */
+    JS_FreeValue(ctx, cb_result);
+    *presult = JS_UNDEFINED;
+    DCHECK(hdr->stage == SD_REMOVE,
+           "§6.1.2's deleteRule resumed into a stage the algorithm does not have — its one modelled step is "
+           "step 3, and the chain of questions that step may ask is a cursor on this machine's own state "
+           "rather than a stage apiece, so a second stage means a resume landed in another algorithm's "
+           "numbering");
+    /* §6.1.2 declares no `optional` on this member, so a short call is the DECLARATION's to refuse. An equality
+       and not a `>=`, so the day this member's IDL grows a position the assert names the line that assumes one. */
+    DCHECK(argc == 1,
+           "§6.1.2's deleteRule reached its body with an argument count its declaration does not produce — its "
+           "one `unsigned long index` is required, so §3.6's argument-count check refuses a shorter call before "
+           "this body is entered");
+    /* Re-derived on every entry rather than held across the fork: no line between the entry and the ask runs
+       the page's code — step_fork_run only clones and re-enters — so re-deriving cannot answer differently,
+       and holding the record on a state that PARKS would keep a raw C pointer across a park. The accessor is
+       also what captures the sheet into the running flow's COW delta, which a held pointer would skip. */
+    s = sheet_here(ctx, hdr->this_val);
+    if (!s)
+        return JS_STEP_ABRUPT;   /* §3.7.7 Operations' TypeError on a receiver that is not a CSSStyleSheet */
+    if (concolic_is(argv[0])) {
+        rc = css_rule_delete_index_run(ctx, hdr, c, argv[0], s->rules, &index);
+        if (rc)
+            return rc;   /* parked at the fork, or §6.4 step 2's IndexSizeError already thrown */
+    } else {
+        double d = 0;
+        int have = idl_number_of(ctx, IDL_UNSIGNED_LONG, argv[0], &d);
+
+        DCHECK(have,
+               "§3.2.4.6's conversion produced no number for a position this arm has already established is "
+               "NOT unknown external input — idl_number_of answers 0 only for an unknown carrying no example, "
+               "so a 0 here is a value that is neither a Number nor a concolic reaching a body whose "
+               "declaration converts its one numeric argument");
+        /* §3.2.4.6 `unsigned long`'s own postcondition: §3.2.4.9 Abstract operations' ConvertToInt takes the
+           integer part modulo 2**32, so the result is always an integer in [0, 2**32-1] — NaN and both
+           infinities became +0 in the conversion. */
+        DCHECK(d >= 0 && d <= 4294967295.0 && d == (double)(uint32_t)d,
+               "§3.2.4.6's `unsigned long` conversion answered something that is not an unsigned long — its "
+               "result is the integer part taken modulo 2**32, so a value outside it, or one with a fraction, "
+               "means this position was never converted by anything");
+        index = (uint32_t)d;
+    }
+    out = css_rule_list_delete(ctx, s->rules, index);
+    if (JS_IsException(out))
+        return JS_STEP_ABRUPT;
+    *presult = out;
+    return JS_STEP_DONE;
 }
+
+/* The last two are STATED rather than left to the initializer, because both are declarations and not padding:
+   `catches_abrupt` 0 says this algorithm does NOT handle an abrupt request result itself — it makes no request
+   that can deliver one, so the epilogue's handling is the right one — and `unforkable` NULL says this machine
+   may ALWAYS be forked, which is the whole of what it exists for. */
+static const IdlStepDecl SD_DECL = {
+    js_sheet_delete_rule, sizeof(CssRuleIndexChain), sd_visit, NULL,
+    "CSSOM §6.1.2 The CSSStyleSheet Interface deleteRule(index)", SD_STEPS, 0, NULL
+};
 
 /* ---- the interfaces ------------------------------------------------------------------------------------- */
 
@@ -460,14 +549,21 @@ void css_style_sheet_init(JSContext *ctx)
     g_id_set_disabled = idl_setter_id(ctx, IDL_BOOLEAN, false, js_sheet_set_disabled, 0);
     {
         /* §6.1.2: `unsigned long insertRule(CSSOMString rule, optional unsigned long index = 0)` and
-           `undefined deleteRule(unsigned long index)`. The optional index and both coercions are the
-           declaration's, so neither body converts anything and neither can run the page's code. */
+           `undefined deleteRule(unsigned long index)`. The optional index and both conversions are the
+           declaration's — which is a statement about the CONVERSION and never a licence for a body to run one
+           of its own: an `unsigned long` reaches a body either as the Number §3.2.4.6 produced or as unknown
+           external input CROSSING that boundary as itself, and this comment used to end "so neither body
+           converts anything", under which both bodies converted. */
         static const IdlArgType INSERT[2] = { IDL_DOMSTRING, IDL_UNSIGNED_LONG };
         static const IdlArgType ONE_ULONG[1] = { IDL_UNSIGNED_LONG };
 
         g_id_insert_rule = idl_method_id(ctx, INSERT, 2, js_sheet_insert_rule, 0);
         idl_optional_from(1);
-        g_id_delete_rule = idl_method_id(ctx, ONE_ULONG, 1, js_sheet_delete_rule, 0);
+        /* §6.1.2's `deleteRule` IS A MACHINE, and it is a DECLARATION rather than a dispatch: nothing asks at a
+           call site which implementation to run, because there is no second body for anything to select
+           against. Its one `unsigned long index` can be unknown external input, and asking §6.4's step 2 over
+           one needs a state to snapshot. */
+        g_id_delete_rule = idl_method_id_step(ctx, ONE_ULONG, 1, NULL, 0, &SD_DECL, 0);
     }
     realm_declare_intrinsic(css_style_sheet_install_proto);
 }
