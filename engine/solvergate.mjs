@@ -793,7 +793,42 @@ const DROP = new Map([
                    than on a byte count. WHAT IT COSTS IS STATED PLAINLY: this gate cannot catch a census
                    itself regressing, and nothing else can either — the DCHECKs in solver/result.c and the
                    shape asserts in extension/bridge.js are what stand there. */
-                "_cold", "_heap", "_swap", "_forkAt"])],
+                "_cold", "_heap", "_swap", "_forkAt",
+                /* THE ONE COST IN THIS SET THAT IS NOT A COUNT, AND IT IS DROPPED ON THE SPEC'S OWN GATING
+                   RATHER THAN ON A MAGNITUDE. Every other name above is a total or a reading of an instant
+                   whose SIZE the schedule chooses, and that reason does not reach a LIST OF MESSAGES — a
+                   reader who assumes it does will misclassify the next field of this kind, which is why the
+                   argument is written out rather than filed under the census paragraph.
+                   WHAT DECIDES IT IS WHICH OF TWO QUEUED TASKS RAN FIRST. HTML §8.1.4.7 "Unhandled promise
+                   rejections" step 4 is "Queue a global task on the DOM manipulation task source given global
+                   to run the following step", and the report lives INSIDE that task: step 4.1.1 is "If
+                   p.[[PromiseIsHandled]] is true, then continue." So a `.catch` attached before that task runs
+                   means the rejection is never reported and there is nothing to take back, while the identical
+                   `.catch` attached after it means step 4.1.3 has already reported and HTML §8.1.6.4
+                   "HostPromiseRejectionTracker(promise, operation)" step 7.4 queues the retraction that empties
+                   the row. Which of the two happens is which of two queued tasks the scheduler picked first,
+                   and CLAUDE.md §scheduler makes every enqueued job a first-class flow in the one WFQ — so it
+                   is precisely what these schedules vary. `var p = f(); p.catch(h)` is the ORDINARY shape, not
+                   a corner: it is why the standard keeps two lists at all, and browser/core/html/
+                   unhandled_rejection.c widens the gap further by queueing one task per promise.
+                   THE VARIANCE IS CONFINED TO THIS ARRAY BY CONSTRUCTION AND NOT BY LUCK, which is the whole
+                   reason `pageErrors` can stay in SURFACES while this leaves it. The two are DISJOINT —
+                   solver/result.c's errs_json_array_where emits a message here only when NO occurrence of it
+                   still stands — so a report that is made and then withdrawn contributes NOTHING to
+                   `pageErrors`, and moving the handler earlier or later moves a message between ABSENT and
+                   THIS ARRAY without ever touching that one. See `pageErrors` in SURFACES for the premise that
+                   confinement rests on and the one shape that breaks it.
+                   WHAT IT COSTS, STATED BECAUSE IT IS REAL AND NOT A ROUNDING: solver/result.c says in as many
+                   words that a retracted row is still a capability the page reached for, so this gate stops
+                   asking whether such a gap is seen the same way under every schedule. It cannot ask — holding
+                   this invariant would fail healthy documents whose only sin is attaching a handler in a later
+                   task, which is the false red §Testing names, manufactured by the gate itself.
+                   BY CONSTRUCTION AND NOT FROM A MEASUREMENT, stated for the reason the rows below state it:
+                   no document in engine/tests/solver registers an `unhandledrejection` listener, and every
+                   `.then` in the corpus is attached in the expression that produced the promise, so this array
+                   is `[]` on all of them today. Nobody may read this row as evidence that a mismatch in it was
+                   ever observed here. */
+                "pageErrorsRetracted"])],
   /* `turns` IS A SWITCH-IN COUNT, WHICH IS `_switches` ONE LEVEL DOWN. solve.c counts it in solve_flow_begin —
      the scheduler's every switch-in of a candidate flow — and says so where it counts it: "IT IS SWITCH-INS AND
      NOT DISTINCT FLOWS, which is what makes it a scheduling fact rather than a second copy of `tried`: a
@@ -889,6 +924,27 @@ function canonStr(v, path) {
 const SURFACES = new Map([
   ["fetchCallSites", { shape: "array", accumulates: true }],
   ["securitySinks",  { shape: "array", accumulates: true }],
+  /* `pageErrors` SURVIVES THE ARGUMENT THAT DROPPED `pageErrorsRetracted`, AND THE PREMISE IT SURVIVES ON IS
+     WRITTEN DOWN HERE BECAUSE IT IS NOT UNCONDITIONAL. The tempting inference is that a schedule-dependent
+     RETRACTION set makes the ERROR set it corrects schedule-dependent too, and that inference is wrong: the two
+     arrays are disjoint terminal readings, not a set and its correction. On a run that DRAINS, a message stands
+     here iff the page reached for something and NOTHING ever handled it. HTML §8.1.4.7 "Unhandled promise
+     rejections" step 4.1.1 — "If p.[[PromiseIsHandled]] is true, then continue." — suppresses the report for a
+     promise handled before its queued task runs, and HTML §8.1.6.4 "HostPromiseRejectionTracker(promise,
+     operation)" step 7.4 withdraws it for one handled after; both of those end at standing zero, and
+     solver/result.c emits a message here only while an occurrence still stands. So WHEN the handler attached
+     moves a message between ABSENT and `pageErrorsRetracted` and never into or out of this array. That is what
+     makes exactly one of the pair invariant, and it is this one.
+     THE ONE SHAPE THAT BREAKS IT IS THE PAGE'S OWN LISTENER, NAMED SO A FUTURE MISMATCH HAS A FIRST HYPOTHESIS
+     INSTEAD OF A CAP HUNT. Step 4.1.3 — "If notCanceled is true, then the user agent may report
+     p.[[PromiseResult]] to a developer console." — is gated on the CANCEL rather than on handled-ness, so a
+     page that registers a `preventDefault`-ing `unhandledrejection` listener IN A TASK THAT RACES THE NOTIFY
+     TASK is reported under one task order and not under another, and this array would then legitimately differ.
+     It is not dropped for that: a listener is normally registered before anything rejects, so the race is
+     exotic, and a mismatch reached that way is worth SEEING — dropping a surface to pre-empt a red nobody has
+     seen is the reflex CLAUDE.md bans. DERIVED FROM THE SPEC'S GATING AND NOT MEASURED: no corpus document has
+     such a listener, so this shape has never fired here and this paragraph is a hypothesis to test first, never
+     a report that it did. */
   ["pageErrors",     { shape: "array", accumulates: true }],
   ["_wfq",           { shape: "map",   accumulates: false }],
   /* `_quantum` IS COMPARED, AND IT IS THE ONE FIELD ON THIS DOCUMENT FOR WHICH THAT IS FREE BY CONSTRUCTION
