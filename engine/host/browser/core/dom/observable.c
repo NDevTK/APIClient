@@ -1563,6 +1563,7 @@ void observable_init(JSContext *ctx)
        once per runtime AND runs §3.2.17's read-order check over the declaration, which is why the walk goes
        through it rather than reaching for JS_NewAtom. */
     g_subscribe_options_atoms = idl_dict_declare(ctx, &SUBSCRIBE_OPTIONS_DECL);
+    obs_ops_init(ctx);   /* §3's ObservableEventListenerOptions, declared where `when()` is implemented */
     realm_declare_intrinsic(observable_install_protos);
 }
 
@@ -1672,5 +1673,6 @@ void observable_free(JSContext *ctx)
     /* The atoms belong to the IDL pool, which gives them back with the runtime; what this component owns is
        the HANDLE, and a handle left pointing into a released pool is a stale slot the next agent would read. */
     g_subscribe_options_atoms = NULL;
+    obs_ops_free();
     for (i = 0; i < OP_N; i++) g_op_stepid[i] = -1;
 }

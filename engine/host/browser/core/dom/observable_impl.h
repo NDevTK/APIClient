@@ -323,4 +323,10 @@ int obs_ops_stage(JSContext *ctx, JSObsState *s, JSValue *pcb_result, JSValue **
    this is where they are installed from. */
 void obs_ops_install(JSContext *ctx, JSValueConst proto);
 
+/* THE AGENT'S HALF OF THIS FILE: §3's ObservableEventListenerOptions is DECLARED here, so its member names
+   are interned once per runtime. Called from observable_init, released by observable_free — this file has no
+   platform row of its own, for the same reason it has no machine of its own. */
+void obs_ops_init(JSContext *ctx);
+void obs_ops_free(void);
+
 #endif

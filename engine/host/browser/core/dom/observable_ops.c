@@ -43,6 +43,36 @@
 
 enum { OBS_STAGES(JS_STEP_STAGE_ENUM) };
 
+/* ---- §3's `dictionary ObservableEventListenerOptions { boolean capture = false; boolean passive; };` -------
+ *
+ * DECLARED, BECAUSE THE READ IS §3.2.17'S AND NOT THIS FILE'S. `when()` walked it with its own table of
+ * names, its own JS_NewAtom per read and its own ToBoolean — the second copy of Web IDL §3.2.17 Dictionary
+ * types core/idl_args.h's header forbids, and the reason no IdlDictMember declaration in this engine named
+ * `passive`. It had drifted from the one machine in the way that copy always drifts: the two booleans ran
+ * JS_ToBool from plain C, which for unknown external input answers ECMAScript §7.1.2 ToBoolean's last step
+ * ("Return true") and deletes the false world — idl_dict_bool is where that is NAMED as a member owed a fork.
+ *
+ * THE TWO MEMBERS ARE DECLARED DIFFERENTLY AND THE IDL IS WHY. `capture` writes `= false`, so it is an
+ * IDL_BOOLEAN carrying §3.2.17 step 4.1.5's default and an absent one EXISTS holding false. `passive` writes
+ * no default at all, so it is IDL_BOOLEAN_NO_DEFAULT and an absent one does not exist — which is precisely
+ * what §3's listener construction reads ("options's passive if this member exists; null otherwise") and what
+ * DOM §2.7's default passive value then fills. IDL_BOOLEAN there would fold the two states into one and make
+ * `{}` and `{passive:false}` the same registration.
+ *
+ * The order is §3.2.17's LEXICOGRAPHIC one — capture, then passive — which idl_dict_declare asserts over this
+ * array rather than leaving to be remembered. */
+static const IdlDictMember WHEN_OPTIONS[] = {
+    { "capture", IDL_BOOLEAN,           false, NULL, 0, NULL, IDL_DEFAULT_FALSE },
+    { "passive", IDL_BOOLEAN_NO_DEFAULT },
+};
+static const IdlDictDecl WHEN_OPTIONS_DECL = {
+    "ObservableEventListenerOptions", WHEN_OPTIONS,
+    (int)(sizeof(WHEN_OPTIONS) / sizeof(WHEN_OPTIONS[0]))
+};
+/* Its member names, interned once per runtime — they must be live at both halves of a member read, so they
+   cannot be made per read. Borrowed from the IDL pool. */
+static const JSAtom *g_when_options_atoms;
+
 /* ---- small list helpers ------------------------------------------------------------------------------------
  * The lists here are the ENGINE's — §2.3.2's flatMap queue, §2.3.3's toArray values — so they are walked with
  * own indices and a `length` write rather than through `push`/`shift`, which are page-visible methods on
@@ -211,6 +241,22 @@ static JSValue ops_plain(JSContext *ctx, JSValueConst this_val, int argc, JSValu
         return JS_ThrowTypeError(ctx, "the operator's callback must be a function");
     arg = obs_operator_observable(ctx, magic, this_val, argv[0]);
     return arg;
+}
+
+void obs_ops_init(JSContext *ctx)
+{
+    /* §3's dictionary has no ARGUMENT POSITION to be declared at — `when` registers its own step definition
+       like every operation in this component — which is the entry idl_dict_declare is public for. It also
+       runs §3.2.17's read-order check over the array above, which is why the walk goes through it rather than
+       reaching for JS_NewAtom. Idempotent per runtime. */
+    g_when_options_atoms = idl_dict_declare(ctx, &WHEN_OPTIONS_DECL);
+}
+
+void obs_ops_free(void)
+{
+    /* The atoms belong to the IDL pool, which gives them back with the runtime; the HANDLE is this file's,
+       and one left pointing into a released pool is a stale slot the next agent would read. */
+    g_when_options_atoms = NULL;
 }
 
 void obs_ops_install(JSContext *ctx, JSValueConst proto)
@@ -491,32 +537,48 @@ static int ops_subscribe_callback(JSContext *ctx, JSObsState *s, int *pr)
            step-6 abort steps remove the listener, and nothing here has to remember it was registered. */
         JSValue cfg = obs_rec_get(ctx, s->st, "arg");
         JSValue type = JS_GetPropertyStr(ctx, cfg, "type");
-        JSValue cap = JS_GetPropertyStr(ctx, cfg, "capture");
-        JSValue pas = JS_GetPropertyStr(ctx, cfg, "passive");
         const char *tp;
+        /* THE TWO FLAGS WERE DECIDED AT THE MEMBER, where §3.2.17 converted them — this reads the ANSWERS.
+           They were `JS_ToBool` calls here, which is the coercion this component must not perform: it runs in
+           a LATER invocation than the one that held the page's value, so a `capture` that arrived unknown was
+           pinned to true here with nothing left to fork against.
+           BOTH PRESENCES ARE ASSERTED AND NEITHER IS DEFAULTED. `obs_rec_bool` answers false for a name that
+           is not there and `obs_rec_int` answers 0, so a record built without them would register a bubbling
+           NON-passive listener and read exactly like one the page asked for. */
+        JSValue capv = obs_rec_get(ctx, cfg, "capture"), pasv = obs_rec_get(ctx, cfg, "passive");
+        bool capture;
+        int passive;
 
+        DCHECK(JS_IsBool(capv) && JS_IsNumber(pasv),
+               "§3's subscribe callback was handed a record without the two flags its OP_WHEN entry decides — "
+               "that entry writes `capture` as a boolean and `passive` as the three-state -1/0/1 off the "
+               "CONVERTED ObservableEventListenerOptions, so a record missing either was built elsewhere and "
+               "would register a bubbling non-passive listener indistinguishable from one a page asked for");
+        capture = obs_rec_bool(ctx, cfg, "capture");
+        /* §3's tristate: -1 is "this member does not exist", which "add an event listener" step 4 fills from
+           DOM §2.7's default passive value rather than treating as false. */
+        passive = (int)obs_rec_int(ctx, cfg, "passive");
+        JS_FreeValue(ctx, capv);
+        JS_FreeValue(ctx, pasv);
+        DCHECK(passive >= -1 && passive <= 1,
+               "§3's `passive` reached the subscribe callback as something other than the three states the "
+               "member's own conversion writes — the OP_WHEN entry decides it from the converted dictionary "
+               "and puts -1, 0 or 1 on this record, so anything else is a second writer");
         sig = rec_sub_signal(ctx, s->st);
         /* Step 2: "If subscriber's subscription controller's signal is aborted, abort these steps." */
         if (abort_signal_aborted(ctx, sig)) {
-            JS_FreeValue(ctx, cfg); JS_FreeValue(ctx, type);
-            JS_FreeValue(ctx, cap); JS_FreeValue(ctx, pas); JS_FreeValue(ctx, sig);
+            JS_FreeValue(ctx, cfg); JS_FreeValue(ctx, type); JS_FreeValue(ctx, sig);
             obs_goto(s, S_DONE);
             return 0;
         }
         io = obs_algo_new(ctx, OA_WHEN_INVOKE, s->st);
         tp = JS_ToCString(ctx, type);
         CHECK(tp != NULL, "§3 when(): the event type could not be read back as a string");
-        event_target_add_listener(ctx, s->src, tp, io, JS_ToBool(ctx, cap), /*once*/ false,
-                                  /* §3: "passive: options's passive if this member EXISTS; null otherwise" —
-                                     the tristate, so an absent member still gets §2.7's default for the
-                                     type rather than a hard false. */
-                                  JS_IsUndefined(pas) ? -1 : (JS_ToBool(ctx, pas) ? 1 : 0), sig);
+        event_target_add_listener(ctx, s->src, tp, io, capture, /*once*/ false, passive, sig);
         JS_FreeCString(ctx, tp);
         JS_FreeValue(ctx, io);
         JS_FreeValue(ctx, cfg);
         JS_FreeValue(ctx, type);
-        JS_FreeValue(ctx, cap);
-        JS_FreeValue(ctx, pas);
         JS_FreeValue(ctx, sig);
         obs_goto(s, S_DONE);
         return 0;
@@ -743,42 +805,17 @@ static int ops_stage_enter(JSContext *ctx, JSObsState *s, JSValue *pcb, JSValue 
     }
 
     if (op == OP_WHEN) {
-        /* `when(DOMString type, optional ObservableEventListenerOptions options = {})`. Both members are read
-           with [[Get]] in Web IDL §3.2.17's LEXICOGRAPHIC order — capture, then passive — and `passive` has NO
-           default, so its ABSENCE is a third state the listener record must carry. */
-        static const char *const MEMBERS[2] = { "capture", "passive" };
-        JSValueConst options = step_arg(&s->hdr, 1);
-
-        if (JS_IsUndefined(s->st)) {
+        /* `when(DOMString type, optional ObservableEventListenerOptions options = {})`.
+           THE ARGUMENTS CONVERT LEFT TO RIGHT — Web IDL §3.6 Overload resolution algorithm: "the JavaScript
+           values are converted from left to right" — so `type`'s ToString runs BEFORE any member of the
+           dictionary is read. This block ran the dictionary FIRST, under a comment claiming that WAS the
+           argument order, and a page sees the difference: `et.when({toString(){log("t")}},
+           {get capture(){log("c")}})` logs t then c in a browser and logged c, then passive, then t here. */
+        if (JS_IsUndefined(s->st))
             s->st = obs_record_new(ctx);
-            obs_rec_set(ctx, s->st, "capture", JS_FALSE);   /* `boolean capture = false` */
-            s->member = 0;
-        }
-        if (JS_IsObject(options)) {
-            while (s->member < 2) {
-                JSAtom a = JS_NewAtom(ctx, MEMBERS[s->member]);
-                JSValue v;
-                r = step_getprop_run(ctx, &s->hdr, options, a, *pcb, &v, out_cb, out_argc);
-                JS_FreeAtom(ctx, a);
-                if (r > 0) { *pr = r; return 1; }
-                if (r < 0) { *pr = JS_STEP_ABRUPT; return 1; }
-                *pcb = JS_UNDEFINED;
-                if (s->member == 0)
-                    obs_rec_set(ctx, s->st, "capture", JS_NewBool(ctx, JS_ToBool(ctx, v)));
-                else if (!JS_IsUndefined(v))
-                    obs_rec_set(ctx, s->st, "passive", JS_NewBool(ctx, JS_ToBool(ctx, v)));
-                JS_FreeValue(ctx, v);
-                s->member++;
-            }
-        } else if (!JS_IsUndefined(options) && !JS_IsNull(options)) {
-            JS_ThrowTypeError(ctx, "when: the options must be an object");
-            *pr = JS_STEP_ABRUPT;
-            return 1;
-        }
-        s->member = 0;
-        /* The TYPE conversion is Web IDL's `DOMString`, which is ToString on whatever the page passed — and
-           its `toString` is the page's code, so it is a request like every other conversion here. It runs
-           AFTER the dictionary because that is the argument order the bindings convert in. */
+        /* ARGUMENT 0, `DOMString type` — ToString on whatever the page passed, so its `toString` is the page's
+           code and this is a request like every other conversion here. The converted string ON THE RECORD is
+           the latch: a resume that already has one does not re-run the page's toString. */
         {
             JSValue tv = obs_rec_get(ctx, s->st, "type");
             bool have = !JS_IsUndefined(tv);
@@ -791,6 +828,59 @@ static int ops_stage_enter(JSContext *ctx, JSObsState *s, JSValue *pcb, JSValue 
                 *pcb = JS_UNDEFINED;
                 obs_rec_set(ctx, s->st, "type", str);
             }
+        }
+        /* ARGUMENT 1, the dictionary — Web IDL §3.2.17 Dictionary types, run by the ONE walk
+           core/idl_args.h owns. */
+        {
+            JSValueConst options = step_arg(&s->hdr, 1);
+            JSValue in = *pcb, o, pv;
+
+            *pcb = JS_UNDEFINED;
+            if (!s->dw.started) {
+                /* Web IDL §3.2.17 Dictionary types (ES-to-IDL list) step 1: "If jsDict is not an Object and
+                   jsDict is neither undefined nor null, then throw a TypeError". It stays at the CALLER
+                   because idl_dict_walk_start asserts that step rather than performing it — undefined and
+                   null are legal there, and step 4.1.2 gives every member undefined. */
+                if (!JS_IsObject(options) && !JS_IsUndefined(options) && !JS_IsNull(options)) {
+                    JS_FreeValue(ctx, in);
+                    JS_ThrowTypeError(ctx, "the ObservableEventListenerOptions argument is neither an object, "
+                                           "undefined nor null");
+                    *pr = JS_STEP_ABRUPT;
+                    return 1;
+                }
+                /* NO INTERFACE AND NO FRAMES: both members are booleans, so nothing here brands and nothing
+                   nests — and idl_dict_walk_start asserts the frame count against idl_members_depth over this
+                   very list rather than taking that on trust. */
+                if (idl_dict_walk_start(ctx, &s->dw, options, WHEN_OPTIONS, WHEN_OPTIONS_DECL.n,
+                                        g_when_options_atoms, WHEN_OPTIONS_DECL.name, /*iface*/ 0,
+                                        /*narrow*/ NULL, /*frames*/ NULL, /*frames_cap*/ 0) < 0) {
+                    JS_FreeValue(ctx, in);
+                    *pr = JS_STEP_ABRUPT;
+                    return 1;
+                }
+            }
+            r = idl_dict_walk_run(ctx, &s->hdr, &s->dw, /*frames*/ NULL, /*frames_cap*/ 0, in,
+                                  out_cb, out_argc);
+            if (r > 0) { *pr = r; return 1; }
+            if (r < 0) { *pr = JS_STEP_ABRUPT; return 1; }
+            o = idl_dict_walk_take(ctx, &s->dw);
+            /* THE TWO FLAGS ARE DECIDED HERE, WHERE THE DICTIONARY IS, and the record carries the ANSWERS
+               rather than the raw members — so the subscribe callback, which runs in another invocation and
+               may resume from the cold tier, does no coercion of its own. A JS_ToBool down there is the same
+               pin as one up here, one step further from the value that would have to fork. */
+            obs_rec_set(ctx, s->st, "capture", JS_NewBool(ctx, idl_dict_bool(ctx, o, "capture")));
+            /* §3's listener construction gives its `passive` as "options's passive if this member
+               exists; null otherwise". `passive` declares no default, so §3.2.17 leaves an absent one absent
+               and the THIRD state is real: -1 is that null,
+               which "add an event listener" step 4 then fills from DOM §2.7's default passive value (TRUE for
+               a wheel listener on a Window). Collapsing it to false would make `{}` and `{passive:false}` one
+               registration, which is the pair that differs most. */
+            pv = idl_dict_get(ctx, o, "passive");
+            obs_rec_set(ctx, s->st, "passive",
+                        JS_NewInt32(ctx, JS_IsUndefined(pv) ? -1
+                                                            : (idl_dict_bool(ctx, o, "passive") ? 1 : 0)));
+            JS_FreeValue(ctx, pv);
+            JS_FreeValue(ctx, o);
         }
         s->result = obs_operator_observable(ctx, K_WHEN, s->src, s->st);
         if (JS_IsException(s->result)) { s->result = JS_UNDEFINED; *pr = JS_STEP_ABRUPT; return 1; }
