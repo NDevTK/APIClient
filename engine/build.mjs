@@ -3106,6 +3106,27 @@ const LDFLAGS_COMMON = [
      was a mode that had never run. */
   "-sALLOW_MEMORY_GROWTH=1", "-sMAXIMUM_MEMORY=4294967296",
   "-sSTACK_SIZE=8388608",
+  /* THE MODULE NAMES ITS OWN FUNCTIONS, so a stack is readable without a second instrument. `wasm-ld` strips
+     the name section by default — emscripten's own `building.py` says so in its own words, "wasm-ld can strip
+     debug info for us. this strips both the Names section and DWARF, so we can only use it when we don't need
+     any of those things" — and this build set nothing that turns that off, so every shipped `qjs.wasm` carried
+     exactly ONE custom section (`target_features`, 148 bytes) and every abort printed `wasm-function[7391]`.
+     THAT IS WHAT MADE FIVE CONSECUTIVE LAYOUT ABORTS COST A LANE EACH: with no subject in the frame list, the
+     asking function was all anyone had, and four of the five next-abort predictions made from it named the
+     wrong box. An index is an ordinal into a link, so it is also the §AN-INDEX-NAMES-A-THING-ONLY-WHILE-THE-
+     SET-IS-FIXED defect wearing a stack trace: the same number means a different function in the next build,
+     and it means a different function in the ABI binary than in the smoke binary of the SAME build (measured:
+     all 17 frames of one stack land inside their bodies in one and outside them in the other).
+     `--profiling-funcs` sets EMIT_NAME_SECTION and NOTHING else — it does not raise the debug level, so no
+     codegen changes and the emitted code is the same program. It costs SIZE only, and the size is MEASURED
+     rather than estimated, because a cost carried as a range is a cost nobody can weigh: two links of ONE
+     revision, every other input shared, gave 14991347 bytes without and 15252790 with — +261443, or +1.74%,
+     of which the `name` section is 254334. Re-measure it the same way if it ever needs re-arguing; do not
+     quote this number against a later tree, which is what §Testing means about a result belonging to the
+     revision it was taken at. This is the one flag that RETIRES an instrument rather than adding one, which
+     is why it belongs on the default link and not behind an opt-in arg: a symbolizer reached by REMEMBERING
+     to pass a flag is a symbolizer nobody has at the moment the crash lands. */
+  "--profiling-funcs",
 ];
 // The smoke entry RUNS on load and exits with the @H/@S pass code; the ABI entry is driven by the bridge
 // through ccall, so its runtime must stay alive across qjs_step re-entries and be importable as an ES module.
