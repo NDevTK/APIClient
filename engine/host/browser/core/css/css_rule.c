@@ -3289,6 +3289,21 @@ static JSValue js_rule_set_selector(JSContext *ctx, JSValueConst this_val, JSVal
         if (!JS_IsNull(rule_nesting_parent(r->parent_rule))) {
             char *absolutized = css_nesting_absolutize(reserialized, strlen(reserialized));
 
+            /* THE ASSERT STANDS AT THE READER AND NOT AT THAT ENTRY'S OWN RETURN, because this is where the
+               question gets asked. `reserialized` is REASSIGNED here, AFTER the `if (reserialized)` that
+               established it, so the mint below reads a pointer whose non-nullness was proven for a DIFFERENT
+               value — and `JS_NewString` is a `strlen` of it. The shape therefore reads like a null
+               dereference to anyone arriving at the mint, and it is not one; a reader who re-derives that
+               reads here why, instead of repairing a crash that cannot happen. */
+            DCHECK(absolutized != NULL,
+                   "CSS Nesting §6 \"CSSOM\"'s absolutize answered NULL. core/css/css_nesting.h declares that "
+                   "entry \"OWNED: the caller frees. Never NULL\", and its body makes that true rather than "
+                   "merely promising it: every arm returns `nbuf_finish`, which materialises the EMPTY "
+                   "STRING for a buffer nothing was ever written into, and the one allocation beneath it is "
+                   "a CHECK that aborts rather than "
+                   "answering null — so neither an OOM nor a selector with no absolutized form comes back as "
+                   "a pointer. A null here is that contract broken upstream, never a value this setter was "
+                   "handed");
             free(reserialized);
             reserialized = absolutized;
         }
