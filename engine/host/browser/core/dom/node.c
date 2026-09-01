@@ -2769,7 +2769,7 @@ int node_clone_run(JSContext *ctx, JSStepHdr *hdr, NodeCloneState *s, int base)
             dom_cow_note_created(s->copy);   /* the clone ROOT only — its descendants are reachable through it */
         }
         /* NO EARLY RETURN FOR A SHALLOW CLONE. `subtree` gates step 5 and HTML §4.12.3, and step 6 is not
-           conditioned on it at all: a clonable shadow root is cloned — deeply, because 6.8 passes TRUE — for
+           conditioned on it at all: a clonable shadow root is cloned — deeply, because 6.7 passes TRUE — for
            `host.cloneNode()` exactly as for `host.cloneNode(true)`. So the walk runs either way and each step
            asks the flag itself. */
         s->root = n;
@@ -2837,7 +2837,7 @@ int node_clone_run(JSContext *ctx, JSStepHdr *hdr, NodeCloneState *s, int base)
 
     if (phase == NODE_CLONE_PHASE_SHADOW) {
         /* STEP 6, AT THE ONE MOMENT STEP 5 IS FINISHED FOR `src`. Steps 6.1-6.7 belong to §4.8's record and
-           are shadow_root.c's; what is this machine's is 6.8, which is `clone a node` over each shadow child
+           are shadow_root.c's; what is this machine's is 6.7, which is `clone a node` over each shadow child
            and therefore this same walk one level down. */
         JSValue sr = shadow_root_clone_onto(ctx, s->src, s->cnode);
         lxb_dom_node_t *shadow, *from;
@@ -2847,7 +2847,7 @@ int node_clone_run(JSContext *ctx, JSStepHdr *hdr, NodeCloneState *s, int base)
         shadow = node_of(sr);
         if (shadow) {
             from = shadow_root_of_element(ctx, lxb_dom_interface_element(s->src));
-            DCHECK(shadow_root_is(from), "§4.4 step 6.8 has no shadow tree to clone FROM, and step 6.5 just "
+            DCHECK(shadow_root_is(from), "§4.4 step 6.7 has no shadow tree to clone FROM, and step 6.4 just "
                                          "attached one onto the copy — the two are read from one association");
             if (from->first_child) {
                 /* The second tree reached other than through child links, and the same descent the template

@@ -81,11 +81,12 @@ JSValue shadow_root_attach(JSContext *ctx, JSValueConst el_wrap, const char *mod
    are asked here — is `node` an element, is it a shadow host, is its shadow root's `clonable` true — because
    the second and third are §4.8 record reads and the record is this component's. Answers JS_NULL when any of
    them is false (there is no shadow root to clone), the COPY's new shadow root's wrapper (OWNED) when there is,
-   and JS_EXCEPTION when step 6.5's attach threw. That last one is REACHABLE and step 6 does not catch it, so
+   and JS_EXCEPTION when step 6.4's attach threw. That last one is REACHABLE and step 6 does not catch it, so
    `cloneNode` throws out of the walk: `attachShadow` on an element whose local name has no definition yet
    succeeds, and a `define` for that name with `disabledFeatures: ["shadow"]` afterwards makes the same
-   element's COPY fail §4.8 step 3.
-   STEP 6.8 — cloning the shadow root's children into it — is NOT here. It is `clone a node` over a subtree,
+   element's COPY fail §4.9 "Interface Element" step 3 — `attach a shadow root` is an Element algorithm, so its
+   steps are §4.9's and not this component's own §4.8.
+   STEP 6.7 — cloning the shadow root's children into it — is NOT here. It is `clone a node` over a subtree,
    which is node.c's walk, and re-running that walk here would be a second clone implementation reached only
    through a shadow root. */
 JSValue shadow_root_clone_onto(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *copy);
@@ -109,7 +110,7 @@ JSValue shadow_root_of_element_wrap(JSContext *ctx, JSValueConst el_wrap);
    combination with declarative shadow roots". HTML §13.2.6.4.4 sets it for a
    `<template shadowrootcustomelementregistry>`; DOM §4.5's adopt reads it, and without it that attribute is
    undone by the first adoption, since adopt hands a shadow root with a null registry the new document's
-   unless this says otherwise. §4.4's clone step 6.7 carries it to the copy. */
+   unless this says otherwise. §4.4's clone step 6.6 carries it to the copy. */
 void shadow_root_set_keep_registry_null(JSContext *ctx, JSValueConst sr_wrap);
 bool shadow_root_keep_registry_null(JSContext *ctx, JSValueConst sr_wrap);
 

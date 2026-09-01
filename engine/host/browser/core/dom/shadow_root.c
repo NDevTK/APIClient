@@ -473,8 +473,8 @@ JSValue shadow_root_attach(JSContext *ctx, JSValueConst el_wrap, const char *mod
 
 /* DOM §4.4 "clone a node" STEP 6, its own steps 6.1-6.7. The standard runs it AFTER step 5 has cloned the light
    children, and it is NOT conditioned on `subtree`: `host.cloneNode(false)` still gets the shadow tree, cloned
-   deeply, because step 6.8 passes subtree TRUE whatever the caller asked for. Every field step 6 PASSES or SETS
-   is read off the original's record — the one thing 6.5 hardcodes is `clonable` itself, which it passes as
+   deeply, because step 6.7 passes subtree TRUE whatever the caller asked for. Every field step 6 PASSES or SETS
+   is read off the original's record — the one thing 6.4 hardcodes is `clonable` itself, which it passes as
    true, and that is the same value the original has because it is the condition for being here at all. What
    the new root does NOT take from the original is `available to element internals`: that one is §4.9 step 9's,
    computed from the COPY's own custom element state, which is what the standard says it is. */
@@ -506,10 +506,10 @@ JSValue shadow_root_clone_onto(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_nod
     DCHECK(!JS_IsObject(current), "§4.4 step 6.1: the copy is already a shadow host, so the attach below would "
                                   "reach §4.9 step 4 and either throw or take over a root the clone invented");
     JS_FreeValue(ctx, current);
-    /* STEPS 6.2-6.4: `shadowRootRegistry` is the ORIGINAL root's registry, which is now a real read — a host
+    /* STEPS 6.2-6.3: `shadowRootRegistry` is the ORIGINAL root's registry, which is now a real read — a host
        inside a scoped tree clones into a copy that looks its definitions up in the same scoped registry, which
        is the whole reason a registry is per node rather than per document.
-       Step 6.5: attach a shadow root with the ORIGINAL's mode, serializable, delegates focus and slot
+       Step 6.4: attach a shadow root with the ORIGINAL's mode, serializable, delegates focus and slot
        assignment, and `clonable` true. */
     src_reg = custom_elements_node_registry(ctx, src);
     sr = sr_attach(ctx, copy_wrap, shadow_root_is_open(node_of(src)) ? "open" : "closed",
@@ -517,12 +517,12 @@ JSValue shadow_root_clone_onto(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_nod
                    shadow_root_slot_assignment_is_manual(ctx, node_of(src)) ? "manual" : "named",
                    true, sr_flag(ctx, src, SR_SERIALIZABLE), src_reg);
     JS_FreeValue(ctx, src_reg);
-    /* Step 6.6: "Set copy's shadow root's declarative to node's shadow root's declarative." NOT
+    /* Step 6.5: "Set copy's shadow root's declarative to node's shadow root's declarative." NOT
        shadow_root_mark_declarative, which is HTML §13.2.6.4.4's pair of writes: that one also sets `available
        to element internals`, and step 6 does not — the clone's is whatever §4.9 step 9 just computed from the
        COPY's own custom element state, which is the state the standard says it is. */
     declarative = sr_flag(ctx, src, SR_DECLARATIVE);
-    /* STEP 6.7's flag is read HERE, beside step 6.6's, because both are read off the ORIGINAL and the original
+    /* STEP 6.6's flag is read HERE, beside step 6.5's, because both are read off the ORIGINAL and the original
        is released on the next line. It rides with the registry it guards: a declaratively-parsed root that
        resolves in nothing clones into one that still resolves in nothing, rather than into one the next
        adoption hands the document's registry. */
@@ -532,9 +532,9 @@ JSValue shadow_root_clone_onto(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_nod
     if (JS_IsException(sr))
         return sr;
     rec = sr_slots(ctx, sr);
-    DCHECK(JS_IsObject(rec), "§4.4 step 6.6: the shadow root attach a shadow root just made has no §4.8 record");
+    DCHECK(JS_IsObject(rec), "§4.4 step 6.5: the shadow root attach a shadow root just made has no §4.8 record");
     JS_SetPropertyStr(ctx, rec, SR_FIELD[SR_DECLARATIVE], JS_NewBool(ctx, declarative));
-    JS_SetPropertyStr(ctx, rec, SR_FIELD[SR_KEEP_REGISTRY_NULL], JS_NewBool(ctx, keep_null));   /* step 6.7 */
+    JS_SetPropertyStr(ctx, rec, SR_FIELD[SR_KEEP_REGISTRY_NULL], JS_NewBool(ctx, keep_null));   /* step 6.6 */
     JS_FreeValue(ctx, rec);
     return sr;
 }

@@ -253,13 +253,13 @@ lxb_dom_node_t *node_template_content_host(const lxb_dom_node_t *n);
                       "one descendant per step") \
     X(P##_TEMPLATE, W " → DOM §4.4 clone a node step 3 (HTML §4.12.3 the template element's cloning steps)") \
     X(P##_CHILDREN, W " → DOM §4.4 clone a node step 5 (for each child of node's children, in tree order)") \
-    X(P##_SHADOW,   W " → DOM §4.4 clone a node step 6 (a shadow host's clonable shadow root: steps 6.1-6.7 " \
-                      "attach it onto the copy, 6.8 clones its children), after step 5") \
+    X(P##_SHADOW,   W " → DOM §4.4 clone a node step 6 (a shadow host's clonable shadow root: steps 6.1-6.6 " \
+                      "attach it onto the copy, 6.7 clones its children), after step 5") \
     X(P##_LEAVE,    W " → DOM §4.4 clone a node step 7 (return copy): this node's clone is complete, and step " \
                       "5's loop over its parent's children advances")
 
 /* A LEVEL of the walk — a tree reached OTHER THAN through child links, which is a `<template>`'s content
-   fragment (HTML §4.12.3's cloning steps) and a shadow tree (§4.4 step 6.8). `stage` is where the level that
+   fragment (HTML §4.12.3's cloning steps) and a shadow tree (§4.4 step 6.7). `stage` is where the level that
    pushed this frame RESUMES, and it is not the same for the two: a template's content is cloned by step 3, so
    the element's own step 5 is still to come, while a shadow tree is cloned by step 6, after which only step 7
    remains. A frame with no resume stage is what made step 6 unimplementable — popping back always meant
@@ -287,7 +287,7 @@ typedef struct NodeCloneState {
     lxb_dom_node_t *croot;
     lxb_dom_node_t *cnode;   /* the copy of `src` — what its own children get inserted under */
     /* `clone a node`'s `subtree` FOR THE CURRENT LEVEL, which is not one value for the whole call: step 5 is
-       conditioned on it, HTML §4.12.3 returns early without it, and step 6.8 passes TRUE regardless — so
+       conditioned on it, HTML §4.12.3 returns early without it, and step 6.7 passes TRUE regardless — so
        `host.cloneNode(false)` clones no light children and the whole shadow tree. */
     bool deep;
     int  after;              /* the CALLER's stage this algorithm hands control back at, with `copy` filled */
