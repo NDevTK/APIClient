@@ -754,10 +754,15 @@ async function probeEndpoint(documentId, endpointKey) {
   const result = await probeApiEndpoint(probeUrl.toString(), headers, {
     fetchFn,
   });
-  /* The key lib/popup-discovery.js reads the answer back under, and the shape it asserts there. */
-  DCHECK(result && typeof result.fieldCount === "number" && result.fields && typeof result.fields === "object",
-         "probeApiEndpoint answered without {fieldCount, fields} — the panel reads exactly those two off this " +
-         "record, so anything else renders as a probe that found nothing");
+  /* THE WHOLE RECORD AT THE MINT, THROUGH THE ONE TABLE. A DCHECK for `fieldCount`/`fields` stood here, in
+     this file's own words, justified by "the shape lib/popup-discovery.js asserts there" — and that panel's
+     assertion is gone, because a reader's opinion of half a contract is not where the contract lives. Both
+     halves are lib/store-record.js's `_SR_PROBE_FIELDS`, which states all seven names lib/req2proto.js
+     `probeApiEndpoint` returns and the two whose `null` MEANS the rejection named nothing; asking it here
+     puts the abort at the PRODUCER, where a broken probe is, rather than at the next popup open. The bare
+     endpoint key selects that shape (`_srProbeShape`), which is the same dispatch the panel renders on. */
+  checkStoreRecord("probeResults", endpointKey, result,
+                   "lib/discovery-probe.js storing probeApiEndpoint's answer for " + JSON.stringify(endpointKey));
   tab.probeResults.set(endpointKey, result);
 
   // Store scopes if the probe discovered them

@@ -296,7 +296,20 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       return;
     }
 
+    /* THE ONE ANSWER ON THIS SEAM THAT NO STORE DOOR STANDS IN FRONT OF. Every other map the popup renders
+       reaches it through lib/serialize.js, which now asks lib/store-record.js's question as it projects; this
+       one is read STRAIGHT off the live map, so between lib/discovery-probe.js pushing a drift record and
+       lib/popup-discovery.js printing it there was nothing at all. `_serializeGlobalStore` asserts the same
+       shape — on the IndexedDB path, at the next save, which is after this reply has already been drawn — so
+       for the population that matters here (a change recorded in THIS session) the save door is late rather
+       than absent, and late is what the panel was compensating for with two DCHECKs of its own and a
+       `rec.fetchUrl || ""`. The question is asked once, here, where the record leaves the zone that made it. */
     case "GET_DISCOVERY_CHANGES": {
+      for (const [svc, hist] of globalStore.discoveryChanges) {
+        checkStoreRecord("discoveryChanges", svc, hist,
+                         "lib/popup-handlers.js answering GET_DISCOVERY_CHANGES off globalStore, service " +
+                         JSON.stringify(svc));
+      }
       sendResponse(Object.fromEntries(globalStore.discoveryChanges));
       return;
     }

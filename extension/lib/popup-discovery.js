@@ -206,11 +206,19 @@ function renderDiscoveryPanel() {
    The two the panel skipped are exactly the ones that run with no human watching, which is the state this file
    exists to end — a probe that fires on every page load and reaches no reader is worse off than one nobody
    triggers. */
+/* NEITHER RENDERER ASKS WHAT ITS RECORD IS ANY MORE, AND THE ASYMMETRY BETWEEN THEM IS WHY THAT MATTERS. A
+   DCHECK stood in the field-probe renderer for `fieldCount`/`fields` and there was NONE AT ALL in the
+   service-info one below it — one reader's opinion of half of one of the two shapes, and silence about the
+   other. Both are lib/store-record.js's (`_SR_PROBE_FIELDS`, `_SR_PROBE_SVCINFO`), dispatched on the same key
+   spelling this file dispatches its renderers on, and lib/serialize.js asks that question of every entry as
+   it projects `probeResults` onto the GET_STATE reply — so what arrives here is the shape the store states,
+   for both renderers, without either of them having to say what it believes.
+   THE TRUTHINESS READS BELOW ARE NOT DEFAULTS AND MUST NOT BECOME ASSERTS. `metadata` and `scopes` on a field
+   probe, and `service`/`method`/`scopes` on a service-info answer, are `null` when no rejection named one —
+   lib/req2proto.js initialises each to `null` and assigns only on a named one, and the shape declares them as
+   stated absences. Reading that `null` as "the envelope named none" is reading the producer's statement; the
+   service-info renderer prints exactly that sentence when every one of them is absent. */
 function _discFieldProbeHtml(label, probe) {
-  DCHECK(typeof probe.fieldCount === "number" && probe.fields && typeof probe.fields === "object",
-         "a req2proto probe result carries no field map — probeApiEndpoint returns {url, timestamp, " +
-         "fieldCount, fields, metadata, scopes, probeDetails} on every path, so one without them is that " +
-         "producer broken and the panel would report a probe that found nothing");
   const names = Object.values(probe.fields).map((f) => (f.name || "#" + f.number) + ":" + f.type);
   let html = '<div class="card-meta">' + esc(label) + ": <strong>" + esc(String(probe.fieldCount)) +
              "</strong> field(s)" + (names.length ? " — <code>" + esc(names.join(", ")) + "</code>" : "") + "</div>";
@@ -229,7 +237,12 @@ function _discSvcInfoHtml(label, svcInfo) {
   if (svcInfo.service) bits.push("service " + svcInfo.service);
   if (svcInfo.method) bits.push("method " + svcInfo.method);
   if (svcInfo.scopes && svcInfo.scopes.length) bits.push("scopes " + svcInfo.scopes.join(" "));
-  if (svcInfo.contentTypes && svcInfo.contentTypes.length) bits.push("accepts " + svcInfo.contentTypes.join(", "));
+  /* NO `svcInfo.contentTypes &&`. `scopes` above keeps its null test because `null` is that field's STATED
+     absence; `contentTypes` is a STATED NAME — `discoverServiceInfo` builds the list unconditionally and
+     states what it tried — so the guard could not fire, and what it stood in front of was the one line that
+     says which content types the endpoint accepted at all. An empty list is still a real answer (nothing the
+     probe sent was accepted) and reads as such below. */
+  if (svcInfo.contentTypes.length) bits.push("accepts " + svcInfo.contentTypes.join(", "));
   return '<div class="card-meta">' + esc(label) + ": " +
          (bits.length ? "<code>" + esc(bits.join(" | ")) + "</code>"
                       : "the endpoint answered, and its error envelope named no service, method or scope") +
@@ -382,19 +395,20 @@ function _discChangesHtml() {
   }
   let html = '<div class="section-header">API drift</div>';
   for (const svc of svcs) {
+    /* THREE READS, NO OPINION. Two DCHECKs stood here — one that the per-service value is an array, one that
+       a record carries a `timestamp`/`changes` pair — and a `rec.fetchUrl || ""` beside them, which is the
+       shape of the whole defect: the same file both asserting part of a contract and defaulting past another
+       part of it, each in its own words. All three names are stated by lib/store-record.js's
+       `_SR_DRIFT_HISTORY` / `_SR_DISCOVERY_CHANGE`, and lib/popup-handlers.js now asks that question of every
+       service's history before GET_DISCOVERY_CHANGES answers — so `fetchUrl` is a non-empty string here, and
+       printing it raw is reading the producer's statement rather than supplying one for it. The `|| ""` could
+       only ever have rendered a drift record as a change to an address nobody can name. */
     const recs = discoveryChanges[svc];
-    DCHECK(Array.isArray(recs),
-           "a discoveryChanges entry is not an array — lib/discovery-probe.js pushes {timestamp, fetchUrl, " +
-           "changes} records onto one per service, so anything else is that writer or the IDB rehydrate broken");
     html += '<details class="card"><summary><code>' + esc(svc) + "</code> — " + esc(String(recs.length)) +
             " change record(s)</summary>";
     for (const rec of recs) {
-      DCHECK(typeof rec.timestamp === "number" && Array.isArray(rec.changes),
-             "a discovery-change record carries no timestamp/changes pair — _diffDiscoveryDocs returns a " +
-             "non-empty change list and the writer stamps the time it diffed, so a record without both is " +
-             "one nobody can date or read");
       html += '<div class="card-meta">' + esc(new Date(rec.timestamp).toLocaleString()) +
-              " — <code>" + esc(String(rec.fetchUrl || "")) + "</code></div>";
+              " — <code>" + esc(rec.fetchUrl) + "</code></div>";
       for (const c of rec.changes) html += '<div class="card-meta"><code>' + esc(_discChangeLine(c)) + "</code></div>";
     }
     html += "</details>";

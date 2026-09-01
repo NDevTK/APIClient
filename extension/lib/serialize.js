@@ -158,12 +158,29 @@ function serializeTabData(tab) {
     mergedEndpoints[k] = v;
   }
 
-  // Scopes: global base, tab overwrites
+  /* Scopes: global base, tab overwrites — AND THE RECORD IS ASKED THE ONE QUESTION lib/store-record.js
+     DECLARES, ON ITS WAY OUT, WHICH IS THE ONLY PLACE ON THIS PATH THAT COULD ASK IT. The popup renders these
+     off a `chrome.runtime.sendMessage` reply, and the reply is built from the LIVE maps: a scope list minted
+     in this session reaches the panel with nothing between it and the renderer. `_serializeGlobalStore`'s
+     `_projectChecked("scopes", …)` does assert the same shape — but on the IndexedDB path, at the next save,
+     which is AFTER the popup has already drawn it and is a path `tab.scopes` has not joined yet. So the check
+     that stood at the READER (popup.js asserted a non-empty array of strings, one caller's opinion of a
+     contract stated here) moves to where the record LEAVES this zone, and every consumer of this reply —
+     including one added later — gets the answer instead of restating the question.
+     BOTH LOOPS, NOT THE MERGED RESULT: a tab entry OVERWRITES the global one, so a check after the merge
+     would never see a global record a tab record replaced, and that record is in the store this session's
+     save is about to write. */
   const mergedScopes = {};
   for (const [k, v] of globalStore.scopes) {
+    checkStoreRecord("scopes", k, v,
+                     "lib/serialize.js projecting the moat's scope lists to the popup, service " +
+                     JSON.stringify(k));
     mergedScopes[k] = v;
   }
   for (const [k, v] of tab.scopes) {
+    checkStoreRecord("scopes", k, v,
+                     "lib/serialize.js projecting this document's scope lists to the popup, service " +
+                     JSON.stringify(k));
     mergedScopes[k] = v;
   }
 
@@ -248,12 +265,23 @@ function serializeTabData(tab) {
       mergedDiscovery[k] = { status: v.status, grouping: null };
     }
   }
-  // Probe results: global base, tab overwrites
+  /* Probe results: global base, tab overwrites — asked the same question, for the same reason, and the KEY is
+     part of the question rather than a label on it. This map holds TWO record shapes under four key spellings
+     (lib/store-record.js's `_srProbeShape`: the bare endpoint key and `auto:<service>::<url>` hold
+     lib/req2proto.js `probeApiEndpoint`'s answer, `svc:` and `svcinfo:` hold `discoverServiceInfo`'s), which
+     is exactly the split lib/popup-discovery.js dispatches its two renderers on — so passing `k` here is what
+     makes this the same question the panel was asking of itself one field at a time. */
   const mergedProbe = {};
   for (const [k, v] of globalStore.probeResults) {
+    checkStoreRecord("probeResults", k, v,
+                     "lib/serialize.js projecting the moat's probe answers to the popup, key " +
+                     JSON.stringify(k));
     mergedProbe[k] = v;
   }
   for (const [k, v] of tab.probeResults) {
+    checkStoreRecord("probeResults", k, v,
+                     "lib/serialize.js projecting this document's probe answers to the popup, key " +
+                     JSON.stringify(k));
     mergedProbe[k] = v;
   }
 

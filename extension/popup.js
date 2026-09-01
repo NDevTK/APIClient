@@ -1619,13 +1619,14 @@ function renderDataPanel() {
            "GET_STATE answered without a scopes record — serializeTabData builds one on every path from " +
            "globalStore.scopes overlaid with the document's, so its absence is that serializer broken and the " +
            "scope list a 403 named would be dropped");
+    /* WHAT EACH ENTRY IS, IS NOT THIS READER'S OPINION ANY MORE. A loop here asserted "a non-empty array of
+       scope strings" and named the three writers it believed in — a correct rule, standing in the wrong
+       place: one caller's transcription of a contract lib/store-record.js's `_SR_SCOPES` states for every
+       surface, including the IndexedDB door a session later. It is now asked ONCE, in lib/serialize.js, as
+       this map is projected onto the reply below, so what arrives here has already answered it and a second
+       spelling of the question cannot drift from the first. `_list.length` in the fingerprint is therefore a
+       count of a list, not a guess about one. */
     scopeRows = Object.entries(tabData.scopes).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
-    for (const [_svc, _list] of scopeRows)
-      DCHECK(Array.isArray(_list) && _list.length > 0,
-             "a scopes entry is not a non-empty array of scope strings — all three writers (lib/" +
-             "response-decode.js, lib/discovery-probe.js, lib/popup-handlers.js) store the split scope list " +
-             "ONLY when it has entries, so an empty one is a producer that stopped guarding and this line " +
-             "would report a service as requiring no scope (service=" + _svc + ")");
     /* THE CREDENTIAL CONTEXT, in the same state. lib/response-decode.js writes it ONLY when a request from
        this document carried an Authorization header or a cookie, so `null` is the POSITIVE statement that
        none did — and that is the first thing a reader of a learned surface needs, because §What-the-tool-

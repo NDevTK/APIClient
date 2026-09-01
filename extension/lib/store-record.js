@@ -134,13 +134,22 @@ function _srProbeShape(key) {
 
 /* THE REQUIRED OAUTH SCOPES A SERVICE'S OWN REJECTION NAMED, per service. A LIST, not a record: all three
    producers (lib/discovery-probe.js, lib/popup-handlers.js, lib/response-decode.js) store the split scope list
-   ONLY when it has entries, so an EMPTY list is a producer that stopped guarding and popup.js already says
-   what that costs — "this line would report a service as requiring no scope".
-     THE ELEMENTS ARE STRINGS AND NOT NECESSARILY NON-EMPTY ONES, and that is a door rule kept deliberately
-   looser than the producer's. `sendProbe`'s 403 arm split `WWW-Authenticate`'s `scope=""` into `[""]` and two
-   of the three producers stored it unfiltered, so a readable store can hold one; the fix for that is at that
-   producer (it now filters, and states `null` when nothing survives), and a door asserting against bytes we
-   ourselves shipped would be aiming at our own history with nowhere for the refusal to go. */
+   ONLY when it has entries, so an EMPTY list is a producer that stopped guarding, and what that costs is that
+   the panel reports a service as requiring no scope — a fact about the service, made out of an absence.
+   (popup.js used to say that sentence beside its own copy of this rule; the copy is gone and the rule is
+   asked once, here, so the reason it exists is stated here too rather than pointed at.)
+     THE ELEMENTS ARE NON-EMPTY STRINGS (`_srStr`), AND THE BYTES WE OURSELVES ONCE SHIPPED ARE NOT WHAT THAT
+   RULE IS AIMED AT — the two are reconciled by WHICH of this file's two questions a store gets, not by
+   loosening the predicate. `sendProbe`'s 403 arm split `WWW-Authenticate`'s `scope=""` into `[""]` and two of
+   the three producers stored it unfiltered, so a store written before that fix can hold a scope whose name is
+   the empty string. Such a store does not state this kind's shape (`statedFrom: 2`), so it is ASKED and that
+   record is shed or stranded — which is exactly the somewhere-to-go a refusal needs. A store that DOES state
+   it was written by producers that all filter now (lib/req2proto.js's two arms state `null` when nothing
+   survives; lib/discovery-probe.js, lib/popup-handlers.js and lib/response-decode.js each store only a list
+   with entries), so asserting there is asserting against bytes only a broken producer in THIS build can make.
+   An earlier form of this paragraph said the elements were "not necessarily non-empty ones", which described
+   a predicate this file has never had; a comment that reads as licence to loosen the line beneath it is worse
+   than none, because lib/serialize.js's projection now makes that line load-bearing on the LIVE session. */
 const _SR_SCOPES = _srList("a service's required OAuth scopes", "a scope name", _srStr, true);
 
 /* AN @S FINDING AS THE MOAT HOLDS IT — lib/merge.js's one producer, three names.
