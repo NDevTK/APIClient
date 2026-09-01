@@ -33,6 +33,8 @@
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "solver/cow.h"
+#include "solver/concolic.h"   /* §4.5's `min` may be unknown external input, which crosses §3.2.4.8 as itself,
+                                  and then steps 4-6 are FORKS rather than comparisons — see BR_STEP4_OP */
 #include "core/streams/stream_work.h"
 #include "core/streams/readable_stream.h"
 #include "core/streams/readable_stream_impl.h"
@@ -1471,7 +1473,8 @@ static JSValue js_byobreq_view(JSContext *ctx, JSValueConst this_val, int magic)
 enum { BQ_RESPOND = 0, BQ_RESPOND_VIEW };
 
 #define BQ_STAGES(X) \
-    X(BQ_ENTER, "Web IDL §3.7.5 (the ReadableStreamBYOBRequest brand, before either argument is converted)") \
+    X(BQ_ENTER, "Web IDL §3.7.7 Operations (the ReadableStreamBYOBRequest brand — \"If jsValue does not " \
+                "implement the interface target, throw a TypeError.\" — before either argument is converted)") \
     X(BQ_NUM, "Web IDL §3.2.4.8 ([EnforceRange] unsigned long long bytesWritten — ToNumber is the page's code; " \
               "respondWithNewView's ArrayBufferView needs none)") \
     X(BQ_START, "Streams §4.8 respond(bytesWritten) / respondWithNewView(view) steps 1-3 and §4.9.5's " \
@@ -1812,8 +1815,8 @@ static const IdlDictDecl BYOB_READ_OPTIONS_DECL = {
 static const JSAtom *g_byob_read_options_atoms;
 
 #define BR_STAGES(X) \
-    X(BR_START, "Streams §4.5 read(view, options) — Web IDL §3.7.5's brand and §3.2.25's ArrayBufferView, " \
-                "before the dictionary is read") \
+    X(BR_START, "Streams §4.5 read(view, options) — Web IDL §3.7.7 Operations' brand and §3.2.26 Buffer " \
+                "source types' ArrayBufferView, before the dictionary is read") \
     X(BR_OPTIONS, "Web IDL §3.2.17 Dictionary types over ReadableStreamBYOBReaderReadOptions (the `min` " \
                   "[[Get]] and §3.2.4.8's ToNumber are both the page's code)") \
     X(BR_INTO, "Streams §4.5 read() steps 1-11 and §4.9.5's ReadableByteStreamControllerPullInto") \
@@ -1827,6 +1830,43 @@ static const JSAtom *g_byob_read_options_atoms;
                  "the promise is the page's code)")
 enum { BR_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const BR_STEPS[] = { BR_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+/* THE OPERATION HALVES OF THE TWO KEYS §4.5 STATES OVER `min`, AND THEY ARE TWO AND NOT ONE.
+ *
+ * §4.5's read(view, options) method steps name `min` in exactly two conditions and nowhere else: step 4, "If
+ * options["min"] is 0, return a promise rejected with a TypeError exception.", and the pair step 5.1 / step
+ * 6.1, "If options["min"] > view.[[ArrayLength]], return a promise rejected with a RangeError exception." for
+ * a typed array and "If options["min"] > view.[[ByteLength]], return a promise rejected with a RangeError
+ * exception." for a DataView. Over an unknown `min` BOTH completions of each are feasible — §3.2.4.8's
+ * unsigned long long spans [0, 2**53-1] under §3.3.6 [EnforceRange] and nothing has excluded either side — so
+ * each is a two-armed fork and the three worlds they generate (rejected TypeError, rejected RangeError,
+ * pulled into) are the whole of what this member's value decides HERE.
+ *
+ * THEY MUST NOT SHARE A KEY, for the reason core/timing/timer.c's step 4 and step 5 must not: `min == 0` and
+ * `min > elementCount` are different questions with different answer sets — a flow that answered the first
+ * NO has said nothing whatever about the second — and decide.c keys a predicate by (source identity,
+ * operation), so one name would let one arm's record decide its neighbour.
+ *
+ * step_fork_run keeps a BORROWED pointer to the string on the header and the driver reads it AFTER this
+ * machine has returned, so each must outlive the return: a static literal does, a stack buffer would dangle
+ * exactly where the constraint key is built. Each names the SPEC STEP rather than this file, so two spellings
+ * of one question compose to one key.
+ *
+ * A SUB-NUMBER IS WRITTEN HERE BECAUSE EACH OF THOSE STEPS HOLDS EXACTLY ONE LIST — step 5's `<ol>` has the
+ * single item 5.1 and step 6's has the single item 6.1, so neither number is ambiguous. Step 9 of the same
+ * algorithm holds THREE sibling lists (the read-into request's chunk, close and error steps), which is why
+ * nothing here cites a step 9 sub-number. */
+static const char BR_STEP4_OP[] =
+    "Streams §4.5 read(view, options) step 4 (options[\"min\"] is 0)";
+static const char BR_STEP56_OP[] =
+    "Streams §4.5 read(view, options) steps 5.1/6.1 (options[\"min\"] > the view's element count)";
+
+/* WHICH OF THOSE TWO ASKS IS NEXT. Both live in one stage, so the stage cannot say which of them a resume is
+   standing on, and step_fork_ask asserts that a delivered answer belongs to the ask it is delivered at — so
+   this cursor is what keeps the second fork from being answered at the first's call site. It is a cursor and
+   not a record of the ARMS: what each answered arm establishes about `min` is re-derived from the value's own
+   example at each entry, which is why nothing here has to survive a park except the position. */
+enum { BR_MIN_STEP4 = 0, BR_MIN_STEP56, BR_MIN_PULL };
 
 typedef struct {
     JSStepHdr hdr;
@@ -1846,7 +1886,18 @@ typedef struct {
        here to disagree with it. NO FRAMES: this dictionary declares no `sequence<(DOMString or D)>` member,
        which idl_dict_walk_start asserts against idl_members_depth over the list rather than taking on trust. */
     IdlDictWalk dw;
-    double  min;
+    /* §4.5.1's `min` AS THE CONVERTED MEMBER'S VALUE, not as a number derived from it. It is held rather than
+       read out because it is the OPERAND of the two forks below, and step_fork_run borrows its `over` for the
+       length of the request — so the value has to be somewhere THE SNAPSHOT CARRIES, which is this state,
+       reached by the visit. A double here instead would have decided both of §4.5's questions about an unknown
+       at the moment §3.2.17 answered, which is a whole stage before either of them is asked.
+       THE NUMBER IS A LOCAL OF BR_INTO and no longer a field, because §4.5's steps 4-6 are what turn the value
+       into one and they all sit in that stage: the arms decide whether there is a number to have at all, so a
+       field would be a place for one to stand before its arm existed. */
+    JSValue min_v;
+    /* WHICH OF §4.5's TWO ASKS OVER THAT VALUE IS NEXT — see BR_MIN_STEP4. A scalar rather than a JSValue, so
+       the fork's clone carries it by the same block copy that carries `view_phase`. */
+    uint8_t min_phase;
     uint8_t view_phase;
 } JSByobReadState;
 
@@ -1864,6 +1915,12 @@ static void js_byob_read_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->result);
     v->val(ctx, &s->stream);
     v->val(ctx, &s->dsc);
+    /* THE FORK OPERAND IS OWNED AND THEREFORE DECLARED HERE, which is what makes the sibling's clone take its
+       own reference to it and the teardown release exactly one. It is named UNCONDITIONALLY, as every other
+       value on this state is, because BR_START places JS_UNDEFINED in it before the first operation that can
+       throw — there is no window in which a zeroed slot (which is the INTEGER 0, not undefined) could be
+       handed to a fork. */
+    v->val(ctx, &s->min_v);
     STEP_CB_FOREACH(s->view_cb, i) v->val(ctx, &s->view_cb[i]);
 }
 
@@ -1876,8 +1933,11 @@ static JSValue js_byob_read_fini(JSContext *ctx, void *st, bool take_result)
     return r;
 }
 
-/* EVERY refusal in `read` is a REJECTED PROMISE and not a throw — Web IDL §3.7.6 converts an exception thrown
-   by a promise-returning operation into one, and §4.5's own steps state it directly. */
+/* EVERY refusal in `read` is a REJECTED PROMISE and not a throw — Web IDL §3.7.7 Operations converts an
+   exception thrown by a promise-returning operation into one ("if op has a return type that is a promise
+   type, then return ! Call(%Promise.reject%, %Promise%, «E»)"), and §4.5's own steps state it directly. This
+   is the path BOTH of the forks below take on their rejecting arms, which is why its number is checked here:
+   it stood at §3.7.6, and §3.7.6 is Attributes. */
 static int byob_read_reject(JSContext *ctx, JSByobReadState *s)
 {
     JSValue funcs[2];
@@ -1913,20 +1973,21 @@ static int js_byob_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
         cb_result = JS_UNDEFINED;
         /* EVERY OWNED FIELD IS PLACED BEFORE THE FIRST OPERATION THAT CAN THROW, because the failure path tears
            this state down through fini, which frees exactly what the state holds and nothing else. */
-        s->promise = s->settle = s->result = s->stream = s->dsc = JS_UNDEFINED;
+        s->promise = s->settle = s->result = s->stream = s->dsc = s->min_v = JS_UNDEFINED;
         STEP_CB_FOREACH(s->view_cb, i) s->view_cb[i] = JS_UNDEFINED;
         s->view_phase = 0;
-        /* §4.5.1's declared `min = 1`, placed here as well as by §3.2.17 step 4.1.5 because the conversion at
-           BR_OPTIONS can decline to answer: idl_number_of leaves its output untouched for an unknown carrying
-           no example, and in a release build the DFAIL that names the fork is gone. This is the value that
-           stands in that case, and it is the IDL's own rather than a number chosen here. */
-        s->min = 1;
+        s->min_phase = BR_MIN_STEP4;
         if (!rd || !rd->byob) {
             JS_ThrowTypeError(ctx, "not a ReadableStreamBYOBReader");
             { if (byob_read_reject(ctx, s) < 0) return JS_STEP_ABRUPT; goto settle; }
         }
-        /* §3.2.25's ArrayBufferView conversion, which is also §4.5 step 3's detached test: a view whose buffer
-           has gone answers the same TypeError. */
+        /* Web IDL §3.2.26 Buffer source types' ArrayBufferView conversion, which is also §4.5 step 3's detached
+           test ("If ! IsDetachedBuffer(view.[[ViewedArrayBuffer]]) is true, return a promise rejected with a
+           TypeError exception."): a view whose buffer has gone answers the same TypeError.
+           THE NUMBER HERE WAS §3.2.25 AND THAT IS UNION TYPES — a section that EXISTS, so nothing checking
+           whether a number resolves could see it, and it carried no title, so nothing comparing titles could
+           either. A buffer view's conversion is §3.2.26; the title is written beside the number from now on
+           because the title is the half that survives an edition the number does not. */
         buf = byte_view_parts(ctx, view, &off, &len, &elem, &vt);
         if (JS_IsException(buf)) { if (byob_read_reject(ctx, s) < 0) return JS_STEP_ABRUPT; goto settle; }
         JS_FreeValue(ctx, buf);
@@ -1971,25 +2032,22 @@ static int js_byob_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
                    "§3.2.17 answered with a ReadableStreamBYOBReaderReadOptions carrying no `min` — the IDL "
                    "writes `= 1`, so step 4.1.5 places it for a member the page omitted and this dictionary "
                    "never has a hole where §4.5's steps 4-6 read one");
-            /* THE NUMBER THE CONVERTED MEMBER DENOTES, asked through the declaration's own reader. A body may
-               not run JS_ToFloat64 over this itself: idl_concolic_rule answers CROSSES for every numeric
-               type, so unknown external input arrives UNCONVERTED — that crossing is what keeps a later
-               branch on the value forking — and ToNumber over a concolic runs the page's `valueOf` from a
-               plain C activation with no flow base under it. */
-            if (!idl_number_of(ctx, IDL_UNSIGNED_LONG_LONG_ENFORCE, mv, &s->min))
-                DFAIL("§4.5's read was given an UNKNOWN `min` carrying no example. Step 4 (\"If "
-                      "options[\"min\"] is 0, return a promise rejected with a TypeError\") and steps 5-6 "
-                      "(\"If options[\"min\"] > view.[[ArrayLength]], return a promise rejected with a "
-                      "RangeError\") each have both completions feasible over an unconstrained [EnforceRange] "
-                      "unsigned long long, and §4.9.5's PullInto then has one distinct outcome per minimum "
-                      "fill — so this member must ask step_fork_run over step 4 and over the FINITE arm set "
-                      "{1 … the view's element count, past-it} the view's own length bounds, exactly as "
-                      "core/indexeddb/idb_cursor.c's advance must for its `count`");
-            /* IN RELEASE THAT DFAIL IS GONE and `min` is still the 1 BR_START placed, which is §4.5.1's own
-               declared default rather than a number invented here: release cannot build the fork, so the read
-               takes the IDL's value for a minimum it cannot read. idl_number_of leaves `*out` untouched when
-               it answers 0, so nothing a compiled-out assert wrote is being relied on. */
-            JS_FreeValue(ctx, mv);
+            /* THE CONVERTED MEMBER IS TAKEN AS A VALUE AND NOT AS A NUMBER, which is the whole difference
+               between this stage and §4.5's. A body may not run JS_ToFloat64 over it: idl_concolic_rule
+               answers CROSSES for every numeric type, so unknown external input arrives UNCONVERTED — that
+               crossing is what keeps a later branch on the value forking — and ToNumber over a concolic runs
+               the page's `valueOf` from a plain C activation with no flow base under it.
+               ASKING idl_number_of HERE WOULD HAVE ANSWERED A DIFFERENT QUESTION FROM THE ONE §4.5 ASKS, and
+               that is the defect this stage used to carry rather than a missing feature: an unknown that HAD
+               an example was collapsed to that example's number at the moment §3.2.17 answered, a whole stage
+               before either of §4.5's conditions is stated, so the run explored exactly the one world the
+               example named and nothing downstream could tell that number from a `min` the page wrote as a
+               literal. What the value's domain permits is decided where the SPEC states a condition on it. */
+            DCHECK(JS_IsUndefined(s->min_v),
+                   "§3.2.17's member value was taken twice into one read — BR_OPTIONS reaches this block once "
+                   "per read and hands the value to the state, so a second take would overwrite the operand "
+                   "the two forks below borrow and leak the reference a sibling still holds");
+            s->min_v = mv;   /* OWNED from here: js_byob_read_visit is this state's one ownership list */
         }
         STEP_GOTO(s->hdr.stage, BR_INTO, &s->w.phase, &s->view_phase, &s->hdr.get_phase,
                   &s->hdr.num_phase, NULL);
@@ -2001,7 +2059,11 @@ static int js_byob_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
         ByteCtrlData *c;
         JSValue funcs[2], buf, nb, dsc;
         double off = 0, len = 0, elem = 1, minfill;
-        int vt = 0;
+        /* §4.5's `min` AS A NUMBER, and `have` is whether this flow is entitled to one. Both are locals of the
+           stage that decides them: steps 4-6 below are what establish which world this flow is in, and the
+           number only exists inside the one world that pulls. */
+        double mnum = 0;
+        int have = 0, vt = 0;
 
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
@@ -2014,22 +2076,200 @@ static int js_byob_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
                 JS_FreeValue(ctx, buf);
                 { if (byob_read_reject(ctx, s) < 0) return JS_STEP_ABRUPT; goto settle; }
             }
+            /* §4.5 steps 1-2: "If view.[[ByteLength]] is 0, return a promise rejected with a TypeError
+               exception." and "If view.[[ViewedArrayBuffer]].[[ByteLength]] is 0, return a promise rejected
+               with a TypeError exception." They stand AHEAD of steps 4-6 and that order is observable —
+               `read(new Uint8Array(0), {min: 5})` is step 1's TypeError and not step 5.1's RangeError — so
+               they are answered before the forks and not folded into them. */
             if (len == 0 || blen == 0) {
                 JS_FreeValue(ctx, buf);
                 JS_ThrowTypeError(ctx, "a BYOB read cannot be given an empty view");
                 { if (byob_read_reject(ctx, s) < 0) return JS_STEP_ABRUPT; goto settle; }
             }
         }
-        if (s->min == 0) {
-            JS_FreeValue(ctx, buf);
-            JS_ThrowTypeError(ctx, "a BYOB read's min must not be 0");
-            { if (byob_read_reject(ctx, s) < 0) return JS_STEP_ABRUPT; goto settle; }
+        /* STEPS 1-3 ARE ANSWERED, SO THE BUFFER GOES BACK BEFORE THE FORKS. step_fork_run's contract is that
+           the state is complete-or-empty at the ask, because the SIBLING'S SNAPSHOT IS TAKEN THERE and the
+           snapshot is the machine's declared state — a reference held in a C local of this frame is in no
+           declaration, so returning JS_STEP_FORK while `buf` stood here would leak one buffer reference per
+           fork. `off`, `len`, `elem` and `vt` are plain doubles and an int and cost nothing to re-derive on
+           re-entry, which is what the re-acquisition below is. */
+        JS_FreeValue(ctx, buf);
+        buf = JS_UNDEFINED;
+
+        /* ---- §4.5 STEPS 4-6 OVER `min` -----------------------------------------------------------------
+         *
+         * AN UNKNOWN IS NOT A MISSING NUMBER, IT IS A FORK, and §4.5 states both of the forks itself. Over an
+         * unknown `min` each of its two conditions has both completions feasible — §3.2.4.8's `unsigned long
+         * long` under §3.3.6 [EnforceRange] spans [0, 2**53-1] and no predicate has excluded either side —
+         * so both arms of each run, and the three worlds they generate are the TypeError of step 4, the
+         * RangeError of steps 5.1/6.1, and the pull-into of steps 7-11.
+         *
+         * WHAT DECIDES WHETHER TO FORK IS THE VALUE'S DOMAIN AND NOT ITS EXAMPLE. Asking `idl_number_of` first
+         * and forking only when it declines answers a different question: an unknown that HAS an example would
+         * take the decided path, run both conditions on that example, and the unknown would be gone — the
+         * collapse §Solver-half forbids, performed silently, because what replaced the value is a REAL number
+         * this engine computed. The example is demoted to what it is everywhere else here: the answer to WHICH
+         * arm a real session takes, never to whether there are two.
+         *
+         * AND THE ARM SET IS THREE, WHICH IS WHAT §4.5 ITSELF GENERATES. §4.5 names `min` in exactly two
+         * conditions and nowhere else; every finer distinction a minimum fill makes belongs to §4.9.5's
+         * ReadableByteStreamControllerFillPullIntoDescriptorFromQueue step 9, "If maxAlignedBytes ≥
+         * pullIntoDescriptor's minimum fill,", which is a comparison against the CONTROLLER'S QUEUE. That is a
+         * second predicate with a second operand, asked at its own site, and its other operand does not even
+         * exist yet at this one — the queue is filled after this read is enqueued. Enumerating an arm per
+         * candidate minimum here would file, at §4.5, an answer to a question §4.9.5 asks, which is exactly
+         * the "one arm's record decides its neighbour" the (operation, operands) key exists to prevent; and
+         * choosing which of those candidates a flow runs on would invent a value for a range-gated unknown,
+         * which §@H forbids by name. */
+        if (concolic_is(s->min_v)) {
+            int arm = 0, rc, real;
+
+            /* THE EXAMPLE, IF THERE IS ONE — §3.2.4.9's ConvertToInt run on the value's own concrete through
+               the one copy of that arithmetic, never a rule predicting it. `have` is 0 for an unknown carrying
+               no example, which is a POSITIVE statement and not a hole: there is no number, so neither
+               condition has an observed completion and JS_OUTCOME_REAL_UNSTATED is what each fork is told.
+               IT IS RE-DERIVED ON EVERY ENTRY AND NEVER HELD, which is what lets the two asks below share one
+               stage: whether the example still stands is a function of the arms already answered, and both of
+               those arms are known here from `min_phase` alone. `idl_number_of` runs no page code, so a second
+               reading of one value cannot differ from the first. */
+            have = idl_number_of(ctx, IDL_UNSIGNED_LONG_LONG_ENFORCE, s->min_v, &mnum);
+
+            /* TWO ASKS IN ONE STAGE NEED A CURSOR OF THEIR OWN, and this is not a nicety — it is what makes
+               the second fork legal. step_fork_ask asserts on resume that `fork_ask_key` equals the key of the
+               ask it is standing at, so a machine that re-reaches its FIRST ask while holding the SECOND's
+               answer aborts naming exactly that ("a fork's answer was delivered to a DIFFERENT question than
+               the one that asked for it"). A stage cannot tell them apart, because both live in this one; the
+               cursor can, and it is this machine's own rather than a reuse of `num_phase`, whose value space
+               belongs to the coercion BR_OPTIONS delegates into. */
+            if (s->min_phase == BR_MIN_STEP4) {
+                /* §4.5 step 4: "If options["min"] is 0, return a promise rejected with a TypeError exception."
+                   OUTCOME 0 IS THE NOT-ZERO ARM, which is step_fork_run's one numbering rule read against this
+                   predicate: a run with no forking policy — the @S candidate re-fire — takes outcome 0, and
+                   the ordinary completion of "is this minimum zero" is that it is not. Numbering the rejection
+                   first would divert every candidate re-fire onto an arm that settles and reads nothing. */
+                real = have ? (mnum == 0 ? 1 : 0) : JS_OUTCOME_REAL_UNSTATED;
+                rc = step_fork_run(ctx, &s->hdr, s->min_v, BR_STEP4_OP, 2, real, &arm);
+                if (rc) return rc;
+                DCHECK(arm == 0 || arm == 1,
+                       "a two-armed outcome fork answered with an arm that is neither of them");
+                if (arm == 1) {
+                    JS_ThrowTypeError(ctx, "a BYOB read's min must not be 0");
+                    { if (byob_read_reject(ctx, s) < 0) return JS_STEP_ABRUPT; goto settle; }
+                }
+                s->min_phase = BR_MIN_STEP56;   /* AFTER the return, so a sibling clones the pre-ask cursor */
+            }
+            /* THE FORCED SIBLING DROPS THE CONTRADICTED EXAMPLE. Reaching this line at all means step 4 was
+               answered on its NOT-ZERO arm, so an example of 0 names a world this flow is not in; carrying it
+               would state a `real` for the next fork computed from a value already excluded, and would hand
+               §4.9.5 a minimum fill of 0 that its own step 6's assert forbids. It is written as a test on the
+               EXAMPLE rather than on the arm because that is what survives a resume — the arm is gone by then
+               and the condition it answered is not. Only gate-DEPENDENT values degrade: a `min` whose example
+               agrees with its arm stays concrete, which is the whole point of carrying one. */
+            if (have && mnum == 0) have = 0;
+
+            if (s->min_phase == BR_MIN_STEP56) {
+                /* §4.5 steps 5.1/6.1: "If options["min"] > view.[[ArrayLength]], return a promise rejected
+                   with a RangeError exception." for a typed array, and the same over view.[[ByteLength]] for a
+                   DataView. Step 5 versus step 6 is a branch on the VIEW's type, which is this page's own
+                   object and is DECIDED, never forked; `min * elem > len` is the one comparison both spell,
+                   since a typed array's element count times its element size is its byte length and a
+                   DataView's element size is 1. Outcome 0 is the within-the-view arm, for step 4's reason. */
+                real = have ? (mnum * elem > len ? 1 : 0) : JS_OUTCOME_REAL_UNSTATED;
+                rc = step_fork_run(ctx, &s->hdr, s->min_v, BR_STEP56_OP, 2, real, &arm);
+                if (rc) return rc;
+                DCHECK(arm == 0 || arm == 1,
+                       "a two-armed outcome fork answered with an arm that is neither of them");
+                if (arm == 1) {
+                    JS_ThrowRangeError(ctx, "a BYOB read's min is larger than the view it was given");
+                    { if (byob_read_reject(ctx, s) < 0) return JS_STEP_ABRUPT; goto settle; }
+                }
+                s->min_phase = BR_MIN_PULL;
+            }
+            /* The same drop for the second answered arm, for the same reason. */
+            if (have && mnum * elem > len) have = 0;
+            DCHECK(s->min_phase == BR_MIN_PULL,
+                   "§4.5's steps 4-6 fell through to the pull-into with a cursor that says one of their two "
+                   "asks was never made — every path out of an ask either rejects the read or advances this "
+                   "cursor, so a value here means an arm returned without doing either");
+
+            if (!have) {
+                /* THE ONE WORLD THAT STILL NEEDS A NUMBER AND HAS NONE. Both forks have run and both said this
+                   flow is in the pulling world, so `min` is constrained to [1, the view's element count] and
+                   nothing narrower — a DOMAIN, which is what §@H says such a value is, and §4.9.5 step 5's
+                   "Let minimumFill be min × elementSize" needs a NUMBER for a descriptor field that C
+                   arithmetic reads. Picking one out of that range is the invention §RUN-DON'T-MATCH forbids,
+                   and refusing the read is a dropped flow, so there is nothing correct left to do here. */
+                DFAIL("§4.5's read reached its pull-into arm with a `min` that has no number: an UNKNOWN "
+                      "carrying no example, or one whose example named a world this flow was forced out of. "
+                      "Steps 4 and 5.1/6.1 have both been asked, so the value is constrained to [1, the "
+                      "view's element count] and no further — §4.9.5's PullInto step 5 (\"Let minimumFill be "
+                      "min × elementSize\") then wants a number that only §4.9.5's own "
+                      "FillPullIntoDescriptorFromQueue step 9 (\"If maxAlignedBytes ≥ pullIntoDescriptor's "
+                      "minimum fill,\") distinguishes, against a queue that does not exist yet at this step. "
+                      "So the minimum fill must reach the descriptor AS THE CONCOLIC `min × elementSize` and "
+                      "that step 9 must ask step_fork_run over it there, where its other operand is live");
+            /* IN RELEASE THAT DFAIL IS GONE and the read takes 1 — the LOWER BOUND OF THE ARM IT IS STANDING
+               ON, which is a fact this flow's own forks established rather than a pick out of the range: step
+               4's answered arm is `min` is not 0, and an unsigned long long that is not 0 is at least 1. It is
+               also §4.5.1's declared `= 1` and §4.5's own reading of it ("If not given, then the promise
+               resolves when at least one element is available"). Release cannot build the fork step 9 needs,
+               so this is still a NARROWING of an unknown to one member of its domain and is stated as one;
+               what changed is that the domain is now the arm's and not the type's.
+               IT IS WRITTEN AND NOT LEFT TO AN INITIALISER, unlike the sibling case in
+               core/indexeddb/idb_cursor.c: `idl_number_of` may have written a real example here before the
+               forks excluded it, so `mnum` can be holding a number this arm has said is wrong. */
+                mnum = 1;
+            }
+        } else {
+            /* NOT UNKNOWN INPUT: §4.5's two conditions are ordinary comparisons on a number the declaration
+               produced, and there is no second path for a predicate to select — this arm exists because the
+               forks above have no question to ask, not because it is a fallback for them. */
+            have = idl_number_of(ctx, IDL_UNSIGNED_LONG_LONG_ENFORCE, s->min_v, &mnum);
+            DCHECK(have,
+                   "§3.2.4.8's conversion produced no number for a `min` this arm has already established is "
+                   "NOT unknown external input — idl_number_of answers 0 only for an unknown carrying no "
+                   "example, so a 0 here is a member value that is neither a Number nor a concolic reaching a "
+                   "body whose dictionary declares IDL_UNSIGNED_LONG_LONG_ENFORCE for it");
+            /* §3.3.6 [EnforceRange]'s arm of §3.2.4.9 Abstract operations' ConvertToInt refuses a non-finite
+               value and one outside the type's range BEFORE this stage is reached, and at bitLength 64 that
+               algorithm sets upperBound to 2**53-1 — so a value here it would have refused means this member
+               lost its declared type. */
+            DCHECK(mnum >= 0 && mnum <= 9007199254740991.0 && mnum == floor(mnum),
+                   "§4.5's `min` reached its steps with a value outside an [EnforceRange] unsigned long long — "
+                   "§3.2.4.9's ConvertToInt takes the integer part first and then refuses anything outside "
+                   "[0, 2**53-1], so a fraction or an out-of-range magnitude here means nothing converted it");
+            /* §4.5 step 4. */
+            if (mnum == 0) {
+                JS_ThrowTypeError(ctx, "a BYOB read's min must not be 0");
+                { if (byob_read_reject(ctx, s) < 0) return JS_STEP_ABRUPT; goto settle; }
+            }
+            /* §4.5 steps 5.1/6.1. */
+            if (mnum * elem > len) {
+                JS_ThrowRangeError(ctx, "a BYOB read's min is larger than the view it was given");
+                { if (byob_read_reject(ctx, s) < 0) return JS_STEP_ABRUPT; goto settle; }
+            }
         }
-        if (s->min * elem > len) {
-            JS_FreeValue(ctx, buf);
-            JS_ThrowRangeError(ctx, "a BYOB read's min is larger than the view it was given");
-            { if (byob_read_reject(ctx, s) < 0) return JS_STEP_ABRUPT; goto settle; }
-        }
+        /* §4.9.5's PullInto step 6, "Assert: minimumFill ≥ 0 and minimumFill ≤ view.[[ByteLength]].", asserted
+           at the site that establishes it rather than at the one that consumes it — every arm above leaves
+           `mnum` in [1, the view's element count], the two forked ones by their answered arms and the decided
+           one by its two comparisons. */
+        DCHECK(mnum >= 1 && mnum * elem <= len,
+               "§4.5's steps 4-6 let a `min` through that §4.9.5's PullInto step 6 asserts against — every arm "
+               "of those steps either rejects the read or establishes 1 ≤ min and min × elementSize ≤ the "
+               "view's byte length, so a value outside that means an arm returned without deciding");
+
+        /* Web IDL §3.2.26 Buffer source types' view parts again, for steps 8-11 and §4.9.5. NOTHING RAN IN
+           BETWEEN — step_fork_run runs none of the page's code and byte_view_parts reads internal slots only
+           — so this cannot answer differently from the read above. It is nevertheless HANDLED as well as
+           asserted, because a release build has the assert compiled out and must not carry a live exception
+           into §4.9.5's queue. */
+        buf = byte_view_parts(ctx, view, &off, &len, &elem, &vt);
+        DCHECK(!JS_IsException(buf),
+               "Web IDL §3.2.26 Buffer source types' ArrayBufferView parts answered differently on a second "
+               "read inside one stage — step_fork_run runs none of the page's code and byte_view_parts only "
+               "reads internal slots, so a change here means the view moved under a flow that was merely "
+               "forked");
+        if (JS_IsException(buf)) { if (byob_read_reject(ctx, s) < 0) return JS_STEP_ABRUPT; goto settle; }
         if (JS_IsUndefined(rd->stream)) {
             JS_FreeValue(ctx, buf);
             JS_ThrowTypeError(ctx, "this reader has been released");
@@ -2052,8 +2292,8 @@ static int js_byob_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
             STEP_GOTO(s->hdr.stage, BR_SETTLE, &s->w.phase, &s->view_phase, &s->hdr.get_phase, NULL);
             goto into_done;
         }
-        /* §4.9.5's ReadableByteStreamControllerPullInto. */
-        minfill = s->min * elem;
+        /* §4.9.5's ReadableByteStreamControllerPullInto step 5: "Let minimumFill be min × elementSize." */
+        minfill = mnum * elem;
         nb = byte_transfer(ctx, buf);
         JS_FreeValue(ctx, buf);
         if (JS_IsException(nb)) {

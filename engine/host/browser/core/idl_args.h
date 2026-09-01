@@ -76,7 +76,7 @@ typedef enum {
        JavaScript's Number type as unambiguous integers". So the attribute NARROWS the type's range rather than
        merely refusing what falls outside it, and a declaration reusing the plain type's 2**64-1 would accept
        values a browser rejects.
-       Streams §4.2.1 Interface definition's `ReadableStreamBYOBReaderReadOptions` writes
+       Streams §4.5.1 Interface definition's `ReadableStreamBYOBReaderReadOptions` writes
        `[EnforceRange] unsigned long long min = 1`, and the difference a page sees is two-sided:
        `reader.read(v, {min: 2**60})` is a TypeError from the TYPE where the wider bound reaches §4.5's own
        RangeError, and `reader.read(v, {min: 1.5})` reads with a minimum of 1 because IntegerPart truncates
@@ -741,7 +741,7 @@ typedef enum {
        the day the position's type changes and the two stop agreeing. Declared, the conversion PLACES a real
        `false` and a body reading argv[0] is reading the IDL's value rather than inventing it. */
     IDL_DEFAULT_FALSE,
-    /* `= 1`. Streams §4.2.1 Interface definition's `ReadableStreamBYOBReaderReadOptions` writes
+    /* `= 1`. Streams §4.5.1 Interface definition's `ReadableStreamBYOBReaderReadOptions` writes
        `[EnforceRange] unsigned long long min = 1`, and it is a row here for the reason IDL_DEFAULT_ZERO is
        one rather than being folded into it: the two are different VALUES, and this member's whole algorithm
        branches on the difference — §4.5's read(view, options) step 4 is "If options["min"] is 0, return a
