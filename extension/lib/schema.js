@@ -506,6 +506,65 @@ async function pageContextFetch(tabId, url, opts, documentId) {
     return { error: "blocked: invalid URL" };
   }
 
+  /* THE DESTRUCTIVE-PATH DENY LIST, ON THE OTHER SANCTIONED TRANSPORT — ASKED OF THE CHOKEPOINT, NEVER COPIED
+     HERE. SECURITY.md names `lib/safe-fetch.js` the network chokepoint and this relay the other way analyzer
+     bytes leave; CLAUDE.md puts the deny list "in `safe-fetch.js` WITH EVERY OTHER RISK DECISION" and calls a
+     second copy of the risk decision inside another component the layering violation. A second `_DESTRUCTIVE`
+     in this file would be that violation, so the question is put to `safeFetchDestructiveRefusal`, which IS
+     `_destructiveToken` — the one function in this project that answers it — read by a caller whose act is
+     not a `safeFetch`, exactly as `bridge.js` and `engine/trusted.mjs` read `safeFetchMethodRefusal` and
+     `safeFetchFiringRefusal`.
+     WHY THIS RELAY NEEDED IT AND THE CHOKEPOINT'S OWN GATE COULD NOT REACH IT. `safeFetch` scopes the list to
+     `credentialed && provenance !== "observed"`. `content.js`'s `handlePageFetch` sets
+     `credentials: "same-origin"` on every request it relays — unconditionally, with no parameter in which a
+     caller could say otherwise — so this transport is credentialed for all three entries and every one of
+     their callers, and yet a request that never reaches `safe-fetch.js` cannot be inside that scope at all.
+     The gate was not answering permissively here; it was unaskable here.
+     THE PROVENANCE HALF IS NOT ASKED, AND THIS GATE IS THEREFORE OVER-BROAD ON PURPOSE. `safeFetch` narrows
+     itself with `observed` because it has a caller for which the harm argument is FALSE BY CONSTRUCTION — the
+     ambient seed, whose address the person's own browser navigated to seconds ago in this profile. This relay
+     has no such caller: every address it carries is one this tool composed (a well-known discovery path built
+     from a fixed literal list, a captured endpoint re-sent with a deliberately malformed body) or one an
+     operator typed into the Send panel, and none of them is a request the person's own client made. Over-broad
+     is this list's cheap direction — one unfired request, reported with the token that refused it, and the
+     address still derived and reported in full — while loosening a gate as a side effect of wiring it up is
+     its expensive one.
+     AND THE ARGUMENT IS STRONGER HERE THAN AT THE CHOKEPOINT. RFC 9110 §9.2.1 "Safe Methods" is what keeps
+     `safeFetch`'s own exposure small: it is GET-only by absence, and §9.2.1 says of a safe method that "the
+     client does not request, and does not expect, any state change on the origin server". This relay takes
+     `msg.method` verbatim and two of its three entries name POST, which §9.2.1's safe set — "the GET, HEAD,
+     OPTIONS, and TRACE methods" — does not contain.
+     `CHECK` AND NOT `DCHECK` ON THE GATE'S PRESENCE, on the one discriminator that separates them. This file
+     runs in exactly one realm (`ast-worker.html`, which loads `lib/safe-fetch.js` before it), so an absent
+     gate is that loader changed — and the release behaviour is not unknown: a `ReferenceError` here is not
+     `apiclientFatal`, so `lib/send.js`'s `RETHROW_FATAL` would let it through and report it as
+     `fetch_exception`, i.e. as the server or the network having refused. The gate would be gone and the one
+     account anybody got of it would name the wrong party. */
+  CHECK(typeof safeFetchDestructiveRefusal === "function",
+        "the page-context relay cannot reach the destructive-path deny list — ast-worker.html loads " +
+        "lib/safe-fetch.js before this file and this is the only realm this file runs in, so an absent gate " +
+        "is that loader having changed. Every request this relay sends is credentialed by construction, so " +
+        "proceeding would spend the person's session past the one gate standing between it and a path that " +
+        "ends that session, and the ReferenceError would reach lib/send.js's catch and be reported as a " +
+        "request the server refused");
+  /* RESIDUAL — THIS GATE IS PRE-REQUEST ONLY, WHERE `safeFetch` ASKS TWICE.
+     WHAT IS NOT COVERED: a redirect. `safeFetch` re-asks `_destructiveToken` on the LANDED url
+     (`blocked-destructive-redirect:`) because Fetch §2.2.5 "Requests" makes a request's current URL "a
+     pointer to the last URL in request's URL list", and — as that site says — the re-ask cannot un-send
+     anything, it refuses to INGEST the reply. This relay cannot ask it at all: `handlePageFetch` fetches with
+     Fetch's default `redirect: "follow"` and its reply record is `{ok, status, statusText, headers, body,
+     bodyEncoding}`, which carries no `resp.url`, so no zone downstream of that renderer knows where the
+     request landed.
+     WHAT THE NEXT DIFF BUILDS: `handlePageFetch` states the landed address on its reply record and
+     `_checkPageFetchReply` asserts it — which that edge owes anyway, since SECURITY.md's named hazard here is
+     that "nothing binds the returned `{status, headers, body}` to the request" and the reply is filed under
+     the URL we asked for — and this function re-asks the gate on it before the record is returned.
+     HOW ITS ABSENCE WOULD SHOW: a request to an address carrying no listed token that 302s to one that does —
+     `/account/settings` -> `/account/logout` — completes with the page's cookies attached, no
+     `blocked-destructive:` row anywhere, and its reply filed under the address we asked for. */
+  const _dRefusal = safeFetchDestructiveRefusal(url);
+  if (_dRefusal) return { error: _dRefusal.reason };
+
   // Try the original tab's target frame
   let _pageFetchErr = null;
   if (tabId != null) {
