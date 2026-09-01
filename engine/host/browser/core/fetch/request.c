@@ -327,15 +327,37 @@ static void js_request_ctor_release(JSContext *ctx, void *st)
    "If init is not empty". A second hand-written list of member names is how that question starts answering for
    a dictionary the declaration no longer has. Web IDL reads members in LEXICOGRAPHIC order, which is not the
    order §5.4 uses them in.
+   AND THE LIST IS NOT FETCH'S ALONE. Two other standards extend this dictionary with a `partial dictionary
+   RequestInit`, and Web IDL §2.7 Dictionaries says what that means for the read order in one sentence: "the
+   dictionary members on the one dictionary definition (INCLUDING ANY PARTIAL DICTIONARY DEFINITIONS) are
+   ordered lexicographically by the Unicode codepoints that comprise their identifiers". So a partial's member
+   is not appended after Fetch's — it sorts among them, which is why `duplex` sits between `credentials` and
+   `headers` and `targetAddressSpace` between `signal` and `window`. Each foreign member says which standard
+   it came from at its own row, because that is where a reader asks.
    `AbortSignal? signal` CARRIES NO DEFAULT, which is Fetch's own IDL and is load-bearing here rather than
    pedantic: a defaulted member is PRESENT on every converted dictionary, so `signal` with an IDL default made
    `new Request(r, {})` a NON-EMPTY init and step 13 would have reset the referrer of every construction there
    has ever been. The body reads it with abort_signal_is, which answers false for an absent member exactly as
    it does for `null`, so nothing needed the default. */
+/* §5.4's `enum RequestDuplex { "half" };` — a ONE-VALUE enumeration, which is not a degenerate case but the
+   whole point of the member: §3.2.18 makes every other string a TypeError, and step 39's test is that the
+   member EXISTS, so "half" is the only spelling by which a page can say "yes, I know this body is a stream". */
+IDL_ENUM_VALUES(REQUEST_DUPLEX, "half");
+/* §5.4's `enum RequestPriority { "high", "low", "auto" };` — the hint step 27 puts on the request. */
+IDL_ENUM_VALUES(REQUEST_PRIORITY, "auto", "high", "low");
+/* LOCAL NETWORK ACCESS §2.1 IP Address Space's `enum IPAddressSpace { "public", "local", "loopback" };`, which
+   LOCAL NETWORK ACCESS §3.1.2 Fetch API attaches to RequestInit by a partial dictionary. The standard's name
+   is repeated rather than written "that standard's" because the second number would then name NO standard,
+   and Fetch — this file's own — HAS a §3.1.2 ("`Set-Cookie` header"), so the shorter spelling is a real
+   number in the wrong document. */
+IDL_ENUM_VALUES(REQUEST_TARGET_ADDRESS_SPACE, "public", "local", "loopback");
+
 static const IdlDictMember REQUEST_INIT[] = {
     { "body",           IDL_BODYINIT_NULLABLE,  false },
     { "cache",          IDL_DOMSTRING,          false },
     { "credentials",    IDL_DOMSTRING,          false },
+    /* `RequestDuplex duplex` — read at step 39, and read for its PRESENCE rather than for its value. */
+    { "duplex",         IDL_ENUM,               false, REQUEST_DUPLEX },
     { "headers",        IDL_ANY,                false },   /* HeadersInit: the union the fill converts */
     { "integrity",      IDL_DOMSTRING,          false },
     /* `boolean keepalive` declares NO default in Fetch's IDL, so IDL_BOOLEAN_NO_DEFAULT and not IDL_BOOLEAN:
@@ -345,13 +367,67 @@ static const IdlDictMember REQUEST_INIT[] = {
     { "keepalive",      IDL_BOOLEAN_NO_DEFAULT, false },
     { "method",         IDL_BYTESTRING,         false },
     { "mode",           IDL_DOMSTRING,          false },
+    /* `RequestPriority priority` — §5.4 step 27. THE CONVERSION IS THE WHOLE OF WHAT IS OBSERVABLE HERE, and
+       that is a fact about the platform rather than a gap: §3.2.18 makes `{priority: "urgent"}` a TypeError,
+       and step 27's own effect is to set the REQUEST's priority, which §5.4 exposes through no attribute —
+       `Request` has fourteen getters and `priority` is not among them.
+       NAMED RESIDUAL: step 27's "set request's priority to init["priority"]" stores nothing. §2.2.5 Requests
+       gives a request a priority ("high", "low" or "auto", "auto" unless stated otherwise) and this engine's
+       RequestData does not hold one, because no reader exists for it — the endpoint surface records method,
+       URL, headers and body, and the trusted zone's chokepoint is handed those. The next diff carries the
+       request's priority on the record the chokepoint receives and states it beside the method, at which
+       point this member's value is read rather than only checked. ITS ABSENCE SHOWS the day a report
+       distinguishes a `priority: "low"` prefetch from an ordinary call: today the two records are identical.
+       (Step 27's OTHER arm — "if request's internal priority is not null, update it in an
+       implementation-defined manner" — is unreachable from here: §2.2.5 makes internal priority null unless
+       stated otherwise, and step 12 copies the input request's, which no path in this engine ever sets.) */
+    { "priority",       IDL_ENUM,               false, REQUEST_PRIORITY },
     { "redirect",       IDL_DOMSTRING,          false },
     { "referrer",       IDL_USVSTRING,          false },
     { "referrerPolicy", IDL_DOMSTRING,          false },
     /* `AbortSignal? signal` — a DECLARED interface type, so `new Request(u, {signal: 5})` is Web IDL's
        own TypeError thrown before this constructor's first step rather than a check the body makes. */
     { "signal",         IDL_INTERFACE_NULLABLE, false },
+    /* `IPAddressSpace targetAddressSpace`, from LOCAL NETWORK ACCESS §3.1.2 Fetch API's partial dictionary.
+       THE CONVERSION IS ENGINE WORK AND THE DECISION IS NOT, and the split is this project's own rule rather
+       than a convenience: the member declares which address space the page BELIEVES it is reaching, and what
+       a browser does with that belief is refuse or allow a local-network request — a network policy, which
+       lives at `extension/lib/safe-fetch.js`'s chokepoint by construction and which that file already makes
+       (it refuses a private-network target from a public page, reinstating the browser's own answer that the
+       extension's host permissions would otherwise bypass). A second copy of that decision inside the engine
+       is the layering violation, so the engine converts §3.2.18 and stops.
+       NAMED RESIDUAL: the step LOCAL NETWORK ACCESS §3.1.2 Fetch API appends to §5.4 — it opens "If
+       init["targetAddressSpace"] exists, then switch on init["targetAddressSpace"]" and its two arms are
+       `public`, "Do nothing", and `local`, "Set request's targetAddressSpace to local" (the enumeration's
+       third value, `loopback`, has no arm at all in that draft) — stores nothing here. That standard's
+       `partial interface Request { readonly attribute IPAddressSpace targetAddressSpace; }` states no getter
+       steps and no default for a request that never set one, so there is no computed value to answer with
+       and inventing one would be the stub §NO STUBS forbids. The next diff carries the member on the request
+       record the chokepoint receives, so `safe-fetch.js` decides the local-network question with the page's
+       own declaration in hand instead of from the host alone.
+       ITS ABSENCE SHOWS as `fetch("http://router.local/ping", {targetAddressSpace: "local"})` being graded by
+       hostname alone — identical to the same call with the member omitted. */
+    { "targetAddressSpace", IDL_ENUM,           false, REQUEST_TARGET_ADDRESS_SPACE },
+    /* `any window; // can only be set to null` — the comment is Fetch's own, and steps 10 and 11 are what
+       make it true. It is DECLARED `any`, so there is no conversion to perform and no page code to run; the
+       refusal is the CONSTRUCTOR's, at the step that states it. Undeclared, `{window: 5}` was accepted. */
+    { "window",         IDL_ANY,                false },
 };
+/* NAMED RESIDUAL — `PrivateToken privateToken`, which the PRIVATE STATE TOKEN API §6.1 Definitions attaches
+   to RequestInit by a partial dictionary, is NOT DECLARED ABOVE, and declaring it as IDL_ANY would be worse
+   than leaving it out: `any` accepts every value silently, where the member's real type refuses most of them.
+   WHAT IS NOT COVERED: `{privateToken: {}}` must be a Web IDL §3.2.17 Dictionary types TypeError — that
+   dictionary's `version` and `operation` are `required` — and `{privateToken: {version: "2", …}}` must be a
+   §3.2.18 Enumeration types TypeError. Neither throws here.
+   WHAT THE NEXT DIFF BUILDS: a dictionary-valued MEMBER in `core/idl_args.c`'s §3.2.17 walk. That walk today
+   aborts on one ("a dictionary member was declared as a dictionary — the conversion cursor is per-argument,
+   so a nested one would read the outer's names"), and its nested-conversion frames exist only for
+   IDL_SEQUENCE_STRING_OR_DICT and convert only DOMString, DOMString? and another such sequence. So the diff
+   is a push of that frame from the member loop plus the element conversions PrivateToken's own members need —
+   three §3.2.18 enumerations, one of them carrying a `= "none"` default, and a `sequence<USVString>`. It is a
+   capability of the argument machine and not of this file, which is why it is not landed beside the four
+   members above. ITS ABSENCE SHOWS as the Web IDL gap audit continuing to name RequestInit, with
+   `privateToken` as the one member left. */
 #define REQUEST_INIT_N ((int)(sizeof(REQUEST_INIT) / sizeof(REQUEST_INIT[0])))
 
 /* Web IDL §3.2.17 Dictionary types: a member the page did not supply is NOT ON the converted dictionary, and
@@ -495,6 +571,38 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
                 }
             }
             url_record_free(&rec);
+        }
+
+        /* §5.4 STEP 10: "If init["window"] exists and is NON-NULL, then throw a TypeError." Fetch's IDL
+           declares the member `any` and writes the reason beside it as a comment — "can only be set to null"
+           — so the type converts nothing and this step is the entire refusal. Undeclared and unchecked, every
+           value a page could write was accepted: `new Request(u, {window: window})`, which is the shape the
+           member exists to refuse, built a Request in this engine and a TypeError in every browser. That is a
+           WRONG ANSWER and not a missing feature — the engine accepted input the standard rejects.
+           IT SITS HERE BECAUSE THE ORDER IS OBSERVABLE. Step 5's URL parse and its credentials check are
+           above; step 17's "navigate" mode and step 21's cache/mode pair are below, so
+           `new Request("http://u:p@x/", {window: 5})` reports the credentials TypeError and
+           `new Request(u, {window: 5, mode: "navigate"})` reports this one — which is what a browser does.
+           §3.2.17 Dictionary types puts no member on the converted dictionary when the page wrote undefined,
+           so `init_has` IS step 10's "exists" and `{window: undefined}` is absent rather than present-and-not-
+           null. `{window: null}` is the one accepted spelling.
+           NAMED RESIDUAL: step 11 — "If init["window"] exists, then set traversableForUserPrompts to
+           "no-traversable"" — sets nothing. A request's TRAVERSABLE FOR USER PROMPTS is the navigable a fetch
+           may raise an authentication prompt in, and this engine models no such prompt: there is no reader,
+           so a field here would be a value nothing ever asks for. The next diff builds the request record's
+           traversable for user prompts together with the §4.4 HTTP fetch step that consults it, so the two
+           arrive with a question and an answer. ITS ABSENCE SHOWS the day a 401 with a `WWW-Authenticate`
+           reaches a flow: `{window: null}` must make that reply arrive unprompted, and here every reply does,
+           so the member's whole effect is currently indistinguishable from its absence. */
+        if (init_has(ctx, init, "window")) {                                          /* step 10 */
+            JSValue w = idl_dict_get(ctx, init, "window");
+            bool nonnull = !JS_IsNull(w);
+
+            JS_FreeValue(ctx, w);
+            if (nonnull) {
+                JS_ThrowTypeError(ctx, "the RequestInit member `window` can only be set to null");
+                return -1;
+            }
         }
 
         /* THE INIT MEMBERS, IN §5.4'S OWN ORDER — steps 14 through 25. They were applied in the order this
@@ -695,7 +803,44 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
             }
         }
         JS_FreeValue(ctx, bv);
-        /* STEPS 38-41: "Let inputOrInitBody be initBody if it is non-null; otherwise inputBody" — so the
+        /* STEP 39: "If inputOrInitBody is non-null and inputOrInitBody's SOURCE IS NULL, then: …". Step 38
+           names inputOrInitBody as initBody where there is one and inputBody otherwise, so the body this step
+           asks about is the one just extracted or the input Request's — and the question it asks of it is
+           §5.2 BodyInit unions' `source`, which core/fetch/body.h stores because it cannot be derived. A null
+           source means exactly one thing: the body came from the ReadableStream arm, the only arm of §5.2's
+           switch that names no source. The whole step was absent, so a streaming request body was accepted
+           with no `duplex` and under any mode — two TypeErrors a browser throws and this engine did not.
+           NAMED RESIDUAL: sub-step 39.3, "Set this's request's use-CORS-preflight flag", sets nothing. §2.2.5
+           Requests defines it — "A request has an associated use-CORS-preflight flag. Unless stated
+           otherwise, it is unset." — and states what setting it buys: "The use-CORS-preflight flag being set
+           is one of several conditions that results in a CORS-preflight request." The preflight itself is the
+           trusted zone's, because `extension/lib/safe-fetch.js` is where a cross-origin decision is made by
+           construction. The next diff carries the flag on the request record that zone receives, so a
+           preflight is asked for by the request that requires one rather than inferred at the chokepoint.
+           ITS ABSENCE SHOWS as a streamed cross-origin POST reaching the chokepoint indistinguishable from a
+           byte-bodied one, which a browser preflights and it does not. */
+        {
+            const BodyState *ioi = init_body ? &d->body : (input_body ? &from->body : NULL);
+
+            if (ioi && ioi->source_null) {
+                /* STEP 39.1: "If initBody is non-null and init["duplex"] does not exist, then throw a
+                   TypeError." It is the member's PRESENCE and never its value — `RequestDuplex` has the one
+                   value "half", so §3.2.18 has already refused every other spelling at the conversion, and
+                   what is left for this step to test is whether the page said anything at all. */
+                if (init_body && !init_has(ctx, init, "duplex")) {
+                    JS_ThrowTypeError(ctx, "a Request with a ReadableStream body must set duplex to \"half\"");
+                    return -1;
+                }
+                /* STEP 39.2: "If this's request's mode is neither "same-origin" nor "cors", then throw a
+                   TypeError." A streamed body cannot be sent no-cors — there is no way to preflight it. */
+                if (strcmp(d->mode, "same-origin") && strcmp(d->mode, "cors")) {
+                    JS_ThrowTypeError(ctx, "a Request with a ReadableStream body must have mode "
+                                           "\"same-origin\" or \"cors\"");
+                    return -1;
+                }
+            }
+        }
+        /* STEPS 38, 40-41: "Let inputOrInitBody be initBody if it is non-null; otherwise inputBody" — so the
            input's body is this request's ONLY where the init supplied none, which is the whole of the
            `new Request(r, {...})` wrapper idiom. */
         if (!init_body && input_body) {

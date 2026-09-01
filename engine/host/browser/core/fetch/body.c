@@ -54,6 +54,7 @@ void body_state_free(JSRuntime *rt, BodyState *b)
     b->bytes = NULL;
     b->len = 0;
     b->has = 0;
+    b->source_null = 0;
 }
 
 int body_state_set(JSContext *ctx, BodyState *b, const char *bytes, size_t len)
@@ -68,6 +69,12 @@ int body_state_set(JSContext *ctx, BodyState *b, const char *bytes, size_t len)
     b->bytes = NULL;
     b->len = 0;
     b->has = bytes != NULL;
+    /* §5.2's `source` FOR EVERY ARM THAT NAMES ONE. This is the one place a body is filled from bytes, and
+       every arm of the extraction that reaches it — Blob, byte sequence, BufferSource, FormData,
+       URLSearchParams, scalar value string — sets source to something non-null; the ReadableStream arm does
+       not come through here at all and states its own answer. A null body (`new Response()`) is never asked:
+       §5.4 step 39 is guarded by "inputOrInitBody is non-null" before it reads this. */
+    b->source_null = 0;
     if (!bytes) return 0;
     /* +1 and a NUL past the end, so the bytes can still be handed to a C string consumer; `len` is what every
        read here uses, and it is what an interior NUL no longer truncates. */
@@ -91,6 +98,7 @@ int body_clone_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_cap, Body
         if (!src->has) {
             JS_FreeValue(ctx, in);
             dst->has = 0;
+            dst->source_null = 0;
             return 0;
         }
         /* In the spec a body IS a stream; here one is built on demand from the bytes, so the tee's operand has
@@ -132,6 +140,11 @@ int body_clone_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_cap, Body
     dst->len = 0;
     dst->used = 0;   /* §2.2.4: the clone gets its OWN single-use latch, which is the whole point of cloning */
     dst->has = 1;
+    /* §2.2.4 Bodies' clone-a-body: "Return a body whose stream is out2 and OTHER MEMBERS ARE COPIED FROM
+       BODY" — the source is one of those members, so a clone of a byte-sourced body still has a source even
+       though both sides are stream-backed after the tee. Recomputing it from the post-tee shape would say
+       `null` for both and make `new Request(response.clone().body ...)` demand a duplex the spec does not. */
+    dst->source_null = src->source_null;
     JS_FreeValue(ctx, dst->stream);
     dst->stream = b1;
     return 0;
@@ -159,6 +172,13 @@ int body_create_proxy(JSContext *ctx, JSValueConst src_obj, BodyState *src, Body
            "needs the bytes, and hand those bytes on");
     if (body_state_set(ctx, dst, src->bytes, src->len) < 0)
         return -1;
+    /* §5.2's `source` IS ONE OF THE MEMBERS A PROXY CARRIES OVER, and it is stated here rather than left to
+       the byte fill above because the byte fill is this ENGINE's representation of a proxy and not the
+       operation's answer. The DCHECK above makes the two agree today — a proxy of a stream-backed body
+       aborts, so `src->source_null` is 0 at every reachable call — and the day that capability lands, step
+       39 asks this question of the proxied body and must not be told a source exists because bytes were
+       copied. */
+    dst->source_null = src->source_null;
     /* "stream itself becomes immediately locked and disturbed" — the same latch a read sets, captured into the
        running flow's delta first, because the source Request is shared baseline state for every sibling arm. */
     cow_capture_host_state(ctx, src_obj, &src->used, sizeof src->used);
@@ -281,6 +301,12 @@ int body_extract(JSContext *ctx, BodyState *b, JSValueConst init, bool keepalive
         b->bytes = NULL;
         b->len = 0;
         b->has = 1;
+        /* §5.2's SWITCH GIVES THIS ARM NO `source` LINE, and that silence is the whole of what step 39 reads.
+           "Let source be null" opens the algorithm and every other arm assigns over it; a ReadableStream body
+           has no bytes to name, so its source stays null and Fetch §5.4 new Request(input, init) step 39
+           demands `duplex` before it will carry one. It is set HERE and not left to body_state_set, which
+           this arm deliberately does not call. */
+        b->source_null = 1;
         return 0;
     }
     if (JS_IsObject(init)) {

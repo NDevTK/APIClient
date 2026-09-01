@@ -1304,6 +1304,22 @@ const OTHER_SPECS = [
      answers FSA's numbers out of the File System Standard — a wrong answer manufactured by adding a right one.
      A foreign row is what refuses that: an `other:` anchor is never judged at all. */
   "fsa",
+  /* THE TWO STANDARDS THAT EXTEND Fetch's `RequestInit` BY A PARTIAL DICTIONARY, and they are here for the
+     reason the whole list exists: a partial's member is declared beside Fetch's own, in a Fetch-dominant
+     file, so a citation of the OTHER standard's numbering sits surrounded by evidence for Fetch. Their
+     numbers collide with Fetch's head-on: LNA §2.1 is "IP Address Space" where Fetch §2.1 is "URL", and
+     LNA §3.1.2 is "Fetch API" where Fetch §3.1.2 is "`Set-Cookie` header" — two real numbers, neither the
+     right document, which is the wrong-answer shape rather than a coverage gap. (Private State Token §6.1
+     "Definitions" would land differently — Fetch §6 "data: URLs" has no subsections at all, so a vote makes
+     it an UNKNOWN-SECTION — and it is listed for the same reason: the standard is the citation's claim, not
+     the vote's guess.) Neither is indexed, so both are counted and never checked, which is the honest state
+     for a WICG draft this tree cites for one enumeration and one dictionary shape.
+     AND THE SECOND ENTRY IS THE TAIL AND NOT THE NAME, for the reason `cryptography api` sits beside `web
+     cryptography api` above: anchorTokens' own regex reads AT MOST THREE trailing words, so the standard's
+     full name — `Private State Token API`, four words — is a string this file can never be asked about, and
+     listing it would be an entry with no reader. `state token api` is the longest tail the tokenizer can
+     actually produce, and it is what the citation is recognized by. */
+  "local network access", "state token api",
   /* CSS modules, as this tree spells them when it does not use the levelled shortname */
   "css", "selectors", "cascade", "view", "values", "sizing", "fonts", "backgrounds", "text",
   "display", "position", "overflow", "images", "color", "transforms", "writing", "box", "inline",

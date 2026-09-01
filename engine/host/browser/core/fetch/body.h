@@ -11,7 +11,19 @@
    reports null for exactly one of them. `used` is the single-use latch, which a page's retry path tests. */
 /* `stream` is §5.3's `body`, built ON DEMAND and then held: the attribute answers the SAME stream every time,
    and a second one would give a page two independent readers over one body. JS_UNDEFINED until asked for. */
-typedef struct { char *bytes; size_t len; int used; int has; JSValue stream; } BodyState;
+/* `source_null` IS §5.2 BodyInit unions' `source`, ASKED AS THE ONE QUESTION ANY ALGORITHM ASKS OF IT. The
+   extraction opens "Let source be null" and then sets it in every arm but ONE — a Blob, a byte sequence, a
+   BufferSource, a FormData, a URLSearchParams and a scalar value string each name their bytes, and the
+   ReadableStream arm names nothing, because the bytes do not exist yet. Fetch §5.4 new Request(input, init)
+   step 39 is the reader, and what it branches on is exactly "inputOrInitBody's source is null" — never what
+   the source IS — so the field is the predicate rather than the value.
+   IT IS NOT `bytes == NULL` AND IT IS NOT `stream != undefined`, which is why it is stored rather than
+   derived. `new Response()` and a DETACHED BufferSource both carry no bytes and have a source that is not
+   null; and `stream` is ALSO minted on demand by the `.body` getter, so an ordinary byte-sourced body that a
+   page has read once is indistinguishable from a stream-sourced one by that slot. Deriving it either way
+   answers step 39 for a body the page never streamed.
+   §2.2.4 Bodies' clone-a-body says "other members are copied from body", so it rides a clone and a proxy. */
+typedef struct { char *bytes; size_t len; int used; int has; int source_null; JSValue stream; } BodyState;
 
 /* RELEASE EVERYTHING A BodyState OWNS — the bytes AND the stream. It takes a RUNTIME because the place that
    must call it is an including interface's FINALIZER, which has no context; the two that free the bytes by
