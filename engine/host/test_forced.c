@@ -14617,6 +14617,24 @@ int main(int argc, char **argv) {
     endpoint_init();
     solve_init(ctx);
 
+    /* WHAT THIS HOST IS, SAID BEFORE IT BUILDS A REALM — and this position is the whole of the fix rather
+       than a tidy-up. These two lines stood a hundred lines BELOW `tf_agent_init`, beside the COW hook, under
+       a comment about the two hook sets the solver owns; and platform_agent_init ends by running every
+       per-realm intrinsic. navigator.c mints its entire environment record through concolic_source_wrap, ONCE,
+       at that moment, for the realm's lifetime — so with the overlay still uninstalled every one of them came
+       back bare-concrete and stayed that way for the session: userAgent, platform, webdriver,
+       hardwareConcurrency, deviceMemory, maxTouchPoints, language. Nothing crashed and no member was missing.
+       What was missing was the FORK: this fixture's `navigator.userAgent.indexOf('Chrome') >= 0` and
+       `navigator.maxTouchPoints > 0` each DECIDED on their example and ran one arm, while `screen.width < 768`
+       three statements later forked — screen.c mints with concolic_new and asks nobody — so the two `ua` and
+       `touch` probe rows below could not reach 1 in any run, and a whole-run fork census showed 2152 forks at
+       25 predicates with no navigator member among them. core/realm.c now asserts this order at the one call
+       every realm goes through, so the next host to get it wrong is told at the realm rather than never.
+       The COW hook stays where it was: its position answers a different question (the baseline must not be
+       captured), and the two were only ever adjacent. */
+    concolic_install_hooks();
+    concolic_install_source_overlay();   /* a SOLVER host: attacker-controlled values are symbolic sources */
+
     /* BASELINE setup (mark 0): the globals here must NOT be captured, so install the COW hook AFTER.
        THIS FIXTURE'S DOCUMENT IS ITS OWN TOP-LEVEL TRAVERSABLE, so §8.1.3.1's top-level creation URL is the
        address it is installed at below — and `https:` makes it a SECURE CONTEXT, which is what a real bundle
@@ -14722,11 +14740,11 @@ int main(int argc, char **argv) {
     pin_kind_selftest(ctx);      /* a pin is a VALUE and not its §7.1.19 spelling */
     tree_construction_write_selftest();   /* §13.2.6's DOM writes, and the character merge's bytes */
 
-    /* The two hook SETS the solver owns, each declared by its own component. They were struct literals here
-       and again in test_forced.c, and the pair had drifted. */
+    /* The time-travel hook, AFTER the baseline setup above for the reason stated at it: the globals the
+       selftests built must not land in a delta. Its twin — the concolic pair — is NOT here any more and is
+       installed before the agent instead; see it for why the two halves of what used to be one line have
+       different positions. */
     cow_install_time_travel_hooks(engine_gen_fork);
-    concolic_install_hooks();
-    concolic_install_source_overlay();   /* a SOLVER host: attacker-controlled values are symbolic sources */
     /* The surface is installed, so every member the platform has is declared — a declaration from here on is a
        per-wrapper or per-flow mint, and that is what the pool asserts against. */
     idl_args_seal();

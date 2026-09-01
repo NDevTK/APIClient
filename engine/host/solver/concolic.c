@@ -3703,21 +3703,56 @@ void concolic_install_hooks(void)
    ATTACKER controls becomes a source rather than the plain string the address computed. A host that is not
    exploring gets the browser's own answers, which is what the spec defines and what a conformance run checks.
    It is not a "mode": the value semantics above are installed unconditionally, so a concolic that reaches this
-   host still adds, compares and coerces. This decides only whether one is MINTED. */
+   host still adds, compares and coerces. This decides only whether one is MINTED.
+
+   AND "NOT ASKED YET" IS A THIRD ANSWER, NOT A DEFAULT — which is what this used to be and what it cost.
+   A boolean starting at 0 says "this host does not explore" before the host has said anything, and the seam
+   below reads it and hands the plain value back. That is harmless for a value minted PER READ (a later read
+   mints again, under whatever answer is standing by then) and permanent for a value minted ONCE FOR A REALM'S
+   LIFETIME, because the realm keeps whichever answer was standing when its intrinsics ran. Measured: a host
+   built its agent's first realm and installed the overlay a hundred lines later, so every Navigator
+   environment member of that realm — userAgent, platform, webdriver, hardwareConcurrency, deviceMemory,
+   maxTouchPoints, language — was bare-concrete for the whole session, while screen.c's members (which mint
+   through concolic_new and never ask) forked normally in the same document. Nothing crashed and nothing was
+   missing: the UA-sniff gate and the touch gate simply DECIDED instead of forking, so one arm's endpoints were
+   learned and the other arm's world was never created. The three states make that a crash instead: a host
+   DECLARES, once, before it builds a realm, and a seam reached before the declaration says so by name. */
+enum { SOURCE_OVERLAY_UNDECLARED = 0, SOURCE_OVERLAY_BROWSER_ONLY, SOURCE_OVERLAY_EXPLORING };
 static int g_source_overlay;
 long concolic_source_reads(void) { return g_source_reads; }
 /* The same answer, for a component that mints a source of its OWN — see the header. Not folded into
    concolic_source_wrap, because that seam ALSO files the value in the attacker-delivery registry and counts it
    as attacker input acquired: a §4.12.1 data block is neither, and counting one there would report a page that
    read no attacker source as one that did, which is the direction that manufactures a measurement. */
-int concolic_is_exploring(void) { return g_source_overlay; }
+int concolic_is_exploring(void) { return g_source_overlay == SOURCE_OVERLAY_EXPLORING; }
+/* …AND WHETHER THE HOST HAS ANSWERED IT AT ALL, which is the half a caller cannot get from the answer. Read by
+   core/realm.c at the one call every realm's intrinsics go through, because that is the moment a member minted
+   for a realm's LIFETIME freezes whatever answer is standing. */
+int concolic_source_overlay_declared(void) { return g_source_overlay != SOURCE_OVERLAY_UNDECLARED; }
+
+/* A HOST THAT WANTS THE SPEC'S OWN ANSWERS SAYS SO, rather than getting them by not speaking. A conformance
+   run reaches concolic values (a document has an address, so location.c's two sources exist) and needs the
+   value semantics; what it must not have is an unset global becoming unknown input, because the corpus tests
+   the ReferenceError. Declaring it is not decoration: it is what makes "nobody has decided" distinguishable
+   from "decided: no", and therefore what lets the assert below exist at all. */
+void concolic_declare_browser_only(void)
+{
+    DCHECK(g_source_overlay != SOURCE_OVERLAY_EXPLORING,
+           "a host declared itself browser-only AFTER installing the source overlay — the two answers are one "
+           "fact about one process, and a realm built between them holds whichever was standing, so the "
+           "document would fork at some of its gates and decide at the others with nothing to say which");
+    g_source_overlay = SOURCE_OVERLAY_BROWSER_ONLY;
+}
 
 void concolic_install_source_overlay(void)
 {
     DCHECK(g_hooks.add != NULL, "the source overlay was installed over a hook set with no value semantics — a "
                                 "source that cannot be added or coerced is a value the page's first expression "
                                 "throws on");
-    g_source_overlay = 1;
+    DCHECK(g_source_overlay != SOURCE_OVERLAY_BROWSER_ONLY,
+           "a host installed the source overlay AFTER declaring itself browser-only — see the DCHECK in "
+           "concolic_declare_browser_only for why the two answers cannot both stand in one process");
+    g_source_overlay = SOURCE_OVERLAY_EXPLORING;
     g_hooks.absent = absent_read_hook;
     /* AND THE HIT HALF OF THAT SAME QUESTION, installed with it and never without it. A published record's
        members are unknown whether or not the record HOLDS them — the server chose its extent against this
@@ -3758,7 +3793,16 @@ void concolic_install_source_overlay(void)
    PoC can both name, which is exactly `{` src `}`. */
 JSValue concolic_source_wrap(JSContext *ctx, const char *shape, const char *src, JSValue computed)
 {
-    if (!g_source_overlay)
+    /* AND THE HOST MUST HAVE ANSWERED BEFORE THIS SEAM IS ASKED. The answer this call hands back is the whole
+       of whether the value forks, and a caller that mints for a realm's lifetime cannot come back and ask
+       again — see the three states above for the session that lost every Navigator gate to exactly that. */
+    DCHECK(g_source_overlay != SOURCE_OVERLAY_UNDECLARED,
+           "a browser component minted an attacker source before this host said whether it EXPLORES — the "
+           "answer decides whether the value forks control flow, so a mint taken here silently gets the "
+           "browser-only one. The host declares once, before it builds its agent's first realm: "
+           "concolic_install_source_overlay for a solver host, concolic_declare_browser_only for a "
+           "conformance one");
+    if (g_source_overlay != SOURCE_OVERLAY_EXPLORING)
         return computed;
     /* THE ONE POINT AT WHICH THIS DOCUMENT'S RUN ACQUIRES ATTACKER-CONTROLLED INPUT, COUNTED THERE. Every
        component that owns an attacker source mints through this call, so this is the whole of "did the page

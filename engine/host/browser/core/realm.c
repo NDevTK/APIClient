@@ -4,6 +4,7 @@
 
 #include "check.h"
 #include "core/realm.h"
+#include "solver/concolic.h"
 
 static RealmIntrinsic *g_list;
 static int g_n, g_cap;
@@ -41,6 +42,25 @@ void realm_install_intrinsics(JSContext *ctx, const char *top_level_creation_url
     int i;
 
     DCHECK(ctx != NULL, "the per-realm intrinsics were installed into no realm");
+    /* AND THE HOST HAS SAID WHETHER IT EXPLORES, BEFORE ANY OF THEM RUN. An intrinsic below may mint a member
+       through solver/concolic.h's source seam — navigator.c mints its whole environment record there, once,
+       for this realm's LIFETIME — and that seam's answer is the whole of whether the value forks control flow.
+       A realm built before the host declares therefore keeps the browser-only answer for the rest of the
+       session, with nothing to say so: the members exist, carry the right example, coerce and compare
+       correctly, and simply DECIDE at every gate a bundle writes over them instead of forking. Measured on
+       this project's own smoke fixture, whose host installed the overlay a hundred lines after bringing its
+       agent up: `navigator.userAgent.indexOf('Chrome') >= 0` and `navigator.maxTouchPoints > 0` took one arm
+       each for the whole run and the sibling worlds were never created, while `screen.width < 768` in the same
+       document forked — because screen.c mints unconditionally and asks nobody.
+       IT IS ASSERTED HERE AND NOT AT THE SEAM ALONE because this is the one call every realm of every host
+       goes through (the agent's first, and every child navigable's), so a host that gets the order wrong is
+       told at the realm it built too early rather than at whichever member happens to be minted first. */
+    DCHECK(concolic_source_overlay_declared(),
+           "a realm's intrinsics were built before this host declared whether it EXPLORES — a per-realm member "
+           "minted through concolic_source_wrap freezes the answer standing at this instant, so every gate a "
+           "page writes over one of them would decide instead of forking, for this realm's whole life. Declare "
+           "first: concolic_install_source_overlay for a solver host, concolic_declare_browser_only for a "
+           "conformance one, both before platform_agent_init");
     /* EVERY ENVIRONMENT HAS ONE. §8.1.3.1's field is null only for a worker or a worklet, and this engine has
        neither — every environment it builds is a Window one, created AT an address. A host with nothing to
        pass here has not decided which document this realm is, which is the same thing location.c's install

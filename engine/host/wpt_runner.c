@@ -2619,6 +2619,13 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
        throws at the first coercion. What it must NOT have is a global that was never set becoming unknown
        input: the spec answers that with a ReferenceError, and the corpus tests exactly that. */
     concolic_install_hooks();
+    /* …AND THE ANSWER TO THE OTHER HALF, SAID RATHER THAN LEFT UNSAID. This host wants the spec's own values,
+       and it used to get them by never speaking — which made "this host does not explore" and "no host has
+       decided yet" the same state, so a solver host that brought its agent up before installing the overlay
+       got the conformance answer frozen into its first realm with nothing anywhere to notice. Declaring it
+       here is what lets core/realm.c refuse a realm built before the question is answered. It must precede
+       platform_agent_init below, which ends by running every per-realm intrinsic. */
+    concolic_declare_browser_only();
     /* THE SOLVER FRONTIER, because a member that SUSPENDS parks on a flow's pending register and that register
        is the frontier's. WHAT IS IN IT IS THE SCHEDULER'S — engine_sched_begin seeds it and asserts that it
        finds it empty, so an agent init that put a flow there could never be the agent of a session. This one

@@ -122,8 +122,19 @@ void concolic_install_hooks(void);
    that was never set becomes unknown server-injected input rather than a ReferenceError, and a browser value
    an attacker controls becomes a source rather than the plain value the spec computes. A conformance host
    wants the spec's answers and declines this; it still gets the value semantics above. Install after
-   concolic_install_hooks. */
+   concolic_install_hooks — AND BEFORE THE AGENT'S FIRST REALM, which core/realm.c asserts. A per-realm
+   intrinsic that mints through concolic_source_wrap freezes whatever answer is standing when the realm is
+   built, so a host that installs this after platform_agent_init has a realm whose environment members are
+   bare-concrete for the whole session and fork at none of their gates. */
 void concolic_install_source_overlay(void);
+/* …AND THE OTHER ANSWER, WHICH IS A STATEMENT AND NOT A SILENCE. A conformance host declares this instead, so
+   that "nobody has decided yet" is a THIRD state a seam can crash on rather than a boolean's zero. Same
+   position: before the agent's first realm. */
+void concolic_declare_browser_only(void);
+/* WHETHER EITHER OF THE TWO ABOVE HAS BEEN SAID. For the one caller that must refuse to proceed without an
+   answer rather than take one — core/realm.c's realm_install_intrinsics, which is the moment a per-realm mint
+   becomes permanent. */
+int concolic_source_overlay_declared(void);
 /* …AND THE SAME QUESTION, ASKED. A component that mints a source of its OWN — one that is not an attacker
    delivery, so concolic_source_wrap's registry and its read counter would both be a wrong answer about it —
    still owes the gate above, because a conformance host must get the spec's value and not an unknown. This is
