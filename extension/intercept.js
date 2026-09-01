@@ -50,8 +50,22 @@
     return btoa(bin);
   }
 
+  /* THE MARKER IS A FRAGMENT TOKEN, NOT A FRAGMENT SPELLING, and matching the spelling made this predicate
+     disagree with the only mint that produces it. content.js composes the relay's address as
+     `msg.url + (msg.url.includes("#") ? "&" : "#") + "_uasr_send"` — it already knows the address may carry a
+     fragment, and appends with `&` when it does — so the two shapes it can emit are `…#_uasr_send` and
+     `…#frag&_uasr_send`, and a `includes("#_uasr_send")` test sees the first and NOT the second. The sibling
+     reader in lib/response-decode.js has always asked the right question (`url.hash.includes("_uasr_send")`),
+     so one marker had two readers that answered differently for an address whose fragment was not empty.
+     ASK THE FRAGMENT, which is what both readers mean. The token is searched in the fragment alone rather
+     than in the whole address, so a PATH or QUERY that happens to spell `_uasr_send` is still page traffic
+     and is still observed — the filter drops our own requests, never the page's. No URL parse: `url` here is
+     a string this file was handed, and `new URL` on it would be a throw inside a page-owned wrapper. */
   function _isInternalUrl(url) {
-    return url.includes("#_uasr_send") || url.includes("#_internal_probe");
+    var h = url.indexOf("#");
+    if (h < 0) return false;
+    var frag = url.slice(h + 1);
+    return frag.includes("_uasr_send") || frag.includes("_internal_probe");
   }
 
   // ─── Buffered emit ──────────────────────────────────────────────────────────
