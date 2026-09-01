@@ -1108,14 +1108,36 @@ typedef struct {
        already takes one row down. The COUNT says such members exist; only the GAP — in the order's own points,
        against the weight flow_pick actually returned — says whether the ordering is what is keeping them out.
        A large gap with a large count is the WFQ working: those members are genuinely outranked and the aging
-       term is the thing that will reach them. A gap at or near ZERO with a non-zero count is the razor's own
-       state: members standing at the front of the order that the pick is nonetheless not returning, which is
-       starvation rather than ordering and is a defect in the dispatch rather than in the weight.
-       IT IS NOT ASSERTED HERE AND THAT IS DELIBERATE. A census is one instant, and one instant of a zero gap is
-       exactly what a tie looks like — flow_pick seeds the incumbent and compares STRICTLY, so a member tied
-       with the flow in service correctly waits a quantum. What makes it a finding is the gap staying there
-       across a run, which is a statement about a time series and belongs to whoever reads the stream. Left at
-       0.0 when the population is empty, so a reader takes the two together (build.mjs does). */
+       term is the thing that will reach them.
+       AND A GAP AT ZERO IS NOT THE OPPOSITE VERDICT — THIS BLOCK SAID IT WAS, AND THE SENTENCE IS RETIRED HERE
+       RATHER THAN DELETED, because the reading it licensed is one a reader re-derives. It said a gap at or near
+       ZERO beside a non-zero count was the razor's own state: members standing at the front of the order that
+       the pick is nonetheless not returning, starvation rather than ordering, a defect in the DISPATCH rather
+       than in the weight. It does not follow, and the refutation is in flow_pick. The comparison there is
+       STRICT and the incumbent is the SEED, so on a frontier carrying a large EQUAL-WEIGHT cohort — the
+       ordinary state of a one-family page, since every member of a family reads one reward through one pointer
+       and an emission zeroes that family's silence at every arm at once — the pick returns ONE of N tied maxima
+       and the other N-1 stand, at that instant, exactly at the front with `picks == 0`. Zero is then the
+       EXPECTED reading of a healthy sweep, and this row cannot tell that state from the one the retired
+       sentence named. solver/result.c carries the measurement that retired it and the retirement did not reach
+       this block, which is how the stale sentence went on being quoted from here as the tree's standing verdict:
+       six runs of the native fixture, 212 censuses, sixty-three samples at exactly 0.000, spread across every
+       run including ones whose ladder drained all the way to the orphan seed.
+       WHAT ENDS THE TIE IS NOT A DISPATCH RULE AND MUST NOT BECOME ONE, which is the half a reader reaching for
+       a non-strict comparison here has already skipped. Relaxing flow_pick to `>=` would not implement
+       §scheduler's "a never-run flow is never starved" — nothing is ranked AHEAD of a tied member, so there is
+       no starvation for it to cure — it would hand the thread away on equality at every opcode, which is the
+       switch-per-opcode the seed exists to stop. The incumbent's hold ends because it is STRICTLY DEMOTED, and
+       two independent writers do that unconditionally: flow_credit_visit advances `visits` at the end of every
+       completed unit of work, dropping the optimism term from 1/(1+v) to 1/(2+v); and flow_age_running charges
+       the running flow's OWN silence, which advances flow_silence_notch and drops the weight by
+       FLOW_AGE_QUANTUM for a flow that completes no unit at all. The FAMILY half of that charge lands on every
+       arm through one pointer and cancels out of this gap (see `top_svc_fam` below); the OWN half is charged to
+       the dispatched flow alone, so it is exactly the term that breaks the tie in the waiting member's favour.
+       SO THE FINDING IS IN THE SERIES AND NOWHERE ELSE, and it is a THROUGHPUT statement rather than an ordering
+       one: `never_picked` climbing across consecutive censuses while `members` grows is the tail not being
+       reached. A single sample of this row — of any row here — characterises an instant and never a run. Left at
+       0.0 when the population is empty, so a reader takes the two together (build.mjs reads the series). */
     long never_picked;
     double never_picked_gap;
     int64_t svc_max;   /* the largest service notch in the frontier — who is actually consuming the thread */

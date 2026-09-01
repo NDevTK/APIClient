@@ -835,7 +835,11 @@ function wfqReading(out) {
      this reader still runs, and the population check spans two rows that no assert anywhere covers. The
      implication is again ONE-directional — with nobody starved there is no member to measure a distance to, so
      the gap is 0 by construction; a gap of 0 WITH a non-zero count is the state the row exists to report and
-     must not be refused, because it is precisely the razor's STARVES. */
+     must not be refused, because it is what a TIE reads as. That last clause used to end "because it is
+     precisely the razor's STARVES", and it was the same retired sentence solver/flow.h's `never_picked` block
+     carried: flow_pick seeds the incumbent and compares STRICTLY, so it returns ONE of N equal maxima and the
+     other N-1 stand exactly at the front with `picks == 0` — the ordinary state of a one-family frontier, not
+     a verdict about one. The check is unchanged and was always right; only its reason was wrong. */
   if (!(w.neverPickedGap >= 0))
     throw new Error(`[build] the @WFQ census reports neverPickedGap ${w.neverPickedGap} — it is \`wTop\` ` +
                     `minus the best NEVER-DISPATCHED member's weight, and the front of the order cannot be ` +
@@ -996,6 +1000,50 @@ function wfqReading(out) {
      members this walk saw. It is identically zero on a one-family frontier, where every member reads one
      account, so this degenerates to the engine's bound exactly where a real page's frontier lives. */
   const liftBound = (w.valTop - w.valMin) + w.nonrewardMax;
+  /* THE SERIES THIS FUNCTION HAS BEEN HOLDING AND READING ONE ROW OF. `s` is every census the run printed and
+     `w` is its last; two sentences below used to end by telling their reader to go and read the stream — the
+     `topSvc` discriminator on the leader arm, and the tail-not-reached statement solver/result.c names as "the
+     reading that needs neither guessed". An instruction to consult a series, issued by the one reader that had
+     already parsed it, is CLAUDE.md's assert-that-names-a-remedy-but-not-a-site performed in a report: a
+     correct instruction with no object, which is why nobody carried it out. Both are answered here instead,
+     from rows already in hand.
+     ONLY CENSUSES THAT STATE AN ORDER ARE IN IT. solver/result.c emits `{"members":0}` with NO term rows when
+     the walk finds nothing standing, and that omission is a POSITIVE statement — there was no order — never a
+     hole for a `|| 0` to fill. Filtering on it is what stops a run that finished between two censuses from
+     reading as a frontier that collapsed; a row that claims members and then omits a term throws, exactly as
+     the last-census field loop above does, because that is the composer having changed.
+     IT DECIDES NOTHING AND GATES NOTHING. No arm below turns on these numbers and none of them throws on a
+     value: a reader that refused a run for not draining its tail would be the no-progress count §NO BOUNDS
+     forbids, wearing a diagnostic's clothes. It is a reading, printed beside the instant. */
+  const ordSeries = s.filter((r) => typeof r.members === "number" && r.members > 0);
+  for (const r of ordSeries)
+    if (typeof r.neverPicked !== "number" || typeof r.topSvc !== "number")
+      throw new Error(`[build] a @WFQ census states ${r.members} members and omits neverPicked or topSvc — a ` +
+                      `census reporting an order states every term row (solver/result.c's result_wfq_json), so ` +
+                      `this is the composer having changed and not the empty-frontier shape.`);
+  const signedDelta = (n) => (n >= 0 ? `+${n}` : `${n}`);
+  const svcUp = ordSeries.filter((r, i) => i > 0 && r.topSvc > ordSeries[i - 1].topSvc).length;
+  const svcDown = ordSeries.filter((r, i) => i > 0 && r.topSvc < ordSeries[i - 1].topSvc).length;
+  const series = ordSeries.length < 2
+    ? `one census with an order in it, so every reading here is an instant and none of them is a run`
+    : (() => {
+        const a = ordSeries[0], b = ordSeries[ordSeries.length - 1];
+        return `across the ${ordSeries.length} censuses with an order in them the frontier moved ` +
+          `${signedDelta(b.members - a.members)} members while the never-dispatched population moved ` +
+          `${signedDelta(b.neverPicked - a.neverPicked)}` +
+          (b.neverPicked > a.neverPicked
+            ? `, so the tail is NOT being reached — a THROUGHPUT statement and not an ordering one, which is ` +
+              `the only reading of this pair that does not need an instant guessed`
+            : `, so the sweep reached at least as much of the tail as forking added to it`) +
+          `; the front's OWN silence rose at ${svcUp} of those ${ordSeries.length - 1} steps and fell at ` +
+          `${svcDown}, so ` +
+          (svcUp > svcDown
+            ? `the leader is holding the thread and being charged for it, and a gap behind it is closing`
+            : `the front's own charge is not accumulating: the flow STANDING at the front is not the flow ` +
+              `being charged. Two things read that way and \`topSvcFam\` beside it separates them — a front ` +
+              `REFILLED by freshly-minted arms, or a leader whose silence an emission keeps forgiving — and ` +
+              `in neither does waiting close a gap behind it`);
+      })();
   /* WHAT THE FRONT ITSELF IS DOING, which is the half `neverPickedGap` cannot supply and without which a
      standing gap has two causes and one reading. See solver/flow.h: `topSvcFam` is the leading ACCOUNT's
      silence and is what an emission resets, so it says whether that account's aging is being forgiven; `topSvc`
@@ -1010,13 +1058,30 @@ function wfqReading(out) {
     (w.families === 1
       ? `; this frontier is ONE family, so that family charge lands on every member in the same instant and ` +
         `cancels out of every gap above — only the ${(w.topSvc * AGE_QUANTUM).toFixed(3)} points of the ` +
-        `leader's OWN silence can close one. Read \`topSvc\` across the census stream and not at one instant: ` +
-        `climbing monotonically is a single member monopolising the thread and the gaps behind it are closing; ` +
-        `staying low or sawtoothing while a gap stands is a front being REFILLED by freshly-minted arms, and ` +
-        `no amount of waiting closes that, because the flow being charged is never the flow at the front`
+        `leader's OWN silence can close one, and this digit is one instant of it: the series sentence beside ` +
+        `this reads that half across the whole stream, which is the only place the discriminator lives`
       : `; across ${w.families} families both halves order, so either can move a gap between accounts`);
+  /* FOUR ARMS AND NOT THREE, AND THE ONE ADDED IS THE ONLY ONE THAT FIRED ON A HEALTHY RUN. A gap of exactly
+     0.000 fell into the first arm below and was reported, in words, as "this is the razor's STARVES" — the
+     sentence solver/result.c retired with measurement (six runs, 212 censuses, SIXTY-THREE samples at exactly
+     0.000, spread across every run including ones whose ladder drained to the orphan seed) and that
+     solver/flow.h went on carrying. A verdict that fires on 30% of the samples of a frontier that is working is
+     not a verdict, and this one was quoted out of the tree and acted on as a dispatch defect.
+     ZERO IS A TIE AND A TIE IS NOT A DEFICIT. flow_pick seeds the incumbent and compares STRICTLY, so it
+     returns ONE of N equal maxima and the other N-1 stand at that instant exactly at the front — the ordinary
+     state of a one-family frontier, where every member reads one reward through one pointer and an emission
+     zeroes that family's silence at every arm at once. Nothing is ranked ahead of those members, so the
+     ORDERING is not what is keeping them out and no reading of the ordering can say anything about them. */
   const starved = w.neverPicked === 0
     ? `every member has been handed the thread at least once`
+    : w.neverPickedGap === 0
+    ? `${w.neverPicked} of ${w.members} members have NEVER been handed the thread and the best of them is not ` +
+      `behind at all — it TIES the front. flow_pick seeds the incumbent and compares STRICTLY, so it returns ` +
+      `one of N equal maxima and the rest stand exactly here; nothing is ranked ahead of them, so the ordering ` +
+      `is not what is keeping them out and this instant is not evidence either way. The incumbent's hold ends ` +
+      `at its next completed unit of work (flow_credit_visit drops the optimism term from 1/(1+v) to 1/(2+v)) ` +
+      `or at its next notch of OWN silence (flow_age_running), whichever comes first — the series beside this ` +
+      `is the reading, and it is a throughput one`
     : `${w.neverPicked} of ${w.members} members have NEVER been handed the thread, the best of them standing ` +
       `${w.neverPickedGap.toFixed(3)} points behind the front` +
       /* THREE ARMS AND NOT TWO, WHICH IS THE DISTINCTION THE BOUND'S TWO SUMMANDS ALREADY CARRY AND WHICH A
@@ -1032,9 +1097,10 @@ function wfqReading(out) {
          zero) and this is the two-way reading it was — which is why collapsing them looked right. */
       (w.neverPickedGap <= w.nonrewardMax
         ? ` — within the ${w.nonrewardMax.toFixed(3)} that every non-reward term of flow_weight together can ` +
-          `lift one member, so the best of them is behind by LIFT alone and one bounded term reading ` +
-          `differently would put it at the front: this is the razor's STARVES rather than an ordering that ` +
-          `has not reached them yet`
+          `lift one member, so the best of them is behind by LIFT alone: it IS strictly outranked, and one ` +
+          `bounded term reading differently puts it at the front — the leader's own silence being the term ` +
+          `that will. This is an ordering that has not reached them YET and not the razor's STARVES, which is ` +
+          `a claim about a member the order never returns and is therefore a claim about the series`
         : w.neverPickedGap <= liftBound
         ? ` — beyond the ${w.nonrewardMax.toFixed(3)} every non-reward term can lift it but inside the ` +
           `${(w.valTop - w.valMin).toFixed(3)} of reward spread between the ${w.families} accounts standing, ` +
@@ -1055,7 +1121,7 @@ function wfqReading(out) {
                    the mirror of the defect this reader's own field list exists to stop — and it is the row a
                    reader needs BEFORE a gap opens, because the discriminator it carries is a shape across the
                    stream and a stream is only assembled from censuses that all state it. */
-                `${ucb}; ${starved}; ${leader}`;
+                `${ucb}; ${starved}; ${leader}; ${series}`;
   /* WHOSE REWARD THE ORDER IS, which is a different question from whether the reward is ordering it and is the
      one the verdict's own sentence makes a claim about. `selfEmit` counts members that have emitted something
      THEMSELVES, so the difference is how many stand on an account some other arm of their fork family filled.
