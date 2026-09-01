@@ -6360,6 +6360,15 @@ static int flow_step(JSContext *ctx, Flow *f) {
             }
             JS_FreeValue(ctx, pcv);
         }
+        /* WHICH ROW THIS FLOW HAD STARTED BEFORE THIS STEP, read BEFORE the block that may start another and
+           consumed at the resume below — see there for what it decides. It is a READING of the one field the
+           compile writes and never a flag beside it: a flag is a second statement of "a program started here"
+           that a later edit can forget to make, and `last_compiled` is the statement the compile already makes
+           (it is written at exactly one line, and the no-replay DCHECK at that line makes it strictly
+           increasing, so "it moved" and "this step compiled" are the same fact rather than two that agree).
+           A step that does not enter the block cannot move it, which is why no reset is needed: every path out
+           of flow_step returns, so this is re-read per entry. */
+        int last_compiled0 = f->last_compiled;
         if (!f->frame) {
             const char *body;
             /* AND ITS LENGTH, WHICH THE BODY ALREADY KNOWS. Both compiles below took `strlen(body)`, which is
@@ -6720,7 +6729,30 @@ static int flow_step(JSContext *ctx, Flow *f) {
                 g_step_unit = STEP_UNIT_FINISHED;
                 return 1;   /* all scripts + chunks + microtask jobs + live fetches + load listeners done */
             }
-            g_step_unit = STEP_UNIT_COMPILE_PROGRAM;
+            /* NO ARM IS NAMED HERE, AND THAT IS THE CORRECTION. `STEP_UNIT_COMPILE_PROGRAM` was set at this
+               line for all three exits of this block, and the exit it was named for — a CLASSIC program that
+               compiled and started — is the one that does not return from inside the block: it falls through
+               to the resume roughly two hundred lines below, which assigns `STEP_UNIT_RESUME_PROGRAM` over it
+               before running a single opcode. So the row spelled `compile-program` could only ever be reached
+               by the two exits that do NOT run a classic program (a compile that FAILED, and a MODULE that
+               evaluated), and every step that actually started one was counted as a resume.
+               WHAT THAT COST IS NOT THE LABEL, IT IS THE ONE COMPARISON THE CENSUS EXISTS TO MAKE. `steps` and
+               `live` say work is admitted and not retired; the arm histogram is what says whether the members
+               that are not retiring are MOVING THROUGH their documents or grinding inside one program, and
+               those two answers were summed into `resume-program`. A run in which every member starts a program
+               and a run in which no member has started one since its first are then the SAME NUMBER in that
+               row, whatever the number is — and step_unit.h's own preamble names that pair as arms that "take
+               opposite work". This claim is about the assignments and not about any run: no count anywhere is
+               evidence for it, and none is needed, because the overwrite is on the path.
+               AND `compile-program` WAS READ AS A COUNT OF PROGRAM STARTS AND COMPARED ACROSS REVISIONS, which
+               is how a defect in a label becomes a defect in a diagnosis. That reading is wrong twice over and
+               the two refutations are independent, which is worth keeping because either one alone would look
+               like a quibble: the row does not count starts at all (this comment), and the smoke's whole-run
+               counts on this host are not comparable between revisions anyway (§Testing's one-run rule, and a
+               measured 22 / 69 / 22 answered-statement count across three CONSECUTIVE revisions, which admits
+               no monotone reading of any of them). What the row does count is a compile that FAILED and a
+               MODULE that evaluated — two events with nothing in common but the block they leave from.
+               EACH EXIT NAMES ITSELF NOW, in the same shape as every other arm of this ladder. */
             /* NO REPLAY, asserted at the only place a program can start. A flow compiles each entry of its
                sequence once and thereafter RESUMES the suspended frame; reaching this line again for an index
                it already started means the resume path lost the frame and the flow is re-executing a program —
@@ -6927,6 +6959,12 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    not fit most contexts, so a dead candidate looks exactly like a busy one from the outside;
                    the no-replay DCHECK at the compile site is what named it. Dead means SKIPPED, which is what
                    "a dead candidate and nothing more" was always supposed to mean. */
+                /* AND IT IS THE ONE ARM OF THIS LADDER THAT ADVANCES THE CURSOR WITHOUT RUNNING ANYTHING, which
+                   is why it is its own row rather than sharing one with a program that started. A frontier
+                   standing here is stepping THROUGH bodies rather than executing them — a run of dead @S
+                   candidates, or a page whose modules do not parse — and the work that answers it is at the
+                   compile, never at the scheduler. */
+                g_step_unit = STEP_UNIT_NO_COMPILE;
                 f->script_i++;
                 return 0;
             }
@@ -6937,7 +6975,16 @@ static int flow_step(JSContext *ctx, Flow *f) {
                preempt), and the scheduler resumes it there like every other parked continuation. Its evaluation
                promise settling is likewise a FLOW resuming and not a drain: the reaction is a microtask on THIS
                flow's queue, run by the checkpoint above, which is why nothing here waits for it. */
-            if (stype == SCRIPT_TYPE_MODULE) { f->script_i++; return 0; }
+            /* …AND IT IS ITS OWN ARM, because it is §8.1.4.4's OTHER entry and the difference is exactly what
+               the census has to be able to see: this exit leaves the flow with NO FRAME, so the next step
+               enters the ladder above at `if (!f->frame)` and the flow's own queued reactions are reachable,
+               while the classic exit below leaves a live frame and every job arm is out of reach until it
+               completes. Two arms, two shapes of frontier. */
+            if (stype == SCRIPT_TYPE_MODULE) {
+                g_step_unit = STEP_UNIT_EVALUATE_MODULE;
+                f->script_i++;
+                return 0;
+            }
         }
         /* HTML §8.1.4.4 "Calling scripts", run a classic script step 8's third bullet — built at the completion
            below and INSTALLED after that completion's frame has been freed, which is the only reason it is
@@ -6960,7 +7007,29 @@ static int flow_step(JSContext *ctx, Flow *f) {
             /* A <script>'s completion value is not observable to the page (only an eval API surfaces one), so it is
                taken and released here — never DISCARDED by the engine, which would hide a live value from the host. */
             JSValue cv = JS_UNDEFINED;
-            g_step_unit = STEP_UNIT_RESUME_PROGRAM;
+            /* DID THIS STEP START THE FRAME IT IS ABOUT TO RESUME — the one question this line used to answer
+               the same way for both. The block above is the ONLY thing in this function that writes
+               `last_compiled`, and it writes it strictly upward, so the field having moved across that block is
+               the compile itself and not a second record of it. A flow that arrived here with a live frame did
+               not enter the block at all and reads the value it entered with.
+               THE TWO ARE OPPOSITE FACTS ABOUT A FRONTIER, WHICH IS WHY ONE ROW COULD NOT CARRY THEM: a START
+               has advanced this flow's §4.12.1 position — a program of the document that had never run is now
+               running — and a RESUME has advanced a program counter inside one that already was. A census in
+               which every step is a resume and one in which every step starts a new program are the same
+               census when they share a row, and "the members are not retiring" is exactly the state in which
+               the difference is the whole diagnosis. */
+            int started_here = (f->last_compiled != last_compiled0);
+            /* AND A PROGRAM THIS STEP STARTED IS NEVER A CALL, which is not decoration: three consumers below
+               (`g_completed`, §4.12.1.1 step 4's restore, and the cursor advance at the tail) are each guarded
+               by `is_call` on the premise that a call frame holds no row of the sequence, and the frame the
+               block above just built holds the row `last_compiled` was written from. A true reading here would
+               mean the compile produced a call root, and all three of those guards would then be excluding the
+               one frame that IS this row's program. */
+            DCHECK(!started_here || !is_call,
+                   "the frame a step just COMPILED reports itself as a call root — JS_FlowNew builds a program "
+                   "base, so this is a compile that produced something else, and the three consumers below "
+                   "that exclude calls would each exclude the row this step just started");
+            g_step_unit = started_here ? STEP_UNIT_START_PROGRAM : STEP_UNIT_RESUME_PROGRAM;
             int r = JS_FlowResume(ctx, (JSValue *)f->frame, &cv);
             /* A CROSS-AGENT OPERATION'S COMPLETION IS AN ANSWER, AND IT IS ASKED FIRST because the two readings
                of a throw are mutually exclusive: this program is another agent's operation, so its throw

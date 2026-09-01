@@ -1110,8 +1110,10 @@ function wfqReading(out) {
 
 /* WHY THE MEMBERS ARE NOT FINISHING — the `stepUnits` histogram, which is the row `finished` and `live` could
    never carry. Those two say work is being ADMITTED and not RETIRED; this says what the members that are not
-   retiring are DOING, and the arms take opposite work: `compile-program`/`resume-program` is a frontier that
-   legitimately holds more script than it used to, `queue-rendering-opportunity`/`fire-due-timer`/
+   retiring are DOING, and the arms take opposite work: `start-a-classic-program` is a frontier moving THROUGH
+   its documents while `resume-program` beside it is one grinding inside programs it has already started (one
+   row carried both until solver/step_unit.h split them, and a frontier that admits members and retires none is
+   exactly the state in which that difference is the diagnosis), `queue-rendering-opportunity`/`fire-due-timer`/
    `document-lifecycle-stage` is unbounded periodic work, the orphan arms are seeding drives, and
    `host-blocked`/`await-owed-reply`/`await-fetch-record`/`await-peer-operation` are four distinct kinds of
    waiting. One verdict covered all of them.

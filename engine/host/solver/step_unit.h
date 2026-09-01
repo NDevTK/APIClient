@@ -7,9 +7,17 @@
  * (the mirror of a defaulted field, and harder to see because the value is real), and what it cost is one
  * silence covering arms that take OPPOSITE work: a frontier looping in `queue-rendering-opportunity` or
  * `fire-due-timer` has unbounded periodic work and is a fidelity gap or a regression; one sitting in
- * `compile-program`/`resume-program` legitimately holds more script than it used to; one in the orphan arms is
- * seeding drives; one at `await-owed-reply` is parked on the host. Those are four different diffs, and
+ * `start-a-classic-program`/`resume-program` legitimately holds more script than it used to; one in the orphan
+ * arms is seeding drives; one at `await-owed-reply` is parked on the host. Those are four different diffs, and
  * "no flow finished across the window" was the whole of what the gate could say about which.
+ *
+ * AND THE PAIR IN THAT SENTENCE IS THE ONE THIS LIST GOT WRONG, WHICH IS WORTH STATING BESIDE THE DEFECT IT
+ * ENDS. `start` and `resume` are not one state read twice: a step that STARTS a program advanced this flow's
+ * §4.12.1 position and is forward progress by construction, while a step that RESUMES one advanced a program
+ * counter and may have advanced nothing observable at all. Merged, the row they shared answered the question
+ * "is this frontier moving through its documents or grinding inside one program" with a number that is TRUE OF
+ * BOTH — and that is precisely the question a frontier which admits members and retires none is asked. The
+ * merge was not a naming choice; see the arms below for how the two came to share a row.
  *
  * WHY IT IS AN ENUM AND NOT THE STRING IT WAS. A census row keyed on a free-form literal is a SECOND list of
  * the arms — one at the assignment, one at the reader — and two lists of one thing disagree eventually, which
@@ -73,7 +81,18 @@
     X(ORPHAN_SEED,        "seed-one-orphan-flow")                                 \
     X(ORPHAN_ROUTE,       "hand-a-parked-drive-its-function")                     \
     X(ORPHAN_RESUME,      "resume-a-parked-orphan-drive")                         \
-    X(COMPILE_PROGRAM,    "compile-program")                                      \
+    /* THE BLOCK THAT STARTS A PROGRAM HAS THREE EXITS AND USED TO HAVE ONE NAME */ \
+    /* — §8.1.4.4 "Calling scripts" has TWO entries (run a classic script, run a */ \
+    /* module script) and a compile has two outcomes, and `compile-program` was  */ \
+    /* set at the head of the block for all of them. The classic arm that STARTS */ \
+    /* then falls through to the resume below, which overwrites the name, so the */ \
+    /* row could only ever be reached by the two exits that DO NOT run a classic */ \
+    /* program: a compile that failed, and a module that evaluated. The one      */ \
+    /* event the name described was the one event it never counted. See the      */ \
+    /* compile site in flow_step for the derivation that replaces it.            */ \
+    X(START_PROGRAM,      "start-a-classic-program")                              \
+    X(EVALUATE_MODULE,    "evaluate-a-module-program")                            \
+    X(NO_COMPILE,         "program-did-not-compile")                              \
     X(RESUME_PROGRAM,     "resume-program")                                       \
     /* …and the arms that perform NO work: three flavours of waiting, and done */ \
     X(AWAIT_FETCH_RECORD, "await-fetch-record")                                   \
