@@ -195,7 +195,7 @@ static JSValue sh_entries(JSContext *ctx)
     JSValue rec = sh_traversable_record(ctx), list = JS_GetPropertyStr(ctx, rec, SH_R_ENTRIES);
 
     JS_FreeValue(ctx, rec);
-    DCHECK(JS_IsArray(list), "§7.4.1's session history entries held something that is not a list");
+    DCHECK(JS_IsArray(list), "§7.4.1.1 \"Session history entries\"' list held something that is not a list");
     return list;
 }
 

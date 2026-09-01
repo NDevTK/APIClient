@@ -297,7 +297,7 @@ const INTERFACES = {
      that exposes them, which is the file named here. */
   UserActivation:       "core/html/user_activation.c",
   History:              "core/frame/history.c",
-  /* HTML §7.2.6, the navigation API. Its entry list is a view over §7.4.1's session history entries, and the
+  /* HTML §7.2.6, the navigation API. Its entry list is a view over §7.4.1.1's session history entries, and the
      three fields it reads off one (their navigation API state, key and id) belong to the ENTRY — so
      session_history.c is named beside it, the way node.c's row names the mixin it also installs. The
      `dispose` and `currententrychange` event handler IDL attributes come off the shared EventTarget
