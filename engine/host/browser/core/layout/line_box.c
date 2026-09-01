@@ -1045,13 +1045,19 @@ typedef struct {
    IT WRITES INTO A CALLER-OWNED BUFFER rather than handing back lexbor's pointer, because a local name is a
    length-and-pointer pair with no promise of a terminator and a crash path must not read past one. A NULL
    element and a nameless one are DIFFERENT answers and are spelled differently: the first says the caller had
-   nothing to name, the second says it had a node neither parser nor `createElement` minted. */
+   nothing to name, the second says it had a node neither parser nor `createElement` minted.
+   THE NOWHERE-TO-WRITE CASE IS A THIRD ANSWER AND NOT AN ASSERT, for the reason core/layout/box_subject.h
+   states in full: a helper a `DFAILF` calls must be TOTAL, because an assert firing during message composition
+   does not report a SECOND defect — it REPLACES the first, and the reader loses the box, the container and the
+   remedy. This one guarded a caller mistake, so it could only ever have fired while composing the diagnostic it
+   is part of, which is the one moment an abort here is worth nothing. The invariant it stood for is unchanged:
+   `cap` under 2 leaves no room for a name and a terminator, and this says so instead of aborting over it. */
 static const char *lb_el_name(lxb_dom_element_t *el, char *buf, size_t cap)
 {
     size_t len = 0;
     const lxb_char_t *tag = el == NULL ? NULL : lxb_dom_element_local_name(el, &len);
 
-    DCHECK(buf != NULL && cap >= 2, "an element name was asked for with nowhere to write one");
+    if (buf == NULL || cap < 2) return "(nowhere to write an element name)";
     if (el == NULL) return "(no element)";
     if (tag == NULL) return "(no local name)";
     if (len > cap - 1) len = cap - 1;

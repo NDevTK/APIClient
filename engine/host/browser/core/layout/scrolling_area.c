@@ -1,7 +1,6 @@
 /* CSSOM VIEW §2 "Terminology"'s SCROLLING AREA, for an element. See scrolling_area.h for why the term is a
    component, for the shape §2's four-row table shares, and for why an extent cannot stand in for it. */
 #include <stdbool.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -13,6 +12,7 @@
 #include "core/dom/document.h"
 #include "core/dom/element_view.h"
 #include "core/layout/block_flow.h"
+#include "core/layout/box_subject.h"
 #include "core/layout/flow_position.h"
 #include "core/layout/line_box.h"
 #include "core/layout/replaced_element.h"
@@ -41,67 +41,18 @@
    DESCENDANT and not the element whose area is being measured; `sa_fold_span`'s is the box that ESTABLISHES
    the context, beside the two coordinates it reported; the text-run abort's is the text node's PARENT. Naming
    `el` at any of those would read as authoritative and be wrong, which is worse than naming nothing.
-   THE HELPERS ARE TOTAL AND THEIR ONE ALLOCATION IS FREED ON EVERY PATH INCLUDING THE ABORTING ONE. A helper a
-   crash calls must not be able to crash: an assert inside message composition does not report a SECOND defect,
-   it REPLACES the first. So `css_computed_value` is reached DIRECTLY rather than through `sa_computed_is`
-   below, whose own DCHECK would be exactly that replacement; the value is COPIED into a caller's buffer and
-   released here, because a crash path has nowhere to put a `free`; and `replaced_element_of` is not reached at
-   all, which matters most at the text-run abort — that function ABORTS by name for an `embed`, a `video`, a
-   `canvas`, an `object`, an `audio` and an `input`, and a REPLACED INLINE parent (`<object>x</object>`) is one
-   of the three cases that abort exists to tell apart, so asking it would report core/layout/replaced_element.c's
-   gap for precisely the case whose own gap is being reported.
-   THE LOCAL NAME IS WRITTEN THROUGH `%.*s` with lexbor's own length rather than as a C string, because it is a
-   length-and-pointer pair with no promise of a terminator; C99 §7.19.6.1 "The fprintf function" requires the
-   array to contain a null character only "if the precision is not specified or is greater than the size of the
-   array", and writes "no more than that many bytes" otherwise. */
-static const char *sa_computed_into(lxb_dom_element_t *el, const char *name, char *buf, size_t cap)
-{
-    char *v;
-    int n;
-
-    if (buf == NULL || cap == 0) return "(nowhere to compose a computed value)";
-    if (el == NULL) return "(no element)";
-    v = css_computed_value(el, name);
-    if (v == NULL) return "(no computed value)";
-    n = snprintf(buf, cap, "%s", v);
-    free(v);
-    return n < 0 ? "(computed value unavailable)" : buf;
-}
-
-static const char *sa_box_name(lxb_dom_element_t *el, char *buf, size_t cap)
-{
-    char dbuf[64];
-    size_t len = 0;
-    const lxb_char_t *tag;
-    int n;
-
-    if (buf == NULL || cap == 0) return "(nowhere to compose a box name)";
-    if (el == NULL) return "(no element)";
-    tag = lxb_dom_element_local_name(el, &len);
-    if (len > 128) len = 128;
-    n = tag == NULL
-        ? snprintf(buf, cap, "(no local name) (display `%s`)",
-                   sa_computed_into(el, "display", dbuf, sizeof dbuf))
-        : snprintf(buf, cap, "<%.*s> (display `%s`)", (int) len, (const char *) tag,
-                   sa_computed_into(el, "display", dbuf, sizeof dbuf));
-    return n < 0 ? "(box name unavailable)" : buf;
-}
-
-/* THE SAME, FOR A NODE THAT MAY NOT BE AN ELEMENT. §2's extreme is over "all of the element's descendants'
-   boxes" and the walk below descends through TEXT nodes as well as elements — a text run's anonymous inline
-   box is one of those descendants — so "(no element)" would be a wrong answer at the sites that delimit a run
-   rather than a missing one, and the node KIND is the fact a reader needs. */
-static const char *sa_node_name(lxb_dom_node_t *n, char *buf, size_t cap)
-{
-    if (n == NULL) return "(no node)";
-    if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) return sa_box_name(lxb_dom_interface_element(n), buf, cap);
-    if (n->type == LXB_DOM_NODE_TYPE_TEXT) return "(text node)";
-    if (n->type == LXB_DOM_NODE_TYPE_COMMENT) return "(comment node)";
-    if (n->type == LXB_DOM_NODE_TYPE_DOCUMENT) return "(the document)";
-    if (n->type == LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT) return "(a document fragment)";
-    return "(non-element node)";
-}
-
+   THE COMPOSITION ITSELF IS core/layout/box_subject.h's, which is where the argument that it must be TOTAL now
+   lives, together with the ownership contract and the `%.*s` rule. Two things this file owes that component:
+   `box_subject_computed` is reached instead of `sa_computed_is` below, whose own DCHECK would be exactly that
+   replacement; and `replaced_element_of` is reached from no message here, which matters most at the text-run
+   abort — that function ABORTS by name for an `embed`, a `video`, a `canvas`, an `object`, an `audio` and an
+   `input`, and a REPLACED INLINE parent (`<object>x</object>`) is one of the cases that abort exists to tell
+   apart, so asking it would report core/layout/replaced_element.c's gap for precisely the case whose own gap is
+   being reported.
+   THE SITES THAT NAME A NODE rather than a box are the ones that DELIMIT A RUN: §2's extreme is over "all of
+   the element's descendants' boxes" and the walk below descends through TEXT nodes as well as elements — a
+   text run's anonymous inline box is one of those descendants — so `box_subject_node` is what they ask and
+   "(no element)" would be a wrong answer there rather than a missing one. */
 static bool sa_computed_is(lxb_dom_element_t *el, const char *name, const char *kw)
 {
     char *v = css_computed_value(el, name);
@@ -112,7 +63,7 @@ static bool sa_computed_is(lxb_dom_element_t *el, const char *name, const char *
             "%s, property `%s`: "
             "the cascade produced no computed value for a property this engine models — every one of "
             "them is in lexbor's registry with an initial value, so the last layer always answers",
-            sa_box_name(el, nbuf, sizeof nbuf), name);
+            box_subject(el, nbuf, sizeof nbuf), name);
     same = strcmp(v, kw) == 0;
     free(v);
     return same;
@@ -131,7 +82,7 @@ static bool sa_is_block_container(lxb_dom_element_t *el)
 
     DCHECKF(d != NULL, "%s: the cascade produced no computed `display` for an element — the UA layer answers "
                        "`inline` for every element it does not name, so this cannot be unset",
-                       sa_box_name(el, nbuf, sizeof nbuf));
+                       box_subject(el, nbuf, sizeof nbuf));
     container = block_flow_display_is_block_container(d);
     free(d);
     return container;
@@ -161,7 +112,7 @@ bool scrolling_area_ending_edge_at_higher_coordinate(lxb_dom_element_t *el, bool
            "own box was placed by core/layout/flow_position.c, which crashes for exactly that value before any "
            "coordinate exists to measure — so this element has a position and a writing mode that disagree, and "
            "the two tests have come apart",
-           sa_box_name(el, nbuf, sizeof nbuf), sa_computed_into(el, "writing-mode", vbuf, sizeof vbuf));
+           box_subject(el, nbuf, sizeof nbuf), box_subject_computed(el, "writing-mode", vbuf, sizeof vbuf));
     if (vertical) return true;   /* block-end is downward in every horizontal writing mode */
     /* inline-end is the line-right side for a used `direction` of `ltr` and the line-left side for `rtl`, and
        the property admits no third value — asserted here rather than read as "not rtl", so a spelling the
@@ -175,7 +126,7 @@ bool scrolling_area_ending_edge_at_higher_coordinate(lxb_dom_element_t *el, bool
            "a computed `direction` is neither `ltr` nor `rtl`. css-writing-modes-4 §2.1 \"Specifying "
            "Directionality: the direction property\" gives the property the `Value:` line `ltr | rtl` and "
            "nothing else",
-           sa_box_name(el, nbuf, sizeof nbuf), sa_computed_into(el, "direction", vbuf, sizeof vbuf));
+           box_subject(el, nbuf, sizeof nbuf), box_subject_computed(el, "direction", vbuf, sizeof vbuf));
     return !sa_computed_is(el, "direction", "rtl");
 }
 
@@ -203,7 +154,7 @@ static bool sa_excluded(lxb_dom_element_t *el, lxb_dom_element_t *descendant)
            "§10.1's FIRST case — the initial containing block — was answered for a strict DESCENDANT of an "
            "element, and that case is the ROOT ELEMENT's alone. A descendant of any element has a root element "
            "above it, so this is the root test and the tree's own shape having come apart",
-           sa_box_name(descendant, dbuf, sizeof dbuf), sa_box_name(el, ebuf, sizeof ebuf));
+           box_subject(descendant, dbuf, sizeof dbuf), box_subject(el, ebuf, sizeof ebuf));
     cbn = lxb_dom_interface_node(cb);
     /* An ANCESTOR of the element, which is strictly above it: a box whose containing block is the ELEMENT
        ITSELF is in the scrolling area, so the walk starts at the element's parent. */
@@ -280,7 +231,7 @@ static CssPx sa_inline_box_edge(lxb_dom_element_t *d, bool vertical, bool ending
            "CSS 2.2 §9.4.2's formatting context was reported as NO BOX for an inline box whose fragments were "
            "measured in it. core/layout/line_box.c walks past every inline ancestor to a block container and "
            "crashes there when it runs out, so a NULL here is that walk having returned without either",
-           sa_box_name(d, nbuf, sizeof nbuf), vertical ? "block" : "inline", lo.px, hi.px);
+           box_subject(d, nbuf, sizeof nbuf), vertical ? "block" : "inline", lo.px, hi.px);
     return css_px_add(sa_content_origin(establishing, vertical), ending_at_hi ? hi : lo);
 }
 
@@ -313,8 +264,8 @@ static CssPx sa_fold_span(lxb_dom_element_t *style, lxb_dom_node_t *first, lxb_d
            "CSS 2.2 §9.4.2's line boxes reported a span whose ENDING edge is before its BEGINNING edge. The "
            "two are a maximum and a minimum over the same set of boxes seeded at the same corner, so an "
            "inverted pair is the two edges having been derived from different lines",
-           sa_box_name(style, sbuf, sizeof sbuf), sa_node_name(first, fbuf, sizeof fbuf),
-           end == NULL ? "end of the child list" : sa_node_name(end, ebuf, sizeof ebuf),
+           box_subject(style, sbuf, sizeof sbuf), box_subject_node(first, fbuf, sizeof fbuf),
+           end == NULL ? "end of the child list" : box_subject_node(end, ebuf, sizeof ebuf),
            vertical ? "block" : "inline", lo.px, hi.px);
     if (ending_at_hi) return css_px_max(best, css_px_add(origin, hi));
     return css_px_min(best, css_px_add(origin, lo));
@@ -449,7 +400,7 @@ static CssPx sa_descendants_extreme(lxb_dom_element_t *el, lxb_dom_element_t *ex
                    "walk root %s, the text node's parent is %s: "
                    "a TEXT node inside an element's subtree has no element parent — the walk started at an "
                    "element and descends only through its children, so a text node here belongs to one",
-                   sa_box_name(el, wbuf, sizeof wbuf), sa_node_name(n->parent, pbuf, sizeof pbuf));
+                   box_subject(el, wbuf, sizeof wbuf), box_subject_node(n->parent, pbuf, sizeof pbuf));
             parent = lxb_dom_interface_element(n->parent);
             /* §9.2.2.1's rule answers whether the run is a box at all; collapsible white space is not and
                contributes nothing. A run that IS a box is on a line box of ONE of the two contexts folded
@@ -514,7 +465,7 @@ static CssPx sa_descendants_extreme(lxb_dom_element_t *el, lxb_dom_element_t *ex
                       "reader on to `replaced_element_of`, and asking that from a crash message would ABORT for "
                       "an `embed`, a `video`, a `canvas`, an `object`, an `audio` or an `input` — reporting "
                       "core/layout/replaced_element.c's own gap for exactly case (3), in place of this one",
-                      sa_box_name(parent, pbuf, sizeof pbuf), sa_box_name(el, wbuf, sizeof wbuf));
+                      box_subject(parent, pbuf, sizeof pbuf), box_subject(el, wbuf, sizeof wbuf));
         }
         if (descend && n->first_child != NULL) { n = n->first_child; continue; }
         while (n != root && n->next == NULL) n = n->parent;
@@ -560,7 +511,7 @@ CssPx scrolling_area_extent_px(lxb_dom_element_t *el, bool vertical)
               "below — everything after the seed is unchanged, because the descendant walk is over `el`'s "
               "subtree and does not read `el`'s own extent again. Take that to the CSSOM View editors as well: "
               "§2's row states a single padding edge for a box the CSS 2.2 sections above give several",
-              sa_box_name(el, nbuf, sizeof nbuf));
+              box_subject(el, nbuf, sizeof nbuf));
     /* THE ELEMENT'S OWN PADDING BOX FIRST, because its two edges are §2's table's own BEGINNING edges and
        because the placement inside it is where a box type this engine cannot lay out crashes by its own name.
        core/layout/flow_position.h owns the border-to-padding step, so the read of `border-top-width` that used
@@ -583,7 +534,7 @@ CssPx scrolling_area_extent_px(lxb_dom_element_t *el, bool vertical)
            "edge as an extreme OVER that padding edge, so the padding box is one of the operands of the maximum "
            "and the result cannot be below it — a smaller answer is the beginning edge and the ending edge "
            "having been derived from different boxes",
-           sa_box_name(el, nbuf, sizeof nbuf), vertical ? "block" : "inline", lo.px, hi.px, padding.px);
+           box_subject(el, nbuf, sizeof nbuf), vertical ? "block" : "inline", lo.px, hi.px, padding.px);
     return css_px_sub(hi, lo);
 }
 
@@ -615,7 +566,7 @@ static lxb_dom_element_t *sa_principal_writing_mode_element(lxb_dom_node_t *doc)
     char rbuf[160];
 
     /* THE COMPOUND CONDITION MERGES TWO STATES AND THE SUBJECT IS WHAT TELLS THEM APART — a document with NO
-       document element at all, and one whose document element is not an element node. `sa_node_name` answers
+       document element at all, and one whose document element is not an element node. `box_subject_node` answers
        both from the one operand, which is why this is the subject rather than a second assert. */
     DCHECKF(root != NULL && root->type == LXB_DOM_NODE_TYPE_ELEMENT,
            "the document's document element is %s: "
@@ -624,7 +575,7 @@ static lxb_dom_element_t *sa_principal_writing_mode_element(lxb_dom_node_t *doc)
            "that HAS a viewport — CSSOM VIEW §2's viewport scrolling-area row below and CSSOM VIEW §6.1's "
            "ancestor walk — while a viewport exists only for a document a navigable is presenting, and such a "
            "document has a root element",
-           sa_node_name(root, rbuf, sizeof rbuf));
+           box_subject_node(root, rbuf, sizeof rbuf));
     /* "…a body child element whose display value is not none". `document_body_of` is HTML §3.1.7's body
        element, which is already the FIRST `body` or `frameset` child of the root; the display half is
        core/dom/element_view.h's one predicate, which reads the computed `display` of the element and of its
@@ -642,7 +593,7 @@ bool scrolling_area_viewport_ending_edge_at_higher_coordinate(lxb_dom_node_t *do
            "CSSOM VIEW §2's overflow directions for a VIEWPORT were asked of a node that is not a Document. The "
            "directions are css-writing-modes-4 §8's principal writing mode, which §8 states over THE DOCUMENT's "
            "root element, so there is no other node this question has an answer for",
-           sa_node_name(doc, nbuf, sizeof nbuf));
+           box_subject_node(doc, nbuf, sizeof nbuf));
     /* §2 gives "a scrolling box of a viewport or element" ONE definition of its two overflow directions, so
        once §8 has named the element whose used values the viewport's are, this is the element form and not a
        second derivation of the same bit. */
@@ -661,7 +612,7 @@ CssPx scrolling_area_viewport_extent_px(lxb_dom_node_t *doc, CssPx icb_extent, b
            "CSSOM VIEW §2's scrolling area of a VIEWPORT was asked of a node that is not a Document — the row "
            "is stated over the initial containing block and \"all of the viewport's descendants' boxes\", and "
            "both of those are facts about the document a viewport is presenting",
-           sa_node_name(doc, nbuf, sizeof nbuf));
+           box_subject_node(doc, nbuf, sizeof nbuf));
     DCHECKF(icb_extent.px >= 0.0,
            "%s axis, ICB extent %g: "
            "CSS 2.2 §10.1 \"Definition of 'containing block'\" gives the initial containing block \"the "
@@ -707,7 +658,7 @@ CssPx scrolling_area_viewport_extent_px(lxb_dom_node_t *doc, CssPx icb_extent, b
            "result cannot be below it. This is the invariant CSSOM VIEW §6's `scrollWidth`/`scrollHeight` "
            "max(area, viewport) and §4's `scroll()` clamp both rest on, and a smaller answer is the beginning "
            "edge and the ending edge having been derived from different boxes",
-           sa_node_name(rootn, nbuf, sizeof nbuf), vertical ? "block" : "inline",
+           box_subject_node(rootn, nbuf, sizeof nbuf), vertical ? "block" : "inline",
            lo.px, hi.px, icb_extent.px);
     return css_px_sub(hi, lo);
 }
