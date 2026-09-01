@@ -517,6 +517,25 @@ static JSValue js_port_post(JSContext *ctx, JSValueConst this_val, int argc, JSV
         transfer = JS_NewArray(ctx);
         if (JS_IsException(transfer)) { JS_FreeValue(ctx, target); return JS_EXCEPTION; }
     }
+    /* THE MEMBER ROAD, which the DFAIL at the top of this body does not cover. That one fires when the SECOND
+       ARGUMENT is unknown — §3.6 with no overload to choose. `port.postMessage(m, {transfer: location.hash})`
+       is a real Object, so the dictionary arm is correctly chosen and the unknown is one member inside it;
+       Web IDL §3.2.17 Dictionary types' member loop crosses it as itself, and the assert below then reported
+       that as the declaration having failed to materialize a sequence.
+       IT IS NOT THE ENUMERATION CASE AND MUST NOT BE FORKED LIKE ONE. Web IDL §3.2.21 Sequences —
+       sequence<T> step 2 is "Let method be ? GetMethod(V, %Symbol.iterator%)", which over an unknown is
+       another unknown, and §3.2.21.1 Creating a sequence from an iterable repeats to an unknown length — so
+       unlike an enumeration there is no arm set the spec writes down, and the honest statement is that the
+       conversion has no answer over unknown input yet. js_window_post names the same gap at its own copy of
+       this member. */
+    if (concolic_is(transfer))
+        DFAIL("MessagePort.postMessage's `transfer` MEMBER is UNKNOWN EXTERNAL INPUT, so §3.2.21's "
+              "iterator-protocol conversion never ran and what follows would read a `length` and indices off "
+              "the page's own unknown — the array-like walk this body was converted away from, over a value "
+              "that is not even an array. There is no given arm set to ask step_fork_run over: §3.2.21 step "
+              "2's GetMethod over an unknown is another unknown and §3.2.21.1 repeats to an unknown length. "
+              "Build §3.2.21 over unknown input AT THE CONVERSION — the element cursor already parks, so what "
+              "is missing is what the protocol answers when the ITERABLE is unknown");
     DCHECK(JS_IsArray(transfer), "postMessage's transfer list is not the materialized sequence — "
                                  "IDL_SEQUENCE_OBJECT is what §3.2.21 builds, and reading the page's object "
                                  "again here would run its iterator a second time");

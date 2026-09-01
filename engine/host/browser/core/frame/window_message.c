@@ -637,6 +637,25 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
     }
     if (JS_IsUndefined(tov)) tov = JS_NewString(ctx, POST_TARGET_ORIGIN_DEFAULT);
     if (JS_IsException(tov)) { JS_FreeValue(ctx, transfer); return JS_EXCEPTION; }
+    /* THE SAME MISSING FORK THE ARGUMENT ARM ABOVE NAMES, ONE ROAD OVER — and this is the road that bypassed
+       it. The DFAIL at the top of this body fires when the SECOND ARGUMENT is unknown, which is §3.6 having
+       no overload to choose; it says nothing about `postMessage(msg, {targetOrigin: location.hash})`, where
+       the argument is a real Object, the dictionary arm is correctly chosen, and the UNKNOWN is one member
+       inside it. Web IDL §3.2.17 Dictionary types' member loop crosses that member as itself, so it arrives
+       here wearing an Object and the shape assert below answered "the declaration lost its default" — a
+       report about the conversion, for a value the conversion handled exactly as designed.
+       IT IS A CONTROL-FLOW VALUE AND NOT A CARRIED ONE, which is what makes crossing insufficient here where
+       it is sufficient for a DOMString a body merely stores. This string decides §9.3.3 step 8.1's
+       same-origin comparison, so an unknown leaves BOTH the delivered and the dropped world feasible, and
+       everything below coerces it to bytes and compares them. */
+    if (concolic_is(tov))
+        DFAIL("postMessage's `targetOrigin` MEMBER is UNKNOWN EXTERNAL INPUT — the same unpinned target "
+              "origin this body's second-argument DFAIL names, reached through the options dictionary "
+              "instead of through §3.6. §9.3.3 step 5 parses it and step 8.1 compares it against the target "
+              "document's origin, so both the delivered and the dropped arm stay feasible and the strcmp and "
+              "url_parse below would decide it from bytes nobody measured. Fork the post: queue the entry "
+              "under each arm of the origin comparison, the way a branch on unknown external input forks "
+              "anywhere else. ONE mechanism answers both roads, because both end at the same comparison");
     DCHECK(JS_IsString(tov), "postMessage's target origin is not a string — the declaration converts it as a "
                              "USVString and places the IDL's own default when the page wrote none");
     /* §9.4.4's `= []`: no `transfer` member is a transfer list of nothing. That is the IDL's own default and
@@ -646,6 +665,21 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
         transfer = JS_NewArray(ctx);
         if (JS_IsException(transfer)) { JS_FreeValue(ctx, tov); return JS_EXCEPTION; }
     }
+    /* A SEQUENCE MEMBER'S UNKNOWN IS A THIRD QUESTION, neither the string's carry nor the enumeration's
+       finite fork, and it is named here rather than reported as a broken conversion. §3.2.17's member loop
+       crosses `{transfer: location.hash}` as itself, so what arrives is the page's unknown and not the Array
+       §3.2.21 builds. There is no arm list to fork over: Web IDL §3.2.21 Sequences — sequence<T> step 2 is
+       "Let method be ? GetMethod(V, %Symbol.iterator%)", which over an unknown yields another unknown, and
+       §3.2.21.1 Creating a sequence from an iterable then repeats until the iterator says done — an unknown
+       LENGTH, so the feasible worlds are not enumerable the way an enumeration's are. */
+    if (concolic_is(transfer))
+        DFAIL("postMessage's `transfer` MEMBER is UNKNOWN EXTERNAL INPUT, so §3.2.21's iterator-protocol "
+              "conversion never ran and the walks below would read a `length` and indices off the page's own "
+              "unknown. It is NOT the enumeration case: §3.2.21 step 2's GetMethod over an unknown is "
+              "another unknown and §3.2.21.1 repeats to an unknown length, so there is no given arm set to "
+              "ask over. What this needs is §3.2.21 answered over unknown input at the CONVERSION — the "
+              "cursor already parks per element, so the missing piece is what the protocol answers when the "
+              "iterable itself is unknown, and until it exists no transfer list can be built from one");
     DCHECK(JS_IsArray(transfer), "postMessage's transfer list is not the materialized sequence — "
                                  "IDL_SEQUENCE_OBJECT is what §3.2.21 builds, and reading the page's object "
                                  "again here would run its iterator a second time");

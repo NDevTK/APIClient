@@ -675,7 +675,27 @@ static JSValue js_conn_transaction(JSContext *ctx, JSValueConst this_val, int ar
                              "a transaction cannot be created with an empty scope");
         goto fail;
     }
-    /* Step 6 — see the header comment: the TYPE admits "versionchange" and this algorithm refuses it. */
+    /* Step 6 — see the header comment: the TYPE admits "versionchange" and this algorithm refuses it.
+       BOTH ROADS INTO conn_enum_index CARRY AN UNKNOWN, and the ask is written at each of them rather than
+       inside the helper, because what a reader needs is the ARM LIST and the two lists differ. Web IDL
+       §3.2.18 Enumeration types is "Let S be the result of calling ? ToString(V)" and then "If S is not one
+       of E's enumeration values, then throw a TypeError" — the type admits the listed strings and nothing
+       else, so unknown external input has no arm to cross as here, where a DOMString member legitimately
+       crosses. It reaches conn_enum_index's JS_ToCString as an unknown either way, which is a boundary that
+       owes C real bytes and has none. */
+    if (concolic_is(argv[1]))
+        DFAIL("IDBDatabase.transaction's `mode` ARGUMENT is UNKNOWN EXTERNAL INPUT. Web IDL §3.2.18 "
+              "Enumeration types refuses an unrecognised value with a TypeError, so it cannot cross as "
+              "itself, and it must not be picked: `readonly` and `readwrite` are two worlds this engine "
+              "observes differently — every mutating member opens with Indexed Database API §4.5 The "
+              "IDBObjectStore interface's own step, \"If transaction is a read-only transaction, throw a "
+              "\"ReadOnlyError\" DOMException.\" — so the arm decides whether a whole branch of the page's "
+              "storage code runs at all — and `versionchange` is the third value the TYPE admits and step 6 "
+              "directly below refuses. The arm "
+              "set is GIVEN by the enumeration rather than chosen, which is what makes an N-way ask honest "
+              "where a range's would not be: ask step_fork_run over TX_MODES plus the TypeError arm at the "
+              "§3.2.18 conversion, outcome 0 the first listed value. Its SUBPROBLEM is the boolean "
+              "dictionary member, which idl_dict_bool_at already names and which is not built");
     mode = conn_enum_index(ctx, argv[1], TX_MODES);
     if (mode != IDB_TX_READONLY && mode != IDB_TX_READWRITE) {
         JS_ThrowTypeError(ctx, "a transaction cannot be created with the mode \"versionchange\" — an upgrade "
@@ -686,6 +706,19 @@ static JSValue js_conn_transaction(JSContext *ctx, JSValueConst this_val, int ar
     /* Steps 7, 8 and 9. §4.9's creation takes the scope (CONSUMED), and the cleanup event loop is set HERE and
        not inside the creation because §5.7's upgrade transaction must not have one — see idb_transaction.h. */
     durability = idl_dict_get(ctx, options, "durability");
+    /* THE MEMBER ROAD to the same helper, and the same missing fork. The declaration's `= "default"` is
+       placed only when the page wrote NOTHING; `{durability: location.hash}` is a member the page wrote, so
+       §3.2.17's loop crosses it and the assert below — which reads the absence of a string as the default
+       having gone missing — reported a conversion failure for a value the conversion crossed on purpose. */
+    if (concolic_is(durability))
+        DFAIL("IDBTransactionOptions' `durability` MEMBER is UNKNOWN EXTERNAL INPUT. Web IDL §3.2.18 "
+              "Enumeration types refuses an unrecognised value with a TypeError, so it cannot cross as "
+              "itself, and picking one deletes the others: `enum IDBTransactionDurability { \"default\", "
+              "\"strict\", \"relaxed\" }` is three values a page reads back off IDBTransaction's own "
+              "`durability` getter and can branch on. The arm set is GIVEN by the enumeration, so ask "
+              "step_fork_run over TX_DURABILITY plus the TypeError arm at the §3.2.18 conversion, outcome 0 "
+              "the first listed value — the same one mechanism the `mode` argument above names, which is why "
+              "it belongs at the conversion and not in either body");
     DCHECK(JS_IsString(durability),
            "IDBTransactionOptions' `durability` is declared with the IDL's own `= \"default\"`, so the "
            "conversion places it whether or not the page wrote one — an absent one here is the declaration "

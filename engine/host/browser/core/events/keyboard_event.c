@@ -97,7 +97,20 @@ bool keyboard_event_is(JSContext *ctx, JSValueConst v)
 
 /* A `DOMString` member whose IDL default is the empty string — which is also the un-initialized value of both
    attributes that take one here. The declaration has already converted it, so this reads the record it built
-   and runs none of the page's code. Returns an OWNED string, or JS_EXCEPTION. */
+   and runs none of the page's code. Returns an OWNED string, or JS_EXCEPTION.
+   BOTH CALLERS ARE IN ke_init_slots AND BOTH WANT THE SAME THING — `key` and `code` are one contract (store
+   the member, hand it back from the getter), which is why one helper serves them and why the assert below can
+   be written once without losing which member it is about: the caller's own `name` is in the message.
+   UNKNOWN EXTERNAL INPUT IS CARRIED, AND THAT IS THE POINT RATHER THAN A HOLE. Web IDL §3.2.17 Dictionary
+   types' member loop crosses an unknown as ITSELF before any type arm is asked, so what arrives here for
+   `new KeyboardEvent("keydown", {key: location.hash})` wears an ordinary Object. This used to be asserted
+   against, with a message saying the member "arrived unconverted" — which was the crossing being reported as
+   a failure of the conversion that performs it, and the cost was not the false account but the ABORT: a
+   DOMString member's whole job here is to be STORED and handed back by the `key` getter, so a crossed one
+   rides the slot to whatever reads `ev.key`, and a flow that sinks it (`el.innerHTML = ev.key`) is an @S
+   derivation this engine can solve. Refusing the value ends that flow at the constructor. Nothing coerces it
+   on this path: the value is placed in the slot and js_ke_get returns the slot, so the taint survives the
+   round trip intact. */
 static JSValue ke_dict_str(JSContext *ctx, JSValueConst init, const char *name)
 {
     JSValue v = idl_dict_get(ctx, init, name);
@@ -106,8 +119,11 @@ static JSValue ke_dict_str(JSContext *ctx, JSValueConst init, const char *name)
         JS_FreeValue(ctx, v);
         return JS_NewString(ctx, "");
     }
-    DCHECK(JS_IsString(v), "a KeyboardEventInit DOMString member arrived unconverted — the declaration is what "
-                           "converts it, and a body that stringifies one runs the page's toString from C");
+    DCHECKF(JS_IsString(v) || concolic_is(v),
+            "KeyboardEventInit's `%s` is neither a string nor unknown external input — the declaration "
+            "converts it and Web IDL §3.2.17 Dictionary types' member loop crosses an unknown one, so those "
+            "are the two states that exist here and a third means the conversion was skipped",
+            name);
     return v;
 }
 

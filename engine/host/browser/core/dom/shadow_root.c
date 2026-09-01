@@ -659,13 +659,56 @@ static JSValue js_el_attach_shadow(JSContext *ctx, JSValueConst this_val, int ar
                                         "scoped nor this document's");
         }
     }
+    /* AN ENUMERATION IS THE ONE DECLARED TYPE WHOSE UNKNOWN CANNOT BE CARRIED AS ITSELF, and both of this
+       dictionary's are one.
+       Web IDL §3.2.17 Dictionary types' member loop crosses unknown external input as ITSELF before any type
+       arm is asked — deliberately, because a DOMString's bytes are carried to a sink and opacity has to
+       survive the boundary. So `JS_IsString` here answers TWO questions with one bit: did the declaration
+       convert this member, and is this value known. The assert that stood over `mode` reported the second as
+       a failure of the first — it said the conversion was skipped — which is the crossing being blamed on the
+       machine that performs it; and `slotAssignment`'s ternary below did not report it at all — a crossed
+       member is not a string, so it took the same road an ABSENT member takes and was pinned to "named" in
+       both builds with nothing anywhere to say a world had been deleted.
+       AN ENUMERATION IS DIFFERENT FROM A STRING AND THE DIFFERENCE IS §3.2.18's SECOND STEP. Web IDL §3.2.18
+       Enumeration types is "Let S be the result of calling ? ToString(V)" and then "If S is not one of E's
+       enumeration values, then throw a TypeError" — the type admits the listed strings and NOTHING else, so
+       an unknown has no arm to cross as. What it has instead is a set of feasible worlds the IDL itself
+       writes down: `enum ShadowRootMode { "open", "closed" }` and `enum SlotAssignmentMode { "manual",
+       "named" }`. Unlike a numeric range, that set is GIVEN rather than chosen, so an N-way ask over it
+       invents nothing — which is exactly the line §@H draws between a pin and a fabrication.
+       BOTH ASKS ARE WRITTEN AT THEIR OWN SITE rather than in a shared reader, because each one's ARMS are the
+       thing the next reader needs and they are different lists. */
     mode_v = idl_dict_get(ctx, init, "mode");
+    if (concolic_is(mode_v))
+        DFAIL("attachShadow's `mode` is UNKNOWN EXTERNAL INPUT. Web IDL §3.2.18 Enumeration types refuses a "
+              "value it cannot recognise with a TypeError, so an unknown cannot cross as itself the way a "
+              "DOMString member does — and it must not be picked either: `open` and `closed` are two worlds "
+              "this engine observes differently, since the `shadowRoot` getter answers the root in one and "
+              "null in the other, so a flow handed the wrong arm cannot see the subtree it was about to "
+              "inject into. The arm set is GIVEN by the enumeration rather than chosen, which is what makes "
+              "the fork honest where a range's would not be: ask step_fork_run over SR_MODE_VALUES plus the "
+              "TypeError arm at the §3.2.18 conversion — outcome 0 the first listed value, since that is the "
+              "arm a run with no forking policy takes — so every enumeration in the platform is answered "
+              "once rather than once per member. Its SUBPROBLEM is the boolean dictionary member, which "
+              "idl_dict_bool_at already names and which is not built");
     DCHECK(JS_IsString(mode_v), "ShadowRootInit's `mode` is required and the declaration converts it, so a "
-                                "body reaching here without a string means the conversion was skipped");
+                                "body reaching here with neither a string nor unknown external input means "
+                                "the conversion was skipped");
     slot_v = idl_dict_get(ctx, init, "slotAssignment");
+    if (concolic_is(slot_v))
+        DFAIL("attachShadow's `slotAssignment` is UNKNOWN EXTERNAL INPUT, and the ternary below cannot say "
+              "so: a crossed member is not a string, so it took the absent member's road and was silently "
+              "pinned to the IDL default \"named\". The two values are two worlds: DOM §4.2.2.3 Finding slots "
+              "and slottables branches on exactly this member — \"If shadow’s slot assignment is \"manual\", "
+              "then return the slot in shadow’s descendants whose manually assigned nodes contains "
+              "slottable, if any; otherwise null.\" — so which nodes a slot holds is decided here, and the "
+              "pin deletes whichever world the page did not get. Fork it exactly as `mode` above is forked, "
+              "over SR_SLOT_VALUES");
     mode = JS_ToCString(ctx, mode_v);
     /* `slotAssignment` defaults to "named" — a default the DECLARATION does not apply (an absent member is
-       absent), so the member's own IDL default is stated here, where the IDL states it. */
+       absent), so the member's own IDL default is stated here, where the IDL states it. The ternary is a
+       statement about ABSENCE and only about absence, which is what the ask directly above buys it: the one
+       other non-string that could reach it crashes by name first. */
     slot_assignment = JS_IsString(slot_v) ? JS_ToCString(ctx, slot_v) : NULL;
     result = sr_attach(ctx, this_val, mode ? mode : "open", idl_dict_bool(ctx, init, "delegatesFocus"),
                        slot_assignment ? slot_assignment : "named",
