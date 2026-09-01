@@ -45,9 +45,14 @@
  * core/frame/viewport.c derives a child navigable's viewport from. An `img` is answered from the image
  * request state core/html/html_image.h already models, which is the same state a real browser is in: while the
  * fetch is outstanding the user agent has not yet learned that it cannot decode the reply, and §15.4.2's
- * second rule is written about exactly that moment. What is genuinely absent — a DECODED image's natural
- * dimensions, a plugin's, a video frame's — crashes at the arm that would have to read it, naming the decoder
- * rather than answering a plausible number.
+ * second rule is written about exactly that moment. An `embed` is answered wherever HTML §4.8.6 "The embed
+ * element" says it REPRESENTS NOTHING — an element with neither a `src` nor a `type` attribute, or one with a
+ * media element ancestor — which needs no plugin, no decoder and no fetch, because there is no content to
+ * classify; §10.3.2's last arm gives it the same 300 x 150 as an `iframe` by a different route, and the two
+ * derivations are kept apart in replaced_element.c for that reason. What is genuinely absent — a DECODED
+ * image's natural dimensions, a video frame's, and the RESOURCE an `embed` with a `src` has never fetched —
+ * crashes at the arm that would have to read it, naming what to build rather than answering a plausible
+ * number.
  */
 #ifndef ENGINE_HOST_BROWSER_CORE_LAYOUT_REPLACED_ELEMENT_H
 #define ENGINE_HOST_BROWSER_CORE_LAYOUT_REPLACED_ELEMENT_H

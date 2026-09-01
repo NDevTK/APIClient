@@ -11,6 +11,7 @@
 #include "core/css/css_length.h"
 #include "core/dom/document.h"
 #include "core/html/html_image.h"
+#include "core/html/media_element.h"
 #include "core/layout/replaced_element.h"
 
 /* NOT A REPLACED ELEMENT — every field zeroed, which replaced_element.h makes the contract: a caller reading a
@@ -195,6 +196,45 @@ static ReplacedElement rep_img(JSContext *ctx, lxb_dom_element_t *el)
     return rep_sized(0.0, 0.0);
 }
 
+/* ---- HTML §4.8.6 "The embed element": WHEN AN `embed` REPRESENTS NOTHING -----------------------------------
+   §15.4.1 "Embedded content" makes an `embed` a replaced element with no state to consult — "The embed,
+   iframe, and video elements are expected to be treated as replaced elements" — so the only question left is
+   css-images-3 §4.1's natural dimensions, and those are the CONTENT's. §4.8.6 states outright when there is no
+   content: "While any of the following conditions are occurring, any plugin instantiated for the element must
+   be removed, and the embed element represents nothing:", followed by three conditions. It is a "while ANY"
+   list, so one of them is the whole answer and the three are not a conjunction to complete.
+   THE FIRST TWO ARE COMPUTED HERE AND THE THIRD IS NOT, and the split is not arbitrary: "The element has
+   neither a src attribute nor a type attribute" and "The element has a media element ancestor" are questions
+   about the TREE, which this engine holds in full, while "The element has an ancestor object element that is
+   not showing its fallback content" is a question about §4.8.7 "The object element"'s representation
+   algorithm, which is the very thing `replaced_element_of`'s `object` arm crashes for. A false from this
+   function therefore says only that the first two conditions do not hold; it never says the element represents
+   something — which is why its ONE caller crashes rather than answering, and why this returns a bool rather
+   than a ReplacedElement it would have to invent.
+   PRESENCE, NOT EMPTINESS. §4.8.6's first condition is written over the attributes being SET, and the section
+   asks the other question one paragraph later where it means it (a potentially active embed needs its "src
+   attribute is either absent or its value is not the empty string"), so `<embed src="">` HAS a src attribute
+   and this condition does not catch it. That is not a gap being papered over — it is the case §4.8.6 leaves
+   to the setup steps, and the caller's crash names them.
+   THE MEDIA-ELEMENT SET IS ASKED, NOT RESTATED. §4.8.11 "Media elements"' first sentence is answered by
+   core/html/media_element.h, over the interned tag id and the namespace, so an SVG `<video>` ancestor is not
+   one — a tag-name walk written here would have said it was. */
+static bool rep_embed_represents_nothing(lxb_dom_element_t *el)
+{
+    const lxb_dom_node_t *a;
+
+    DCHECK(lxb_html_tree_node_is(lxb_dom_interface_node(el), LXB_TAG_EMBED),
+           "HTML §4.8.6 \"The embed element\"'s represents-nothing conditions were asked about an element that "
+           "is not an `embed` — the section is written about that element alone, and the tag dispatch in "
+           "`replaced_element_of` is this function's only caller, so this is the two having come apart");
+    if (!rep_attr_present(el, "src") && !rep_attr_present(el, "type")) return true;
+    /* The condition is about an ANCESTOR, which is strictly above the element, so the walk starts at its
+       parent — an `embed` is not a media element and could not be its own. */
+    for (a = lxb_dom_interface_node(el)->parent; a != NULL; a = a->parent)
+        if (media_element_is(a)) return true;
+    return false;
+}
+
 ReplacedElement replaced_element_of(lxb_dom_element_t *el)
 {
     lxb_dom_node_t *n;
@@ -223,14 +263,46 @@ ReplacedElement replaced_element_of(lxb_dom_element_t *el)
        CSS 2.1 §10.3.2's 300 x 150, which is the number core/frame/viewport.c derives a child navigable's
        viewport from, and the two are one statement now rather than two constants. */
     if (lxb_html_tree_node_is(n, LXB_TAG_IFRAME)) return rep_bare();
-    if (lxb_html_tree_node_is(n, LXB_TAG_EMBED))
-        DFAIL("HTML §15.4.1 \"Embedded content\" makes an `embed` a REPLACED ELEMENT unconditionally, and its "
-              "css-images-3 §4.1 natural dimensions are its CONTENT's — a plugin's, or the image or document "
-              "the resource turns out to be, which §4.8.6 \"The embed element\" resolves by TYPE SNIFFING the "
-              "response. This agent runs no plugins and decodes no images, so the honest answer is not 'no "
-              "natural dimensions' (that is the answer for an embedded DOCUMENT and would silently make every "
-              "`embed` 300 x 150): it is that the resource has never been classified. BUILD §4.8.6's "
-              "determine-the-type-of-the-content steps and the per-type natural dimensions they select");
+    /* AN `embed` THAT REPRESENTS NOTHING HAS NO NATURAL DIMENSIONS, WHICH IS A COMPUTED ANSWER AND NOT A SHRUG.
+       css-images-3 §4.1 "Object-Sizing Terminology" is what makes the derivation short: "These natural
+       dimensions represent the preferred sizing intrinsic to the object itself; that is, they are not a
+       function of the context in which the object is used", and an element §4.8.6 says represents NOTHING has
+       no object for a preferred size to be intrinsic to — so none of the three exists. Nothing in HTML supplies
+       one either, and the one rule that looks as though it might is written for other elements: HTML §15.4.2
+       "Images"' fourth rule gives natural dimensions of 0 to an element that represents nothing, and its list
+       governs "img elements and input elements whose type attributes are in the Image Button state", which
+       this is not. §15.4.1 "Embedded content" gives an `embed` no dimensions at all.
+       CSS 2.1 §10.3.2 "Inline, replaced elements"' LAST ARM then sizes the box — "Otherwise, if 'width' has a
+       computed value of 'auto', but none of the conditions above are met, then the used value of 'width'
+       becomes 300px" — and §10.6.2's last arm gives 150.
+       IT IS THE `iframe`'s PAIR OF NUMBERS AND NOT THE `iframe`'s DERIVATION, which is why this is a second
+       call to `rep_bare` rather than a shared arm: an embedded document has no natural dimensions because
+       css-images-3 §4.1 names it as an object that has none, and this element has none because there is no
+       object. The box is not empty of CONTENT, which is the other half of why 0 by 0 would be wrong here —
+       §4.8.6's display-no-plugin steps say "Display an indication that no plugin could be found for element,
+       as the contents of element", so the rectangle is one something is drawn in. */
+    if (lxb_html_tree_node_is(n, LXB_TAG_EMBED)) {
+        if (rep_embed_represents_nothing(el)) return rep_bare();
+        DFAIL("HTML §15.4.1 \"Embedded content\" makes an `embed` a REPLACED ELEMENT unconditionally, and this "
+              "one carries a `src` or a `type` and has no media element ancestor, so §4.8.6 \"The embed "
+              "element\"'s represents-nothing list does not answer it and its css-images-3 §4.1 natural "
+              "dimensions would be its CONTENT's. THE RESOURCE HAS NEVER BEEN FETCHED: §4.8.6's EMBED ELEMENT "
+              "SETUP STEPS are what fetch it — a request whose destination is `embed`, whose credentials mode "
+              "is `include` and whose mode is `navigate` — and nothing in this engine queues them on the embed "
+              "task source. BUILD those steps, with the `load` event they fire on a network error and the "
+              "delay they put on the document's load event; the fetch is also an ENDPOINT this tool exists to "
+              "find, so what the absence costs is more than a box size. THE INSTRUCTION THAT STOOD HERE WAS "
+              "SPEC-WRONG AND IS DELETED: it said to build §4.8.6's determine-the-type-of-the-content steps "
+              "and the per-type natural dimensions they select, and that algorithm selects none. Each of its "
+              "three non-null arms is conditioned on a PLUGIN supporting the type, its last step is to return "
+              "null, and §4.8.6's switch sends null to display-no-plugin, whose last step makes the element "
+              "represent nothing — the answer the arm above already gives. A user agent may have no plugins at "
+              "all: HTML §2.1.6 \"Plugins\" says \"Indeed, this specification doesn't require user agents to "
+              "support plugins at all\". THE ONE CONDITION GENUINELY UNANSWERABLE HERE is §4.8.6's third, "
+              "\"The element has an ancestor object element that is not showing its fallback content\", which "
+              "needs §4.8.7 \"The object element\"'s representation algorithm — the same one the `object` arm "
+              "below crashes for, so building that arm answers this one too");
+    }
     if (lxb_html_tree_node_is(n, LXB_TAG_VIDEO))
         DFAIL("HTML §15.4.1 \"Embedded content\" makes a `video` a REPLACED ELEMENT unconditionally, and its "
               "css-images-3 §4.1 natural dimensions are the DECODED video's — §4.8.11 \"Media elements\" makes "

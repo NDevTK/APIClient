@@ -19,6 +19,16 @@
  * it renders the container at all. `m` must be a record §4.4 produced. */
 bool media_device_renders(const MimeType *m);
 
+/* §4.8.11 "Media elements"' FIRST SENTENCE — "HTMLMediaElement objects (audio and video, in this
+ * specification) are simply known as media elements" — asked of a node that is not itself the subject of the
+ * question. HTML §4.8.6 "The embed element" states one of the conditions under which an `embed` represents
+ * nothing as "The element has a media element ancestor", so core/layout/replaced_element.c walks ancestors and
+ * has to name this set; a tag list written at that walk would be the second answer `media_device_renders`
+ * above is exported to prevent, and it would be the WRONG one in the way this file's own definition records —
+ * the test is over the interned tag id AND the namespace, so an SVG `<video>` is not a media element and a
+ * name-only copy would say it is. */
+bool media_element_is(const lxb_dom_node_t *n);
+
 /* Declared ONCE PER AGENT, from html_element_init — the interfaces, the reflections §4.8.11 puts on
    HTMLMediaElement rather than on the two element interfaces that inherit them, and the step machines. */
 void media_element_declare(JSContext *ctx);

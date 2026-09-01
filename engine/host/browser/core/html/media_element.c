@@ -133,6 +133,13 @@ static bool media_is_node(const lxb_dom_node_t *n)
            (lxb_html_tree_node_is(n, LXB_TAG_AUDIO) || lxb_html_tree_node_is(n, LXB_TAG_VIDEO));
 }
 
+/* THE SAME QUESTION ASKED FROM OUTSIDE THIS FILE — see media_element.h for why it is exported rather than
+   re-derived at the one caller that needs it. */
+bool media_element_is(const lxb_dom_node_t *n)
+{
+    return media_is_node(n);
+}
+
 /* WHICH NODES ARE `source` ELEMENTS — §4.8.11.5 step 10's "source element child" and §4.8.12's insertion
    steps, over the interned tag id and the namespace for media_is_node's two reasons: an SVG `<source>` is not
    one, and the question is asked of every child of every media element and of every inserted node. */
