@@ -419,9 +419,27 @@ static CvMatcher *cv_matcher_new(JSContext *ctx, JSValueConst wrap, const char *
     joined[plen + 6] = 0;
     anchored = lre_compile(&bclen, errbuf, sizeof errbuf, joined, plen + 6, LRE_FLAG_UNICODE_SETS, ctx);
     js_free(ctx, joined);
-    DCHECK(anchored != NULL, "§4.10.5.3.6's anchored pattern failed to compile although the pattern itself "
-                             "compiled — the standard's two-step compile exists exactly so this cannot happen");
-    if (!anchored) return NULL;
+    /* THE SPEC ASSERTS THIS COMPILE CANNOT FAIL, AND THE ONLY RESIDUAL IS AN ALLOCATION — SO IT IS A CHECK.
+       §4.10.5.3.6 "The pattern attribute"'s last step is `Return ! RegExpCreate(anchoredPattern, "v")`, and the
+       `!` is ECMAScript's statement that the operation never returns an abrupt completion. The section's own
+       note says why the FIRST compile above exists to make that true: "we want to ensure that the regular
+       expression is valid in standalone form, instead of only becoming valid after being surrounded by the
+       `^(?:` and `)$` anchors". A SYNTAX failure is therefore excluded by the step above, and the only way this
+       implementation's second `lre_compile` still answers NULL is `dbuf_error` — the bytecode buffer's
+       allocation — which check.h assigns to CHECK by name.
+       IT IS FATAL IN RELEASE BECAUSE THE SILENT ANSWER IS A WRONG VALIDITY VERDICT RATHER THAN A CRASH. NULL is
+       what the two paths above return to say the element HAS NO compiled pattern regular expression, which is a
+       state §4.10.5.3.6 defines — so answering NULL here makes an allocation failure INDISTINGUISHABLE from an
+       element that declares no `pattern` at all, and the control then satisfies its pattern constraint for a
+       value it does not match. A dev-only assert cannot stand in front of that: it is compiled out in exactly
+       the build where the wrong verdict would be reported, and a wrong verdict propagates the way a plausible
+       datum does, not the way a fault does. */
+    CHECK(anchored != NULL,
+          "constraint validation: OOM compiling §4.10.5.3.6's anchored pattern. The standard's own `!` excludes "
+          "an abrupt completion here and the unanchored compile above already proved the pattern valid in "
+          "standalone form, so the residual failure is the bytecode buffer's allocation — and returning NULL "
+          "would report this element as having no `pattern` attribute at all, passing a value that does not "
+          "match it");
     m = js_mallocz(ctx, sizeof *m);
     CHECK(m != NULL, "constraint validation: OOM allocating a compiled pattern");
     m->refs = 1;
