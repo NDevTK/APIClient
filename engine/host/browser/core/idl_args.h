@@ -1485,7 +1485,16 @@ void idl_active_ctor_owed(JSContext *ctx, JSStepHdr *hdr, JSValueConst ctor);
    declaration's contract: an absent dictionary has every member absent, and that is all it means.
    Nothing of the page's is on the object these read, so neither runs any of its code. */
 JSValue idl_dict_get(JSContext *ctx, JSValueConst dict, const char *name);
-bool    idl_dict_bool(JSContext *ctx, JSValueConst dict, const char *name);
+/* THE BOOLEAN READ CARRIES ITS CALLER'S ADDRESS, because its assert is one line reached from every dictionary
+   in the platform. The concolic refusal below it names a REMEDY — declare this member a step machine and fork
+   at its own stage — and a remedy stamped `idl_args.c` names an action with no object: the reader is told what
+   to build and not where, so the crash is rediscovered rather than fixed. The pair is captured at the CALL and
+   never derived here, which is why this is a macro expanded at each site and not a second function wrapping
+   the first; the member's own name travels with it because one name (`bubbles`, `capture`) is declared by many
+   dictionaries and only the pair says which one refused. */
+bool    idl_dict_bool_at(JSContext *ctx, JSValueConst dict, const char *name,
+                         const char *file, int line);
+#define idl_dict_bool(ctx, dict, name) idl_dict_bool_at((ctx), (dict), (name), __FILE__, __LINE__)
 
 /* §4.2.3'S TREE STEPS, DRAINED WHERE THEY CAN YIELD.
    A DOM mutation's insertion/removing steps are a walk of the whole changed subtree, and they used to run inside

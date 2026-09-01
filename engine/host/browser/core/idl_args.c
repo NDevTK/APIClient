@@ -4142,8 +4142,12 @@ JSValue idl_dict_get(JSContext *ctx, JSValueConst dict, const char *name)
 
 /* …AND A BOOLEAN ONE IS A COERCION, WHICH IS WHY IT ASSERTS WHAT THE READ ABOVE DOES NOT.
    Web IDL §3.2.17 Dictionary types step 4.1.4 converts a `boolean` member with ToBoolean, and this engine
-   deliberately does NOT run that conversion over unknown external input: idl_args.h's IDL_CONCOLIC_CROSSES
-   crosses the value as ITSELF so opacity survives the boundary and reaches the member's own algorithm. This
+   deliberately does NOT run that conversion over unknown external input: the §3.2.17 member loop above
+   rewrites a concolic member's type to IDL_ANY before ANY type arm is asked, so the value crosses as ITSELF
+   and opacity survives the boundary to reach the member's own algorithm. (That rewrite is unconditional and
+   does not consult idl_concolic_rule, which this comment used to name as its authority — the rule answers the
+   ARGUMENT boundary, where IDL_BOOLEAN is IDL_CONCOLIC_FORKS and the conversion asks step_tobool_run; a
+   dictionary member is the other half of §3.2.3 and its answer is this crossing plus the refusal below.) This
    function is where that care is spent, because a concolic wears an Object — solver/concolic.c gives it one so
    a method on an unknown yields another unknown — and EVERY Object is truthy. ToBoolean here therefore does
    not read the member: it PINS it to `true` for every unknown there has ever been and deletes the world in
@@ -4153,15 +4157,17 @@ JSValue idl_dict_get(JSContext *ctx, JSValueConst dict, const char *name)
    cannot: it is already inside its activation and has no state for the other arm to be snapshotted at. This
    assert is what names that conversion at the site that needs it, rather than letting a member go on answering
    one world confidently. */
-bool idl_dict_bool(JSContext *ctx, JSValueConst dict, const char *name)
+bool idl_dict_bool_at(JSContext *ctx, JSValueConst dict, const char *name, const char *file, int line)
 {
     JSValue v = idl_dict_get(ctx, dict, name);
     bool b;
 
-    DCHECK(!concolic_is(v),
-           "a boolean dictionary member was read out of UNKNOWN EXTERNAL INPUT through the plain C reader — "
-           "ToBoolean pins it to `true` for every unknown and deletes the false world. Declare this member a "
-           "step machine (idl_method_id_step) and ask step_fork_run for the flag at its own stage");
+    DCHECKF(!concolic_is(v),
+            "the boolean dictionary member `%s` was read out of UNKNOWN EXTERNAL INPUT through the plain C "
+            "reader at %s:%d — ToBoolean pins it to `true` for every unknown and deletes the false world. "
+            "Declare that member a step machine (idl_method_id_step) and ask step_fork_run for the flag at "
+            "its own stage",
+            name, file, line);
     b = JS_ToBool(ctx, v);
     JS_FreeValue(ctx, v);
     return b;

@@ -143,26 +143,23 @@ static JSValue mo_ro_list(JSContext *ctx, JSValueConst wrap, int create)
 /* A MutationObserverInit member, as §4.3.1's steps ask about it: does it EXIST, and is it TRUE. The two are
    different questions and every one of observe()'s six validation steps turns on which one it is asking —
    `observe(t, {attributes:false, attributeFilter:[]})` is a TypeError while `observe(t, {attributeFilter:[]})`
-   is not, and a conversion that folded absence into false could not tell them apart. */
-static JSValue mo_opt(JSContext *ctx, JSValueConst options, const char *name)
-{
-    return JS_GetPropertyStr(ctx, (JSValue)options, name);
-}
-
+   is not, and a conversion that folded absence into false could not tell them apart.
+   BOTH QUESTIONS ARE THE DECLARATION'S READERS AND NEITHER IS THIS FILE'S OWN. The IS-IT-TRUE half was a local
+   `JS_ToBool` over the converted member, which is idl_dict_bool's body MINUS the one thing that function is
+   for: §3.2.17's member loop crosses a concolic member as ITSELF (unknown external input keeps forking), so a
+   `JS_ToBool` here answered `true` for every unknown — a concolic wears an Object and every Object is truthy —
+   and pinned all six of MutationObserverInit's declared booleans, deleting the world in which the page's
+   `{attributes: <unknown>}` is false before any of observe()'s six validation steps could observe it. That is
+   the collapse the union arm in core/idl_args.c names when it says the taint must reach the member's readers,
+   and a second copy of a coercion is where the copy without the refusal lives. The DOES-IT-EXIST half is
+   different in kind and stays: presence is a REAL answer for a concolic — the member IS there — so it asks
+   idl_dict_get and asserts nothing. */
 static bool mo_opt_exists(JSContext *ctx, JSValueConst options, const char *name)
 {
-    JSValue v = mo_opt(ctx, options, name);
+    JSValue v = idl_dict_get(ctx, options, name);
     bool e = !JS_IsUndefined(v);
     JS_FreeValue(ctx, v);
     return e;
-}
-
-static bool mo_opt_true(JSContext *ctx, JSValueConst options, const char *name)
-{
-    JSValue v = mo_opt(ctx, options, name);
-    bool t = JS_ToBool(ctx, v) > 0;
-    JS_FreeValue(ctx, v);
-    return t;
 }
 
 /* ---- §4.3 QUEUE A MUTATION OBSERVER MICROTASK / NOTIFY MUTATION OBSERVERS -------------------------------- */
@@ -414,7 +411,7 @@ static const JSTrampStepDef js_mo_notify_def = {
    why a filtered observer never hears about an `xlink:href` however it spells the local name. */
 static bool mo_filter_rejects(JSContext *ctx, JSValueConst options, const char *name, const char *ns)
 {
-    JSValue filter = mo_opt(ctx, options, "attributeFilter");
+    JSValue filter = idl_dict_get(ctx, options, "attributeFilter");
     uint32_t n, i;
     bool found = false;
 
@@ -472,11 +469,11 @@ void mutation_observer_queue_record(JSContext *ctx, int type, lxb_dom_node_t *ta
             bool skip;
 
             /* STEP 3.2's five bullets — "if NONE of the following are true", so each is a reason to SKIP. */
-            skip = (n != target && !mo_opt_true(rctx, options, "subtree"))
-                || (type == MR_TYPE_ATTRIBUTES && !mo_opt_true(rctx, options, "attributes"))
+            skip = (n != target && !idl_dict_bool(rctx, options, "subtree"))
+                || (type == MR_TYPE_ATTRIBUTES && !idl_dict_bool(rctx, options, "attributes"))
                 || (type == MR_TYPE_ATTRIBUTES && mo_filter_rejects(rctx, options, name, ns))
-                || (type == MR_TYPE_CHARACTER_DATA && !mo_opt_true(rctx, options, "characterData"))
-                || (type == MR_TYPE_CHILD_LIST && !mo_opt_true(rctx, options, "childList"));
+                || (type == MR_TYPE_CHARACTER_DATA && !idl_dict_bool(rctx, options, "characterData"))
+                || (type == MR_TYPE_CHILD_LIST && !idl_dict_bool(rctx, options, "childList"));
             if (!skip) {
                 uint32_t on = mo_len(rctx, obs), j, at = on;
 
@@ -493,8 +490,8 @@ void mutation_observer_queue_record(JSContext *ctx, int type, lxb_dom_node_t *ta
                 /* STEP 3.2.3: the mapped old value, which is per OBSERVER and not per registration — one
                    registration asking for it is enough, and that is why the map holds a value rather than the
                    record being built here. */
-                if ((type == MR_TYPE_ATTRIBUTES && mo_opt_true(rctx, options, "attributeOldValue")) ||
-                    (type == MR_TYPE_CHARACTER_DATA && mo_opt_true(rctx, options, "characterDataOldValue")))
+                if ((type == MR_TYPE_ATTRIBUTES && idl_dict_bool(rctx, options, "attributeOldValue")) ||
+                    (type == MR_TYPE_CHARACTER_DATA && idl_dict_bool(rctx, options, "characterDataOldValue")))
                     JS_SetPropertyUint32(rctx, olds, at,
                                          old ? JS_NewStringLen(rctx, old, old_len) : JS_NULL);
             }
@@ -564,7 +561,7 @@ void mutation_observer_transient_for_removal(JSContext *ctx, lxb_dom_node_t *nod
             JSValue e = JS_GetPropertyUint32(ctx, list, i);
             JSValue options = JS_GetPropertyUint32(ctx, e, RO_OPTIONS);
 
-            if (mo_opt_true(ctx, options, "subtree")) {
+            if (idl_dict_bool(ctx, options, "subtree")) {
                 JSValue t = JS_NewArray(ctx);
                 JSValue mo = JS_GetPropertyUint32(ctx, e, RO_OBSERVER);
                 JSValue mstate, nodes;
@@ -832,24 +829,24 @@ static JSValue js_mo_observe(JSContext *ctx, JSValueConst this_val, int argc, JS
         !mo_opt_exists(ctx, options, "characterData"))
         JS_SetPropertyStr(ctx, options, "characterData", JS_TRUE);
 
-    if (!mo_opt_true(ctx, options, "childList") && !mo_opt_true(ctx, options, "attributes") &&
-        !mo_opt_true(ctx, options, "characterData")) {                            /* step 3 */
+    if (!idl_dict_bool(ctx, options, "childList") && !idl_dict_bool(ctx, options, "attributes") &&
+        !idl_dict_bool(ctx, options, "characterData")) {                            /* step 3 */
         JS_FreeValue(ctx, options);
         JS_FreeValue(ctx, state);
         return JS_ThrowTypeError(ctx, "one of childList, attributes or characterData must be true");
     }
-    if (mo_opt_true(ctx, options, "attributeOldValue") && !mo_opt_true(ctx, options, "attributes")) {
+    if (idl_dict_bool(ctx, options, "attributeOldValue") && !idl_dict_bool(ctx, options, "attributes")) {
         JS_FreeValue(ctx, options);                                               /* step 4 */
         JS_FreeValue(ctx, state);
         return JS_ThrowTypeError(ctx, "attributeOldValue requires attributes");
     }
-    if (mo_opt_exists(ctx, options, "attributeFilter") && !mo_opt_true(ctx, options, "attributes")) {
+    if (mo_opt_exists(ctx, options, "attributeFilter") && !idl_dict_bool(ctx, options, "attributes")) {
         JS_FreeValue(ctx, options);                                               /* step 5 */
         JS_FreeValue(ctx, state);
         return JS_ThrowTypeError(ctx, "attributeFilter requires attributes");
     }
-    if (mo_opt_true(ctx, options, "characterDataOldValue") &&
-        !mo_opt_true(ctx, options, "characterData")) {                            /* step 6 */
+    if (idl_dict_bool(ctx, options, "characterDataOldValue") &&
+        !idl_dict_bool(ctx, options, "characterData")) {                            /* step 6 */
         JS_FreeValue(ctx, options);
         JS_FreeValue(ctx, state);
         return JS_ThrowTypeError(ctx, "characterDataOldValue requires characterData");

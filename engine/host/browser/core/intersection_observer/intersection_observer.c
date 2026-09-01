@@ -1425,9 +1425,13 @@ static int js_io_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
                            "`long` with a `= 0` default");
     JS_ToFloat64(ctx, &delay, v);
     JS_FreeValue(ctx, v);
-    v = JS_GetPropertyStr(ctx, (JSValue)options, "trackVisibility");
-    track = JS_ToBool(ctx, v) > 0;
-    JS_FreeValue(ctx, v);
+    /* THE READ IS idl_dict_bool AND NOT A BARE JS_ToBool, for the reason the `delay` DCHECK one line above
+       states in its own axis: §3.2.17's member loop crosses a concolic member as ITSELF, so what arrives here
+       for `{trackVisibility: <unknown>}` is unknown external input wearing an Object, and every Object is
+       truthy. A local ToBoolean therefore did not read the member — it pinned it to `true`, deleted the world
+       in which §3.2.8 step 1 answers false, and then clamped `delay` up to 100 in the one world left. The
+       shared reader refuses instead, naming the member owed a §3.2.25-style fork at its own stage. */
+    track = idl_dict_bool(ctx, options, "trackVisibility");
     if (track && delay < 100.0) delay = 100.0;                            /* step 11 */
 
     root = JS_GetPropertyStr(ctx, (JSValue)options, "root");
