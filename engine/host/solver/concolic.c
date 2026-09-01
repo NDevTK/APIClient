@@ -1311,6 +1311,70 @@ const char *concolic_source_encodes(const char *root)
     return row < 0 ? NULL : g_srcs[row].encode;
 }
 
+/* WHAT THE MECHANISM ITSELF DOES TO A BYTE NOBODY DECLARED — the OTHER half of a delivery, and the half that
+   used to be answered by one hardcoded clause for every source at once.
+ *
+ * A declared `encode` set states what distinguishes ONE component from its siblings: location.c declares the
+ * backtick for the fragment and the apostrophe and `#` for the query, and its own comment says that difference
+ * is the whole reason those are two sources. What it deliberately does NOT state is the part every URL
+ * component SHARES, because restating it on each row would be a second copy of the standard's own text — and a
+ * copy `bytes_probe` could not even hold, since it addresses each declared byte by ONE decimal digit and
+ * DCHECKs the set at ten.
+ * SO THE SHARED PART IS ASKED OF THE MECHANISM, and the mechanism is a COLUMN this registry already carries.
+ * Deriving it from `deliver` rather than from a list of source names is what makes a mechanism added later
+ * answer the question instead of silently inheriting whichever answer was hardcoded: the switch has no
+ * default, so a new kind does not compile until somebody decides.
+ *
+ * THE THREE ANSWERS ARE NOT TWO. A payload serialized INTO a URL inherits URL §1.3 "Percent-encoded bytes"'s
+ * C0 control percent-encode set, which that section defines as "consisting of C0 controls and all code points
+ * greater than U+007E (~)" and which the fragment, query and special-query sets are each defined as
+ * "consisting of the C0 control percent-encode set and" their own few ASCII additions — the additions being
+ * exactly what the rows declare. A payload carried VERBATIM inherits nothing, and this is not an omission:
+ * concolic.h's own SRC_DELIVER_CROSS_DOCUMENT_MESSAGE paragraph states it as a measured property of HTML
+ * §9.3.3 "Posting messages" (step 7 serializes and step 8.4 deserializes, "and neither transforms a string"),
+ * and file_system.c states the same for a file, "read verbatim, with no percent-encoding and no leading
+ * character". Those two declarations were already in the tree, and the loop below was contradicting both.
+ * THE THIRD ANSWER IS THAT THERE IS NO ANSWER, which is why this returns a tri-state and not a flag. A PLANT's
+ * `encode` column is not an encode set at all — document_metadata.c declares it as what a cookie value "cannot
+ * carry", per RFC 6265 §4.1.1 "Syntax", whose `cookie-octet = %x21 / %x23-2B / %x2D-3A / %x3C-5B / %x5D-7E` is
+ * annotated "US-ASCII characters excluding CTLs, whitespace DQUOTE, comma, semicolon, and backslash". The row
+ * lists that production's PRINTABLE exclusions; what it leaves unlisted is the CTLs, DEL and everything above
+ * US-ASCII, and for those a plant neither percent-encodes (Chrome does not) nor carries (the production
+ * forbids it) — it is refused. Answering either way there would be a false PoC, so the caller crashes. */
+typedef enum { CARRIER_URL = 0, CARRIER_VERBATIM, CARRIER_CONSTRAINED } CarrierKind;
+
+static CarrierKind root_carrier(const char *root)
+{
+    int row = root_declared_row(root);
+
+    /* A ROOT WITH NO ROW IS NOT A CASE — it is the state the ONE caller has already excluded, so a plausible
+       answer here would be the defaulted field §Architecture names rather than a fact. The caller returns the
+       payload untouched when the root declares nothing AND the injection point does too, and when the
+       injection point DOES declare one the DCHECK beside the call has already said the two name the same
+       source — so reaching this with no row means those two facts were threaded from different operands and
+       the mechanism about to be applied belongs to neither of them. */
+    if (row < 0) {
+        DFAIL("a candidate's delivery ROOT declares no source while its injection point declares one — the "
+              "encode set and the carrier are the two halves of ONE row's answer, so a root with no row means "
+              "the payload is about to be delivered under a mechanism nothing in this registry states for it");
+        return CARRIER_VERBATIM;   /* release only — dev stops at the assert above */
+    }
+    switch (g_srcs[row].deliver) {
+    case SRC_DELIVER_ADDRESS:                return CARRIER_URL;        /* the VICTIM'S own address */
+    case SRC_DELIVER_REFERRING_ADDRESS:      return CARRIER_URL;        /* the address the victim arrives FROM */
+    case SRC_DELIVER_USER_FILE:              return CARRIER_VERBATIM;   /* file_system.c: read verbatim */
+    case SRC_DELIVER_CROSS_DOCUMENT_MESSAGE: return CARRIER_VERBATIM;   /* HTML §9.3.3 steps 7/8.4 */
+    case SRC_DELIVER_PLANT:                  return CARRIER_CONSTRAINED;/* RFC 6265 §4.1.1's cookie-octet */
+    }
+    DFAIL("a source declared a delivery mechanism that does not say what it does to an UNDECLARED byte — the "
+          "declared set is only the part that distinguishes one component from its siblings, so every "
+          "mechanism must also state whether it serializes its payload into a URL (and so inherits URL §1.3 "
+          "\"Percent-encoded bytes\"'s C0 control percent-encode set), carries it verbatim, or refuses bytes "
+          "its own production excludes. Without that a candidate is delivered under whichever answer this "
+          "switch was written for first");
+    return CARRIER_VERBATIM;
+}
+
 /* JSConcolicHooks.lead — the DOMAIN fact the delivery declaration already holds, read by a builtin that has to
    decide whether one of its completions is feasible at all. The prefix is what the component states its
    component's value carries (`#` for a fragment, `?` for a query), so this is not a guess about the value: it
@@ -1350,6 +1414,7 @@ static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *roo
 {
     const SourceDelivery *at = NULL;   /* the INJECTION POINT's row, if it has one: the component's prefix */
     const char *encode;                /* …and the ROOT's percent-encode set, which every derivation inherits */
+    CarrierKind carrier;               /* …and what the ROOT's MECHANISM does to a byte that set does not name */
     const unsigned char *p;
     char *out;
     size_t o = 0, n;
@@ -1439,14 +1504,46 @@ static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *roo
            "the other");
     if (!at && !encode) return JS_NewString(ctx, payload);   /* nothing carries these bytes: delivered as itself */
     if (!encode) encode = "";
+    /* THE SAME KEY AS THE ENCODE SET, and it has to be: the two are the declared and the shared halves of ONE
+       row's answer, so reading them from different rows would apply one mechanism's rule to another's bytes —
+       the mistake the DCHECK above catches for the PREFIX, one column over. */
+    carrier = root_carrier(root);
 
     n = strlen(payload);
     out = reclaim_malloc(n * 3 + 2);
     CHECK(out != NULL, "concolic: OOM delivering a candidate");
     if (at && at->prefix) out[o++] = at->prefix;
     for (p = (const unsigned char *)payload; *p; p++) {
-        /* C0 controls and DEL are percent-encoded by every URL component, so they are not in any declared set. */
-        if (*p < 0x20 || *p == 0x7F || strchr(encode, (char)*p)) {
+        /* THE BYTE IS OUTSIDE PRINTABLE US-ASCII, so what happens to it is the MECHANISM's to say and not this
+           row's — see root_carrier. `< 0x20` is Infra's C0 control exactly ("a code point in the range U+0000
+           NULL to U+001F INFORMATION SEPARATOR ONE, inclusive"), and `> 0x7E` is URL §1.3's "all code points
+           greater than U+007E (~)" — which is why DEL needs no clause of its own: 0x7F is greater than 0x7E,
+           and the `*p == 0x7F` that stood here was this set's high range implemented for ONE of its 129
+           members. Byte-wise `%XX` over a UTF-8 payload IS §1.3's UTF-8 percent-encode, whose own loop runs
+           "for each byte of encodeOutput" and percent-encodes each one under a set it asserts "includes all
+           non-ASCII code points". */
+        int shared = *p < 0x20 || *p > 0x7E;
+
+        if (shared && carrier == CARRIER_CONSTRAINED) {
+            /* NEITHER ANSWER IS AVAILABLE, so neither is given. Percent-encoding it claims a transform the
+               carrier does not perform (a `;` does not reach a cookie as `%3B`, and a CTL does not reach one at
+               all), and passing it raw claims a plant RFC 6265 §4.1.1's cookie-octet forbids — so the candidate
+               would be recorded as a search that failed rather than as one that was never deliverable.
+               WHAT THE NEXT DIFF BUILDS: the derivation's own constraint table (solver/solve_filter.h's
+               SolveDelivered, which solve.c seeds with solve_delivered_all and narrows only from an observed
+               run) starts from the DECLARATION for a constrained carrier, so solve_html.c's and solve_js.c's
+               emitters decline such an escape at construction — the site the two-sided constraint already runs
+               at — instead of it arriving here with no delivery to give it. HOW ITS ABSENCE SHOWS: this abort,
+               reached today by a cookie-sourced JS-context search whose hole sits in a §12.4 SingleLineComment,
+               because that state's exit escape is the one derived breakout in this engine carrying a byte
+               outside printable US-ASCII. */
+            DFAILF("an @S candidate carries the byte 0x%02X to a source whose carrier can neither encode it nor "
+                   "hold it — the declared set lists only the PRINTABLE bytes the carrier's own production "
+                   "excludes, so a byte outside US-ASCII has no delivery this component can state and both "
+                   "answers are a false PoC. The escape had to be declined where it was CONSTRUCTED",
+                   (unsigned)*p);
+        }
+        if ((shared && carrier == CARRIER_URL) || strchr(encode, (char)*p)) {
             static const char HEX[] = "0123456789ABCDEF";
             out[o++] = '%'; out[o++] = HEX[*p >> 4]; out[o++] = HEX[*p & 15];
         } else {
