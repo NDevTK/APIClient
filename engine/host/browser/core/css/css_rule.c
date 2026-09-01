@@ -2076,7 +2076,22 @@ static void rbuf_add_indented(RBuf *b, const char *s)
 }
 
 /* One of the record's texts, copied out. NULL when the field is JS_NULL — a rule type that has no such text —
-   or when the string conversion itself threw, which is the caller's pending exception. */
+   or when the string conversion itself threw, which is the caller's pending exception.
+   THE TWO ALLOCATION FAILURES BELOW GET DIFFERENT ANSWERS AND THAT IS THE DESIGN, so read this before making
+   either line agree with the other: they are not two answers to one question, they are answers to two.
+   `JS_ToCStringLen`'s failure arrives with a JS exception ALREADY MINTED. Given the `JS_IsString(v)` above,
+   quickjs reaches exactly one residual failure — `js_alloc_string`, either through the rope's linearization or
+   through the UTF-8 encode — and that function's own failure arm is `JS_ThrowOutOfMemory(ctx)`. So the NULL is
+   a channel that already carries the fault, and the `bool` chain above it exists to carry it the rest of the
+   way: `cssText`'s `return JS_EXCEPTION` is only well formed BECAUSE an exception is pending. Re-reporting that
+   as a fatal CHECK would make this the one DOM member in the engine that aborts on an exception every other
+   member propagates — the host overriding a decision that is quickjs's to make.
+   The `malloc` has no such channel. It is an allocation THIS component performs and observes directly, with
+   nothing minted for anyone to propagate, so a NULL for it would hand `cssText` a `JS_EXCEPTION` with no
+   exception pending. That is check.h's "memory-allocation success", and it is the answer this file already
+   gives at every other raw allocation it makes — the record's own calloc, the RBuf's realloc, the parse's
+   collection array, the nested-rule array and the layer-name array. The split is not fatal-versus-recoverable;
+   it is WHO OWNS THE EXCEPTION CHANNEL. */
 static char *rule_text_copy(JSContext *ctx, JSValueConst v, size_t *plen)
 {
     size_t len = 0;
@@ -2095,6 +2110,28 @@ static char *rule_text_copy(JSContext *ctx, JSValueConst v, size_t *plen)
     *plen = len;
     return out;
 }
+
+/* THE ASSERT'S HALF OF THE ONE BIT ABOVE, AND THE REASON IT IS A PREDICATE RATHER THAN A CLAUSE REPEATED AT
+   EVERY SITE. `rule_text_copy` answers TWO questions with ONE NULL — "this record's field is not a string" and
+   "the conversion threw" — and each of its asserting callers asks BOTH of it: the GUARD asks the first (there
+   is no text, abandon the serialization and leave the pending exception to the caller) and the DCHECK asks the
+   second (this record's field is a string, which is the engine's own logic). Written over the pointer alone,
+   the DCHECK is decided by the stricter question and the whole cost lands on the other one — an OOM inside the
+   conversion aborts the DEV build at a line whose guard beneath it already knows exactly what to do with it,
+   and does so in the build where nothing is going wrong that release would not survive.
+   So the two questions are split into two PREDICATES over the ONE bit rather than into two bits that could
+   disagree. This is the DCHECK's, and it is not a weakening: it still fires for the whole of what every one of
+   those messages says — a record whose field is not a string, with nothing pending — and it says nothing about
+   allocation, which was never that invariant's business. Reading the exception is out of the question in a
+   DCHECK condition (`JS_GetException` CLEARS it, and a condition compiled out in release must be
+   side-effect-free), so the question asked is the one `JS_HasException` answers: was anything thrown.
+   IT IS A MACRO AND NOT A `static inline`, for the reason every assert-only helper has to be one: release
+   compiles a DCHECK to `(void)sizeof(cond)`, which type-checks the expression and never calls it, so a
+   function here is DECLARED, referenced, and emitted nowhere — clang says so by name
+   (`-Wunneeded-internal-declaration`) and a warning in a shared tree is every lane's. A macro expands at the
+   site and leaves nothing behind. Both operands are evaluated once and a DCHECK condition is side-effect-free
+   by contract, so there is no double-evaluation to guard against beyond the parentheses. */
+#define RULE_TEXT_FIELD_WAS_STRING(ctx, p) ((p) != NULL || JS_HasException(ctx))
 
 static bool rule_serialize(JSContext *ctx, JSValueConst rule, RBuf *out);
 
@@ -2186,9 +2223,10 @@ static bool style_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueConst ru
     char *sel = rule_text_copy(ctx, r->selector_text, &sl);
     bool ok;
 
-    DCHECK(sel != NULL,
-           "a §6.4.3 style rule has no serialized selector list. Both things that write one — the parse and "
-           "`selectorText =` — store only what lexbor accepted, so a null means the string conversion failed");
+    DCHECK(RULE_TEXT_FIELD_WAS_STRING(ctx, sel),
+           "a §6.4.3 style rule's serialized selector list is not a string, and nothing is pending — so this is "
+           "the RECORD and not a conversion that threw. Both things that write one, the parse and "
+           "`selectorText =`, store only what lexbor accepted");
     if (!sel) return false;
     ok = decls_and_rules_serialize(ctx, r, rule, sel, sl, out);
     free(sel);
@@ -2205,9 +2243,9 @@ static bool page_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueConst rul
     RBuf prefix = { NULL, 0, 0 };
     bool ok;
 
-    DCHECK(sel != NULL,
-           "a §6.4.7 page rule has no page selector list. `@page {}` declares the EMPTY one, which is the "
-           "empty string — both writers store a string and neither stores nothing");
+    DCHECK(RULE_TEXT_FIELD_WAS_STRING(ctx, sel),
+           "a §6.4.7 page rule's page selector list is not a string, and nothing is pending. `@page {}` declares "
+           "the EMPTY one, which is the empty string — both writers store a string and neither stores nothing");
     if (!sel) return false;
     rbuf_add(&prefix, "@page");
     if (sl) { rbuf_add(&prefix, " "); rbuf_add_n(&prefix, sel, sl); }
@@ -2249,15 +2287,15 @@ static bool keyframes_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueCons
     char *piece;
     unsigned nk, i;
 
-    DCHECK(name != NULL,
-           "a CSS Animations §6.3 keyframes rule has no name. §3's grammar has no arm without a "
-           "`<keyframes-name>` so the creator refuses a prelude that lacks one, and §6.3.2's setter stores a "
-           "string — a null here means the string conversion itself failed");
-    DCHECK(keyword != NULL,
-           "a CSS Animations §6.3 keyframes rule has no at-keyword. `keyframes_rule_new` is its one creator "
-           "and it stores either `keyframes` or the CSS Compatibility §3.1 spelling the page wrote, so a null "
-           "here is a rule minted somewhere else — and the serialization would then have to guess which of "
-           "the two spellings the page's own stylesheet used");
+    DCHECK(RULE_TEXT_FIELD_WAS_STRING(ctx, name),
+           "a CSS Animations §6.3 keyframes rule's name is not a string, and nothing is pending. §3's grammar "
+           "has no arm without a `<keyframes-name>` so the creator refuses a prelude that lacks one, and "
+           "§6.3.2's setter stores a string");
+    DCHECK(RULE_TEXT_FIELD_WAS_STRING(ctx, keyword),
+           "a CSS Animations §6.3 keyframes rule's at-keyword is not a string, and nothing is pending — so the "
+           "rule was minted somewhere other than `keyframes_rule_new`, which is its one creator and stores "
+           "either `keyframes` or the CSS Compatibility §3.1 spelling the page wrote. The serialization would "
+           "otherwise have to guess which of the two spellings the page's own stylesheet used");
     if (!name || !keyword) { free(name); free(keyword); return false; }
     /* THE THREE EXCLUSIONS ARE THE `<keyframes-name>` GRAMMAR'S OWN, so they are asked of the one entry that
        holds them (core/css/css_at_rule_prelude.h) rather than restated here — the parse REFUSES exactly this
@@ -2294,9 +2332,10 @@ static bool keyframe_rule_serialize(JSContext *ctx, CssRuleData *r, RBuf *out)
     char *keys = rule_text_copy(ctx, r->selector_text, &kl);
     char *block, *decls;
 
-    DCHECK(keys != NULL,
-           "a CSS Animations §6.2 keyframe rule has no keyText. §3's `<keyframe-selector>#` has no empty arm, "
-           "so both writers — the parse and `keyText =` — store a non-empty canonical list or refuse");
+    DCHECK(RULE_TEXT_FIELD_WAS_STRING(ctx, keys),
+           "a CSS Animations §6.2 keyframe rule's keyText is not a string, and nothing is pending. §3's "
+           "`<keyframe-selector>#` has no empty arm, so both writers — the parse and `keyText =` — store a "
+           "non-empty canonical list or refuse");
     if (!keys) return false;
     block = rule_text_copy(ctx, r->block_text, &bl);
     /* UNRESTRICTED, like every other arm, and that is the point of filtering on the WRITE side: the stored
@@ -2365,10 +2404,9 @@ static char *container_part(JSContext *ctx, CssRuleData *r, uint32_t i, unsigned
     char *out = rule_text_copy(ctx, v, &l);
 
     JS_FreeValue(ctx, v);
-    DCHECK(out != NULL,
-           "an `@container` rule's condition list holds something that is not a string — its one creator fills "
-           "it from core/css/css_at_rule_prelude.h and then FREEZES it, so a null here is the string "
-           "conversion itself having failed");
+    DCHECK(RULE_TEXT_FIELD_WAS_STRING(ctx, out),
+           "an `@container` rule's condition list holds something that is not a string, and nothing is pending. "
+           "Its one creator fills the list from core/css/css_at_rule_prelude.h and then FREEZES it");
     return out;
 }
 
@@ -2452,10 +2490,10 @@ static bool rule_layer_names(JSContext *ctx, CssRuleData *r, char ***pv, unsigne
 
         out[i] = rule_text_copy(ctx, v, &l);
         JS_FreeValue(ctx, v);
-        DCHECK(out[i] != NULL,
-               "an `@layer` rule's layer name list holds something that is not a string — the one creator "
-               "fills it from core/css/css_at_rule_prelude.h's serialized names and then FREEZES it, so a null "
-               "here means the string conversion itself failed");
+        DCHECK(RULE_TEXT_FIELD_WAS_STRING(ctx, out[i]),
+               "an `@layer` rule's layer name list holds something that is not a string, and nothing is "
+               "pending. The one creator fills it from core/css/css_at_rule_prelude.h's serialized names and "
+               "then FREEZES it");
         if (!out[i]) { serialized_free(out, i); return false; }
     }
     *pv = out;
@@ -2603,15 +2641,15 @@ static bool property_rule_serialize(JSContext *ctx, CssRuleData *r, RBuf *out)
     char *syntax, *initial, *piece;
 
     JS_FreeValue(ctx, name_val);
-    DCHECK(name != NULL,
-           "an `@property` rule has no name. §3's `<custom-property-name>#` has no arm without one and the one "
-           "creator refuses a prelude that lacks one, so a null here means the string conversion itself failed");
+    DCHECK(RULE_TEXT_FIELD_WAS_STRING(ctx, name),
+           "an `@property` rule's name is not a string, and nothing is pending. §3's `<custom-property-name>#` "
+           "has no arm without one and the one creator refuses a prelude that lacks one");
     if (!name) return false;
     syntax = rule_text_copy(ctx, r->property_syntax, &sl);
-    DCHECK(syntax != NULL,
-           "an `@property` rule has no syntax. §3.1's descriptor is OPTIONAL and its INITIAL is `\"*\"`, which "
-           "the creator stores for a rule that declares none — so the field is a string on every `@property` "
-           "rule there is and a null here is the conversion failing");
+    DCHECK(RULE_TEXT_FIELD_WAS_STRING(ctx, syntax),
+           "an `@property` rule's syntax is not a string, and nothing is pending. §3.1's descriptor is OPTIONAL "
+           "and its INITIAL is `\"*\"`, which the creator stores for a rule that declares none — so the field "
+           "is a string on every `@property` rule there is");
     if (!syntax) { free(name); return false; }
     DCHECK(JS_IsBool(r->property_inherits),
            "an `@property` rule's inherit flag is not a boolean — §3.2's descriptor is OPTIONAL with the INITIAL "
@@ -2665,9 +2703,10 @@ static bool import_rule_serialize(JSContext *ctx, CssRuleData *r, RBuf *out)
     char *href = rule_text_copy(ctx, r->href, &hl);
     char *layer, *supports, *media, *url;
 
-    DCHECK(href != NULL,
-           "a §6.4.4 import rule has no href, and there is no partial answer: CSS Cascade §2's grammar has no "
-           "arm without the `<url>`, so import_rule_new refuses a prelude that lacks one");
+    DCHECK(RULE_TEXT_FIELD_WAS_STRING(ctx, href),
+           "a §6.4.4 import rule's href is not a string, and nothing is pending. There is no partial answer: "
+           "CSS Cascade §2's grammar has no arm without the `<url>`, so import_rule_new refuses a prelude that "
+           "lacks one");
     if (!href) return false;
     url = css_serialize_url(href, hl);
     free(href);
@@ -2707,9 +2746,10 @@ static bool namespace_rule_serialize(JSContext *ctx, CssRuleData *r, RBuf *out)
     char *uri = rule_text_copy(ctx, r->namespace_uri, &ul);
     char *piece;
 
-    DCHECK(prefix != NULL && uri != NULL,
-           "a §6.4.9 namespace rule is missing its prefix or its namespace. Both are written by the one "
-           "creator, which stores the EMPTY STRING for the default namespace rather than nothing at all");
+    DCHECK(RULE_TEXT_FIELD_WAS_STRING(ctx, prefix) && RULE_TEXT_FIELD_WAS_STRING(ctx, uri),
+           "a §6.4.9 namespace rule's prefix or its namespace is not a string, and nothing is pending. Both are "
+           "written by the one creator, which stores the EMPTY STRING for the default namespace rather than "
+           "nothing at all");
     if (!prefix || !uri) { free(prefix); free(uri); return false; }
     rbuf_add(out, "@namespace ");
     if (pl) {
@@ -2745,10 +2785,9 @@ static bool decl_body_rule_serialize(JSContext *ctx, CssRuleData *r, const char 
     char *block = rule_text_copy(ctx, r->block_text, &bl);
     char *decls;
 
-    DCHECK(block != NULL,
-           "a rule whose body is a declaration list has no declaration text. `@font-face {}` and `@top-left {}` "
-           "declare nothing, which is the EMPTY STRING, so a null here means the string conversion itself "
-           "failed");
+    DCHECK(RULE_TEXT_FIELD_WAS_STRING(ctx, block),
+           "a rule whose body is a declaration list has a declaration text that is not a string, and nothing is "
+           "pending. `@font-face {}` and `@top-left {}` declare nothing, which is the EMPTY STRING");
     if (!block) return false;
     decls = cssom_serialize_declarations(block, bl, CSSOM_BLOCK_UNRESTRICTED);
     free(block);
@@ -2769,9 +2808,9 @@ static bool margin_rule_serialize(JSContext *ctx, CssRuleData *r, RBuf *out)
     char *name = rule_text_copy(ctx, r->at_name, &nl);
     bool ok;
 
-    DCHECK(name != NULL,
-           "a §6.4.8 margin rule has no at-rule name. `margin_rule_new` is the one creator and it stores one "
-           "of CSS Paged Media §4.3's sixteen, so a null here means the string conversion itself failed");
+    DCHECK(RULE_TEXT_FIELD_WAS_STRING(ctx, name),
+           "a §6.4.8 margin rule's at-rule name is not a string, and nothing is pending. `margin_rule_new` is "
+           "the one creator and it stores one of CSS Paged Media §4.3's sixteen");
     if (!name) return false;
     ok = decl_body_rule_serialize(ctx, r, name, out);
     free(name);
@@ -3920,10 +3959,11 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
        neighbour's declarations, and a `*` stand-in would make the rule match EVERY element. §6.4.3's selector
        list is non-empty for every rule this build can make — both creators keep only what lexbor accepted — so
        this is the pending-exception path, and the whole sheet is abandoned. */
-    DCHECK(sel != NULL,
-           "a §6.4.3 style rule has no serialized selector list. Both things that write one — the parse and "
+    DCHECK(RULE_TEXT_FIELD_WAS_STRING(ctx, sel),
+           "a §6.4.3 style rule's serialized selector list is not a string, and nothing is pending — so this is "
+           "the RECORD and not a conversion that threw. Both things that write one — the parse and "
            "`selectorText =`, in css_rule.c — go through cssom_parse_rules and store only what lexbor "
-           "accepted, so an empty one means the string conversion itself failed");
+           "accepted");
     if (!sel) return false;
     /* CSS NESTING IS RESOLVED, NEVER FLATTENED. A nested rule's stored selector is CSS Nesting §6 "CSSOM"'s
        absolutized `<relative-selector-list>`, so it always names its parent with a nesting selector; §4
