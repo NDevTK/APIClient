@@ -67,8 +67,12 @@
  *     of a citation whose standard is its own evidence. The number-does-not-exist check has always been gated
  *     that way and says so below; the TITLE-MISMATCH check was not, and it is the one live route by which an
  *     inference could have become a verdict — 398 file-voted sites carry a quoted phrase and stand on a number
- *     their guessed standard has, which is everything that check needs. It produced nothing today, and "it has
- *     not fired yet" is not a property of a mechanism. A MISATTRIBUTED cannot arise from a vote at all, and
+ *     their guessed standard has, which is everything that check needs. It produced nothing the day it was
+ *     gated, and "it has not fired yet" is not a property of a mechanism — which the tree has since settled
+ *     the other way: the run prints a NON-ZERO count of title checks refused on that ground, so the gate is
+ *     now suppressing claims a vote would have made rather than standing idle. Read the number in the
+ *     INFERRED line; do not read one from here, because a count in a header is a fact about a revision.
+ *     A MISATTRIBUTED cannot arise from a vote at all, and
  *     that is structural rather than lucky: the vote is only reached when the file's anchor is NOT among the
  *     standards the citation's own term evidence names, so `owned` below is false by construction.
  * WHAT THAT LEAVES IS A COUNT, AND A COUNT WITH NO LIST BEHIND IT IS THE SILENT-ZERO SHAPE THIS FILE ALREADY
@@ -2050,7 +2054,9 @@ function audit(argv, opts = {}) {
   const stat = { total: 0, bare: 0, anchored: 0, byTerm: 0, byFile: 0, other: 0, skipped: 0,
                  confirmed: 0, confirmedByUse: 0, confirmedByContainment: 0, confirmedByRun: 0,
                  unverified: 0, multiSpec: 0,
-                 foreignTerm: 0, titleRefused: 0, byTitle: 0, numberRefused: 0 };
+                 foreignTerm: 0, titleRefused: 0, byTitle: 0, numberRefused: 0,
+                 titled: 0, titledQuoted: 0, titledEv: 0, titledOK: 0, titledMis: 0, titledMisInTitle: 0,
+                 titledTailEv: 0, titledTailMis: 0 };
   const byKey = new Map();
   /* Per standard, how many of its audited citations were placed there by the file vote rather than by their
    * own anchor or their own term — and the sites themselves, so the count has a list behind it. */
@@ -2278,9 +2284,33 @@ function audit(argv, opts = {}) {
        * colon unrecognized the site fell to the running-prose path, whose leading three words happen to title
        * HTML §7.2.2 "The Window object". On the quoted path the WHOLE quotation is compared, matches no title,
        * and nothing is asserted — which is the correct answer and the one the quoting was meant to produce. */
-      c.quoted = (/^['"’“]?s?['"’“]?\s*:?\s*["“]([^"”]{2,90})["”]/.exec(after) || [])[1] || null;
+      const qm = /^['"’“]?s?['"’“]?\s*:?\s*["“]([^"”]{2,90})["”]/.exec(after);
+      c.quoted = qm ? qm[1] : null;
       c.words = normTerm(after.replace(/^'s\b/, " ")).split(" ").filter(Boolean);
       c.after = after;                       /* the raw prose, for the delimiter test in check (4) */
+      /* AND THE WORDS A QUOTED TITLE LEAVES BEHIND, kept for the CENSUS and for nothing else. The probe below
+       * reads the QUOTED run, so a citation written `Fetch §N "Fetch methods"' network error` puts its term
+       * evidence on `fetch methods` and `network error` is never looked up at all — while the same claim
+       * written bare, as `§N's network error`, goes through `lookup` and is reported. That is not an asymmetry
+       * to close here: check (2) records the refinement that would close it as built, measured and refused. It
+       * is the DENOMINATOR the reported counts are a fraction of, and this file's own rule — stated at check
+       * (1) and again at check (4) — is that a refusal nobody can see is the same silent zero as a list nobody
+       * can see. One regex, matched once: a second copy of this spelling is a second thing to get wrong.
+       *
+       * AND THE NUMBER IS WRITTEN `§N` ON PURPOSE, WHICH IS A RULE FOR EVERY WORKED EXAMPLE IN THIS FILE AND
+       * WAS LEARNED BY BREAKING IT. This file is AUDITED BY ITSELF, so an example carrying a REAL number is a
+       * REAL citation to PASS 3: it joins that number's group for this file and its own term evidence enters
+       * `g.keys`, which is what decides how every OTHER citation of that number here resolves. Measured while
+       * landing this paragraph — spelling the Fetch number out put `fetch` into the group that the IndexedDB
+       * step-number example further up owns alone, the group went from one key to two, the file's dominant
+       * anchor broke the tie the other way, and a comment that is exactly right was charged with a
+       * QUOTE-WRONG-STANDARD. MENTION-NOT-CLAIM does not save it: that withholds a VERDICT on the mention
+       * itself, and runs long after PASS 3 has already counted the mention's evidence for its neighbours. */
+      c.tail = null;
+      if (qm) {
+        const tw = normTerm(after.slice(qm[0].length).replace(/^'s\b/, " ")).split(" ").filter(Boolean);
+        if (tw.length) c.tail = tw;
+      }
       /* THE FIRST TOKEN AS THE AUTHOR SPELLED IT, kept because normTerm has already destroyed the one signal
        * that separates an operation name from an English word — see addOp. It is accepted only where it
        * normalizes to exactly the first word the lookup will ask for, so a token this scan reads differently
@@ -2289,6 +2319,7 @@ function audit(argv, opts = {}) {
         .exec(after) || [])[1] || "";
       c.opHead = !!rawHead && c.words.length > 0 && nameIsIdentifier(rawHead) && normTerm(rawHead) === c.words[0];
       const only = c.anchor && !c.anchor.startsWith("other:") ? c.anchor : null;
+      c.only = only;                         /* the census below re-asks `lookup` with the citation's own scope */
       if (c.anchor && c.anchor.startsWith("other:")) { c.foreign = true; continue; }
       /* A QUOTE IS THE AUTHOR'S OWN STATEMENT OF WHAT THE CITATION IS ABOUT, so it is matched WHOLE and the
        * running prose is not consulted at all. Prefix-matching inside a quote reads a term out of a sentence
@@ -2471,29 +2502,42 @@ function audit(argv, opts = {}) {
          * confirmation it also refused. What a future attempt needs is a way to tell a section's SUBJECT from
          * the operations it merely invokes; a positional scan is not that. */
         const titleCands = c.anchor && idx.has(c.anchor) ? [c.anchor] : [...idx.keys()];
+        let titledBy = null, titledByQuote = false;
         for (const k of titleCands) {
           const sx = idx.get(k).sections[no];
           if (!sx) continue;
           const wt = normTerm(sx.title);
           if (!wt) continue;
           if ((c.quoted && normTerm(c.quoted) === wt) ||
-              c.words.slice(0, wt.split(" ").length).join(" ") === wt) { verdict = { kind: "OK-TITLED" }; break; }
+              c.words.slice(0, wt.split(" ").length).join(" ") === wt) {
+            verdict = { kind: "OK-TITLED" }; titledBy = wt;
+            titledByQuote = !!(c.quoted && normTerm(c.quoted) === wt);
+            break;
+          }
         }
 
         /* (3) TERM ATTRIBUTION across every indexed standard. The finding is raised only when NO candidate
          * standard defines the phrase at this number, none defines it UNDER it, and none is prominently about
          * it there — so the claim the report makes is the one it can prove. */
-        if (!verdict && c.ev) {
-          const ok = c.ev.hits.find((h) => h.defAt);
-          const under = c.ev.hits.find((h) => h.underAt);
-          const used = c.ev.hits.find((h) => h.useAt);
+        /* AND IT IS A FUNCTION BECAUSE THE CENSUS ASKS IT TOO. Check (2) above ENDS the site, so every one of
+         * these questions goes unasked there — and this file's rule, stated at check (1) and again at check
+         * (4), is that a refusal nobody can see is the same silent zero as a list nobody can see. The census
+         * below reports what the title consumed, and it reports it by RUNNING THIS, never by restating it:
+         * CLAUDE.md's rule for an auditor is that it derives the rule it checks from the code that owns it,
+         * because a second copy written for a counter drifts from the checker the day the checker changes and
+         * then reports a tool this file no longer has. `stat.foreignTerm` is incremented by the CALLER rather
+         * than in here, so asking the question for the census does not move a number about findings. */
+        const termCheck = (ev) => {
+          const ok = ev.hits.find((h) => h.defAt);
+          const under = ev.hits.find((h) => h.underAt);
+          const used = ev.hits.find((h) => h.useAt);
           /* AND THE OTHER MEMBERS OF THIS CITATION'S OWN RUN COUNT AS CITED, because the author wrote them.
            * The claim a MISATTRIBUTED makes — "you cited §N and the thing is numbered somewhere else" — is
            * simply FALSE when "somewhere else" is a number standing three characters to the left under the
            * same `'s`. This is the same asymmetry as the paragraph below: a confirmation may quantify over
            * anything the citation actually says, and a finding may only assert what it can prove. */
           const inRun = c.run
-            ? c.ev.hits.find((h) => h.where.some((d) => c.run.some((r) => d === r || contains(r, d))))
+            ? ev.hits.find((h) => h.where.some((d) => c.run.some((r) => d === r || contains(r, d))))
             : null;
           /* CONFIRMATION QUANTIFIES OVER EVERY STANDARD; A FINDING DOES NOT — AND THAT ASYMMETRY IS THE WHOLE
            * DIFFERENCE BETWEEN A CHECKABLE CLAIM AND A COINCIDENCE. A confirmation says "some standard does
@@ -2512,25 +2556,69 @@ function audit(argv, opts = {}) {
            * in this file's own header is same-standard — `determine the origin` at HTML §7.3.1 for HTML
            * §7.3.2.1, `pipeTo` at Streams §4.2.4 for Streams §4.9.1 — because that is the claim the index can
            * actually support. */
-          const owned = c.ev.hits.some((h) => h.key === spec);
-          if (ok) verdict = { kind: "OK-TERM" };
-          else if (under) verdict = { kind: "OK-CONTAINS" };
-          else if (used) verdict = { kind: "OK-USE" };
-          else if (inRun) verdict = { kind: "OK-RUN" };
-          else if (!owned) { stat.foreignTerm++; }
-          else {
-            const where = c.ev.hits.map((h) => {
-              const hx = idx.get(h.key);
-              return `${h.key} ${h.where.map((n) => `§${n} "${hx.sections[n] ? hx.sections[n].title : "?"}"`).join(" / ")}`;
-            }).join("; ");
-            const men = Math.max(...c.ev.hits.map((h) => h.mentions));
-            const one = c.ev.hits.length === 1 && c.ev.hits[0].where.length === 1
-              ? `${c.ev.hits[0].key} §${c.ev.hits[0].where[0]}` : null;
-            verdict = { kind: "MISATTRIBUTED", target: one,
-              msg: `"${c.ev.phrase}" is defined in ${where} — no indexed standard defines it at §${no}, nor under it, nor is any §${no} about it` +
-                   (sections[no] ? ` (${spec} §${no} is "${sections[no].title}"` : " (") +
-                   (men ? `, which links the term ${men}×)` : ")") };
+          const owned = ev.hits.some((h) => h.key === spec);
+          if (ok) return { kind: "OK-TERM" };
+          if (under) return { kind: "OK-CONTAINS" };
+          if (used) return { kind: "OK-USE" };
+          if (inRun) return { kind: "OK-RUN" };
+          if (!owned) return { kind: "FOREIGN-TERM" };
+          const where = ev.hits.map((h) => {
+            const hx = idx.get(h.key);
+            return `${h.key} ${h.where.map((n) => `§${n} "${hx.sections[n] ? hx.sections[n].title : "?"}"`).join(" / ")}`;
+          }).join("; ");
+          const men = Math.max(...ev.hits.map((h) => h.mentions));
+          const one = ev.hits.length === 1 && ev.hits[0].where.length === 1
+            ? `${ev.hits[0].key} §${ev.hits[0].where[0]}` : null;
+          return { kind: "MISATTRIBUTED", target: one,
+            msg: `"${ev.phrase}" is defined in ${where} — no indexed standard defines it at §${no}, nor under it, nor is any §${no} about it` +
+                 (sections[no] ? ` (${spec} §${no} is "${sections[no].title}"` : " (") +
+                 (men ? `, which links the term ${men}×)` : ")") };
+        };
+
+        /* WHAT THE TITLE CONSUMED, COUNTED WHERE IT WAS CONSUMED. Two populations, and they are two because
+         * they are consumed at two different places — pooling them would report a partition as a total, which
+         * is the shape this report already refuses at MENTION-NOT-CLAIM and at the file-vote counters.
+         *   (A) the SAME evidence check (3) would have read, which the `break` above ends the site before.
+         *   (B) the prose after a QUOTED title, which never reaches a lookup at all: `c.ev` is the probe of the
+         *       quoted run, so `Fetch §N "Fetch methods"' network error` puts its evidence on `fetch methods`
+         *       while the bare `§N's network error` is looked up and reported. Same claim, two spellings, two
+         *       verdicts — and it is (B), not (A), that the asymmetry a reader notices lives in. (`§N`, not the
+         *       real number: see the paragraph at `c.tail` for why a worked example in THIS file must not carry
+         *       one.)
+         * NEITHER IS A FINDING AND NEITHER BECOMES ONE HERE. The refinement that would judge (B) was built,
+         * measured and refused three paragraphs up; what is added is the number, because a category whose count
+         * excludes a population without saying so is not a coverage figure. And (A) carries the evidence for the
+         * refusal beside it: `titledMisInTitle` counts the sites whose term phrase sits INSIDE the very title
+         * that confirmed them — the rendering-chapter `Flow content` heading against the content-category dfn
+         * of the same name, which is the worked example three paragraphs up — and that is exactly the false
+         * positive the title-first order exists to suppress, so a reader can SEE that the consumed population
+         * is mostly that rather than take this file's word for it. */
+        if (verdict && verdict.kind === "OK-TITLED") {
+          stat.titled++;
+          if (titledByQuote) stat.titledQuoted++;
+          if (c.ev) {
+            stat.titledEv++;
+            const wouldBe = termCheck(c.ev);
+            if (wouldBe.kind === "MISATTRIBUTED") {
+              stat.titledMis++;
+              const ph = c.ev.phrase;
+              if (titledBy && (ph === titledBy || titledBy.startsWith(ph + " ") || titledBy.includes(" " + ph)))
+                stat.titledMisInTitle++;
+            } else if (wouldBe.kind !== "FOREIGN-TERM") stat.titledOK++;
           }
+          if (titledByQuote && c.tail) {
+            const tev = lookup(c.tail, no, c.only, false);
+            if (tev) {
+              stat.titledTailEv++;
+              if (termCheck(tev).kind === "MISATTRIBUTED") stat.titledTailMis++;
+            }
+          }
+        }
+
+        if (!verdict && c.ev) {
+          const t = termCheck(c.ev);
+          if (t.kind === "FOREIGN-TERM") stat.foreignTerm++;
+          else verdict = t;
         }
 
         /* (4) A phrase that titles a DIFFERENT section of the same standard — the renumbering tell.
@@ -2848,7 +2936,8 @@ function audit(argv, opts = {}) {
     console.log(`  NOT COLLECTED by this default run: engine/qjs beyond quickjs.c/.h and engine/lexbor — upstream, not this tree's to answer for; ` +
       `and generated bytes under out/ and .work/, which nobody wrote. Everything this project's own hands typed is collected, gates included.`);
   console.log(`  resolved: ${stat.anchored} by their own anchor, ${stat.byTerm} by the term they name, ` +
-    `${stat.byTitle} by a section TITLE they state that only one standard uses`);
+    `${stat.byTitle} by a section TITLE they state that only one standard uses AND that that standard numbers beside the cited § ` +
+    `(the neighbourhood half is not caution — without it a title whose owner this audit does not index resolves to whichever indexed standard happens to reuse the heading)`);
   console.log(`  INFERRED: ${stat.byFile} name no standard, no term and no title, and were placed by their file's dominant anchor — a guess, ` +
     `so nothing below judges them (${stat.titleRefused} title check(s) and ${stat.numberRefused} number-exists check(s) refused on that ground); ` +
     `--unanchored lists them`);
@@ -2859,6 +2948,27 @@ function audit(argv, opts = {}) {
     `${stat.confirmedByRun} by another number in the same citation's own run), ` +
     `${stat.unverified} carry no title and no term any index knows, ${stat.multiSpec} name a term more than one standard defines`);
   console.log(`  ${stat.foreignTerm} name a term only ANOTHER standard defines, so the standard they cite numbers nothing this audit could hold them to`);
+
+  /* THE TITLE CHANNEL STATES WHAT IT CONSUMED, AND THE REASON IT MUST IS THIS FILE'S OWN RULE RATHER THAN A
+   * NEW ONE. Check (1) counts the number-exists checks a file vote refused, check (4) counts the title checks
+   * it refused, and the sentence at each says why: a check that silently declines to run is the silent zero
+   * this whole file is written against. The LARGEST refusal this audit makes had no counter at all — a stated
+   * title ENDS the site, so `stat.confirmed` pooled it with a term confirmation and nothing anywhere said how
+   * much of the corpus the term check was never asked about. That is CLAUDE.md's coverage rule exactly: a
+   * figure states what it is a fraction of, or it is not a coverage figure.
+   * AND THE INCENTIVE IS WHY IT IS PRINTED RATHER THAN MERELY KNOWN. Writing a correct title beside a number is
+   * what CLAUDE.md asks authors to do, and doing it MOVES a citation out of the reported population without
+   * changing anything about whether its attribution is loose — so a tree that adds titles gets a quieter report
+   * for it. Silence there would make this audit reward a cosmetic edit; the numbers below make the trade
+   * visible instead, which is the only honest form the trade has. */
+  console.log(`  ${stat.titled} were confirmed by the section TITLE they state, and a stated title ENDS the site — the term check below is not asked of them, deliberately (see check (2)).`);
+  console.log(`    THE COST, so this report is not a fraction of a population it does not name: ${stat.titledEv} of those name a term this audit knows, ` +
+    `and on that same evidence the term check would have CONFIRMED ${stat.titledOK}, REPORTED ${stat.titledMis}, and refused ${stat.titledEv - stat.titledOK - stat.titledMis} as another standard's vocabulary — ` +
+    `${stat.titledMisInTitle} of which name a phrase sitting INSIDE the very title that confirmed them, which is the false positive the title-first order exists to suppress`);
+  console.log(`    AND ${stat.titledQuoted} state that title IN QUOTES, which aims the term probe at the TITLE itself, so the prose AFTER the quote reaches no lookup at all: ` +
+    `${stat.titledTailEv} of those trailing phrases are terms this audit knows and ${stat.titledTailMis} of them stand at a number no standard places them at. ` +
+    `That is where one claim in two spellings gets two verdicts: a citation written \`Fetch §N "Fetch methods"' network error\` is confirmed by its title, ` +
+    `and the same claim written \`§N's network error\` is REPORTED above — so writing a correct title down moves a site out of that count without changing what it claims`);
 
   /* A TRUNCATED LIST THAT DOES NOT SAY IT IS TRUNCATED IS READ AS THE WHOLE LIST, AND THESE TWO LINES ARE THE
    * ONLY PLACE THIS REPORT DISCLOSES WHAT IT DID NOT LOOK AT. CLAUDE.md calls an unindexed standard "COUNTED
@@ -3044,6 +3154,14 @@ function audit(argv, opts = {}) {
   for (const kind of ["UNKNOWN-SECTION", "MISATTRIBUTED", "TITLE-MISMATCH", "RETIREMENT-NOTE-WRONG"]) {
     const g = groups.get(kind) || [];
     console.log(`${kind}: ${g.length}`);
+    /* THE DENOMINATOR TRAVELS WITH THE HEADLINE NUMBER, not only with the census forty lines up. This count is
+     * over the citations the term check was ASKED of, and a reader triaging it needs to know which population
+     * that is without reconstructing it — the same reason the quotation check names its axis in its own
+     * banner rather than leaving a zero to read as a clean bill. */
+    if (kind === "MISATTRIBUTED")
+      console.log(`  (a count over the citations the term check was ASKED of. ${stat.titled} more were confirmed by a stated TITLE and never asked; ` +
+        `on their own evidence the term check would have added ${stat.titledMis} claims here, ${stat.titledMisInTitle} of them naming a phrase inside that same title. ` +
+        `Adding a correct title to a citation MOVES it out of this number — see the title-channel lines in the census above for both halves.)`);
     for (const f of head(g, limit)) {
       console.log(`  ${f.file}:${f.line}  ${f.msg}`);
       console.log(`      ${f.text.trim()}`);
