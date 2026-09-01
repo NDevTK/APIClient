@@ -82,15 +82,26 @@ enum { COW_CUR_UNRECORDED = 0, COW_CUR_ABSENT = 1, COW_CUR_PRESENT = 2 };
 /*   COW_STATE_HOST_REC — a component record that OWNS JSValues (target is the record, `rec` its layout). The
  *                        byte arm above cannot serve it: a memcpy of a JSValue makes a reference it does not
  *                        count, so the next restore frees a value the blob still names. See cow.h.
- *   COW_STATE_BUFFER   — an ARRAY BUFFER's BYTES (obj is the buffer object, a_len its byte length; target
+ *   COW_STATE_BUFFER   — an ARRAY BUFFER's whole STORAGE STATE (obj is the buffer object; target and a_len
  *                        unused). A typed array's elements are not JSValues and not slots — they are raw bytes
  *                        in an ArrayBuffer — so `ta[i] = v`, fill, copyWithin, set, sort, reverse, DataView's
  *                        setters and Atomics all wrote where no capture could see them. It is not the HOST byte
  *                        arm above even though both copy bytes: that one holds a raw `target` pointer into a
  *                        record whose owner never moves it, while an ArrayBuffer's storage is FREED by a detach
- *                        and REALLOCATED by a resize, so this entry names the buffer OBJECT and asks it for the
- *                        bytes at each save and restore (JS_GetBufferBytes / JS_SetBufferBytes). Why the unit is
- *                        the bytes and not the element is in cow.h.
+ *                        and REALLOCATED by a resize, so this entry names the buffer OBJECT and asks the engine
+ *                        for its state at each save and restore (JS_BufferStateSave/Restore/Free). Why the unit
+ *                        is the bytes and not the element is in cow.h.
+ *                        THE EXTENT IS IN THE SAME BLOB AS THE BYTES, and it was in no blob at all: the entry
+ *                        held `a_len` bytes read off the buffer, so a `resize`/`grow` left it describing a
+ *                        length the buffer no longer had and a `transfer`/detach left it naming freed storage,
+ *                        and the mutation hook could only ABORT. Giving the extent a SECOND entry over the same
+ *                        buffer is not the fix — two entries have an ORDER, and an apply that replays this
+ *                        flow's bytes before its length puts bytes into an extent they do not fit. So one blob
+ *                        holds both, the two capture points are one capture, and a flow that reaches any part
+ *                        of a buffer's storage may write any other — the same argument COW_STATE_OBJECT makes
+ *                        for its three fields. The blob is the engine's because it must allocate and free
+ *                        storage and it holds a counted reference on the views whose cached window a resize
+ *                        does not re-derive.
  *   COW_STATE_OBJECT   — a JSObject's OWN state (obj is the object; target unused): its EXTENSIBLE bit, its
  *                        PROTOTYPE, and its [[PrimitiveValue]]/[[DateValue]]/[[ErrorData]] internal slot. Not
  *                        a property and not the class's opaque record, so no hook here could see any of them:
@@ -417,26 +428,13 @@ static void *cow_state_save(JSContext *ctx, const CowEntry *e) {
         return blob;
     }
     case COW_STATE_BUFFER: {
-        /* THE BYTES ARE ASKED OF THE BUFFER, never read through a pointer the entry kept: a detach frees that
-           storage and a resize reallocates it, which is the whole reason this is not the HOST arm above. */
-        uint32_t len;
-        const uint8_t *bytes = JS_GetBufferBytes(e->obj, &len);
-        void *blob;
-        /* THE BACKSTOP, NOT THE STATEMENT — cow_capture_buffer_lifetime refuses the detach and the resize AT
-           the mutation, where neither ordering can slip past. These two said the same thing from here, and
-           from here they could only see a buffer this flow had already captured: reaching either one now means
-           storage moved without passing that capture point, which is a route to build rather than a resize to
-           report. */
-        CHECK(bytes != NULL,
-              "a COW delta is saving the bytes of a DETACHED buffer, and the detach did not pass "
-              "cow_capture_buffer_lifetime — route whatever freed this storage through it");
-        CHECK(len == (uint32_t)e->a_len,
-              "a COW delta is saving a different number of bytes than it captured, and the resize did not pass "
-              "cow_capture_buffer_lifetime — route whatever moved this storage through it");
-        blob = reclaim_malloc(e->a_len);
-        CHECK(blob, "cow: OOM saving a buffer's bytes — a lost baseline write leaks one flow's typed-array "
-                    "state into every sibling");
-        memcpy(blob, bytes, e->a_len);
+        /* THE STATE IS ASKED OF THE BUFFER, never read through a pointer the entry kept: a detach frees that
+           storage and a resize reallocates it, which is the whole reason this is not the HOST arm above. The
+           blob carries the extent and the detached bit beside the bytes, so a resize and a transfer are states
+           this entry can hold rather than states it aborts on. */
+        void *blob = JS_BufferStateSave(ctx, e->obj);
+        CHECK(blob, "cow: OOM saving a buffer's storage state — a lost baseline leaks one flow's typed-array "
+                    "state, and its resize, into every sibling");
         return blob;
     }
     default:
@@ -476,9 +474,8 @@ static void cow_state_restore(JSContext *ctx, const CowEntry *e, void *blob) {
         break;
     }
     case COW_STATE_BUFFER:
-        DCHECK(blob != NULL, "a buffer's bytes were re-applied before any unapply had recorded them — the "
-                             "context switch that parked this flow did not run");
-        JS_SetBufferBytes(e->obj, blob, (uint32_t)e->a_len);
+        /* It asserts the blob's presence itself, at the field it needs — as the object arm below does. */
+        JS_BufferStateRestore(ctx, e->obj, blob);
         break;
     case COW_STATE_OBJECT:
         JS_ObjStateRestore(ctx, e->obj, blob);   /* asserts the blob's presence itself, at the field it needs */
@@ -495,8 +492,8 @@ static void cow_state_restore(JSContext *ctx, const CowEntry *e, void *blob) {
 static void cow_state_free(JSRuntime *rt, const CowEntry *e, void *blob) {
     switch (e->state_kind) {
     case COW_STATE_MODULE: JS_ModuleEvalStateFree(rt, blob); break;
-    case COW_STATE_HOST:
-    case COW_STATE_BUFFER: free(blob); break;   /* both are POD bytes: nothing in them holds a reference */
+    case COW_STATE_HOST: free(blob); break;   /* POD bytes: nothing in it holds a reference */
+    case COW_STATE_BUFFER: JS_BufferStateFree(rt, blob); break;   /* it holds real storage and view references */
     case COW_STATE_OBJECT: JS_ObjStateFree(rt, blob); break;   /* it holds a proto and an internal-slot value */
     case COW_STATE_HOST_REC:
         if (blob) {
@@ -762,56 +759,42 @@ void cow_capture_host_state(JSContext *ctx, JSValueConst owner, void *p, size_t 
     cow_capture_end();
 }
 
-/* A SHARED ARRAY BUFFER'S BYTES — see cow.h for why the unit is the bytes and not a view's element.
+/* A SHARED ARRAY BUFFER'S STORAGE STATE — see cow.h for why the unit is the bytes and not a view's element,
+   and why the extent rides in the same entry as the bytes.
    The identity of the entry is the buffer OBJECT and not a `target` pointer, because the storage a pointer
    would name is freed by a detach and reallocated by a resize; that is also why the save and the restore ask
-   the buffer for its bytes rather than keeping the address they first saw. */
+   the buffer for its state rather than keeping the address they first saw.
+   ONE CAPTURE FOR BOTH SITES — a byte write and a resize/transfer/detach raise the same hook, so this runs
+   before either and the dedup below makes them one entry. The ordering that used to decide everything (write
+   then resize, or resize then write) decides nothing now: whichever comes first takes the baseline, and the
+   baseline it takes describes the whole storage either way. */
 void cow_capture_buffer(JSContext *ctx, JSValueConst abuf) {
     if (cow_hooks_off() || !g_current) return;
     CowDelta *d = g_current;
     uint32_t len;
-    DCHECK(JS_IsObject(abuf), "a buffer's bytes were captured with no buffer object — the capture named a VIEW "
-                              "where it must name the storage the view is a window onto");
+    DCHECK(JS_IsObject(abuf), "a buffer's storage state was captured with no buffer object — the capture named "
+                              "a VIEW where it must name the storage the view is a window onto");
     if (JS_ObjFlowGen(abuf) > d->fork_gen) return;   /* flow-private skip — the O(shared-state) invariant */
-    /* A DETACHED buffer answers NULL and an empty one answers zero bytes. Neither is a failure and neither is a
-       hole a default is filling: a buffer with no bytes has nothing a flow could have written, so there is
-       nothing to isolate, and this entry is over CONTENTS.
-       IT WAS READ AS THE HOLE THROUGH WHICH A ZERO-LENGTH RESIZABLE BUFFER ESCAPED, and it is not: a flow that
-       resizes a zero-length buffer up and writes into it does capture — after the resize, with the post-resize
-       bytes as its baseline — and what escaped is the RESIZE, which no length this line could have recorded
-       would have held. The same escape happens with a buffer that was never empty (resize FIRST, write second),
-       so removing this skip would have closed one ordering and left the other. It is closed at the mutation
-       instead: cow_capture_buffer_lifetime below. */
-    if (!JS_GetBufferBytes(abuf, &len) || len == 0) return;
-    for (int i = 0; i < d->n; i++)                   /* one entry per buffer: the FIRST bytes are the baseline */
+    /* A DETACHED buffer answers NULL, and skipping it is a POSITIVE STATEMENT rather than a hole a default
+       fills: no operation in §25.1 re-attaches one, so a detached buffer's state is terminal and there is
+       nothing a swap could put back or take away.
+       WHAT IS NOT SKIPPED ANY MORE IS AN EMPTY ONE. `len == 0` stood here and was read as "nothing to
+       isolate", which is true of the CONTENTS and false of the storage: a flow that resizes a zero-length
+       resizable buffer up and writes into it left no entry at all, and the sibling inherited both the new
+       extent and the write. The extent is in this entry now, so an empty buffer is captured like any other. */
+    if (!JS_GetBufferBytes(abuf, &len)) return;
+    for (int i = 0; i < d->n; i++)                   /* one entry per buffer: the FIRST state is the baseline */
         if (d->e[i].is_state && d->e[i].state_kind == COW_STATE_BUFFER &&
             JS_VALUE_GET_PTR(d->e[i].obj) == JS_VALUE_GET_PTR(abuf)) return;
     cow_capture_begin();
-    if (cow_room_for_one(d, "cow: OOM growing delta (buffer bytes)"))
+    if (cow_room_for_one(d, "cow: OOM growing delta (buffer state)"))
         cow_hash_rebuild(d);
     CowEntry *e = &d->e[d->n++];
     cow_entry_init(e);
     e->obj = JS_DupValue(ctx, abuf);
-    e->is_state = 1; e->state_kind = COW_STATE_BUFFER; e->a_len = len;
-    e->a_base = cow_state_save(ctx, e);   /* the bytes as this flow found them */
+    e->is_state = 1; e->state_kind = COW_STATE_BUFFER;
+    e->a_base = cow_state_save(ctx, e);   /* the storage as this flow found it */
     cow_capture_end();
-}
-
-/* A SHARED BUFFER'S LIFETIME — see cow.h for why this is asked at the mutation and not at the save.
-   It captures nothing, because there is nothing yet to capture it INTO: the byte entry holds contents and this
-   is the storage those contents live in. What it does is turn the silent half of one defect into the loud half
-   it already had, at the one point both halves pass through. */
-void cow_capture_buffer_lifetime(JSContext *ctx, JSValueConst abuf) {
-    CowDelta *d = g_current;
-    (void)ctx;
-    if (cow_hooks_off() || !d) return;
-    DCHECK(JS_IsObject(abuf), "a buffer's lifetime changed on something that is not a buffer object");
-    if (JS_ObjFlowGen(abuf) > d->fork_gen) return;   /* flow-private skip — the O(shared-state) invariant */
-    CHECK_FAIL("a flow RESIZED, TRANSFERRED or DETACHED a SHARED ArrayBuffer: the byte entry is over the "
-               "buffer's CONTENTS and this moves the storage they live in, so the sibling would inherit both "
-               "the new length and this flow's writes — build the buffer-LIFETIME entry (the buffer object's "
-               "byte length, its detached state, and the count each view over it carries), swapped like every "
-               "other entry, beside COW_STATE_BUFFER");
 }
 
 /* A SHARED OBJECT'S OWN STATE — see cow.h and the COW_STATE_OBJECT arm above. Captured per OBJECT and not per
@@ -1408,8 +1391,7 @@ void cow_install_time_travel_hooks(JSTimeTravelGenFork gen_fork)
 {
     static JSTimeTravelHooks HOOKS = {
         .prop_write = cow_capture_hook, .cell_write = cow_capture_varref,
-        .arr_append = cow_capture_arr_append, .buf_write = cow_capture_buffer,
-        .buf_lifetime = cow_capture_buffer_lifetime,
+        .arr_append = cow_capture_arr_append, .buf_state = cow_capture_buffer,
         .map_add = cow_capture_map_add, .map_mutate = cow_capture_map_mutate,
         .async_state = cow_capture_async_state, .module_eval = cow_capture_module_eval,
         .obj_state = cow_capture_obj_state, .async_fork = cow_capture_async_fork };

@@ -86,8 +86,9 @@ void      cow_capture_varref(JSContext *ctx, void *vref);
    baseline lookup — an append is always a fresh existed=0 slot). The accumulator hot path. */
 void      cow_capture_arr_append(JSContext *ctx, JSValueConst obj, JSAtom atom);
 
-/* Install as JSTimeTravelHooks.buf_write: capture a shared ARRAY BUFFER's BYTES before this flow writes any of
-   them. `abuf` is the ArrayBuffer/SharedArrayBuffer OBJECT.
+/* Install as JSTimeTravelHooks.buf_state: capture a shared ARRAY BUFFER's whole STORAGE STATE before this flow
+   changes any of it — any of its BYTES, or the EXTENT they live in (`resize`/`grow`, `transfer`, a detach).
+   `abuf` is the ArrayBuffer/SharedArrayBuffer OBJECT.
  *
  * THE UNIT IS THE BUFFER'S BYTES, NOT A VIEW'S ELEMENT, and that is decided by the code rather than by taste.
  * A typed array's elements are raw bytes in an ArrayBuffer, so `ta[i] = v` reached no property hook and no
@@ -104,30 +105,28 @@ void      cow_capture_arr_append(JSContext *ctx, JSValueConst obj, JSAtom atom);
  * are one storage. The entry names the BUFFER OBJECT and never its data pointer, which is why it cannot be the
  * existing COW_STATE_HOST byte arm: that one holds a raw `target` into a record its owner never moves, while an
  * ArrayBuffer's storage is freed by a detach and reallocated by a resize.
- * ONE entry per buffer per flow, holding the bytes as this flow FIRST found them — so a loop overwriting one
+ * ONE entry per buffer per flow, holding the storage as this flow FIRST found it — so a loop overwriting one
  * element a million times costs one entry and the delta stays O(shared state touched), which an undo log of
- * ranges would not. A DETACHED or empty buffer is skipped: it holds no bytes, so there is nothing to isolate. */
-void      cow_capture_buffer(JSContext *ctx, JSValueConst abuf);
-
-/* Install as JSTimeTravelHooks.buf_lifetime: a flow is about to RESIZE, GROW, TRANSFER or DETACH `abuf`.
+ * ranges would not. A DETACHED buffer is skipped, and that is a positive statement: no operation in §25.1
+ * re-attaches one, so its state is terminal and a swap has nothing to put back.
  *
- * THE CONTENTS AND THE STORAGE ARE TWO FACTS, and only the first of them has an entry. cow_capture_buffer holds
- * `a_len` bytes read off the buffer, so a resize leaves the entry describing a length the buffer no longer has
- * and a detach leaves it naming storage that is freed — which is exactly what cow_state_save's two CHECKs say.
- * WHAT THEY CANNOT SAY IS THE OTHER ORDERING. They read a buffer this flow had ALREADY captured, so they fire
- * for write-then-resize and never for resize-then-write: that one creates the entry AFTER the mutation, over
- * the post-resize bytes, and every later save then agrees with itself while the sibling inherits both the new
- * size and the write. One half of the same defect aborted by name and the other half was silent. A buffer that
- * is EMPTY at first touch is not a separate case, it is that ordering with no alternative — there is no byte to
- * write before the resize — which is why the `len == 0` skip in cow_capture_buffer is correct and stays: a
- * buffer with no bytes has no contents to isolate, and what escaped was never its contents.
- * So the question is asked at the MUTATION, where there is no ordering left to get wrong. The flow-private skip
- * is the same generational test every capture uses (a resizable buffer the running flow built is its own to
- * resize); a SHARED one ABORTS, naming the buffer-LIFETIME entry that is not built. That entry is the work this
- * refuses in place of: an entry over the buffer OBJECT's storage identity — its byte length, its detached
- * state, and the count each view carries — swapped like every other entry, so a flow may resize a shared buffer
- * and its sibling still find the length and the bytes it left. */
-void      cow_capture_buffer_lifetime(JSContext *ctx, JSValueConst abuf);
+ * THE EXTENT IS IN THE SAME ENTRY AS THE BYTES, AND IT WAS IN NO ENTRY AT ALL. This held `a_len` bytes read off
+ * the buffer, so a `resize`/`grow` left it describing a length the buffer no longer had and a `transfer`/detach
+ * left it naming freed storage; a separate mutation hook existed for exactly those three operations and its
+ * host arm could only ABORT. Two orderings, one silent: write-then-resize reached a save-side check, while
+ * resize-then-write created the entry AFTER the mutation over the post-resize bytes, so nothing ever disagreed
+ * with itself and the sibling inherited both the new size and the write. A buffer EMPTY at first touch is that
+ * ordering with no alternative, which is why the `len == 0` skip that used to stand here is gone.
+ * GIVING THE EXTENT A SECOND ENTRY IS NOT THE FIX, and that is the part worth keeping. Two entries over one
+ * buffer have an ORDER in the head, and apply replays forward: a flow that resized and then wrote gets its
+ * bytes replayed before its length, into an extent they do not fit. So the blob holds the whole storage state —
+ * the bytes, the byte length, the detached bit and the one per-view window a resize does not re-derive — the
+ * two capture points become one capture, and a flow that reaches any part of a buffer's storage may write any
+ * other. That is the same argument cow_capture_obj_state makes for its three fields, and the blob is the
+ * engine's (JS_BufferStateSave) for the same reason: it must allocate and free real storage, and it holds a
+ * counted reference on each of the views whose cached window a resize does not re-derive — which is
+ * length-tracking DataViews and nothing else. */
+void      cow_capture_buffer(JSContext *ctx, JSValueConst abuf);
 
 /* Install as JSTimeTravelHooks.map_add: O(1) capture of a KNOWN-NEW Set/Map record (Set.add / Map.set of a fresh
    key on a shared collection). unapply deletes the flow's added record (JS_MapDeleteRecord), apply re-adds it
