@@ -113,9 +113,12 @@ static void is_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_
         return;
     }
     el = lxb_dom_interface_element(n);
-    /* css-display §3 "Box Generation": `display: none` "turns off the display of an element so that it has no "
-       effect on layout at all", so there is no box to contribute. This is the one element case that is
-       genuinely nothing rather than something unbuilt, which is why it is not a crash. */
+    /* css-display-3 §2.5 "Box Generation: the none and contents keywords" on `display: none`: "The element and
+       its descendants generate no boxes or text sequences." So there is no box to contribute. This is the one
+       element case that is nothing rather than something unbuilt, which is why it is not a crash.
+       WHAT STOOD HERE cited §3 "Box Generation" and quoted `none` as turning "off the display of an element so
+       that it has no effect on layout at all" — a sentence that appears NOWHERE in css-display-3, beside a
+       number that is "Display Order: the order property". Box generation is §2.5 and always has been. */
     if (is_computed_is(el, "display", "none")) return;
     /* OUT OF FLOW CONTRIBUTES NOTHING, and css-text-3 §5.5 confirms it introduces no break either ("out-of-flow
        boxes and inline box boundaries do not introduce a forced line break or soft wrap opportunity in the

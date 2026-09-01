@@ -306,15 +306,19 @@ static BfChildKind bf_element_child(lxb_dom_element_t *el)
     d = bf_computed(el, "display");
     if (strcmp(d, "none") == 0) { free(d); return BF_CHILD_NO_BOX; }
     if (strcmp(d, "contents") == 0)
-        DFAIL("css-display §3.1 gives this child `display: contents`, which 'does not generate any boxes "
-              "itself, but its children and pseudo-elements still generate boxes and text runs as normal' — so "
-              "the box tree and the ELEMENT tree are no longer the same shape here, and the children this walk "
-              "must place are the child's children spliced into this list at its position. That splice is a "
-              "BOX-TREE construction step and it belongs to every walk over children rather than to this one: "
+        DFAIL("css-display-3 §2.5 \"Box Generation: the none and contents keywords\" gives this child "
+              "`display: contents`: \"The element itself does not generate any boxes, but its children and "
+              "pseudo-elements still generate boxes and text sequences as normal.\" So the box tree and the "
+              "ELEMENT tree are no longer the same shape here, and the children this walk must place are the "
+              "child's children spliced into this list at its position. That splice is a BOX-TREE construction "
+              "step and it belongs to every walk over children rather than to this one: "
               "core/layout/used_value.c's containing-block walk already steps OVER such an ancestor, and doing "
-              "the same here by hand would be a second copy of one rule. BUILD css-display §3's box-tree "
-              "flattening as the thing this walk iterates, so a `contents` element is invisible to every "
-              "consumer at once");
+              "the same here by hand would be a second copy of one rule. BUILD THE SPLICE §2.5 STATES — \"For "
+              "the purposes of box generation and layout, the element must be treated as if it had been "
+              "replaced in the element tree by its contents (including both its source-document children and "
+              "its pseudo-elements, such as ::before and ::after pseudo-elements, which are generated "
+              "before/after the element's children as normal).\" — as the thing this walk iterates, so a "
+              "`contents` element is invisible to every consumer at once");
     block = strcmp(d, "block") == 0 || strcmp(d, "flow-root") == 0 || strcmp(d, "list-item") == 0 ||
             strcmp(d, "flex") == 0 || strcmp(d, "grid") == 0;
     inline_level = strcmp(d, "inline") == 0 || strcmp(d, "inline-block") == 0 ||
@@ -932,7 +936,7 @@ CssPx block_flow_child_top(lxb_dom_element_t *el)
     DCHECK(lxb_dom_interface_node(cb) == lxb_dom_interface_node(el)->parent,
            "§10.1's containing block for this box is NOT its parent element, so §9.4.1's walk over that block's "
            "own children can never reach it. The two ways to get here are the two that walk crashes on for their "
-           "own reasons — a `display: contents` ancestor, whose children css-display §3 splices into the "
+           "own reasons — a `display: contents` ancestor, whose children css-display-3 §2.5 splices into the "
            "grandparent's box list, and an ancestor that generates no block container box at all — so the walk "
            "below would raise one of those messages a step late. Decide it HERE, where the discrepancy is");
     (void)bf_layout(cb, el, &top, &found, NULL);

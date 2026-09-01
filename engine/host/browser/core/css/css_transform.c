@@ -55,8 +55,9 @@ bool css_transform_is_transformable(lxb_dom_element_t *el)
                       "asked — the UA layer answers `inline` for every element it does not name, so this "
                       "cannot be unset");
     /* "all elements whose layout is GOVERNED BY THE CSS BOX MODEL" is the category's opening clause, and an
-       element that generates no box is outside it before any exclusion is reached: css-display §3.1 gives
-       `contents` no box of its own and `none` no box at all. This is not the same statement as the exclusions
+       element that generates no box is outside it before any exclusion is reached: css-display-3 §2.5 "Box
+       Generation: the none and contents keywords" gives `contents` no box of its own and `none` no box at all
+       ("The element and its descendants generate no boxes or text sequences."). This is not the same statement as the exclusions
        below — those name boxes that EXIST and that a transform does not apply to — and it matters for the
        ancestor walk, where a `display: contents` wrapper between a rotated `div` and its child must not stop
        the walk and must not be reported as the rotated element either. */

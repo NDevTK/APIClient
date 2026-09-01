@@ -527,9 +527,14 @@ static int byte_fill_from_queue(JSContext *ctx, ByteCtrlData *c, JSValueConst ds
         size_t scap = 0;
         uint8_t *sp = JS_GetArrayBuffer(ctx, &scap, hbuf);
 
-        /* §4.9.5's CanCopyDataBlockBytes, which the standard says the user agent should ALWAYS check and stop
-           on: the next line reads and writes raw memory, so a violated bound is not a spec bug to report but a
-           process to end. */
+        /* §8.3 "Miscellaneous"' CanCopyDataBlockBytes, ASSERTED by §4.9.5 "Byte stream controllers" one step
+           before its CopyDataBlockBytes — the two CHECKs below are its steps 5 ("If toBuffer is fromBuffer,
+           return false") and 8/9 (the two byte-length bounds). §4.9.5 states what a user agent owes that
+           assertion: "The user agent should always check this assertion, and stop in an implementation-defined
+           manner if it fails (e.g. by crashing the process, or by erroring the stream)." The next line reads
+           and writes raw memory, so a violated bound is not a spec bug to report but a process to end.
+           THE OPERATION IS DEFINED IN §8.3 AND ONLY USED IN §4.9.5; what stood here called it "§4.9.5's",
+           which names a section that defines nothing of that name. */
         CHECK(sp != NULL && sp != dp, "a byte stream copied a queue entry into the buffer it came from");
         CHECK(dest >= 0 && n >= 0 && dest + n <= (double)dcap && hoff >= 0 && hoff + n <= (double)scap,
               "a byte stream's queue copy left the bounds of one of its buffers");

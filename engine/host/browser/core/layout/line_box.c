@@ -401,12 +401,16 @@ static void lb_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_
     if (strcmp(d, "none") == 0) { free(d); return; }
     if (strcmp(d, "contents") == 0) {
         free(d);
-        DFAIL("css-display §3.1 gives this child `display: contents`, which \"does not generate any boxes "
-              "itself, but its children and pseudo-elements still generate boxes and text runs as normal\" — so "
-              "the boxes on this line are the child's children spliced in at its position. That splice is a "
-              "BOX-TREE construction step belonging to every walk over children rather than to this one, and "
-              "core/layout/block_flow.c's own child walk names the same absence. BUILD css-display §3's "
-              "box-tree flattening as the thing both walks iterate");
+        DFAIL("css-display-3 §2.5 \"Box Generation: the none and contents keywords\" gives this child "
+              "`display: contents`: \"The element itself does not generate any boxes, but its children and "
+              "pseudo-elements still generate boxes and text sequences as normal.\" So the boxes on this line "
+              "are the child's children spliced in at its position. That splice is a BOX-TREE construction "
+              "step belonging to every walk over children rather than to this one, and "
+              "core/layout/block_flow.c's own child walk names the same absence. BUILD THE SPLICE §2.5 STATES "
+              "— \"For the purposes of box generation and layout, the element must be treated as if it had "
+              "been replaced in the element tree by its contents (including both its source-document children "
+              "and its pseudo-elements, such as ::before and ::after pseudo-elements, which are generated "
+              "before/after the element's children as normal).\" — as the thing both walks iterate");
         return;
     }
     atomic = strcmp(d, "inline-block") == 0 || strcmp(d, "inline-flex") == 0 ||

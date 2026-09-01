@@ -246,8 +246,10 @@ static void fp_require_placeable(lxb_dom_element_t *el)
     DCHECK(d != NULL, "the cascade produced no computed `display` for an element whose box is being placed");
     if (d == NULL) return;
     DCHECK(strcmp(d, "none") != 0 && strcmp(d, "contents") != 0,
-           "CSS 2 §9.4.1's placement was asked for an element that GENERATES NO BOX — css-display §3.1 gives "
-           "`contents` no box of its own and `none` no box at all, and core/dom/element_view.h's one box "
+           "CSS 2 §9.4.1's placement was asked for an element that GENERATES NO BOX — css-display-3 §2.5 "
+           "\"Box Generation: the none and contents keywords\" gives `contents` no box of its own and `none` "
+           "no box at all (\"The element and its descendants generate no boxes or text sequences.\"), and "
+           "core/dom/element_view.h's one box "
            "predicate reads exactly those two values. The caller's own step establishes the box exists before "
            "asking where it is, so this is that predicate and this test disagreeing");
     for (i = 0; i < sizeof(TABLE_INTERNAL) / sizeof(TABLE_INTERNAL[0]); i++)
