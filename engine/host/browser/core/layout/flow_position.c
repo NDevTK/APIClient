@@ -310,8 +310,11 @@ static void fp_require_placeable(lxb_dom_element_t *el)
               "other than 'visible'\"; \"the baseline of an 'inline-table' is the baseline of the first row\"), "
               "so §10.8's step 1 splits its margin box at that line rather than putting all of it above the "
               "baseline the way `lb_atomic_extent` does for a box that has none. BUILD the inner baseline and "
-              "the used inline size for the box types CSS 2.1 §10 does not own (an `inline-flex` and an "
-              "`inline-grid` are css-flexbox §9's and css-grid §11's, and `uv_box_kind` classifies neither), "
+              "the used inline size for the box types CSS 2.1 §10 does not own — an `inline-flex` and an "
+              "`inline-grid` are CLASSIFIED (`uv_box_kind`'s `UV_BOX_INLINE_FLEX_GRID`) and their `auto` width "
+              "crashes naming css-flexbox-1 §9.9.1 \"Flex Container Intrinsic Main Sizes\" and css-grid-1 §5.2 "
+              "\"Sizing Grid Containers\", so what is left of that half is the module's own INTRINSIC MAIN "
+              "SIZES and no longer the classification — "
               "which is what core/layout/line_box.c's own atomic arm names. Then this box reaches the line and "
               "this arm deletes");
     /* What is left is a box CSS 2.1 §9.2.1 'Block-level elements and block boxes' makes block-level, which is

@@ -433,11 +433,17 @@ static void lb_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_
               "box, and its `e.above`), plus `overflow`, whose computed value core/css/css_computed_value.c "
               "must derive for the exception to be readable. (2) THE USED INLINE SIZE for the box types CSS "
               "2.1 §10 does not own: §10.3.9 \"'Inline-block', non-replaced elements in normal flow\" answers "
-              "an `inline-block` (core/layout/used_value.c's shrink-to-fit), but an `inline-flex` and an "
-              "`inline-grid` are their own modules' (css-flexbox §9 and css-grid §11) and `uv_box_kind` "
-              "classifies neither — it reads them as block-level and would run §10.3.3's constraint equation "
-              "over a box no part of §10.3 describes. FIX THAT CLASSIFICATION FIRST, in used_value.c, so the "
-              "width this arm would ask for crashes by its own module's name instead of answering wrongly");
+              "an `inline-block` (core/layout/used_value.c's shrink-to-fit), and an `inline-flex` and an "
+              "`inline-grid` are CLASSIFIED — `uv_box_kind`'s `UV_BOX_INLINE_FLEX_GRID` — so an `auto` width "
+              "on one now CRASHES by its own module's name rather than answering with §10.3.3's constraint "
+              "equation over a box no part of §10.3 describes, and this line no longer asks for that fix. "
+              "WHAT THE CLASSIFICATION LEFT IS THE TWO INTRINSIC TERMS §10.3.9's shrink-to-fit reads: "
+              "css-flexbox-1 §9.9.1 \"Flex Container Intrinsic Main Sizes\" and css-grid-1 §5.2 \"Sizing Grid "
+              "Containers\" (\"the sum of the grid container's track sizes (including gutters)\") each define "
+              "their own, and core/layout/intrinsic_size.c measures a BLOCK CONTAINER's by laying out its line "
+              "boxes — which is why it crashes for one of these rather than answering. BUILD the module's own "
+              "intrinsic main sizes as a second producer of `IntrinsicInlineSizes`; an `inline-table` is "
+              "§17.5.2's and is the same shape one module over");
     /* CSS 2.2 §9.2.1.1's SECOND PARAGRAPH, which is a DIFFERENT box structure from its first and is reached
        from here rather than from block_flow.c — the block-level box is not a child of the block container at
        all, so the classification that delimits the anonymous runs never sees it. It is named apart from the

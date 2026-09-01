@@ -23,15 +23,40 @@
    margin read the same in both; that is true and it was still the wrong shape, because a computed `auto`
    MARGIN does not — §10.3.5 and §10.3.9 both say outright that its used value is 0, while §10.3.7 solves it
    from a constraint equation between `left` and `right`. One member for the two turned a rule this component
-   can state into a crash it had no way to tell apart from one it cannot. */
+   can state into a crash it had no way to tell apart from one it cannot.
+   AND THE LIST IS NOT §10's ALONE, WHICH IS WHY THE LAST ARM OF THE CLASSIFICATION CANNOT BE AN `else` THAT
+   MEANS "BLOCK-LEVEL". A box type §10 never heard of that falls to §10.3.3's member does not crash — it runs
+   the constraint equation and RETURNS A NUMBER, which is the one failure this file has no way to notice. The
+   inline-level flex and grid containers arrived exactly that way: css-flexbox-1 §3 "Flex Containers: the flex
+   and inline-flex display values" and css-grid-1 §5.1 "Establishing Grid Containers: the grid and inline-grid
+   display values" each define their pair so that only the OUTER display type differs — "a flex container box
+   that is block-level when placed in flow layout" against one "that is inline-level" — and matching neither
+   `inline` nor `inline-block` is not the same fact as being block-level.
+   THE PAIR IS SPLIT AND ONLY THE INLINE-LEVEL HALF IS A MEMBER, which is a derivation and not an oversight to
+   be tidied away later. Both modules state the container's own size the same way — css-grid-1 §5.2 "Sizing
+   Grid Containers" ("A grid container is sized using the rules of the formatting context in which it
+   participates"), css-flexbox-1 §9.2 "Line Length Determination" ("Determine the main size of the flex
+   container using the rules of the formatting context in which it participates") — and §5.2 then spells both
+   halves out: a block-level one "is sized like a block box that establishes a formatting context, with an auto
+   inline size CALCULATED AS FOR NON-REPLACED BLOCK BOXES", which IS §10.3.3 and is why `display: flex` and
+   `display: grid` belong on `UV_BOX_BLOCK_FLOW` rather than on a member of their own; an inline-level one "is
+   sized as an ATOMIC INLINE-LEVEL BOX (such as an inline-block)", which is §10.3.9's shape over intrinsic
+   sizes §10 cannot measure. The block-level half's one genuine disagreement is its `auto` BLOCK size (§5.2:
+   "in both inline and block formatting contexts, the grid container's auto block size is its max-content
+   size"), and that arm already leaves through core/layout/block_flow.c's own crash naming the module. */
 typedef enum {
-    UV_BOX_INLINE = 0,     /* §10.3.1 / §10.6.1 — an inline box; `width` and `height` do not apply to it */
-    UV_BOX_BLOCK_FLOW,     /* §10.3.3 / §10.6.3 — block-level, in normal flow: the constraint equation's box */
-    UV_BOX_FLOAT,          /* §10.3.5 — floating: shrink-to-fit when auto, `auto` margins are 0 */
-    UV_BOX_ABS,            /* §10.3.7 — absolutely positioned: the equation between `left`, `width`, `right` */
-    UV_BOX_INLINE_BLOCK,   /* §10.3.9 — shrink-to-fit when auto, `auto` margins are 0 */
-    UV_BOX_TABLE,          /* CSS 2.1 §17.5 — the table's own width and height algorithms, not §10's */
-    UV_BOX_ITEM            /* a flex or grid item: css-flexbox §9.7 / css-grid sizes it, and §10 does not */
+    UV_BOX_INLINE = 0,       /* §10.3.1 / §10.6.1 — an inline box; `width` and `height` do not apply to it */
+    UV_BOX_BLOCK_FLOW,       /* §10.3.3 / §10.6.3 — block-level, in normal flow: the constraint equation's box */
+    UV_BOX_FLOAT,            /* §10.3.5 — floating: shrink-to-fit when auto, `auto` margins are 0 */
+    UV_BOX_ABS,              /* §10.3.7 — absolutely positioned: the equation between `left`, `width`, `right` */
+    UV_BOX_INLINE_BLOCK,     /* §10.3.9 — shrink-to-fit when auto, `auto` margins are 0 */
+    UV_BOX_INLINE_FLEX_GRID, /* an INLINE-LEVEL flex or grid container: §10.3.9's shape (an atomic inline-level
+                                box, so `auto` margins are 0 and an `auto` width shrink-to-fits) over the
+                                intrinsic sizes its OWN module defines — css-flexbox-1 §9.9.1 "Flex Container
+                                Intrinsic Main Sizes", css-grid-1 §5.2 "Sizing Grid Containers" — which are not
+                                the ones §10.3.5's formula reads */
+    UV_BOX_TABLE,            /* CSS 2.1 §17.5 — the table's own width and height algorithms, not §10's */
+    UV_BOX_ITEM              /* a flex or grid item: css-flexbox §9.7 / css-grid sizes it, and §10 does not */
 } UvBox;
 
 static char *uv_computed(lxb_dom_element_t *el, const char *name)
@@ -78,10 +103,26 @@ static bool uv_display_is_table(const char *d)
     return false;
 }
 
+/* THE FOUR VALUES css-flexbox-1 §3 AND css-grid-1 §5.1 ADD TO `display`, which is the question asked of a
+   PARENT to decide whether this box is an ITEM and of the box ITSELF to decide whether it is a CONTAINER. */
 static bool uv_display_is_flex_or_grid(const char *d)
 {
     return d != NULL && (strcmp(d, "flex") == 0 || strcmp(d, "inline-flex") == 0 ||
                          strcmp(d, "grid") == 0 || strcmp(d, "inline-grid") == 0);
+}
+
+/* AND WHICH HALF OF THE ONE PAIR IT IS. §3 and §5.1 define each pair as the SAME container box differing only
+   in its outer display type — "block-level when placed in flow layout" against "inline-level" — and both
+   modules then size the container "using the rules of the formatting context in which it participates"
+   (css-grid-1 §5.2 "Sizing Grid Containers", css-flexbox-1 §9.2 "Line Length Determination"), so the outer
+   half is the whole of what this component has to know. IT IS DERIVED FROM THE LIST ABOVE AND NOT A SECOND
+   COPY OF IT: a fifth spelling added there is inline-level or block-level by the same test rather than by
+   being remembered in two places, which is the failure the box-type list's own comment describes. The `inline-`
+   prefix is exact over that list and nowhere near a guess about a name — §3 and §5.1 write the inline-level
+   half of each pair and no other member of the list carries it. */
+static bool uv_display_is_inline_flex_or_grid(const char *d)
+{
+    return uv_display_is_flex_or_grid(d) && strncmp(d, "inline-", 7) == 0;
 }
 
 /* THE BOX TYPE, in the order the questions have to be asked. Each test is a fact about the element that makes
@@ -93,7 +134,12 @@ static bool uv_display_is_flex_or_grid(const char *d)
        out-of-flow test precedes the item test;
      - and `display` is read last because css_computed_value.c has already BLOCKIFIED it for a float, for an
        absolutely positioned box and for a flex item, so by here it can no longer say `inline` for any of them.
-*/
+   THE LAST TEST IS THE OUTER DISPLAY TYPE OF A FLEX OR GRID CONTAINER, and it has to be asked BEFORE the fall
+   to §10.3.3's member because that fall answers rather than crashing. css-flexbox-1 §3's and css-grid-1 §5.1's
+   last paragraphs are what make the test the display string alone: each amends CSS 2.1 §9.7's table with a row
+   sending `inline-flex` to `flex` and `inline-grid` to `grid`, so blockification — which the three tests above
+   have also already left through — has taken the inline-level spellings away from every box that is not
+   genuinely inline-level in flow layout, and a surviving `inline-flex` here IS an atomic inline-level box. */
 static UvBox uv_box_kind(lxb_dom_element_t *el)
 {
     char *display = uv_computed(el, "display");
@@ -115,9 +161,10 @@ static UvBox uv_box_kind(lxb_dom_element_t *el)
     }
     free(parent_display);
     if (!uv_computed_is(el, "float", "none")) { free(display); return UV_BOX_FLOAT; }
-    if (strcmp(display, "inline") == 0)            kind = UV_BOX_INLINE;
-    else if (strcmp(display, "inline-block") == 0) kind = UV_BOX_INLINE_BLOCK;
-    else                                           kind = UV_BOX_BLOCK_FLOW;
+    if (strcmp(display, "inline") == 0)                  kind = UV_BOX_INLINE;
+    else if (strcmp(display, "inline-block") == 0)       kind = UV_BOX_INLINE_BLOCK;
+    else if (uv_display_is_inline_flex_or_grid(display)) kind = UV_BOX_INLINE_FLEX_GRID;
+    else                                                 kind = UV_BOX_BLOCK_FLOW;
     free(display);
     return kind;
 }
@@ -131,7 +178,15 @@ static UvBox uv_box_kind(lxb_dom_element_t *el)
  *     becomes a used value of '0'." §10.3.5 "Floating, non-replaced elements" opens with the same rule ("If
  *     'margin-left', or 'margin-right' are computed as 'auto', their used value is '0'") and §10.3.9
  *     "'Inline-block', non-replaced elements in normal flow" closes with it. A non-`auto` margin on any of the
- *     three is its computed value, because none of them has an equation to be over-constrained BY.
+ *     three is its computed value, because none of them has an equation to be over-constrained BY. AN
+ *     INLINE-LEVEL FLEX OR GRID CONTAINER IS ON THIS SIDE TOO, by the delegation its own module makes rather
+ *     than by resemblance: css-grid-1 §5.2 "Sizing Grid Containers" says it "is sized as an ATOMIC
+ *     INLINE-LEVEL BOX (such as an inline-block)" and css-flexbox-1 §9.2 "Line Length Determination" sends it
+ *     to "the rules of the formatting context in which it participates", which for CSS 2.2 §9.2.2's atomic
+ *     inline-level box is §10.3.9 — the section above, whose margin sentence is therefore this box's too. Note
+ *     what that delegation does NOT carry: §10.3.9's shrink-to-fit reads §10.3.5's two intrinsic terms, and
+ *     THOSE are the module's own (css-flexbox-1 §9.9.1, §5.2's track sums), which is why the width crashes in
+ *     `uv_pass_size` while the margin answers here.
  *   · §10.3.3 "Block-level, non-replaced elements in normal flow" and §10.3.7 "Absolutely positioned,
  *     non-replaced elements" each state a CONSTRAINT among the used values with 'width' as a term, so every
  *     one of their margin rules — §10.3.3's rules 2, 4, 5 and 6 and its over-constrained case, §10.3.7's
@@ -149,7 +204,8 @@ static UvBox uv_box_kind(lxb_dom_element_t *el)
  * content, to produce a number the margin rules never look at. */
 static bool uv_margin_reads_width(UvBox box)
 {
-    return box != UV_BOX_INLINE && box != UV_BOX_FLOAT && box != UV_BOX_INLINE_BLOCK;
+    return box != UV_BOX_INLINE && box != UV_BOX_FLOAT && box != UV_BOX_INLINE_BLOCK &&
+           box != UV_BOX_INLINE_FLEX_GRID;
 }
 
 /* `auto` is the answer three of §10.3's rules and two of §10.6's branch on, and it is also what CSS 2.1
@@ -1048,7 +1104,12 @@ static CssPx uv_margin(lxb_dom_element_t *el, const char *name, const char *oppo
        is what this arm branches on. §10.3.1 (inline), §10.3.5 (floating) and §10.3.9 (inline-block) each state
        outright that "a computed value of 'auto' for 'margin-left' or 'margin-right' becomes a used value of
        '0'"; §10.3.3 says it too, but only in its rule 5, "if 'width' is set to 'auto', any other 'auto' values
-       become '0'" — with a non-auto `width` its `auto` margins take the slack instead.
+       become '0'" — with a non-auto `width` its `auto` margins take the slack instead. A FOURTH BOX TYPE
+       REACHES THE SAME 0 THROUGH §10.3.9 rather than through a fourth sentence: css-grid-1 §5.2 sizes an
+       inline-level grid container "as an atomic inline-level box (such as an inline-block)" and css-flexbox-1
+       §9.2 sends an inline-level flex container to its formatting context's rules, so §10.3.9 IS their margin
+       section — and this is the arm where that delegation pays, because it answers `margin-left: auto` on an
+       `inline-flex` with the 0 the spec states while the box's WIDTH is still an unbuilt intrinsic size.
        IT IS `uv_margin_reads_width`'S OWN LIST, negated, and it is spelled that way rather than repeated
        because it IS the same question: a section that states the margin outright is exactly a section with no
        equation to read a width from, so a box type added to one list and not the other would take this arm's
@@ -1517,6 +1578,20 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
                   "css-flexbox §9.4 collects the items into flex lines and §9.7 resolves the flexible lengths, "
                   "css-grid §11 sizes the item to its TRACK — and CSS 2.1 §10.6.3's stack of block-level "
                   "children is not it. BUILD the flex layout over the container's own used content size");
+        if (box == UV_BOX_INLINE_FLEX_GRID)
+            DFAIL("an INLINE-LEVEL FLEX OR GRID CONTAINER with `height: auto`. Both modules give the container "
+                  "the same automatic block size and neither of them is §10.6.3's walk: css-grid-1 §5.2 "
+                  "\"Sizing Grid Containers\" says \"in both inline and block formatting contexts, the grid "
+                  "container's auto block size is its MAX-CONTENT SIZE\", which the same section states as "
+                  "\"the sum of the grid container's track sizes (including gutters) in the appropriate axis\", "
+                  "and css-flexbox-1 §9.9 \"Intrinsic Sizes\" says the container's content-based logical "
+                  "heights \"use the max-content size\", which §9.9.2 \"Flex Container Intrinsic Cross Sizes\" "
+                  "derives from the FLEX LINES. Two grid items in one row do not stack and two flex items on "
+                  "one line do not either, so §10.6.3's collapsing column of block-level children would answer "
+                  "a number from the wrong algorithm. BUILD the module this box's `display` names — its track "
+                  "sizing (css-grid-1 §11.3 \"Track Sizing Algorithm\") or its line and cross sizing "
+                  "(css-flexbox-1 §9.4 \"Cross Size Determination\") — over the container's own used main size, "
+                  "which is the arm below and is the same absence one axis over");
         DCHECK(box == UV_BOX_BLOCK_FLOW || box == UV_BOX_FLOAT || box == UV_BOX_INLINE_BLOCK,
                "an `auto` height reached §10.6.3's walk on a box type whose own section is elsewhere — every "
                "one of them has left through its own crash above, so uv_box_kind's list and this one have come "
@@ -1560,6 +1635,30 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
               "sizes the item to its TRACK, which is itself sized from the items in it. Both are intrinsic "
               "sizes and neither is §10.3.3's equation. BUILD the flex layout over the container's own used "
               "content size, which §10.1 and §10.3.3 answer now");
+    if (box == UV_BOX_INLINE_FLEX_GRID)
+        DFAIL("an INLINE-LEVEL FLEX OR GRID CONTAINER with `width: auto`. It is CSS 2.2 §9.2.2's ATOMIC "
+              "INLINE-LEVEL box, so its own module sends it to the section this file already runs for an "
+              "inline-block — css-grid-1 §5.2 \"Sizing Grid Containers\" says it \"is sized as an atomic "
+              "inline-level box (such as an inline-block)\" and css-flexbox-1 §9.2 \"Line Length "
+              "Determination\" says \"determine the main size of the flex container using the rules of the "
+              "formatting context in which it participates\" — which is §10.3.9's shrink-to-fit. WHAT IS "
+              "MISSING IS NEITHER THE FORMULA NOR THE AVAILABLE WIDTH, and that is the whole difference "
+              "between this arm and the absolutely positioned one above: §10.3.9 sends this box to §10.3.5's "
+              "three-term `min(max(preferred minimum width, available width), preferred width)`, which "
+              "`uv_shrink_to_fit_width` computes, over an available width that IS §10.3.5's six-term one. It "
+              "is the TWO INTRINSIC TERMS. core/layout/intrinsic_size.c measures them by laying the box's own "
+              "text out under CSS 2.2 §9.4.2's line boxes and crashes for a box that is not a block container, "
+              "and this one is not: css-flexbox-1 §3 says \"flex containers are not block containers\" and "
+              "css-grid-1 §5.1 says \"grid containers are not block containers\", and what is inside one is "
+              "flex lines or grid tracks rather than line boxes. So the "
+              "two terms are the MODULE's — css-flexbox-1 §9.9.1 \"Flex Container Intrinsic Main Sizes\" (the "
+              "max-content main size is the largest per-line sum of the items' flexed sizes; §9.9.1.3 gives a "
+              "multi-line container's min-content main size as the largest min-content contribution) and "
+              "css-grid-1 §5.2 (\"the max-content size (min-content size) of a grid container is the sum of "
+              "the grid container's track sizes (including gutters) in the appropriate axis, when the grid is "
+              "sized under a max-content constraint (min-content constraint)\"). BUILD the one this box's "
+              "`display` names as a second producer of `IntrinsicInlineSizes`; the shrink-to-fit above then "
+              "runs unchanged over it");
     DCHECK(box == UV_BOX_BLOCK_FLOW,
            "an `auto` width reached §10.3.3's constraint equation on a box that is not block-level in normal "
            "flow — every other box type in uv_box_kind's list has left through its own section above, so the "
