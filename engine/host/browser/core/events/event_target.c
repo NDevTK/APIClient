@@ -1310,6 +1310,64 @@ static const IdlStepDecl AEL_DECL = { ael_step, sizeof(AelState), ael_visit, NUL
     X("onpointerleave", "pointerleave", EH_GLOBAL)                                                               \
     X("ongotpointercapture", "gotpointercapture", EH_GLOBAL)                                                     \
     X("onlostpointercapture", "lostpointercapture", EH_GLOBAL)                                                   \
+    /* THE FOUR OTHER SPECS THAT DECLARE A `partial interface mixin GlobalEventHandlers`, in the shape the       \
+       Pointer Events block above already settled: the partial makes each of these a GlobalEventHandlers         \
+       member exactly like §8.1.8.2.1's own, so EH_GLOBAL is the whole of what installs them, and the            \
+       CONTENT-ATTRIBUTE half is HTML §8.1.8.1 Event handlers' sentence quoted above rather than an inference    \
+       of this list's. CSS Animations and CSS Transitions do not even need that sentence — each writes it        \
+       itself, in a section whose title is the one HTML uses. CSS ANIMATIONS MODULE LEVEL 1 §5.3 Event           \
+       handlers on elements, `Document` objects, and `Window` objects and CSS TRANSITIONS MODULE LEVEL 1 §6.3    \
+       Event handlers on elements, `Document` objects, and `Window` objects both read: "The following are the    \
+       event handlers (and their corresponding event handler event types) that must be supported by all HTML     \
+       elements, as both event handler content attributes and event handler IDL attributes; and that must be     \
+       supported by all Document and Window objects, as event handler IDL attributes". Each of those two         \
+       sections carries the TABLE the TYPE column below is read from, and neither is a §8.1.8.2 table — these    \
+       are other standards' rows, which is why they sit here and not in the alphabetical block above.            \
+       THE FOUR LEGACY ALIASES OF THESE VERY EVENTS WERE ALREADY IN THIS LIST, WHICH IS WHY THEIR ABSENCE WAS    \
+       A WRONG ANSWER AND NOT MERELY A GAP. `onwebkitanimationend` was here and `onanimationend` was not, so     \
+       a bundle's modern handler stayed an ordinary JS property that no `animationend` dispatch could reach      \
+       while its 2011 alias was a real handler over the same event — and because                                 \
+       event_target_handler_attribute_on_element decides content-attribute membership from this same             \
+       EH_GLOBAL bit, `<div ontransitionend="…">` was an attribute HTML §8.6.2's remove-unsafe left in place     \
+       and Trusted Types §3.8 never tested, on markup a transition-driven UI writes constantly.                  \
+       THE OTHER FOUR ROWS EACH STATE THEIR OWN EVENT TYPE, which is the column that cannot be derived.          \
+       SELECTION API's `Extensions to GlobalEventHandlers interface` — cited by TITLE with no number            \
+       because that draft prints a section number on nothing — says of each of its two that "The attribute       \
+       must be an event handler IDL attribute for the selectstart event supported by all HTML elements" (and     \
+       correspondingly for `selectionchange`; the published ED leaves the two operands after that clause as      \
+       unprocessed bikeshed markup, so the quotation stops where the rendered text does). WEBXR DOM OVERLAYS     \
+       §2.1 onbeforexrselect says "This event is an XRSessionEvent with type beforexrselect that bubbles, is     \
+       cancelable, and is composed." FENCED FRAME §3.10.1 onfencedtreeclick event handler says "The table in     \
+       the event handlers on elements, Document objects, and Window objects section of [HTML] is modified to     \
+       include a new row", and gives that row as `onfencedtreeclick` over `fencedtreeclick` — so it is the       \
+       one of these four whose own standard puts it in §8.1.8.2's element table, content-attribute half          \
+       included, rather than leaving that to §8.1.8.1's general sentence.                                        \
+       NOT COVERED: CSS SCROLL SNAP MODULE LEVEL 2's two, which @webref/idl publishes as `onsnapchanged` and     \
+       `onsnapchanging` and which idlgen.mjs therefore charges every one of these interfaces. That draft         \
+       DISAGREES WITH ITSELF about both columns: its `IDL Definition` declares those two names, while its own    \
+       `Event handlers on elements, Document objects and Window objects` table gives `onscrollsnapchange`        \
+       over `scrollsnapchange` and `onscrollsnapchanging` over `scrollsnapchanging`, and the bare types          \
+       `snapchanged` and `snapchanging` appear nowhere in the draft as event types at all — every dispatch       \
+       and every SnapEvent definition in it is spelled with the `scroll` prefix. A row here needs BOTH           \
+       columns, and this list's whole reason for making the type a column is that a guessed one registers a      \
+       listener for a type nothing dispatches, which is indistinguishable from a handler nobody set. THE NEXT    \
+       DIFF BUILDS these two rows from whichever pair the draft settles on, read from its table and its IDL      \
+       block AGREEING; ITS ABSENCE SHOWS as engine/idlgen.mjs reporting `onsnapchanged` and `onsnapchanging`     \
+       ABSENT on HTMLElement, Document and Window. `onpointerrawupdate` is likewise still not here, for the      \
+       [SecureContext] reason the Pointer Events block above states — a reader completing this family from       \
+       the published IDL must not take it as the twelfth of these. */                                            \
+    X("onanimationstart", "animationstart", EH_GLOBAL)                                                           \
+    X("onanimationiteration", "animationiteration", EH_GLOBAL)                                                   \
+    X("onanimationend", "animationend", EH_GLOBAL)                                                               \
+    X("onanimationcancel", "animationcancel", EH_GLOBAL)                                                         \
+    X("ontransitionrun", "transitionrun", EH_GLOBAL)                                                             \
+    X("ontransitionstart", "transitionstart", EH_GLOBAL)                                                         \
+    X("ontransitionend", "transitionend", EH_GLOBAL)                                                             \
+    X("ontransitioncancel", "transitioncancel", EH_GLOBAL)                                                       \
+    X("onselectstart", "selectstart", EH_GLOBAL)                                                                 \
+    X("onselectionchange", "selectionchange", EH_GLOBAL)                                                         \
+    X("onbeforexrselect", "beforexrselect", EH_GLOBAL)                                                           \
+    X("onfencedtreeclick", "fencedtreeclick", EH_GLOBAL)                                                         \
     /* WindowEventHandlers — §8.1.8.2's THIRD table, "reified as event handler IDL attributes through the        \
        WindowEventHandlers interface mixin". It was called the second table here and said the set was            \
        Document's; §8.1.8.2's second table is the six Window-reflecting names above, and the mixin is included   \
