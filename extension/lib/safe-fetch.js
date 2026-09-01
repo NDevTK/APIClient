@@ -884,10 +884,15 @@ async function safeFetch(url, opts) {
      never on the wire — SECURITY.md deleted every principal-shaped field an untrusted
      zone could send, so this one has no argument to travel in — which makes it always
      `_browserFacts`' `url`, minted in the trusted zone out of `MessageSender` and
-     already DCHECKed there as a non-empty string. All four call sites are in
-     `bridge.js`, every one takes it from that mint, and `navigationLoad` asserts the
-     same fact again at its own door. So an absent or unparseable principal is OUR bug
-     and it asserts. This is NOT the hostile input SECURITY.md refuses to abort on:
+     already DCHECKed there as a non-empty string. Every call site takes it from that
+     mint: four in `bridge.js`, where `navigationLoad` asserts the same fact again at
+     its own door, and one in `lib/discovery-probe.js`, whose automatic discovery sweep
+     reads `doc.url` off the DocData that `handleContentMessage` stamps FROM that mint
+     and asserts it before building its fetch fn. (That sentence said "all four call
+     sites are in `bridge.js`" and stopped being true the day the sweep was moved off
+     the page-context relay onto this chokepoint — a claim about the call graph, which
+     a diff can falsify without touching the line that makes it.) So an absent or
+     unparseable principal is OUR bug and it asserts. This is NOT the hostile input SECURITY.md refuses to abort on:
      that is `CONTENT_SEED`'s page-suggested address, which is dropped closed, and it is
      a different value that never reaches this argument.
      DCHECK AND NOT CHECK, because the release question is only whether we may PROCEED —

@@ -445,6 +445,61 @@ async function _sendPageFetch(tabId, url, opts, documentId) {
   return reply;
 }
 
+/* WHO ACTED — THE ONE FACT THIS RELAY CANNOT SEE, SO IT IS TOLD, AND THE TELLING IS ASSERTED.
+ *
+ * The destructive-path deny list is scoped out of this transport (see `pageContextFetch` below), and the whole
+ * of that argument is that a HUMAN composed the request at a surface that showed it to them. That makes the
+ * grade of the ACT the load-bearing fact of this file — and it was, for a while, a fact about WHICH FUNCTIONS
+ * HAPPENED TO CALL WHICH. Three entries reached this relay with nobody at a surface: the automatic discovery
+ * sweep, the automatic error probe, and the service-info probe fired the instant a response body arrived. Every
+ * one of them was credentialed by construction, two of them POSTed a body the app never produced, and the
+ * exemption above covered all three because the relay had no way to ask.
+ *
+ * IT IS NOT INFERRED HERE AND IT CANNOT BE. Nothing this function can see distinguishes the two grades: the
+ * URL, the verb, the headers and the body are identical in shape whether an operator typed them or a response
+ * handler composed them, and a relay that guessed would be answering the question its own exemption rests on
+ * with a heuristic. So the grade TRAVELS WITH THE CALL, stated by the site that knows — the popup command
+ * handler, the Send panel, the response handler — and is carried, never re-derived, down every frame between
+ * that site and this one.
+ *
+ * TWO VALUES, AND ONLY ONE OF THEM MAY BE HERE. `PAGE_CONTEXT_TOOL_INITIATED` exists because a routing site
+ * genuinely holds it (`lib/discovery-probe.js`'s sweep serves both grades and picks its transport from this
+ * value), not because this relay has an arm for it: an act this tool decided on goes to `safeFetch`, which is
+ * the chokepoint SECURITY.md names and the one that asks the provenance, credential and deny-list questions.
+ * A caller that cannot state its grade is a caller that must not proceed — an absent value takes the same arm
+ * as `tool`, which is the arm that aborts, so forgetting to state one is not a way to be exempted.
+ *
+ * CHECK AND NOT DCHECK: this is the authorization grade the exemption is scoped by, so proceeding in RELEASE
+ * with an unstated one is exactly the state that was shipping. */
+const PAGE_CONTEXT_USER_INITIATED = "user-initiated";
+const PAGE_CONTEXT_TOOL_INITIATED = "tool-initiated";
+const _PAGE_CONTEXT_GRADES = [PAGE_CONTEXT_USER_INITIATED, PAGE_CONTEXT_TOOL_INITIATED];
+
+/* THE SITE TRAVELS WITH THE QUESTION. This helper is called from the relay AND from the two relay-fn factories
+   in offscreen-brain.js, so an abort raised at its own line would name this file for every caller in the
+   extension — the shared-helper defect CLAUDE.md names. `who` is the caller's own name, stated at the call. */
+function pageContextRequireUserInitiated(initiator, who) {
+  CHECK(initiator === PAGE_CONTEXT_USER_INITIATED,
+        "the page-context relay was reached by " + who + " with the initiator grade " +
+        JSON.stringify(initiator) + " — this transport issues the request AS THE PAGE with the person's own " +
+        "cookies and is exempt from the credentialed destructive-path deny list, and that exemption is scoped " +
+        "to acts a HUMAN initiated at a surface that showed them the request. An act this tool decided on goes " +
+        "to safeFetch (lib/safe-fetch.js), which asks the provenance, credential and deny-list questions this " +
+        "edge cannot; an unstated grade is a caller that never answered the question at all");
+}
+
+/* A GRADE THAT IS NEITHER OF THE TWO IS A ROUTING SITE READING A VALUE NOBODY MINTED, and it takes whichever
+   arm the site wrote as its else — which is why the routing sites assert the value before they dispatch on it
+   rather than testing for `user` and calling everything else automatic. */
+function pageContextStatedGrade(initiator, who) {
+  CHECK(_PAGE_CONTEXT_GRADES.indexOf(initiator) >= 0,
+        who + " named the initiator grade " + JSON.stringify(initiator) + ", which is neither of the two this " +
+        "extension states (" + _PAGE_CONTEXT_GRADES.join(", ") + ") — the grade decides which TRANSPORT the " +
+        "request leaves by, so a third spelling is a request routed by whichever arm the dispatch happened to " +
+        "write last");
+  return initiator;
+}
+
 /* THE PAGE-CONTEXT EDGE HAS THREE ENTRIES, AND WHICH VERB EACH ONE MAY NAME IS A PROPERTY OF ITS CALLER.
  *
  * THE SHAPE RULE IS DELETED, AND IT WAS THIS FILE'S. It said there were two entries and that the learning one
@@ -461,10 +516,15 @@ async function _sendPageFetch(tabId, url, opts, documentId) {
  * can check against, and every one of the three states its verb at the call site rather than inheriting one.
  *   pageContextGet   LEARNING a published document. GET, with no parameter to say otherwise.
  *   pageContextSend  the popup's MANUAL REPLAY. Any method — the human chose it in the Send panel.
- *   pageContextFetch the ERROR PROBE (lib/req2proto.js). It names POST because the probe IS a POST. */
+ *   pageContextFetch the ERROR PROBE (lib/req2proto.js). It names POST because the probe IS a POST.
+ *
+ * AND EVERY ONE OF THE THREE NAMES ITS INITIATOR GRADE AT THE CALL SITE, for the same reason it names its verb
+ * there: the far end holds no policy, so the trusted sender is the only place either fact is decided. The verb
+ * says WHAT is being asked; the grade says WHOSE ACT it is, which is what the deny-list exemption below is
+ * scoped by. Both are stated rather than inherited, and both are asserted before the message is built. */
 
 /* LEARNING. A GET of a published URL as the page, credentialed by the page's own jar. */
-async function pageContextGet(tabId, url, headers, documentId) {
+async function pageContextGet(tabId, url, headers, documentId, initiator) {
   /* A GET HAS NO BODY, AND THIS ENTRY SAYS SO RATHER THAN LEAVING THE RELAY TO INFER IT. This was the one
      producer of the three that omitted `body`/`bodyEncoding`, and that omission is what forced `_sendPageFetch`
      to spell a `?? null` — a default that then covered every OTHER caller too, so a body one of them stopped
@@ -475,15 +535,16 @@ async function pageContextGet(tabId, url, headers, documentId) {
     url,
     { method: "GET", headers: headers || {}, body: null, bodyEncoding: null },
     documentId,
+    initiator,
   );
 }
 
 /* THE POPUP'S MANUAL REPLAY — the user named the method, the URL and the body in the Send panel. */
-async function pageContextSend(tabId, url, opts, documentId) {
+async function pageContextSend(tabId, url, opts, documentId, initiator) {
   DCHECK(!!opts && typeof opts.method === "string" && opts.method !== "",
          "a manual page-context send named no method — this entry exists because the USER chose one, and an " +
          "absent one would silently become a GET of a URL the user meant to POST to");
-  return pageContextFetch(tabId, url, opts, documentId);
+  return pageContextFetch(tabId, url, opts, documentId, initiator);
 }
 
 /**
@@ -492,7 +553,11 @@ async function pageContextSend(tabId, url, opts, documentId) {
  * frame is reused across navigations and could be a different origin.
  * @param {string} documentId — the target document (stable across the page's life)
  */
-async function pageContextFetch(tabId, url, opts, documentId) {
+async function pageContextFetch(tabId, url, opts, documentId, initiator) {
+  /* WHOSE ACT THIS IS, ASKED FIRST AND ASKED HERE. It is asked before the URL is even parsed because it is not
+     a property of the request — every other check below is about the bytes, and this one is about whether this
+     transport may carry them at all. */
+  pageContextRequireUserInitiated(initiator, "a caller of pageContextFetch naming " + url);
   DCHECK(!!opts && typeof opts.method === "string" && opts.method !== "",
          "a page-context fetch reached the relay with no method — every entry above states one at its call " +
          "site, so an absent method is a caller that named no operation and whose verb nobody decided");
@@ -513,20 +578,30 @@ async function pageContextFetch(tabId, url, opts, documentId) {
      user". Every clause of that sentence is about an act nobody asked for. It is sound precisely because it is
      ALLOWED TO BE WRONG: a wrong deny costs one unfired request that forced execution still derives and
      reports in full, so refusing on a guess is cheap.
-     THAT ARITHMETIC INVERTS THE MOMENT A HUMAN COMPOSED THE REQUEST. This relay's entries are operator-typed
-     (the Send panel, where a person read the address, the verb and the body and pressed the button) or an
-     operator-initiated probe. A deny list standing there is not a floor under the tool's autonomy, it is the
-     tool VETOING ITS OPERATOR on a substring match — and the cost is no longer one unfired request the report
-     still carries, it is a person told their own explicit act was "blocked" by a pattern they never saw and
-     cannot argue with. SECURITY.md's egress taxonomy already draws exactly this line: a path answering the
-     operator "is authorized by a human at a surface that shows them the bytes". Authorization by a human at
-     that surface is the strongest grade this project has; a token list is the weakest, and the weak one does
-     not overrule the strong one.
+     THAT ARITHMETIC INVERTS THE MOMENT A HUMAN COMPOSED THE REQUEST. A deny list standing there is not a floor
+     under the tool's autonomy, it is the tool VETOING ITS OPERATOR on a substring match — and the cost is no
+     longer one unfired request the report still carries, it is a person told their own explicit act was
+     "blocked" by a pattern they never saw and cannot argue with. SECURITY.md's egress taxonomy already draws
+     exactly this line: a path answering the operator "is authorized by a human at a surface that shows them
+     the bytes". Authorization by a human at that surface is the strongest grade this project has; a token list
+     is the weakest, and the weak one does not overrule the strong one.
+     AND THE EXEMPTION IS SCOPED BY A FACT THIS FILE NOW REQUIRES RATHER THAN BY ONE IT USED TO ASSERT. This
+     paragraph said every entry here was "operator-typed … or an operator-initiated probe", and that sentence
+     was FALSE OF THREE CALLERS the whole time it stood: `lib/response-decode.js` fired an automatic discovery
+     sweep, an automatic req2proto error probe and an automatic service-info probe, all three from
+     `handleResponseBody` — the instant a response body arrived, with nobody at any surface. The claim was true
+     of the entries this file DECLARES and false of the code that reached them, which is the exact shape of a
+     claim that cannot be checked where it is written: the relay could see the request and never the act.
+     So the fact is now CARRIED and ASSERTED (`pageContextRequireUserInitiated`, at the head of this function),
+     and the automatic callers were moved off this transport rather than exempted by it. That is what makes the
+     absence of the list here a scope statement instead of a hole in one.
      SO THE ABSENCE HERE IS A DECISION, NOT A GAP. A gate was added at this exact site and removed; if a future
      reader finds the relay "unprotected" and reaches for `safeFetchDestructiveRefusal`, that reader has found
      the thing that was deliberately taken out. What legitimately guards this relay is the same thing that
-     guards any operator action: the operator seeing what they are sending. The `safeFetch` chokepoint keeps
-     its own list for its own autonomous requests, which is where a floor under autonomy belongs. */
+     guards any operator action: the operator seeing what they are sending, plus the grade above, which is what
+     makes "the operator is seeing this" a checkable claim rather than a description of the call graph. The
+     `safeFetch` chokepoint keeps its own list for its own autonomous requests, which is where a floor under
+     autonomy belongs — and it is where the requests that used to be exempted here now go. */
 
   // Try the original tab's target frame
   let _pageFetchErr = null;

@@ -399,7 +399,8 @@ what it owes is that the destination be one this zone can name exactly.
   Destination is this zone's; credentials are the page's own (`credentials:"same-origin"`); the enforcement is
   the BROWSER's SOP/CORS rather than ours, and the credentialed destructive-path deny list DELIBERATELY does
   not reach here — it is a floor under requests this tool composes on its own, and this relay carries an
-  operator's. Both directions are the subsection below, because they fail
+  operator's, which is a fact the relay REQUIRES ITS CALLER TO STATE rather than one that happens to be true of
+  the call graph. Both directions are the subsection below, because they fail
   differently and only one of them is a privilege question.
 - **Renderer program assembly — `renderer-host.js`.** A raw `fetch` of a FIXED name list off our own extension
   origin, because an opaque-origin frame cannot load those files by URL itself. The destination is a constant
@@ -477,20 +478,44 @@ have to be stated, because they fail differently and only one of them is a privi
   decided to send it. That is the whole of the error.
   The list is sound because it is ALLOWED TO BE WRONG: a wrong deny costs one unfired request that forced
   execution still derives and reports in full. That arithmetic inverts the moment a human composed the
-  request. This relay's entries are operator-typed — the Send panel, where a person read the address, the verb
-  and the body and pressed the button — or an operator-initiated probe. A token list standing there is not a
+  request. A token list standing there is not a
   floor under our autonomy, it is the tool VETOING ITS OPERATOR on a substring match, and the cost is a person
   told their own explicit act was blocked by a pattern they never saw. The egress taxonomy above already draws
   this line: a path answering the operator is authorized by a human at a surface that shows them the bytes.
   That is the strongest grade in this document; a token list is the weakest, and the weak one does not
   overrule the strong one. The list stays scoped inside `safeFetch`, for `safeFetch`'s own autonomous
   requests, and a reader who finds this transport ungated has found a decision rather than a gap.
+  **AND THE EXEMPTION IS SCOPED BY A CARRIED FACT, BECAUSE THE SENTENCE IT USED TO BE SCOPED BY WAS FALSE.**
+  This paragraph said the relay's entries are "operator-typed — the Send panel … — or an operator-initiated
+  probe", and that was a claim about WHICH FUNCTIONS HAPPENED TO CALL WHICH, made in a file where nobody could
+  check it. Three callers reached this transport with no human anywhere: `lib/response-decode.js`'s automatic
+  discovery sweep, its automatic req2proto error probe, and its automatic service-info probe — all three fired
+  from `handleResponseBody` the instant a captured response body arrived, all three credentialed by
+  construction, two of them POSTing a body the app never produced. The exemption covered every one of them,
+  because the relay could see the request and never the act.
+  The grade is therefore a VALUE now, stated at the door the act enters by and carried down every frame to the
+  relay, which asserts it (`pageContextRequireUserInitiated`, `lib/schema.js`). It cannot be inferred here and
+  no attempt is made to: a URL, a verb, a header map and a body look identical whether an operator typed them
+  or a response handler composed them, so a relay that guessed would answer the question its own exemption
+  rests on with a heuristic. An unstated grade takes the same arm as `tool-initiated`, which is the arm that
+  aborts, so forgetting to state one is not a way to be exempted.
+  The automatic callers were MOVED OR REMOVED rather than exempted. The discovery sweep now routes its
+  candidate GETs through `safeFetch` when its grade is `tool-initiated` — uncredentialed, so it sees what a
+  logged-out client sees, which is a real reduction stated rather than worked around. The two POST probes have
+  no automatic form at all: `safeFetch` hardcodes `method:"GET"` and reads neither `opts.method` nor
+  `opts.body`, which is how RFC 9110 §9.2.1 "Safe Methods" is enforced structurally, so there is no chokepoint
+  that could carry them and teaching it one would delete that argument from the file whose safety rests on it.
+  Both survive at the grade entitled to them — the Discovery panel's per-endpoint **probe** and **service
+  info** buttons, and the Send panel — and what does not survive is the automatic service-info probe's reach
+  over captured POSTs that mint no endpoint record (Google `batchexecute` / `$rpc`), which have no button
+  because they have no record to hang one on.
   What the relay does need, and has, is that the far end holds NO policy: `handlePageFetch` takes
   `msg.method` verbatim, so the VERB is decided entirely at the trusted call site. That is why the three
   entries are named for their OPERATION rather than for a method (`pageContextGet` GET-only for learning a
   published document, `pageContextSend` any method because the human chose it in the Send panel,
   `pageContextFetch` POST for `req2proto`'s malformed-body error probe) and each states its verb at the call
-  site rather than inheriting one. Routing is `documentId`-only — no `frameId` fallback (reused across
+  site rather than inheriting one — and, for the same reason, its INITIATOR GRADE, since the far end holds no
+  more policy about who acted than it does about which verb to use. Routing is `documentId`-only — no `frameId` fallback (reused across
   navigations at a different origin) and no target-less `tabs.sendMessage` (which broadcasts to every frame).
   No `documentId` → refuse.
 - **Untrusted → trusted (the reply): the reply is ATTACKER DATA, and it is attributed to the URL we asked

@@ -98,12 +98,28 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
        deleted on the ground that nothing in the popup posts them, which is true and is a missing BUTTON: a
        backend with no caller is a UI gap, and deleting the backend closes the gap by removing the capability.
        The backends are lib/req2proto.js (`probeEndpoint`, `discoverServiceInfo`) and lib/discovery-probe.js
-       (`fetchDiscoveryForService`). */
+       (`fetchDiscoveryForService`).
+       AND THIS IS WHERE THAT "USER ACTION" STOPS BEING A DESCRIPTION AND BECOMES A VALUE. All three reach the
+       page-context relay, which issues the request AS THE PAGE with the person's own cookies and is scoped out
+       of the credentialed destructive-path deny list on the ground that a human composed what it carries —
+       so the grade is stated HERE, at the door the human's message arrives at, and carried down. What proves
+       it for each of the three is one line of popup code: lib/popup-discovery.js's `initDiscoveryPanel`
+       registers a `click` listener on the panel body and `_discAction` is the only site that posts any of
+       these three types, so a message of one of these types exists only because a button was pressed. Nothing
+       else in the extension posts them (they are named in popup.html's comment, popup-discovery.js and this
+       switch, and nowhere else).
+       THE SHARPER QUESTION, NAMED RATHER THAN BURIED: FETCH_DISCOVERY's backend may TAIL into a malformed POST
+       error probe when the published document does not describe the seed's method, and the person who pressed
+       "fetch discovery" read neither that verb nor that body. The grade is the ACT's and it propagates to what
+       the act initiates — the same reading under which pressing the button authorises a dozen well-known-path
+       GETs the person also did not read — but the honest statement of the residual is that the BUTTON's label
+       is what makes that reading true, and the button says "fetch discovery". That is a UI-honesty question
+       about what the surface shows, not a transport question, and it is not answered here. */
 
     case "PROBE_ENDPOINT": {
       const _pdoc = _docFromMsg(msg);
       if (!_pdoc) { sendResponse(null); return; }
-      probeEndpoint(_pdoc.documentId, msg.endpointKey).then((result) => {
+      probeEndpoint(_pdoc.documentId, msg.endpointKey, PAGE_CONTEXT_USER_INITIATED).then((result) => {
         sendResponse(result);
       });
       return true;
@@ -150,7 +166,7 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
         if (_kEntry.source === "url") discoverUrl.searchParams.set("key", _k);
         else if (_kEntry.source.startsWith("header:")) headers[_kEntry.source.slice("header:".length)] = _k;
       }
-      const fetchFn = makePageFetchFn(tab.tabId, tab.documentId);
+      const fetchFn = makePageFetchFn(tab.tabId, tab.documentId, PAGE_CONTEXT_USER_INITIATED);
       discoverServiceInfo(discoverUrl.toString(), headers, { fetchFn }).then(
         (result) => {
           tab.probeResults.set(`svc:${msg.endpointKey}`, result);
@@ -183,7 +199,12 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       /* NO `ep.apiKey` LIMB. An endpoint record has no such field (lib/merge.js, its only producer, writes
          none), so it added undefined to the candidate list on every call. */
       if (msg.apiKey && !apiKeys.includes(msg.apiKey)) apiKeys.push(msg.apiKey);
-      fetchDiscoveryForService(tab.documentId, msg.service, hostname, apiKeys).then(
+      /* NO SEED AND NO SEED METHOD — this command names a service, and the seed that named it is already on
+         the stored record (lib/discovery-probe.js reads `currentStatus?.seedUrl` for exactly this caller). The
+         GRADE is what this call adds: it is the button's, so the candidate GETs go through the page-context
+         relay as the page, and the error-probe tail is permitted to fire. */
+      fetchDiscoveryForService(tab.documentId, msg.service, hostname, apiKeys, undefined, undefined,
+                               PAGE_CONTEXT_USER_INITIATED).then(
         () => {
           sendResponse(serializeTabData(tab));
         },

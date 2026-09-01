@@ -123,8 +123,12 @@ const _SR_PROBE_SVCINFO = _srRecord(
 /* WHICH OF THE TWO A STORED PROBE ANSWER IS, DECIDED BY THE KEY THIS ZONE MINTED IT UNDER. The four spellings
    are this store's own vocabulary and lib/popup-discovery.js already dispatches its two renderers on exactly
    this split — the bare endpoint key and `auto:<service>::<url>` hold a field probe (lib/discovery-probe.js's
-   on-demand and automatic arms), `svc:<endpointKey>` and `svcinfo:POST <path>` hold a service-info answer
-   (lib/popup-handlers.js's button and lib/response-decode.js's automatic probe). It is not §RUN-DON'T-MATCH's
+   `probeEndpoint` and `performProbeAndPatch`), `svc:<endpointKey>` and `svcinfo:POST <path>` hold a
+   service-info answer (lib/popup-handlers.js's DISCOVER_SERVICE button, and lib/response-decode.js's automatic
+   probe, WHICH IS DELETED — nothing in this tree mints `svcinfo:` any more, and the prefix stays here because
+   this table is what a store written by an EARLIER BUILD is restored through: dropping it would dispatch those
+   records to `_SR_PROBE_FIELDS` and abort the restore of every profile that holds one). It is not
+   §RUN-DON'T-MATCH's
    forbidden matching: that rule is about reading meaning out of names a PAGE chose, and these four literals
    are written by four sites in this zone. Asking the RECORD which shape it is instead would be circular — the
    question the door asks is precisely whether the record still carries the names its shape declares. */

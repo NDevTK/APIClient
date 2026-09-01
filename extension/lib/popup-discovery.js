@@ -200,12 +200,20 @@ function renderDiscoveryPanel() {
 /* WHAT A PROBE LEARNED — one renderer per ANSWER SHAPE, because `tab.probeResults` holds two of them under four
    key spellings and only two of those spellings had a reader. lib/req2proto.js `probeApiEndpoint` answers
    {fieldCount, fields, metadata, scopes} and is stored under the bare endpoint key (lib/discovery-probe.js
-   `probeEndpoint`, the button below) AND under `auto:<service>::<url>` (`performProbeAndPatch`, the AUTOMATIC
-   probe); `discoverServiceInfo` answers {service, method, scopes, contentTypes} and is stored under
-   `svc:<endpointKey>` (the button) AND under `svcinfo:POST <path>` (lib/response-decode.js's automatic probe).
-   The two the panel skipped are exactly the ones that run with no human watching, which is the state this file
-   exists to end — a probe that fires on every page load and reaches no reader is worse off than one nobody
-   triggers. */
+   `probeEndpoint`, the button below) AND under `auto:<service>::<url>` (`performProbeAndPatch`);
+   `discoverServiceInfo` answers {service, method, scopes, contentTypes} and is stored under
+   `svc:<endpointKey>` (the button) AND under `svcinfo:POST <path>`.
+   TWO OF THE FOUR SPELLINGS WERE MINTED BY PROBES THAT RAN WITH NO HUMAN WATCHING, AND THAT IS NO LONGER A
+   THING THIS EXTENSION DOES. The paragraph here used to say the panel skipping those two was the defect — "a
+   probe that fires on every page load and reaches no reader is worse off than one nobody triggers" — and the
+   renderers were added. The deeper answer arrived later: lib/schema.js's page-context relay is exempt from the
+   credentialed destructive-path deny list because a HUMAN composed what it carries, and a probe firing on
+   every page load was that exemption covering an act nobody initiated. So `svcinfo:` has no writer in this
+   tree at all (its producer is deleted, and the read below serves records already in a store), and `auto:` is
+   now minted only from the operator's FETCH_DISCOVERY. The prefix names WHAT THE KEY IS — a probe keyed by
+   service+URL rather than by endpoint key — and never who asked for it; it is not renamed because renaming a
+   persisted dispatch key orphans every record already written under it, which is a silent loss of collected
+   data traded for a better name. */
 /* NEITHER RENDERER ASKS WHAT ITS RECORD IS ANY MORE, AND THE ASYMMETRY BETWEEN THEM IS WHY THAT MATTERS. A
    DCHECK stood in the field-probe renderer for `fieldCount`/`fields` and there was NONE AT ALL in the
    service-info one below it — one reader's opinion of half of one of the two shapes, and silence about the
@@ -339,10 +347,18 @@ function _discHoleValuesHtml(name, values) {
          values.map((v) => "<code>" + esc(String(v)) + "</code>").join(", ");
 }
 
-// Per ENDPOINT: the two on-demand answers, plus the automatic service-info probe, which lib/response-decode.js
-// keys by the request PATH alone — so the endpoint's own path is what attributes it, and a TEMPLATED endpoint
-// path (`/users/{id}`, what the engine learned) never equals the concrete pathname of the live request that
-// triggered the probe. Those stay unattributed until that key carries the endpoint it was probed for.
+// Per ENDPOINT: the two on-demand answers, plus `svcinfo:POST <path>` records this extension NO LONGER MINTS.
+//
+// THAT THIRD READ IS NOT A READER WITH NO WRITER, AND THE DISTINCTION IS THE STORE. lib/response-decode.js's
+// automatic service-info probe — which fired a malformed credentialed POST the instant a response body arrived,
+// with nobody at any surface — is deleted, so nothing in THIS TREE writes that spelling. Records under it are
+// still real: `probeResults` is persisted to IndexedDB and lib/persistence.js restores it through
+// lib/store-record.js's shape table, which still recognises the prefix for exactly this reason. So the producer
+// is a store written by an earlier build, and dropping the read here would hide data the panel already holds
+// while dropping the prefix from the shape table would abort the RESTORE on any profile that has one.
+// It keys by the request PATH alone, so a TEMPLATED endpoint path (`/users/{id}`, what the engine learned)
+// never equals the concrete pathname of the live request that triggered the probe; those stayed unattributed
+// then and stay unattributed now. The live capability is the "Service info" button, keyed `svc:<endpointKey>`.
 function _discResultHtml(endpointKey, ep) {
   /* `(tabData && tabData.probeResults) || {}` stood here twice. Both callers run inside the per-service loop,
      which `_discServices` can only fill from a non-null `tabData`, and `serializeTabData` writes
@@ -359,11 +375,13 @@ function _discResultHtml(endpointKey, ep) {
   const svcInfo = results["svc:" + endpointKey];
   if (svcInfo) html += _discSvcInfoHtml("service info", svcInfo);
   const autoSvcInfo = results["svcinfo:POST " + ep.path];
-  if (autoSvcInfo) html += _discSvcInfoHtml("service info (automatic)", autoSvcInfo);
+  if (autoSvcInfo) html += _discSvcInfoHtml("service info (automatic, from an earlier build)", autoSvcInfo);
   return html;
 }
 
-// Per SERVICE: the automatic field probes, keyed `auto:<service>::<url>` by lib/discovery-probe.js.
+// Per SERVICE: the field probes keyed `auto:<service>::<url>` by lib/discovery-probe.js's
+// `performProbeAndPatch` — reached from the operator's FETCH_DISCOVERY, never automatically (the prefix names
+// the KEY SHAPE, service+URL rather than endpoint key, and is a persisted dispatch spelling; see above).
 function _discAutoProbesHtml(svc) {
   /* `(tabData && tabData.probeResults) || {}` stood here twice. Both callers run inside the per-service loop,
      which `_discServices` can only fill from a non-null `tabData`, and `serializeTabData` writes
@@ -378,7 +396,7 @@ function _discAutoProbesHtml(svc) {
   let html = "";
   for (const k of Object.keys(results).sort()) {
     if (!k.startsWith(prefix)) continue;
-    html += '<div class="card-meta">automatic probe of <code>' + esc(k.slice(prefix.length)) + "</code></div>" +
+    html += '<div class="card-meta">error probe of <code>' + esc(k.slice(prefix.length)) + "</code></div>" +
             _discFieldProbeHtml("learned", results[k]);
   }
   return html;

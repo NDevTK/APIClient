@@ -725,6 +725,13 @@ async function executeSendRequest(documentId, msg) {
         bodyEncoding,
       },
       documentId,
+      /* THE GRADE, AND THIS IS THE CALL IT WAS WRITTEN FOR. lib/schema.js's page-context relay is scoped out
+         of the credentialed destructive-path deny list because a human composed what it carries, and the Send
+         panel is that claim in its strongest form: `extension/popup.js` binds `sendRequest` to the `btn-send`
+         click, and every field of this request — the address, the verb, the headers and the body — came out of
+         controls that person filled in and can see. This is the one path where a token list refusing on a
+         substring would be the tool vetoing its operator. */
+      PAGE_CONTEXT_USER_INITIATED,
     );
   } catch (err) {
     /* AN INVARIANT ABORT IS NOT A FAILED REQUEST. `pageContextSend` and the `pageContextFetch` under it each

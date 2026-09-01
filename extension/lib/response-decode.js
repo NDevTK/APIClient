@@ -679,19 +679,22 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
     }
   }
 
-  // Protobuf probing trigger — skip for boring asset fetches.
-  if (!_isBoringFetch && isProtobuf && msg.method === "POST") {
-    const discoveryStatus = tab.discoveryDocs.get(service);
-    const doc = discoveryStatus?.doc;
-    const match = doc ? findDiscoveryMethod(doc, url.pathname, msg.method) : null;
-    const isLearnedOnly = match &&
-      discoveryStatus.doc.resources?.learned?.methods[match.method.id.split(".").pop()];
-    if (!match || isLearnedOnly) {
-      const keysForService = collectKeysForService(tab, service, url.hostname);
-      if (apiKey && !keysForService.includes(apiKey)) keysForService.push(apiKey);
-      performProbeAndPatch(documentId, service, msg.url, apiKey || keysForService[0] || null);
-    }
-  }
+  /* THE PROTOBUF PROBING TRIGGER IS DELETED, AND WHAT IT DID IS WORTH STATING SO THE NEXT READER DOES NOT
+     REBUILD IT. It fired `performProbeAndPatch` — a POST of a deliberately-malformed body through the
+     page-context relay, so with the person's own session attached — the instant a captured response body
+     looked like protobuf and the discovery document did not already describe the method. Nobody had pressed
+     anything: `handleResponseBody` runs on traffic the page made, and the probe is a request THIS TOOL
+     composed at somebody else's server on the strength of that traffic arriving.
+     THAT IS THE ONE COMBINATION CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE SAYS IS NEVER A SETTING:
+     credentialed, a method RFC 9110 §9.2.1 "Safe Methods"' safe set does not contain, and a body the app never
+     produced. Its answer is the one that section already gives — "derive it in full, report it, do not send
+     it" — and the derivation is on the record: the endpoint is learned, `seedUrl`/`seedMethod` name the
+     address and the verb the page used, and lib/popup-discovery.js renders a "probe" button for exactly the
+     POST records this arm used to fire at.
+     IT COULD NOT MOVE TO THE CHOKEPOINT, AND THAT IS THE FINDING RATHER THAN AN OMISSION. `safeFetch`
+     hardcodes `method:"GET"` and reads neither `opts.method` nor `opts.body`, which is how it enforces §9.2.1
+     structurally; teaching it a POST to keep this arm alive would delete that argument from the one file whose
+     safety rests on it. The capability is not lost — it is at the grade entitled to it, one click away. */
 
   /* AUTOMATIC BACKGROUND DISCOVERY — skip for boring fetches (probing /.well-known/openapi.json on a CDN is
      wasted traffic).
@@ -752,50 +755,47 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
          probe, which is a POST of a deliberately-malformed body, so it may only probe a seed the page itself
          POSTed — and this is the only frame that knows: `msg.method` sits beside `msg.url` here and is lost
          everywhere below. Passing the address without it is what sent a malformed POST to an endpoint the page
-         had only GET'd. `_seedIsProbeable` aborts on the absence rather than guessing. */
-      fetchDiscoveryForService(documentId, service, url.hostname, keysForService, msg.url, msg.method);
+         had only GET'd. `_seedIsProbeable` aborts on the absence rather than guessing.
+         AND THE GRADE TRAVELS THE SAME WAY, FOR THE SAME REASON. This frame is the only one that knows nobody
+         asked for this: it runs on a response body arriving. Stating `PAGE_CONTEXT_TOOL_INITIATED` here sends
+         the candidate GETs through `safeFetch` instead of the page-context relay — uncredentialed, so this
+         sweep sees only what a logged-out client sees — and stops the sweep's own POST error-probe tail from
+         firing at all. Both are behaviour changes and both are the point: this call used to reach the relay,
+         whose exemption from the credentialed destructive-path deny list is scoped to acts a human initiated,
+         and no human initiates this one. */
+      fetchDiscoveryForService(documentId, service, url.hostname, keysForService, msg.url, msg.method,
+                               PAGE_CONTEXT_TOOL_INITIATED);
     }
   }
 
-  // Error-based service-info probe (lib/req2proto.js; README "Error-Based Schema
-  // Probing"). An intentionally-malformed POST to the endpoint provokes a gapi
-  // error envelope, learning its CANONICAL service/method + OAuth scopes, merged
-  // into the discovery doc — EVEN when a real doc exists, since the probe can
-  // surface a HIDDEN service/method/scope the doc omits. This is the automatic
-  // form of the DISCOVER_SERVICE message (which is a user action over one
-  // endpoint, not a background step). POST endpoints only — the probe's own
-  // method, so it introduces no method the page did not already use.
-  if (!_isBoringFetch && msg.method === "POST") {
-    // Probe the POST request URL DIRECTLY. handleResponseBody sees EVERY captured
-    // POST; the request need NOT be a "learned" endpoint in globalStore.endpoints
-    // (Google batchexecute / $rpc calls are logged + classified into a service but
-    // are not endpoint-keyed).
-    const _siUrl = new URL(url.href);
-    _siUrl.searchParams.delete("key");
-    const _siKey = _siUrl.hostname + _siUrl.pathname;
-    if (!_svcInfoProbedUrls.has(_siKey)) {
-      _svcInfoProbedUrls.add(_siKey);
-      const _siHeaders = {};
-      if (apiKey) _siHeaders["X-Goog-Api-Key"] = apiKey;
-      const _siPath = _siUrl.pathname;
-      discoverServiceInfo(_siUrl.toString(), _siHeaders, { fetchFn: makePageFetchFn(tab.tabId, documentId) }).then((result) => {
-        if (!result) return;
-        let _merged = false;
-        const _scopes = Array.isArray(result.scopes) ? result.scopes.filter(Boolean) : [];
-        if (_scopes.length) { tab.scopes.set(service, _scopes); _merged = true; }
-        const _doc = globalStore.discoveryDocs.get(service)?.doc;
-        if (_doc) {
-          const _m = findDiscoveryMethod(_doc, _siPath, "POST")?.method;
-          if (_m) {
-            if (_scopes.length && (!Array.isArray(_m.scopes) || !_m.scopes.length)) { _m.scopes = _scopes; _merged = true; }
-            if (result.service && _m._probedService !== result.service) { _m._probedService = result.service; _merged = true; }
-            if (result.method && _m._probedMethod !== result.method) { _m._probedMethod = result.method; _merged = true; }
-          }
-        }
-        if (_merged) { tab.probeResults.set(`svcinfo:POST ${_siPath}`, result); mergeToGlobal(tab); notifyPopup(tab.tabId); }
-      }).catch((e) => { if (typeof console !== "undefined") console.debug("[brain] @WHY {phase:'svcinfo-probe',reason:'" + (e && e.message || e) + "'}"); });
-    }
-  }
+  /* THE AUTOMATIC ERROR-BASED SERVICE-INFO PROBE IS DELETED. It is the same act as the protobuf trigger above
+     and it is deleted for the same reason, but it is worth its own paragraph because its own comment named the
+     thing that made it wrong and read it as a feature: "This is the automatic form of the DISCOVER_SERVICE
+     message (which is a user action over one endpoint, not a background step)." DISCOVER_SERVICE is a user
+     action; an automatic form of a user action is not that action, it is the tool performing it without being
+     asked — and the transport both used, the page-context relay, is scoped out of the credentialed
+     destructive-path deny list precisely BECAUSE a human composed what it carries.
+     WHAT IT DID: for every captured POST that was not a boring asset fetch, it sent `discoverServiceInfo` —
+     THREE malformed POSTs, one per content type — at the request's own URL with the person's session
+     attached, deduped by host+path in a module-global set (`_svcInfoProbedUrls`, which goes with it, in
+     lib/discovery-probe.js). It provoked a gapi error envelope naming the canonical service/method and the
+     required OAuth scopes, and merged those onto the discovery method record.
+     WHY IT CANNOT SIMPLY MOVE: it is a POST, and `safeFetch` reads neither `opts.method` nor `opts.body` — the
+     structural enforcement of RFC 9110 §9.2.1 "Safe Methods" — and it NEEDS the session, because the whole
+     product is an authenticated error envelope; unauthenticated, the reply is a 401 naming no service, no
+     method and no scope. So "route it through the chokepoint uncredentialed" would keep the request and lose
+     the answer, which is worse than not asking.
+     WHAT SURVIVES AND WHAT DOES NOT. lib/popup-handlers.js's DISCOVER_SERVICE is the same backend behind the
+     Discovery panel's per-endpoint "Service info" button, so every endpoint-keyed POST record keeps the
+     capability at one click. What does NOT survive is the case this arm's own comment was written for: a
+     captured POST that is not endpoint-keyed at all (Google `batchexecute` / `$rpc` calls are logged and
+     classified into a service but mint no endpoint record), which has no button because it has no record to
+     hang one on. That is a real reduction in reach and it is reported as one rather than papered over —
+     §Attacker sources' own answer applies to it, that a derived-and-unfired request is not a gap in the report
+     but IS the report, and the request is derived in full here: the address, the verb the page used and the
+     service classification are all on the log entry.
+     The 403 `www-authenticate` scope extraction below is UNTOUCHED and is not a probe: it reads a header off a
+     reply the PAGE's own request already received. */
 
   // Extract OAuth scopes from 403 www-authenticate response header
   if (msg.status === 403 && msg.responseHeaders) {
@@ -822,14 +822,18 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
              field had no reader, so nothing ever went looking for the value the lookup failed to deliver.
              REPAIRING THE KEY ALONE WOULD HAVE BEEN A REGRESSION, not a fix: it would have started writing a
              constructor-forbidden name onto live records, which persistence then carries into IndexedDB.
-             SO THE SCOPES GO WHERE SCOPES ARE ALREADY READ. `method.scopes` on the discovery method record is
-             the SAME field this file's `discoverServiceInfo` probe arm fills, and it has real consumers —
-             lib/popup-form.js renders it as the Send panel's "Scopes:" row, lib/openapi-export.js emits it as
-             the operation's `security`, lib/send.js carries it onto the resolved schema. Filled only when
-             empty, exactly as that probe does: a discovery document's DECLARED scopes are the API's own
+             SO THE SCOPES GO WHERE SCOPES ARE ALREADY READ. `method.scopes` on the discovery method record has
+             real consumers — lib/popup-form.js renders it as the Send panel's "Scopes:" row,
+             lib/openapi-export.js emits it as the operation's `security`, lib/send.js carries it onto the
+             resolved schema. Filled only when empty: a discovery document's DECLARED scopes are the API's own
              statement about the operation, and a challenge answering one forced request must not overwrite
              it. The unconditional per-service `tab.scopes` write above is untouched and is what guarantees no
              observation is lost when no document names this method.
+             (This paragraph named this file's own automatic `discoverServiceInfo` probe arm as the other
+             filler of the same field and as the precedent for the fill-only-when-empty rule. That arm is
+             deleted — see the block above — so the precedent now stands on lib/popup-handlers.js's
+             DISCOVER_SERVICE, which is the same backend behind a button. THIS ARM IS NOT A PROBE and nothing
+             about it changed: the 403 it reads is the answer to a request the PAGE made.)
              NAMED RESIDUAL — the scope is attached per SERVICE always and per METHOD only where a discovery
              document describes it.
                WHAT IS NOT COVERED: a service with no discovery document (every app that is not a Google API)

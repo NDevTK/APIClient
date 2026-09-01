@@ -14,6 +14,25 @@
 // rejection that describes the request the service wanted, so they reach the relay through `makePageFetchFn`
 // and lib/req2proto.js names the method. An endpoint that answers 4xx to a malformed body has not been
 // mutated.
+//
+// AND THERE IS A THIRD AXIS THAT IS NOT ABOUT THE REQUEST AT ALL — WHOSE ACT IT IS — WHICH DECIDES THE
+// TRANSPORT BEFORE THE VERB DECIDES THE ENTRY. The page-context relay issues the request AS THE PAGE with the
+// person's own cookies, and lib/schema.js scopes it out of the credentialed destructive-path deny list on the
+// ground that a human composed what it carries. `fetchDiscoveryForService` is reached from BOTH grades — the
+// popup's FETCH_DISCOVERY button and lib/response-decode.js's automatic sweep — so it takes the grade as an
+// argument and picks its transport from it: a human's act goes to the relay, this tool's own act goes to
+// `safeFetch`, the chokepoint that asks the provenance, credential and deny-list questions the relay cannot.
+// It is not a fallback and neither arm is legacy: they are two POLICIES over one question, and the grade is
+// stated by the caller rather than inferred here, so a site that cannot name it aborts instead of defaulting
+// into the exempt one.
+//
+// WHAT THAT COSTS THE AUTOMATIC ARM IS STATED RATHER THAN WORKED AROUND. `safeFetch` sends no cookies on this
+// path and hardcodes `method:"GET"` (it reads neither `opts.method` nor `opts.body`, which is how RFC 9110
+// §9.2.1 "Safe Methods" is enforced structurally rather than by a test). So an automatic sweep sees only what
+// a logged-out client sees, and the POST error probe below has NO automatic form at all — there is no
+// chokepoint that can carry it, and giving it one would be adding an autonomous credentialed POST to the one
+// file whose safety argument is that it cannot make one. The probe survives at the grade entitled to it: the
+// Discovery panel's per-endpoint "probe" and "service info" buttons.
 
 // ─── Discovery Document Diffing ──────────────────────────────────────────────
 
@@ -128,6 +147,55 @@ function _seedIsProbeable(seedUrl, seedMethod) {
   return seedMethod === "POST";
 }
 
+/* THE AUTOMATIC ARM'S GET FUNCTION — the same question the relay's answers, asked at the chokepoint instead.
+ *
+ * WHY IT IS AN ADAPTER AND NOT A SECOND LOOP. The candidate walk below is written against a FUNCTION taking
+ * `(url, headers)` and answering `{ok, status, headers, body}` or `{error}`, which is the relay's vocabulary;
+ * the chokepoint answers its own record (`{ok, status, statusText, headers, body: Uint8Array, urlList,
+ * computedType, refusal}`). One loop over two transports is the whole point — duplicating the walk would be
+ * two copies of the candidate list, the diff, the merge and the not_found record, and the day they disagreed
+ * a service would publish a document to one grade and not the other.
+ *
+ * WHAT IT STATES TO THE CHOKEPOINT, AND WHY EACH ANSWER IS THE ONE IT IS.
+ *   pageUrl / pageOrigin — the analysed DOCUMENT's own browser-stated facts, off the DocData that
+ *     `handleContentMessage` stamps from `_browserFacts` (`doc.url` is `MessageSender.url`, `doc.origin` is
+ *     `MessageSender.origin`). NOT the tab's top-level address, which is the SSRF-principal substitution
+ *     SECURITY.md records removing, and not a URL-derived origin, which fabricates a tuple origin for a
+ *     sandboxed document the browser refused to give one.
+ *   provenance `derived` — the app's own code named this HOST (the page reached it) and `buildDiscoveryUrls`
+ *     composed a published well-known PATH onto it. No gate was forced to reach it, so it is not `forced`; the
+ *     page never fetched `$discovery/rest` itself, so it is not `observed`. Calling it observed would be the
+ *     fabrication §A-REQUEST-CARRIES-THE-PROVENANCE names — a reply merged into the observed pool for a
+ *     request no client made.
+ *   destination `""` — Fetch §2.2.5 "Requests"' destination for a plain data fetch. A discovery document is
+ *     JSON this zone parses, never program text it compiles, so it takes no CORB.
+ *
+ * A REFUSAL COMES BACK AS `{error}` CARRYING ITS OWN GRADE AND REASON, never as a silent miss: the loop reads
+ * `resp.error` as "this address published no document", and a request this tool DECLINED to make is a
+ * different fact from one a server answered 404 to. `safeFetch`'s `statusText` is the only account anyone gets
+ * of a request that did not happen, so it travels rather than being flattened. */
+function _chokepointGetFn(tab, who) {
+  DCHECK(typeof tab.url === "string" && tab.url !== "",
+         "the automatic discovery sweep has no page principal for " + who + " — handleContentMessage stamps " +
+         "`doc.url` from _browserFacts on every content message, so its absence is that mint broken and " +
+         "safeFetch would classify this document's SSRF target against no principal at all");
+  return async function (url, headers) {
+    const r = await safeFetch(url, {
+      pageUrl: tab.url,
+      pageOrigin: tab.origin,
+      provenance: "derived",
+      destination: "",
+      headers: headers || {},
+    });
+    /* `refusal` IS A POSITIVE STATEMENT ON EVERY RECORD safeFetch RETURNS — `null` means the request reached
+       the wire and what follows is the server's answer, an HTTP error status included. So this reads the
+       field rather than inferring a refusal from `!ok`, which would report a 404 as something this zone
+       declined and a decline as something the service said. */
+    if (r.refusal) return { error: r.refusal.kind + ":" + r.refusal.reason };
+    return { ok: r.ok, status: r.status, headers: r.headers, body: new TextDecoder().decode(r.body) };
+  };
+}
+
 /**
  * Fetch discovery document for a service, trying multiple API keys.
  * Some discovery documents only load with the correct API key.
@@ -139,6 +207,9 @@ function _seedIsProbeable(seedUrl, seedMethod) {
  * @param {string} [seedUrl]  the request that named this service
  * @param {string} [seedMethod] THE VERB THE PAGE USED ON `seedUrl`. The probe fallback below is a POST of a
  *   deliberately-malformed body, so a seed whose method this zone was never told is a seed it may not probe.
+ * @param {string} initiator WHOSE ACT THIS IS — lib/schema.js's `PAGE_CONTEXT_USER_INITIATED` (the popup's
+ *   FETCH_DISCOVERY button) or `PAGE_CONTEXT_TOOL_INITIATED` (lib/response-decode.js's automatic sweep). It
+ *   decides the TRANSPORT the candidate GETs leave by and whether the POST error-probe tail may fire at all.
  */
 async function fetchDiscoveryForService(
   documentId,
@@ -147,7 +218,10 @@ async function fetchDiscoveryForService(
   apiKeys,
   seedUrl,
   seedMethod,
+  initiator,
 ) {
+  pageContextStatedGrade(initiator, "lib/discovery-probe.js fetchDiscoveryForService, service " +
+                                    JSON.stringify(service));
   const tab = _docForLearning(documentId);
   /* NO TERNARY. `_docForLearning` asserts the document is registered AND that it carries a tabId (the browser
      states one on every content message and the page-context relay routes by it), so `(tab && tab.tabId != null)
@@ -156,8 +230,14 @@ async function fetchDiscoveryForService(
 
   /* A GET FUNCTION, AND THERE IS NO PARAMETER HERE IN WHICH TO ASK FOR ANYTHING ELSE — the candidate carries a
      URL and headers, and the relay's learning entry (lib/schema.js `pageContextGet`) takes exactly those. This
-     loop used to hand the relay a `method` off each candidate, one of which was a POST. */
-  const getFn = makePageGetFn(tabId, documentId);
+     loop used to hand the relay a `method` off each candidate, one of which was a POST.
+     WHICH GET FUNCTION IS THE GRADE'S ANSWER AND NOT THIS LOOP'S. Both arms answer the same question in the
+     same vocabulary — `{ok, status, headers, body}` or `{error}` — which is what lets one loop drive either,
+     and is also why the DCHECK below can assert that vocabulary for both without knowing which one ran. */
+  const getFn = initiator === PAGE_CONTEXT_USER_INITIATED
+    ? makePageGetFn(tabId, documentId, initiator)
+    : _chokepointGetFn(tab, "lib/discovery-probe.js fetchDiscoveryForService, service " +
+                            JSON.stringify(service));
   const triedKeys = new Set();
 
   // Build a deduplicated candidate list across all keys
@@ -178,13 +258,15 @@ async function fetchDiscoveryForService(
     for (const { url, headers } of candidates) {
       try {
         const resp = await getFn(url, headers);
-        /* A RELAY REPLY IS A RECORD, and a non-record here is the relay edge broken rather than a candidate
+        /* A GET-FN REPLY IS A RECORD, and a non-record here is the edge broken rather than a candidate
            that 404'd — which `resp.error || !resp.ok` would have read as "this address does not publish a
-           document" for every candidate of every service. */
+           document" for every candidate of every service. It is asked of BOTH transports and names both,
+           because the point of one loop over two is that neither gets to answer in its own dialect. */
         DCHECK(resp && typeof resp === "object",
-               "the page-context GET relay answered with no reply record — pageContextGet returns " +
-               "{ok, status, headers, body} or {error}, so anything else is that edge broken and every " +
-               "discovery candidate would read as an address that published nothing");
+               "the discovery GET function answered with no reply record — lib/schema.js's `pageContextGet` " +
+               "and this file's `_chokepointGetFn` each return {ok, status, headers, body} or {error}, so " +
+               "anything else is one of those two edges broken and every discovery candidate would read as " +
+               "an address that published nothing");
 
         if (resp.error || !resp.ok) continue;
 
@@ -274,12 +356,17 @@ async function fetchDiscoveryForService(
              just captured. The probe is a POST of a malformed body, so a GET seed was answered by sending a
              method the page never used to somebody else's server — the one thing §Attacker-sources forbids
              outright. The method now travels with the seed. */
+          /* AND THE PROBE IS THE OPERATOR'S TAIL, NOT THE SWEEP'S. `performProbeAndPatch` POSTs a
+             deliberately-malformed body with the person's cookies attached; the grade is what says a person
+             asked for that. Under the automatic grade the fall-through below records what was fetched and
+             stops — the seed and its verb stay on the record, which is what makes the Discovery panel's own
+             probe button a request the operator can still choose to make. */
           if (seedUrl && _seedIsProbeable(seedUrl, seedMethod)) {
             const seedUrlObj = new URL(seedUrl);
             const match = findDiscoveryMethod(mergedDoc, seedUrlObj.pathname, seedMethod);
-            if (!match) {
+            if (!match && initiator === PAGE_CONTEXT_USER_INITIATED) {
               notifyPopup(tabId);
-              await performProbeAndPatch(documentId, service, seedUrl, apiKey);
+              await performProbeAndPatch(documentId, service, seedUrl, apiKey, initiator);
               return;
             }
           }
@@ -305,10 +392,17 @@ async function fetchDiscoveryForService(
   const finalSeedUrl = seedUrl || currentStatus?.seedUrl;
   const finalSeedMethod = (seedUrl ? seedMethod : currentStatus?.seedMethod) || null;
 
-  if (finalSeedUrl && _seedIsProbeable(finalSeedUrl, finalSeedMethod)) {
+  /* THE SAME TAIL, THE SAME GRADE TEST, AND THE `else` IS WHERE THE AUTOMATIC ARM NOW LANDS — which is the
+     right place rather than a consolation. The not_found record below states the fact this sweep established
+     (this key set found no published document), keeps `seedUrl` and `seedMethod`, and keeps everything the
+     bundle taught us; §Attacker-sources says a derived-and-unfired request "is not a gap in the report, it IS
+     the report", and this record is that report's entry for one. What used to happen instead was a
+     credentialed malformed POST at somebody else's server on the strength of a response body arriving. */
+  if (finalSeedUrl && _seedIsProbeable(finalSeedUrl, finalSeedMethod) &&
+      initiator === PAGE_CONTEXT_USER_INITIATED) {
     // Pick a key to try probing with (use the first available one if any)
     const probeKey = keysToTry[0] || null;
-    await performProbeAndPatch(documentId, service, finalSeedUrl, probeKey);
+    await performProbeAndPatch(documentId, service, finalSeedUrl, probeKey, initiator);
   } else {
     /* TRULY NOT FOUND, AND NO TIMESTAMP ON IT. `_failedAt` was recorded here and response-decode.js read it
        as a 300-SECOND COOLDOWN before this service could be asked again — a clock deciding when work may
@@ -360,8 +454,20 @@ const _inflight = new Set();
 
 /**
  * Perform req2proto probing and patch the discovery document.
+ *
+ * A HUMAN'S ACT, ASSERTED AT THE DOOR. This function composes a POST of a deliberately-malformed body and
+ * sends it with the person's own session attached, at a host the page named. RFC 9110 §9.2.1 "Safe Methods"
+ * does not contain POST — "Of the request methods defined by this specification, the GET, HEAD, OPTIONS, and
+ * TRACE methods are defined to be safe" — so nothing about the METHOD makes this cheap, and the body is one
+ * the app never produced. CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE names credentialed + state-mutating +
+ * values-the-app-never-produced as the one combination that is never a setting; what takes this out of that
+ * combination is not a property of the request, it is that a person asked for it at a surface naming the
+ * endpoint. So the grade is a REQUIRED argument and its absence aborts: this used to be reached from
+ * lib/response-decode.js the instant a captured response body was protobuf, with nobody at any surface.
  */
-async function performProbeAndPatch(documentId, service, targetUrl, apiKey) {
+async function performProbeAndPatch(documentId, service, targetUrl, apiKey, initiator) {
+  pageContextRequireUserInitiated(initiator,
+    "lib/discovery-probe.js performProbeAndPatch, service " + JSON.stringify(service));
   // Deduplicate: skip if already probing this service+url combo
   const probeKey = `${service}::${targetUrl}`;
   if (_inflight.has(probeKey)) return;
@@ -378,7 +484,7 @@ async function performProbeAndPatch(documentId, service, targetUrl, apiKey) {
          "its absence is the loader having dropped it and every error probe in the extension silently doing " +
          "nothing");
 
-  const fetchFn = makePageFetchFn(tabId, documentId);
+  const fetchFn = makePageFetchFn(tabId, documentId, initiator);
 
   /* THE SIXTH COPY, AND THE ONE THAT WAS FACING THE OTHER WAY. `apiKey ? {"x-goog-api-key": apiKey} : {}`
      stood here: where `probeEndpoint` below refuses to invent an injection point, this INVENTED one for every
@@ -696,7 +802,12 @@ function convertProbeFieldsToSchema(rootFieldsObj, schemas, rootPrefix = "") {
 
 // ─── req2proto Fallback Probing ──────────────────────────────────────────────
 
-async function probeEndpoint(documentId, endpointKey) {
+/* THE PANEL'S PER-ENDPOINT PROBE. Same malformed credentialed POST as `performProbeAndPatch`, same reason the
+   grade is a required argument, and this is the entry the capability now lives at: lib/popup-handlers.js's
+   PROBE_ENDPOINT, posted by a click listener on the Discovery panel's own button. */
+async function probeEndpoint(documentId, endpointKey, initiator) {
+  pageContextRequireUserInitiated(initiator,
+    "lib/discovery-probe.js probeEndpoint, endpoint " + JSON.stringify(endpointKey));
   const tab = _docForLearning(documentId);
   const tabId = tab.tabId; // Chrome routing — asserted non-null by _docForLearning
 
@@ -750,7 +861,7 @@ async function probeEndpoint(documentId, endpointKey) {
     else if (_e.source.startsWith("header:")) headers[_e.source.slice("header:".length)] = _k;
   }
 
-  const fetchFn = makePageFetchFn(tabId, documentId);
+  const fetchFn = makePageFetchFn(tabId, documentId, initiator);
   const result = await probeApiEndpoint(probeUrl.toString(), headers, {
     fetchFn,
   });
@@ -777,36 +888,27 @@ async function probeEndpoint(documentId, endpointKey) {
 
 // ─── Request/Response Handling (from intercept.js via content.js relay) ──────
 
-// Host+path of POST URLs already error-probed by discoverServiceInfo (the
-// automatic service-info probe below). Module-global so it dedupes across
-// documents/tabs; resets on offscreen reload (a re-probe is harmless).
+// THE `_svcInfoProbedUrls` SET IS GONE WITH THE REQUEST IT GATED, and the reasoning is kept because the
+// argument it made is still correct about a request nobody may make automatically any more.
 //
-// THIS IS THE `one-per-endpoint` RULE, NOT A SOLVER BOUND, AND THE DISTINCTION IS WHY IT SURVIVES A
-// SECTION THAT BANS SEEN-SETS BY NAME. §NO BOUNDS governs the FRONTIER — flows, exploration, and the
-// principle that only EMITTED OUTPUT proves a flow is done, because shared state means byte-identical
-// args can still progress. Nothing here is a flow. This gates whether the trusted zone puts a
-// deliberately-malformed POST ON THE WIRE to a third-party API, and §Attacker sources states the rule
-// for exactly that and states it the other way: "Each active fetch is made FROM the document that
-// learned the endpoint, CORS-bounded both ways, one-per-endpoint (a method's safety is a PROTOCOL
-// CONTRACT and never a URL shape — see the safety rule below), never a blind sweep."
-// THE PARENTHESIS IS QUOTED AT ITS CURRENT WORDING AND THE OLD ONE IS NOT COMING BACK, because the
-// argument it made has been RETIRED rather than reworded. It read "no method is universally safe — GET
-// can mutate via /logout, /delete?id=", and CLAUDE.md now names that reasoning as the mistake:
-// §IS-THIS-REQUEST-STATE-MUTATING calls reaching for a URL shape to answer it "§RUN-DON'T-MATCH performed
-// on an address", and RFC 9110 §9.2.1 "Safe Methods" puts the very example on the other side of the line —
-// "it is the resource owner's responsibility to ensure that the action is consistent with the request
-// method semantics", and a `page?do=delete` is that owner's failure, which they "MUST disable or disallow
-// that action when it is accessed using a safe request method". A quotation is the half a reader verifies least, so
-// a retired one left standing goes on teaching a rule the tree no longer obeys — and this one sat in the
-// file whose probe the deny list guards. NONE OF WHICH CHANGES WHAT THIS SET IS FOR: the sentence's
-// operative words here are one-per-endpoint and never a blind sweep, and both survived the rewording.
-// Without this set, `handleResponseBody`
-// probes on EVERY captured POST — the blind sweep that sentence forbids, aimed at somebody else's
-// server. Deleting it does not widen the search; the probe's answer is a property of the SERVER, not
-// of any path through the page, so a second identical probe cannot learn what the first did not.
+// It held the host+path of every POST URL the automatic service-info probe had already error-probed, and it
+// was the `one-per-endpoint` rule rather than a §NO BOUNDS seen-set: §NO BOUNDS governs the FRONTIER — flows,
+// exploration, and the principle that only EMITTED OUTPUT proves a flow is done, because shared state means
+// byte-identical args can still progress — and nothing this set touched was a flow. It gated whether the
+// trusted zone put a deliberately-malformed POST ON THE WIRE at a third-party API, which is exactly what
+// §Attacker sources states the rule for, the other way round: "Each active fetch is made FROM the document
+// that learned the endpoint, CORS-bounded both ways, one-per-endpoint (a method's safety is a PROTOCOL
+// CONTRACT and never a URL shape — see the safety rule below), never a blind sweep." Without it,
+// `handleResponseBody` probed on EVERY captured POST — the blind sweep that sentence forbids.
 //
-// It has been read the other way once already and that is why this comment is here: the commit that
-// moved this file into C cited the set as one of three defects it was deleting, under §NO BOUNDS. The
-// C it produced had no entry that could issue a credentialed POST at all, so what actually shipped was
-// not an unbounded probe but no probe.
-const _svcInfoProbedUrls = new Set();
+// WHAT ACTUALLY ENDED THE BLIND SWEEP IS THE GRADE, WHICH IS A STRICTLY LARGER ANSWER TO THE SAME QUESTION.
+// A dedup set makes an unauthorised request happen ONCE per address instead of many times; it never asked
+// whether it should happen at all. lib/schema.js now requires an act's INITIATOR at the page-context relay,
+// the automatic caller in lib/response-decode.js is deleted, and the probe survives at the Discovery panel's
+// per-endpoint buttons — where a human names the endpoint, which is also why a per-address dedup would now be
+// a tool refusing to repeat an act its operator asked for twice.
+//
+// AND ONE THING IT WAS READ AS AND MUST NOT BE AGAIN: the commit that moved this file into C cited the set as
+// one of three defects it was deleting under §NO BOUNDS. The C it produced had no entry that could issue a
+// credentialed POST at all, so what shipped was not an unbounded probe but NO probe. Deleting a gate is not
+// the same act as deleting what it gated, and only the second of those is what happened here.

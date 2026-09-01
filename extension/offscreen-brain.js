@@ -794,12 +794,27 @@ function stripJsonp(text) {
    `sendProbe` writes `method: "POST"` at the call site. A rejected malformed body mutates nothing, and there
    was for a while a rule here saying no caller could express that verb at all — it is deleted, because it did
    not stop a state change, it stopped a measurement. */
-function makePageGetFn(tabId, documentId = null) {
-  return (url, headers) => pageContextGet(tabId, url, headers, documentId);
+/* AND BOTH BIND THE INITIATOR GRADE, WHICH IS WHY THEY ASSERT IT HERE AND NOT ONLY AT THE RELAY. A relay fn is
+   a closure that outlives the frame that made it — `probeApiEndpoint` and `discoverServiceInfo` take one as
+   `opts.fetchFn` and call it several times, once per content type — so the moment of MAKING one is the last
+   place the act's grade is still obviously in view, and the first place a caller that has none can be stopped.
+   Making one is therefore a statement that a human initiated this act; a caller that cannot make that
+   statement is not choosing a different fetch fn, it is choosing `safeFetch`, which is a different POLICY and
+   not a different transport (lib/safe-fetch.js: the deny list, the credential decision and the firing decision
+   are one policy at one chokepoint). The relay asserts again because it is the boundary and because these two
+   factories are not its only door. */
+/* NO `documentId = null` DEFAULT ON EITHER. It was there, it was unreachable (all four call sites pass one),
+   and it is exactly the shape a required trailing parameter must not sit behind — a caller that omitted the
+   document would have been silently given the relay's own `blocked: no documentId` refusal instead of naming
+   the gap. Both arguments are the caller's to state. */
+function makePageGetFn(tabId, documentId, initiator) {
+  pageContextRequireUserInitiated(initiator, "makePageGetFn (document " + documentId + ")");
+  return (url, headers) => pageContextGet(tabId, url, headers, documentId, initiator);
 }
 
-function makePageFetchFn(tabId, documentId = null) {
-  return (url, opts) => pageContextFetch(tabId, url, opts, documentId);
+function makePageFetchFn(tabId, documentId, initiator) {
+  pageContextRequireUserInitiated(initiator, "makePageFetchFn (document " + documentId + ")");
+  return (url, opts) => pageContextFetch(tabId, url, opts, documentId, initiator);
 }
 
 // ─── Discovery Document Fetching ─────────────────────────────────────────────

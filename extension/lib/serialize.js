@@ -268,7 +268,8 @@ function serializeTabData(tab) {
   /* Probe results: global base, tab overwrites — asked the same question, for the same reason, and the KEY is
      part of the question rather than a label on it. This map holds TWO record shapes under four key spellings
      (lib/store-record.js's `_srProbeShape`: the bare endpoint key and `auto:<service>::<url>` hold
-     lib/req2proto.js `probeApiEndpoint`'s answer, `svc:` and `svcinfo:` hold `discoverServiceInfo`'s), which
+     lib/req2proto.js `probeApiEndpoint`'s answer, `svc:` and `svcinfo:` hold `discoverServiceInfo`'s — the
+     last of those four is minted by nothing in this tree and is carried for records already in a store), which
      is exactly the split lib/popup-discovery.js dispatches its two renderers on — so passing `k` here is what
      makes this the same question the panel was asking of itself one field at a time. */
   const mergedProbe = {};

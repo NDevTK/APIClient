@@ -385,7 +385,7 @@ function isBinaryContentType(ct) {
 // offscreen document, which holds <all_urls> host permissions — so it carried none of the chokepoint's
 // guarantees (no http(s)-only, no origin-relative SSRF classification, no GET forcing, no CORB) and it
 // issued the probe's POST bodies at whatever URL an error-probe target resolved to. Every real caller
-// already passes `fetchFn: makePageFetchFn(tabId, documentId)` (the pageContextFetch relay), so the only
+// already passes `fetchFn: makePageFetchFn(tabId, documentId, initiator)` (the pageContextFetch relay), so the only
 // thing it ever did was stand ready to be selected by a caller that forgot — the shape of a legacy
 // fallback, whose whole failure mode is that it silently works.
 //
