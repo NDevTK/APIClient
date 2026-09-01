@@ -214,8 +214,41 @@ JSValue static_range_new(JSContext *ctx, JSValueConst snode, uint32_t soff, JSVa
     return obj;
 }
 
-/* `new StaticRange(init)` — §5.4. The dictionary arrived converted, so its four members are a Node, a number,
-   a Node and a number and nothing here runs the page's code. */
+/* THE OFFSET A `StaticRangeInit` CARRIES, REFUSED WHERE IT IS UNKNOWN — a MACRO so the abort stamps the
+   member's own line, for the reason IDL_DCHECK_MEMBER is one.
+   DOM §5.4 Interface StaticRange BRANCHES ON NEITHER OFFSET. Its constructor has two steps, and the second is
+   a pure set: "Set this’s start to (init["startContainer"], init["startOffset"]) and end to
+   (init["endContainer"], init["endOffset"])". So an unknown `startOffset` is not a value this body needs a
+   NUMBER for — it is a value this body should STORE, and a page that later reads `.startOffset` and branches
+   on it should fork there. That makes this a CARRY, and the only thing stopping it is that RangeBounds spells
+   its two offsets `uint32_t` because §5.5's live-range adjustment steps do arithmetic on them.
+   WITHOUT THE REFUSAL THE COERCION ANSWERS FOR THE MEMBER AND NAMES NO SITE. Web IDL §3.2.17 Dictionary
+   types' member loop rewrites a CONCOLIC member's declared type to IDL_ANY before any type arm is asked, so
+   `new StaticRange({startOffset: <unknown>, …})` reaches this body still wearing the Object
+   solver/concolic.c gives it, and JS_ToUint32 funnels it into ECMAScript §7.1.4 ToNumber's concolic arm —
+   which aborts in dev naming the value's SHAPE and the PAGE's frames and no C address at all, one message
+   shared with every coercion in the engine, and in release throws a TypeError this body used to drop on the
+   floor and run past. Refusing here names the member and this file:line; testing the conversion's result is
+   what stops a release build placing a zero nothing computed and returning a StaticRange with a live
+   exception on the context.
+   WHAT THE NEXT DIFF BUILDS: RangeBounds holding `start_off`/`end_off` as JSValues, with §5.5's adjustment
+   steps and §5.3's `collapsed` (which compares the two) asking for the number they need at their own sites.
+   A StaticRange never joins the live-range list — range_register is range.c's own and only §5.5's
+   constructor reaches it — so the arithmetic and the carry do not meet on one object.
+   HOW ITS ABSENCE SHOWS: this abort, on any page that builds a StaticRange out of a value it did not itself
+   compute. */
+#define SR_OFFSET_IS_CARRIED(v, member)                                                                       \
+    DCHECKF(!concolic_is(v),                                                                                  \
+            "StaticRangeInit's `%s` — declared `required unsigned long %s` by DOM §5.4 Interface StaticRange " \
+            "— reached its body as UNKNOWN EXTERNAL INPUT, which Web IDL §3.2.17 Dictionary types' member "    \
+            "loop CROSSED as itself before any type arm was asked. §5.4's constructor branches on it nowhere: "\
+            "its step 2 SETS the boundary point and nothing more, so this member is owed a CARRY and not a "   \
+            "number. This refusal is the INTERMEDIATE state and drops a world the run could have explored — "  \
+            "build the carry (RangeBounds holding its two offsets as JSValues, §5.5's adjustment steps and "   \
+            "§5.3's `collapsed` comparison each asking for the number at their own site), never a coercion "   \
+            "here and never a weakening of this assert", (member), (member))
+
+/* `new StaticRange(init)` — §5.4. */
 static JSValue js_static_range_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                     int magic)
 {
@@ -248,11 +281,17 @@ static JSValue js_static_range_ctor(JSContext *ctx, JSValueConst this_val, int a
     }
     {
         JSValue v = idl_dict_get(ctx, init, "startOffset");
-        JS_ToUint32(ctx, &so, v);
+        int r;
+
+        SR_OFFSET_IS_CARRIED(v, "startOffset");
+        r = JS_ToUint32(ctx, &so, v);
         JS_FreeValue(ctx, v);
+        if (r < 0) { JS_FreeValue(ctx, sc); JS_FreeValue(ctx, ec); return JS_EXCEPTION; }
         v = idl_dict_get(ctx, init, "endOffset");
-        JS_ToUint32(ctx, &eo, v);
+        SR_OFFSET_IS_CARRIED(v, "endOffset");
+        r = JS_ToUint32(ctx, &eo, v);
         JS_FreeValue(ctx, v);
+        if (r < 0) { JS_FreeValue(ctx, sc); JS_FreeValue(ctx, ec); return JS_EXCEPTION; }
     }
     proto = JS_GetClassProto(ctx, g_static_class);
     DCHECK(!JS_IsNull(proto), "a StaticRange was built in a realm with no StaticRange.prototype");
