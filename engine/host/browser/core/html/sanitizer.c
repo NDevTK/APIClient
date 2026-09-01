@@ -811,13 +811,17 @@ static JSValue san_canon_list(JSContext *ctx, JSValueConst list, SanKind kind)
    Both steps are "if it does not exist, set it": a member the page WROTE is copied into the canonical
    configuration verbatim, which is faithful — §3.2.17 (ES-to-IDL list) step 4.1.4.1 already converted it, so
    in the standard's model there is nothing left here but a boolean.
-   IN THIS ENGINE THERE IS A THIRD VALUE, AND IT IS THE POINT OF THIS ASSERT. idl_args.c's §3.2.17 member loop
-   rewrites a CONCOLIC member's declared type to IDL_ANY before any type arm is asked, unconditionally, so
-   `new Sanitizer({comments: location.hash})` reaches this line still wearing the Object solver/concolic.c
-   gives an unknown — and these two steps then store it in the configuration the whole component answers
-   from. That is correct and deliberate (opacity must survive a coercion), which is exactly why it is worth
-   asserting: it is the ONLY way an unknown gets into `r->config`, and every read of these two members below
-   goes through idl_dict_bool because of it.
+   AND IN THIS ENGINE THAT IS NOW TRUE TOO, WHICH IS A CORRECTION TO WHAT STOOD HERE. idl_args.c's §3.2.17
+   member loop used to rewrite a CONCOLIC member's declared type to IDL_ANY before any type arm was asked,
+   for every type including this one — so `new Sanitizer({comments: location.hash})` reached this line still
+   wearing the Object solver/concolic.c gives an unknown, and these two steps stored it in the configuration
+   the whole component answers from. It no longer does: `boolean` is the type whose CONVERSION is the fork
+   (idl_args.h's idl_concolic_rule answers IDL_CONCOLIC_FORKS for IDL_BOOLEAN_NO_DEFAULT, which is what
+   SAN_CONFIG_MEMBERS declares both of these), so the member loop asks §7.1.2 ToBoolean at the branch seam,
+   BOTH worlds run, and what arrives here is a real `true` in one flow and a real `false` in its sibling.
+   THE ASSERT STILL ADMITS THE UNKNOWN and that is deliberate rather than leftover: it is the ONE place that
+   would see a boolean member arriving uncoerced if that crossing ever came back, and the shape it would
+   arrive in is exactly this. What it must not admit is a fourth shape, which is a declaration defect.
    `v` IS CONSUMED. */
 static void san_carry_flag(JSContext *ctx, JSValueConst cfg, const char *member, JSValue v)
 {
@@ -1449,15 +1453,17 @@ static JSValue js_san_set_flag(JSContext *ctx, JSValueConst this_val, int argc, 
     if (!r) return JS_EXCEPTION;
     /* §3.6 threw for a call with no argument before this body ran, and the declaration converted what there
        was — so this is ToBoolean over a value that is already one, or over unknown external input, which
-       forks rather than being asserted about. THE ARGUMENT IS THE HALF THAT IS ANSWERED: `ONE_BOOL` declares
-       IDL_BOOLEAN, whose rule is IDL_CONCOLIC_FORKS, so the conversion asked step_tobool_run and `argv[0]` is
-       a real boolean here. The member it is compared AGAINST is the other half, and it is not — see below. */
+       forks rather than being asserted about. `ONE_BOOL` declares IDL_BOOLEAN, whose rule is
+       IDL_CONCOLIC_FORKS, so the conversion asked step_tobool_run and `argv[0]` is a real boolean here. THE
+       MEMBER IT IS COMPARED AGAINST IS THE OTHER HALF, and it is now answered the same way — see below. */
     allow = argc > 0 && JS_ToBool(ctx, argv[0]);
     if (magic && !san_has(ctx, r->config, "attributes")) return JS_FALSE;    /* step 3 */
-    /* Step 4's "if configuration[member] is allow, return false" over the STORED member, which is where an
-       unknown that crossed §3.2.17 lives — so it goes through the refusing reader and never a bare ToBoolean,
-       which would answer `true` for every unknown and report "nothing changed" for a configuration whose flag
-       nobody has established. */
+    /* Step 4's "if configuration[member] is allow, return false" over the STORED member. §8.6.3 declares both
+       flags `boolean`, SAN_CONFIG_MEMBERS declares them IDL_BOOLEAN_NO_DEFAULT, and that type's rule is
+       IDL_CONCOLIC_FORKS — so §3.2.17's member loop forked the unknown at the branch seam and canonicalize
+       carried a real truth value here. The read goes through idl_dict_bool rather than a bare `JS_ToBool`
+       anyway, because that reader is what still refuses a configuration object that never came through the
+       conversion at all, which a `JS_ToBool` would answer `true` for with nothing to say so. */
     had = san_has(ctx, r->config, member) && idl_dict_bool(ctx, r->config, member) == allow;
     if (had) return JS_FALSE;
     if (magic && allow) {

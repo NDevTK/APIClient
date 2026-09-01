@@ -689,8 +689,11 @@ static JSValue js_el_attach_shadow(JSContext *ctx, JSValueConst this_val, int ar
               "the fork honest where a range's would not be: ask step_fork_run over SR_MODE_VALUES plus the "
               "TypeError arm at the §3.2.18 conversion — outcome 0 the first listed value, since that is the "
               "arm a run with no forking policy takes — so every enumeration in the platform is answered "
-              "once rather than once per member. Its SUBPROBLEM is the boolean dictionary member, which "
-              "idl_dict_bool_at already names and which is not built");
+              "once rather than once per member. Its subproblem — the two-armed §3.2.3 boolean, at the "
+              "argument boundary AND at the dictionary member — is built, AT THE CONVERSION rather than in "
+              "the bodies, which is where this ask belongs too: one arm in the member loop serves every "
+              "declared enumeration member at once, and `delegatesFocus`, `clonable` and `serializable` "
+              "three lines below now reach this plain C body already forked, needing nothing of it");
     DCHECK(JS_IsString(mode_v), "ShadowRootInit's `mode` is required and the declaration converts it, so a "
                                 "body reaching here with neither a string nor unknown external input means "
                                 "the conversion was skipped");

@@ -850,8 +850,10 @@ void event_init(JSContext *ctx)
     JSClassDef d = { "Event" };
     /* DOM §2.2 Interface Event: `undefined initEvent(DOMString type, optional boolean bubbles = false,
        optional boolean cancelable = false)`. THE TWO FLAGS ARE `boolean` AND THE DECLARATION SAYS SO, which is
-       not a tidier spelling of IDL_ANY — IDL_BOOLEAN is the one scalar idl_concolic_rule answers
-       IDL_CONCOLIC_FORKS for, and the fork happens INSIDE the conversion. Declared IDL_ANY the value crossed
+       not a tidier spelling of IDL_ANY — IDL_BOOLEAN is the one scalar an ARGUMENT position can be declared
+       that idl_concolic_rule answers IDL_CONCOLIC_FORKS for (its twin, IDL_BOOLEAN_NO_DEFAULT, gets the same
+       answer for the same §3.2.3 reason and is a dictionary member's type alone), and the fork happens INSIDE
+       the conversion. Declared IDL_ANY the value crossed
        unconverted into this file's own `JS_ToBool(ctx, argv[1])`, and ECMAScript §7.1.2 ToBoolean ( arg ) ends
        "Return true" over the ordinary Object an unknown wears — so `e.initEvent(t, cfg.bubbles)` was a
        BUBBLING event in every world and the non-bubbling one was deleted with nothing to say so, which is the

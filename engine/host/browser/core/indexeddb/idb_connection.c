@@ -694,8 +694,9 @@ static JSValue js_conn_transaction(JSContext *ctx, JSValueConst this_val, int ar
               "directly below refuses. The arm "
               "set is GIVEN by the enumeration rather than chosen, which is what makes an N-way ask honest "
               "where a range's would not be: ask step_fork_run over TX_MODES plus the TypeError arm at the "
-              "§3.2.18 conversion, outcome 0 the first listed value. Its SUBPROBLEM is the boolean "
-              "dictionary member, which idl_dict_bool_at already names and which is not built");
+              "§3.2.18 conversion, outcome 0 the first listed value. Its subproblem — the two-armed §3.2.3 "
+              "boolean, at the argument boundary AND at the dictionary member — is built, at the conversion "
+              "and not in the bodies, which is the shape this ask takes too");
     mode = conn_enum_index(ctx, argv[1], TX_MODES);
     if (mode != IDB_TX_READONLY && mode != IDB_TX_READWRITE) {
         JS_ThrowTypeError(ctx, "a transaction cannot be created with the mode \"versionchange\" — an upgrade "

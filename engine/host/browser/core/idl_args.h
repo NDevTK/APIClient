@@ -148,7 +148,11 @@ typedef enum {
        answers. ToBoolean(undefined) is false, so IDL_BOOLEAN folds the two together and can express neither
        step. MutationObserverInit declares four of these (attributes, characterData, attributeOldValue,
        characterDataOldValue) and the two members that DO carry `= false` (childList, subtree) stay
-       IDL_BOOLEAN, which is the IDL's own distinction and not a convention. */
+       IDL_BOOLEAN, which is the IDL's own distinction and not a convention.
+       WHAT IT DOES NOT DIFFER IN IS THE CONVERSION. A member that is PRESENT is converted by §3.2.3 exactly as
+       IDL_BOOLEAN's is, so unknown external input at either type is the same fork at the same seam — see
+       idl_concolic_rule, which answers IDL_CONCOLIC_FORKS for both. The distinction this type exists for is
+       about `undefined` and about nothing else. */
     IDL_BOOLEAN_NO_DEFAULT,
     /* `sequence<DOMString>` — §3.2.21's iterator-protocol conversion with DOMString as the element type.
        DOM §4.3.1's `attributeFilter` is the first, and it is a DICTIONARY MEMBER: the iterator protocol is the
@@ -598,14 +602,23 @@ static inline IdlConcolicRule idl_concolic_rule(IdlArgType t)
        that had it. Both truth values are feasible and the algorithms behind this boundary observe different
        worlds for them — `cloneNode(deep)` copies a subtree or does not, `open(m, u, async)` is a synchronous
        XHR or an asynchronous one, `toggle(t, force)` adds a class or removes it — so neither may be picked.
-       THE ARGUMENT BOUNDARY IS WHAT THIS ANSWERS FOR, and the DICTIONARY-MEMBER half of §3.2.3 is a different
-       site with its own answer rather than a gap here: idl_dict_walk_run crosses every unknown member as
-       itself, idl_dict_bool CRASHES on one read through the plain C reader, and a member that needs a C bool
-       out of an unknown forks at the READ under its own algorithm's name (DOM §2.7's flatten more options is
-       the worked example, and its ask is still the outcome seam's). The argument side is the branch seam's —
-       see the conversion — so a page that writes `if (cfg.on)` and then passes `cfg.on` to a member files ONE
-       constraint entry rather than two that can contradict each other. */
+       BOTH BOUNDARIES ANSWER IT AND THEY ANSWER IT AT THE SAME SEAM, which is why this is one row. §3.2.3 is
+       reached from two places — an ARGUMENT position and a §3.2.17 dictionary MEMBER — and for a while only
+       the first of them forked: the member loop crossed every unknown member as itself, so the pin merely
+       MOVED from the conversion into whatever `JS_ToBool` the body used, and idl_dict_bool had to refuse the
+       value to stop it. Crossing is not the cure for this type at either boundary, for the reason the
+       paragraph above gives: a boolean's only consumer is control flow, so a crossed one has nowhere to go.
+       Both sites ask step_tobool_run — the BRANCH seam — so a page that writes `if (cfg.on)`, passes `cfg.on`
+       to a member and writes `{on: cfg.on}` files ONE constraint entry rather than three that can contradict
+       each other.
+       IDL_BOOLEAN_NO_DEFAULT IS THE SAME TYPE ASKING THE SAME QUESTION, and is here for that reason alone: it
+       differs from IDL_BOOLEAN in what an ABSENT member means (see its declaration), which is a fact about
+       `undefined` and says nothing about what §3.2.3 does with a value that is present and unknown. It sat
+       under `default:` at CROSSES while IDL_BOOLEAN was already here — so on one dictionary
+       (MutationObserverInit) four members were pinned to `true` by the readers the other two had stopped
+       being pinned by. */
     case IDL_BOOLEAN:
+    case IDL_BOOLEAN_NO_DEFAULT:
         return IDL_CONCOLIC_FORKS;
     default:
         return IDL_CONCOLIC_CROSSES;
@@ -936,6 +949,17 @@ typedef struct {
     IdlDictLevel lvl;
     uint8_t    conv_sp;   /* how many IdlConvFrame frames are live; 0 = level zero is the one in flight */
     uint8_t    started;   /* the walk has a `src` and an `out`; 0 = nothing in flight, so a resume may start it */
+    /* THE NAME OF THE FORK THIS WALK IS ASKING — step_tobool_run's `op` for a §3.2.3 boolean member over
+       unknown external input. It is HERE and not a C local because the driver reads `JSStepHdr::fork_op`
+       AFTER the machine has returned JS_STEP_FORK, by which time a local of the member loop is gone; and it
+       is the WALK's rather than the header's shared `len_op` because that buffer belongs to the length probe
+       and two mechanisms sharing one scratch space is how one overwrites the other's outstanding question.
+       ONE BUFFER IS ENOUGH BECAUSE ONE FORK IS IN FLIGHT: step_fork_ask refuses a second ask while the first
+       one's operands are still on the header. It is SCRATCH and carries nothing across a park — the ask is
+       re-composed from the declaration on every entry, and JSStepHdr::fork_ask_key (a content hash) is what
+       survives to match the answer to the question, so a byte-copied clone that never reads this buffer's
+       stale contents is correct by construction. */
+    char       ask[160];
 } IdlDictWalk;
 
 /* INTERN a dictionary declaration's member names, once per runtime, and answer them. The atom must be live at
@@ -1504,12 +1528,15 @@ void idl_active_ctor_owed(JSContext *ctx, JSStepHdr *hdr, JSValueConst ctor);
    Nothing of the page's is on the object these read, so neither runs any of its code. */
 JSValue idl_dict_get(JSContext *ctx, JSValueConst dict, const char *name);
 /* THE BOOLEAN READ CARRIES ITS CALLER'S ADDRESS, because its assert is one line reached from every dictionary
-   in the platform. The concolic refusal below it names a REMEDY — declare this member a step machine and fork
-   at its own stage — and a remedy stamped `idl_args.c` names an action with no object: the reader is told what
-   to build and not where, so the crash is rediscovered rather than fixed. The pair is captured at the CALL and
-   never derived here, which is why this is a macro expanded at each site and not a second function wrapping
-   the first; the member's own name travels with it because one name (`bubbles`, `capture`) is declared by many
-   dictionaries and only the pair says which one refused. */
+   in the platform, and a crash stamped `idl_args.c` names a defect with no object. The pair is captured at the
+   CALL and never derived here, which is why this is a macro expanded at each site and not a second function
+   wrapping the first; the member's own name travels with it because one name (`bubbles`, `capture`) is
+   declared by many dictionaries and only the pair says which read it was.
+   WHAT IT NOW REPORTS IS AN OBJECT AND NO LONGER A MISSING FORK. §3.2.3's fork is performed by the member loop
+   (idl_concolic_rule answers IDL_CONCOLIC_FORKS for both boolean types, so the crossing does not rewrite them
+   and the loop asks step_tobool_run), so every member this reader is meant to read arrives as a real truth
+   value. An unknown here says the object did not come through §3.2.17, or that the member is not declared a
+   boolean — see the refusal itself, which is where that split is stated. */
 bool    idl_dict_bool_at(JSContext *ctx, JSValueConst dict, const char *name,
                          const char *file, int line);
 #define idl_dict_bool(ctx, dict, name) idl_dict_bool_at((ctx), (dict), (name), __FILE__, __LINE__)
@@ -1520,8 +1547,11 @@ bool    idl_dict_bool_at(JSContext *ctx, JSValueConst dict, const char *name,
    to an IDL value whose type is the type member is declared to be of". That assertion has TWO ways to fail
    and only ONE of them is a conversion that went wrong.
    THE FIRST IS THE CROSSING, AND IT IS THE ENGINE WORKING AS DESIGNED. idl_dict_walk_run's member loop
-   rewrites a CONCOLIC member's declared type to IDL_ANY BEFORE any type arm is asked, unconditionally, so
-   unknown external input crosses the boundary AS ITSELF and reaches the body still wearing the Object
+   rewrites a CONCOLIC member's declared type to IDL_ANY BEFORE any type arm is asked — for every declared
+   type whose rule is not IDL_CONCOLIC_FORKS, which is every type this macro is used at (the one exception is
+   §3.2.3's boolean, whose conversion IS the fork and which therefore reaches its arm and is placed as a real
+   truth value; idl_dict_bool is the reader for those, and it makes the opposite assertion) — so unknown
+   external input crosses the boundary AS ITSELF and reaches the body still wearing the Object
    solver/concolic.c gives it. Nothing was converted, so nothing failed. A shape assert phrased "reached this
    body unconverted" is then a CORRECT CRASH WITH A FALSE EXPLANATION — the worst shape an assert has, because
    the crash IS right and only its account is wrong, so it does not announce itself. A reader who obeys it

@@ -223,7 +223,9 @@ JSValue static_range_new(JSContext *ctx, JSValueConst snode, uint32_t soff, JSVa
    on it should fork there. That makes this a CARRY, and the only thing stopping it is that RangeBounds spells
    its two offsets `uint32_t` because §5.5's live-range adjustment steps do arithmetic on them.
    WITHOUT THE REFUSAL THE COERCION ANSWERS FOR THE MEMBER AND NAMES NO SITE. Web IDL §3.2.17 Dictionary
-   types' member loop rewrites a CONCOLIC member's declared type to IDL_ANY before any type arm is asked, so
+   types' member loop rewrites a CONCOLIC member's declared type to IDL_ANY before its arm is asked — which is
+   what idl_args.h's idl_concolic_rule says for every type it answers IDL_CONCOLIC_CROSSES for, and an
+   `unsigned long` is one of them — so
    `new StaticRange({startOffset: <unknown>, …})` reaches this body still wearing the Object
    solver/concolic.c gives it, and JS_ToUint32 funnels it into ECMAScript §7.1.4 ToNumber's concolic arm —
    which aborts in dev naming the value's SHAPE and the PAGE's frames and no C address at all, one message

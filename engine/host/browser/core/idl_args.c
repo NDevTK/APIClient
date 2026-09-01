@@ -1899,10 +1899,34 @@ static int idl_level_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *walk, IdlC
            undefined so the body can tell absence from false (see idl_args.h). */
         if (JS_IsUndefined(w->mv) && mt != IDL_BOOLEAN)
             mt = IDL_ANY;
-        /* The same boundary rule the arguments follow: unknown external input crosses as ITSELF, so a
-           concolic member keeps forking control flow instead of collapsing at a coercion. */
-        if (mt != IDL_ANY && concolic_is(w->mv))
+        /* The same boundary rule the arguments follow, AND NOW ASKED THE SAME WAY. idl_args.h's
+           idl_concolic_rule is the ONE statement of what a declared type does with unknown external input;
+           this reads it instead of restating it, exactly as the argument path's pass-through does, because a
+           hand-maintained mirror of a hand-maintained list is the defect that rule exists to prevent.
+           A TYPE WHOSE CONVERSION *IS* THE FORK IS NOT CROSSED, WHICH IS THE WHOLE OF THIS CONDITION. Web IDL
+           §3.2.3 boolean's one step is ECMAScript §7.1.2 ToBoolean ( arg ), whose last step is "Return true",
+           and a concolic wears an ordinary Object — so a crossed boolean member is not an unconverted value
+           the body still holds, it is a value every `JS_ToBool` in every body answers `true` for. Crossing
+           MOVED that collapse into the reader; it never removed it. The boolean arm below asks the BRANCH
+           seam instead, so both worlds run and `if (cfg.on)` and a member taking `cfg.on` are ONE gate with
+           one constraint entry — the same answer the argument boundary already gives one type over.
+           EVERY OTHER RULE IS UNCHANGED: CROSSES and UNASKED both reach IDL_ANY exactly as they did, so a
+           DOMString member still carries its bytes to the body and a dictionary member is still a bag of
+           reads. */
+        if (mt != IDL_ANY && concolic_is(w->mv) && idl_concolic_rule(mt) != IDL_CONCOLIC_FORKS)
             mt = IDL_ANY;
+        /* AND THE ONLY FORK THIS LOOP PERFORMS IS §3.2.3's, ASSERTED WHERE THE UNCROSSING HAPPENS. The two
+           §3.2.25 unions that also answer FORKS resolve their arm at an ARGUMENT position, where the value is
+           a position's and not a member's — a member declared one would fall past every arm below and be
+           PLACED UNCONVERTED, which is silent both ways it can go wrong (crossed, it is placed unconverted
+           too). The condition above is what makes this reachable at all, so the two are one statement. */
+        DCHECK(!concolic_is(w->mv) || idl_concolic_rule(mt) != IDL_CONCOLIC_FORKS ||
+               mt == IDL_BOOLEAN || mt == IDL_BOOLEAN_NO_DEFAULT,
+               "a dictionary member declared a type whose conversion FORKS over unknown external input, and "
+               "this member loop has an arm for exactly one of those — Web IDL §3.2.3 boolean. The §3.2.25 "
+               "unions that answer FORKS are resolved at an argument position by the conversion above, not "
+               "here, so a member declared one reaches no arm and is placed unconverted. Give the type its "
+               "arm in this loop, beside the boolean's");
         /* §3.2.25 over `(DOMString or sequence<DOMString>)` ON A DICTIONARY MEMBER — the same union the
            argument path resolves, resolved here so the arm's @@iterator read parks on the MEMBER it is
            on. It rewrites `mt` and the arms below convert what it chose; step 2's null is placed
@@ -2115,9 +2139,68 @@ static int idl_level_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *walk, IdlC
             w->seq_phase = 0;
         }
         else if (mt == IDL_BOOLEAN || mt == IDL_BOOLEAN_NO_DEFAULT) {
-            JSValue b = JS_NewBool(ctx, JS_ToBool(ctx, w->mv));
+            int res = 0;
+
+            /* §3.2.17 (ES-to-IDL list) step 4.1.4.1 CONVERTS A MEMBER BY ITS DECLARED TYPE, and for a
+               `boolean` that type's whole algorithm is Web IDL §3.2.3 boolean — "Let x be the result of
+               computing ToBoolean(V)" — which is ECMAScript §7.1.2 ToBoolean ( arg ). It runs none of the
+               page's code, so for a value the page determined this is the coercion it always was, taken
+               inside the call below with no request and no fork.
+               OVER UNKNOWN EXTERNAL INPUT IT IS A FORK, AND THIS IS THE DICTIONARY HALF OF THE ANSWER THE
+               ARGUMENT BOUNDARY ALREADY GIVES. §7.1.2's last step is "Return true" and a concolic wears an
+               ordinary Object (solver/concolic.c installs one so a method on an unknown yields another
+               unknown), so the coercion did not answer the question coarsely — it DECIDED it, pinning every
+               unknown flag to `true` and deleting the world in which it is false. That deletion did not stop
+               at this line: the walk's crossing sent the unknown past this arm to the BODY, where
+               idl_dict_bool's plain `JS_ToBool` answered `true` for it, which is why that reader had to
+               refuse. Both worlds are feasible and the algorithms behind this boundary observe different ones
+               — `getRootNode({composed})` answers the shadow-including root or the root, `observe({subtree})`
+               watches a subtree or a node, `attachShadow({clonable})` copies a shadow root or does not — so
+               neither may be picked.
+               IT IS THE BRANCH SEAM AND NOT THE OUTCOME SEAM, exactly as the argument-position conversion's
+               §3.2.3 arm is. quickjs-step.h states the rule at both: a ToBoolean is the SAME PREDICATE
+               `if (p)` asks about, keyed by the value's own branch identity, so `if (cfg.deep)` and
+               `node.cloneNode(cfg.deep)` and `{deep: cfg.deep}` are ONE gate with one pin and one domain.
+               Asked at the outcome seam this would file a second, independent entry over one predicate — a
+               flow that had already pinned `cfg.deep` would fork again and stand on two arms contradicting
+               each other — and it would record none of what a branch records, so an @H parameter the page had
+               gated would print with no domain at all.
+               NOTHING IS NUMBERED, and that is a consequence of the seam rather than an omission: a truth
+               value has exactly two completions and the arm a real session takes is computed by the branch
+               seam out of the value's own example, so this site declares neither an ordering nor a `real`.
+               THE ASK NAMES THE MEMBER, BECAUSE ONE MACHINE MAKES MANY OF THEM. JSStepHdr::fork_ask_key is a
+               content hash of this string and it is what stops one ask's answer being consumed at another's
+               call site — MutationObserverInit declares SIX booleans, so a single constant here would give
+               all six one key and a resume from the fourth would be read as the answer to the first. The name
+               is the DECLARATION's and not a cursor: the member's identifier, its inheritance LEVEL (which
+               is what tells an inherited `bubbles` from a re-declared one, and is fixed at the declaration
+               rather than being a position in anything the page moves), and the dictionary it is declared on.
+               ONLY THE TOP LEVEL CAN BE STANDING HERE, so those three name the ask uniquely across the whole
+               walk: every level BELOW the top is parked at `mphase` 1 on the member that PUSHED it, and a
+               member whose type pushes a level is a dictionary or a sequence and never a boolean.
+               `in` IS RELEASED BEFORE THE ASK for the reason the argument path's §3.2.25 arm states: the
+               request takes no `in` to hand it to, and the sibling's snapshot is taken at this return, so
+               nothing of the caller's may be live across it. `w->mv` is not the caller's — it is the level's
+               own slot, which idl_level_visit names, which is where step_tobool_run requires a borrowed
+               operand to live. */
+            DCHECK(idl_concolic_rule(mt) == IDL_CONCOLIC_FORKS,
+                   "§3.2.17's boolean member asks §7.1.2 ToBoolean at the branch seam for unknown input while "
+                   "idl_args.h no longer declares this boolean type as one that forks — the crossing above "
+                   "would then rewrite the member to IDL_ANY, this arm would never be reached for an unknown, "
+                   "and every reader of the placed member would answer `true` again with nothing to say so");
+            JS_FreeValue(ctx, in);
+            in = JS_UNDEFINED;
+            snprintf(walk->ask, sizeof walk->ask,
+                     "Web IDL §3.2.3 boolean member `%s` (level %u) of %s",
+                     dm->name, (unsigned)dm->level, idl_dict_where(w));
+            r = step_tobool_run(ctx, hdr, w->mv, walk->ask, &res);
+            if (r) return r;   /* parked ON THIS MEMBER's own coercion, or forked at it */
+            DCHECK(res == 0 || res == 1,
+                   "§3.2.3's conversion came back with something that is neither of the two truth values a "
+                   "boolean has — the two worlds a flag names are all there are, and a third is a world "
+                   "nothing can be in");
             JS_FreeValue(ctx, w->mv);
-            w->mv = b;
+            w->mv = JS_NewBool(ctx, res);
         }
         else if (mt == IDL_CALLBACK) {
             if (!JS_IsFunction(ctx, w->mv)) {
@@ -4175,33 +4258,39 @@ JSValue idl_dict_get(JSContext *ctx, JSValueConst dict, const char *name)
 }
 
 /* …AND A BOOLEAN ONE IS A COERCION, WHICH IS WHY IT ASSERTS WHAT THE READ ABOVE DOES NOT.
-   Web IDL §3.2.17 Dictionary types step 4.1.4 converts a `boolean` member with ToBoolean, and this engine
-   deliberately does NOT run that conversion over unknown external input: the §3.2.17 member loop above
-   rewrites a concolic member's type to IDL_ANY before ANY type arm is asked, so the value crosses as ITSELF
-   and opacity survives the boundary to reach the member's own algorithm. (That rewrite is unconditional and
-   does not consult idl_concolic_rule, which this comment used to name as its authority — the rule answers the
-   ARGUMENT boundary, where IDL_BOOLEAN is IDL_CONCOLIC_FORKS and the conversion asks step_tobool_run; a
-   dictionary member is the other half of §3.2.3 and its answer is this crossing plus the refusal below.) This
-   function is where that care is spent, because a concolic wears an Object — solver/concolic.c gives it one so
-   a method on an unknown yields another unknown — and EVERY Object is truthy. ToBoolean here therefore does
-   not read the member: it PINS it to `true` for every unknown there has ever been and deletes the world in
-   which it is false, one level below the union arm that has the same shape.
-   A MEMBER THAT NEEDS A C bool OUT OF AN UNKNOWN ASKS FOR AN ARM, and an ask is a request, so the member is a
-   step machine (idl_method_id_step) whose stage calls step_fork_run — decide.h states why a plain C body
-   cannot: it is already inside its activation and has no state for the other arm to be snapshotted at. This
-   assert is what names that conversion at the site that needs it, rather than letting a member go on answering
-   one world confidently. */
+   Web IDL §3.2.17 Dictionary types step 4.1.4.1 converts a `boolean` member by its declared type, which is
+   Web IDL §3.2.3 boolean, which is ECMAScript §7.1.2 ToBoolean ( arg ). That conversion belongs to the
+   MEMBER LOOP and it is performed there, over unknown external input as well as over a value the page
+   determined: the loop asks step_tobool_run at the BRANCH seam, both worlds run, and what it places on the
+   dictionary is a real `true` or a real `false`. So by the time a body reads a member, the fork has already
+   happened and this reader has nothing left to decide.
+   WHICH IS WHY THE REFUSAL BELOW IS NOW A SHOULD-NEVER-HAPPEN AND NOT A REQUEST FOR WORK. It used to name a
+   remedy — declare the member a step machine and fork at its own stage — because the member loop crossed every
+   unknown member as itself and left the pin sitting in whatever `JS_ToBool` a body reached for. That crossing
+   is gone for this type (idl_concolic_rule answers IDL_CONCOLIC_FORKS for IDL_BOOLEAN and
+   IDL_BOOLEAN_NO_DEFAULT, and the loop reads the rule), so a remedy phrased that way would send the next
+   reader to build a fork that is already built, at a site that is not where the value came from.
+   AN UNKNOWN REACHING HERE IS THEREFORE A STATEMENT ABOUT THE OBJECT, NOT ABOUT THE MEMBER: either it never
+   went through §3.2.17 at all, or the member is not declared a boolean in the IdlDictMember list this
+   operation registered — and in both cases the fix is at the declaration or at whoever built the object, not
+   in a body. It stays a DCHECK rather than being deleted because a reader cannot tell those two apart from
+   `true`, and this is where the difference is still visible.
+   IT KEEPS THE CALLER'S ADDRESS for the reason idl_args.h states at the macro: one name (`composed`,
+   `capture`) is declared by many dictionaries, and only the pair of the name and the site says which object
+   was the one that never crossed the conversion. */
 bool idl_dict_bool_at(JSContext *ctx, JSValueConst dict, const char *name, const char *file, int line)
 {
     JSValue v = idl_dict_get(ctx, dict, name);
     bool b;
 
     DCHECKF(!concolic_is(v),
-            "the boolean dictionary member `%s` was read out of UNKNOWN EXTERNAL INPUT through the plain C "
-            "reader at %s:%d — ToBoolean pins it to `true` for every unknown and deletes the false world. "
-            "Declare that member a step machine (idl_method_id_step) and ask step_fork_run for the flag at "
-            "its own stage",
-            name, file, line);
+            "the boolean dictionary member `%s` read at %s:%d is UNKNOWN EXTERNAL INPUT, and ToBoolean below "
+            "would pin it to `true` and delete the false world. Web IDL §3.2.17's member loop already forks "
+            "§3.2.3 at the branch seam and places a real truth value, so this object did not come from that "
+            "loop: either it was built without a §3.2.17 conversion, or the IdlDictMember list this operation "
+            "registered does not declare `%s` IDL_BOOLEAN / IDL_BOOLEAN_NO_DEFAULT. Fix the declaration or "
+            "the builder — there is no fork owed at this read",
+            name, file, line, name);
     b = JS_ToBool(ctx, v);
     JS_FreeValue(ctx, v);
     return b;
