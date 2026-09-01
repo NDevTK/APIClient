@@ -4509,10 +4509,10 @@ list is the thing the COW delta already carries.
 
 **Step 1/2/8's flag is per-FORM and per-FLOW**, held as an own slot on the form's wrapper under a
 private Symbol. It makes the algorithm non-reentrant, which is what turns a handler's
-`new FormData(theSameForm)` into XHR §5 step 1.3's `InvalidStateError`. A run that is ABANDONED —
-outranked and dropped inside step 5, or unwound by a throw — clears it from its teardown, because a
-flag left set makes every later submission of that form take step 1's early return and silently do
-nothing.
+`new FormData(theSameForm)` into XHR §4 "Interface FormData" step 1.3's `InvalidStateError`. A run
+that is ABANDONED — outranked and dropped inside step 5, or unwound by a throw — clears it from its
+teardown, because a flag left set makes every later submission of that form take step 1's early
+return and silently do nothing.
 
 **§4.10.18.4's `elements` is the same question with a wider category.** Both it and step 3 ask "which
 elements of the form's ROOT have this form as their form owner"; `elements` takes LISTED (minus
@@ -4531,7 +4531,8 @@ be set to true") makes the two one boolean. §4.10.7's **selectedness setting al
 on top of it, which is why `<select name=x><option>a<option>b</select>` submits `x=a` with no
 `selected` attribute anywhere.
 
-**XHR §5's constructor**, whose step 1 this is reached from:
+**XHR §4 "Interface FormData"'s constructor**, whose step 1 this is reached from (the number was §5 here
+and at every site in `core/html/form_data.c`; XHR §5 is "Interface ProgressEvent"):
 
   1. If *form* is given:
      1. If *submitter* is non-null: it must be a **submit button** (else `TypeError`) whose **form
@@ -4541,17 +4542,35 @@ on top of it, which is why `<select name=x><option>a<option>b</select>` submits 
      3. If *list* is null, throw `InvalidStateError`. —
      4. Set this's entry list to *list*. —
 
-`optional HTMLFormElement form` is a real interface-typed position, so a non-form is a `TypeError`
-the TYPE throws — but `optional HTMLElement? submitter` is a NULLABLE interface, and one declaration
-carries one brand and one narrowing, so the two positions cannot both be expressed by the declaration
-surface (§16.5a's gap, one level further in). The submitter's check is therefore the constructor's
-first act, stated as such.
+**Both positions are `IDL_ANY` and both refusals are the body's**, and the reason this entry used to
+give for that is **retired and deleted rather than softened**: "one declaration carries one brand and
+one narrowing, so the two positions cannot both be expressed by the declaration surface (§16.5a's gap,
+one level further in)". §3.2.15's `I` is stated PER POSITION now (`idl_arg_iface`), and
+`core/events/mouse_event.c` declares two different interfaces in one argument list — which is this
+member's shape exactly. `IDL_INTERFACE_NULLABLE` exists too, and `core/html/submit_event.c` declares
+this very `HTMLElement? submitter` with it. The sentence that stood here — "`optional HTMLFormElement
+form` is a real interface-typed position, so a non-form is a `TypeError` the TYPE throws" — was a claim
+about a declaration this file has never carried, which is the worse half of the error: a reader
+checking it would have looked for a type that is not there.
+
+**What still blocks it is the ORDERING, and it rules out exactly one of the two routes.**
+`idl_iface_brand` reads a class id at declaration time and refuses a zero, and `core/platform.c`
+declares `form_data` far above the `element` row that creates the node class — so `submit_event.c`'s
+brand + narrowing pair is unreachable from here, and `submit_event.c`'s own comment says why IT is
+exempt. `idl_arg_iface` reads no class id and is untouched by that; what stops IT is a fourth thing
+neither this entry nor the C comment ever named — its predicate is
+`bool (*)(JSContext *, JSValueConst)`, because both callers answer "implements" by walking a realm's
+prototype chain, while `html_form_is_form_element` and `html_element_is` are realm-free and correctly
+so. The surface has a per-position form that demands a realm and a realm-free form
+(`idl_iface_narrow`) that is declaration-wide; this member needs per-position AND realm-free at two
+positions naming two interfaces. `core/html/form_data.c` carries the residual with what the next diff
+must build.
 
 **The encoding is a PARAMETER, not a read.** §4.10.22.4's own default is UTF-8 and that is what
 `new FormData(form)` passes; HTML §4.10.22.3 "Form submission algorithm" **step 6** passes the result
 of §4.10.22.5 "Selecting a form submission encoding"'s **pick an encoding** (`accept-charset` split on ASCII whitespace, first label that resolves to an encoding,
 UTF-8 otherwise). Reading `accept-charset` from inside the algorithm would put a `_charset_` entry
-in a list XHR §5 builds without one — the same defect as any operation reading its inputs off the
+in a list XHR §4 builds without one — the same defect as any operation reading its inputs off the
 object it acts on rather than taking them with it.
 
 ### 16.8 What §16.7 leaves ABSENT, by name
