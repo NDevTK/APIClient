@@ -442,8 +442,9 @@ enum { PA_NONE = 0, PA_SHOW, PA_HIDE };
 #define POPOVER_STAGES(X) \
     X(PO_ENTER,      "HTML §6.12 The popover attribute: the invoked member's own steps (showPopover step 1, " \
                      "hidePopover step 1, togglePopover steps 1-4) and then, for show popover, its steps 1-8, " \
-                     "or for hide a popover, its steps 1-11 — each of those is one slot read, one slot write " \
-                     "or one check popover validity, which runs none of the page's code") \
+                     "or for hide a popover, its steps 1-11 — a range because every step in it is ONE O(1) " \
+                     "engine action: a slot read, a slot write, or a check popover validity whose four steps " \
+                     "are an attribute-state lookup and a connectedness walk") \
     X(PO_SHOW_FIRE,  "HTML §6.12 The popover attribute's show popover step 9 (fire an event named " \
                      "beforetoggle, using ToggleEvent, cancelable, with oldState \"closed\", newState " \
                      "\"open\" and source, at element)") \
