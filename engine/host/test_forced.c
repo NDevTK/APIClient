@@ -6217,9 +6217,10 @@ static const char *emitted_rec_grade(const EmittedRec *r, size_t *n) {
     const char *g = strstr(r->at, key), *q;
 
     CHECK(g != NULL && g < r->b + r->n,
-          "an endpoint record carries no `provenance` between its address and the next record — "
-          "endpoint_json_array writes that field unconditionally and immediately after the url, and it is "
-          "what tells one statement's arms apart from two different requests at one address");
+          "an endpoint record carries no `provenance` inside its OWN extent — the span ends at this record's "
+          "closing brace (emitted_rec_end), so a grade found past it belongs to another record or to another "
+          "surface entirely. endpoint_json_array writes that field unconditionally and immediately after the "
+          "url, and it is what tells one statement's arms apart from two different requests at one address");
     g += sizeof key - 1;
     q = memchr(g, '"', (size_t)(r->b + r->n - g));
     CHECK(q != NULL, "an endpoint record's `provenance` string is not terminated inside the record");
