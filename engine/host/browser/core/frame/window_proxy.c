@@ -64,10 +64,24 @@ typedef struct {
     JSValue window;    /* the navigable's active Window, or JS_UNDEFINED when the document is remote (owned) */
     /* THE ACTIVE DOCUMENT'S REALM, when this agent holds it — NULL when the document is a peer's. It is what a
        member that reads THROUGH to the active document is answered from: `length` counts the child navigables
-       of THAT document, and asking it of the READING realm counts the wrong document's frames. It is also what
-       BORROWED: the AGENT owns every realm it built and releases them with itself (navigable.c). A proxy is a
-       GC object and a realm is not, so an owning reference here would have to be released from a finalizer —
-       which frees JSValues during collection — and the realm's own Document teardown would still never run.
+       of THAT document, and asking it of the READING realm counts the wrong document's frames.
+       BORROWED, AND WHAT IT IS BORROWED FROM IS THE FIELD ABOVE IT. This said "the AGENT owns every realm it
+       built and releases them with itself (navigable.c)", and navigable.c says the OPPOSITE in as many words —
+       "THE AGENT MUST NOT OWN ONE, and that is the whole mechanism rather than a preference", because an
+       agent-held reference is an EXTERNAL ROOT that would make the realm, and therefore the very WindowProxy
+       whose collection says the navigable is gone, permanently reachable. Its list is borrowed pointers,
+       nav_create_finish drops the builder's own reference (JS_FreeContext) the moment the navigable has the
+       realm, and navigable_free frees the list while explicitly releasing no realm. So NOTHING holds a counted
+       reference to a child realm by name: what keeps it alive is `window` — the Window's C function objects
+       each hold the realm that defined them (js_call_c_function reads `p->u.cfunc.realm`) — and this pointer
+       is a raw borrow that is only ever valid while that field is set. The two are written and cleared
+       together for that reason, and HTML §7.5.10 "Destroying documents" step 9 clearing them is the whole of
+       this engine's reclamation edge (window_proxy_set_destroyed). A stale claim about WHO OWNS A REALM is not
+       a wording detail here: a reader chasing a leak would go looking for the agent's release, find none, and
+       conclude the reclamation is unbuilt.
+       A proxy is a GC object and a realm is not, so an owning reference here would have to be released from a
+       finalizer — which frees JSValues during collection — and the realm's own Document teardown would still
+       never run.
        NULL UNTIL THE DOCUMENT IS MATERIALIZED — see proxy_realm and navigable.h. `url` is what it is built
        from; a navigable that has been NAVIGATED is materialized at creation, one that still holds its initial
        about:blank Document only when something reads through it. */
