@@ -47,12 +47,17 @@ static const char DIALOG_STATE_OPEN[]   = "open";
 static const char DIALOG_STATE_CLOSED[] = "closed";
 
 /* The `returnValue` IDL attribute's storage, and §4.11.4's DIALOG TOGGLE TASK TRACKER. Both are per-element
-   state under a private Symbol; the tracker's slot holds the PENDING task's OLD STATE (the only field of the
-   struct anything reads) and its ABSENCE is the spec's null tracker. */
+   state under a private Symbol; the tracker is the struct's TWO fields in two slots — the pending task's OLD
+   STATE and the task itself — and its ABSENCE is the spec's null tracker. */
 static JSValue g_ret_key = JS_UNDEFINED;
 static JSAtom  g_atom_ret = JS_ATOM_NULL;
 static JSValue g_tracker_key = JS_UNDEFINED;
 static JSAtom  g_atom_tracker = JS_ATOM_NULL;
+/* …and the TASK half of that same struct, as the JSTaskHandle JS_EnqueueCallTask answered, in a BigInt so the
+   full 64 bits survive. Two slots and not one because the tracker IS two fields and an absent slot is the
+   spec's null; they are written and cleared together, which the read asserts. */
+static JSValue g_tracker_task_key = JS_UNDEFINED;
+static JSAtom  g_atom_tracker_task = JS_ATOM_NULL;
 static int     g_toggle_stepid = -1;
 static int     g_id_return_value = -1;
 
@@ -149,6 +154,7 @@ static const char *const DIALOG_TOGGLE_STEPS[] = { DIALOG_TOGGLE_STAGES(JS_STEP_
 static void dialog_tracker_clear(JSContext *ctx, JSValueConst element)
 {
     JS_DeleteProperty(ctx, (JSValue)element, g_atom_tracker, 0);
+    JS_DeleteProperty(ctx, (JSValue)element, g_atom_tracker_task, 0);
 }
 
 static int js_dialog_toggle_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
@@ -218,18 +224,42 @@ static void dialog_queue_toggle_task(JSContext *ctx, JSValueConst element, const
 {
     JSValueConst argv[4];
     JSValue fn, ov, nv, pending;
-    const char *carried = old_state;
+    JSTaskHandle handle;
 
-    /* Step 1: "if element's dialog toggle task tracker is not null" — carry its OLD STATE forward, remove its
-       task, and clear it. The carry and the clear are here; the REMOVAL is not, and cannot be faked into one:
-       a task this engine has enqueued is a job on the frontier with no handle to name it by, so nothing can
-       take it back off the queue and the coalesced `toggle` would fire twice. */
+    /* Step 1: "if element's dialog toggle task tracker is not null" — carry its OLD STATE forward, REMOVE its
+       task from its task queue, and clear it. All three run here.
+       THE REMOVAL USED TO BE A DFAIL SAYING THIS ENGINE HAD NO HANDLE TO REMOVE A TASK BY, and that claim was
+       FALSE by the time anybody read it: JS_EnqueueCallTask answers a JSTaskHandle and JS_RemoveQueuedTask
+       takes one, and that function's own contract names this very step ("HTML's 'remove <task> from its task
+       queue', the step every toggle task tracker rests on (§4.11.1 details, §4.11.4 dialog, §6.12 popover)").
+       It is deleted rather than re-aimed: a crash that says a capability is absent tells the next reader not to
+       go and look, which is the one kind of stale claim nothing catches.
+       JS_RemoveQueuedTask answers 0 as ordinarily as 1 — a handle outlives the task it names, so the task may
+       already have run or be running right now, which is the standard's own no-op. */
+    ov = JS_UNDEFINED;
     if (JS_GetOwnSlot(ctx, &pending, element, g_atom_tracker) > 0) {
-        JS_FreeValue(ctx, pending);
-        DFAIL("§4.11.4 queue a dialog toggle event task step 1.2 must REMOVE the pending toggle task from its "
-              "task queue, and this engine's job queue has no handle to remove one by (JS_EnqueueCallTask "
-              "returns nothing) — build a removable queued element task, then carry the tracker's old state "
-              "onto this one and let the removed task go");
+        JSValue task;
+
+        DCHECK(JS_IsString(pending), "the dialog toggle task tracker's OLD STATE slot held something that is "
+                                     "not a string — the only writer is step 3 below, which places one of "
+                                     "§4.11.4's two state strings");
+        ov = pending;                                                       /* step 1.1's carry of oldState */
+        if (JS_GetOwnSlot(ctx, &task, element, g_atom_tracker_task) > 0) {
+            uint64_t h = 0;
+
+            JS_ToBigUint64(ctx, &h, task);
+            JS_FreeValue(ctx, task);
+            JS_RemoveQueuedTask(JS_GetRuntime(ctx), (JSTaskHandle)h);       /* step 1.2's removal */
+        } else {
+            DFAIL("§4.11.4's dialog toggle task tracker held an OLD STATE with no TASK — the two slots are one "
+                  "struct and step 3 writes both, so one without the other means a write went missing and the "
+                  "superseded `toggle` cannot be taken off its queue");
+        }
+        dialog_tracker_clear(ctx, element);                                 /* step 1.3 */
+    }
+    if (JS_IsUndefined(ov)) {
+        ov = JS_NewString(ctx, old_state);
+        CHECK(!JS_IsException(ov), "the dialog toggle task's old state could not be allocated");
     }
     if (g_toggle_stepid < 0)
         g_toggle_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_dialog_toggle_def);
@@ -237,8 +267,6 @@ static void dialog_queue_toggle_task(JSContext *ctx, JSValueConst element, const
        one fires an event at an element of THIS document. */
     fn = JS_NewCFunction2(ctx, NULL, "dialogToggle", 4, JS_CFUNC_step, g_toggle_stepid);
     CHECK(!JS_IsException(fn), "the dialog toggle task's callee could not be allocated");
-    ov = JS_NewString(ctx, carried);
-    CHECK(!JS_IsException(ov), "the dialog toggle task's old state could not be allocated");
     nv = JS_NewString(ctx, new_state);
     CHECK(!JS_IsException(nv), "the dialog toggle task's new state could not be allocated");
     argv[0] = element;
@@ -251,11 +279,13 @@ static void dialog_queue_toggle_task(JSContext *ctx, JSValueConst element, const
        submitting a `<form method=dialog>` inside an open `<dialog>`, so a microtask fired `toggle` inside the
        checkpoint of the script that called `submit()` — ahead of every task already standing, an expired
        timer or a delivered message among them. */
-    JS_EnqueueCallTask(ctx, fn, 4, argv);   /* §4.11.4: the DOM manipulation task source */
+    handle = JS_EnqueueCallTask(ctx, fn, 4, argv);   /* §4.11.4: the DOM manipulation task source */
     /* Step 3: "set element's dialog toggle task tracker to a struct with task set to the just-queued task and
-       old state set to oldState". The OLD STATE is the field anything reads back; the task is the job just
-       enqueued, which is the half step 1.2 above cannot yet name. */
+       old state set to oldState" — BOTH fields, in the two slots that are the one struct. */
     JS_DefinePropertyValue(ctx, (JSValue)element, g_atom_tracker, JS_DupValue(ctx, ov),
+                           JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE);
+    JS_DefinePropertyValue(ctx, (JSValue)element, g_atom_tracker_task,
+                           JS_NewBigUint64(ctx, (uint64_t)handle),
                            JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE);
     JS_FreeValue(ctx, nv);
     JS_FreeValue(ctx, ov);
@@ -429,6 +459,10 @@ void html_dialog_declare(JSContext *ctx)
     CHECK(!JS_IsException(g_tracker_key), "the dialog toggle-task tracker slot key allocation failed");
     g_atom_tracker = JS_ValueToAtom(ctx, g_tracker_key);
     CHECK(g_atom_tracker != JS_ATOM_NULL, "the dialog toggle-task tracker slot key could not be interned");
+    g_tracker_task_key = JS_NewSymbol(ctx, "dialogToggleTaskTrackerTask", false);
+    CHECK(!JS_IsException(g_tracker_task_key), "the dialog toggle-task handle slot key allocation failed");
+    g_atom_tracker_task = JS_ValueToAtom(ctx, g_tracker_task_key);
+    CHECK(g_atom_tracker_task != JS_ATOM_NULL, "the dialog toggle-task handle slot key could not be interned");
     /* §4.11.5's ToggleEvent, which both of §4.11.4's fires use — declared from here because this file is the
        only thing in the build that mints one, and §4.11.4 is where the standard first reaches it. */
     toggle_event_init(ctx);
@@ -455,6 +489,10 @@ void html_dialog_free(JSRuntime *rt)
     g_atom_tracker = JS_ATOM_NULL;
     JS_FreeValueRT(rt, g_tracker_key);
     g_tracker_key = JS_UNDEFINED;
+    JS_FreeAtomRT(rt, g_atom_tracker_task);
+    g_atom_tracker_task = JS_ATOM_NULL;
+    JS_FreeValueRT(rt, g_tracker_task_key);
+    g_tracker_task_key = JS_UNDEFINED;
     g_toggle_stepid = -1;
     g_id_return_value = -1;
 }

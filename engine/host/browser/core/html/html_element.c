@@ -67,6 +67,7 @@
 #include "core/html/element_internals.h"
 #include "core/html/focus.h"
 #include "core/html/html_dialog.h"
+#include "core/html/popover.h"
 #include "core/html/media_element.h"
 #include "core/html/html_element.h"
 #include "core/html/element_interfaces.h"   /* §3.2.2's rows, generated — see engine/elemgen.mjs */
@@ -112,17 +113,16 @@ static const EnumeratedAttribute ENTERKEYHINT_ATTR = {
     ENTERKEYHINT_KW, ENUMERATED_NO_STATE, ENUMERATED_NO_STATE, ENUMERATED_NO_STATE
 };
 
-/* §6.12's `popover`, whose THREE special states are three DIFFERENT states — "the attribute's missing value
-   default is the No Popover state, its invalid value default is the Manual state, and its empty value default
-   is the Auto state" — which is the case core/html/enumerated_attribute.c's header records as having defeated
-   an earlier implementation that collapsed missing and invalid into one field. All three are observable through
-   §2.6.1's getter: `<div>` reflects "" (No Popover has no keyword), `<div popover>` reflects "auto", and
-   `<div popover=bogus>` reflects "manual". */
-enum { POPOVER_NONE = 0, POPOVER_AUTO, POPOVER_MANUAL, POPOVER_HINT };
-static const EnumeratedKeyword POPOVER_KW[] = {
-    { "auto", POPOVER_AUTO }, { "manual", POPOVER_MANUAL }, { "hint", POPOVER_HINT }, { NULL, 0 }
-};
-static const EnumeratedAttribute POPOVER_ATTR = { POPOVER_KW, POPOVER_NONE, POPOVER_AUTO, POPOVER_MANUAL };
+/* §6.12's `popover` is NOT declared here. Its keyword table and its three special states are
+   core/html/popover.h's `POPOVER_ATTRIBUTE`, for the reason `dir`'s definition is core/html/directionality.h's:
+   the component that owns an attribute's ALGORITHMS owns its §2.3.3 definition, and §6.12's show popover, hide
+   a popover and check popover validity all read that state. This file owns the table of which interface a tag
+   wears and which reflections each carries, and the row below points at the one definition.
+   THE THREE SPECIAL STATES ARE THREE DIFFERENT STATES — "the attribute's missing value default is the No
+   Popover state, its invalid value default is the Manual state, and its empty value default is the Auto state"
+   — which is the case core/html/enumerated_attribute.c's header records as having defeated an implementation
+   that collapsed missing and invalid into one field. All three are observable through §2.6.1's getter: `<div>`
+   reflects "" (No Popover has no keyword), `<div popover>` reflects "auto", `<div popover=x>` "manual". */
 
 /* §4.6.8.20's PRELOAD DESTINATION and §4.6.8.12's MODULE PRELOAD DESTINATION, whose UNION §4.2.4 makes the
    keyword set of `<link as>`: "Each of the union of preload destinations and module preload destinations is a
@@ -189,7 +189,7 @@ static const ElReflect R_HTML[] = {
        and the section adds a note that the row here made false — "Note how the setter for the nonce IDL
        attribute does not update the corresponding content attribute." Wrong in BOTH directions, which is why
        it is core/html/nonce_attribute.c and not a new kind in the reflection enum. */
-    { "popover", "popover", REFLECT_ENUM, .en = &POPOVER_ATTR },
+    { "popover", "popover", REFLECT_ENUM, .en = &POPOVER_ATTRIBUTE },
     { "hidden", "hidden", REFLECT_BOOL }, { "inert", "inert", REFLECT_BOOL },
     { "autofocus", "autofocus", REFLECT_BOOL },
     /* §2.6.2 `[Reflect, ReflectRange=(0,8)] unsigned long` — no [ReflectDefault], so an unparseable or absent
@@ -843,6 +843,11 @@ void html_element_init(JSContext *ctx)
        (a `method=dialog` submission) is its caller. It comes AFTER html_form_declare for no ordering reason of
        its own; §4.11 is simply the next section this file reaches. */
     html_dialog_declare(ctx);
+    /* §6.12's three members and the state machine behind them, plus CSS Positioned Layout Level 4 §3's top
+       layer that its show popover fills — declared here because `showPopover`, `hidePopover` and
+       `togglePopover` are HTMLElement members, which is what this file owns the table of, and because the
+       `popover` reflection row above points at that component's §2.3.3 attribute definition. */
+    popover_declare(ctx);
     /* §4.8.11's media element state machine — declared here because HTMLMediaElement.prototype is the parent
        of two rows of the table above, so this file is what decides when it must exist. */
     media_element_declare(ctx);
@@ -940,6 +945,9 @@ void html_element_install_protos(JSContext *ctx)
        in CSS 2.1 §10.1's initial containing block, which is 300 CSS pixels wide in a child navigable and 1280
        in the top-level traversable, and a C member runs in the realm that DEFINED it. */
     html_element_view_install(ctx, html_p);
+    /* HTML §6.12 The popover attribute's `showPopover(options)`, `hidePopover()` and `togglePopover(options)`
+       — HTMLElement members, installed on THIS realm's prototype like every other. */
+    popover_install(ctx, html_p);
     JS_SetClassProto(ctx, g_html_class, JS_DupValue(ctx, html_p));
 
     /* §4.8.11's `interface HTMLMediaElement : HTMLElement`, built BEFORE the per-tag loop because the two
@@ -1225,6 +1233,7 @@ void html_element_free(JSRuntime *rt)
     declarative_shadow_free();
     html_form_free(rt);
     html_dialog_free(rt);
+    popover_free(rt);   /* §6.12's slot keys and member ids, and the top layer's two slot keys with them */
     media_element_free(rt);
     html_image_free(rt);
     html_link_free(rt);

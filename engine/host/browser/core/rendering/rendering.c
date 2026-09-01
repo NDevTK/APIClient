@@ -19,6 +19,7 @@
 #include "core/html/autofocus.h"
 #include "core/html/focus.h"
 #include "core/css/media_query_list.h"
+#include "core/css/top_layer.h"
 #include "core/dom/page_visibility.h"
 #include "core/intersection_observer/intersection_observer.h"
 #include "core/rendering/animation_frame.h"
@@ -347,10 +348,16 @@ static void steps_20_to_23(JSContext *docctx)
        scriptable result for it to produce and no interface whose arrival would give it one, so it is a
        documented no-effect rather than an assertion — the one place in this component where that is the
        honest answer. */
-    realm_awaits(docctx, "HTMLDialogElement.prototype.showModal",
-                "update the rendering step 23 PROCESSES TOP LAYER REMOVALS, and the top layer is filled by "
-                "`dialog.showModal()` and by fullscreen — this build now has showModal, so the top layer has a "
-                "producer and step 23 must be written");
+    /* STEP 23 — "process top layer removals given doc", which is CSS Positioned Layout Level 4 §3.3 Top Layer
+       Manipulation's own algorithm and whose note names this step as its ONE caller: "this is intended to be
+       called during the 'Update the Rendering' step of HTML's rendering algorithm. It is not intended to be
+       called by other algorithms."
+       IT IS A CALL AND NOT A `realm_awaits` ANY MORE, and the probe that stood here is deleted rather than
+       re-aimed because its sentence has become false: it said the top layer "is filled by `dialog.showModal()`
+       and by fullscreen", and neither of those is in this build while the layer is filled anyway — HTML §6.12
+       The popover attribute's show popover step 18 adds an element to it and its hide a popover step 12
+       REQUESTS a removal, which is exactly the pending set this step drains. */
+    top_layer_process_removals(docctx, document_object(docctx));
 }
 
 static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
