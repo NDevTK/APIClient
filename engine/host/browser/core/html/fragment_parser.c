@@ -96,6 +96,10 @@ void fragment_parse_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->tree(ctx, (void **)&own, cursors, nc, &dom_cow_private_tree_ops);
     s->own_context = own ? lxb_dom_interface_element(own) : NULL;
     if (ctx_is_own) s->context = ctxn ? lxb_dom_interface_element(ctxn) : NULL;
+    /* §14.4's HALF DECLARES ITS OWN, for the same reason the fork asks it its own question: what it holds
+       between two steps is its to name, and a driver that listed those fields would be a second statement of
+       another component's ownership. Inert for an HTML parse, whose `xf` is all-zero. */
+    xml_fragment_visit(ctx, &s->xf, v);
     sanitizer_walk_visit(ctx, &s->san, v);
 }
 
@@ -158,18 +162,23 @@ const char *fragment_parse_unforkable(const void *st)
         return "a fragment parse cannot be forked between its parse and its placement — this machine OWNS the "
                "tree the parse produced (`frag`, which fragment_parse_release deep-destroys, with `node` the "
                "cursor into it and §8.6.4 set and filter HTML's sanitizer walk standing inside it), and the "
-               "OPERATION that declares a private tree exists (`v->tree`, which this machine already declares "
-               "its created parse context through) while the SUBTREE WALK its clone needs does not — so the "
-               "sibling arm would get an empty root, place nothing, and leave the original's nodes named by "
-               "two states. "
-               "BUILD THAT WALK, in solver/dom_cow.c's dom_private_tree_clone, where its absence is asserted. "
-               "It is NOT core/html/tree_construction.c's copy_subtree re-exported, and this message said it "
-               "was: that walk takes the two temporary DOCUMENT nodes and starts at `src_top->first_child`, so "
-               "a DETACHED root has no entry point into it and needs its own top copied and mapped first; and "
-               "it descends into a `<template>`'s content and NOT into a SHADOW ROOT, while THIS tree can hold "
-               "one — declarative_shadow_parsed runs at the FRAG_FEED boundary above, on this fragment, before "
-               "any node is placed. The destroy side owes the shadow root too and says so already at "
-               "core/html/sanitizer.c's removal DCHECK, so both halves of the operation are one piece of work. "
+               "OPERATION that declares a private tree exists and its SUBTREE WALK is built (`v->tree`, and "
+               "solver/dom_cow.c's dom_private_tree_clone, which §14.4's half of this very machine already "
+               "declares its own tree through). What stops THIS tree is not the walk: it is the three things "
+               "this file's own FRAG_FEED boundary does to a fragment that §14.4's boundary does not. "
+               "A NODE'S PER-FLOW STATE LIVES ON ITS JS WRAPPER and not on the lexbor node, so a copy carries "
+               "it only where DOM §4.4 \"Cloning nodes\" states cloning steps — which that walk performs, and "
+               "which is why a copied `<script>` keeps §13.4's Inert `already started` rather than running "
+               "markup this parse marked dead. Two of the three have no such steps to perform. "
+               "declarative_shadow_parsed can leave a SHADOW HOST here, and §4.4 step 6's clone of a shadow "
+               "root is `attach a shadow root`, which refuses and therefore THROWS — a fork's copy has no way "
+               "to be abrupt, and dom_cow_destroy_private owes the same root coming back "
+               "(core/html/sanitizer.c's removal DCHECK is that half already named). media_element_parsed can "
+               "leave a MEDIA ELEMENT here whose §4.8.11 state is on its wrapper and whose resource-selection "
+               "JOB is already enqueued naming the ORIGINAL's wrapper, and §4.8.11 states no cloning steps at "
+               "all. Both crash by name in dom_private_tree_clone rather than being skipped, so BUILD THOSE "
+               "TWO — an exception a visit can carry out, and a fork's answer for a pending job that names a "
+               "node the fork has just copied. "
                "Then fragment_parse_visit declares `frag` with `node` as its cursor, sanitizer_walk_visit "
                "hands up its own seven cursors and its level stack's two-per-level, its `attr` cursor gets the "
                "answer a node->node map does not carry (an attribute is not a node: it is the copy of "

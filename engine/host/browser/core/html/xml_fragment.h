@@ -51,6 +51,7 @@
 #include <lexbor/dom/dom.h>
 
 #include "quickjs.h"
+#include "quickjs-step.h"
 #include "core/xml/xml_parse.h"
 
 /* WHERE §14.4 RESTS BETWEEN TWO STEPS. `phase` is this component's own and not a stage of the machine that
@@ -93,9 +94,21 @@ int xml_fragment_step(JSContext *ctx, XmlFragmentParse *s);
    two owners of one private tree is two destroys of it. */
 lxb_dom_node_t *xml_fragment_take(XmlFragmentParse *s);
 
+/* WHAT THIS RECORD OWNS, declared once — the private tree §14.4 [1] parses into, with `docel` as the cursor
+   standing in it. The machine that holds this record names this in its own `visit`, so the fork copies both
+   through the ONE list and the teardown destroys both through it. There is no second half: `release` is only
+   what a declaration cannot name, which here is the XML parse handle.
+   ITS TREE IS THE ONE A PRIVATE-TREE COPY CAN ANSWER FOR IN FULL, and that is a fact about §14.4 rather than a
+   convenience: this component runs neither §13.2.6.4.4's declarative-shadow conversion nor §4.8.11.2's media
+   walk (the banner above says why for each), so no node of it is a shadow host and none is a media element —
+   the two cases solver/dom_cow.c's copy crashes on by name. What it DOES run is §14.2's already-started stamp,
+   and that is carried by DOM §4.4's cloning steps, which that copy performs per node. */
+void xml_fragment_visit(JSContext *ctx, XmlFragmentParse *s, JSStepVisit *v);
+
 /* THE ABANDONED PARSE — a flow dropped between two steps. The XML handle is aborted (core/xml/xml_parse.h's
-   own entry for "nobody is going to ask for a report") and whatever of the tree this component still owns is
-   destroyed. Idempotent, because a machine's release runs on the throw path too. */
+   own entry for "nobody is going to ask for a report"). It does NOT destroy the tree: that is declared, so the
+   one teardown frees it after this returns, and freeing it here as well is the second list the teardown's own
+   fingerprint bracket measures. Idempotent, because a machine's release runs on the throw path too. */
 void xml_fragment_release(XmlFragmentParse *s);
 
 /* WHY A FLOW STANDING HERE CANNOT FORK, or NULL when it can — the same question core/html/fragment_parser.h's

@@ -367,23 +367,35 @@ lxb_dom_node_t *xml_fragment_take(XmlFragmentParse *s)
     return root;
 }
 
+/* WHAT THIS RECORD OWNS — see xml_fragment.h. The tree and the cursor standing in it are ONE operation and not
+   two slots, because the only moment at which "which node does `docel` now name" has an answer is while the
+   copy's node map is alive, which is inside that operation. */
+void xml_fragment_visit(JSContext *ctx, XmlFragmentParse *s, JSStepVisit *v)
+{
+    void **cursors[1];
+
+    /* §14.4 step 9's DOCUMENT ELEMENT is a CHILD of the root — the lift phase reads its children out of it and
+       then discards it — so it is a cursor into the declared tree and never a second tree. Asserted rather
+       than assumed: a `docel` outside the root is one the copy's map cannot answer for, and the sibling arm
+       would be left standing on the arm this fork was taken from. */
+    DCHECK(s->docel == NULL || (s->root != NULL && s->docel->parent == s->root),
+           "HTML §14.4's machine holds a document element that is not a child of the private root — steps "
+           "9-11 move that element's children within the root and then discard it, so it lives inside the "
+           "tree this record declares or it is a claim that outlived the tree it named");
+    cursors[0] = (void **)&s->docel;
+    v->tree(ctx, (void **)&s->root, cursors, 1, &dom_cow_private_tree_ops);
+}
+
 void xml_fragment_release(XmlFragmentParse *s)
 {
     if (s->parse) {
         /* core/xml/xml_parse.h's own entry for "nobody is going to ask for a report", which is exactly a flow
-           dropped between two steps. The tree the parse built is left standing and the destroy below is what
-           takes it. */
+           dropped between two steps. The tree the parse built is left standing: it is DECLARED, so the one
+           teardown destroys it after this returns, and `docel` goes with it because it is declared as the
+           cursor into it rather than as a claim of its own. */
         xml_parse_abort(s->parse);
         s->parse = NULL;
     }
-    if (s->root) {
-        dom_cow_destroy_private(s->root, /*with_children*/ true);
-        s->root = NULL;
-        s->docel = NULL;   /* it hung under the root and went with it */
-    }
-    DCHECK(s->docel == NULL,
-           "HTML §14.4's machine was released holding a document element with no root — the element is a child "
-           "of the root and cannot outlive it, so this is a claim that survived the tree it named");
 }
 
 const char *xml_fragment_unforkable(const XmlFragmentParse *s)
@@ -399,12 +411,13 @@ const char *xml_fragment_unforkable(const XmlFragmentParse *s)
                "the insertion point at the sibling's copy of the tree, which is the same map the tree-builder "
                "half already needs. The same clone is what makes this machine PARK, because every field it "
                "would copy has a name a later build can resume from";
-    if (s->root != NULL)
-        return "an XML fragment parse cannot be forked between its parse and its placement — this machine OWNS "
-               "the private tree §14.4 steps 9-11 are moving children within, and no JSStepVisit operation "
-               "declares a private DOM TREE, so the sibling arm would share one tree with the original: two "
-               "arms placing the same nodes and two releases destroying them. It is the SAME missing operation "
-               "core/html/fragment_parser.c's first clause names (a `v->tree` whose clone deep-copies a "
-               "subtree through a node->node map), and both clauses delete together";
+    /* THE SECOND CLAUSE IS GONE, and what it said is why the deletion is worth a sentence rather than a
+       silence: it said "no JSStepVisit operation declares a private DOM TREE", which was a claim about the
+       ENGINE and not about §14.4 — so the day that operation was built this clause went on refusing a fork for
+       a reason that had stopped being true, and a reader would have gone to build what was already there.
+       `root` is declared through `v->tree` now, with `docel` as its cursor, and the copy answers for this tree
+       in full: §14.4 runs neither the declarative-shadow conversion nor the media walk, so neither of the two
+       cases solver/dom_cow.c's copy crashes on can be in it, and §14.2's already-started stamp is carried by
+       DOM §4.4's cloning steps that copy performs per node. */
     return NULL;
 }

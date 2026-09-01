@@ -13,6 +13,14 @@
 #include "core/dom/node_interface.h"   /* dom_document_destroy — a document's nodes go back before its arenas do */
 #include "core/dom/node.h"   /* node_template_content — §4.12.3's second tree, which a parse also builds into */
 #include "solver/attr_shadow.h"   /* the taint shadow rides the attribute delta (per-flow isolation of stashed taint) */
+/* DOM §4.4 "Cloning nodes"' CLONING STEPS, which a private tree's copy owes exactly as clone-a-node does —
+   these are the same two component entries core/dom/node.c calls at its own step 3, and the two the list does
+   NOT cover are what the copy crashes on by name. */
+#include "core/dom/shadow_root.h"        /* §4.4 step 6 — the one whose clone can THROW */
+#include "core/html/html_script.h"       /* §4.12.1's pair: `already started`, which §13.4's Inert mode sets */
+#include "core/html/media_element.h"     /* §4.8.11 — state on the wrapper, and no cloning steps at all */
+#include "core/html/nonce_attribute.h"   /* §2.5.6's pair, over every HTML element and not one tag */
+#include <lexbor/core/avl.h>   /* the node->node map: a pointer map with no structure to invent */
 #include <lexbor/dom/dom.h>
 
 typedef struct DomUndo {
@@ -1234,62 +1242,223 @@ void dom_cow_destroy_private(lxb_dom_node_t *root, bool with_children) {
     else               lxb_dom_node_destroy(root);
 }
 
-/* THE TWO SIDES OF A PRIVATE TREE A STEP MACHINE DECLARES — see dom_cow.h. Written as a pair because they are
-   one contract read in two directions: whatever the clone gives the sibling is exactly what the sibling's own
-   teardown will destroy, and a field either side names alone is a leak or a double free. */
-static void *dom_private_tree_clone(JSContext *ctx, void *root, void **cursors[], int ncursors)
+/* THE NODE MAP'S TWO OPERATIONS. lexbor's AVL is keyed on a `size_t`, which a node ADDRESS is; both sides of
+   every entry are pointers into the same document's arena. */
+static void dom_private_map_put(lexbor_avl_t *avl, lexbor_avl_node_t **avl_root,
+                                const lxb_dom_node_t *src, lxb_dom_node_t *dst)
 {
-    lxb_dom_node_t *src = root, *copy;
-    int i;
+    DCHECK(src != NULL && dst != NULL, "a private-tree copy's node map was given half of a pair");
+    /* A SECOND ENTRY FOR ONE SOURCE NODE IS A WALK THAT REACHED IT TWICE, and the later one is what a lookup
+       would answer — so a cursor would be re-pointed at a copy nothing is linked to. The walk reaches a
+       `<template>`'s content through its element and every other node through child links exactly once. */
+    DCHECK(lexbor_avl_search(avl, *avl_root, (size_t)(uintptr_t)src) == NULL,
+           "a private-tree copy reached one source node twice — the second copy is what a cursor would be "
+           "re-pointed at, and nothing is linked to it");
+    CHECK(lexbor_avl_insert(avl, avl_root, (size_t)(uintptr_t)src, dst) != NULL,
+          "a fork could not record a node in the map for the private tree it is copying");
+}
 
-    (void)ctx;
-    dom_private_check(src);
-    /* THE SUBTREE WALK IS THE NEXT DIFF AND IT IS NOT THIS ONE. What is copied here is ONE node, which is what
-       §8.5.5 step 5's / §8.5.6 step 4's / §8.5.7 step 6's created parse context is — an element in no tree with
-       no children. A tree with children reaching here is a machine that declared one before the walk exists,
-       and the copy it would get is an empty root: BUILD THE WALK, and note that
-       core/html/tree_construction.c's copy_subtree is NOT already it in two ways that a reader taking that
-       sentence on trust would only find at run time. It takes the two temporary DOCUMENT nodes and starts at
-       `src_top->first_child`, so a DETACHED root has no entry point into it and needs its top copied and mapped
-       first; and its walk descends into a `<template>`'s content and NOT into a SHADOW ROOT, while the tree a
-       fragment parse owns after its boundary can hold one — core/html/fragment_parser.c runs
-       declarative_shadow_parsed there. The destroy side owes the shadow root too, and says so already:
-       core/html/sanitizer.c's removal DCHECK is the same absence seen from the other end. */
-    DCHECK(src->first_child == NULL,
-           "a flow-private DOM tree with CHILDREN was declared to a fork and this copies exactly one node — "
-           "the sibling arm would get an EMPTY root and place nothing; build the subtree walk with its "
-           "node->node map, which is what the cursor re-point below is already written against");
-    DCHECK(src->owner_document != NULL,
-           "a flow-private DOM node with no owner document was declared to a fork — the copy is made against "
-           "that document so its interned tag and attribute ids stay meaningful, and there is no other "
-           "document this operation could name");
-    /* NOTHING HAS SEEN THIS TREE, which is what makes a fresh node the right answer rather than an identity
-       question: a node carrying a JS wrapper would leave the fork deciding which arm's node that wrapper
-       names, and there is no such answer. */
-    DCHECK(JS_IsUndefined(node_wrap_peek(src)),
-           "a node of a flow-private tree already has a JS wrapper — a private tree is one no other flow can "
-           "reach, so a wrapper on it means something outside this machine is holding the node and the copy "
-           "would need an identity answer for it");
-    copy = lxb_html_interface_clone(src->owner_document, src);
-    CHECK(copy != NULL, "a fork could not copy the flow-private DOM tree a step machine declared");
+static lxb_dom_node_t *dom_private_map_get(lexbor_avl_t *avl, lexbor_avl_node_t *avl_root,
+                                           const lxb_dom_node_t *src)
+{
+    lexbor_avl_node_t *e;
+    if (src == NULL) return NULL;
+    e = lexbor_avl_search(avl, avl_root, (size_t)(uintptr_t)src);
+    return e != NULL ? (lxb_dom_node_t *)e->value : NULL;
+}
+
+/* ONE NODE OF A PRIVATE TREE, COPIED — lexbor's own clone for this document, which is the code that MADE the
+   node, so attributes, namespaces and every per-interface field are copied by it and not by a second answer
+   written here; then DOM §4.4 "Cloning nodes"' cloning steps, which are what carries the per-flow state that
+   lives on the node's WRAPPER rather than on the node.
+   THE TWO THIS CANNOT ANSWER ARE ASKED FIRST AND CRASH — see the banner below. */
+static lxb_dom_node_t *dom_private_copy_one(JSContext *ctx, lxb_dom_document_t *doc, const lxb_dom_node_t *src)
+{
+    lxb_dom_node_t *c;
+
+    if (src->type == LXB_DOM_NODE_TYPE_ELEMENT) {
+        DCHECK(shadow_root_of_element(ctx, lxb_dom_interface_element(src)) == NULL,
+               "a private tree a fork must copy holds a SHADOW HOST, and DOM §4.4 step 6's clone of a shadow "
+               "root is `attach a shadow root`, which REFUSES — so it can throw and a fork's copy has no way "
+               "to be abrupt. BUILD THAT: shadow_root_clone_onto is steps 6.1-6.7 and needs a caller that can "
+               "carry its exception out of a visit, and dom_cow_destroy_private owes the same root on the way "
+               "back (core/html/sanitizer.c's removal DCHECK is that half already named). A fragment parse "
+               "reaches this because declarative_shadow_parsed runs at its FRAG_FEED boundary, before the "
+               "placement and before §8.6.4's walk");
+        DCHECK(!media_element_is(src),
+               "a private tree a fork must copy holds a MEDIA ELEMENT, whose §4.8.11 state is on its wrapper "
+               "and whose resource-selection job is already enqueued NAMING THE ORIGINAL's wrapper — and "
+               "§4.8.11 states no cloning steps, so there is nothing to call and the sibling arm would get a "
+               "media element in a network state nothing put it in. BUILD THE FORK'S ANSWER for a pending job "
+               "that names a node the fork has just copied; media_element_parsed at the FRAG_FEED boundary is "
+               "what enqueues it");
+    }
+    c = lxb_html_interface_clone(doc, src);
+    CHECK(c != NULL, "a fork could not copy a node of the flow-private DOM tree a step machine declared");
     /* THE COPY IS IN THE SAME DOCUMENT AS THE ORIGINAL. lxb_dom_node_interface_copy takes its
        `dst->owner_document == src->owner_document` path and assigns local_name, ns and prefix verbatim, so no
        name is re-interned and a placement out of the copy still needs no §4.5 adopt. The moment that stops
        being true every tag and attribute id lands in another hash, silently and correctly-looking. */
-    DCHECK(copy->owner_document == src->owner_document,
+    DCHECK(c->owner_document == src->owner_document,
            "a copied flow-private node belongs to a different document than the node it was copied from — its "
            "interned tag and attribute ids are then meaningless against the document it will be placed into");
+    /* §4.4 STEP 3's CLONING STEPS, which are these two component entries and not a list restated here — the
+       same two core/dom/node.c's clone-a-node machine calls at its own step 3. HTML §4.12.1's pair carries a
+       `<script>`'s `already started`, without which a fork undoes §13.4's Inert mode; HTML §2.5.6's carries
+       [[CryptographicNonce]] for every HTML element, and the attribute the clone above already copied is the
+       STALE half of that pair by design. Both are unconditional on §4.4's `subtree`, so both run per node. */
+    html_script_cloned(ctx, (lxb_dom_node_t *)src, c);
+    nonce_attribute_cloned(ctx, (lxb_dom_node_t *)src, c);
+    /* AND NOTHING IS NOTED CREATED. The whole copy has ONE owner — the sibling's own declared tree slot, which
+       its teardown destroys — so a per-node creation claim would be a second owner for every node, and the
+       discard would destroy through the first and then through freed memory. That is dom_cow.h's one
+       ownership convention over a private tree, kept here as every parse that feeds one keeps it. */
+    return c;
+}
+
+/* The tree a copied node belongs to — the copy's top, or a `<template>`'s content fragment. Both are roots
+   with no parent, which is exactly the question dom_cow's private-tree declaration asks. */
+static lxb_dom_node_t *dom_private_root_of(lxb_dom_node_t *n)
+{
+    while (n->parent != NULL) n = n->parent;
+    return n;
+}
+
+/* WHERE THE WALK GOES AFTER `n`'s SUBTREE IS FINISHED. Iterative, and it climbs by `parent` and by a content
+   fragment's `host` rather than carrying a level stack: those two links are the only way into or out of a
+   level and the tree already holds both, so the depth here is the page's markup and none of it is on the C
+   stack. `croot` changes at the one transition that changes it — leaving a `<template>`'s content for the
+   template element's OWN children, which HTML §4.12.3 keeps as two separate child lists. */
+static lxb_dom_node_t *dom_private_walk_next(lxb_dom_node_t *n, const lxb_dom_node_t *top,
+                                             lexbor_avl_t *avl, lexbor_avl_node_t *avl_root,
+                                             lxb_dom_node_t **croot)
+{
+    for (;;) {
+        lxb_dom_node_t *up, *host, *host_copy;
+
+        if (n->next != NULL) return n->next;
+        up = n->parent;
+        if (up == NULL) {
+            /* A CONTENT FRAGMENT HAS NO PARENT — it is reached through its host, which is the one link out of
+               it. Anything else with no parent is a second tree this walk was never given. */
+            host = node_template_content_host(n);
+            DCHECK(host != NULL,
+                   "a private-tree copy walked out of the tree it was given — the only root it enters other "
+                   "than the top is a <template>'s content fragment, which is reached through its host");
+            host_copy = dom_private_map_get(avl, avl_root, host);
+            DCHECK(host_copy != NULL,
+                   "a private-tree copy left a <template>'s content and its host has no copy — the host is "
+                   "copied before its content is walked, so the map cannot be missing it");
+            *croot = dom_private_root_of(host_copy);
+            n = host;
+            if (n->first_child != NULL) return n->first_child;
+            continue;
+        }
+        if (up == top) return NULL;
+        DCHECK(dom_private_map_get(avl, avl_root, up) != NULL,
+               "a private-tree copy climbed into a node it never copied — the only trees it enters are the one "
+               "it was given and a <template>'s content, and it copies every node of both");
+        n = up;
+    }
+}
+
+/* THE TWO SIDES OF A PRIVATE TREE A STEP MACHINE DECLARES — see dom_cow.h. Written as a pair because they are
+ * one contract read in two directions: whatever the clone gives the sibling is exactly what the sibling's own
+ * teardown will destroy, and a field either side names alone is a leak or a double free.
+ *
+ * THE MAP IS lexbor's OWN AVL, keyed on the source node's ADDRESS and carrying the copy — a pointer map with
+ * no structure to invent, in the pinned tree, allocated out of a dobject it destroys with itself. It records a
+ * copy that has just been made and nothing about it parks, so it is a STACK-LIFETIME artifact of this one call
+ * and is not a field of anything. That is also why the cursors are an argument here rather than a slot kind of
+ * their own: the only moment at which "which node does this cursor now name" has an answer is while this map
+ * is alive.
+ *
+ * WHAT A COPY OWES BEYOND ITS SHAPE IS DOM §4.4 "Cloning nodes"' CLONING STEPS, and that list is the thing a
+ * subtree copy is silently wrong without. A node's PER-FLOW state does not live on the lexbor node at all — it
+ * lives on the node's JS WRAPPER, because §3.7 makes it a per-flow fact — so a walk that copied structure and
+ * stopped would hand the sibling arm a `<script>` whose `already started` is FALSE for markup this parse
+ * marked dead, and §13.4's Inert scripting mode would be undone by taking a fork. The steps are not this
+ * file's to state: they are the component entries core/dom/node.c's clone-a-node machine calls at its own step
+ * 3, called here from the one other walk that copies nodes, so there is one list and not two.
+ *
+ * THE TWO THE LIST DOES NOT COVER CRASH BY NAME rather than being skipped, because skipping is exactly the
+ * shape that is wrong in silence. §4.4 step 6's SHADOW ROOT is a `shadow_root_attach` whose refusals are
+ * reachable and which returns an EXCEPTION, and a visit has no way to be abrupt; §4.8.11's MEDIA ELEMENT keeps
+ * its state on the wrapper AND has already enqueued a resource-selection job naming the ORIGINAL's wrapper, and
+ * §4.8.11 states no cloning steps at all, so there is nothing to call and the sibling would silently get a
+ * media element in the wrong network state. Both are cases a seam BEFORE the fork created (core/html/
+ * fragment_parser.c's FRAG_FEED boundary runs declarative_shadow_parsed and media_element_parsed on the tree it
+ * hands on), which is why they are asked here per node and not once at the root. */
+static void *dom_private_tree_clone(JSContext *ctx, void *root, void **cursors[], int ncursors)
+{
+    lxb_dom_node_t *src = root, *top, *croot, *n;
+    lexbor_avl_t *avl;
+    lexbor_avl_node_t *avl_root = NULL;
+    int i;
+
+    dom_private_check(src);
+    DCHECK(src->owner_document != NULL,
+           "a flow-private DOM node with no owner document was declared to a fork — the copy is made against "
+           "that document so its interned tag and attribute ids stay meaningful, and there is no other "
+           "document this operation could name");
+    avl = lexbor_avl_create();
+    CHECK(avl != NULL && lexbor_avl_init(avl, 128, sizeof(lexbor_avl_node_t)) == LXB_STATUS_OK,
+          "a fork could not create the node map for the flow-private tree a step machine declared");
+
+    /* THE TOP IS COPIED HERE AND NOT BY THE LOOP, which is the whole difference between this walk and the one
+       core/html/tree_construction.c performs over a partial parse: that one is handed the two temporary
+       DOCUMENT nodes and starts at `src_top->first_child`, so a DETACHED root — which is what every private
+       tree a step machine owns is — has no entry point into it at all. */
+    top = dom_private_copy_one(ctx, src->owner_document, src);
+    dom_private_map_put(avl, &avl_root, src, top);
+    croot = top;
+    n = src->first_child;
+    while (n != NULL) {
+        lxb_dom_node_t *parent = dom_private_map_get(avl, avl_root, n->parent);
+        lxb_dom_node_t *copy, *content, *ccontent;
+
+        DCHECK(parent != NULL,
+               "a private-tree copy reached a node whose parent it has not copied — the walk is pre-order over "
+               "both trees, so a parent is always in the map before its children");
+        copy = dom_private_copy_one(ctx, src->owner_document, n);
+        dom_cow_insert_private(croot, parent, copy);
+        dom_private_map_put(avl, &avl_root, n, copy);
+
+        /* HTML §4.12.3's CLONING STEPS — a `<template>`'s markup is not under the element, it is in a separate
+           fragment reached through it, and lexbor's clone gives the copy its own EMPTY one because the
+           template interface's constructor makes it. The fragment goes in the map like every element, because
+           it is the insertion parent its children are looked up by, and `croot` follows it because a content
+           fragment is a root with no parent and therefore its own private tree in dom_cow's terms. */
+        content  = node_template_content(n);
+        ccontent = node_template_content(copy);
+        if (content != NULL) {
+            DCHECK(ccontent != NULL,
+                   "a copied <template> has no content fragment — lexbor's clone built something other than a "
+                   "template interface for a node whose tag is template");
+            dom_private_map_put(avl, &avl_root, content, ccontent);
+            if (content->first_child != NULL) { croot = ccontent; n = content->first_child; continue; }
+        } else {
+            DCHECK(ccontent == NULL,
+                   "the copy of a non-template node has a template content fragment — the two sides of this "
+                   "walk have stopped being the same kind of node");
+        }
+        if (n->first_child != NULL) { n = n->first_child; continue; }
+        n = dom_private_walk_next(n, src, avl, avl_root, &croot);
+    }
+
     for (i = 0; i < ncursors; i++) {
-        lxb_dom_node_t *c = *cursors[i];
+        lxb_dom_node_t *c = *cursors[i], *cc;
 
         if (c == NULL) continue;   /* a cursor the algorithm has not taken yet */
-        DCHECK(c == src,
+        cc = dom_private_map_get(avl, avl_root, c);
+        DCHECK(cc != NULL,
                "a cursor into a flow-private tree names a node this copy does not know — every cursor a "
-               "machine declares beside its tree must name a node OF that tree, and one that does not would "
-               "be left aimed at the arm this fork was taken from");
-        *cursors[i] = copy;
+               "machine declares beside its tree must name a node OF that tree, and one that does not is left "
+               "aimed at the arm this fork was taken from");
+        *cursors[i] = cc;
     }
-    return copy;
+    lexbor_avl_destroy(avl, true);
+    return top;
 }
 
 static void dom_private_tree_destroy(JSContext *ctx, void *root)
