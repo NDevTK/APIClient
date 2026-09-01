@@ -2149,6 +2149,47 @@ function audit(argv, opts = {}) {
    * noun phrase and means the title was only its beginning. A colon is refused too, on the same evidence — it
    * delimits 50 correct sites and it is also what stands inside the quoted IDL `interface Document : Node`,
    * which produced two of the nine.
+   *
+   * AND THE POSSESSIVE STANDING BEFORE THE PHRASE IS REFUSED FOR A REASON THAT IS NOT A THRESHOLD AT ALL, SO
+   * IT IS WRITTEN DOWN HERE RATHER THAN LEFT AS AN ABSENCE FOR SOMEONE TO "FIX". `§N's X` DOES NOT CLAIM THAT
+   * §N IS TITLED X — it claims X is IN §N, which is the opposite relation and is check (3)'s question, not
+   * this one's. The two shapes differ only in which side of the phrase the apostrophe stands on and they mean
+   * opposite things: a possessive AFTER the phrase is ADMITTED above (`§4.8.5 The iframe element's …` — the
+   * name is complete and the sentence then talks about the thing), which is why `['’]s\b` sits in the
+   * terminator set; a possessive BEFORE it makes the phrase the section's PROPERTY. This scan reads the RAW
+   * prose while `c.words` was built from prose normTerm had already deleted the possessive out of, so the two
+   * readings disagree at that one character — and that disagreement is CORRECT here, not a bug to reconcile.
+   *
+   * BOTH REFUSALS WERE RE-MEASURED AS A WIDENING AND THE WIDENING IS WRONG IN KIND RATHER THAN MERELY NOISY.
+   * Check (2)'s note used to end by naming "make `delimited` see a colon and a possessive" as the thing a
+   * future single-reader diff builds; that instruction is RETIRED, and it is retired HERE rather than
+   * deleted, because a reader who re-derives it will re-attempt it. Built as one variant — a leading
+   * possessive skipped before the scan, `:` added to the terminator set — and measured as two runs on one
+   * frozen tree at `b973d98b`, only this file swapped between them: findings 495 -> 502, and EVERY OTHER
+   * COLUMN BYTE-IDENTICAL (MISATTRIBUTED 490, UNDECIDED 2625, UNKNOWN-SECTION 0, RETIREMENT-NOTE-WRONG 0,
+   * QUOTE-WRONG-SECTION 54, QUOTE-WRONG-STANDARD 24, MENTION-NOT-CLAIM 230), so the whole of it lands in
+   * TITLE-MISMATCH, 5 -> 12. ALL SEVEN NEW FINDINGS WERE READ AND FIVE ARE FALSE ACCUSATIONS — a 71% false
+   * rate in the one category this file calls the worst finding it can emit. The five: `§8.5.1's` and
+   * `§9.3.2's` Computed-value and Applies-to LINES, which are rows of the property definition table those
+   * sections carry and which happen to title CSS 2.1's conventions clauses; `§10's used values`, naming what
+   * §10 computes; and twice the IDL specimen `§4.4 interface Document : Node` the sentence above already
+   * predicted the colon would catch. Every one is exactly right as written and the finding names a
+   * replacement number that would edit it into a wrong one.
+   *
+   * WHAT THE REFUSAL COSTS, MEASURED RATHER THAN ASSERTED: the possessive shape is NOT unjudged, because
+   * normTerm deletes the `'s` and hands X to the term scan, which is what caught the pair check (2)'s note is
+   * about — `§7.4.1's session history entries` is a MISATTRIBUTED from check (3), never a TITLE-MISMATCH from
+   * here. What escapes both is only the case where X is a heading and NO index knows it as a term, and that
+   * was two sites in the whole tree, both real: `engine/wpt.mjs`'s animation-frames rows and
+   * `engine/fieldgate.mjs`'s callback-functions comment. Two real findings do not buy five wrong ones, and
+   * the two were repaired by hand in the diff after this one.
+   * WHAT A FUTURE ATTEMPT MUST BUILD FIRST, since the terminator set is not the obstacle: a rule separating a
+   * phrase the author DISPLAYED from one they CLAIMED. Three of the five false accusations put the matched
+   * words inside a BACKTICK RUN — `mentionNotClaim`'s specimen rule, which today asks about the CITATION,
+   * asked about the PHRASE instead. It is not built here because with the terminator set unwidened no
+   * backticked phrase can reach this check at all, so it would guard a path that does not exist. HOW ITS
+   * ABSENCE WOULD SHOW: it cannot show today; it shows the instant someone widens the set above without it,
+   * as those three sites going red.
    * RESIDUAL — AN UNQUOTED TITLE RUNNING STRAIGHT INTO A VERB IS NOT JUDGED, and it is half of this shape:
    * 870 of the 1743 end in a word rather than a mark, so `§7.3.1 Creating browsing contexts is what this
    * claims` is declined while `§7.3.1 Creating browsing contexts, …` is caught. The code is right about what
@@ -2540,8 +2581,13 @@ function audit(argv, opts = {}) {
            * questions: it would be decided by the stricter one and the cost would land, silently, on the
            * looser. So the shared rule is the one that is direction-NEUTRAL — a longer title beats a
            * shorter one whichever way the check points — and the floors stay where their direction is safe.
-           * A future attempt that wants one reader for both must first make `delimited` see a colon and a
-           * possessive; until then, widening this is a regression with a tidier shape. */
+           * AND THE CLAUSE THAT USED TO END THIS PARAGRAPH IS RETIRED — it said a future attempt must first
+           * make `delimited` see a colon and a possessive, and that widening has since been built and
+           * measured: it is wrong in KIND, not merely noisy, because `§N's X` claims X is IN §N rather than
+           * that §N is TITLED X, which is check (3)'s question and is where that shape is already answered.
+           * The measurement, the seven findings it raised and the five that were false are recorded at
+           * `delimited`, together with what a single-reader attempt would have to build before the terminator
+           * set is worth touching. Until then, widening this is a regression with a tidier shape. */
           let confirms;
           if (c.quoted) {
             confirms = normTerm(c.quoted) === wt;
