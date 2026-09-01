@@ -1886,8 +1886,15 @@ void sanitizer_walk_begin(JSContext *ctx, SanitizerWalk *w, lxb_dom_node_t *root
 void sanitizer_walk_visit(JSContext *ctx, SanitizerWalk *w, JSStepVisit *v)
 {
     v->val(ctx, &w->config);
-    /* The level stack is plain storage a forked arm must not share — each arm unwinds its own. The DOM
-       pointers in it are per-flow COW nodes, which every arm reaches by the same address. */
+    /* The level stack is plain storage a forked arm must not share — each arm unwinds its own.
+       THE DOM POINTERS IN IT ARE NOT DECLARED HERE, AND THAT IS A STATEMENT WITH A CONDITION ON IT. They are
+       per-flow COW nodes of the tree the HOSTING machine owns, so every arm reaches them by the same address
+       for exactly as long as that machine's tree is SHARED between the arms — which is what
+       core/html/fragment_parser.c's fragment_parse_unforkable holds the fork for. The day that tree is cloned
+       instead, every pointer here names a node of the arm the fork was taken from: the seven cursors above,
+       and this stack's `node` and `root` at each of `sp` levels, and `attr`, which a node->node map cannot
+       answer at all because an attribute is not a node. They are named in that clause, and they are one piece
+       of work with it — a copy of the tree that landed without them would be silent. */
     v->buf(ctx, (void **)&w->stack, sizeof(SanLevel) * (size_t)w->scap);
 }
 

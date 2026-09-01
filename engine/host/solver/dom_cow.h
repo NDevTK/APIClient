@@ -11,6 +11,7 @@
 
 #include <lexbor/html/html.h>
 #include "quickjs.h"
+#include "quickjs-step.h"   /* JSStepTreeOps — a private tree is a thing a step machine's fork has to copy */
 
 /* Capture gate: while non-zero, DOM mutations are recorded into the running flow's delta. The scheduler sets
    it (0 pre-baseline / during a shared chunk eval, 1 once the per-flow baseline is fixed). */
@@ -315,6 +316,20 @@ void dom_cow_move_before_private(lxb_dom_node_t *root, lxb_dom_node_t *ref, lxb_
    already be empty: everything under it would be freed with it, and this operation exists precisely because
    what was under it went somewhere else. */
 void dom_cow_discard_private(lxb_dom_node_t *root, lxb_dom_node_t *node);
+
+/* A PRIVATE TREE, DECLARED TO A STEP MACHINE'S FORK AND TEARDOWN — quickjs-step.h's `v->tree`, answered here
+   because the DESTROY half is `dom_cow_destroy_private` two declarations up and the CLONE half is the same
+   question asked forwards: what does the sibling arm get that neither arm can free twice.
+   IT BELONGS ON THE DECLARATION AND NEVER IN A `release`. A machine's `visit` is the ONE list of what it owns,
+   so a tree named here is cloned by the fork and freed by the teardown through that one list — and a `release`
+   that also freed it is the second list, which the teardown's own fingerprint bracket now measures rather than
+   trusts. That is the whole reason this is an operation the engine dispatches instead of a pair of calls a
+   machine makes for itself: a machine must never learn which consumer is visiting it.
+   THE CURSORS ARE THE OTHER HALF AND THEY ARE NOT OPTIONAL. Every pointer a machine holds INTO the tree — a
+   placement cursor, the parse context when the parse created it, a walk standing on a node — names a node the
+   copy replaced, so a clone that re-pointed the root and nothing else hands the sibling a tree it owns and a
+   set of pointers into the arm it was forked from. */
+extern const JSStepTreeOps dom_cow_private_tree_ops;
 
 /* Scheduler hooks — swap the running flow's DOM writes. There is no `dom_revert` twin that DISCARDS them: a
    flow that finishes is switched out like any other and then RELEASED, which is the same path an evicted flow

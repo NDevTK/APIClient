@@ -1234,6 +1234,72 @@ void dom_cow_destroy_private(lxb_dom_node_t *root, bool with_children) {
     else               lxb_dom_node_destroy(root);
 }
 
+/* THE TWO SIDES OF A PRIVATE TREE A STEP MACHINE DECLARES — see dom_cow.h. Written as a pair because they are
+   one contract read in two directions: whatever the clone gives the sibling is exactly what the sibling's own
+   teardown will destroy, and a field either side names alone is a leak or a double free. */
+static void *dom_private_tree_clone(JSContext *ctx, void *root, void **cursors[], int ncursors)
+{
+    lxb_dom_node_t *src = root, *copy;
+    int i;
+
+    (void)ctx;
+    dom_private_check(src);
+    /* THE SUBTREE WALK IS THE NEXT DIFF AND IT IS NOT THIS ONE. What is copied here is ONE node, which is what
+       §8.5.5 step 5's / §8.5.6 step 4's / §8.5.7 step 6's created parse context is — an element in no tree with
+       no children. A tree with children reaching here is a machine that declared one before the walk exists,
+       and the copy it would get is an empty root: BUILD THE WALK, and note that
+       core/html/tree_construction.c's copy_subtree is NOT already it in two ways that a reader taking that
+       sentence on trust would only find at run time. It takes the two temporary DOCUMENT nodes and starts at
+       `src_top->first_child`, so a DETACHED root has no entry point into it and needs its top copied and mapped
+       first; and its walk descends into a `<template>`'s content and NOT into a SHADOW ROOT, while the tree a
+       fragment parse owns after its boundary can hold one — core/html/fragment_parser.c runs
+       declarative_shadow_parsed there. The destroy side owes the shadow root too, and says so already:
+       core/html/sanitizer.c's removal DCHECK is the same absence seen from the other end. */
+    DCHECK(src->first_child == NULL,
+           "a flow-private DOM tree with CHILDREN was declared to a fork and this copies exactly one node — "
+           "the sibling arm would get an EMPTY root and place nothing; build the subtree walk with its "
+           "node->node map, which is what the cursor re-point below is already written against");
+    DCHECK(src->owner_document != NULL,
+           "a flow-private DOM node with no owner document was declared to a fork — the copy is made against "
+           "that document so its interned tag and attribute ids stay meaningful, and there is no other "
+           "document this operation could name");
+    /* NOTHING HAS SEEN THIS TREE, which is what makes a fresh node the right answer rather than an identity
+       question: a node carrying a JS wrapper would leave the fork deciding which arm's node that wrapper
+       names, and there is no such answer. */
+    DCHECK(JS_IsUndefined(node_wrap_peek(src)),
+           "a node of a flow-private tree already has a JS wrapper — a private tree is one no other flow can "
+           "reach, so a wrapper on it means something outside this machine is holding the node and the copy "
+           "would need an identity answer for it");
+    copy = lxb_html_interface_clone(src->owner_document, src);
+    CHECK(copy != NULL, "a fork could not copy the flow-private DOM tree a step machine declared");
+    /* THE COPY IS IN THE SAME DOCUMENT AS THE ORIGINAL. lxb_dom_node_interface_copy takes its
+       `dst->owner_document == src->owner_document` path and assigns local_name, ns and prefix verbatim, so no
+       name is re-interned and a placement out of the copy still needs no §4.5 adopt. The moment that stops
+       being true every tag and attribute id lands in another hash, silently and correctly-looking. */
+    DCHECK(copy->owner_document == src->owner_document,
+           "a copied flow-private node belongs to a different document than the node it was copied from — its "
+           "interned tag and attribute ids are then meaningless against the document it will be placed into");
+    for (i = 0; i < ncursors; i++) {
+        lxb_dom_node_t *c = *cursors[i];
+
+        if (c == NULL) continue;   /* a cursor the algorithm has not taken yet */
+        DCHECK(c == src,
+               "a cursor into a flow-private tree names a node this copy does not know — every cursor a "
+               "machine declares beside its tree must name a node OF that tree, and one that does not would "
+               "be left aimed at the arm this fork was taken from");
+        *cursors[i] = copy;
+    }
+    return copy;
+}
+
+static void dom_private_tree_destroy(JSContext *ctx, void *root)
+{
+    (void)ctx;
+    dom_cow_destroy_private(root, /*with_children*/ true);
+}
+
+const JSStepTreeOps dom_cow_private_tree_ops = { dom_private_tree_clone, dom_private_tree_destroy };
+
 /* DESTROY ONE NODE OF a private tree — see dom_cow.h. `lxb_dom_node_destroy` detaches before it frees, and it
    frees through the DOCUMENT's per-interface destructor, which for a `<template>` is what releases the template
    contents fragment along with the element AND, since core/dom/node_interface.c owns that dispatcher, the

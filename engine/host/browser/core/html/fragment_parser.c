@@ -65,9 +65,37 @@
 void fragment_parse_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     FragmentParse *s = st;
+    /* §8.5.5 STEP 5's / §8.5.6 STEP 4's / §8.5.7 STEP 6's CREATED PARSE CONTEXT, DECLARED. It is an element
+       this machine made that is in NO tree, so it is a flow-private tree of exactly one node and nothing but
+       this machine can ever free it — which is why it used to be freed by `release`, and why that was the
+       second list: a field the declaration does not name is a field the fork cannot copy, so a sibling arm
+       took the SAME element and both releases destroyed it.
+       AND `context` IS A CURSOR INTO IT, which is the half a root-only copy would get wrong. All three
+       sections that create one parse in it — fragment_parse_begin is handed the created element itself — so a
+       clone that re-pointed the tree and left `context` alone would hand the sibling arm a context element
+       belonging to the arm it was forked from, and the first FRAG_FEED byte reads its local name, its
+       namespace and its owner document off freed memory the moment the original arm's teardown runs.
+       IT IS A CURSOR ONLY WHILE IT NAMES THE CREATED ELEMENT: a member that reached its own DONE before
+       fragment_parse_begin ran has an `own_context` and NO context at all, and every member that did not
+       create one is parsing against an element of the REAL tree, which this machine does not own. */
+    lxb_dom_node_t *own = s->own_context ? lxb_dom_interface_node(s->own_context) : NULL;
+    bool ctx_is_own = s->own_context != NULL && s->context == s->own_context;
+    lxb_dom_node_t *ctxn = ctx_is_own ? lxb_dom_interface_node(s->context) : NULL;
+    void **cursors[1] = { NULL };
+    int nc = 0;
+
+    DCHECK(s->own_context == NULL || s->context == NULL || s->context == s->own_context,
+           "a fragment parse created its own context element and is parsing in a DIFFERENT context — the "
+           "created one is then named by nothing that travels with the parse, so a fork's copy of it has no "
+           "cursor to re-point and the sibling arm would parse against the original arm's element");
+    if (ctx_is_own) cursors[nc++] = (void **)&ctxn;
+
     v->val(ctx, &s->compliant);
     v->buf(ctx, (void **)&s->html, s->len ? s->len + 1 : 0);
     v->val(ctx, &s->san_config);
+    v->tree(ctx, (void **)&own, cursors, nc, &dom_cow_private_tree_ops);
+    s->own_context = own ? lxb_dom_interface_element(own) : NULL;
+    if (ctx_is_own) s->context = ctxn ? lxb_dom_interface_element(ctxn) : NULL;
     sanitizer_walk_visit(ctx, &s->san, v);
 }
 
@@ -81,8 +109,8 @@ void fragment_parse_visit(JSContext *ctx, void *st, JSStepVisit *v)
    FORKABLE — while still OWNING the whole tree the parse had produced (`frag`, deep-destroyed by
    fragment_parse_release, with `node` the cursor into it and §8.6.4 set and filter HTML's sanitizer walk
    standing inside it) and, for §8.5.5 step 5, §8.5.6 step 4 and §8.5.7 step 6, an `own_context` element that
-   is in no tree and that fragment_parse_release also destroys. Neither is in fragment_parse_visit, because
-   JSStepVisit has no operation for a private DOM tree — so a fork taken at a FRAG_PLACE or FRAG_CLEAR or SAN_* rest point
+   is in no tree and that fragment_parse_release also destroyed. Neither was in fragment_parse_visit, because
+   JSStepVisit had no operation for a private DOM tree — so a fork taken at a FRAG_PLACE or FRAG_CLEAR or SAN_* rest point
    handed two arms ONE tree: both would place the same nodes into their own documents and
    both fragment_parse_releases would destroy it. Those rest points are reachable, because the placement's
    §4.2.3 insertion steps run page code (a custom element's connectedCallback), which is where a concolic branch
@@ -102,9 +130,20 @@ void fragment_parse_visit(JSContext *ctx, void *st, JSStepVisit *v)
    lxb_dom_document_init with a non-NULL owner inherits the real document's arenas and hashes and stamps every
    parsed node with the REAL document. What the fork needs is the SUBTREE plus a node->node map to move the tree
    builder's arrays onto it, which is what that component now is.
-   WHAT IS LEFT IS ORDERED, and the two clauses below are in that order: the private-tree declaration first,
-   because it is the one a fork reaches TODAY and the one whose clone half is already written, and §13.2.5's
-   tokenizer second. See the header above fragment_parse_step for the rest of the ordering. */
+   AND THE SAME FAILURE MODE HAS SINCE BEEN CAUGHT IN THIS MESSAGE ONE LEVEL DOWN, which is why the clause
+   below no longer tells anyone what the clone half already is. It said `copy_subtree` needed "only to be
+   exported with its map", and that sentence was true of the tree it was written for and false of the tree the
+   fork actually reaches: that walk takes the two temporary DOCUMENT nodes and starts at `src_top->first_child`,
+   so a DETACHED root has no entry point into it, and it descends into a `<template>`'s content and NOT into a
+   SHADOW ROOT — while the tree this machine owns after the FRAG_FEED boundary can hold one, because
+   declarative_shadow_parsed runs at that boundary, on this fragment, before a single node is placed. The
+   destroy side owes the shadow root too and already says so: core/html/sanitizer.c's removal DCHECK is the
+   same absence read from the other end. A reader who took the retired sentence on trust would have exported a
+   walk that silently copied a fragment without its shadow trees.
+   WHAT IS LEFT IS ORDERED, and the clauses below are in that order: the parse's own tree first, because it is
+   the one a fork reaches TODAY, and §13.2.5's tokenizer second. See the header above fragment_parse_step for
+   the rest of the ordering. The CREATED PARSE CONTEXT is no longer one of them — it is a private tree of one
+   node with `context` as its cursor, and fragment_parse_visit declares it through `v->tree`. */
 const char *fragment_parse_unforkable(const void *st)
 {
     const FragmentParse *s = st;
@@ -115,21 +154,26 @@ const char *fragment_parse_unforkable(const void *st)
        component's ownership. Asked first because it is the half a flow standing in FRAG_XML is inside. */
     if (why != NULL)
         return why;
-    if (s->frag != NULL || s->own_context != NULL)
+    if (s->frag != NULL)
         return "a fragment parse cannot be forked between its parse and its placement — this machine OWNS the "
                "tree the parse produced (`frag`, which fragment_parse_release deep-destroys, with `node` the "
-               "cursor into it and §8.6.4 set and filter HTML's sanitizer walk standing inside it) and, for "
-               "§8.5.5 step 5, §8.5.6 step 4 and §8.5.7 step 6, an `own_context` element that is in no tree "
-               "and that fragment_parse_release destroys too. fragment_parse_visit declares neither, because "
-               "JSStepVisit has no operation for a PRIVATE DOM TREE, so the sibling arm would share one tree with the "
-               "original: two arms placing the same nodes and two releases destroying them. "
-               "BUILD THAT OPERATION — a `v->tree` whose three consumers do different work the way v->reexec's "
-               "do: the CLONE deep-copies the subtree into the same document arena and re-points every cursor "
-               "through a node->node map, which is copy_subtree in core/html/tree_construction.c (written for "
-               "the tree-builder copy and needing only to be exported with its map); the TEARDOWN is "
-               "dom_cow_destroy_private; the FINGERPRINT folds the node addresses. Then fragment_parse_visit declares "
-               "`frag` with `node`, `own_context`, and the sanitizer walk declares its own cursors, and this "
-               "clause deletes";
+               "cursor into it and §8.6.4 set and filter HTML's sanitizer walk standing inside it), and the "
+               "OPERATION that declares a private tree exists (`v->tree`, which this machine already declares "
+               "its created parse context through) while the SUBTREE WALK its clone needs does not — so the "
+               "sibling arm would get an empty root, place nothing, and leave the original's nodes named by "
+               "two states. "
+               "BUILD THAT WALK, in solver/dom_cow.c's dom_private_tree_clone, where its absence is asserted. "
+               "It is NOT core/html/tree_construction.c's copy_subtree re-exported, and this message said it "
+               "was: that walk takes the two temporary DOCUMENT nodes and starts at `src_top->first_child`, so "
+               "a DETACHED root has no entry point into it and needs its own top copied and mapped first; and "
+               "it descends into a `<template>`'s content and NOT into a SHADOW ROOT, while THIS tree can hold "
+               "one — declarative_shadow_parsed runs at the FRAG_FEED boundary above, on this fragment, before "
+               "any node is placed. The destroy side owes the shadow root too and says so already at "
+               "core/html/sanitizer.c's removal DCHECK, so both halves of the operation are one piece of work. "
+               "Then fragment_parse_visit declares `frag` with `node` as its cursor, sanitizer_walk_visit "
+               "hands up its own seven cursors and its level stack's two-per-level, its `attr` cursor gets the "
+               "answer a node->node map does not carry (an attribute is not a node: it is the copy of "
+               "`cur`'s attribute at the same position), and this clause deletes";
     return s->parser
          ? "a fragment parse cannot be forked mid-parse — the TREE-BUILDER half is built "
            "(core/html/tree_construction.c: html_tree_construction_copy deep-copies the partial subtree into "
@@ -155,11 +199,16 @@ const char *fragment_parse_unforkable(const void *st)
          : NULL;
 }
 
-/* WHAT NO DECLARATION NAMES: a lexbor element, a lexbor parser, and THE PARSE'S OWN TREE.
-   `compliant`, the sanitizer's `config`, the markup copy and the sanitizer walk's level stack are all named by
-   fragment_parse_visit — the two buffers as `buf`, which is why they are allocated with the RUNTIME's allocator: the
-   fork's copy of a `buf` is js_malloc'd, so a sibling arm releasing a plain malloc'd one would hand the wrong
-   allocator a runtime block, and the accounting the runtime keeps of both would be wrong in each direction. */
+/* WHAT NO DECLARATION NAMES: a lexbor PARSER, and THE PARSE'S OWN TREE.
+   `compliant`, the sanitizer's `config`, the markup copy, the sanitizer walk's level stack and the created
+   parse context are all named by fragment_parse_visit — the two buffers as `buf`, which is why they are
+   allocated with the RUNTIME's allocator: the fork's copy of a `buf` is js_malloc'd, so a sibling arm
+   releasing a plain malloc'd one would hand the wrong allocator a runtime block, and the accounting the
+   runtime keeps of both would be wrong in each direction.
+   THE CREATED CONTEXT LEFT THIS LIST WHEN IT GAINED A DECLARATION, and that is the direction this list only
+   ever moves in: a field named by `visit` is cloned by the fork and freed by the one teardown, so freeing it
+   here as well is the second list. What is left below is what a declaration cannot name — a lexbor parse
+   handle, and a tree whose copy is the operation fragment_parse_unforkable is still holding the fork for. */
 void fragment_parse_release(JSContext *ctx, void *st)
 {
     FragmentParse *s = st;
@@ -168,11 +217,9 @@ void fragment_parse_release(JSContext *ctx, void *st)
        through its own entry for the reason the fork asks it its own question: what it holds is its to name.
        Idempotent and inert for an HTML parse, whose `xf` is all-zero. */
     xml_fragment_release(&s->xf);
-    /* §8.5.5 step 5's / §8.5.7 step 6's `body` never entered a tree, so nothing else will ever free it. */
-    if (s->own_context) {
-        dom_cow_destroy_private(lxb_dom_interface_node(s->own_context), /*with_children*/ true);
-        s->own_context = NULL;
-    }
+    /* §8.5.5 step 5's / §8.5.7 step 6's `body` IS NOT FREED HERE ANY MORE — it is declared, so the ONE list
+       destroys it after this returns. Freeing it here as well is the second list, and the teardown's own
+       fingerprint bracket around this call is what now measures that rather than trusting it. */
     /* THE THROW PATH OWNS THE PARSER TOO. A flow dropped mid-parse would otherwise leak a tokenizer, an
        open-element stack and the temporary document behind them. */
     if (s->parser) {
