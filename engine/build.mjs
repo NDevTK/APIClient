@@ -2268,14 +2268,36 @@ function pageErrorText(out) {
      (the fixture stopped exercising something); an explored one's absence is the SCHEDULER's answer and never
      the fixture's — how many flows reach a forked completion is not a fact this document states — so it is
      reported as a count and is never asserted against a number. */
-  const explored = new Set([...out.matchAll(/^@PAGEERR-EXPLORED at=(\S+) (.*)$/gm)]
-                             .map((m) => m[1] + " " + m[2].trim()));
+  /* ONE SPELLING OF THE PAIR, MINTED AND PROBED THROUGH THE SAME FUNCTION. The set and the membership test are
+     two sites naming ONE key, and a key each composes for itself is the read-with-no-writer defect with no name
+     missing for a grep to find: both spellings look right alone, `has` answers false for every pair a producer
+     ever declared, and the engine's own throw lands in `rogue` wearing the one label this partition exists to
+     deny it. It is not hypothetical — the joiner disagreed here ("\0") and at the probe (" ") from this line's
+     first day, so `mine` was empty in every run there has ever been and `mineText` said nothing, which reads
+     exactly like a run that explored no throwing world. A SEPARATOR and not a bare concatenation because an
+     address and a message are both free text: at="a b"+msg="c" and at="a"+msg="b c" are different pairs that
+     concatenate alike. NUL is the byte neither can contain — written as the ESCAPE and never as the raw byte,
+     because a single raw NUL makes this whole file BINARY to grep, and a reader grepping `PAGEERR` across the
+     .mjs tree getting no hit at all is how a two-site key gets to disagree unobserved in the first place. */
+  const pairKey = (at, msg) => at + "\0" + msg;
+  const explored = new Set();
+  for (const m of out.matchAll(/^@PAGEERR-EXPLORED at=(\S+) (.*)$/gm)) {
+    const msg = m[2].trim();
+    /* THE SAME ACCEPTANCE RULE AS THE ANNOUNCEMENT LOOP BELOW, which drops an empty message. A side that keeps
+       what the other drops mints a key nothing can ever match, and would fire the contract check below on a
+       disagreement between two readers rather than on anything the producer did. */
+    if (!msg) continue;
+    explored.add(pairKey(m[1], msg));
+  }
   const errs = [];
+  /* EVERY PAIR EVER ANNOUNCED, WHICH IS NOT `errs` — a retraction splices the pair out of what STANDS, and an
+     explored pair whose report was later taken back is a correct run rather than a broken producer. */
+  const announced = new Set();
   let retracted = 0;
   for (const m of out.matchAll(/^@PAGEERR(-RETRACTED)? at=(\S+) (.*)$/gm)) {
     const e = { at: m[2], msg: m[3].trim() };
     if (!e.msg) continue;
-    if (!m[1]) { errs.push(e); continue; }
+    if (!m[1]) { announced.add(pairKey(e.at, e.msg)); errs.push(e); continue; }
     const k = errs.findIndex((s) => s.at === e.at && s.msg === e.msg);
     if (k < 0)
       throw new Error("[build] an @PAGEERR-RETRACTED line names a (message, throw site) pair no @PAGEERR line " +
@@ -2286,6 +2308,24 @@ function pageErrorText(out) {
     errs.splice(k, 1);
     retracted++;
   }
+  /* AND THE CHECK THAT KEEPS `mineText` FROM READING ZERO WHEN IT IS BROKEN RATHER THAN QUIET — the sibling of
+     the @PAGEERR-RETRACTED contract above, and it exists because the failure it catches ALREADY HAPPENED here
+     and was unobservable for precisely the reason `mineText` names: a silent zero and a mechanism that stopped
+     being reached read alike. `mine` stays REPORTED and never asserted against a number — how many flows reach
+     a forked completion is the SCHEDULER's answer, so an empty `explored` set is a correct run and nothing
+     here objects to it. What is NOT the scheduler's answer is a declaration that classifies NOTHING:
+     test_forced.c prints @PAGEERR-EXPLORED from the same call as the @PAGEERR it qualifies, with the same two
+     arguments, on the standing edge only — so a declaration matching no announcement means the reader's key
+     has stopped meeting the producer's and every population below it is mis-assigned.
+     ASKED AGAINST WHAT WAS ANNOUNCED AND NOT AGAINST WHAT STANDS, so a retraction can never fire it. */
+  for (const k of explored)
+    if (!announced.has(k))
+      throw new Error("[build] an @PAGEERR-EXPLORED line names a (message, throw site) pair no @PAGEERR line " +
+                      "announced — test_forced.c prints the declaration from the same call as the report it " +
+                      "qualifies, so an unmatched one means this reader's key no longer meets the producer's " +
+                      "and every page-error population in this report is mis-assigned: " +
+                      JSON.stringify(k.slice(k.indexOf("\0") + 1, k.indexOf("\0") + 161)) +
+                      " at " + k.slice(0, k.indexOf("\0")));
   /* SAID EVEN WHEN NOTHING STANDS, because it is the difference between a run whose page raised nothing and a
      run whose page raised errors and handled every one of them — §Testing's absent-count-versus-zero-count on
      the stream route, exactly as `pageErrorsRetracted` is on the document route. */
@@ -2297,7 +2337,7 @@ function pageErrorText(out) {
      claim is asked FIRST because it is the DOCUMENT's statement about a program it owns, and a fixture that
      stopped exercising its own staged throw must not have that absence hidden by the engine's classification
      of some other throw at the same address. */
-  const isExplored = (e) => explored.has(e.at + " " + e.msg);
+  const isExplored = (e) => explored.has(pairKey(e.at, e.msg));
   const known = errs.filter((e) => staged.has(e.at));
   const mine = errs.filter((e) => !staged.has(e.at) && isExplored(e));
   const rogue = errs.filter((e) => !staged.has(e.at) && !isExplored(e));
