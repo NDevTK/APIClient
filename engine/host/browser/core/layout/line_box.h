@@ -245,7 +245,25 @@ typedef struct {
  * the nearest block container too but its own exception makes an INLINE ancestor a containing block of a
  * different shape ("the bounding box around the padding boxes of the first and the last inline boxes"), so
  * core/layout/used_value.h answers a different question and crashes there rather than stepping over it. One
- * walk, here, because both of §6's and §7's consumers would otherwise carry a copy. */
+ * walk, here, because both of §6's and §7's consumers would otherwise carry a copy.
+ *
+ * FINDING IT MEANS FINDING THE RUN AS WELL, because the container is only half an answer when it is MIXED. CSS
+ * 2.2 §9.2.1.1 "Anonymous block boxes" — "if a block container box (such as that generated for the DIV above)
+ * has a block-level box inside it (such as the P above), then we force it to have only block-level boxes inside
+ * it" — puts this box's line boxes inside one of the ANONYMOUS BLOCK BOXES that forcing generates, one per
+ * maximal run of inline-level children, and that box is not the container: filling the container's whole child
+ * list would flow this box's items together with every other run's, which is a different partition on line
+ * boxes that do not exist. So this entry asks core/layout/block_flow.h which of those boxes holds the child it
+ * descended through, and fills THAT run. The runs and their positions come from block_flow.h's own §9.4.1 stack
+ * rather than being delimited a second time here, because a run's boundaries and its box's position are two
+ * halves of one derivation and two copies could disagree about where a margin collapsed.
+ *
+ * `*establishing` IS STILL THE CONTAINER AND THE FRAME IS STILL ITS CONTENT BOX, in both shapes, which is what
+ * makes the paragraph above invisible to every caller. §9.2.1.1 gives the anonymous box no element and no
+ * margin, border or padding, and its own origin inside the container is a number block_flow.h reports — so this
+ * entry ADDS that origin to the coordinates it measures inside the box, and a mixed container's fragments come
+ * out in the same frame an unmixed one's do. There is no second frame for a caller to know about, and no
+ * element is reported that the element tree does not contain. */
 size_t line_box_inline_fragments(lxb_dom_element_t *el, lxb_dom_element_t **establishing,
                                  LineBoxFragment **out);
 

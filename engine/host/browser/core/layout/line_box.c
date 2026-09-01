@@ -987,17 +987,110 @@ static CssPx lb_align_offset(lxb_dom_element_t *style, const TextRunMeasure *m, 
    See line_box.h for the frame the four numbers are in, for why the block axis is the LINE BOX's, and for why
    this entry finds the formatting context itself where the two above are handed a run. */
 
-/* THE BLOCK CONTAINER WHOSE INLINE FORMATTING CONTEXT `el` IS IN — the nearest ancestor that generates a block
-   container box, reached by walking PAST the inline boxes between them. §9.4.2's own condition then has to hold
-   of it over its WHOLE child list, because that is the one shape of the context that has an element to name it
-   (core/layout/block_flow.h); a MIXED container's runs belong to §9.2.1.1's anonymous block boxes, which the
-   element tree does not contain, and this crashes for that rather than measuring the wrong run. */
-static lxb_dom_element_t *lb_establishing_box(lxb_dom_element_t *el)
-{
-    lxb_dom_node_t *a;
+/* §9.4.2's CONTEXT `el` IS ON, EXPRESSED THE WAY core/layout/line_box.h's TWO OTHER ENTRIES ALREADY TAKE ONE —
+   the ELEMENT whose properties the box has, the half-open RUN of that element's children the box holds, and
+   where the box's own content box origin sits inside that element's content box.
+   THE TWO OFFSETS ARE THE WHOLE DIFFERENCE BETWEEN §9.4.2's TWO SHAPES OF ONE CONTEXT, and they are fields
+   rather than a flag because the composition below must add them without asking which shape it got. A block
+   container "that contains no block-level boxes" (§9.4.2's own condition) establishes the context over its
+   WHOLE child list — the box IS that element's, so the run is that list and both offsets are zero because
+   there is no box between the two frames — while a MIXED container's inline-level children sit inside CSS 2.2
+   §9.2.1.1 "Anonymous block boxes"' boxes, one per maximal run, each of which no element names: its run is its
+   own and its origin is where CSS 2 §9.4.1 "Block formatting contexts"' stack put it among its block-level
+   siblings.
+   `style` IS THE CONTAINER IN BOTH SHAPES, AND §9.2.1.1 IS WHY RATHER THAN A CONVENIENCE: "the properties of
+   anonymous boxes are inherited from the enclosing non-anonymous box …. Non-inherited properties have their
+   initial value. For example, the font of the anonymous box is inherited from the DIV, but the margins will be
+   0." So the container supplies every property the fill and §10.8's measurement read — there is no other
+   element to read them off — and it is also the box core/layout/line_box.h promises the caller its coordinates
+   are measured from. That promise is what the origin offset KEEPS: a mixed container's fragments come out in
+   the same frame an unmixed one's do, so no caller of that header learns that this box's lines were on a box
+   the element tree does not contain, and none of them changes.
+   THE INLINE-AXIS OFFSET IS A ZERO AND IS STILL ADDED. block_flow.h derives it: `width` has the initial value
+   `auto` and both margins are 0, so CSS 2.1 §10.3.3's constraint equation leaves the whole of the container's
+   content width to `width` and the anonymous box's two inline margin edges are exactly its container's two
+   CONTENT edges. That is also why `lb_align_offset` reads the line box's width off the container for both
+   shapes — §9.4.2 gives the line box the containing block's width, and the two boxes have the same one. The
+   offset is added rather than assumed away because the enumeration REPORTS it, and a consumer that dropped a
+   reported field would be reading one of two numbers and trusting the other. */
+typedef struct {
+    lxb_dom_element_t *style;
+    lxb_dom_node_t *first;
+    lxb_dom_node_t *end;
+    CssPx origin_x, origin_y;
+} LbContext;
 
-    for (a = lxb_dom_interface_node(el)->parent; a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT;
-         a = a->parent) {
+/* WHICH of `container`'s anonymous block boxes holds `child`, and WHERE that box is. `child` is `container`'s
+   OWN child on the path down to the inline box being measured, so it is one of the nodes §9.2.1.1's forcing
+   classified when it delimited the runs — which makes this a LOOKUP in core/layout/block_flow.h's enumeration
+   and not a second delimitation. It is reached that way for the reason core/layout/scrolling_area.c gives at
+   its own caller: a run's boundaries and its box's POSITION are two halves of ONE derivation, since the
+   position is a distance down §9.4.1's stack and that stack is the walk that generated the run, so a second
+   copy here could disagree with it about where a margin collapsed.
+   THE THREE ASSERTS ARE THREE DIFFERENT DEFECTS AND ARE DELIBERATELY NOT ONE COUNT, because each names a
+   different thing to fix — a container the section's sentence does not apply to, a per-child classification
+   asked twice and answered differently, and a walk that emitted a run it did not advance past. */
+static void lb_anon_run(lxb_dom_element_t *container, lxb_dom_node_t *child, LbContext *ctx)
+{
+    BlockFlowAnonBox *v = NULL;
+    size_t n = block_flow_anonymous_boxes(container, &v), i, found = 0;
+
+    DCHECK(n > 0,
+           "CSS 2.2 §9.2.1.1 \"Anonymous block boxes\" generated NO box inside a block container that answered "
+           "FALSE to CSS 2.2 §9.4.2 \"Inline formatting contexts\"' establishing condition, while an "
+           "inline-level box inside that container is being measured. Those two answers cannot both be right. "
+           "§9.4.2's condition is that \"an inline formatting context is established by a block container box "
+           "that contains no block-level boxes\", so a FALSE says this container holds one — and §9.2.1.1 then "
+           "wraps every maximal run of inline-level children, of which the run holding this box is one. A zero "
+           "is core/layout/block_flow.h's positive statement that this container has NO inline-level content "
+           "at all, which the box being measured contradicts, so the two are its one per-child predicate asked "
+           "twice over one child list and answered differently");
+    for (i = 0; i < n; i++) {
+        lxb_dom_node_t *c;
+
+        for (c = v[i].first; c != NULL && c != v[i].end; c = c->next) {
+            if (c != child) continue;
+            ctx->first = v[i].first;
+            ctx->end = v[i].end;
+            ctx->origin_x = v[i].content_x;
+            ctx->origin_y = v[i].content_y;
+            found++;
+        }
+    }
+    free(v);
+    DCHECK(found != 0,
+           "the block container's child holding this inline box is in NONE of CSS 2.2 §9.2.1.1 \"Anonymous "
+           "block boxes\"' runs. Every child that generates an inline-level box is inside exactly one of them, "
+           "because the section forces the container \"to have only block-level boxes inside it\" — so a child "
+           "is either a block-level box, or generates no box, or is inside the anonymous box wrapping its run "
+           "— and the caller has already established that an inline box hangs below this child. So "
+           "core/layout/block_flow.c classified it as block-level or as generating no box at all while this "
+           "walk reached a box on a line through it, and filling the container's whole child list instead "
+           "would partition a run this box is not in");
+    DCHECK(found <= 1,
+           "one child of a block container is inside TWO of CSS 2.2 §9.2.1.1 \"Anonymous block boxes\"' runs. "
+           "The section wraps each MAXIMAL run of inline-level content in one box, so the runs PARTITION the "
+           "child list and cannot overlap — two hits are core/layout/block_flow.c's stack having emitted a run "
+           "it did not then advance past, and the run and origin taken here would be whichever of the two "
+           "boxes the walk reported last");
+}
+
+/* THE INLINE FORMATTING CONTEXT `el` IS ON — the nearest ancestor that generates a block container box, reached
+   by walking PAST the inline boxes between them, and then WHICH of §9.4.2's two shapes of that context holds
+   this box. §9.4.2's own condition is asked over the container's WHOLE child list because that is the one shape
+   with an element to name it (core/layout/block_flow.h); a MIXED container's runs are §9.2.1.1's anonymous
+   block boxes, and the one holding this box supplies the run and the origin `lb_anon_run` looks up. */
+static LbContext lb_establishing_context(lxb_dom_element_t *el)
+{
+    lxb_dom_node_t *a, *child = lxb_dom_interface_node(el);
+    LbContext ctx;
+
+    ctx.style = NULL;
+    ctx.first = NULL;
+    ctx.end = NULL;
+    ctx.origin_x = css_px(0.0);
+    ctx.origin_y = css_px(0.0);
+    for (a = child->parent; a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; child = a, a = a->parent) {
         lxb_dom_element_t *anc = lxb_dom_interface_element(a);
         char *d = lb_computed(anc, "display");
         bool container = block_flow_display_is_block_container(d);
@@ -1005,22 +1098,17 @@ static lxb_dom_element_t *lb_establishing_box(lxb_dom_element_t *el)
 
         free(d);
         if (container) {
-            if (!block_flow_establishes_inline_context(anc))
-                DFAIL("CSS 2.2 §9.2.1.1 \"Anonymous block boxes\": the block container holding this inline box "
-                      "ALSO holds block-level boxes, so the line boxes this box is on belong to an ANONYMOUS "
-                      "BLOCK BOX and not to that element — \"if a block container box has a block-level box "
-                      "inside it, then we force it to have only block-level boxes inside it\", each run of "
-                      "inline-level content wrapped in an anonymous box. The RUN is what core/layout/"
-                      "line_box.h's two other entries take, and core/layout/block_flow.c is what delimits the "
-                      "runs (`bf_anon_run_end`), so the measurement is not what is missing. WHAT IS MISSING IS "
-                      "THE BOX'S POSITION: the anonymous box is a block-level box in its parent's block "
-                      "formatting context, so its own origin is CSS 2 §9.4.1's over the SIBLING boxes above it "
-                      "— which core/layout/block_flow.h's `block_flow_child_top` computes for an ELEMENT and "
-                      "cannot be asked about a box no element names. BUILD the anonymous box as something the "
-                      "stack can be asked about — a (parent, first, end) run block_flow.c already computes, "
-                      "given a height and a top — then this walk answers that run instead of this element and "
-                      "every number below is unchanged");
-            return anc;
+            ctx.style = anc;
+            /* §9.4.2's condition over the WHOLE child list picks the shape, and it is asked ONCE through the
+               component that owns it — so this branch and the enumeration `lb_anon_run` reads are the same
+               classification of the same children rather than two that could disagree about which of them
+               generates a box. */
+            if (block_flow_establishes_inline_context(anc)) {
+                ctx.first = a->first_child;
+                return ctx;
+            }
+            lb_anon_run(anc, child, &ctx);
+            return ctx;
         }
         if (!step_over)
             DFAIL("CSS 2.2 §9.4.2's inline formatting context was asked for an inline box whose nearest "
@@ -1039,7 +1127,7 @@ static lxb_dom_element_t *lb_establishing_box(lxb_dom_element_t *el)
           "it — an element that reached this line is in a tree with no root element, which is a caller that "
           "asked where a DETACHED box is. core/dom/element_view.h's has-a-box predicate answers that before "
           "any position is asked for, so the two have come apart");
-    return NULL;
+    return ctx;
 }
 
 /* §9.4.2's TWO EDGE ITEMS OF ONE INLINE BOX, which delimit its content in the collected run. core/layout/
@@ -1122,9 +1210,9 @@ size_t line_box_inline_fragments(lxb_dom_element_t *el, lxb_dom_element_t **esta
     TextRunMeasure m;
     TextRunLine *lines = NULL;
     LineBoxFragment *frags;
+    LbContext ctx;
     lxb_dom_element_t *style;
-    lxb_dom_node_t *first;
-    CssPx top = css_px(0.0), lead, trail;
+    CssPx top, lead, trail;
     CssPx before = css_px(0.0), after = css_px(0.0), drop = css_px(0.0), extent = css_px(0.0);
     size_t n, i, open = 0, close = 0, nf = 0;
     bool atomic;
@@ -1182,11 +1270,22 @@ size_t line_box_inline_fragments(lxb_dom_element_t *el, lxb_dom_element_t **esta
               "reach even that: `lb_phrasing_break` crashes for the soft wrap opportunity itself, one walk "
               "earlier, so it is that crash and not this one that gates it");
     lb_require_horizontal_tb(el);
-    style = lb_establishing_box(el);
+    ctx = lb_establishing_context(el);
+    style = ctx.style;
     lb_require_horizontal_tb(style);
     *establishing = style;
-    first = lxb_dom_interface_node(style)->first_child;
-    n = lb_fill(&m, style, first, NULL, &lines);
+    /* THE RUN IS FILLED AND NOT THE CHILD LIST, which is the whole of CSS 2.2 §9.2.1.1 "Anonymous block boxes"'
+       effect on this walk. Inside a MIXED container the line boxes this box is on belong to ONE of the
+       anonymous block boxes, and a fill over the container's whole child list would flow this box's items
+       together with every OTHER run's — a different partition, on line boxes that do not exist, whose §10.8
+       step 3 heights would be maxima over boxes that are not on one line. For the unmixed shape the run IS the
+       whole child list, so this is the same fill it always was.
+       THE STACK IS SEEDED AT THAT BOX'S OWN TOP CONTENT EDGE rather than at zero, which is what keeps every
+       coordinate below in the frame core/layout/line_box.h promises the caller — an offset from the
+       CONTAINER's content box origin — while the lines themselves are measured inside the box that holds them.
+       The seed is zero for the unmixed shape, by the same derivation, so that caller's numbers are unchanged. */
+    top = ctx.origin_y;
+    n = lb_fill(&m, style, ctx.first, ctx.end, &lines);
     DCHECK(n >= 1,
            "CSS 2.2 §9.4.2's fill produced NO line box for a formatting context that contains an inline-level "
            "box. That box's items are content the fill partitions — \"line boxes are created as needed to hold "
@@ -1262,8 +1361,12 @@ size_t line_box_inline_fragments(lxb_dom_element_t *el, lxb_dom_element_t **esta
             size_t lo = lines[i].from > open ? lines[i].from : open;
             size_t hi = lines[i].to < close + 1 ? lines[i].to : close + 1;
             CssPx align = lb_align_offset(style, &m, lines[i], i, n);
-            CssPx start = css_px_add(align, text_run_measure_line_offset(&m, lines[i], lo));
-            CssPx end = css_px_add(align, text_run_measure_line_offset(&m, lines[i], hi));
+            /* The offset along the line is inside the box holding it, and `ctx.origin_x` is that box's own
+               inline-start content edge inside the container — zero, by §9.2.1.1's initial values with
+               §10.3.3's constraint equation, and added rather than assumed for the reason the type's banner
+               gives. */
+            CssPx start = css_px_add(ctx.origin_x, css_px_add(align, text_run_measure_line_offset(&m, lines[i], lo)));
+            CssPx end = css_px_add(ctx.origin_x, css_px_add(align, text_run_measure_line_offset(&m, lines[i], hi)));
             /* §10.8's step 3 measures the line box from its uppermost box top, and `e.above` is the maximum
                `A'` across the line — so the line's baseline sits exactly that far below its top edge, and
                every box on it hangs its own content area from that one line. */
