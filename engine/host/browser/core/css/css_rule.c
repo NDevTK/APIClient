@@ -288,11 +288,51 @@ static CssRuleData *rule_of(JSValueConst v)
    Routing ALL of them rather than the object-valued ones is the point — which slot is a string today is not a
    property the next reader should have to re-derive to know whether a write is safe.
    The MINT does not come here: rule_new fills every slot before JS_SetOpaque, where the record is unreachable
-   by the collector and has no value to release. */
-static void rule_set(JSContext *ctx, CssRuleData *r, JSValue *slot, JSValue v)
-{
-    cow_record_set(ctx, r, &RULE_REC, slot, v);
-}
+   by the collector and has no value to release.
+
+   AND THE VALUE PUBLISHED IS NEVER A FAILURE VALUE, WHICH IS AN INVARIANT ABOUT THE RECORD AND NOT ABOUT ANY
+   ONE MINT. `JS_NewString` reaches JS_EXCEPTION by two arms — `js_alloc_string` failing, which throws
+   OutOfMemory, and a length past JS_STRING_LEN_MAX, which throws RangeError — and `cow_record_set` stores
+   whatever it is handed: its three asserts are all about the SLOT (inside the record, named by the layout) and
+   none is about the value. So `rule_set(ctx, r, &r->f, JS_NewString(ctx, …))` written bare PUBLISHES the
+   failure into the record, and that is a different failure from an allocation that gets propagated. The record
+   OUTLIVES THE FRAME: the COW delta captures it, rule_gc_mark walks it, rule_finalizer frees it, and every
+   later serialization reads it. `rule_text_copy` then answers NULL for the field — the same NULL it answers for
+   a record whose field was never a string — so the fault surfaces at a READER, in another function, as a
+   record defect, which is what it is not.
+   THE DISCRIMINATOR IS THE ONE THIS FILE ALREADY RECORDS AT `rule_text_copy`: not fatal-versus-recoverable, but
+   WHO OWNS THE EXCEPTION CHANNEL. A rule record owns none, and the paths that fill one own none either — the
+   sheet parse is `css_style_sheet_set_rules_from_text` → `css_rule_build_sheet` → `build_run`, all of them
+   `void`, and its one driver `rule_built` folds `JS_IsException(rule) || JS_IsUndefined(rule)` into a single
+   arm, which is CSS Syntax §8 "CSS stylesheets"'s DROP. Propagating out of a creator therefore does not
+   propagate: it is laundered into "this rule was invalid CSS" and the OOM is gone. That is check.h's
+   "memory-allocation success", and it is the answer this file already gives at every neighbouring mint with no
+   channel — rule_new's calloc and its JS_NewArray, container_conditions_array's, layer_names_array's,
+   property_names_array's, css_rule_list_new's idl_indexed_new.
+   IT IS A MACRO SO THE ABORT NAMES THE CREATOR. A check written inside the function would stamp THIS line for
+   all of the call sites and hand its reader a remedy with no object; expanded at the site it stamps the mint
+   that failed, and `#v_` puts that mint's own source text in the reason. Every operand is used exactly once and
+   the value is bound to a temp before it is tested, so the mint is evaluated once — a bare `CHECK` over `v_`
+   followed by a store of `v_` would mint it twice.
+   A CALLER THAT HAS A CHANNEL DOES NOT REACH THIS: it tests the mint BEFORE publishing and returns the
+   exception, which is what the three attribute setters and `js_rule_style` do. This is for the publish that has
+   nowhere to report. */
+#define rule_set(ctx_, r_, slot_, v_)                                                                          \
+    do {                                                                                                       \
+        JSValue rule_set_v_ = (v_);                                                                            \
+                                                                                                               \
+        CHECKF(!JS_IsException(rule_set_v_),                                                                    \
+               "a CSS rule record's owned slot was published with the FAILURE VALUE of `%s`, so the mint that "  \
+               "was supposed to fill it failed. A rule record has NO exception channel and neither has any "     \
+               "path that fills one, so this value is not propagated anywhere — it is STORED, and every later "  \
+               "read of the field then meets something that is neither the string nor the object the slot is "   \
+               "declared to hold, in another function, with nothing pending to say why. If this call site DOES " \
+               "have a channel (an attribute getter or setter, whose return reaches the page), the fix is at "   \
+               "the site and not here: test the mint and RETURN the exception before publishing. If it does "    \
+               "not, this is the allocation wall itself",                                                       \
+               #v_);                                                                                            \
+        cow_record_set((ctx_), (r_), &RULE_REC, (slot_), rule_set_v_);                                          \
+    } while (0)
 
 static CssRuleData *rule_here(JSContext *ctx, JSValueConst v)
 {
@@ -3227,6 +3267,7 @@ static JSValue js_rule_set_selector(JSContext *ctx, JSValueConst this_val, JSVal
     CssRuleData *r = rule_here_typed(ctx, this_val, RULE_TYPE_STYLE, "CSSStyleRule");
     const char *v;
     char *reserialized;
+    JSValue text;
 
     (void)magic;
     if (!r) return JS_EXCEPTION;
@@ -3251,9 +3292,19 @@ static JSValue js_rule_set_selector(JSContext *ctx, JSValueConst this_val, JSVal
             free(reserialized);
             reserialized = absolutized;
         }
-        rule_set(ctx, r, &r->selector_text, JS_NewString(ctx, reserialized));
+        /* THE CHANNEL IS FREE HERE, so the mint is tested BEFORE the record sees it. An attribute setter's
+           return goes to idl_args_dispatch, which takes a JS_EXCEPTION straight into `s->ce_exc =
+           JS_GetException(ctx)` and carries it out through idl_ce_finish — so unlike a creator's, this
+           exception reaches the page. Publishing it instead would be worse than the creator's case rather than
+           equal to it: `cow_record_set` releases the OLD value first, so a failed mint would DESTROY the
+           selector the rule already had and then report success by returning JS_UNDEFINED. Leaving the rule
+           unchanged and throwing is also what §6.4.3 leaves behind for its own null branch. */
+        text = JS_NewString(ctx, reserialized);
+        free(reserialized);
+        if (JS_IsException(text)) return text;
+        rule_set(ctx, r, &r->selector_text, text);
+        return JS_UNDEFINED;
     }
-    free(reserialized);
     return JS_UNDEFINED;
 }
 
@@ -3272,6 +3323,7 @@ static JSValue js_rule_set_page_selector(JSContext *ctx, JSValueConst this_val, 
     CssRuleData *r = rule_here_typed(ctx, this_val, RULE_TYPE_PAGE, "CSSPageRule");
     const char *v;
     char *parsed;
+    JSValue text;
 
     (void)magic;
     if (!r) return JS_EXCEPTION;
@@ -3280,8 +3332,12 @@ static JSValue js_rule_set_page_selector(JSContext *ctx, JSValueConst this_val, 
     parsed = css_prelude_page_selectors(v, strlen(v));
     JS_FreeCString(ctx, v);
     if (parsed) {
-        rule_set(ctx, r, &r->selector_text, JS_NewString(ctx, parsed));
+        /* Tested before the record sees it, for the reason §6.4.3's setter above gives: this return reaches the
+           page, and publishing a failed mint would release the selector list the rule already had. */
+        text = JS_NewString(ctx, parsed);
         free(parsed);
+        if (JS_IsException(text)) return text;
+        rule_set(ctx, r, &r->selector_text, text);
     }
     return JS_UNDEFINED;
 }
@@ -3295,6 +3351,7 @@ static JSValue js_rule_set_key_text(JSContext *ctx, JSValueConst this_val, JSVal
     CssRuleData *r = rule_here_typed(ctx, this_val, RULE_TYPE_KEYFRAME, "CSSKeyframeRule");
     const char *v;
     char *parsed;
+    JSValue text;
 
     (void)magic;
     if (!r) return JS_EXCEPTION;
@@ -3304,8 +3361,14 @@ static JSValue js_rule_set_key_text(JSContext *ctx, JSValueConst this_val, JSVal
     JS_FreeCString(ctx, v);
     if (!parsed)
         return JS_ThrowDOMException(ctx, "SyntaxError", "the value is not a keyframe selector list");
-    rule_set(ctx, r, &r->selector_text, JS_NewString(ctx, parsed));
+    /* Tested before the record sees it, for the reason §6.4.3's setter above gives — and the sentence quoted
+       at this function's banner makes it sharper still: leaving the attribute unchanged is what CSS Animations
+       §6.2.2 owes on a failure, and publishing a failed mint would leave it changed to a value that is not a
+       string at all. */
+    text = JS_NewString(ctx, parsed);
     free(parsed);
+    if (JS_IsException(text)) return text;
+    rule_set(ctx, r, &r->selector_text, text);
     return JS_UNDEFINED;
 }
 
@@ -3649,7 +3712,15 @@ static JSValue js_rule_style(JSContext *ctx, JSValueConst this_val, int magic)
     r = rule_here_typed(ctx, this_val, OF[magic].type, OF[magic].iface);
     if (!r) return JS_EXCEPTION;
     if (!JS_IsObject(r->style)) {
-        rule_set(ctx, r, &r->style, OF[magic].create(ctx, this_val));
+        /* `cssd_new` propagates its own idl_indexed_new failure, and this getter's return reaches the page, so
+           the failure is RETURNED rather than memoized. Publishing it would put a value that is not an object
+           in the slot this same `!JS_IsObject` test reads, so the next get would mint again — a memo that
+           remembers a failure is not a memo, and the record would be carrying an exception across every park
+           and resume in between. */
+        JSValue block = OF[magic].create(ctx, this_val);
+
+        if (JS_IsException(block)) return block;
+        rule_set(ctx, r, &r->style, block);
     }
     return JS_DupValue(ctx, r->style);
 }
