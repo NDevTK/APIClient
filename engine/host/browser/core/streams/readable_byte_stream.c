@@ -1783,11 +1783,34 @@ static const JSTrampStepDef js_byobreq_defs[2] = { BQ_DEF(BQ_RESPOND), BQ_DEF(BQ
 
 /* ---- §4.5's read(view, options) ----------------------------------------------------------------------------- */
 
+/* §4.5.1 Interface definition's `dictionary ReadableStreamBYOBReaderReadOptions { [EnforceRange] unsigned long
+   long min = 1; }`, declared rather than walked by hand. The walk it goes through is core/idl_args.h's, the
+   same machine a declared argument position drives — this member is a step machine, so the conversion is
+   EMBEDDED here rather than performed at the argument boundary, and it needs no stage of its own beyond the
+   one the machine already rests in.
+   THE HAND-ROLLED READ THIS REPLACES WAS WRONG IN TWO DIRECTIONS AT ONCE, both of them the attribute's own
+   arithmetic restated from memory. It refused a value whose IntegerPart differs from itself, so
+   `read(v, {min: 1.5})` was a TypeError where §3.2.4.9 Abstract operations' ConvertToInt says "Set x to
+   IntegerPart(x)" BEFORE the bounds are tested and a browser reads with a minimum of 1; and it tested against
+   2**64-1, where that algorithm's own first step opens "If bitLength is 64, then:" and sets upperBound to
+   2**53-1, so `read(v, {min: 2**60})` reached §4.5's RangeError instead of the type's TypeError. Both are the
+   second copy drifting, which is why the arithmetic now lives once, at the type. */
+static const IdlDictMember BYOB_READ_OPTIONS[] = {
+    { "min", IDL_UNSIGNED_LONG_LONG_ENFORCE, false, NULL, 0, NULL, IDL_DEFAULT_ONE },
+};
+static const IdlDictDecl BYOB_READ_OPTIONS_DECL = {
+    "ReadableStreamBYOBReaderReadOptions", BYOB_READ_OPTIONS,
+    (int)(sizeof BYOB_READ_OPTIONS / sizeof BYOB_READ_OPTIONS[0])
+};
+/* Its member name, interned ONCE per runtime at this component's init — a member read is two halves with a
+   suspension in between, so the atom has to outlive the park. */
+static const JSAtom *g_byob_read_options_atoms;
+
 #define BR_STAGES(X) \
     X(BR_START, "Streams §4.5 read(view, options) — Web IDL §3.7.5's brand and §3.2.25's ArrayBufferView, " \
                 "before the dictionary is read") \
-    X(BR_MIN, "Web IDL §3.2.17 (ReadableStreamBYOBReaderReadOptions[\"min\"] — the [[Get]] is the page's code)") \
-    X(BR_MINNUM, "Web IDL §3.2.4.8 ([EnforceRange] unsigned long long min — ToNumber is the page's code)") \
+    X(BR_OPTIONS, "Web IDL §3.2.17 Dictionary types over ReadableStreamBYOBReaderReadOptions (the `min` " \
+                  "[[Get]] and §3.2.4.8's ToNumber are both the page's code)") \
     X(BR_INTO, "Streams §4.5 read() steps 1-11 and §4.9.5's ReadableByteStreamControllerPullInto") \
     X(BR_EMPTYVIEW, "Streams §4.9.5 ReadableByteStreamControllerPullInto's closed branch (constructing the " \
                     "EMPTY view that gives the caller its memory back — %DataView% is a step machine)") \
@@ -1814,6 +1837,10 @@ typedef struct {
        is why they share one phase byte and one buffer rather than carrying two of each. */
     JSValue dsc;
     ByteViewCb view_cb;
+    /* §3.2.17's CONVERSION IN FLIGHT. Its own `started` byte is the resume point, so there is no second flag
+       here to disagree with it. NO FRAMES: this dictionary declares no `sequence<(DOMString or D)>` member,
+       which idl_dict_walk_start asserts against idl_members_depth over the list rather than taking on trust. */
+    IdlDictWalk dw;
     double  min;
     uint8_t view_phase;
 } JSByobReadState;
@@ -1823,6 +1850,10 @@ static void js_byob_read_visit(JSContext *ctx, void *st, JSStepVisit *v)
     JSByobReadState *s = st;
     int i;
     stream_work_visit(ctx, &s->w, v);
+    /* THE SAME NULL/0 the start and the run are given — one statement of this host's layout. Naming the walk
+       here is what makes an ABANDONED conversion (a throwing `min` getter, a flow parked and never resumed)
+       the driver's ordinary discharge rather than a teardown of its own. */
+    idl_dict_walk_visit(ctx, &s->dw, /*frames*/ NULL, /*frames_cap*/ 0, v);
     v->val(ctx, &s->promise);
     v->val(ctx, &s->settle);
     v->val(ctx, &s->result);
@@ -1846,7 +1877,7 @@ static int byob_read_reject(JSContext *ctx, JSByobReadState *s)
 {
     JSValue funcs[2];
 
-    JS_FreeValue(ctx, s->result);   /* the raw `min` the coercion was reading, when that is what threw */
+    JS_FreeValue(ctx, s->result);   /* whatever the failing stage was holding to settle with */
     s->result = JS_GetException(ctx);
     DCHECK(JS_IsUndefined(s->promise), "a BYOB read rejected after it had already made its promise");
     s->promise = JS_NewPromiseCapability(ctx, funcs);
@@ -1880,6 +1911,10 @@ static int js_byob_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
         s->promise = s->settle = s->result = s->stream = s->dsc = JS_UNDEFINED;
         STEP_CB_FOREACH(s->view_cb, i) s->view_cb[i] = JS_UNDEFINED;
         s->view_phase = 0;
+        /* §4.5.1's declared `min = 1`, placed here as well as by §3.2.17 step 4.1.5 because the conversion at
+           BR_OPTIONS can decline to answer: idl_number_of leaves its output untouched for an unknown carrying
+           no example, and in a release build the DFAIL that names the fork is gone. This is the value that
+           stands in that case, and it is the IDL's own rather than a number chosen here. */
         s->min = 1;
         if (!rd || !rd->byob) {
             JS_ThrowTypeError(ctx, "not a ReadableStreamBYOBReader");
@@ -1890,46 +1925,69 @@ static int js_byob_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
         buf = byte_view_parts(ctx, view, &off, &len, &elem, &vt);
         if (JS_IsException(buf)) { if (byob_read_reject(ctx, s) < 0) return JS_STEP_ABRUPT; goto settle; }
         JS_FreeValue(ctx, buf);
-        STEP_GOTO(s->hdr.stage, BR_MIN, &s->w.phase, &s->view_phase, &s->hdr.get_phase, NULL);
+        /* THE CURSOR LIST NAMES `num_phase` AT BOTH EDGES OF BR_OPTIONS, because §3.2.17's member loop rests
+           on the numeric coercion as well as on the [[Get]] — `min`'s type is a §3.2.4 integer, so
+           idl_dict_walk_run drives step_todouble_run and this machine owns that cursor for the length of the
+           conversion. It was absent while the coercion was hand-rolled here, which is the same omission one
+           stage earlier. */
+        STEP_GOTO(s->hdr.stage, BR_OPTIONS, &s->w.phase, &s->view_phase, &s->hdr.get_phase,
+                  &s->hdr.num_phase, NULL);
     }
 
-    if (s->hdr.stage == BR_MIN) {
-        /* Web IDL §3.2.17's dictionary conversion, which is a [[Get]] of `min` and then §3.2.4.8's coercion — both the
-           page's code, and both BEFORE §4.5's own steps 1-8. */
-        if (JS_IsUndefined(opts) || JS_IsNull(opts)) {
-            STEP_GOTO(s->hdr.stage, BR_INTO, &s->w.phase, &s->view_phase, &s->hdr.get_phase, NULL);
-        } else if (!JS_IsObject(opts)) {
-            JS_ThrowTypeError(ctx, "the read options must be an object");
-            { if (byob_read_reject(ctx, s) < 0) return JS_STEP_ABRUPT; goto settle; }
-        } else {
-            JSAtom a = JS_NewAtom(ctx, "min");
-            JSValue got = JS_UNDEFINED;
-            r = step_getprop_run(ctx, &s->hdr, opts, a, cb_result, &got, out_cb, out_argc);
-            JS_FreeAtom(ctx, a);
-            if (r > 0) return r;
-            if (r < 0) { if (byob_read_reject(ctx, s) < 0) return JS_STEP_ABRUPT; goto settle; }
-            cb_result = JS_UNDEFINED;
-            JS_FreeValue(ctx, s->result);
-            s->result = got;
-            STEP_GOTO(s->hdr.stage, JS_IsUndefined(got) ? BR_INTO : BR_MINNUM, &s->w.phase, &s->view_phase,
-                      &s->hdr.get_phase, NULL);
+    if (s->hdr.stage == BR_OPTIONS) {
+        /* Web IDL §3.2.17 Dictionary types over `options`, which is the `min` [[Get]] and then §3.2.4.8's
+           coercion — both the page's code, and both BEFORE §4.5's own steps 1-8. */
+        if (!s->dw.started) {
+            /* §3.2.17 (ES-to-IDL list) step 1: "If jsDict is not an Object and jsDict is neither undefined nor
+               null, then throw a TypeError." It is the caller's — see idl_dict_walk_start. undefined and null
+               are LEGAL and take the same member loop: step 4.1.2 makes `min`'s value undefined and step
+               4.1.5 then places the declared `= 1`, which is why there is no separate absent-options arm. */
+            if (!JS_IsObject(opts) && !JS_IsUndefined(opts) && !JS_IsNull(opts)) {
+                JS_ThrowTypeError(ctx, "the read options are not a ReadableStreamBYOBReaderReadOptions "
+                                       "dictionary");
+                { if (byob_read_reject(ctx, s) < 0) return JS_STEP_ABRUPT; goto settle; }
+            }
+            if (idl_dict_walk_start(ctx, &s->dw, opts, BYOB_READ_OPTIONS, BYOB_READ_OPTIONS_DECL.n,
+                                    g_byob_read_options_atoms, BYOB_READ_OPTIONS_DECL.name,
+                                    /*iface*/ 0, /*narrow*/ NULL, /*frames*/ NULL, /*frames_cap*/ 0) < 0)
+                return JS_STEP_ABRUPT;
         }
-    }
-
-    if (s->hdr.stage == BR_MINNUM) {
-        double x = 0;
-        r = step_todouble_run(ctx, &s->hdr, s->result, cb_result, &x, out_cb, out_argc);
-        if (r > 0) return r;
-        if (r < 0) { if (byob_read_reject(ctx, s) < 0) return JS_STEP_ABRUPT; goto settle; }
+        r = idl_dict_walk_run(ctx, &s->hdr, &s->dw, /*frames*/ NULL, /*frames_cap*/ 0, cb_result,
+                              out_cb, out_argc);
         cb_result = JS_UNDEFINED;
-        JS_FreeValue(ctx, s->result);
-        s->result = JS_UNDEFINED;
-        if (!isfinite(x) || x != trunc(x) || x < 0 || x > 18446744073709551615.0) {
-            JS_ThrowTypeError(ctx, "min is outside the range of an unsigned long long");
-            { if (byob_read_reject(ctx, s) < 0) return JS_STEP_ABRUPT; goto settle; }
+        if (r > 0) return r;   /* parked in the `min` [[Get]] or in its own ToNumber */
+        if (r < 0) { if (byob_read_reject(ctx, s) < 0) return JS_STEP_ABRUPT; goto settle; }
+        {
+            JSValue o = idl_dict_walk_take(ctx, &s->dw);
+            JSValue mv = idl_dict_get(ctx, o, "min");
+
+            JS_FreeValue(ctx, o);
+            DCHECK(!JS_IsUndefined(mv),
+                   "§3.2.17 answered with a ReadableStreamBYOBReaderReadOptions carrying no `min` — the IDL "
+                   "writes `= 1`, so step 4.1.5 places it for a member the page omitted and this dictionary "
+                   "never has a hole where §4.5's steps 4-6 read one");
+            /* THE NUMBER THE CONVERTED MEMBER DENOTES, asked through the declaration's own reader. A body may
+               not run JS_ToFloat64 over this itself: idl_concolic_rule answers CROSSES for every numeric
+               type, so unknown external input arrives UNCONVERTED — that crossing is what keeps a later
+               branch on the value forking — and ToNumber over a concolic runs the page's `valueOf` from a
+               plain C activation with no flow base under it. */
+            if (!idl_number_of(ctx, IDL_UNSIGNED_LONG_LONG_ENFORCE, mv, &s->min))
+                DFAIL("§4.5's read was given an UNKNOWN `min` carrying no example. Step 4 (\"If "
+                      "options[\"min\"] is 0, return a promise rejected with a TypeError\") and steps 5-6 "
+                      "(\"If options[\"min\"] > view.[[ArrayLength]], return a promise rejected with a "
+                      "RangeError\") each have both completions feasible over an unconstrained [EnforceRange] "
+                      "unsigned long long, and §4.9.5's PullInto then has one distinct outcome per minimum "
+                      "fill — so this member must ask step_fork_run over step 4 and over the FINITE arm set "
+                      "{1 … the view's element count, past-it} the view's own length bounds, exactly as "
+                      "core/indexeddb/idb_cursor.c's advance must for its `count`");
+            /* IN RELEASE THAT DFAIL IS GONE and `min` is still the 1 BR_START placed, which is §4.5.1's own
+               declared default rather than a number invented here: release cannot build the fork, so the read
+               takes the IDL's value for a minimum it cannot read. idl_number_of leaves `*out` untouched when
+               it answers 0, so nothing a compiled-out assert wrote is being relied on. */
+            JS_FreeValue(ctx, mv);
         }
-        s->min = x;
-        STEP_GOTO(s->hdr.stage, BR_INTO, &s->w.phase, &s->view_phase, &s->hdr.get_phase, NULL);
+        STEP_GOTO(s->hdr.stage, BR_INTO, &s->w.phase, &s->view_phase, &s->hdr.get_phase,
+                  &s->hdr.num_phase, NULL);
     }
 
     if (s->hdr.stage == BR_INTO) {
@@ -2188,6 +2246,11 @@ void readable_byte_stream_init(JSContext *ctx)
     }
     g_byob_read_stepid = JS_RegisterStepDef(rt, &js_byob_read_def);
     CHECK(g_byob_read_stepid >= 0, "streams: no step id for the BYOB reader's read");
+    /* §4.5.1's dictionary has no ARGUMENT POSITION to be declared at — `read` is a step machine, so it
+       converts the value it is holding — and its member name is interned here, once for this runtime, because
+       the read is two halves with a suspension between them. idl_dict_declare also runs §3.2.17's
+       lexicographic read-order check over the list, which is why it is the way in rather than JS_NewAtom. */
+    g_byob_read_options_atoms = idl_dict_declare(ctx, &BYOB_READ_OPTIONS_DECL);
 }
 
 void readable_byte_stream_install_protos(JSContext *ctx)
@@ -2248,4 +2311,7 @@ void readable_byte_stream_free(void)
     for (i = 0; i < 2; i++) g_byobreq_stepids[i] = -1;
     for (i = 0; i < 4; i++) g_byte_rxn_stepids[i] = -1;
     g_byob_read_stepid = -1;
+    /* The atoms belong to the IDL pool, which gives them back with the runtime; what this component owns is
+       the HANDLE, and a handle left pointing into a released pool is a stale slot. */
+    g_byob_read_options_atoms = NULL;
 }

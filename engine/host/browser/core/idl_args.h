@@ -66,6 +66,22 @@ typedef enum {
        that need it: `truncate(-1)` is 2**64-1 bytes in a browser (a QuotaExceededError), where the signed
        conversion answers -1 and hands the algorithm a negative size no step of it is written for. */
     IDL_UNSIGNED_LONG_LONG,
+    /* `[EnforceRange] unsigned long long` — §3.3.6 [EnforceRange] over §3.2.4.8 unsigned long long, and it is
+       a separate row from the one above for the same reason IDL_UNSIGNED_LONG_ENFORCE is separate from
+       IDL_UNSIGNED_LONG: the extended attribute IS the conversion, replacing the modulo with a refusal.
+       ITS UPPER BOUND IS NOT 2**64-1 AND THAT IS §3.2.4.9's OWN FIRST STEP, not a bound chosen here.
+       ConvertToInt(V, bitLength, signedness) opens "If bitLength is 64, then:" and sets upperBound to 2**53-1
+       (the standard writes that as a superscript) — and says why in a note directly beneath it: "this ensures
+       long long types associated with [EnforceRange] or [Clamp] extended attributes are representable in
+       JavaScript's Number type as unambiguous integers". So the attribute NARROWS the type's range rather than
+       merely refusing what falls outside it, and a declaration reusing the plain type's 2**64-1 would accept
+       values a browser rejects.
+       Streams §4.2.1 Interface definition's `ReadableStreamBYOBReaderReadOptions` writes
+       `[EnforceRange] unsigned long long min = 1`, and the difference a page sees is two-sided:
+       `reader.read(v, {min: 2**60})` is a TypeError from the TYPE where the wider bound reaches §4.5's own
+       RangeError, and `reader.read(v, {min: 1.5})` reads with a minimum of 1 because IntegerPart truncates
+       before the bounds are tested — [EnforceRange] refuses a value out of RANGE and never a fractional one. */
+    IDL_UNSIGNED_LONG_LONG_ENFORCE,
     /* `[Clamp] long long`. The extended attribute REPLACES the modulo with §3.2.4.9: clamp to the type's range
        and round to the NEAREST integer, choosing the even one at a half. Blob's `slice(start, end)` is the
        member that carries it, and `slice(1.5)` starting at byte 2 rather than byte 1 is the difference. */
@@ -673,6 +689,15 @@ typedef enum {
        the day the position's type changes and the two stop agreeing. Declared, the conversion PLACES a real
        `false` and a body reading argv[0] is reading the IDL's value rather than inventing it. */
     IDL_DEFAULT_FALSE,
+    /* `= 1`. Streams §4.2.1 Interface definition's `ReadableStreamBYOBReaderReadOptions` writes
+       `[EnforceRange] unsigned long long min = 1`, and it is a row here for the reason IDL_DEFAULT_ZERO is
+       one rather than being folded into it: the two are different VALUES, and this member's whole algorithm
+       branches on the difference — §4.5's read(view, options) step 4 is "If options["min"] is 0, return a
+       promise rejected with a TypeError", so a zero placed where the IDL writes one turns every
+       `reader.read(v)` into a rejection. An absent member does not exist at all, so a reader that filled the
+       absence itself would be inventing the number; declared, §3.2.17 step 4.1.5 PLACES it and the reader
+       asserts it is there. */
+    IDL_DEFAULT_ONE,
 } IdlDictDefault;
 
 struct IdlDictDecl;

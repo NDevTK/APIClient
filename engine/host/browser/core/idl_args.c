@@ -99,7 +99,7 @@ static bool idl_is_integer(IdlArgType t)
 {
     return t == IDL_LONG || t == IDL_UNSIGNED_LONG || t == IDL_UNSIGNED_SHORT ||
            t == IDL_LONG_LONG || t == IDL_UNSIGNED_LONG_LONG || t == IDL_LONG_LONG_CLAMP ||
-           t == IDL_UNSIGNED_LONG_ENFORCE;
+           t == IDL_UNSIGNED_LONG_ENFORCE || t == IDL_UNSIGNED_LONG_LONG_ENFORCE;
 }
 
 
@@ -149,15 +149,32 @@ static JSValue idl_num_of(JSContext *ctx, IdlArgType t, double x)
     /* §3.3.6 [EnforceRange]'s ARM of §3.2.4.9 Abstract operations' ConvertToInt, which is four of that
        algorithm's own steps and not a bound this file chose: "If x is NaN, +∞, or −∞, then throw a TypeError";
        "Set x to IntegerPart(x)" (itself "floor(abs(n))", negated when n < 0); "If x < lowerBound or
-       x > upperBound, then throw a TypeError"; "Return x". The bounds are `unsigned long`'s, which is the
-       only type in this build carrying the attribute — a second one states its own here rather than sharing a
-       width parameter, because the whole point of the attribute is that the range is part of the TYPE. */
+       x > upperBound, then throw a TypeError"; "Return x". Each type carrying the attribute STATES ITS OWN
+       BOUNDS here rather than sharing a width parameter, because the whole point of the attribute is that the
+       range is part of the TYPE. */
     if (t == IDL_UNSIGNED_LONG_ENFORCE) {
         if (!isfinite(x))
             return JS_ThrowTypeError(ctx, "the provided value is non-finite and its argument enforces a range");
         x = (x < 0 ? -1.0 : 1.0) * floor(fabs(x));
         if (x < 0 || x > 4294967295.0)
             return JS_ThrowTypeError(ctx, "the provided value is outside the range of an unsigned long");
+        return JS_NewInt64(ctx, (int64_t)x);
+    }
+    /* THE SAME FOUR STEPS AT bitLength 64, WHOSE UPPER BOUND IS 2**53-1 AND NOT 2**64-1 — that is
+       §3.2.4.9 Abstract operations' own FIRST step ("If bitLength is 64, then:" — the bound it sets there is
+       written as a superscript), stated so a [EnforceRange] or [Clamp] `long long` is "representable in
+       JavaScript's Number type as unambiguous integers". A 2**64-1 bound would accept values a browser refuses
+       at the type, and IntegerPart runs BEFORE the bounds test, so a fractional value is truncated and never
+       refused. The result is at most 2**53-1, so unlike the plain `unsigned long long` above it fits an
+       int64_t exactly and needs no magnitude-through-a-double. */
+    if (t == IDL_UNSIGNED_LONG_LONG_ENFORCE) {
+        if (!isfinite(x))
+            return JS_ThrowTypeError(ctx, "the provided value is non-finite and its argument enforces a range");
+        x = (x < 0 ? -1.0 : 1.0) * floor(fabs(x));
+        if (x < 0 || x > 9007199254740991.0)
+            return JS_ThrowTypeError(ctx,
+                                     "the provided value is outside the range of an unsigned long long whose "
+                                     "argument enforces a range");
         return JS_NewInt64(ctx, (int64_t)x);
     }
     /* AN `unsigned long long` DOES NOT FIT IN AN int64_t, and the half of its range that does not is exactly
@@ -726,6 +743,7 @@ static JSValue idl_default_of(JSContext *ctx, IdlDictDefault kind, const char *s
 {
     if (kind == IDL_DEFAULT_NULL) return JS_NULL;
     if (kind == IDL_DEFAULT_ZERO) return JS_NewInt32(ctx, 0);
+    if (kind == IDL_DEFAULT_ONE) return JS_NewInt32(ctx, 1);
     if (kind == IDL_DEFAULT_FALSE) return JS_NewBool(ctx, 0);
     DCHECK(kind == IDL_DEFAULT_STRING && str != NULL,
            "a declaration named a default this machine has no value for — the forms are the ones the "
