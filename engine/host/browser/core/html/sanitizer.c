@@ -1137,10 +1137,6 @@ static bool san_config_is_valid(JSContext *ctx, JSValueConst cfg)
     JSValue rem_pi = san_get(ctx, cfg, "removeProcessingInstructions");
     bool has_el = !JS_IsUndefined(elements), has_at = !JS_IsUndefined(attributes);
     bool has_pi = !JS_IsUndefined(pis), has_rwc = !JS_IsUndefined(rwc);
-    /* What steps 16.2.1.5 and 16.3 ask — "If config["dataAttributes"] is true and …" — read ONCE through the
-       reader that refuses unknown external input, because a bare JS_ToBool here answers `true` for every
-       unknown and decides whether this configuration is one `configure` step 2 throws a TypeError for. */
-    bool data_on = idl_dict_bool(ctx, cfg, "dataAttributes");
     bool ok = false;
     uint32_t n, i;
 
@@ -1177,6 +1173,22 @@ static bool san_config_is_valid(JSContext *ctx, JSValueConst cfg)
         if (san_lists_intersect(ctx, has_el ? elements : rem_el, rwc)) goto done;
     }
     if (has_at) {                                                              /* step 16 */
+        /* STEP 16 IS THE ONLY STEP OF THIS ALGORITHM THAT ASKS THE FLAG'S TRUTH, so it is read HERE and no
+           longer at the top. Steps 16.2.1.5 and 16.3 are "If config["dataAttributes"] is true and …"; step
+           17.2's "If config["dataAttributes"] exists, then return false" is an EXISTENCE test, which is a
+           different question with a different answer and is answered by san_has below. Read at the top, the
+           truth of a member was taken for a configuration whose validity never depends on it — the same
+           discipline §8.6.4's own step 1.5.9.3.1 follows by asking the attribute's NAME first.
+           WHAT THE READ MEANS NOW. §8.6.3 declares the member `boolean` and SAN_CONFIG_MEMBERS declares it
+           IDL_BOOLEAN_NO_DEFAULT, whose idl_concolic_rule is IDL_CONCOLIC_FORKS — so for a configuration the
+           page WROTE, Web IDL §3.2.17's member loop already asked ECMAScript §7.1.2 ToBoolean at the BRANCH
+           seam and canonicalize step 12 carried a real truth value here. The world in which the flag is the
+           other one is a SIBLING FLOW standing at this same line, not an arm declined at it. idl_dict_bool
+           rather than a bare `JS_ToBool` for a reason that is about the READER and not about which routes are
+           open: it NAMES an unknown arriving here, where a `JS_ToBool` answers `true` for one and decides
+           whether `configure` step 2 throws with nothing anywhere to say a truth value was picked. */
+        bool data_on = idl_dict_bool(ctx, cfg, "dataAttributes");
+
         DCHECK(san_has(ctx, cfg, "dataAttributes"),                            /* step 16.1 */
                "§8.6.4's validity found an attributes allow-list with no dataAttributes beside it — "
                "canonicalize the configuration sets one whenever that list exists");
@@ -1587,8 +1599,13 @@ static JSValue js_san_allow_element(JSContext *ctx, JSValueConst this_val, int a
             if (!JS_IsUndefined(local)) {
                 san_dedup(ctx, local);
                 san_filter_by(ctx, local, ga, false);      /* difference with the global allow-list */
-                /* Through the refusing reader: whether this element keeps its own `data-` entries is a world
-                   an unknown flag admits both of, and a bare ToBoolean would silently keep the drop arm. */
+                /* BOTH WORLDS THIS NAMES ARE EXPLORED, AND NEITHER IS DECLINED HERE. Whether this element
+                   keeps its own `data-` entries is decided by the flag, and Web IDL §3.2.17's member loop
+                   already asked ECMAScript §7.1.2 ToBoolean at the branch seam for a configuration the page
+                   wrote — so this flow carries one truth value while a sibling carries the other, and both
+                   reach this line. idl_dict_bool and not a bare ToBoolean for a reason about the READER
+                   rather than about which routes are open: it NAMES an unknown arriving here, where a
+                   ToBoolean would silently keep the drop arm. */
                 if (idl_dict_bool(ctx, r->config, "dataAttributes"))
                     san_drop_data_attributes(ctx, local);
             }
@@ -2122,9 +2139,13 @@ int sanitizer_walk_step(JSContext *ctx, JSStepHdr *hdr, SanitizerWalk *w)
                 /* The custom-data escape: a `data-` attribute in the null namespace survives an allow-list it
                    is not in, when the configuration allows data attributes at all. Step 1.5.9.3.1 asks the
                    name FIRST, so the flag is only read where its answer changes what happens to this
-                   attribute — and it is read through the reader that refuses an unknown, because "does this
-                   attacker-shaped attribute survive the sanitizer" is precisely a world that must not be
-                   decided by an Object being truthy. */
+                   attribute. "Does this attacker-shaped attribute survive the sanitizer" is exactly the
+                   question that must not be decided by an Object being truthy, and WHAT DECIDES IT IS THIS
+                   FLOW'S OWN PATH: Web IDL §3.2.17's member loop asked ECMAScript §7.1.2 ToBoolean at the
+                   branch seam when the configuration was built, so one flow stands here with the attribute
+                   surviving and its sibling with it removed. The reader is idl_dict_bool and not a bare
+                   ToBoolean for a reason about the READER rather than about which routes are open: it NAMES
+                   an unknown arriving here instead of answering `true` for it and saying nothing. */
                 allowed = strncmp(aname, "data-", 5) == 0 && ansp == NULL &&
                           idl_dict_bool(ctx, w->config, "dataAttributes");
             }
