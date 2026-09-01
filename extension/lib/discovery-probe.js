@@ -782,8 +782,20 @@ async function probeEndpoint(documentId, endpointKey) {
 // args can still progress. Nothing here is a flow. This gates whether the trusted zone puts a
 // deliberately-malformed POST ON THE WIRE to a third-party API, and §Attacker sources states the rule
 // for exactly that and states it the other way: "Each active fetch is made FROM the document that
-// learned the endpoint, CORS-bounded both ways, one-per-endpoint (no method is universally safe — GET
-// can mutate via /logout, /delete?id=), never a blind sweep." Without this set, `handleResponseBody`
+// learned the endpoint, CORS-bounded both ways, one-per-endpoint (a method's safety is a PROTOCOL
+// CONTRACT and never a URL shape — see the safety rule below), never a blind sweep."
+// THE PARENTHESIS IS QUOTED AT ITS CURRENT WORDING AND THE OLD ONE IS NOT COMING BACK, because the
+// argument it made has been RETIRED rather than reworded. It read "no method is universally safe — GET
+// can mutate via /logout, /delete?id=", and CLAUDE.md now names that reasoning as the mistake:
+// §IS-THIS-REQUEST-STATE-MUTATING calls reaching for a URL shape to answer it "§RUN-DON'T-MATCH performed
+// on an address", and RFC 9110 §9.2.1 "Safe Methods" puts the very example on the other side of the line —
+// "it is the resource owner's responsibility to ensure that the action is consistent with the request
+// method semantics", and a `page?do=delete` is that owner's failure, which they "MUST disable or disallow
+// that action when it is accessed using a safe request method". A quotation is the half a reader verifies least, so
+// a retired one left standing goes on teaching a rule the tree no longer obeys — and this one sat in the
+// file whose probe the deny list guards. NONE OF WHICH CHANGES WHAT THIS SET IS FOR: the sentence's
+// operative words here are one-per-endpoint and never a blind sweep, and both survived the rewording.
+// Without this set, `handleResponseBody`
 // probes on EVERY captured POST — the blind sweep that sentence forbids, aimed at somebody else's
 // server. Deleting it does not widen the search; the probe's answer is a property of the SERVER, not
 // of any path through the page, so a second identical probe cannot learn what the first did not.

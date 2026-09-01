@@ -531,9 +531,10 @@ async function pageContextFetch(tabId, url, opts, documentId) {
      its expensive one.
      AND THE ARGUMENT IS STRONGER HERE THAN AT THE CHOKEPOINT. RFC 9110 §9.2.1 "Safe Methods" is what keeps
      `safeFetch`'s own exposure small: it is GET-only by absence, and §9.2.1 says of a safe method that "the
-     client does not request, and does not expect, any state change on the origin server". This relay takes
-     `msg.method` verbatim and two of its three entries name POST, which §9.2.1's safe set — "the GET, HEAD,
-     OPTIONS, and TRACE methods" — does not contain.
+     client does not request, and does not expect, any state change on the origin server as a result of
+     applying a safe method to a target resource". This relay takes `msg.method` verbatim and two of its three
+     entries name POST, which §9.2.1's safe set does not contain — "Of the request methods defined by this
+     specification, the GET, HEAD, OPTIONS, and TRACE methods are defined to be safe."
      `CHECK` AND NOT `DCHECK` ON THE GATE'S PRESENCE, on the one discriminator that separates them. This file
      runs in exactly one realm (`ast-worker.html`, which loads `lib/safe-fetch.js` before it), so an absent
      gate is that loader changed — and the release behaviour is not unknown: a `ReferenceError` here is not

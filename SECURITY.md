@@ -256,14 +256,18 @@ guarantees, in one auditable place:
   is composed in the engine at the PARK, out of the two facts that own it — the park's own kind (HTML §4.12.1
   "The script element"'s parser-inserted flag) and whether the parking flow's path had stood on an arm its own
   concrete example contradicts — and it rides the pending line beside the method and the destination, where
-  both hosts' doors already refuse a token outside the three. What is missing is the READER: `bridge.js`
-  validates the field and does not pass it to `safeFetch`, so the chokepoint that owns every risk decision is
-  the one zone that cannot see it. That is deliberate rather than an omission — a field the chokepoint asserts
-  and decides nothing from is a computed writer with no reader, which is the mirror of the defaulted field and
-  is just as invisible — so the field arrives at the gate in the same diff as the thing that reads it: the
-  per-origin authorisation, which is a person's sentence and never an inference. Until then the list stays
-  armed: over-broad is its cheap direction — one unfired request, reported with its
-  token — and loosening a gate as a side effect of turning cookies on is its expensive one.
+  both hosts' doors already refuse a token outside the three. **THE READER EXISTS, AND THIS PARAGRAPH SAID IT
+  DID NOT FOR LONGER THAN THAT WAS TRUE** — the same failure it records one sentence up, made a second time
+  about the same field. It read "What is missing is the READER: `bridge.js` validates the field and does not
+  pass it to `safeFetch`, so the chokepoint that owns every risk decision is the one zone that cannot see it",
+  and every `self.safeFetch` call site in `bridge.js` now states a `provenance`: `_provenanceOf` is a fatal
+  `CHECK` on it, `_firingRefusal` decides from it, and `safeFetchWiden` is the per-origin authorisation this
+  paragraph named as the diff the field would arrive with. So the list is no longer armed over the whole
+  credentialed population: `safe-fetch.js` scopes it to `credentialed && provenance !== "observed"`, which
+  exempts exactly the caller whose harm argument is false by construction — the ambient seed, whose address
+  the person's own browser navigated to seconds ago in this profile. What is unchanged is the DIRECTION:
+  over-broad is this list's cheap direction — one unfired request, reported with its token — and loosening a
+  gate as a side effect of turning cookies on is its expensive one.
   **THE LEARNED-GET REPLAY IS STILL UNCREDENTIALED, AND THAT IS PROVENANCE AND NOT PLUMBING.** `bridge.js`'s
   `fetched` passes no `pageOrigin` and nothing writes `msg.credentialed`. A navigation is OBSERVED — the
   person went there — while an address the engine learned may be DERIVED or FORCED, and a credentialed reply
@@ -393,7 +397,9 @@ what it owes is that the destination be one this zone can name exactly.
 - **Requests issued AS THE PAGE — the page-context relay.** `pageContextGet` / `pageContextSend` /
   `pageContextFetch` reach `content.js`'s `handlePageFetch`, whose raw `fetch` runs in the untrusted renderer.
   Destination is this zone's; credentials are the page's own (`credentials:"same-origin"`); the enforcement is
-  the BROWSER's SOP/CORS rather than ours. Both directions are the subsection below, because they fail
+  the BROWSER's SOP/CORS rather than ours, with ONE gate that is ours and is not an SOP question at all — the
+  credentialed destructive-path deny list, asked of the chokepoint through `safeFetchDestructiveRefusal` and
+  never copied into this transport. Both directions are the subsection below, because they fail
   differently and only one of them is a privilege question.
 - **Renderer program assembly — `renderer-host.js`.** A raw `fetch` of a FIXED name list off our own extension
   origin, because an opaque-origin frame cannot load those files by URL itself. The destination is a constant
@@ -459,6 +465,27 @@ have to be stated, because they fail differently and only one of them is a privi
   of what that renderer holds. It is a DOWNGRADE from the extension's `<all_urls>` reach, not a grant. This
   is why "what stops a compromised content script asking for a fetch the offscreen never authorised" has no
   check behind it and needs none — a compromised renderer does not need our relay to make that request.
+  **THAT ARGUMENT IS ABOUT PRIVILEGE, AND ONE GATE ON THIS EDGE IS NOT ABOUT PRIVILEGE AT ALL.** The
+  credentialed destructive-path deny list exists because this tool builds requests no real client makes, and a
+  GET that ends the person's session mid-analysis is a CSRF *we* committed against our own user. "A
+  compromised renderer already holds the socket" does not answer it, because the party being protected is the
+  PERSON and the party acting is US. `safe-fetch.js` scopes that list to
+  `credentialed && provenance !== "observed"` — so a request that never reaches that file cannot be inside the
+  scope at all, and the gate was not answering permissively here, it was UNASKABLE here. Every request this
+  relay sends is credentialed by construction (`handlePageFetch` sets `credentials: "same-origin"` with no
+  parameter in which a caller could say otherwise), and two of its three entries name POST, which RFC 9110
+  §9.2.1 "Safe Methods"' safe set does not contain — "Of the request methods defined by this specification,
+  the GET, HEAD, OPTIONS, and TRACE methods are defined to be safe." — so the
+  argument is *stronger* here than at the chokepoint, which is GET-only by absence. `pageContextFetch`
+  therefore asks `safeFetchDestructiveRefusal`, which IS `_destructiveToken` read by a caller whose act is not
+  a `safeFetch` — the same shape as `safeFetchMethodRefusal` and `safeFetchFiringRefusal`, and never a second
+  list in this transport, which is the layering violation CLAUDE.md names for putting a risk decision anywhere
+  but the chokepoint. The PROVENANCE half is not asked here and the gate is over-broad on purpose: this relay
+  has no `observed` caller to exempt, because every address it carries is one this tool composed (a well-known
+  discovery path from a fixed literal list, a captured endpoint re-sent with a deliberately malformed body) or
+  one an operator typed into the Send panel. It is asked PRE-REQUEST only — the reply record carries no
+  `resp.url`, so the landed-address re-ask `safe-fetch.js` makes has no input on this edge; the residual is
+  stated at the gate in `lib/schema.js`.
   What the relay does need, and has, is that the far end holds NO policy: `handlePageFetch` takes
   `msg.method` verbatim, so the VERB is decided entirely at the trusted call site. That is why the three
   entries are named for their OPERATION rather than for a method (`pageContextGet` GET-only for learning a
