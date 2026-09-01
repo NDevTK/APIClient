@@ -408,7 +408,7 @@ static char *errs_json_array(ErrsArray which) {
     errs_raw(&b, &cap, &len, "[");
     for (int i = 0; i < g_errs_n; i++) {
         int seen = 0, stands_somewhere = 0, retracted_somewhere = 0, explored_somewhere = 0;
-        int want;
+        int want = 0;   /* the conservative answer for a value outside ErrsArray — see the switch below */
         /* BY MESSAGE, ACROSS EVERY ROW THAT CARRIES IT, because the three arrays are decided per MESSAGE while
            the rows are per pair: a message standing at one throw site is not retracted just because another
            site withdrew it. */
@@ -432,16 +432,18 @@ static char *errs_json_array(ErrsArray which) {
                "retraction only MOVES an occurrence to the retracted counter, so a row at zero on both was "
                "created by a path that never reported anything, and the two arrays this file calls a partition "
                "would silently stop being one");
+        /* NO `default:` ARM, AND THAT IS WHAT MAKES THIS SWITCH TOTAL. A default would suppress `-Wswitch`
+           (in `-Wall` on both compilers this tree builds with), so a FOURTH array added to `ErrsArray` would
+           compile silently and be caught only by a runtime abort somebody has to exercise. Without one the
+           compiler names the missing arm at the line that has to answer for it — which is strictly stronger
+           than a DFAIL, because it fires on a build rather than on a run that happened to ask. The `want = 0`
+           above is the conservative answer for an out-of-range CAST, which is unreachable here (the enum is
+           static to this file and every caller passes a literal): it emits an empty array rather than every
+           message, so an impossible state cannot publish a console it has not decided. */
         switch (which) {
         case ERRS_STANDING:  want = stands_somewhere; break;
         case ERRS_RETRACTED: want = !stands_somewhere && retracted_somewhere; break;
         case ERRS_EXPLORED:  want = explored_somewhere; break;
-        default:
-            DFAIL("a page-error array was asked for under an ErrsArray this composer does not have — the enum "
-                  "and this switch are the only two places the question is spelled, so a value outside it is a "
-                  "cast or an uninitialised read rather than a fourth array somebody added");
-            want = 0;
-            break;
         }
         if (!want) continue;
         if (emitted++) errs_raw(&b, &cap, &len, ",");
