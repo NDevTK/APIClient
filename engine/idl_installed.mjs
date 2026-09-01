@@ -1072,6 +1072,19 @@ const IFACE_SEEDS = [
   { fn: "idl_class_string",   obj: 1, iface: 2 },
 ];
 const IFACE_OBJECT = { fn: "idl_interface_object", iface: 1, obj: 2 };
+/* WHICH INTERFACES THIS ENGINE LETS A PAGE `new`, AND WHY THAT IS NOT THE SAME QUESTION AS WHICH ONES HAVE AN
+   INTERFACE OBJECT. Web IDL §3.7.1 Interface object gives EVERY exposed interface a property on the global,
+   and gives it [[Construct]] steps only where the interface declares a constructor — so the presence of the
+   property says nothing about whether `new X()` runs anything. In this engine the two are built by different
+   calls and only ONE of them constructs: idl_interface_object mints `idl_illegal_ctor` (its own header says
+   "whose call and construct both throw a TypeError"), node_install_interface mints `js_node_iface_ctor`, which
+   is the same throw, and node_install_interface_ctor HANGS WHATEVER ITS CALLER MINTED — `Node` and
+   `HTMLMediaElement` reach it carrying an idl_interface_object, so it is not a marker of anything. What is
+   left is idl_step_constructor, whose own DCHECK ties its stepid to a declared member and which mints
+   JS_CFUNC_step_ctor: the engine saying, about the identifier beside it, that this interface's §3.7.1 construct
+   steps exist. Read as an install fact here rather than restated by a consumer, for the reason every other one
+   is — a second copy of it is the copy that drifts. */
+const CONSTRUCTING_FORM = { fn: "idl_step_constructor", iface: 1 };
 /* §3.11.1's LEGACY CALLBACK INTERFACE OBJECT, which is a SEED and not a link. A callback interface has no
    interface prototype object — Web IDL §3.7.3's tag is that object's, so there is none anywhere on this one —
    and the constants §3.7.5 defines on it are real members a page reads (`NodeFilter.SHOW_ELEMENT`). So the
@@ -2079,6 +2092,8 @@ function generatedRefusal(form, env) {
 
 export function installedMembers(paths, env) {
   const records = [], unresolved = [], offInstaller = [], excluded = [], unselected = [];
+  /* The identifiers CONSTRUCTING_FORM names — every interface a page can actually `new` in this engine. */
+  const constructs = new Set();
   const { forms } = env;
   /* which GENERATED_FORMS installers the corpus calls at all — see the loop after the file walk */
   const called = new Set();
@@ -2359,6 +2374,20 @@ export function installedMembers(paths, env) {
       }
     }
 
+    /* 1b. WHICH INTERFACES THIS FILE MAKES CONSTRUCTIBLE — see CONSTRUCTING_FORM. The identifier is the
+       argument, so a table-driven install (`idl_step_constructor(ctx, NAMES[i], …)`) resolves through the same
+       reader every other name here goes through, and one it CANNOT read is reported rather than dropped: an
+       unread constructor mint would read as an interface the engine refuses to construct, which is the false
+       direction — it would make a dictionary that IS reachable report as unreachable. The definition's own
+       header sits in no function body and so is never a call site. */
+    for (const site of callSites(masked, CONSTRUCTING_FORM.fn)) {
+      const f = fnAt(site.at);
+      if (!f) continue;
+      const names = scoped(f).strings(site.args[CONSTRUCTING_FORM.iface] || "", localsFor(f));
+      if (!names) { report(site.at, CONSTRUCTING_FORM.fn, site.args[CONSTRUCTING_FORM.iface] || ""); continue; }
+      for (const n of names) constructs.add(n);
+    }
+
     /* 2. the JSCFunctionListEntry tables, read only where one is installed */
     for (const site of callSites(masked, "JS_SetPropertyFunctionList")) {
       const f = fnAt(site.at);
@@ -2544,5 +2573,5 @@ export function installedMembers(paths, env) {
                                   : `${form.partial}'s installer is declared to live in \`${form.in}\`, and ` +
                                     `this corpus has no such file` });
   }
-  return { records, unresolved, offInstaller, excluded, unselected };
+  return { records, unresolved, offInstaller, excluded, unselected, constructs };
 }

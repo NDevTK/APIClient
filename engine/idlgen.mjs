@@ -1275,19 +1275,52 @@ const creditSubsets = (name) => {
    and the interface its target is, which is what the whole audit above already established; the IDL then states
    what that member ACCEPTS. A record whose NAME is itself an interface is an interface object install, and
    §3.7.1's interface object is what a page calls `new` on, so its constructor's arguments count too — that is
-   how every `FooEventInit` in the platform is reached, since no operation anywhere takes one. */
+   how every `FooEventInit` in the platform is reached, since no operation anywhere takes one. TWO THINGS THAT
+   SENTENCE DOES NOT SAY, both of which it was read as saying: the constructor counted is the interface's OWN
+   (see memberOps), and it counts only where THIS ENGINE mints one (see world.constructs at the loop below).
+   An interface object exists for every exposed interface either way, so its install is evidence of neither. */
 const opsOf = new Map();
 const memberOps = (iface) => {
   if (opsOf.has(iface)) return opsOf.get(iface);
   const m = new Map();
+  /* AN OPERATION IS INHERITED AND A CONSTRUCTOR IS NOT, so the two are read from different member lists.
+     Web IDL §3.7.1 Interface object's construct steps open "If I was not declared with a constructor
+     operation, then throw a TypeError" and resolve the overload "for constructors with identifier id on
+     interface I" — I being the interface the object is FOR, never a base it inherits from. Reading the ctor off
+     the flattened list makes every derived interface answer with its base's: BeforeUnloadEvent reports Event's
+     `constructor(DOMString, optional EventInit)` and FileSystemWritableFileStream reports WritableStream's
+     `constructor(optional object, optional QueuingStrategy)`, neither of which its own IDL declares and
+     neither of which any browser lets a page call. It was invisible while the only thing read off a ctor was
+     which dictionaries it takes AND those dictionaries were declared anyway — a wrong reachability that
+     happened to reach a true row. */
+  const own = (byName.get(iface) || { members: [] }).members;
   for (const x of flatten(iface)) {
     if ((x.type !== "operation" && x.type !== "constructor") || (x.type === "operation" && !x.name)) continue;
+    if (x.type === "constructor" && !own.includes(x)) continue;   /* a base's constructor is not this one's */
     const key = x.type === "constructor" ? " ctor" : x.name;
     if (!m.has(key)) m.set(key, []);
     m.get(key).push(x);
   }
   opsOf.set(iface, m);
   return m;
+};
+/* A CONSTRUCTOR THE IDL DECLARES THAT THIS ENGINE REFUSES, recorded where it costs a DICTIONARY its only way
+   in. The whole population of absent constructors is wider than this — every §3.7.1 [[Construct]] the engine
+   answers with a TypeError — and none of it is reported anywhere, because idl_members.mjs's members() collects
+   `attribute`, `operation` and `const` and no `constructor`, so the ABSENT census cannot see one. That is a
+   NAMED RESIDUAL and not this diff: what belongs to the DICTIONARY audit is the constructor whose absence makes
+   a dictionary unreachable, because that is the one an UNDECLARED row would otherwise mis-diagnose. The rest
+   shows as `new Range()` answering "Illegal constructor" while Range's row reads COMPLETE, and it closes when
+   §3.7.1's constructor becomes a row of that census. */
+const ctorAbsent = new Map();
+const noteCtorAbsent = (iface, ctors, r) => {
+  const dicts = new Set();
+  for (const op of ctors)
+    for (const a of op.arguments || [])
+      for (const d of dictionaryTypesIn(a.idlType)) dicts.add(d);
+  if (!dicts.size) return;               /* an absent constructor taking no dictionary is the residual above */
+  if (!ctorAbsent.has(iface)) ctorAbsent.set(iface, { file: r.file, line: r.line, dicts: new Set() });
+  for (const d of dicts) ctorAbsent.get(iface).dicts.add(d);
 };
 const dictSites = new Map();
 const noteSite = (d, site) => {
@@ -1298,13 +1331,32 @@ const noteSite = (d, site) => {
 for (const r of world.records) {
   if (r.nonInterface) continue;
   const asks = [];
+  /* A NAMED RESIDUAL — THE OPERATION ARM, WHICH IS THE OTHER HALF OF THE SAME QUESTION. WHAT IS NOT COVERED: an
+     operation's dictionary argument is counted reachable from the IDL alone, so a position this engine declares
+     with a type that cannot carry a dictionary still reports that dictionary's members UNDECLARED, under the
+     same "declare the member" instruction the constructor arm below no longer gives. WHAT THE NEXT DIFF BUILDS:
+     this arm reads the declared IdlArgType row for the argument's POSITION through idl_argdecl.mjs's
+     declarations() — the one parse of `idl_method_id*` that argaudit.mjs and argtypegate.mjs already share, so
+     no second copy is created — and counts the dictionary only where the declared type can produce one. HOW ITS
+     ABSENCE SHOWS: JsonWebKey's twenty members report UNDECLARED while §14.3.9's `(BufferSource or JsonWebKey)
+     keyData` position is declared IDL_BUFFERSOURCE, a narrowing that file names at the declaration and whose
+     jwk arm throws a TypeError by name — so the members could not be read however they were declared. */
   for (const iface of r.ifaces || []) {
     const ops = memberOps(iface).get(r.name);
     if (ops) asks.push([`${iface}.${r.name}`, ops]);
   }
   if (byName.has(r.name)) {
     const ctors = memberOps(r.name).get(" ctor");
-    if (ctors) asks.push([`new ${r.name}`, ctors]);
+    /* ONLY WHERE THIS ENGINE ACTUALLY CONSTRUCTS. An interface OBJECT is installed for every exposed
+       interface, and §3.7.1 gives it [[Construct]] steps only where the interface declares a constructor —
+       which this engine states with idl_step_constructor and states nowhere else (idl_installed.mjs's
+       CONSTRUCTING_FORM). Reading the property's existence as the constructor's is the audit deriving a fact
+       about THIS ENGINE from the IDL alone, and it does not fail quietly: it reported a dictionary as reachable
+       through a constructor whose every call is `idl_illegal_ctor`'s TypeError, under an instruction to declare
+       three members that no conversion could ever have read. The absent constructor is reported below instead,
+       which is the true instruction and the one an engineer can act on. */
+    if (ctors && world.constructs.has(r.name)) asks.push([`new ${r.name}`, ctors]);
+    else if (ctors) noteCtorAbsent(r.name, ctors, r);
   }
   for (const [what, ops] of asks)
     for (const op of ops)
@@ -1336,7 +1388,13 @@ for (const [d, sites] of [...dictSites].sort()) {
   if (order.join(",") !== want.join(",")) dictOrder.push({ d, named, order, want });
 }
 
-defect("dictionary members the platform declares that no IdlDictMember declaration names", dictUndeclared.length);
+/* THE COUNT IS OF MEMBERS, WHICH IS WHAT THE LABEL ALREADY SAID. It was `dictUndeclared.length` — the number of
+   DICTIONARIES holding at least one undeclared member — printed under a label naming MEMBERS, so the verdict
+   answered a different question from the rows above it and the two could not be reconciled by reading them. A
+   coverage figure states what it is a fraction of, in the same line, or it is not a coverage figure. */
+defect("dictionary members the platform declares that no IdlDictMember declaration names",
+       dictUndeclared.reduce((n, u) => n + u.missing.length, 0));
+defect("dictionaries a page cannot reach because the constructor that takes one is absent", ctorAbsent.size);
 defect("IdlDictMember entries naming a member the dictionary the declaration names does not have", dictStranger.length);
 defect("dictionary members whose declared `required` contradicts the IDL", dictRequired.length);
 defect("named dictionary declarations whose member order is not §3.2.17's", dictOrder.length);
@@ -1354,6 +1412,15 @@ for (const u of dictUndeclared)
               `reads ${u.missing.length > 1 ? "them" : "it"} — either the option is silently ignored, or a ` +
               `component reads it with a dictionary walk of its own, which is the second copy of §3.2.17 ` +
               `core/idl_args.h's own header forbids. Both are the same fix: declare the member.`);
+for (const [iface, c] of [...ctorAbsent].sort())
+  console.log(`[idl-audit]   ${iface}: its IDL declares a constructor taking ${[...c.dicts].sort().join(", ")}, ` +
+              `and the interface object installed at ${c.file.replace(BROWSER + "/", "")}:${c.line} is named by ` +
+              `no idl_step_constructor in this engine — so Web IDL §3.7.1 Interface object's [[Construct]] is ` +
+              `the shared "Illegal constructor" TypeError, \`new ${iface}()\` throws before any argument is ` +
+              `converted, and the dictionary is reachable through nothing. The fix is the CONSTRUCTOR: ` +
+              `declaring them here would write rows §3.2.17 never reaches. Build the constructor's steps as a ` +
+              `declared member and mint its interface object with idl_step_constructor, and the dictionary ` +
+              `becomes reachable and is audited like every other`);
 for (const s of dictStranger)
   console.log(`[idl-audit]   ${s.named.file.replace(BROWSER + "/", "")}:${s.named.line}  ${s.named.decl} declares ` +
               `\`${s.name}\`, which ${s.d} does not have — a member no page can pass, so the [[Get]] §3.2.17 ` +
