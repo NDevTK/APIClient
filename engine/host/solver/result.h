@@ -132,6 +132,50 @@ void result_page_error(const char *msg, const char *filename);
    is a second crash. */
 void result_page_error_value(JSContext *ctx, JSValueConst err);
 
+/* ---- WHOSE THROW IT WAS ------------------------------------------------------------------------------------
+ *
+ * THE EXCEPTION NOW PENDING IS THIS ENGINE'S OWN EXPLORATION AND NOT THE PAGE'S PROGRAM, DECLARED BY THE SITE
+ * THAT RAISED IT. A forced-exec flow throwing on unknown external input is the exploration surface — CLAUDE.md
+ * names it in the list of things that are deliberately NOT a `@WHY` — and a browser component that forks N
+ * feasible completions over an unknown reaches, on one of them, a spec step whose answer IS a throw. That
+ * throw is correct, is a world this engine chose to run, and ends the page's script in that world exactly as a
+ * browser would. It is still an uncaught page error and is still recorded as one: it is EVIDENCE.
+ *
+ * WHAT IT IS NOT IS A PAGE ERROR OF THE KIND `pageErrors` EXISTS FOR, AND THE DIFFERENCE IS CHECKABLE RATHER
+ * THAN A MATTER OF TASTE. The paragraph above result_page_error says what makes an uncaught throw worth
+ * recording: the script ends, so every endpoint the rest of it would have emitted is simply ABSENT and a probe
+ * row over them reads 0. That sentence is FALSE of an exploration completion — the sibling arms of the same
+ * fork are flows that carry on past it and emit exactly those endpoints, so nothing is absent and no row goes
+ * to 0. One fact, two populations, and before this seam a consumer had exactly one number for both: the engine
+ * said which arm it was standing on IN THE MESSAGE'S PROSE and nothing could ASK.
+ *
+ * IT IS DECLARED AT THE RAISE AND NOWHERE ELSE, because the raise is the only instant at which it is known.
+ * The value travels to §8.1.4.6 "Runtime script errors" through the page's own frames, where a consumer sees a
+ * TypeError with a backtrace into the page and has no way to tell it from one `null.x` produced. So the site
+ * that CHOSE the completion says so, immediately, and this records the (message, throw site) pair result.c
+ * already keys a page-error row on — the SAME derivation the report and the retraction use, so a row cannot be
+ * marked under one key and read under another.
+ *
+ * IT TAKES NO MESSAGE AND NO ERROR KIND, which is what keeps it from becoming a second way to throw. The
+ * caller has already raised its exception with the ordinary constructor, because the KIND is the SPEC's (Web
+ * IDL §3.2.15 Interface types ends "Throw a TypeError."; Streams §4.5 "The ReadableStreamBYOBReader class"
+ * says instead "return a promise rejected with a RangeError exception") and never this seam's to pick. This takes the pending exception, records it as the engine's, and re-raises it
+ * UNCHANGED — the page sees byte-identically what it saw before, and only the classification is new.
+ *
+ * NOT A SUPPRESSION AND NOT A TEXT MATCH. The row is still reported, still stands, still retracts. And the
+ * declaration is COMPUTED by the producer at the moment it produces the throw, never a list of message text a
+ * consumer keeps: a hand-kept list would swallow the regression it exists to surface the first time a real
+ * page raised the same string, which is the reason the staged-address partition next door refuses text too.
+ *
+ * Returns JS_EXCEPTION so a caller can `return result_explored_throw(ctx);`. */
+JSValue result_explored_throw(JSContext *ctx);
+/* …AND THE QUESTION THAT ANSWERS, asked with the same (message, throw site) pair every other reader of this
+   surface is keyed by. 1 = this engine declared the throw its own exploration; 0 = it did not, which is the
+   positive statement that the pair came from the page's own program and is the population a regression lands
+   in. A host printing a page-error stream asks this at the moment it prints, because a stream's reader has no
+   second chance to reclassify a line it has already consumed. */
+int result_page_error_explored(const char *msg, const char *filename);
+
 /* ---- TAKING ONE BACK ---------------------------------------------------------------------------------------
  *
  * A REPORT THIS ENGINE MADE ABOUT A PAGE THAT TURNED OUT TO HAVE DONE NOTHING WRONG. HTML §8.1.4.7 "Unhandled

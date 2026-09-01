@@ -31,6 +31,7 @@
 #include "core/events/event_handler.h"
 #include "core/events/event_path.h"
 #include "core/events/report_exception.h"
+#include "solver/result.h"   /* §3.2.15's refusal on a forked arm is this engine's own throw — see the AEL_SIGNAL stage */
 
 /* The two shapes every DOM member in this file has. Spelled once so a member declares its IDL, not a bitmask. */
 static const IdlArgType IDL_1STR[1] = { IDL_DOMSTRING };
@@ -1066,10 +1067,19 @@ static int ael_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
                    apart read a designed world as an unbuilt capability — which is what happened, from a smoke
                    run, to an expert reader. The page's own TypeError is now §3.2.15's at the member's
                    conversion and never reaches this body, so the two cannot be confused again; what keeps this
-                   message honest is that it says which arm it is on, not that it differs from a neighbour. */
+                   message honest is that it says which arm it is on, not that it differs from a neighbour.
+                   AND SAYING IT IN THE MESSAGE IS NOT SAYING IT TO A CONSUMER. The sentence above was true and
+                   was PROSE: the value reaches §8.1.4.6 "Runtime script errors" through the page's own frames,
+                   so a reader downstream had a TypeError with a backtrace into the page and one number for two
+                   populations — a fixture statement that broke, and a world this engine chose to run. It cost
+                   an expert reader a session once and a second reader a second time, from the same line. The
+                   declaration below is that same fact as something a consumer can ASK (solver/result.h), made
+                   at the only instant it is known and by the site that chose the completion; the throw itself
+                   is unchanged, and the page sees byte-identically what it saw before. */
                 JS_ThrowTypeError(ctx, "options.signal does not implement AbortSignal (on the forced arm where "
                                        "this flow's unknown `options.signal` is not one — two sibling arms take "
                                        "it as a live signal and as an already-aborted one)");
+                result_explored_throw(ctx);
                 return -1;
             }
             if (arm == 1)

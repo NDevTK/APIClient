@@ -2224,6 +2224,26 @@ const runNumbers = (t) =>
    it has stopped meaning anything. */
 function pageErrorText(out) {
   const staged = new Set([...out.matchAll(/^@PAGEERR-STAGED (\S+)$/gm)].map((m) => m[1]));
+  /* AND THE ENGINE'S OWN CLAIM ABOUT A ROW IT PRODUCED — solver/result.h. Keyed on the (message, throw site)
+     PAIR rather than on an address, and the asymmetry with `staged` is the design: an address is the only unit
+     a FIXTURE can speak in, because a program is what a fixture owns, while the ENGINE knows the exact throw
+     it minted. A forked completion over unknown external input reaching a spec step whose answer is a throw is
+     the exploration surface — CLAUDE.md names it among the things that are deliberately NOT a `@WHY` — and
+     before this line it arrived here as `UNSTAGED UNCAUGHT PAGE ERROR`, which is this reader's name for a
+     fixture statement that broke. Two facts, one number, in the very function written to end three states
+     behind one answer: it misread a designed world as a regression twice, once for an expert reader and once
+     for a whole session's brief.
+     IT IS NOT A SUPPRESSION AND CANNOT BECOME ONE. The error is still counted, still quoted, still its own
+     population — what changes is that the population a reader is sent to investigate contains only throws
+     nobody declared. And it is not a message-text list either, which is what the address partition next door
+     refuses for good reason: the pair is COMPUTED by the producer at the instant it raises, so a real page
+     raising the identical string from the identical site was never declared and lands in `rogue`.
+     THE SEPARATION IS ALSO WHY THE TWO POPULATIONS MUST NOT BE ADDED. A staged error's ABSENCE is a finding
+     (the fixture stopped exercising something); an explored one's absence is the SCHEDULER's answer and never
+     the fixture's — how many flows reach a forked completion is not a fact this document states — so it is
+     reported as a count and is never asserted against a number. */
+  const explored = new Set([...out.matchAll(/^@PAGEERR-EXPLORED at=(\S+) (.*)$/gm)]
+                             .map((m) => m[1] + " " + m[2].trim()));
   const errs = [];
   let retracted = 0;
   for (const m of out.matchAll(/^@PAGEERR(-RETRACTED)? at=(\S+) (.*)$/gm)) {
@@ -2245,15 +2265,31 @@ function pageErrorText(out) {
      the stream route, exactly as `pageErrorsRetracted` is on the document route. */
   const retractedText = retracted ? ` (plus ${retracted} reported and retracted, handled in a later task)` : "";
   if (!errs.length) return retracted ? ` — 0 standing page error(s)${retractedText}` : "";
+  /* THREE POPULATIONS AND NOT TWO, IN THAT ORDER, BECAUSE THE CLAIMS ARE ASKED OF DIFFERENT UNITS. The
+     fixture's is an ADDRESS and the engine's is a PAIR, so an error can satisfy both — a chunk that stages a
+     throw the engine also declares its own — and a reader needs each error in exactly one column. The staged
+     claim is asked FIRST because it is the DOCUMENT's statement about a program it owns, and a fixture that
+     stopped exercising its own staged throw must not have that absence hidden by the engine's classification
+     of some other throw at the same address. */
+  const isExplored = (e) => explored.has(e.at + " " + e.msg);
   const known = errs.filter((e) => staged.has(e.at));
-  const rogue = errs.filter((e) => !staged.has(e.at));
+  const mine = errs.filter((e) => !staged.has(e.at) && isExplored(e));
+  const rogue = errs.filter((e) => !staged.has(e.at) && !isExplored(e));
   /* THE STAGED COUNT IS CARRIED EVEN WHEN NOTHING IS WRONG, because its DISAPPEARANCE is the other direction
      this line can report: a run in which the document staged two errors and produced one is a run whose
      fixture stopped exercising something, and a reader shown only the rogue population would see silence. */
   const stagedText = `${known.length} from the ${staged.size} address(es) it declares`;
-  if (!rogue.length) return ` — ${errs.length} page error(s), all staged: ${stagedText}${retractedText}`;
+  /* AND THE ENGINE'S OWN, CARRIED ON THE SAME RULE BUT NEVER AS AN ASSERTION. Its absence is not a finding
+     about this document: how many flows reach a forked completion is the SCHEDULER's answer, so a run that
+     explored one throwing world and a run that explored none are both correct runs of one fixture. It is here
+     because the count is what tells a reader the classification is WIRED — a silent zero and a mechanism that
+     stopped being reached read alike, and only one of them is worth a look. */
+  const mineText = mine.length ? `, plus ${mine.length} this engine raised itself exploring a forked completion`
+                               : ``;
+  if (!rogue.length)
+    return ` — ${errs.length} page error(s), none unaccounted for: ${stagedText}${mineText}${retractedText}`;
   const q = (e) => `${JSON.stringify(e.msg.slice(0, 160))} at ${e.at === "-" ? "no throw site (§8.1.4.6's own answer for a value with no backtrace)" : e.at}`;
-  return ` — ${rogue.length} UNSTAGED UNCAUGHT PAGE ERROR(S) (plus ${stagedText}${retractedText}), first: ${q(rogue[0])}` +
+  return ` — ${rogue.length} UNSTAGED UNCAUGHT PAGE ERROR(S) (plus ${stagedText}${mineText}${retractedText}), first: ${q(rogue[0])}` +
          (rogue.length > 1 ? ` (+${rogue.length - 1} more, deduped by solver/result.c on (message, throw site))` : "");
 }
 

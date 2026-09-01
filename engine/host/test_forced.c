@@ -5108,11 +5108,35 @@ static void tf_err_edge_seen(const char *msg, ResultPageErrorEdge edge) {
     }
 }
 
+/* …AND THE THIRD POPULATION, WHICH IS THE ENGINE'S OWN CLAIM RATHER THAN THIS DOCUMENT'S. The staged
+ * declaration below says which ADDRESSES this fixture expects an uncaught error from, and it is the only thing
+ * a fixture CAN say: a program is the unit it owns. It cannot declare the throw at issue here at all, and that
+ * is not an oversight in the table — the throw is raised at `https://x.test/p`, this document's OWN address,
+ * where a staged declaration would cover every statement of a two-thousand-statement program and swallow
+ * exactly the regression the partition exists to surface.
+ * SO THE PRODUCER DECLARES IT. A forked completion over unknown external input reaching a spec step whose
+ * answer is a throw is this engine exploring, and solver/result.h records the (message, throw site) pair at the
+ * raise; this asks the same question with the same key, at the moment it prints, because a stream's reader has
+ * no second chance to reclassify a line it has already consumed.
+ * IT IS A SECOND LINE AND NOT A FIELD ON THE FIRST, for `@PAGEERR-RETRACTED`'s reason one paragraph down: a
+ * reader that has consumed the report matches by the pair rather than by re-reading a line it has passed — and
+ * the error itself is still announced, still stands, still retracts. Nothing here suppresses anything. */
 static void tf_page_error(const char *msg, const char *filename, ResultPageErrorEdge edge) {
     const char *at = filename && *filename ? filename : "-";
     tf_err_edge_seen(msg, edge);
     switch (edge) {
-    case RESULT_PAGE_ERROR_STANDS:    printf("@PAGEERR at=%s %s\n", at, msg); break;
+    case RESULT_PAGE_ERROR_STANDS:
+        printf("@PAGEERR at=%s %s\n", at, msg);
+        /* ASKED WITH THE FILENAME result.c HOLDS AND NEVER WITH THE `-` THIS PRINTER SUBSTITUTES. The recorded
+           pair carries §8.1.4.6's own "" for a value with no backtrace; the display token is this line's, so
+           asking with it would answer about a pair nobody ever declared. `filename` is REQUIRED and never NULL
+           (solver/result.h, asserted at result_page_error before this hook is reached), so it is passed as it
+           arrived rather than defaulted past — a `?:` here would turn a broken producer into a plausible 0.
+           ON THE STANDING EDGE ONLY, because the declaration qualifies a REPORT: a correction's reader matches
+           it to the report by the pair, and the pair is already declared by the time one can be printed. */
+        if (result_page_error_explored(msg, filename))
+            printf("@PAGEERR-EXPLORED at=%s %s\n", at, msg);
+        break;
     case RESULT_PAGE_ERROR_RETRACTED: printf("@PAGEERR-RETRACTED at=%s %s\n", at, msg); break;
     }
     fflush(stdout);

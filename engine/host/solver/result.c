@@ -56,6 +56,50 @@ static PageErrorRow *errs_find(const char *msg, const char *filename) {
     return NULL;
 }
 
+/* THE PAIRS THIS ENGINE DECLARED ITS OWN EXPLORATION — see result.h for what the declaration means and why the
+   site that raises is the only place it can be made. Keyed on the SAME (message, throw site) pair a row is,
+   through the SAME derivation, because a mark filed under one key and read under another is a classification
+   that confidently answers about a different row.
+   IT IS NOT A FIELD ON PageErrorRow, AND THAT IS THE WHOLE OF WHY IT CANNOT DRIFT. The declaration is made at
+   the RAISE, which is strictly before §8.1.4.6 reports anything, so a row could only ever be a SECOND copy of
+   what this table already holds — kept in step at every insert, by hand, for ever. One fact, one place, asked
+   by key; the row stays what it was.
+   PROCESS-LIFETIME, like the rows beside it: a declaration is a statement about a throw this run made, and a
+   run that raised the same pair twice made one statement. */
+typedef struct { char *msg; char *at; } ExploredPair;
+static ExploredPair *g_expl; static int g_expl_n, g_expl_cap;
+
+int result_page_error_explored(const char *msg, const char *filename) {
+    DCHECK(msg != NULL && filename != NULL,
+           "the exploration question was asked with half a key — a page-error row is identified by (message, "
+           "throw site) and a null half would answer about whichever row happened to carry the other, which is "
+           "a wrong classification rather than a missing one");
+    for (int i = 0; i < g_expl_n; i++)
+        if (!strcmp(g_expl[i].msg, msg) && !strcmp(g_expl[i].at, filename)) return 1;
+    return 0;
+}
+
+static void explored_add(const char *msg, const char *filename) {
+    if (result_page_error_explored(msg, filename)) return;
+    if (g_expl_n >= g_expl_cap) {
+        int c = g_expl_cap ? g_expl_cap * 2 : 8;
+        ExploredPair *a = realloc(g_expl, (size_t)c * sizeof(*g_expl));
+        /* A LOST DECLARATION IS STILL NOT WORTH FAILING A RUN OVER — the row's own growth beside this says the
+           same, and the cost of losing one here is that a line lands in the population a reader reads by hand
+           rather than in the one this engine minted it into. Never a wrong verdict: nothing here is a verdict. */
+        if (!a) return;
+        g_expl = a;
+        g_expl_cap = c;
+    }
+    g_expl[g_expl_n].msg = strdup(msg);
+    g_expl[g_expl_n].at = strdup(filename);
+    if (g_expl[g_expl_n].msg && g_expl[g_expl_n].at) { g_expl_n++; return; }
+    /* HALF A PAIR IS WORSE THAN NONE — it would compare equal on the half that allocated and answer about a
+       row nobody declared, so the partial entry goes rather than being committed with a hole in it. */
+    free(g_expl[g_expl_n].msg); free(g_expl[g_expl_n].at);
+    g_expl[g_expl_n].msg = NULL; g_expl[g_expl_n].at = NULL;
+}
+
 /* WHO PRINTS ONE AS IT HAPPENS, AND THE FACT THAT A HOST ANSWERED THE QUESTION AT ALL — see result.h. The
    second is not bookkeeping for the first: a NULL hook USED to mean "this host publishes the document", so a
    host that had considered where an uncaught page error is read and a host that never had made the identical
@@ -239,6 +283,30 @@ void result_page_error_value(JSContext *ctx, JSValueConst err) {
     free(at);
 }
 
+/* THE SITE THAT CHOSE THE COMPLETION SAYING SO — see result.h. It runs at the RAISE and derives its key
+   through `page_error_key`, which is the same derivation the report and the retraction use: the value is the
+   very object §8.1.4.6 will later be handed, its backtrace was captured when it was constructed and nothing
+   here touches it, so the pair recorded now IS the pair the row will be keyed on rather than a second reading
+   of a second value. Runs NO page code, for `result_error_text`'s reason. */
+JSValue result_explored_throw(JSContext *ctx) {
+    char buf[320];
+    char *at;
+    JSValue e;
+
+    DCHECK(JS_HasException(ctx),
+           "a site declared its throw to be this engine's own exploration with NO exception pending — the "
+           "declaration is about the value the caller has just raised, so with nothing raised there is nothing "
+           "to classify and the next page error to arrive would be the one this had marked as the engine's");
+    e = JS_GetException(ctx);
+    page_error_key(ctx, e, buf, sizeof buf, &at);
+    explored_add(buf, at);
+    free(at);
+    /* RE-RAISED UNCHANGED, which is the half that keeps this from being a second way to throw: JS_Throw takes
+       the reference this function is holding and returns JS_EXCEPTION, so the page sees the identical value
+       with the identical backtrace and the only thing that is new is that a consumer can now ask whose it was. */
+    return JS_Throw(ctx, e);
+}
+
 /* §8.1.6.4 step 7.4's edge, keyed by the same derivation as the report — result.h states why a page that
    mutated the reason between the two events is a legitimate miss rather than something to assert on. */
 void result_page_error_value_retract(JSContext *ctx, JSValueConst reason) {
@@ -303,7 +371,22 @@ static void errs_append(char **buf, size_t *cap, size_t *len, const char *s) {
    A RETRACTED ROW IS STILL A CAPABILITY THE PAGE REACHED FOR, which is why the second array carries the
    MESSAGE rather than merely a count of withdrawals. `Element.matches is not a function` names an unbuilt
    engine capability whether or not the bundle caught the rejection it arrived in — the retraction says the
-   page did nothing wrong, never that the engine has nothing to build. */
+   page did nothing wrong, never that the engine has nothing to build.
+   AND WHOSE THROW IT WAS IS NOT ON THIS ROUTE YET, WHICH IS NARROWER THAN result.h STATES RATHER THAN WRONG.
+   `result_page_error_explored` answers for any consumer and the STREAM route asks it, so a host whose output
+   is lines already partitions the two populations; the DOCUMENT does not carry the answer, so a consumer that
+   reads only `pageErrors` sees an engine-minted exploration TypeError sitting among the page's own errors with
+   nothing to distinguish it. THE NEXT DIFF adds a third, ORTHOGONAL array (`pageErrorsExplored` — orthogonal
+   and not a fourth state of the two above, because "did this still stand" and "whose throw was it" are two
+   questions and a message may honestly answer both), per MESSAGE like these two, which is exact here rather
+   than a compromise: the text is this engine's own prose raised at its own seam, so a message explored at one
+   throw site is explored at every one. IT IS A SEPARATE DIFF BECAUSE ITS REAL CONTENT IS `result_json`'s BUFFER
+   ARITHMETIC — a twelfth `%s` means re-deriving the fixed-byte and counter widths FROM THE FORMAT STRING, and
+   that function's own paragraph records what happened the last time somebody ADJUSTED that count instead:
+   five numbers wrong in the safe-looking direction and a stated worst case of 742 inside a buffer the real one
+   (818) did not fit. ITS ABSENCE SHOWS as an extension popup listing `options.signal does not implement
+   AbortSignal (on the forced arm …)` under a page's own errors, on a run whose smoke log printed the same pair
+   as explored. */
 static char *errs_json_array_where(int want_standing) {
     char *b = NULL; size_t cap = 0, len = 0;
     int emitted = 0;
