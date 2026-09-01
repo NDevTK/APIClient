@@ -1020,6 +1020,73 @@ typedef struct {
     CssPx origin_x, origin_y;
 } LbContext;
 
+/* THE SUBJECT OF EVERY CRASH BELOW, WHICH IS AN ELEMENT AND NOT A LINE.
+   §AN-ASSERT-THAT-NAMES-A-REMEDY's test is to count the call sites that can reach an abort and to make the
+   ADDRESS part of the assert once that number is larger than one would read by hand. This walk is reached from
+   every CSSOM VIEW §6 member that asks for a position or an extent, from §7's scroll algorithms, from a Range's
+   client rects, from IntersectionObserver's update and from the rendering step — so it is.
+   WHICH ADDRESS IS THE QUESTION, and the answer here is the one core/idl_indexed.c already reasoned out for its
+   own shape: a `__FILE__`/`__LINE__` threaded from those callers arrives through `sa_inline_box_edge` and
+   `flow_inline_fragment_rects`, which is a handful of forwarding functions for the whole tree — the form that
+   rule names as the WRONG capture point — and it would still not say which BOX has no rule. Every remedy the
+   aborts below state names a `display` value and a container rather than a place, so the address their reader
+   is standing in front of is the ELEMENT and the computed `display` beside it. That is also what the rest of
+   this directory already carries: core/layout/used_value.c's `DFAILF`s name the `display` and nothing else.
+   MEASURED, AND IT IS WHY THIS IS NOT DECORATION. An abort on this walk was diagnosed from a wasm frame list,
+   which named the ASKER — `scrollWidth` — and carried no subject at all; the subject was then reasoned out
+   from the fixture's stylesheet, and the conclusion was that its `<div>`s are `display: none` so the walk could
+   not have reached them. That was true of the divs and false of the crash, because the walk that aborts is the
+   VIEWPORT's, taken over the whole document, and its subject is an element the reasoning never considered. The
+   half that had an instrument was the half nobody got wrong.
+   IT WRITES INTO A CALLER-OWNED BUFFER rather than handing back lexbor's pointer, because a local name is a
+   length-and-pointer pair with no promise of a terminator and a crash path must not read past one. A NULL
+   element and a nameless one are DIFFERENT answers and are spelled differently: the first says the caller had
+   nothing to name, the second says it had a node neither parser nor `createElement` minted. */
+static const char *lb_el_name(lxb_dom_element_t *el, char *buf, size_t cap)
+{
+    size_t len = 0;
+    const lxb_char_t *tag = el == NULL ? NULL : lxb_dom_element_local_name(el, &len);
+
+    DCHECK(buf != NULL && cap >= 2, "an element name was asked for with nowhere to write one");
+    if (el == NULL) return "(no element)";
+    if (tag == NULL) return "(no local name)";
+    if (len > cap - 1) len = cap - 1;
+    memcpy(buf, tag, len);
+    buf[len] = '\0';
+    return buf;
+}
+
+/* THE SAME, FOR A NODE THAT MAY NOT BE AN ELEMENT. §9.2.1.1 delimits its runs over a container's WHOLE child
+   list, so the child a run lookup fails on is as likely to be a text node as an element and "(no element)"
+   would be a wrong answer rather than a missing one — the node kind IS the fact a reader needs there. */
+static const char *lb_node_name(lxb_dom_node_t *n, char *buf, size_t cap)
+{
+    if (n == NULL) return "(no node)";
+    if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) return lb_el_name(lxb_dom_interface_element(n), buf, cap);
+    if (n->type == LXB_DOM_NODE_TYPE_TEXT) return "(text node)";
+    if (n->type == LXB_DOM_NODE_TYPE_COMMENT) return "(comment node)";
+    return "(non-element node)";
+}
+
+/* THE COMPUTED `display` OF THE SAME SUBJECT, which is the second half of the address. It LEAKS on the
+   aborting path and that is deliberate: the process is one `abort()` away, and the alternative is a free every
+   crash arm would have to reach. In release the whole call sits inside `DFAILF`'s `sizeof` and is never
+   evaluated, so nothing is allocated there at all.
+   IT GOES TO `css_computed_value` DIRECTLY AND NOT THROUGH `lb_computed`, WHICH IS THE ONE INTERESTING LINE IN
+   THIS FILE'S TWO NAMING HELPERS. `lb_computed` DCHECKs its result non-NULL, and that assert is correct where
+   this file READS a property to compute geometry with. Here the value is being read to COMPOSE A CRASH
+   MESSAGE, and an assert on that path does not report a second defect — it REPLACES the first one, so the
+   reader loses the box, the container and the remedy and is handed the cascade's invariant instead. A helper
+   that a `DFAILF` calls must therefore be TOTAL: every guard in these two functions is there because its
+   failure mode is destroying the diagnostic it is part of, which is the opposite of a `?:` past a broken
+   invariant — the invariant still has its own crash, at the site that depends on the value. */
+static const char *lb_el_display(lxb_dom_element_t *el)
+{
+    char *d = el == NULL ? NULL : css_computed_value(el, "display");
+
+    return d != NULL ? d : "(no computed display)";
+}
+
 /* WHICH of `container`'s anonymous block boxes holds `child`, and WHERE that box is. `child` is `container`'s
    OWN child on the path down to the inline box being measured, so it is one of the nodes §9.2.1.1's forcing
    classified when it delimited the runs — which makes this a LOOKUP in core/layout/block_flow.h's enumeration
@@ -1034,8 +1101,10 @@ static void lb_anon_run(lxb_dom_element_t *container, lxb_dom_node_t *child, LbC
 {
     BlockFlowAnonBox *v = NULL;
     size_t n = block_flow_anonymous_boxes(container, &v), i, found = 0;
+    char cbuf[64], nbuf[64];
 
-    DCHECK(n > 0,
+    DCHECKF(n > 0,
+           "<%s> (display `%s`), child <%s>: "
            "CSS 2.2 §9.2.1.1 \"Anonymous block boxes\" generated NO box inside a block container that answered "
            "FALSE to CSS 2.2 §9.4.2 \"Inline formatting contexts\"' establishing condition, while an "
            "inline-level box inside that container is being measured. Those two answers cannot both be right. "
@@ -1044,7 +1113,9 @@ static void lb_anon_run(lxb_dom_element_t *container, lxb_dom_node_t *child, LbC
            "wraps every maximal run of inline-level children, of which the run holding this box is one. A zero "
            "is core/layout/block_flow.h's positive statement that this container has NO inline-level content "
            "at all, which the box being measured contradicts, so the two are its one per-child predicate asked "
-           "twice over one child list and answered differently");
+           "twice over one child list and answered differently",
+           lb_el_name(container, cbuf, sizeof cbuf), lb_el_display(container),
+           lb_node_name(child, nbuf, sizeof nbuf));
     for (i = 0; i < n; i++) {
         lxb_dom_node_t *c;
 
@@ -1058,7 +1129,8 @@ static void lb_anon_run(lxb_dom_element_t *container, lxb_dom_node_t *child, LbC
         }
     }
     free(v);
-    DCHECK(found != 0,
+    DCHECKF(found != 0,
+           "<%s> (display `%s`), child <%s>: "
            "the block container's child holding this inline box is in NONE of CSS 2.2 §9.2.1.1 \"Anonymous "
            "block boxes\"' runs. Every child that generates an inline-level box is inside exactly one of them, "
            "because the section forces the container \"to have only block-level boxes inside it\" — so a child "
@@ -1066,13 +1138,18 @@ static void lb_anon_run(lxb_dom_element_t *container, lxb_dom_node_t *child, LbC
            "— and the caller has already established that an inline box hangs below this child. So "
            "core/layout/block_flow.c classified it as block-level or as generating no box at all while this "
            "walk reached a box on a line through it, and filling the container's whole child list instead "
-           "would partition a run this box is not in");
-    DCHECK(found <= 1,
+           "would partition a run this box is not in",
+           lb_el_name(container, cbuf, sizeof cbuf), lb_el_display(container),
+           lb_node_name(child, nbuf, sizeof nbuf));
+    DCHECKF(found <= 1,
+           "<%s> (display `%s`), child <%s>: "
            "one child of a block container is inside TWO of CSS 2.2 §9.2.1.1 \"Anonymous block boxes\"' runs. "
            "The section wraps each MAXIMAL run of inline-level content in one box, so the runs PARTITION the "
            "child list and cannot overlap — two hits are core/layout/block_flow.c's stack having emitted a run "
            "it did not then advance past, and the run and origin taken here would be whichever of the two "
-           "boxes the walk reported last");
+           "boxes the walk reported last",
+           lb_el_name(container, cbuf, sizeof cbuf), lb_el_display(container),
+           lb_node_name(child, nbuf, sizeof nbuf));
 }
 
 /* THE INLINE FORMATTING CONTEXT `el` IS ON — the nearest ancestor that generates a block container box, reached
@@ -1083,6 +1160,7 @@ static void lb_anon_run(lxb_dom_element_t *container, lxb_dom_node_t *child, LbC
 static LbContext lb_establishing_context(lxb_dom_element_t *el)
 {
     lxb_dom_node_t *a, *child = lxb_dom_interface_node(el);
+    char ebuf[64], abuf[64];
     LbContext ctx;
 
     ctx.style = NULL;
@@ -1096,6 +1174,23 @@ static LbContext lb_establishing_context(lxb_dom_element_t *el)
         bool container = block_flow_display_is_block_container(d);
         bool step_over = strcmp(d, "inline") == 0 || strcmp(d, "contents") == 0;
 
+        /* THE CRASH BELOW READS `d`, SO THE FREE MOVES UNDER IT AND STAYS A SINGLE ONE. The condition gains
+           `!container` and says the same thing it did: the `container` arm returns out of this function, so
+           the original test was only ever reached with `container` false. Nothing else about the order moves —
+           on every path that continues, the free still happens before the branch it used to precede. */
+        if (!container && !step_over)
+            DFAILF("<%s> (display `%s`), ancestor <%s> (display `%s`): "
+                  "CSS 2.2 §9.4.2's inline formatting context was asked for an inline box whose nearest "
+                  "box-generating ancestor is neither a BLOCK CONTAINER nor an inline box it can be reached "
+                  "through. Its computed `display` makes it a table box, a table row or row group, a flex or "
+                  "grid container, or a box that generates none at all — and each of those puts this box in a "
+                  "formatting context a DIFFERENT module owns: CSS 2.1 §17.5 \"Visual layout of table "
+                  "contents\" for the first three, css-flexbox §4 and css-grid §9 for the next two, which "
+                  "BLOCKIFY their children so an `inline` child of one is not an inline box at all. Fix the "
+                  "blockification where the child's `display` is computed (css-display §2.7's "
+                  "blockification), or BUILD the module that owns the container",
+                  lb_el_name(el, ebuf, sizeof ebuf), lb_el_display(el),
+                  lb_el_name(anc, abuf, sizeof abuf), d);
         free(d);
         if (container) {
             ctx.style = anc;
@@ -1110,23 +1205,20 @@ static LbContext lb_establishing_context(lxb_dom_element_t *el)
             lb_anon_run(anc, child, &ctx);
             return ctx;
         }
-        if (!step_over)
-            DFAIL("CSS 2.2 §9.4.2's inline formatting context was asked for an inline box whose nearest "
-                  "box-generating ancestor is neither a BLOCK CONTAINER nor an inline box it can be reached "
-                  "through. Its computed `display` makes it a table box, a table row or row group, a flex or "
-                  "grid container, or a box that generates none at all — and each of those puts this box in a "
-                  "formatting context a DIFFERENT module owns: CSS 2.1 §17.5 \"Visual layout of table "
-                  "contents\" for the first three, css-flexbox §4 and css-grid §9 for the next two, which "
-                  "BLOCKIFY their children so an `inline` child of one is not an inline box at all. Fix the "
-                  "blockification where the child's `display` is computed (css-display §2.7's "
-                  "blockification), or BUILD the module that owns the container");
     }
-    DFAIL("the inline formatting context walk ran out of ancestors without finding a block container box. "
+    /* THE ONE ABORT ON THIS WALK WHOSE REMEDY'S OBJECT IS THE CALLER AND NOT THE BOX, which is why it names the
+       element's own connectedness rather than a `display`: the fix is that some entry asked for a position
+       without asking the has-a-box predicate first, and WHICH ancestor the walk stopped under is what says
+       whether the tree is detached or merely rootless. */
+    DFAILF("<%s> (display `%s`), highest ancestor reached <%s>: "
+          "the inline formatting context walk ran out of ancestors without finding a block container box. "
           "CSS Display §2.8 makes the ROOT ELEMENT a block container whatever it declares (\"a display of "
           "contents computes to block on the root element\"), so every element inside a document has one above "
           "it — an element that reached this line is in a tree with no root element, which is a caller that "
           "asked where a DETACHED box is. core/dom/element_view.h's has-a-box predicate answers that before "
-          "any position is asked for, so the two have come apart");
+          "any position is asked for, so the two have come apart",
+          lb_el_name(el, ebuf, sizeof ebuf), lb_el_display(el),
+          lb_node_name(child, abuf, sizeof abuf));
     return ctx;
 }
 
