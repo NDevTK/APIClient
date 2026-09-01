@@ -2056,7 +2056,11 @@ function audit(argv, opts = {}) {
                  unverified: 0, multiSpec: 0,
                  foreignTerm: 0, titleRefused: 0, byTitle: 0, numberRefused: 0,
                  titled: 0, titledQuoted: 0, titledEv: 0, titledOK: 0, titledMis: 0, titledMisInTitle: 0,
-                 titledTailEv: 0, titledTailMis: 0 };
+                 titledTailEv: 0, titledTailMis: 0, titleDeclined: 0,
+                 titleBy: { notWords: 0, term: 0, possessive: 0, quotation: 0, oneWord: 0,
+                            nearTitle: 0, voted: 0, noCorpus: 0, inSectionText: 0, unplaced: 0 } };
+  /* The residue of check (5) — a stated title no channel could place. Listed, never counted as a finding. */
+  const unplacedTitles = [];
   const byKey = new Map();
   /* Per standard, how many of its audited citations were placed there by the file vote rather than by their
    * own anchor or their own term — and the sites themselves, so the count has a list behind it. */
@@ -2327,6 +2331,13 @@ function audit(argv, opts = {}) {
        * and nothing is asserted — which is the correct answer and the one the quoting was meant to produce. */
       const qm = /^['"’“]?s?['"’“]?\s*:?\s*["“]([^"”]{2,90})["”]/.exec(after);
       c.quoted = qm ? qm[1] : null;
+      /* AND WHETHER A POSSESSIVE ATTACHED IT, RECORDED WHERE THE POSSESSIVE IS ADMITTED — this regex is the
+       * one place that can still tell `§N's "X"` from `§N "X"`, and they are two different claims. `§N's X`
+       * says X is IN §N, which is check (3)'s question; `§N "X"` says §N is TITLED X, which is check (2)'s and
+       * check (4)'s. Check (2) reads both and does so on purpose: a CONFIRMATION that quantifies over a claim
+       * the author did not make costs nothing, because the site is already right either way. An ACCUSATION
+       * cannot, and the census at check (5) carries the measurement that settles it. */
+      c.quotedPossessive = !!qm && /^['’]s/.test(qm[0]);
       c.words = normTerm(after.replace(/^'s\b/, " ")).split(" ").filter(Boolean);
       c.after = after;                       /* the raw prose, for the delimiter test in check (4) */
       /* AND THE WORDS A QUOTED TITLE LEAVES BEHIND, kept for the CENSUS and for nothing else. The probe below
@@ -2757,9 +2768,10 @@ function audit(argv, opts = {}) {
          * whether or not the quote titled anything — a number that mixes "declined to look" with "declined to
          * report" and reads as the second. The claim is computed first and the vote is asked afterwards, so the
          * count is exactly the findings a guessed standard cost. */
+        let stated = null;
         if (!verdict) {
           const tt = titleToNo.get(spec);
-          let claim = claimIn(tt, c);
+          let claim = stated = claimIn(tt, c);
           /* A SECTION CONTAINS ITS OWN SUBSECTIONS, so citing §4.9.5 in prose that names §4.9's title is less
            * precise and not wrong — the identical rule check (3) applies to a term, applied to a title for the
            * identical reason. `readable_byte_stream.c` cites Streams §4.9.5 "Byte stream controllers" and says
@@ -2770,6 +2782,58 @@ function audit(argv, opts = {}) {
             verdict = { kind: "TITLE-MISMATCH",
               msg: `"${c.quoted || claim}" titles ${spec} §${tt.get(claim).join(", §")}; §${no} is "${sections[no].title}"` };
           }
+        }
+
+        /* (5) THE STATED TITLE NOTHING ABOVE COULD PLACE — A CENSUS, NOT A CHECK, AND THE REASON IT IS A CENSUS
+         * IS MEASURED RATHER THAN CAUTIOUS. Check (2) CONFIRMS a quoted phrase that IS the cited section's
+         * title; check (4) ACCUSES one that titles a DIFFERENT section of the same standard. Between them sits
+         * a phrase that titles NEITHER — and that is where a FABRICATED title lands, because a title somebody
+         * invented or misremembered heads nothing anywhere, while a title gone stale through a renumbering
+         * still heads the section it used to. So the gap is real and it is exactly the shape of the fabricated
+         * QUOTATION this file's header records: a claim nobody could falsify because no channel asked.
+         *
+         * IT IS ASKED NOW AND IT DOES NOT PRODUCE A FINDING, AND THE MEASUREMENT IS WHY. Reported as a finding
+         * — quoted run, two words or more, no term any index knows, below the quotation channel's floor, heading
+         * no section, and absent from the cited section's own text — it raises 31 claims tree-wide. THIRTY of
+         * them are the possessive `§N's "X"`, which asserts X is IN §N and says nothing whatever about §N's
+         * title; check (2)'s own paragraph already calls that shape wrong in KIND rather than merely noisy. Of
+         * the three that survive dropping the possessive, all three are still TERM claims written without one
+         * (a `"close a subscription" steps 1-2`, an `"attribute changed":`, and a banner reading
+         * `"CSS At-rules"` — the run itself lists them with their coordinates, which is why no number is spelled
+         * out here: a worked example carrying a REAL number is a REAL citation to PASS 3, and its term evidence
+         * would then help decide how every OTHER citation of that number in this file resolves — see the
+         * paragraph at `c.tail`). Not one of the 31 is a fabricated title. Precision on the axis the channel
+         * would claim to measure is zero. The corroboration check (4) requires — the phrase demonstrably heads
+         * SOME section — is not a hedge on that channel, it is the ONLY evidence available that a quoted run
+         * beside a number is a title claim at all, and removing it removes the subject of the sentence.
+         *
+         * SO WHAT IS BUILT IS THE THING THAT WAS ACTUALLY MISSING, WHICH IS THE REFUSAL'S VISIBILITY. This
+         * file's rule, stated at check (1) and again at check (4), is that a refusal nobody can see is the same
+         * silent zero as a list nobody can see — and this population was in no count under any name. An author
+         * who wrote the form CLAUDE.md mandates, and got it wrong, read "0 findings" and could not tell that
+         * their quoted run had been read and declined. Each bucket below is a DIFFERENT fact about why nothing
+         * was said, and the last one — `unplaced` — is the residue a fabricated title would sit in, so it is
+         * LISTED for a human exactly as UNDECIDED-ON-A-DIAGNOSED-NUMBER is. Three sites, which a person reads.
+         *
+         * EVERY BUCKET IS DECIDED BY THE CODE THAT OWNS THE QUESTION, never by a second copy of its rule:
+         * `c.ev` is the probe's own answer, `c.quotedPossessive` is set by the regex that admits the possessive,
+         * the quotation floor is `fragmentsOf` and `MIN_COMPARED_WORDS` called by name, `stated` is check (4)'s
+         * own `claimIn`, and the text test is `containsFragments` over the corpus the quotation check reads. */
+        if (!verdict && c.quoted) {
+          const q = normTerm(c.quoted);
+          const tx = txt.has(spec) ? txt.get(spec).sections : null;
+          c.titleBucket =
+            !q ? "notWords"
+            : c.ev ? "term"
+            : c.quotedPossessive ? "possessive"
+            : fragmentsOf(c.quoted).compared >= MIN_COMPARED_WORDS ? "quotation"
+            : q.split(" ").length < 2 ? "oneWord"
+            : stated ? "nearTitle"
+            : how === "file" ? "voted"
+            : !tx ? "noCorpus"
+            : containsFragments(Object.keys(tx).filter((n) => n === no || contains(no, n))
+                                  .map((n) => tx[n]).join(" "), [quoteTokens(c.quoted, false)]) ? "inSectionText"
+            : "unplaced";
         }
       }
 
@@ -2833,6 +2897,14 @@ function audit(argv, opts = {}) {
         mentions.push({ ...rec, why: disclaim, note,
           would: verdict && !verdict.kind.startsWith("OK") ? `${verdict.kind}: ${verdict.msg}` : null });
         continue;
+      }
+
+      /* COUNTED HERE AND NOT AT THE CHECK, because a MENTION is not a claim and must be in neither the count
+       * nor the list — the same reason the disclaim block above withholds a verdict rather than a report. */
+      if (c.titleBucket) {
+        stat.titleDeclined++;
+        stat.titleBy[c.titleBucket]++;
+        if (c.titleBucket === "unplaced") unplacedTitles.push({ ...rec, title: c.quoted, real: sections[no].title });
       }
 
       if (!verdict) {
@@ -3268,6 +3340,35 @@ function audit(argv, opts = {}) {
     console.log(`      ${f.text.trim()}`);
   }
   elided(suspects, limit, "undecided site(s)");
+
+  /* THE TITLE CHANNEL'S OWN REFUSALS, PARTITIONED BY WHY — see check (5). A citation that states a phrase in
+   * quotes right after the number has written it where CLAUDE.md's mandated form puts the TITLE, so when
+   * neither the confirmation nor the mismatch channel can place it, the report owes a reader the reason. The
+   * buckets are not degrees of the same answer: a possessive is a claim about a section's CONTENTS, a long run
+   * is a QUOTATION another channel already judged, a phrase in the section's own text is the section's WORDS,
+   * and only the last bucket is a stated title this tool read and could say nothing at all about. */
+  {
+    const b = stat.titleBy;
+    console.log(`\nTITLE-STATED-AND-UNPLACED: ${stat.titleDeclined} — a quoted phrase in title position that neither the`);
+    console.log(`  confirmation channel (check 2) nor the mismatch channel (check 4) could place. This counts only citations`);
+    console.log(`  resolved to one of the ${idx.size} INDEXED standards: the ${stat.other} that name a standard this audit does not index are`);
+    console.log(`  outside every check here, and the "standards seen but not indexed" line in the census above names them.`);
+    console.log(`    ${b.quotation} are long enough that the QUOTATION CHECK judged them (${MIN_COMPARED_WORDS}+ compared words) — not silent, reported there`);
+    console.log(`    ${b.possessive} are the possessive \`§N's "X"\`, which claims X is IN §N and asserts nothing about §N's title — check (3)'s question, and it found no term`);
+    console.log(`    ${b.term} carry a phrase some OTHER standard defines, already counted as another standard's vocabulary`);
+    console.log(`    ${b.inSectionText} quote words that ARE in the cited section's own text — the author quoted the section, not its heading`);
+    console.log(`    ${b.nearTitle} state a title the cited standard carries at a section CONTAINING or CONTAINED BY the cited one — less precise, not wrong`);
+    console.log(`    ${b.voted} stand under a standard only a file vote placed, so "no section of X is titled this" would be a claim about a document the citation never named`);
+    console.log(`    ${b.noCorpus} cite a standard with a section index but no committed text corpus; ${b.oneWord} state a one-word title and ${b.notWords} normalize to no words at all`);
+    console.log(`  ${b.unplaced} REMAIN — not the section's title, not any section's title, not a term any index knows, and not the section's own words.`);
+    console.log(`  A FABRICATED TITLE LANDS HERE, so each is listed. This is not a finding: the tool cannot tell a fabricated title`);
+    console.log(`  from a term claim written without a possessive, and check (5) records the measurement that says so.`);
+    for (const f of head(unplacedTitles, limit)) {
+      console.log(`  ${f.file}:${f.line}  ${f.spec} §${f.no} states "${f.title}"; §${f.no} is "${f.real}"`);
+      console.log(`      ${f.text.trim()}`);
+    }
+    elided(unplacedTitles, limit, "unplaced title claim(s)");
+  }
 
   /* PRINTED, NOT SUPPRESSED — the whole difference between a rule and a mute button. Every site the grammar
    * disclaimed is listed with the verdict the checker WOULD have given it, so a reader who thinks the tool got
