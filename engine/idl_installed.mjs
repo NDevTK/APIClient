@@ -1083,8 +1083,41 @@ const IFACE_OBJECT = { fn: "idl_interface_object", iface: 1, obj: 2 };
    left is idl_step_constructor, whose own DCHECK ties its stepid to a declared member and which mints
    JS_CFUNC_step_ctor: the engine saying, about the identifier beside it, that this interface's §3.7.1 construct
    steps exist. Read as an install fact here rather than restated by a consumer, for the reason every other one
-   is — a second copy of it is the copy that drifts. */
+   is — a second copy of it is the copy that drifts.
+   AND `idl_step_constructor` IS ONE OF THE FORMS AND WAS READ AS THE ONLY ONE, WHICH IS THE FALSE ABSENT THIS
+   FILE EXISTS TO REFUSE. The paragraph above enumerates the REFUSING calls exhaustively and then names the one
+   constructing call it happened to be looking at, and the two are not complements: a component that mints its
+   interface object with a plain `JS_NewCFunction2(ctx, js_range_ctor, "Range", 0, JS_CFUNC_constructor, 0)`
+   constructs perfectly well and appears in neither list. Read as the single form, SEVEN interfaces a page can
+   construct today reported as refusals — AbortController, CustomElementRegistry, DocumentFragment, EventTarget,
+   FileReader, Observable and Range — and `new Range()` was the worked example a hand-off carried as evidence
+   that the population was unreported, which it was: the interface was already there. A false ABSENT sends
+   someone to build what is already built, and it arrives wearing the auditor's authority.
+   SO THE QUESTION IS ASKED OF THE MINT, WHICH IS THE THING THAT DECIDES IT. Every constructor in this engine
+   is a `JS_NewCFunction2` with a constructing cproto, whatever helper wraps it, and what separates the two
+   populations is the CALLBACK: `idl_illegal_ctor`, `js_node_iface_ctor`, each file's own `js_illegal_ctor` and
+   abort.c's `js_abort_signal_ctor` are five spellings of ONE body — Web IDL §3.7.1's own "If I was not
+   declared with a constructor operation, then throw a TypeError" and nothing else. That body is the engine's
+   statement of a refusal, so it is what is read; a list of the five names is the second copy that drifts the
+   day a sixth is written. A callback that does anything else CONSTRUCTS.
+   The two reads are ordered, and the order is the point: CLASSIFY FIRST, then read the name only where the
+   mint constructs. A refusal contributes to neither answer, so its name being a parameter (`idl_interface_object`
+   and `node_install_interface` both mint under the `name` they were handed) is nothing to report — while an
+   unreadable name on a CONSTRUCTING mint is exactly the false direction and is reported. Read the other way
+   round, the two shared helpers produce two unresolved entries per run that no C change could ever clear. */
 const CONSTRUCTING_FORM = { fn: "idl_step_constructor", iface: 1 };
+const MINT_FORM = { fn: "JS_NewCFunction2", cb: 1, iface: 2, cproto: 4 };
+/* The cprotos that give the minted object [[Construct]]. quickjs's own set plus this fork's JS_CFUNC_step_ctor;
+   a cproto outside it makes an ordinary function and is not this question. */
+const CTOR_PROTOS = new Set(["JS_CFUNC_constructor", "JS_CFUNC_constructor_magic",
+                             "JS_CFUNC_constructor_or_func", "JS_CFUNC_constructor_or_func_magic",
+                             "JS_CFUNC_step_ctor"]);
+/* §3.7.1's refusal AS THE ENGINE WRITES IT: a body that is nothing but the TypeError, the `(void)` casts that
+   silence its unused parameters aside. Deliberately exact rather than a search for the throw ANYWHERE in the
+   body — a real constructor that throws a TypeError on a bad argument is not a refusal, and a test that
+   matched one would report a built interface as absent. */
+const REFUSING_BODY =
+  /^\s*\{\s*(?:\(\s*void\s*\)\s*[A-Za-z_]\w*\s*;\s*)*return\s+JS_ThrowTypeError\s*\(\s*[A-Za-z_]\w*\s*,\s*"[^"]*"\s*\)\s*;\s*\}\s*$/;
 /* §3.11.1's LEGACY CALLBACK INTERFACE OBJECT, which is a SEED and not a link. A callback interface has no
    interface prototype object — Web IDL §3.7.3's tag is that object's, so there is none anywhere on this one —
    and the constants §3.7.5 defines on it are real members a page reads (`NodeFilter.SHOW_ELEMENT`). So the
@@ -2092,7 +2125,9 @@ function generatedRefusal(form, env) {
 
 export function installedMembers(paths, env) {
   const records = [], unresolved = [], offInstaller = [], excluded = [], unselected = [];
-  /* The identifiers CONSTRUCTING_FORM names — every interface a page can actually `new` in this engine. */
+  /* Every interface a page can actually `new` in this engine — the identifiers CONSTRUCTING_FORM names and the
+     identifiers a MINT_FORM whose callback is not §3.7.1's refusal names. Both, because either alone is a
+     false ABSENT: read as CONSTRUCTING_FORM only, seven built interfaces reported as refusals. */
   const constructs = new Set();
   const { forms } = env;
   /* which GENERATED_FORMS installers the corpus calls at all — see the loop after the file walk */
@@ -2385,6 +2420,40 @@ export function installedMembers(paths, env) {
       if (!f) continue;
       const names = scoped(f).strings(site.args[CONSTRUCTING_FORM.iface] || "", localsFor(f));
       if (!names) { report(site.at, CONSTRUCTING_FORM.fn, site.args[CONSTRUCTING_FORM.iface] || ""); continue; }
+      for (const n of names) constructs.add(n);
+    }
+
+    /* 1c. THE SAME QUESTION ASKED OF THE MINT ITSELF — see MINT_FORM. `idl_step_constructor` is one way this
+       engine gives an interface object [[Construct]] and 1b read it as the only one; a component that mints
+       its own (`JS_NewCFunction2(ctx, js_range_ctor, "Range", 0, JS_CFUNC_constructor, 0)`) constructs just as
+       well. Classified by the CALLBACK's body rather than by its name, and only a CONSTRUCTING mint has its
+       identifier read — the two shared refusing helpers mint under a `name` parameter, which is unreadable
+       here and is also nothing to say. */
+    for (const site of callSites(masked, MINT_FORM.fn)) {
+      const f = fnAt(site.at);
+      if (!f) continue;
+      const cproto = stripCast(site.args[MINT_FORM.cproto] || "").trim();
+      if (!CTOR_PROTOS.has(cproto)) continue;
+      /* THE CALLBACK SLOT IS THE ONE PLACE A POINTER CAST IS UNAMBIGUOUS, so it is stripped HERE and not in the
+         shared stripCast, whose own header records why it cannot be widened: `(f)(x)` is a CALL and no lexical
+         rule tells a type name from a value name. It does not apply at this argument. `JS_NewCFunction2`
+         declares its second parameter `JSCFunction *`, so a parenthesised text ending in `*` there is a type
+         and can be nothing else — and three of the seven mints spell it that way, `(JSCFunction *)js_range_ctor`
+         among them, so a reader that skipped them reported Range, DocumentFragment and CustomElementRegistry
+         as refusals while they construct. */
+      const cb = stripCast(site.args[MINT_FORM.cb] || "").replace(/^\(\s*[A-Za-z_][\w \t]*\*\s*\)\s*/, "").trim();
+      /* A STEP CTOR CARRIES NO CALLBACK — its behaviour is the stepid beside it, so there is no body to read
+         and no refusal to find: JS_CFUNC_step_ctor IS the construct steps. Every other cproto runs `cb`. */
+      if (cproto !== "JS_CFUNC_step_ctor") {
+        const body = (fns.find((g) => g.name === cb) || {}).body;
+        /* A callback this file does not define is one whose body cannot be classified. Reported, never
+           assumed: guessing "constructs" credits an interface that throws, guessing "refuses" sends someone
+           to build what is there, and both are the false bill this file exists to refuse. */
+        if (body === undefined) { report(site.at, MINT_FORM.fn, `${cb} is not a function this file defines`); continue; }
+        if (REFUSING_BODY.test(body)) continue;
+      }
+      const names = scoped(f).strings(site.args[MINT_FORM.iface] || "", localsFor(f));
+      if (!names) { report(site.at, MINT_FORM.fn, site.args[MINT_FORM.iface] || ""); continue; }
       for (const n of names) constructs.add(n);
     }
 

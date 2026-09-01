@@ -660,6 +660,20 @@ const chainOf = (iface) => {
   return out;
 };
 
+/* THE CONSTRUCTOR OPERATIONS AN INTERFACE DECLARES ITSELF — the one statement of "a constructor is not
+   inherited", read by both consumers instead of spelled twice. Web IDL §3.7.1 Interface object resolves the
+   overload "for constructors with identifier id on interface I", I being the interface the object is FOR and
+   never a base it inherits from, and §3.7.3 Interface prototype object's own `constructor` property is a
+   different thing entirely — it points AT the interface object and is not a construct step. It is a helper
+   rather than a line inside memberOps because the constructor census below asks the identical question, and a
+   second copy of the not-inherited rule is the copy that goes on reporting BeforeUnloadEvent with Event's
+   `constructor(DOMString, optional EventInit)` after the first is fixed. */
+const ownConstructors = (iface) =>
+  ((byName.get(iface) || { members: [] }).members).filter((x) => x.type === "constructor");
+/* HTML §3.2.3 "HTML element constructors" — "To support the custom elements feature, all HTML elements have
+   special constructor behavior. This is indicated via the [HTMLConstructor] IDL extended attribute." */
+const isHtmlConstructor = (op) => (op.extAttrs || []).some((a) => a.name === "HTMLConstructor");
+
 let totalMissing = 0;
 /* The DISTINCT names, because the per-interface counts legitimately repeat an inherited gap: HTMLElement's
    getBoundingClientRect is absent on every one of the twelve HTML interfaces that inherit it, and one
@@ -752,6 +766,11 @@ for (const [iface, files] of declaringFiles) {
    itself. Named, never skipped: either the tag misspells an interface, or the spec is one webref does not
    carry and the row has to say so. */
 const noIdl = [];
+/* THE CONSTRUCTOR CENSUS — see the loop, which explains why this is an axis of its own and not a member
+   column. Three lists rather than two counters, because the denominator has to be printed beside the gap:
+   `built + html + ordinary` is every AUDITED interface whose IDL declares a constructor operation, which is
+   the only set either gap number means anything against. */
+const ctorBuilt = [], htmlCtorAbsent = [], ordinaryCtorAbsent = [];
 
 for (const [iface, paths] of AUDITED) {
   const file = paths.join(" + ");
@@ -820,6 +839,31 @@ for (const [iface, paths] of AUDITED) {
   const bannedShrug = /JS_SetPrototype\s*\([^)]*\bg_opaque\b/.test(src);
   const spec = members(iface);
   if (!spec.length && !byName.has(iface)) { noIdl.push([iface, file]); continue; }
+  /* CAN A PAGE `new` THIS INTERFACE — THE MEMBER CENSUS ABOVE CANNOT ASK, AND ITS SILENCE READ AS A YES.
+     `spec` is idl_members.mjs's member() list, which collects `attribute`, `operation` and `const`, so a
+     `constructor` operation is in NO denominator anywhere in this file: an interface whose every member is
+     installed and whose constructor is Web IDL §3.7.1 Interface object's shared "Illegal constructor"
+     TypeError printed `complete`. That is a false clean bill on ordinary page code — `new Comment("x")` is
+     DOM §4.14 Interface Comment and it throws — and an entire member kind outside the denominator is the
+     largest form of the coverage figure §Testing says must state what it is a fraction of.
+     IT IS ITS OWN AXIS AND IS NOT FOLDED INTO THE MEMBER COUNTS, deliberately. A constructor is not a property
+     of the interface prototype object: §3.7.1 gives the interface OBJECT [[Construct]] steps, and §3.7.3's
+     `constructor` property points at that object rather than being one. Adding it to `spec` would make the
+     audit hunt for an installed property called "constructor", which is a different fact and one every
+     prototype already satisfies — so it would answer a question nobody asked and silence this one. It is one
+     bit per interface (the overloads are one question, "does `new` run anything"), it is NOT inherited
+     (ownConstructors), and it enters neither `distinctAbsent`, `pairsAbsent` nor `totalMissing`. */
+  const ctors = ownConstructors(iface);
+  const ctorAbsent = ctors.length && !world.constructs.has(iface);
+  /* HTML §3.2.3's population is counted apart, because it is ONE piece of work and not sixty-nine. §3.2.3 says
+     interfaces annotated with [HTMLConstructor] "have the following overridden constructor steps" — one
+     algorithm, shared, parameterised by the interface, which is why custom_elements.c's single
+     custom_elements_html_constructor already serves HTMLElement. Summing them with the ordinary constructors
+     would report seventy-three things to build where there are four plus one mechanism, and a count that mixes
+     two questions is the defect this audit keeps finding in itself. */
+  const ctorIsHtml = ctors.some(isHtmlConstructor);
+  if (ctorAbsent) (ctorIsHtml ? htmlCtorAbsent : ordinaryCtorAbsent).push(iface);
+  else if (ctors.length) ctorBuilt.push(iface);
   /* A CONDITIONAL member — one the component DECLARES this user agent must not have (idl_members_excluded). It
      is not a gap and it is not installed, so it is neither counted nor dropped: it is named, with the spec
      sentence that excludes it, so nobody works it off the ABSENT list and builds a member the spec forbids.
@@ -917,6 +961,16 @@ for (const [iface, paths] of AUDITED) {
   const plain = [...new Set(offInstaller.filter((o) => absent.includes(o.name)).map((o) => o.name))];
   const parts = [];
   if (absent.length) parts.push(`ABSENT ${absent.length} — ${absent.join(", ")}`);
+  /* THE ROW SAYS IT, not only the ledger. A row is what a person reads when they pick an interface up, and
+     `${iface}: complete` is the sentence that has to stop being printed for an interface a page cannot `new` —
+     the ledger totals below are the falsifiable check, the row is the thing that stops sending someone away. */
+  if (ctorAbsent)
+    parts.push(`ABSENT CONSTRUCTOR — its IDL declares ${ctors.map((op) => `constructor(${(op.arguments || [])
+      .map((a) => `${a.optional ? "optional " : ""}${a.idlType && a.idlType.idlType ? (typeof a.idlType.idlType === "string" ? a.idlType.idlType : "…") : "…"} ${a.name}`)
+      .join(", ")})`).join(" / ")}${ctorIsHtml ? " [HTMLConstructor]" : ""} and no mint in this engine gives ` +
+      `its Web IDL §3.7.1 Interface object [[Construct]] steps, so \`new ${iface}()\` is the shared "Illegal ` +
+      `constructor" TypeError${ctorIsHtml ? " — HTML §3.2.3 \"HTML element constructors\", whose steps are " +
+      "OVERRIDDEN and shared, so this is one mechanism and not one job per interface" : ""}`);
   if (unproven.length) parts.push(`UNPROVEN ${unproven.length} — ${unproven.map((n) => {
     const r = maybeHere.get(n);
     return `${n} (installed at ${r.file.replace(BROWSER + "/", "")}:${r.line}, ${r.why})`;
@@ -947,6 +1001,45 @@ for (const [iface, paths] of AUDITED) {
 defect(`ABSENT members (distinct; ${pairsAbsent} interface-member pairs a page cannot reach)`,
        distinctAbsent.size);
 defect(`js_noop-STUB members (distinct; ${pairsNoop} interface-member pairs)`, distinctNoop.size);
+/* THE TWO CONSTRUCTOR CATEGORIES, EACH WITH THE SET IT IS A FRACTION OF IN ITS OWN LABEL. They are separate
+   because the WORK is separate, not because the count looks better split: HTML §3.2.3's are one shared
+   overridden algorithm reached from sixty-odd interface objects, and the ordinary ones are that many distinct
+   construct steps to write. One count over both would name neither job. */
+const ctorDeclaring = ctorBuilt.length + htmlCtorAbsent.length + ordinaryCtorAbsent.length;
+defect(`interfaces a page cannot \`new\` — §3.7.1 construct steps absent (of ${ctorDeclaring} audited ` +
+       `interfaces whose IDL declares a constructor operation, ${ctorBuilt.length} of which this engine mints; ` +
+       `HTML §3.2.3's [HTMLConstructor] population is its own category in this ledger)`, ordinaryCtorAbsent.length);
+defect(`[HTMLConstructor] interfaces a page cannot \`new\` — HTML §3.2.3 "HTML element constructors", ONE ` +
+       `shared overridden algorithm (of ${ctorDeclaring} audited interfaces declaring a constructor)`,
+       htmlCtorAbsent.length);
+if (ordinaryCtorAbsent.length)
+  console.log(`[idl-audit] ${ordinaryCtorAbsent.length} interface(s) whose own construct steps are unbuilt — ` +
+              `${ordinaryCtorAbsent.join(", ")}. Each is its interface's own algorithm to write in its ` +
+              `component and to mint with idl_step_constructor; a page that writes \`new X()\` gets a TypeError.`);
+if (htmlCtorAbsent.length)
+  console.log(`[idl-audit] ${htmlCtorAbsent.length} [HTMLConstructor] interface(s) a page cannot \`new\` — ` +
+              `HTML §3.2.3's steps are OVERRIDDEN and shared, and custom_elements.c already runs them for ` +
+              `HTMLElement, so this is ONE mechanism (route each element interface object through it) rather ` +
+              `than ${htmlCtorAbsent.length} algorithms: ${htmlCtorAbsent.join(", ")}`);
+/* THE OTHER SIDE, so neither list can go stale in silence: a name this engine gives [[Construct]] that the
+   platform declares no constructor operation for. Web IDL §3.7.2 "Legacy factory functions" is the one legitimate
+   shape — `[LegacyFactoryFunction=Image(…)]` puts a constructible `Image` on the global under a name that is
+   no interface's — so those are recognised from the IDL rather than excused by name, and anything left is a
+   mint naming something the corpus does not declare, which is a typo the run must not swallow. */
+const legacyFactories = new Set();
+for (const n of idl.declarations)
+  for (const a of n.extAttrs || [])
+    if (a.name === "LegacyFactoryFunction" && a.rhs && typeof a.rhs.value === "string") legacyFactories.add(a.rhs.value);
+const strayConstructs = [...world.constructs]
+  .filter((n) => !legacyFactories.has(n) && !ownConstructors(n).length).sort();
+defect("interface objects this engine gives [[Construct]] that the platform declares no constructor for",
+       strayConstructs.length);
+for (const n of strayConstructs)
+  console.log(`[idl-audit] ${n}: this engine mints a CONSTRUCTING interface object for it and no IDL in the ` +
+              `corpus declares \`${n}\` with a constructor operation — either the identifier beside the mint ` +
+              `misspells an interface, or the mint is a Web IDL §3.7.2 "Legacy factory functions" name this index does ` +
+              `not carry. Web IDL §3.7.1's construct steps throw a TypeError for an interface not declared ` +
+              `with one, so a page reaching this gets behaviour no browser has`);
 if (totalMissing)
   console.log(`[idl-audit] ${distinct.size} distinct spec members not yet implemented (${totalMissing} across ` +
               `all interfaces, since an inherited gap is absent on each) — implement each at the root, never a stub.`);
@@ -1293,10 +1386,10 @@ const memberOps = (iface) => {
      neither of which any browser lets a page call. It was invisible while the only thing read off a ctor was
      which dictionaries it takes AND those dictionaries were declared anyway — a wrong reachability that
      happened to reach a true row. */
-  const own = (byName.get(iface) || { members: [] }).members;
+  const own = new Set(ownConstructors(iface));
   for (const x of flatten(iface)) {
     if ((x.type !== "operation" && x.type !== "constructor") || (x.type === "operation" && !x.name)) continue;
-    if (x.type === "constructor" && !own.includes(x)) continue;   /* a base's constructor is not this one's */
+    if (x.type === "constructor" && !own.has(x)) continue;        /* a base's constructor is not this one's */
     const key = x.type === "constructor" ? " ctor" : x.name;
     if (!m.has(key)) m.set(key, []);
     m.get(key).push(x);
