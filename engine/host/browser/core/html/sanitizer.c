@@ -850,9 +850,13 @@ static JSValue san_canon_list(JSContext *ctx, JSValueConst list, SanKind kind)
    (idl_args.h's idl_concolic_rule answers IDL_CONCOLIC_FORKS for IDL_BOOLEAN_NO_DEFAULT, which is what
    SAN_CONFIG_MEMBERS declares both of these), so the member loop asks §7.1.2 ToBoolean at the branch seam,
    BOTH worlds run, and what arrives here is a real `true` in one flow and a real `false` in its sibling.
-   THE ASSERT STILL ADMITS THE UNKNOWN and that is deliberate rather than leftover: it is the ONE place that
-   would see a boolean member arriving uncoerced if that crossing ever came back, and the shape it would
-   arrive in is exactly this. What it must not admit is a fourth shape, which is a declaration defect.
+   THE ASSERT STILL ADMITS THE UNKNOWN, AND ONE ROUTE IS LEFT FOR ONE TO ARRIVE BY: `new Sanitizer(<unknown>)`
+   makes the CONFIGURATION ITSELF unknown, so §3.2.17 step 4.1.3.1's `? Get` MINTS these members rather than
+   reading them and "the member is absent" is a world nothing has ruled out — which for a NO-DEFAULT boolean is
+   a third world §3.2.3's two arms cannot express, so the member loop crosses that case deliberately (its own
+   residual at the crossing names the presence fork that ends it). Every read of these two members below goes
+   through idl_dict_bool because of that one route. What this must not admit is a fourth shape, which is a
+   declaration defect.
    `v` IS CONSUMED. */
 static void san_carry_flag(JSContext *ctx, JSValueConst cfg, const char *member, JSValue v)
 {
@@ -1491,10 +1495,12 @@ static JSValue js_san_set_flag(JSContext *ctx, JSValueConst this_val, int argc, 
     if (magic && !san_has(ctx, r->config, "attributes")) return JS_FALSE;    /* step 3 */
     /* Step 4's "if configuration[member] is allow, return false" over the STORED member. §8.6.3 declares both
        flags `boolean`, SAN_CONFIG_MEMBERS declares them IDL_BOOLEAN_NO_DEFAULT, and that type's rule is
-       IDL_CONCOLIC_FORKS — so §3.2.17's member loop forked the unknown at the branch seam and canonicalize
-       carried a real truth value here. The read goes through idl_dict_bool rather than a bare `JS_ToBool`
-       anyway, because that reader is what still refuses a configuration object that never came through the
-       conversion at all, which a `JS_ToBool` would answer `true` for with nothing to say so. */
+       IDL_CONCOLIC_FORKS — so for a configuration the page WROTE, §3.2.17's member loop forked the unknown at
+       the branch seam and canonicalize carried a real truth value here. The read still goes through
+       idl_dict_bool and not a bare `JS_ToBool`, because one route is left open on purpose: a configuration
+       that is ITSELF unknown mints these members instead of reading them, and the loop crosses a no-default
+       boolean there rather than deleting the absent world — see san_carry_flag. That is the case a
+       `JS_ToBool` would answer `true` for while reporting "nothing changed", with nothing to say so. */
     had = san_has(ctx, r->config, member) && idl_dict_bool(ctx, r->config, member) == allow;
     if (had) return JS_FALSE;
     if (magic && allow) {

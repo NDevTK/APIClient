@@ -1912,8 +1912,34 @@ static int idl_level_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *walk, IdlC
            one constraint entry — the same answer the argument boundary already gives one type over.
            EVERY OTHER RULE IS UNCHANGED: CROSSES and UNASKED both reach IDL_ANY exactly as they did, so a
            DOMString member still carries its bytes to the body and a dictionary member is still a bag of
-           reads. */
-        if (mt != IDL_ANY && concolic_is(w->mv) && idl_concolic_rule(mt) != IDL_CONCOLIC_FORKS)
+           reads.
+           RESIDUAL — WHAT IS NOT COVERED, AND WHY TWO ARMS ARE COMPLETE FOR ONE BOOLEAN TYPE AND NOT THE
+           OTHER. §3.2.3's fork produces exactly two worlds, and this member loop's own step 4.1.3 question —
+           "is jsMemberValue undefined" — is a THIRD one whenever it has no answer. It always has an answer
+           when `src` is a real object: the get returned a value, and a concolic is a value. It has none when
+           `src` is ITSELF unknown, because then step 4.1.3.1's `? Get` did not read a property at all — it
+           MINTED an unknown whose unconstrained domain contains `undefined`, so "the member is absent" is a
+           world nothing here has ruled out.
+           FOR IDL_BOOLEAN THAT THIRD WORLD IS NOT A THIRD WORLD, which is a proof and not a case list: step
+           4.1.5 gives an absent member "member's default value", and a `boolean` member's default is one of
+           the two truth values this fork already runs, so the absent world is byte-identical to one of the
+           arms and two arms cover three cases. FOR IDL_BOOLEAN_NO_DEFAULT it is a real third world — that is
+           the entire reason the type exists (see idl_args.h) — and coercing there would DELETE it. So a
+           no-default boolean read off an unknown source keeps crossing, exactly as it did before this arm
+           existed, and the body that reads it keeps answering its own presence question.
+           WHAT THE NEXT DIFF BUILDS: step 4.1.3.2's presence question as a fork ON THIS WALK — a second
+           branch-seam ask, under its own ask name (this machine has one ask today and `fork_ask_key` is what
+           keeps two apart), whose ABSENT arm leaves the member off `w->out` entirely and whose PRESENT arm
+           falls through to the arms below. When that exists this exception goes and the condition is the bare
+           rule again.
+           HOW ITS ABSENCE WOULD SHOW: `addEventListener("wheel", f, location.hash)` down §3.2.25's dictionary
+           arm reads `passive` off an unknown bag, and DOM §2.7 Interface EventTarget's flatten more options
+           makes ABSENT mean "the default passive value" (true for a wheel listener on a Window) where present
+           -and-false means false. Remove this exception without the presence fork and that world is gone: the
+           listener is non-passive in every flow, and nothing crashes to say so. */
+        if (mt != IDL_ANY && concolic_is(w->mv) &&
+            (idl_concolic_rule(mt) != IDL_CONCOLIC_FORKS ||
+             (mt == IDL_BOOLEAN_NO_DEFAULT && concolic_is(w->src))))
             mt = IDL_ANY;
         /* AND THE ONLY FORK THIS LOOP PERFORMS IS §3.2.3's, ASSERTED WHERE THE UNCROSSING HAPPENS. The two
            §3.2.25 unions that also answer FORKS resolve their arm at an ARGUMENT position, where the value is
@@ -4264,20 +4290,23 @@ JSValue idl_dict_get(JSContext *ctx, JSValueConst dict, const char *name)
    determined: the loop asks step_tobool_run at the BRANCH seam, both worlds run, and what it places on the
    dictionary is a real `true` or a real `false`. So by the time a body reads a member, the fork has already
    happened and this reader has nothing left to decide.
-   WHICH IS WHY THE REFUSAL BELOW IS NOW A SHOULD-NEVER-HAPPEN AND NOT A REQUEST FOR WORK. It used to name a
-   remedy — declare the member a step machine and fork at its own stage — because the member loop crossed every
-   unknown member as itself and left the pin sitting in whatever `JS_ToBool` a body reached for. That crossing
-   is gone for this type (idl_concolic_rule answers IDL_CONCOLIC_FORKS for IDL_BOOLEAN and
-   IDL_BOOLEAN_NO_DEFAULT, and the loop reads the rule), so a remedy phrased that way would send the next
-   reader to build a fork that is already built, at a site that is not where the value came from.
-   AN UNKNOWN REACHING HERE IS THEREFORE A STATEMENT ABOUT THE OBJECT, NOT ABOUT THE MEMBER: either it never
-   went through §3.2.17 at all, or the member is not declared a boolean in the IdlDictMember list this
-   operation registered — and in both cases the fix is at the declaration or at whoever built the object, not
-   in a body. It stays a DCHECK rather than being deleted because a reader cannot tell those two apart from
-   `true`, and this is where the difference is still visible.
+   WHICH NARROWS WHAT THE REFUSAL BELOW MEANS TO THREE THINGS, and the old message named none of them: it
+   asked for a remedy — declare the member a step machine and fork at its own stage — that is now both already
+   built and at the wrong seam, so a reader who took it at its word would build a fork that exists.
+   (1) THE OBJECT NEVER WENT THROUGH §3.2.17, so no conversion ran on anything it holds.
+   (2) THE MEMBER IS NOT DECLARED A BOOLEAN in the IdlDictMember list this operation registered, so the loop
+       had no §3.2.3 arm to take for it.
+   (3) IT IS A NO-DEFAULT BOOLEAN WHOSE PRESENCE IS UNKNOWN — the source object was itself unknown external
+       input, so step 4.1.3.1's `? Get` minted the member rather than reading it, "absent" is a world nothing
+       has ruled out, and §3.2.3's two arms cannot express three. The member loop crosses that one on purpose
+       (see the residual at its crossing), and the BODY is what still owes the three-armed ask.
+   Only (3) is a request for work, and the work is at the READ rather than here: this reader hands back a C
+   `bool`, which is two worlds, so it has nowhere to put the third. (1) and (2) are declaration or builder
+   defects. It stays a DCHECK rather than being deleted because nothing else tells the three apart from a
+   confident `true`.
    IT KEEPS THE CALLER'S ADDRESS for the reason idl_args.h states at the macro: one name (`composed`,
-   `capture`) is declared by many dictionaries, and only the pair of the name and the site says which object
-   was the one that never crossed the conversion. */
+   `capture`) is declared by many dictionaries, and only the pair of the name and the site says which read it
+   was. */
 bool idl_dict_bool_at(JSContext *ctx, JSValueConst dict, const char *name, const char *file, int line)
 {
     JSValue v = idl_dict_get(ctx, dict, name);
@@ -4285,12 +4314,16 @@ bool idl_dict_bool_at(JSContext *ctx, JSValueConst dict, const char *name, const
 
     DCHECKF(!concolic_is(v),
             "the boolean dictionary member `%s` read at %s:%d is UNKNOWN EXTERNAL INPUT, and ToBoolean below "
-            "would pin it to `true` and delete the false world. Web IDL §3.2.17's member loop already forks "
-            "§3.2.3 at the branch seam and places a real truth value, so this object did not come from that "
-            "loop: either it was built without a §3.2.17 conversion, or the IdlDictMember list this operation "
-            "registered does not declare `%s` IDL_BOOLEAN / IDL_BOOLEAN_NO_DEFAULT. Fix the declaration or "
-            "the builder — there is no fork owed at this read",
-            name, file, line, name);
+            "would pin it to `true` and delete the false world. Web IDL §3.2.17's member loop forks §3.2.3 at "
+            "the branch seam and places a real truth value, so exactly three things put an unknown here. "
+            "(1) This object never went through §3.2.17 — fix whoever built it. (2) The IdlDictMember list "
+            "this operation registered does not declare `%s` IDL_BOOLEAN / IDL_BOOLEAN_NO_DEFAULT — fix the "
+            "declaration. (3) `%s` is a NO-DEFAULT boolean whose SOURCE object was itself unknown, so step "
+            "4.1.3.1's `? Get` minted it and `absent` is a world §3.2.3's two arms cannot express; the loop "
+            "crosses that case deliberately. Only (3) is work, and it is not here: this reader answers with a "
+            "C `bool`, which is two worlds, so the three-armed ask belongs at the site that can hold three "
+            "(a step machine stage asking whether the member EXISTS before asking what it is)",
+            name, file, line, name, name);
     b = JS_ToBool(ctx, v);
     JS_FreeValue(ctx, v);
     return b;

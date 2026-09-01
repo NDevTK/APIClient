@@ -1532,11 +1532,13 @@ JSValue idl_dict_get(JSContext *ctx, JSValueConst dict, const char *name);
    CALL and never derived here, which is why this is a macro expanded at each site and not a second function
    wrapping the first; the member's own name travels with it because one name (`bubbles`, `capture`) is
    declared by many dictionaries and only the pair says which read it was.
-   WHAT IT NOW REPORTS IS AN OBJECT AND NO LONGER A MISSING FORK. §3.2.3's fork is performed by the member loop
-   (idl_concolic_rule answers IDL_CONCOLIC_FORKS for both boolean types, so the crossing does not rewrite them
-   and the loop asks step_tobool_run), so every member this reader is meant to read arrives as a real truth
-   value. An unknown here says the object did not come through §3.2.17, or that the member is not declared a
-   boolean — see the refusal itself, which is where that split is stated. */
+   WHAT IT NOW REPORTS IS NARROWER AND NO LONGER A MISSING FORK AT THIS READ. §3.2.3's fork is performed by
+   the member loop (idl_concolic_rule answers IDL_CONCOLIC_FORKS for both boolean types, so the crossing does
+   not rewrite them and the loop asks step_tobool_run), so a member read off a converted dictionary arrives as
+   a real truth value. An unknown here says one of three things — the object never went through §3.2.17, the
+   member is not declared a boolean, or it is a NO-DEFAULT boolean whose source was itself unknown so its
+   PRESENCE is the unanswered question rather than its truth value. The refusal itself is where that split is
+   stated, because only the third is work and it is owed at a site that can hold three worlds. */
 bool    idl_dict_bool_at(JSContext *ctx, JSValueConst dict, const char *name,
                          const char *file, int line);
 #define idl_dict_bool(ctx, dict, name) idl_dict_bool_at((ctx), (dict), (name), __FILE__, __LINE__)
