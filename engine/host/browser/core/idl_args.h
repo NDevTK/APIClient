@@ -776,6 +776,17 @@ typedef struct {
        and the conversion asserts that one of the two was stated rather than reading past a missing class. It is
        therefore not the `x || 0` §Consumer-defaults forbids — there is no producer that could have written it. */
     JSClassID   iface;
+    /* AND THE NARROWING THAT CLASS CANNOT EXPRESS, ON THE SAME MEMBER — the per-member half of
+       idl_iface_narrow, which the class alone made unreachable. `idl_member_iface` takes BOTH from the member
+       when the member states its class, so a member stating its own class no longer silently loses the
+       DECLARATION's narrowing along with the declaration's class: those are two statements and taking one
+       could only ever have dropped the other. Every DOM node wrapper is ONE class, so `iface` set to
+       `node_class_id()` says "a Node" and can say no more, while HTML §7.2.6.10.1 The NavigateEvent
+       interface's `Element? sourceElement` says Element — and without this a Text node or a Document crossed
+       as one. NULL is a STATEMENT, exactly as `iface`'s zero is: the class names the interface exactly, which
+       is true of `FormData? formData` on that same dictionary and of every member whose interface is one
+       class. It is read by the two arms that read `iface` and by nothing else. */
+    bool      (*iface_narrow)(JSValueConst v);
 } IdlDictMember;
 
 /* A DICTIONARY, DECLARED — its member list in §3.2.17's read order, and the identifier its IDL gives it. A
@@ -852,10 +863,12 @@ typedef struct {
     int       n;
     /* §3.2.15 Interface types' BRAND for this level's interface-typed members, and the narrowing a class id
        cannot express — see idl_iface_brand / idl_iface_narrow. A member carrying its own (IdlDictMember::iface)
-       overrides it. Zero and NULL for a level with no interface-typed member, AND for every PUSHED level: a
-       nested dictionary is reached through a member and not through a declaration, so it has no declaration-wide
-       class to state and each of its interface-typed members names its own. The conversion asserts that rather
-       than reading past a missing one. */
+       overrides BOTH, taking its narrowing from IdlDictMember::iface_narrow: the class and the narrowing are
+       two statements about one member, so a member that states its class states its narrowing too rather than
+       inheriting a narrowing written for a different interface. Zero and NULL for a level with no
+       interface-typed member, AND for every PUSHED level: a nested dictionary is reached through a member and
+       not through a declaration, so it has no declaration-wide class to state and each of its interface-typed
+       members names its own. The conversion asserts that rather than reading past a missing one. */
     JSClassID iface;
     bool    (*narrow)(JSValueConst v);
     int       mi;       /* THE RESUME POINT: the member being read */
@@ -1273,7 +1286,11 @@ void idl_iface_brand(JSClassID iface);
    The predicate runs AFTER the class check and its failure is the same TypeError, so a member declares the
    interface it means in ONE place rather than repeating a hand-written test in its body — which is the whole
    reason the brand is part of the type. Set after the declaration, naming the member the LAST one made, as
-   idl_iface_brand and idl_optional_from do. */
+   idl_iface_brand and idl_optional_from do.
+   IT IS THE DECLARATION-WIDE FORM AND A DICTIONARY MEMBER HAS ITS OWN — IdlDictMember::iface_narrow, beside
+   that member's own class. A dictionary whose interface-typed members are all one interface states both here,
+   once; one that declares several (NavigateEventInit's four) cannot, because this names ONE predicate for the
+   whole declaration and a `FormData` is not an `Element`. */
 void idl_iface_narrow(bool (*is)(JSValueConst v));
 
 /* DECLARE §3.2.15's `I` AT ONE POSITION — "If V implements I, then return … Throw a TypeError" — for a member

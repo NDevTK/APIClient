@@ -1507,13 +1507,12 @@ static int idl_level_start(JSContext *ctx, IdlDictLevel *l, JSValueConst src,
    inheriting the outer one would brand this dictionary's interface-typed members against the outer dictionary's
    interface. Zero is therefore stated, and each interface-typed member of a nested dictionary names its own
    class (IdlDictMember::iface); the conversion's own `want != 0` assert is what refuses one that did not.
-   NAMED RESIDUAL — the DECLARATION-WIDE NARROWING (idl_iface_narrow) has no per-member form, so a pushed level
-   carries none. WHAT IS NOT COVERED: a nested dictionary member whose IDL writes a union of two interface types
-   that share one class id here — Intersection Observer §2.4's `(Element or Document)? root` is the shape — which
-   at a pushed level takes §3.2.15's brand alone and not the narrowing. WHAT THE NEXT DIFF BUILDS: a `narrow`
-   field on IdlDictMember beside `iface`, read by the same two arms that read the class. ITS ABSENCE WOULD SHOW
-   as such a member accepting a value of the wider class where the union names only the narrower one. No nested
-   dictionary in the platform declares an interface-typed member today. */
+   AND ITS NARROWING TOO, for the same reason and out of the same member — IdlDictMember::iface_narrow, which a
+   residual here used to name as the next diff. A pushed level carries no declaration-wide narrowing either, so
+   a nested member whose IDL writes a union of two interface types sharing one class id (Intersection Observer
+   §2.4's `(Element or Document)? root` is the shape) states its narrowing on the member exactly as it states
+   its class, and the two arms below read the pair through idl_member_iface. NULL there is the member saying
+   its class names its interface exactly, never a narrowing nobody wrote. */
 static int idl_level_start_decl(JSContext *ctx, IdlDictLevel *l, JSValueConst src, const IdlDictDecl *d)
 {
     DCHECK(d != NULL, "a §3.2.17 level was pushed with no dictionary declaration behind it — the dictionary is "
@@ -1807,6 +1806,14 @@ int idl_dict_walk_start(JSContext *ctx, IdlDictWalk *w, JSValueConst src,
  * that member's own correct values — HTML §7.2.6.10.1 The NavigateEvent interface's `dictionary
  * NavigateEventInit : EventInit` is the shape that makes this real: `destination`, `signal`, `formData` and
  * `sourceElement` are four members naming four interfaces. So the two travel together or neither is read.
+ * AND SUCH A MEMBER STATES ITS OWN NARROWING TOO (IdlDictMember::iface_narrow), which is the half that was
+ * missing and the reason "the two travel together" used to end in a NULL. Refusing the declaration's narrowing
+ * is right and it is not an answer: `Element? sourceElement` needs a narrowing, and with nowhere on the member
+ * to put one the type could only be declared as the class — "a Node" — which crosses a Text node and a
+ * Document as an Element, or not declared at all, which is what that member did. Both statements are now the
+ * member's, so taking the class from the member takes the narrowing from the member and the pair cannot be
+ * half-read. NULL there is the member saying its class names its interface exactly, which is what `FormData?`
+ * on that same dictionary says.
  * BOTH INTERFACE ARMS BELOW ASK THIS. The class alone was written out at each of them and they had already
  * drifted: the nullable arm read the declaration's narrowing and the un-nullable one did not, so a class that
  * covers a whole node tree branded and nothing said which kind. */
@@ -1814,7 +1821,7 @@ static void idl_member_iface(const IdlDictMember *dm, const IdlDictLevel *w,
                              JSClassID *want, bool (**narrow)(JSValueConst v))
 {
     *want   = dm->iface ? dm->iface : w->iface;
-    *narrow = dm->iface ? NULL : w->narrow;
+    *narrow = dm->iface ? dm->iface_narrow : w->narrow;
 }
 
 /* DRIVE THE LEVEL ON TOP one re-entry's worth — WEB IDL §3.2.17 Dictionary types (ES-to-IDL list) step 4.1's

@@ -173,9 +173,22 @@ static JSValue js_nce_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSVa
                                       "eventInitDict");
     nt = idl_dict_get(ctx, init, "navigationType");
     from = idl_dict_get(ctx, init, "from");
-    DCHECK(JS_GetClassID(from) == navigation_history_entry_class(),
-           "the declared `required NavigationHistoryEntry from` reached this body as something else — the "
-           "brand is the TYPE's (idl_iface_brand), so a wrong value is a TypeError before the body is entered");
+    /* THE BRAND REFUSES A WRONG VALUE BEFORE ANY BODY IS ENTERED AND DOES NOT SEE AN UNKNOWN ONE. §3.2.15
+       Interface types' test is IDL_INTERFACE's arm, reached through the class idl_iface_brand states for this
+       declaration, and the §3.2.17 Dictionary types member loop rewrites a CONCOLIC member's type to IDL_ANY
+       before that arm is asked — so `{from: <unknown>}` is the one shape that reaches here having passed no
+       brand at all, and a message about a value that is "something else" misnames it.
+       THE REFUSAL IS INTERMEDIATE AND THE FORK IT IS OWED NEEDS AN OBJECT THIS FILE CANNOT MINT. Over an
+       unknown both of §3.2.15's steps are feasible, so the worlds are step 2's "Throw a TypeError." and a
+       construction whose `from` slot holds a NavigationHistoryEntry — and §7.2.7.1's own note is what the
+       second arm would have to satisfy ("If navigationType is null or 'reload', then this value will be the
+       same as navigation.currentEntry"), a page comparing the slot against a live entry by IDENTITY. An
+       unknown cannot answer that comparison, so the arm wants an entry rather than a value, which is not a
+       fork this constructor can ask for on its own. */
+    IDL_DCHECK_MEMBER(JS_GetClassID(from) == navigation_history_entry_class(), from, "from",
+                      "`required NavigationHistoryEntry from` by HTML §7.2.7.1 The "
+                      "NavigationCurrentEntryChangeEvent interface — branded by idl_iface_brand over "
+                      "IDL_INTERFACE");
     /* DOM §2.5 "Constructing events" with THIS interface's prototype — an event the PAGE constructs is untrusted. */
     ev = event_new_derived(ctx, nce_proto(ctx), argv[0],
                            idl_dict_bool(ctx, init, "bubbles"),

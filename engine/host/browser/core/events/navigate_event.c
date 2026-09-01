@@ -30,20 +30,31 @@
  * event and not of the algorithm that fired it, and it is BYTES because a serialized state crosses a park.
  *
  * ITS DICTIONARY DECLARES FOUR DIFFERENT INTERFACE TYPES, which is what made IdlDictMember::iface necessary:
- * `destination` is a NavigationDestination and `signal` an AbortSignal, both REQUIRED and both branded by the
- * declaration. The other two — `FormData?` and `Element?` — are NULLABLE interface types, which IDL_INTERFACE
- * cannot express because it refuses the null the IDL's own `= null` makes ordinary; they follow the precedent
- * core/html/toggle_event.c and core/html/submit_event.c set and are checked in the body, with the type's whole
- * rule performed there. */
+ * `destination` is a NavigationDestination and `signal` an AbortSignal, both REQUIRED; `FormData? formData` and
+ * `Element? sourceElement` are the same section under §3.2.20 Nullable types — T? step 3, "Otherwise, if V is
+ * null or undefined, then return the IDL nullable type T? value null". All four are branded by the
+ * DECLARATION, each against its own class and — for `sourceElement`, whose class is every node wrapper in this
+ * engine — its own narrowing.
+ *
+ * THE TWO NULLABLE ONES WERE DECLARED `any` AND CHECKED IN THIS BODY, AND THAT COST A WRONG ANSWER TO THE PAGE.
+ * A hand-rolled `else if (!form_data_is(v)) return JS_ThrowTypeError(...)` is §3.2.15's own step 2 written out
+ * one stage too late, and it cannot tell a value that is not a FormData from one this engine DOES NOT KNOW:
+ * §3.2.17 Dictionary types' member loop crosses unknown external input as ITSELF before any type arm is asked,
+ * so `{formData: <unknown>}` arrived here wearing the Object solver/concolic.c gives it and was told its value
+ * was invalid — a TypeError the page can SEE and act on, asserting something the engine had not established,
+ * and deleting the world in which the value was a FormData all the same. Declared, that value crosses and
+ * reaches the slot as itself, and every later branch on `e.formData` forks where the page branches. The
+ * placement was wrong in a second, page-visible way even for a real wrong value: §3.2.17 converts member by
+ * member in lexicographic order, so `formData`'s TypeError is owed BEFORE `hasUAVisualTransition`, `info` and
+ * `navigationType` are read at all, and a body runs after every one of them. */
 #include <stdbool.h>
 #include <string.h>
-
-#include <lexbor/dom/dom.h>
 
 #include "check.h"
 #include "quickjs.h"
 #include "core/agent_state.h"
 #include "core/dom/abort.h"
+#include "core/dom/element.h"
 #include "core/dom/node.h"
 #include "core/events/event.h"
 #include "core/events/navigate_event.h"
@@ -79,16 +90,6 @@ static JSValue ne_proto(JSContext *ctx)
     DCHECK(!JS_IsNull(proto), "NavigateEvent.prototype was asked for in a realm that never ran its per-realm "
                               "install");
     return proto;   /* OWNED */
-}
-
-/* `Element?` — asked of the TREE, because every element wrapper in this engine is one node class and the
-   question this member's type asks is narrower than that class. The same test and the same reason as
-   core/html/toggle_event.c's `source`. */
-static bool ne_is_element(JSValueConst v)
-{
-    lxb_dom_node_t *n = node_of(v);
-
-    return n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT;
 }
 
 /* The slot record of a NavigateEvent. OWNED. */
@@ -225,7 +226,7 @@ JSValue navigate_event_new_to_fire(JSContext *ctx, const char *navigation_type, 
     DCHECK(abort_signal_is(ctx, signal),
            "§7.2.6.10.4 initialized a NavigateEvent's `signal` with something that is not an AbortSignal — it "
            "is the event's own abort controller's signal, minted a line earlier");
-    DCHECK(JS_IsNull(source_element) || ne_is_element(source_element),
+    DCHECK(JS_IsNull(source_element) || element_is(source_element),
            "§7.2.6.10.4 initialized a NavigateEvent's `sourceElement` with something that is neither an Element "
            "nor null — the attribute is typed `Element?` and the responsible element is a link, a form or a "
            "submit button");
@@ -294,14 +295,14 @@ static IdlDictMember NE_INIT[] = {
     { "canIntercept",          IDL_BOOLEAN,           false, NULL,            1 },
     { "destination",           IDL_INTERFACE,         true,  NULL,            1 },
     { "downloadRequest",       IDL_DOMSTRING_NULLABLE, false, NULL,           1, NULL, IDL_DEFAULT_NULL, NULL },
-    { "formData",              IDL_ANY,               false, NULL,            1, NULL, IDL_DEFAULT_NULL, NULL },
+    { "formData",              IDL_INTERFACE_NULLABLE, false, NULL,           1, NULL, IDL_DEFAULT_NULL, NULL },
     { "hasUAVisualTransition", IDL_BOOLEAN,           false, NULL,            1 },
     { "hashChange",            IDL_BOOLEAN,           false, NULL,            1 },
     { "info",                  IDL_ANY,               false, NULL,            1 },
     { "navigationType",        IDL_ENUM,              false, NAVIGATION_TYPE, 1, NULL, IDL_DEFAULT_STRING,
                                                                                        "push" },
     { "signal",                IDL_INTERFACE,         true,  NULL,            1 },
-    { "sourceElement",         IDL_ANY,               false, NULL,            1, NULL, IDL_DEFAULT_NULL, NULL },
+    { "sourceElement",         IDL_INTERFACE_NULLABLE, false, NULL,           1, NULL, IDL_DEFAULT_NULL, NULL },
     { "userInitiated",         IDL_BOOLEAN,           false, NULL,            1 },
 };
 
@@ -318,29 +319,36 @@ static JSValue js_ne_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSVal
         return JS_ThrowTypeError(ctx, "NavigateEvent constructor requires a type and an eventInitDict");
     for (i = 0; i < NE_N; i++)
         members[i] = idl_dict_get(ctx, init, NE_NAME[i]);
-    DCHECK(JS_GetClassID(members[NE_DESTINATION]) == navigation_destination_class() &&
-           abort_signal_is(ctx, members[NE_SIGNAL]),
-           "the declared `required NavigationDestination destination` and `required AbortSignal signal` reached "
-           "this body as something else — each brand is its own member's (IdlDictMember::iface), so a wrong "
-           "value is a TypeError before the body is entered");
-    /* `FormData? formData = null` and `Element? sourceElement = null` — NULLABLE interface types, which
-       IDL_INTERFACE cannot express because it refuses the null the `= null` makes ordinary. The rule performed
-       here is the type's, whole: null and undefined are the IDL null, an instance crosses as itself, and
-       anything else is a TypeError. The same placement and the same reason as core/html/toggle_event.c's. */
-    if (JS_IsUndefined(members[NE_FORM_DATA]) || JS_IsNull(members[NE_FORM_DATA])) {
-        JS_FreeValue(ctx, members[NE_FORM_DATA]);
-        members[NE_FORM_DATA] = JS_NULL;
-    } else if (!form_data_is(members[NE_FORM_DATA])) {
-        for (i = 0; i < NE_N; i++) JS_FreeValue(ctx, members[i]);
-        return JS_ThrowTypeError(ctx, "NavigateEventInit member `formData` is not a FormData");
-    }
-    if (JS_IsUndefined(members[NE_SOURCE_ELEMENT]) || JS_IsNull(members[NE_SOURCE_ELEMENT])) {
-        JS_FreeValue(ctx, members[NE_SOURCE_ELEMENT]);
-        members[NE_SOURCE_ELEMENT] = JS_NULL;
-    } else if (!ne_is_element(members[NE_SOURCE_ELEMENT])) {
-        for (i = 0; i < NE_N; i++) JS_FreeValue(ctx, members[i]);
-        return JS_ThrowTypeError(ctx, "NavigateEventInit member `sourceElement` is not an Element");
-    }
+    /* TWO REQUIRED MEMBERS, TWO REFUSALS, because a joint one names NEITHER. `destination` and `signal` are two
+       members declared two different interfaces, so a reader standing at one abort has to be told which of them
+       came in wrong — and the message that fired named the pair, the rule and no subject, which is an action
+       with no object. THE ONLY SHAPE EITHER CAN REACH THIS BODY IN is a branded object or an unknown the
+       §3.2.17 member loop crossed past the brand arm; everything else is §3.2.15 Interface types step 2's
+       "Throw a TypeError." before the body is entered.
+       BOTH REFUSALS ARE INTERMEDIATE AND THE FORK EACH IS OWED IS THE SAME ONE. Over an unknown, §3.2.15's two
+       steps are both feasible — this engine has not established that the value implements the interface and has
+       not established that it does not — so the worlds are the TypeError of step 2 and a construction whose
+       slot holds a NavigationDestination (an AbortSignal). What blocks the second arm is that §7.2.6.10.1's
+       attributes must return "the values they are initialized to" and every algorithm that reads them reads a
+       PLATFORM OBJECT — navigate_event_signal hands the slot to core/dom/abort.c, §7.2.6.10.4's commit reads
+       the destination's URL — so the arm needs an object this engine cannot mint out of an unknown, which is
+       not a fork this file can ask for on its own. Until there is one, this abort is the engine declining to
+       explore a world the unknown admits, and it says so rather than blaming a conversion. */
+    IDL_DCHECK_MEMBER(JS_GetClassID(members[NE_DESTINATION]) == navigation_destination_class(),
+                      members[NE_DESTINATION], "destination",
+                      "`required NavigationDestination destination` by HTML §7.2.6.10.1 The NavigateEvent "
+                      "interface — branded per member (IdlDictMember::iface) over IDL_INTERFACE");
+    IDL_DCHECK_MEMBER(abort_signal_is(ctx, members[NE_SIGNAL]), members[NE_SIGNAL], "signal",
+                      "`required AbortSignal signal` by HTML §7.2.6.10.1 The NavigateEvent interface — branded "
+                      "per member (IdlDictMember::iface) over IDL_INTERFACE");
+    /* `FormData? formData = null` AND `Element? sourceElement = null` HAVE NO CHECK HERE AND MUST NOT GAIN ONE.
+       Both are declared IDL_INTERFACE_NULLABLE with their own class, so §3.2.20 Nullable types — T? ran at each
+       member's own position in the conversion — its step 3 for a null or an undefined, its step 4 (the inner
+       type, which is §3.2.15 Interface types) for everything else — and what reaches this body is therefore one
+       of exactly THREE shapes: the IDL null, an instance of the member's own interface, or an unknown the
+       member loop crossed as itself. The third is why a shape assert here would be WRONG and not merely
+       redundant: an assert over the first two REFUSES the third, which is the world the crossing exists to keep
+       open. The slot carries it, and the page's own branch on `e.formData` is where it forks. */
     /* DOM §2.5 "Constructing events" with THIS interface's prototype — an event the PAGE constructs is untrusted,
        and
        §7.2.6.10.1's shared checks read exactly that off `isTrusted` when `intercept()` lands.
@@ -397,19 +405,30 @@ void navigate_event_install_protos(JSContext *ctx)
     int i;
 
     DCHECK(g_ready, "a realm asked for NavigateEvent before its init declared it");
-    /* THE TWO REQUIRED INTERFACE MEMBERS CARRY THEIR OWN CLASSES, and they are read HERE rather than at the
+    /* ALL FOUR INTERFACE-TYPED MEMBERS CARRY THEIR OWN CLASSES, and they are read HERE rather than at the
        declaration because a class id is a RUNTIME registration made in core/platform.c's row order: this
-       interface is declared from core/events/event.c's subclass list, which runs BEFORE the `abort` row. A
-       class id is agent-scoped — one per JSRuntime, not one per realm — so reading it at the first realm's
-       install reads the same id every later realm would, and writing it again on each install writes the same
-       value. That is why this is not the module static §per-realm-fact forbids: the fact being answered is the
-       AGENT's, and the assertions inside each class accessor fire if either component has not declared yet. */
+       interface is declared from core/events/event.c's subclass list, which runs BEFORE the `abort` and
+       `element` rows. A class id is agent-scoped — one per JSRuntime, not one per realm — so reading it at the
+       first realm's install reads the same id every later realm would, and writing it again on each install
+       writes the same value. That is why this is not the module static §per-realm-fact forbids: the fact being
+       answered is the AGENT's, and the assertions inside each class accessor fire if either component has not
+       declared yet. The declaration pass runs to its end before any realm's intrinsics begin, so every one of
+       these four is registered by the time this line runs.
+       AND `sourceElement` CARRIES A NARROWING BESIDE ITS CLASS, because a class cannot say what its type says.
+       Every node wrapper in this engine is ONE class, so `node_class_id()` answers "a Node" for a Text node and
+       for a Document as readily as for an Element, while HTML §7.2.6.10.1 The NavigateEvent interface writes
+       `Element? sourceElement = null`. The other three classes name their interfaces exactly and state NULL,
+       which is a positive statement and not an omission. */
     NE_INIT[4].iface = navigation_destination_class();     /* `destination` */
+    NE_INIT[6].iface = form_data_class_id();               /* `formData` */
     NE_INIT[11].iface = abort_signal_class();              /* `signal` */
-    DCHECK(!strcmp(NE_INIT[4].name, "destination") && !strcmp(NE_INIT[11].name, "signal"),
-           "NavigateEventInit's member list moved under the two indices that carry its interface classes — the "
+    NE_INIT[12].iface = node_class_id();                   /* `sourceElement` */
+    NE_INIT[12].iface_narrow = element_is;                 /* …and the half the class cannot carry */
+    DCHECK(!strcmp(NE_INIT[4].name, "destination") && !strcmp(NE_INIT[6].name, "formData") &&
+           !strcmp(NE_INIT[11].name, "signal") && !strcmp(NE_INIT[12].name, "sourceElement"),
+           "NavigateEventInit's member list moved under the four indices that carry its interface classes — the "
            "list is in Web IDL's conversion order, so inserting a member renumbers it and the brands would then "
-           "be attached to the wrong two members");
+           "be attached to the wrong members");
     prev = JS_GetClassProto(ctx, g_nav_ev_class);
     DCHECK(JS_IsNull(prev), "navigate_event_install_protos ran twice in one realm");
     JS_FreeValue(ctx, prev);
