@@ -921,7 +921,7 @@ void custom_elements_active_ctor_enter(JSContext *ctx, JSValueConst ctor, JSValu
            "§4.13.4's active custom element constructor map was written before custom_elements_init built it");
     DCHECK(JS_IsConstructor(ctx, ctor),
            "§4.13.4's active custom element constructor map was keyed by something that is not a constructor. "
-           "The key is a DEFINITION's constructor and §4.13.4's `define` step 1 is \"If IsConstructor("
+           "The key is a DEFINITION's constructor and HTML §4.13.4's `define` step 1 is \"If IsConstructor("
            "constructor) is false, then throw a TypeError\", so anything else here came from a definition this "
            "component never committed — and HTML §3.2.3 \"HTML element constructors\" step 3 would then key "
            "its lookup on a value no `super()` can ever present");

@@ -958,7 +958,7 @@ int html_script_exec_run(JSContext *ctx, ScriptExec *x, JSValue in, JSValue **ou
                 const char *base = document_base_url(ctx);
 
                 DCHECK(base != NULL,
-                       "§4.12.1.1 step 34's base URL is \"el's node document's document base URL\" and this "
+                       "HTML §4.12.1.1 step 34's base URL is \"el's node document's document base URL\" and this "
                        "document has none — HTML §2.4.3 \"Document base URLs\" ends its fallback base URL at "
                        "\"return document's URL\", so every Document has one, and an absent one is a document "
                        "built somewhere that never set its URL");

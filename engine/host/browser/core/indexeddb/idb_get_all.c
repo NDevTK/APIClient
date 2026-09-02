@@ -203,8 +203,9 @@ static JSValue ga_referenced_value(JSContext *ctx, JSValueConst index, JSValueCo
     JSValue store = idb_index_store(ctx, index), only = idb_key_range_only_key(ctx, primary), out;
 
     DCHECK(idb_count_records(ctx, store, only) == 1,
-           "an index record's REFERENCED VALUE is not in the referenced object store. §2.6: \"each record in "
-           "an index references one and only one record in the index's referenced object store\", and §6.4 "
+           "an index record's REFERENCED VALUE is not in the referenced object store. IndexedDB §2.6: \"each "
+           "record in an index references one and only one record in the index's referenced object store\", "
+           "and §6.4 "
            "step 2 is what keeps that true when a store record is removed — a missing one means that step did "
            "not run for this index");
     out = idb_retrieve_value(ctx, store, only);

@@ -825,8 +825,8 @@ static JSValue js_cu_advance(JSContext *ctx, JSValueConst this_val, int argc, JS
        the fabrication §RUN-DON'T-MATCH forbids and returning early is the dropped flow §Time-travel's razor
        calls a cap, so there is nothing correct left to do and this crashes at the member that has to fork. */
     if (!idl_number_of(ctx, IDL_UNSIGNED_LONG_ENFORCE, argv[0], &count))
-        DFAIL("§4.9's advance was given an UNKNOWN count carrying no example. Its step 1 (\"If count is 0 "
-              "(zero), throw a TypeError\") has both completions feasible over an unconstrained "
+        DFAIL("IndexedDB §4.9's advance was given an UNKNOWN count carrying no example. Its step 1 "
+              "(\"If count is 0 (zero), throw a TypeError\") has both completions feasible over an unconstrained "
               "[EnforceRange] unsigned long, and §6.7's step 9 then has one distinct outcome per skip — so "
               "this member must become a step machine (idl_method_id_step) and ask step_fork_run over step 1, "
               "exactly as core/timing/timer.c asks it over HTML §8.7 Timers' step 4, then fork §6.7 step 9 "

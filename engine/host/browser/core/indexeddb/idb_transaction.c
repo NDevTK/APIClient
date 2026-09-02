@@ -361,8 +361,9 @@ void idb_transaction_handle_add(JSContext *ctx, JSValueConst tx, JSValueConst ha
     store = idb_object_store_handle_store(ctx, handle);
     existing = idb_transaction_handle_find(ctx, tx, store);
     DCHECK(JS_IsNull(existing),
-           "a SECOND object store handle was filed for one STORE in one transaction — §2.2.1: \"there must be "
-           "only one object store handle associated with a particular object store within a transaction\", "
+           "a SECOND object store handle was filed for one STORE in one transaction — IndexedDB §2.2.1: "
+           "\"there must be only one object store handle associated with a particular object store within a "
+           "transaction\", "
            "which §4.10's note states as what a page compares. §4.10's objectStore() resolves the store and "
            "asks for its existing handle before it mints another, and §4.4's createObjectStore files the one "
            "it has just made for a store nothing else can yet hold one for");

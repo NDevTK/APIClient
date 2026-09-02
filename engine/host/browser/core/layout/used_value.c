@@ -432,8 +432,8 @@ static UvSurround uv_surround(lxb_dom_element_t *el, bool vertical)
     }
     DCHECK(s.padding.px >= 0.0 && s.border.px >= 0.0,
            "css-sizing-3 §3.3's conversion between the content box and the border box was handed a NEGATIVE "
-           "surround. CSS 2.1 §8.4 states outright that 'negative values for padding properties are not "
-           "allowed' and css-backgrounds-3 §3.3's <line-width> is a non-negative <length>, so lexbor drops "
+           "surround. CSS 2.1 §8.4 states outright that \"Unlike margin properties, values for padding values "
+           "cannot be negative\" and css-backgrounds-3 §3.3's <line-width> is a non-negative <length>, so lexbor drops "
            "either declaration — a negative here is a used value this component derived rather than one an "
            "author wrote, and every box it is a term of would be smaller than the box it contains");
     return s;

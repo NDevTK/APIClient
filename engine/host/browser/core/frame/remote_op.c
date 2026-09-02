@@ -206,7 +206,7 @@ RemoteOp *remote_op_parse(const char *record)
     DCHECK(o->op != OP_WPGET || window_proxy_cross_origin_property(o->f[3])->needs_get,
            "a cross-agent record asked this agent for a Window member whose HTML §7.2.1.3.1 "
            "CrossOriginProperties ( O ) record carries neither [[NeedsGetter]] nor [[NeedsSetter]] — that is "
-           "§7.2.1.3.4 CrossOriginGetOwnPropertyHelper's OPERATION branch, whose answer is \"an anonymous "
+           "HTML §7.2.1.3.4 CrossOriginGetOwnPropertyHelper's OPERATION branch, whose answer is \"an anonymous "
            "built-in function, created in the current realm, that performs the same steps as the IDL operation "
            "P on object O\", and this "
            "seam performs the getter branch only. The two members window_proxy.c's proxy_get_step can emit are "

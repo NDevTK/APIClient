@@ -2094,7 +2094,7 @@ void element_post_connection_record(lxb_dom_node_t *n)
 {
     DCHECK(n != NULL, "the children changed steps recorded nothing");
     DCHECK(node_is_connected(n),
-           "§4.12.1.1's children changed steps recorded a node that is not connected — their step 1 is \"if "
+           "HTML §4.12.1.1's children changed steps recorded a node that is not connected — their step 1 is \"if "
            "the script element is not connected, then return\", so the test belongs to the caller and a "
            "disconnected node here means it was not made");
     /* THE SAME QUESTION THE INSERT SIDE ASKS, because this is the same list and the same drain. A `<script>`

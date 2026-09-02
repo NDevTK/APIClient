@@ -487,8 +487,9 @@ static const char *idb_inject_path(JSContext *ctx, JSValueConst key_path, size_t
     const char *path;
 
     DCHECK(JS_IsString(key_path),
-           "§7.2 was given a SEQUENCE key path. Its own note is that this cannot happen — \"it is not possible "
-           "to create a object store which has a key generator and also has a key path that is a sequence\" — "
+           "IndexedDB §7.2 was given a SEQUENCE key path. Its own note is that this cannot happen — \"it is "
+           "not possible to create a object store which has a key generator and also has a key path that is "
+           "a sequence\" — "
            "and §4.4's createObjectStore is what makes it true, reporting an \"InvalidAccessError\" for "
            "autoIncrement with one before the store exists");
     idb_key_path_precondition(ctx, key_path);
@@ -578,8 +579,9 @@ void idb_key_path_inject(JSContext *ctx, JSValueConst value, JSValueConst key, J
            11.4.2 has already run the check above over this same value and this same key path and it answered
            true — which is the standard's own note here, and is why the two algorithms are one file. */
         DCHECK(JS_IsObject(cur),                                   /* STEP 4.1 */
-               "§7.2's inject reached a value that is not an Object at an identifier of the key path. \"Check "
-               "that a key could be injected into a value\" answered TRUE for this pair at §4.5 step 11.4.2, "
+               "IndexedDB §7.2's inject reached a value that is not an Object at an identifier of the key "
+               "path. \"Check that a key could be injected into a value\" answered TRUE for this pair at §4.5 "
+               "step 11.4.2, "
                "so either it was never run or it was run against a DIFFERENT value than the one §6.1 step "
                "1.1.3 handed this — and §4.5 step 10's clone is the only value either may see");
         idb_inject_not_concolic(ctx, cur);
