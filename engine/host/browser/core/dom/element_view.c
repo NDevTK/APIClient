@@ -1128,11 +1128,16 @@ static void ev_require_enumerable_fragments(const EvTarget *t)
     if (kind == ELEMENT_VIEW_FRAGMENTS_TABLE)
         DFAIL("CSSOM VIEW §6's getClientRects() step 3's SECOND CONSTRAINT: an element whose computed `display` "
               "is `table` or `inline-table` contributes 'both the TABLE BOX and the CAPTION BOX, if any, but "
-              "not the anonymous container box' — two fragments out of a box structure CSS 2 §17.2's anonymous "
-              "table-object generation builds and this engine does not. Its extents are not §10's either: "
+              "not the anonymous container box' — two fragments out of a box structure CSS 2.1 §17.2.1 "
+              "Anonymous table objects generates. THE STRUCTURE IS BUILT and this line used to say it was not: "
+              "core/layout/table_box.h answers §17.2.1's first two stages, and `table_box_captions` answers "
+              "exactly the CAPTION BOX half of the sentence above — the anonymous container this step excludes "
+              "is CSS 2.1 §17.4 Tables in the visual formatting model's table wrapper box, which nothing here "
+              "has to produce. Its extents are not §10's either: "
               "§17.5.2's two table layout algorithms own the table's width and §17.5.3 owns its height, which "
               "is why core/layout/used_value.c crashes for a table box before this member could place one. "
-              "BUILD §17.2, then §17.5's algorithms");
+              "BUILD §17.5's algorithms over table_box.h's rows; the two fragments this step wants then have "
+              "edges");
 }
 
 /* §6's getClientRects() STEPS, AS THE INTERNAL ALGORITHM. §2 is explicit that a member "said to call another

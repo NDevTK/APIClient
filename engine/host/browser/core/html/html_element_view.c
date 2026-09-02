@@ -361,12 +361,17 @@ static JSValue hev_offset_extent(JSContext *ctx, const HevTarget *t, bool vertic
     }
     if (kind == ELEMENT_VIEW_FRAGMENTS_TABLE)
         DFAIL("CSSOM VIEW §7's offsetWidth/offsetHeight step 2 is over the fragments of the PRINCIPAL BOX, and "
-              "an element whose computed `display` is `table` or `inline-table` has the box structure CSS 2 "
-              "§17.2's anonymous table-object generation builds — a table box, an optional caption box and the "
-              "anonymous container around them — which this engine does not build. Its EXTENTS are not §10's "
+              "an element whose computed `display` is `table` or `inline-table` has the box structure CSS 2.1 "
+              "§17.2.1 Anonymous table objects generates — a table box, an optional caption box and the "
+              "anonymous container around them. TWO OF THOSE THREE ARE BUILT and this line used to say none "
+              "was: core/layout/table_box.h answers §17.2.1's first two stages and the caption boxes CSS 2.1 "
+              "§17.4 Tables in the visual formatting model puts beside the table box. The container is that "
+              "section's TABLE WRAPPER BOX — \"the table generates a principal block box called the table "
+              "wrapper box that contains the table box itself and any caption boxes\" — and no element in the "
+              "tree names it. Its EXTENTS are not §10's "
               "either: §17.5.2's two table layout algorithms own the table's width and §17.5.3 owns its height, "
               "which is why core/layout/used_value.c crashes for a table box before this member could measure "
-              "one. BUILD §17.2, then §17.5's algorithms");
+              "one. BUILD §17.4's wrapper box, then §17.5's algorithms over table_box.h's rows");
     /* step 2, for a principal box of one fragment */
     return element_view_length_long(ctx, used_value_border_edge_px(el, vertical));
 }
