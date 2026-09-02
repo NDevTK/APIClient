@@ -441,6 +441,38 @@ JSValue readable_stream_from_bytes(JSContext *ctx, const char *bytes, size_t len
     return obj;
 }
 
+/* Fetch §5.3's `textStream()` step 2 — see the header for why this is not the function above with no bytes. */
+JSValue readable_stream_closed_empty(JSContext *ctx)
+{
+    StreamData *d;
+    JSValue obj = readable_stream_empty(ctx);
+
+    if (JS_IsException(obj)) return obj;
+    d = rs_stream_data(obj);
+    /* §4.9.2's ReadableStreamClose has three parts and only the FIRST of them has anything to act on here: it
+       moves the state, then settles the reader's `closed` promise, then answers every parked read request. The
+       other two are calls of the page's code, which is why closing a stream is a step machine everywhere else
+       in this file — and why the ASSERT is the load-bearing line rather than the assignment. A stream that has
+       just been minted cannot have been handed to a reader, so there is no promise to settle and no request to
+       answer; the day a caller reaches this with a stream that HAS one, the two silent parts are the bug and
+       this names it instead of quietly skipping them. */
+    DCHECK(JS_IsUndefined(d->reader),
+           "a stream reached §5.3 step 2's close already locked to a reader — §4.9.2's ReadableStreamClose "
+           "must then settle that reader's `closed` promise and answer its parked read requests, and both of "
+           "those are CALLS of the page's code that this synchronous entry cannot make. Close it through the "
+           "cancel/close step machine instead");
+    DCHECK(d->state == RS_READABLE,
+           "a stream this function has just minted is already closed or errored — readable_stream_empty "
+           "answers a stream in §4.2's `readable` state and nothing between there and here may move it");
+    d->state = RS_CLOSED;
+    /* The controller's own two flags, so a closed stream's controller reads the way §4.9.4's
+       ReadableStreamDefaultControllerClose leaves one: close requested, and started because §9.2's "set up"
+       ran no start algorithm for it to be waiting on. */
+    ctrl_of(d->controller)->close_requested = 1;
+    ctrl_of(d->controller)->started = 1;
+    return obj;
+}
+
 bool readable_stream_is(JSValueConst v)
 {
     return g_stream_class != 0 && JS_GetOpaque(v, g_stream_class) != NULL;

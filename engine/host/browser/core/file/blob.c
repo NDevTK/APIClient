@@ -13,23 +13,17 @@
  * §3.3.2 "The stream() method" IS BUILT and this paragraph used to deny it. It said `stream()` and
  * `textStream()` were both "ABSENT, honestly, until there is a ReadableStream", and the reason it gave stopped
  * being true when core/streams/readable_stream.c landed — which this file already knows, since it includes that
- * header and installs `stream` from it. A stale absence claim is the kind a reader does not check, so it is
- * corrected here rather than carried: `stream()` is installed, and what is absent is §3.3.6 "The textStream()
- * method" alone.
+ * header and installs `stream` from it. A stale absence claim is the kind a reader does not check, so the
+ * correction is kept rather than the claim.
  *
- * NAMED RESIDUAL: §3.3.6's `textStream()` is not installed. WHAT IS NOT COVERED: its four steps are "Let stream
- * be the result of calling get stream on this. Let decoder be a new TextDecoderStream in this's relevant realm.
- * Set up decoder with UTF-8. Return the result of calling stream, piped through decoder." — and this engine can
- * perform the first and not the middle two from C. Both pieces EXIST as page-reachable step machines and neither
- * is reachable by a host component: core/encoding/text_stream.c mints TextDecoderStream through a file-static
- * ctor step id, and core/streams/pipe.c drives Streams §4.2.4's `pipeThrough` through a file-static step id of
- * its own. WHAT THE NEXT DIFF BUILDS: an exported entry on each of those two components — one that answers a
- * TextDecoderStream already set up with UTF-8 in the calling realm, one that pipes a ReadableStream through a
- * TransformStream and answers the transform's readable half — after which this member and Fetch §5.3 "Body
- * mixin"'s identically-shaped `textStream()` are both a short step machine over them, which is why the entries
- * are the unit of work rather than either member. HOW ITS ABSENCE SHOWS: `blob.textStream()` is a TypeError
- * where `blob.stream()` answers a stream, so a page decoding a Blob incrementally must pipe through its own
- * `new TextDecoderStream()` — which works, and is the difference the missing member would remove. */
+ * §3.3.6 "The textStream() method" IS BUILT TOO, and the residual that stood here — which named the two
+ * exported entries it needed — is retired with it. What it asked for turned out to be THREE entries and not
+ * two, and one of the three it named was the wrong operation: piping is Streams §9.5 Piping's "piped through",
+ * the operation another standard performs over a TransformStream's internal slots, NOT §4.2.4's `pipeThrough`
+ * member, whose first steps run Web IDL §3.2.17 over a page-supplied object. The third is Fetch §5.3 step 2's
+ * set-up-and-CLOSED empty stream, which readable_stream_from_bytes cannot answer because it enqueues a chunk.
+ * The member itself is below, and its last three steps are Fetch §5.3's steps 4-6 word for word, so those live
+ * once in core/encoding/text_stream.c and both members call them. */
 #include <stdlib.h>
 #include <string.h>
 
@@ -43,6 +37,7 @@
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/idl_iter.h"
+#include "core/encoding/text_stream.h"
 #include "core/streams/readable_stream.h"
 #include "core/frame/location.h"
 #include "core/dom/document.h"
@@ -78,6 +73,7 @@ static JSClassID g_blob_class;
    PROTOTYPE SLOT alone — the same store quickjs keeps for Blob, so the two are found the same way. */
 static JSClassID g_file_class;
 static int       g_blob_id_stream = -1, g_blob_id_slice = -1;
+static int       g_blob_textstream_stepid = -1;
 static int       g_file_ctor_stepid = -1;
 static JSRuntime *g_blob_rt;
 static int       g_blob_ctor_stepid = -1;
@@ -457,6 +453,93 @@ static JSValue js_blob_stream(JSContext *ctx, JSValueConst this_val, int argc, J
     if (!bytes) return JS_ThrowTypeError(ctx, "not a Blob");
     return readable_stream_from_bytes(ctx, bytes, len);
 }
+
+/* §3.3.6's `textStream()`. FOUR STEPS, and the last three are Fetch §5.3's steps 4-6 word for word, so they are
+   ONE operation in core/encoding/text_stream.c and what is here is step 1 and the call.
+ *
+ * NO UNUSABLE CHECK AND NO NULL ARM, which is the whole of what File API declares differently: §3 makes a Blob
+ * an IMMUTABLE BYTE SEQUENCE, so there is nothing to consume and `get stream on this` answers a fresh stream
+ * every time — `b.textStream()` twice gives the text twice, where the same two calls on a Response are a
+ * TypeError. The same sentence the readers above are built on.
+ *
+ * ALWAYS UTF-8, WHATEVER THE BLOB'S `type` SAYS. §3.3.6's own note puts it against the older member: "This
+ * differs from readAsText() in that it always uses the UTF-8 encoding" — a Blob whose type carries a `charset`
+ * parameter is still decoded as UTF-8 here, and a page that wants otherwise pipes through its own decoder. */
+#define BLT_STAGES(X) \
+    X(BLT_ENTRY = IDL_STEP_FIRST, \
+      "File API §3.3.6 textStream() step 1 (let stream be the result of calling get stream on this)") \
+    X(BLT_DECODE, \
+      "File API §3.3.6 textStream() steps 2-4 (a new TextDecoderStream set up with UTF-8, and the result of " \
+      "calling stream, piped through decoder)") \
+    X(BLT_DONE, "File API §3.3.6 textStream() (the member's ReadableStream is its result)")
+enum { BLT_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const BLT_STEPS[] = { BLT_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    uint8_t phase;
+    JSValue stream;   /* step 1's stream (owned) */
+    JSValue cb[2];    /* step_call_run's buffer: [this, func] — the decode takes no arguments */
+} JSBlobTextState;
+
+static void js_blob_text_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    JSBlobTextState *s = st;
+    int k;
+    v->val(ctx, &s->stream);
+    for (k = 0; k < 2; k++) v->val(ctx, &s->cb[k]);
+}
+
+static int js_blob_text_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                             JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    JSBlobTextState *s = st;
+    int r;
+
+    (void)argc; (void)argv;
+    if (hdr->stage == BLT_ENTRY) {
+        size_t len = 0;
+        const char *bytes;
+
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        /* Every owned slot before anything that can throw — the failure path frees what the state holds. */
+        s->stream = JS_UNDEFINED;
+        s->cb[0] = s->cb[1] = JS_UNDEFINED;
+
+        /* §3.3.6 step 1: "get stream on this", which §3.3.2's `stream()` is also defined as — the SAME
+           operation, so it is the same bytes and the same one-chunk-then-close stream. */
+        bytes = blob_bytes_of(hdr->this_val, &len, NULL);
+        if (!bytes) return JS_ThrowTypeError(ctx, "not a Blob"), -1;
+        s->stream = readable_stream_from_bytes(ctx, bytes, len);
+        if (JS_IsException(s->stream)) { s->stream = JS_UNDEFINED; return -1; }
+        STEP_GOTO(hdr->stage, BLT_DECODE, &s->phase, NULL);
+    }
+
+    if (hdr->stage == BLT_DECODE) {
+        JSValue op = text_stream_decode_op(ctx);
+        JSValue out;
+
+        r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), op, s->stream, 0, NULL,
+                          cb_result, &out, out_cb, out_argc);
+        JS_FreeValue(ctx, op);
+        if (r > 0) return r;
+        if (JS_IsException(out)) return -1;
+        STEP_GOTO(hdr->stage, BLT_DONE, &s->phase, NULL);
+        *presult = out;
+        return 0;
+    }
+
+    DFAIL("File API §3.3.6's textStream() resumed at a stage it does not have");
+    JS_FreeValue(ctx, cb_result);
+    return -1;
+}
+
+static const IdlStepDecl js_blob_text_decl = {
+    js_blob_text_step, sizeof(JSBlobTextState), js_blob_text_visit, NULL,
+    "File API §3.3.6 textStream()", BLT_STEPS,
+    /* `catches_abrupt` = 0: the decode's throw is the page's to see. `unforkable` = NULL: JSValues only. */
+    0, NULL
+};
 
 /* WHERE A BLOB'S BYTES CAME FROM — the question the shared reader machine asks of every interface that holds
    a byte sequence, and this is Blob's answer. A READER OF THIS INTERFACE'S OWN THAT CALLED THE SHARED ONE AND
@@ -860,6 +943,7 @@ void blob_init(JSContext *ctx)
         JS_NewClass(rt, g_file_class, &fdef);
     }
     g_blob_id_stream = idl_method_id(ctx, SLICE_ARGS, 0, js_blob_stream, 0);
+    g_blob_textstream_stepid = idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_blob_text_decl, 0);
     g_blob_id_slice  = idl_method_id(ctx, SLICE_ARGS, 3, js_blob_slice, 0);
     idl_optional_from(0);   /* §3.1: all three of slice's arguments are optional */
 
@@ -897,6 +981,9 @@ void blob_install_protos(JSContext *ctx)
     idl_install_accessor(ctx, blob_p, "size", js_blob_get, BLOB_SIZE, -1);
     idl_install_accessor(ctx, blob_p, "type", js_blob_get, BLOB_TYPE, -1);
     idl_install_method(ctx, blob_p, "stream", g_blob_id_stream);
+    /* §4: File.prototype CHAINS to this one, so installing here is what gives a File the member too —
+       the same inheritance that gives it `slice` and `text`. */
+    idl_install_step_method(ctx, blob_p, "textStream", 0, g_blob_textstream_stepid);
     idl_install_method(ctx, blob_p, "slice", g_blob_id_slice);
     byte_reader_install(ctx, blob_p, g_blob_reader_handle);
     JS_SetClassProto(ctx, g_blob_class, blob_p);

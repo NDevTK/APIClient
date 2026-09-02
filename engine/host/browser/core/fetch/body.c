@@ -19,7 +19,9 @@
 #include "quickjs-step.h"
 #include "solver/cow.h"
 #include "core/byte_reader.h"
+#include "core/encoding/text_stream.h"
 #include "core/fetch/body.h"
+#include "core/idl_args.h"
 #include "core/file/blob.h"
 #include "core/html/form_data.h"
 #include "core/url/url.h"
@@ -527,6 +529,174 @@ static const ByteReaderIface BODY_READER_IFACE = {
     body_reader_source
 };
 
+
+/* §5.3's `bodyUsed`: the body is non-null AND its stream is DISTURBED. The latch this component sets when a
+   reader consumes the bytes is one way to disturb it; reading the `body` stream directly is the other, and a
+   page that does the second and asks the first must be told the truth. */
+static JSValue js_body_get_used(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    const BodyIface *f = &g_body_iface[magic];
+    BodyState *b = f->of(this_val);
+    if (!b) return JS_ThrowTypeError(ctx, "not a %s", f->iface);
+    return JS_NewBool(ctx, b->used != 0 || readable_stream_disturbed(b->stream));
+}
+
+/* THE BODY'S STREAM, BUILT ON FIRST DEMAND AND THEN THE SAME ONE FOR EVER. In the spec a body IS a stream;
+   here it is bytes with a stream made when something first needs one, and "the same one" is the load-bearing
+   half: a second would give the page two independent readers over one byte sequence, so `response.body ===
+   response.body` and the stream `textStream()` decodes is the stream `bodyUsed` reports the disturbance of.
+   ONE PLACE, because there are now two members that need it and the second copy is where they would drift.
+   Returns 0, or -1 with a throw live. The caller has already established the body is non-null. */
+static int body_stream_ensure(JSContext *ctx, BodyState *b)
+{
+    DCHECK(b->has, "a null body was asked for its stream — §5.3 answers null for one, and every caller of this "
+                   "checks `has` first because that is the distinction the flag exists to keep");
+    if (!JS_IsUndefined(b->stream)) return 0;
+    b->stream = readable_stream_from_bytes(ctx, b->bytes ? b->bytes : "", b->len);
+    if (JS_IsException(b->stream)) { b->stream = JS_UNDEFINED; return -1; }
+    return 0;
+}
+
+/* §5.3's `body`. NULL for a null body — which is not an empty one — and otherwise the SAME stream every time,
+   because a second would give the page two independent readers over one byte sequence. */
+static JSValue js_body_get_body(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    const BodyIface *f = &g_body_iface[magic];
+    BodyState *b = f->of(this_val);
+    if (!b) return JS_ThrowTypeError(ctx, "not a %s", f->iface);
+    if (!b->has) return JS_NULL;
+    if (body_stream_ensure(ctx, b) < 0) return JS_EXCEPTION;
+    return JS_DupValue(ctx, b->stream);
+}
+
+/* §5.3's `[NewObject] ReadableStream textStream()`, for BOTH including interfaces.
+ *
+ * IT IS THE ONE MEMBER OF THIS MIXIN THAT THROWS RATHER THAN REJECTING, and that is not an accident of this
+ * implementation: its IDL return type is `ReadableStream` and not `Promise<…>`, so Web IDL has no promise to
+ * reject into and step 1's TypeError arrives where the page wrote the call. Every other reader here answers a
+ * rejected promise for the same condition. A page can tell those apart with a bare `try`.
+ *
+ * STEPS 4-6 ARE NOT HERE. They are File API §3.3.6's steps 2-4 word for word, so they are one operation in
+ * core/encoding/text_stream.c and this member performs its own steps 1-3 and then calls it.
+ *
+ * THE RESIDUAL THAT STOOD HERE NAMED TWO EXPORTED ENTRIES AND WAS WRONG ABOUT BOTH HALVES OF THAT, which is
+ * worth keeping because its next-diff clause is the kind only the person acting on it ever reads. It said the
+ * pipe was Streams §4.2.4 "Constructor, methods, and properties"' `pipeThrough`; that member converts a
+ * ReadableWritablePair out of a page-supplied object and reads a StreamPipeOptions off another, and driving a
+ * host's own bytes through it would let a patched accessor choose the destination. The operation is §9.5
+ * Piping's "piped through", which reads `transform.[[writable]]` and `[[readable]]` as slots and whose first
+ * two steps are ASSERTS. And it counted two entries where there are three: step 2's empty stream must be SET
+ * UP AND CLOSED, and readable_stream_from_bytes cannot answer it — that one enqueues a chunk, so a
+ * zero-length call hands back `{ value: Uint8Array(0), done: false }` where step 2's stream answers `done`. */
+#define BTS_STAGES(X) \
+    X(BTS_ENTRY = IDL_STEP_FIRST, \
+      "Fetch §5.3 textStream() steps 1-3 (the unusable check, the null-body arm's set-up-and-closed stream, " \
+      "and this's body's stream)") \
+    X(BTS_DECODE, \
+      "Fetch §5.3 textStream() steps 4-6 (a new TextDecoderStream set up with UTF-8, and the result of " \
+      "stream piped through it)") \
+    X(BTS_DONE, "Fetch §5.3 textStream() (the member's ReadableStream is its result)")
+enum { BTS_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const BTS_STEPS[] = { BTS_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    uint8_t phase;
+    JSValue stream;    /* §5.3 step 3's "this's body's stream" (owned) */
+    JSValue cb[2];     /* step_call_run's buffer: [this, func] — the decode takes no arguments */
+} JSBodyTextState;
+
+static void js_body_text_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    JSBodyTextState *s = st;
+    int k;
+    v->val(ctx, &s->stream);
+    for (k = 0; k < 2; k++) v->val(ctx, &s->cb[k]);
+}
+
+static int js_body_text_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                             JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    JSBodyTextState *s = st;
+    int r;
+
+    (void)argc; (void)argv;
+    if (hdr->stage == BTS_ENTRY) {
+        const BodyIface *f;
+        BodyState *b;
+        bool locked = false;
+
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        /* Every owned slot before anything that can throw — the failure path frees what the state holds. */
+        s->stream = JS_UNDEFINED;
+        s->cb[0] = s->cb[1] = JS_UNDEFINED;
+
+        f = body_iface_of(hdr->this_val);
+        if (!f) return JS_ThrowTypeError(ctx, "not a Request or a Response"), -1;
+        b = f->of(hdr->this_val);
+        DCHECK(b != NULL, "the Body mixin's own table matched a receiver its `of` then had no state for");
+
+        /* §5.3 step 1: "If this is unusable, then throw a TypeError." §5.3 defines unusable as "its body is
+           non-null and its body's stream is disturbed or locked" — BOTH halves, where `bodyUsed` is the
+           disturbed half alone, which is why this asks the question again rather than reading that getter.
+           The consume latch is one way to disturb the stream and reading it directly is the other, so the
+           three conditions are asked together. Both slots go through the INTERNAL operations, so a page that
+           patched `ReadableStream.prototype.locked` cannot decide whether its own body is usable. */
+        readable_stream_query(b->stream, NULL, &locked);
+        if (b->has && (b->used || locked || readable_stream_disturbed(b->stream)))
+            return JS_ThrowTypeError(ctx, "the body is unusable"), -1;
+
+        /* §5.3 step 2: a NULL body — which is not an empty one — answers a stream that is set up and CLOSED,
+           so its first read is `done` with no chunk. It returns that stream directly: no decoder is made and
+           nothing is piped, because there is nothing to decode. */
+        if (!b->has) {
+            *presult = readable_stream_closed_empty(ctx);
+            if (JS_IsException(*presult)) return -1;
+            STEP_GOTO(hdr->stage, BTS_DONE, &s->phase, NULL);
+            return 0;
+        }
+
+        /* §5.3 step 3: "Let stream be this's body's stream." */
+        if (body_stream_ensure(ctx, b) < 0) return -1;
+        s->stream = JS_DupValue(ctx, b->stream);
+        STEP_GOTO(hdr->stage, BTS_DECODE, &s->phase, NULL);
+    }
+
+    if (hdr->stage == BTS_DECODE) {
+        JSValue op = text_stream_decode_op(ctx);
+        JSValue out;
+
+        r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), op, s->stream, 0, NULL,
+                          cb_result, &out, out_cb, out_argc);
+        JS_FreeValue(ctx, op);
+        if (r > 0) return r;
+        if (JS_IsException(out)) return -1;
+        STEP_GOTO(hdr->stage, BTS_DONE, &s->phase, NULL);
+        *presult = out;
+        return 0;
+    }
+
+    DFAIL("Fetch §5.3's textStream() resumed at a stage it does not have");
+    JS_FreeValue(ctx, cb_result);
+    return -1;
+}
+
+static const IdlStepDecl js_body_text_decl = {
+    js_body_text_step, sizeof(JSBodyTextState), js_body_text_visit, NULL,
+    "Fetch §5.3 textStream()", BTS_STEPS,
+    /* `catches_abrupt` = 0: this member PROPAGATES. Step 1's TypeError is thrown before any request has been
+       made, and the decode's own abrupt — a throwing `enqueue` the page put on the controller prototype, a
+       transform that errored — is the page's to see at the call it wrote. There is nothing here for a body to
+       do with a throw that the epilogue does not already do. `unforkable` = NULL: every slot this state holds
+       is a JSValue the visit above names, so a fork copies it whole. */
+    0, NULL
+};
+
+/* ONE MACHINE FOR BOTH INCLUDING INTERFACES, like the readers above: the member finds its receiver's state
+   through the mixin's own table rather than through a magic, so the two prototypes install the same
+   declaration and there is one algorithm to be right about. */
+static int g_body_text_stepid = -1;
+
 int body_declare(JSContext *ctx, JSClassID class_id, BodyState *(*of)(JSValueConst v),
                  char *(*mime)(JSContext *ctx, JSValueConst v),
                  char *(*source)(JSContext *ctx, JSValueConst v), const char *iface)
@@ -548,61 +718,25 @@ int body_declare(JSContext *ctx, JSClassID class_id, BodyState *(*of)(JSValueCon
        receiver's bytes through the one `take` above, which is the mixin's own algorithm and not either
        interface's. The declaration is made on the FIRST include and reused, so the two prototypes install the
        same behaviour under their own function objects. */
-    if (handle == 0)
+    if (handle == 0) {
         f->reader_handle = byte_reader_declare(ctx, &BODY_READER_IFACE);
-    else
+        /* §5.3's `textStream()` is declared on the same include and for the same reason: one algorithm, whose
+           receiver decides which interface it is running for. */
+        g_body_text_stepid = idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_body_text_decl, 0);
+    } else {
         f->reader_handle = g_body_iface[0].reader_handle;
+    }
     return handle;
 }
 
-/* §5.3's `bodyUsed`: the body is non-null AND its stream is DISTURBED. The latch this component sets when a
-   reader consumes the bytes is one way to disturb it; reading the `body` stream directly is the other, and a
-   page that does the second and asks the first must be told the truth. */
-static JSValue js_body_get_used(JSContext *ctx, JSValueConst this_val, int magic)
-{
-    const BodyIface *f = &g_body_iface[magic];
-    BodyState *b = f->of(this_val);
-    if (!b) return JS_ThrowTypeError(ctx, "not a %s", f->iface);
-    return JS_NewBool(ctx, b->used != 0 || readable_stream_disturbed(b->stream));
-}
-
-/* §5.3's `body`. NULL for a null body — which is not an empty one — and otherwise the SAME stream every time,
-   because a second would give the page two independent readers over one byte sequence. */
-static JSValue js_body_get_body(JSContext *ctx, JSValueConst this_val, int magic)
-{
-    const BodyIface *f = &g_body_iface[magic];
-    BodyState *b = f->of(this_val);
-    if (!b) return JS_ThrowTypeError(ctx, "not a %s", f->iface);
-    if (!b->has) return JS_NULL;
-    if (JS_IsUndefined(b->stream)) {
-        b->stream = readable_stream_from_bytes(ctx, b->bytes ? b->bytes : "", b->len);
-        if (JS_IsException(b->stream)) { b->stream = JS_UNDEFINED; return JS_EXCEPTION; }
-    }
-    return JS_DupValue(ctx, b->stream);
-}
-
-/* NAMED RESIDUAL — §5.3's `[NewObject] ReadableStream textStream()` is not installed, on Request or on Response.
- * WHAT IS NOT COVERED: its steps are "If this is unusable, then throw a TypeError"; then, for a null body, a new
- * ReadableStream set up and closed; otherwise a new TextDecoderStream in this's relevant realm, "Set up decoder
- * with UTF-8", and "Return the result of stream, piped through decoder". The first two arms are reachable from
- * here already — §5.3 defines unusable as "if its body is non-null and its body's stream is disturbed or
- * locked", which is what js_body_get_used reads, and readable_stream_create answers the empty-stream arm. The
- * third is not: minting a TextDecoderStream and running Streams §4.2.4 "Constructor, methods, and properties"'
- * `pipeThrough` are both page-reachable step machines whose step ids are file-static to
- * core/encoding/text_stream.c and core/streams/pipe.c, so no host component can drive them.
- * WHAT THE NEXT DIFF BUILDS: the two exported entries those components owe — a UTF-8 TextDecoderStream minted in
- * the calling realm, and a pipe-through that answers a transform's readable half — and then this member as a
- * step machine over them, shared by both including interfaces the way every other member of this mixin is.
- * File API §3.3.6 "The textStream() method" on Blob is the same four steps without the unusable check, so the
- * two entries close four audit rows and not two; core/file/blob.c carries the matching residual.
- * HOW ITS ABSENCE SHOWS: `response.textStream()` is a TypeError where `response.body` answers a stream, so a
- * page streaming text must pipe through its own `new TextDecoderStream()`. The day the member exists, the
- * difference is observable in the ERROR arm rather than the happy one — `textStream()` on a used body must throw
- * a TypeError SYNCHRONOUSLY, where every other reader on this mixin answers a rejected promise. */
 void body_install(JSContext *ctx, JSValueConst proto, int handle)
 {
     DCHECK(handle >= 0 && handle < g_body_iface_n, "Body was installed with a handle nothing declared");
+    DCHECK(g_body_text_stepid >= 0,
+           "the Body mixin was installed into a realm before body_declare declared its textStream machine — "
+           "the declaration is made on the FIRST include and every realm's install reads it");
     byte_reader_install(ctx, proto, g_body_iface[handle].reader_handle);
+    idl_install_step_method(ctx, proto, "textStream", 0, g_body_text_stepid);
     {
         JSCFunctionListEntry e[2] = {
             JS_CGETSET_MAGIC_DEF("bodyUsed", js_body_get_used, NULL, 0),

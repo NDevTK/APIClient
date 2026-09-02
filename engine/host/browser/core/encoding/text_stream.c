@@ -34,6 +34,8 @@
 #include "core/encoding/text_stream.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
+#include "core/streams/pipe.h"
+#include "core/streams/readable_stream.h"
 #include "core/streams/transform_stream.h"
 
 /* ---- the two interfaces' state ----------------------------------------------------------------------------- */
@@ -481,8 +483,13 @@ static int tc_build(JSContext *ctx, JSTcState *s, bool decoder, int enc, bool fa
     return 0;
 }
 
+/* `next` IS THE STAGE THE CALLER CONTINUES AT, and it is a parameter because the set-up is not always the last
+   thing its caller does. §7.5's and §7.6's constructors are FINISHED once the transform exists, so they pass
+   their own TC_DONE; the decode operation below has a pipe to perform afterwards and passes its own next stage.
+   Stated as an argument rather than branched on inside, so this function still has exactly one exit and the
+   caller's stage list stays the caller's. */
 static int tc_run(JSContext *ctx, JSStepHdr *hdr, JSTcState *s, JSValue cb_result, JSValue *presult,
-                  JSValue **out_cb, int *out_argc)
+                  int next, JSValue **out_cb, int *out_argc)
 {
     JSValue out;
     int r;
@@ -506,7 +513,7 @@ static int tc_run(JSContext *ctx, JSStepHdr *hdr, JSTcState *s, JSValue cb_resul
             JS_FreeValue(ctx, t->transform);
             t->transform = out;
         }
-        STEP_GOTO(hdr->stage, TC_DONE, &s->phase, NULL);
+        STEP_GOTO(hdr->stage, next, &s->phase, NULL);
         *presult = s->obj;
         s->obj = JS_UNDEFINED;
         return 0;
@@ -548,7 +555,7 @@ static int js_tds_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
             return -1;
         hdr->stage = TC_SETUP;
     }
-    return tc_run(ctx, hdr, s, cb_result, presult, out_cb, out_argc);
+    return tc_run(ctx, hdr, s, cb_result, presult, TC_DONE, out_cb, out_argc);
 }
 
 /* §7.6's constructor: no arguments at all — a TextEncoderStream is always UTF-8. */
@@ -569,7 +576,7 @@ static int js_tes_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         if (tc_build(ctx, s, false, 0, false, false) < 0) return -1;
         hdr->stage = TC_SETUP;
     }
-    return tc_run(ctx, hdr, s, cb_result, presult, out_cb, out_argc);
+    return tc_run(ctx, hdr, s, cb_result, presult, TC_DONE, out_cb, out_argc);
 }
 
 static const IdlStepDecl js_tds_ctor_decl = {
@@ -582,6 +589,163 @@ static const IdlStepDecl js_tes_ctor_decl = {
     js_tes_ctor_step, sizeof(JSTcState), js_tc_visit, NULL,
     "Encoding §7.6 new TextEncoderStream()", TC_STEPS
 };
+
+/* ---- the UTF-8 text decode two standards share --------------------------------------------------------------
+ *
+ * FETCH §5.3's `textStream()` STEPS 4-6 AND FILE API §3.3.6's STEPS 2-4 ARE THE SAME THREE STEPS, WORD FOR
+ * WORD, which is why they are ONE operation here and not a copy in each caller. Fetch writes them "Let decoder
+ * be a new TextDecoderStream object in this's relevant realm", "Set up decoder with UTF-8" and "Return the
+ * result of stream, piped through decoder"; File API writes "Let decoder be a new TextDecoderStream in this's
+ * relevant realm", "Set up decoder with UTF-8" and "Return the result of calling stream, piped through
+ * decoder". What the two members do NOT share is their prologue — Fetch has an unusable check and a null-body
+ * arm, File API has neither — and that stays with each member, where the spec puts it.
+ *
+ * IT LIVES HERE BECAUSE THE DECODER IS THE PART THAT MUST BE BUILT. "A new TextDecoderStream object" is Web IDL
+ * "new", which CREATES an object without running the constructor, and "set up decoder with UTF-8" is Encoding
+ * §7.5's own "set up a text decoder stream" — an operation this standard exports for exactly this use. Neither
+ * is reachable through the page-visible `new TextDecoderStream()`: that constructor's steps 1-3 look up a LABEL
+ * and refuse a call without `new`, and neither is a thing another standard's algorithm performs.
+ *
+ * THE PIPE IS ONE CALL AND NOT A SECOND IMPLEMENTATION — Streams §9.5 Piping's "piped through", taken from
+ * core/streams/pipe.h, which is the operation another standard performs rather than §4.2.4's member. */
+
+/* WHERE THIS MACHINE RESTS. Its first two stages ARE the constructor's above — the same create-and-set-up, so
+   the same two numbers — and it adds one: the pipe. That alignment is what lets tc_run drive the middle of both,
+   and it is asserted rather than assumed. */
+#define TD_STAGES(X) \
+    X(TD_ENTRY = IDL_STEP_FIRST, \
+      "Encoding §7.5 set up a text decoder stream steps 1-7 (the assert that UTF-8 is not the replacement " \
+      "encoding, the decoder and I/O queue, and the two algorithms) — Fetch §5.3 textStream() step 4 / File " \
+      "API §3.3.6 textStream() step 2's new TextDecoderStream object") \
+    X(TD_SETUP, \
+      "Encoding §7.5 set up a text decoder stream's last step (Streams §9.3.1's set up a TransformStream over " \
+      "those algorithms) — Fetch §5.3 textStream() step 5 / File API §3.3.6 textStream() step 3") \
+    X(TD_PIPE, \
+      "Streams §9.5 Piping's piped through — Fetch §5.3 textStream() step 6 / File API §3.3.6 textStream() " \
+      "step 4 (the result of stream, piped through decoder)") \
+    X(TD_DONE, \
+      "Fetch §5.3 textStream() / File API §3.3.6 textStream() (the transform's readable half is the result)")
+enum { TD_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const TD_STEPS[] = { TD_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+/* tc_run ASSERTS `hdr->stage == TC_SETUP` and this machine reaches it at TD_SETUP, so the two enumerations
+   agree or the assert is about a different number than the one the machine is at. Both lists open at
+   IDL_STEP_FIRST with an entry stage and a set-up stage, which is the fact being pinned — a stage inserted
+   into either list ahead of the set-up breaks it here rather than at whichever call first parked. */
+_Static_assert((int)TD_ENTRY == (int)TC_ENTRY && (int)TD_SETUP == (int)TC_SETUP,
+               "the text-decode machine's first two stages must be the text stream constructor's, because "
+               "tc_run drives both and asserts the constructor's number");
+
+typedef struct {
+    /* FIRST, so js_tc_visit can walk it through this state's own pointer — one ownership list for the
+       create-and-set-up half rather than a second copy of its five call slots and its three algorithms. */
+    JSTcState tc;
+    JSValue decoder;        /* what the set-up answered, until the pipe has been performed (owned) */
+    uint8_t pipe_phase;     /* the §9.5 call's cursor — tc.phase is the set-up call's and they never overlap */
+    JSValue pipe_cb[3];     /* step_call_run's buffer: [this, func, transform] */
+} JSTdState;
+
+static void js_td_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    JSTdState *s = st;
+    int k;
+    js_tc_visit(ctx, &s->tc, v);
+    v->val(ctx, &s->decoder);
+    for (k = 0; k < 3; k++) v->val(ctx, &s->pipe_cb[k]);
+}
+
+static int js_td_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                      JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    JSTdState *s = st;
+    int r;
+
+    (void)argc; (void)argv;
+    if (hdr->stage == TD_ENTRY) {
+        int enc;
+
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        /* EVERY OWNED SLOT BEFORE THE FIRST OPERATION THAT CAN THROW. tc_build allocates and can fail, and the
+           failure path tears this state down through the declaration's `visit` — which frees exactly what the
+           state holds and nothing it never got, so a slot handed over late is freed uninitialised. The
+           constructor half is initialised here rather than by tc_build for the same reason it is there. */
+        s->tc.obj = JS_UNDEFINED;
+        s->tc.fns[0] = s->tc.fns[1] = s->tc.fns[2] = JS_UNDEFINED;
+        { int k; for (k = 0; k < 5; k++) s->tc.cb[k] = JS_UNDEFINED; }
+        s->decoder = JS_UNDEFINED;
+        s->pipe_cb[0] = s->pipe_cb[1] = s->pipe_cb[2] = JS_UNDEFINED;
+
+        DCHECK(readable_stream_is(hdr->this_val),
+               "the UTF-8 text decode was performed on a receiver that is not a ReadableStream — Fetch §5.3 "
+               "step 3 and File API §3.3.6 step 1 each name one before this operation is reached, so a caller "
+               "arriving with anything else skipped its own step");
+        /* §7.5's set up a text decoder stream takes "an optional encoding encoding (default UTF-8)" and both
+           callers say UTF-8 explicitly. Looked up in encoding.c's own table rather than written as a number,
+           so this names the same encoding `new TextDecoderStream()` does. */
+        enc = encoding_lookup("utf-8", sizeof("utf-8") - 1);
+        DCHECK(enc >= 0 && !encoding_is_replacement(enc),
+               "§7.5's set up a text decoder stream step 1 asserts \"encoding is not replacement\", and the "
+               "UTF-8 label did not resolve to a usable encoding — the label table and this operation "
+               "disagree about the one encoding every caller of it names");
+        if (tc_build(ctx, &s->tc, /*decoder*/ true, enc, /*fatal*/ false, /*ignore_bom*/ false) < 0)
+            return -1;
+        hdr->stage = TD_SETUP;
+    }
+
+    if (hdr->stage == TD_SETUP) {
+        r = tc_run(ctx, hdr, &s->tc, cb_result, &s->decoder, TD_PIPE, out_cb, out_argc);
+        if (r > 0) return r;
+        if (r < 0) return -1;
+        cb_result = JS_UNDEFINED;   /* tc_run's own request consumed it */
+    }
+
+    if (hdr->stage == TD_PIPE) {
+        TextStreamData *t = ts_any_of(s->decoder);
+        JSValue op, out;
+        JSValueConst arg;
+
+        DCHECK(t != NULL, "the UTF-8 text decode lost its own TextDecoderStream between two stages");
+        /* §9.5's operand is a TransformStream, and a TextDecoderStream is NOT one — it INCLUDES Streams
+           §9.3.2's GenericTransformStream mixin, whose associated `transform` is the transform stream. Fetch
+           and File API both write "piped through decoder" naming the including object, and the mixin is what
+           that resolves through; handing the decoder itself to §9.5 would fail its own brand test. */
+        arg = t->transform;
+        DCHECK(transform_stream_is(arg),
+               "a TextDecoderStream reached the pipe with no TransformStream in its mixin slot — set up is "
+               "what fills it and this stage is only reached once set up has answered");
+        op = pipe_through_op(ctx);
+        r = step_call_run(ctx, &s->pipe_phase, STEP_CB(s->pipe_cb), op, hdr->this_val, 1, &arg,
+                          cb_result, &out, out_cb, out_argc);
+        JS_FreeValue(ctx, op);
+        if (r > 0) return r;
+        if (JS_IsException(out)) return -1;
+        DCHECK(readable_stream_is(out),
+               "Streams §9.5's piped through answered something that is not a ReadableStream — its last step "
+               "is \"Return transform.[[readable]]\", which is one by construction");
+        STEP_GOTO(hdr->stage, TD_DONE, &s->pipe_phase, &s->tc.phase, NULL);
+        *presult = out;
+        return 0;
+    }
+
+    DFAIL("the UTF-8 text decode resumed at a stage Fetch §5.3 and File API §3.3.6 do not have between them");
+    JS_FreeValue(ctx, cb_result);
+    return -1;
+}
+
+static const IdlStepDecl js_td_decl = {
+    js_td_step, sizeof(JSTdState), js_td_visit, NULL,
+    "Fetch §5.3 textStream() steps 4-6 / File API §3.3.6 textStream() steps 2-4", TD_STEPS,
+    /* `catches_abrupt` = 0: a throw from the set-up or from the pipe belongs to whichever member called this,
+       and through it to the page. `unforkable` = NULL: the state is JSValues the visit names and nothing
+       else — no lexbor handle, no foreign allocation — so a fork copies it whole. */
+    0, NULL
+};
+
+static int g_td_stepid = -1;
+/* THIS REALM'S copy of the operation — a function object carries the realm it was minted in, so one held in a
+   module static would decode every document's body in whichever realm first asked. */
+static int g_td_slot = -1;
 
 /* ---- install -------------------------------------------------------------------------------------------- */
 
@@ -618,6 +782,10 @@ void text_stream_init(JSContext *ctx)
                                            &js_tds_ctor_decl, 0);
     idl_optional_from(0);   /* §7.5: both constructor arguments are optional */
     g_tes_ctor_stepid = idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_tes_ctor_decl, 0);
+    /* NO ARGUMENTS: the stream is the RECEIVER, because §9.5's piped-through is defined on one and this
+       operation is the caller that performs it. */
+    g_td_stepid = idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_td_decl, 0);
+    g_td_slot = realm_value_declare(ctx, "Encoding §7.5's UTF-8 text decode of a ReadableStream");
     realm_declare_intrinsic(text_stream_install_protos);
 }
 
@@ -648,6 +816,21 @@ void text_stream_install_protos(JSContext *ctx)
     idl_install_accessor(ctx, tes_p, "readable", js_gts_get, GTS_READABLE, -1);
     idl_install_accessor(ctx, tes_p, "writable", js_gts_get, GTS_WRITABLE, -1);
     JS_SetClassProto(ctx, g_tes_class, tes_p);
+
+    /* The shared decode, minted for THIS realm. It is not a member of either interface, so it goes on neither
+       prototype and no page can reach it; the two `textStream()` members take it with text_stream_decode_op. */
+    {
+        DCHECK(g_td_stepid >= 0,
+               "a realm asked for the UTF-8 text decode before text_stream_init declared its machine");
+        realm_value_set(ctx, g_td_slot, idl_step_function(ctx, "textStream", g_td_stepid));
+    }
+}
+
+JSValue text_stream_decode_op(JSContext *ctx)
+{
+    DCHECK(g_td_slot >= 0,
+           "the UTF-8 text decode was asked for before this component declared its realm slot");
+    return realm_value_get(ctx, g_td_slot);   /* OWNED */
 }
 
 void text_stream_install(JSContext *ctx, JSValueConst global)
@@ -684,5 +867,9 @@ void text_stream_free(JSContext *ctx)
     /* the prototypes are the REALMS' — released with their contexts */
     g_ts_rt = NULL;
     g_tds_ctor_stepid = g_tes_ctor_stepid = -1;
+    g_td_stepid = -1;
+    /* The realm's own copy went back with its context; what this component owns is the HANDLE, and one carried
+       into the next runtime would name a slot that runtime never set. */
+    g_td_slot = -1;
     for (i = 0; i < ALG_N; i++) g_alg_stepid[i] = -1;
 }

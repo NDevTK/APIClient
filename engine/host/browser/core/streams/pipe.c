@@ -37,9 +37,11 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/idl_args.h"
+#include "core/realm.h"
 #include "core/dom/abort.h"
 #include "core/streams/pipe.h"
 #include "core/streams/readable_stream.h"
+#include "core/streams/transform_stream.h"
 #include "core/streams/writable_stream.h"
 #include "core/streams/stream_work.h"
 
@@ -205,6 +207,16 @@ static JSValue pipe_new(JSContext *ctx)
 
 enum {
     OP_PIPE_TO = 0, OP_PIPE_THROUGH,   /* the two members */
+    /* §9.5 Piping's "piped through", which is NOT the member above and must not be routed to it. The member is
+       §4.2.4, whose steps 1-4 convert a ReadableWritablePair out of whatever the page passed and read a
+       StreamPipeOptions off it; §9.5 is the operation ANOTHER STANDARD performs, and it is handed a
+       TransformStream whose two halves it reads as INTERNAL SLOTS — "Let promise be ! ReadableStreamPipeTo(
+       readable, transform.[[writable]], preventClose, preventAbort, preventCancel, signalArg)". Its first two
+       steps are ASSERTS where the member's are throws, because a spec that reaches here has already
+       established both streams are free. Routing a host caller through the member instead would run §3.2.17
+       over an object the host built and let a page that patched Object.prototype decide what its `writable`
+       is. */
+    OP_SPEC_THROUGH,
     /* the loop */
     OP_READY_OK, OP_READY_ERR, OP_READ_OK, OP_READ_ERR, OP_WRITE_SETTLED,
     /* the four propagation rules, as reactions on the two `closed` promises */
@@ -220,8 +232,8 @@ enum {
    labels name them the way the standard writes them. Everything before step 15 IS numbered and the stages say
    which number they are at. */
 #define PIPE_STAGES(X) \
-    X(S_ENTRY, "Streams §4.2.4 pipeTo/pipeThrough (this invocation's entry: which member or which of §4.9.1's " \
-               "reactions it is)") \
+    X(S_ENTRY, "Streams §4.2.4 pipeTo/pipeThrough or §9.5 Piping's piped through (this invocation's entry: " \
+               "which member, or the operation another standard performs, or which of §4.9.1's reactions)") \
     X(S_TRANSFORM, "Streams §4.2.4 pipeThrough(transform, options) steps 2 and 4 (Get(transform, \"writable\") " \
                    "and Get(transform, \"readable\"))") \
     X(S_OPT, "Streams §4.2.4 pipeTo step 3 / pipeThrough step 3 (the StreamPipeOptions members, read in the " \
@@ -291,6 +303,11 @@ typedef struct {
 
 static int g_op_stepid[OP_N];
 static int g_pipe_to_stepid = -1, g_pipe_through_stepid = -1;
+/* §9.5's operation AS THIS REALM'S FUNCTION OBJECT — the slot, not the object. A function carries the realm it
+   was minted in (js_call_c_function reads `p->u.cfunc.realm`), so one held in a module static would answer
+   every document's pipe from whichever realm happened to make it first; the per-realm store is where a value
+   that is not a prototype belongs, and pipe_install is this component's per-realm hook. */
+static int g_spec_through_slot = -1;
 
 static void js_pipe_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
@@ -391,11 +408,50 @@ static int js_pipe_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
         s->prevent[0] = s->prevent[1] = s->prevent[2] = 0;
         s->member = 0;
         s->reject = 0;
-        s->through = (op == OP_PIPE_THROUGH);
+        /* BOTH ENTRIES THAT ANSWER A STREAM RATHER THAN A PROMISE. §4.2.4's `pipeThrough` and §9.5's "piped
+           through" differ in how they GET the transform's two halves and in nothing after that, so from here
+           on they are one path and this flag is what says so. */
+        s->through = (op == OP_PIPE_THROUGH || op == OP_SPEC_THROUGH);
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
 
-        if (op > OP_PIPE_THROUGH) {
+        if (op == OP_SPEC_THROUGH) {
+            /* §9.5's operand is a TransformStream and its halves are the SLOTS, so there is no §3.2.17
+               conversion and no options to read: the operation declares four optional arguments and every
+               caller in this engine takes their defaults (preventClose, preventAbort and preventCancel false,
+               no signal), which the zeroed `prevent` and the undefined `sig` above already are. */
+            JSValueConst tr = step_arg(hdr, 0);
+            bool src_locked = false, dst_locked = false;
+
+            DCHECK(readable_stream_is(hdr->this_val),
+                   "Streams §9.5's piped-through was performed on a receiver that is not a ReadableStream — "
+                   "the operation is defined over one, and this entry is reached only from a host component "
+                   "that has one in hand");
+            DCHECK(transform_stream_is(tr),
+                   "Streams §9.5's piped-through was handed something that is not a TransformStream — a spec "
+                   "layering its own interface over one (Encoding's TextDecoderStream) must pass the "
+                   "GenericTransformStream mixin's associated `transform`, never the including object");
+            s->tr[TR_READABLE] = JS_DupValue(ctx, transform_stream_readable(tr));
+            s->tr[TR_WRITABLE] = JS_DupValue(ctx, transform_stream_writable(tr));
+            /* §9.5 steps 1-2, which are "Assert: ! IsReadableStreamLocked(readable) is false" and "Assert: !
+               IsWritableStreamLocked(transform.[[writable]]) is false". They are ASSERTS in the standard
+               because the caller is a specification rather than a page, so they are asserts here. S_LOCKS
+               below asks the same two questions and THROWS, which is §4.2.4's answer and the right one to
+               keep for release: a caller that has broken this contract must not go on to build a pipe over a
+               stream someone else is reading. */
+            readable_stream_query(hdr->this_val, NULL, &src_locked);
+            writable_stream_query(s->tr[TR_WRITABLE], NULL, &dst_locked, NULL);
+            DCHECK(!src_locked,
+                   "Streams §9.5 step 1's assert failed: the stream handed to a piped-through is already "
+                   "locked to a reader, so the caller consumed it before asking for it to be piped");
+            DCHECK(!dst_locked,
+                   "Streams §9.5 step 2's assert failed: the transform's writable half is already locked to a "
+                   "writer, so this transform is already the destination of another pipe");
+            STEP_GOTO(s->hdr.stage, S_LOCKS, &s->w.phase, &s->hdr.get_phase, NULL);
+            goto run;
+        }
+
+        if (op > OP_SPEC_THROUGH) {
             /* a REACTION: the record is what it captured, and the settled value is its argument. */
             s->pipe = JS_DupValue(ctx, JS_StepClosureData(hdr, 0));
             s->value = JS_DupValue(ctx, step_arg(hdr, 0));
@@ -1088,9 +1144,15 @@ run:
 static const JSTrampStepDef js_pipe_defs[OP_N] = {
     PIPE_DEF(0),  PIPE_DEF(1),  PIPE_DEF(2),  PIPE_DEF(3),  PIPE_DEF(4),
     PIPE_DEF(5),  PIPE_DEF(6),  PIPE_DEF(7),  PIPE_DEF(8),  PIPE_DEF(9),
-    PIPE_DEF(10), PIPE_DEF(11), PIPE_DEF(12), PIPE_DEF(13),
+    PIPE_DEF(10), PIPE_DEF(11), PIPE_DEF(12), PIPE_DEF(13), PIPE_DEF(14),
 };
 #undef PIPE_DEF
+/* THE TABLE IS INDEXED BY THE OPERATION, so a row added to the enum and not to the array above is a definition
+   read past the end of it. C would zero-fill a short initialiser silently and JS_RegisterStepDef's own check
+   would then abort on a NULL `visit` for whichever op happened to be last — true, but naming the wrong thing.
+   This says which fact is broken. */
+_Static_assert(COUNTOF(js_pipe_defs) == OP_N,
+               "the §4.9.1 step-def table has a row per operation and the enum grew without it");
 
 void pipe_init(JSContext *ctx)
 {
@@ -1117,6 +1179,7 @@ void pipe_init(JSContext *ctx)
        of order aborts here rather than on whichever call first reaches it. */
     g_pipe_pair_atoms = idl_dict_declare(ctx, &PIPE_PAIR_DECL);
     g_pipe_options_atoms = idl_dict_declare(ctx, &PIPE_OPTIONS_DECL);
+    g_spec_through_slot = realm_value_declare(ctx, "Streams §9.5 Piping's piped through");
 }
 
 void pipe_install(JSContext *ctx, JSValueConst stream_proto)
@@ -1144,6 +1207,24 @@ void pipe_install(JSContext *ctx, JSValueConst stream_proto)
        also 1 — the options argument is optional in both. */
     idl_install_step_method(ctx, stream_proto, "pipeThrough", 1, g_pipe_through_stepid);
     idl_install_step_method(ctx, stream_proto, "pipeTo", 1, g_pipe_to_stepid);
+
+    /* §9.5's operation, minted for THIS realm and put nowhere a page can reach — it is not a member, so it
+       goes on no prototype. A host caller takes it with pipe_through_op and calls it like any other function,
+       which is what keeps it suspendable. */
+    {
+        JSValue fn = JS_NewCFunction2(ctx, NULL, "", 1, JS_CFUNC_step, g_op_stepid[OP_SPEC_THROUGH]);
+        CHECK(!JS_IsException(fn), "piping: §9.5's piped-through operation could not be made");
+        DCHECK(g_spec_through_slot >= 0,
+               "§9.5's operation was installed into a realm before pipe_init declared its slot");
+        realm_value_set(ctx, g_spec_through_slot, fn);
+    }
+}
+
+JSValue pipe_through_op(JSContext *ctx)
+{
+    DCHECK(g_spec_through_slot >= 0,
+           "Streams §9.5's piped-through was asked for before this component declared its realm slot");
+    return realm_value_get(ctx, g_spec_through_slot);   /* OWNED */
 }
 
 void pipe_free(JSContext *ctx)
@@ -1160,4 +1241,8 @@ void pipe_free(JSContext *ctx)
        runtime would brand this dictionary's members against a class that runtime never minted. */
     g_pipe_pair_atoms = g_pipe_options_atoms = NULL;
     PIPE_PAIR[TR_READABLE].iface = PIPE_PAIR[TR_WRITABLE].iface = 0;
+    /* The realm slot is a HANDLE into the same per-runtime pool, and the values it named went back with their
+       contexts — so it is released here for the reason the atoms are, and a slot carried into the next runtime
+       would read a value that runtime never set. */
+    g_spec_through_slot = -1;
 }

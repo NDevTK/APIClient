@@ -16,6 +16,20 @@ void readable_stream_free(JSContext *ctx);
    what "a byte sequence" means when there is nothing left to arrive. */
 JSValue readable_stream_from_bytes(JSContext *ctx, const char *bytes, size_t len);
 
+/* A STREAM THAT IS ALREADY CLOSED AND HAS NEVER HELD A CHUNK — Fetch §5.3 "Body mixin"'s `textStream()` step 2,
+   whose three lines are "Let emptyStream be a new ReadableStream in this's relevant realm", "Set up
+   emptyStream" and "Close emptyStream".
+   IT IS NOT readable_stream_from_bytes WITH NO BYTES, and the difference is what a page reads. That one
+   ENQUEUES ONE CHUNK and then requests close, so a zero-length call queues a zero-length Uint8Array and the
+   first read answers `{ value: Uint8Array(0), done: false }`; §4.2 answers a read on a CLOSED stream `done`
+   whatever is queued, so step 2's stream answers `{ value: undefined, done: true }` on that same first read.
+   A null body is not an empty one — body.c's own `take` keeps that distinction for `bodyUsed` — and this is
+   the same distinction on the stream side.
+   Nothing of the page's runs: §4.9.2's ReadableStreamClose settles the reader's `closed` promise and answers
+   every parked read request, and a stream this function has only just made has neither, which is asserted
+   rather than assumed. */
+JSValue readable_stream_closed_empty(JSContext *ctx);
+
 /* §4.2's `disturbed` flag, which Fetch §5.3 "Body mixin" defines `bodyUsed` over — "the bodyUsed getter steps
    are to return true if this's body is non-null and this's body's stream is disturbed": a body is used when its
    stream has been READ FROM, not when the stream was merely handed out. (§5.2 stood here and is "BodyInit
