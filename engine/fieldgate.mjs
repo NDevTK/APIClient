@@ -25,7 +25,20 @@
  *                    the coarser DEFAULTED WHOLE RECORD — a `|| { … }` substituting an entire emitted shape.
  *                    This is the CONCEALMENT: it is what turns the categories above from a crash into a
  *                    plausible datum, and it is a defect on its own terms even where the writer exists today,
- *                    because it is what will hide the writer's removal tomorrow.
+ *                    because it is what will hide the writer's removal tomorrow. It is the FALLBACK half of
+ *                    that concealment; the other half is COERCED, one entry down, and every test in this
+ *                    category looks for an operand the other one does not have.
+ *   COERCED          the same concealment with nothing in the line to find. A read standing under an
+ *                    ECMAScript conversion does not have its absence SUBSTITUTED, it has one MINTED:
+ *                    §7.1.19 ToString ( arg ) answers the String `undefined` for undefined and `null` for
+ *                    null, and both of those are property keys a JSON object can carry and path segments a
+ *                    server can spell. Measured: four `String(f.id)` reads composed a wire address off a
+ *                    record that does not carry `id`, the token matched the FIRST entry of the map being
+ *                    searched, and what came out was a field identity, a type badge and a rename button all
+ *                    describing a field nothing described — invisible to every category above, because the
+ *                    DEFAULTED test looks for a `||` and there was none. ONE of its three bands accuses and
+ *                    two are printed or counted; §the COERCION states the axis and §THE THREE BANDS states
+ *                    what was measured and what was refused.
  *   OUTSIDE THE RETURN DOMAIN
  *                    the same defect where the plausible datum is a VALUE and not a name: a host branching on
  *                    a code its producer cannot answer. Every identifier on both sides is spelled correctly,
@@ -75,8 +88,9 @@
  * language. `f.sink` and `f.poc` are two of solve.c's, so `f` is a finding and `f.cspBlocked` is a read of a
  * field nothing writes. A member IMMEDIATELY CALLED is skipped as an operation rather than a datum, which is
  * sound and not merely convenient: a record on this seam is JSON text, and JSON carries no functions.
- * The single-field case is NOT a pass — it is the AMBIGUOUS category, named with its place, because "is this
- * an endpoint or an AST node" is a question this cannot answer and answering it either way is the guess.
+ * The single-field case is NOT a pass — it is the AMBIGUOUS category, named with its place, because whether
+ * a receiver is an endpoint or an AST node is a question this cannot answer and answering it either way is the
+ * guess.
  * AND THE SHAPE IS ASKED OF BOTH ZONES, BECAUSE A NAME COLLIDES ACROSS THEM IN BOTH DIRECTIONS AT ONCE. One C
  * function body is one record and ONE JS OBJECT LITERAL IS ONE RECORD, off the same construct the whole-record
  * default already reads. Without the second half the anchor had only ONE authority it could be decided by, so
@@ -301,8 +315,12 @@ const REGEX_OK_WORD = new Set(["return", "typeof", "instanceof", "in", "of", "ne
 function maskJS(src) {
   const code = src.split(""), struct = src.split("");
   const n = src.length;
-  /* the template/`${}` stack: each entry is the brace depth at which a `${` was opened */
+  /* the template/`${}` stack: each entry is the brace depth a `${` was opened at, AND the offset it opened
+     at. The second is read by §the COERCION, and it is recorded here rather than recovered later because this
+     pass is the only one that knows which `${` belongs to a template and which `{` opens a block — asking that
+     of the masked text afterwards would be a guess about two characters. */
   const tmpl = [];
+  const subst = [];   // [interior start, closing-brace offset) for each `${ … }`
   let braceDepth = 0;
   let i = 0;
   /* A `#!` line is not JavaScript and its `/usr/bin` is not a regular expression — reading it as one swallows
@@ -344,7 +362,7 @@ function maskJS(src) {
         if (src[j] === "`") { blank(struct, i + 1, j); i = j + 1; break; }
         if (src[j] === "$" && src[j + 1] === "{") {
           blank(struct, i + 1, j);
-          tmpl.push(braceDepth);
+          tmpl.push({ depth: braceDepth, open: j + 2 });
           braceDepth++;
           i = j + 2;
           break;
@@ -375,15 +393,15 @@ function maskJS(src) {
     if (c === "{") braceDepth++;
     else if (c === "}") {
       braceDepth--;
-      if (tmpl.length && braceDepth === tmpl[tmpl.length - 1]) {
+      if (tmpl.length && braceDepth === tmpl[tmpl.length - 1].depth) {
         /* back into the template that opened this `${` */
-        tmpl.pop();
+        subst.push([tmpl.pop().open, i]);
         let j = i + 1;
         for (;;) {
           if (j >= n) return { fault: { off: i, why: "an unterminated template literal" } };
           if (src[j] === "\\") { j += 2; continue; }
           if (src[j] === "`") { blank(struct, i + 1, j); i = j + 1; break; }
-          if (src[j] === "$" && src[j + 1] === "{") { blank(struct, i + 1, j); tmpl.push(braceDepth); braceDepth++; i = j + 2; break; }
+          if (src[j] === "$" && src[j + 1] === "{") { blank(struct, i + 1, j); tmpl.push({ depth: braceDepth, open: j + 2 }); braceDepth++; i = j + 2; break; }
           j++;
         }
         prevSig = "`"; prevWord = ""; continue;
@@ -400,7 +418,7 @@ function maskJS(src) {
     if (!/\s/.test(c)) prevWord = "";
     i++;
   }
-  return { code: code.join(""), struct: struct.join("") };
+  return { code: code.join(""), struct: struct.join(""), subst };
 }
 
 /* ---- balanced scanning ----------------------------------------------------------------------------------- */
@@ -545,6 +563,343 @@ function boolConsumer(struct, code, start) {
   return w && w[1] === "instanceof" ? w[1] : null;
 }
 
+
+/* ---- §the COERCION: the absence that arrives as a value with no default standing beside it ----------------- */
+
+/* A DEFAULT SUBSTITUTES A VALUE FOR AN ABSENCE; A COERCION MINTS ONE OUT OF IT, AND THE MINTED ONE IS THE
+ * BETTER CONCEALMENT. §the CATEGORIES states DEFAULTED as "`||`, `??`, `?.`, or inside a swallowing
+ * try/catch" — every one of those an OPERAND standing in the line beside the read, which is the whole reason
+ * that category is findable. ECMAScript §7.1.19 ToString ( arg ) needs no operand: its own steps answer the
+ * String `undefined` for undefined and the String `null` for null. Both of those are property keys a JSON
+ * object can carry and path segments a server can spell, so the absence does not merely survive
+ * the read — it arrives at the consumer WEARING THE SHAPE OF THE THING BEING LOOKED FOR. Measured in this
+ * corpus: a lookup composed a wire address with `String()` off a record that does not carry the field, and the
+ * token it minted matched the FIRST entry of the map it was searching; what came out was a field identity, a
+ * type badge and a rename button all describing a field nothing described. Every DEFAULTED test in this file
+ * looks for a fallback, and in that line there was none to find.
+ *
+ * THE AXIS IS THE ABSTRACT OPERATION, NEVER A LIST OF COERCING FUNCTIONS. Such a list is the second copy this
+ * auditor exists to catch: right on the day it is written, silently short on the day the corpus grows a
+ * spelling. What is asked instead is which of ECMAScript's own conversions the read's SYNTAX places it under.
+ *   §7.1.19 ToString ( arg )  undefined => `undefined`, null => `null`. Both are plausible data — a key, a
+ *                             path segment, an attribute value, a query parameter. This is the sharp half.
+ *   §7.1.4 ToNumber ( arg )   undefined => NaN, null => +0. An absent field reaching a count, an index or an
+ *                             id as `0` is the same plausible datum by the other route; NaN is the loud half
+ *                             and travels with it, because WHICH of the two an absent field is here is
+ *                             precisely the question nobody at the read can answer.
+ *   §7.1.2 ToBoolean ( arg )  DELIBERATELY OUT, for the reason §boolConsumer argues one screen up: a boolean
+ *                             is not a value anyone mistook for a datum — the absence DECIDES A BRANCH rather
+ *                             than hiding inside one. Reporting it would report every `if (o.f)` in the
+ *                             corpus, which is reporting the language.
+ *
+ * AND THE SYNTAX IS THE SPEC'S OWN PRODUCTIONS, each a construct rather than a spelling:
+ *   §13.2.8.5 Runtime Semantics: SubstitutionEvaluation — a read inside a `${ }`, whose spans the masker
+ *             records because it is the pass that knows which `${` is a template's.
+ *   §13.15.3 ApplyStringOrNumericBinaryOperator — with opText `+`, a String on EITHER side makes the operator
+ *             take ToString of both, so a `+` chain holding a string literal coerces every operand in it;
+ *             with any other opText both sides go through ToNumeric, which is §7.1.4 for a non-BigInt.
+ *   §13.5.4 Unary + Operator — ToNumber of its one operand.
+ *   §19.2 Function Properties of the Global Object, and the two constructors called as functions beside them:
+ *             §22.1.1.1 String ( value ), §21.1.1.1 Number ( value ), §19.2.5 parseInt ( string, radix ) and
+ *             §19.2.4 parseFloat ( string ) each STATE the conversion of their first argument in their own
+ *             steps. A name THIS CORPUS BINDS is not one of them, which is asked of `declaredHere` rather than
+ *             assumed — the same question the platform arm asks of an unshadowed `document`.
+ *
+ * WHAT IS LEFT OUT, SAID PLAINLY, BECAUSE A SILENT OMISSION IS THIS FILE'S OWN DEFECT CLASS PERFORMED ON ITS
+ * OWN OUTPUT.
+ *   A WEB IDL ARGUMENT typed DOMString or USVString coerces exactly as `String()` does — `el.setAttribute(k,
+ *     v.f)` mints the token `undefined` through the platform rather than through a global — and it is
+ *     DERIVABLE here, off the same @webref/idl the platform arm already loads. It is not asked, because typing the callee's
+ *     RECEIVER is a question the later anchor pass answers while this one runs during the scan. THE NEXT DIFF
+ *     asks it where `ifaceOfExpr` already stands and joins `argTypeName` to it, so that a coerced argument is
+ *     reported at the platform call. ITS ABSENCE SHOWS as a row landing on a `String(...)` one line above a
+ *     `setAttribute` and no row at all on the `setAttribute` that has no `String()` in front of it.
+ *   `x.f.toString()` AND `x.f.join()` are not this defect: they THROW on an absence, which is the loud
+ *     outcome this whole file exists to ask for, and a member immediately called is already skipped as an
+ *     operation rather than a datum.
+ *   `JSON.stringify(x.f)` yields the ABSENT value rather than a token, so it conceals nothing a reader could
+ *     mistake for a datum.
+ *   A TAGGED TEMPLATE hands its substitutions to its tag function UNCONVERTED (§13.3.11 Tagged Templates), so
+ *     a read inside one is not under §13.2.8.5 at all and this OVER-reports it. The masker records a `${ }`
+ *     span without asking what stands in front of the backtick, so telling the two apart is one character the
+ *     next diff reads there; until it does, the over-report lands in the KEYED/A VALUE bands, which are listed
+ *     and counted rather than accused, and it SHOWS as a template-substitution row whose backtick is preceded
+ *     by an identifier.
+ *
+ * AND THE IDENTITY QUESTION IS ASKED OF ONE CONSTRUCT OF THE FOUR, WHICH IS A NARROWING AND IS NAMED AS ONE.
+ * §THE THREE BANDS accuses a coerced read whose token is an EQUALITY OPERAND, and only the global-conversion
+ * arm knows its own outer extent — a call runs from its callee to its closing paren, which is where the `===`
+ * is looked for. A template substitution and a `+` chain are coerced expressions too, and their extents are a
+ * backtick pair and an operand run this walk does not currently carry out of `coercionOf`; so `${x.f} === k`
+ * and `"a" + x.f === k` are recorded as A VALUE. THE NEXT DIFF returns the coerced expression's span from
+ * `coercionOf` beside its conversion, so `isEqualityOperand` is asked of all four the same way. ITS ABSENCE
+ * SHOWS as a template or `+` row in the A VALUE band with a `===` on the same line. */
+
+/* WHERE a coerced read stands, which is what decides whether the token it mints is a datum or a diagnostic.
+   Three constructs, and each is already read in this file for another question: the argument list of a
+   should-never-happen (the absence ABORTS there, so the conversion is printing a message beside a crash, not
+   feeding a consumer), the argument list of a console emission (the token is being shown to a person, who is
+   the one reader who can tell "undefined" from a field value), and everywhere else — which is the seam. */
+function readPlace(assertSpans, emitSpans, off) {
+  if (assertSpans.some(([a, b]) => off >= a && off < b)) return "assert";
+  if (emitSpans.some(([a, b]) => off >= a && off < b)) return "log";
+  return null;
+}
+
+/* One past the opener of the innermost `(` enclosing `off` with no balanced pair between them, or -1 when the
+   innermost enclosing bracket is not a `(` at all. A `[` or `{` in that position ends the walk rather than
+   being stepped over: an argument list is what the conversion functions below are read out of, and a read
+   inside an array or an object literal inside a call is not in the call's argument position. */
+function enclosingCallParen(struct, off) {
+  let d = 0;
+  for (let i = off - 1; i >= 0; i--) {
+    const c = struct[i];
+    if (c === ")" || c === "]" || c === "}") d++;
+    else if (c === "(" || c === "[" || c === "{") {
+      if (d === 0) return c === "(" ? i : -1;
+      d--;
+    }
+  }
+  return -1;
+}
+
+/* The span [a,b) with its surrounding whitespace removed. */
+function spansOf(struct, a, b) {
+  while (a < b && /\s/.test(struct[a])) a++;
+  while (b > a && /\s/.test(struct[b - 1])) b--;
+  return [a, b];
+}
+
+/* The `[` of the innermost MEMBER ACCESSOR enclosing `off`, or -1. An array literal's `[` is not one, and the
+   character in front of the bracket is what says which it is: a member accessor's base ends in an identifier
+   character or a closing bracket, an array literal's `[` follows an operator, a comma or nothing. */
+function enclosingBracketKey(struct, off) {
+  let d = 0;
+  for (let i = off - 1; i >= 0; i--) {
+    const c = struct[i];
+    if (c === ")" || c === "]" || c === "}") d++;
+    else if (c === "(" || c === "[" || c === "{") {
+      if (d) { d--; continue; }
+      if (c !== "[") return -1;
+      let b = i;
+      while (b > 0 && /\s/.test(struct[b - 1])) b--;
+      return b > 0 && /[\w$)\]]/.test(struct[b - 1]) ? i : -1;
+    }
+  }
+  return -1;
+}
+
+/* IS THE COERCED EXPRESSION AN EQUALITY OPERAND — which is the question that separates a token that EXISTS
+   from a token that MATCHES. `String(x.f) === node.field` is the measured incident exactly: the absence became
+   the token `undefined`, a JSON body's own key can BE that token, and the comparison then succeeded on the first entry
+   of the map. Asked of the WHOLE coerced expression, never of the read inside it. */
+const EQ_OPS = ["===", "!==", "==", "!="];
+function isEqualityOperand(struct, a, b) {
+  let r = b;
+  while (r < struct.length && /\s/.test(struct[r])) r++;
+  for (const op of EQ_OPS) if (struct.slice(r, r + op.length) === op) return true;
+  let l = a;
+  while (l > 0 && /\s/.test(struct[l - 1])) l--;
+  for (const op of EQ_OPS) if (struct.slice(l - op.length, l) === op) return true;
+  return false;
+}
+
+/* One operand of a `+` chain, stepped over from its first character. Identifier characters, `.`, `?.` and
+   balanced groups are the operand; anything else ends it. -1 says this walk cannot tell where the operand
+   ends, which ends the chain — the under-crediting direction this file takes everywhere. */
+function skipOperandFwd(struct, i) {
+  const n = struct.length;
+  let started = false;
+  while (i < n) {
+    const c = struct[i];
+    if (/[\w$.]/.test(c)) { i++; started = true; continue; }
+    if (c === "?" && struct[i + 1] === ".") { i += 2; continue; }
+    if (c === "(" || c === "[") { const e = matchAt(struct, i); if (e < 0) return -1; i = e; started = true; continue; }
+    break;
+  }
+  return started ? i : -1;
+}
+function skipOperandBack(struct, i) {
+  let started = false;
+  while (i > 0) {
+    const c = struct[i - 1];
+    if (/[\w$.]/.test(c)) { i--; started = true; continue; }
+    if (c === ")" || c === "]") {
+      let d = 0, j = i - 1;
+      for (; j >= 0; j--) {
+        const q = struct[j];
+        if (q === ")" || q === "]" || q === "}") d++;
+        else if (q === "(" || q === "[" || q === "{") { d--; if (!d) break; }
+      }
+      if (j < 0) return -1;
+      i = j; started = true; continue;
+    }
+    break;
+  }
+  return started ? i : -1;
+}
+
+/* Is the read at [from,to) an operand of a `+` chain one of whose operands is a STRING or TEMPLATE literal?
+   §13.15.3's `+` takes ToString of BOTH operands the moment either side is a String, and `+` is
+   left-associative, so one string literal anywhere in the run is enough to say a ToString happened to at
+   least the sub-expression this read is in. The quote characters survive in `struct` — only their CONTENTS
+   are blanked — so whether an operand is a string literal is a structural question here. */
+function plusChainString(struct, from, to) {
+  let i = to;
+  for (;;) {
+    while (i < struct.length && /\s/.test(struct[i])) i++;
+    if (struct[i] !== "+" || struct[i + 1] === "+" || struct[i + 1] === "=") break;
+    i++;
+    while (i < struct.length && /\s/.test(struct[i])) i++;
+    if (struct[i] === '"' || struct[i] === "'" || struct[i] === "`") return true;
+    const e = skipOperandFwd(struct, i);
+    if (e < 0) break;
+    i = e;
+  }
+  let j = from;
+  for (;;) {
+    while (j > 0 && /\s/.test(struct[j - 1])) j--;
+    if (struct[j - 1] !== "+" || struct[j - 2] === "+" || struct[j - 2] === "=" || struct[j - 2] === "!"
+        || struct[j - 2] === "<" || struct[j - 2] === ">") break;
+    j--;
+    while (j > 0 && /\s/.test(struct[j - 1])) j--;
+    if (struct[j - 1] === '"' || struct[j - 1] === "'" || struct[j - 1] === "`") return true;
+    const e = skipOperandBack(struct, j);
+    if (e < 0) break;
+    j = e;
+  }
+  return false;
+}
+
+/* The arithmetic operators §13.15.3 sends through ToNumeric, plus `+`, whose own conversion is decided by the
+   VALUES and not by the syntax — either operand being a String makes it ToString of both, and nothing else
+   makes it ToNumber of both. Where a string LITERAL is in the chain the answer is known and `plusChainString`
+   has already given it; where it is not, the read is still under a conversion and WHICH one is undecidable
+   here, which the row says rather than picking.
+   `/` IS DELIBERATELY ABSENT. The masker decides division from regexp by what precedes the slash; a `/` after
+   a read is a division and readable, but a `/` BEFORE one can be the closing slash of a regexp whose interior
+   this view has blanked, and telling those apart at this end is the guess this file refuses everywhere. The
+   cost is that `a / o.f` is not reported while `o.f * 2` is — the under-crediting direction. */
+const ARITH_OPS = ["**", "*", "%", "-", "+"];
+const ARITH_SEC = "ECMAScript §13.15.3 ApplyStringOrNumericBinaryOperator ( leftValue, opText, rightValue )";
+const arithTo = (op) => (op === "+" ? "ToString or ToNumber — §13.15.3 decides on the VALUES" : "ToNumber");
+
+/* The ECMAScript global functions whose own steps convert their FIRST argument, with the clause that says so.
+   This is not a list of "functions that coerce" — it is the set of §19.2 Function Properties of the Global
+   Object (plus the two constructors §22.1.1.1 and §21.1.1.1 called without `new`) whose defined steps begin by
+   converting argument one, which is a fact about the STANDARD and not about this corpus. A name the corpus
+   binds for itself is not the global one, and that is asked, never assumed. */
+const GLOBAL_CONVERSION = new Map([
+  ["String", { to: "ToString", sec: "ECMAScript §22.1.1.1 String ( value )" }],
+  ["Number", { to: "ToNumber", sec: "ECMAScript §21.1.1.1 Number ( value )" }],
+  ["parseInt", { to: "ToString", sec: "ECMAScript §19.2.5 parseInt ( string, radix )" }],
+  ["parseFloat", { to: "ToString", sec: "ECMAScript §19.2.4 parseFloat ( string )" }],
+]);
+
+/* The conversion a read at [from,to) stands under, or null. `subst` is the masker's list of `${ }` interiors;
+   `boundHere` is the file's own scope answer, so a corpus that declares its own `String` is not credited with
+   the language's. */
+function coercionOf(struct, code, from, to, subst, boundHere) {
+  /* A CONVERSION APPLIES TO A WHOLE VALUE, AND A READ THAT IS ONLY PART OF ONE IS NOT UNDER IT. This is the
+     same question §boolConsumer asks to the LEFT of a `||` — "is anything already consuming this read" — asked
+     to the RIGHT, and it is what separates the axis from a listing of the language: in `${JSON.stringify(o.f)}`
+     and `"x" + f(o.g)` the substitution and the `+` convert what the CALL returned, and `o.f`/`o.g` never meet
+     ToString at all. Asking it first took this category from 536 rows to a population a person can read, and
+     every row it removed was a read whose absence the conversion beside it does NOT make plausible. */
+  let e = to;
+  while (e < struct.length && /\s/.test(struct[e])) e++;
+  if (struct[e] === "." || struct[e] === "[" || struct[e] === "(") return null;
+  if (struct[e] === "?" && (struct[e + 1] === "." || struct[e + 1] === "[" || struct[e + 1] === "(")) return null;
+  const spans = (a, b) => spansOf(struct, a, b);
+
+  /* §13.3.3 EvaluatePropertyAccessWithExpressionKey, whose key goes through §7.1.21 ToPropertyKey ( arg ) and
+     from there to §7.1.19 ToString. `o[x.f]` with `f` absent keys the object at `undefined`, and on the WRITE side
+     `o[x.f] = v` mints that key ON the object — the token then exists, is enumerable, and is what a later
+     lookup of a genuinely-absent field finds. The `[` must be a MEMBER accessor and not an array literal,
+     which is what the character in front of it says. */
+  const ob = enclosingBracketKey(struct, from);
+  if (ob >= 0) {
+    const cb = matchAt(struct, ob);
+    if (cb > 0) {
+      const [x, y] = spansOf(struct, ob + 1, cb - 1);
+      if (x === from && y === to)
+        return { to: "ToString", how: "a computed property key", use: "a property key",
+                 sec: "ECMAScript §7.1.21 ToPropertyKey ( arg )" };
+    }
+  }
+
+  /* §13.2.8.5 — the substitution's value is handed to ToString by the template's own evaluation, so the read
+     must BE the substitution expression and not merely stand inside it. */
+  for (const [a, b] of subst) {
+    const [x, y] = spans(a, b);
+    if (x === from && y === to)
+      return { to: "ToString", how: "a `${ }` template substitution", use: "a value",
+               sec: "ECMAScript §13.2.8.5 Runtime Semantics: SubstitutionEvaluation" };
+  }
+
+  /* §19.2 and the two constructors called as functions — the read must BE the FIRST argument, which is the one
+     whose conversion those clauses state, and the callee must be the language's global rather than a member
+     (`x.String(…)`) or a name this file binds for itself. */
+  const open = enclosingCallParen(struct, from);
+  if (open > 0) {
+    const head = Math.max(0, open - 40);
+    const w = /([A-Za-z_$][\w$]*)\s*$/.exec(code.slice(head, open));
+    if (w && GLOBAL_CONVERSION.has(w[1]) && !boundHere(w[1])) {
+      const before = struct[head + w.index - 1] || " ";
+      const close = matchAt(struct, open);
+      if (before !== "." && before !== "?" && close > 0) {
+        const first = splitTop(struct, open + 1, close - 1)[0];
+        if (first) {
+          const [x, y] = spans(first[0], first[1]);
+          if (x === from && y === to) {
+            const g = GLOBAL_CONVERSION.get(w[1]);
+            /* The coerced EXPRESSION is the whole call, so the identity question is asked of that span and not
+               of the read — `String(x.f) === k` compares the token, and `x.f === k` compares the field. */
+            const idAt = head + w.index;
+            return { to: g.to, how: `the argument of \`${w[1]}()\``, sec: g.sec,
+                     use: isEqualityOperand(struct, idAt, matchAt(struct, open)) ? "an equality operand" : "a value" };
+          }
+        }
+      }
+    }
+  }
+
+  /* §13.15.3 with a String on one side — ToString of BOTH, and the string literal in the chain is what says so. */
+  if (plusChainString(struct, from, to))
+    return { to: "ToString", how: "an operand of a `+` chain holding a string literal", sec: ARITH_SEC, use: "a value" };
+
+  /* The arithmetic operators, asked to the right and then to the left. A compound assignment (`o.f *= 2`) is
+     skipped: it is a read-modify-write of the record's OWN field, and the value it mints it also stores, which
+     is a different sentence than the one this category makes. */
+  let r = to;
+  while (r < struct.length && /\s/.test(struct[r])) r++;
+  for (const op of ARITH_OPS) {
+    if (struct.slice(r, r + op.length) !== op) continue;
+    if (struct[r + op.length] === "=") continue;                 /* `*=`, `+=`, `-=`, `%=`, `**=` */
+    if (op.length === 1 && struct[r + 1] === op) continue;       /* `**`, `++`, `--` — a longer operator */
+    return { to: arithTo(op), how: `the left operand of \`${op}\``, sec: ARITH_SEC, use: "a value" };
+  }
+  let l = from;
+  while (l > 0 && /\s/.test(struct[l - 1])) l--;
+  for (const op of ARITH_OPS) {
+    if (struct.slice(l - op.length, l) !== op) continue;
+    if (op.length === 1 && struct[l - op.length - 1] === op) continue;   /* the tail of `**`/`++`/`--` */
+    /* UNARY OR BINARY IS A QUESTION ABOUT WHAT PRECEDES THE OPERATOR, and it changes which clause applies:
+       §13.5.4 Unary + Operator converts one operand, §13.15.3 converts two. `x = -o.f` and `a - o.f` are the
+       same character in two productions. */
+    let b = l - op.length;
+    while (b > 0 && /\s/.test(struct[b - 1])) b--;
+    const binary = b > 0 && /[\w$)\]"'`]/.test(struct[b - 1]);
+    if (!binary && op === "+")
+      return { to: "ToNumber", how: "the operand of a unary `+`", sec: "ECMAScript §13.5.4 Unary + Operator", use: "a value" };
+    if (!binary && op === "-")
+      return { to: "ToNumber", how: "the operand of a unary `-`", sec: "ECMAScript §13.5.5 Unary - Operator", use: "a value" };
+    if (!binary) continue;
+    return { to: arithTo(op), how: `the right operand of \`${op}\``, sec: ARITH_SEC, use: "a value" };
+  }
+  return null;
+}
+
 /* ---- the record namespaces ------------------------------------------------------------------------------- */
 
 /* A field name, with every place that WRITES it and every place that READS it. The diff between the two sides
@@ -562,8 +917,8 @@ const cEmitted = new Set();
    function's emissions are one record: endpoint_json_array's method/url/params/name/location/validValues,
    result_json's twenty-four counters, solve_json_array's sink/source/poc/firesOn), and a receiver is that
    record when it is READ LIKE IT — two of its fields, not one. The single-name case is not dropped: it is the
-   AMBIGUOUS category below, named with its place, because "is this an endpoint or an AST node" is a question
-   this cannot answer and answering it either way is the guess the whole file is built against. */
+   AMBIGUOUS category below, named with its place, because whether a receiver is an endpoint or an AST node is
+   a question this cannot answer and answering it either way is the guess the whole file is built against. */
 const shapes = new Map();   // "file:offset" -> Set(name)
 const shapeOf = (id) => { let s = shapes.get(id); if (!s) shapes.set(id, (s = new Set())); return s; };
 
@@ -587,6 +942,11 @@ const rec = (map, name) => {
 };
 
 const defaulted = [];   // {file,line,name,form,recv}
+/* A read whose ABSENCE a conversion turns into a value — §the COERCION. Held apart from `defaulted` because
+   the two are different facts about the line and the remedy differs: a default is deleted, a coercion is
+   ASSERTED before it happens. Every row carries the conversion, the construct that applied it and the clause
+   that defines it, so a reader can disagree with the classification without opening the standard. */
+const coerced = [];     // {file,line,name,recv,shape,to,how,sec,where}
 /* A read a `||`/`??` follows WITHOUT defaulting it, because a boolean-producing operator already consumed the
    value — see §boolConsumer. Printed in full for the same reason DECIDED PLATFORM is: a decided negative nobody
    can see is the concealment this file exists to report, performed on its own output. Every row names the
@@ -2024,12 +2384,33 @@ function functionScopes(struct, code) {
 function scanJS(file, src) {
   const masked = maskJS(src);
   if (masked.fault) { refuse(file, lineOf(src, masked.fault.off), "a JS file this masker could not tokenize", masked.fault.why); return null; }
-  const { code, struct } = masked;
+  const { code, struct, subst } = masked;
   const fault = bracketFault(struct);
   if (fault) { refuse(file, lineOf(src, fault.off), "a JS file whose masked brackets do not balance — the mask is wrong somewhere above this and every span answer about the file would be a guess", fault.why); return null; }
 
   const site = (off) => ({ file, line: lineOf(src, off) });
   const swallow = swallowingTrySpans(struct);
+  /* --- the spans a should-never-happen ASSERTS over ------------------------------------------------------- */
+  /* §Architecture's remedy for a field a consumer defaults is "it DCHECKs the field's presence and shape", and
+     a consumer that has already done it has closed the thing this gate is looking for: a name the producer does
+     not write is then an ABORT at the read rather than a plausible datum. That is a fact about a CONSTRUCT — the
+     read sits inside the argument list of the assert — and it is read here so §the anchor loop can ask it. */
+  const assertSpans = [];
+  for (const fn of ["DCHECK", "DFAIL", "CHECK", "CHECK_FAIL", "DCHECKF"])
+    for (const c of callSites(struct, fn))
+      if (struct[c.at - 1] !== "." && c.close > 0) assertSpans.push([c.open, c.close]);
+  /* A DRIVER PRINTS MARKERS TOO, and reading every JS literal as a MATCH made solvergate's own `@EMIT` and
+     `@GATEFAIL` — which it writes with console.log and then greps out of a child's stdout — report as markers
+     nothing prints. So the same discriminator the C side uses applies here: a literal inside an emission call
+     is the marker being PRINTED; everywhere else it is the marker being LOOKED FOR. */
+  const emitSpans = [];
+  for (const fn of ["console.log", "console.error", "console.warn", "console.info", "process.stdout.write", "process.stderr.write"])
+    for (const c of callSites(struct, fn.split(".").pop())) {
+      const qual = fn.slice(0, fn.lastIndexOf(".")).replace(".", "\\s*\\.\\s*");
+      if (!new RegExp(`(^|[^\\w$.])${qual}\\s*\\.\\s*$`).test(struct.slice(Math.max(0, c.at - 32), c.at))) continue;
+      if (c.close > 0) emitSpans.push([c.open, c.close]);
+    }
+  const emitting = (off) => emitSpans.some(([a, b]) => off >= a && off < b);
   /* THE KEY A READ ANCHORS UNDER: the receiver's text, qualified by the scope its BASE NAME is bound in. The
      text stays the display, because that is what a reader opens the file to find; the key is what decides
      which reads are reads of one object. A receiver whose base is not a bare identifier (`a().b`) has no
@@ -2186,7 +2567,10 @@ function scanJS(file, src) {
       else consumed = { form: `${op} default`, by: consumed };
     }
     else if (inSpan(swallow, m.index)) form = "inside a swallowing try/catch";
-    localReads.push({ name: m[2], recv, key: keyOf(recv, m.index), off: nameAt, form, consumed });
+    const co = form || consumed || at0.start === undefined ? null
+      : coercionOf(struct, code, at0.start, nameAt + m[2].length, subst, declaredHere);
+    localReads.push({ name: m[2], recv, key: keyOf(recv, m.index), off: nameAt, form, consumed,
+                      coerced: co, coercedAt: co ? readPlace(assertSpans, emitSpans, m.index) : null });
     if (isRMW) localWrites.push({ name: m[2], off: nameAt });
   }
 
@@ -2216,7 +2600,10 @@ function scanJS(file, src) {
       else consumed = { form: `${op} default`, by: consumed };
     }
     else if (inSpan(swallow, at)) form = "inside a swallowing try/catch";
-    localReads.push({ name, recv, key: keyOf(recv, at), off: at, form, consumed });
+    const co2 = form || consumed || at1.start === undefined ? null
+      : coercionOf(struct, code, at1.start, at + m[0].length, subst, declaredHere);
+    localReads.push({ name, recv, key: keyOf(recv, at), off: at, form, consumed,
+                      coerced: co2, coercedAt: co2 ? readPlace(assertSpans, emitSpans, at) : null });
   }
 
   /* --- bracketed member expressions whose key is a NAME THIS FILE STATES ---------------------------------- */
@@ -2256,7 +2643,12 @@ function scanJS(file, src) {
     for (const nm of ans.names) {
       if (!/^[A-Za-z_$][\w$]*$/.test(nm)) continue;
       if (isWrite) { localWrites.push({ name: nm, off: at }); memberAssigns.push({ key: keyOf(recv, at), name: nm, off: at }); }
-      else localReads.push({ name: nm, recv, key: keyOf(recv, at), off: at, form, consumed });
+      else {
+        const co3 = form || consumed || at2.start === undefined ? null
+          : coercionOf(struct, code, at2.start, at + m[0].length, subst, declaredHere);
+        localReads.push({ name: nm, recv, key: keyOf(recv, at), off: at, form, consumed,
+                          coerced: co3, coercedAt: co3 ? readPlace(assertSpans, emitSpans, at) : null });
+      }
     }
   }
 
@@ -2469,29 +2861,7 @@ function scanJS(file, src) {
     }
   }
 
-  /* --- the spans a should-never-happen ASSERTS over ------------------------------------------------------- */
-  /* §Architecture's remedy for a field a consumer defaults is "it DCHECKs the field's presence and shape", and
-     a consumer that has already done it has closed the thing this gate is looking for: a name the producer does
-     not write is then an ABORT at the read rather than a plausible datum. That is a fact about a CONSTRUCT — the
-     read sits inside the argument list of the assert — and it is read here so §the anchor loop can ask it. */
-  const assertSpans = [];
-  for (const fn of ["DCHECK", "DFAIL", "CHECK", "CHECK_FAIL", "DCHECKF"])
-    for (const c of callSites(struct, fn))
-      if (struct[c.at - 1] !== "." && c.close > 0) assertSpans.push([c.open, c.close]);
-
   /* --- markers: a literal naming an @TAG is a reference to the stream contract ----------------------------- */
-  /* A DRIVER PRINTS MARKERS TOO, and reading every JS literal as a MATCH made solvergate's own `@EMIT` and
-     `@GATEFAIL` — which it writes with console.log and then greps out of a child's stdout — report as markers
-     nothing prints. So the same discriminator the C side uses applies here: a literal inside an emission call
-     is the marker being PRINTED; everywhere else it is the marker being LOOKED FOR. */
-  const emitSpans = [];
-  for (const fn of ["console.log", "console.error", "console.warn", "console.info", "process.stdout.write", "process.stderr.write"])
-    for (const c of callSites(struct, fn.split(".").pop())) {
-      const qual = fn.slice(0, fn.lastIndexOf(".")).replace(".", "\\s*\\.\\s*");
-      if (!new RegExp(`(^|[^\\w$.])${qual}\\s*\\.\\s*$`).test(struct.slice(Math.max(0, c.at - 32), c.at))) continue;
-      if (c.close > 0) emitSpans.push([c.open, c.close]);
-    }
-  const emitting = (off) => emitSpans.some(([a, b]) => off >= a && off < b);
 
   const STRLIT = /(["'`])((?:[^\\]|\\.)*?)\1/g;
   while ((m = STRLIT.exec(code))) {
@@ -4143,15 +4513,27 @@ for (const s of jsScans) {
             const site = { ...s.site(r.off), recv, shape: jBest };
             if (r.form) defaulted.push({ ...site, name: r.name, form: r.form });
             else if (r.consumed) decidedOperand.push({ ...site, name: r.name, ...r.consumed });
+            else if (r.coerced) coerced.push({ ...site, name: r.name, ...r.coerced, where: r.coercedAt, disp: "a record this corpus constructs" });
           }
         }
-        else ambiguous.push({ ...s.site(rs[0].off), recv, reason: TWO_RECORDS,
+        else {
+          for (const r of rs)
+            if (r.coerced && !r.form && !r.consumed)
+              coerced.push({ ...s.site(r.off), recv, name: r.name, ...r.coerced, where: r.coercedAt, disp: "AMBIGUOUS — two records explain it equally" });
+          ambiguous.push({ ...s.site(rs[0].off), recv, reason: TWO_RECORDS,
                               why: `reads ${bestN} field(s) of the emission at ${best} and the same ${jN} of the ` +
                                    `record constructed at ${jBest} — \`${[...names].join("`, `")}\`` });
+        }
         continue;
       }
     }
     if (bestN < 2) {
+      for (const r of rs)
+        if (r.coerced && !r.form && !r.consumed)
+          coerced.push({ ...s.site(r.off), recv, name: r.name, ...r.coerced, where: r.coercedAt,
+                         disp: bestN === 1 ? (shapes.get(best).has(r.name) ? "UNDECIDED — one emitted name, and this is it"
+                                                                            : "UNDECIDED — one emitted name, and this is not it")
+                                           : "UNDECIDED — no emitted name at all" });
       /* ONE intersecting name is not an anchor and it is not a pass either. Reported only where the receiver
          also reads a name NO producer emits — which is the only configuration in which the undecided question
          could be hiding this defect, and reporting the rest would be reporting the language again. */
@@ -4190,6 +4572,10 @@ for (const s of jsScans) {
          a receiver whose identity this file got wrong. The name written NOWHERE is not diverted into this
          category — it stays READ-NO-WRITER, which is louder and is already the right row for it. */
       if (!shapes.get(best).has(r.name)) {
+        if (r.coerced && !r.form && !r.consumed)
+          coerced.push({ ...site, name: r.name, ...r.coerced, where: r.coercedAt,
+                         disp: fields.get(r.name)?.writes.length ? "the emission it anchors to, which does NOT carry this name"
+                                                                                : "no producer anywhere" });
         if (fields.get(r.name)?.writes.length)
           offRecord.push({ ...site, name: r.name, writes: fields.get(r.name).writes.slice(0, 4) });
         else rec(fields, r.name).reads.push(site);
@@ -4198,6 +4584,7 @@ for (const s of jsScans) {
       rec(fields, r.name).reads.push(site);
       if (r.form) defaulted.push({ ...site, name: r.name, form: r.form });
       else if (r.consumed) decidedOperand.push({ ...site, name: r.name, ...r.consumed });
+      else if (r.coerced) coerced.push({ ...site, name: r.name, ...r.coerced, where: r.coercedAt, disp: "the emission it anchors to, which carries this name" });
     }
   }
 }
@@ -4459,6 +4846,44 @@ show(`WRITTEN marker with no reader — ${mWriteNoReader.length} stream marker(s
 
 const dByForm = new Map();
 for (const d of defaulted) dByForm.set(d.form, (dByForm.get(d.form) || 0) + 1);
+/* THE THREE BANDS, AND WHY ONLY ONE OF THEM ACCUSES. Every row below is a read standing under a conversion,
+   which is the same fact; what differs is what the corpus DOES with the token, and that is what decides whether
+   an absence is a wrong answer or merely an unremarkable one.
+     COMPARED   the minted token is an equality operand, so an absence MATCHES. That is a wrong answer with the
+                same shape as a right one, it is the measured incident exactly, and its remedy is mechanical —
+                assert the field, or compare before converting. This band is the verdict's.
+     KEYED      the token becomes a property key, so `o[x.f] = v` MINTS "undefined" ON the object and a later
+                read of a genuinely absent field finds it. Real, and LISTED rather than accused: whether the
+                absence is possible is a fact about the RECORD, and at every disposition these rows land on the
+                producer does write the name. Printed because a reader chasing an "undefined" key has nowhere
+                else to look.
+     A VALUE    the token is printed, concatenated or summed and nothing compares or keys it. NOT REPORTED, and
+                the refusal is MEASURED rather than assumed: the rows were read, and they are census counters in
+                a report line, tagged-union arms that have already branched on their own tag, and an
+                instrument's own finding record — a listing of the language, which is what §the SHAPE anchor
+                exists to keep out. The COUNT stays, per construct, because a decided negative nobody can see is
+                the concealment this file exists to report; it is also the standing evidence for the refusal,
+                which a comment could not be. */
+const coercedCompared = coerced.filter((c) => c.use === "an equality operand" && !c.where);
+const coercedKeyed = coerced.filter((c) => c.use === "a property key");
+const coercedValue = coerced.filter((c) => c.use === "a value");
+if (coerced.length) {
+  log(`── COERCED — ${coerced.length} read(s) of a record field standing under a conversion that turns its ` +
+      `absence into a value rather than into a crash ──`);
+  log(`  ${String(coercedCompared.length).padStart(5)}  COMPARED — the token is an equality operand, so an absence MATCHES. This band is the verdict's`);
+  for (const c of coercedCompared)
+    log(`         ${place(c)}  ${c.recv}.${c.name}  ${c.to} via ${c.how}; the record is ${c.disp}  — ${c.sec}`);
+  const inEq = coerced.filter((c) => c.use === "an equality operand" && c.where);
+  for (const [w, n] of [...inEq.reduce((m, c) => m.set(c.where, (m.get(c.where) || 0) + 1), new Map())])
+    log(`         (and ${n} more inside ${w === "assert" ? "a should-never-happen, where the absence ABORTS" : "a console emission, where a person reads the token"})`);
+  log(`  ${String(coercedKeyed.length).padStart(5)}  KEYED — the token becomes a property key (§7.1.21 ToPropertyKey). Listed, not accused`);
+  for (const c of coercedKeyed.slice(0, 20)) log(`         ${place(c)}  ${c.recv}.${c.name}  <${c.disp}${c.where ? "/" + c.where : ""}>`);
+  if (coercedKeyed.length > 20) log(`         … and ${coercedKeyed.length - 20} more`);
+  log(`  ${String(coercedValue.length).padStart(5)}  A VALUE — nothing compares or keys the token. Refused, by construct:`);
+  const byHow = new Map();
+  for (const c of coercedValue) byHow.set(c.how, (byHow.get(c.how) || 0) + 1);
+  for (const [h, n] of [...byHow].sort((a, b) => b[1] - a[1])) log(`         ${String(n).padStart(5)}  ${h}`);
+}
 if (defaulted.length) {
   log(`── DEFAULTED reads — ${defaulted.length} read(s) of a record field through a form that survives its absence ──`);
   for (const [form, n] of [...dByForm].sort((a, b) => b[1] - a[1])) log(`  ${String(n).padStart(5)}  ${form}`);
@@ -4715,6 +5140,7 @@ const cats = [
   ["stream markers NAMED with no writer", mReadNoWriter.length],
   ["stream markers WRITTEN with no reader", mWriteNoReader.length],
   ["reads of a record field DEFAULTED rather than asserted", defaulted.length],
+  ["reads of a record field CONVERTED into a token something compares — an absence that MATCHES", coercedCompared.length],
   ["whole emitted records DEFAULTED away by a substitute literal", wholeDefaulted.length],
   ["comparisons OUTSIDE a producer's return domain — branches on a value it cannot answer", outsideDomain.length],
   ["values a producer returns that an exhaustive construct does NOT enumerate", unenumerated.length],
@@ -4736,7 +5162,8 @@ if (!cats.length) {
 for (const [k, n] of cats) log(`  ${String(n).padStart(5)}  ${k}`);
 console.error(`[field-gate] FAILED — ${cats.length} category(ies) above. A read with no writer is a wrong number ` +
               `already being reported; a write with no reader is a measurement nobody sees; a defaulted read is ` +
-              `what stops either from being a crash. Fix at the ROOT: make the consumer DCHECK the field ` +
+              `what stops either from being a crash, and a CONVERTED one stops it from even looking empty. ` +
+              `Fix at the ROOT: make the consumer DCHECK the field ` +
               `(extension/check.js mirrors check.h), or delete the half of the contract that has gone stale.`);
 process.exit(1);
 
