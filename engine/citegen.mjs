@@ -2074,9 +2074,20 @@ function unescapeC(s) {
   });
 }
 
-/* A QUOTATION IS A DOUBLE-QUOTED RUN AND NOTHING ELSE. This tree writes code in backticks and a term in single
- * quotes; the double quote is what it uses to say "these are the standard's own words", which is the only
- * spelling that carries the claim this check falsifies.
+/* THE DOUBLE-QUOTED RUNS, WHICH ARE MOST OF THE QUOTATIONS AND NOT ALL OF THEM. This paragraph said for a
+ * long time that a quotation was a double-quoted run AND NOTHING ELSE, on the ground that this tree writes
+ * code in backticks and a term in single quotes. The first half of that is right and the conclusion did not
+ * follow: a term is SHORT and the word floor already declines it, so the mark was never what separated a term
+ * from a quotation — length was. What the sentence actually bought was a REFUSAL TO SCAN, and a refusal to
+ * scan is not a refusal to judge: a run this function never returns is not counted as too short, not counted
+ * as unresolved, not counted anywhere at all, so a file carrying one simply reads as a file with fewer
+ * quotations in it. That is the silent zero this tool exists to end, sitting inside the check its own header
+ * calls the one a reader trusts most and verifies least — and a fabricated sentence written with the other
+ * mark survived in it. `singleQuotedRuns` below reads that mark and states what it costs.
+ * THIS SCANNER STAYS THE ONLY READER THE CITATION SCAN USES, and that is a decision rather than an oversight:
+ * `quotedSrcRuns` exists to keep a number inside quoted text from being read as a citation, and the mark this
+ * function reads cannot also be an apostrophe, so a stray one ends a scan instead of swallowing a paragraph.
+ * The other mark can, which is the whole of why the two scanners are not one.
  * THE PAIRING IS SCANNED AND NOT MATCHED, and the difference is not style — a regex with a MINIMUM LENGTH
  * silently re-pairs every quote after a short one. `serialize as \"{\"` is a one-character quotation, so a
  * pattern demanding two characters skips its opening mark, pairs its CLOSING mark with the next opening one,
@@ -2125,7 +2136,57 @@ function quotedRuns(prose) {
       }
     }
     if (j < 0) break;
-    out.push({ text: prose.slice(i + 1, j), at: i });
+    out.push({ text: prose.slice(i + 1, j), at: i, mark: '"' });
+    i = j;
+  }
+  return out;
+}
+
+/* THE OTHER MARK, WHOSE WHOLE DIFFICULTY IS THAT IT IS ALSO THE APOSTROPHE. Nothing about the claim a
+ * quotation makes depends on which mark carries it, so refusing to read one mark refuses to CHECK a claim
+ * that was made — but the two marks are not alike to scan, and treating them as alike is how a widening turns
+ * into a fabricator. MEASURED on a frozen tree, twice, and the first number was the scanner's own defect
+ * rather than the tree's population: a rule that took every mark preceded by a non-word character found 638
+ * runs of six-plus compared words, and a rule that then excluded the apostrophe shapes below found 49. The
+ * 589 that vanished were not quotations anybody wrote — they were one apostrophe pairing with another across
+ * whole sentences, which is exactly the failure the double-quote scanner cannot have. So the discriminators
+ * are not taste; each was read off a population it removed, and each errs toward reading a mark as punctuation
+ * rather than as a delimiter, which costs a check and never plants one.
+ *   AN OPENER MAY NOT FOLLOW A WORD CHARACTER — the possessive and the contraction, and by far the commonest
+ *     shape of both.
+ *   AN OPENER MAY NOT FOLLOW A CLOSING SPECIMEN MARK either. This is the one a word-character test misses and
+ *     it dominated the 589: this tree writes a possessive on a backticked or bracketed identifier constantly,
+ *     and the mark that follows one is an apostrophe standing after punctuation. Reading it as an opener paired
+ *     it with the next term the sentence quoted, and handed the checker a run that began mid-clause.
+ *   AN OPENER MAY NOT BE A CLITIC — the same possessive surviving the two rules above by having had its
+ *     identifier stripped, and the plural forms with it.
+ *   AN OPENER MAY NOT STAND AT THE WINDOW'S FIRST CHARACTER, because the character before it is then outside
+ *     the window and no rule above can be asked. The window opens immediately after a citation's own number,
+ *     so a real quotation cannot start there; what does start there is a possessive on the number itself.
+ *   A CLOSER MAY NOT BE FOLLOWED BY A WORD CHARACTER, nor PRECEDED by whitespace — the same reading in the
+ *     other direction, which is what stops a run ending on the opener of the next term the sentence quotes.
+ * WHAT THIS ADMITS THAT IS NOT A SPEC QUOTATION, stated because a widening's cost is the part a reader cannot
+ * measure from the count: a SPECIMEN this tree wrote with the wrong mark — a URL, the assertion strings of a
+ * test file — is now compared against a standard and cannot be found in one. Those are reported rather than
+ * suppressed, and the repair is at the site and is the tree's own convention: a specimen goes in backticks,
+ * which both this scanner and `mentionNotClaim`'s rule already read as a spelling being shown rather than a
+ * claim being made. A suppression rule here would be a second copy of that convention and the copy that
+ * drifts is the one nobody runs. */
+const SINGLE_CLITIC = /^(?:s|t|re|ll|ve|d|m)(?![A-Za-z0-9-])/i;
+const SINGLE_NOT_OPEN = "`\"'’”)]}>";
+function singleQuotedRuns(prose) {
+  const out = [];
+  const word = (c) => /[A-Za-z0-9]/.test(c || "");
+  for (let i = 1; i < prose.length; i++) {
+    if (prose[i] !== "'") continue;
+    if (word(prose[i - 1]) || SINGLE_NOT_OPEN.includes(prose[i - 1])) continue;
+    if (!word(prose[i + 1])) continue;
+    if (SINGLE_CLITIC.test(prose.slice(i + 1, i + 5))) continue;
+    let j = -1;
+    for (let k = i + 1; k < prose.length; k++)
+      if (prose[k] === "'" && !word(prose[k + 1] || " ") && !/\s/.test(prose[k - 1] || " ")) { j = k; break; }
+    if (j < 0) break;
+    out.push({ text: prose.slice(i + 1, j), at: i, mark: "'" });
     i = j;
   }
   return out;
@@ -2577,8 +2638,13 @@ function audit(argv, opts = {}) {
   const quotes = [];
   /* Every refusal field below carries a `<name>Crash` twin, and `refuse` in PASS 4 throws if a name arrives
    * without one — so a state added here cannot silently lose the who-pays axis that orders the queue. */
+  /* `single*` are not a refusal state and take no `Crash` twin from `refuse`: they say which MARK carried a
+   * run this check saw, across every verdict and every refusal, so the channel that used to be unscanned can
+   * be told apart from the one that always was. A widening whose size nobody can read is a widening nobody
+   * can disbelieve, and `singleTooShort` is the half that says how much of it the word floor absorbed. */
   const qstat = { okNearbyCrossLiteral: 0, seen: 0, checked: 0, verified: 0, okNearby: 0, wrongSection: 0, wrongSectionAncestor: 0, wrongStandard: 0, notFound: 0, notFoundNothing: 0,
                   noCorpus: 0, noCorpusCrash: 0, noSection: 0, noSectionCrash: 0, tooShort: 0,
+                  single: 0, singleCrash: 0, singleTooShort: 0,
                   voted: 0, votedCrash: 0, foreign: 0, foreignCrash: 0, unresolved: 0, unresolvedCrash: 0 };
   const noCorpusBy = new Map();
   const gapHist = [];
@@ -3623,14 +3689,25 @@ function audit(argv, opts = {}) {
         const c = admitted[i];
         const stop = i + 1 < admitted.length ? admitted[i + 1].at : null;
         const prose = governedProse(src, spans, c.at, c.len, stop);
-        for (const q of quotedRuns(prose)) {
+        /* BOTH MARKS, IN ONE ORDER, because everything downstream of here reads a run's POSITION — the
+         * nearest-preceding rule, the gap histogram, the window a confirmation searches. Two scans appended
+         * one after the other would hand this loop a run at offset 400 before a run at offset 12 and make
+         * those readers answer about the wrong neighbour. The two scanners stay separate for the reason
+         * `singleQuotedRuns` gives; their OUTPUT is one stream. */
+        const runs = [...quotedRuns(prose), ...singleQuotedRuns(prose)].sort((a, b) => a.at - b.at);
+        for (const q of runs) {
           const f = fragmentsOf(q.text);
           if (!f.all.length) continue;
-          if (f.compared < MIN_COMPARED_WORDS) { qstat.tooShort++; continue; }
+          if (f.compared < MIN_COMPARED_WORDS) {
+            qstat.tooShort++;
+            if (q.mark === "'") qstat.singleTooShort++;
+            continue;
+          }
           qstat.seen++;
           const rec = { file: relative(ROOT, file), line: lineOf(c.at), no: c.no, spec: c.spec,
                         how: c.how, quote: q.text.trim(), words: f.words, elided: f.elided, gap: q.at,
-                        crash: inCrashMessage(src, spans, c.at) };
+                        mark: q.mark, crash: inCrashMessage(src, spans, c.at) };
+          if (q.mark === "'") { qstat.single++; if (rec.crash) qstat.singleCrash++; }
           /* THE FIVE STATES ARE KEPT APART, because CLAUDE.md's recurring defect is several states behind one
            * answer and a search cannot be directed toward a gap it cannot see. Each refusal below is a
            * DIFFERENT fact about why this quotation was not judged, and each is counted under its own name.
@@ -4229,6 +4306,11 @@ function audit(argv, opts = {}) {
     console.log(`  (this asks about TEXT. It says nothing about whether the number exists, whether the algorithm lives there,`);
     console.log(`   or whether the claim the sentence makes is true — those are the checks above, and they are different axes.)`);
     console.log(`  ${qstat.seen} quotation(s) of ${MIN_COMPARED_WORDS}+ words stand in prose a citation governs; ${qstat.checked} were compared against a section's own words`);
+    /* WHICH MARK CARRIED THEM, printed because this channel was UNSCANNED and a population that was invisible
+     * has to be visible as a NUMBER before anybody can argue about its size. The too-short figure is beside it
+     * for the same reason: it is where this tree's terms and property names land, and reading the two together
+     * is what says the word floor — never the mark — is what separates a term from a quotation. */
+    console.log(`    by MARK: ${qstat.seen - qstat.single} double-quoted, ${qstat.single} single-quoted (${qstat.singleCrash} of those in a crash message; a further ${qstat.singleTooShort} single-quoted run(s) were declined by the word floor, which is where this tree's own terms and property names land)`);
     console.log(`    VERIFIED ${qstat.verified}  CONFIRMED-BY-A-NUMBER-THE-SAME-COMMENT-CITES ${qstat.okNearby} (${qstat.okNearbyCrossLiteral} of them by a number in a DIFFERENT LITERAL of the same crash message — the population a span-keyed lookup cannot see, so this figure is what the prose-unit rule is carrying)  WRONG-SECTION ${qstat.wrongSection} (${qstat.wrongSectionAncestor} of them at a section that CONTAINS the cited one)  WRONG-STANDARD ${qstat.wrongStandard}  NOT-FOUND ${qstat.notFound}` +
       ` (of which ${qstat.notFoundNothing} leave the standard within their first ${MIN_FRAGMENT_WORDS} words — a fabricated sentence and a piece of this tree's own prose in quotation marks both land there, and nothing mechanical separates them)`);
     /* EACH REFUSAL NAMES ITS OWN STATE AND THE SUBSET A CRASH PRINTS, because these are a WORK QUEUE and the
