@@ -1055,7 +1055,9 @@ static BfBox bf_box(lxb_dom_element_t *el, bool baseline)
                "'height', the computed 'height' of each cell in the row, and the minimum height (MIN) required "
                "by the cells\", whose content term is a cell's content height and therefore needs the cell's "
                "USED WIDTH: §17.5.2 Table width algorithms: the 'table-layout' property's, over §17.5 Visual "
-               "layout of table contents' grid, which is which column each cell occupies and what it spans. "
+               "layout of table contents' grid, which is which column each cell occupies and what it spans — and "
+               "core/layout/table_grid.h answers that, so §17.5.2 is the whole of the width chain that is "
+               "left. "
                "(2) Each caption box's height is §10.6.3's over ITS used width, and CSS 2.1 §17.4 Tables in the "
                "visual formatting model makes that the wrapper's content width: \"the border-edge width of "
                "the table box inside it, as "
@@ -1065,7 +1067,7 @@ static BfBox bf_box(lxb_dom_element_t *el, bool baseline)
                "that property is not in core/css/css_computed_value.c's modelled set, so it cannot be read at "
                "all. §17.4.1 gives it `Computed value: as specified`, which makes it ONE ROW of that file's "
                "as-specified arm; core/css/css_defaulting.c already carries it among the inherited properties, "
-               "as §17.4.1's `Inherited: yes` requires. BUILD §17.5's grid, then §17.5.2, then §17.5.3, and "
+               "as §17.4.1's `Inherited: yes` requires. BUILD §17.5.2 over table_grid.h's columns, then §17.5.3, and "
                "record `caption-side` alongside — this walk then measures the wrapper with no arm added to it",
                box_subject(el, nbuf, sizeof nbuf));
     /* Not a block container: a flex or grid CONTAINER, whose height is its own spec's and which establishes an

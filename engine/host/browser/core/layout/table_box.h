@@ -45,10 +45,11 @@
  *     walk's own child list (core/layout/block_flow.c), where that wrapping changes what §9.4.1 stacks, and
  *     this entry is asked of a box that IS a table. Building it here would be a table box generating itself.
  *   - §17.5's GRID — which column each cell occupies, and how many rows and columns it spans — is a different
- *     algorithm over this answer and not a refinement of it. §17.5's own rule 5 says so: "Although CSS 2.1 does
- *     not define how the number of spanned rows or columns is determined, a user agent may have special
- *     knowledge about the source document", which is HTML's `rowspan` and `colspan`. §17.5.3 needs the grid
- *     only for its own row-spanning sentence; §17.5.2's column widths need all of it.
+ *     algorithm over this answer and not a refinement of it, and it is core/layout/table_grid.h's. §17.5's own
+ *     rule 5 says why it cannot be here: "Although CSS 2.1 does not define how the number of spanned rows or
+ *     columns is determined, a user agent may have special knowledge about the source document", so the grid
+ *     reads HTML §4.9.11's `rowspan` and `colspan` while this component reads only `display`. §17.5.3 needs
+ *     the grid only for its own row-spanning sentence; §17.5.2's column widths need all of it.
  *   - §17.4's TABLE WRAPPER BOX is the box §9.4.1 actually stacks ("the table generates a principal block box
  *     called the table wrapper box that contains the table box itself and any caption boxes"), and it is a
  *     block container that no element names. `table_box_captions` below answers the half of it this component
@@ -127,7 +128,7 @@ typedef struct {
 
 /* ONE ROW BOX, with its cells in the order they occur in its child list — which is NOT their column order:
    §17.5's rule 5 places a cell in the leftmost grid column that its earlier siblings and any row-spanning cell
-   from a prior row leave free, and that assignment is the grid this component does not build. `group` is the
+   from a prior row leave free, and that assignment is core/layout/table_grid.h's. `group` is the
    row group box the row is inside, or NULL where the row's parent is the table box itself; §17.2.1 generates
    no anonymous row group, so a NULL there is the tree's own shape and never a missing box. */
 typedef struct {

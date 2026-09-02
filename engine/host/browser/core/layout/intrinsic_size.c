@@ -278,7 +278,8 @@ IntrinsicInlineSizes intrinsic_inline_sizes(lxb_dom_element_t *el)
                   "from them, and CSS 2.2 §17.5.2's automatic table layout derives a table's from its COLUMNS' "
                   "cell minima and maxima over the box structure §17.2.1 Anonymous table objects generates — "
                   "which core/layout/table_box.h answers, so a table's remaining input is §17.5 Visual layout "
-                  "of table contents' grid: which column each cell occupies and how many it spans. BUILD the "
+                  "of table contents' grid — which column each cell occupies and how many it spans — and "
+                  "core/layout/table_grid.h answers that, so §17.5.2 is the whole of what is left. BUILD the "
                   "one this `display` names; the flex and grid arms each need their own box tree first and "
                   "none of the three is this walk with a different accumulator");
     }

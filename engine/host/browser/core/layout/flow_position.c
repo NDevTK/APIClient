@@ -366,10 +366,10 @@ static void fp_require_placeable(lxb_dom_element_t *el)
               "is a distance §9.4.1's two rules can produce. THE BOX STRUCTURE IS NO LONGER WHAT IT NEEDS: "
               "core/layout/table_box.h answers §17.2.1 Anonymous table objects' first two stages — this "
               "table's rows in §17.2's display order, each with its cells — so what is left is §17.5 Visual "
-              "layout of table contents' grid over those rows (which column each cell occupies, its rule 5 "
-              "deferring the span count to the document language) and then §17.5.2's and §17.5.3's algorithms, "
+              "layout of table contents' grid over those rows — which core/layout/table_grid.h answers, spans and "
+              "all, so what is left is §17.5.2's and §17.5.3's algorithms, "
               "which core/layout/used_value.c already crashes for when a table's EXTENT is asked. BUILD "
-              "§17.5's grid, then §17.5.2, then §17.5.3",
+              "§17.5.2 over table_grid.h's columns, then §17.5.3",
               box_subject(el, nbuf, sizeof nbuf));
     if (inline_level)
         DFAILF("%s: "

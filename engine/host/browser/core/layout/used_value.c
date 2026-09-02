@@ -1418,7 +1418,8 @@ static CssPx uv_margin(lxb_dom_element_t *el, const char *name, const char *oppo
               "— an intrinsic size over its columns — and only then is there a slack for §10.3.3's margin "
               "rules to divide, which is what makes `table { margin: 0 auto }` centre it. THE BOX GENERATION "
               "IS BUILT — §17.2.1 Anonymous table objects' first two stages are core/layout/table_box.h's — so "
-              "BUILD §17.5 Visual layout of table contents' grid over its rows and then §17.5.2's algorithms; "
+              "core/layout/table_grid.h answers §17.5 Visual layout of table contents' grid over its rows, so BUILD "
+              "§17.5.2's algorithms over it; "
               "the margin rule is then the same "
               "code the block-level arm above already runs. AND THE MARGIN IS NOT THIS BOX'S ANYWAY, which is "
               "the half this line did not say: §17.4 Tables in the visual formatting model uses `margin-*` on "
@@ -1723,7 +1724,8 @@ static CssPx uv_replaced_size(lxb_dom_element_t *el, const ReplacedElement *rep,
               "width and height and §10.3.2's intrinsic-dimension arms do not apply to it — §17.5.2's two "
               "algorithms derive the width from the COLUMNS, and a replaced element has none. THE BOX "
               "GENERATION IS BUILT — §17.2.1 Anonymous table objects' first two stages are "
-              "core/layout/table_box.h's — so BUILD §17.5's grid and then its algorithms; what a table box "
+              "core/layout/table_box.h's and its grid is core/layout/table_grid.h's — so BUILD §17.5's algorithms "
+              "over them; what a table box "
               "does with a replaced "
               "element's own natural dimensions is then their question and not this section's. CSS 2.1 §17.2 "
               "The CSS table model is the sentence that puts this element here at all: \"Replaced elements with these "
@@ -1812,7 +1814,8 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
                   "two table layout algorithms. THE INTERNAL BOX STRUCTURE IS NO LONGER WHAT THEY ARE WAITING "
                   "ON and this line said it was: §17.2.1 Anonymous table objects' first two stages are "
                   "core/layout/table_box.h's, so what stands between them and this arm is §17.5 Visual layout "
-                  "of table contents' grid — which column each cell occupies and what it spans");
+                  "of table contents' grid — which column each cell occupies and what it spans — which "
+                  "core/layout/table_grid.h now answers, leaving §17.5.2 itself");
         if (box == UV_BOX_ITEM)
             DFAIL("this box is a FLEX or GRID ITEM, so its used main and cross sizes come from its container's "
                   "algorithm and not from CSS 2.1 §10 at all — css-flexbox §9.7 resolves the flexible lengths "
@@ -1896,7 +1899,8 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
                   "cell's USED WIDTH. "
                   "THAT WIDTH IS WHAT IS MISSING, NOT THE BOX STRUCTURE: §17.2.1 Anonymous table objects' "
                   "first two stages are core/layout/table_box.h's, and a cell is as wide as its column, so "
-                  "BUILD §17.5 Visual layout of table contents' grid and §17.5.2, and only then §17.5.3");
+                  "§17.5 Visual layout of table contents' grid is core/layout/table_grid.h's, so BUILD §17.5.2 over "
+                  "it and only then §17.5.3");
         if (box == UV_BOX_ITEM)
             DFAIL("a FLEX or GRID ITEM with `height: auto`. Its cross size is its CONTAINER's algorithm — "
                   "css-flexbox §9.4 collects the items into flex lines and §9.7 resolves the flexible lengths, "
@@ -1962,8 +1966,8 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
               "STRUCTURE IS BUILT and this line used to ask for it first: core/layout/table_box.h answers "
               "§17.2.1's first two stages, so what §17.5.2 still needs over it is §17.5 Visual layout of table "
               "contents' grid — which column each cell is in, since a COLUMN's minimum and maximum are taken "
-              "across the cells that occupy it and nothing here yet says which those are. BUILD §17.5's grid "
-              "and then §17.5.2's two algorithms");
+              "across the cells that occupy it and core/layout/table_grid.h is what says which those are. BUILD "
+              "§17.5.2's two algorithms over it");
     if (box == UV_BOX_ITEM)
         DFAIL("a FLEX or GRID ITEM with `width: auto`. css-flexbox §9.7 makes the FLEX BASE SIZE the item's "
               "max-content contribution and then flexes it against the container's free space; css-grid §11 "
