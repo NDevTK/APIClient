@@ -1140,16 +1140,45 @@ static void nv_sort_by_unit(NvList *l)
     }
 }
 
-/* §4.3.1's toSum's LAST STEP — "Return a new CSSMathSum object whose values internal slot is set to values" —
- * which is §4.3.4's SPEC-INTERNAL mint ("Return a new CSSMathSum whose values internal slot is set to args")
- * and NOT its constructor, so the standard states no type step here at all.
+/* BOTH of §4.3.1's toSum RETURNS — its units-empty branch's "then return a new CSSMathSum object whose values
+ * internal slot is set to values" and its last step's "Return a new CSSMathSum object whose values internal
+ * slot is set to result". Neither states a type step, so neither throws. `values` is BORROWED.
  *
- * WHICH IS WHY IT NEITHER THROWS NOR CRASHES, AND WHY THAT IS THE WHOLE POINT OF THIS ENTRY. `CSS.px(1).toSum(
- * "px", "s")` is a CSSMathSum of `1px` and `0s` whose §4.3.2 type is FAILURE, and a browser hands it back: the
- * TypeError for a failing type belongs to §4.3.4's four LIST CONSTRUCTORS and to §4.3.1's own add/mul/min/max,
- * and toSum passes through none of them. A TypeError here would be a refusal §4.3.1 does not state. So the type
- * is a value core/css/css_math.h can hold (`css_math_type_failure`) and the mint stores it like any other.
- * `values` is BORROWED. */
+ * THAT "RETURN A NEW CSSMathSum OBJECT" CREATES THE OBJECT AND DOES NOT RUN §4.3.4's CONSTRUCTOR, AND THE
+ * ARGUMENT IS WRITTEN OUT HERE BECAUSE A CONFORMANCE FILE ASSERTS THE OPPOSITE (see below). Two sentences of
+ * the standard settle it and neither is about this member:
+ *   (1) §4.3.4's CSSMathSum CONSTRUCTOR ENDS IN THE SAME PHRASE — "Let type be the result of adding the types
+ *       of all the items of args. If type is failure, throw a TypeError." then "Return a new CSSMathSum whose
+ *       values internal slot is set to args." A constructor's own last step cannot be an invocation of that
+ *       constructor, so the phrase is direct object creation with an internal slot set, in the very section
+ *       that defines the constructor.
+ *   (2) §4.3.1's OWN add, mul, min and max EACH STATE THE TYPE STEP THEMSELVES, immediately before it — "Let
+ *       type be the result of adding the types of every item in values. If type is failure, throw a TypeError.
+ *       Return a new CSSMathSum object whose values internal slot is set to values." If that return ran the
+ *       constructor, the constructor's step 3 would repeat the identical addition and all four members' type
+ *       steps would be dead text. toSum is the one member of that family with no type step of its own, and it
+ *       is the one whose result can therefore carry §4.3.2's failure.
+ * THE WORD "object" CARRIES NO DISTINCTION and must not be used as one — §4.3.4 writes it INSIDE a
+ * constructor's last step: the min/max pair is "defined identically to the above, except that in the last step
+ * they return a new CSSMathMin or CSSMathMax object, respectively."
+ *
+ * WPT'S `css/css-typed-om/.../toSum.tentative.html` ASSERTS `CSS.px(1).toSum('px','s')` THROWS A TypeError,
+ * AND THAT SUBTEST IS A RED THIS ENGINE IS CORRECT TO PRODUCE. Walk the member on that input: step 1 types
+ * both units, step 2's sum value is «(1, «["px" → 1]»)», step 3 yields one CSSUnitValue, step 5's first unit
+ * consumes it and its second appends a `0s` temp, and step 6's "If values is not empty, throw a TypeError" is
+ * therefore NOT reached — values is empty. The only step left that could throw is the return, which by (1) and
+ * (2) does not. The file is `.tentative`, which WPT's own docs/writing-tests/file-names.md defines as
+ * "Indicates that a test makes assertions not yet required by any specification, or in contradiction to some
+ * specification. This is useful when implementation experience is needed to inform the specification." So it
+ * records an implementation, not a conformance requirement, and CLAUDE.md's ordering — the spec is the source
+ * of truth and a browser is confirmation — decides it.
+ * WHAT WOULD OVERTURN THIS, precisely: §4.3.1's toSum gaining a "Let type be … If type is failure, throw a
+ * TypeError" step of its own, or that corpus file losing `.tentative`. THEN, AND ONLY THEN, this entry runs
+ * `css_math_value_type_fold` and throws like `nv_arith` does — and the cost of that day is worth knowing in
+ * advance: toSum is the ONLY public producer of a failure-typed object (§4.3.4's four list constructors refuse
+ * one, and its CSSMathNegate and CSSMathInvert constructors have no type step but can only WRAP a value that
+ * already carries the type), so making it throw would leave core/css/css_math.h's absorbing arms in add and
+ * multiply, and §4.3.1's type() failure arm, unreachable — and unreachable code goes rather than waits. */
 static JSValue nv_to_sum_result(JSContext *ctx, NvList *values)
 {
     DCHECK(values->n >= 1,

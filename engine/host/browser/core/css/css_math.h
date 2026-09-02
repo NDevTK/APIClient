@@ -100,7 +100,10 @@ typedef enum {
    to result", which is §4.3.4's spec-internal mint and states NO type step at all — so `CSS.px(1).toSum("px",
    "s")` is a CSSMathSum of `1px` and `0s` whose type is failure, handed back rather than refused. A TypeError
    there would be a refusal §4.3.1 does not state; §4.3.4's constructors are where the TypeError lives ("If type
-   is failure, throw a TypeError"), and toSum does not go through one.
+   is failure, throw a TypeError"), and toSum does not go through one. THAT LAST CLAUSE IS THE WHOLE LOAD-
+   BEARING READING AND A CONFORMANCE FILE ASSERTS ITS OPPOSITE; the two sentences of the standard that settle
+   it, and what in this header would become unreachable if it flipped, are written out at `nv_to_sum_result` in
+   core/css/css_numeric_value.c. Nothing here restates them, so there is one place to correct if it turns.
    IT IS ENCODED IN THE HINT AND NOT IN A SECOND FIELD, so the record has exactly ONE representation of failure
    and a `failure` flag cannot disagree with a hint beside it. It is also TRUE of a failure rather than a
    sentinel chosen for convenience: §4.3.2 says "The percent hint is either null or a base type" of a TYPE, and

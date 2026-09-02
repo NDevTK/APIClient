@@ -14277,10 +14277,18 @@ static void css_numeric_type_selftest(void)
            matching that of type", and core/css/css_math.h writes failure IN the hint. So unlike the two above,
            this CHECK is not discriminating against a missing branch (there is none to miss); it holds the
            ENCODING to the property the header claims for it, and it fails the day failure stops living in the
-           hint without invert gaining the arm that would then be needed. §4.3.4's CSSMathInvert constructor
-           has NO type step, so `new CSSMathInvert(CSS.px(1).toSum("px","s"))` must be BUILT — while
-           `new CSSMathSum(CSS.px(1).toSum("px","s"), CSS.px(1))` must THROW. That pair is what cannot be
-           passed by luck: no single wrong answer about failure satisfies both, and neither half is a crash. */
+           hint without invert gaining the arm that would then be needed.
+           THIS FIXTURE IS DELIBERATELY C-LEVEL AND NAMES NO MEMBER, which is what keeps it decisive. The
+           obvious JS discriminators all route through §4.3.1's `toSum` — the ONLY public producer of a
+           failure-typed object — and whether that member throws is exactly the question WPT's
+           `toSum.tentative.html` and this engine answer differently (the argument is at `nv_to_sum_result` in
+           core/css/css_numeric_value.c). A fixture built on it would conflate "the failure type is modelled
+           wrongly" with "we follow the draft and the corpus file records an implementation", which are two
+           results that must never share one red. What IS uncontested at the JS level, and worth having beside
+           this: `new CSSMathSum(CSS.px(1), CSS.s(1))` must throw a TypeError while
+           `new CSSMathProduct(CSS.px(1), CSS.s(1))` must NOT — §4.3.4's product "multiplies the types instead
+           of adding", and multiplying two null-hinted types cannot fail. One wrong belief about the type step
+           cannot satisfy both of those either, and neither of them mentions toSum. */
         r = css_math_type_invert(&fail);
         CHECK(css_math_type_is_failure(&r),
               "§4.3.2's invert must answer FAILURE for a failure, or `new CSSMathInvert(CSS.px(1).toSum("

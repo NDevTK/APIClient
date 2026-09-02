@@ -36,7 +36,10 @@
  * §4.3.1's add, mul, min and max in their own words. Its CSSMathNegate and CSSMathInvert constructors state NO
  * type step at all. And §4.3.1's `toSum` ends at "Return a new CSSMathSum object whose values internal slot is
  * set to result" — the SPEC-INTERNAL mint, with no type step — so `CSS.px(1).toSum("px", "s")` is a CSSMathSum
- * of `1px` and `0s` whose type is FAILURE, which a browser hands back. A mint that refused for the caller
+ * of `1px` and `0s` whose type is FAILURE. THAT READING IS CONTESTED BY A CONFORMANCE FILE AND THE ARGUMENT
+ * FOR IT IS WRITTEN OUT AT `nv_to_sum_result` IN core/css/css_numeric_value.c — read it before changing this,
+ * because it also states what one line of this component would become unreachable if the reading flipped.
+ * A mint that refused for the caller
  * therefore could not serve toSum, and a TypeError there would be a refusal §4.3.1 does not state. So the mint
  * always mints and STORES whatever type the table gives it, failure included (core/css/css_math.h's
  * `css_math_type_failure`), and the two callers that have a step 3 run it themselves, before they mint, in the
