@@ -894,9 +894,18 @@ void fs_writable_init(JSContext *ctx)
     g_stepid_write = JS_RegisterStepDef(rt, &FWW_DEF);
     g_stepid_close = JS_RegisterStepDef(rt, &FWC_DEF);
     g_stepid_abort = JS_RegisterStepDef(rt, &FWA_DEF);
+    /* ALL THREE RETURN A PROMISE TYPE, so Web IDL §3.7.7 Operations' create an operation function rejects for
+       the whole call and never throws. The three differ in WHAT that covers, which is why it is worth saying
+       here rather than once: `write`'s argument is IDL_ANY and cannot fail, so its rejections come from the
+       brand check and from the stream; `seek` and `truncate` take an `unsigned long long` whose conversion IS
+       the declaration's, so `stream.seek({valueOf(){throw x}})` and a bare `stream.seek()` (arity) are two
+       throws that §3.7.7 turns into the rejection a page's `.catch` is written for. */
     g_id_write = idl_method_id_step(ctx, WRITE_ARGS, 1, NULL, 0, &FWM_DECL, FWM_WRITE_M);
+    idl_returns_promise();   /* §2.5.1 The write() method: `Promise<undefined>` */
     g_id_seek = idl_method_id_step(ctx, NUM_ARGS, 1, NULL, 0, &FWM_DECL, FWM_SEEK_M);
+    idl_returns_promise();   /* §2.5.2 The seek() method: `Promise<undefined>` */
     g_id_truncate = idl_method_id_step(ctx, NUM_ARGS, 1, NULL, 0, &FWM_DECL, FWM_TRUNCATE_M);
+    idl_returns_promise();   /* §2.5.3 The truncate() method: `Promise<undefined>` */
     agent_state_id("file_system_writable", &g_stepid_write,
                    "File System §2.5's write-a-chunk machine, and the declaration latch");
     agent_state_id("file_system_writable", &g_stepid_close, "§2.5's close-algorithm machine (its step 4)");

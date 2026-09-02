@@ -1990,6 +1990,13 @@ void media_element_declare(JSContext *ctx)
                                               (int)(sizeof(R_MEDIA) / sizeof(R_MEDIA[0])));
     g_id_load = idl_method_id(ctx, NULL, 0, js_media_load, 0);
     g_id_play = idl_method_id(ctx, NULL, 0, js_media_play, 0);
+    /* HTML §4.8.11.8 Playing the media resource: `Promise<undefined> play()`. Web IDL §3.7.7 Operations'
+       create an operation function rejects for the whole call, and js_media_play does that for exactly ONE of
+       its two failures: step 2's NotSupportedError is already a rejected promise there, while the receiver
+       check it opens with returns JS_EXCEPTION, so `HTMLMediaElement.prototype.play.call({})` threw where a
+       browser rejects. Declaring the return type is what makes the two answer alike, rather than teaching the
+       body a second copy of the rule. */
+    idl_returns_promise();
     g_id_pause = idl_method_id(ctx, NULL, 0, js_media_pause, 0);
     g_id_start_date = idl_method_id(ctx, NULL, 0, js_media_start_date, 0);
     g_id_can_play = idl_method_id(ctx, STR1, 1, js_media_can_play_type, 0);

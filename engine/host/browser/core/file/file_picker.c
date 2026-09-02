@@ -942,19 +942,34 @@ void file_picker_init(JSContext *ctx)
     g_recent = JS_NewObject(ctx);
     CHECK(!JS_IsException(g_recent),
           "File System Access §3.2.2's recently picked directory map could not be allocated");
+    /* ALL THREE RETURN A PROMISE TYPE, so Web IDL §3.7.7 Operations' create an operation function turns EVERY
+       abrupt completion of the call into a rejection — the receiver check, the arity, the dictionary
+       conversion and the algorithm alike. The body already mints its capability before its own first failure
+       and settles rather than throws (see fpk_step); what it cannot reach is everything BEFORE it runs, and
+       `showOpenFilePicker(5)` is exactly that — Web IDL §3.2.17 Dictionary types: "If jsDict is not an Object
+       and jsDict is neither undefined nor null, then throw a TypeError", a throw the page must instead see
+       through the `.catch` it wrote. */
     g_id_open = idl_method_id_step(ctx, OPTS_ONLY, 1, OPEN_OPTIONS,
                                    (int)(sizeof OPEN_OPTIONS / sizeof OPEN_OPTIONS[0]), &FPK_DECL, M_OPEN);
     idl_optional_from(0);
+    idl_returns_promise();   /* §3.3: `Promise<sequence<FileSystemFileHandle>> showOpenFilePicker(…)` */
     g_id_save = idl_method_id_step(ctx, OPTS_ONLY, 1, SAVE_OPTIONS,
                                    (int)(sizeof SAVE_OPTIONS / sizeof SAVE_OPTIONS[0]), &FPK_DECL, M_SAVE);
     idl_optional_from(0);
+    idl_returns_promise();   /* §3.4: `Promise<FileSystemFileHandle> showSaveFilePicker(…)` */
     g_id_directory = idl_method_id_step(ctx, OPTS_ONLY, 1, DIRECTORY_OPTIONS,
                                         (int)(sizeof DIRECTORY_OPTIONS / sizeof DIRECTORY_OPTIONS[0]),
                                         &FPK_DECL, M_DIRECTORY);
     idl_optional_from(0);
-    agent_state_id("file_picker", &g_id_open, "§3.1's showOpenFilePicker machine, and the declaration latch");
-    agent_state_id("file_picker", &g_id_save, "§3.2's showSaveFilePicker machine");
-    agent_state_id("file_picker", &g_id_directory, "§3.3's showDirectoryPicker machine");
+    idl_returns_promise();   /* §3.5: `Promise<FileSystemDirectoryHandle> showDirectoryPicker(…)` */
+    /* THE SECTION NUMBERS THESE THREE LABELS CARRIED WERE §3.1/§3.2/§3.3, WHICH ARE Local File System
+       Permissions, File picker options AND showOpenFilePicker — off by two in one direction, which is what a
+       renumbered living draft looks like from inside a file that recorded the number and not the title. The
+       titles are here so the next such move is visible instead of silent. */
+    agent_state_id("file_picker", &g_id_open,
+                   "§3.3 The showOpenFilePicker() method's machine, and the declaration latch");
+    agent_state_id("file_picker", &g_id_save, "§3.4 The showSaveFilePicker() method's machine");
+    agent_state_id("file_picker", &g_id_directory, "§3.5 The showDirectoryPicker() method's machine");
     agent_state_value("file_picker", &g_recent, "§3.2.2's recently-picked directory map");
     agent_state_ptr("file_picker", &g_rt, "the runtime §3.2.2's map was allocated in");
     /* THE THREE MEMBERS ARE `partial interface Window`'s AND EVERY REALM IS A WINDOW, so they are declared

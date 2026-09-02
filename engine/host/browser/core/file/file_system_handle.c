@@ -918,22 +918,36 @@ void fs_handle_init(JSContext *ctx)
 
     /* §2.2's two attributes run none of the page's code — they read the locator, which is this component's own
        C record — so they are ordinary getters and not machines, and they carry no magic. */
+    /* EVERY ONE OF THE SEVEN RETURNS A PROMISE TYPE, so Web IDL §3.7.7 Operations' create an operation
+       function rejects rather than throws for the whole call — and here that is not a formality, because the
+       ARGUMENT CONVERSIONS are where these members fail in practice and every one of them runs BEFORE the
+       body: `dir.getFileHandle()` (arity), `dir.getFileHandle(name, 5)` (a dictionary from a non-object) and
+       `handle.isSameEntry({})` (the declared interface brand below) all threw where a browser hands back a
+       rejected promise. The body's own §3.7.7 handling — the capability minted before its first failure, the
+       locator check settling rather than throwing — covers only what happens after that. */
     g_id_is_same_entry = idl_method_id_step(ctx, HANDLE_ARG, 1, NULL, 0, &FSH_DECL, M_IS_SAME_ENTRY);
     idl_iface_brand(g_handle_class);
+    idl_returns_promise();   /* §2.2.1 The isSameEntry() method: `Promise<boolean>` */
     g_id_resolve = idl_method_id_step(ctx, HANDLE_ARG, 1, NULL, 0, &FSH_DECL, M_RESOLVE);
     idl_iface_brand(g_handle_class);
+    idl_returns_promise();   /* §2.4.5 The resolve() method: `Promise<sequence<USVString>?>` */
     g_id_get_file = idl_method_id_step(ctx, NULL, 0, NULL, 0, &FSH_DECL, M_GET_FILE);
+    idl_returns_promise();   /* §2.3.1 The getFile() method: `Promise<File>` */
     g_id_create_writable = idl_method_id_step(ctx, OPTS_ONLY, 1, WRITABLE_OPTIONS, 1, &FSH_DECL,
                                               M_CREATE_WRITABLE);
     idl_optional_from(0);
+    idl_returns_promise();   /* §2.3.2 The createWritable() method: `Promise<FileSystemWritableFileStream>` */
     g_id_get_file_handle = idl_method_id_step(ctx, NAME_OPTS, 2, GET_FILE_OPTIONS, 1, &FSH_DECL,
                                               M_GET_FILE_HANDLE);
     idl_optional_from(1);
+    idl_returns_promise();   /* §2.4.2 The getFileHandle() method: `Promise<FileSystemFileHandle>` */
     g_id_get_directory_handle = idl_method_id_step(ctx, NAME_OPTS, 2, GET_FILE_OPTIONS, 1, &FSH_DECL,
                                                    M_GET_DIRECTORY_HANDLE);
     idl_optional_from(1);
+    idl_returns_promise();   /* §2.4.3 The getDirectoryHandle() method: `Promise<FileSystemDirectoryHandle>` */
     g_id_remove_entry = idl_method_id_step(ctx, NAME_OPTS, 2, REMOVE_OPTIONS, 1, &FSH_DECL, M_REMOVE_ENTRY);
     idl_optional_from(1);
+    idl_returns_promise();   /* §2.4.4 The removeEntry() method: `Promise<undefined>` */
     /* §2.4.1's asynchronous iteration, declared with the members it sits beside because the class, the three
        method ids and the two step machines are the AGENT's, exactly as every id above is. */
     g_dir_iter_handle = idl_async_iter_declare(ctx, &FS_DIR_ITER_OPS);

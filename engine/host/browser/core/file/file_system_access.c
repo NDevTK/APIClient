@@ -438,10 +438,18 @@ void file_system_access_init(JSContext *ctx)
     permission_subject_declare(g_feature, fsa_subject_is);
     permission_constraints_declare(g_feature, fsa_constraints);
 
+    /* BOTH RETURN A PROMISE TYPE, so Web IDL §3.7.7 Operations' create an operation function makes every
+       abrupt completion of the call a rejection. The body performs the brand check itself, after minting the
+       capability, and that half is unaffected; what it cannot reach is the DICTIONARY CONVERSION, which runs
+       before the body — Web IDL §3.2.17 Dictionary types: "If jsDict is not an Object and jsDict is neither
+       undefined nor null, then throw a TypeError", so `handle.queryPermission(5)` threw where §3.7.7 requires
+       the page to see a rejected promise. */
     g_id_query = idl_method_id_step(ctx, OPTS_ONLY, 1, FSA_PERM_OPTIONS, 1, &FSA_DECL, M_QUERY);
     idl_optional_from(0);
+    idl_returns_promise();   /* §2.3.1 The queryPermission() method: `Promise<PermissionState>` */
     g_id_request = idl_method_id_step(ctx, OPTS_ONLY, 1, FSA_PERM_OPTIONS, 1, &FSA_DECL, M_REQUEST);
     idl_optional_from(0);
+    idl_returns_promise();   /* §2.3.2 The requestPermission() method: `Promise<PermissionState>` */
     agent_state_id("file_system_access", &g_feature,
                    "§4's registry row for the \"file-system\" powerful feature, and the declaration latch");
     agent_state_id("file_system_access", &g_id_query, "§2.3's queryPermission machine");

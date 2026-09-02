@@ -3658,6 +3658,13 @@ void custom_elements_init(JSContext *ctx)
         static const IdlArgType ONE_STR[1] = { IDL_DOMSTRING };
         g_id_get = idl_method_id(ctx, ONE_STR, 1, js_ce_get, 0);
         g_id_when_defined = idl_method_id(ctx, ONE_STR, 1, js_ce_when_defined, 0);
+        /* `Promise<CustomElementConstructor> whenDefined(DOMString name)` — Web IDL §3.7.7 Operations' create
+           an operation function rejects for the WHOLE call, and js_ce_when_defined does it for exactly one of
+           its three failures: §4.13.4 step 1's SyntaxError is already a rejected promise there, while the
+           receiver check it opens with returns JS_EXCEPTION and the DOMString conversion runs before the body
+           at all. `CustomElementRegistry.prototype.whenDefined.call({})` and `whenDefined({toString(){throw
+           x}})` are rejections in a browser and were throws here. */
+        idl_returns_promise();
     }
     {
         /* `getName(CustomElementConstructor constructor)` — a callback function type, whose conversion IS a

@@ -546,6 +546,11 @@ void indexed_db_init(JSContext *ctx)
        needs: settling a promise is calling the capability's function, which is the page's code path and cannot
        be a JS_Call from C. */
     g_id_databases = idl_method_id_step(ctx, NULL, 0, NULL, 0, &DBS_STEP, 0);
+    /* Web IDL §3.7.7 Operations' create an operation function rejects for the whole call. The member takes no
+       arguments, so what this covers is the BRAND CHECK the body asks first — `IDBFactory.prototype.databases
+       .call({})` threw a TypeError where a browser hands back a rejected promise, and that is the one throw a
+       page cannot tell from `databases()` simply refusing. */
+    idl_returns_promise();
     g_id_databases_task = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_idb_databases_task_def);
     /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. Its header used to state that it
        "holds no agent-lifetime JS value, so there is nothing to release", and the conclusion did not follow
