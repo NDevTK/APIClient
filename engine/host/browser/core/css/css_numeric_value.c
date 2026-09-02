@@ -100,7 +100,8 @@ CssMathType css_numeric_value_type_of(JSContext *ctx, JSValueConst v)
     if (css_math_value_is(v)) return css_math_value_type(v);
     DCHECK(css_unit_value_is(v),
            "the type of a CSSNumericValue was asked of something that is not one — every caller is a member "
-           "body past its Web IDL §3.7.5 brand check or an algorithm over an already-rectified operand");
+           "body past its Web IDL §3.7.7 Operations brand check or an algorithm over an already-rectified "
+           "operand");
     /* §4.3.3: "The type of a CSSUnitValue is the result of creating a type from its unit internal slot." */
     unit = css_unit_value_unit(v);
     if (!css_numeric_type_from_unit(unit, strlen(unit), &t)) {
@@ -116,7 +117,7 @@ CssMathType css_numeric_value_type_of(JSContext *ctx, JSValueConst v)
     return t;
 }
 
-/* Web IDL §3.7.5 Operations' brand check: a member of CSSNumericValue.prototype reached on something that is
+/* Web IDL §3.7.7 Operations' brand check: a member of CSSNumericValue.prototype reached on something that is
  * not a CSSNumericValue is a TypeError, and a page tells that apart from `undefined`. It is §3.2.15's own
  * question, so it is the entry above and never a second test — the receiver of `equals` and its arguments are
  * branded against one predicate, which is what stops the two from admitting different sets of objects. */

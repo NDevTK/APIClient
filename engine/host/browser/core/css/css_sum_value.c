@@ -622,8 +622,8 @@ bool css_sum_value_create(JSContext *ctx, JSValueConst v, CssSumValue *out)
     out->n = out->cap = 0;
     DCHECK(css_numeric_value_is(ctx, v),
            "§4.3.1's create-a-sum-value was asked about something that is not a CSSNumericValue — every caller "
-           "is a member body past its Web IDL §3.7.5 brand check or an operand of a §4.3.4 list the mint "
-           "rectified");
+           "is a member body past its Web IDL §3.7.7 Operations brand check or an operand of a §4.3.4 list "
+           "the mint rectified");
 
     if (!css_math_value_is(v)) {
         sv_leaf(ctx, v, &pending);

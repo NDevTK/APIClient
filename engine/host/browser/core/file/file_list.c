@@ -132,7 +132,8 @@ static const IdlIndexedDecl FILE_LIST_INDEXED = { "FileList", fl_indexed_length,
 /* ---- the members ------------------------------------------------------------------------------------------ */
 
 /* §5.1: "must return the number of files in the FileList object. If there are no files, this attribute must
-   return 0." The brand check is Web IDL §3.7.5's, and it is this member's: `FileList.prototype.length` read off
+   return 0." The brand check is Web IDL §3.7.6 Attributes', and it is this member's: `FileList.prototype
+   .length` read off
    a plain object is a TypeError, not zero. */
 static JSValue js_fl_length(JSContext *ctx, JSValueConst this_val, int magic)
 {

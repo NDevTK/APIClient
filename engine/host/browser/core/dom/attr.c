@@ -555,8 +555,9 @@ static JSValue js_doc_create_attribute(JSContext *ctx, JSValueConst this_val, in
     lxb_dom_document_t *doc;
     lxb_dom_attr_t *a;
 
-    /* WEB IDL §3.7.5: a member reached with a receiver that does not implement the interface is a TypeError,
-       thrown at the call. NOT a DCHECK — the corpus asks for that throw deliberately. */
+    /* WEB IDL §3.7.7 Operations: an operation reached with a receiver that does not implement the interface
+       is a TypeError, thrown at the call — "If jsValue does not implement the interface target, throw a
+       TypeError". NOT a DCHECK — the corpus asks for that throw deliberately. */
     if (!n || n->type != LXB_DOM_NODE_TYPE_DOCUMENT) return JS_ThrowTypeError(ctx, "this is not a Document");
     doc = lxb_dom_interface_document(n);
     if (magic == 0) {

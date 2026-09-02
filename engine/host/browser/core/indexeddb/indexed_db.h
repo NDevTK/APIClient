@@ -4,7 +4,8 @@
 
 #include "quickjs.h"
 
-/* Declared ONCE PER AGENT: the IDBFactory class §3.7.5's brand check asks, `cmp`'s declaration, and the
+/* Declared ONCE PER AGENT: the IDBFactory class §3.7.7 Operations' brand check asks, `cmp`'s declaration, and
+   the
    per-realm install that builds this realm's IDBFactory.prototype, its interface object and the one
    [SameObject] IDBFactory `indexedDB` answers with. */
 void indexed_db_init(JSContext *ctx);

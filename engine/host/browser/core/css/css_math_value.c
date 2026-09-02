@@ -126,8 +126,13 @@ CssMathType css_math_value_type(JSValueConst v)
     return d->type;
 }
 
-/* Web IDL §3.7.5's BRAND CHECK for a member of one of these prototypes, and the TypeError a page tells apart
-   from `undefined`. */
+/* Web IDL §3.7.6 Attributes' BRAND CHECK for a member of one of these prototypes, and the TypeError a page
+   tells apart from `undefined`. Its two callers are §4.3.4's attribute getters — `operator`, `values` and
+   `value` — so the step is create-an-attribute-getter's, whose WHOLE sentence is "If jsValue does not
+   implement target, then: If attribute was specified with the [LegacyLenientThis] extended attribute, then
+   return undefined. Otherwise, throw a TypeError." None of the three is [LegacyLenientThis], so the throw is
+   the only arm reachable here.
+   THE NUMBER READ §3.7.5, WHICH IS Constants and states nothing about a receiver. */
 static CssMathValueData *mv_here(JSContext *ctx, JSValueConst v)
 {
     CssMathValueData *d = mv_of(v);

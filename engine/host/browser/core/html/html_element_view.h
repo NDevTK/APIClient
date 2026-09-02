@@ -5,7 +5,8 @@
  * interface Element` and §7 is a `partial interface HTMLElement`, and that is not a filing detail: `svg.offsetTop`
  * is `undefined` in every user agent and `svg.clientTop` is 0, because the two sections install on two
  * prototypes. A member of this section reached through `.call` on a non-HTML element is a TypeError, which is
- * WEB IDL §3.7.5's brand check over HTMLElement rather than over Element, and one file installing both could
+ * WEB IDL §3.7.6 Attributes' brand check over HTMLElement rather than over Element, and one file installing
+ * both could
  * not state that. The DERIVATIONS the two share — the has-a-box predicate, the `long` conversion and its mint,
  * the fragment count — are stated ONCE in core/dom/element_view.h and read from here.
  *

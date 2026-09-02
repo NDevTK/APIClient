@@ -111,7 +111,8 @@ static void ev_target_of_element(lxb_dom_element_t *el, EvTarget *t)
            "existence is defined over exactly that (element_view.h), so the two answers have come apart");
 }
 
-/* WEB IDL §3.7.5's BRAND CHECK. `Element.prototype.clientWidth` read off a plain object is a TypeError, and a
+/* WEB IDL §3.7.6 Attributes' BRAND CHECK. `Element.prototype.clientWidth` read off a plain object is a
+   TypeError, and a
    page tells that apart from `undefined` — a feature detector that probes the descriptor and applies the getter
    reads the throw as "this is a real interface". Returns false with the TypeError pending. */
 static bool ev_target(JSContext *ctx, JSValueConst this_val, EvTarget *t)

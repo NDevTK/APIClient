@@ -1384,7 +1384,8 @@ static JSValue js_cu_get_request(JSContext *ctx, JSValueConst this_val, int magi
  * that interface's prototype alone, so a key-only cursor does not have it — which is §4.9's own last sentence
  * ("a cursor that has its key only flag set to FALSE implements the IDBCursorWithValue interface as well").
  *
- * ITS BRAND IS THE NARROWER CLASS AND NOT `idb_cursor_is`, which is Web IDL §3.7.5 and not pedantry: a page
+ * ITS BRAND IS THE NARROWER CLASS AND NOT `idb_cursor_is`, which is Web IDL §3.7.6 Attributes and not
+ * pedantry: a page
  * reaches this getter off IDBCursorWithValue.prototype with any receiver it likes
  * (`Object.getOwnPropertyDescriptor(IDBCursorWithValue.prototype, "value").get.call(keyOnlyCursor)`), and
  * §3.7.6 makes that a TypeError because the receiver does not IMPLEMENT the interface the member is declared

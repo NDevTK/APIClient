@@ -158,7 +158,11 @@ enum { LOC_ASSIGN, LOC_REPLACE };
    (remote_location.c) and the assert that matters is no longer "the entries are absent" but "the interface
    declares them", which is what a filter needs in order to have something to expose. */
 
-/* THE CLASS IS THE BRAND. Web IDL §3.7.5's check is "does esValue implement the interface", and the one object
+/* THE CLASS IS THE BRAND. Web IDL §3.7.6 Attributes' check is "If jsValue does not implement target" and
+   §3.7.7 Operations' is "If jsValue does not implement the interface target, throw a TypeError" — this
+   interface declares both kinds, so both apply. THE NUMBER READ §3.7.5, WHICH IS Constants, and the phrase
+   quoted beside it named `esValue` — the identifier an OLDER edition used, so the quotation had gone stale
+   with the number. The one object
    per realm WEARS the class, so the check is a class-id comparison a page cannot forge. Its members are OWN
    properties of that object, so the only way to reach a getter with the wrong receiver is to pull it out with
    Object.getOwnPropertyDescriptor and apply it — which a browser answers with a TypeError, so this does. */
@@ -371,7 +375,8 @@ static JSValue loc_component(JSContext *ctx, const UrlRecord *rec, bool want_que
     return loc_string(ctx, loc_concat(want_query ? "?" : "#", part));
 }
 
-/* EVERY DECLARED MEMBER'S GETTER, once, with §3.7.5's brand check and the realm assertion in front of it. Its
+/* EVERY DECLARED MEMBER'S GETTER, once, with §3.7.6 Attributes' brand check and the realm assertion in front
+   of it. Its
    magic is its index; there is nothing per member to write, which is what stops a member from arriving with a
    hand-written getter that forgets either. */
 static JSValue js_loc_get(JSContext *ctx, JSValueConst this_val, int magic)

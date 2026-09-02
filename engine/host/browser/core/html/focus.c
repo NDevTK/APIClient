@@ -1077,7 +1077,7 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
                 STEP_GOTO(hdr->stage, FOC_AREA, &s->fphase, &s->ua_phase, NULL);
                 continue;
             }
-            /* WEB IDL §3.7.5's brand check — a TypeError, not an assert, because
+            /* WEB IDL §3.7.7 Operations' brand check — a TypeError, not an assert, because
                `HTMLElement.prototype.focus.call(null)` is a thing the corpus does deliberately. */
             n = node_of(hdr->this_val);
             if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) {
@@ -1686,7 +1686,8 @@ static JSValue js_tab_index_get(JSContext *ctx, JSValueConst this_val, int magic
     HtmlInteger parsed;
 
     (void)magic;
-    /* WEB IDL §3.7.5's brand check, a THROW and not an assert: this accessor sits on HTMLElement.prototype and
+    /* WEB IDL §3.7.6 Attributes' brand check, a THROW and not an assert: this accessor sits on
+       HTMLElement.prototype and
        a page reaches one off a prototype with `.call` on anything at all. */
     if (!html_element_is(this_val))
         return JS_ThrowTypeError(ctx, "HTMLElement.tabIndex was reached on something that is not an HTML "

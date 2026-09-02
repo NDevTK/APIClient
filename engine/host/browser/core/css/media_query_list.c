@@ -76,7 +76,8 @@ static MqlData *mql_data(JSContext *ctx, JSValueConst obj)
 {
     MqlData *d;
 
-    /* WEB IDL §3.7.5's BRAND IS A FACT ABOUT THE OBJECT, AND THE DECLARATION IS A SEPARATE QUESTION — asked
+    /* THE BRAND — WEB IDL §3.7.6 Attributes' for `media` and `matches`, §3.7.7 Operations' for `addListener`
+       and `removeListener` — IS A FACT ABOUT THE OBJECT, AND THE DECLARATION IS A SEPARATE QUESTION — asked
        here rather than folded into the comparison below, because the comparison cannot tell the two apart.
        JS_GetOpaque2 answers NULL and throws for a class id that does not match, so once media_query_list_free
        has given g_mql_class back to 0 this brand does not admit anything it should reject; it does the other

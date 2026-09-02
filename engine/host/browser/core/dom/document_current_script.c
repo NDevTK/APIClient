@@ -194,7 +194,8 @@ static JSValue js_doc_current_script(JSContext *ctx, JSValueConst this_val, int 
     JSValue rec, v;
 
     (void)magic;
-    /* WEB IDL §3.7.5's BRAND CHECK — a TypeError thrown AT THE READ, not a DCHECK: the corpus pulls these
+    /* WEB IDL §3.7.6 Attributes' BRAND CHECK — a TypeError thrown AT THE READ, not a DCHECK: the corpus pulls
+       these
        getters off the prototype and applies them to strangers deliberately. */
     if (!n || n->type != LXB_DOM_NODE_TYPE_DOCUMENT)
         return JS_ThrowTypeError(ctx, "this is not a Document");

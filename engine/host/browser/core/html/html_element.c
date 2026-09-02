@@ -708,7 +708,8 @@ static JSValue js_template_content(JSContext *ctx, JSValueConst this_val, int ma
     lxb_html_template_element_t *t;
 
     (void)magic;
-    /* WEB IDL §3.7.5's BRAND CHECK, and it is a THROW rather than an assert. This was a DCHECK whose message
+    /* WEB IDL §3.7.6 Attributes' BRAND CHECK, and it is a THROW rather than an assert. This was a DCHECK whose
+       message
        said that reaching it meant the interface table handed out the wrong prototype — which is FALSE: a page
        reaches an accessor off the prototype with `.call` on anything at all, so the receiver is the PAGE's
        input and an abort there is this engine crashing on a line of ordinary JavaScript. */

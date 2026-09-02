@@ -399,9 +399,11 @@ static CssRuleData *rule_here(JSContext *ctx, JSValueConst v)
     return r;
 }
 
-/* Web IDL §3.7.5's brand for a member declared on a DERIVED interface's prototype: a page can read
-   `CSSMediaRule.prototype.media` and apply it to a style rule, and the answer is a TypeError rather than a read
-   of a JS_NULL slot. The interface a rule IS is its stored type — see css_rule.h. */
+/* Web IDL §3.7.6 Attributes' and §3.7.7 Operations' brand for a member declared on a DERIVED interface's
+   prototype — BOTH, because this entry serves the accessors and CSSKeyframesRule's `appendRule`, `deleteRule`
+   and `findRule` alike, and the two sections state the same receiver step for the two member kinds. A page
+   can read `CSSMediaRule.prototype.media` and apply it to a style rule, and the answer is a TypeError rather
+   than a read of a JS_NULL slot. The interface a rule IS is its stored type — see css_rule.h. */
 static CssRuleData *rule_here_typed(JSContext *ctx, JSValueConst v, uint16_t type, const char *iface)
 {
     CssRuleData *r = rule_of(v);
@@ -527,10 +529,10 @@ static bool rule_type_has_child_rules(uint16_t type)
 }
 
 /* IS THIS RULE TYPE A §6.4.5 GROUPING RULE — "an at-rule that CONTAINS OTHER RULES nested inside itself", plus
-   the style rule CSS Nesting made one. It is Web IDL §3.7.5's brand check for `cssRules`, `insertRule` and
-   `deleteRule` AS CSSGroupingRule DECLARES THEM: a page can reach `CSSGroupingRule.prototype.insertRule` and
-   apply it to an `@import` rule, and the answer is a TypeError and not an insertion into a list that rule does
-   not have.
+   the style rule CSS Nesting made one. It is Web IDL §3.7.6 Attributes' brand check for `cssRules` and
+   §3.7.7 Operations' for `insertRule` and `deleteRule`, AS CSSGroupingRule DECLARES THEM: a page can reach
+   `CSSGroupingRule.prototype.insertRule` and apply it to an `@import` rule, and the answer is a TypeError and
+   not an insertion into a list that rule does not have.
    IT IS A NARROWER QUESTION THAN THE ONE ABOVE, and CSS Animations is why. Its CSSKeyframesRule holds child
    rules and is `interface CSSKeyframesRule : CSSRule` — it does not inherit CSSGroupingRule and declares its
    OWN `cssRules`, `appendRule(CSSOMString)` and `deleteRule(CSSOMString)`, whose argument is a keyframe

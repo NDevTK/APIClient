@@ -26,7 +26,8 @@ void html_form_free(JSRuntime *rt);
  * control's value" is the defect that lets one algorithm read a value another one wrote differently. */
 
 /* Whether this node is a `textarea` element. Exported so a component that installs on both text-control
-   prototypes can perform Web IDL §3.7.5's brand check without a fourth private copy of the local-name test. */
+   prototypes can perform Web IDL §3.7.6 Attributes' and §3.7.7 Operations' brand check without a fourth
+   private copy of the local-name test. */
 bool html_form_is_textarea(const lxb_dom_node_t *n);
 
 /* §4.10.11's API VALUE: "the element's raw value, with newlines normalized" (Infra §4.7 Strings), which is what

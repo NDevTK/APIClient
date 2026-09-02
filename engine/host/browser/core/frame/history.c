@@ -75,9 +75,10 @@ static const char *const HIST_NAME[] = { "length", "scrollRestoration", "state" 
 /* §7.2.5's two mode words, as the magic pushState and replaceState are declared with. */
 enum { HIST_PUSH, HIST_REPLACE };
 
-/* WEB IDL §3.7.5's BRAND. The one History per realm WEARS the class, so the check is a class-id comparison a
-   page cannot forge, and pulling a getter off the prototype and applying it to something else is the TypeError
-   a browser answers with. */
+/* WEB IDL §3.7.6 Attributes' AND §3.7.7 Operations' BRAND — §7.2.5 declares both kinds and this one entry
+   serves them all. The one History per realm WEARS the class, so the check is a class-id comparison a page
+   cannot forge, and pulling a getter off the prototype and applying it to something else is the TypeError a
+   browser answers with. */
 static bool hist_brand(JSContext *ctx, JSValueConst this_val)
 {
     DCHECK(g_history_class != 0, "a History member ran before history_init declared the class");

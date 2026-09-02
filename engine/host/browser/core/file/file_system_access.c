@@ -235,7 +235,8 @@ static int fsa_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
            brand failure is a rejected promise and not a throw, and a page's `.catch` must see it. */
         s->promise = JS_NewPromiseCapability(ctx, s->funcs);
         if (JS_IsException(s->promise)) return -1;
-        /* WEB IDL §3.7.5's BRAND CHECK, asked AFTER the capability exists because §3.7.7 makes it a rejection
+        /* WEB IDL §3.7.7 Operations' BRAND CHECK, asked AFTER the capability exists because §3.7.7 makes it a
+           rejection
            for an operation whose return type is a promise — a page tells that apart from `undefined`. */
         if (!fs_handle_is(hdr->this_val)) {
             JS_ThrowTypeError(ctx, "a FileSystemHandle permission member was reached on something that is not "

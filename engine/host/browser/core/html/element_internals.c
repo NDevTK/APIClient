@@ -103,7 +103,7 @@ static JSAtom  g_atom_vtarget = JS_ATOM_NULL;
    both directions: `ValidityState.prototype`'s getter brand-checks by asking for the target slot, and with one
    key an ELEMENT answers that check with its cached ValidityState — so
    `descriptor.get.call(someElement)` would report `valid: true` instead of throwing the TypeError Web IDL
-   §3.7.5 requires. A brand test is only a brand test if nothing else can pass it. */
+   §3.7.6 Attributes requires. A brand test is only a brand test if nothing else can pass it. */
 static JSValue g_validity_key = JS_UNDEFINED;
 static JSAtom  g_atom_validity = JS_ATOM_NULL;
 
@@ -209,7 +209,9 @@ static JSValue ei_target(JSContext *ctx, JSValueConst this_val)
     return ei_slot(ctx, this_val, g_atom_target);
 }
 
-/* THE RECEIVER CHECK EVERY MEMBER MAKES FIRST — Web IDL §3.7.5's brand check, whose failure is a TypeError
+/* THE RECEIVER CHECK EVERY MEMBER MAKES FIRST — Web IDL §3.7.6 Attributes' brand check for the accessors and
+   §3.7.7 Operations' for `setFormValue`, `setValidity`, `checkValidity` and `reportValidity`, whose failure is
+   a TypeError
    thrown before the member's own step 1. Returns the target element (OWNED) or JS_UNDEFINED with a throw. */
 static JSValue ei_target_or_throw(JSContext *ctx, JSValueConst this_val)
 {
@@ -792,7 +794,8 @@ static JSValue js_internals_aria_set(JSContext *ctx, JSValueConst this_val, JSVa
  * WHAT DIFFERS, EXACTLY, AND WHY EACH IS THE STANDARD'S SENTENCE AND NOT A CONVENIENCE:
  *   - "get the element" is the TARGET ELEMENT, not the receiver — so the ids resolve in that element's root and
  *     the ancestor filter walks its ancestors, which is what makes `internals.ariaLabelledByElements` name
- *     elements in the custom element's own tree. It is also §3.7.5's BRAND: an object with no target slot is
+ *     elements in the custom element's own tree. It is also §3.7.6 Attributes' BRAND: an object with no
+ *     target slot is
  *     not an ElementInternals, and the mixin throws the TypeError for it.
  *   - The content attribute is §4.13.7.4's INTERNAL CONTENT ATTRIBUTE MAP, not the element's attributes — which
  *     is what makes these the DEFAULT semantics the page author can still override with the real markup.

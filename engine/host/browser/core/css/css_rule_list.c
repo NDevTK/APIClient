@@ -64,8 +64,9 @@ static JSValue crl_item(JSContext *ctx, JSValueConst self, uint32_t i)
 
 static const IdlIndexedDecl CRL_INDEXED = { "CSSRuleList", crl_length, crl_item, NULL, 0 };
 
-/* Web IDL §3.7.5's brand for the two PROTOTYPE members: the decl callbacks above are reached only through an
-   index lookup on an object idl_indexed already resolved, so they answer the empty collection for a stranger,
+/* The brand for the two PROTOTYPE members — Web IDL §3.7.6 Attributes' for `length` and §3.7.7 Operations'
+   for `item`: the decl callbacks above are reached only through an index lookup on an object idl_indexed
+   already resolved, so they answer the empty collection for a stranger,
    while a member read off `CSSRuleList.prototype` directly must THROW. */
 static bool crl_is(JSContext *ctx, JSValueConst v)
 {

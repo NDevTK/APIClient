@@ -75,7 +75,8 @@ static int g_id_set[4] = { -1, -1, -1, -1 };
 
 /* ---- the record ------------------------------------------------------------------------------------------ */
 
-/* §3.7.5's BRAND, and the point at which the flow REACHES the record. A record a flow has reached is one it may
+/* §3.7.6 Attributes' and §3.7.7 Operations' BRAND — the accessors and `toJSON` share this one entry — and the
+   point at which the flow REACHES the record. A record a flow has reached is one it may
    write, and capturing here is what makes it impossible to have a `r.x = …` this delta did not see — CLAUDE.md's
    rule for a component's own C record. The delta dedups to one entry per flow. */
 static DomRectBox *dr_box(JSValueConst v)
@@ -110,7 +111,8 @@ bool dom_rect_is(JSValueConst v)
     return JS_GetOpaque(v, g_ro_class) != NULL || JS_GetOpaque(v, g_rect_class) != NULL;
 }
 
-/* The brand, with §3.7.5's TypeError pending when it fails: `DOMRectReadOnly.prototype.x` read off a plain
+/* The brand, with §3.7.6 Attributes' TypeError pending when it fails: `DOMRectReadOnly.prototype.x` read off
+   a plain
    object throws, and a page's feature detector reads that throw as "this is a real interface". */
 static DomRectBox *dr_this(JSContext *ctx, JSValueConst this_val)
 {

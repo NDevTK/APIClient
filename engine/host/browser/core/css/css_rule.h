@@ -53,8 +53,9 @@
  * and cannot change" — and it is also WHICH INTERFACE the rule is, so those are one field rather than two facts
  * that could disagree. It is what §6.4 steps 5 and 6 ask about a rule (an `@import` may not follow a style rule
  * and an `@namespace` may not join a sheet that holds one), what serialize-a-CSS-rule branches on, and what
- * §3.7.5's brand check on a derived interface's member tests. It used to be answered from the CLASS, on the
- * stated ground that this build had exactly one rule interface; that stopped being true with §7.3. The
+ * §3.7.6 Attributes' and §3.7.7 Operations' brand check on a derived interface's member tests. It used to be
+ * answered from the CLASS, on the stated ground that this build had exactly one rule interface; that stopped
+ * being true with §7.3. The
  * alternative — a class per interface — would have
  * put §6.4.2's four members (which run with `this` being ANY rule, whatever its interface) behind a lookup that
  * tries each class in turn, or copied them onto every concrete prototype, which is the hand-maintained list
@@ -95,7 +96,8 @@
  * `deleteRule` whose argument is a keyframe SELECTOR where §6.4.5's is an INDEX, which is exactly why the IDL
  * keeps the two interfaces apart and why one predicate could not serve both. `rule_type_has_child_rules`
  * decides storage (an Array, for the reason above) and what the parse may nest; `rule_type_is_grouping` is
- * §3.7.5's brand for the three members CSSGroupingRule declares, and it asserts it is the narrower of the two.
+ * the brand for the three members CSSGroupingRule declares — §3.7.6 Attributes' for `cssRules`, §3.7.7
+ * Operations' for the other two — and it asserts it is the narrower of the two.
  * §6.3.3's INDEXED PROPERTY GETTER is not a member at all — Web IDL §3.9 makes it the object's own-property
  * behaviour — so it is an EXOTIC on this component's class, running core/idl_indexed.h's one algorithm over a
  * decl this file hands out for that one rule type. A collection object could not have carried it: a

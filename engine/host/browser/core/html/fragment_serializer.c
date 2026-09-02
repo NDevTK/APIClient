@@ -381,7 +381,8 @@ static int js_frag_ser_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
            carries a value has to be given one before anything can read it as "absent". */
         s->shadow_roots = JS_UNDEFINED;
 
-        /* WEB IDL §3.7.5's BRAND CHECK, and it is a THROW: a page reaches an accessor or a method off the
+        /* WEB IDL §3.7.6 Attributes' BRAND CHECK for the accessor and §3.7.7 Operations' for the method, and
+           it is a THROW: a page reaches an accessor or a method off the
            prototype with `.call` on anything it likes, so what the receiver is is the PAGE's input and not
            this engine's invariant. §8.5.5's outerHTML is declared on Element alone; the other two are declared
            on Element and on ShadowRoot, which is a DocumentFragment and not an element. */

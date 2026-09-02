@@ -78,7 +78,8 @@ static IdbRecordData *record_of(JSValueConst v)
     return r;
 }
 
-/* WEB IDL §3.7.5's BRAND CHECK. `IDBRecord.prototype.key` read off anything else is a TypeError, and a page
+/* WEB IDL §3.7.6 Attributes' BRAND CHECK. `IDBRecord.prototype.key` read off anything else is a TypeError,
+   and a page
    tells that apart from `undefined`. */
 static IdbRecordData *record_here(JSContext *ctx, JSValueConst v)
 {

@@ -514,7 +514,8 @@ JSValue html_form_textarea_api_value(JSContext *ctx, JSValueConst wrap)
    here reaches for it: the `value` IDL attribute returns the API value by the standard's own sentence, and
    §4.10.20's relevant value is the API value too. */
 
-/* Web IDL §3.7.5's BRAND CHECK for the two members HTMLTextAreaElement declares here, and it is this file's for
+/* Web IDL §3.7.6 Attributes' BRAND CHECK for the two members HTMLTextAreaElement declares here, and it is
+   this file's for
    the same reason `js_input_brand` below is: `HTMLTextAreaElement.prototype.value` reached on anything else is
    a TypeError, not the child text content a shared accessor would hand back for any element that has one. It
    is also what keeps §4.10.11's own algorithms — which assert their receiver, because the raw value belongs to
@@ -631,7 +632,7 @@ static JSValue js_ctrl_set_value(JSContext *ctx, JSValueConst this_val, JSValueC
 }
 
 /* §4.10.5.4's `value` on HTMLInputElement, which input_value.c owns in full — the four modes and §4.10.5.1's
-   value sanitization algorithm. Here only Web IDL §3.7.5's BRAND CHECK, because the member is
+   value sanitization algorithm. Here only Web IDL §3.7.6 Attributes' BRAND CHECK, because the member is
    HTMLInputElement's: `descriptor.get.call(textarea)` is a TypeError and not the empty string a shared accessor
    would answer, and the two controls that share this file's other accessor are not `input` elements. */
 static JSValue js_input_brand(JSContext *ctx, JSValueConst this_val)
@@ -1689,7 +1690,8 @@ static int js_submit_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
         s->firing_set = 0;
         STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
         form_entry_list_init(&s->entries);
-        /* Web IDL §3.7.5's brand check: both members are HTMLFormElement's, and one invoked on anything else
+        /* Web IDL §3.7.7 Operations' brand check: both members are HTMLFormElement's, and one invoked on
+           anything else
            is a TypeError. It was a silent `return`, which told a page that `submit.call({})` had submitted. */
         if (!html_form_is_form_element(s->hdr.this_val)) {
             JS_ThrowTypeError(ctx, "submit/requestSubmit was called on something that is not an "

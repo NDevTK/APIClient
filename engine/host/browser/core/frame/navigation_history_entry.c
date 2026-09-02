@@ -56,7 +56,8 @@ static int       g_id_get_state = -1;
 
 #define NHE_SHE "sessionHistoryEntry"
 
-/* WEB IDL §3.7.5's BRAND AS A FACT ABOUT THE OBJECT, WITH THE DECLARATION ASKED SEPARATELY — and this file is
+/* WEB IDL §3.7.6 Attributes' BRAND AS A FACT ABOUT THE OBJECT, WITH THE DECLARATION ASKED SEPARATELY — and
+ * this file is
  * one predicate rather than five because it had FIVE `JS_GetClassID(x) == g_nhe_class` sites: nhe_brand's
  * `if`, which asked the declaration question first as `DCHECK(g_ready, …)`, and FOUR DCHECKs which asked it
  * not at all.
@@ -96,8 +97,8 @@ static JSValue nhe_proto(JSContext *ctx)
     return proto;   /* OWNED */
 }
 
-/* WEB IDL §3.7.5's BRAND. The class is the check, so a getter pulled off the prototype and applied to
-   something else is the TypeError a browser answers with rather than a read of a slot that is not there. */
+/* WEB IDL §3.7.6 Attributes' BRAND. The class is the check, so a getter pulled off the prototype and applied
+   to something else is the TypeError a browser answers with rather than a read of a slot that is not there. */
 static bool nhe_brand(JSContext *ctx, JSValueConst this_val)
 {
     if (nhe_is(this_val)) return true;

@@ -32,7 +32,8 @@ static JSRuntime *g_nav_rt;
 static int       g_obj_slot = -1;
 static int       g_id_entries = -1, g_id_update_current_entry = -1;
 
-/* WEB IDL §3.7.5's BRAND AS A FACT ABOUT THE OBJECT, WITH THE DECLARATION ASKED SEPARATELY. Both call sites
+/* WEB IDL §3.7.6 Attributes' AND §3.7.7 Operations' BRAND AS A FACT ABOUT THE OBJECT, WITH THE DECLARATION
+ * ASKED SEPARATELY. Both call sites
  * used to fold the two together — one as `DCHECK(g_nav_class != 0)` beside the comparison, one with nothing at
  * all — and the fold INVERTS the moment navigation_free gives the id back: quickjs.h defines
  * JS_INVALID_CLASS_ID as 0 and JS_GetClassID answers it for everything that is not an object, so `== 0` is
@@ -512,7 +513,8 @@ void navigation_set_ongoing_navigate_event(JSContext *ctx, JSValueConst ev)
 
 /* ---- §7.2.6.6's members ------------------------------------------------------------------------------------ */
 
-/* WEB IDL §3.7.5's BRAND, plus the SAME-REALM check core/frame/history.c makes for the same reason: a C member
+/* WEB IDL §3.7.6 Attributes' AND §3.7.7 Operations' BRAND — §7.2.6.6 declares both kinds — plus the
+   SAME-REALM check core/frame/history.c makes for the same reason: a C member
    runs in the realm that DEFINED it, so a member pulled off THIS realm's Navigation.prototype and applied to
    ANOTHER realm's Navigation would read this document's entry list while wearing that document's object. Two
    same-origin documents are one heap, so that is a reachable state and not a hypothetical. */

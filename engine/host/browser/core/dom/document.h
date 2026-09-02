@@ -185,7 +185,8 @@ JSValueConst document_object(JSContext *ctx);
    realm holds several (a createHTMLDocument, a DOMParser parse, an XHR responseXML) and only its ACTIVE one
    has a browsing context. §2's selection is per DOCUMENT, so it is this record's field and not a realm value;
    the algorithm and the object are core/dom/selection.c's. `doc` must be a Document wrapper — a receiver that
-   is not one is Web IDL §3.7.5's TypeError, thrown here. OWNED. */
+   is not one is Web IDL §3.7.7 Operations' TypeError, thrown here — `getSelection()` is an operation, so the
+   step is "If jsValue does not implement the interface target, throw a TypeError". OWNED. */
 JSValue document_selection(JSContext *ctx, JSValueConst doc);
 /* HTML §8.1.3.2 Environment settings objects' API BASE URL of this realm, which §7.2.2.6 Script settings for
    Window objects answers — "Return the current base URL of window's associated Document." —

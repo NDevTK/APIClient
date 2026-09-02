@@ -86,7 +86,8 @@ static void status_descriptor(JSContext *ctx, JSValueConst slots, PermissionDesc
                             "registry");
 }
 
-/* WEB IDL §3.7.5's BRAND CHECK. `PermissionStatus.prototype.state` read off a plain object is a TypeError, and
+/* WEB IDL §3.7.6 Attributes' BRAND CHECK. `PermissionStatus.prototype.state` read off a plain object is a
+   TypeError, and
    a page tells that apart from `undefined` — a feature detector that probes the descriptor and applies the
    getter reads the throw as "this is a real interface". A real throw, not an assert, for that reason. */
 static bool status_brand(JSContext *ctx, JSValueConst this_val)
@@ -399,8 +400,8 @@ void permission_status_init(JSContext *ctx)
     g_rt = rt;
     g_key = JS_NewSymbol(ctx, "permissionStatusState", false);
     CHECK(!JS_IsException(g_key), "the PermissionStatus slot key allocation failed");
-    /* THE CLASS IS BOTH THE PER-REALM PROTOTYPE SLOT AND THE BRAND: the object WEARS it, so §3.7.5's check is
-       a class-id comparison and a page cannot forge one. */
+    /* THE CLASS IS BOTH THE PER-REALM PROTOTYPE SLOT AND THE BRAND: the object WEARS it, so §3.7.6
+       Attributes' check is a class-id comparison and a page cannot forge one. */
     JS_NewClassID(rt, &g_status_class);
     CHECK(JS_NewClass(rt, g_status_class, &def) == 0,
           "PermissionStatus: the per-realm prototype slot could not be declared");

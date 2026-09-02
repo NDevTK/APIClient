@@ -20,7 +20,10 @@ bool performance_is(JSValueConst v)
     return g_perf_class != 0 && JS_GetClassID(v) == g_perf_class;
 }
 
-/* WEB IDL §3.7.5 Platform objects implementing interfaces' BRAND, for the one member that is an ATTRIBUTE.
+/* WEB IDL §3.7.6 Attributes' BRAND, for the one member that is an ATTRIBUTE. THE NUMBER AND THE TITLE HERE
+   WERE BOTH WRONG AND WERE WRONG SEPARATELY: it read "§3.7.5 Platform objects implementing interfaces", and
+   §3.7.5 is Constants while "Platform objects implementing interfaces" is §3.8 — a pairing in which each half
+   alone looks checkable and neither names the section that holds the step.
    §7's two operations state the same check at their declaration, where Web IDL §3.7.7 Operations asks it — step
    2.1.2.3 of the try-list, before step 2.1.4 computes the effective overload set — so a body cannot be the place
    for theirs. An attribute's getter has nothing to convert, so its receiver check has no ordering hazard and the
@@ -201,7 +204,7 @@ void performance_init(JSContext *ctx)
     DCHECK(g_perf_slot < 0, "performance_init ran twice — the class, the slot and the two operations are "
                             "declared once per AGENT");
     /* THE CLASS IS BOTH THE PER-REALM PROTOTYPE SLOT AND THE BRAND: the one object per realm WEARS it, so
-       §3.7.5's check is a class-id comparison and a page cannot forge one. */
+       §3.7.6 Attributes' and §3.7.7 Operations' check is a class-id comparison and a page cannot forge one. */
     JS_NewClassID(JS_GetRuntime(ctx), &g_perf_class);
     CHECK(JS_NewClass(JS_GetRuntime(ctx), g_perf_class, &d) == 0,
           "Performance: the per-realm prototype slot could not be declared");
@@ -219,8 +222,8 @@ void performance_init(JSContext *ctx)
     idl_this_iface(performance_is, "Performance");
 
     agent_state_class("performance", &g_perf_class,
-                      "HR-TIME §7 Performance's class — its per-realm prototype slot and Web IDL §3.7.5's "
-                      "brand");
+                      "HR-TIME §7 Performance's class — its per-realm prototype slot and Web IDL §3.7.6 "
+                      "Attributes' and §3.7.7 Operations' brand");
     agent_state_id("performance", &g_perf_slot,
                    "HR-TIME §8.1's realm-value slot for the global's Performance, and this component's "
                    "declaration latch");

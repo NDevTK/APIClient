@@ -110,9 +110,11 @@ typedef enum {
    interface that has them, which is what keeps this component ignorant of ElementInternals. */
 typedef struct {
     /* "GET THE ELEMENT" — for an element target, itself; for an ElementInternals, its target element. OWNED,
-       and JS_UNDEFINED when the receiver is not a target of this kind, which makes it Web IDL §3.7.5's BRAND
-       TEST in the same call: the caller throws the TypeError a wrong receiver is owed. One op rather than two,
-       because for both kinds the brand IS "does this object have an element to answer for". */
+       and JS_UNDEFINED when the receiver is not a target of this kind, which makes it Web IDL §3.7.6
+       Attributes' BRAND TEST in the same call: the caller throws the TypeError a wrong receiver is owed. One
+       op rather than two, because for both kinds the brand IS the question does this object have an element
+       to answer for — this engine's own gloss and NOT a quotation of the standard, so it carries no quotes
+       to be read as one. */
     JSValue (*element)(JSContext *ctx, JSValueConst target);
     /* "GET THE CONTENT ATTRIBUTE" — an OWNED string freed with free(), or NULL when the attribute does not
        exist (§2.6.1's null, which is what the members read as the IDL null). */

@@ -74,7 +74,8 @@ JSValue idb_key_range_only_key(JSContext *ctx, JSValueConst key);
    the conversion above guarantees, so a value that is not one crashes rather than answering. */
 bool idb_key_range_contains(JSContext *ctx, JSValueConst range, JSValueConst key);
 
-/* WEB IDL §3.7.5's BRAND, asked of a value that arrived from another component. §2.9's convert-a-value-to-a-key
+/* WEB IDL §3.8 Platform objects implementing interfaces' "value implements an interface interface", asked of
+   a value that arrived from another component. §2.9's convert-a-value-to-a-key
    -range asks it as its own step 1 and answers with the range, which is all a member that CONVERTS needs; §5.12's
    "is a potentially valid key range" asks it as a QUESTION and takes a different branch on the answer, so the
    question exists on its own. */

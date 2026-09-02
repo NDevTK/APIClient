@@ -18,8 +18,9 @@
  * not a wrong value; it is a whole arm of the program that no run has ever taken, and it is why this is worth
  * more than the reference count that ranked it.
  *
- * THE ONE OBJECT PER REALM WEARS ITS OWN CLASS, and both halves of that matter. The class is Web IDL §3.7.5's
- * BRAND — `Performance.prototype.now.call({})` is a TypeError and a page tells that apart from `undefined` —
+ * THE ONE OBJECT PER REALM WEARS ITS OWN CLASS, and both halves of that matter. The class is Web IDL §3.7.7
+ * Operations' BRAND — `Performance.prototype.now.call({})` is a TypeError and a page tells that apart from
+ * `undefined` —
  * and it is quickjs's per-context prototype slot, which is what makes §3.7.3's interface prototype object a
  * per-REALM object rather than a module static answering every document from whichever realm ran first.
  *

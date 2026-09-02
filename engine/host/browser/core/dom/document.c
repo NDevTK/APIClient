@@ -523,9 +523,11 @@ static Document *doc_receiver(JSContext *ctx, JSValueConst this_val)
     lxb_dom_node_t *n = node_of(this_val);
     Document *d;
 
-    /* WEB IDL §3.7.5: a member reached with a receiver that does not implement the interface is a TypeError,
-       thrown at the read — `Object.getOwnPropertyDescriptor(Document.prototype, "URL").get.call(null)` is a
-       thing the corpus does deliberately. It is NOT an engine invariant and so NOT a DCHECK: asserting it would
+    /* WEB IDL §3.7.6 Attributes AND §3.7.7 Operations — this entry serves both member kinds, and each section
+       states the same step: a member reached with a receiver that does not implement the interface is a
+       TypeError, thrown at the read — `Object.getOwnPropertyDescriptor(Document.prototype, "URL").get.call(
+       null)` is a thing the corpus does deliberately. It is NOT an engine invariant and so NOT a DCHECK:
+       asserting it would
        turn a test that asks for the throw into an abort that takes the whole file with it. */
     if (!n || n->type != LXB_DOM_NODE_TYPE_DOCUMENT) {
         JS_ThrowTypeError(ctx, "this is not a Document");
@@ -2645,7 +2647,7 @@ static JSValue js_doc_tree(JSContext *ctx, JSValueConst this_val, int magic)
 {
     lxb_dom_node_t *doc = node_of(this_val), *root, *n;
 
-    /* WEB IDL §3.7.5's brand check — a TypeError, not an assert; see doc_receiver. */
+    /* WEB IDL §3.7.6 Attributes' brand check — a TypeError, not an assert; see doc_receiver. */
     if (!doc || doc->type != LXB_DOM_NODE_TYPE_DOCUMENT)
         return JS_ThrowTypeError(ctx, "this is not a Document");
     root = document_document_element_of(doc);

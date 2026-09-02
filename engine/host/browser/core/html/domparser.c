@@ -140,7 +140,8 @@ static JSValue js_domparser_ctor(JSContext *ctx, JSValueConst this_val, int argc
     return obj;
 }
 
-/* WEB IDL §3.7.5's BRAND CHECK. `DOMParser.prototype.parseFromString` is reachable off the prototype with
+/* WEB IDL §3.7.7 Operations' BRAND CHECK. `DOMParser.prototype.parseFromString` is reachable off the
+   prototype with
    `.call` on anything a page likes, so the receiver is the PAGE'S input and this is a THROW rather than an
    assert. A receiver that IS a DOMParser and has no record is an ENGINE invariant: the constructor is the only
    way one exists and it sets the record before returning. */
@@ -344,7 +345,7 @@ static JSValue js_domparser_parse_from_string(JSContext *ctx, JSValueConst this_
     size_t len = 0;
 
     (void)magic; (void)argc;
-    if (!p) return JS_EXCEPTION;                 /* §3.7.5's brand check threw */
+    if (!p) return JS_EXCEPTION;                 /* §3.7.7 Operations' brand check threw */
 
     /* STEP 1. §2's TrustedHTML does not exist in this engine, so the "is an instance of the expected type" step
        is DECIDED rather than skipped and a document under `require-trusted-types-for 'script'` gets the

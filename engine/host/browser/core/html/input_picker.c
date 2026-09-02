@@ -178,7 +178,8 @@ static int picker_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVal
         s->dismissed = JS_UNDEFINED;
         s->ua_phase = 0;
         s->type_state = (uint8_t)state;
-        /* WEB IDL §3.7.5's BRAND CHECK. `HTMLInputElement.prototype.showPicker.call(textarea)` is a TypeError
+        /* WEB IDL §3.7.7 Operations' BRAND CHECK. `HTMLInputElement.prototype.showPicker.call(textarea)` is a
+           TypeError
            and a page tells that apart from every DOMException below it. */
         if (state == INPUT_STATE_NONE) {
             JS_ThrowTypeError(ctx, "HTMLInputElement's `showPicker` was called on something that is not an "

@@ -96,7 +96,8 @@ static JSValue js_dialog_get_return_value(JSContext *ctx, JSValueConst this_val,
     (void)magic;
     DCHECK(g_atom_ret != JS_ATOM_NULL,
            "HTMLDialogElement.returnValue was read before html_dialog_declare minted its slot key");
-    /* WEB IDL §3.7.5's BRAND CHECK, and it is a THROW rather than an assert: a page reaches an accessor off the
+    /* WEB IDL §3.7.6 Attributes' BRAND CHECK, and it is a THROW rather than an assert: a page reaches an
+       accessor off the
        prototype with `.call` on anything at all, so the receiver is the PAGE's input. */
     if (!dialog_elem_of(this_val))
         return JS_ThrowTypeError(ctx, "HTMLDialogElement.returnValue read on something that is not a <dialog> "

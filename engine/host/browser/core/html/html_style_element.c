@@ -227,7 +227,8 @@ void html_style_element_parsed(JSContext *ctx, lxb_dom_node_t *root)
 
 /* ---- the members ----------------------------------------------------------------------------------------- */
 
-/* WEB IDL §3.7.5's BRAND CHECK, and it is a THROW rather than an assert: all three members below live on
+/* WEB IDL §3.7.6 Attributes' BRAND CHECK, and it is a THROW rather than an assert: all three members below
+   live on
    HTMLStyleElement.prototype, and a page reaches an accessor off a prototype with `.call` on anything at all —
    `Object.create(HTMLStyleElement.prototype).sheet` included — so the receiver is the PAGE'S input. */
 static bool style_receiver_ok(JSContext *ctx, JSValueConst this_val, const char *member)

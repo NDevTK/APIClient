@@ -630,7 +630,8 @@ static int js_el_set_html(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
            gives that argument the default Inert. Only step 6 below moves it. */
         FragScriptingMode scripting = FRAG_SCRIPTING_INERT;
 
-        /* WEB IDL §3.7.5's BRAND CHECK. `Element.prototype`'s members reach any receiver a page hands them
+        /* WEB IDL §3.7.6 Attributes' BRAND CHECK for the `innerHTML`/`outerHTML` setters and §3.7.7
+           Operations' for `setHTMLUnsafe`. `Element.prototype`'s members reach any receiver a page hands them
            with `.call`, and ShadowRoot's two are declared on an interface that is NOT an element — a
            DocumentFragment — so which of the two this is decides what the receiver must be. */
         if (on_shadow) {

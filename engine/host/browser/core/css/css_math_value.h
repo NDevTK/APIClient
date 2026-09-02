@@ -131,7 +131,9 @@ JSValue css_math_value_new(JSContext *ctx, CssMathOp op, JSValueConst *items, in
    into its own TypeError. `items` is BORROWED and `n` obeys the same shape rule as the mint's. */
 CssMathType css_math_value_type_fold(JSContext *ctx, CssMathOp op, JSValueConst *items, int n);
 
-/* Web IDL §3.7.5's BRAND for the whole family: is this object one of §4.3.4's math values in this agent? */
+/* Web IDL §3.8 Platform objects implementing interfaces' "value implements an interface interface" for the
+   whole family: is this object one of §4.3.4's math values in this agent? The TypeError a member owes a
+   receiver that fails it is §3.7.6 Attributes'. THE NUMBER READ §3.7.5, WHICH IS Constants. */
 bool css_math_value_is(JSValueConst v);
 
 /* WHICH ONE — §4.3.4's `operator` table read as this component's dispatch. `v` must be a math value; the

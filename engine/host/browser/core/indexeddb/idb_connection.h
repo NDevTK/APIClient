@@ -65,7 +65,8 @@ void idb_connection_set_closed_hook(void (*on_closed)(JSContext *ctx, JSValueCon
    it becomes true is the moment one of them finishes. */
 void idb_connection_transaction_finished(JSContext *ctx, JSValueConst connection);
 
-/* Web IDL §3.7.5's brand, asked of a value that arrived from another component. */
+/* Web IDL §3.8 Platform objects implementing interfaces' "value implements an interface interface", asked of a
+   value that arrived from another component. */
 bool idb_connection_is(JSValueConst v);
 
 #endif

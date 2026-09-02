@@ -67,7 +67,8 @@ static void hev_target_of_element(lxb_dom_element_t *el, HevTarget *t)
            "rather than one");
 }
 
-/* WEB IDL §3.7.5's BRAND CHECK, and it is over HTMLElement rather than over Element — which is the whole reason
+/* WEB IDL §3.7.6 Attributes' BRAND CHECK, and it is over HTMLElement rather than over Element — which is the
+   whole reason
    this section is a file of its own. `Object.getOwnPropertyDescriptor(HTMLElement.prototype,'offsetWidth').get
    .call(svgEl)` is a TypeError in every user agent and `svgEl.offsetWidth` is `undefined`, and a page that
    feature-detects by applying the getter tells the throw apart from both. A THROW and not an assert: the

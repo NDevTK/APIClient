@@ -65,7 +65,8 @@ static JSValue dsl_item(JSContext *ctx, JSValueConst self, uint32_t i)
 
 static const IdlIndexedDecl DOM_STRING_LIST_INDEXED = { "DOMStringList", dsl_length, dsl_item, NULL, 0 };
 
-/* Web IDL §3.7.5's BRAND, asked by the three PROTOTYPE members. The two decl callbacks above are reached only
+/* The BRAND asked by the three PROTOTYPE members — Web IDL §3.7.6 Attributes' for `length`, §3.7.7
+   Operations' for `item` and `contains`. The two decl callbacks above are reached only
    through an index lookup on an object idl_indexed already resolved, so they answer the empty list for a
    stranger; a member read off `DOMStringList.prototype` directly must THROW, because a page tells that apart
    from `undefined`. */

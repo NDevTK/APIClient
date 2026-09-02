@@ -61,7 +61,8 @@ static JSValue dest_proto(JSContext *ctx)
     return proto;   /* OWNED */
 }
 
-/* WEB IDL §3.7.5's BRAND. The class is the check, so a getter pulled off the prototype and applied to something
+/* WEB IDL §3.7.6 Attributes' BRAND. The class is the check, so a getter pulled off the prototype and applied
+   to something
    else is the TypeError a browser answers with rather than a read of a slot that is not there. */
 static bool dest_brand(JSContext *ctx, JSValueConst this_val)
 {

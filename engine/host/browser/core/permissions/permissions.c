@@ -18,7 +18,8 @@ static int g_id_query = -1;
 static JSAtom g_atom_name;
 static JSRuntime *g_rt;
 
-/* WEB IDL §3.7.5's BRAND CHECK, as core/frame/navigator.c's is and for its reason: a page tells a TypeError
+/* WEB IDL §3.7.7 Operations' BRAND CHECK, as core/frame/navigator.c's is and for its reason: a page tells a
+   TypeError
    apart from `undefined`, and a feature detector that applies the method to a plain object reads the throw as
    "this is a real interface". */
 static bool permissions_brand(JSContext *ctx, JSValueConst this_val)

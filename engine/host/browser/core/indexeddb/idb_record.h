@@ -32,7 +32,8 @@ void idb_record_init(JSContext *ctx);
  * All three are CONSUMED. The snapshot is OWNED. */
 JSValue idb_record_new(JSContext *ctx, JSValue key, JSValue primary_key, JSValue value);
 
-/* Web IDL §3.7.5's brand, asked of a value that arrived from another component. */
+/* Web IDL §3.8 Platform objects implementing interfaces' "value implements an interface interface", asked of a
+   value that arrived from another component. */
 bool idb_record_is(JSValueConst v);
 
 /* The AGENT's half, undone — core/platform.h's release column. */

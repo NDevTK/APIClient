@@ -71,7 +71,8 @@ static const char *const DM_NAME[] = { DM_MEMBERS(DM_NAME_ONE) };
    is the setter's algorithm or a TypeError in strict mode. Stated once, beside the names. */
 static int g_id_cookie_set = -1;
 
-/* WEB IDL §3.7.5's BRAND CHECK. A member reached with a receiver that does not implement the interface is a
+/* WEB IDL §3.7.6 Attributes' BRAND CHECK. An attribute reached with a receiver that does not implement the
+   interface is a
    TypeError thrown AT THE READ — the corpus pulls these getters off the prototype and applies them deliberately
    — so it is not an engine invariant and not a DCHECK. Answers the receiver's DOM document, which is what says
    WHICH document the member is about. */

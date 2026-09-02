@@ -413,7 +413,7 @@ static JSValue ranges_list(JSContext *ctx, JSValueConst this_val, const char *me
         return JS_ThrowTypeError(ctx, "%s called on something that is not a TimeRanges", member);
     /* One private Symbol carries the internal state of all three of this file's object kinds, so the brand is
        WHAT IS UNDER IT: only a TimeRanges keeps a ranges list there, and `TimeRanges.prototype.start.call(x)`
-       on a MediaError must be the TypeError §3.7.5 gives it rather than an IndexSizeError. */
+       on a MediaError must be the TypeError §3.7.7 Operations gives it rather than an IndexSizeError. */
     if (!JS_IsArray(list)) {
         JS_FreeValue(ctx, list);
         return JS_ThrowTypeError(ctx, "%s called on something that is not a TimeRanges", member);

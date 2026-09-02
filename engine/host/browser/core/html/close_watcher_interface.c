@@ -10,7 +10,8 @@
  * `free`-able C record hanging off a class would need a finalizer and a gc_mark for a single reference the
  * engine already knows how to trace.
  *
- * THE BRAND IS THE CLASS AND NOT THE SLOT. Web IDL §3.7.5's brand check refuses a member invoked on anything
+ * THE BRAND IS THE CLASS AND NOT THE SLOT. Web IDL §3.7.7 Operations' brand check (and §3.7.6 Attributes' for
+ * the two event-handler attributes) refuses a member invoked on anything
  * that does not implement the interface, and asking "does it have my slot" would answer for an object this
  * file happened to write one on rather than for a CloseWatcher — the two are the same today and are not the
  * same fact. The class is also what §3.7 needs anyway, because JS_SetClassProto is where this realm's
@@ -43,7 +44,7 @@ static JSValue   g_slot_key = JS_UNDEFINED;   /* the internal-close-watcher slot
 static JSAtom    g_slot_atom = JS_ATOM_NULL;
 static int       g_id_ctor = -1, g_id_request_close = -1, g_id_close = -1, g_id_destroy = -1;
 
-/* Web IDL §3.7.5's BRAND CHECK, as the class every instance wears. */
+/* Web IDL §3.7.6 Attributes' and §3.7.7 Operations' BRAND CHECK, as the class every instance wears. */
 static bool cwi_is(JSValueConst v)
 {
     return JS_GetClassID(v) == g_cw_class;
@@ -170,8 +171,9 @@ static JSValue js_cw_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSVal
 enum { M_REQUEST_CLOSE = 0, M_CLOSE };
 
 #define CWI_STAGES(X) \
-    X(CWI_ENTER, "HTML §6.10.3 The CloseWatcher interface's requestClose()/close() prologue: Web IDL §3.7.5's " \
-                 "brand check and the resolution of this's internal close watcher — two O(1) engine actions, " \
+    X(CWI_ENTER, "HTML §6.10.3 The CloseWatcher interface's requestClose()/close() prologue: Web IDL §3.7.7 " \
+                 "Operations' brand check and the resolution of this's internal close watcher — two O(1) " \
+                 "engine actions, " \
                  "a class-id comparison and one own-slot read") \
     X(CWI_RUN,   "HTML §6.10.3 The CloseWatcher interface's requestClose() method steps (\"to request to " \
                  "close this's internal close watcher with false\") or close() method steps (\"to close " \

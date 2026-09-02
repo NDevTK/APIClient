@@ -940,7 +940,7 @@ uint32_t input_files_pick(JSContext *ctx, JSValueConst wrap)
 
 /* ---- §4.10.5.4's `files` member ----------------------------------------------------------------------------- */
 
-/* Web IDL §3.7.5's BRAND CHECK, which is this member's own because this file installs it:
+/* Web IDL §3.7.6 Attributes' BRAND CHECK, which is this member's own because this file installs it:
    `descriptor.get.call(textarea)` is a TypeError and not the null a non-file input answers with. */
 static bool iv_is_input(JSValueConst this_val)
 {

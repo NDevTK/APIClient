@@ -40,7 +40,9 @@
 
 /* WHICH MEMBER, AND WHICH INTERFACE DECLARED IT — both halves live in the magic. §4.10.20's six members are
    declared SEPARATELY by HTMLInputElement and by HTMLTextAreaElement (the section shares ALGORITHMS, not a
-   mixin), so Web IDL §3.7.5's brand check is per interface: `HTMLInputElement.prototype.select.call(textarea)`
+   mixin), so the brand check — Web IDL §3.7.6 Attributes' for the three selection accessors, §3.7.7
+   Operations' for `select`, `setRangeText` and `setSelectionRange` — is per interface:
+   `HTMLInputElement.prototype.select.call(textarea)`
    is a TypeError and not a select, exactly as html_form.c's `js_input_brand` states for `value`. One shared C
    body cannot ask which prototype it was reached through, so the INSTALL says. */
 enum { TCS_M_SELECT = 0, TCS_M_START, TCS_M_END, TCS_M_DIRECTION, TCS_M_SET_RANGE_TEXT, TCS_M_SET_RANGE };
@@ -128,7 +130,8 @@ bool text_control_selection_applies(const lxb_dom_node_t *n)
 /* ---- the control, and its relevant value ------------------------------------------------------------------ */
 
 /* WHAT THIS RECEIVER IS. `is_textarea` is the INSTALL's claim (which prototype the member came off) and the
-   node is the receiver's reality; disagreement is Web IDL §3.7.5's TypeError and never a silent answer. */
+   node is the receiver's reality; disagreement is Web IDL §3.7.6 Attributes' or §3.7.7 Operations' TypeError,
+   by the member kind, and never a silent answer. */
 typedef struct { bool is_textarea; HtmlInputState st; lxb_dom_element_t *el; } TcsControl;
 
 static bool tcs_receiver(JSContext *ctx, JSValueConst wrap, int magic, const char *member, TcsControl *out)
@@ -804,7 +807,8 @@ static JSValue js_tcs_set_range_text(JSContext *ctx, JSValueConst this_val, int 
 
 /* TWELVE IDS AND NOT SIX. The magic carries the declaring interface (see its enum above) and the magic is baked
    into the declaration, so each of the six members is declared once per interface — which is what makes
-   `HTMLInputElement.prototype.setRangeText.call(aTextarea)` the TypeError Web IDL §3.7.5 requires instead of a
+   `HTMLInputElement.prototype.setRangeText.call(aTextarea)` the TypeError Web IDL §3.7.7 Operations requires
+   instead of a
    splice performed on the wrong control's value. */
 static int g_id_start_in = -1, g_id_start_ta = -1;
 static int g_id_end_in = -1, g_id_end_ta = -1;

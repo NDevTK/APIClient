@@ -85,7 +85,8 @@ JSValue idb_object_store_record_operation(JSContext *ctx, JSValueConst tx, JSVal
 JSValue idb_object_store_delete_operation(JSContext *ctx, JSValueConst tx, JSValueConst store,
                                           JSValueConst range);
 
-/* Web IDL §3.7.5's brand, asked of a value that arrived from another component. */
+/* Web IDL §3.8 Platform objects implementing interfaces' "value implements an interface interface", asked of a
+   value that arrived from another component. */
 bool idb_object_store_is(JSValueConst v);
 
 #endif

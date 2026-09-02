@@ -65,7 +65,8 @@ static int       g_id_delete = -1;
 static int       g_id_databases = -1;
 static int       g_id_databases_task = -1;
 
-/* WEB IDL §3.7.5's BRAND CHECK. `IDBFactory.prototype.cmp.call({}, 1, 2)` is a TypeError, and a page tells that
+/* WEB IDL §3.7.7 Operations' BRAND CHECK. `IDBFactory.prototype.cmp.call({}, 1, 2)` is a TypeError, and a page
+   tells that
    apart from a "DataError". */
 static bool factory_brand(JSContext *ctx, JSValueConst this_val)
 {

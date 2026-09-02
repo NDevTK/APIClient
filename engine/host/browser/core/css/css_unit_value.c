@@ -73,9 +73,9 @@ bool css_unit_value_is(JSValueConst v)
 
 /* §4.3.3's two internal slots for §4.3.1's algorithms — see css_unit_value.h for the borrow/own split and for
    why they are entries here rather than a struct the superclass reads directly. Both DCHECK the brand instead
-   of answering for a miss: every caller is a §4.3.1 member body that has already thrown the Web IDL §3.7.5
-   TypeError for a `this` that is not one, so an absent record is a body that skipped its own brand check and
-   is about to read a unit off whatever object the page passed. */
+   of answering for a miss: every caller is a §4.3.1 member body that has already thrown the Web IDL §3.7.7
+   Operations TypeError for a `this` that is not one, so an absent record is a body that skipped its own brand
+   check and is about to read a unit off whatever object the page passed. */
 const char *css_unit_value_unit(JSValueConst v)
 {
     CssUnitValueData *u = uv_of(v);
@@ -94,8 +94,8 @@ JSValue css_unit_value_value(JSContext *ctx, JSValueConst v)
     return JS_DupValue(ctx, u->value);
 }
 
-/* WEB IDL §3.7.5's BRAND CHECK. `CSSUnitValue.prototype.value` read off `{}` is a TypeError, and a page tells
-   that apart from `undefined`. */
+/* WEB IDL §3.7.6 Attributes' BRAND CHECK. `CSSUnitValue.prototype.value` read off `{}` is a TypeError, and a
+   page tells that apart from `undefined`. */
 static CssUnitValueData *uv_here(JSContext *ctx, JSValueConst v)
 {
     CssUnitValueData *u = uv_of(v);

@@ -115,7 +115,8 @@ static JSValue ne_field(JSContext *ctx, JSValueConst ev, const char *name)
     return v;
 }
 
-/* WEB IDL §3.7.5's BRAND, asked of the OWN SLOT RECORD — never of a class id, which is a question no instance
+/* WEB IDL §3.7.6 Attributes' BRAND, asked of the OWN SLOT RECORD — never of a class id, which is a question
+   no instance
    of this interface has ever answered yes to. The class an event interface declares exists for its per-realm
    PROTOTYPE SLOT and nothing wears it: every event in this engine is minted by core/events/event.c's
    event_make_proto through JS_NewObjectProto, so JS_GetClassID of a NavigateEvent is JS_CLASS_OBJECT, for the
@@ -164,7 +165,8 @@ static JSValue js_ne_get(JSContext *ctx, JSValueConst this_val, int magic)
     DCHECK(g_ready, "a NavigateEvent attribute was read before its init ran");
     DCHECK(magic >= NE_NAVIGATION_TYPE && magic < NE_N,
            "a NavigateEvent accessor was installed with a magic this interface has no member for");
-    /* WEB IDL §3.7.5's BRAND, as the ONE predicate above and not a second copy of it: a getter pulled off the
+    /* WEB IDL §3.7.6 Attributes' BRAND, as the ONE predicate above and not a second copy of it: a getter
+       pulled off the
        prototype and applied to something else is the TypeError a browser answers with rather than a read of a
        slot that is not there — and NavigateEvent.prototype itself fails it, because the record is an OWN slot
        of each instance and the prototype carries none. */

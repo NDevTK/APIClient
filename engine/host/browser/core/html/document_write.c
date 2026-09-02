@@ -35,7 +35,8 @@ static const char *const DW_SINK[2] = { "Document write", "Document writeln" };
 
 /* ---- the receiver -------------------------------------------------------------------------------------- */
 
-/* WEB IDL §3.7.5's BRAND CHECK — a TypeError thrown AT THE CALL and NOT an engine invariant, for the reason
+/* WEB IDL §3.7.7 Operations' BRAND CHECK — a TypeError thrown AT THE CALL and NOT an engine invariant, for
+   the reason
    core/dom/document_domain.c's own receiver states: the corpus pulls these off the prototype and applies them
    to the wrong receiver deliberately, so asserting would turn a test that asks for the throw into an abort. */
 static lxb_dom_document_t *dw_receiver(JSContext *ctx, JSValueConst this_val)

@@ -21,7 +21,8 @@
    assignment runs the setter's algorithm or is a TypeError in strict mode. */
 static int g_id_domain_set = -1;
 
-/* WEB IDL §3.7.5's BRAND CHECK — a TypeError thrown AT THE READ and not an engine invariant, for the reason
+/* WEB IDL §3.7.6 Attributes' BRAND CHECK — a TypeError thrown AT THE READ and not an engine invariant, for
+   the reason
    document_metadata.c's own receiver states: the corpus pulls these accessors off the prototype and applies
    them to the wrong receiver deliberately. */
 static lxb_dom_document_t *dd_receiver(JSContext *ctx, JSValueConst this_val)

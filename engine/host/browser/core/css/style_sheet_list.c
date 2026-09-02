@@ -301,7 +301,8 @@ static JSValue ssl_item(JSContext *ctx, JSValueConst self, uint32_t i)
 
 static const IdlIndexedDecl SSL_INDEXED = { "StyleSheetList", ssl_length, ssl_item, NULL, 0 };
 
-/* Web IDL §3.7.5's brand, asked by the two PROTOTYPE members: the decl callbacks above are reached only through
+/* The brand asked by the two PROTOTYPE members — Web IDL §3.7.6 Attributes' for `length`, §3.7.7 Operations'
+   for `item`: the decl callbacks above are reached only through
    an index lookup on an object idl_indexed already resolved, so they answer the empty collection for a
    stranger, while a member read off `StyleSheetList.prototype` directly must THROW — a page tells that apart
    from `undefined`. */
@@ -396,7 +397,8 @@ static JSValue js_style_sheets(JSContext *ctx, JSValueConst this_val, int magic)
     {
         lxb_dom_node_t *n = node_of(this_val);
 
-        /* Web IDL §3.7.5's brand check, and a THROW rather than an assert: the member is on two prototypes and
+        /* Web IDL §3.7.6 Attributes' brand check, and a THROW rather than an assert: the member is on two
+           prototypes and
            a page reaches an accessor off one with `.call` on anything at all. */
         if (!n || (n->type != LXB_DOM_NODE_TYPE_DOCUMENT && !shadow_root_is(n)))
             return JS_ThrowTypeError(ctx, "styleSheets was reached on something that is neither a Document nor "

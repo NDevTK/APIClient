@@ -29,8 +29,9 @@
  * property of the value being the EVENT'S and not this interface's. A slot of its own would be a second value
  * retargeting never reaches, and the two would disagree exactly where the standard is careful.
  *
- * SO THIS INTERFACE HAS NO ATTRIBUTE STATE, AND ITS SLOT RECORD IS THE BRAND AND NOTHING ELSE. Web IDL §3.7.5
- * makes every member of an interface check that its receiver implements it — `FocusEvent.prototype`'s
+ * SO THIS INTERFACE HAS NO ATTRIBUTE STATE, AND ITS SLOT RECORD IS THE BRAND AND NOTHING ELSE. Web IDL
+ * §3.7.6 Attributes makes an interface's accessor check that its receiver implements it — `FocusEvent
+ * .prototype`'s
  * relatedTarget getter called on a `new UIEvent('x')` is a TypeError and not `null` — and the brand a page
  * cannot forge is an own slot under a private Symbol, for the reason event.c gives. The record is EMPTY
  * because the interface adds no state; it exists because the QUESTION "is this a FocusEvent" has to have an

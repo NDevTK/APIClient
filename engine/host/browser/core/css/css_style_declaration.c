@@ -3006,8 +3006,9 @@ static int js_cssd_item(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
     DCHECK(argc == 1,
            "§6.6.1's item(index) reached its body with an argument count its declaration does not produce — "
            "`index` is REQUIRED, so §3.6's argument-count check refuses a bare item() before this body runs");
-    /* Web IDL §3.7.5's BRAND CHECK, which is this member's and runs on every entry: `el.style.item` called on
-       a plain object throws, and a resumed entry re-establishes it rather than trusting the one before. */
+    /* Web IDL §3.7.7 Operations' BRAND CHECK, which is this member's and runs on every entry: `el.style.item`
+       called on a plain object throws, and a resumed entry re-establishes it rather than trusting the one
+       before. */
     block = cssd_block(ctx, hdr->this_val);
     if (JS_IsException(block))
         return JS_STEP_ABRUPT;

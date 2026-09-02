@@ -51,7 +51,8 @@ static const int VV_MAGIC[] = {
 };
 #define VV_NAMES ((int)(sizeof(VV_NAME) / sizeof(VV_NAME[0])))
 
-/* WEB IDL §3.7.5's BRAND CHECK — `VisualViewport.prototype.width` read off a plain object is a TypeError, and a
+/* WEB IDL §3.7.6 Attributes' BRAND CHECK — `VisualViewport.prototype.width` read off a plain object is a
+   TypeError, and a
    page tells that apart from `undefined`: a feature detector that pulls the descriptor and applies the getter
    reads the throw as "this is a real interface". A real throw, not an assert, for exactly that reason. */
 static bool vv_brand(JSContext *ctx, JSValueConst this_val)
@@ -306,7 +307,7 @@ void visual_viewport_init(JSContext *ctx)
     DCHECK(g_obj_slot < 0, "visual_viewport_init ran twice — the class and the slots are declared once per "
                            "AGENT");
     /* THE CLASS IS BOTH THE PER-REALM PROTOTYPE SLOT AND THE BRAND: the one object per realm WEARS it, so
-       §3.7.5's check is a class-id comparison and a page cannot forge one. */
+       §3.7.6 Attributes' check is a class-id comparison and a page cannot forge one. */
     JS_NewClassID(JS_GetRuntime(ctx), &g_vv_class);
     CHECK(JS_NewClass(JS_GetRuntime(ctx), g_vv_class, &d) == 0,
           "VisualViewport: the per-realm prototype slot could not be declared");
@@ -326,11 +327,11 @@ void visual_viewport_init(JSContext *ctx)
        agent state in its sense and the release is now the inverse of a declaration rather than of nothing.
        RESETTING IT IS SAFE HERE FOR THE REASON THAT HEADER MAKES A RULE OUT OF: nothing this class dispatches
        runs after the release column. It has no finalizer and no gc_mark — the one object per realm wears it as
-       §3.7.5's BRAND and carries no opaque — so the collection that follows platform_agent_free reaches
-       nothing that would read a class id this call has already zeroed. */
+       §3.7.6 Attributes' BRAND and carries no opaque — so the collection that follows platform_agent_free
+       reaches nothing that would read a class id this call has already zeroed. */
     agent_state_class("visual_viewport", &g_vv_class,
                       "CSSOM VIEW §12 VisualViewport's class — its per-realm prototype slot and Web IDL "
-                      "§3.7.5's brand");
+                      "§3.7.6 Attributes' brand");
     agent_state_id("visual_viewport", &g_obj_slot,
                    "CSSOM VIEW §4 Extensions to the Window Interface's realm-value slot for `visualViewport`, "
                    "and this component's declaration latch");

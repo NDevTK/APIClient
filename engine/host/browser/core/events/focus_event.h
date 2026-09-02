@@ -19,7 +19,8 @@ JSValue focus_event_proto(JSContext *ctx);
    is the caller. */
 JSValue focus_event_new(JSContext *ctx);
 
-/* IS THIS OBJECT A FocusEvent — Web IDL §3.7.5's brand check, which `relatedTarget` makes before reading the
+/* IS THIS OBJECT A FocusEvent — Web IDL §3.7.6 Attributes' brand check, which `relatedTarget` makes before
+   reading the
    Event value it is an attribute over. It is the slot record and not the class, so it stays true across an
    interface that inherits this one. */
 bool focus_event_is(JSContext *ctx, JSValueConst v);

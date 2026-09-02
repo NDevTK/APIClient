@@ -26,7 +26,7 @@ JSValue navigation_history_entry_new(JSContext *ctx, JSValueConst she);
    Navigation needs and the one thing this component will not answer with a raw property read from outside. */
 JSValue navigation_history_entry_she(JSContext *ctx, JSValueConst nhe);
 
-/* WEB IDL §3.7.5's BRAND, as the class every instance wears — what
+/* WEB IDL §3.7.6 Attributes' BRAND, as the class every instance wears — what
    NavigationCurrentEntryChangeEventInit's `required NavigationHistoryEntry from` is declared against, so the
    member does not cross as itself and no body writes a check of its own. */
 JSClassID navigation_history_entry_class(void);

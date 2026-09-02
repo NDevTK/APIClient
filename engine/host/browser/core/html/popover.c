@@ -1677,7 +1677,8 @@ static int popover_body(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
         s->original_type = s->effective_type = POPOVER_STATE_NONE;
         s->should_restore = 0;
         s->stack_call = 0;
-        /* Web IDL §3.7.5's BRAND CHECK. All three members are HTMLElement's, and one invoked on anything else
+        /* Web IDL §3.7.7 Operations' BRAND CHECK. All three members are HTMLElement's, and one invoked on
+           anything else
            is a TypeError rather than a silent return — a page that wrote `f.call(x)` must find out. */
         if (!html_element_is(hdr->this_val)) {
             JS_ThrowTypeError(ctx, "showPopover/hidePopover/togglePopover was called on something that is not "

@@ -63,7 +63,8 @@ static JSValue drl_item(JSContext *ctx, JSValueConst self, uint32_t i)
 
 static const IdlIndexedDecl DOM_RECT_LIST_INDEXED = { "DOMRectList", drl_length, drl_item, NULL, 0 };
 
-/* Web IDL §3.7.5's BRAND, asked by the two PROTOTYPE members. The two decl callbacks above are reached only
+/* The BRAND asked by the two PROTOTYPE members — Web IDL §3.7.6 Attributes' for `length`, §3.7.7 Operations'
+   for `item`. The two decl callbacks above are reached only
    through an index lookup on an object idl_indexed already resolved, so they answer the empty list for a
    stranger; a member read off `DOMRectList.prototype` directly must THROW, because a page tells that apart
    from `undefined`. */

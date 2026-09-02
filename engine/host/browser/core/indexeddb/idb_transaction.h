@@ -161,7 +161,8 @@ void idb_transaction_set_upgrade_finished_hook(void (*on_finished)(JSContext *ct
    connection CLOSED. */
 bool idb_transaction_any_live_for_connection(JSContext *ctx, JSValueConst connection);
 
-/* Is this value an IDBTransaction — Web IDL §3.7.5's brand, asked of a value that arrived from another
+/* Is this value an IDBTransaction — Web IDL §3.8 Platform objects implementing interfaces' "value implements
+   an interface interface", asked of a value that arrived from another
    component (a request's `transaction`) rather than from the page. */
 bool idb_transaction_is(JSValueConst v);
 

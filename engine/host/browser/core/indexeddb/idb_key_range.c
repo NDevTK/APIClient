@@ -89,7 +89,8 @@ bool idb_key_range_is(JSValueConst v)
     return g_range_class != 0 && JS_GetClassID(v) == g_range_class;
 }
 
-/* WEB IDL §3.7.5's BRAND CHECK. `IDBKeyRange.prototype.includes.call({}, 1)` is a TypeError, and a page tells
+/* WEB IDL §3.7.6 Attributes' BRAND CHECK for the four bound getters and §3.7.7 Operations' for `includes` —
+   this one entry serves both. `IDBKeyRange.prototype.includes.call({}, 1)` is a TypeError, and a page tells
    that apart from `false`. */
 static IdbRangeData *range_here(JSContext *ctx, JSValueConst v)
 {
@@ -109,7 +110,7 @@ static IdbRangeData *range_here(JSContext *ctx, JSValueConst v)
    unmarked child keeps the internal reference gc_decref exists to subtract, so gc_scan reads the keys as rooted
    from outside the heap. JS_GetAnyOpaque, because the collector dispatched here THROUGH the class — the id is a
    fact it already has and must not look up. `range_here` keeps the class test, because that one is Web IDL
-   §3.7.5's BRAND and runs while the agent is live. */
+   §3.7.6 Attributes' and §3.7.7 Operations' BRAND and runs while the agent is live. */
 static void range_finalizer(JSRuntime *rt, JSValue val)
 {
     JSClassID id = 0;
@@ -381,7 +382,8 @@ static int js_range_one_key(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         JS_FreeValue(ctx, cb_result);
         DCHECK(magic >= RANGE_M_ONLY && magic <= RANGE_M_INCLUDES,
                "an IDBKeyRange one-key member was declared with a magic naming none of §4.7's four");
-        /* `includes` is the only one of the four with a receiver, and Web IDL §3.7.5's brand check is asked
+        /* `includes` is the only one of the four with a receiver, and Web IDL §3.7.7 Operations' brand check
+           is asked
            before its step 1 — a page tells that TypeError apart from `false`. */
         if (magic == RANGE_M_INCLUDES && !range_here(ctx, hdr->this_val))
             return JS_STEP_ABRUPT;

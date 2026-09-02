@@ -119,9 +119,9 @@ bool css_numeric_convert_ratio(const char *from, const char *to, double *ratio);
 bool css_numeric_canonical(const char *unit, size_t unit_len, double *per, const char **canon);
 
 /* Web IDL §3.2.15 Interface types' "If V implements I" FOR I = CSSNumericValue — the predicate the
-   `(double or CSSNumericValue)` union's arm is, and the one §3.7.5 brand every member of this superclass
-   checks its receiver with. ONE entry, because those are the same question asked at two ends of a call and a
-   second spelling of it is the copy that goes on admitting one subclass after another is minted.
+   `(double or CSSNumericValue)` union's arm is, and the one §3.7.7 Operations brand every member of this
+   superclass checks its receiver with. ONE entry, because those are the same question asked at two ends of a
+   call and a second spelling of it is the copy that goes on admitting one subclass after another is minted.
    IT TAKES A REALM AND IGNORES IT, which is core/idl_args.h's `idl_arg_iface` signature and is deliberate
    there: an interface reached through a PROTOTYPE CHAIN is a per-realm fact. This one is not — it is a class
    brand, and a class id belongs to the runtime — so the parameter is accepted and unread rather than the

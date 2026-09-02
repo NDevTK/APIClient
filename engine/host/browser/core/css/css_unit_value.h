@@ -73,7 +73,9 @@
  * must still mint and only the constructor spelling may throw. */
 JSValue css_unit_value_new(JSContext *ctx, JSValue value, const char *unit);
 
-/* Web IDL §3.7.5's BRAND: is this object a CSSUnitValue of this agent? */
+/* Web IDL §3.8 Platform objects implementing interfaces' "value implements an interface interface": is this
+   object a CSSUnitValue of this agent? The TypeError its two accessors owe a receiver that fails it is
+   §3.7.6 Attributes'. */
 bool css_unit_value_is(JSValueConst v);
 
 /* §4.3.3's TWO INTERNAL SLOTS, for the §4.3.1 algorithms that are stated over them — create a sum value from a

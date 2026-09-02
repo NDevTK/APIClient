@@ -47,7 +47,8 @@ static lxb_dom_document_t *impl_doc(JSContext *ctx, JSValueConst this_val)
     lxb_dom_document_t *d;
 
     /* THE TWO FAILURES ARE DIFFERENT THINGS AND THE CLASS ID IS WHAT TELLS THEM APART. A receiver that is not a
-       DOMImplementation is WEB IDL §3.7.5's brand check — a TypeError thrown at the call, which the corpus asks
+       DOMImplementation is WEB IDL §3.7.7 Operations' brand check — a TypeError thrown at the call, which the
+       corpus asks
        for deliberately with `DOMImplementation.prototype.createDocument.call({})`, and never an assert. A
        receiver that IS one whose associated document is gone is an ENGINE invariant, because the record detaches
        it at teardown precisely so a stale object crashes rather than walking freed memory. Reading the opaque
@@ -80,7 +81,7 @@ static JSValue js_impl_create_doctype(JSContext *ctx, JSValueConst this_val, int
     JSValue r;
 
     (void)magic; (void)argc;
-    if (!doc) return JS_EXCEPTION;   /* §3.7.5's brand check threw */
+    if (!doc) return JS_EXCEPTION;   /* §3.7.7 Operations' brand check threw */
     name = JS_ToCString(ctx, argv[0]);
     pub  = name ? JS_ToCString(ctx, argv[1]) : NULL;
     sys  = pub  ? JS_ToCString(ctx, argv[2]) : NULL;
@@ -136,7 +137,8 @@ static JSValue js_impl_create_html_document(JSContext *ctx, JSValueConst this_va
     JSValue doc;
 
     (void)magic;
-    /* §3.7.5's brand check. The associated document is not read past it — §4.5.1 step 8 gives the new document
+    /* §3.7.7 Operations' brand check. The associated document is not read past it — §4.5.1 step 8 gives the
+       new document
        that one's ORIGIN, and an origin-keyed agent cluster has exactly one, which is this realm's. */
     if (!impl_doc(ctx, this_val)) return JS_EXCEPTION;
     dom = dom_document_create();
@@ -216,7 +218,7 @@ static JSValue js_impl_create_document(JSContext *ctx, JSValueConst this_val, in
     const char *ns = NULL, *type;
 
     (void)magic;
-    if (!impl_doc(ctx, this_val)) return JS_EXCEPTION;   /* §3.7.5's brand check; see createHTMLDocument */
+    if (!impl_doc(ctx, this_val)) return JS_EXCEPTION;   /* §3.7.7's brand check; see createHTMLDocument */
     if (argc > 0 && !JS_IsNull(argv[0]) && !JS_IsUndefined(argv[0])) {
         ns = JS_ToCString(ctx, argv[0]);
         if (!ns) return JS_EXCEPTION;

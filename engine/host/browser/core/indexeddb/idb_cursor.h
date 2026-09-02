@@ -60,7 +60,8 @@ void idb_cursor_set_request(JSContext *ctx, JSValueConst cursor, JSValueConst re
    own steps name, through the entry below. `cursor` is BORROWED; the callable is OWNED. */
 JSValue idb_cursor_iterate_operation(JSContext *ctx, JSValueConst cursor);
 
-/* Web IDL §3.7.5's brand, asked of a value that arrived from another component. TRUE for an IDBCursorWithValue
+/* Web IDL §3.8 Platform objects implementing interfaces' "value implements an interface interface", asked of a
+   value that arrived from another component. TRUE for an IDBCursorWithValue
    too: §4.9 declares `interface IDBCursorWithValue : IDBCursor`, so a brand that answered false for one would
    make `cursor.key` a TypeError on every cursor a page actually holds. */
 bool idb_cursor_is(JSValueConst v);

@@ -92,7 +92,8 @@ JSValue idb_request_error(JSContext *ctx, JSValueConst req);
    reach the open request FROM the upgrade transaction and back. OWNED, JS_NULL when there is none. */
 JSValue idb_request_transaction(JSContext *ctx, JSValueConst req);
 
-/* Web IDL §3.7.5's brand, asked of a value that arrived from another component. TRUE for an open request too:
+/* Web IDL §3.8 Platform objects implementing interfaces' "value implements an interface interface", asked of a
+   value that arrived from another component. TRUE for an open request too:
    §2.8.1's open request IS a request, and IDBOpenDBRequest inherits IDBRequest, so a brand that answered false
    for one would make `openRequest.readyState` a TypeError. */
 bool idb_request_is(JSValueConst v);

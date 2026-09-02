@@ -574,7 +574,8 @@ void user_activation_consume_history_action(JSContext *ctx)
 static JSClassID g_ua_class;
 static int g_obj_slot = -1;
 
-/* WEB IDL §3.7.5's BRAND CHECK. `UserActivation.prototype.isActive` read off a plain object is a TypeError, and
+/* WEB IDL §3.7.6 Attributes' BRAND CHECK. `UserActivation.prototype.isActive` read off a plain object is a
+   TypeError, and
    a page tells that apart from `false` — which is the whole reason the members cannot be plain data properties
    on the one object. */
 static bool ua_brand(JSContext *ctx, JSValueConst this_val)
@@ -727,7 +728,7 @@ void user_activation_init(JSContext *ctx)
     DCHECK(g_slot < 0, "user_activation_init ran twice — the record's slot is declared once per AGENT");
     g_slot = realm_value_declare(ctx, "HTML §6.4.1 the Window's user activation timestamps");
     /* THE CLASS IS BOTH THE PER-REALM PROTOTYPE SLOT AND THE BRAND: the one object per realm WEARS it, so
-       §3.7.5's check is a class-id comparison and a page cannot forge one. */
+       §3.7.6 Attributes' check is a class-id comparison and a page cannot forge one. */
     JS_NewClassID(JS_GetRuntime(ctx), &g_ua_class);
     CHECK(JS_NewClass(JS_GetRuntime(ctx), g_ua_class, &d) == 0,
           "UserActivation: the per-realm prototype slot could not be declared");

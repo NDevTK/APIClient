@@ -88,7 +88,8 @@ static Selection *sel_of(JSValueConst v)
     return s;
 }
 
-/* Web IDL §3.7.5: a member reached with a receiver that does not implement the interface is a TypeError thrown
+/* Web IDL §3.7.6 Attributes and §3.7.7 Operations — this entry serves both, and each states the same step:
+   a member reached with a receiver that does not implement the interface is a TypeError thrown
    at the call. NOT a DCHECK — a page (and the corpus) reaches for one deliberately. */
 static Selection *sel_here(JSContext *ctx, JSValueConst v)
 {
@@ -115,7 +116,7 @@ static Selection *sel_here(JSContext *ctx, JSValueConst v)
  * JS_GetAnyOpaque, because the collector dispatched here THROUGH the class — the id is a fact it already has
  * and must not look up. It is NOT compared against `g_sel_class` either: that is remote_object.c's failure in
  * the same note, a guaranteed false @WHY for any live object. `sel_of` keeps the class test, because that one
- * is Web IDL §3.7.5's BRAND and runs while the agent is live. */
+ * is Web IDL §3.7.6 Attributes' and §3.7.7 Operations' BRAND and runs while the agent is live. */
 static void sel_finalizer(JSRuntime *rt, JSValue val)
 {
     JSClassID id = 0;

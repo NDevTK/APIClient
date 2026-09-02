@@ -106,7 +106,8 @@ static void range_live_drop(void)
  * JS_GetAnyOpaque, because the collector dispatched here THROUGH the class — the id is a fact it already has
  * and must not look up. It is NOT compared against `g_range_class` either: that is the guaranteed-false `@WHY`
  * agent_state.h records for remote_object.c. `range_here` keeps the class test, because that one is Web IDL
- * §3.7.5's BRAND and runs while the agent is live. */
+ * §3.7.6 Attributes' and §3.7.7 Operations' BRAND — §5.5 declares both member kinds — and runs while the
+ * agent is live. */
 static void range_finalizer(JSRuntime *rt, JSValue val)
 {
     JSClassID id = 0;

@@ -171,7 +171,8 @@ bool idb_transaction_is(JSValueConst v)
     return g_tx_class != 0 && JS_GetClassID(v) == g_tx_class;
 }
 
-/* WEB IDL §3.7.5's BRAND CHECK for a member — `IDBTransaction.prototype.abort.call({})` is a TypeError, and a
+/* WEB IDL §3.7.6 Attributes' and §3.7.7 Operations' BRAND CHECK for a member —
+   `IDBTransaction.prototype.abort.call({})` is a TypeError, and a
    page tells that apart from the "InvalidStateError" the algorithm reports. */
 static bool tx_brand(JSContext *ctx, JSValueConst this_val)
 {

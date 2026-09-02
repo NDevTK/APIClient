@@ -76,7 +76,8 @@ static bool local_name_is(lxb_dom_element_t *el, const char *name)
     return n && strlen(name) == len && memcmp(n, name, len) == 0;
 }
 
-/* WEB IDL §3.7.5's brand check, a THROW and not an assert: every member below sits on HTMLElement.prototype and
+/* WEB IDL §3.7.6 Attributes' brand check, a THROW and not an assert: every member below sits on
+   HTMLElement.prototype and
    a page reaches an accessor off a prototype with `.call` on anything at all. */
 static lxb_dom_element_t *receiver(JSContext *ctx, JSValueConst this_val, const char *member)
 {

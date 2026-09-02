@@ -143,7 +143,8 @@ MediaQuerySet *media_list_query_set(JSContext *ctx, JSValueConst list)
 /* ---- §4.4's members ---------------------------------------------------------------------------------------- */
 
 /* The receiver, brand-checked. Every member is on the PROTOTYPE, so a page can apply one to anything at all and
-   Web IDL §3.7.5's answer is a TypeError rather than a read of nothing. */
+   the answer — Web IDL §3.7.6 Attributes' for `mediaText` and `length`, §3.7.7 Operations' for `item`,
+   `appendMedium` and `deleteMedium` — is a TypeError rather than a read of nothing. */
 static bool ml_here(JSContext *ctx, JSValueConst v, const char *member)
 {
     if (media_list_is(ctx, v)) return true;

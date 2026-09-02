@@ -129,7 +129,8 @@ static JSValue js_tpl_enum_get(JSContext *ctx, JSValueConst this_val, int magic)
 
     DCHECK(magic >= 0 && magic < (int)(sizeof(DSD_ENUM) / sizeof(DSD_ENUM[0])),
            "a §4.12.3 enumerated reflection was installed with a magic the table does not name");
-    /* WEB IDL §3.7.5's BRAND CHECK, and it is a THROW rather than an assert: a page reaches an accessor off
+    /* WEB IDL §3.7.6 Attributes' BRAND CHECK, and it is a THROW rather than an assert: a page reaches an
+       accessor off
        the prototype with `.call` on anything it likes, so "the receiver is a <template>" is the PAGE's input
        and not this engine's invariant. */
     if (!el || !lxb_html_tree_node_is(lxb_dom_interface_node(el), LXB_TAG_TEMPLATE))

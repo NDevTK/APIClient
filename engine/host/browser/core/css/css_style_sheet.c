@@ -113,7 +113,8 @@ static void sheet_set_at(JSContext *ctx, CssStyleSheetData *s, JSValue *slot, JS
 #define sheet_set(ctx_, s_, slot_, v_) sheet_set_at((ctx_), (s_), (slot_), (v_), __FILE__, __LINE__)
 
 /* The receiver, brand-checked. Both interfaces declare every member on a PROTOTYPE, so a page can apply one to
-   anything at all and §3.7.5's answer is a TypeError rather than a read of nothing. */
+   anything at all, and the answer — Web IDL §3.7.6 Attributes' for the accessors, §3.7.7 Operations' for
+   `insertRule`, `deleteRule`, `replace` and `replaceSync` — is a TypeError rather than a read of nothing. */
 static CssStyleSheetData *sheet_here(JSContext *ctx, JSValueConst v)
 {
     CssStyleSheetData *s = sheet_of(v);

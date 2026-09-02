@@ -235,7 +235,8 @@ static JSValue ce_document_registry(JSContext *ctx)
     return realm_value_get(ctx, g_registry_slot);
 }
 
-/* WEB IDL §3.7.5's BRAND CHECK, whose failure is a TypeError thrown before the member's own step 1. The
+/* WEB IDL §3.7.7 Operations' BRAND CHECK, whose failure is a TypeError thrown before the member's own step 1.
+   The
    receiver itself is what the member goes on using — it is the argument it already holds — so this answers
    only whether it may. With the members on the PROTOTYPE this is the only thing standing between
    `CustomElementRegistry.prototype.define.call({}, …)` and a definition committed onto nothing. */
@@ -3811,7 +3812,8 @@ void custom_elements_install(JSContext *ctx, JSValueConst global)
  * reader of them is a second answer to what a node's registry is. So the two install entry points below are
  * called with the prototypes that carry the member, exactly as shadow_root.c hands Element `shadowRoot`.
  *
- * THE SURFACE IS THE MAGIC, so a receiver a surface does not admit is a Web IDL §3.7.5 brand failure — a
+ * THE SURFACE IS THE MAGIC, so a receiver a surface does not admit is a Web IDL §3.7.6 Attributes brand
+ * failure — a
  * TypeError thrown before the getter steps, which is what `Object.getOwnPropertyDescriptor(Element.prototype,
  * "customElementRegistry").get.call(document)` must produce. Asking instead whether the receiver is ANY node
  * that can carry a registry would make the Element member answer for a Document — a member on the wrong

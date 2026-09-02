@@ -87,7 +87,9 @@ static const char *const SCR_NAME[] = { SCREEN_MEMBERS(SCREEN_NAME_ONE) };
 static const char *const SCR_SRC[]  = { SCREEN_MEMBERS(SCREEN_SRC_ONE) };
 static const char *const SCR_HOLE[] = { SCREEN_MEMBERS(SCREEN_HOLE_ONE) };
 
-/* THE CLASS IS THE BRAND. Web IDL §3.7.5's check on every getter is "does esValue implement the interface", and
+/* THE CLASS IS THE BRAND. Web IDL §3.7.6 Attributes' check on every getter is "If jsValue does not implement
+   target" — this interface declares attributes and nothing else. THE NUMBER READ §3.7.5, WHICH IS Constants,
+   and the phrase quoted beside it named `esValue`, the identifier an OLDER edition used. And
    the one object per realm WEARS the class, so the check is a class-id comparison a page cannot forge. It
    carries no per-object data — the values are the realm's — so it needs no finalizer and no gc_mark. */
 static JSClassID g_screen_class;
@@ -119,7 +121,8 @@ void screen_avail_source(bool vertical, const char **shape, const char **src)
     *src   = SCR_SRC[idx];
 }
 
-/* WEB IDL §3.7.5's BRAND CHECK. `Screen.prototype.width` read off a plain object is a TypeError, and a page
+/* WEB IDL §3.7.6 Attributes' BRAND CHECK. `Screen.prototype.width` read off a plain object is a TypeError,
+   and a page
    tells that apart from `undefined` — a feature detector that probes the descriptor and applies the getter
    reads the throw as "this is a real interface". It is a real throw and not an assert for exactly that reason. */
 static bool screen_brand(JSContext *ctx, JSValueConst this_val)
@@ -281,7 +284,7 @@ void screen_init(JSContext *ctx)
 
     DCHECK(g_vals_slot < 0, "screen_init ran twice — the class and the slots are declared once per AGENT");
     /* THE CLASS IS BOTH THE PER-REALM PROTOTYPE SLOT AND THE BRAND: the one object per realm WEARS it, so
-       §3.7.5's check is a class-id comparison and a page cannot forge one. */
+       §3.7.6 Attributes' check is a class-id comparison and a page cannot forge one. */
     JS_NewClassID(JS_GetRuntime(ctx), &g_screen_class);
     CHECK(JS_NewClass(JS_GetRuntime(ctx), g_screen_class, &d) == 0,
           "Screen: the per-realm prototype slot could not be declared");

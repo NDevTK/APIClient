@@ -42,7 +42,8 @@ static JSClassID g_record_class;
 static JSValue   g_fields_key = JS_UNDEFINED;   /* the private symbol the field array hangs off */
 static JSAtom    g_atom_fields = JS_ATOM_NULL;
 
-/* THE BRAND. §3.7.5: an interface's attribute getter throws a TypeError when `this` does not implement it, and
+/* THE BRAND. §3.7.6 Attributes: an interface's attribute getter throws a TypeError when `this` does not
+   implement it, and
    a page distinguishes that from `undefined` — `MutationRecord.prototype.type` read off a plain object must
    throw. The class id is the brand because this class carries no opaque: the record's whole state is the own
    slot, which anything could be given, so the class is the only thing that cannot be forged. */

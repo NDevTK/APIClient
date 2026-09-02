@@ -56,7 +56,7 @@ static JSAtom  g_atom_state = JS_ATOM_NULL;
 /* Declared once per AGENT, installed per realm. The ids are per (target kind, member), because which target a
    member answers for is decided by the DECLARATION — the prototype it is installed on — and never re-derived
    from the receiver at the read. Asking the receiver would answer for an Element handed to
-   ElementInternals.prototype's getter, which is exactly the brand hole §3.7.5 exists to close. */
+   ElementInternals.prototype's getter, which is exactly the brand hole §3.7.6 Attributes exists to close. */
 static int g_refl_base = -1;
 static int g_id_el_get[ARIA_TARGET_KINDS][ARIA_EL_N], g_id_el_set[ARIA_TARGET_KINDS][ARIA_EL_N];
 static const AriaTargetOps *g_ops[ARIA_TARGET_KINDS];
@@ -90,7 +90,7 @@ void aria_mixin_declare_target(AriaTargetKind kind, const AriaTargetOps *ops)
  * goes through — so a reflection stays captured in the running flow's DOM delta. */
 static JSValue aria_element_target(JSContext *ctx, JSValueConst target)
 {
-    if (!element_of_value(target)) return JS_UNDEFINED;   /* not an element: §3.7.5's brand, answered by absence */
+    if (!element_of_value(target)) return JS_UNDEFINED;   /* not an element: §3.7.6's brand, by absence */
     return JS_DupValue(ctx, target);
 }
 
@@ -337,7 +337,7 @@ static int js_aria_element_get(JSContext *ctx, JSStepHdr *hdr, void *st, int arg
            "an ARIAMixin element reflection ran with a magic the mixin does not declare");
 
     if (hdr->stage == ARIA_EL_START) {
-        JSValue elv = ops->element(ctx, hdr->this_val);   /* §2.6.1 step 1, and §3.7.5's brand test in one */
+        JSValue elv = ops->element(ctx, hdr->this_val);   /* §2.6.1 step 1, and §3.7.6's brand test in one */
         lxb_dom_element_t *el = element_of_value(elv);
         JSValue set;
         char *val;
@@ -345,7 +345,8 @@ static int js_aria_element_get(JSContext *ctx, JSStepHdr *hdr, void *st, int arg
 
         *presult = JS_NULL;
         if (!JS_IsObject(elv)) {
-            /* Web IDL §3.7.5: an accessor whose receiver does not implement the interface throws, and a page
+            /* Web IDL §3.7.6 Attributes: an accessor whose receiver does not implement the interface throws
+               ("If jsValue does not implement target"), and a page
                tells that apart from a null answer. The kind the DECLARATION named is what decides this — an
                Element reaching ElementInternals.prototype's getter fails it, which is the whole point of the
                kind riding the magic rather than being sniffed off the receiver. */
@@ -452,7 +453,7 @@ static JSValue js_aria_element_set(JSContext *ctx, JSValueConst this_val, JSValu
 
     DCHECK(magic >= 0 && magic < ARIA_TARGET_KINDS * ARIA_EL_N,
            "an ARIAMixin element reflection ran with a magic the mixin does not declare");
-    elv = ops->element(ctx, this_val);   /* §3.7.5's brand test, the same one the getter makes */
+    elv = ops->element(ctx, this_val);   /* §3.7.6's brand test, the same one the getter makes */
     if (!JS_IsObject(elv)) {
         JS_FreeValue(ctx, elv);
         return JS_ThrowTypeError(ctx, "an ARIAMixin element reflection was set on the wrong kind of object");
