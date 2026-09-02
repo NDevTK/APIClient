@@ -614,12 +614,14 @@ static const IdlStepDecl js_tes_ctor_decl = {
    and it is asserted rather than assumed. */
 #define TD_STAGES(X) \
     X(TD_ENTRY = IDL_STEP_FIRST, \
-      "Encoding §7.5 set up a text decoder stream steps 1-7 (the assert that UTF-8 is not the replacement " \
-      "encoding, the decoder and I/O queue, and the two algorithms) — Fetch §5.3 textStream() step 4 / File " \
-      "API §3.3.6 textStream() step 2's new TextDecoderStream object") \
+      "Encoding §7.5 set up a text decoder stream steps 1-8 (the assert that UTF-8 is not the replacement " \
+      "encoding, the four slots, the decoder and I/O queue, and the two algorithms — one O(1) engine action, " \
+      "no step of which reaches a page) — Fetch §5.3 textStream() step 4 / File API §3.3.6 textStream() step " \
+      "2's new TextDecoderStream object") \
     X(TD_SETUP, \
-      "Encoding §7.5 set up a text decoder stream's last step (Streams §9.3.1's set up a TransformStream over " \
-      "those algorithms) — Fetch §5.3 textStream() step 5 / File API §3.3.6 textStream() step 3") \
+      "Encoding §7.5 set up a text decoder stream steps 9-11 (a new TransformStream, Streams §9.3.1's set up " \
+      "over those algorithms, and stream's transform) — Fetch §5.3 textStream() step 5 / File API §3.3.6 " \
+      "textStream() step 3") \
     X(TD_PIPE, \
       "Streams §9.5 Piping's piped through — Fetch §5.3 textStream() step 6 / File API §3.3.6 textStream() " \
       "step 4 (the result of stream, piped through decoder)") \
