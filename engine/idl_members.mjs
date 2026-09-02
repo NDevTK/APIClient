@@ -165,7 +165,15 @@ export async function loadIdl() {
      A member's DEFAULT is carried as `hasDefault` and never as the value: §3.2.17 step 4.1.5 makes a defaulted
      member EXIST on the converted dictionary even where the page wrote nothing, which is a THIRD state beside
      present and absent, and whether the engine spells that default correctly is a question about the value that
-     a name list cannot hold — it belongs to whoever compares the two, not to this index. */
+     a name list cannot hold — it belongs to whoever compares the two, not to this index.
+     `extAttrs` IS THE FIELD'S OWN AND NOT ITS TYPE'S, and the difference is the whole reason it is carried
+     here rather than being read off `idlType` by a consumer. webidl2 puts §3.3.6 [EnforceRange] and §3.3.3
+     [Clamp] on the FIELD node for a dictionary member — `[EnforceRange] unsigned long count` parses with the
+     attribute on the member and an EMPTY `extAttrs` on the type — while an ARGUMENT carries them either side.
+     A consumer reading only the type therefore sees a bare `unsigned long`, which is a DIFFERENT declared
+     conversion — §3.3.6 [EnforceRange] replaces the modulo wrap §3.2.4.6 unsigned long performs with a throw —
+     so dropping this field does not lose an annotation: it silently changes the type the member is compared
+     against. */
   function dictMembers(name) {
     const out = [];
     const chain = dictChain(name);
@@ -176,7 +184,7 @@ export async function loadIdl() {
       own.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
       for (const m of own)
         out.push({ name: m.name, required: !!m.required, hasDefault: m.default != null,
-                   level, declaredBy: chain[level], idlType: m.idlType });
+                   level, declaredBy: chain[level], idlType: m.idlType, extAttrs: m.extAttrs || [] });
     }
     return out;
   }

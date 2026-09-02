@@ -73,6 +73,7 @@ import { dirname, join, relative } from "node:path";
 import { loadEnvironment, installedMembers } from "./idl_installed.mjs";
 import { loadIdl } from "./idl_members.mjs";
 import { contract, declarations, strip, args, callText, lineOf, INTERPRETED_MODS } from "./idl_argdecl.mjs";
+import { typeConvention } from "./idl_typename.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = dirname(HERE);
@@ -85,71 +86,14 @@ const CONFIRM = process.argv.includes("--confirm");
 const C = contract(join(CORE, "idl_args.h"));
 const idl = await loadIdl();
 
-/* ---- what KIND of thing a spec type name is, read off the corpus's own declarations -----------------------
+/* ---- what KIND of thing a spec type name is, and the enumerator the convention predicts for it ------------
  *
- * A `callback interface` is NOT an interface and idl_args.h declares them apart — §3.2.19's conversion for a
- * callback interface type accepts a callable where §3.2.15's brand test for an interface type does not, which
- * is exactly the difference between `addEventListener(t, function(){})` working and throwing. An audit that
- * folded the two reported the engine's correct IDL_CALLBACK_INTERFACE_NULLABLE as a defect at every
- * EventListener and NodeFilter position it saw, which is the kind of finding that gets an auditor muted. */
-/* `enums` carries the VALUES and not only the names, because §3.2.18 says the value list IS the type — the
-   ENUMVALUES axis below compares the engine's declared list against it, and a name-only set could not. */
-const enums = new Map(), callbacks = new Set(), callbackIfaces = new Set(), typedefs = new Map();
-for (const n of idl.declarations) {
-  if (n.type === "enum" && n.name) enums.set(n.name, (n.values || []).map((v) => v.value));
-  else if (n.type === "callback" && n.name) callbacks.add(n.name);
-  else if (n.type === "callback interface" && n.name) callbackIfaces.add(n.name);
-  else if (n.type === "typedef" && n.name) typedefs.set(n.name, n.idlType);
-}
-
-/* Web IDL §2.4 typedefs are pure abbreviation — "an alternative way to refer to a type" — so a declaration
-   states the type the typedef names and the audit must see through it. Bounded by the number of typedefs the
-   corpus has, because §2.4 forbids a cycle and a corpus of a hundred specs is not a thing to trust on that. */
-function resolveTypedef(t, depth = 0) {
-  if (!t || depth > 8) return t;
-  if (typeof t.idlType === "string" && typedefs.has(t.idlType)) {
-    const to = typedefs.get(t.idlType);
-    /* A typedef's own nullability composes with the reference's. */
-    return resolveTypedef({ ...to, nullable: to.nullable || t.nullable,
-                            extAttrs: [...(to.extAttrs || []), ...(t.extAttrs || [])] }, depth + 1);
-  }
-  return t;
-}
-
-const extNames = (argNode, t) =>
-  [...(t.extAttrs || []), ...(argNode.extAttrs || [])].map((a) => a.name);
-
-/* THE ONLY EXTENDED ATTRIBUTES THE CONVENTION SPELLS. §3.3.6 [EnforceRange] and §3.3.3 [Clamp] REPLACE the
-   conversion, so idl_args.h makes each its own enumerator rather than a flag and the convention appends a
-   suffix. Every OTHER extended attribute on an argument type changes the conversion in a way no enumerator
-   name states — [LegacyNullToEmptyString] is the one this tree carries, and idl_setter_id declares it as a
-   separate `null_to_empty` PARAMETER rather than as a type — so a position carrying one is UNPLACEABLE and
-   judged against nothing. Reporting those as type mismatches is how an auditor manufactures work. */
-const SPELLED_EXT = new Set(["EnforceRange", "Clamp"]);
-
-/* THE ENUMERATOR THE CONVENTION PREDICTS for one IDL argument type, or null where the convention has nothing
-   to say. Membership is then asked of the enum itself: a name this composes that the header does not declare
-   is UNPLACEABLE, which is this audit's reach and not the engine's defect. */
-function enumeratorFor(argNode) {
-  const t = resolveTypedef(argNode.idlType);
-  if (!t) return null;
-  if (t.union || t.generic) return null;         /* the union and generic enumerators are per-member: §3.2.25 */
-  const base = typeof t.idlType === "string" ? t.idlType : null;
-  if (!base) return null;
-  const ext = extNames(argNode, t);
-  if (ext.some((n) => !SPELLED_EXT.has(n))) return null;
-  let stem;
-  if (enums.has(base)) stem = "IDL_ENUM";
-  else if (callbacks.has(base)) stem = "IDL_CALLBACK";
-  else if (callbackIfaces.has(base)) stem = "IDL_CALLBACK_INTERFACE";
-  else if (idl.dictByName.has(base)) stem = "IDL_DICT";
-  else if (idl.byName.has(base)) stem = "IDL_INTERFACE";
-  else stem = "IDL_" + base.toUpperCase().replace(/\s+/g, "_");
-  if (ext.includes("EnforceRange")) stem += "_ENFORCE";
-  else if (ext.includes("Clamp")) stem += "_CLAMP";
-  if (t.nullable) stem += "_NULLABLE";
-  return stem;
-}
+ * BOTH ARE engine/idl_typename.mjs's AND NOT THIS FILE'S. They were written here and moved out unchanged when
+ * dicttypegate.mjs needed the same composition at a DICTIONARY MEMBER: §3.2's conversions are per TYPE and
+ * know nothing about where the type was written, so an argument position and a dictionary member ask one
+ * question — and two copies of it would be the restated rule CLAUDE.md's auditor discipline exists to stop,
+ * with the copy that drifts being whichever gate is run less often. */
+const { enums, resolveTypedef, enumeratorFor } = typeConvention(idl);
 
 /* A VARIADIC `any...` TAIL IS THE ONE THE DECLARATION MAY OMIT, and this is read off idl_args.h rather than
    decided here: idl_method_id's own paragraph says "A position the IDL does not list is passed through

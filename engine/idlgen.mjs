@@ -53,6 +53,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { loadEnvironment, installedMembers } from "./idl_installed.mjs";
 import { loadIdl, windowGlobals, iterationMembers } from "./idl_members.mjs";
+import { readDictDecls } from "./idl_dictdecl.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const HOST = join(HERE, "host");
@@ -1251,108 +1252,19 @@ for (const c of env.recordContradictions)
  * reported complete whose component declares no array of its own: the credit came from a neighbour. */
 const dictHave = new Map();          /* dictionary name -> the member names some C declaration could give it */
 const dictNamed = new Map();         /* dictionary name -> the named IdlDictDecl that states it */
-const dictArrays = [];               /* every IdlDictMember array this run could read */
-const dictUnreadable = [];           /* and every one it could not */
 const dictUnknownName = [];
 
-/* The 1-based line an offset falls on, so a finding names a site rather than a file — the same address rule
-   §Offensive-programming states for an assert, applied to a report. */
-const lineAt = (src, off) => {
-  let n = 1;
-  for (let i = 0; i < off && i < src.length; i++) if (src[i] === "\n") n++;
-  return n;
-};
-/* The `}` closing the `{` at `i`, or -1. Over MASKED source, so a brace inside a comment or a string cannot
-   move the count — which is why this reads env.sources' masked text and never the file. */
-const closeBrace = (s, i) => {
-  let d = 0;
-  for (let j = i; j < s.length; j++) {
-    const c = s[j];
-    if (c === "{") d++;
-    else if (c === "}" && !--d) return j;
-  }
-  return -1;
-};
-/* Top-level commas of one initialiser body. */
-const splitTopLevel = (s) => {
-  const out = [];
-  let d = 0, st = 0;
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i];
-    if (c === "(" || c === "[" || c === "{") d++;
-    else if (c === ")" || c === "]" || c === "}") d--;
-    else if (c === "," && !d) { out.push(s.slice(st, i)); st = i + 1; }
-  }
-  out.push(s.slice(st));
-  return out;
-};
-const STRING_LIT = /^"((?:[^"\\]|\\.)*)"$/;
-
-/* ONE `IdlDictMember` INITIALISER LIST, READ OR REFUSED — never partially read. A member list this cannot read
-   is not a list with fewer members, it is a list of unknown length, and crediting the entries it did manage is
-   the false COMPLETE minted by the reader rather than by the engine. An entry that is a bare identifier is
-   resolved through the macros idl_installed.mjs already collected — core/events/ui_event.h states the seven
-   members UIEvent contributes as one object-like macro and four components expand it, so refusing that
-   construct would put four event dictionaries beyond the audit for a spelling. */
-function readDictMembers(body, macros, depth = 0) {
-  const out = [];
-  for (const raw of splitTopLevel(body)) {
-    const e = raw.trim();
-    if (!e) continue;
-    if (!e.startsWith("{")) {
-      const def = /^[A-Za-z_]\w*$/.test(e) && macros.get(e);
-      if (!def || def.params || depth > 4) return { why: e.replace(/\s+/g, " ").slice(0, 60) };
-      const nested = readDictMembers(def.body, macros, depth + 1);
-      if (nested.why) return nested;
-      out.push(...nested.members);
-      continue;
-    }
-    const fields = splitTopLevel(e.slice(1, e.lastIndexOf("}")));
-    const lit = (fields[0] || "").trim().match(STRING_LIT);
-    if (!lit) return { why: (fields[0] || "").trim().replace(/\s+/g, " ").slice(0, 60) };
-    /* Field 2 is `required` and field 4 is §3.2.17's level; both are omitted by the short form, and C then
-       zero-fills them — which is the IDL's own default for both (a member with no `required` written is
-       optional, and a dictionary that inherits nothing has one level). A field that is not a literal is not
-       assumed either way: it is left undeclared and the checks that need it skip that member and say so. */
-    const req = (fields[2] || "").trim(), lvl = (fields[4] || "").trim();
-    out.push({ name: lit[1],
-               required: req === "" ? false : req === "true" ? true : req === "false" ? false : null,
-               level: lvl === "" ? 0 : /^\d+$/.test(lvl) ? Number(lvl) : null });
-  }
-  return { members: out };
-}
-
-const ARRAY_DECL = /\bIdlDictMember\s+([A-Za-z_]\w*)\s*\[[^\]]*\]\s*=\s*\{/g;
-const NAMED_DECL = /\bIdlDictDecl\s+([A-Za-z_]\w*)\s*=\s*\{/g;
-const bySymbol = new Map();
-for (const [path, { masked, orig }] of env.sources) {
-  ARRAY_DECL.lastIndex = 0;
-  for (let m; (m = ARRAY_DECL.exec(masked)); ) {
-    const open = m.index + m[0].length - 1, close = closeBrace(masked, open);
-    const at = { file: path, line: lineAt(orig, m.index), sym: m[1] };
-    if (close < 0) { dictUnreadable.push({ ...at, why: "the initialiser's braces do not balance" }); continue; }
-    const r = readDictMembers(masked.slice(open + 1, close), env.macros);
-    if (r.why) { dictUnreadable.push({ ...at, why: `an entry this reader cannot resolve: ${r.why}` }); continue; }
-    const rec = { ...at, members: r.members };
-    dictArrays.push(rec);
-    bySymbol.set(`${path} ${m[1]}`, rec);
-    if (!bySymbol.has(m[1])) bySymbol.set(m[1], rec);
-  }
-}
-for (const [path, { masked, orig }] of env.sources) {
-  NAMED_DECL.lastIndex = 0;
-  for (let m; (m = NAMED_DECL.exec(masked)); ) {
-    const open = m.index + m[0].length - 1, close = closeBrace(masked, open);
-    if (close < 0) continue;
-    const fields = splitTopLevel(masked.slice(open + 1, close));
-    const lit = (fields[0] || "").trim().match(STRING_LIT), sym = (fields[1] || "").trim();
-    const line = lineAt(orig, m.index);
-    if (!lit) { dictUnreadable.push({ file: path, line, sym: m[1], why: "its dictionary identifier is not a string literal" }); continue; }
-    const arr = bySymbol.get(`${path} ${sym}`) || bySymbol.get(sym);
-    if (!arr) { dictUnreadable.push({ file: path, line, sym: m[1], why: `its member list \`${sym}\` was not read` }); continue; }
-    if (!dictByName.has(lit[1])) { dictUnknownName.push({ file: path, line, name: lit[1] }); continue; }
-    dictNamed.set(lit[1], { ...arr, decl: m[1], file: path, line });
-  }
+/* THE C-SIDE READ IS engine/idl_dictdecl.mjs's AND NOT THIS FILE'S. It was written here and moved out unchanged
+   when the dictionary-member TYPE axis needed the same `IdlDictMember` initialiser lists: two readers of one
+   construct are two answers to "what does this engine declare about this dictionary", and the one that drifts
+   is the copy whose consumer runs less often. What stays HERE is the question this audit asks of the read —
+   membership, `required` and §3.2.17's read order — and the classification of a named declaration's IDENTIFIER,
+   which is an IDL-side fact the reader has no business holding: it reports the identifier the C states, and
+   whether any spec defines a dictionary by that name is this file's question and not the reader's. */
+const { arrays: dictArrays, named: dictNameds, unreadable: dictUnreadable } = readDictDecls(env);
+for (const n of dictNameds) {
+  if (!dictByName.has(n.name)) { dictUnknownName.push({ file: n.file, line: n.line, name: n.name }); continue; }
+  dictNamed.set(n.name, { ...n.arr, decl: n.decl, file: n.file, line: n.line });
 }
 /* THE SUBSET CREDIT, stated once: an array can only be the declaration of a dictionary that has every member it
    names, so its names are what SOME declaration of that dictionary would contribute. Computed over the audited
