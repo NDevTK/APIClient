@@ -499,7 +499,7 @@ static void park_rec_orphan(const Flow *f)
            "the cold tier was asked to name the function of a flow that is not a driven orphan — the record "
            "would tell a later session to call something this flow never called");
     /* THE LOCATOR EXISTS, asserted where it is written rather than trusted from where it was stamped.
-       engine_orphan_fork stamps it at the one point a drive is created and a fork inherits it with the mark, so
+       engine_orphan_seed stamps it at the one point a drive is created and a fork inherits it with the mark, so
        a drive without one is a third path into being an orphan that nobody has named — and the record it would
        write is sixteen zeros, which is a perfectly valid name for a body that does not exist. */
     DCHECK(f->orphan_hash != 0,
@@ -1416,8 +1416,8 @@ void cold_resume(JSContext *ctx, const char *recipes)
                closure does not exist in this heap at all. What is installed is the WAIT. The flow replays the
                document exactly as an 'f' does — which is what re-creates the closure and what consumes its
                recorded arms — and at the point its work runs out, which is the point the drive stood at in the
-               session that recorded it, engine_orphan_fork hands it the body this locator names and it builds
-               its own call. That ordering is the whole reason this is a wait and not a call: adopting earlier
+               session that recorded it, engine_orphan_seed's ROUTE hands it the body this locator names and
+               engine_orphan_resume builds its own call on its next turn. That ordering is the whole reason this is a wait and not a call: adopting earlier
                would put the call in front of programs the replay still owes and consume their arms with it.
                NOTHING HERE MAKES THE FUNCTION APPEAR, and that is the honest part. A bundle that changed under
                the residue no longer contains this body, the claim is never met, and the flow finishes having

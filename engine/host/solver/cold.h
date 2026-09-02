@@ -115,8 +115,9 @@ typedef struct {
        so nothing a reader holds can tell the two apart. Two members in one bucket, and no way to say which is
        which.
        WHAT TURNS ON IT IS THE ORPHAN QUESTION, which is why this is the fact worth carrying rather than a
-       per-bucket phase table. engine.c reaches engine_orphan_fork only where a flow has no program, job,
-       lifecycle event, timer, rendering opportunity or outstanding reply left, so `0` orphan asks has two
+       per-bucket phase table. engine.c reaches engine_orphan_seed only where a flow has no program, job,
+       lifecycle event, timer, rendering opportunity, outstanding reply or unmodelled close request left, so
+       `0` orphan asks has two
        readings — no member has run out of PROGRAMS, or members have and are held by one of the other five —
        and the census reported them identically. Measured on the native smoke fixture: 129 members standing at
        the top bucket with `deepest 10`, i.e. every program the document has, against a run reporting zero

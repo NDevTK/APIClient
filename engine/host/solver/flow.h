@@ -369,7 +369,7 @@ typedef struct Flow {
     int cand_rung;
 
     /* IS THIS FLOW A DRIVEN ORPHAN — a flow whose frame is a CALL of a function the page defined and nothing
-       ever called (engine.c's engine_orphan_fork). It is not a different KIND of flow in any way the scheduler
+       ever called (engine.c's engine_orphan_seed). It is not a different KIND of flow in any way the scheduler
        can see: same assembly as an answer-fork arm, same delta, same world, same rank, same preemption, and its
        branches fork ordinary siblings. It carries exactly one consequence, and the field exists to state it:
        ITS WORK IS NOT IN ITS RECIPE. Every other flow's recipe is (decision vector, reward) and a resume

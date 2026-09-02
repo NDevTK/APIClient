@@ -7594,8 +7594,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         snprintf(orphan_why_, sizeof orphan_why_,
                  "NOT ASKED: no flow of this run has run out of work yet, so the frontier has never reached the "
                  "question orphan-invoke answers (engine_orphan_census: asked=0, driven=0). That is the "
-                 "SCHEDULE — engine_orphan_fork is reached only where a flow has no program, job, lifecycle "
-                 "event, timer, rendering opportunity or outstanding reply left — and it says nothing about "
+                 "SCHEDULE — engine_orphan_seed is reached only where a flow has no program, job, lifecycle "
+                 "event, timer, frame, reply or close request left — and it says nothing about "
                  "the take, the drive or this endpoint. The seven orphan rows are 0 together for this one "
                  "reason and stay so until some flow finishes its own work");
     else if (orphans_driven == 0)

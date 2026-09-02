@@ -1846,8 +1846,9 @@ function censusReading(out) {
           + `question this reader exists to answer and a single sample cannot answer it`
         : `; over ${run.length} samples asked +${dAsk}, driven +${dDrv}` +
           (last._orphansAsked === 0
-            ? ` — NEVER ASKED. engine_orphan_fork is reached only where a flow has no program, job, lifecycle `
-              + `event, timer, rendering opportunity or outstanding reply left, so no flow of this session has `
+            ? ` — NEVER ASKED. engine_orphan_seed is reached only where a flow has no program, job, lifecycle `
+              + `event, timer, rendering opportunity, outstanding reply or unmodelled close request left, so `
+              + `no flow of this session has `
               + `run out of its own work yet. That is the SCHEDULE and says nothing whatever about the take, `
               + `the drive, or whether this bundle ships uncalled code`
               + (liveMoved === null
