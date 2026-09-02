@@ -328,6 +328,27 @@ int  pending_blocked(JSValueConst reg);
    run_scheduler had to leave switched off because of this line. */
 int  pending_ready(JSValueConst reg);
 
+/* HOW MANY OF THEM — the SAME predicate counted rather than short-circuited, and the one number the census had
+ * no way to state.
+ *
+ * WHY THE LEVEL BESIDE IT COULD NOT ANSWER THIS. `pending_count` is the array's length whatever state its
+ * entries are in, so the census's `pend` sums FOUR populations that take opposite work into one figure: entries
+ * the host is still owed, entries it has ANSWERED and this flow has not yet delivered, answered SYNCHRONOUS
+ * rendezvous the parked machine will take at its own call site, and parks the trusted zone has DECLINED. A
+ * frontier drowning in undelivered replies and one waiting on a host that never paid read the same there, which
+ * is CLAUDE.md's rule about an answer that collapses two states reporting neither.
+ *
+ * AND IT IS THE UNIT `deliver-one-reply` CONSUMES, WHICH IS THE HALF THE REPLY DOOR'S RATE STRUCTURALLY CANNOT
+ * BE. `pending_index_asked_total`/`_answered_total` count RECORDS — a record is keyed at most once and untracked
+ * when it is answered — while ONE record is named by every register that forked while it was in flight
+ * (pending_fork shares the record and copies the naming), and a delivery consumes ONE NAMING. So the two are not
+ * a ratio: `replyAnswered` is bounded by the number of distinct requests and the delivery debt is bounded by
+ * nothing of the sort, and dividing one by the other produces a percentage of nothing. It was so divided — 998
+ * deliveries against 24636 answered records read as "4% consumed" — which is the defaulted-field defect
+ * performed on a report: a plausible datum where no measurement existed. This is the denominator that does
+ * exist, in the arm's own unit, summed over the live frontier by cold_census as `pend_ready`. */
+int  pending_deliverable_count(JSValueConst reg);
+
 /* IS THE HOST STILL OWED ANYTHING ON THIS REGISTER — the exact question `flow_set_host_owed`'s mark is a claim
    about, and the one `pending_count(reg) > 0` cannot answer. A register holding one ANSWERED entry has a
    non-zero count while the host owes it nothing, so a flow stuck on such an entry passes a count test and is

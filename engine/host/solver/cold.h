@@ -154,6 +154,16 @@ typedef struct {
        `pending_index_answered_total`, which is what the census publishes as `replyAsked`/`replyAnswered`. */
     long pend_count;
     long pend_bytes;
+    /* …AND THE ONE POPULATION INSIDE THAT LENGTH THAT IS A DEBT THE FRONTIER OWES ITSELF: entries the host has
+       ANSWERED which the flow naming them has not yet delivered (solver/pending.h's pending_deliverable_count).
+       IT IS THE DENOMINATOR OF `deliver-one-reply` AND NOTHING ELSE IN THIS CENSUS IS. That arm consumes exactly
+       one NAMING per visit; `replyAsked`/`replyAnswered` count RECORDS, and one record is named by every register
+       that forked while it was in flight — so the reply door's rate can be `asked == answered` while this number
+       climbs without bound, and the two must never be divided by one another. A flow cannot reach flow_step's
+       FINISHED arm while this is non-zero for its register (the delivery rung returns first), and a flow that
+       does not finish never releases its register, so a rising `pend_ready` beside `finished 0` is one fact and
+       not two. A REPORT AND NEVER A BOUND (§NO BOUNDS): nothing reads it, no arm branches on it. */
+    long pend_ready;
     long misc_bytes;         /* the Flow struct, its candidate substitution, a routed record, the blob headers */
 
     /* SHARED rows — counted ONCE for the whole frontier, because a frozen segment is referenced by every flow

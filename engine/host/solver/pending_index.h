@@ -110,7 +110,18 @@ long pending_index_node_answered(const PendIndexNode *n);
  *
  * AND A PAYMENT IS NOT YET A THING LEARNED — the value has reached the REGISTER, and the flow still has to
  * take it. Read `pending_index_answered_total` against the census's `deliver-one-reply` step-unit arm: the
- * first climbing with the second at zero is a document being paid and consuming nothing.
+ * first climbing with the second AT ZERO is a document being paid and consuming nothing.
+ *
+ * THAT READING IS A PREDICATE AND IT IS NOT A RATIO, AND THE DIFFERENCE IS THE UNIT. This pair counts RECORDS —
+ * keyed at most once, untracked when answered — and `deliver-one-reply` counts NAMINGS: pending_fork gives the
+ * sibling a new array naming the SAME record, and each arm must take its own delivery, so ONE answered record is
+ * as many deliveries as there are registers naming it. The two therefore have no common denominator, and the
+ * arm's total may legitimately exceed `answered` on a forking document. Dividing them produces a percentage of
+ * nothing, and it has been divided: 998 deliveries against 24636 answered records was relayed as "about 4%
+ * consumed". The number in the ARM's unit is the census's `pendReady` (solver/pending.h's
+ * pending_deliverable_count, summed over the live frontier by cold_census) — that is the denominator, and
+ * `pend` is not one either, since it sums the deliverable set together with what the host is still owed, with
+ * answered synchronous rendezvous, and with declined parks.
  *
  * THAT PAIRING IS NOT HYPOTHETICAL AND IT IS WHY THIS PAIR WAS BUILT. Measured on the wasm smoke at 74eb1d62
  * (build-full.log, 13 censuses, 5857 steps, the run killed at its CPU budget): `deliver-one-reply` NEVER RAN,

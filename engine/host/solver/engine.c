@@ -3328,10 +3328,31 @@ static void engine_queue_el_body(uint32_t doc, DynBody *body, DynKind kind, Scri
  * stays on the register until the step that delivers it, and the flow reports progress, so it is re-ranked and
  * comes back for the rest exactly as it comes back for its programs and its jobs.
  *
- * THE FIRST ANSWERED ENTRY IN REGISTER ORDER, which is a property worth having on purpose: delivery order is
- * then a function of the order the flow ISSUED its requests and not of the order the host happened to answer
- * them, which is the invariance §Testing's solver differential asks for ("replies answered tail-first must
- * emit the same findings"). */
+ * THE FIRST ANSWERED ENTRY IN THE REGISTER'S CURRENT ARRAY ORDER, AND THAT IS NOT THE ORDER THE FLOW ISSUED
+ * ITS REQUESTS. This paragraph used to claim it was — "delivery order is then a function of the order the flow
+ * ISSUED its requests and not of the order the host happened to answer them, which is the invariance §Testing's
+ * solver differential asks for" — and the register cannot carry that claim: pending_remove is a SWAP-REMOVE
+ * (solver/pending.h says so in its own words, "the register is a set of outstanding requests, not an ordered
+ * queue"), so the first removal moves the LAST entry into the hole and every issue-order reading after it is an
+ * artifact of which entries happened to have been taken. Four entries A B C D all answered deliver A, D, B, C.
+ * The two HOSTREQ removals in this file (engine_host_take, and the withdrawal beside it) permute it too, so
+ * this is not something the delivery site can fix by shifting instead of swapping.
+ * IT IS NOT §8.1.7.3'S ORDER EITHER, WHICH IS THE HALF THAT MATTERS FOR FIDELITY. A completed fetch's task is
+ * queued on ONE source, HTML §8.1.7.1 Definitions requires that "For each event loop, every task source must be
+ * associated with a specific task queue", and §8.1.7.3 Processing model step 2.3 then takes the oldest of that
+ * queue — "Set oldestTask to the first runnable task in taskQueue, and remove it from taskQueue" — so the order
+ * within this source is the order the REPLIES ARRIVED and is not implementation-defined.
+ * WHAT IS NOT COVERED: this arm delivers one answered entry per step, which is right, and picks WHICH one out of
+ * a permuted array, which is neither of the two defensible orders.
+ * WHAT THE NEXT DIFF BUILDS: an arrival ordinal on the RECORD — a PENDING_FIELDS entry, PEND_SHARE for `value`'s
+ * reason exactly (an answer that arrived before a fork was computed in a world both arms were in), minted
+ * monotonically at the one write that settles a record, which is the `PEND_HAVE_VALUE` case pending.c's
+ * pend_index_sync is already dispatched on from pending_set — and this scan choosing the SMALLEST rather than
+ * the first, which is §8.1.7.3's oldest-first over the networking task source.
+ * HOW ITS ABSENCE SHOWS: engine/solvergate.mjs already drives a `lastreply` schedule ("one entry per turn, tail
+ * first"), so a corpus document with two concurrently answered fetches whose `.then` handlers observe each
+ * other disagrees between `lastreply` and the `direct` reference. That is the gate reporting a real reorder, and
+ * the fix is the ordinal — never a narrowing of the schedule set. */
 static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
     int i = 0;
     while (i < pending_count(f->pending)) {
@@ -6554,15 +6575,22 @@ static int flow_step(JSContext *ctx, Flow *f) {
              * fetch task ends "Otherwise, queue a global task on the networking task source with
              * taskDestination and algorithm", and BOTH kinds of reply this register holds arrive that way — a
              * `fetch()` and an external script's bytes, whose url HTML §8.1.4.2 "Fetching scripts" hands to
-             * that same algorithm. That is why ONE delivery serves both, and why flow_deliver_one_reply takes the
-             * first ANSWERED entry in register order rather than choosing between them: HTML §8.1.7.1
-             * Definitions says "For each event loop, every task source must be associated with a specific task
-             * queue" and §8.1.7.3 Processing model step 3 says "Set oldestTask to the first runnable task in
-             * taskQueue, and remove it from taskQueue", so order WITHIN this source is arrival order and is
-             * not implementation-defined at all.
+             * that same algorithm. That is why ONE delivery serves both, and why flow_deliver_one_reply takes one
+             * ANSWERED entry rather than choosing between the two kinds: HTML §8.1.7.1 Definitions says "For
+             * each event loop, every task source must be associated with a specific task queue" and §8.1.7.3
+             * Processing model step 2.3 says "Set oldestTask to the first runnable task in taskQueue, and remove
+             * it from taskQueue", so order WITHIN this source is arrival order and is not implementation-defined
+             * at all. (The step number is a sub-number because step 2 — "If the event loop has a task queue with
+             * at least one runnable task" — holds exactly one nested list, and it stood here as a bare `step 3`,
+             * which is that list's third item counted as a peer of the outer one.)
+             * WHICH ANSWERED ENTRY THIS ARM TAKES IS NOT YET THAT ORDER, and the sentence that used to claim it
+             * was is corrected at flow_deliver_one_reply's own header, with the ordinal that would make it true
+             * and the gate schedule its absence shows up in. What the citation above settles is the arm's
+             * POSITION in this ladder, which is what the rest of this paragraph is about, and that argument does
+             * not depend on the choice within the source.
              *
              * WHAT IS IMPLEMENTATION-DEFINED IS ONLY WHICH QUEUE, AND IT DOES NOT REACH AS FAR AS THIS ARM USED
-             * TO SIT. §8.1.7.3 step 1 is "Let taskQueue be one such task queue, chosen in an
+             * TO SIT. §8.1.7.3 step 2.1 is "Let taskQueue be one such task queue, chosen in an
              * implementation-defined manner", over the queues that have at least one runnable task, and
              * §8.1.7.5 Dealing with the event loop from other specifications states what that choice is FOR:
              * "you must choose a task source when queuing a global task; this governs the relative order of

@@ -970,6 +970,17 @@ char *result_cold_json(void) {
            "when it is answered, so a payment credited without a key is a reply settling a record the host was "
            "never shown, and `replyAnswered/replyAsked` is about to be published as a rate over two different "
            "populations. Both terms are written in solver/pending_index.c and nowhere else");
+    /* AND THE DELIVERY DEBT IS A SUBSET OF THE REGISTER IT IS COUNTED OUT OF, which is the only relation these
+       two rows have and therefore the only one worth asserting. Both are summed in ONE pass of cold_census over
+       ONE frontier — `pend_count` is every entry of every live register and `pend_ready` is the entries of those
+       same registers that flow_deliver_one_reply may take — so an excess is not a large debt, it is the two
+       counters having been summed over different populations, and `pendReady` would then publish as a debt the
+       frontier does not hold. */
+    DCHECK(c.pend_ready <= c.pend_count,
+           "more of the frontier's register entries are DELIVERABLE than there are register entries — the two "
+           "rows are counted in one pass of cold_census over one frontier and the deliverable set is a subset "
+           "of the register by construction, so this is two sums over different populations and the census is "
+           "about to publish a delivery debt larger than the registers it was read out of");
     ran = resumed.flows + resumed.cands > 0;
     /* A REBUILD IS ALL OF ITSELF OR NONE OF IT, asserted here because `resumed: 0` is a POSITIVE claim that this
        session was handed no residue and this is the one place both halves of that claim are in one hand.
@@ -1016,7 +1027,8 @@ char *result_cold_json(void) {
                  "\"replyAsked\":%ld,\"replyAnswered\":%ld,\"pagedReqs\":%ld,"
                  "\"pagedAsks\":%ld,\"pagedUnarmed\":%ld,\"pagedFloor\":%ld,"
                  "\"decEntries\":%ld,\"decKiB\":%ld,\"headEntries\":%ld,\"headKiB\":%ld,"
-                 "\"domHeadEntries\":%ld,\"domHeadKiB\":%ld,\"jobs\":%ld,\"pend\":%ld,\"pendKiB\":%ld,"
+                 "\"domHeadEntries\":%ld,\"domHeadKiB\":%ld,\"jobs\":%ld,\"pend\":%ld,\"pendReady\":%ld,"
+                 "\"pendKiB\":%ld,"
                  "\"miscKiB\":%ld,\"perFlowKiB\":%ld,"
                  "\"segKiB\":%ld,\"domSegKiB\":%ld,\"pinSegs\":%ld,\"pinSegEntries\":%ld,"
                  "\"pinSegKiB\":%ld,\"decSegs\":%ld,\"decSegEntries\":%ld,\"decSegKiB\":%ld,"
@@ -1035,7 +1047,7 @@ char *result_cold_json(void) {
                  e.paged_reqs,
                  e.paged_asks, e.paged_unarmed, e.paged_floor,
                  c.dec_entries, c.dec_bytes / 1024, c.head_entries, c.head_bytes / 1024,
-                 c.dom_head_entries, c.dom_head_bytes / 1024, c.job_count, c.pend_count,
+                 c.dom_head_entries, c.dom_head_bytes / 1024, c.job_count, c.pend_count, c.pend_ready,
                  c.pend_bytes / 1024, c.misc_bytes / 1024,
                  (c.dec_bytes + c.head_bytes + c.dom_head_bytes + c.pend_bytes + c.misc_bytes) / 1024,
                  c.seg_bytes / 1024, c.dom_seg_bytes / 1024,

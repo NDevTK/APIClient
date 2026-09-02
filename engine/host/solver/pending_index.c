@@ -87,6 +87,9 @@ static PendIndexNode    *g_nodes_tail;  /* appended in creation order, so the jo
  * counts as a step-unit arm. `replyAnswered` climbing with that arm at zero is a document being paid and
  * consuming nothing — the exact shape CLAUDE.md records as having happened once already, where every flow a
  * page's fetch parked "stayed parked forever" and the learning "had never once happened".
+ * AND THAT IS A PREDICATE ON THE ARM BEING ZERO AND NEVER A RATIO AGAINST IT — this pair is per RECORD and the
+ * arm is per NAMING, one record being named by every register that forked while it was in flight. The census's
+ * `pendReady` is the arm's own unit; pending_index.h carries the derivation.
  *
  * NOT RESET AT A SESSION BOUNDARY, with engine.c's five and for their reason: a rate whose numerator and
  * denominator are cleared at different moments is not a rate. `pending_index_reset` frees the table below and

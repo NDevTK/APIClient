@@ -199,21 +199,45 @@ int pending_blocked(JSValueConst reg)
     return 0;
 }
 
+/* CAN flow_deliver_one_reply TAKE THIS ENTRY — the one condition the two questions below are made of, written
+   once here for the reason `pend_owed` above is: what differs between the callers is whether they want to know
+   THAT there is one or HOW MANY there are, never what "deliverable" means, and a second spelling of it would let
+   the arm's guard and the arm's debt disagree about the same register.
+   THE KIND IS HALF THE QUESTION — see pending.h. A HOSTREQ's answer belongs to the machine that is parked at the
+   call site which asked for it; flow_deliver_one_reply never delivers one, so a register holding nothing else is
+   not ready and its flow must go on waiting for its own resume rather than be sent to a delivery that would take
+   the answer away from it. */
+static int pend_deliverable(JSValueConst e)
+{
+    return pending_get_int(e, PEND_HAVE_VALUE) != 0 &&
+           pending_get_int(e, PEND_KIND) != FLOW_PENDING_HOSTREQ;
+}
+
 int pending_ready(JSValueConst reg)
 {
     int n = pend_len(reg), i;
     for (i = 0; i < n; i++) {
         JSValue e = pending_entry(reg, i);
-        /* THE KIND IS HALF THE QUESTION — see pending.h. A HOSTREQ's answer belongs to the machine that is
-           parked at the call site which asked for it; flow_deliver_one_reply never delivers one, so a
-           register holding nothing else is not ready and its flow must go on waiting for its own resume rather
-           than be sent to a delivery that would take the answer away from it. */
-        int hit = pending_get_int(e, PEND_HAVE_VALUE) != 0 &&
-                  pending_get_int(e, PEND_KIND) != FLOW_PENDING_HOSTREQ;
+        int hit = pend_deliverable(e);
         JS_FreeValue(pend_ctx(), e);
         if (hit) return 1;
     }
     return 0;
+}
+
+/* HOW MANY DELIVERIES THIS REGISTER STILL OWES ITS OWN FLOW — see pending.h for what it is for. Deliberately
+   NOT short-circuited: `pending_ready` answers a guard and this answers a DEBT, and a debt that stopped at the
+   first member would be the level whose collapse this counter exists to end. */
+int pending_deliverable_count(JSValueConst reg)
+{
+    int n = pend_len(reg), i, c = 0;
+
+    for (i = 0; i < n; i++) {
+        JSValue e = pending_entry(reg, i);
+        if (pend_deliverable(e)) c++;
+        JS_FreeValue(pend_ctx(), e);
+    }
+    return c;
 }
 
 int pending_outstanding(JSValueConst reg)

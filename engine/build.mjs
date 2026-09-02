@@ -211,7 +211,15 @@ const COLD_FIELDS = ["live", "framed", "blocked", "owed",
                         asks against `sold` (`unarmed + floor + sold == asks`), checked below. */
                      "pagedReqs", "pagedAsks", "pagedUnarmed", "pagedFloor",
                      "decEntries", "decKiB", "headEntries", "headKiB",
-                     "domHeadEntries", "domHeadKiB", "jobs", "pend", "pendKiB",
+                     /* `pendReady` IS TO `pend` WHAT `pagedUnarmed`/`pagedFloor` ARE TO `pagedAsks` — the
+                        partition that stops one length answering for four populations. `pend` sums entries the
+                        host is still owed, entries it has ANSWERED and the naming flow has not delivered,
+                        answered synchronous rendezvous, and declined parks; those take opposite work and the
+                        level cannot say which it is made of. `pendReady` is the second of the four, and it is
+                        also the ONLY row in this census in the unit `deliver-one-reply` consumes — the reply
+                        door's `replyAsked`/`replyAnswered` count RECORDS while a delivery consumes a NAMING,
+                        so those two are a predicate on the arm being zero and never a denominator for it. */
+                     "domHeadEntries", "domHeadKiB", "jobs", "pend", "pendReady", "pendKiB",
                      "miscKiB", "perFlowKiB",
                      "segKiB", "domSegKiB", "pinSegs", "pinSegEntries", "pinSegKiB",
                      "decSegs", "decSegEntries", "decSegKiB", "dynBodies", "dynKiB", "sharedKiB",
@@ -1645,8 +1653,16 @@ function censusReading(out) {
                   every entry of every live flow's register whatever state it is in — outstanding, ALREADY
                   ANSWERED and awaiting that flow's own delivery, declined, synchronous — so it stood at
                   299306 beside `owed 0` and `blocked 0` in the same census, which read as a contradiction and
-                  was not one. The debt is `pending_owed_replies` and the RATE is the `reply` pair below. */
-               `entries, ${c.b.jobs} queued job(s), ${c.b.pend} pending register entr(ies), ` +
+                  was not one. The debt is `pending_owed_replies` and the RATE is the `reply` pair below.
+                  AND ONE OF THOSE FOUR STATES IS NOW SPLIT OUT BESIDE IT, because naming the collapse did not
+                  end it: a reader still had to choose which of the four a rising `pend` was, and the two
+                  answers that mattered — a host that never paid, and a frontier drowning in replies nobody
+                  took — are the two that take opposite work. `pendReady` is the second, in the unit
+                  `deliver-one-reply` consumes, so the arm and its debt are finally on one line. The rest of
+                  `pend` is what the host is still owed plus the synchronous and declined entries, which is why
+                  this prints both rather than the difference. */
+               `entries, ${c.b.jobs} queued job(s), ${c.b.pend} pending register entr(ies) ` +
+               `(${c.b.pendReady} awaiting their own flow's delivery), ` +
                `${c.b.dynBodies} shared program(s); frozen: ${c.b.pinSegs}/${c.b.pinSegEntries} pin, ` +
                `${c.b.decSegs}/${c.b.decSegEntries} decision`);
     /* AND WHETHER THE HOST PAID, WHETHER THE DOCUMENT GOT ANYWHERE, AND WHAT THE INHERITED DRIVES DID — three
@@ -1682,7 +1698,14 @@ function censusReading(out) {
                   the histogram beside this already counts. `asked == answered` with that arm at 0 is a
                   document being paid in full and consuming nothing — measured exactly so on the wasm smoke at
                   74eb1d62, where the reply-dependent probe rows (fetch, then-chain, clone-body, body-bytes,
-                  body-iso) were all 0 and 55% of the frontier's per-flow memory was undelivered replies. */
+                  body-iso) were all 0 and 55% of the frontier's per-flow memory was undelivered replies.
+                  THAT IS A PREDICATE ON THE ARM BEING ZERO AND IT IS NOT A RATIO, WHICH IS A DISTINCTION THIS
+                  SENTENCE DID NOT MAKE AND SOMEBODY THEN NEEDED. This pair is per RECORD; the arm is per
+                  NAMING — pending_fork gives the sibling a new array naming the SAME record and each arm owes
+                  its own delivery — so on a forking document the arm may legitimately EXCEED `answered`, and
+                  the quotient of the two is a percentage of nothing. It was taken as one: 998 arm runs against
+                  24636 answered records was relayed as "about 4% consumed". The denominator in the arm's unit
+                  is `pendReady` on the frontier-shape line above. */
                `; reply ${c.b.replyAnswered}/${c.b.replyAsked} record(s) answered` +
                `; programs: deepest ${c.b.deepest}, completed ${c.b.completed}` +
                `; forks ${c.b.forks}` +

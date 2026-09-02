@@ -123,6 +123,11 @@ void cold_census(ColdCensus *out)
            which is exactly what drifts the next time a field is added. */
         out->pend_count += pending_count(f->pending);
         out->pend_bytes += pending_bytes(f->pending);
+        /* …AND THE DEBT INSIDE THAT LENGTH, IN THE UNIT THE DELIVERY ARM CONSUMES — see cold.h. Asked of the
+           register itself for the same reason its bytes are: the predicate that decides what
+           flow_deliver_one_reply may take belongs beside the register's other questions and not restated here,
+           where the next kind added would silently be counted as deliverable. */
+        out->pend_ready += pending_deliverable_count(f->pending);
         /* THE PROGRAM TEXT IS NOT A PER-FLOW ROW ANY MORE — see the shared block below. What this walk used to
            add here was `strlen` over every row of every flow, which both multiplied the sharing back out and
            made the census itself a pass over every byte of every bundle the frontier holds. */
