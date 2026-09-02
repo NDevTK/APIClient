@@ -774,6 +774,32 @@ static const EventHandlerTargetTerms EH_TARGET_TERMS = {
     eh_is_body_or_frameset, eh_node_document_is_active, eh_node_document_global,
 };
 
+/* HTML §6.5 Activation behavior of elements' click() STEP 1: "If this element is a form control that is
+ * disabled, then return." — the question core/events/event_target.c asks of this file, because click() is
+ * installed on HTMLElement.prototype and every HTML element there is can therefore reach it.
+ *
+ * BOTH CONJUNCTS, AND THE FIRST IS THE LOAD-BEARING ONE. §4.10.19.5 Enabling and disabling form controls: the
+ * disabled attribute defines the second — "A form control is disabled if any of the following are true" — and
+ * its SECOND bullet names no element list at all: "the element is a descendant of a fieldset element whose
+ * disabled attribute is specified, and the element is not a descendant of that fieldset element's first legend
+ * element child". Read alone, that is TRUE of a `<div>` inside `<fieldset disabled>`, so a step 1 asking only
+ * "is it disabled" would stop `div.click()` firing — and it is the definition's SUBJECT ("a form control")
+ * that excludes it, which is exactly why §6.5 spells the subject out in its own sentence.
+ *
+ * THE SUBJECT IS §4.10.2 Categories' SUBMITTABLE SET, and that is not a third reading of the term: it is
+ * character-for-character the list §4.10.19.5's FIRST bullet enumerates — "the element is a button, input,
+ * select, textarea, or form-associated custom element" — so the two halves are asked of one set that
+ * html_form.c already spells once. `fieldset`, `object` and `output` carry the `disabled` content attribute and
+ * are NOT in it, which is the standard's own answer rather than a narrowing chosen here.
+ *
+ * ONE PREDICATE OVER TWO THAT ALREADY EXIST, NEVER A SECOND COPY OF EITHER: html_form_control_is_disabled is
+ * read by §4.10.21.1's candidacy, §4.10.22.4's entry list, §4.10.5.1's mutability and §4.13's form-associated
+ * custom elements, and a §6.5-shaped copy of it here would be the second answer to one question. */
+static bool html_element_is_disabled_form_control(JSContext *ctx, JSValueConst el)
+{
+    return html_form_is_submittable(ctx, el) && html_form_control_is_disabled(ctx, el);
+}
+
 void html_element_init(JSContext *ctx)
 {
     JSClassDef hd = { "HTMLElement" }, ud = { "HTMLUnknownElement" };
@@ -907,6 +933,10 @@ void html_element_init(JSContext *ctx)
        this file's table is what knows. Claimed per AGENT beside the element resolver below, and given back at
        html_element_free, which core/platform.c's reverse-declaration order runs before event_target_free. */
     event_target_set_handler_target_terms(&EH_TARGET_TERMS);
+    /* HTML §6.5's click() step 1, whose subject is a form control — this file's table is what knows which
+       elements those are, and click() is installed from here. Claimed per AGENT beside the terms above and
+       given back at html_element_free for the same reason. */
+    event_target_set_click_terms(html_element_is_disabled_form_control);
     realm_declare_intrinsic(html_element_install_protos);
     /* node.c keys its prototype table by node TYPE; an element's interface is keyed by its LOCAL NAME, which is
        HTML's mapping and not the DOM's. So the base ASKS, and stays the one place a wrapper is built. */
@@ -1250,15 +1280,16 @@ bool html_element_is(JSValueConst v)
 
 void html_element_free(JSRuntime *rt)
 {
-    /* THE THREE SLOTS THIS FILE CLAIMED IN OTHER COMPONENTS, GIVEN BACK FIRST. §2.9's activation behaviour is
+    /* THE FOUR SLOTS THIS FILE CLAIMED IN OTHER COMPONENTS, GIVEN BACK FIRST. §2.9's activation behaviour is
        core/events/event_target.c's slot pointing at core/html/hyperlink.c, the element resolver is
-       core/dom/node.c's slot pointing at this file, and §8.1.8.1's determine-the-target terms are a second
-       event_target.c slot pointing at this file — each is a callback INTO a component the cascade around
-       this line is tearing down, which is the defect core/agent_state.h found in idb_transaction. All three
-       receivers assert at their own release that the claim is gone. */
+       core/dom/node.c's slot pointing at this file, and §8.1.8.1's determine-the-target terms and HTML §6.5's
+       click() step 1 predicate are two more event_target.c slots pointing at this file — each is a callback
+       INTO a component the cascade around this line is tearing down, which is the defect core/agent_state.h
+       found in idb_transaction. All four receivers assert at their own release that the claim is gone. */
     hyperlink_free();
     node_set_element_resolver(NULL);
     event_target_set_handler_target_terms(NULL);
+    event_target_set_click_terms(NULL);
     dom_string_map_free(rt);
     nonce_attribute_free();   /* §2.5.6's setter id, reset like core/html/html_base_element.c's */
     form_submission_attributes_free();   /* §4.10.19.6's two, likewise */

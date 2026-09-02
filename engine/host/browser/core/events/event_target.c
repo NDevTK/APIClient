@@ -45,6 +45,17 @@ static const IdlArgType IDL_2STR[2] = { IDL_DOMSTRING, IDL_DOMSTRING };
    tag is part of the value. Asking JS_IsUndefined of it answers "no" before anything has run, which fired the
    ran-twice assert on the FIRST call. A JSValue's emptiness is not the allocator's default. */
 static JSValue g_key;
+/* HTML §6.5 Activation behavior of elements' "Each element has an associated CLICK IN PROGRESS FLAG, which is
+   initially unset" — the key that flag hangs off, a Symbol for the same reason the listener map's is: it is an
+   internal slot, so a page can neither read it nor collide with it.
+   ON THE WRAPPER AND NOT ON THE NODE, which is what makes it TIME-TRAVEL for free. The flag is set by step 3
+   and unset by step 5 with the whole of step 4's dispatch in between, and that dispatch parks — so the flag is
+   live across a suspension and must belong to the FLOW that raised it. Written as a property on the element's
+   wrapper it is an ordinary slot write the COW delta already captures, and a sibling arm forked mid-click sees
+   its own value; written into the lexbor node it would be one flag for every flow at once, which is the
+   opposite of what a re-entrancy guard on a forking engine has to be. There is exactly one wrapper per node
+   (core/dom/node.c's identity map), so `event.target.click()` and `el.click()` reach the same slot. */
+static JSValue g_click_flag_key;
 static int g_ready;
 /* §2.9's PROPAGATION PATH IS THE TREE'S QUESTION, not this component's. Naming node.c here made EVERY host that
    installs events link the whole DOM and lexbor with it, which is why the streams gate could not build with a
@@ -56,6 +67,9 @@ static const EventTargetTree *g_tree;
 static bool (*g_has_activation)(JSContext *ctx, JSValueConst el);
 static int (*g_run_activation)(JSContext *ctx, JSValueConst el, JSValueConst ev,
                                uint8_t *phase, uint32_t *req);
+/* HTML §6.5 Activation behavior of elements' click() STEP 1's question, declared by whoever owns form controls
+   — see event_target_set_click_terms. */
+static bool (*g_is_disabled_form_control)(JSContext *ctx, JSValueConst el);
 /* HTML §8.1.8.1's handler map key, and the MARKER that holds the handler's place in a listener list — see the
    event-handler section below. Declared here because event_target_init mints them. */
 static JSValue g_handler_key;
@@ -183,6 +197,8 @@ void event_target_init(JSContext *ctx)
     eh_assert_types();
     g_key = JS_NewSymbol(ctx, "eventListeners", false);
     CHECK(!JS_IsException(g_key), "the event-listener key allocation failed");
+    g_click_flag_key = JS_NewSymbol(ctx, "clickInProgress", false);
+    CHECK(!JS_IsException(g_click_flag_key), "HTML §6.5's click in progress flag key allocation failed");
     g_handler_key = JS_NewSymbol(ctx, "eventHandlers", false);
     g_handler_marker = JS_NewObject(ctx);
     g_uncompiled_key = JS_NewSymbol(ctx, "internalRawUncompiledHandler", false);
@@ -232,6 +248,7 @@ void event_target_init(JSContext *ctx)
     realm_declare_intrinsic(event_target_install);
     agent_state_flag("event_target", &g_ready, "the declaration latch");
     agent_state_value("event_target", &g_key, "§2.7's listener-map key");
+    agent_state_value("event_target", &g_click_flag_key, "HTML §6.5's click in progress flag key");
     agent_state_value("event_target", &g_handler_key, "HTML §8.1.8.1's handler-map key");
     agent_state_value("event_target", &g_handler_marker, "HTML §8.1.8.1's handler placeholder in a listener list");
     agent_state_value("event_target", &g_uncompiled_key, "HTML §8.1.8.1's internal raw uncompiled handler brand");
@@ -241,15 +258,17 @@ void event_target_init(JSContext *ctx)
     agent_state_id("event_target", &g_dispatch_stepid, "§2.7's dispatchEvent machine");
     agent_state_id("event_target", &g_dispatch_pair_stepid, "§2.9's internal dispatch machine");
     agent_state_id("event_target", &g_click_stepid, "§2.9's synthetic-click dispatch machine");
-    /* THE FOUR SLOTS OTHER COMPONENTS CLAIM — three claims, since §2.9's activation behaviour is a PAIR. Each
+    /* THE FIVE SLOTS OTHER COMPONENTS CLAIM — four claims, since §2.9's activation behaviour is a PAIR. Each
        slot is this component's static and another component's obligation, so each is declared here, where the
-       state lives, and cleared by whoever claimed it. The release below asserts all four are back, which is
+       state lives, and cleared by whoever claimed it. The release below asserts all five are back, which is
        what puts the claimants BEFORE this row in core/platform.c's reverse-declaration order rather than
        leaving that ordering to be remembered. */
     agent_state_ptr("event_target", &g_tree, "§2.9's tree walk, claimed by core/dom/node.c");
     agent_state_ptr("event_target", &g_has_activation, "§2.9's activation predicate, claimed by core/html/hyperlink.c");
     agent_state_ptr("event_target", &g_run_activation, "§2.9's activation behaviour, claimed by core/html/hyperlink.c");
     agent_state_ptr("event_target", &g_handler_set_hook, "§9.4.2's handler-set hook, claimed by core/events/message_port.c");
+    agent_state_ptr("event_target", &g_is_disabled_form_control,
+                    "HTML §6.5's click() step 1 predicate, claimed by core/html/html_element.c");
 }
 
 /* §2.7's prototype FOR THIS REALM. Owned — the caller frees. */
@@ -374,6 +393,22 @@ void event_target_set_activation(bool (*has)(JSContext *ctx, JSValueConst el),
     g_run_activation = run;
 }
 
+void event_target_set_click_terms(bool (*is_disabled_form_control)(JSContext *ctx, JSValueConst el))
+{
+    /* NULL IS THE RELEASE — see event_target_set_tree for why the two are one call. */
+    if (is_disabled_form_control == NULL) {
+        DCHECK(g_is_disabled_form_control != NULL,
+               "HTML §6.5's click() step 1 predicate was released by a component that never registered one");
+        g_is_disabled_form_control = NULL;
+        return;
+    }
+    DCHECK(g_is_disabled_form_control == NULL,
+           "a second component registered HTML §6.5's click() step 1 predicate — that step is \"If this "
+           "element is a form control that is disabled, then return\", there is ONE answer to it, and a "
+           "second claim silently decides which elements in the agent can be clicked at all");
+    g_is_disabled_form_control = is_disabled_form_control;
+}
+
 void event_target_set_handler_target_terms(const EventHandlerTargetTerms *terms)
 {
     /* NULL IS THE RELEASE — see event_target_set_tree for why the two are one call. */
@@ -403,11 +438,11 @@ void event_target_free(JSRuntime *rt)
        row has a declare — so a release reaching here undeclared is a host tearing this component down with
        something that is not the platform's list. */
     DCHECK(g_ready, "§2.7's event machinery was released in an agent that never declared it");
-    /* THE FOUR SLOTS OTHER COMPONENTS CLAIM ARE EMPTY BY NOW, AND THAT IS AN ORDERING STATEMENT. Each
+    /* THE FIVE SLOTS OTHER COMPONENTS CLAIM ARE EMPTY BY NOW, AND THAT IS AN ORDERING STATEMENT. Each
        claimant holds a C function pointer INTO its own component; this row is about to give back the state
        those functions read, so a claimant still holding one is a component released AFTER the thing it points
-       into. core/platform.c's reverse-declaration order is what puts node/hyperlink/message_port first, and
-       this is where that order stops being something a reader has to reconstruct. */
+       into. core/platform.c's reverse-declaration order is what puts node/hyperlink/message_port/html_element
+       first, and this is where that order stops being something a reader has to reconstruct. */
     DCHECK(g_tree == NULL,
            "§2.9's tree walk was still registered when the event machinery was released — core/dom/node.c "
            "claimed it and must give it back at node_free, which reverse-declaration order runs first");
@@ -421,14 +456,19 @@ void event_target_free(JSRuntime *rt)
            "HTML §8.1.8.1's determine the target of an event handler terms were still registered when the "
            "event machinery was released — core/html/html_element.c claimed them and must give them back at "
            "html_element_free, which reverse-declaration order runs first");
+    DCHECK(g_is_disabled_form_control == NULL,
+           "HTML §6.5's click() step 1 predicate was still registered when the event machinery was released — "
+           "core/html/html_element.c claimed it and must give it back at html_element_free, which "
+           "reverse-declaration order runs first");
     JS_FreeValueRT(rt, g_key);
+    JS_FreeValueRT(rt, g_click_flag_key);
     JS_FreeValueRT(rt, g_handler_key);
     JS_FreeValueRT(rt, g_handler_marker);
     JS_FreeValueRT(rt, g_uncompiled_key);
     g_uncompiled_key = JS_UNDEFINED;
     /* THE PROTOTYPE IS NOT RELEASED HERE: each realm's is held by that realm's class-proto slot and goes with
        the realm. Neither is the dispatcher — there is no lasting one to hold. */
-    g_key = g_handler_key = g_handler_marker = JS_UNDEFINED;
+    g_key = g_click_flag_key = g_handler_key = g_handler_marker = JS_UNDEFINED;
     /* THE IDS THIS AGENT WAS ISSUED, GIVEN BACK. A step id and a class id name a registration in the runtime
        that is going away with them; kept, they are what a SECOND agent's lazy `if (id < 0)` reads to decide it
        need not register again — core/agent_state.h's fetch defect, and the registry below asserts it. */
@@ -2145,6 +2185,60 @@ static void listener_remove_record(JSContext *ctx, JSValueConst target, const ch
 }
 
 
+/* HTML §6.5 Activation behavior of elements' `click()` STEP 2, 3 AND 5's flag: "Each element has an associated
+   click in progress flag, which is initially unset."
+   ABSENT IS UNSET, and that is the standard's own sentence rather than a default filling a hole — an element
+   nobody has clicked has no slot, which is exactly the state step 2 tests for and step 5 restores.
+   IT IS READ AS AN OWN SLOT, never as a property LOOKUP, for the reason listener_map states: a miss on a page
+   object walks the prototype chain into the solver's absent-state seam, which MINTS a concolic for the name.
+   An unknown here would fork the guard — one world where a click is already in progress and one where it is
+   not — off a fact this engine wrote itself and therefore knows. An internal slot is by definition an own
+   slot. */
+static bool click_in_progress(JSContext *ctx, JSValueConst el)
+{
+    JSAtom k;
+    JSValue v;
+    bool set;
+
+    DCHECK(g_ready, "HTML §6.5's click in progress flag was read before event_target_init minted its key");
+    k = JS_ValueToAtom(ctx, g_click_flag_key);
+    CHECK(k != JS_ATOM_NULL, "HTML §6.5's click in progress flag key could not be interned");
+    if (JS_GetOwnSlot(ctx, &v, el, k) <= 0)
+        v = JS_FALSE;
+    JS_FreeAtom(ctx, k);
+    set = JS_ToBool(ctx, v) != 0;
+    JS_FreeValue(ctx, v);
+    return set;
+}
+
+/* Steps 3 and 5's WRITE. A [[DefineOwnProperty]] rather than a storage poke, because the whole point of putting
+   the flag on the wrapper is that the COW delta captures it: the define records the slot's pre-write state
+   (absent, for the first click) in the running flow's delta, so an arm forked between step 3 and step 5 unsets
+   its own copy and a sibling that never entered click() still reads unset.
+   CONFIGURABLE AND WRITABLE, for the reason constraint_validation.c gives for the same shape: the slot is
+   written again at every click, and one defined with no flags makes the second write a silent no-op — which
+   here would be step 5 failing to unset and the element never clickable again. */
+static void click_in_progress_set(JSContext *ctx, JSValueConst el, bool on)
+{
+    JSAtom k;
+    int ok;
+
+    DCHECK(g_ready, "HTML §6.5's click in progress flag was written before event_target_init minted its key");
+    k = JS_ValueToAtom(ctx, g_click_flag_key);
+    CHECK(k != JS_ATOM_NULL, "HTML §6.5's click in progress flag key could not be interned");
+    ok = JS_DefinePropertyValue(ctx, (JSValue)el, k, JS_NewBool(ctx, on),
+                                JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE);
+    JS_FreeAtom(ctx, k);
+    DCHECK(ok > 0,
+           "HTML §6.5's click in progress flag would not stick to the element. The only way a define of a "
+           "configurable own slot is refused is a target that is NOT EXTENSIBLE, which a page reaches with "
+           "Object.preventExtensions/seal/freeze on an element — so what is missing is internal slots that "
+           "survive it, which this engine models as own properties throughout (the listener map and "
+           "§4.10.21.1's custom validity message have the same shape). Build that, or a sealed element's "
+           "step 3 never sets the guard step 2 reads, and a click handler calling click() recurses without "
+           "end");
+}
+
 /* §2.9 DISPATCH, as a machine — and the reason dispatchEvent could not exist before.
  *
  * The spec makes dispatch SYNCHRONOUS and makes its return value depend on what the listeners did: it answers
@@ -2168,7 +2262,9 @@ enum { DISPATCH_ARG = 0, CLICK_SYNTH = 1, DISPATCH_PAIR = 2 };
    It can suspend at three points: while WALKING the tree that makes the path (a page-sized walk, so it yields
    between parents), inside a listener, and inside the activation behaviour. */
 #define DISPATCH_STAGES(X) \
-    X(DISPATCH_INIT, "Web IDL §3.2.15 Interface types' conversion of the `Event event` argument, DOM §2.7 " \
+    X(DISPATCH_INIT, "HTML §6.5 Activation behavior of elements' click() steps 1-3 for a synthetic click (the " \
+                     "disabled-form-control return, the click in progress flag's test and set), Web IDL " \
+                     "§3.2.15 Interface types' conversion of the `Event event` argument, DOM §2.7 " \
                      "Interface EventTarget's dispatchEvent(event) method steps 1-2 (its two-condition " \
                      "InvalidStateError, and isTrusted), then DOM §2.9 dispatch steps 1-6.8 (the dispatch " \
                      "flag, the target override, the relatedTarget retargeted against the target and the " \
@@ -2194,6 +2290,12 @@ typedef struct JSDispatchState {
     uint32_t  ti, tn;    /* THE OTHER: how far into the current PASS, and how long the whole path is */
     /* §2.9 step 6.4's isActivationEvent, decided once at step 6.4 and read again at 6.9.6.1 for every ancestor. */
     uint8_t   is_activation;
+    /* HTML §6.5's click() STEP 5 DEBT, and it is a POSITIVE STATEMENT rather than a copy of the target: this
+       holds an element EXACTLY WHEN step 3 set that element's click in progress flag and step 5 has not yet
+       unset it. So the CLICK_SYNTH entries that returned at step 1 or step 2 leave it undefined and owe
+       nothing, and no other entry into this machine can ever owe anything — which is what lets the unset be
+       one unconditional line in the teardown instead of a condition restating the three arms. */
+    JSValue   click_el;
     /* THE ACTIVATION BEHAVIOUR'S OWN SUSPENSION. §4.6.3's is a navigation and a navigation fetches, so the
        behaviour is a step like everything else that can wait on the host: `aphase` is its resume point and
        `areq` the host request it is waiting on. They live here because the machine that can park is this one. */
@@ -2275,6 +2377,7 @@ static void js_dispatch_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->arr);
     v->val(ctx, &s->ev);
     v->val(ctx, &s->result);
+    v->val(ctx, &s->click_el);
     /* DERIVED FROM THE ARRAY, never a literal beside it: quickjs-step.h's paragraph on this is about exactly
        the buffer below, which has now grown once — a visit one slot short leaves a live value the fork never
        dups, and it fails nowhere near here. */
@@ -2288,6 +2391,19 @@ static JSValue js_dispatch_fini(JSContext *ctx, void *st, bool take_result)
     JSValue r = take_result ? s->result : JS_UNDEFINED;
 
     if (take_result) s->result = JS_UNDEFINED;
+    /* HTML §6.5 Activation behavior of elements' click() STEP 5: "Unset this element's click in progress flag."
+       HERE BECAUSE THIS IS THE ALGORITHM'S OWN LAST STEP, not because the teardown is a convenient place —
+       quickjs-step.h's contract for `fini` names "a re-entrancy guard lowered" as one of the things a machine
+       "owes on the way out", and the click in progress flag is exactly that. Step 4 is the whole dispatch, so
+       step 5 is whatever runs after it, and this is the one point every exit from step 4 passes through: the
+       ordinary completion, and the abrupt one (`catches_abrupt`) that the activation behaviour at step 12.1 can
+       still raise. Written at the normal terminal alone it would leave the flag SET for ever on the abrupt
+       path, and the element would never accept another click() — a page-visible dead element from a failure
+       that had nothing to do with it.
+       IT READS AN OWNED VALUE AND FREES NOTHING: the declaration names click_el, so tramp_step_state_free_1
+       releases it after this returns, and a free here would be the second list this engine forbids. */
+    if (JS_IsObject(s->click_el))
+        click_in_progress_set(ctx, s->click_el, false);
     /* §8.1.4.6 step 5's FLAG, if the dispatch was abandoned inside a report. It is not a reference, so no
        declaration names it; the report record's references ARE named by js_dispatch_visit, which is why this
        is the unlock and not the whole release. */
@@ -2557,7 +2673,7 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         s->path = s->type = s->lcb = s->exc = s->cur = s->act = s->arr = s->ev = s->result = JS_UNDEFINED;
-        s->tgt = s->slottable = JS_UNDEFINED;
+        s->tgt = s->slottable = s->click_el = JS_UNDEFINED;
         {
             int k;
             STEP_CB_FOREACH(s->cb, k)
@@ -2573,7 +2689,8 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                              event named click at this element, with the not trusted flag set", and HTML
                              §8.1.8.3 Event firing's LAST step is "Return the result of dispatching event at
                              target" — which IS this dispatch. (The number here used to be §3.2.2, which is
-                             "Elements in the DOM" and defines no method at all.)
+                             "Elements in the DOM" and defines no method at all.) THIS ENTRY IS THE WHOLE
+                             METHOD AND NOT ONLY ITS STEP 4: steps 1-3 run just below, step 5 in the teardown.
              DISPATCH_PAIR — the ENGINE firing its own event, where there is no receiver to be the target
                              because the caller is C: both come in as arguments.
            The third is what let the second DELIVERY go. The engine used to enqueue each listener as its own
@@ -2581,6 +2698,35 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
            whether anything cancelled, and was a second implementation of §2.9 beside this one. */
         target = (s->hdr.arg == DISPATCH_PAIR) ? step_arg(&s->hdr, 0)
                                               : event_target_receiver(ctx, s->hdr.this_val);
+        /* HTML §6.5 Activation behavior of elements' click() STEPS 1-3, which run BEFORE step 4 builds the
+           event — this machine's CLICK_SYNTH entry IS that method, and step 4 is everything below.
+           EACH OF THE THREE EXITS ANSWERS THE SAME THING, WHICH IS WHY THE RESULT MOVED. §6.5's steps return
+           nothing and HTML's IDL declares `undefined click()`, so a click that returns at step 1 and one that
+           runs the whole dispatch must be indistinguishable to the page. This machine answered `!canceled` for
+           every entry, so adding steps 1-2 alone would have handed a page a boolean for a click that fired and
+           `undefined` for one a disabled control refused — a way to read an element's disabled state that no
+           browser exposes, invented by the guard that was supposed to model one. See the terminal below. */
+        if (s->hdr.arg == CLICK_SYNTH) {
+            /* STEP 1: "If this element is a form control that is disabled, then return."
+               A HOST THAT REGISTERED NO PREDICATE HAS NO FORM CONTROLS, so nothing in it is one that is
+               disabled — the same positive reading dispatch_get_parent takes of a host with no tree, and not a
+               default filling a hole: HTML's form layer is what defines the concept, so a host without it has
+               no elements the question is about rather than an unanswered question. */
+            if (g_is_disabled_form_control != NULL && g_is_disabled_form_control(ctx, target))
+                return JS_STEP_DONE;
+            /* STEP 2: "If this element's click in progress flag is set, then return."
+               THIS IS THE STEP THAT TERMINATES A RE-ENTRANT CLICK, and on this engine it is the ONLY thing
+               that can: a handler whose body calls click() on its own element re-enters here, and §NO BOUNDS
+               forbids answering that with a depth cap — the standard's own flag is the terminator, and it is
+               per element rather than per stack, so `a.onclick = () => b.click()` and back still alternates
+               exactly once each way, as it does in a browser. */
+            if (click_in_progress(ctx, target))
+                return JS_STEP_DONE;
+            /* STEP 3: "Set this element's click in progress flag." The debt step 5 discharges is recorded in
+               the SAME line that raises it, so there is no path that sets the flag without owing the unset. */
+            click_in_progress_set(ctx, target, true);
+            s->click_el = JS_DupValue(ctx, target);
+        }
         s->ev = (s->hdr.arg == CLICK_SYNTH)
                     ? dispatch_synthetic_click(ctx, target)
                     : JS_DupValue(ctx, step_arg(&s->hdr, s->hdr.arg == DISPATCH_PAIR ? 1 : 0));
@@ -3189,7 +3335,16 @@ activation:
         ar = g_run_activation(ctx, s->act, s->ev, &s->aphase, &s->areq);
         if (ar != JS_STEP_DONE) return ar;
     }
-    s->result = JS_NewBool(ctx, !event_canceled(ctx, s->ev));
+    /* DOM §2.9 dispatch's last step, "Return false if event's canceled flag is set; otherwise true" — which
+       DOM §2.7's `dispatchEvent(event)` step 3 returns, and which HTML §6.5's `click()` DOES NOT: its step 4
+       fires the event and its step 5 is the last thing it does, so the method has no return value at all and
+       HTML's IDL says so (`undefined click()`). The dispatch still runs in full and its canceled flag still
+       decides the activation behaviour above; what differs is only what the METHOD hands back. Answering the
+       boolean here made `el.click()` evaluate to true or false in a page where every browser answers undefined,
+       and — once steps 1 and 2 existed — would have made the two early returns distinguishable from the fire.
+       DISPATCH_PAIR is the engine's own C door and reads the boolean the same way dispatchEvent does. */
+    s->result = (s->hdr.arg == CLICK_SYNTH) ? JS_UNDEFINED
+                                            : JS_NewBool(ctx, !event_canceled(ctx, s->ev));
     return JS_STEP_DONE;
 }
 
@@ -3197,8 +3352,11 @@ static const JSTrampStepDef js_dispatch_def = {
     sizeof(JSDispatchState), js_dispatch_step, js_dispatch_fini, DISPATCH_ARG, .catches_abrupt = 1, .visit = js_dispatch_visit,
     .algorithm = "DOM §2.9 dispatch", .steps = DISPATCH_STEPS
 };
-/* §3.2.2 click(). The SAME machine — a click is a dispatch, and giving it its own would be two implementations
-   of §2.9 that could disagree about listener order, the handler slot or the canceled flag. */
+/* HTML §6.5 Activation behavior of elements' click(). The SAME machine — the method's step 4 IS a dispatch, and
+   giving it its own would be two implementations of §2.9 that could disagree about listener order, the handler
+   slot or the canceled flag. Its OTHER four steps are the CLICK_SYNTH arms above and below: steps 1-3 at the
+   machine's entry and step 5 in its teardown. (The number here used to be §3.2.2, which is "Elements in the
+   DOM" and defines no method at all.) */
 static const JSTrampStepDef js_click_def = {
     sizeof(JSDispatchState), js_dispatch_step, js_dispatch_fini, CLICK_SYNTH, .catches_abrupt = 1, .visit = js_dispatch_visit,
     .algorithm = "DOM §2.9 dispatch", .steps = DISPATCH_STEPS

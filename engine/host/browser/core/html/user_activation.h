@@ -4,9 +4,10 @@
  * whether "document's relevant global object has sticky activation", and document_lifecycle.c answered
  * `return false;` under a comment that said this user agent has no input device. Half of that comment is
  * SPEC-TRUE and survives into this component: §6.4.2 activates only on an event whose `isTrusted` is true, and
- * §3.2.2's `element.click()` mints an UNTRUSTED event, so a page cannot activate itself. The other half was the
- * defect — "there is no source of activation" is a fact about this engine's INPUTS, and it was written down as
- * a fact about the STATE. Those differ everywhere it matters: the state has two timestamps with two different
+ * §6.5 Activation behavior of elements' `element.click()` mints an UNTRUSTED event, so a page cannot activate
+ * itself. (The number here used to be §3.2.2, which is "Elements in the DOM" and defines no method.) The other
+ * half was the defect — "there is no source of activation" is a fact about this engine's INPUTS, and it was
+ * written down as a fact about the STATE. Those differ everywhere it matters: the state has two timestamps with two different
  * lifetimes, an ordering between them, a consumption that makes one false while the other stays true, and a
  * per-Window identity that a notification propagates across a navigable subtree. A constant models none of it,
  * and every algorithm that reads it — the unload prompt, §7.3.1.7's popup rules, §7.4.2.1's source snapshot

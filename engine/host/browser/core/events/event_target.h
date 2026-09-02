@@ -202,10 +202,18 @@ enum { EH_GLOBAL = 1, EH_WINDOW = 2, EH_DOCUMENT = 4, EH_SIGNAL = 8, EH_PORT = 1
           installed by both, which is exactly what the mask is for. A bit of its own is what keeps the pair off
           every other prototype: a CloseWatcher includes no mixin at all. */
        EH_CLOSE_WATCHER = 1048576 };
-/* HTML §6.5 Activation behavior of elements' click() — "Fire a synthetic pointer event named click at this
-   element, with the not trusted flag set." — which IS DOM §2.9 dispatch, so it is the same machine under a
-   second entry rather than a second implementation of it. */
+/* HTML §6.5 Activation behavior of elements' click() — whose step 4, "Fire a synthetic pointer event named
+   click at this element, with the not trusted flag set", IS DOM §2.9 dispatch, so it is the same machine under
+   a second entry rather than a second implementation of it. The method's other four steps ride that entry:
+   steps 1-3 at the machine's DISPATCH_INIT and step 5 in its teardown, where a re-entrancy guard belongs. */
 void event_target_install_click(JSContext *ctx, JSValueConst target);
+/* HTML §6.5 Activation behavior of elements' click() STEP 1 — "If this element is a form control that is
+   disabled, then return." — ASKED OF WHOEVER OWNS FORM CONTROLS, for the reason §2.9's tree walk is asked of
+   whoever owns the tree: naming the HTML form layer from this file would make every host that installs events
+   link it, and a host with no form controls has no element the question is about. NULL is the RELEASE, and one
+   claimant at a time; the answer is a fact about the element's markup, so it runs none of the page's code and
+   forks nothing. */
+void event_target_set_click_terms(bool (*is_disabled_form_control)(JSContext *ctx, JSValueConst el));
 void event_target_install_handlers(JSContext *ctx, JSValueConst target, int mask);
 /* IS THIS THE NAME OF AN EVENT HANDLER CONTENT ATTRIBUTE? Trusted Types §3.8 Get Trusted Type data for
    attribute step 2 is the caller: a name in this set maps to TrustedScript whatever the element is.
