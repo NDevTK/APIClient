@@ -52,7 +52,7 @@
 
 #include "core/css/css_length.h"
 
-/* css-sizing-3 §2.2 "Intrinsic Contributions"' OUTER SIZE at ONE SIDE of an INLINE BOX, in CSS pixels — the
+/* css-sizing-3 §2.2 "Intrinsic Size Contributions"' OUTER SIZE at ONE SIDE of an INLINE BOX, in CSS pixels — the
    trailing side for `trailing` true. §2.2 states both contributions as "based on the OUTER SIZE of the box; for
    this purpose auto margins are treated as zero", so an inline box's own horizontal margin, border and padding
    are part of what it puts on a line, and css-text-3 §5.5 "Line Breaking Details" is what says WHERE: "inline
@@ -63,9 +63,15 @@
    and CSS 2.2 §9.4.2's line box holds it too — "horizontal margins, borders, and padding are respected between
    these boxes" — which is core/layout/line_box.c's fill deciding where the line runs out. Both hand it to
    core/layout/text_run.h as an EDGE item at a position, which is why neither of them adds it to a total.
-   A PERCENTAGE CRASHES rather than resolving, and that is a CYCLE and not a gap in the model: a percentage on
-   any of the six resolves against the containing block width, which for a shrink-to-fit box is CSS 2.2
-   §10.3.5's own output — the answer the measurement is being run to produce. */
+   A PERCENTAGE CRASHES rather than resolving, and the reason is the SHARING above rather than an unanswered
+   question. A percentage on any of the six resolves against the containing block width, which for a
+   shrink-to-fit box is CSS 2.2 §10.3.5's own output — the answer the measurement is being run to produce —
+   and css-sizing-3 §5.2.1 "Intrinsic Contributions of Percentage-Sized Boxes" DOES answer that case, with
+   zero, for a margin and for a padding alike. What it answers is the INTRINSIC CONTRIBUTION, which is one of
+   this entry's two callers and not the other: line_box.c fills at a width its containing block has already
+   determined, where the same percentage is not cyclic and resolves normally. So the zero belongs on the
+   intrinsic side of a SPLIT this entry does not yet have, and until it does, one predicate here would be
+   answering two questions with the stricter one's answer. */
 CssPx intrinsic_inline_box_edge_px(lxb_dom_element_t *el, bool trailing);
 
 /* css-sizing-3 §5.1's PAIR. They are returned together and never separately because §2.1 defines them over the
