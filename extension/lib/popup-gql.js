@@ -207,7 +207,7 @@ function gqlFieldTreeToJson(rootFields) {
           continue;
         }
         if (f.label === "repeated" && Array.isArray(f.value)) { target[f.name] = f.value.slice(); continue; }
-        if (f.value == null && !f.children?.length) continue;
+        if (f.value == null && !fdHasChildren(f, "lib/popup-gql.js gqlFieldTreeToJson")) continue;
         if (f.type === "bool" || f.type === "boolean") { target[f.name] = f.value === true || f.value === "true"; continue; }
         if (f.type === "number" || f.type === "int32" || f.type === "int64" || f.type === "uint32" || f.type === "uint64" ||
             f.type === "double" || f.type === "float" || f.type === "sint32" || f.type === "sint64") {

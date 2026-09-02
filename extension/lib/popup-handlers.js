@@ -186,15 +186,25 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       if (!tab) { sendResponse(null); return; }
       /* THE HOSTNAME IS ONE THE PAGE ACTUALLY REACHED, NEVER `${service}.googleapis.com`. That fallback was
          here and it invented an address no code computed — §RUN, DON'T MATCH — so a service with no learned
-         endpoint would have sent this zone probing a host the bundle never named. A caller that names neither
-         a hostname nor an endpoint has nothing to discover.
-         AND IT IS A HOST OF *THIS* SERVICE. `tab.endpoints.values().next().value` took whichever endpoint the
-         map happened to hold first, of any service, so a caller naming a service the document knows would be
-         answered with an unrelated service's host — one arbitrary record standing in for the named one. */
-      let ep = null;
-      for (const _e of tab.endpoints.values()) { if (_e.service === msg.service) { ep = _e; break; } }
-      const hostname = msg.hostname || (ep && ep.host) || null;
-      if (!hostname) { sendResponse(null); return; }
+         endpoint would have sent this zone probing a host the bundle never named. A caller that names no
+         hostname has nothing to discover, and that ABSENCE IS THE ANSWER rather than a hole to fill.
+         THE SECOND LOOKUP IS DELETED, AND IT IS THE SAME DEFECT AS THE FIRST ONE WEARING A NARROWER SCOPE.
+         `msg.hostname || (ep && ep.host)` walked `tab.endpoints` for an endpoint of this service and took the
+         FIRST one — which is precisely the computation lib/popup-discovery.js has already done: its
+         `_discServices` records `hostname: ep.host` from the first endpoint of each service, renders the
+         Fetch button ONLY when that hostname exists, and `_discAction` posts it as `hostname: ds.host`. So
+         this was ONE FACT ANSWERED FROM TWO PLACES for one agent, and the copy here could only ever run in a
+         state its own producer cannot create — the button that mints this message does not exist without a
+         hostname. A second copy of a derivation is how the FIRST version of this line came to take an
+         unrelated service's host, and re-deriving it here is how it would come back.
+         SO THE MESSAGE IS ASKED AND NOTHING ELSE IS. An absent hostname states what the panel already states
+         in words beside the missing button — "no endpoint of this service was learned here, so there is no
+         host of its own to fetch a document from" — and this handler answers `null`, which is that same
+         sentence in the reply. It is a REFUSAL and not a DCHECK because the shape is composable by a caller
+         that has no button to press (testing/popup_handlers.cjs posts exactly that message, deliberately, to
+         see this `null`), and because answering `null` is a true statement about a service with no host. */
+      const hostname = typeof msg.hostname === "string" && msg.hostname !== "" ? msg.hostname : null;
+      if (hostname === null) { sendResponse(null); return; }
       const apiKeys = collectKeysForService(tab, msg.service, hostname);
       /* NO `ep.apiKey` LIMB. An endpoint record has no such field (lib/merge.js, its only producer, writes
          none), so it added undefined to the candidate list on every call. */
@@ -758,27 +768,40 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
     case "IMPORT_OPENAPI": {
       // GLOBAL — an imported spec is a user-provided service definition, not a
       // page fetch; it goes straight into the global discovery store (no doc).
+      /* THE MESSAGE IS READ AND REFUSED OUTSIDE THE CONVERSION'S `try`, because the two failures are not the
+         same failure and one `catch` was answering for both. `convertOpenApiToDiscovery` runs over a JSON
+         file the researcher chose, so a throw out of it is a document this converter cannot read — a real
+         condition, and "Import failed: <message>" is a true thing to say about it. Whether `msg.spec` is a
+         record at all is a question about OUR OWN message, asked and answered here in four refusals that
+         each name what is wrong; standing them inside the converter's `try` made every one of them a read
+         whose absence the handler had already decided to survive, and would have reported a malformed
+         MESSAGE under a sentence about a malformed SPEC.
+         IT IS A REFUSAL AND NOT A DCHECK FOR lib/field-def.js's REASON: lib/popup-response.js writes
+         `spec: JSON.parse(text)` from a file the researcher picked, so the NAME is always stated and the
+         VALUE is third-party — `JSON.parse("null")` and `JSON.parse("3")` are both documents making no
+         claim this zone can import, and aborting the trusted zone on them is the one thing an assert must
+         never do. */
+      const spec = msg.spec;
+      if (!spec || typeof spec !== "object") {
+        sendResponse({ error: "Invalid OpenAPI spec: not an object" });
+        return;
+      }
+      if (!spec.paths || typeof spec.paths !== "object") {
+        sendResponse({ error: "Invalid OpenAPI spec: missing or invalid paths" });
+        return;
+      }
+      // Validate OpenAPI version — only 3.0.x and 3.1.x supported
+      if (spec.openapi) {
+        if (!/^3\.\d+\.\d+/.test(spec.openapi)) {
+          sendResponse({ error: "Unsupported OpenAPI version: " + spec.openapi + ". Only 3.x is supported." });
+          return;
+        }
+      } else if (spec.swagger) {
+        // Swagger 2.0 — not supported by convertOpenApiToDiscovery
+        sendResponse({ error: "Swagger 2.0 is not supported. Please convert to OpenAPI 3.x first." });
+        return;
+      }
       try {
-        const spec = msg.spec;
-        if (!spec || typeof spec !== "object") {
-          sendResponse({ error: "Invalid OpenAPI spec: not an object" });
-          return;
-        }
-        if (!spec.paths || typeof spec.paths !== "object") {
-          sendResponse({ error: "Invalid OpenAPI spec: missing or invalid paths" });
-          return;
-        }
-        // Validate OpenAPI version — only 3.0.x and 3.1.x supported
-        if (spec.openapi) {
-          if (!/^3\.\d+\.\d+/.test(spec.openapi)) {
-            sendResponse({ error: "Unsupported OpenAPI version: " + spec.openapi + ". Only 3.x is supported." });
-            return;
-          }
-        } else if (spec.swagger) {
-          // Swagger 2.0 — not supported by convertOpenApiToDiscovery
-          sendResponse({ error: "Swagger 2.0 is not supported. Please convert to OpenAPI 3.x first." });
-          return;
-        }
         // Determine service name. Prefer the original internal key when
         // it was preserved via the `x-service-key` vendor extension on
         // export — otherwise a UASR-exported spec for a path-prefixed

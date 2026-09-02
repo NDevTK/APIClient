@@ -374,39 +374,93 @@
 
     // Read body asynchronously — never blocks the caller
     (async () => {
-      try {
-        const headers = {};
-        clone.headers.forEach((v, k) => {
-          headers[k] = v;
-        });
+      /* THE RESPONSE'S OWN FACTS ARE FOUR PAGE-OWNED READS AND THEY BELONG IN `_pageOwned` LIKE THE TWO
+         ABOVE — the paragraph-wide `try` that used to hold them was the exact construct this file's
+         `_pageOwned` paragraph says was retired, still standing one function down. Its one `catch` covered
+         three unrelated conditions at once: a page-replaced prototype getter, a body stream that errored,
+         and THIS FILE'S OWN record composition — so a defect in `emit`'s record was indistinguishable from
+         a page defending itself, in the half of the tool CLAUDE.md calls a thermometer.
+         NONE OF THE FOUR CAN BE ABSENT, which is why their concealment was purely a misplaced guard and not
+         a missing field. Fetch §5.5 "Response class" declares them non-nullable —
+         `[SameObject] readonly attribute Headers headers`, `readonly attribute unsigned short status`,
+         `readonly attribute ByteString statusText`, `readonly attribute ResponseType type` — so on a real
+         Response every one of them answers. What can fail is the LOOKUP, because intercept.js runs in the
+         page's own realm and `Response.prototype` is the page's: a replaced getter throws, and that is the
+         page refusing to be observed. `_PAGE_THREW` is this file's word for that, and it is now said before
+         the body read rather than after it, so a hostile prototype costs no body decode.
+         READING THEM EARLY IS SPEC-IDENTICAL. All four are facts of the response, not of its body (§2.2.6
+         Responses states each on the response itself), so consuming the body afterwards cannot change any
+         of them; ordering them before `arrayBuffer()`/`text()` only moves the refusal earlier. */
+      const meta = _pageOwned(function () {
+        const h = {};
+        clone.headers.forEach(function (v, k) { h[k] = v; });
+        return { headers: h, status: clone.status, statusText: clone.statusText, responseType: clone.type };
+      });
+      if (meta === _PAGE_THREW) return;
+      const headers = meta.headers;
+      const respStatus = meta.status;
+      /* Fetch §2.2.6 Responses' STATUS MESSAGE, read off the same Response the status came from. The
+         consumer that needs it is the HAR export, whose `response.statusText` it used to synthesize as
+         `"OK"` for every 200 and `""` for everything else — a reason phrase no server ever sent, written
+         into a document a reviewer reads as the server's own words. THE EMPTY STRING IS A REAL ANSWER AND
+         THE SYNTHESIS WAS WRONG EXACTLY WHERE IT LOOKED RIGHT: §2.2.6 says "Responses over an HTTP/2
+         connection will always have the empty byte sequence as status message as HTTP/2 does not support
+         them", so on every h2 origin — which is most of them — the export was inventing "OK" for a field
+         the protocol had deliberately emptied. An opaque cross-origin response is `""` for the same
+         reason: the browser refusing to state one, travelling as itself. */
+      const respStatusText = meta.statusText;
+      /* Fetch §2.2.6 Responses' TYPE. The spec's list is SIX, not the five that stood here: a response's
+         type is "basic", "cors", "default", "error", "opaque", or "opaqueredirect", and "Unless stated
+         otherwise, it is 'default'" — which is exactly the one this site can see and the one the old
+         comment omitted, because a page that replaced `window.fetch` and hands back a `new Response(...)`
+         it built itself gets "default" by that sentence. Opaque is a fact-level signal that the body was
+         cross-origin-no-cors and therefore unreadable — treated as fire-and-forget rather than an API
+         response by the classifier. Every one of the six is a non-empty string, so the `|| null` that once
+         stood here could not fire; what it DID do was tell the reader that absence was possible, and the
+         offscreen wrote a matching `|| null` on the far side. */
+      const respType = meta.responseType;
 
-        // If body wasn't captured synchronously (Request with stream body),
-        // try reading from a cloned Request
-        if (reqBody === null && input instanceof Request && !init) {
-          try {
-            var rc = input.clone();
-            var ct2 = reqHeaders["content-type"] || "";
-            if (isBinary(ct2)) {
-              var ab = await rc.arrayBuffer();
-              reqBody = uint8ToBase64(new Uint8Array(ab));
-              reqBase64 = true;
-            } else {
-              reqBody = await rc.text();
-            }
-          } catch (e) {
-            /* A REQUEST BODY THAT WAS ALREADY A STREAM. Fetch §5.4 "Request class": "The clone() method
-               steps are: If this is unusable, then throw a TypeError", and §5.3 "Body mixin" defines unusable
-               as "its body is non-null and its body's stream is disturbed or locked" — the ordinary outcome
-               when the page handed `fetch()` a Request it had already begun to consume. That is a request
-               whose body this file cannot see, not a defect in it: `reqBody` stays null, which the record
-               already states as "no body captured", and saying so at debug volume is what separates that
-               from a bug here. */
-            console.debug("[apiclient:req body]", (e && e.message) || e);
+      // If body wasn't captured synchronously (Request with stream body),
+      // try reading from a cloned Request
+      if (reqBody === null && input instanceof Request && !init) {
+        try {
+          var rc = input.clone();
+          var ct2 = reqHeaders["content-type"] || "";
+          if (isBinary(ct2)) {
+            var ab = await rc.arrayBuffer();
+            reqBody = uint8ToBase64(new Uint8Array(ab));
+            reqBase64 = true;
+          } else {
+            reqBody = await rc.text();
           }
+        } catch (e) {
+          /* A REQUEST BODY THAT WAS ALREADY A STREAM. Fetch §5.4 "Request class": "The clone() method
+             steps are: If this is unusable, then throw a TypeError", and §5.3 "Body mixin" defines unusable
+             as "its body is non-null and its body's stream is disturbed or locked" — the ordinary outcome
+             when the page handed `fetch()` a Request it had already begun to consume. That is a request
+             whose body this file cannot see, not a defect in it: `reqBody` stays null, which the record
+             already states as "no body captured", and saying so at debug volume is what separates that
+             from a bug here. */
+          console.debug("[apiclient:req body]", (e && e.message) || e);
         }
+      }
 
-        let body,
-          base64Encoded = false;
+      /* THE RESPONSE BODY READ IS THE ONE THING LEFT THAT LEGITIMATELY FAILS, AND THE `try` NOW HOLDS IT
+         AND NOTHING ELSE. `clone.arrayBuffer()`/`.text()` reject when the underlying stream errors or the
+         document is torn down mid-read (Fetch §5.3 "Body mixin") — one capture lost, honestly, and the
+         `return` says so rather than falling through to compose a record around a body that does not exist.
+         WHAT USED TO SHARE THIS CATCH AND NO LONGER DOES, in both directions: the four page-owned prototype
+         reads went up into `_pageOwned`, where the page's refusal is stated by name; and the `emit` below
+         came OUT, because it is this file's own logic and a defect in it must not read as a stream that
+         errored. Nothing was lost by lifting it — `emit` already guards its own `CustomEvent` dispatch, for
+         the detached-document reason it states at its definition — so the paragraph-wide catch was buying
+         one thing only, which was silence about our own record composition.
+         `isBinary` and `uint8ToBase64` stay inside it because they stand on the body path: both are pure
+         (`btoa` over a `String.fromCharCode` of bytes, every one of which is ≤ 255), so neither throws, and
+         moving them out would only split the body derivation across the brace for no gain. */
+      let body,
+        base64Encoded = false;
+      try {
         if (isBinary(ct)) {
           const buf = await clone.arrayBuffer();
           body = uint8ToBase64(new Uint8Array(buf));
@@ -414,47 +468,27 @@
         } else {
           body = await clone.text();
         }
-
-        emit({
-          url,
-          transport: "fetch",
-          method,
-          status: clone.status,
-          /* Fetch §2.2.6 Responses' STATUS MESSAGE, read off the same Response the status came from. The
-             consumer that needs it is the HAR export, whose `response.statusText` it used to synthesize as
-             `"OK"` for every 200 and `""` for everything else — a reason phrase no server ever sent,
-             written into a document a reviewer reads as the server's own words. THE EMPTY STRING IS A REAL
-             ANSWER AND THE SYNTHESIS WAS WRONG EXACTLY WHERE IT LOOKED RIGHT: §2.2.6 states a response over
-             an HTTP/2 connection ALWAYS has the empty byte sequence as its status message, so on every h2
-             origin — which is most of them — the export was inventing "OK" for a field the protocol had
-             deliberately emptied. An opaque cross-origin response is `""` for the same reason: the browser
-             refusing to state one, travelling as itself. */
-          statusText: clone.statusText,
-          /* Fetch §2.2.6 Responses' TYPE: "basic" | "cors" | "opaque" | "opaqueredirect" | "error".
-             Opaque is a fact-level signal that the body was cross-origin-no-cors and therefore unreadable —
-             treated as fire-and-forget rather than an API response by the classifier. Every one of the five
-             is a non-empty string, so the `|| null` that stood here could not fire; what it DID do was tell
-             the reader that absence was possible, and the offscreen wrote a matching `|| null` on the far
-             side. One dead default at each end of a field that is always present. */
-          responseType: clone.type,
-          contentType: ct,
-          responseHeaders: headers,
-          body,
-          base64Encoded,
-          requestHeaders: reqHeaders,
-          requestBody: reqBody,
-          requestBodyBase64: reqBase64,
-          callStack: callStack,
-        });
       } catch (e) {
-        /* READING A BODY IS THE ONE THING HERE THAT LEGITIMATELY FAILS, AND IT NO LONGER FAILS SILENTLY.
-           `clone.arrayBuffer()`/`.text()` reject when the underlying stream errors or the document is torn
-           down mid-read (Fetch §5.3 "Body mixin"), and `clone.headers`/`.status`/`.type` reach through
-           prototypes the page owns. Those are real conditions for one capture to be lost. What must NOT be
-           lost with them is a defect in the record composition above — so this states which capture went and
-           why, at the same debug volume `emit` and the WebSocket send guard already use. */
-        console.debug("[apiclient:fetch capture]", url, (e && e.message) || e);
+        console.debug("[apiclient:fetch body]", url, (e && e.message) || e);
+        return;
       }
+
+      emit({
+        url,
+        transport: "fetch",
+        method,
+        status: respStatus,
+        statusText: respStatusText,
+        responseType: respType,
+        contentType: ct,
+        responseHeaders: headers,
+        body,
+        base64Encoded,
+        requestHeaders: reqHeaders,
+        requestBody: reqBody,
+        requestBodyBase64: reqBase64,
+        callStack: callStack,
+      });
     })();
 
     return response;

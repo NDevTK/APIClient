@@ -226,8 +226,32 @@ function renderDiscoveryPanel() {
    lib/req2proto.js initialises each to `null` and assigns only on a named one, and the shape declares them as
    stated absences. Reading that `null` as "the envelope named none" is reading the producer's statement; the
    service-info renderer prints exactly that sentence when every one of them is absent. */
+/* WHAT TO CALL A PROBED FIELD — the NAME the server's own rejection spelled, else the WIRE NUMBER it stated,
+   else a statement that it named neither. `f.name || "#" + f.number` read those three as two, and the third
+   is reachable from bytes a server chose: lib/req2proto.js's Google arm composes `name` out of the last
+   segment of `violation.field`, so an envelope whose field path ends in a dot (`"a."`) splits to `""` — a
+   name that is PRESENT and EMPTY, which is not the same fact as a name the envelope never spelled. Under the
+   `||` that empty name fell through to `"#" + f.number`, and `number` is `null` whenever the rejection stated
+   no wire tag (the same arm writes `parseInt(...) || null`), so the panel rendered the literal label
+   `#null:string` — a wire tag no document ever named, in a list a reviewer reads as the server's own field
+   inventory.
+   THE NAME IS NEVER ABSENT AND THAT IS WHY THIS IS A REFUSAL AND NOT A DCHECK: both of lib/req2proto.js's
+   mints state `name` on every push and the merge keys on `#number` or on the name itself, so the field is
+   always there — what varies is whether the DOCUMENT said anything in it, and asserting on a server's empty
+   string would be the trusted zone aborting on bytes a target chose. So each of the three is said as
+   itself. */
+function _discProbeFieldLabel(f) {
+  DCHECK(typeof f.name === "string",
+         "a probed field carries no `name` string — lib/req2proto.js's two mints both state it on every " +
+         "field they push and lib/popup-handlers.js keys the merge on it, so an absent one is that producer " +
+         "gone silent and this list would label the field with whatever the fallback reached for");
+  if (f.name !== "") return f.name;
+  if (f.number !== null && f.number !== undefined) return "#" + f.number;
+  return "(the rejection named neither a name nor a number)";
+}
+
 function _discFieldProbeHtml(label, probe) {
-  const names = Object.values(probe.fields).map((f) => (f.name || "#" + f.number) + ":" + f.type);
+  const names = Object.values(probe.fields).map((f) => _discProbeFieldLabel(f) + ":" + f.type);
   let html = '<div class="card-meta">' + esc(label) + ": <strong>" + esc(String(probe.fieldCount)) +
              "</strong> field(s)" + (names.length ? " — <code>" + esc(names.join(", ")) + "</code>" : "") + "</div>";
   if (probe.metadata && (probe.metadata.service || probe.metadata.method)) {

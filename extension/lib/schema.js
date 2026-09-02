@@ -266,27 +266,46 @@ function mergeSchemaInto(doc, rootSchemaName, rootNewSchema) {
     if (!existing._drift) existing._drift = [];
     const newProps = newSchema.properties || {};
 
+    /* A FIELD-NUMBER MAP IS KEYED BY A FIELD NUMBER OR IT IS NOT KEYED AT ALL, and `p.number ?? p.id` was
+       putting NAMES in it. The two spellings are real and both have writers — this file's own indexed mint
+       states `id` and `number` as the SAME integer, while lib/discovery.js writes a Google Discovery
+       property's `id`, which is a SCHEMA IDENTIFIER, and lib/popup-handlers.js's rename writes
+       `id: <property key>` beside `number: parseInt(<key>) || null`. So the `??` was not a default over an
+       absence at all: it was an alternation over two spellings, and it accepted whatever the second spelling
+       held. A `null` number therefore fell through to a NAME, `numToKey["userName"] = "userName"`, and the
+       branch below — which renames a stored property onto a new key when the two agree on a field number —
+       fired on two properties agreeing on a schema NAME instead. That is a persisted schema silently
+       renamed, from a match this map was never supposed to be able to make.
+       THE LAW IS ASKED, NOT RESTATED. lib/encode.js's `pbWireTag` is the one statement of what a wire tag is
+       (Protobuf Language Guide (proto 3), "Assigning Field Numbers": "You must give each field in your
+       message definition a number between 1 and 536,870,911"), and it REFUSES everything else — so the
+       alternation survives, each of its two limbs states a number or nothing, and a property that names no
+       tag simply has no entry here. Matching then falls back to key equality, which is the true statement
+       about a property whose number nobody stated. */
     const numToKey = {};
     for (const [k, p] of Object.entries(existing.properties)) {
-      const n = p.number ?? p.id;
-      if (n != null) numToKey[n] = k;
+      const n = pbWireTag(p.number) ?? pbWireTag(p.id);
+      if (n !== null) numToKey[n] = k;
     }
 
     for (const [key, newProp] of Object.entries(newProps)) {
-      const fieldNum = newProp.number ?? newProp.id;
+      const fieldNum = pbWireTag(newProp.number) ?? pbWireTag(newProp.id);
       const matchKey = existing.properties[key] ? key
-        : (fieldNum != null && numToKey[fieldNum]) ? numToKey[fieldNum]
+        : (fieldNum !== null && numToKey[fieldNum]) ? numToKey[fieldNum]
         : null;
       const old = matchKey ? existing.properties[matchKey] : null;
 
       if (!old) {
         existing.properties[key] = newProp;
-        if (fieldNum != null) numToKey[fieldNum] = key;
+        if (fieldNum !== null) numToKey[fieldNum] = key;
         existing._drift.push({ type: "field_added", field: key, fieldType: newProp.type, timestamp: Date.now() });
       } else {
         if (matchKey !== key && !old.customName && !/^field\d+$/.test(key)) {
           existing.properties[key] = old;
           delete existing.properties[matchKey];
+          /* THE RENAME IS ONLY REACHED THROUGH A REAL TAG. `matchKey !== key` requires the match to have come
+             from `numToKey`, which now holds only refused wire tags, so `fieldNum` here is an integer by
+             construction — the old code wrote `numToKey[undefined]` on the one path where it was not. */
           numToKey[fieldNum] = key;
         }
         if (old.customName) {

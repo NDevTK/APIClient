@@ -310,3 +310,48 @@ function makeFieldDef(parts, where) {
          "it would label the CAPTURED request's own value as one this tool derived");
   return fd;
 }
+
+/* THE FIELDS A COLLECTED FIELD STATES, or `null` when it states no message at all — ONE reading of
+   `children`, because FOUR encoders read that name and read it FOUR different ways, and only two of the four
+   were reading the record.
+     WHAT THE RECORD SAYS is above, at `FIELD_DEF_ABSENT`: `children: null` MEANS "this field is not a
+   message" and `[]` MEANS "a message with no fields", "which is a different statement and must stay
+   distinguishable from it". Two facts, and the encoders disagreed about whether they are two:
+   lib/encode.js's protobuf encoder asked `f.children && f.children.length` and read the `null` as itself;
+   its JSON encoder asked `!f.children?.length`; lib/popup-gql.js's copy of that encoder asked the same;
+   and its JSPB encoder wrote `f.children || []`, which SUBSTITUTES the second statement for the first — the
+   one thing the record forbids, performed on the way to the wire.
+     THAT SUBSTITUTION HAS A REACHABLE PRODUCER AND IT IS NOT A HYPOTHETICAL. lib/discovery.js's
+   `_circularRefSentinel` states `type: "message"` with `children` unstated — deliberately, and its own
+   comment says why: "`children: null` says there is no message to descend into". It is a TRUNCATION MARKER
+   for a `$ref` that pointed back onto its own chain. Under `|| []` that marker encoded as an EMPTY
+   SUBMESSAGE in the JSPB slot its field number names — a message the panel never described, composed out of
+   the record's word for "nothing to describe", sent to a server as if it were a field the researcher filled.
+     SO THE READ IS A NAMED OPERATION AND THE VOCABULARY IS ASSERTED HERE. `undefined` is not one of the two
+   answers and never was: `makeFieldDef` writes every key, and lib/popup-form.js's `_collectShallow` — the
+   producer of every record the four encoders actually walk — states `children` on all four of its returns.
+   A third spelling is therefore a producer of OURS bypassing both, which is what `?.` and `||` were quietly
+   surviving, and it crashes. */
+function fdChildren(f, where) {
+  DCHECK(!!f && typeof f === "object" && !Array.isArray(f),
+         "a field's children were asked of something that is not a field record (" + where + ") — the " +
+         "encoders walk lib/popup-form.js `_collectShallow`'s own results, so anything else is that walk " +
+         "handing an encoder a value it collected from somewhere it does not describe");
+  DCHECK(f.children === null || Array.isArray(f.children),
+         "a field states `children` as neither a list nor null (" + where + ") — `null` MEANS this field is " +
+         "not a message and `[]` MEANS a message with no fields, and those are two facts this record keeps " +
+         "apart; a third spelling is a producer that stopped stating the name, which every `|| []` and " +
+         "`?.length` on this seam used to answer with the wrong one of the two");
+  return f.children;
+}
+
+/* DOES THIS FIELD CARRY A MESSAGE TREE TO DESCEND INTO — the question the JSON, JSPB, protobuf and GraphQL
+   encoders each ask before walking. It folds the two absences the record keeps apart (`null` = not a
+   message, `[]` = a message with no fields) onto ONE answer, which is correct HERE and only here: a walk
+   over no fields and a walk over a field that is not a message do the same nothing. The fold is stated
+   rather than fallen into, which is the whole difference from `!f.children?.length` — that spelling folded
+   a THIRD case in with them, an absent name, and had no way to say it had. */
+function fdHasChildren(f, where) {
+  const kids = fdChildren(f, where);
+  return kids !== null && kids.length > 0;
+}

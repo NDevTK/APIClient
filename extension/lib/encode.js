@@ -109,7 +109,7 @@ function encodeFormToJson(rootFields) {
         continue;
       }
 
-      if (f.value == null && !f.children?.length) continue;
+      if (f.value == null && !fdHasChildren(f, "lib/encode.js encodeFormToJson")) continue;
       target[f.name] = coerceValue(f.value, f.type);
     }
   }
@@ -140,12 +140,22 @@ function encodeFormToJson(rootFields) {
    `#seven` badge is dropped from the encoded body and nothing says so. WHAT THE NEXT DIFF BUILDS: a refusal
    the send path SURFACES, so composing a protobuf body out of a document that named no wire tag reports which
    field it could not carry instead of quietly carrying fewer. HOW ITS ABSENCE SHOWS: a protobuf or JSPB body
-   with a field missing whose number badge the panel displayed beside its input. */
-function pbFieldNumber(f) {
-  const n = f.number;
+   with a field missing whose number badge the panel displayed beside its input.
+   THE LAW AND THE FIELD IT IS ASKED OF ARE TWO FUNCTIONS, because a THIRD reader needed the law and not the
+   field: lib/schema.js's `mergeSchemaInto` keys a number→property map off a SCHEMA PROPERTY, whose wire tag
+   is spelled `number` by lib/schema.js's own indexed mint and `id` by lib/discovery.js and by the rename in
+   lib/popup-handlers.js. It read `p.number ?? p.id` raw, so a discovery document's `id` — a SCHEMA NAME, not
+   a number — became a key of a field-NUMBER map, and two properties sharing that name renamed one onto the
+   other. Splitting the law out is what lets that reader ask it instead of restating it; a second copy of
+   "between 1 and 536,870,911" is exactly the drift this file's own three-way `children` disagreement was. */
+function pbWireTag(n) {
   if (n === null || n === undefined) return null;
   const v = typeof n === "number" ? n : (/^[0-9]+$/.test(String(n)) ? Number(n) : NaN);
   return Number.isInteger(v) && v >= 1 && v <= 536870911 ? v : null;
+}
+
+function pbFieldNumber(f) {
+  return pbWireTag(f.number);
 }
 
 /**
@@ -175,9 +185,23 @@ function encodeFormToJspb(rootFields) {
       if (num === null) continue;
       const targetIdx = num - 1;
       if (f.type === "message" && f.label !== "repeated") {
-        const sub = buildOne(f.children || []);
-        target[targetIdx] = sub;
-        queue.push({ fields: f.children || [], target: sub });
+        /* A MESSAGE THAT STATES NO FIELDS AND A MESSAGE WITH NO FIELDS ARE TWO ANSWERS AND THIS SLOT KEEPS
+           THEM APART. `f.children || []` merged them: it took lib/field-def.js's `null` — "this field is not
+           a message to descend into", which lib/discovery.js's `_circularRefSentinel` states DELIBERATELY for
+           a `$ref` that pointed back onto its own chain — and wrote the OTHER statement, `[]`, into the wire
+           slot this field's number names. A truncation marker went out as an empty submessage the researcher
+           never composed, and the two encoders beside this one (`encodeFormToProtobuf` below, and
+           `encodeFormToJson` above) had always read that `null` as itself, so one record was answering three
+           ways in one file.
+           A JSPB ARRAY IS INDEXED BY FIELD NUMBER, so "no submessage here" already has a spelling in it: the
+           slot keeps the `null` `buildOne` filled it with. That is the same absence the wire gives a field
+           nobody set, which is the true statement about a message this panel could not describe. */
+        const kids = fdChildren(f, "lib/encode.js encodeFormToJspb");
+        if (kids !== null) {
+          const sub = buildOne(kids);
+          target[targetIdx] = sub;
+          queue.push({ fields: kids, target: sub });
+        }
       } else if (f.label === "repeated" && f.type === "message" && Array.isArray(f.value)) {
         const repeated = [];
         target[targetIdx] = repeated;
@@ -239,7 +263,7 @@ function encodeFormToProtobuf(fields) {
       // that carries no tag carries nothing this encoder can write.
       const num = pbFieldNumber(f);
       if (num === null) { top.i++; continue; }
-      if (f.value == null && !(f.children && f.children.length)) { top.i++; continue; }
+      if (f.value == null && !fdHasChildren(f, "lib/encode.js encodeFormToProtobuf")) { top.i++; continue; }
       if (f.label === "repeated" && Array.isArray(f.value)) {
         if (PACKABLE.has(f.type)) {
           const innerParts = [];
@@ -260,12 +284,12 @@ function encodeFormToProtobuf(fields) {
         top.i++;
         continue;
       }
-      if (f.type === "message" && f.children && f.children.length) {
+      if (f.type === "message" && fdHasChildren(f, "lib/encode.js encodeFormToProtobuf message")) {
         // Push sub-frame for nested message; parent waits at its
         // pending field number until the child returns its bytes.
         top.pendingNum = num;
         top.i++;
-        stack.push({ fields: f.children, parts: [], i: 0, pendingNum: null });
+        stack.push({ fields: fdChildren(f, "lib/encode.js encodeFormToProtobuf message"), parts: [], i: 0, pendingNum: null });
         pushedSubFrame = true;
         break;
       }
