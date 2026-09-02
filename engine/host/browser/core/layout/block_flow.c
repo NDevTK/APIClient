@@ -1016,8 +1016,27 @@ static BfBox bf_box(lxb_dom_element_t *el, bool baseline)
        and `height` among them, is used on the TABLE BOX, and the wrapper gets the initial value instead — so
        `used_value_border_edge_px` on the table ELEMENT is a measurement of the wrong box, and it would be one
        whether or not it happened to succeed. */
+    /* IT IS A `CHECK` AND NOT A `DCHECK`, WHICH IS A DECISION AND NOT A DEFAULT — CLAUDE.md's own rule is that
+       when unsure it is a DCHECK, so the reason has to be positive. A `DFAILF` here is compiled out in release
+       and execution FALLS THROUGH to the arm below, which returns `used_value_border_edge_px` on the table
+       ELEMENT — and §17.4's split makes that a measurement of the OTHER BOX: `border-*`, `padding-*` and
+       `height` are used on the table box, so the number is not the wrapper's edge under any reading. What
+       makes that production-fatal rather than merely wrong is WHERE IT GOES. This height becomes
+       `block_flow_child_top`'s running offset, which becomes core/layout/flow_position.c's coordinates, which
+       become CSSOM VIEW's `getBoundingClientRect`, the scrolling area, and
+       core/intersection_observer/intersection_observer.c's chain — and this engine's OUTPUT is findings
+       derived from what it observed. A fabricated rectangle there is a plausible datum indistinguishable from
+       a measurement, which is the defect this project names at the field level and refuses; it is the DATA
+       INTEGRITY case CLAUDE.md's CHECK list carries, so it must not PROCEED in release either.
+       THE COST IS STATED BECAUSE IT IS VISIBLE: engine/wpt.mjs reads the marker, so this site reports in the
+       `fatal` column and not in `gap`, which that gate calls THE WORK QUEUE. It is still the work queue —
+       §17.5 below is what to build — and the column says only that shipping past it is not an option.
+       THE ARM BELOW HAS THE SAME SHAPE FOR A FLEX OR GRID CONTAINER and is NOT promoted here: that is another
+       lane's box type, its wrong number is the same element's own border edge rather than a different box's,
+       and moving its aborts between columns without a measurement to attribute them to would be this diff
+       spending someone else's signal. It is named, not changed. */
     if (wrapper)
-        DFAILF("%s: "
+        CHECK_FAILF("%s: "
                "CSS 2.1 §17.4 Tables in the visual formatting model's TABLE WRAPPER BOX is on §9.4.1's stack "
                "and its BORDER-BOX HEIGHT is what this walk needs. The wrapper's own edges are settled and are "
                "not what is missing: CSS 2.1 §17.4 Tables in the visual formatting model gives it the table "
