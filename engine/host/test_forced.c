@@ -3330,6 +3330,65 @@ static const char *HTML_COLD =
     "</script>"
     "</body></html>";
 
+/* THE CLOSE-REQUEST DOCUMENT — the fourth, and it exists because the road from HTML §6.12 "The popover
+ * attribute"'s show popover step 15.10 to the close action it supplies had never been TRAVERSED. Every link in
+ * it was written, reviewed and asserted at its own ends: §6.12's establish, the MODELLED arrival core/html/
+ * close_request.c queues, §6.10.1 "Close requests"' step 7, §6.10.2 "Close watcher infrastructure"'s process
+ * close watchers, its request to close, its close, and the dispatch that calls hide a popover. What no process
+ * in this tree had ever done is RUN one end to end, and CLAUDE.md names that state exactly: an unexecuted
+ * design is untested code, and what it hides does not present as an absence. (That sentence is PARAPHRASED and
+ * not put in quotation marks, for the reason core/html/close_watcher.c states about its own retired one: a
+ * quoted run standing beside a citation is read as the STANDARD's words, and engine/citegen.mjs cannot tell a
+ * fabricated sentence from a piece of this tree quoting itself — it read the quotation that stood here as a
+ * claim about HTML §6.10.2 and said so, which is the tool being right.)
+ *
+ * WHY IT IS A DOCUMENT OF ITS OWN AND NOT A STATEMENT IN THE FULL ONE, which is the whole of what makes its
+ * verdict readable. `model-a-potential-close-request` (solver/step_unit.h) counts a SCHEDULER STEP and not a
+ * document's popovers: every flow that runs out of work models an arrival, so over a document with a frontier
+ * the row is a function of how many members reached exhaustion and says nothing whatever about §6.12. Over a
+ * document with ONE flow it is arithmetic, and the arithmetic is the claim — see the rows.
+ *
+ * SO IT IS WRITTEN TO HAVE EXACTLY ONE FLOW, and each of the three ways it could have more is refused on
+ * purpose rather than by accident:
+ *   - NO CONCOLIC SOURCE. `state.*` and `location.hash` are what the other three documents fork on; this one
+ *     reads none, so no predicate in it has two feasible arms.
+ *   - NO UNCALLED FUNCTION. The one function body it ships is the `beforetoggle` listener, and show popover
+ *     step 9 CALLS it before the flow ever runs out of work — so the orphan arm above the close-request arm
+ *     takes nothing and seeds no sibling.
+ *   - NO FORK INSIDE THE ALGORITHMS IT RUNS. §6.12's show popover step 23 runs §6.6.6's ALLOW FOCUS STEPS,
+ *     whose second clause is §6.4.1's transient activation and therefore a fork — but its FIRST clause
+ *     short-circuits for a document allowed to use `focus-without-user-activation`, which a top-level
+ *     traversable's own document is; and §6.10.2's request to close step 6 asks §6.4.1's history-action
+ *     activation only when "manager's groups's size is less than manager's allowed number of groups", which is
+ *     1 < 1 here. Both are properties of THIS document rather than of the engine, which is why they are stated
+ *     here beside it and asserted by the row that counts the steps.
+ *
+ * THE LISTENER TAKES A REST PARAMETER, and that is CLAUDE.md §C-stack's fixture rule rather than decoration: a
+ * callback frame with `narg_alloc == 0` BORROWS its argument slots, which is sound only when they are the
+ * caller's operand stack, and every other argument shape a listener can be written with takes the identical
+ * borrowed path. A rest parameter is the one shape that builds an array out of those slots, so it is the only
+ * one that can find a frame that does not own them. No listener in any other document here has one.
+ *
+ * WHAT IT OBSERVES, AND WHY THE OBSERVATION IS AN ENDPOINT. The chain's terminal act is §6.12's hide a popover
+ * step 12 firing `beforetoggle` with oldState "open" and newState "closed" — the page's own handler, reached
+ * only if every link held — so the fetch that handler makes IS the traversal, recorded on the surface this
+ * fixture already reads. Its provenance is the second half of the claim: the arrival was modelled and nothing
+ * performed it, so CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE grades everything past it FORCED, and the two
+ * fires of one listener therefore land in TWO records of one address that differ by grade. */
+static const char *HTML_POPOVER =
+    "<!doctype html><html><body>"
+    "<div popover=auto id=pv></div>"
+    "<script>"
+    "var pv = document.getElementById('pv');"
+    /* `a.length` rides the request because the rest array's SIZE is the borrowed-slot bug's observable: a frame
+       that does not own its arguments builds the rest array out of storage somebody else frees. */
+    "pv.addEventListener('beforetoggle', function(...a){"
+      "fetch('/api/popover?old=' + a[0].oldState + '&state=' + a[0].newState + '&n=' + a.length);"
+    "});"
+    "pv.showPopover();"
+    "</script>"
+    "</body></html>";
+
 /* HTML §7.2.6 AND CSP §6.1, in C — the browser half's tests are C tests, and this one has no page to run.
    What it pins is the pair of facts the rest of the platform will build on: what a policy PERMITS, and that a
    child's container is a CLONE whose answers do not move when the parent's would. */
@@ -9872,6 +9931,123 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "or answering twice, and with `read` absent it is the clause above's lost world showing up a "
              "second time");
 
+    /* ─── HTML §6.12 The popover attribute → §6.10.1 Close requests → §6.10.2 Close watcher infrastructure ────
+       FIVE RUNGS OF ONE ROAD, LOWEST FIRST, because the road has five joins and a single folded row would say
+       "the popover did not close" for a failure at any of them. See HTML_POPOVER for why this document has one
+       flow and what each of its three no-fork properties is doing there.
+
+       THE STEP COUNT IS READ OFF THE ENGINE AND NOT OFF THE RESULT DOCUMENT, even though result.c composes the
+       same histogram into `stepUnitRuns`. The document is a STRING this function is handed, and a row that
+       located a row of a nested object inside it by `strstr` would be answered by the `stepUnits` GAUGE that
+       carries the identical key — two censuses, one name, opposite meanings (solver/result.c says so where it
+       writes them). The accessor is unambiguous and is the producer itself. */
+    EngineStepUnitRuns cw_runs;
+    long cw_modelled;
+
+    engine_step_unit_runs(&cw_runs);
+    cw_modelled = cw_runs.arms[STEP_UNIT_CLOSE_REQUEST];
+
+    /* RUNG 1 — the show ran and its step 9 `beforetoggle` reached the page. Everything below it is unreadable
+       without this: a chain that never established a watcher cannot close one. */
+    const char *pop_show_why = NULL; int pop_show = 1;
+    /* THE ADDRESS AS THE EMITTER WRITES IT — the PATH, with no query on it: endpoint_json_array splits the
+       query into `params`, so a needle carrying `?` matches nothing this file has ever emitted, which is the
+       term-that-cannot-pass shape the record locators above were written for. */
+    fold_row(&pop_show, &pop_show_why, !!strstr(js, "\"/api/popover\""),
+             "NOT REACHED: there is no /api/popover record at all, so `pv.showPopover()` never reached HTML "
+             "§6.12 The popover attribute's show popover step 9 (fire an event named beforetoggle, using "
+             "ToggleEvent, with oldState \"closed\" and newState \"open\") — or the listener registration "
+             "itself never ran. That is the SCHEDULE or the member, and says nothing about §6.10");
+    fold_row(&pop_show, &pop_show_why, param_value_is(js, "/api/popover", "state", "open"),
+             "the statement RAN and no record carries `state` = `open` — show popover step 9 fired something "
+             "at the listener whose ToggleEvent newState is not \"open\", which is core/html/toggle_event.c's "
+             "two slots or §6.12's own arguments to them rather than anything in §6.10");
+    fold_row(&pop_show, &pop_show_why, param_value_is(js, "/api/popover", "old", "closed"),
+             "the show fired and its ToggleEvent's `oldState` is not \"closed\" — the pair is ONE struct and "
+             "§6.12 states both, so one right and one wrong is the two slots crossed");
+    /* RUNG 2 — the listener's frame OWNED its arguments. §C-stack's rest-parameter rule: every other argument
+       shape takes the borrowed path and cannot see this. */
+    const char *pop_rest_why = NULL; int pop_rest = 1;
+    fold_row(&pop_rest, &pop_rest_why, pop_show, pop_show_why);
+    fold_row(&pop_rest, &pop_rest_why, param_value_is(js, "/api/popover", "n", "1"),
+             "the `beforetoggle` listener ran and its REST ARRAY does not hold exactly the one argument DOM "
+             "§2.9's inner invoke passes — a callback frame that BORROWS its argument slots (narg_alloc == 0) "
+             "builds the rest array out of storage it does not own, which is the ownership bug §C-stack's "
+             "fixture rule exists to reach and which no other listener in this fixture can find");
+    /* RUNG 3 — the ARRIVAL was modelled at all. This is the one rung that is about the SCHEDULER rather than
+       about §6.10 or §6.12: a 0 here is `g_sess_forking` false, or a ladder that returned above the close-
+       request arm (an outstanding reply, a queued job, an orphan still to take), and neither says anything
+       about the watcher. */
+    const char *pop_model_why = NULL; int pop_model = 1;
+    fold_row(&pop_model, &pop_model_why, cw_modelled >= 1,
+             "no flow of this document ever modelled a potential close request — solver/step_unit.h's "
+             "`model-a-potential-close-request` is 0, so engine_close_request_fork was never taken. It is the "
+             "LAST arm of flow_step's ladder, so either the session does not fork (g_sess_forking, which "
+             "engine_run sets) or every member returned through an arm above it and no flow in this document "
+             "ever reached the end of its own work");
+    /* RUNG 4 — THE TRAVERSAL. The modelled arrival reached §6.10.1's step 7, §6.10.2's process close watchers
+       took the last group, requested to close its one member, ran §6.12's cancel action, closed it, and the
+       close-action dispatch called hide a popover, whose step 12 fired the second `beforetoggle`. */
+    const char *pop_close_why = NULL; int pop_close = 1;
+    fold_row(&pop_close, &pop_close_why, pop_model, pop_model_why);
+    fold_row(&pop_close, &pop_close_why, param_value_is(js, "/api/popover", "state", "closed"),
+             "an arrival WAS modelled and no record carries `state` = `closed` — the road from HTML §6.10.1 "
+             "Close requests' step 7 to HTML §6.12 The popover attribute's hide a popover step 12 did not "
+             "complete. Read it against the run's aborts first: a §6.10.1 step 1 DFAIL is a fullscreen "
+             "element, a close_watcher.c CW_ASSERT_WINDOW is the establishing realm not being the document's, "
+             "and a popover.c DFAIL at the focusing steps is an `autofocus` this document does not have. With "
+             "NO abort, the walk ran and answered: either show popover step 15.10 established no watcher (the "
+             "element's `popover` state is not Auto, or step 15 was never entered), or §6.10.2's request to "
+             "close returned true at one of its steps 1-3 and 5, or its close returned at one of ITS steps "
+             "1-3, or the close-action dispatch reached §6.12's hide a popover and that algorithm returned "
+             "before its step 12 (its step 1's check popover validity, or `fireEvents` false)");
+    fold_row(&pop_close, &pop_close_why, param_value_is(js, "/api/popover", "old", "open"),
+             "the hide fired and its ToggleEvent's `oldState` is not \"open\" — §6.12's hide a popover step 12 "
+             "states oldState \"open\" and newState \"closed\", so one right and one wrong is the two slots "
+             "crossed on the hide's side only");
+    /* RUNG 5 — WHAT THE ARRIVAL COST THE PROVENANCE. Nobody performed the gesture, so CLAUDE.md
+       §A-REQUEST-CARRIES-THE-PROVENANCE grades every request built past it FORCED — and the SHOW's fetch is
+       not forced, so the one address carries two records that differ by grade. That split is asserted by
+       emitted_recs_one_statement above (two records of one address sharing a grade is a DCHECK); this row is
+       the positive half, that the forced grade is the one the CLOSE's request carries. */
+    const char *pop_forced_why = NULL; int pop_forced = 1;
+    fold_row(&pop_forced, &pop_forced_why, pop_close, pop_close_why);
+    fold_row(&pop_forced, &pop_forced_why,
+             emitted_record_has(js, "/api/popover", "\"provenance\":\"" PENDING_PROVENANCE_FORCED "\""),
+             "the close's `beforetoggle` fetch reached the surface and NO record of /api/popover is graded "
+             "`forced` — the flow modelled an arrival no user performed and went on to build a request that "
+             "says a real load of this document makes it. flow_mark_forced_arm is taken in the same operation "
+             "as the task frame (engine.c), so a derived grade here is that mark not reaching "
+             "pending_prov_compose rather than a policy decision");
+    /* RUNG 6 — §6.10.1's STEP 9, AND THE ARITHMETIC THAT IS THE WHOLE REASON THIS DOCUMENT IS ITS OWN. A run
+       that closes a group answers `closedSomething` TRUE and does not latch, so the manager is asked ONCE MORE
+       and that second task is the one that reaches "Alternative processing: Otherwise, there was nothing
+       watching for a close request" — which is the fact engine_close_request_fork latches and the reason it
+       stops with no counter and no seen-set. One group therefore costs TWO steps, and this document has one
+       group: establish's step 4 takes the new-group branch exactly once, because a realm's manager is born
+       with an allowed number of groups of 1 and its groups empty (0 < 1), and nothing here interacts with the
+       page, so §6.10.2's notify never raises it again. */
+    const char *pop_alt_why = NULL; int pop_alt = 1;
+    fold_row(&pop_alt, &pop_alt_why, pop_close, pop_close_why);
+    fold_row(&pop_alt, &pop_alt_why, cw_modelled >= 2,
+             "the popover was closed by a modelled arrival and no SECOND arrival was ever modelled — the flow "
+             "that closed the group answered HTML §6.10.1 Close requests' step 8 and returned, so it must be "
+             "asked again and answer step 9. A 0 here with the close green means the flow finished between "
+             "the two (it did not come back to the ladder), or `close_req_none` was latched by the run that "
+             "CLOSED something, which would be step 8's answer written into step 9's fact");
+    /* …AND THE COUNT IS EXACTLY THAT, which is a statement about the FRONTIER and not about §6.10: N+1 per
+       flow that reaches exhaustion, one group, one flow. It is a separate row from the one above because the
+       two fail for opposite reasons — that one is the chain not finishing, this one is the document having
+       more members than it was written to have — and a single row would report both as "the popover". */
+    const char *pop_once_why = NULL; int pop_once = 1;
+    fold_row(&pop_once, &pop_once_why, pop_alt, pop_alt_why);
+    fold_row(&pop_once, &pop_once_why, cw_modelled == 2,
+             "the chain traversed and `model-a-potential-close-request` is not exactly 2. MORE means a second "
+             "member of this frontier reached the end of its own work — a fork this document was written not "
+             "to have (see HTML_POPOVER for the three it refuses), or a second group in one manager, and "
+             "neither is a defect in §6.10 or §6.12; the number itself is in the @RESULT line's "
+             "`stepUnitRuns`. FEWER cannot reach this row, because the clause above it is >= 2");
+
     /* EVERY ROW NAMES THE STATEMENT IT IS ABOUT, and the two cold sessions are two answers and not one: they run
        the same document and one is about what a park WROTE while the other is about what a resume REBUILT. */
     Probe probes[] = {
@@ -10192,6 +10368,16 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "con-threw", con_threw, "_CShape", SESS_EXPLORE },
         { "con-s-one", con_s_one, "_CShape", SESS_EXPLORE },
         { "con-shape", con_shape, "_CShape", SESS_EXPLORE },
+        /* THE CLOSE-REQUEST ROAD, LOWEST RUNG FIRST — read them in this order and the lowest 0 is the answer.
+           Every one is keyed on `pv.showPopover()`, which is the statement they are all about and which only
+           HTML_POPOVER contains, so this whole family is selected by that document and by no other. */
+        { "popover-show", pop_show, "pv.showPopover()", SESS_EXPLORE, pop_show_why },
+        { "popover-rest", pop_rest, "pv.showPopover()", SESS_EXPLORE, pop_rest_why },
+        { "popover-modelled", pop_model, "pv.showPopover()", SESS_EXPLORE, pop_model_why },
+        { "popover-closed", pop_close, "pv.showPopover()", SESS_EXPLORE, pop_close_why },
+        { "popover-forced", pop_forced, "pv.showPopover()", SESS_EXPLORE, pop_forced_why },
+        { "popover-alternative", pop_alt, "pv.showPopover()", SESS_EXPLORE, pop_alt_why },
+        { "popover-once", pop_once, "pv.showPopover()", SESS_EXPLORE, pop_once_why },
         /* THE TWO COLD SESSIONS. Their key is the @S sink whose candidate sessions are what makes a park write
            a 'c' record at all, so the row still names a statement of the document it runs over; the SESSION is
            what tells the two apart, because they run the SAME document and one is about what a park WROTE while
@@ -10232,9 +10418,9 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            the same defect as a corpus file the collector does not collect: the total looks complete. The message
            NAMES the row, and DCHECKF formats it only on the arm that aborts. */
         DCHECKF(strstr(HTML, probes[pi].key) || strstr(HTML_MIN, probes[pi].key) ||
-                strstr(HTML_COLD, probes[pi].key),
+                strstr(HTML_COLD, probes[pi].key) || strstr(HTML_POPOVER, probes[pi].key),
                 "the probe `%s` names a statement no document in this fixture makes — its key `%s` is in "
-                "none of the three, so the row would be selected by no run and assert nothing, while the "
+                "none of the four, so the row would be selected by no run and assert nothing, while the "
                 "table it sits in reads as complete", probes[pi].name, probes[pi].key);
         if (probes[pi].sess != g_sess) continue;
         if (!strstr(g_doc, probes[pi].key)) continue;
@@ -15455,6 +15641,11 @@ int main(int argc, char **argv) {
     tf_agent_init(ctx, "https://x.test", "https://x.test/p");
     navigable_set_realm_builder(tf_child_realm);
     int min_doc = arg_has(argc, argv, "--min");   /* fast per-change memory gate: the minimal clone/COW doc */
+    /* THE CLOSE-REQUEST DOCUMENT, which is a document and not a flag on another one: its whole verdict is an
+       ARITHMETIC over `model-a-potential-close-request`, and that row counts a scheduler step per flow that
+       reaches exhaustion rather than a popover — so it is readable only over a document with one flow. See
+       HTML_POPOVER. */
+    int popover_doc = arg_has(argc, argv, "--popover");
     /* THE TWO SESSIONS OF THE CROSS-SESSION ROUND TRIP, one per invocation, because that is what a session
        boundary IS: the first writes its residue to this host's store and the process ends, the second starts
        from nothing but that document. Doing both inside one process would leave the endpoint surface, the sink
@@ -15475,7 +15666,15 @@ int main(int argc, char **argv) {
            "the cold round trip was asked for over the minimal document — the park refuses a frontier holding "
            "a foreign world's segment and that document opens child navigables, so this run would abort in "
            "cold_park naming the cross-instance park rather than measuring the tier");
-    const char *doc = cold_doc ? HTML_COLD : (min_doc ? HTML_MIN : HTML);
+    /* AND THE FOURTH DOCUMENT IS ALONE FOR THE SAME REASON THE OTHER THREE ARE — the probe table answers for
+       ONE document per run — but with a sharper one of its own: HTML_POPOVER's rows count SCHEDULER STEPS, so
+       a run that carried a second document's flows beside it would answer them over a frontier those rows
+       cannot be about. Refused rather than left to produce a number nobody can read. */
+    DCHECK(!(popover_doc && (cold_doc || min_doc)),
+           "the close-request document was asked for together with another — its rows are an arithmetic over "
+           "`model-a-potential-close-request`, which counts one scheduler step per flow that reaches "
+           "exhaustion, so they are statements about a frontier with exactly the members HTML_POPOVER creates");
+    const char *doc = popover_doc ? HTML_POPOVER : cold_doc ? HTML_COLD : (min_doc ? HTML_MIN : HTML);
     /* WHAT THIS INVOCATION IS, stated ONCE and read by the probe table — see it for why the document itself is
        what decides which rows this run carries. */
     g_doc = doc;
