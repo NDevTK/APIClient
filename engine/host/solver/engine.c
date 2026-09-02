@@ -6165,27 +6165,27 @@ static void flow_run_one_job(JSContext *ctx, Flow *f) {
     JS_FreeValue(ctx, job);
 }
 
-/* IS A MICROTASK CHECKPOINT DUE BEFORE THIS FLOW'S NEXT PROGRAM?
+/* IS THIS FLOW'S JAVASCRIPT EXECUTION CONTEXT STACK EMPTY?
    HTML §8.1.4.4 "Calling scripts", clean up after running script step 3: "If the JavaScript execution context
-   stack is now empty, perform a microtask checkpoint." `Flow::frame` IS that stack here ("the current script's
-   live preemptible frame, NULL between scripts", solver/flow.h) and the caller has already established that it
-   is NULL, so what is left to decide is only WHICH boundaries are boundaries.
-   §4.12.1.1 "Processing model" ends "prepare the script element" with "Otherwise, immediately execute the
-   script element el, even if other scripts are already executing" — that program ran INSIDE the one that
-   inserted it, so the stack never emptied across it and the checkpoint the inserting program owes falls AFTER
-   its row. Every OTHER program the flow has left is a task: the document's next <script>, a lazy chunk, a
-   `javascript:` URL, a §8.7 Timers string handler, a peer's operation. §8.1.7.3 "Processing model" performs the
-   checkpoint at the END of each task, so all of them come after it, and that is the whole of the answer.
-   THIS USED TO BE ASKED ONLY AFTER THE SEQUENCE WAS EXHAUSTED, which is why it is a function now. The job arm
-   sat below the arms that compile a program, so it was reachable only once the cursor had passed the last row
-   — no microtask of any kind ran until every document script and every queued row had run, and
-   `<script>Promise.resolve().then(() => fetch('/a'))</script><script>fetch('/b')</script>` produced /b before
-   /a. No browser does that, and nothing in the engine could say so: the checkpoint END hook (engine_step)
-   already read §8.1.4.4's precondition correctly while the checkpoint itself did not run there at all. */
-static int flow_checkpoint_due(const Flow *f) {
+   stack is now empty, perform a microtask checkpoint." That sentence is the precondition of a MICROTASK
+   checkpoint and of a TASK alike — §8.1.7.3 "Processing model" runs one task and then performs a checkpoint,
+   so neither may begin part-way through a program — and it has two halves here, only one of which is a field.
+   `Flow::frame` IS that stack ("the current script's live preemptible frame, NULL between scripts",
+   solver/flow.h), so a live frame answers no outright.
+   THE OTHER HALF IS THE ROW AT THE CURSOR. §4.12.1.1 "Processing model" ends "prepare the script element" with
+   "Otherwise, immediately execute the script element el, even if other scripts are already executing" — that
+   program runs INSIDE the one that inserted it, so the stack has NOT emptied across it and nothing the event
+   loop would otherwise pick may run in front of it. Every OTHER program the flow has left is a task: the
+   document's next <script>, a lazy chunk, a `javascript:` URL, a §8.7 Timers string handler, a peer's
+   operation.
+   IT IS ONE PREDICATE AND NOT A CONDITION EACH ARM RESTATES, which is the whole reason it is a function: the
+   microtask checkpoint below and the networking task source's arm in flow_step are two consumers of ONE spec
+   sentence, and a second spelling of it is a second copy that disagrees eventually. A caller that has already
+   established `!f->frame` pays one field read for the half it knows. */
+static int flow_stack_empty(const Flow *f) {
     int row;
 
-    if (!flow_job_microtask(f)) return 0;
+    if (f->frame) return 0;
     row = f->script_i;
     if (row < f->dyn_n) {
         DCHECK(f->dyn_pos != NULL,
@@ -6195,6 +6195,20 @@ static int flow_checkpoint_due(const Flow *f) {
         if (f->dyn_pos[row] == DYN_POS_IMMEDIATE) return 0;
     }
     return 1;
+}
+
+/* IS A MICROTASK CHECKPOINT DUE BEFORE THIS FLOW'S NEXT PROGRAM? — the stack being empty, and a microtask to
+   run. §8.1.7.3 "Processing model" performs the checkpoint at the END of each task, so every task of this
+   flow comes after it, and that is the whole of the answer.
+   THIS USED TO BE ASKED ONLY AFTER THE SEQUENCE WAS EXHAUSTED, which is why it is a function now. The job arm
+   sat below the arms that compile a program, so it was reachable only once the cursor had passed the last row
+   — no microtask of any kind ran until every document script and every queued row had run, and
+   `<script>Promise.resolve().then(() => fetch('/a'))</script><script>fetch('/b')</script>` produced /b before
+   /a. No browser does that, and nothing in the engine could say so: the checkpoint END hook (engine_step)
+   already read §8.1.4.4's precondition correctly while the checkpoint itself did not run there at all. */
+static int flow_checkpoint_due(const Flow *f) {
+    if (!flow_job_microtask(f)) return 0;
+    return flow_stack_empty(f);
 }
 
 /* ONE UNIT OF WORK, THEN RETURN — flow_step is a step, and it used to be a drain.
@@ -6534,6 +6548,53 @@ static int flow_step(JSContext *ctx, Flow *f) {
                 flow_run_one_job(ctx, f);
                 return flow_blocked(f) ? FLOW_STEP_OWED : 0;
             }
+            /* THE NETWORKING TASK SOURCE, AND IT IS A RUNG OF THIS LADDER RATHER THAN THE FLOOR OF IT.
+             *
+             * A COMPLETED FETCH IS DELIVERED BY A TASK ON ONE NAMED SOURCE. Fetch §2 Infrastructure's queue a
+             * fetch task ends "Otherwise, queue a global task on the networking task source with
+             * taskDestination and algorithm", and BOTH kinds of reply this register holds arrive that way — a
+             * `fetch()` and an external script's bytes, whose url HTML §8.1.4.2 "Fetching scripts" hands to
+             * that same algorithm. That is why ONE delivery serves both, and why flow_deliver_one_reply takes the
+             * first ANSWERED entry in register order rather than choosing between them: HTML §8.1.7.1
+             * Definitions says "For each event loop, every task source must be associated with a specific task
+             * queue" and §8.1.7.3 Processing model step 3 says "Set oldestTask to the first runnable task in
+             * taskQueue, and remove it from taskQueue", so order WITHIN this source is arrival order and is
+             * not implementation-defined at all.
+             *
+             * WHAT IS IMPLEMENTATION-DEFINED IS ONLY WHICH QUEUE, AND IT DOES NOT REACH AS FAR AS THIS ARM USED
+             * TO SIT. §8.1.7.3 step 1 is "Let taskQueue be one such task queue, chosen in an
+             * implementation-defined manner", over the queues that have at least one runnable task, and
+             * §8.1.7.5 Dealing with the event loop from other specifications states what that choice is FOR:
+             * "you must choose a task source when queuing a global task; this governs the relative order of
+             * your steps versus others". It is a PREFERENCE and not an exclusion — §8.1.7.1's own worked
+             * example gives keyboard and mouse events "preference over other tasks three-quarters of the time,
+             * keeping the interface responsive but not starving other task queues".
+             *
+             * SO THE STANDARD PERMITS EITHER STRICT ORDER AND EXACTLY ONE OF THEM MAY BE TAKEN. This arm stood
+             * BELOW the flow's program sequence and its job queue, reachable only with `script_i >= dyn_n` and
+             * zero queued jobs — and a flow's sequence is not a fixed set: a running program APPENDS rows (a
+             * lazy chunk, an injected `<script>`, a `javascript:` URL, a peer's operation), so "the sequence is
+             * exhausted" is a condition the page's own code can keep false, and the exclusion is then permanent
+             * with no counter anywhere for anybody to read. Networking-first cannot fail the same way, and that
+             * asymmetry is the whole of the decision rather than a taste: the answered set GROWS only when this
+             * flow issues requests and it issues them by running its programs, while every delivery strictly
+             * CONSUMES one entry — so the sequence below is deferred by at most what this flow itself asked
+             * for, and never by an amount the page can extend. §scheduler's razor is what settles which of the
+             * two the engine may take: "drops, starves, skips, reorders, or forgets ANY flow — it is a CAP,
+             * banned".
+             *
+             * AND THE GUARD IS §8.1.4.4 "Calling scripts"'S, NOT A PRIORITY OF ITS OWN. A task may not begin
+             * while the JavaScript execution context stack is non-empty, and a DYN_POS_IMMEDIATE row at the
+             * cursor is exactly that — flow_stack_empty is the one statement of it, read here and by the
+             * checkpoint directly above, so the two arms cannot come to disagree about when a turn may start.
+             * ONE PER STEP, like every other unit of work in this function: the delivery ends the step, the
+             * checkpoint above runs the reaction it enqueued on the next pass, and this arm takes the next
+             * reply after that — §8.1.7.3's task-then-checkpoint, never one pass that settles them all. */
+            if (flow_stack_empty(f) && flow_pending_ready(f)) {
+                g_step_unit = STEP_UNIT_DELIVER_REPLY;
+                flow_deliver_one_reply(ctx, f);
+                return 0;
+            }
             /* THE FLOW'S SEQUENCE, AND THERE IS ONLY ONE OF THEM. Two arms stood here: the SESSION document's
                static scripts, read out of a borrowed `bodies` array at `script_i`, and then this flow's own
                rows at `script_i - n`. They differed in nothing a program cares about — both are §4.12.1
@@ -6557,15 +6618,34 @@ static int flow_step(JSContext *ctx, Flow *f) {
                        its own — so the flow WAITS here: §4.12.1 fixes this script's position against the scripts
                        written around it, and running what comes after a bundle before the bundle is a different
                        program. The reply REPLACES this entry and the next pass compiles it.
-                       A reply that has ALREADY arrived is delivered first — parking without checking leaves the
-                       flow owed forever on a URL the host has answered. ONE of them, like every other unit of
-                       work in this function: if several are answered the flow comes back here for the next,
-                       and the row this arm is waiting on is filled by whichever delivery names it. */
-                    if (flow_pending_ready(f)) {
-                        g_step_unit = STEP_UNIT_DELIVER_REPLY;
-                        flow_deliver_one_reply(ctx, f);
-                        return 0;
+                       A REPLY THAT HAD ALREADY ARRIVED WAS DELIVERED BEFORE THIS ROW WAS EVEN READ, so the
+                       second delivery that stood here is gone rather than moved. It existed because this arm
+                       was one of only two places a reply could be taken, and it guarded against parking for
+                       ever on a URL the host had answered; the networking task source's arm now runs above the
+                       whole sequence, for every position of it and not only for a flow standing at an external
+                       row, and reaching this line is therefore already the statement that nothing is
+                       deliverable. Asserted rather than assumed, because the two guards are the same question
+                       asked at two rungs and a change to either one would otherwise re-open that park
+                       silently. */
+#if APICLIENT_DEV
+                    {
+                        /* READ OUTSIDE THE CONDITION AND UNDER THE DEV GUARD: pending_ready reads the
+                           register's `length`, which INTERNS AN ATOM, and check.h forbids a side effect inside
+                           a DCHECK — the same rule and the same shape as engine_host_take's
+                           pending_extra_count. flow_stack_empty is asked beside it because it is the other
+                           half of the arm above's conjunction: a DYN_SCRIPT_SRC row is queued DYN_POS_APPEND
+                           at both of the two sites that create one, so an IMMEDIATE row can never be the way
+                           this line was reached, and if it ever is the assert says so here rather than the
+                           flow parking on a paid request. */
+                        int ready = flow_pending_ready(f);
+                        DCHECK(flow_stack_empty(f) && !ready,
+                               "a flow reached an external script row holding an answered reply — the "
+                               "networking task source's arm runs above the whole sequence, so an answered "
+                               "entry standing here means that arm's guard and this row's have stopped being "
+                               "the same question, and this flow is about to report itself owed a reply the "
+                               "host has already paid");
                     }
+#endif
                     engine_pending_docscript(ctx, body, f->script_i);
                     /* …AND THE PARK MAY HAVE ANSWERED ITSELF. Fetch §4.3 Scheme fetch runs at the park, and
                        for `data:`, `blob:` and `about:` the response is built inside this agent — so the entry
@@ -6574,7 +6654,10 @@ static int flow_step(JSContext *ctx, Flow *f) {
                        HOST EVENT clears it, and no host event is coming for a request the host was never
                        shown. The scheduler asserts exactly that at the mark (`pending_outstanding`), which is
                        why this is a re-read of the register and not an `if` on which scheme it was. Progress
-                       instead, and the next pass takes the arm above and delivers. */
+                       instead, and the next pass takes the networking task source's arm ABOVE THE SEQUENCE
+                       and delivers — which is the same arm that would have taken a reply the host answered
+                       between two slices, so a scheme-answered entry and a host-answered one leave through
+                       one door. */
                     if (flow_pending_ready(f)) { g_step_unit = STEP_UNIT_SCHEME_FETCH; return 0; }
                     /* …AND THE RECORD THE HOST REALLY DOES OWE NAMES ITSELF TOO. This return performs no work,
                        so it used to leave the PREVIOUS arm's name standing and the step was attributed to
@@ -6607,38 +6690,33 @@ static int flow_step(JSContext *ctx, Flow *f) {
                 flow_run_one_job(ctx, f);
                 return flow_blocked(f) ? FLOW_STEP_OWED : 0;
             }
-            else if (flow_pending_ready(f)) {
-                /* FETCH-AWAIT: this flow's programs are done and its microtasks are run, and a suspended async
-                   body is awaiting a LIVE fetch (a pending promise). The network has completed, so ONE answered
-                   entry is delivered — the awaiting body's reaction is enqueued as a job in this flow's queue
-                   (we are switched in, flow_running == f) — and the step ends there. The checkpoint arm above
-                   runs that reaction on the next pass and this arm delivers the next reply after it, which is
-                   §8.1.7.3 "Processing model"'s task-then-checkpoint and not a pass that settles them all.
-                   AND ITS REACHABILITY IS THE CONJUNCTION OF EVERY `else` ABOVE IT, WHICH IS A STRONGER
-                   CONDITION THAN ITS FIRST SENTENCE SAYS AND WAS MEASURED TO BE UNREACHABLE. To arrive here a
-                   flow must have NO live frame, be PAST THE END of its program sequence (`script_i >= dyn_n`)
-                   and hold ZERO queued jobs — so a flow that calls `fetch()` and still has one program row or
-                   one job left does not take its reply on this turn, and on a forking document it may not take
-                   it at all. The `DYN_SCRIPT_SRC` arm above is the only other delivery, and it is reached only
-                   by a flow standing AT an external-script row. Measured on the wasm smoke at 74eb1d62
-                   (build-full.log): over 5857 steps and 13 censuses this arm and that one ran ZERO times
-                   between them — `deliver-one-reply` is in the never-run list — while the host answered every
-                   record at every slice (run_scheduler's post-payment `engine_pending_fetches()` empty assert
-                   was armed at `-DAPICLIENT_DEV=1` and silent throughout). The result was 299306 register
-                   entries, all answered and none taken, at 55% of the frontier's per-flow memory, with the
-                   reply-dependent probe rows (`fetch`, `then-chain`, `clone-body`, `body-bytes`, `body-iso`)
-                   all 0 — §Learning-from-replies' whole surface, from a run that was paid in full.
-                   WHAT IS NOT ESTABLISHED, AND IT IS THE PART THAT DECIDES THE FIX: §8.1.7.3 step 2 chooses
-                   among task queues "in an implementation-defined manner", so the ORDER of this arm against
-                   the two above it is not settled by that sentence and must not be re-ordered on the strength
-                   of this note. What the note asserts is the REACHABILITY and the measurement, both of which
-                   are checkable — `replyAnswered` (solver/pending_index.h) equal to `replyAsked` with the
-                   `deliver-one-reply` step-unit arm at 0 is this state, in one reading, on any document. */
-                g_step_unit = STEP_UNIT_DELIVER_REPLY;
-                flow_deliver_one_reply(ctx, f);
-                return 0;
-            }
-            /* NOTHING QUEUED AND NOTHING DELIVERABLE. What follows is what becomes due when the flow has
+            /* NO THIRD DELIVERY STOOD HERE AND THE ONE THAT DID IS DELETED RATHER THAN MOVED, which is worth
+               the space because it is the defect this ladder is now shaped against and its reasoning was
+               written down at this line as a reason to leave it alone.
+               IT WAS A FETCH-AWAIT ARM — this flow's programs done, its microtasks run, a suspended async body
+               awaiting a live fetch — and its REACHABILITY was the conjunction of every `else` above it: no
+               live frame, PAST THE END of the program sequence (`script_i >= dyn_n`), and ZERO queued jobs. So
+               a flow that called `fetch()` and still held one program row or one job did not take its reply on
+               that turn, and on a forking document it never took it at all. Measured on the wasm smoke at
+               74eb1d62 (build-full.log): over 5857 steps and 13 censuses this arm and the external-script one
+               ran ZERO times between them — `deliver-one-reply` in the never-run list — while the host
+               answered every record at every slice (run_scheduler's post-payment `engine_pending_fetches()`
+               empty assert armed at `-DAPICLIENT_DEV=1` and silent throughout). 299306 register entries, all
+               answered and none taken, 55% of the frontier's per-flow memory, and the reply-dependent probe
+               rows (`fetch`, `then-chain`, `clone-body`, `body-bytes`, `body-iso`) all 0 — §Learning-from-
+               replies' whole surface, from a run that was paid in full.
+               WHAT THE NOTE HERE DECLINED TO DECIDE IS DECIDED, and where: §8.1.7.3 "Processing model" step 1
+               does choose among task queues "in an implementation-defined manner", so that sentence alone
+               never settled the order and the note was right to refuse it — but it is not the only sentence,
+               and the arm above the sequence carries the reading that settles it. The freedom is a PREFERENCE
+               between queues (§8.1.7.1 Definitions' own example, "not starving other task queues"), and of
+               the two strict orders it permits only one is free of permanent exclusion, because a flow's
+               sequence is a set its own programs extend and its answered set is one every delivery consumes.
+               A REGISTER IS NOT A TASK QUEUE THIS LADDER MAY REACH TWICE. One site delivers now, above the
+               sequence; a second here would be the two-implementations seam §C-stack names, with the fork
+               order and the microtask ordering of solver/engine.c's flow_deliver_one_reply header split
+               across it. */
+            /* NOTHING QUEUED. What follows is what becomes due when the flow has
                nothing else, in the order it becomes due: first the load lifecycle, which is already due (a
                parser finishing waits on no clock), and only then the two CLOCK-DRIVEN sources — and by the
                time control reaches here everything that was already due (this flow's jobs above, a reply that

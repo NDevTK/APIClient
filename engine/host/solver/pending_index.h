@@ -127,7 +127,16 @@ long pending_index_node_answered(const PendIndexNode *n);
  * nothing. So the residue those 299306 register slots are made of is ANSWERED REPLIES NO FLOW HAS EVER TAKEN,
  * at 67076 KiB: 55% of the frontier's entire per-flow memory.
  * A rate over THIS door is what says that in one reading, and until it existed the census could not say it at
- * all: not one of its rows separates "never asked" from "asked, paid, and never consumed". */
+ * all: not one of its rows separates "never asked" from "asked, paid, and never consumed".
+ *
+ * WHAT MAKES THE TAKE REACHABLE IS AN ORDER, AND THE ORDER IS NAMED WHERE IT IS TAKEN. A reply is a task on
+ * ONE task source — Fetch §2 Infrastructure's queue a fetch task ends "Otherwise, queue a global task on the
+ * networking task source with taskDestination and algorithm" — and flow_step now runs that source's arm above
+ * the flow's program sequence and its job queue rather than below both, guarded only by HTML §8.1.4.4
+ * "Calling scripts"'s empty execution context stack. The derivation, including what HTML §8.1.7.3 Processing
+ * model does and does not settle, is at that arm and is not restated here. What this pair is for is
+ * unchanged: it is the READING that decides whether the arm is being reached, and it is the one that would
+ * catch the same defect arriving through some other route. */
 long pending_index_asked_total(void);
 long pending_index_answered_total(void);
 
