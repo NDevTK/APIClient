@@ -4881,10 +4881,22 @@ void idl_typed_array(int index, JSTypedArrayEnum kind, bool allow_shared, bool a
     m->arg_views[index].allow_resizable = allow_resizable;
 }
 
-/* See idl_args.h. Same "names the last declaration" rule as idl_optional_from, and it must be stated BEFORE
-   idl_optional_from and idl_arg_default: both of those measure positions against `idl_declared_positions`,
-   which a variadic tail shortens by one, so a member that said it afterwards would have had its optional
-   index and its defaults checked against a list one longer than the one it declares. */
+/* See idl_args.h. Same "names the last declaration" rule as idl_optional_from, and it composes with every
+   other post-declaration modifier IN ANY ORDER — this sets one bool and reads nothing another modifier writes,
+   and that bool has exactly one reader, the §3.7.7 completion conversion in js_idl_args_step, at RUNTIME.
+   THIS COMMENT USED TO IMPOSE AN ORDERING AND ITS REASON WAS FALSE IN BOTH HALVES, which is worth writing down
+   rather than deleting, because a reader who re-derives the retired reason will re-introduce the rule. It said
+   this must stand BEFORE idl_optional_from and idl_arg_default "because both of those measure positions
+   against idl_declared_positions, which a variadic tail shortens by one". Neither half survives reading the
+   two functions: they bound their index against `m->nargs` and not against idl_declared_positions, which no
+   modifier shortens and which is called only from the RUNTIME conversion paths; and this function never
+   touches `variadic` or `nargs`, so it could not move either bound if they did. That reason belongs to
+   idl_variadic, which is the modifier that does shorten the declared list.
+   THE ORDERING THAT IS REAL IS idl_optional_from BEFORE idl_arg_default, and it is asserted where it applies —
+   idl_arg_default's own DCHECK reads `m->first_optional` and says so in its message. The cost of the wrong one
+   was not theoretical: two call sites in dom/element_view.c placed their declaration to satisfy it and wrote
+   "for idl_returns_promise's own reason" beside it, so a rule that does not exist had been obeyed and recorded
+   twice by the people who reasoned it out. */
 void idl_returns_promise(void)
 {
     IdlMember *m;

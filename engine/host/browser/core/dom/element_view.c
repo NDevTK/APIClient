@@ -1395,10 +1395,11 @@ static int ev_declare_scroll(JSContext *ctx, EvScrollKind kind)
                                 (int)(sizeof EV_SCROLL_TO_OPTIONS / sizeof EV_SCROLL_TO_OPTIONS[0]),
                                 js_ev_scroll, (int)kind);
 
-    /* §3.7.7's PROMISE RETURN TYPE, stated BEFORE the optional index for idl_returns_promise's own reason. It
-       is what makes `el.scrollTo(0)` — §3.2.17 step 1 refusing a value that is not undefined, null or an
-       Object — a REJECTED promise rather than a throw, which is what a page wrapping the call in `.catch`
-       is relying on. */
+    /* §3.7.7's PROMISE RETURN TYPE. It is what makes `el.scrollTo(0)` — §3.2.17 step 1 refusing a value that
+       is not undefined, null or an Object — a REJECTED promise rather than a throw, which is what a page
+       wrapping the call in `.catch` is relying on. Its position here is only reading order: this used to say
+       it stood before the optional index "for idl_returns_promise's own reason", and there is no such reason —
+       see that function, whose ordering claim was false in both halves and is corrected there. */
     idl_returns_promise();
     /* THE DICTIONARY ENTRY DECLARES POSITION 0 OPTIONAL (`optional ScrollToOptions options = {}`), so
        `el.scrollTo()` is a legal call… */
@@ -1433,8 +1434,9 @@ void element_view_init(JSContext *ctx)
                                                js_ev_scroll_into_view, 0);
     /* §3.7.7's PROMISE RETURN TYPE — `Promise<undefined> scrollIntoView(...)`, so a conversion that throws
        (§3.2.18 refusing `{block: "middle"}`) is a REJECTED promise and not a throw, which is what a page
-       wrapping the call in `.catch` relies on. Stated BEFORE the optional index for idl_returns_promise's own
-       reason. */
+       wrapping the call in `.catch` relies on. Its position before the optional index is reading order and
+       nothing else — the "idl_returns_promise's own reason" this used to cite does not exist, and the false
+       ordering claim is corrected at that function. */
     idl_returns_promise();
     idl_optional_from(0);
 }
