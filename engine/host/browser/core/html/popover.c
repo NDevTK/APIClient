@@ -1693,7 +1693,8 @@ static int popover_body(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
            (step 4); hidePopover declares no options at all and its one step passes null. */
         if (magic != M_HIDE) {
             /* togglePopover's argument is `(TogglePopoverOptions or boolean)` — §3.2.25's union, whose object
-               arm is the dictionary and whose every other value is the boolean. §6.12 steps 2 and 3 read the
+               arm is the dictionary, whose undefined and null are the dictionary too (§3.2.25 step 4) and
+               whose every OTHER value is the boolean. §6.12 steps 2 and 3 read the
                two arms apart itself ("If options is a boolean, set force to options. Otherwise, if
                options[\"force\"] exists, set force to options[\"force\"]"), which is what IDL_BOOL_OR_DICT's
                declaration delivers: the boolean arm places the boolean and the dictionary arm places the built
@@ -1708,10 +1709,22 @@ static int popover_body(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
             } else if (magic == M_TOGGLE) {
                 JSValue f = idl_dict_get(ctx, opts, "force");                        /* toggle step 3 */
 
+                /* STEP 3 IS `exists` AND NOT `is false`, WHICH IS WHY THE MEMBER IS IDL_BOOLEAN_NO_DEFAULT.
+                   HTML §6.12 The popover attribute's togglePopover step 3 reads "Otherwise, if
+                   options["force"] exists, set force to options["force"]." — Infra's map `exists`, over a
+                   member `dictionary TogglePopoverOptions : ShowPopoverOptions { boolean force; }` declares
+                   with NO default. IDL_BOOLEAN carries its `= false` in the TYPE (ToBoolean(undefined) is
+                   false, which IS the default such a member declares), so it PLACED `false` for an absent
+                   `force`: step 3 then saw a member that exists, step 1's null was overwritten, and step 6's
+                   "Otherwise, if force is null or true" could not run — `el.togglePopover({})` on a HIDDEN
+                   popover did nothing at all where a browser shows it. IDL_BOOLEAN_NO_DEFAULT is the type
+                   that keeps the two states apart, and this read is the `exists` test over its absence. */
                 if (!JS_IsUndefined(f)) {
                     DCHECK(JS_IsBool(f), "TogglePopoverOptions.force arrived as something that is not a "
-                                         "boolean — the member is declared IDL_BOOLEAN, and the declaration's "
-                                         "conversion is what places it");
+                                         "boolean — the member is declared IDL_BOOLEAN_NO_DEFAULT, whose "
+                                         "conversion for a PRESENT member is Web IDL §3.2.3 boolean exactly "
+                                         "as IDL_BOOLEAN's is, and an ABSENT one it leaves undefined for the "
+                                         "`exists` test above");
                     force_given = true;
                     force = JS_ToBool(ctx, f) != 0;
                 }
@@ -2033,7 +2046,12 @@ static const IdlStepDecl POPOVER_DECL = {
 
 /* §6.12's `dictionary ShowPopoverOptions { HTMLElement source; }` and `dictionary TogglePopoverOptions :
    ShowPopoverOptions { boolean force; }`. Neither member is `required` and neither has a default, so an absent
-   one is absent — which is exactly what §6.12's "if it exists" asks.
+   one is absent — which is exactly what §6.12's "if it exists" asks. THAT IS A CLAIM ABOUT THE DECLARED TYPES
+   AND NOT ONLY ABOUT THE IDL, and it was a claim about the IDL alone: `force` stood at IDL_BOOLEAN, which
+   spells the `= false` the IDL does not write, so the sentence read as satisfied while step 3's `exists` test
+   was answered `true` for every call that omitted the member. `source` is IDL_INTERFACE and `force` is
+   IDL_BOOLEAN_NO_DEFAULT; a boolean member added here that DOES carry `= false` takes IDL_BOOLEAN, and the
+   difference is not a convention but the two states §3.2.17 gives a member with no default.
 
    THE ORDER IS TWO FACTS AND THE `level` COLUMN IS WHERE THE SECOND ONE IS STATED. Web IDL §3.2.17 Dictionary
    types' conversion reads its members over TWO nested loops: step 3 is "let dictionaries be a list consisting
@@ -2064,8 +2082,13 @@ static IdlDictMember TOGGLE_POPOVER_OPTIONS[] = {
     { "source", IDL_INTERFACE, false, NULL, 0, NULL, IDL_DEFAULT_NONE, NULL, .iface = 0,
       .iface_narrow = popover_source_is_html_element },
     /* LEVEL 1: `force` is declared on TogglePopoverOptions itself, and `source` above is inherited from
-       ShowPopoverOptions — §3.2.17 step 3's "least to most derived". */
-    { "force", IDL_BOOLEAN, false, NULL, 1, NULL, IDL_DEFAULT_NONE, NULL, .iface = 0,
+       ShowPopoverOptions — §3.2.17 step 3's "least to most derived".
+       IDL_BOOLEAN_NO_DEFAULT AND NOT IDL_BOOLEAN, because the banner above already said why and the row did
+       not obey it: the IDL writes `boolean force;` with no `= false`, and §6.12's step 3 asks whether the
+       member EXISTS. IDL_BOOLEAN folds absence into `false` on purpose (see idl_args.h — ToBoolean(undefined)
+       IS the `= false` a defaulted member declares), which is the RIGHT type for `bubbles`, `cancelable` and
+       every other event-init boolean whose IDL writes the default, and the WRONG one here. */
+    { "force", IDL_BOOLEAN_NO_DEFAULT, false, NULL, 1, NULL, IDL_DEFAULT_NONE, NULL, .iface = 0,
       .iface_narrow = NULL }
 };
 

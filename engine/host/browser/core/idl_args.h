@@ -397,18 +397,36 @@ typedef enum {
        idl_type_is_dictionary's answer for it (§3.6's rule that an omitted DICTIONARY argument is not an absent
        one), and that is a question about ARGUMENTS which this row, on a member, does not raise. */
     IDL_DICT_NULLABLE,
-    /* `(AddEventListenerOptions or boolean)` — the one union of this shape in the DOM, and its rule is what
-       §2.7's "flatten" states: a value that is NOT an object IS the first declared member's boolean, and an
-       object is read as an ordinary dictionary. Named for the rule rather than for the member, because the
-       rule is what the IDL states — the same reason IDL_STRING_UNLESS_CALLABLE is named that way. */
+    /* `(AddEventListenerOptions or boolean)` — the one union of this shape in the DOM. Its rule is Web IDL
+       §3.2.25 Union types read in the standard's own step order, and the order is the whole of it: step 4 is
+       "If V is null or undefined, then:" over a sub-step reading "If types includes a dictionary type, then
+       return the result of converting V to that dictionary type.", step 11 sends any other Object there too,
+       and ONLY what survives both falls to step 12/18's boolean. So an omitted argument — which §3.6 hands
+       this position as `undefined`, because `optional … = {}` makes it a dictionary and not an absence — is
+       the EMPTY DICTIONARY and never the boolean `false`.
+       THE SENTENCE THAT STOOD HERE — `a value that is NOT an object IS the first declared member's boolean`
+       — IS WRONG BY EXACTLY STEP 4, and it is
+       rewritten rather than deleted because it is re-derivable from DOM §2.7 Interface EventTarget's flatten
+       options alone ("If options is a boolean, then return options") — that algorithm asks about the
+       CONVERTED IDL value, so it presupposes §3.2.25 and cannot be read as replacing it. Named for the rule
+       rather than for the member, because the rule is what the IDL states — the same reason
+       IDL_STRING_UNLESS_CALLABLE is named that way. */
     IDL_DICT_OR_BOOL_FIRST,
     /* `(boolean or ScrollIntoViewOptions)` — §3.2.25's SAME TWO ARMS as the row above with the SAME test, and
        a different destination for the boolean, which is why it is a second row rather than a second caller of
-       that one. The row above bakes in DOM §2.7 "Interface EventTarget"'s flatten options ("if options is a
+       that one. The row above bakes in DOM §2.7 Interface EventTarget's flatten options ("If options is a
        boolean, then return options" — as the `capture` MEMBER), because that is what DOM's own algorithm does
-       with the arm. CSSOM VIEW §6's `scrollIntoView(arg)` reads the boolean ITSELF at its step 6 — "otherwise,
-       if arg is false, then set block to 'end'" — and `true` sets nothing at all, so there is no member for it
+       with the arm. CSSOM VIEW §6 Extensions to the Element Interface's `scrollIntoView(arg)` reads the
+       boolean ITSELF at its step 6 — "Otherwise, if arg is false, then set block to "end"" — and `true` sets
+       nothing at all, so there is no member for it
        to be flattened into and inventing one would be a dictionary field no IDL declares.
+       WHICH IS WHY §3.2.25 STEP 4 IS OBSERVABLE HERE AND NOT AT THE ROW ABOVE. Both rows send undefined and
+       null to the DICTIONARY arm, and for `(AddEventListenerOptions or boolean)` that changes nothing a page
+       can see — DOM's flatten leaves `capture` false either way. Here the two arms are two SCROLL POSITIONS:
+       the dictionary arm leaves step 2's "start" while the boolean `false` sets step 6's "end", so
+       `el.scrollIntoView()` and `el.scrollIntoView(null)` land at opposite ends of the element the day the
+       arm is decided by object-ness alone. §6's own steps say so: step 5 is the ScrollIntoViewOptions clause
+       and `optional (boolean or ScrollIntoViewOptions) arg = {}` makes the omitted call a dictionary.
        SO THE BOOLEAN ARM PLACES THE BOOLEAN and the dictionary arm places the built dictionary, and the BODY
        tells them apart with `JS_IsBool` — which is §3.2.25's own output ("return the result of converting V to
        boolean" against "return the result of converting V to that dictionary type") rather than a shape test

@@ -773,8 +773,15 @@ static JSValue js_ev_scroll_into_view(JSContext *ctx, JSValueConst this_val, int
        question here is the union's own OUTPUT and not a shape test performed a second time on the page's
        value — which is what `JS_IsObject` on a concolic would have been. */
     if (JS_IsBool(argv[0])) {
-        /* Step 6 — "otherwise, if arg is false, then set block to 'end'". `true` sets nothing, which is why
-           `el.scrollIntoView(true)` and `el.scrollIntoView()` are the same call. */
+        /* Step 6 — "Otherwise, if arg is false, then set block to "end"". `true` sets nothing, so
+           `el.scrollIntoView(true)` and `el.scrollIntoView()` agree on every value §6 computes — BY TWO
+           DIFFERENT ROUTES, and the sentence that stood here named only one of them. An OMITTED argument does
+           not reach this branch at all: `optional (boolean or ScrollIntoViewOptions) arg = {}` makes the
+           position a dictionary, and Web IDL §3.2.25 Union types step 4 sends its `undefined` (and an
+           explicit `null`) to the dictionary arm below, where steps 1-4's "auto"/"start"/"nearest"/null are
+           what ScrollIntoViewOptions' own declared defaults place. They agreed by ACCIDENT while the union
+           read undefined as a non-object and handed this branch a `false`, which set `block` to "end" — the
+           opposite alignment — for every `el.scrollIntoView()` there has ever been. */
         if (!JS_ToBool(ctx, argv[0])) block = SCROLL_LOGICAL_END;
     } else if (concolic_is(argv[0])) {
         free(behavior);

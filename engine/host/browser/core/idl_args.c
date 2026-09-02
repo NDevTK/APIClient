@@ -3744,6 +3744,27 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                takes the dictionary arm, and everything else falls to step 12 "If V is a Boolean" / step 18
                "If types includes boolean" — which is what DOM §2.7 "Interface EventTarget"'s flatten options
                states as "If options is a boolean, then return options".
+               AND UNDEFINED AND NULL TAKE THE DICTIONARY ARM, WHICH IS STEP 4 AND SITS ABOVE ALL THREE OF
+               THOSE. Web IDL §3.2.25 Union types opens "If V is null or undefined, then:" at step 4, whose one
+               sub-step reads "If types includes a dictionary type, then return the result of converting V to
+               that dictionary type." — so the object test below is the answer to steps 11/12/18 and never to
+               step 4, and asking it alone put `undefined` and `null` on the BOOLEAN arm for both unions of
+               this shape. (§3.2.25 step 2 would take them to the IDL null instead, but only where the union
+               INCLUDES a nullable type, and a `(boolean or D)` union has no arm that admits one — a union that
+               did would be a third enumerator with a third rule, not this one under a wider test.)
+               WHAT IT COST IS TWO MEMBERS AND THE OMITTED-ARGUMENT CALL OF EACH, because §3.6 hands a declared
+               dictionary position `undefined` when the page stops short of it (see idl_type_is_dictionary) and
+               that undefined arrived HERE. `el.togglePopover()` and `el.togglePopover(null)` reached HTML
+               §6.12 The popover attribute's togglePopover step 2 as `force` = false — a forced HIDE — so a
+               hidden popover never opened, where the spec's step 1 leaves `force` null and step 6 shows it.
+               `el.scrollIntoView()` reached CSSOM VIEW §6 Extensions to the Element Interface's step 6 as the
+               boolean false and set `block` to "end", where its step 5's dictionary arm leaves the "start" of
+               step 2 — the opposite alignment, and that body's own step-6 comment already said `()` and
+               `(true)` are the same call, which was true of the spec and not of this engine.
+               THE DICTIONARY ARM IS WHAT THE WALK ALREADY ACCEPTS: §3.2.17 Dictionary types step 1 admits
+               undefined and null (idl_dict_walk_begin asserts exactly that set), and its step 4.1.2 gives
+               every member `undefined`, so both reach §3.2.17 as the empty dictionary `optional … = {}`
+               names and every member's declared default is placed by step 4.1.5.
                OVER UNKNOWN EXTERNAL INPUT IT IS A FORK AND NOT A TEST, and it was a test. A concolic is an
                object carrying a [[Call]] — solver/concolic.c installs one so a method on an unknown yields
                another unknown instead of throwing "not a function" and taking the rest of the program with it
@@ -3768,7 +3789,9 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                parked member read is waiting for, and the member would come back holding `undefined` where the
                page's value belongs. `started` is what says the arm is already behind us. */
             if (t != IDL_DICT && !s->dw.started) {
-                bool_arm = !JS_IsObject(a);
+                /* Step 4 first, then steps 11/12/18 — an Object is the dictionary and everything that is
+                   neither an Object nor step 4's two values is the boolean. */
+                bool_arm = !JS_IsObject(a) && !JS_IsUndefined(a) && !JS_IsNull(a);
                 if (concolic_is(a)) {
                     int arm = 0, rc;
 
@@ -3790,16 +3813,24 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                 }
             }
             if (bool_arm) {
-                /* §2.7 "flatten": a non-object IS the first member's boolean. NO §3.2.17 CONVERSION RUNS ON
+                /* §2.7 "flatten": a value that is neither an Object nor step 4's undefined-or-null IS the
+                   first member's boolean. NO §3.2.17 CONVERSION RUNS ON
                    THIS ARM AT ALL — §3.2.25 converts V to exactly one of the two types, and on this arm it is
                    the boolean — so the walk is never started and there is no half-built dictionary to discard.
                    The old form minted the object before the arm was known and then abandoned it here, AND ran
                    §3.2.17 step 4.1.5's defaults over a dictionary this arm does not produce. That was a
                    §3.2.17 step reached from outside §3.2.17, and it is gone rather than moved into the walk:
-                   what the algorithm reads on this arm is DOM §2.7 "Interface EventTarget"'s flatten more
-                   options — "If options is a boolean, then return «[ \"capture\" → options, \"once\" → false,
-                   \"passive\" → null, \"signal\" → null ]»" — whose values are the ALGORITHM'S and not the
+                   what the algorithm reads on this arm is DOM §2.7 Interface EventTarget's flatten more
+                   options — "Let once be false. Let passive and signal be null." ahead of its own
+                   dictionary-only clause — whose values are the ALGORITHM'S and not the
                    IDL's, and which an absent member already answers (idl_dict_bool reads absent as false).
+                   THE «[ … ]» MAP SPELLING QUOTED HERE BEFORE IS NOT IN DOM. That standard states these
+                   values as three `Let` steps guarding a `If options is a dictionary:` clause, never as a
+                   returned ordered map, so the sentence was a paraphrase wearing quotation marks — the one
+                   citation shape a reader trusts most and verifies least. The CLAIM it was offered for is
+                   unchanged and is why it is rewritten rather than dropped: `once` false and `passive` and
+                   `signal` null on this arm are DOM's own defaults and not Web IDL's, so no §3.2.17 default
+                   is owed here.
                    No member in the platform observed the difference: the one IDL_DICT_OR_BOOL_FIRST member
                    declares no default on any of its four, and the IDL_BOOL_OR_DICT arm skipped the loop
                    outright. It would have observed it the day one did.
@@ -3837,8 +3868,11 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             /* §3.2.17 (ES-to-IDL list) STEP 1: a value that is NOT undefined, null or an Object is a TypeError
                before any member is read — `new Blob([], 123)` throws, and reading `123.type` instead answered
                undefined and built a Blob. It is performed HERE, at the position, because this is where what to
-               say about the value is known; the walk asserts it rather than repeating it. The union forms never
-               reach this line — a non-object took the boolean arm above. */
+               say about the value is known; the walk asserts it rather than repeating it. A UNION FORM REACHES
+               THIS LINE ONLY WITH §3.2.25 STEP 4's undefined or null, which this test lets through to the
+               walk exactly as a plain IDL_DICT position's does — every OTHER non-object took the boolean arm
+               above. (The sentence here said a union form never reaches this line at all, which was true only
+               while step 4 was unimplemented and the boolean arm swallowed those two values.) */
             if (!s->dw.started && !JS_IsObject(a) && !JS_IsUndefined(a) && !JS_IsNull(a)) {
                 JS_FreeValue(ctx, cb_result);
                 JS_ThrowTypeError(ctx, "the dictionary argument is neither an object, null nor undefined");
