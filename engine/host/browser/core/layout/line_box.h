@@ -88,12 +88,22 @@
    the section says "must be treated as NOT EXISTING for any other purpose", which is a different fact from a
    height of zero and is what §8.3.1's collapse-through note asks for. It is written on every path, so a caller
    reading it after a crash-free return is reading a measurement rather than whatever it initialised.
+   `*last_baseline` RECEIVES CSS 2.2 §10.8.1 "Leading and half-leading"'s OTHER DISTANCE DOWN THE SAME LINE
+   BOXES — the offset from the same top content edge to the BASELINE of that same last line box, which is a
+   position INSIDE the box the returned height ends at. It is a THIRD OUT-PARAMETER AND NOT A SECOND ENTRY for
+   the reason the walk behind it states in full: §10.6.3's bottom edge and §10.8.1's baseline are one running
+   position read at two points of one loop over one fill, and a second pass could put the baseline on a line
+   the height had not counted. It is a distance ONLY WHEN `*any_line_box` IS TRUE; its zero otherwise is not a
+   coordinate, exactly as the returned height's is not, and both are written on every path.
+   NONE OF THE THREE IS OPTIONAL, which is why neither out-parameter may be NULL: they are the three answers
+   ONE reduction has, so a caller that wanted only some of them would still be paying for all three, and a
+   nullable one is the shape that invites a second walk to be added for the answer it declined.
    THE CALLER HAS ALREADY ESTABLISHED §9.4.2's OWN CONDITION over the run it passes — that this box contains no
    block-level boxes — because deciding it requires classifying every child, which core/layout/block_flow.c
    does once, both to choose between the two formatting contexts and to delimit §9.2.1.1's runs. A block-level
    box reaching this walk is those two classifications having come apart, and it crashes here saying so. */
 CssPx line_box_content_height(lxb_dom_element_t *style, lxb_dom_node_t *first, lxb_dom_node_t *end,
-                              bool *any_line_box);
+                              bool *any_line_box, CssPx *last_baseline);
 
 /* WHERE THE BOXES ON THIS FORMATTING CONTEXT'S LINE BOXES REACH on ONE PHYSICAL AXIS — `*lo` and `*hi` receive
  * the lowest and highest coordinates any of them occupies, as OFFSETS FROM THE ESTABLISHING BOX'S CONTENT BOX
@@ -202,8 +212,14 @@ void line_box_content_span(lxb_dom_element_t *style, lxb_dom_node_t *first, lxb_
  * of the table") and to an `inline-block` ("The baseline of an 'inline-block' is the baseline of its last line
  * box in the normal flow, unless it has either no in-flow line boxes or if its 'overflow' property has a
  * computed value other than 'visible', in which case the baseline is the bottom margin edge") and to NOTHING
- * else. THAT SECOND SENTENCE IS ANSWERED IN FULL — the standard writes it under §10.8.1 "Leading and
- * half-leading", which is where this component cites it — and its three arms do not produce the same geometry:
+ * else. THAT SECOND SENTENCE IS ANSWERED FOR EVERY BLOCK CONTAINER §9.4.1's STACK CAN PLACE — the standard
+ * writes it under §10.8.1 "Leading and half-leading", which is where this component cites it, and its main arm
+ * reaches core/layout/block_flow.h's stack rather than this file's own reduction, so an `inline-block` holding
+ * an in-flow BLOCK-LEVEL box is measured and not refused. What is still narrower than the sentence is a
+ * block-level child whose own baseline another module owns — a `flex` or `grid` container on that stack —
+ * which crashes there naming css-flexbox-1 §8.5 "Flex Container Baselines" and css-grid-1 §10.6 "Grid
+ * Container Baselines", so it shows as an abort on an `inline-block` whose stack holds one and never as a
+ * wrong number. Its three arms do not produce the same geometry:
  * an `inline-block` sent to its bottom margin edge by either disjunct hangs its whole margin box above the
  * line, while one measured by the MAIN arm has the line's baseline running THROUGH it, at the baseline of the
  * last line box of the formatting context inside it. So a REPLACED element's bottom

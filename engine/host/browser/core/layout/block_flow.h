@@ -125,28 +125,39 @@ bool block_flow_text_child_generates_box(lxb_dom_element_t *parent, const lxb_do
    disagree about whether a run of white space is content (§9.2.2.1, the predicate above). */
 bool block_flow_establishes_inline_context(lxb_dom_element_t *el);
 
-/* CSS 2.2 §9.4.2's ESTABLISHING CONDITION READ AS THE FACT IT IS STATED OVER: does `el`'s box contain an
-   IN-FLOW BLOCK-LEVEL BOX? §9.4.2's first sentence is that an inline formatting context "is established by a
-   block container box that contains no block-level boxes", so this is that condition NEGATED and is not a
-   second classification — it is the same `display` reading over the same child list, so a caller asking here
-   and the walk that lays the box out cannot come to disagree about what is on §9.4.1's stack.
-   IT IS A SECOND ENTRY BESIDE THE PREDICATE ABOVE BECAUSE THE TWO DISAGREE ABOUT THE EMPTY BOX, AND THAT
-   DISAGREEMENT IS THE WHOLE REASON IT EXISTS. A block container with no in-flow child contains no block-level
-   box, so §9.4.2's condition HOLDS of it — while the predicate above answers FALSE, because its question is
-   whether this element is where core/layout/line_box.h's RUN is the whole child list, and a box with nothing
-   to flow is not a context anyone wants delimited. A caller that needs to know whether this box's line boxes,
-   IF ANY,
-   are its own therefore cannot read that answer: FALSE there means "it holds a block-level box" OR "it holds
-   no content", and those two want opposite treatment.
-   ITS CALLER IS CSS 2.2 §10.8.1 "Leading and half-leading"'s `inline-block` BASELINE, whose whole sentence is
-   "The baseline of an 'inline-block' is the baseline of its last line box in the normal flow, unless it has
-   either no in-flow line boxes or if its 'overflow' property has a computed value other than 'visible', in
-   which case the baseline is the bottom margin edge." That caller answers the empty box itself — no in-flow
-   child means no line box, so the exception fires — and has to send a box holding a block-level one to this
-   file's stack, because a line box inside a block-level descendant is at that descendant's own offset down it.
-   TRUE is therefore that caller's crash and FALSE is its measurement, which a single "establishes a context"
-   answer cannot separate. */
-bool block_flow_contains_block_level_box(lxb_dom_element_t *el);
+/* CSS 2.2 §10.8.1 "Leading and half-leading"'s `inline-block` BASELINE, as the DISTANCE §9.4.1's OWN STACK
+   REACHES IT AT. The section states the whole rule in one sentence with an exception in it: "The baseline of
+   an 'inline-block' is the baseline of its last line box in the normal flow, unless it has either no in-flow
+   line boxes or if its 'overflow' property has a computed value other than 'visible', in which case the
+   baseline is the bottom margin edge." This entry answers the MAIN ARM and the FIRST DISJUNCT of that
+   exception — it returns whether §9.4.1's stack met an in-flow line box at all, and stores at `*baseline` the
+   offset from `el`'s TOP CONTENT EDGE to that last line box's baseline. The `overflow` disjunct is not asked
+   here and must not be: it is a fact about the box's own declarations that its CALLER decides before it has
+   any reason to look inside, and asking it twice would be one sentence with two readers.
+   `*baseline` IS A DISTANCE ONLY WHEN THE ANSWER IS TRUE. Its zero otherwise is not a coordinate — there is no
+   line box for a baseline to be inside — exactly as core/layout/line_box.h's height then measures no last line
+   box. It is written on every path, so a caller that reads it after a false is reading a measurement of
+   nothing rather than whatever it initialised.
+   IT IS THE SAME WALK AS §10.6.3's HEIGHT AND A THIRD READING OF ITS RUNNING POSITION, WHICH IS WHY IT LIVES
+   HERE AND NOT AT THE CALLER. §9.2.1 makes a block container one that "either contains only block-level boxes
+   or establishes an inline formatting context", so this box's last line box is in one of exactly two places:
+   in the ONE inline formatting context this element's own box establishes, or inside whichever box on §9.4.1's
+   stack was placed last and has one — at THAT box's own offset down the stack, which is the running position
+   §10.6.3's height walk already computes and nothing else can re-derive. §9.2.1.1 "Anonymous block boxes" puts
+   a third kind of box on that stack ("if a block container box … has a block-level box inside it …, then we
+   force it to have only block-level boxes inside it"), and it is a candidate like any other. Composing this at
+   a call site out of a height and a descendant's line boxes would be a second walk over one child list, free
+   to disagree with the first about where a margin collapsed.
+   THE STACK IS WALKED WHATEVER `height` SAYS, for `block_flow_anonymous_boxes`' reason: `bf_height_needs_content`
+   decides whether a box's own content decides ITS SIZE, and where its line boxes ARE is a different question —
+   a box with a declared `height` is exactly the one whose last line box can sit below its own content edge, and
+   §10.8.1 asks for that baseline and not for a clamped one.
+   `el` MUST BE A BLOCK CONTAINER (§9.2.1), because §10.8.1's sentence and §9.2.1's alternative are both stated
+   over that box; a caller has classified it first and a box that is not one crashes here. Every box on the
+   stack whose own baseline belongs to another module — a `flex` or a `grid` container — crashes naming that
+   module, because a bottom margin edge substituted for it would be a wrong number on a real line rather than
+   an absent one. */
+bool block_flow_last_line_box_baseline(lxb_dom_element_t *el, CssPx *baseline);
 
 /* CSS 2.2 §9.2.1.1 "Anonymous block boxes"' OTHER SHAPE OF §9.4.2's CONTEXT — the one with no element to name
    it. §9.2.1.1: "if a block container box (such as that generated for the DIV above) has a block-level box

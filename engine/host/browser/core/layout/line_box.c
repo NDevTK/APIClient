@@ -137,10 +137,14 @@ static void lb_require_baseline_alignment(lxb_dom_element_t *el)
               "alternative and not an empty one. §4.2.1's own `auto` is \"last-baseline alignment for "
               "inline-block, first-baseline alignment for everything else\", which is exactly the LAST line box "
               "§10.8.1 states (\"the baseline of its last line box in the normal flow\") and is what "
-              "`LbLines.last_baseline` carries. WHAT IS NOT BUILT IS THE `first` ARM: `lb_reduce` overwrites "
-              "one running position per existing line and keeps the last, so the FIRST existing line's baseline "
-              "is a second field of that same reduction and nothing more — BUILD it there, beside "
-              "`last_baseline`, and select on this longhand at `lb_atomic_extent`. An `inline-block` the "
+              "`LbLines.last_baseline` carries. WHAT IS NOT BUILT IS THE `first` ARM, AND IT IS NO LONGER ONE "
+              "FIELD: `lb_reduce` overwrites one running position per existing line and keeps the last, so the "
+              "FIRST existing line's baseline is a second field of that same reduction — but the arm "
+              "`lb_atomic_extent` reads is `block_flow_last_line_box_baseline`, which reduces §9.4.1's whole "
+              "STACK and whose own first-line answer is the first box on that stack to have a line box rather "
+              "than the last. BUILD the pair in `lb_reduce`, carry it out through "
+              "`line_box_content_height`, and carry THAT pair through core/layout/block_flow.h's entry, which "
+              "is where the stack decides which box the first line is in. An `inline-block` the "
               "exception sends to its bottom margin edge (a scroll container, or one with no in-flow line box) "
               "still has ONE source and is not a set this longhand indexes into. DECIDE which of the four is "
               "here, before reading a source that may select nothing");
@@ -176,8 +180,6 @@ typedef struct {
     CssPx last_baseline;  /* §10.8.1's `inline-block` arm: to the BASELINE of that same line box */
     bool  any;            /* §9.4.2's other answer; false says the two distances are about no line box */
 } LbLines;
-
-static LbLines lb_reduce(lxb_dom_element_t *style, lxb_dom_node_t *first, lxb_dom_node_t *end);
 
 /* TWO SUMS OF THE SAME REAL NUMBER, taken in different orders — the only comparison this file makes between
    doubles, and it exists for the assert below. The neighbourhood is scaled by the magnitude because a CSS
@@ -297,10 +299,16 @@ static CssPx lb_content_top_from_margin_edge(lxb_dom_element_t *el)
    sentences, one pair of numbers: `above` the whole margin box and `below` zero.
    THE FOURTH BOX IS THE ONE THIS FUNCTION LOOKS INSIDE, and looking is the only way: §10.8.1's main arm is
    "the baseline of its LAST LINE BOX IN THE NORMAL FLOW", which is a position inside a formatting context that
-   has to be flowed before it exists. `lb_reduce` is that flow — this component's own answer, one level down —
-   and the same pass reports whether there is one at all, which is §10.8.1's own "no in-flow line boxes"
-   decided over §9.4.2's rule about which line boxes exist. So the sentence's main arm and that disjunct come
-   from ONE reading and can never disagree about which line boxes there are.
+   has to be flowed before it exists. THE FLOW IS core/layout/block_flow.h's AND NOT THIS FILE'S, and asking it
+   there is what makes the arm whole rather than half: §9.2.1 says a block container "either contains only
+   block-level boxes or establishes an inline formatting context", so an `inline-block` holding an in-flow
+   BLOCK-LEVEL box has its last line box inside whichever box §9.4.1's stack placed last that has one, at that
+   box's own offset down the stack — a distance only the walk that computes the stack can report. That walk
+   answers the disjunct at the same time, which is §10.8.1's own "no in-flow line boxes" decided over §9.4.2's
+   rule about which line boxes exist, so the sentence's main arm and that disjunct come from ONE reading and
+   can never disagree about which line boxes there are. Routing BOTH shapes of block container through the one
+   entry is deliberate: the shape that establishes §9.4.2's context is the same walk's own early arm over the
+   same reduction, so a local second call here would be one computation reachable two ways and free to drift.
    THE ALIGNMENT IS `baseline` BY ASSERTION AND NOT BY ASSUMPTION: `lb_require_baseline_alignment` runs over
    this element before it reaches the run, so any other css-inline-3 §4.2 value has already crashed.
    NO FLOOR ON EITHER NUMBER, because CSS 2.2 §8.3 allows a negative margin, §8.1's nesting is unconditional
@@ -314,7 +322,7 @@ static LbExtent lb_atomic_extent(lxb_dom_element_t *el)
     bool inline_block = lb_computed_is(el, "display", "inline-block");
     bool replaced = replaced_element_of(el).replaced;
     LbExtent out;
-    LbLines inner;
+    CssPx inner_baseline = css_px(0.0);
 
     /* THE TWO-SIDED HALF OF `lb_child`'s ROUTING, ASSERTED WHERE THE GEOMETRY IS CHOSEN. That walk emits an
        ATOMIC run item for exactly two shapes — a replaced element, and a non-replaced `inline-block` — and
@@ -334,34 +342,16 @@ static LbExtent lb_atomic_extent(lxb_dom_element_t *el)
     out.below = css_px(0.0);
     if (replaced) return out;
     if (lb_inline_block_overflow_excepts_baseline(el)) return out;
-    if (block_flow_contains_block_level_box(el))
-        DFAIL("CSS 2.2 §10.8.1 \"Leading and half-leading\" makes this `inline-block`'s baseline \"the baseline "
-              "of its LAST LINE BOX IN THE NORMAL FLOW\", and this box contains an in-flow BLOCK-LEVEL box — so "
-              "that line box is not one of this component's. §9.2.1.1 \"Anonymous block boxes\" forces such a "
-              "container \"to have only block-level boxes inside it\", and the last line box in its normal flow "
-              "is inside whichever in-flow box §9.4.1's stack placed last that has one, at that box's own "
-              "offset down the stack. THE INNER BASELINE ITSELF IS BUILT AND IS NOT WHAT THIS NAMES: an "
-              "`inline-block` that establishes §9.4.2's inline formatting context is measured below — the last "
-              "EXISTING line box's `A'` beneath the top content edge, with the line boxes §9.4.2 says \"must be "
-              "treated as NOT EXISTING for any other purpose\" advancing the stack by nothing — and §10.8.1's "
-              "\"no in-flow line boxes\" disjunct is that same reduction's own answer. WHAT MUST EXIST "
-              "AFTERWARD IS ONE ENTRY IN core/layout/block_flow.h: the offset of the LAST in-flow line box's "
-              "baseline from this box's top content edge, together with whether §9.4.1's stack met one at all. "
-              "It belongs in that file for the reason its own header already gives about §10.6.3's height and a "
-              "child's offset: those are one walk because a box's y IS the running position the height walk "
-              "computes, and two walks over one child list can disagree about where a margin collapsed. This "
-              "baseline is a THIRD reading of that same running position, not a composition to assemble here "
-              "out of a height and a descendant's line boxes. ROUTE this box to that entry once it exists; do "
-              "not widen this one");
-    inner = lb_reduce(el, lxb_dom_interface_node(el)->first_child, NULL);
     /* §10.8.1's NO-IN-FLOW-LINE-BOXES DISJUNCT, ANSWERED BY THE READING THAT WOULD HAVE HAD TO RUN ANYWAY —
        the sentence is quoted whole above `lb_inline_block_overflow_excepts_baseline`, and this is its other
        exception, ending at the same bottom margin edge. §9.4.2's zero-height line box is one the section says
-       "must be treated as NOT EXISTING for any other purpose", which is exactly what `LbLines.any` reports, so
-       `<span style="display:inline-block"></span>` and one holding only empty inline boxes take this arm
-       alongside a scroll container — three routes, one geometry, no second test. */
-    if (!inner.any) return out;
-    out.above = css_px_add(lb_content_top_from_margin_edge(el), inner.last_baseline);
+       "must be treated as zero-height line boxes for the purposes of determining the positions of any elements
+       inside of them, and must be treated as not existing for any other purpose", which is exactly what
+       `block_flow_last_line_box_baseline` reports FALSE for, so `<span style="display:inline-block"></span>`,
+       one holding only empty inline boxes, and one whose whole block-level stack holds no line box all take
+       this arm alongside a scroll container — four routes, one geometry, no second test. */
+    if (!block_flow_last_line_box_baseline(el, &inner_baseline)) return out;
+    out.above = css_px_add(lb_content_top_from_margin_edge(el), inner_baseline);
     out.below = css_px_sub(margin_box, out.above);
     return out;
 }
@@ -577,8 +567,10 @@ static void lb_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_
               "in-flow line boxes or if its 'overflow' property has a computed value other than 'visible', in "
               "which case the baseline is the bottom margin edge.\" ALL THREE OF ITS ARMS ARE BUILT and a "
               "non-replaced `inline-block` is collected above without asking any of them here: "
-              "`lb_atomic_extent` reads the `overflow` disjunct, flows the formatting context inside the box "
-              "for the main arm's last line box, and takes \"no in-flow line boxes\" off that same reading. "
+              "`lb_atomic_extent` reads the `overflow` disjunct itself and sends the box to core/layout/"
+              "block_flow.h's `block_flow_last_line_box_baseline`, which walks §9.4.1's stack — so the main "
+              "arm's last line box is found whether it is on the box's own inline formatting context or "
+              "inside a block-level descendant, and \"no in-flow line boxes\" is that same walk's own answer. "
               "TWO SHAPES STILL ARRIVE HERE AND THEY DO NOT WANT THE SAME WORK. An `inline-table` wants a "
               "DIFFERENT sentence of the same definition, \"The baseline of an 'inline-table' is the baseline "
               "of the first row of the table\", which is CSS 2.1 §17.2 \"The CSS table model\"'s box structure "
@@ -676,8 +668,9 @@ static void lb_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_
        inside: §9.2.2 makes this "a single opaque box" in THIS formatting context, so its contents are not items
        of THIS run and emitting edges around them would put two boundaries around content this run does not
        hold. The formatting context INSIDE the box is flowed by that box's own questions, one level down and
-       through this same component — used_value.h's block-axis answer for its height, and `lb_reduce` for the
-       baseline §10.8.1 puts inside it. */
+       through this same component — used_value.h's block-axis answer for its height, and, for the baseline
+       §10.8.1 puts inside it, core/layout/block_flow.h's walk over §9.4.1's stack, which reaches this file
+       again for whichever box on that stack holds the last line box. */
     if (on_the_line) {
         text_run_measure_add_atomic(m, el, used_value_margin_edge_px(el, false));
         return;
@@ -878,8 +871,8 @@ static size_t lb_fill(TextRunMeasure *m, lxb_dom_element_t *style, lxb_dom_node_
    to the BOTTOM EDGE of the last line box and §10.8.1's `inline-block` arm wants the distance to that same
    line box's BASELINE, which is a position INSIDE it — so the two are one running position read at two points
    of one loop, and a second pass could put the baseline on a line the height had not counted. That is the same
-   argument `lb_fill`'s banner makes about the collection one level down, and it is why this is a static with
-   two callers rather than two entries.
+   argument `lb_fill`'s banner makes about the collection one level down, and it is why ONE entry carries all
+   three answers out of this file rather than one entry per answer.
    §9.4.2's ZERO-HEIGHT LINE BOX IS SKIPPED BY BOTH READINGS AND THAT IS ONE FACT, NOT TWO. A line the section
    says "must be treated as ZERO-HEIGHT line boxes for the purposes of determining the positions of any
    elements inside of them, and must be treated as NOT EXISTING for any other purpose" advances the stack by
@@ -937,19 +930,27 @@ static LbLines lb_reduce(lxb_dom_element_t *style, lxb_dom_node_t *first, lxb_do
 }
 
 CssPx line_box_content_height(lxb_dom_element_t *style, lxb_dom_node_t *first, lxb_dom_node_t *end,
-                              bool *any_line_box)
+                              bool *any_line_box, CssPx *last_baseline)
 {
     LbLines r;
 
     DCHECK(any_line_box != NULL,
            "CSS 2.2 §9.4.2's line boxes were asked for with nowhere to report whether any of them exists — "
            "that is not an optional out-parameter, it is §8.3.1's own question");
+    DCHECK(last_baseline != NULL,
+           "CSS 2.2 §9.4.2's line boxes were asked for with nowhere to report the LAST one's baseline — that "
+           "is not an optional out-parameter either, it is CSS 2.2 §10.8.1 \"Leading and half-leading\"'s own "
+           "question about the same lines. The reduction below computes it whether or not anyone reads it, "
+           "because it is the same running position §10.6.3's height ends at, so declining it buys nothing and "
+           "a caller holding a nullable one would be a second walk waiting to be written");
     r = lb_reduce(style, first, end);
     *any_line_box = r.any;
     /* When no line box exists, §10.6.3 has no last line box for its bottom edge to be and the accumulated
        height is exactly the zero the reduction started at — the caller learns through `any_line_box` that this
        is an ABSENT line box rather than a measured zero, which is the distinction §8.3.1 needs and a single
-       number cannot carry. */
+       number cannot carry. §10.8.1's baseline is the same zero for the same reason: there is no line box for a
+       baseline to be inside, and the same `any_line_box` says so for both. */
+    *last_baseline = r.last_baseline;
     return r.height;
 }
 

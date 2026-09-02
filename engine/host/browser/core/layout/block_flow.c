@@ -12,6 +12,7 @@
 #include "core/css/css_length.h"
 #include "core/dom/document.h"
 #include "core/layout/block_flow.h"
+#include "core/layout/box_subject.h"
 #include "core/layout/line_box.h"
 #include "core/layout/used_value.h"
 
@@ -170,6 +171,25 @@ static bool bf_no_collapse_through_edges(lxb_dom_element_t *el)
               "there — a rule that reads the root element's cascade from the body's computed value, which is "
               "the shape §7's inheritance already has — and this crash becomes the boolean it stands in for");
     return true;
+}
+
+/* CSS 2 §8.1 "Box dimensions"' TWO EDGES between a box's TOP BORDER EDGE and its TOP CONTENT EDGE. §9.4.1's
+   stack reaches each child at its top BORDER edge — that is what `block_flow_child_top` reports and what this
+   walk's own running position is — while §9.4.2 stacks the line boxes INSIDE a box from its top CONTENT edge,
+   so a distance measured in one frame needs exactly this to be read in the other.
+   NO FLOOR IS APPLIED AND NONE IS NEEDED: CSS 2 §8.4 "Padding properties" says outright that "unlike margin
+   properties, values for padding values cannot be negative", and css-backgrounds-3 §3.3 "Line Thickness: the
+   border-width properties" gives a border width a `<line-width>`, so neither operand can be. A floor here
+   would be a rule the two properties already carry, restated where it could drift. */
+static CssPx bf_content_top_from_border_edge(lxb_dom_element_t *el)
+{
+    CssLength b = css_computed_length(el, "border-top-width");
+
+    DCHECK(b.kind == CSS_LENGTH_ABSOLUTE,
+           "a `border-*-width` computed to something that is not an absolute length. css-backgrounds-3 §3.3's "
+           "`Computed value:` line is `absolute length, snapped as a border width` and every arm of that "
+           "derivation produces one, so a percentage or a keyword here is a rule that did not run");
+    return css_px_add(b.px, used_value_px(el, "padding-top"));
 }
 
 /* §8.3.1's "no line boxes, no clearance, no padding and no border separate them", for ONE of a box's two
@@ -384,9 +404,18 @@ typedef struct {
     BfRun top;               /* the run adjoining its top border edge, its own margin-top included */
     BfRun bottom;
     bool  collapse_through;  /* §8.3.1: the two runs are ONE run and the box places nothing */
+    /* §10.8.1's `inline-block` baseline, IN THE SAME FRAME AS `content_h` — the distance from this box's own
+       TOP CONTENT EDGE — so the struct carries one origin and a reader cannot take one distance for the other.
+       THEY ARE A MEASUREMENT ONLY WHERE THE WALK WAS ASKED FOR ONE (`bf_layout`'s `baseline` argument), AND
+       THE ONE READER IS THE WALK ITSELF, under that same flag. A `false` from a walk that was not asked would
+       be indistinguishable from §9.4.2's own "this box has no line box", which is a real and different answer
+       — so the flag gates the READ and not merely the write, and there is no path on which the two can be
+       confused. `bf_layout` is asked for the baseline exactly when its caller was, all the way down. */
+    CssPx last_baseline;
+    bool  has_line_box;
 } BfBox;
 
-static BfBox bf_box(lxb_dom_element_t *el);
+static BfBox bf_box(lxb_dom_element_t *el, bool baseline);
 
 /* ---- WHICH FORMATTING CONTEXT THIS BLOCK CONTAINER ESTABLISHES ------------------------------------------
    CSS 2.2 §9.4.2 states the condition and §9.2.1 states the alternative in the same breath: a block container
@@ -446,30 +475,6 @@ bool block_flow_establishes_inline_context(lxb_dom_element_t *el)
     free(d);
     if (!container) return false;
     return bf_content_kind(el) == BF_CONTENT_INLINE;
-}
-
-bool block_flow_contains_block_level_box(lxb_dom_element_t *el)
-{
-    BfContent kind;
-    char *d;
-    bool container;
-
-    DCHECK(el != NULL, "CSS 2.2 §9.4.2's establishing condition was asked with no element");
-    d = bf_computed(el, "display");
-    container = block_flow_display_is_block_container(d);
-    free(d);
-    /* §9.4.2 states its condition over a BLOCK CONTAINER BOX and §9.2.1 states the alternative over the same
-       box — "either contains only block-level boxes or establishes an inline formatting context" — so the
-       question has no answer for a box that is neither. An inline box's inline content is on its ANCESTOR's
-       lines and a flex or grid container's children are css-flexbox §4's flex items, so answering FALSE for
-       either would report an inline formatting context that is not there. */
-    DCHECK(container,
-           "CSS 2.2 §9.4.2's establishing condition was asked of a box that is not a BLOCK CONTAINER, and "
-           "§9.2.1's \"either contains only block-level boxes or establishes an inline formatting context\" is "
-           "stated over exactly that box. The caller has classified the box type before asking, so the two "
-           "lists have come apart");
-    kind = bf_content_kind(el);
-    return kind == BF_CONTENT_BLOCK || kind == BF_CONTENT_MIXED;
 }
 
 /* ---- CSS 2.2 §9.2.1.1 "Anonymous block boxes" -------------------------------------------------------------
@@ -602,7 +607,15 @@ static BfBox bf_anon_box(lxb_dom_element_t *parent, lxb_dom_node_t *first, lxb_d
     out.top = bf_run_of(css_px(0.0));
     out.bottom = bf_run_of(css_px(0.0));
     out.collapse_through = false;
-    h = line_box_content_height(parent, first, end, &any_line_box);
+    /* §10.8.1's BASELINE COMES OUT OF THE SAME READING AND IS NEVER ASKED FOR SEPARATELY HERE, because this box
+       has no `height` of its own to decide anything: §9.2.1.1 gives it the initial value, so the reduction runs
+       for the height on every path and the baseline is a second distance down the lines it already walked.
+       ITS FRAME NEEDS NO CONVERSION: "the margins will be 0" and the other non-inherited properties are at
+       their initial values, so this box's border edge, padding edge and content edge are ONE rectangle and the
+       distance line_box.h measures from the top CONTENT edge is the distance the stack outside measures from
+       the top BORDER edge. That is the same identity `bf_anon_record` states for the position. */
+    h = line_box_content_height(parent, first, end, &any_line_box, &out.last_baseline);
+    out.has_line_box = any_line_box;
     if (!any_line_box) {
         /* §8.3.1's own note, every conjunct of which is a constant for this box except the last two: "a box's
            own margins collapse if the 'min-height' property is zero, and it has neither top or bottom borders
@@ -633,9 +646,16 @@ static BfBox bf_anon_box(lxb_dom_element_t *parent, lxb_dom_node_t *first, lxb_d
 /* §9.4.1's placement rule over §8.3.1's runs, for the in-flow children of one block container. It answers this
    box's own contribution, and on the way it hands the caller the offset of `want`'s top border edge from this
    box's top CONTENT edge — the same running position read out at the child that asked for it, which is why
-   there is one walk and not two. */
+   there is one walk and not two.
+   `baseline` ASKS FOR CSS 2.2 §10.8.1's THIRD READING OF THAT SAME POSITION, reported on `BfBox`. It is a
+   REQUEST and not a mode: nothing else about the walk changes, and every arm below writes the pair whether it
+   was asked or not — what the flag decides is whether a `has_line_box` of false is a measurement or merely the
+   initialisation, which is why the flag gates the read at every level and travels down unchanged. It is not
+   free, and that is the whole reason it is a flag: answering it means walking INTO a child whose own `height`
+   already decided its size (`bf_height_needs_content`), so a height walk that always asked would look inside
+   boxes §10.6.3 never needs to open, doubling the tree walked at every level and reaching sections that crash. */
 static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *want_top, bool *found,
-                       BfAnonSink *anon)
+                       BfAnonSink *anon, bool baseline)
 {
     lxb_dom_node_t *n = lxb_dom_interface_node(el), *c;
     /* §8.3.1's THIRD and FOURTH adjoining pairs are different conditions and were one flag here, which got
@@ -670,6 +690,11 @@ static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wa
     out.bottom = bf_run_of(used_value_px(el, "margin-bottom"));
     out.border_h = css_px(0.0);
     out.collapse_through = false;
+    /* §10.8.1's pair starts where §9.4.1's stack starts and where §9.4.2's line boxes start — the top content
+       edge, with nothing met — so a box that places nothing reports NOT MET rather than a coordinate. Every
+       arm below either overwrites both or leaves both, and no arm writes one without the other. */
+    out.last_baseline = css_px(0.0);
+    out.has_line_box = false;
     if (bf_content_kind(el) == BF_CONTENT_INLINE) {
         /* §9.4.2's INLINE FORMATTING CONTEXT. Nothing below this branch applies to it: §8.3.1's adjoining
            margins are stated over boxes that "both belong to in-flow BLOCK-LEVEL boxes participating in the
@@ -688,7 +713,12 @@ static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wa
         /* This container holds no block-level box, so §9.2.1.1 generates nothing and the one inline formatting
            context here is over the WHOLE child list — the same run form the anonymous box is measured through,
            with the container's own element supplying the style it already owns. */
-        h = line_box_content_height(el, n->first_child, NULL, &any_line_box);
+        /* §10.8.1's MAIN ARM FOR THE SHAPE THAT HAS AN ELEMENT TO NAME IT. This box establishes the one inline
+           formatting context, so "its last line box in the normal flow" is the last EXISTING line box of this
+           very reduction and the distance is already measured from this box's top content edge — the frame
+           `BfBox` states. It is taken from the same call that answers the height, never a second one. */
+        h = line_box_content_height(el, n->first_child, NULL, &any_line_box, &out.last_baseline);
+        out.has_line_box = any_line_box;
         if (any_line_box) {
             DCHECK(h.px >= 0.0,
                    "CSS 2.2 §10.8's step 3 produced a NEGATIVE line box height. It is \"the distance between "
@@ -742,7 +772,7 @@ static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wa
             c = end;
         } else {
             ce = lxb_dom_interface_element(c);
-            b = bf_box(ce);
+            b = bf_box(ce, baseline);
             c = c->next;
         }
         /* §8.3.1's second adjoining pair — "bottom margin of box and top margin of its next in-flow following
@@ -762,6 +792,18 @@ static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wa
                that. */
             CssPx through_top = escaping ? pos : css_px_add(pos, bf_run_value(run));
 
+            /* §8.3.1's collapse-through note requires that the box "does not contain a line box", so a box that
+               reached this arm cannot be the one holding §10.8.1's last line box. That is one fact stated in
+               two places rather than two facts, and asserting it here is what keeps them from parting: the
+               note's conjunct is decided over the box's own children and `has_line_box` is decided over the
+               same reduction, so a box answering both would be §9.4.2's "not existing for any other purpose"
+               read one way for the collapse and the other way for the baseline. */
+            DCHECK(!baseline || !b.has_line_box,
+                   "CSS 2.2 §8.3.1's collapse-through note lists \"it does not contain a line box\" among the "
+                   "conjuncts that let a box's own two margins collapse, and this box COLLAPSED THROUGH while "
+                   "reporting a line box for §10.8.1's baseline. One of the two readings is wrong about "
+                   "§9.4.2's zero-height line box, and the margin it already collapsed is a position every "
+                   "box below this one on the stack has been placed against");
             if (ce != NULL && ce == want) {
                 *want_top = through_top;
                 *found = true;
@@ -794,6 +836,22 @@ static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wa
             *found = true;
         }
         if (ce == NULL) bf_anon_record(anon, anon_first, anon_end, pos, b.border_h);
+        /* CSS 2.2 §10.8.1's "LAST line box in the normal flow", TAKEN OFF THE SAME `pos` THE PLACEMENT ABOVE
+           JUST USED. §9.4.1 lays the boxes out "one after the other, vertically, beginning at the top of a
+           containing block", so the last of them to hold a line box holds THE last line box — which is why
+           this is an overwrite per box that has one and not a search, and why nothing here decides anything
+           about ORDER that the stack has not already decided.
+           THE FRAME CONVERSION IS §8.1's AND IS THE ONLY ARITHMETIC: `pos` is this box's TOP BORDER EDGE and
+           `b.last_baseline` is measured from its TOP CONTENT EDGE, so the border and the padding between them
+           are added here. §9.2.1.1's anonymous block box has neither — "the margins will be 0" and every other
+           non-inherited property is at its initial value — so its two edges are one and its term is a literal
+           zero, the same identity `bf_anon_record` above relies on for the position. */
+        if (baseline && b.has_line_box) {
+            CssPx inner = ce != NULL ? bf_content_top_from_border_edge(ce) : css_px(0.0);
+
+            out.last_baseline = css_px_add(css_px_add(pos, inner), b.last_baseline);
+            out.has_line_box = true;
+        }
         pos = css_px_add(pos, b.border_h);
         run = b.bottom;
         placed = true;
@@ -873,13 +931,21 @@ static bool bf_height_needs_content(lxb_dom_element_t *el)
        exists precisely so the conversion is stated once without the cycle. That entry is ALSO where CSS 2.1
        §10.7's clamp runs for this box, over the extent handed to it — the substituted pass is a declared
        length, so it needs no walk and the cycle stays broken.
-   A box that COLLAPSES THROUGH has no border box to stack, which is what the flag is for. */
-static BfBox bf_box(lxb_dom_element_t *el)
+   A box that COLLAPSES THROUGH has no border box to stack, which is what the flag is for.
+   §10.8.1's BASELINE IS A THIRD ANSWER AND IT SPLITS THE FIRST BULLET, which is the whole reason `baseline` is
+   an argument here rather than a property of the box. The size question above is settled for a declared height
+   WITHOUT looking inside; where this box's own LINE BOXES ARE is a different question with a different answer,
+   and a box with a declared `height` is exactly the one whose last line box can sit below its own content edge
+   (§10.8.1 asks for that baseline, not for a clamped one). So when the baseline is asked for, the walk RUNS
+   whatever `height` says — `block_flow_anonymous_boxes` runs it for the same reason and states it in the same
+   words — and only the SIZE is still taken from used_value.h. */
+static BfBox bf_box(lxb_dom_element_t *el, bool baseline)
 {
     CssPx sink = css_px(0.0);
     bool sunk = false;
     char *d = bf_computed(el, "display");
     bool container = block_flow_display_is_block_container(d);
+    char nbuf[160];
     BfBox b;
 
     free(d);
@@ -887,14 +953,67 @@ static BfBox bf_box(lxb_dom_element_t *el)
     b.top = bf_run_of(used_value_px(el, "margin-top"));
     b.bottom = bf_run_of(used_value_px(el, "margin-bottom"));
     b.collapse_through = false;
+    b.last_baseline = css_px(0.0);
+    b.has_line_box = false;
     /* Not a block container: a flex or grid CONTAINER, whose height is its own spec's and which establishes an
        independent formatting context, so its margins are its own and nothing inside it is this walk's. The
        height is asked for and crashes in the section that owns it. */
-    if (!container || !bf_height_needs_content(el)) {
+    if (!container) {
+        /* ITS BASELINE IS ITS OWN MODULE'S AND MUST NOT BE GUESSED. This box is on §9.4.1's stack and can
+           therefore be the LAST box holding a line box, so an answer of "no line box here" is not a skip — it
+           would hand §10.8.1's sentence the baseline of some EARLIER box, or its own bottom margin edge, and
+           both are real coordinates on a real line that nothing downstream can tell from a measured one. */
+        if (baseline)
+            DFAILF("CSS 2.2 §10.8.1 \"Leading and half-leading\" is walking §9.4.1's stack for the baseline of "
+                   "an enclosing `inline-block` — \"the baseline of its last line box in the normal flow\" — and "
+                   "reached a box on that stack that is NOT a block container (%s), so it holds no line box of "
+                   "§9.4.2's and its baseline is defined by its own module: css-flexbox-1 §8.5 \"Flex Container "
+                   "Baselines\" for a flex container, whose own words are that \"the baselines of a flex "
+                   "container are determined as follows\" over its startmost and endmost FLEX LINES, and "
+                   "css-grid-1 §10.6 \"Grid Container Baselines\" for a "
+                   "grid container. Those two are the whole of what can arrive: `bf_element_child` above puts "
+                   "exactly `block`, `flow-root`, `list-item`, `flex` and `grid` on this stack, the first three "
+                   "are block containers, and a TABLE box crashes there instead — §17.2's anonymous table-object "
+                   "generation is missing before its §17.5.3 baseline is. NEITHER SKIPPING NOR SUBSTITUTING "
+                   "THE BOTTOM MARGIN EDGE IS AVAILABLE HERE: this box may be the LAST one on the stack that has "
+                   "a baseline at all, so either would put a real coordinate on a real line that no reader can "
+                   "distinguish from a measured one. BUILD the module's own baseline and report it on `BfBox` "
+                   "beside `last_baseline`, in the same frame — the distance from this box's own top content "
+                   "edge — and the placement above needs no arm added for it. It shows as this abort on an "
+                   "`inline-block` whose §9.4.1 stack holds a flex or grid container, and on nothing else",
+                   box_subject(el, nbuf, sizeof nbuf));
         b.border_h = used_value_border_edge_px(el, true);
         return b;
     }
-    b = bf_layout(el, NULL, &sink, &sunk, NULL);
+    if (!bf_height_needs_content(el)) {
+        if (!baseline) {
+            b.border_h = used_value_border_edge_px(el, true);
+            return b;
+        }
+        /* The SIZE is settled and the LINE BOXES are not, so the walk runs for the baseline alone: everything
+           else it answers is about a height this box does not take from its content, and taking any of it would
+           be §10.6.3's rule running for a box §10.6.2 already sized. */
+        b.border_h = used_value_border_edge_px(el, true);
+        {
+            BfBox inner = bf_layout(el, NULL, &sink, &sunk, NULL, true);
+
+            DCHECK(!sunk, "the child walk reported placing a box it was not looking for");
+            /* §8.3.1's fourth adjoining pair needs "zero or auto computed height", which is exactly what
+               `bf_height_needs_content` just answered NO to — so a box on this arm cannot collapse through, and
+               the two answers being discarded here are discarded because the section makes them unreachable
+               rather than because this arm has no use for them. */
+            DCHECK(!inner.collapse_through,
+                   "CSS 2.2 §8.3.1's collapse-through note requires a box with \"zero or auto computed "
+                   "height\", and this box's `height` is neither — `bf_height_needs_content` answered false "
+                   "for it one line above. The walk nevertheless reported it collapsing through, so the "
+                   "note's conjunct and css-sizing-3 §3.2.1's behaves-as-auto have come apart, and the run "
+                   "this box would have merged is one every sibling below it is placed against");
+            b.last_baseline = inner.last_baseline;
+            b.has_line_box = inner.has_line_box;
+        }
+        return b;
+    }
+    b = bf_layout(el, NULL, &sink, &sunk, NULL, baseline);
     DCHECK(!sunk, "the child walk reported placing a box it was not looking for");
     if (b.collapse_through) return b;
     /* A box whose height BEHAVES AS AUTO (css-sizing-3 §3.2.1) is the one whose border-box height is this
@@ -939,9 +1058,44 @@ CssPx block_flow_auto_height(lxb_dom_element_t *el)
               "context' — so there is no block formatting context inside it for this walk to run over. The "
               "caller is core/layout/used_value.c, which classifies the box type before asking, so the two "
               "lists have come apart");
-    b = bf_layout(el, NULL, &unused, &found, NULL);
+    b = bf_layout(el, NULL, &unused, &found, NULL, false);
     DCHECK(!found, "the content-height walk reported placing the box it was not looking for");
     return b.content_h;
+}
+
+bool block_flow_last_line_box_baseline(lxb_dom_element_t *el, CssPx *baseline)
+{
+    CssPx unused = css_px(0.0);
+    bool found = false;
+    char *d;
+    bool container;
+    BfBox b;
+
+    DCHECK(el != NULL, "CSS 2.2 §10.8.1's `inline-block` baseline was asked for with no element");
+    DCHECK(baseline != NULL,
+           "CSS 2.2 §10.8.1's `inline-block` baseline was asked for with nowhere to put the distance. The "
+           "return value is only the sentence's \"no in-flow line boxes\" disjunct, so a caller holding it "
+           "alone would know that a baseline EXISTS and have no coordinate to align the line to");
+    d = bf_computed(el, "display");
+    container = block_flow_display_is_block_container(d);
+    free(d);
+    /* §9.2.1 states the alternative this walk chooses between — a block container "either contains only
+       block-level boxes or establishes an inline formatting context" — over a BLOCK CONTAINER BOX, and
+       §10.8.1's own sentence is about an `inline-block`, which §9.2.1 makes one. A box that is neither has no
+       §9.4.2 line boxes of its own and no §9.4.1 stack this walk can run, so there is nothing here to measure
+       rather than a measurement to decline. */
+    DCHECK(container,
+           "CSS 2.2 §10.8.1's `inline-block` baseline was asked of a box that is not a BLOCK CONTAINER. "
+           "§9.2.1's \"either contains only block-level boxes or establishes an inline formatting context\" is "
+           "stated over exactly that box, and core/layout/line_box.c has classified the box type — and taken "
+           "out the REPLACED `inline-block`, which has no baseline at all — before asking, so the two lists "
+           "have come apart");
+    b = bf_layout(el, NULL, &unused, &found, NULL, true);
+    DCHECK(!found, "the baseline walk reported placing a box it was not looking for");
+    /* `bf_layout` measures both of its distances from this box's TOP CONTENT EDGE, which is the frame this
+       entry's contract states, so there is no conversion here and none is hidden in the caller either. */
+    *baseline = b.last_baseline;
+    return b.has_line_box;
 }
 
 CssPx block_flow_child_top(lxb_dom_element_t *el)
@@ -963,7 +1117,7 @@ CssPx block_flow_child_top(lxb_dom_element_t *el)
            "own reasons — a `display: contents` ancestor, whose children css-display-3 §2.5 splices into the "
            "grandparent's box list, and an ancestor that generates no block container box at all — so the walk "
            "below would raise one of those messages a step late. Decide it HERE, where the discrepancy is");
-    (void)bf_layout(cb, el, &top, &found, NULL);
+    (void)bf_layout(cb, el, &top, &found, NULL, false);
     if (!found)
         DFAIL("CSS 2 §9.4.1's walk over this box's containing block placed every in-flow block-level child it "
               "found and NEVER REACHED THIS BOX, so there is no position to report. The walk skips exactly what "
@@ -1006,7 +1160,7 @@ size_t block_flow_anonymous_boxes(lxb_dom_element_t *el, BlockFlowAnonBox **out)
        come from. It is run whatever this container's `height` says — `bf_height_needs_content` decides whether
        a box's own content decides ITS SIZE, which is a different question from where the boxes inside it are,
        and a container with a declared height is exactly the one whose text can overflow it. */
-    (void)bf_layout(el, NULL, &unused, &found, &sink);
+    (void)bf_layout(el, NULL, &unused, &found, &sink, false);
     DCHECK(!found, "the anonymous-box walk reported placing a box it was not looking for");
     DCHECK(sink.n > 0,
            "CSS 2.2 §9.2.1.1's forcing generated NO anonymous block box inside a container whose child list "
