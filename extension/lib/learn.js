@@ -160,6 +160,34 @@ function intersectPredicates(target, observed) {
   target._predicates = target._predicates.filter((p) => seen.indexOf(_predKey(p)) >= 0);
 }
 
+/* WHICH TWO LOOSE EQUALITIES ARE ONE — the operand AND ITS TYPE, which is the identity the engine's own dedup
+   and its own intersection both use (solver/concolic.h `concolic_looseeq_same`). The type is half the key and
+   not a label on it: ECMAScript §7.1.19 ToString ( arg ) flattens `undefined`, `null`, `0` and `false` onto
+   text that is also a legal String operand, so a key over the value alone would merge `== undefined` with
+   `== "undefined"` — two gates whose §7.2.13 IsLooselyEqual ( x, y ) holding sets have nothing in common —
+   into one claim no run ever made. Composed and length-prefixed for `_predKey`'s reason. */
+function _leqKey(q) {
+  return [String(q.type), String(q.value)].map((s) => s.length + ":" + s).join("");
+}
+
+/* Loose equalities: INTERSECT, which is `intersectExcludedValues`' rule and not a second one — a gate belongs
+   on the record only where EVERY observed path obeyed it, so a sighting that reached the request without
+   holding it DISPROVES the claim. There is no hull and no widening because the domain is unordered: `== 0`
+   and `== ""` do not weaken to a common claim, and inventing one that covered both would mean computing the
+   union of two of §7.2.13's holding sets, whose Object arm runs the page's own ToPrimitive — deciding what
+   `==` MEANS, in a merge rule, which is the recogniser CLAUDE.md §RUN-DON'T-MATCH forbids.
+   `observed` is the array this sighting proved (empty = this sighting proved nothing). A target that has never
+   carried the field takes the sighting whole — it has no claim to intersect against. */
+function intersectLooselyEquals(target, observed) {
+  DCHECK(Array.isArray(observed),
+         "a loose-equality merge was handed something that is not an array — a sighting either proved a set " +
+         "of loose equalities or proved none, and `none` is the EMPTY array rather than a missing argument, " +
+         "because the empty set is what erases a claim an earlier path had made");
+  if (!Array.isArray(target._looselyEquals)) { target._looselyEquals = observed.slice(); return; }
+  const seen = observed.map(_leqKey);
+  target._looselyEquals = target._looselyEquals.filter((q) => seen.indexOf(_leqKey(q)) >= 0);
+}
+
 function astHeaderRecord(headers) {
   DCHECK(headers && typeof headers === "object" && !Array.isArray(headers) && Object.keys(headers).length,
          "astHeaderRecord was handed something that is not a non-empty header record — endpoint.c omits the " +
@@ -598,6 +626,37 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
     intersectPredicates(target, p.predicates);
   };
 
+  /* …AND THE LOOSE EQUALITIES THAT HELD, which is the FOURTH way a gate narrows a domain and the one that
+     reached this file as silence. A `===` that held determined the value and it is in `validValues`; a `==`
+     that held determined none — ECMAScript §7.2.13 IsLooselyEqual ( x, y ) coerces — so the engine records the
+     PREDICATE instead, and without carrying it a param whose only gate was `x == 0` renders exactly like one
+     nothing ever tested while the sibling path's `excludes` carries the same gate's other arm.
+     NOTHING HERE RE-IMPLEMENTS `==`. The value and its type are carried, intersected and rendered as the
+     transcript they are; §7.2.13's holding set is never computed, which would mean running the page's own
+     ToPrimitive for its step 12 arm in a consumer where no page code is running.
+     A CALL SITE IS ALWAYS AN OBSERVATION, so the no-key arm passes the EMPTY array rather than returning —
+     endpoint.c omits `looselyEquals` exactly where no loose equality held on every observed path to this
+     request, so its absence is the positive statement "this run proved nothing here" and the intersection is
+     what turns that into the erasure of an earlier path's claim. */
+  const _mergeLooselyEquals = (target, p) => {
+    if (!("looselyEquals" in p)) { intersectLooselyEquals(target, []); return; }
+    DCHECK(Array.isArray(p.looselyEquals) && p.looselyEquals.length > 0,
+           "an @H param carries a `looselyEquals` that is not a non-empty array — endpoint.c omits the key " +
+           "entirely where no loose equality held on every observed path, so an empty or non-array one here " +
+           "is the engine stating a domain it does not have");
+    DCHECK(p.looselyEquals.every((q) => q && typeof q === "object" && !Array.isArray(q) &&
+                                   typeof q.value === "string" &&
+                                   (q.type === "string" || q.type === "number" || q.type === "boolean" ||
+                                    q.type === "null" || q.type === "undefined" || q.type === "bigint")),
+           "an @H loose equality is not {value:<string>, type:one of string/number/boolean/null/undefined/" +
+           "bigint} — endpoint.c writes the operand through json_buf_str and the type through " +
+           "concolic_lit_report_name, whose switch is exhaustive over ConcolicLit and aborts on the kindless " +
+           "one, so anything else is that producer having changed shape under a reader that would carry the " +
+           "wrong half. The value may legitimately be the EMPTY string (`x == \"\"` is a gate a bundle " +
+           "writes), which is why its length is not asserted and its type is");
+    intersectLooselyEquals(target, p.looselyEquals);
+  };
+
   /* WHERE EACH VALUE LANDED IS THE PRODUCER'S STATEMENT, NEVER THIS FILE'S DEFAULT. endpoint.c writes
      `location` on every param — "path" for a `{hole}` the code interpolated into the address (its example
      value aligned out of the concolic's concrete URL), "query" for the display URL's query string, "body"
@@ -633,6 +692,7 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
     _mergeExcludes(m.parameters[p.name], p);
     _mergeBounds(m.parameters[p.name], p);
     _mergePredicates(m.parameters[p.name], p);
+    _mergeLooselyEquals(m.parameters[p.name], p);
   }
 
   // Reverse cross-doc reconcile: if THIS method is templated ({hole} path
@@ -767,6 +827,10 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
          `startsWith` exactly as a query param is, and a projection carrying two of the three facts would make
          the report's silence mean two different things in two halves of one record. */
       _mergePredicates(schema.properties[bp.name], bp);
+      /* …and the loose equality's, for the fourth time and the same reason. A body field the page POSTs is
+         gated by `== 0` exactly as a query param is, and a projection carrying three of the four facts would
+         make the report's silence mean two different things in two halves of one record. */
+      _mergeLooselyEquals(schema.properties[bp.name], bp);
     }
     if (!m.request) m.request = { $ref: schemaName };
   }

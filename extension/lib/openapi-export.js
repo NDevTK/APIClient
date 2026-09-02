@@ -283,6 +283,23 @@ function convertDiscoveryToOpenApi(doc, serviceName) {
                 ...(Array.isArray(pDef._predicates) && pDef._predicates.length
                     ? { "x-observed-predicates": pDef._predicates.map(
                           (q) => ({ method: q.method, arguments: q.arguments.slice(), holds: q.holds })) } : {}),
+                /* AND THE LOOSE EQUALITIES, AS AN ANNOTATION FOR THE SAME REASON ONE STEP SHARPER. The
+                   keyword that looks right is `const`, and it would be a LIE rather than an over-statement:
+                   ECMAScript §7.2.13 IsLooselyEqual ( x, y ) coerces, so `x == 0` holds for `0`, for `""`,
+                   for `false` and — by its step 12, which runs the page's own ToPrimitive — for objects, and
+                   asserting `const: 0` states that the run determined a value it explicitly did not. That is
+                   the WITNESS the engine refuses to pin, arriving in an exported document where a reviewer
+                   would read it as observed. `enum` over the holding set is the same fabrication with more
+                   members, and computing that set means re-implementing fourteen spec steps in an exporter.
+                   So the transcript is exported as a transcript: the operand the page wrote and WHAT IT
+                   SPELLS, because §7.1.19 ToString flattens `undefined`, `null`, `0` and `false` onto text a
+                   String operand can also spell and the two are different demands. A validator ignores it, a
+                   reviewer reads it as JavaScript, and nothing here claims a semantics.
+                   Emitted only where the claim survived every observed path, which is why this is a length
+                   test and not a `||` — lib/learn.js writes `[]` where another path disproved it. */
+                ...(Array.isArray(pDef._looselyEquals) && pDef._looselyEquals.length
+                    ? { "x-observed-loosely-equals": pDef._looselyEquals.map(
+                          (q) => ({ value: q.value, type: q.type })) } : {}),
               };
               /* NO DEFAULT. `endpoint.c` emits a `location` per param and `learn.js` writes it onto every
                  parameters entry, so an absent one means a record older than that producer — a stale IDB

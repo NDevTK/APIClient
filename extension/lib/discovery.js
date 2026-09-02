@@ -315,6 +315,11 @@ function _buildDiscoveryFieldShell(name, prop, requiredList) {
        three facts would make the panel's silence about the third mean two different things depending on
        which of the two producers built the record — the STRUCTURAL silence makeFieldDef exists to prevent. */
     _predicates: fdDocList(prop._predicates),
+    /* …and the LOOSE EQUALITIES the bundle's own code held, fourth of the four and by the same rule again.
+       A `==` gate over a body field the page POSTs is observed exactly as one over a query param is, and a
+       producer speaking about three of the four facts makes the panel's silence about the fourth mean two
+       different things depending on which producer built the record. */
+    _looselyEquals: fdDocList(prop._looselyEquals),
   }, "lib/discovery.js _buildDiscoveryFieldShell, property `" + name + "`");
 }
 

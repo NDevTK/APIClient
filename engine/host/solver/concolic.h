@@ -523,14 +523,12 @@ const char *concolic_name_cstr(JSContext *ctx, JSValueConst v);
    equality bounds rather than determines it does not make it less of a demand.
    AN UNSTATED ALGORITHM TAKES THE REFUSED ARM. JS_CONCOLIC_EQ_LOOSE is quickjs.h's zero, so a caller that
    forgets refuses the value and keeps the demand — forgetting is not a way to be exempted.
-   NAMED RESIDUAL — A LOOSE EQUALITY'S HOLDING ARM RECORDS NOTHING. What is not covered: the SET §7.2.13
-   leaves is a real narrowing this flow observed, and nothing here files it, so the true arm of `x == 0`
-   emits its parameter with the same bytes as a parameter nothing ever tested. What the next diff builds: a
-   loosely-equal DOMAIN recorder standing beside `concolic_exclude` and `concolic_bound` below, plus the @H
-   rendering that prints its shape, so that arm states `{==0}` where it now states nothing. How its absence
-   would show: for one source, the FALSE arm of a `==` gate carries an exclusion into the report while the
-   TRUE arm carries an unannotated shape — the two arms of one observation disagreeing about whether a gate
-   was seen at all, which §@H calls a wrong report rather than a partial one.
+   THE NARROWING THE LOOSE ARM DID OBSERVE IS FILED ELSEWHERE, and this function is not where a reader should
+   look for it. Refusing the VALUE is the whole of what this line does; the SET §7.2.13 leaves is a real fact
+   the flow observed and `concolic_looseeq` below records it, keyed by the HOLE the report prints rather than
+   by the `src` a read concretizes through — which is the reason it is a separate recorder and not a third
+   state here. So the two arms of one loose gate now state one thing each: the failing arm an exclusion, the
+   holding arm the predicate that held.
    NAMED RESIDUAL — A BIGINT IS NOT PINNED. What is not covered: `x === 5n` on its true arm records nothing, so
    a bundle gating on a BigInt literal re-forks every later branch over that source instead of deciding it.
    What the next diff builds: a quickjs export that mints a BigInt from its §6.1.6.2.21
@@ -604,6 +602,95 @@ void        concolic_contradict_example(const char *ident);
    and `*n` is 0 with a NULL return when the flow proved nothing about it. That is a POSITIVE statement (no
    equality gate over this value took its false arm on the path that built this request), never a hole. */
 const char *const *concolic_excluded(const char *hole, int *n);
+/* THE EQUALITY'S THIRD ARM — WHAT A **LOOSE** EQUALITY'S HOLDING ARM ESTABLISHES, which `concolic_pin` refuses
+ * to record and `concolic_exclude` is the wrong polarity for.
+ *
+ * §7.2.14 IsStrictlyEqual ( x, y ) step 1 is "If SameType(x, y) is false, return false", so a `===` that HELD
+ * determined the operand and the pin IS the record of it. §7.2.13 IsLooselyEqual ( x, y ) coerces instead, so
+ * its holding arm leaves a SET — and `concolic_pin` therefore writes no value for it, which is right and
+ * leaves the fact unfiled. That silence is the defect: §@H's shape states PROVENANCE and DOMAIN, and "the
+ * failure is asymmetric — a shape carrying provenance alone renders an UNCONSTRAINED parameter and a
+ * range-gated one with identical bytes, so its silence about the gate is read as the positive statement
+ * 'anything goes'". The true arm of `x == 0` emitted its parameter with the same bytes as a parameter nothing
+ * ever tested, while its own SIBLING carried an exclusion — two arms of one observation disagreeing about
+ * whether a gate was seen at all.
+ *
+ * IT INVENTS NOTHING, WHICH IS THE WHOLE OF WHY IT IS NOT THE PIN UNDER ANOTHER NAME. §@H's line is "whether a
+ * VALUE was determined, never whether a CONSTRAINT was": the operand is the concrete side the PAGE wrote, the
+ * arm is the arm this flow took, and no member of the set is chosen. A pin says "the value IS this"; this says
+ * "the page's own `==` against this answered true here", which is a fact about the PREDICATE and not about the
+ * value.
+ *
+ * WHAT THE HOLDING SET *IS* DEPENDS ON THE TOKEN'S KIND, AND THAT IS EXACTLY WHY THIS RECORD DOES NOT STATE
+ * IT. Under §7.2.13 an `undefined` token admits {undefined, null} (steps 2 and 3, plus step 4's [[IsHTMLDDA]]
+ * object in a web host); a Number token admits every String whose §7.1.4 ToNumber is that number (step 6),
+ * `false`/`true` through steps 9 and 10, a BigInt through step 13, and — step 12 — every Object whose
+ * ToPrimitive lands there, which runs the PAGE'S OWN valueOf; a String token admits Numbers and BigInts that
+ * spell it (steps 5, 7 and 8) and objects again. Six kinds, six different readings, and the Object arm of every
+ * one of them is decided by code that is not running by the time a report is composed. So a consumer that
+ * rendered the SET would be re-implementing §7.2.13's fourteen steps beside the engine that already runs
+ * them — a second copy of the spec's own table, and the one thing §RUN-DON'T-MATCH forbids most plainly. What
+ * is carried is the PREDICATE the page wrote, and the reader reads it as JavaScript: `== 0` says what `== 0`
+ * says. ONE recorder therefore serves every kind, and the kind is a FIELD OF THE ROW rather than a choice of
+ * recorder.
+ *
+ * `kind` IS NOT DECORATION ON `tok` — IT IS THE HALF THAT MAKES THE ROW A DIFFERENT DEMAND. `x == undefined`
+ * demands a value that is null or undefined, which for a query parameter is the demand that it be ABSENT;
+ * `x == "undefined"` demands the nine characters. §7.1.19 ToString flattens the two onto one spelling, exactly
+ * as it does for the pin, so a row that carried the spelling alone would state one of them and mean the other.
+ * It is the same pair `concolic_pin` takes and it is asserted the same way.
+ *
+ * IT IS NOT `concolic_strpred_file`, AND THE THREE REASONS ARE WHY THIS IS A THIRD RECORDER RATHER THAN A
+ * FOURTH KIND OF ROW IN THAT ONE. (1) `ConcolicCallPred.method` is "the property NAME the page read off the
+ * unknown — an atom, never a guess", and `==` is an OPERATOR: nothing was read off the value, so a row spelling
+ * `==` there states of the program a thing the program does not contain. (2) The two classes' ARMS are filed
+ * differently — a call predicate files BOTH arms into its own set, while a loose equality's failing arm is
+ * already `concolic_exclude`'s, so a `holds:false` equality row is a value no producer can ever emit and would
+ * be a dead branch in every consumer of it. (3) This row must carry its operand's KIND, which is meaningless
+ * for a call and would put a field on every call-predicate row that answers a question that row is never
+ * asked — §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS, manufactured rather than met.
+ *
+ * IT IS ALSO NOT `concolic_bound`, WHICH IS THE NEAR MISS. An interval is a claim about a NUMBER, and
+ * `x == 0` holding is not one: it admits `""`, `false` and `[]`, so writing lo=hi=0 would state that the value
+ * IS the number zero — the WITNESS this whole rule exists to refuse, arriving through a different recorder.
+ * And `x == undefined` has no double to file at all, which `concolic_bound`'s own `txt && *txt` assert says.
+ *
+ * A BIGINT TOKEN IS RECORDED HERE THOUGH `concolic_pin` REFUSES ONE, and the two are consistent rather than in
+ * tension: the pin's read-back must MINT the value again (`pin_mint`, which quickjs.h exports no route to for
+ * an arbitrary-precision literal), while this must only PRINT it. A row states a fact; a pin answers a read.
+ *
+ * Keyed by the HOLE KEY for `concolic_cmp_subject`'s reason. Within one flow the observations CONJOIN and
+ * accumulate (`if (x == 0 && x == "")` is two facts about one parameter); an exact repeat — same kind, same
+ * spelling — is idempotent. Across sightings of one endpoint the merge is the OPPOSITE and lives in
+ * endpoint.c, for the reason stated there.
+ * IT DOES NOT TRAVEL THROUGH A DERIVATION, for the reason `concolic_exclude` and `concolic_bound` give:
+ * `x.length == 0` is a fact about the LENGTH, and carrying it onto `x` would be the recorded
+ * transform-expression §Re-execution forbids. */
+typedef struct { char *tok; signed char kind; } ConcolicLooseEq;
+void        concolic_looseeq(const char *hole, ConcolicLit kind, const char *tok);
+/* WHAT THIS FLOW'S OWN LOOSE EQUALITIES HELD OF `hole` — borrowed, valid until the running flow's constraint
+   next grows, `*n` 0 with a NULL return when the flow proved nothing. That zero is a POSITIVE statement (no
+   loose equality over this value held on the path that built this request), never a hole a caller may fill. */
+const ConcolicLooseEq *concolic_looseeq_read(const char *hole, int *n);
+/* IS `p` THE SAME OBSERVATION AS (kind, tok)? ONE SPELLER, for `concolic_pred_same`'s reason exactly: it is
+   asked at both ends of the pipeline — this file dedups a repeat WITHIN a flow, endpoint.c intersects sets
+   ACROSS sightings — and an intersection using a stricter rule than the dedup drops from the record a claim
+   every observed path obeyed. The KIND is half the comparison: `x == 0` and `x == "0"` are two gates. */
+int         concolic_looseeq_same(const ConcolicLooseEq *p, ConcolicLit kind, const char *tok);
+/* WHAT ONE ROW OWNS, COPIED AND RELEASED BY ONE PAIR OF LINES EACH — `concolic_pred_copy`'s rule over this
+   row's own fields, and here for the same reason: three holders keep a set of these (the flow's constraint
+   head, its copy-up from an inherited segment, and endpoint.c's per-request row and merged param), so a field
+   added to the struct must have nowhere else it could be written. */
+void        concolic_looseeq_copy(ConcolicLooseEq *dst, const ConcolicLooseEq *src);
+void        concolic_looseeq_release(ConcolicLooseEq *p);
+/* THE KIND AS A REPORT NAMES IT — "string", "number", "boolean", "null", "undefined", "bigint".
+   IT IS NOT `lit_tag`, AND THE TWO ARE NOT A DUPLICATED TABLE: that one is the kind's one-letter field in a
+   composed constraint IDENTITY, where the only property that matters is that two kinds never write one byte,
+   and this is the word a reviewer reads. One fact, two questions asked of it. Both switch over the whole enum
+   with no default, so a kind added to `ConcolicLit` reddens both rather than silently taking one's fallthrough.
+   Aborts on CONCOLIC_LIT_NONE: a row is written only where the operand HAS a spelling, so a kindless one
+   reaching an emission is a record whose own producer could not say what type the page compared against. */
+const char *concolic_lit_report_name(ConcolicLit k);
 /* THE ORDERING'S HALF OF THE SAME RULE — the exclusion's twin over an ORDERED domain, and the second-largest
    gate class a real minified bundle contains.
    An equality determines a VALUE on one arm and an exclusion on the other. An ordering determines NO value on

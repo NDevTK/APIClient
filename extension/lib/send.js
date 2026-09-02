@@ -201,6 +201,13 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
                `_excludedValues` rather than with a `||` for the reason stated there: `[]` is a claim another
                path DISPROVED and must not arrive as "nothing was observed". */
             _predicates: fdDocList(pd._predicates),
+            /* …AND THE FOURTH — the LOOSE EQUALITIES (`==`) the bundle's own code HELD of this value.
+               ECMAScript §7.2.14 IsStrictlyEqual step 1 makes a `===` that held a DETERMINATION, so it
+               arrives as a value; §7.2.13 IsLooselyEqual coerces and its holding arm determines none, so the
+               engine records the predicate — and a projection carrying the first three and not this one
+               leaves a parameter gated only by `x == 0` rendering exactly like one nothing had ever tested.
+               Written like `_excludedValues` for the reason stated there. */
+            _looselyEquals: fdDocList(pd._looselyEquals),
             /* NO `_sourceMapName` AND NO `_astValueSource`. The first promised a declared name recovered
                from the page's source map (minified `e` shown as `owner`); nothing in engine/host has ever
                emitted one and lib/learn.js's copy of it read a field the engine's param record does not
@@ -320,7 +327,7 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
       /* AND IT DECLARES THE WHOLE RECORD, NOT THE FIVE FIELDS IT HAS AN INTERESTING ANSWER FOR. This literal
          and the discovery-doc literal above are the map's TWO producers, and they were writing two different
          shapes: everything the doc-derived branch says about a parameter's domain — `enum`, `format`,
-         `_range`, `_bounds`, `_excludedValues`, `_predicates`, the three confidences, the example and its
+         `_range`, `_bounds`, `_excludedValues`, `_predicates`, `_looselyEquals`, the three confidences, the example and its
          source — was simply absent here. The consumers papered over the disagreement rather than reporting it
          (`param.enum || null`, `param._range || null`, `param._defaultValue ?? null` in lib/popup-form.js),
          which is the §Architecture defect exactly: a default is what stops a producer's silence being a
@@ -343,6 +350,7 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
                                _defaultValue: null, _defaultConfidence: null, _range: null,
                                _exampleValue: null, _exampleValueSource: null,
                                _excludedValues: null, _bounds: null, _predicates: null,
+                               _looselyEquals: null,
                                _astForcedValues: null,
                                _astValidValues: null };
       DCHECK(cur && typeof cur === "object",

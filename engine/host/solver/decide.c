@@ -1462,16 +1462,16 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
     const char *src = NULL, *tok = NULL;
     ConcolicLit tok_kind = CONCOLIC_LIT_NONE;
     char *key;
-    int op, forked = 0, arm, real, neg;
+    int op, forked = 0, arm, real, neg, eq_holds, eq_fails;
 
     if (!g_running || !concolic_is(cond)) return -1;   /* not a forced-exec branch on a concolic value */
 
     /* THE POLARITY BETWEEN THE VALUE THIS BRANCH TESTS AND THE PREDICATE IT IS ABOUT — read ONCE, here, and
        applied at exactly two places: to the observation on the way in, and to the arm on the way out. Between
        those two lines this whole function works in the PREDICATE's terms, which is what lets the pin, the
-       exclusion, the bound and the call predicate below record off the same three readers with no case for a
-       negation anywhere: `arm` means "the page's own gate answered true", whichever way the page spelled the
-       test. Everything that is not a negation answers 0 and reads exactly as it did. */
+       exclusion, the loose-equality domain, the bound and the call predicate below record off the same
+       readers with no case for a negation anywhere: `arm` means "the page's own gate answered true",
+       whichever way the page spelled the test. Everything that is not a negation answers 0 and reads exactly as it did. */
     neg = concolic_branch_neg(cond);
     DCHECK(neg == 0 || neg == 1,
            "a branch condition carries a polarity that is neither itself nor its complement — the arm below "
@@ -1517,7 +1517,19 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
        operand as EITHER of two values, and concretize-on-pin then decided every later branch over that source
        out of a witness the run had not observed. concolic_pin splits the two writes on it; see its
        declaration for the step-by-step reading and for why the principal DEMAND is made under both. */
-    if (src && tok && ((op == OPCMP_EQ && arm == 1) || (op == OPCMP_NE && arm == 0)))
+    /* WHICH SIDE OF THE EQUALITY THIS FLOW IS STANDING ON, SPELLED ONCE. Three sibling records now read it —
+       the pin, the exclusion and the loose-equality domain below — and three copies of
+       `(op == OPCMP_EQ && arm == 1) || …` are three rules free to disagree about which arm proved what, which
+       is the one disagreement that would file a pin on the arm that disproved it. `!=` is the same predicate
+       with its arms swapped, which is why neither name mentions the operator's spelling. */
+    eq_holds = (op == OPCMP_EQ && arm == 1) || (op == OPCMP_NE && arm == 0);
+    eq_fails = (op == OPCMP_EQ && arm == 0) || (op == OPCMP_NE && arm == 1);
+    DCHECK(op == OPCMP_NONE ? (!eq_holds && !eq_fails) : (eq_holds != eq_fails),
+           "an equality's two arms are neither exclusive nor exhaustive over one branch — a comparison result "
+           "that is not an equality must stand on NEITHER (an ordering and a call predicate determine no "
+           "value), and one that is must stand on exactly one, or a pin and the exclusion that contradicts it "
+           "are recorded off the same run of the same gate");
+    if (src && tok && eq_holds)
         concolic_pin(src, concolic_root_c(cond), tok_kind, tok, concolic_cmp_algo(cond));
     /* AND THE OTHER ARM, WHICH IS AN OBSERVATION AND NOT AN ABSENCE — the half this line did not have.
        Forced multi-path runs BOTH arms of every `x === "admin"`, so the two branches of this `if` fire at
@@ -1540,9 +1552,41 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
        contrapositive is exactly this arm: a LOOSE equality that FAILED proves the operand is not the token,
        every bit as strictly as a strict one that failed. Gating this on the algorithm alongside the pin would
        delete a real observation on the arm the tool exists to explore, for a symmetry §7.2.13 does not have. */
-    else if (tok && ((op == OPCMP_EQ && arm == 0) || (op == OPCMP_NE && arm == 1))) {
+    else if (tok && eq_fails) {
         const char *subj = concolic_cmp_subject(cond);
         if (subj) concolic_exclude(subj, tok);
+    }
+    /* AND THE HOLDING ARM OF A **LOOSE** EQUALITY, WHICH IS THE ONE ARM OF THE THREE THAT USED TO RECORD
+       NOTHING AT ALL. `concolic_pin` above refuses the value here and is right to — §7.2.13 IsLooselyEqual
+       ( x, y )'s holding arm leaves a SET, so writing a member of it would pick a WITNESS — but a refusal is
+       not a record, and the fact the flow observed had nowhere to go. §@H: "a shape carrying provenance alone
+       renders an UNCONSTRAINED parameter and a range-gated one with identical bytes, so its silence about the
+       gate is read as the positive statement 'anything goes'". The two arms of ONE `==` gate were disagreeing
+       about whether a gate had been seen at all — the failing arm carried an exclusion into the report and the
+       holding arm carried nothing.
+       IT IS A SIBLING OF THE TWO ABOVE AND NOT AN `else` OF THEM, exactly as the ordering and the call
+       predicate below are not: those two branch on which ARM the flow took, this on which ALGORITHM the page
+       wrote, and folding the second question into the first `if/else` chain would make their independence an
+       accident of ordering rather than a property the reads assert.
+       IT DOES NOT DEPEND ON `src`, WHICH IS WHY IT IS NOT INSIDE THE PIN'S `if`. A pin is keyed by `src`
+       because that is what a later READ concretizes through; a domain is keyed by the HOLE because that is all
+       the emission has (concolic_cmp_subject states the pair). The NULL subject is the positive statement the
+       exclusion reads it as: an operand whose shape is the unnameable `{}` has no hole the @H surface prints.
+       THE ALGORITHM IS ASKED ONLY WHERE THERE IS ONE. `concolic_cmp_algo` aborts on a predicate that is not an
+       equality rather than inventing a §7.2.13/§7.2.14 reading for it, so `eq_holds` — which is false for
+       every OPCMP_NONE — is its precondition and is evaluated first here by the `&&`.
+       IT INVENTS NOTHING, AND THE LINE IS THE SAME ONE THE PIN IS REFUSED BY: `tok` is the concrete side the
+       PAGE wrote and `arm` is the arm this run took, so what is recorded is that the page's own `==` against
+       that operand ANSWERED TRUE here. §@H draws the line at whether a VALUE was determined, never whether a
+       constraint was — and no value is determined by a predicate answering true. */
+    if (tok && eq_holds && concolic_cmp_algo(cond) == JS_CONCOLIC_EQ_LOOSE) {
+        const char *subj = concolic_cmp_subject(cond);
+        DCHECK(tok_kind != CONCOLIC_LIT_NONE,
+               "an equality reached the loose-domain record with an operand this engine cannot spell — "
+               "pred_new asserts that a token and its kind are written together, so a spelling with no kind "
+               "would file `x == undefined` and `x == \"undefined\"` under one row, and §7.2.13 steps 2 and 3 "
+               "give those two gates holding sets with nothing in common");
+        if (subj) concolic_looseeq(subj, tok_kind, tok);
     }
     /* AND THE ORDERING, WHICH IS THE SAME OBSERVATION OVER AN ORDERED DOMAIN AND WHOSE *BOTH* ARMS CARRY ONE.
        An equality splits into a determined VALUE and a determined non-value; an ordering determines no value

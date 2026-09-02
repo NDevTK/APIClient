@@ -79,7 +79,8 @@ void    endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
    `[ {"method":..,"url":..,"provenance":"observed"|"derived"|"forced",
       "params":[{"name":..,"location":..,"validValues":[..],"excludes":[..],
       "bounds":{"minimum"|"exclusiveMinimum":N,"maximum"|"exclusiveMaximum":N},
-      "predicates":[{"method":..,"arguments":[..],"holds":true|false}]}]}, ... ]`.
+      "predicates":[{"method":..,"arguments":[..],"holds":true|false}],
+      "looselyEquals":[{"value":..,"type":..}]}]}, ... ]`.
    Every param states WHERE IT LANDED — "path", "query" or "body" — because that is what the reviewer replays
    it with, and because a consumer that has to default the field cannot tell an unknown from a query param.
    AND EVERY RECORD STATES WHAT IT IS EVIDENCE OF. `provenance` is one of solver/engine.h's three words and it
@@ -138,6 +139,33 @@ void    endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
    IT INVENTS NOTHING AND STAYS A SHAPE: no string satisfying the predicate is ever emitted, exactly as no
    member of `bounds`' interval is. `predicates` is omitted where no call predicate survived every observed
    path, and that absence is the statement.
+   `looselyEquals` IS THE FOURTH, AND IT IS THE ONE ARM OF AN EQUALITY THAT USED TO REACH THIS SURFACE AS
+   SILENCE. ECMAScript §7.2.14 IsStrictlyEqual ( x, y ) step 1 is "If SameType(x, y) is false, return false",
+   so a `===` that HELD determined the value and it is in `validValues`; §7.2.13 IsLooselyEqual ( x, y )
+   coerces instead, so its holding arm determines none and the pin refuses it — correctly, and until this key
+   existed that refusal was the whole of the record. A param whose only gate was `x == 0` therefore rendered
+   with the same bytes as one nothing ever tested, while the SIBLING flow that took the same gate's other arm
+   carried an `excludes` — two arms of one observation disagreeing about whether a gate was seen at all, which
+   is this file's own wrong-report-not-a-partial-one rule read against itself.
+   Each entry is `{"value":<string>,"type":"string"|"number"|"boolean"|"null"|"undefined"|"bigint"}`: the
+   operand the page wrote, as its own §7.1.19 ToString ( arg ), and WHAT THAT OPERAND SPELLS. Both halves are
+   load-bearing and the second is not decoration on the first — ToString flattens `undefined`, `null`, `0` and
+   `false` onto text that is also a legal String operand, and `x == undefined` is a demand that the value be
+   null or undefined (for a query parameter, that it be ABSENT) while `x == "undefined"` is a demand for nine
+   characters. A consumer that carried the value alone would state one of those and mean the other.
+   IT STATES THE PREDICATE AND NEVER THE SET IT ADMITS. §7.2.13's holding set differs per token kind and its
+   step 12 arm runs the PAGE's own ToPrimitive, so rendering the set would mean re-implementing fourteen spec
+   steps in a consumer, over code that is not running by then — CLAUDE.md §RUN-DON'T-MATCH, performed in a
+   report. What is carried is the transcript, and a reader reads `== 0` as JavaScript.
+   IT INVENTS NOTHING: no member of the holding set is emitted, exactly as no member of `bounds`' interval is,
+   and `validValues` still carries only what the code COMPUTED. `looselyEquals` is omitted where no loose
+   equality held on every observed path, and that absence is the statement.
+   THERE IS NO `holds:false` HERE, AND THAT IS A PROPERTY OF THE RECORD RATHER THAN A GAP IN IT. The arm this
+   key does not cover is the arm `excludes` already covers — a loose equality that FAILED proves the operand is
+   not the token as strictly as a strict one that failed, because §7.2.14 step 1 makes `x === tok` imply
+   SameType and §7.2.13 step 1 then hands a SameType pair straight to §7.2.14. So one gate files one fact per
+   arm, into two keys, and a consumer that branched on a false arm here would be reading for a value no
+   producer can emit.
    It is an array and not a document
    because the DOCUMENT is one thing the host reads once (result.h): a surface that wrapped itself could not
    be composed with the others without a host-side splice, which is the host owning structure again. */

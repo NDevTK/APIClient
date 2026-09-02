@@ -155,6 +155,14 @@ function buildFormFields(schema, initialData = null) {
                as the positive statement "anything goes". `undefined` and `null` are one statement here for
                the reason they are one on the two lines above. */
             _predicates: param._predicates === undefined ? null : param._predicates,
+            /* …and the LOOSE EQUALITY gate's, which is the fourth fact of the same kind and the one arm of an
+               equality that reached this panel as silence. A `===` that held is a VALUE and arrives through
+               `_astValidValues`; a `==` that held determined none (ECMAScript §7.2.13 IsLooselyEqual ( x, y )
+               coerces), so the engine records the predicate and this is where it renders. Without it a
+               parameter whose only gate was `x == 0` renders exactly like one nothing ever tested, while the
+               sibling path's `_excludedValues` carries the same gate's other arm. `undefined` and `null` are
+               one statement here for the reason they are one on the three lines above. */
+            _looselyEquals: param._looselyEquals === undefined ? null : param._looselyEquals,
           }, "lib/popup-form.js URL parameter `" + name + "`"),
           "param",
           0,
@@ -342,6 +350,27 @@ function predicatesPhrase(ps) {
            .join(" and ");
 }
 
+/* THE LOOSE EQUALITIES THE BUNDLE'S OWN CODE HELD OF THIS PARAMETER, rendered as the operator the page wrote.
+   `== 0` says what `== 0` says, and this file does not say more: ECMAScript §7.2.13 IsLooselyEqual ( x, y )'s
+   holding set differs per operand type and its step 12 arm runs the page's own ToPrimitive, so spelling out
+   "0, \"\", false or any object coercing to zero" here would be re-implementing fourteen spec steps in a
+   renderer — the recogniser CLAUDE.md §RUN-DON'T-MATCH forbids, one hop downstream of the engine that refused
+   to build it. The reviewer reads JavaScript.
+   THE OPERAND IS PRINTED IN ITS OWN TYPE AND NOT AS THE ENGINE'S TRANSPORT STRING, which is the whole reason
+   the record carries a `type`: §7.1.19 ToString ( arg ) flattens `undefined`, `null`, `0` and `false` onto
+   text that is also a legal String operand, so printing the value alone would render `x == undefined` and
+   `x == "undefined"` identically while §7.2.13 steps 2 and 3 give them holding sets with nothing in common.
+   Only a `string` operand is quoted; every other type is the page's own literal.
+   THERE IS NO FALSE ARM TO RENDER, unlike `predicatesPhrase`'s leading `!`: a loose equality that FAILED is
+   filed as an exclusion instead (solver/endpoint.h states why the two arms take two keys), so it arrives here
+   through `_excludedValues` and this phrase is always an affirmative one.
+   Returns "" when there is nothing to state, which every caller reads as the positive statement it is. */
+function looselyEqualsPhrase(qs) {
+  if (!Array.isArray(qs) || !qs.length) return "";
+  return qs.map((q) => "== " + (q.type === "string" ? JSON.stringify(String(q.value)) : String(q.value)))
+           .join(" and ");
+}
+
 // Form-builder iterative driver. The three public entry points
 // (createFieldInput, _buildRepeatedMessageItem, _buildMessageGroup)
 // each seed a build queue, build the root wrapper synchronously, and
@@ -481,6 +510,16 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
   const _pp = predicatesPhrase(fieldDef._predicates);
   if (_pp) {
     labelHtml += ` <span class="field-stat badge-predicates" title="the predicates the bundle's own code ran on this parameter, and the answer each got, on every observed path to this request — a leading ! is a test the run PROVED false. A constraint the code stated, never a value it computed">${esc(_pp)}</span>`;
+  }
+  /* …AND THE LOOSE EQUALITY'S HALF, WHICH IS THE FOURTH AND THE ONE THAT USED TO ARRIVE AS NOTHING. A `===`
+     that held DETERMINED the value and the parameter shows it as a prefill; a `==` that held determined none,
+     so the engine refuses to pin and records the predicate instead — and until this badge existed a parameter
+     the bundle gated with `x == 0` rendered exactly like one nothing ever tested. It renders a CONSTRAINT and
+     never a value: `== 0` is not something a reviewer can mistake for a key to send, which is why @H may
+     state it where inventing `0` out of it is forbidden. */
+  const _lq = looselyEqualsPhrase(fieldDef._looselyEquals);
+  if (_lq) {
+    labelHtml += ` <span class="field-stat badge-predicates" title="the loose equalities (==) the bundle's own code held of this parameter on every observed path to this request. ECMAScript §7.2.13 IsLooselyEqual coerces, so this narrows the value without determining it — read it as JavaScript. A constraint the code stated, never a value it computed">${esc(_lq)}</span>`;
   }
   // A PREFILLED BOX ALWAYS CARRIES ITS PROVENANCE. The badge is driven by the SAME resolvePrefill() the input
   // reads, so the box can never show a value the label does not attribute — which is what happened for a
@@ -926,6 +965,12 @@ function createSingleInput(fieldDef, initialValue = null, category = null) {
            the order here decides which is repeated in the box and never which is reported. */
         : predicatesPhrase(fieldDef._predicates)
           ? (type || "value") + " satisfying " + predicatesPhrase(fieldDef._predicates)
+        /* …and the LOOSE EQUALITY last of the four, for the reason the call gate is fourth-from-last: a box
+           states ONE thing, and the three above are the narrower statements. All four are on the label as
+           their own badges, so the order here decides which is repeated in the box and never which is
+           reported. */
+        : looselyEqualsPhrase(fieldDef._looselyEquals)
+          ? (type || "value") + " satisfying x " + looselyEqualsPhrase(fieldDef._looselyEquals)
         : (type || "value");
       if (pf.value !== null) {
         inp.value =

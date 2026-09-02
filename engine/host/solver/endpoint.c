@@ -45,7 +45,8 @@ static const char *const ep_loc_name[] = { "query", "path", "body" };
 typedef struct { int has_lo, has_hi; double lo, hi; int lo_incl, hi_incl; char *lo_txt, *hi_txt; } ParamBound;
 typedef struct { char *name; EpLoc loc; char **vals; int nvals, vcap;
                  char **excl; int nexcl; ParamBound bnd;
-                 ConcolicPred *pred; int npred; } Param;
+                 ConcolicPred *pred; int npred;
+                 ConcolicLooseEq *leq; int nleq; } Param;
 typedef struct { char *name; char *value; } EpHeader;   /* the transport half: what the request must carry */
 /* `is_asset` IS WHAT THE RESOURCE AT THIS ADDRESS TURNED OUT TO BE, and it can only be written after the
    record exists. §Attacker sources: "Static assets are NEVER endpoints (magic-byte + content-type, not URL
@@ -138,8 +139,11 @@ static char *url_display(JSContext *ctx, JSValueConst url) {
    live in the flow's constraint head, which the very next narrowing reallocs. */
 /* …and `pred` for the reason both of those are copied: concolic_strpred_read hands back a BORROWED row that
    lives in the flow's constraint head, which the very next narrowing reallocs. */
+/* …and `leq` for the same reason a third time: concolic_looseeq_read hands back a BORROWED row out of that
+   same head. */
 typedef struct { char *name; char *val; EpLoc loc; char **excl; int nexcl; ParamBound bnd;
-                 ConcolicPred *pred; int npred; } KV;
+                 ConcolicPred *pred; int npred;
+                 ConcolicLooseEq *leq; int nleq; } KV;
 typedef struct { KV *e; int n, cap; } KvBuf;
 
 /* ONE COPY AND ONE DISPOSER FOR A SET OF THEM. What a single ROW owns is concolic.c's to say
@@ -162,6 +166,33 @@ static void param_pred_free(ConcolicPred *p, int n) {
     int i;
     for (i = 0; i < n; i++) concolic_pred_release(&p[i]);
     free(p);
+}
+
+/* THE SAME PAIR OVER THE LOOSE-EQUALITY ROW, and here for the reason the two above are here: what a single ROW
+   owns is concolic.c's to say (concolic_looseeq_copy / concolic_looseeq_release) and is never re-spelled here;
+   what THIS file owns is the ARRAY around the rows. */
+static ConcolicLooseEq *param_leq_copy(const ConcolicLooseEq *src, int n) {
+    ConcolicLooseEq *out;
+    int i;
+
+    if (n <= 0) return NULL;
+    out = malloc((size_t)n * sizeof(ConcolicLooseEq));
+    CHECK(out, "endpoint: OOM taking a param's observed loose equalities off the flow");
+    for (i = 0; i < n; i++) concolic_looseeq_copy(&out[i], &src[i]);
+    return out;
+}
+
+static void param_leq_free(ConcolicLooseEq *p, int n) {
+    int i;
+    for (i = 0; i < n; i++) concolic_looseeq_release(&p[i]);
+    free(p);
+}
+
+/* WHICH TWO LOOSE EQUALITIES ARE ONE is asked at both ends — concolic.c dedups a repeat within a flow, this
+   file intersects across sightings — so it is asked of ONE speller (concolic_looseeq_same), for the reason
+   param_pred_same states of its own. */
+static int param_leq_same(const ConcolicLooseEq *a, const ConcolicLooseEq *b) {
+    return concolic_looseeq_same(a, (ConcolicLit)b->kind, b->tok);
 }
 
 /* WHICH TWO PREDICATES ARE ONE is asked at both ends — concolic.c dedups a repeat within a flow, this file
@@ -253,6 +284,21 @@ static void kv_add(KvBuf *b, const char *name, size_t nlen, const char *val, siz
             b->e[b->n].npred = npr;
         }
     }
+    /* …AND THE LOOSE EQUALITIES THAT HELD, off the SAME flow at the SAME instant, for the same reason a fourth
+       time. It is the arm §7.2.13 IsLooselyEqual ( x, y ) leaves undetermined and concolic_pin therefore
+       refuses to pin: a param whose only gate was `x == 0` and one nothing ever tested render with identical
+       bytes without this, while that param's own SIBLING flow carries an exclusion — the two arms of one
+       observation disagreeing about whether a gate was seen at all. */
+    b->e[b->n].leq = NULL;
+    b->e[b->n].nleq = 0;
+    if (hole) {
+        int nlq = 0;
+        const ConcolicLooseEq *lq = concolic_looseeq_read(hole, &nlq);
+        if (nlq > 0) {
+            b->e[b->n].leq = param_leq_copy(lq, nlq);
+            b->e[b->n].nleq = nlq;
+        }
+    }
     b->n++;
 }
 
@@ -270,6 +316,7 @@ static void kv_free(KvBuf *b) {
         free(b->e[i].excl);
         param_bound_free(&b->e[i].bnd);
         param_pred_free(b->e[i].pred, b->e[i].npred);
+        param_leq_free(b->e[i].leq, b->e[i].nleq);
     }
     free(b->e); b->e = NULL; b->n = b->cap = 0;
 }
@@ -598,6 +645,35 @@ static void param_intersect_pred(Param *p, const ConcolicPred *src, int n) {
     p->npred = k;
 }
 
+/* THE LOOSE EQUALITIES' FIRST OBSERVATION — this endpoint's record takes the set the recording flow proved. */
+static void param_set_leq(Param *p, const ConcolicLooseEq *src, int n) {
+    DCHECK(p->nleq == 0 && p->leq == NULL,
+           "an endpoint param's loose-equality set was seeded twice — the first sighting takes the set and "
+           "every later one INTERSECTS it, so a second seed would replace a constraint that had already been "
+           "narrowed by another path and state, of this endpoint, something no run of the program obeyed");
+    if (n <= 0) return;
+    p->leq = param_leq_copy(src, n);
+    p->nleq = n;
+}
+
+/* …AND EVERY LATER ONE NARROWS IT — `param_intersect_excl`'s claim over a set of loose equalities instead of a
+   set of excluded tokens, and the SAME rule rather than a second one. A claim the record still carries is one
+   EVERY observed path to this endpoint obeyed; a gate this flow did not hold is one some path reached the
+   request without, and the claim goes. There is no hull because there is no order: `== 0` and `== ""` do not
+   weaken to a common claim, and inventing one that covered both would mean computing the union of two of
+   §7.2.13 IsLooselyEqual ( x, y )'s holding sets — which is deciding what `==` MEANS, in a merge rule, over an
+   Object arm that runs the page's own ToPrimitive and is not running here. */
+static void param_intersect_leq(Param *p, const ConcolicLooseEq *src, int n) {
+    int i, j, k = 0;
+    for (i = 0; i < p->nleq; i++) {
+        int keep = 0;
+        for (j = 0; j < n; j++) if (param_leq_same(&p->leq[i], &src[j])) { keep = 1; break; }
+        if (keep) p->leq[k++] = p->leq[i];
+        else concolic_looseeq_release(&p->leq[i]);   /* the ROW's string; the array is this param's */
+    }
+    p->nleq = k;
+}
+
 static void param_add_val(Param *p, const char *v) {   /* merge a validValue (dedup, skip empty) */
     if (!v || !v[0]) return;
     for (int i = 0; i < p->nvals; i++) if (!strcmp(p->vals[i], v)) return;
@@ -663,6 +739,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
                 param_intersect_excl(&g_eps[i].params[j], kvb.e[j].excl, kvb.e[j].nexcl);
                 param_widen_bound(&g_eps[i].params[j].bnd, &kvb.e[j].bnd);
                 param_intersect_pred(&g_eps[i].params[j], kvb.e[j].pred, kvb.e[j].npred);
+                param_intersect_leq(&g_eps[i].params[j], kvb.e[j].leq, kvb.e[j].nleq);
             }
             /* A REQUIRED HEADER THIS ENDPOINT DID NOT HAVE IS EMITTED OUTPUT, and this path credited the WFQ
                with nothing for it. An endpoint's IDENTITY is method + path + param names AND locations
@@ -697,6 +774,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
         param_set_excl(&e->params[e->np], kvb.e[j].excl, kvb.e[j].nexcl);
         param_set_bound(&e->params[e->np].bnd, &kvb.e[j].bnd);
         param_set_pred(&e->params[e->np], kvb.e[j].pred, kvb.e[j].npred);
+        param_set_leq(&e->params[e->np], kvb.e[j].leq, kvb.e[j].nleq);
         e->np++;
     }
     /* The count is deliberately DROPPED here: every header of a brand-new endpoint is new, and the discovery
@@ -871,6 +949,39 @@ char *endpoint_json_array(void) {
                 }
                 json_buf_raw(&b, "]");
             }
+            /* …AND THE LOOSE EQUALITIES THAT HELD, which is the FOURTH way a gate narrows a domain and the one
+               that used to reach the report as silence. §7.2.14 IsStrictlyEqual ( x, y ) step 1 is "If
+               SameType(x, y) is false, return false", so a `===` that held DETERMINED the value and it appears
+               in `validValues`; §7.2.13 IsLooselyEqual ( x, y ) coerces, so its holding arm determines nothing
+               and `concolic_pin` refuses it — correctly, and until this key existed that refusal was the whole
+               of the record. The param then rendered exactly like one nothing had ever tested, while its
+               sibling flow's `excludes` carried the same gate's other arm.
+               EACH ENTRY IS `{"value":<string>,"type":<string>}` AND BOTH HALVES ARE LOAD-BEARING. The value is
+               the operand's own §7.1.19 ToString ( arg ), which flattens `undefined`, `null`, `0` and `false`
+               onto text that is also a legal String operand — so `type` is what separates `== undefined`
+               (which §7.2.13 steps 2 and 3 make a demand for null-or-undefined, and for a query parameter a
+               demand that it be ABSENT) from `== "undefined"` (which demands nine characters). The word is
+               concolic.c's own report name for the kind and never a re-spelling of it here.
+               IT STATES THE PREDICATE AND NOT THE SET. §7.2.13's holding set depends on the token's kind and
+               its Object arm runs the PAGE's own ToPrimitive, so a consumer that rendered the set would be
+               re-implementing fourteen spec steps beside the engine that runs them — §RUN-DON'T-MATCH, in a
+               report. What is carried is the transcript: the page wrote `== 0` and this run got true.
+               IT INVENTS NOTHING. No member of the holding set is emitted; `validValues` still carries only
+               what the code COMPUTED, exactly as it does beside `bounds`.
+               THE ABSENCE IS THE STATEMENT, as it is for `excludes`, `bounds` and `predicates`: no key at all
+               where no loose equality held on every observed path to this request, never an empty array. */
+            if (e->params[j].nleq) {
+                json_buf_raw(&b, ","); json_buf_key(&b, "looselyEquals"); json_buf_raw(&b, "[");
+                for (int k = 0; k < e->params[j].nleq; k++) {
+                    const ConcolicLooseEq *lq = &e->params[j].leq[k];
+                    if (k) json_buf_raw(&b, ",");
+                    json_buf_raw(&b, "{"); json_buf_key(&b, "value"); json_buf_str(&b, lq->tok);
+                    json_buf_raw(&b, ","); json_buf_key(&b, "type");
+                    json_buf_str(&b, concolic_lit_report_name((ConcolicLit)lq->kind));
+                    json_buf_raw(&b, "}");
+                }
+                json_buf_raw(&b, "]");
+            }
             json_buf_raw(&b, "}");
         }
         json_buf_raw(&b, "]");
@@ -909,6 +1020,7 @@ void endpoint_free(void) {
             free(g_eps[i].params[j].excl);
             param_bound_free(&g_eps[i].params[j].bnd);
             param_pred_free(g_eps[i].params[j].pred, g_eps[i].params[j].npred);
+            param_leq_free(g_eps[i].params[j].leq, g_eps[i].params[j].nleq);
         }
         free(g_eps[i].params);
         for (int j = 0; j < g_eps[i].nh; j++) { free(g_eps[i].hdrs[j].name); free(g_eps[i].hdrs[j].value); }

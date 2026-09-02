@@ -155,6 +155,49 @@ void concolic_pred_release(ConcolicPred *p) {
     p->method = NULL; p->args = NULL; p->nargs = 0;
 }
 
+/* ── THE LOOSE EQUALITY'S HOLDING ARM, AS A ROW ──────────────────────────────────────────────────────────────
+ * See concolic.h for what the row IS and for the three reasons it is not a ConcolicPred. These three functions
+ * are the row's whole ownership contract, kept beside ConcolicPred's for the reason that pair states: three
+ * holders keep a set of them, so a field added to the struct must have exactly one place it is copied and one
+ * where it is released. */
+int concolic_looseeq_same(const ConcolicLooseEq *p, ConcolicLit kind, const char *tok) {
+    /* THE KIND IS HALF THE COMPARISON. §7.1.19 ToString ( arg ) flattens `undefined`, `null`, `0` and `false`
+       onto text that is also a legal String operand, so two rows agreeing on the spelling alone would collapse
+       `x == undefined` into `x == "undefined"` — two gates with two different holding sets, deduped into one
+       claim the run never made. This is the same pair pred_new asserts and concolic_pin refuses to split. */
+    return p->kind == (signed char)kind && !strcmp(p->tok, tok);
+}
+
+void concolic_looseeq_copy(ConcolicLooseEq *dst, const ConcolicLooseEq *src) {
+    dst->kind = src->kind;
+    dst->tok = strdup(src->tok);
+    CHECK(dst->tok, "concolic: OOM copying the operand a flow's own loose equality held against");
+}
+
+void concolic_looseeq_release(ConcolicLooseEq *p) {
+    free(p->tok);
+    p->tok = NULL; p->kind = (signed char)CONCOLIC_LIT_NONE;
+}
+
+/* THE KIND AS A REPORT NAMES IT — see concolic.h for why this is not lit_tag. The switch has no `default`, so
+   a kind added to ConcolicLit fails to compile here rather than being emitted under a neighbour's word. */
+const char *concolic_lit_report_name(ConcolicLit k)
+{
+    switch (k) {
+    case CONCOLIC_LIT_STRING:    return "string";
+    case CONCOLIC_LIT_NUMBER:    return "number";
+    case CONCOLIC_LIT_BOOL:      return "boolean";
+    case CONCOLIC_LIT_NULL:      return "null";
+    case CONCOLIC_LIT_UNDEFINED: return "undefined";
+    case CONCOLIC_LIT_BIGINT:    return "bigint";
+    case CONCOLIC_LIT_NONE:      break;
+    }
+    DFAILF("a domain row reached the emission carrying a kind this file has no report word for (%d) — a row is "
+           "written only where the operand HAS a spelling, and a reviewer reading `== undefined` must be able "
+           "to tell the value from the nine-character string, which is exactly what the kind says", (int)k);
+    return NULL;
+}
+
 /* ── THE ONE ENCODING ───────────────────────────────────────────────────────────────────────────────────────
  * Every identity this file composes and every constraint key decide.c builds is a TAG plus a sequence of
  * FIELDS, written as `<byte length>:<bytes>` each. Two properties follow from that and both are load-bearing:
@@ -440,7 +483,15 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
               (max for the lower, min for the upper) as the flow observes more gates, and a tie between an
               inclusive and an exclusive bound at the same number keeps the EXCLUSIVE one, which is the
               tighter fact.
-   All six are per-flow and travel together, which is why they are ONE entry rather than six maps that a
+     leq   — the LOOSE EQUALITIES that HELD over this HOLE, each as the operand the page wrote and what that
+              operand SPELLS. It is the equality's third arm and shares a record with neither the pin nor the
+              exclusion, for the reason `pred` shares one with neither of those either: §7.2.14's holding arm
+              DETERMINES a value and is `val`, §7.2.13's holding arm determines none and bounds the operand to
+              a set §7.2.13 alone can read, and the failing arm of both is `excl`. It is keyed by the HOLE and
+              `val` by the `src`, which is not an inconsistency to unify — a pin is what a later READ
+              concretizes through and a domain is what the EMISSION looks up. Within one flow they CONJOIN and
+              accumulate, and an exact repeat adds nothing.
+   All seven are per-flow and travel together, which is why they are ONE entry rather than seven maps that a
    fork, a suspend and a resume would each have to remember to carry. */
 /* One side of an interval, and the SPELLING beside the number. The number is what a merge orders two bounds
    by; the text is the page's own §6.1.6.1.20 Number::toString of the literal it wrote, kept so nothing
@@ -448,7 +499,7 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
 typedef struct { double num; char *txt; signed char present; signed char inclusive; } BoundSide;
 typedef struct { BoundSide lo, hi; } Bound;
 typedef struct { char *key; char *val; signed char valkind; char **excl; int nexcl; Bound *bnd;
-                 ConcolicPred *pred; int npred;
+                 ConcolicPred *pred; int npred; ConcolicLooseEq *leq; int nleq;
                  signed char truth; signed char pinned_root; signed char ex_contra; } Cons;
 
 static void bound_side_free(BoundSide *s) { free(s->txt); s->txt = NULL; s->present = 0; }
@@ -477,6 +528,8 @@ static void cons_entry_free(Cons *e) {
     if (e->bnd) { bound_side_free(&e->bnd->lo); bound_side_free(&e->bnd->hi); free(e->bnd); }
     for (i = 0; i < e->npred; i++) concolic_pred_release(&e->pred[i]);
     free(e->pred);
+    for (i = 0; i < e->nleq; i++) concolic_looseeq_release(&e->leq[i]);
+    free(e->leq);
 }
 /* …and one measurement, for the same reason: the freeze's byte census reads exactly the fields the free above
    disposes of, so a field that grows the entry is counted where it is counted for every other. */
@@ -497,6 +550,8 @@ static long cons_entry_bytes(const Cons *e) {
         n += (long)e->pred[i].nargs * (long)sizeof(char *);
         for (k = 0; k < e->pred[i].nargs; k++) n += (long)strlen(e->pred[i].args[k]) + 1;
     }
+    n += (long)e->nleq * (long)sizeof(ConcolicLooseEq);
+    for (i = 0; i < e->nleq; i++) n += (long)strlen(e->leq[i].tok) + 1;
     return n;
 }
 
@@ -655,6 +710,20 @@ static Cons *cons_entry(const char *key) {
             concolic_pred_copy(&g_pins[g_pins_n].pred[k], &below->pred[k]);
         g_pins[g_pins_n].npred = below->npred;
     }
+    /* …AND THE LOOSE EQUALITIES THAT HELD, for exactly the reason the three above copy up. A flow that
+       observed `x == 0`, was preempted, and resumed to build its request would otherwise report a parameter
+       nothing had ever tested — the fact lost to a context switch rather than to anything the program did,
+       which is the defect this whole entry is a list of. */
+    g_pins[g_pins_n].leq = NULL;
+    g_pins[g_pins_n].nleq = 0;
+    if (below && below->nleq) {
+        int k;
+        g_pins[g_pins_n].leq = malloc((size_t)below->nleq * sizeof(ConcolicLooseEq));
+        CHECK(g_pins[g_pins_n].leq, "concolic: OOM copying an inherited loose-equality set");
+        for (k = 0; k < below->nleq; k++)
+            concolic_looseeq_copy(&g_pins[g_pins_n].leq[k], &below->leq[k]);
+        g_pins[g_pins_n].nleq = below->nleq;
+    }
     g_pins[g_pins_n].truth = below ? below->truth : -1;
     /* INHERITED WITH THE REST OF THE ENTRY. A principal demand this flow made before its last freeze is still
        this flow's demand, and a copy-up that dropped it would make the very same path answer "unpinned" the
@@ -727,9 +796,12 @@ void concolic_pin(const char *src, const char *root, ConcolicLit kind, const cha
        here is choosing a WITNESS, and concretize-on-pin makes every later branch over the source decide from
        the choice instead of forking. §@H draws the line at whether a VALUE was determined, never whether a
        constraint was, and this is the value half of it.
-       THE NARROWING IS NOT LOST BECAUSE IT WAS NEVER HELD — it is UNRECORDED, which is concolic.h's named
-       residual at this function's declaration, and until that recorder exists an unpinned source simply forks
-       again at its next gate. That is sound and is what this engine did before any pin existed. */
+       THE NARROWING IS NOT LOST AND IS NOT THIS FUNCTION'S TO HOLD. A pin is keyed by `src`, because that is
+       what a later READ concretizes through; the loose arm's fact is a DOMAIN, and a domain is keyed by the
+       HOLE the report prints — two names for two consumers (concolic_cmp_subject states the pair). So
+       decide.c files it through `concolic_looseeq` on the same arm this line refuses, and what an unpinned
+       source still does here is FORK again at its next gate, which is sound and is what this engine did
+       before any pin existed. */
     /* A CONCOLIC CARRIES A PROVENANCE AND A ROOT TOGETHER (concolic_alloc asserts it), so a pin taken off one
        and missing the other is a value minted somewhere that does not go through that mint — and what it costs
        is silent: the principal rule below would answer "unpinned" for a flow that demanded an origin, and the
@@ -817,6 +889,81 @@ const char *const *concolic_excluded(const char *hole, int *n) {
     if (!c || !c->nexcl) { *n = 0; return NULL; }
     *n = c->nexcl;
     return (const char *const *)c->excl;
+}
+
+/* THE CONSTRAINT KEY A LOOSE-EQUALITY SET LIVES UNDER — its OWN tag, for the reason excl_key and bnd_key state
+   of theirs: `!= "admin"`, `> 5`, `startsWith("/api")` and `== 0` are four claims about one hole, and filing
+   any two of them together would make a consumer that reads one see another's shape. It is a separate tag from
+   `excl` in particular because those two are the SAME operand under the SAME operator on OPPOSITE arms — the
+   one pair a shared key would silently merge into a claim that a value both is and is not the token. Caller
+   frees. */
+static char *leq_key(const char *hole) {
+    const char *f[1];
+    f[0] = hole;
+    return concolic_ident_compose("looseeq", f, 1);
+}
+
+/* THE HOLDING ARM OF A LOOSE EQUALITY — see concolic.h. Nothing here is chosen: the operand is the concrete
+   side the PAGE wrote and the arm is the arm this run took, so this records that the page's own `==` against
+   that operand answered true of this value. §@H's line is whether a VALUE was determined, and none is. */
+void concolic_looseeq(const char *hole, ConcolicLit kind, const char *tok) {
+    Cons *c;
+    ConcolicLooseEq *a;
+    char *key;
+    int i;
+
+    DCHECK(hole && *hole,
+           "a loose equality's holding arm was recorded against no HOLE — the subject is what the emission "
+           "looks the domain up by, so a nameless one is a constraint stored where nothing can read it and a "
+           "parameter that renders as unconstrained while this flow has proved otherwise");
+    DCHECK(tok != NULL,
+           "a loose equality's holding arm named no OPERAND — the operand is the concrete side the page's own "
+           "predicate wrote, and without it there is no fact, only the knowledge that some fact existed");
+    /* THE OPERAND AND ITS KIND ARE ONE ARGUMENT IN TWO HALVES, asserted where they meet, exactly as
+       concolic_pin asserts them: a spelling with no kind states `x == undefined` and `x == "undefined"` with
+       identical bytes, and those are two gates whose holding sets under §7.2.13 IsLooselyEqual ( x, y ) have
+       nothing in common — the first admits {undefined, null} by steps 2 and 3, the second neither of them.
+       Unlike concolic_pin this does NOT refuse a BigInt: that refusal is about the read-back having to MINT a
+       value again, and a row is only ever PRINTED. */
+    DCHECK(kind != CONCOLIC_LIT_NONE,
+           "a loose equality's holding arm was recorded for an operand this engine cannot spell — literal_tok "
+           "answers NULL for an Object and a Symbol and the hook mints no token for one, so a row arriving "
+           "here with no kind is a token composed somewhere that does not go through that classification");
+    key = leq_key(hole);
+    CHECK(key, "concolic: the loose-equality key could not be composed — a hole is a real string, so the only "
+               "way this fails is allocation, and a lost constraint reports an unconstrained parameter");
+    c = cons_entry(key);
+    free(key);
+    for (i = 0; i < c->nleq; i++)
+        if (concolic_looseeq_same(&c->leq[i], kind, tok)) return;   /* the same gate, tested again */
+    a = realloc(c->leq, (size_t)(c->nleq + 1) * sizeof(ConcolicLooseEq));
+    CHECK(a, "concolic: OOM recording a loose equality this flow's own run proved of its input");
+    c->leq = a;
+    {   /* THE ONE DEEP COPY, asked of the same pair every other holder asks — see concolic_looseeq_copy. The
+           row is assembled on the stack first so the copy has exactly one shape to take, which is what keeps a
+           field added to ConcolicLooseEq from having a fourth place it could be forgotten. */
+        ConcolicLooseEq in;
+        in.tok = (char *)tok;
+        in.kind = (signed char)kind;
+        concolic_looseeq_copy(&c->leq[c->nleq], &in);
+    }
+    c->nleq++;
+}
+
+const ConcolicLooseEq *concolic_looseeq_read(const char *hole, int *n) {
+    const Cons *c = NULL;
+
+    DCHECK(n != NULL, "the loose-equality set was asked for with nowhere to put its SIZE — a borrowed array "
+                      "with no count is an array the caller has to guess the end of");
+    if (hole) {
+        char *key = leq_key(hole);
+        CHECK(key, "concolic: the loose-equality key could not be composed at the read");
+        c = cons_lookup(key);
+        free(key);
+    }
+    if (!c || !c->nleq) { *n = 0; return NULL; }
+    *n = c->nleq;
+    return c->leq;
 }
 
 /* THE CONSTRAINT KEY AN INTERVAL LIVES UNDER — composed under its own tag for the reason excl_key states, and

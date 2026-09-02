@@ -419,6 +419,13 @@ function _mergeParamInto(ep, np) {
      above records: a second document that reached the request without testing `startsWith("/api")` is a path
      that disproves the claim, and the moat would go on rendering it. */
   if (Array.isArray(np._predicates)) intersectPredicates(ep, np._predicates);
+  /* …AND THE LOOSE EQUALITIES, WHICH ARE THE FOURTH FACT OF THE SAME KIND AND MERGE BY THE SAME LAW. They
+     spell "proved nothing" as the empty array, exactly as `_excludedValues` and `_predicates` do, so presence
+     as an array is the whole test here too. Omitting them would repeat, one fact later again, the error the
+     paragraph above records — and in the direction that matters most for this particular fact, because a
+     surviving `== 0` tells a reviewer to send a value that coerces to zero when a second document reached the
+     request without any such gate. */
+  if (Array.isArray(np._looselyEquals)) intersectLooselyEquals(ep, np._looselyEquals);
 }
 
 /* THE PER-METHOD STATS UNION — `lib/stats.js`'s `mergeParamStats`, WHICH HAD NO CALLER.

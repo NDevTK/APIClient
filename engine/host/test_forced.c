@@ -13957,6 +13957,113 @@ static void pin_algo_selftest(JSContext *ctx)
     concolic_clear_pins();
 }
 
+/* ─── …AND THE SET IT LEAVES IS A NARROWING THIS FLOW OBSERVED ─────────────────────────────────────────────
+ * The fixture above asserts that a loose equality's holding arm records NO VALUE. That is only half a
+ * mechanism: §@H says a shape states PROVENANCE and DOMAIN and that "the failure is asymmetric — a shape
+ * carrying provenance alone renders an UNCONSTRAINED parameter and a range-gated one with identical bytes,
+ * so its silence about the gate is read as the positive statement 'anything goes'". So the arm that may not
+ * PIN must still FILE, and this fixture is the statement that it does.
+ *
+ * ITS THREE ASSERTIONS ARE THE THREE WAYS THIS DIFF CAN BE WRONG, and each names one:
+ *   (1) THE FACT IS RECORDED. A loose equality that held is readable back under the hole the emission looks
+ *       a domain up by. Falsified by `concolic_looseeq_read` answering 0 after a filing — the residual's own
+ *       "how its absence would show", which was the whole defect.
+ *   (2) THE KIND IS PART OF THE FACT. §7.1.19 ToString ( arg ) flattens `undefined` onto text a String
+ *       operand can also spell, so `x == undefined` and `x == "undefined"` are TWO gates: §7.2.13
+ *       IsLooselyEqual ( x, y ) steps 2 and 3 make the first hold for null, and neither step admits the
+ *       nine-character string. Falsified by a store that deduped them into one row — the pin's own
+ *       spelling-versus-value defect, arriving one recorder over.
+ *   (3) THE HOLE IS NOT THE EXCLUSION'S. `!= "admin"` and `== "admin"` are the SAME operand under the SAME
+ *       operator on OPPOSITE arms, so a shared key would state that one value both is and is not the token.
+ *       Falsified by either read seeing the other's row.
+ * AND THE OVER-CORRECTION IS ASSERTED IN THE SAME BREATH, because it is the other failure: a STRICT equality
+ * must record NOTHING here — its holding arm determined a value and `concolic_pin` is where that goes, so a
+ * recorder that also filed strict gates would report `== "admin"` as a domain on a parameter whose value the
+ * run had actually determined, which is a weaker claim rendered beside a stronger one.
+ *
+ * IT DRIVES THE STORE DIRECTLY rather than through decide.c, for pin_kind_selftest's reason inverted: what is
+ * under test here is the RECORD and its keying, and a fixture that reached it through a branch would be
+ * asserting the branch as well and could not tell which of the two had failed. The arm-selection half is
+ * decide.c's `eq_holds`/`eq_fails` pair, which its own DCHECK states. */
+static void looseeq_selftest(void)
+{
+    const ConcolicLooseEq *rows;
+    const char *const *ex;
+    int n = -1;
+
+    /* (1) THE FACT IS RECORDED, AND ITS TWO HALVES COME BACK TOGETHER. */
+    concolic_looseeq("leq.n", CONCOLIC_LIT_NUMBER, "0");
+    rows = concolic_looseeq_read("leq.n", &n);
+    CHECK(rows && n == 1 && rows[0].kind == (signed char)CONCOLIC_LIT_NUMBER && !strcmp(rows[0].tok, "0"),
+          "a loose equality that HELD was not readable back under its own hole — this is the whole of the "
+          "defect: `concolic_pin` refuses the value for §7.2.13's arm and is right to, and if nothing files "
+          "the narrowing then the true arm of `x == 0` emits its parameter with the same bytes as a "
+          "parameter nothing ever tested, while the sibling flow's exclusion carries the same gate's other "
+          "arm — two arms of one observation disagreeing about whether a gate was seen at all");
+
+    /* AN EXACT REPEAT IS ONE FACT. A bundle tests the same flag over and over, and a set that grew per
+       sighting would render one gate as several. */
+    concolic_looseeq("leq.n", CONCOLIC_LIT_NUMBER, "0");
+    rows = concolic_looseeq_read("leq.n", &n);
+    CHECK(rows && n == 1,
+          "the same loose equality recorded twice became two rows — within one flow these CONJOIN, so a "
+          "repeat of one gate is one fact and a report listing it twice states a narrowing the run made once");
+
+    /* (2) THE KIND IS PART OF THE FACT. `x == undefined` admits null by §7.2.13 step 3; `x == "undefined"`
+       admits neither undefined nor null, because step 1 hands two Strings to §7.2.14 IsStrictlyEqual. Two
+       gates, and §7.1.19 ToString gives them one spelling — so a store keyed on the spelling alone would
+       report one and mean the other. */
+    concolic_looseeq("leq.u", CONCOLIC_LIT_UNDEFINED, "undefined");
+    concolic_looseeq("leq.u", CONCOLIC_LIT_STRING, "undefined");
+    rows = concolic_looseeq_read("leq.u", &n);
+    CHECK(rows && n == 2,
+          "`x == undefined` and `x == \"undefined\"` deduped into one row — their §7.2.13 holding sets have "
+          "nothing in common (steps 2 and 3 admit null for the first; step 1 sends two Strings straight to "
+          "§7.2.14 for the second), so one row states one of them and a reviewer sends the other");
+    CHECK(rows[0].kind != rows[1].kind,
+          "two loose-equality rows over one hole came back with one kind — the kind is what the report "
+          "prints beside the operand, so two rows that agree on it are two claims a reviewer cannot tell "
+          "apart and one of the two gates is unrepresented");
+
+    /* (3) THE HOLE IS NOT THE EXCLUSION'S. These are the two ARMS of one gate, and a shared key would state
+       that the value both is and is not the token — the one collision this recorder's own tag exists for. */
+    concolic_exclude("leq.n", "0");
+    rows = concolic_looseeq_read("leq.n", &n);
+    CHECK(rows && n == 1,
+          "an exclusion recorded over one hole appeared in that hole's LOOSE-EQUALITY set — `!= 0` and "
+          "`== 0` are the same operand under the same operator on opposite arms, so one key for both would "
+          "publish a domain saying the value both is and is not the token");
+    ex = concolic_excluded("leq.n", &n);
+    CHECK(ex && n == 1 && !strcmp(ex[0], "0"),
+          "a loose equality recorded over one hole displaced that hole's EXCLUSION set — the two arms of "
+          "one gate are two facts, and a recorder that overwrote the other would delete the arm this tool "
+          "exists to explore");
+
+    /* A HOLE NOTHING TESTED ANSWERS ZERO, WHICH IS A POSITIVE STATEMENT AND NOT A HOLE — the same reading
+       `concolic_excluded`'s zero has, asserted so a consumer's absence-is-the-statement rule stands on a
+       producer that means it. */
+    n = -1;
+    rows = concolic_looseeq_read("leq.absent", &n);
+    CHECK(rows == NULL && n == 0,
+          "a hole no loose equality was ever recorded against answered with rows or with an unset count — "
+          "the emission omits the key entirely on a zero and a consumer reads that omission as 'this run "
+          "proved nothing here', so a count left unwritten would publish whatever the caller's stack held");
+
+    /* AND THE OVER-CORRECTION: A STRICT EQUALITY MUST STILL PIN AND MUST FILE NOTHING HERE. `concolic_pin`
+       is where §7.2.14's determination goes, and a domain row beside it would state the weaker claim next
+       to the stronger one. The pin is asserted through the store it writes, which is `pinned_root`'s twin
+       one key over — the value itself is pin_kind_selftest's subject and is not re-asserted here. */
+    concolic_pin("leq.s", "leq.s", CONCOLIC_LIT_STRING, "admin", JS_CONCOLIC_EQ_STRICT);
+    n = -1;
+    rows = concolic_looseeq_read("leq.s", &n);
+    CHECK(rows == NULL && n == 0,
+          "a STRICT equality's holding arm filed a loose-equality domain — §7.2.14 IsStrictlyEqual ( x, y ) "
+          "step 1 makes that arm a DETERMINATION, so the value belongs in the pin and a domain row beside it "
+          "reports `== \"admin\"` as a constraint on a parameter whose value this run actually computed");
+
+    concolic_clear_pins();
+}
+
 /* ─── THE PRODUCTION ABI, DRIVEN BY THIS PROCESS ──────────────────────────────────────────────────────────
  * CLAUDE.md: "The engine's home is therefore the host that gives it real threads, a real CPU clock, a real
  * `fork()` and a real sanitizer; a browser vehicle is ONE host among several, driven through the same ABI."
@@ -14936,6 +15043,7 @@ int main(int argc, char **argv) {
        for the reason the §9.3.3 block above states. */
     pin_kind_selftest(ctx);      /* a pin is a VALUE and not its §7.1.19 spelling */
     pin_algo_selftest(ctx);      /* …and only §7.2.14's arm determines one; §7.2.13's leaves a SET */
+    looseeq_selftest();          /* …and that SET is a real narrowing, filed as the predicate that held */
     tree_construction_write_selftest();   /* §13.2.6's DOM writes, and the character merge's bytes */
 
     /* The time-travel hook, AFTER the baseline setup above for the reason stated at it: the globals the

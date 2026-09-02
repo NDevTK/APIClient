@@ -138,6 +138,16 @@ const FIELD_DEF_ABSENT = Object.freeze({
                             // equality determines a value, an ordering an interval, a call neither), and the
                             // one §@H names in its headline example. null = nothing proved, `[]` = a claim a
                             // later path disproved — the same two facts `_excludedValues` keeps apart.
+  _looselyEquals: null,     // the LOOSE EQUALITIES (`==`) the bundle's own code HELD of this field —
+                            // [{value,type}], the engine's record carried unrenamed from endpoint.c. It is
+                            // the fourth way a gate narrows a domain and the one arm of an equality that had
+                            // nowhere to go: ECMAScript §7.2.14 IsStrictlyEqual step 1 makes a `===` that
+                            // held a DETERMINATION, so it arrives as a value in `_astValidValues`, while
+                            // §7.2.13 IsLooselyEqual coerces and its holding arm determines none — the engine
+                            // records the predicate instead. `type` is half the fact, not a label on it:
+                            // §7.1.19 ToString flattens `undefined`, `null`, `0` and `false` onto text a
+                            // String operand can also spell. null = nothing proved, `[]` = a claim a later
+                            // path disproved — the same two facts `_excludedValues` keeps apart.
   _astValidValues: null,    // values the bundle was observed setting this field to ON A PATH THAT STOOD ON NO
                             // FORCED ARM — the pool a consumer may OFFER from; null = none observed.
   _astForcedValues: null,   // values EVERY sighting of which stood on a forced arm — a real observation this
@@ -223,7 +233,8 @@ function makeFieldDef(parts, where) {
          "so anything else here is that refusal bypassed");
   DCHECK(_fdNullOrList(fd.children) && _fdNullOrList(fd.enum) && _fdNullOrList(fd.enumDescriptions) &&
          _fdNullOrList(fd._excludedValues) && _fdNullOrList(fd._astValidValues) &&
-         _fdNullOrList(fd._astForcedValues) && _fdNullOrList(fd._predicates),
+         _fdNullOrList(fd._astForcedValues) && _fdNullOrList(fd._predicates) &&
+         _fdNullOrList(fd._looselyEquals),
          "a FieldDef carries a list-or-nothing in a third form (" + where + ") — `children: null` means NOT " +
          "a message and `children: []` means a message with no fields, and a consumer that cannot tell them " +
          "apart renders one as the other");
