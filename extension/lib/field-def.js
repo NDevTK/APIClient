@@ -366,7 +366,14 @@ function makeFieldDef(parts, where) {
    BOTH protobuf encoders skip a field with no wire tag before they ever look at `children` — a probe field
    carries `fdDocKey(pf.number)`, so it is the one that would reach the JSPB slot and the protobuf sub-frame.
      AND THEY DIFFER IN ONE MORE PLACE, WHICH IS WHERE THE NAME ITSELF IS READ AS A KEY. A probe's field name
-   is a name the TARGET's own error reply stated; the sentinel's `"..."` is one this extension MINTED, and no
+   is a name the TARGET's own error reply stated — WHICH IT WAS NOT WHEN THIS PARAGRAPH WAS WRITTEN, and the
+   correction is recorded here because the premise is what the argument stands on. `_probeFieldsToDefs` read
+   the field's identity off the MAP KEY, and lib/req2proto.js keys its answer `#<number>` for every numbered
+   field, so `#3` — a dedup token this extension minted — was the name every numbered probe field arrived
+   under, which is exactly the property the sentence claimed separated the two producers. That read is gone
+   (the name is now the field record's own, refused through `fdDocString`, and a field the reply numbered and
+   did not name is refused rather than given one), so the sentence is true of the tree as well as of the
+   intent. The sentinel's `"..."` is one this extension MINTED, and no
    name above could say so — so the Send panel offered the marker a RENAME control, and a rename on a key no
    schema declares CREATES that property in the stored document (lib/popup-handlers.js RENAME_FIELD), which
    the discovery walk then renders and sends as a field. `isNameMarker` is that fact, stated by the one

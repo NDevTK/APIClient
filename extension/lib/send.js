@@ -12,10 +12,53 @@
    them through IndexedDB before they reach here).
    ITERATIVE, because a probe's nesting depth is the SERVER's choice: req2proto attaches children from nested
    probes with no depth of its own, so a self-recursive translator would be a stack whose bound an origin
-   server sets. */
+   server sets.
+
+   THE NAME IS THE FIELD RECORD'S OWN AND THE MAP KEY IS NOT A NAME AT ALL — which is the correction, and it
+   was not an edge case. lib/req2proto.js's `probeApiEndpoint` DEDUPLICATES its field list by wire tag and
+   keys the map it returns `#<number>` for every numbered field (its `key` is `"#" + field.number` where the
+   field is numbered and `field.name` only where it is not), so reading that key as the name renamed EVERY
+   numbered probe field to the store's own
+   dedup token: a field a server described as `userId` reached the Send panel as `#3`, its stated name
+   discarded, and `#3` is what lib/encode.js writes as the JSON key (`target[f.name]`, five sites). It also
+   broke the merge below — `df.name.toLowerCase() === pf.name.toLowerCase()` cannot match `userid` against
+   `#3`, so the probe's number/type/label never overlaid the discovery field and the same field was PUSHED a
+   second time, rendering twice: once named and once under a token no document declares. `#3` is not an array
+   index, but it is the same fabrication the comment on the old key-vs-name alternative already forbade, and
+   it was in the branch that comment believed was the safe one.
+
+   A FIELD THE PROBE NUMBERED AND DID NOT NAME IS REFUSED, and that is a decision rather than a shortfall.
+   This record's `name` is one field doing four jobs — the rendered label, the collect key
+   (lib/popup-form.js `_collectShallow`), the JSON/GraphQL wire key, and the rename target — which is why
+   lib/field-def.js states it among the four with NO absent value. For a numbered-but-unnamed field those
+   jobs DISAGREE: the protobuf/JSPB slot is the number and is real, while on the JSON wire there is no key,
+   so any name this function supplied would be one the panel invented and sent. The record's one facility for
+   a minted name says so in its own words — `isNameMarker` MEANS "addresses NOTHING" and is asserted
+   incompatible with a `number` precisely because "a `number` would fill an encoder's slot under it" — so
+   routing this case through it would mean weakening that assert to admit the case it names.
+   AND REFUSING LOSES NOTHING, WHICH IS WHAT SETTLES IT. The SAME `probeResult.fields` also reaches the panel
+   through lib/discovery-probe.js's `convertProbeFieldsToSchema`, which already answers this exact question in
+   the vocabulary that can state it: it reads `Object.values`, never the key; it skips a field with neither a
+   name nor a number; and it files a numbered-but-unnamed one under `field_<n>` with `name: null` and the
+   number beside it, because a discovery `properties` map has a key AND an address where this record has one
+   name for both. A numbered-but-unnamed field therefore still reaches the Send panel — through the door built
+   for it, as a document property — and what is refused here is only the second, unnamable copy of it.
+   `""` is refused with `null` for the reason lib/popup-response.js's `_pbAddressText` and
+   lib/discovery-probe.js's schema-name test both give: it is text, and it is an entry no rename can address.
+
+   THE ARRAY SHAPE IS GONE. Its `named === null ? k : named` fallback minted the array INDEX as a wire key —
+   which the comment standing over it already called forbidden — and no producer in this tree makes one:
+   `probeApiEndpoint` returns `fields: Object.fromEntries(...)`, and lib/store-record.js's `_SR_PROBE_FIELDS`
+   states `fields: _srObj`, which excludes an array on the way back out of IndexedDB. A dead arm is not
+   revived on the strength of what it would have done; it is refused through `fdDocRecord` like any other
+   shape this store does not declare. */
 function _probeFieldsToDefs(fieldsObj) {
-  function one(name, raw) {
+  /* `null` = THIS PROBE FIELD IS NOT ONE THE PANEL CAN RENDER — a refusal and not an empty record, because
+     the caller must not push a row for it. */
+  function one(raw) {
     const pf = fdDocRecord(raw) === null ? {} : raw;
+    const name = fdDocString(pf.name);
+    if (name === null || name === "") return null;
     const type = fdDocString(pf.type);
     const kids = fdDocList(pf.children);
     return {
@@ -37,21 +80,26 @@ function _probeFieldsToDefs(fieldsObj) {
   }
   const out = [];
   const queue = [];
-  const entries = (fieldsObj && typeof fieldsObj === "object") ? Object.entries(fieldsObj) : [];
-  for (const [k, raw] of entries) {
-    /* THE KEY IS THE NAME WHERE THE PROBE STORE IS AN OBJECT, and the record's own `name` where it is an
-       array (lib/req2proto.js pushes, lib/discovery-probe.js keys) — a prefer-A-else-B alternative between
-       two producers, not a hole: an array index is not a wire key and must never be rendered as one. */
-    const named = Array.isArray(fieldsObj) ? fdDocString(raw && raw.name) : k;
-    const built = one(named === null ? k : named, raw);
+  /* THE VALUES, NEVER THE KEYS. A probe answer's map is keyed by lib/req2proto.js's dedup token, and the
+     field's identity is inside the record it points at — the same read `convertProbeFieldsToSchema` makes of
+     this very store. `fdDocRecord` is the refusal for a store that is not the shape `_SR_PROBE_FIELDS`
+     declares; what it yields is an empty field list, which is the true statement about it. */
+  const store = fdDocRecord(fieldsObj);
+  for (const raw of store === null ? [] : Object.values(store)) {
+    const built = one(raw);
+    if (built === null) continue;
     out.push(built.def);
     if (built.kids) queue.push({ into: built.def.children, kids: built.kids });
   }
   while (queue.length > 0) {
     const item = queue.shift();
     for (const raw of item.kids) {
-      const nm = fdDocString(raw && raw.name);
-      const built = one(nm === null ? "" : nm, raw);
+      /* A REFUSED CHILD TAKES ITS OWN CHILDREN WITH IT — a message this panel cannot address is one whose
+         nested fields have no path to the wire either, so the subtree is not enqueued. What its parent is
+         left holding is `children: []`, which lib/field-def.js reads as "a message with no fields": the
+         honest statement here, since `null` would claim the probe never said it was a message, and it did. */
+      const built = one(raw);
+      if (built === null) continue;
       item.into.push(built.def);
       if (built.kids) queue.push({ into: built.def.children, kids: built.kids });
     }

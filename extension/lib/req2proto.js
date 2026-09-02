@@ -54,6 +54,17 @@ const GENERIC_ERROR_PATTERNS = [
   { re: /unknown field ['"]?([^'"]+)['"]?/i, fieldIdx: 1 },
 ];
 
+/* A `google.rpc.BadRequest.FieldViolation`'s OWN FIELD PATH, or nothing — the one refusal this file makes of
+   the one value it reads off a violation rather than out of a description it has already matched. It is
+   `fdDocString` plus the empty string, because `""` is a path that addresses no field and both readers below
+   already fell through it: this keeps the `||` these two call sites used to spell, and adds the case a `||`
+   could not survive (a non-string, which reaches `.split` and throws). Non-empty text is returned as-is —
+   this refuses a SHAPE and never edits a path a server stated. */
+function _statedFieldPath(v) {
+  const s = fdDocString(v);
+  return s === null || s === "" ? null : s;
+}
+
 const REQUIRED_FIELD_RE = /Missing required field (.+) at '([^']+)'/g;
 const MESSAGE_TYPE_RE = /^type\.googleapis\.com\/(.+)$/;
 const MESSAGE_NAME_RE =
@@ -215,7 +226,12 @@ function parseJsonErrors(body) {
       const reqMatch = REQUIRED_FIELD_RE.exec(v.description);
       if (reqMatch) {
         const requiredFieldName = reqMatch[1];
-        const parentPath = v.field || reqMatch[2] || "";
+        /* THE SAME REFUSAL PASS 2 MAKES, ON THE SAME CLAIM. `v.field` is one fact read in two places, and
+           reading it raw here while refusing it there is the two passes disagreeing about what the document
+           said: a non-string `field` keyed this map under its coercion (`requiredFieldMap[7]` is the entry
+           `"7"`) while Pass 2 filed the same violation under the regex-stated path, so the required-field
+           lookup missed a parent it had just recorded. */
+        const parentPath = _statedFieldPath(v.field) ?? (reqMatch[2] || "");
         if (!requiredFieldMap[parentPath]) requiredFieldMap[parentPath] = [];
         requiredFieldMap[parentPath].push(requiredFieldName);
       }
@@ -235,8 +251,18 @@ function parseJsonErrors(body) {
       const typeStr = match[2];
       const valueOrNumber = match[3];
 
-      // Use violation.field if available, fall back to regex field path
-      const rawFieldPath = v.field || regexFieldPath;
+      /* THE VIOLATION'S OWN FIELD PATH WHERE IT STATED ONE AS TEXT, else the path its description named.
+         `v.field || regexFieldPath` was already that alternative — it just could not survive the case that
+         makes an alternative necessary. These bytes are a target's `google.rpc.Status`, so a document is
+         free to spell `field` as a NUMBER: `{"field": 7, "description": "Invalid value at 'userId' …"}` is a
+         reply that NUMBERED the field and did not name it, `(7).split` is a TypeError, and `sendProbe`'s
+         catch (which RETHROW_FATAL passes over, since a TypeError carries no `apiclientFatal`) turned it
+         into `{ error, fields: [] }` — reported as "the service refused the probe". One malformed violation
+         therefore discarded EVERY field the same reply legitimately described, and the only trace was the
+         error string. Refused through lib/field-def.js like every other value a stranger's document states:
+         a `field` that is not text makes no path claim, and the description's own path is what remains. */
+      const statedPath = _statedFieldPath(v.field);
+      const rawFieldPath = statedPath ?? regexFieldPath;
       const pathParts = rawFieldPath.split(".");
       const fieldName = pathParts[pathParts.length - 1];
       const fieldNumber = parseInt(valueOrNumber, 10) || null;
