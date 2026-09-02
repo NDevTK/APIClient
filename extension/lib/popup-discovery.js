@@ -232,14 +232,19 @@ function renderDiscoveryPanel() {
    segment of `violation.field`, so an envelope whose field path ends in a dot (`"a."`) splits to `""` — a
    name that is PRESENT and EMPTY, which is not the same fact as a name the envelope never spelled. Under the
    `||` that empty name fell through to `"#" + f.number`, and `number` is `null` whenever the rejection stated
-   no wire tag (the same arm writes `parseInt(...) || null`), so the panel rendered the literal label
-   `#null:string` — a wire tag no document ever named, in a list a reviewer reads as the server's own field
-   inventory.
+   no wire tag (lib/req2proto.js's `_statedFieldNumber` yields a positive integer or nothing), so the panel
+   rendered the literal label `#null:string` — a wire tag no document ever named, in a list a reviewer reads
+   as the server's own field inventory.
    THE NAME IS NEVER ABSENT AND THAT IS WHY THIS IS A REFUSAL AND NOT A DCHECK: both of lib/req2proto.js's
-   mints state `name` on every push and the merge keys on `#number` or on the name itself, so the field is
-   always there — what varies is whether the DOCUMENT said anything in it, and asserting on a server's empty
-   string would be the trusted zone aborting on bytes a target chose. So each of the three is said as
-   itself. */
+   mints state `name` on every push, so the field is always there — what varies is whether the DOCUMENT said
+   anything in it, and asserting on a server's empty string would be the trusted zone aborting on bytes a
+   target chose. So each of the three is said as itself.
+   THE SENTENCE THAT USED TO CARRY THAT ARGUMENT SAID "the merge keys on `#number` or on the name itself",
+   AND IT IS RETIRED RATHER THAN DELETED, because a reader who re-derives it will re-introduce the defect it
+   described: `probeApiEndpoint` keys on the field's PATH now, which is `parentPath` plus the cleaned name, so
+   two fields of two different messages that happen to share a wire tag no longer collapse onto one record.
+   The key is therefore never a NAME either, which is why lib/send.js's `_probeFieldsToDefs` reads the values
+   and never the keys. */
 function _discProbeFieldLabel(f) {
   DCHECK(typeof f.name === "string",
          "a probed field carries no `name` string — lib/req2proto.js's two mints both state it on every " +

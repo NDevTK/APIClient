@@ -374,6 +374,16 @@ function parseJsonErrors(body) {
 
       const parentPath =
         pathParts.length > 1 ? pathParts.slice(0, -1).join(".") : "";
+      /* THE FIELD'S IDENTITY, WHICH IS THE PATH THE REJECTION STATED AND NOT ITS WIRE TAG. A tag identifies a
+         field WITHIN ONE MESSAGE, so it is only an identity while every path is flat — and this parser does
+         not produce flat paths, which is precisely why `parentPath` exists two lines up. `probeApiEndpoint`
+         keyed its dedup on the bare number, and the measured consequence is that ONE ordinary reply naming
+         `request.browse_id` (tag 2) and `filter.max_results` (tag 2) — two fields of two different messages —
+         collapsed to a single record and the second was discarded.
+         THE REPEATED SPELLING IS CLEANED OFF THE TAIL, so `thing[0]` and `thing` are the same field: that is
+         `cleanName`, which the label above reads for the same reason. */
+      const statedPath =
+        parentPath === "" ? cleanName : parentPath + "." + cleanName;
       const isRequired =
         (requiredFieldMap.get(parentPath) || []).includes(cleanName) ||
         (requiredFieldMap.get(rawFieldPath) || []).length > 0;
@@ -382,6 +392,7 @@ function parseJsonErrors(body) {
       if (mappedType) {
         fields.push({
           name: cleanName,
+          path: statedPath,
           type: mappedType,
           number: fieldNumber,
           messageType: null,
@@ -397,6 +408,7 @@ function parseJsonErrors(body) {
         if (fullType === "google.protobuf.Any") {
           fields.push({
             name: cleanName,
+          path: statedPath,
             type: "message",
             number: fieldNumber,
             messageType: "google.protobuf.Any",
@@ -418,6 +430,7 @@ function parseJsonErrors(body) {
         const nameMatch = MESSAGE_NAME_RE.exec(fullType);
         fields.push({
           name: cleanName,
+          path: statedPath,
           type: "message",
           number: fieldNumber,
           messageType: fullType,
@@ -434,6 +447,7 @@ function parseJsonErrors(body) {
       const isEnum = ENUM_ERROR_STRINGS.some((s) => v.description.includes(s));
       fields.push({
         name: cleanName,
+        path: statedPath,
         type: isEnum ? "enum" : typeStr || "unknown",
         number: fieldNumber,
         messageType: isEnum ? typeStr : null,
@@ -453,6 +467,7 @@ function parseJsonErrors(body) {
 
           fields.push({
             name: fieldName,
+            path: fieldName,
             type: typeStr.toLowerCase(),
             number: _statedFieldNumber(reflectedVal),
             required: pattern.required || false,
@@ -717,25 +732,60 @@ async function probeApiEndpoint(url, headers = {}, opts = {}) {
       if (result.metadata?.method) metadata = metadata || result.metadata;
       if (result.scopes) scopes = result.scopes;
 
-      // Merge fields, deduplicate by field number (main.go lines 218-220)
-      const seenNumbers = new Set(
-        [...allFields.values()].map((f) => f.number).filter(Boolean),
-      );
+      /* MERGE TWO DESCRIPTIONS OF ONE FIELD, KEYED ON THE IDENTITY THE REJECTION STATED — its PATH.
+         WHAT WAS HERE: a dedup on the bare field NUMBER, `key = field.number ? '#'+n : field.name`, guarded by
+         `if (field.number && seenNumbers.has(field.number)) continue;`. `seenNumbers` is rebuilt from
+         `allFields` on every result, and every entry keyed `#n` was inserted with `field.number === n` truthy
+         — so `allFields.has('#n')` IMPLIES `seenNumbers.has(n)`, the `continue` always fired first, and the
+         merge below it was UNREACHABLE for every numbered field, which is every field the Google regex
+         numbers. The four upgrades under it ran only for UNNUMBERED fields sharing a name, where the key IS
+         the name, so `existing.name === field.name` by construction and there was never a `name` for a merge
+         to upgrade. The second description was not merged badly; it was DROPPED WHOLE.
+         MEASURED in a real Chrome DOM (3 runs, byte-identical), answering the str probe and the int probe with
+         different descriptions of one tag:
+           first states `()` → `type: "unknown"`, second states TYPE_INT32   ⇒ result `unknown`
+           second adds `Missing required field` and a `thing[0]` spelling     ⇒ result optional, not required
+         and, needing no second probe at all, ONE reply naming `request.browse_id` (tag 2) beside
+         `filter.max_results` (tag 2) ⇒ ONE record, `filter.max_results` gone. A tag identifies a field WITHIN
+         ONE MESSAGE, so keying on it alone asserts that two fields of two different messages are the same one.
+         THE PATH IS THE IDENTITY AND THE TAG IS A FACT ABOUT THE FIELD, merged like every other fact. Every
+         combination below is MONOTONE — it fills what one description left absent and never overwrites what
+         another stated — so the order the two probes ran in cannot change the answer. Where two descriptions
+         of ONE path state DIFFERENT tags the server has contradicted itself, and the first observation stands:
+         choosing between them would be inventing a tag neither description states on its own authority. */
       for (const field of result.fields || []) {
-        const key = field.number ? `#${field.number}` : field.name;
-        if (field.number && seenNumbers.has(field.number)) continue;
-        if (!allFields.has(key)) {
-          allFields.set(key, field);
-          if (field.number) seenNumbers.add(field.number);
-        } else {
-          const existing = allFields.get(key);
-          if (field.type !== "unknown" && existing.type === "unknown")
-            existing.type = field.type;
-          if (field.messageType && !existing.messageType)
-            existing.messageType = field.messageType;
-          if (field.required) existing.required = true;
-          if (field.label === "repeated") existing.label = "repeated";
+        /* `path` IS OURS, SO IT IS ASSERTED AND NEVER DEFAULTED. Every one of `parseJsonErrors`'s five pushes
+           states it; a missing one is that producer broken, and the cost of reading it through a `||` instead
+           would be a map entry keyed `undefined` that silently absorbs every field the fifth push mints. That
+           is not hypothetical — this file had exactly four of the five stating it for one revision of this
+           diff, and the FIXTURE printed the `undefined` key. An assert here is what makes the fifth push
+           impossible to forget.
+           IT ASKS ONLY THAT THE FIELD IS A STRING, NEVER WHAT IS IN IT. An EMPTY path is reachable from a
+           TARGET'S OWN BYTES — a violation naming the path `[0]` cleans to an empty name and an empty parent
+           — so asserting non-empty here would abort the trusted zone on a value a stranger's server chose,
+           which is the defect the refusals at the top of this file exist to remove. The shape is ours and is
+           asserted; the content is the server's and is not. */
+        DCHECK(typeof field.path === "string",
+               "a probe field carries no `path` string — lib/req2proto.js's `parseJsonErrors` states it on " +
+               "every field it pushes, and it is the identity this merge keys on, so an absent one would " +
+               "collapse every field of that mint onto one record");
+        const existing = allFields.get(field.path);
+        if (existing === undefined) {
+          allFields.set(field.path, field);
+          continue;
         }
+        if (field.type !== "unknown" && existing.type === "unknown")
+          existing.type = field.type;
+        if (field.number && !existing.number) existing.number = field.number;
+        if (field.messageType && !existing.messageType)
+          existing.messageType = field.messageType;
+        if (field.required) existing.required = true;
+        if (field.label === "repeated") existing.label = "repeated";
+        /* THE CHILDREN A DESCRIPTION FOUND, WHICH THE NUMBER-DEDUP NEVER REACHED. `google.protobuf.Any` is
+           pushed WITH its two children, so a probe that typed a field as Any after another typed it opaquely
+           carried the only statement of what is inside it — and that statement went out with the record. */
+        if (field.children && !existing.children)
+          existing.children = field.children;
       }
     }
 
