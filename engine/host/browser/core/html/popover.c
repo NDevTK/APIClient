@@ -34,14 +34,19 @@
  * property write is captured by the COW delta, so a forked arm that showed a popover and one that did not each
  * read back their own state, and a parked flow resumes with the one it had.
  *
- * WHAT IS HONESTLY ABSENT, AND WHERE IT CRASHES. The AUTO and HINT states need three mechanisms this build has
- * none of — §6.12's hide popover stack until, its topmost popover ancestor (a FLAT TREE descendant test), and
- * §6.10 Close requests and close watchers' close watcher, which show popover's Auto/Hint arm establishes as one
- * of its own steps. That arm is show popover step 15, and it DFAILs there naming all three: the split is the
- * SPEC'S OWN and not a convenience, because a Manual popover enters none of it — step 15's whole block, hide a
- * popover step 11's whole block, and every read of the showing auto/hint popover lists are reachable only from
- * it. `<div popover=manual>` is therefore complete here and `<div popover>` (whose empty value default is Auto)
- * is a named crash rather than a wrong answer. */
+ * WHAT IS HONESTLY ABSENT, AND WHERE IT CRASHES. The AUTO and HINT states need TWO mechanisms this build has
+ * none of — §6.12's hide popover stack until, and its topmost popover ancestor (a FLAT TREE descendant test).
+ * That arm is show popover step 15, and it DFAILs there naming both: the split is the SPEC'S OWN and not a
+ * convenience, because a Manual popover enters none of it — step 15's whole block, hide a popover step 11's
+ * whole block, and every read of the showing auto/hint popover lists are reachable only from it.
+ * `<div popover=manual>` is therefore complete here and `<div popover>` (whose empty value default is Auto) is
+ * a named crash rather than a wrong answer.
+ *   IT WAS THREE, AND THE THIRD WAS §6.10 Close requests and close watchers' close watcher, which step 15's
+ * block establishes as its last sub-step. core/html/close_watcher.c holds §6.10.2's manager and its establish
+ * and destroy, so that one is now a call this file makes rather than a mechanism it waits on. What §6.10 does
+ * NOT yet have is the half that RUNS a watcher's actions — request to close, close, and process close watchers
+ * — so a watcher this file establishes is never asked to close and a §6.12 popover goes on hiding only through
+ * its own `hidePopover()`. That is a limit of §6.10 and not of this file, and close_watcher.h names it. */
 #include <string.h>
 
 #include <lexbor/dom/dom.h>
@@ -509,12 +514,15 @@ static void popover_cleanup_hiding(JSContext *ctx, PopoverState *s)
     /* The close-watcher half is "if element's popover close watcher is not null: destroy it; set it to null".
        Only show popover step 15's Auto/Hint arm establishes one and that arm DFAILs below, so the watcher is
        null here by construction — asserted at the step rather than assumed, through the slot that would hold
-       one if §6.10's close watchers existed. */
+       one. The DESTROY this step owes it exists now (core/html/close_watcher.h's close_watcher_destroy, given
+       the element's relevant global object, which is the realm step 15 establishes it in); what is still
+       missing is the step-15 block that would put one there. */
     DCHECK(ps_is_null(ctx, s->el, PS_OPENED_MODE),
            "HTML §6.12 The popover attribute's hide a popover step 8's cleanupSteps found an element with an "
            "OPENED IN POPOVER MODE, which only show popover step 15's Auto/Hint arm sets — that arm DFAILs in "
-           "this build, so reaching here means it was built and this step must now destroy the element's "
-           "popover close watcher (§6.10 Close requests and close watchers) before decrementing");
+           "this build, so reaching here means it was built and this step must now call close_watcher_destroy "
+           "(HTML §6.10.2 Close watcher infrastructure) on the element's popover close watcher, and set that "
+           "slot to null, before decrementing");
     ps_set(ctx, s->doc, PS_DOC_NESTING, JS_NewInt32(ctx, popover_nesting(ctx, s->doc) - 1));
 }
 
@@ -798,23 +806,26 @@ static int popover_body(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
             lxb_dom_element_t *e = lxb_dom_interface_element(node_of(s->el));
             int type = popover_attribute_state(e);
 
-            /* Step 15 — the whole Auto/Hint block, which is where every mechanism §6.12 has that this build
-               has not is reached: the topmost popover ancestor, hide popover stack until, the hint stack
-               parent, the opened-in-popover-mode writes and §6.10's close watcher. A Manual popover enters
-               none of it, which is the SPEC's own split and the reason this file is complete for one state
-               and a named crash for the other two. */
+            /* Step 15 — the whole Auto/Hint block, which is where the mechanisms §6.12 has that this build has
+               not are reached: the topmost popover ancestor, hide popover stack until, the hint stack parent
+               and the opened-in-popover-mode writes. Its LAST sub-step, establish a close watcher, is no
+               longer among them — core/html/close_watcher.c holds §6.10.2's establish, so the block's own two
+               are all that is left. A Manual popover enters none of it, which is the SPEC's own split and the
+               reason this file is complete for one state and a named crash for the other two. */
             if (type == POPOVER_STATE_AUTO || type == POPOVER_STATE_HINT)
                 DFAIL("HTML §6.12 The popover attribute's show popover step 15 is the Auto/Hint block, and it "
-                      "needs three mechanisms this build has none of: TOPMOST POPOVER ANCESTOR (whose index "
-                      "walk is over FLAT TREE descendants of the showing auto and hint popover lists), HIDE "
-                      "POPOVER STACK UNTIL, and — as its last sub-step — ESTABLISH A CLOSE WATCHER, which is "
-                      "HTML §6.10 Close requests and close watchers and has no component in this engine at "
-                      "all (core/html/user_activation.c already records that §6.4.2 step 5.2's notify-the-"
-                      "close-watcher-manager waits on the same thing). Build §6.10's close watcher first, "
-                      "since the other two are steps of this block and it is a standard of its own; then this "
-                      "block, then hide a popover step 11 and §6.12.2 Popover light dismiss, which are its "
-                      "other two consumers. `<div popover>` reaches here because §6.12's EMPTY VALUE DEFAULT "
-                      "is the Auto state");
+                      "needs two mechanisms this build has none of, BOTH OF THEM §6.12'S OWN: TOPMOST POPOVER "
+                      "ANCESTOR (whose index walk is over FLAT TREE descendants of the showing auto and hint "
+                      "popover lists) and HIDE POPOVER STACK UNTIL. Its last sub-step, ESTABLISH A CLOSE "
+                      "WATCHER, is built — call close_watcher_establish (core/html/close_watcher.h) with "
+                      "CLOSE_WATCHER_KIND_POPOVER and this element, given the element's relevant global "
+                      "object, and keep the result in the element's popover close watcher slot for hide a "
+                      "popover step 8's cleanupSteps to destroy. What §6.10 still lacks is the half that RUNS "
+                      "a watcher's actions (request to close, close, process close watchers), so a popover "
+                      "that establishes one will not yet hide on a close request; that is §6.10's residual and "
+                      "does not block this block. Build these two, then this block, then hide a popover step "
+                      "11 and §6.12.2 Popover light dismiss, which are its other two consumers. `<div popover>` "
+                      "reaches here because §6.12's EMPTY VALUE DEFAULT is the Auto state");
             DCHECK(type == POPOVER_STATE_MANUAL,
                    "HTML §6.12 The popover attribute's show popover reached step 16 with a `popover` attribute "
                    "that is in neither the Auto, the Hint nor the Manual state — step 3's check popover "
@@ -930,9 +941,22 @@ static const IdlStepDecl POPOVER_DECL = {
 };
 
 /* §6.12's `dictionary ShowPopoverOptions { HTMLElement source; }` and `dictionary TogglePopoverOptions :
-   ShowPopoverOptions { boolean force; }`. Web IDL reads a dictionary's INHERITED members first, so `source`
-   precedes `force`, which is the order these lists are in. Neither member is `required` and neither has a
-   default, so an absent one is absent — which is exactly what §6.12's "if it exists" asks. */
+   ShowPopoverOptions { boolean force; }`. Neither member is `required` and neither has a default, so an absent
+   one is absent — which is exactly what §6.12's "if it exists" asks.
+
+   THE ORDER IS TWO FACTS AND THE `level` COLUMN IS WHERE THE SECOND ONE IS STATED. Web IDL §3.2.17 Dictionary
+   types' conversion reads its members over TWO nested loops: step 3 is "let dictionaries be a list consisting
+   of D and all of D's inherited dictionaries, in order from least to most derived", and step 4 is "for each
+   dictionary dictionary in dictionaries, in order: for each dictionary member member declared on dictionary, in
+   lexicographical order". So the ancestry decides the outer order and the spelling decides only the inner one —
+   `source` is `ShowPopoverOptions`' and `force` is `TogglePopoverOptions`' own, so `source` is read first
+   THOUGH `force` sorts before it.
+   THIS FILE WROTE THAT SENTENCE IN PROSE AND LEFT BOTH LEVELS AT 0, which declares the pair as ONE level whose
+   spelling must ascend — and `force` < `source`, so idl_dict_order_check aborted at declaration and took every
+   engine stage down with it. core/events/hash_change_event.c's own comment names this exact trap and its
+   dictionary is the lucky half of it: `newURL`/`oldURL` sort the same way the levels do, so a missing level
+   there would have gone unnoticed. Here the two orders DISAGREE, which is why the level is not decoration —
+   it is the only place the inheritance is written down. */
 static bool popover_source_is_html_element(JSValueConst v) { return html_element_is(v); }
 
 /* NOT `const`, and the reason is the one core/dom/node.c's class id is: a JSClassID is minted at agent start
@@ -946,7 +970,9 @@ static IdlDictMember SHOW_POPOVER_OPTIONS[] = {
 static IdlDictMember TOGGLE_POPOVER_OPTIONS[] = {
     { "source", IDL_INTERFACE, false, NULL, 0, NULL, IDL_DEFAULT_NONE, NULL, 0,
       popover_source_is_html_element },
-    { "force", IDL_BOOLEAN, false, NULL, 0, NULL, IDL_DEFAULT_NONE, NULL, 0, NULL }
+    /* LEVEL 1: `force` is declared on TogglePopoverOptions itself, and `source` above is inherited from
+       ShowPopoverOptions — §3.2.17 step 3's "least to most derived". */
+    { "force", IDL_BOOLEAN, false, NULL, 1, NULL, IDL_DEFAULT_NONE, NULL, 0, NULL }
 };
 
 void popover_declare(JSContext *ctx)

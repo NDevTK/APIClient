@@ -9,6 +9,7 @@
 #include "core/realm.h"
 #include "core/dom/document.h"
 #include "core/frame/window_proxy.h"
+#include "core/html/close_watcher.h"
 #include "core/html/html_iframe.h"
 #include "core/html/user_activation.h"
 #include "core/timing/hr_time.h"
@@ -306,12 +307,15 @@ int user_activation_history_action_run(JSContext *ctx, JSStepHdr *h, uint8_t *ph
  * the top-level traversable down, cross-origin frames included. Sharing one walk between them would have been
  * the security hole the note names. */
 
-/* §6.4.2 STEP 5, FOR ONE WINDOW. Step 5.2 is "notify the close watcher manager about user activation given
-   window", and §6.10.2's steps for that read and write two fields of the Window's CLOSE WATCHER MANAGER — its
-   "next user interaction allows a new group" boolean and its "allowed number of groups" count. Both are read by
-   exactly one thing, §6.10's CloseWatcher machinery, which this engine has no interface for: there is no
-   manager here to notify, in the same sense §7.5.10's worker loops iterate a set that is empty by construction.
-   The day CloseWatcher lands it brings its manager, and its manager brings this line. */
+/* §6.4.2 STEP 5, FOR ONE WINDOW — both of its sub-steps, which are two different components'.
+   THIS SITE ONCE RECORDED STEP 5.2 AS UNREACHABLE and the reason it gave has been retired, so it is written
+   out here rather than deleted: a reader who re-derives it will re-introduce the gap. It said the manager's
+   two fields were "read by exactly one thing, §6.10's CloseWatcher machinery, which this engine has no
+   interface for", and concluded there was no manager to notify — the §7.5.10 shape, a walk over a set that is
+   empty by construction. The conclusion did not follow from the premise even then: §6.10.2 gives the manager
+   to the WINDOW, not to the `CloseWatcher` interface, and §6.12 The popover attribute and §4.11.4's modal
+   `dialog` establish watchers in it without that interface existing at all. core/html/close_watcher.c now
+   holds it, every realm is built with one at its spec-initial values, and step 5.2 is an ordinary call. */
 static void ua_activate(JSContext *rctx)
 {
     /* Step 5.1 — and this is the write that turns the unknown into a fact. Once a trusted input event has
@@ -333,6 +337,11 @@ static void ua_activate(JSContext *rctx)
        clock. Storing the value is what keeps those two facts apart; flattening it here would report an
        activation at a moment nothing computed. */
     ua_set(rctx, UA_LAST, ua_now(rctx));
+    /* Step 5.2 — "Notify the close watcher manager about user activation given window." It is THIS window's
+       manager, which is why it takes the same realm step 5.1 wrote: §6.4.2's step 5 walks a SET of Windows and
+       every one of them is a different realm in this agent, so a manager notified out of the asking realm
+       would raise one Window's allowance for another Window's interaction. */
+    close_watcher_notify_user_activation(rctx);
 }
 
 /* THE ACTIVE DOCUMENT'S REALM OF A NAVIGABLE IN THE SET — with the two states that are not realms named at the

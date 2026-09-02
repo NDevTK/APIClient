@@ -38,6 +38,7 @@
 #include "core/events/event.h"
 #include "core/events/event_target.h"
 #include "core/frame/navigable.h"
+#include "core/html/close_watcher.h"
 #include "core/html/constraint_validation.h"
 #include "core/html/custom_elements.h"
 #include "core/html/form_data.h"
@@ -2486,6 +2487,12 @@ void html_form_declare(JSContext *ctx)
        not §4.10's section; when core/html grows a declaration point that is not a form's, this line is one of
        the ones that belongs to it. */
     user_activation_init(ctx);
+    /* §6.10.2's CLOSE WATCHER MANAGER, declared here for exactly the reason the line above is and subject to
+       the same caveat about whose section this is: its per-Window record has to exist BEFORE the first realm
+       is built, because §6.4.2 step 5.2 notifies one on every activation and a realm that missed the install
+       has none. It comes AFTER user_activation's line because that is the caller — core/html/user_activation.c
+       performs step 5.2 — and reading the two in this order is how the dependency reads in §6.4.2 itself. */
+    close_watcher_init(ctx);
     /* BOTH submission members register their own step definition rather than declaring arguments to the args
        machine, so both install through the installer for that kind — see idl_install_step_method. `submit()`
        is one because §4.10.22.4's `formdata` event is the page's code and it runs on that path too. */
@@ -2546,6 +2553,7 @@ void html_form_free(JSRuntime *rt)
     input_picker_free();
     text_control_selection_free(rt);
     user_activation_free();
+    close_watcher_free();
     /* The slot keys are the AGENT's, so they are released with the agent — a Symbol nobody frees is a live GC
        object the runtime's own walk counts as a leak. */
     JS_FreeAtomRT(rt, g_atom_owner);
