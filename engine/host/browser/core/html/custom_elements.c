@@ -79,6 +79,7 @@
 #include "core/html/html_element.h"
 #include "core/html/custom_elements.h"
 #include "core/html/element_internals.h"
+#include "solver/concolic.h"      /* DOM §4.9's is value can be a string this engine does not know the bytes of */
 
 /* ---- §4.13.4 "The CustomElementRegistry interface" — A REGISTRY IS AN OBJECT, AND `customElements` IS ONE --
  *
@@ -495,13 +496,22 @@ static JSAtom g_cb_atoms[CE_CB_COUNT];
 static int    g_id_define, g_id_get, g_id_get_name, g_id_when_defined, g_id_upgrade, g_id_initialize;
 
 /* DOM §4.9's IS VALUE for an element, read off its own slot — see g_is_key. UNDEFINED is the spec's null, which
-   is what every element that no algorithm gave one has. OWNED. */
+   is what every element that no algorithm gave one has. OWNED.
+   WHAT THE SLOT MAY HOLD IS ASSERTED HERE ALTHOUGH THIS IS A SHARED HELPER, and the reason it does not need a
+   caller's site is that the invariant is about the WRITE and there is exactly one writer:
+   custom_elements_created_with_is_value, whose two spellings are a string minted from bytes and an unknown
+   handed straight through. A reader that trips this has not made a mistake — the writer has — so the remedy
+   the message names is at the one site a reader can go to. */
 static JSValue ce_is_value_of(JSContext *ctx, JSValueConst wrap)
 {
     JSValue v;
 
     if (!JS_IsObject(wrap)) return JS_UNDEFINED;
     if (JS_GetOwnSlot(ctx, &v, wrap, g_atom_is) <= 0) return JS_UNDEFINED;
+    DCHECK(JS_IsString(v) || concolic_is(v),
+           "an element's is-value slot holds something that is neither a string nor an unknown — DOM §4.9's is "
+           "value is null or a string, the absent slot IS the null, and the only writer is "
+           "custom_elements_created_with_is_value");
     return v;
 }
 
@@ -585,6 +595,29 @@ static JSValue ce_find_for_node(JSContext *ctx, JSValueConst wrap, const char *n
     if (!JS_IsObject(def)) {                                     /* step 4 */
         JSValue is = ce_is_value_of(ctx, wrap);
         size_t ilen = 0;
+        /* NAMED RESIDUAL — CORRECT for every is value whose bytes are known, NARROWER than §4.13.3 step 4.
+             NOT COVERED: an is value that is unknown external input. Step 4 is "contains an item with name
+               equal to is and local name equal to localName", and over an unknown `is` that has as many
+               answers as the set holds items whose local name is `localName`, plus null.
+             WHAT THE NEXT DIFF BUILDS: that N-way question asked over the unknown, with the arms named by
+               each candidate definition's NAME and never by its position in the definition set — §4.13.4's
+               define step 16 is "Append definition to this's custom element definition set", so a recorded
+               position names a different definition on the way back in. AND WITH IT, A CALLER THAT CAN CARRY
+               THE SIBLING: this file has TWO entries into this lookup and they are not alike, which is the
+               half to check before believing this clause. One is
+               custom_elements_definition_lookup_for_element, whose createElement caller is a JSStepHdr step
+               function; the other is ce_try_upgrade, which is `static void`, reached from three insertion
+               sites, and has no machine state for a sibling to be snapshotted at. So the ask cannot simply be
+               written inside this function — the upgrade entry has to become something that can fork first.
+               WHAT IS **NOT** AN OBSTACLE, because reading it as one would send the next reader to convert a
+               member that can no longer arrive here with an unknown: §4.13.7's attachInternals. Its step 2
+               looks up with a NULL is, and its step 1 now throws for a non-null one, so an unknown is value
+               reaches this lookup through that door never.
+             HOW ITS ABSENCE SHOWS: `createElement("button", {is: <unknown>})` answers with a plain
+               HTMLButtonElement in custom element state "undefined" even when the registry ALREADY holds a
+               matching `define("my-btn", C, {extends:"button"})` — where a browser given any concrete `is`
+               returns the upgraded element. It is a NOT-YET-SOLVED lookup and not a wrong one: the element
+               keeps its is value and its "undefined" state, which is the state a later upgrade starts from. */
         const char *iv = JS_IsString(is) ? JS_ToCStringLen(ctx, &ilen, is) : NULL;
 
         if (iv) {
@@ -1702,12 +1735,17 @@ bool custom_elements_definition_is_customized_builtin(JSContext *ctx, JSValueCon
     return builtin;
 }
 
-/* DOM §4.9's IS VALUE AS A PREDICATE — see custom_elements.h. The slot holds a STRING for every is value this
-   engine produces and is absent otherwise, so "is not null" is exactly "the slot holds a string". */
+/* DOM §4.9's IS VALUE AS A PREDICATE — see custom_elements.h. The absent slot IS the spec's null and nothing
+   else, so "is not null" is exactly "the slot holds something".
+   IT USED TO ASK `JS_IsString`, ON THIS FILE'S OWN ARGUMENT — now retired — that the slot held a STRING for
+   every is value this engine produced. That was true while every is value came from bytes, and it turned
+   an is value whose bytes are unknown external input into a positive statement that the element has none.
+   The predicate does not depend on the bytes: an unknown is non-null on every arm it could resolve to, so
+   §4.13.7 "Element internals"' attachInternals step 1 throws for it, once, with nothing to fork. */
 bool custom_elements_element_has_is_value(JSContext *ctx, JSValueConst wrap)
 {
     JSValue is = ce_is_value_of(ctx, wrap);
-    bool has = JS_IsString(is);
+    bool has = !JS_IsUndefined(is);
 
     DCHECK(g_ready, "an element's is value was asked for before custom_elements_init declared the slot");
     JS_FreeValue(ctx, is);
@@ -2440,7 +2478,12 @@ static bool ce_upgradable_name(JSContext *ctx, lxb_dom_element_t *el)
     wrap = node_wrap_peek(lxb_dom_interface_node(el));
     if (!JS_IsObject(wrap)) return false;
     is = ce_is_value_of(ctx, wrap);
-    customized = JS_IsString(is);
+    /* PRESENCE, NOT BYTES — so an is value whose bytes are unknown external input answers YES here and needs no
+       fork: every arm it could resolve to is a non-null is value, and this question asks only whether the
+       element is one a lookup could ever resolve. What that costs is one wrapper read and one state read for
+       such an element, which then answers "undefined" and enqueues nothing; what asking `JS_IsString` cost was
+       removing the element from candidacy outright. */
+    customized = !JS_IsUndefined(is);
     JS_FreeValue(ctx, is);
     return customized;
 }
@@ -2602,6 +2645,30 @@ static void ce_upgrade_particular(JSContext *ctx, JSValueConst registry, lxb_dom
         if (mine && is_name) {                       /* the "additionally" clause */
             JSValue is = ce_is_value_of(ctx, wrap);
             size_t got = 0;
+            /* NAMED RESIDUAL — CORRECT for every is value whose bytes are known, NARROWER than the clause
+                 above, which is verbatim "Additionally, if name is not localName, only include elements whose
+                 is value is equal to name."
+                   NOT COVERED: a candidate whose is value is unknown external input. The equality has two
+                     feasible answers for it and this takes the false one.
+                   WHAT THE NEXT DIFF BUILDS: that equality asked as a real two-armed question over the
+                     unknown, so the true arm enqueues the upgrade reaction and the false arm does not. THE
+                     DRIVER IS NOT THE MISSING PIECE HERE and saying otherwise would send the next reader to
+                     build one that exists: js_ce_define is already a JSStepHdr step function — it has to be,
+                     because §4.13.4 step 14 Gets `prototype` off the page's constructor — and this walk is a
+                     plain helper it calls from its commit stage. What the ask needs is to move INTO a stage of
+                     that machine, not a machine of its own.
+                   IT IS THE SAME PROPOSITION AS §4.13.3 STEP 4'S RESIDUAL ABOVE AND NOT THE SAME ASK, and the
+                     difference is the whole of what a shared implementation would get wrong. Both compare ONE
+                     element's is value against ONE definition's NAME, so the two must compose the SAME
+                     constraint key — a flow that answered "it is `my-btn`" at creation must not be asked again
+                     here and must not be able to answer differently. But the sites are two: one runs at
+                     creation inside a different machine, and one runs per candidate over a tree walk. One
+                     producer serving both is the shape to avoid; one KEY serving both is the requirement.
+                   HOW ITS ABSENCE SHOWS: `createElement("button", {is: <unknown>})` followed by
+                     `define("my-btn", C, {extends:"button"})` leaves the element in state "undefined" for
+                     ever, with `connectedCallback` never firing, where a browser upgrades it the moment the
+                     definition lands. Distinguishable from the residual above by ORDER: that one is the
+                     definition already present at creation, this one is the definition arriving after. */
             const char *iv = JS_IsString(is) ? JS_ToCStringLen(ctx, &got, is) : NULL;
 
             mine = iv != NULL && got == ilen && memcmp(iv, is_name, ilen) == 0;
@@ -3636,18 +3703,25 @@ void custom_elements_mark_failed(JSContext *ctx, JSValueConst wrap)
  * on the element's WRAPPER, and a wrapper is minted in a realm. The population is solve_html.c's witness
  * documents, whose elements are never looked up, never upgraded and never asked `:defined`; the same sentence
  * is why custom_elements_is_defined answers such a node from ce_state_derive alone. */
-void custom_elements_created_with_is_value(lxb_dom_element_t *el, const char *is, size_t len)
+void custom_elements_created_with_is_value(lxb_dom_element_t *el, const char *is, size_t len,
+                                           JSValueConst unknown)
 {
     lxb_dom_node_t *n = lxb_dom_interface_node(el);
     JSContext *ctx;
     JSValue wrap;
 
     DCHECK(el != NULL, "an is value was written onto no element");
+    DCHECK(!(is != NULL && !JS_IsUndefined(unknown)),
+           "an is value arrived spelled BOTH ways at once — a caller states the bytes it has or the unknown it "
+           "cannot spell, and supplying both is two answers to what this element's is value is");
+    DCHECK(JS_IsUndefined(unknown) || concolic_is(unknown),
+           "an is value's unknown spelling was given a value that is not unknown — a caller holding a real "
+           "string passes its BYTES, so that the one slot cannot end up holding a plain object");
     /* THE NULL IS VALUE IS THE ABSENT SLOT, so there is nothing to write for it — and `len == 0` is NOT that
        case: `<button is="">` has the EMPTY STRING as its is value, which DOM §4.9 step 6.3 counts as non-null
        and which therefore makes the element "undefined" rather than "uncustomized". The pointer is the
-       discriminator and the length never is. */
-    if (is == NULL) return;
+       discriminator and the length never is. NEITHER SPELLING SUPPLIED is that same null. */
+    if (is == NULL && JS_IsUndefined(unknown)) return;
     if (!g_ready) return;
     ctx = document_realm_of(n);
     if (ctx == NULL) return;
@@ -3668,7 +3742,16 @@ void custom_elements_created_with_is_value(lxb_dom_element_t *el, const char *is
                "step 2 and never again, so the element being created here already belonged to another "
                "creation");
     }
-    JS_DefinePropertyValue(ctx, wrap, g_atom_is, JS_NewStringLen(ctx, is, len), CE_SLOT_FLAGS);
+    /* THE UNKNOWN IS STORED AS ITSELF and is not coerced, minted or replaced by its example. It is the page's
+       own value, so it carries the source identity every later read of this slot has to be able to name, and
+       the realm it was minted in is the realm the page holds it in — this entry resolves the ELEMENT'S realm
+       to find the wrapper, which is a different question and not one that licenses re-minting the value. */
+    JS_DefinePropertyValue(ctx, wrap, g_atom_is,
+                           is != NULL ? JS_NewStringLen(ctx, is, len) : JS_DupValue(ctx, unknown),
+                           CE_SLOT_FLAGS);
+    /* Step 6.3's condition reduces to the namespace test for the unknown spelling for exactly the reason it
+       does for the known one: "localName is a valid custom element name OR is is non-null", and an unknown is
+       value is non-null on every arm. */
     if (n->ns == LXB_NS_HTML)                                    /* step 6.3 */
         ce_set_state(ctx, wrap, CE_STATE_UNDEFINED);
     JS_FreeValue(ctx, wrap);

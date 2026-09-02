@@ -1082,32 +1082,36 @@ static int js_doc_create_element_step(JSContext *ctx, JSStepHdr *hdr, void *st, 
             *presult = js_doc_create_element(ctx, hdr->this_val, argc, argv, 0);
             return JS_IsException(*presult) ? -1 : 0;
         }
-        /* AN `is` THAT IS UNKNOWN EXTERNAL INPUT IS RESOLVED THE WAY THE LOCAL NAME ABOVE IS, and for the
-           same reason: the engine RUNS the real operation on the concrete example rather than predicting what
-           running it would have produced, so `createElement("button", {is: location.hash.slice(1)})` looks up
-           the definition the run's own example names. The member's declared type is DOMString, and §3.2.17's
-           member loop hands a CONCOLIC member across as itself rather than coercing it, which is why this
-           arrives here still wearing its Object and not as a coerced string. */
+        /* AN `is` THAT IS UNKNOWN EXTERNAL INPUT IS RESOLVED THE WAY THE LOCAL NAME ABOVE IS **WHERE ITS
+           SOURCE CARRIES AN EXAMPLE**, and for the same reason: the engine RUNS the real operation on the
+           concrete example rather than predicting what running it would have produced, so
+           `createElement("button", {is: location.hash.slice(1)})` looks up the definition the run's own
+           example names. WHERE IT CARRIES NONE the two part company, and that is not this arm being weaker —
+           it is the local name and the is value being two different questions. A local name with no example
+           has nothing to CREATE: §4.9 step 3 needs a name to look up and step 6.1 needs one to pick an
+           interface with, so the arm above hands the whole creation to the concolic-tag path. An is value
+           with no example still creates the SAME element off the same known local name; all that is unknown
+           is which definition it names, and that is a lookup this engine can go on to solve rather than a
+           creation it cannot perform. The member's declared type is DOMString, and §3.2.17's member loop hands
+           a CONCOLIC member across as itself rather than coercing it, which is why this arrives here still
+           wearing its Object and not as a coerced string. */
         if (concolic_is(is)) {
             JSValue ex = concolic_example(ctx, is);
 
-            JS_FreeValue(ctx, is);
             if (JS_IsString(ex)) {
+                JS_FreeValue(ctx, is);
                 is = ex;
             } else {
-                /* NAMED RESIDUAL — CORRECT for every is value that has one, NARROWER than DOM §4.9.
-                     NOT COVERED: an `is` whose source carries NO example, which DOM §4.9 still passes to
-                       create an element internal step 2 as a real is value.
-                     WHAT THE NEXT DIFF BUILDS: an is-value slot that can HOLD a concolic, which is a change
-                       to the slot and to all four of its readers at once (§4.13.3's lookup step 4,
-                       §4.13.4 step 17's "additionally" filter, ce_upgradable_name and `:defined`) — every one
-                       of them tests JS_IsString today, so a concolic written into the slot would be read as
-                       an ABSENT is value by all four and the element would answer as if it had none.
-                     HOW ITS ABSENCE SHOWS: `createElement("button", {is: <opaque>})` produces an element
-                       whose `:defined` is true and which no later `define("my-btn", C, {extends:"button"})`
-                       upgrades, where a browser given any concrete `is` upgrades it. */
+                /* NO EXAMPLE IS NOT THE NULL IS VALUE, AND WRITING ONE HERE WAS THE DEFAULT THAT CONCEALED IT.
+                   DOM §4.9 passes whatever `is` holds to create an element internal step 2, and a source that
+                   carries no example still holds a STRING — one whose bytes this run has not learned. Setting
+                   `is` to JS_NULL turned that into the positive statement that the page made no customized
+                   built-in at all: the slot went unwritten, step 6.3 never ran, and `<button>` derived
+                   "uncustomized", so `:defined` answered TRUE and attachInternals succeeded for an element a
+                   browser refuses both for. The unknown rides through instead, and the readers that depend on
+                   its BYTES rather than on its presence carry their own residuals at
+                   custom_elements.c — this one is closed. */
                 JS_FreeValue(ctx, ex);
-                is = JS_NULL;
             }
         }
         /* §4.9's "CREATE AN ELEMENT INTERNAL", PERFORMED BEFORE STEP 3'S LOOKUP. The lookup is over
@@ -1137,7 +1141,7 @@ static int js_doc_create_element_step(JSContext *ctx, JSStepHdr *hdr, void *st, 
            on its own, so `new Document()`'s null-namespace element carries the is value and stays
            "uncustomized", exactly as the standard says. Nothing downstream is thereby handed a foreign element
            with a definition: HTML §4.13.3's lookup step 2 refuses a non-HTML namespace outright. */
-        if (JS_IsString(is)) {
+        if (JS_IsString(is) || concolic_is(is)) {
             lxb_dom_node_t *made = node_of(s->el);
             size_t ilen = 0;
             const char *iv;
@@ -1146,10 +1150,19 @@ static int js_doc_create_element_step(JSContext *ctx, JSStepHdr *hdr, void *st, 
                    "DOM §4.9 create an element internal answered with something that is not an element, and "
                    "the is value about to be written is a fact about an ELEMENT — the cast below would "
                    "otherwise read another node kind's struct as one");
-            iv = JS_ToCStringLen(ctx, &ilen, is);
-            if (!iv) { JS_FreeValue(ctx, registry); JS_FreeValue(ctx, is); return -1; }
-            custom_elements_created_with_is_value(lxb_dom_interface_element(made), iv, ilen);
-            JS_FreeCString(ctx, iv);
+            /* THE TWO SPELLINGS OF ONE WRITE. A known is value goes as BYTES, which is what lets the entry own
+               the realm resolution the markup producer also needs; an is value whose bytes are unknown goes as
+               ITSELF, uncoerced — running `JS_ToCStringLen` on it would spell the SHAPE and store a plausible
+               string, which is the invention §@H forbids and would be indistinguishable from a value the code
+               determined. */
+            if (concolic_is(is)) {
+                custom_elements_created_with_is_value(lxb_dom_interface_element(made), NULL, 0, is);
+            } else {
+                iv = JS_ToCStringLen(ctx, &ilen, is);
+                if (!iv) { JS_FreeValue(ctx, registry); JS_FreeValue(ctx, is); return -1; }
+                custom_elements_created_with_is_value(lxb_dom_interface_element(made), iv, ilen, JS_UNDEFINED);
+                JS_FreeCString(ctx, iv);
+            }
         }
         JS_FreeValue(ctx, is);
         s->def = custom_elements_definition_lookup_for_element(ctx, s->el);   /* §4.9 STEP 3 */

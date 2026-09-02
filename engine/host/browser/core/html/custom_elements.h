@@ -198,7 +198,13 @@ bool custom_elements_definition_is_customized_builtin(JSContext *ctx, JSValueCon
    ATTRIBUTE — DOM §4.9 fixes the is value at creation and never lets it move, so a `setAttribute("is", …)` on
    an ordinary element must not start making this throw and a `removeAttribute("is")` on a customized built-in
    must not stop it. The slot is this component's record, which is why the predicate is here and why no caller
-   may re-derive the answer from the attribute list. */
+   may re-derive the answer from the attribute list.
+   IT IS A TEST AND NOT A LOST FORK, WHICH IS THE QUESTION TO ASK OF EVERY READER OF THIS SLOT. An is value
+   whose bytes are unknown external input is NON-NULL on every arm of whatever it turns out to be, so this
+   step's answer does not depend on the bytes and forking here would mint two siblings that throw the same
+   DOMException. The readers that DO depend on the bytes are the two that compare the is value against a
+   definition's NAME — §4.13.3 "Core concepts"' look up a custom element definition step 4 and §4.13.4 "The
+   CustomElementRegistry interface"' upgrade particular elements within a document — and those are forks. */
 bool custom_elements_element_has_is_value(JSContext *ctx, JSValueConst wrap);
 
 /* §4.13.4'S ACTIVE CUSTOM ELEMENT CONSTRUCTOR MAP, AS THE ONE PAIR THAT BRACKETS A CONSTRUCT. "Each
@@ -254,8 +260,22 @@ void custom_elements_mark_failed(JSContext *ctx, JSValueConst wrap);
    `is` NULL IS DOM'S NULL IS VALUE and writes nothing; a NON-NULL `is` of length 0 is `is=""`, which DOM §4.9
    step 6.3 counts as non-null. IT TAKES THE ELEMENT AND NO REALM, for custom_elements_is_defined's reason —
    the caller is a parse edge standing on a Lexbor node, and the realm this state belongs to is the ELEMENT'S
-   OWN DOCUMENT'S, never whichever one happens to be running. */
-void custom_elements_created_with_is_value(lxb_dom_element_t *el, const char *is, size_t len);
+   OWN DOCUMENT'S, never whichever one happens to be running.
+   AN IS VALUE THE CALLER CANNOT SPELL ARRIVES AS `unknown`, AND THAT IS A THIRD STATE RATHER THAN A SECOND
+   SPELLING OF THE NULL ONE. DOM §4.9's is value is "null or a string"; this engine's third answer is a string
+   whose BYTES are unknown external input, which is non-null on every arm of whatever it turns out to be —
+   `createElement("button", {is: location.hash.slice(1)})` made a customized built-in in a browser for every
+   value the fragment can hold. Collapsing it to the null is value is the defaulted-field defect at its
+   sharpest: the slot then reads ABSENT to every reader, the element derives "uncustomized", and unknown
+   external input has been turned into the positive statement that the page made no customized built-in at all.
+   EXACTLY ONE OF THE TWO SPELLINGS IS SUPPLIED and the entry asserts it: `is` non-NULL is the known value,
+   `unknown` non-UNDEFINED is the unknown one, and NEITHER is DOM's null. They are two parameters and not two
+   entries because there is still ONE write and one moment — the argument above for a single writer is about
+   what an is value MEANS, and it does not weaken because the bytes arrive by two roads. The byte road stays
+   bytes so the parse edge keeps needing no realm: it has no context to mint a string in, and handing it one
+   would duplicate at the caller the realm resolution this entry exists to own. */
+void custom_elements_created_with_is_value(lxb_dom_element_t *el, const char *is, size_t len,
+                                           JSValueConst unknown);
 /* `window.customElements` — this realm's Document's CustomElementRegistry, and the `CustomElementRegistry`
    interface object that makes `new CustomElementRegistry()` (a SCOPED one) constructible. */
 void custom_elements_install(JSContext *ctx, JSValueConst global);

@@ -122,8 +122,12 @@ static lxb_status_t html_parse_attr_appended(lxb_dom_element_t *element,
            attribute exists" under §13.2.6.1 step 5 and both are the empty string, which DOM §4.9 step 6.3
            counts as non-null — so the two are folded HERE rather than at the component, whose `is == NULL`
            means DOM's NULL IS VALUE and nothing else. */
+        /* MARKUP HAS BYTES AND NEVER AN UNKNOWN. The token attribute's value comes off the tokenizer, so it is
+           always a run of characters this parse read — an `innerHTML` assignment of unknown external input is
+           resolved to the bytes that were PARSED before any token exists, and there is no road from here to an
+           is value whose bytes are not known. JS_UNDEFINED is that positive statement and not an omission. */
         custom_elements_created_with_is_value(element, value ? (const char *)value : "",
-                                              value ? value_len : 0);
+                                              value ? value_len : 0, JS_UNDEFINED);
     }
     /* AND THEN LEXBOR'S OWN STEPS RUN — the composition, on EVERY path out of the bookkeeping above. The match
        ends in a `break` rather than a return for exactly that reason: a claimed token attribute is the common
