@@ -14835,9 +14835,27 @@ static void looseeq_selftest(void)
  * zone answers with the replies it will make and the refusals it will not, and a round that pays NOTHING is the
  * zone saying it cannot — which is the same forcing function with the reason supplied by the party that has it
  * rather than guessed by the party that does not.
- * PEER PROVISIONING IS STILL REFUSED, one seam along: `wpt_runner.c` already forks and execs a second instance
- * of this very binary over a pipe, so the mechanism exists and what is missing is the ROUTING TABLE between
- * instances — the trusted zone's one fact ("which instance holds which document") — which is the next diff. */
+ * PEER PROVISIONING IS NO LONGER REFUSED, AND THE CLAUSE THAT STOOD HERE IS RECORDED RATHER THAN DELETED. It
+ * said the mechanism existed in `wpt_runner.c`'s fork-and-exec and that what was missing was the ROUTING TABLE
+ * between instances — the trusted zone's one fact, "which instance holds which document" — as the next diff.
+ * Both halves have since moved. `engine/trusted.mjs` provisions a peer ITSELF: `provision()` spawns this
+ * binary's `--abi` arm once per document and states `referenced` for it, at three peer call sites beside the
+ * root's; and `holderOf(doc)` IS that routing table, which that file names as one in three places. A reader
+ * obeying the retired clause would have built a table the zone already keeps, inside the zone that keeps it.
+ * THE RETIRED REASON IS KEPT BECAUSE IT RE-DERIVES EASILY FROM HERE: `wpt_runner.c` does still fork and exec
+ * this binary, so from inside this file that looks like the peer mechanism — and it is not the one the zone
+ * uses. A peer is the PARENT's spawn, for the same reason the zone is the parent at all (a trusted process
+ * forked BY the untrusted one would have its argv, environment, descriptors and lifetime chosen by the process
+ * it polices), so a peer forked from here would hand the child's provisioning to the child.
+ * WHAT THE NEXT DIFF BUILDS: the cross-instance OPERATIONS that transport still carries no arms for, which
+ * `core/frame/window_proxy.c` names at the two sites that abort for want of them — a NAVIGATE of a navigable
+ * another agent holds, routed as an operation through `core/frame/remote_op.h` rather than written as a local
+ * binding, and a cross-instance RESOLVE for the opener policy of a peer's navigable, which suspends the asking
+ * flow and resumes it with the peer's answer in the asking flow's own world.
+ * HOW ITS ABSENCE SHOWS: a chain whose middle document is moved to another instance by HTML §7.1.3.2 Browsing
+ * context group switches due to cross-origin opener policy, and whose creator then writes `w.location` — the
+ * write aborts in the CREATOR's instance naming the discarded browsing context, where a browser navigates the
+ * peer; and any read of that peer's opener policy aborts one line earlier for the same missing route. */
 
 /* ONE RECORD OFF STDIN. `getdelim` rather than a `char line[N]` with an abort past it: a real bundle's document
    is megabytes and its base64 is more, so a fixed line buffer is a document this host would refuse to be

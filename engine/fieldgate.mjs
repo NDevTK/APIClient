@@ -1825,12 +1825,24 @@ const inSpan = (spans, off) => spans.some(([a, b]) => off >= a && off < b);
  * "an ordered map data type with a fixed, ordered set of entries" and says an operation taking one "will
  * perform a one-time conversion from the given JavaScript value", so there is no interface object, no
  * prototype and nothing for `instanceof` to test; the type is stated ONLY by the operation that declares the
- * argument. Two things are missing and they stack: `idl_members.mjs` collects
- * `interface`, `interface mixin`, `callback interface` and `namespace` and NOT `dictionary`, so there is no
- * member list to diff against; and there is no arm anywhere here that types the parameters of a function
- * literal ASSIGNED TO a platform member, which is the mirror of §paramSlot's function literal PASSED TO one.
- * The next diff builds the first (dictionaries into the member map, flattened through the inheritance §2.7
- * gives them, as an identity kind with no subtree to narrow within) and then the second. ITS ABSENCE SHOWS as
+ * argument. TWO THINGS WERE MISSING AND THEY STACKED; THE FIRST IS BUILT AND ONLY THE SECOND IS STILL THIS
+ * RESIDUAL. `idl_members.mjs` collects `dictionary` now — into its own `dictByName`/`dictInheritanceOf` pair,
+ * partials merged as §2.7 requires, with `dictChain` giving that inheritance least-derived first, `dictMembers`
+ * giving each member as `{name, required, hasDefault, level, declaredBy, idlType}` in Web IDL §3.2.17
+ * "Dictionary types"' read order, and `dictionaryTypesIn` reaching a dictionary nested inside a union or a
+ * sequence. So there IS a member list to diff `init`'s reads against, and this file already imports the module
+ * that answers it.
+ * THE RETIRED HALF IS WRITTEN DOWN RATHER THAN DELETED, BECAUSE ITS REASON STILL READS AS TRUE FROM HERE. This
+ * clause used to say the next diff puts "dictionaries into the member map", and `byName`'s kind list really is
+ * still `interface`, `interface mixin`, `callback interface` and `namespace` — so a reader re-deriving the
+ * retired reason would go and fold them in, which is the one thing `idl_members.mjs` argues at its own site
+ * must never happen: `byName.has(x)` is what idlgen asks to decide whether an interface tag names something
+ * the corpus declares, and `members()` collects `attribute`/`operation`/`const` and never `field`, so a
+ * dictionary sharing that map answers the EMPTY member list and mints a false COMPLETE. The two maps are
+ * separate ON PURPOSE; what this residual wants is to READ the dictionary one.
+ * WHAT THE NEXT DIFF BUILDS: the arm this file still has none of — one that types the parameters of a function
+ * literal ASSIGNED TO a platform member, which is the mirror of §paramSlot's function literal PASSED TO one —
+ * and then asks `dictMembers` of whichever declared argument type that arm lands `init` on. ITS ABSENCE SHOWS as
  * `init` reading `body` and `method` — two names of the capture record `emit()` composes — so the ≥2 shape rule
  * anchors it to that record and it appears NOWHERE in this report, because both names have producers; the tell
  * is that a `RequestInit` never reaches DECIDED PLATFORM while the `input` declared beside it now does. A relay
