@@ -2575,8 +2575,11 @@ function audit(argv, opts = {}) {
   const undecided = [];
   const mentions = [];
   const quotes = [];
+  /* Every refusal field below carries a `<name>Crash` twin, and `refuse` in PASS 4 throws if a name arrives
+   * without one — so a state added here cannot silently lose the who-pays axis that orders the queue. */
   const qstat = { okNearbyCrossLiteral: 0, seen: 0, checked: 0, verified: 0, okNearby: 0, wrongSection: 0, wrongSectionAncestor: 0, wrongStandard: 0, notFound: 0, notFoundNothing: 0,
-                  noCorpus: 0, noSection: 0, tooShort: 0, voted: 0 };
+                  noCorpus: 0, noCorpusCrash: 0, noSection: 0, noSectionCrash: 0, tooShort: 0,
+                  voted: 0, votedCrash: 0, foreign: 0, foreignCrash: 0, unresolved: 0, unresolvedCrash: 0 };
   const noCorpusBy = new Map();
   const gapHist = [];
   const stepsOut = [], stepsAway = [];
@@ -3630,19 +3633,59 @@ function audit(argv, opts = {}) {
                         crash: inCrashMessage(src, spans, c.at) };
           /* THE FIVE STATES ARE KEPT APART, because CLAUDE.md's recurring defect is several states behind one
            * answer and a search cannot be directed toward a gap it cannot see. Each refusal below is a
-           * DIFFERENT fact about why this quotation was not judged, and each is counted under its own name. */
-          if (!c.spec) { qstat.voted++; continue; }              /* foreign or unresolved — no claim to check */
-          /* THE FILE VOTE MAY RESOLVE AND MAY NOT JUDGE — this file's own division of labour, applied. A
-           * quotation finding is a statement about a STANDARD, so a citation whose standard is an inference
-           * from its neighbours has nothing here that can be demonstrated. */
-          if (c.how === "file") { qstat.voted++; continue; }
-          if (!txt.has(c.spec)) { qstat.noCorpus++; noCorpusBy.set(c.spec, (noCorpusBy.get(c.spec) || 0) + 1); continue; }
+           * DIFFERENT fact about why this quotation was not judged, and each is counted under its own name.
+           *
+           * THAT SENTENCE STOOD ABOVE TWO BRANCHES THAT SHARED ONE COUNTER, which is the removal-announced-
+           * but-not-made shape CLAUDE.md records against THIS FILE by name: a comment certifying a separation
+           * the line beneath it does not make, so an auditor reads the claim and never runs the grep. The
+           * merged name was `voted`, and the census printed the whole of it under the file-vote wording —
+           * false of the half that reached it through `!c.spec`. It is not a cosmetic
+           * mislabel: this population is a WORK QUEUE, and the three states have three different repairs.
+           *   FOREIGN — the citation NAMES a standard, and this tool indexes no corpus for it. Writing a
+           *     standard at the site fixes nothing; the repair is an INDEX, and it belongs to whoever adds
+           *     one. It is counted apart so it stops inflating a queue no edit at these sites can drain.
+           *   UNRESOLVED — no anchor, no stated title, no term any index knows, and no file anchor to vote
+           *     with. Nothing placed it, so there is no guess to refuse.
+           *   VOTED — the file vote placed a standard and THE FILE VOTE MAY NOT JUDGE, this file's own
+           *     division of labour. A quotation finding is a statement about a STANDARD, so a citation whose
+           *     standard is an inference from its neighbours has nothing here that can be demonstrated.
+           * WHAT SEPARATES THE LAST TWO IS WHETHER THIS TOOL HOLDS AN OPINION, NOT WHETHER A SITE EDIT HELPS,
+           * and the difference is worth stating because the obvious reading is wrong in a way that was
+           * MEASURED here rather than reasoned about. Both are drained by writing the standard's name in
+           * front of the number: a bare section number bearing a quotation, in a file carrying no anchor to
+           * vote with, lands in UNRESOLVED and leaves `checked` exactly where it was; the same site with the
+           * standard's name written in front of that number is COMPARED, one more quotation judged and the
+           * refusal gone. That was run both ways on a frozen tree. So the actionable per-site queue is VOTED plus
+           * UNRESOLVED, and only FOREIGN is outside it. VOTED is nonetheless the head of that queue, because
+           * it is where the audit prints a standard in parentheses it has no evidence for — a reader skimming
+           * --unanchored can take that inference for a fact, which is the one way this tool commits the
+           * failure it exists to catch. UNRESOLVED is silent instead of wrong, and silence is the cheaper bug.
+           * The step channel next door has partitioned exactly this way all along; the divergence was here.
+           *
+           * AND EACH REFUSAL IS COUNTED TWICE — TOTAL, AND THE SUBSET A CRASH PRINTS. `rec.crash` is already
+           * computed above for every quotation and was read only by the finding kinds, so for the whole
+           * unjudged population it was a computed value consumed by nothing: CLAUDE.md's mirror of the
+           * read-with-no-writer defect, and the harder one to see, because such a value is real and asserted
+           * and simply read by nobody. It is the one axis that orders the queue by who pays — a quotation
+           * in a comment is read with the file open, and a quotation in a DFAIL message is read by whoever is
+           * standing at the abort with nothing around it, which is the same reason --unanchored ranks on it. */
+          const refuse = (why) => {
+            /* A TYPO'D NAME WOULD MAKE A COUNTER `NaN` AND PRINT IT, which is the plausible-datum shape this
+             * census exists to end, so the field must already be declared in qstat. */
+            if (!(why in qstat) || !(why + "Crash" in qstat)) throw new Error(`citegen: undeclared refusal counter ${why}`);
+            qstat[why]++;
+            if (rec.crash) qstat[why + "Crash"]++;
+          };
+          if (c.foreign) { refuse("foreign"); continue; }
+          if (!c.spec) { refuse("unresolved"); continue; }
+          if (c.how === "file") { refuse("voted"); continue; }
+          if (!txt.has(c.spec)) { refuse("noCorpus"); noCorpusBy.set(c.spec, (noCorpusBy.get(c.spec) || 0) + 1); continue; }
           const tx = txt.get(c.spec).sections;
           /* A SECTION CONTAINS ITS SUBSECTIONS — the same rule check (3) applies to a term, applied to text,
            * and it is the join that keeps the corpus free of duplication. The slices are contiguous in the
            * document, so numeric order reproduces the original stream. */
           const own = Object.keys(tx).filter((n) => n === c.no || contains(c.no, n)).sort(cmpNo);
-          if (!own.length) { qstat.noSection++; continue; }
+          if (!own.length) { refuse("noSection"); continue; }
           qstat.checked++;
           if (containsAnyForm(own.map((n) => tx[n]).join(" "), f)) { qstat.verified++; gapHist.push([q.at, 1]); continue; }
           gapHist.push([q.at, 0]);
@@ -4188,10 +4231,18 @@ function audit(argv, opts = {}) {
     console.log(`  ${qstat.seen} quotation(s) of ${MIN_COMPARED_WORDS}+ words stand in prose a citation governs; ${qstat.checked} were compared against a section's own words`);
     console.log(`    VERIFIED ${qstat.verified}  CONFIRMED-BY-A-NUMBER-THE-SAME-COMMENT-CITES ${qstat.okNearby} (${qstat.okNearbyCrossLiteral} of them by a number in a DIFFERENT LITERAL of the same crash message — the population a span-keyed lookup cannot see, so this figure is what the prose-unit rule is carrying)  WRONG-SECTION ${qstat.wrongSection} (${qstat.wrongSectionAncestor} of them at a section that CONTAINS the cited one)  WRONG-STANDARD ${qstat.wrongStandard}  NOT-FOUND ${qstat.notFound}` +
       ` (of which ${qstat.notFoundNothing} leave the standard within their first ${MIN_FRAGMENT_WORDS} words — a fabricated sentence and a piece of this tree's own prose in quotation marks both land there, and nothing mechanical separates them)`);
-    console.log(`  NOT CHECKED, and why: ${qstat.noCorpus} cite a standard with no committed text corpus` +
+    /* EACH REFUSAL NAMES ITS OWN STATE AND THE SUBSET A CRASH PRINTS, because these are a WORK QUEUE and the
+     * three former `voted` states do not have the same repair: VOTED and UNRESOLVED are drained by writing
+     * the standard's name at the site (measured, not assumed — see PASS 4), and FOREIGN is not, because it
+     * already names one. The crash figure is what orders what remains: that text is read by whoever is
+     * standing at an abort, with no file open. */
+    const cr = (n) => (n ? `, ${n} of them in a crash message` : "");
+    console.log(`  NOT CHECKED, and why: ${qstat.noCorpus} cite a standard with no committed text corpus${cr(qstat.noCorpusCrash)}` +
       (noCorpusBy.size ? ` (${[...noCorpusBy].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}=${v}`).join(" ")})` : "") +
-      `; ${qstat.voted} sit under a citation naming no standard, whose standard only a file vote placed` +
-      `; ${qstat.noSection} cite a §N the standard does not have (the corpus holds text for every section its index has, so this is the UNKNOWN-SECTION population above)` +
+      `; ${qstat.voted} sit under a citation naming no standard, whose standard only a file vote placed${cr(qstat.votedCrash)} — the head of the site-drainable queue, because this is where the audit prints a standard it has no evidence for` +
+      `; ${qstat.unresolved} carry no anchor, no stated title and no term any index knows, so nothing placed them at all${cr(qstat.unresolvedCrash)} — also drained by naming the standard, silent rather than wrong until it is` +
+      `; ${qstat.foreign} name a standard this tool indexes no text for${cr(qstat.foreignCrash)}, which no edit at the site can fix — that repair is an index` +
+      `; ${qstat.noSection} cite a §N the standard does not have${cr(qstat.noSectionCrash)} (the corpus holds text for every section its index has, so this is the UNKNOWN-SECTION population above)` +
       `; a further ${qstat.tooShort} quoted run(s) are shorter than ${MIN_COMPARED_WORDS} words or carry no fragment of ${MIN_FRAGMENT_WORDS} and are not quotations this check can falsify`);
     if (argv.includes("--gaps")) {
       const b = new Map();
