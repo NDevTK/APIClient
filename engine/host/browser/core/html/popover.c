@@ -42,11 +42,13 @@
  * `<div popover=manual>` is therefore complete here and `<div popover>` (whose empty value default is Auto) is
  * a named crash rather than a wrong answer.
  *   IT WAS THREE, AND THE THIRD WAS §6.10 Close requests and close watchers' close watcher, which step 15's
- * block establishes as its last sub-step. core/html/close_watcher.c holds §6.10.2's manager and its establish
- * and destroy, so that one is now a call this file makes rather than a mechanism it waits on. What §6.10 does
- * NOT yet have is the half that RUNS a watcher's actions — request to close, close, and process close watchers
- * — so a watcher this file establishes is never asked to close and a §6.12 popover goes on hiding only through
- * its own `hidePopover()`. That is a limit of §6.10 and not of this file, and close_watcher.h names it. */
+ * block establishes as its last sub-step. core/html/close_watcher.c holds ALL of §6.10.2 now — the manager,
+ * establish and destroy, and the three algorithms that RUN a watcher's actions — so that one is a call this
+ * file makes rather than a mechanism it waits on. What is owed in the OTHER direction is this file's: §6.10.2's
+ * close-action dispatch has to run a POPOVER watcher's close action, which step 15 states is "to hide a popover
+ * given element, true, true, false, and null", and hide a popover is exported here only as the `hidePopover()`
+ * and `togglePopover()` members — so that arm DFAILs naming the export to make. It is unreachable rather than
+ * wrong today, because step 15's block is the only establisher of that kind and it DFAILs first. */
 #include <string.h>
 
 #include <lexbor/dom/dom.h>
@@ -820,10 +822,13 @@ static int popover_body(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
                       "WATCHER, is built — call close_watcher_establish (core/html/close_watcher.h) with "
                       "CLOSE_WATCHER_KIND_POPOVER and this element, given the element's relevant global "
                       "object, and keep the result in the element's popover close watcher slot for hide a "
-                      "popover step 8's cleanupSteps to destroy. What §6.10 still lacks is the half that RUNS "
-                      "a watcher's actions (request to close, close, process close watchers), so a popover "
-                      "that establishes one will not yet hide on a close request; that is §6.10's residual and "
-                      "does not block this block. Build these two, then this block, then hide a popover step "
+                      "popover step 8's cleanupSteps to destroy. §6.10 HOLDS THE HALF THAT RUNS A WATCHER'S "
+                      "ACTIONS NOW (request to close, close, process close watchers), and what it cannot yet "
+                      "reach is THIS FILE'S hide a popover: its close-action dispatch DFAILs for a "
+                      "POPOVER-kind watcher because this file exports that algorithm only as its two IDL "
+                      "members. So establishing one here without also exporting hide a popover as a request "
+                      "moves the crash rather than removing it, and the two belong in one diff. Build these "
+                      "two, then this block and that export, then hide a popover step "
                       "11 and §6.12.2 Popover light dismiss, which are its other two consumers. `<div popover>` "
                       "reaches here because §6.12's EMPTY VALUE DEFAULT is the Auto state");
             DCHECK(type == POPOVER_STATE_MANUAL,

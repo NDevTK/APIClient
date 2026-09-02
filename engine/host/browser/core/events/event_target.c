@@ -1188,8 +1188,8 @@ static const IdlStepDecl AEL_DECL = { ael_step, sizeof(AelState), ael_visit, NUL
     X("onblur", "blur", EH_GLOBAL | EH_WINDOW_REFLECTING)                                                        \
     /* `oncancel` is a GlobalEventHandlers name AND HTML §6.10.3 The CloseWatcher interface's own event handler \
        IDL attribute, over the SAME event type — one row with two memberships, exactly as `onclose` below is   \
-       GlobalEventHandlers' and two other interfaces'. §6.10.3's `cancel` is also the event this build actually \
-       FIRES under that name: close_watcher.c's cancel-action dispatch is its one producer. */                  \
+       GlobalEventHandlers' and two other interfaces'. A second X() row would put the name in this list twice, \
+       and every consumer of the list would then see a member that does not exist twice over. */               \
     X("oncancel", "cancel", EH_GLOBAL | EH_CLOSE_WATCHER)                                                        \
     X("oncanplay", "canplay", EH_GLOBAL)                                                                         \
     X("oncanplaythrough", "canplaythrough", EH_GLOBAL)                                                           \

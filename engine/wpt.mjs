@@ -234,6 +234,22 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       expected to be bad, and a bad first number is the honest measurement this gate exists to
                       take rather than a reason to leave the directories out. */
                    "permissions", "storage", "fs", "html/user-activation",
+                   /* HTML §6.10 "Close requests and close watchers". It is a TOP-LEVEL directory upstream and
+                      not an `html/…` one, which is why a reader looking for it under `html/interaction` finds
+                      nothing — its 55 files sit at `close-watcher/`, and this checkout's own index at the
+                      pinned revision is where that was read rather than from recollection.
+                      IT IS THE ORACLE FOR §6.10.2's GROUP ALGEBRA AND FOR NOTHING ELSE IN THIS TREE. The
+                      manager's allowance, its banking boolean and its join-the-last-group branch are arithmetic
+                      no other corpus asks about, and `basic.html`, `abortsignal.html`, `event-properties.html`
+                      and `inside-event-listeners.html` ask about them through the ONE interface that
+                      establishes a watcher in this build. Its `esc-key/` and `user-activation/` subtrees ask
+                      about a close request, which nothing here dispatches, and its `iframes/` subtree asks
+                      across navigables — so a large part of this directory is measuring §6.10.1 and §4.11.4,
+                      neither of which exists yet.
+                      NOTHING IS PREDICTED HERE ABOUT WHAT IT SCORES. Expect bad first numbers: what each
+                      failure NAMES is the work queue, and a directory left out because its numbers would be
+                      bad is the excluded test this gate exists to catch. */
+                   "close-watcher",
                    /* HTML §8.1.7.3 "Processing model"'s rendering loop and §8.12 "Animation frames" —
                       core/rendering. §8.9 stood at both numbers here and is "User prompts", which owns
                       alert/confirm/print and nothing on this row. The

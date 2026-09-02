@@ -194,7 +194,14 @@ enum { EH_GLOBAL = 1, EH_WINDOW = 2, EH_DOCUMENT = 4, EH_SIGNAL = 8, EH_PORT = 1
           EH_PORT is `onmessage`/`onmessageerror`, which §9.5 Broadcasting to other browsing contexts
           includes on BroadcastChannel too, and no BroadcastChannel declares an `onclose`. A membership
           bit of its own is what keeps one name off a prototype whose IDL does not declare it. */
-       EH_MESSAGE_PORT = 524288 };
+       EH_MESSAGE_PORT = 524288,
+       /* HTML §6.10.3 The CloseWatcher interface's OWN two, `oncancel` and `onclose`, which that interface
+          declares on itself ("the event handlers … that must be supported, as event handler IDL attributes, by
+          all objects implementing the CloseWatcher interface"). Both names belong to GlobalEventHandlers as
+          well, so each is one more bit on an entry that already exists — a name declared by two mixins is
+          installed by both, which is exactly what the mask is for. A bit of its own is what keeps the pair off
+          every other prototype: a CloseWatcher includes no mixin at all. */
+       EH_CLOSE_WATCHER = 1048576 };
 /* HTML §6.5 Activation behavior of elements' click() — "Fire a synthetic pointer event named click at this
    element, with the not trusted flag set." — which IS DOM §2.9 dispatch, so it is the same machine under a
    second entry rather than a second implementation of it. */
