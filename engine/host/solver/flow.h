@@ -512,8 +512,22 @@ typedef struct Flow {
        its own readiness and its own DOMContentLoaded. The stage lives on each Document (document.c's readiness
        slot), which is a heap write the COW delta already isolates per flow — so it is still per-flow, and it is
        now also per-document, which is what it always had to be. */
-    int   script_i;        /* position in this flow's ONE program sequence: a row of `dyn`, on [0, dyn_n) */
-    /* ONE SEQUENCE AND ONE ADDRESS SPACE. The cursor used to walk the SESSION document's own scripts out of a
+    int   script_i;        /* position in this flow's ONE program sequence: a row of `dyn`, on [0, dyn_n] */
+    /* THE RANGE IS CLOSED AT BOTH ENDS AND THIS LINE SAID IT WAS HALF-OPEN, which is one character and is the
+       sentence that makes the frontier's own cursor histogram unreadable. `dyn_n` is a LEGAL value and is what
+       the cursor holds between two programs at the tail: flow.c's flow_programs_unstarted_for_document states
+       the contract ("between two programs the cursor stands one past the last started row") and engine.c
+       asserts `script_i <= dyn_n` at the one line that advances it. So the cursor's domain is ONE WIDER than
+       the PROGRAM-INDEX domain [0, dyn_n) that solver/engine.h's `deepest` and `completed` live in, and the
+       two are not comparable without saying which is which.
+       WHAT THE HALF-OPEN SPELLING COST IS NOT PEDANTIC AND WAS MEASURED. solver/cold.h's `program_cursors` is a
+       histogram over THIS field, so on a document of eleven programs it renders a bucket 11 beside a `deepest`
+       of 10 — a bucket whose index, read as a program, names a program the document does not have. A lane read
+       that pair as two instruments contradicting each other and stopped there, which is the correct instinct
+       (CLAUDE.md: a gauge that contradicts the maximum beside it is reporting about nothing) applied to a
+       disagreement that does not exist. The census asserts the real identity now, at the composer where both
+       numbers are in one hand.
+       ONE SEQUENCE AND ONE ADDRESS SPACE. The cursor used to walk the SESSION document's own scripts out of a
        separate table on [0, n) and only then this flow's rows on [n, n+dyn_n), through an offset every reader
        restated. The document's scripts are seeded as rows of `dyn` at creation now (flow_set_seed_hook), so
        there is no half to be in — which is also what makes §4.12.1.1's "immediately execute the script element"

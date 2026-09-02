@@ -54,6 +54,22 @@ void cold_census(ColdCensus *out)
                "a member of the frontier stands at a NEGATIVE program cursor — `script_i` is a position in the "
                "flow's own program sequence and is only ever advanced upward from 0, so a value below it is a "
                "corrupted Flow and the histogram below would write outside its own allocation");
+        /* …AND THE OTHER END OF ITS RANGE, WHICH IS CLOSED. `dyn_n` is a legal cursor and is what a member
+           holds between two programs at the tail (solver/flow.h), so the bound here is `<=` and not `<`;
+           anything ABOVE it is the defect flow.c's flow_programs_unstarted_for_document describes, a cursor
+           ahead of the slot every append takes, and the row queued next would be written behind it and never
+           run. engine.c asserts this at the line that ADVANCES the cursor; this is the same contract read at
+           the census, which is where a member that got there some other way is seen. */
+        DCHECK(f->script_i <= f->dyn_n,
+               "a member of the frontier stands PAST the end of its own program queue — the cursor's range is "
+               "closed at `dyn_n` (one past the last row, which is where a member between two programs "
+               "stands), so a value above it is ahead of the slot the next append takes and every program "
+               "queued onto this flow from here on is written behind the cursor, never compiled and never "
+               "counted as unstarted");
+        /* …AND WHETHER THIS MEMBER HAS ANY ROW LEFT AT ALL, which the bucket it lands in cannot say: one
+           cursor value holds both "inside the program at this index" and "past the last row of this sequence",
+           and `dyn_n` is per-flow and crosses no boundary. See cold.h for what turns on the difference. */
+        if (f->script_i == f->dyn_n) out->out_of_programs++;
         if (f->script_i >= out->program_cursor_n) {
             int want = f->script_i + 1;
             long *grown = realloc(out->program_cursors, (size_t)want * sizeof *grown);

@@ -50,8 +50,22 @@ typedef struct {
        its own (solver/flow.h) and this counts them. */
     long step_units[STEP_UNIT_N];
 
-    /* WHERE IN ITS DOCUMENT EACH MEMBER IS STANDING — one count per program index, over the whole frontier.
+    /* WHERE IN ITS DOCUMENT EACH MEMBER IS STANDING — one count per CURSOR VALUE, over the whole frontier.
        Emitted as `programCursors`.
+
+       A CURSOR IS NOT A PROGRAM INDEX, AND THIS BLOCK CALLED IT ONE. solver/flow.h's `script_i` runs over
+       [0, dyn_n] — CLOSED at the top, because `dyn_n` is what the cursor holds between two programs at the
+       tail — while a PROGRAM index runs over [0, dyn_n) and is the domain solver/engine.h's `deepest` and
+       `completed` live in. The histogram is therefore ONE BUCKET WIDER than the document has programs, and its
+       top bucket is the members that have run out of rows. Read as a program index that bucket names a program
+       the document does not have, which is how the row a reader is told to compare against `deepest` came to
+       look like an instrument contradicting the maximum beside it. It is not: on a document of eleven programs,
+       `deepest 10 / completed 10` and a bucket at 11 are the SAME statement made twice.
+       THE IDENTITY THAT SAYS SO IS ASSERTED, at solver/result.c where this census and the frontier census are
+       in one hand: every live member's cursor is at most `deepest + 1`. A cursor of `c` above zero means the
+       member left the program at `c - 1`, and a program is only left after engine.c has STARTED it at the one
+       line that raises `deepest` — so `deepest >= c - 1` for every standing member, and a width above
+       `deepest + 2` is the two rows describing different runs.
 
        IT IS THE ROW `deepest` AND `completed` STRUCTURALLY CANNOT CARRY, and those two are otherwise the whole
        of what this engine says about a frontier's progress THROUGH its programs. Both are GLOBAL MAXIMA over
@@ -90,6 +104,28 @@ typedef struct {
        well as at the walk — this is an instrument, and the verdict it informs is a person's. */
     long *program_cursors;
     int   program_cursor_n;
+    /* …AND HOW MANY OF THE STANDING MEMBERS HAVE NO ROW LEFT TO RUN — `script_i == dyn_n`, counted on the same
+       walk. Emitted as `outOfPrograms`.
+
+       IT IS NOT DERIVABLE FROM THE HISTOGRAM AND THAT IS THE WHOLE REASON IT IS A ROW. The bucket a member
+       lands in is its cursor, and one cursor value covers two states that take opposite work: INSIDE the
+       program at that index (its frame is live) and PAST THE LAST ROW OF ITS OWN SEQUENCE (there is no program
+       there to be inside). `framed` above separates those two — but `framed` is a count over the WHOLE
+       frontier and cannot be attributed to a bucket, and `dyn_n` is per-flow and crosses no boundary at all,
+       so nothing a reader holds can tell the two apart. Two members in one bucket, and no way to say which is
+       which.
+       WHAT TURNS ON IT IS THE ORPHAN QUESTION, which is why this is the fact worth carrying rather than a
+       per-bucket phase table. engine.c reaches engine_orphan_fork only where a flow has no program, job,
+       lifecycle event, timer, rendering opportunity or outstanding reply left, so `0` orphan asks has two
+       readings — no member has run out of PROGRAMS, or members have and are held by one of the other five —
+       and the census reported them identically. Measured on the native smoke fixture: 129 members standing at
+       the top bucket with `deepest 10`, i.e. every program the document has, against a run reporting zero
+       orphan asks. Those two together are the second reading and say which of the five to open; either one
+       alone is the first.
+       A REPORT AND NEVER A BOUND (§NO BOUNDS), for `program_cursors`' reason exactly: nothing in the engine
+       reads it, no arm of any verdict branches on it, and "how many members have run out of programs" is
+       precisely the shape a drain check would be built from. */
+    long  out_of_programs;
 
     /* PER-FLOW rows — these multiply by the number of parked flows, so they are what a pager pays for. */
     long dec_entries;        /* decision-vector slots the flows STAND ON — a chain total, so this counts the

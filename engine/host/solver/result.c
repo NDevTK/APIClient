@@ -731,6 +731,20 @@ char *result_swap_json(void) {
    histogram is the per-member companion that decides it: read against `deepest` on the same line, mass sitting
    LOW is the first and mass sitting AT it is the second. solver/cold.h carries the derivation, why its extent
    is the frontier's own rather than a list's, and why it is a report that decides nothing.
+   READ AGAINST `deepest` MEANS READ IN ITS OWN UNIT, WHICH THE SENTENCE ABOVE DOES NOT SAY AND A READER
+   CANNOT SUPPLY. The buckets are CURSORS and `deepest` is a PROGRAM INDEX, and a cursor's range is closed at
+   `dyn_n` while a program index's is not — so the cursor that means "this member has finished the deepest
+   program the document has" is `deepest + 1`, not `deepest`. The mass sitting AT `deepest + 1` is the second
+   diagnosis; a top bucket one above `deepest` is not two instruments disagreeing, which is how it has been
+   read. `outOfPrograms` beside them is the count of members standing there with no row left at all.
+
+   `outOfPrograms` IS THE ROW THE HISTOGRAM CANNOT CARRY FOR ITSELF. One cursor value covers a member INSIDE
+   the program at that index and a member PAST THE LAST ROW of its own sequence; `framed` separates those two
+   over the WHOLE frontier and cannot be attributed to a bucket, and `dyn_n` is per-flow and crosses no
+   boundary. What turns on the difference is engine.c's orphan arm, which is reached only where a member has no
+   program left — so zero orphan asks reads identically for "nobody has run out of programs" and for "members
+   have and are held by a job, a timer, a lifecycle event, a rendering opportunity or an owed reply", which are
+   different files to open. See solver/cold.h.
 
    `hostAnswersExtra` IS BESIDE `hostAnswered` AND IS NOT PART OF IT. One rendezvous has one answer per peer
    TIMELINE and every one of them is true, but only the FIRST settles the ask; the rest each fork an arm and
@@ -850,9 +864,11 @@ char *result_cold_json(void) {
        session there has ever been. The consumer asserts the row's presence and reads its value; neither side
        may default the other's hole.
        THE THIRD HISTOGRAM ON THIS DOCUMENT IS NOT ONE OF THESE TWO AND IS NOT SIZED HERE. `programCursors` is
-       keyed on PROGRAM INDEX rather than on solver/step_unit.h's arms, so its extent is the frontier's own and
-       there is nothing to expand a width from — cursor_hist_json measures what it is about to write, which is
-       the same discipline STEP_UNITS_JSON_MAX gives these two by derivation. */
+       keyed on the members' own CURSOR — solver/flow.h's `script_i`, whose range is closed at `dyn_n` and so
+       runs one wider than the program indices `deepest` and `completed` are maxima over — rather than on
+       solver/step_unit.h's arms, so its extent is the frontier's own and there is nothing to expand a width
+       from: cursor_hist_json measures what it is about to write, which is the same discipline
+       STEP_UNITS_JSON_MAX gives these two by derivation. */
     char hist[STEP_UNITS_JSON_MAX];
     char runs[STEP_UNITS_JSON_MAX];
     /* AND THE THIRD HISTOGRAM, ON THE HEAP FOR THE ONE REASON THE TWO ABOVE ARE ON THE STACK: its extent is
@@ -910,6 +926,25 @@ char *result_cold_json(void) {
     }
     cold_resumed(&resumed);
     engine_frontier_census(&e);
+    /* THE CURSOR HISTOGRAM AGAINST THE MAXIMUM IT IS READ BESIDE — the one identity that says the two rows are
+       about the same run, asserted here because this is the only place both are in one hand. It is not a
+       restatement of the partition above: that one asks whether the walk saw every member, and this asks
+       whether where they are standing is consistent with how far the document has got.
+       THE DERIVATION, so a reader can check it rather than obey it. A cursor of `c` above zero means the
+       member LEFT the program at `c - 1`; every site that advances the cursor is downstream of engine.c's
+       compile block, which raises `deepest` to the index it is about to start before it starts it; therefore
+       `deepest >= c - 1` for every standing member, and the histogram's top index is at most `deepest + 1`.
+       An empty frontier satisfies it too — cold.c gives it the one row 0 and `deepest` is -1.
+       WHAT A BREAK MEANS AND WHAT IT DOES NOT. It is one of exactly two things, and neither of them is this
+       histogram being too narrow: a cursor advanced past a program nothing started, or a start that did not
+       raise `deepest`. Both are in engine.c and both make every reading of "has the mass advanced" a statement
+       about a document this run did not execute. Do not widen anything here to accommodate it — the width is
+       measured from the members and is not a choice this file makes. */
+    DCHECK(c.program_cursor_n - 1 <= e.deepest + 1,
+           "the frontier's deepest STANDING cursor is more than one past the deepest program this document has "
+           "ever STARTED — a cursor is one-past-the-program-it-left, so those two numbers are the same fact "
+           "read twice and a member cannot stand beyond a program nothing began. Either the cursor advanced "
+           "for something that was not a started program, or a program started without raising `deepest`");
     ran = resumed.flows + resumed.cands > 0;
     /* A REBUILD IS ALL OF ITSELF OR NONE OF IT, asserted here because `resumed: 0` is a POSITIVE claim that this
        session was handed no residue and this is the one place both halves of that claim are in one hand.
@@ -961,6 +996,7 @@ char *result_cold_json(void) {
                  "\"pinSegKiB\":%ld,\"decSegs\":%ld,\"decSegEntries\":%ld,\"decSegKiB\":%ld,"
                  "\"dynBodies\":%ld,\"dynKiB\":%ld,\"sharedKiB\":%ld,"
                  "\"steps\":%ld,\"stepUnitRuns\":%s,"
+                 "\"outOfPrograms\":%ld,"
                  "\"stepUnits\":%s,\"programCursors\":%s}",
                  c.flows, c.framed, c.blocked, flow_host_owed_count(),
                  e.finished, e.finished_flows, e.finished_cands,
@@ -981,6 +1017,7 @@ char *result_cold_json(void) {
                  c.dyn_count, c.dyn_bytes / 1024,
                  (c.seg_bytes + c.dom_seg_bytes + c.pin_seg_bytes + c.dec_seg_bytes + c.dyn_bytes) / 1024,
                  r.steps, runs,
+                 c.out_of_programs,
                  hist, cursors);
     free(cursors);
     cold_census_release(&c);

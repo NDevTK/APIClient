@@ -216,7 +216,14 @@ const COLD_FIELDS = ["live", "framed", "blocked", "owed",
                         is the total TWO of them are checked against (`stepUnits` and `programCursors`) and
                         `deepest`/`completed` are what the third is READ against, which is why all four are
                         listed here rather than left to those readers. */
-                     "steps"];
+                     "steps",
+                     /* `outOfPrograms` IS TO `programCursors` WHAT `live` IS TO `stepUnits` — not a total, but
+                        the one fact the histogram's own buckets cannot carry. A cursor value covers a member
+                        INSIDE the program at that index and a member PAST THE LAST ROW of its own sequence,
+                        and `framed` (which separates them) is a whole-frontier count that cannot be
+                        attributed to a bucket. Listed here so a composer that stops emitting it fails as a
+                        renamed row rather than reading `undefined` into the sentence below. */
+                     "outOfPrograms"];
 /* THE POPULATION SPLITS ARE PARTITIONS AND THE PARTITION IS THE CONTRACT, checked here for the reason
    `stepUnitReading` checks its histogram against `live`: two rows that are supposed to be the whole of a third
    are two numbers that can drift, and drifted they are WORSE than the one number they replaced, because each
@@ -1334,14 +1341,28 @@ function programCursorReading(b) {
            `measurement and not an absent row`;
   const top = at.reduce((x, r) => (r[1] > x[1] ? r : x), at[0]);
   const standingDeepest = at.reduce((x, r) => (Number(r[0]) > x ? Number(r[0]) : x), Number(at[0][0]));
+  /* THE BUCKETS ARE CURSORS AND `deepest` IS A PROGRAM INDEX, AND THIS SENTENCE USED TO CALL THEM BOTH
+     PROGRAMS. solver/flow.h's `script_i` runs over [0, dyn_n] — closed at the top, because `dyn_n` is what a
+     member holds between two programs at the tail — so the histogram is ONE BUCKET WIDER than the document has
+     programs and its top bucket is the members with no row left. Rendered as "N program slots" and "at program
+     11" beside `document deepest 10`, that reads as a gauge naming a program the document does not have, and
+     it was read that way: a lane took the pair for two instruments contradicting each other and stopped, which
+     is the right instinct applied to a disagreement that does not exist. The unit is named on the line now,
+     the cursor that MEANS "finished the deepest program" is spelled out, and solver/result.c asserts the
+     identity (top cursor <= deepest + 1) at the composer where both numbers are in one hand. */
+  const finishedAll = Number(b.deepest) + 1;
   return `program cursors at the last census (${b.live} live member${b.live === 1 ? "" : "s"} over ` +
-         `${rows.length} program slot${rows.length === 1 ? "" : "s"}, ` +
-         `document deepest ${b.deepest} / completed ${b.completed}): ` +
+         `${rows.length} cursor slot${rows.length === 1 ? "" : "s"} — a CURSOR is one-past-the-program-it-left, ` +
+         `so the slots run one wider than the document's programs; ` +
+         `document deepest ${b.deepest} / completed ${b.completed}, and ${b.outOfPrograms} member` +
+         `${b.outOfPrograms === 1 ? " has" : "s have"} no row left to run): ` +
          at.map((r) => `${r[1]} at ${r[0]}`).join(", ") +
-         ` — largest bucket ${top[1]} of ${b.live} at program ${top[0]}, deepest member standing at ` +
+         ` — largest bucket ${top[1]} of ${b.live} at cursor ${top[0]}, deepest member standing at cursor ` +
          `${standingDeepest}. A mass LOW against \`deepest\` and a mass AT it are opposite diagnoses ` +
          `(solver/cold.h): the first is a frontier whose mass never advances while a few members run deep, ` +
-         `the second is BFS on a forking page with unbounded work. This row states which and decides nothing`;
+         `the second is BFS on a forking page with unbounded work — and "AT it" is cursor ${finishedAll}, ` +
+         `not ${b.deepest}, because a member that has finished the deepest program stands one past it. ` +
+         `This row states which and decides nothing`;
 }
 
 /* THE COLD ROUND TRIP, PER RECORD KIND — @COLDPARK from session ONE against @COLDRESUME from session TWO, and
