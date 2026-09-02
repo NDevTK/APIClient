@@ -99,6 +99,17 @@ void custom_elements_free(JSRuntime *rt);
    the install). */
 JSValue custom_elements_html_constructor(JSContext *ctx);
 
+/* THE SAME ALGORITHM AS THIS REALM'S INTERFACE OBJECT FOR EVERY OTHER HTML ELEMENT INTERFACE. §3.2.3 says
+   interfaces annotated `[HTMLConstructor]` "have the following overridden constructor steps" — one list of
+   steps, shared, and the only step whose ANSWER depends on which interface is running is 8.1's "the list of
+   local names for elements … that use the active function object as their element interface", which the
+   machine asks HTML §3.2.2 rather than carrying a table of. So this takes an interface NAME only to name the
+   function object it mints; nothing downstream reads it.
+   IT IS WHAT MAKES A CUSTOMIZED BUILT-IN CONSTRUCTIBLE, and nothing else needs it: `new HTMLButtonElement()` is
+   step 1's TypeError with or without this, and an autonomous class extending the wrong interface is step 7.1's.
+   OWNED (consumed by the install). */
+JSValue custom_elements_element_constructor(JSContext *ctx, const char *iface);
+
 /* §4.13.3's lookup performed FOR AN ELEMENT — its own custom element registry, its namespace, its local name
    and its is value, which are the four arguments the algorithm takes. This is the form every caller that HAS a
    node should use: it is the only one that can answer out of a SCOPED registry. OWNED; JS_UNDEFINED when there

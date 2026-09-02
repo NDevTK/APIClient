@@ -434,6 +434,16 @@ static JSAtom  g_atom_def = JS_ATOM_NULL;
 static JSValue g_state_key = JS_UNDEFINED;
 static JSAtom  g_atom_state = JS_ATOM_NULL;
 
+/* DOM §4.9's "is value", on the same wrapper and under its own private symbol. HTML §3.2.3 step 9.9 writes it
+   ("set element's is value to isValue") and it is the ONLY thing that distinguishes a customized built-in from
+   the built-in it customizes: both have local name `button`, and §4.13.4's "upgrade particular elements within
+   a document" says so in its own sentence — "Additionally, if name is not localName, only include elements
+   whose is value is equal to name."
+   ABSENT MEANS NULL, which is a positive statement and not a hole: every element is created with a null is
+   value, so the slot is written only where an algorithm sets one and read as null everywhere else. */
+static JSValue g_is_key = JS_UNDEFINED;
+static JSAtom  g_atom_is = JS_ATOM_NULL;
+
 /* §4.13.4 step 14's `lifecycleCallbacks` map, IN ITS KEY ORDER, AS ONE LIST EXPANDED TWICE — the ids the
    engine enqueues by and the names step 14.4 reads off the prototype, which cannot be two lists for the same
    reason a machine's stages cannot: the ORDER is observable. The prototype may be a Proxy, so the sequence of
@@ -478,18 +488,34 @@ static JSAtom g_cb_atoms[CE_CB_COUNT];
 /* declared once per agent */
 static int    g_id_define, g_id_get, g_id_get_name, g_id_when_defined, g_id_upgrade, g_id_initialize;
 
-/* §4.13.3's "LOOK UP A CUSTOM ELEMENT DEFINITION", steps 1 and 3, given the REGISTRY the caller resolved. Step
-   1 is "if registry is null, return null", which is why a node in a document that has no registry — a
-   `DOMParser` document, a template's contents — has no definitions at all rather than the window's. Step 4's
-   `is` arm is the customized-built-in half, which §4.13.4 refuses to register, so no definition can have a
-   name that differs from its local name and the arm has nothing to find; it becomes a real read in the diff
-   that makes `extends` registrable. OWNED by the caller. */
-static JSValue ce_find_in(JSContext *ctx, JSValueConst registry, const char *name, size_t len)
+/* DOM §4.9's IS VALUE for an element, read off its own slot — see g_is_key. UNDEFINED is the spec's null, which
+   is what every element that no algorithm gave one has. OWNED. */
+static JSValue ce_is_value_of(JSContext *ctx, JSValueConst wrap)
+{
+    JSValue v;
+
+    if (!JS_IsObject(wrap)) return JS_UNDEFINED;
+    if (JS_GetOwnSlot(ctx, &v, wrap, g_atom_is) <= 0) return JS_UNDEFINED;
+    return v;
+}
+
+/* THE DEFINITION SET READ BY NAME — §4.13.4's own index, and the whole of what `get(name)`, `whenDefined(name)`
+   and `define`'s step 3 duplicate check ask for. Each of those three is stated over the NAME alone ("the item
+   with name equal to name"), so this answers exactly that and nothing else. UNDEFINED when there is none;
+   OWNED by the caller.
+   IT IS NOT §4.13.3's LOOKUP, and folding the two into one predicate is the defect that would arrive with
+   customized built-ins rather than a saving. §4.13.3's lookup is asked about an ELEMENT — it compares a LOCAL
+   NAME and an IS VALUE — while these three are asked about a NAME a page passed in. The two agreed while every
+   definition was autonomous, because name and local name were then the same string; the first `extends` makes
+   them differ, and a shared predicate would then have to answer the stricter question, silently refusing the
+   looser one: `define("my-btn", C2)` after `define("my-btn", C1, {extends:"button"})` would stop being a
+   duplicate NAME and would commit two definitions under one key. */
+static JSValue ce_find_by_name(JSContext *ctx, JSValueConst registry, const char *name, size_t len)
 {
     JSAtom a;
     JSValue def;
 
-    if (!JS_IsObject(registry)) return JS_UNDEFINED;             /* step 1 */
+    if (!JS_IsObject(registry)) return JS_UNDEFINED;
     a = JS_NewAtomLen(ctx, name, len);
     CHECK(a != JS_ATOM_NULL, "custom elements: a name could not be interned");
     {
@@ -501,16 +527,61 @@ static JSValue ce_find_in(JSContext *ctx, JSValueConst registry, const char *nam
     return def;
 }
 
-/* The same lookup performed FOR A NODE: its own registry, its local name. §4.13.3 step 2's "if namespace is not
-   the HTML namespace, return null" is the element's, and every element this engine can define one for is in it.
-   OWNED. */
+/* Does this definition's LOCAL NAME equal `local` — the equality §4.13.3's steps 3 and 4 both end in. */
+static bool ce_def_local_is(JSContext *ctx, JSValueConst def, const char *local, size_t len)
+{
+    JSValue lo = JS_GetProperty(ctx, def, g_atom_local);
+    size_t got = 0;
+    const char *s = JS_ToCStringLen(ctx, &got, lo);
+    bool same;
+
+    DCHECK(s != NULL, "a custom element definition's local name is not a string — every definition this "
+                      "component commits carries the DOMString §4.13.4 step 15 gives it");
+    same = s != NULL && got == len && memcmp(s, local, len) == 0;
+    if (s) JS_FreeCString(ctx, s);
+    JS_FreeValue(ctx, lo);
+    return same;
+}
+
+/* §4.13.3's "LOOK UP A CUSTOM ELEMENT DEFINITION" FOR A NODE — all five steps, over the node's own registry,
+   its local name and its is value. Step 1 is "if registry is null, return null", which is why a node in a
+   document that has no registry — a `DOMParser` document, a template's contents — has no definitions at all
+   rather than the window's. Step 2's "if namespace is not the HTML namespace, return null" is the element's,
+   and every element this engine can define one for is in it.
+   STEP 3 ASKS FOR TWO EQUALITIES AND THE NAME INDEX ANSWERS ONE: "an item with NAME AND LOCAL NAME BOTH equal
+   to localName". While every definition was autonomous the second half was implied by the first, which is why
+   it was never written. It stops being implied the moment `extends` registers: `define("my-btn", C,
+   {extends:"button"})` puts a definition under the name `my-btn` whose local name is `button`, so an element
+   `<my-btn>` would be handed a definition for a BUTTON and upgraded into a class whose `super()` §3.2.3 step
+   8.2 rejects.
+   STEP 4 IS THE CUSTOMIZED-BUILT-IN ARM — "an item with name equal to `is` and local name equal to localName" —
+   and this is the only lookup that can run it, because an is value is a fact about an ELEMENT. OWNED. */
 static JSValue ce_find_for_node(JSContext *ctx, JSValueConst wrap, const char *name, size_t len)
 {
     JSValue reg = ce_registry_of_node(ctx, wrap);
-    JSValue def = ce_find_in(ctx, reg, name, len);
+    JSValue def = ce_find_by_name(ctx, reg, name, len);          /* steps 1-3, first equality */
 
+    if (JS_IsObject(def) && !ce_def_local_is(ctx, def, name, len)) {   /* step 3, second equality */
+        JS_FreeValue(ctx, def);
+        def = JS_UNDEFINED;
+    }
+    if (!JS_IsObject(def)) {                                     /* step 4 */
+        JSValue is = ce_is_value_of(ctx, wrap);
+        size_t ilen = 0;
+        const char *iv = JS_IsString(is) ? JS_ToCStringLen(ctx, &ilen, is) : NULL;
+
+        if (iv) {
+            def = ce_find_by_name(ctx, reg, iv, ilen);
+            if (JS_IsObject(def) && !ce_def_local_is(ctx, def, name, len)) {
+                JS_FreeValue(ctx, def);
+                def = JS_UNDEFINED;
+            }
+            JS_FreeCString(ctx, iv);
+        }
+        JS_FreeValue(ctx, is);
+    }
     JS_FreeValue(ctx, reg);
-    return def;
+    return def;                                                  /* step 5 is the UNDEFINED that falls through */
 }
 
 /* §4.13.3 "Core concepts" A VALID CUSTOM ELEMENT NAME — all five of its requirements. This was "starts with
@@ -683,6 +754,7 @@ static void ce_set_state(JSContext *ctx, JSValueConst wrap, int state)
            "a custom element state DOM §4.9 does not name was written onto an element");
     JS_DefinePropertyValue(ctx, (JSValue)wrap, g_atom_state, JS_NewInt32(ctx, state), CE_SLOT_FLAGS);
 }
+
 
 /* ---- §4.13.6 the custom element reactions stack ------------------------------------------------------------
    THE QUEUES AND EVERY REACTION ON THEM ARE JS VALUES. A reaction has to fork per flow (two arms of a branch
@@ -1635,6 +1707,10 @@ typedef struct {
     JSValue registry; /* steps 2-4's registry (owned) — step 9.6 writes it onto the element it builds */
     JSValue def;      /* step 5's definition (owned) */
     JSValue proto;    /* step 10's answer (owned) */
+    /* Step 6's `isValue`, which step 8.3 sets to the definition's NAME and step 9.9 writes onto the element.
+       UNDEFINED is step 6's "let isValue be null", which is what an autonomous element keeps: the two arms of
+       step 7/8 are exactly the two answers to "does this element carry an is value". */
+    JSValue is_value;
 } CeHtmlCtorState;
 
 static void ce_html_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -1643,6 +1719,22 @@ static void ce_html_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->registry);
     v->val(ctx, &s->def);
     v->val(ctx, &s->proto);
+    v->val(ctx, &s->is_value);
+}
+
+/* The INTERFACE PROTOTYPE OBJECT of the interface the ACTIVE FUNCTION OBJECT corresponds to. Web IDL §3.7.1
+   Interface object gives an interface object a `prototype` property whose attributes are { [[Writable]]:
+   false, [[Enumerable]]: false, [[Configurable]]: false } — so this read is the object itself and not a slot a
+   page can move, and it needs no per-interface table beside the one node_install_interface_ctor already wrote.
+   Two of §3.2.3's steps are asked in exactly this vocabulary: step 8.2 compares it against the interface
+   HTML §3.2.2 gives the definition's local name, and step 11.2 falls back to it. OWNED. */
+static JSValue ce_interface_proto_of(JSContext *ctx, JSValueConst iface_obj)
+{
+    JSValue p = JS_GetProperty(ctx, iface_obj, g_atom_prototype);
+
+    DCHECK(JS_IsObject(p), "an HTML element interface object carries no `prototype` — every one of them is "
+                           "built through node_install_interface_ctor, whose JS_SetConstructor installs it");
+    return p;
 }
 
 /* §3.2.3 step 5: the item in REGISTRY's definition set whose CONSTRUCTOR is `ctor`. A walk of the ordered
@@ -1683,34 +1775,27 @@ static int js_ce_html_ctor(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
 
     (void)argc; (void)argv;
     if (hdr->stage == HC_LOOKUP) {
-        JSValue active;
-
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
-        s->registry = s->def = s->proto = JS_UNDEFINED;
+        s->registry = s->def = s->proto = s->is_value = JS_UNDEFINED;
         /* Web IDL: an interface object is not callable. `HTMLElement()` with no `new` is a TypeError before
            §3.2.3 step 1, which JS_CFUNC_step_ctor states by delivering an UNDEFINED receiver. */
         if (JS_IsUndefined(ntgt)) {
-            JS_ThrowTypeError(ctx, "constructor HTMLElement requires 'new'");
+            JS_ThrowTypeError(ctx, "an HTML element constructor requires 'new'");
             return -1;
         }
-        /* step 1: NewTarget must not be the active function object. `new HTMLElement()` builds nothing — the
-           element a custom element constructor produces is the DEFINITION's, and there is no definition whose
-           constructor is HTMLElement itself. */
-        active = realm_value_get(ctx, g_html_ctor_slot);
-        DCHECK(JS_IsObject(active), "HTML §3.2.3 ran in a realm whose HTMLElement interface object was never "
-                                    "recorded — step 7.1's \"the active function object is HTMLElement\" is an "
-                                    "identity question and there is nothing to compare against");
-        if (JS_VALUE_GET_PTR(ntgt) == JS_VALUE_GET_PTR(active)) {
-            JS_FreeValue(ctx, active);
+        /* STEP 1: "if NewTarget is equal to THE ACTIVE FUNCTION OBJECT, then throw a TypeError" — and the
+           active function object is the INTERFACE OBJECT THIS CALL ENTERED THROUGH, which `hdr->func_obj` is.
+           It used to be read out of the realm's recorded HTMLElement, which was the same object only because
+           HTMLElement was the one interface carrying this machine; with sixty-nine of them that read would
+           answer step 1 about a different constructor than the one running, and `new HTMLButtonElement()`
+           would fall through to step 5 instead of throwing here. The spec's own example for this step is
+           `customElements.define("bad-1", HTMLButtonElement)`, which is a BUTTON and not an HTMLElement.
+           HTMLElement's identity is still needed — by step 7.1, and by nothing else — so it is read there. */
+        if (JS_VALUE_GET_PTR(ntgt) == JS_VALUE_GET_PTR(hdr->func_obj)) {
             JS_ThrowTypeError(ctx, "Illegal constructor");
             return -1;
         }
-        DCHECK(JS_VALUE_GET_PTR(hdr->func_obj) == JS_VALUE_GET_PTR(active),
-               "HTML §3.2.3 ran with an active function object that is not HTMLElement — the customized "
-               "built-in half of steps 7-8 needs the interface's valid local names, and §4.13.4 refuses "
-               "`extends` until it exists, so no other interface may carry this machine yet");
-        JS_FreeValue(ctx, active);
         /* STEPS 2-5: THE REGISTRY FIRST, AND THE DEFINITION OUT OF IT. Step 3 is the agent's active custom
            element constructor map — set by §4.13.5 step 9 while an upgrade is constructing, and by DOM §4.9
            step 5.1.3 while `create an element` is — and step 4 falls back to HTML §3.2.3's "the current
@@ -1732,18 +1817,75 @@ static int js_ce_html_ctor(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
             JS_ThrowTypeError(ctx, "this constructor is not a defined custom element constructor");
             return -1;
         }
-        /* steps 7-8: autonomous (name == local name) requires the active function object to be HTMLElement,
-           which the assert above already established. A definition whose two names DIFFER is a customized
-           built-in, and §4.13.4 refuses to make one, so reaching here with one is a definition this component
-           did not commit. */
+        /* STEPS 6, 7 AND 8 — THE ONE PLACE THIS ALGORITHM IS NOT THE SAME FOR EVERY INTERFACE, and the reason
+           it is ONE algorithm reached from sixty-nine interface objects rather than sixty-nine algorithms:
+           what differs between them is the ANSWER to step 8.1's question, never the steps.
+           §3.2.3 tells the two arms apart by comparing the definition's NAME with its LOCAL NAME — its own
+           parenthesis, "(i.e., definition is for an autonomous custom element)" — which is why §4.13.4 step 15
+           stores those as two fields even while they were always equal.
+           STEP 7.1 is an identity: an AUTONOMOUS definition's class must extend HTMLElement itself, so
+           `class Bad2 extends HTMLParagraphElement {}` registered with no `extends` throws here rather than at
+           `define`, and it throws from inside the page's own implicit `super()`, which is where the spec's
+           worked example puts it. The comparison is against the realm's RECORDED HTMLElement rather than the
+           global's `HTMLElement` property, because `window.HTMLElement = X` must not change which constructor
+           is legal to extend.
+           STEPS 8.1-8.2 are the customized-built-in half: "let valid local names be the list of local names
+           for elements defined in this specification or in other applicable specifications that USE THE ACTIVE
+           FUNCTION OBJECT AS THEIR ELEMENT INTERFACE", then "if valid local names does not contain
+           definition's local name, then throw a TypeError". Asked as one question and not as a list: HTML
+           §3.2.2's element interface for the definition's local name either IS this interface or is not, and
+           two interfaces are the same interface exactly when their interface prototype objects are — one
+           object per interface per realm, by Web IDL §3.7.3. So the spec's LIST is never materialised, which
+           is also what keeps `<q>`/`<blockquote>` (two names, one HTMLQuoteElement) right for free. The
+           example this rejects is the spec's own `class Bad3 extends HTMLQuoteElement {}` with
+           `{extends: "p"}`. */
         {
             JSValue nm = JS_GetProperty(ctx, s->def, g_atom_name);
-            JSValue lo = JS_GetProperty(ctx, s->def, g_atom_local);
-            bool autonomous = JS_VALUE_GET_PTR(nm) == JS_VALUE_GET_PTR(lo) || JS_IsUndefined(lo);
-            JS_FreeValue(ctx, nm);
-            JS_FreeValue(ctx, lo);
-            DCHECK(autonomous, "HTML §3.2.3 reached a definition whose name and local name differ — a "
-                               "customized built-in, which §4.13.4 does not register");
+            size_t nlen = 0;
+            const char *nm_s = JS_ToCStringLen(ctx, &nlen, nm);
+            bool autonomous;
+
+            if (!nm_s) { JS_FreeValue(ctx, nm); return -1; }
+            autonomous = ce_def_local_is(ctx, s->def, nm_s, nlen);   /* step 7's own test */
+            JS_FreeCString(ctx, nm_s);
+            if (autonomous) {
+                JSValue html_ctor = realm_value_get(ctx, g_html_ctor_slot);
+                bool is_html;
+
+                DCHECK(JS_IsObject(html_ctor),
+                       "HTML §3.2.3 ran in a realm whose HTMLElement interface object was never recorded — "
+                       "step 7.1's \"the active function object is HTMLElement\" is an identity question and "
+                       "there is nothing to compare against");
+                is_html = JS_VALUE_GET_PTR(hdr->func_obj) == JS_VALUE_GET_PTR(html_ctor);
+                JS_FreeValue(ctx, html_ctor);
+                JS_FreeValue(ctx, nm);
+                if (!is_html) {                                      /* step 7.1 */
+                    JS_ThrowTypeError(ctx, "an autonomous custom element's class must extend HTMLElement");
+                    return -1;
+                }
+            } else {
+                JSValue lo = JS_GetProperty(ctx, s->def, g_atom_local);
+                size_t llen = 0;
+                const char *local = JS_ToCStringLen(ctx, &llen, lo);
+                JSValue want, mine;
+                bool serves;
+
+                JS_FreeValue(ctx, lo);
+                if (!local) { JS_FreeValue(ctx, nm); return -1; }
+                want = html_element_interface_proto(ctx, local, llen);   /* step 8.1, as one question */
+                mine = ce_interface_proto_of(ctx, hdr->func_obj);
+                serves = JS_IsObject(want) && JS_VALUE_GET_PTR(want) == JS_VALUE_GET_PTR(mine);
+                JS_FreeValue(ctx, want);
+                JS_FreeValue(ctx, mine);
+                JS_FreeCString(ctx, local);
+                if (!serves) {                                       /* step 8.2 */
+                    JS_FreeValue(ctx, nm);
+                    JS_ThrowTypeError(ctx, "a customized built-in element's class extends an interface that is "
+                                           "not the element interface of the local name it customizes");
+                    return -1;
+                }
+                s->is_value = nm;                                    /* step 8.3, and nm is handed over */
+            }
         }
         hdr->stage = HC_PROTOTYPE;
     }
@@ -1762,9 +1904,15 @@ static int js_ce_html_ctor(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
        `realm` is `? GetFunctionRealm(NewTarget)` — ECMAScript §7.3.24 "GetFunctionRealm ( func )", which
        forwards through a bound function's target (its step 2) and a Proxy's target (its step 3) before falling
        back to the current realm (its step 4).
+       IT IS "THE INTERFACE OF THE ACTIVE FUNCTION OBJECT" AND NOT HTMLElement's, which is a distinction with no
+       difference while one interface carries this machine and a wrong answer the moment sixty-nine do:
+       `class B extends HTMLButtonElement {}` with a non-object `prototype` must fall back to
+       HTMLButtonElement.prototype, and falling back to HTMLElement.prototype would hand the page an element
+       missing every member of the interface it asked for. ce_interface_proto_of reads it off the active
+       function object itself, so the answer is the interface's by construction rather than by a table.
        `ctx` HERE IS THE ACTIVE FUNCTION OBJECT'S REALM, not the caller's: a step machine is entered through
-       `step_realm`/`js_callee_realm`, which answers `p->u.cfunc.realm` for the callee, so
-       `html_element_proto(ctx)` is HTMLElement.prototype of the realm HTMLElement was installed in. That is
+       `step_realm`/`js_callee_realm`, which answers `p->u.cfunc.realm` for the callee, so this is the
+       interface prototype object of the realm the interface object was installed in. That is
        exactly `realm` whenever NewTarget's function realm IS the active function
        object's — and HTML §3.2.3's own note on step 11 says those two can differ ("The realm of the active
        function object might not be realm, so we are using the more general concept of 'the same interface'
@@ -1773,20 +1921,20 @@ static int js_ce_html_ctor(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
          NOT COVERED: a NewTarget whose function realm is not this one. Reached by defining a class minted in
            realm A into realm B's registry (`B.customElements.define('x-r', A.R)`) and then making its
            `prototype` a non-Object, which is the only way step 11 fires at all.
-         WHAT THE NEXT DIFF BUILDS: `JS_GetFunctionRealm` already exists and is already a LOOP over the bound
-           and Proxy chains (engine/qjs/quickjs.c), but it is `static`, and `step_proto_from_ctor_run` — which
-           is that operation composed with step 10's read — is static too and answers out of `class_proto[]`,
-           which no host interface prototype lives in. So the diff EXPORTS `JS_GetFunctionRealm` as a
-           `JS_EXTERN JSContext *` in quickjs.h and this line becomes `html_element_proto(realm)`, which needs
-           nothing else because `html_element_proto` already reads a PER-REALM `JS_GetClassProto` slot. The
-           export must land with the submodule gitlink bump and this host hunk in ONE commit.
+         WHAT THE NEXT DIFF BUILDS: an exported `JS_GetFunctionRealm` — ECMAScript §7.3.24's walk over the bound
+           and Proxy chains, which quickjs.c has as a `static` — and a way to reach ANOTHER realm's interface
+           prototype object for the interface this one's active function object names. The second half is the
+           work: `ce_interface_proto_of` reads the active function object's own `prototype`, which is this
+           realm's by construction, so a cross-realm answer needs the realm's own interface OBJECT first. What
+           must exist afterward is a per-realm lookup from an interface identity to that realm's interface
+           object. The quickjs export must land with the submodule gitlink bump and its host hunks in ONE commit.
          HOW ITS ABSENCE SHOWS: with `A.R.prototype = 5` and `B.customElements.define('x-r', A.R)`, a real
            browser gives the constructed element A's `HTMLElement.prototype`, so `el instanceof A.HTMLElement`
            is true and `el instanceof B.HTMLElement` is false. This engine hands out B's, inverting BOTH — an
            `instanceof` that answers wrong across the boundary, not a missing member. */
     if (!JS_IsObject(s->proto)) {
         JS_FreeValue(ctx, s->proto);
-        s->proto = html_element_proto(ctx);
+        s->proto = ce_interface_proto_of(ctx, hdr->func_obj);
     }
     {
         JSValue stack = JS_GetProperty(ctx, s->def, g_atom_stack);
@@ -1817,6 +1965,12 @@ static int js_ce_html_ctor(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
                state is what DOM §4.9 step 5.1.4's assert reads back and what a later insertion branches on. */
             ce_set_state(ctx, el, CE_STATE_CUSTOM);
             JS_DefinePropertyValue(ctx, el, g_atom_def, JS_DupValue(ctx, s->def), CE_SLOT_FLAGS);
+            /* step 9.9: "set element's is value to isValue". NULL for an autonomous element, which is what
+               step 6 left it and what an absent slot means — and the string step 8.3 took from the definition's
+               name for a customized built-in, which is the ONLY mark distinguishing this `<button>` from every
+               other one. §4.13.3's lookup step 4 and §4.13.4's upgrade walk both read exactly this. */
+            if (JS_IsString(s->is_value))
+                JS_DefinePropertyValue(ctx, el, g_atom_is, JS_DupValue(ctx, s->is_value), CE_SLOT_FLAGS);
             *presult = el;
             return 0;
         }
@@ -1855,8 +2009,26 @@ JSValue custom_elements_html_constructor(JSContext *ctx)
     CHECK(!JS_IsException(ctor), "the HTMLElement interface object could not be allocated");
     /* §3.2.3 step 7.1's IDENTITY, recorded for THIS realm as the object is made. Asking the global for
        `HTMLElement` instead would read a property the page can reassign, and `window.HTMLElement = X` must not
-       change which constructor is legal to extend. */
+       change which constructor is legal to extend.
+       THIS IS THE ONE INTERFACE THAT RECORDS ITSELF, and that asymmetry is §3.2.3's own: step 7.1 names
+       HTMLElement by name, and no other step asks which interface anything is. Every other HTML element
+       interface object is minted by custom_elements_element_constructor below, which is the same machine with
+       nothing recorded — a second slot per interface would be a table answering a question the algorithm
+       never asks. */
     realm_value_set(ctx, g_html_ctor_slot, JS_DupValue(ctx, ctor));
+    return ctor;
+}
+
+JSValue custom_elements_element_constructor(JSContext *ctx, const char *iface)
+{
+    JSValue ctor;
+
+    DCHECK(g_ready, "an HTML element interface object was minted before custom_elements_init declared §3.2.3");
+    DCHECK(strcmp(iface, "HTMLElement") != 0,
+           "HTMLElement was minted through the shared entry point — it must go through "
+           "custom_elements_html_constructor, which is what records §3.2.3 step 7.1's identity for this realm");
+    ctor = idl_step_constructor(ctx, iface, g_id_html_ctor);
+    CHECK(!JS_IsException(ctor), "an HTML element interface object could not be allocated");
     return ctor;
 }
 
@@ -2106,25 +2278,50 @@ void custom_elements_node_adopted(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_doc
     JS_FreeValue(ctx, wrap);
 }
 
-/* NOTHING IS ALLOCATED FOR AN ORDINARY ELEMENT, and that is what keeps these two on the tree walk's hot path.
+/* NOTHING IS ALLOCATED FOR AN ORDINARY ELEMENT, and that is what keeps these on the tree walk's hot path.
    Reading an element's state means minting its WRAPPER, and the parser inserts every node in the document
-   through here — so the cheap half of the question is asked first, off the Lexbor name alone: an element whose
-   local name is not a valid custom element name can be neither "custom" nor upgraded, because the only kind of
-   custom element this engine registers is the AUTONOMOUS kind (ce_define_checks throws NotSupportedError for
-   `extends`, so no built-in's name can carry a definition). Building customized built-ins widens this test at
-   the same time as it widens that refusal. */
-static bool ce_upgradable_name(lxb_dom_element_t *el)
+   through here — so the cheap half of the question is asked first, off the Lexbor name alone.
+   A CUSTOMIZED BUILT-IN DEFEATS THE NAME TEST BY CONSTRUCTION, which is why the name is no longer the whole
+   question. Its local name is a BUILT-IN's — `button`, which §4.13.3 "Core concepts" rejects as a custom
+   element name — and what makes it a custom element is its IS VALUE, DOM §4.9's own slot. So an element whose
+   name does not answer is asked for one, and that read stays free for the tree the page has never touched:
+   an is value is written onto a WRAPPER, so an element that has none cannot have one, and node_wrap_peek
+   answers that without building anything. The same reasoning is why `:defined` reads the wrapper it finds
+   rather than minting one.
+   NAMED RESIDUAL — CORRECT for every is value this engine can currently produce, NARROWER than DOM §4.9.
+     NOT COVERED: an element whose is value came from the PARSER's `is=""` attribute or from DOM §4.9's
+       `createElement(local, {is})`, neither of which exists yet — so no element reaches this with an is value
+       that HTML §3.2.3 step 9.9 did not write onto a wrapper it had just built.
+     WHAT THE NEXT DIFF BUILDS: DOM §4.9 "create an element"'s `is` argument and HTML §13.2.6.1's
+       "create an element for the token" reading the `is` attribute, both of which write this same slot at
+       creation — after which every element carrying one already has the wrapper this peek looks for, because
+       the write is what builds it. Nothing here changes.
+     HOW ITS ABSENCE SHOWS: `document.createElement("button", {is:"my-btn"})` is a TypeError-free call that
+       returns a plain button — no upgrade, no connectedCallback — and `<button is="my-btn">` in markup stays
+       uncustomized after its definition lands. */
+static bool ce_upgradable_name(JSContext *ctx, lxb_dom_element_t *el)
 {
     size_t len = 0;
     const lxb_char_t *tag = lxb_dom_element_local_name(el, &len);
-    return tag != NULL && len != 0 && custom_elements_name_is_valid((const char *)tag, len);
+    JSValueConst wrap;
+    JSValue is;
+    bool customized;
+
+    if (tag == NULL || len == 0) return false;
+    if (custom_elements_name_is_valid((const char *)tag, len)) return true;
+    wrap = node_wrap_peek(lxb_dom_interface_node(el));
+    if (!JS_IsObject(wrap)) return false;
+    is = ce_is_value_of(ctx, wrap);
+    customized = JS_IsString(is);
+    JS_FreeValue(ctx, is);
+    return customized;
 }
 
 void custom_elements_disconnected(JSContext *ctx, lxb_dom_element_t *el)
 {
     JSValue wrap, def;
 
-    if (!g_ready || !ce_upgradable_name(el)) return;
+    if (!g_ready || !ce_upgradable_name(ctx, el)) return;
     wrap = node_wrap(ctx, lxb_dom_interface_node(el));
     /* §4.13.3: only an element whose upgrade SUCCEEDED has a disconnected reaction, and the definition it was
        upgraded WITH is the one that supplies the callback. Asking the registry by name instead would fire for
@@ -2145,7 +2342,7 @@ void custom_elements_moved(JSContext *ctx, lxb_dom_element_t *el)
 {
     JSValue wrap, def, cbs, fn, dis, con;
 
-    if (!g_ready || !ce_upgradable_name(el)) return;
+    if (!g_ready || !ce_upgradable_name(ctx, el)) return;
     wrap = node_wrap(ctx, lxb_dom_interface_node(el));
     /* DOM §4.2.3 move step 24.3's condition is "inclusiveDescendant is CUSTOM", which is the same predicate
        the disconnected reaction above uses and for the same reason: only an element whose upgrade succeeded
@@ -2206,7 +2403,7 @@ void custom_elements_element_connected(JSContext *ctx, lxb_dom_element_t *el)
 {
     JSValue wrap;
 
-    if (!g_ready || !ce_upgradable_name(el)) return;
+    if (!g_ready || !ce_upgradable_name(ctx, el)) return;
     wrap = node_wrap(ctx, lxb_dom_interface_node(el));
     if (!JS_IsObject(wrap)) { JS_FreeValue(ctx, wrap); return; }
     /* DOM §4.2.3 step 7's FIRST clause, which precedes the two below it: "if inclusiveDescendant's custom
@@ -2247,9 +2444,16 @@ void custom_elements_element_connected(JSContext *ctx, lxb_dom_element_t *el)
    §4.13.4 steps 17-18: define() enqueues an upgrade reaction for every EXISTING matching element, not only the
    ones inserted later — a definition that arrives after the parser is the ordinary case for a deferred bundle.
    The upgrades then run at define()'s own `[CEReactions]` boundary, which is what makes
-   `customElements.define(…)` followed by a read of state the constructor set work on the next line. */
+   `customElements.define(…)` followed by a read of state the constructor set work on the next line.
+   `is_name` IS THE ALGORITHM'S OPTIONAL FIFTH ARGUMENT, whose default is localName, and the sentence it comes
+   from is the whole of the customized-built-in half: "Additionally, if name is not localName, only include
+   elements whose is value is equal to name." NULL here IS that default — the autonomous case, where the two
+   strings are equal and the extra filter is a tautology. A definition for `<button is=my-btn>` passes
+   localName `button` and is_name `my-btn`, and without the second filter every plain `<button>` in the
+   document would be enqueued for an upgrade into that class. */
 static void ce_upgrade_particular(JSContext *ctx, JSValueConst registry, lxb_dom_node_t *root,
-                                  const char *name, size_t nlen, JSValueConst def)
+                                  const char *name, size_t nlen, const char *is_name, size_t ilen,
+                                  JSValueConst def)
 {
     lxb_dom_node_t *n;
     size_t len = 0;
@@ -2267,31 +2471,53 @@ static void ce_upgrade_particular(JSContext *ctx, JSValueConst registry, lxb_dom
         reg = ce_registry_of_node(ctx, wrap);
         mine = JS_VALUE_GET_PTR(reg) == JS_VALUE_GET_PTR(registry) && JS_IsObject(reg);
         JS_FreeValue(ctx, reg);
+        if (mine && is_name) {                       /* the "additionally" clause */
+            JSValue is = ce_is_value_of(ctx, wrap);
+            size_t got = 0;
+            const char *iv = JS_IsString(is) ? JS_ToCStringLen(ctx, &got, is) : NULL;
+
+            mine = iv != NULL && got == ilen && memcmp(iv, is_name, ilen) == 0;
+            if (iv) JS_FreeCString(ctx, iv);
+            JS_FreeValue(ctx, is);
+        }
         if (mine) ce_enqueue_upgrade(ctx, wrap, def);
         JS_FreeValue(ctx, wrap);
     }
 }
 
-/* §4.13.4 STEPS 17 AND 18 — the two arms, and they are two STEPS rather than one step's branches: step 17 is
-   "if this's is scoped is true, then for each document of this's scoped document set: upgrade particular
-   elements within a document", and step 18 is the "otherwise" that walks the relevant global's associated
-   Document, which is this realm's. */
+/* §4.13.4's TWO UPGRADE STEPS — and they are two STEPS rather than one step's branches: the first is "if this's
+   is scoped is true, then for each document of this's scoped document set: upgrade particular elements within a
+   document given this, document, definition, and localName", and the second is the "otherwise" that walks the
+   relevant global's associated Document, which is this realm's.
+   THE TWO ARMS PASS DIFFERENT ARGUMENT COUNTS AND THAT IS THE SPEC, not an omission to tidy: the scoped arm
+   passes localName ALONE, the other passes "localName, and name". A scoped registry cannot hold a customized
+   built-in at all — step 7.1 throws a NotSupportedError before anything else about `extends` is read — so its
+   name and local name are always equal and the fifth argument would be its own default. Handing the scoped arm
+   an is filter would be writing a case the algorithm forbids. */
 static void ce_upgrade_candidates(JSContext *ctx, JSValueConst registry, const char *name, size_t nlen,
-                                  JSValueConst def)
+                                  const char *local, size_t llen, JSValueConst def)
 {
+    /* The autonomous case IS "name is localName", which is the default the fifth argument has when it is not
+       passed — so the filter is NULL for it and a real string only for a definition that carries an `extends`. */
+    bool customized = llen != nlen || memcmp(local, name, nlen) != 0;
+
     if (ce_reg_flag(ctx, registry, g_atom_scoped)) {
         JSValue docs = ce_reg_field(ctx, registry, g_atom_docs);
         uint32_t n = ce_array_len(ctx, docs), i;
 
+        DCHECK(!customized, "a SCOPED CustomElementRegistry committed a definition whose local name differs "
+                            "from its name — HTML §4.13.4 step 7.1 throws a NotSupportedError for `extends` on "
+                            "a scoped registry, so ce_define_checks let one through");
         for (i = 0; i < n; i++) {
             JSValue d = JS_GetPropertyUint32(ctx, docs, i);
-            ce_upgrade_particular(ctx, registry, node_of(d), name, nlen, def);
+            ce_upgrade_particular(ctx, registry, node_of(d), local, llen, NULL, 0, def);
             JS_FreeValue(ctx, d);
         }
         JS_FreeValue(ctx, docs);
         return;
     }
-    ce_upgrade_particular(ctx, registry, document_root_node(ctx), name, nlen, def);
+    ce_upgrade_particular(ctx, registry, document_root_node(ctx), local, llen,
+                          customized ? name : NULL, customized ? nlen : 0, def);
 }
 
 /* §4.13.3 "attribute changed": the reaction runs only for a name the definition declared as OBSERVED, which is
@@ -2365,7 +2591,7 @@ static JSValue js_ce_when_defined(JSContext *ctx, JSValueConst this_val, int arg
         JS_FreeValue(ctx, resolving[1]);
         return promise;
     }
-    def = ce_find_in(ctx, reg, nm, nlen);        /* step 2: already defined — resolved with the constructor */
+    def = ce_find_by_name(ctx, reg, nm, nlen);        /* step 2: already defined — resolved with the constructor */
     if (JS_IsObject(def)) {
         JSValue ctor = JS_GetProperty(ctx, def, g_atom_ctor);
 
@@ -2491,6 +2717,10 @@ typedef struct {
        that registry's own state, so a resume must find the same one rather than the realm's. Owned, because a
        parked machine's receiver is not kept alive by the call that is no longer on any stack. */
     JSValue  registry;
+    /* Step 5's LOCAL NAME, or step 7.4's when `extends` named one (owned). It is the definition's local name at
+       step 15, and it is a SECOND field beside the name rather than a re-read of `argv[0]` because those are
+       the same string only for an autonomous element — telling them apart is the whole of §3.2.3 step 7. */
+    JSValue  local;
     uint32_t flags;     /* step 15's three booleans, as CE_DEF_* bit positions */
 } CeDefineState;
 
@@ -2503,6 +2733,7 @@ static void ce_define_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->names);
     v->val(ctx, &s->features);
     v->val(ctx, &s->registry);
+    v->val(ctx, &s->local);
 }
 
 /* §4.13.4 step 14's "then, regardless of whether the above steps threw an exception or not: set this's element
@@ -2575,8 +2806,9 @@ static bool ce_sequence_contains(JSContext *ctx, JSValueConst seq, const char *w
 
 /* §4.13.4 STEPS 1-9 — everything the spec decides BEFORE it touches the page's object. Its own function
    because its own STAGE: running it after the reads, which is where it used to live, made the page's getters
-   observe a call the spec had already rejected. Returns <0 having thrown. */
-static int ce_define_checks(JSContext *ctx, JSValueConst registry, int argc, JSValueConst *argv)
+   observe a call the spec had already rejected. `local` receives step 5's (or step 7.4's) LOCAL NAME, OWNED by
+   the caller and written before the first step that can throw after it. Returns <0 having thrown. */
+static int ce_define_checks(JSContext *ctx, JSValueConst registry, int argc, JSValueConst *argv, JSValue *local)
 {
     JSValue ext;
     const char *nm;
@@ -2604,7 +2836,7 @@ static int ce_define_checks(JSContext *ctx, JSValueConst registry, int argc, JSV
         JS_ThrowDOMException(ctx, "SyntaxError", "%s", custom_elements_name_why(verdict));
         return -1;
     }
-    prev = ce_find_in(ctx, registry, nm, nlen);  /* step 3 */
+    prev = ce_find_by_name(ctx, registry, nm, nlen);  /* step 3 */
     taken = JS_IsObject(prev);
     JS_FreeValue(ctx, prev);
     JS_FreeCString(ctx, nm);
@@ -2636,9 +2868,16 @@ static int ce_define_checks(JSContext *ctx, JSValueConst registry, int argc, JSV
             return -1;
         }
     }
-    /* steps 6-7: customized built-ins. Rejected rather than registered as autonomous — quietly treating
-       `{extends:'button'}` as a new tag would define something the page never asked for and leave the button
-       it did ask for un-upgraded.
+    /* STEP 5: "let localName be name" — the definition's local name DEFAULTS to its name, which is the whole
+       of what makes an autonomous custom element autonomous. Step 7.4 is the only thing that ever changes it.
+       IT IS AN OUT-PARAMETER RATHER THAN A RE-READ AT COMMIT TIME because step 7 is where the answer is
+       decided and the commit is a separate stage: `extends` reaches this function through the already-converted
+       dictionary, and the machine can PARK for the page's getters between here and step 15. */
+    *local = JS_DupValue(ctx, argv[0]);
+    /* STEPS 6-7: CUSTOMIZED BUILT-INS. `<button is="my-btn">` — a definition whose LOCAL NAME is a built-in's
+       and whose NAME is the is value that selects it. It was refused here, which was honest while §3.2.3 could
+       not construct one: registering it as autonomous would have defined a tag the page never asked for and
+       left the button it did ask for un-upgraded.
        IT IS ASKED LAST, WHICH IS WHERE §4.13.4 ASKS IT. This ran FIRST, so
        `define('not a name', C, {extends:'button'})` answered NotSupportedError where the standard answers
        step 2's SyntaxError — a page's `catch` tells those apart, and so does the corpus. Reading the
@@ -2646,20 +2885,55 @@ static int ce_define_checks(JSContext *ctx, JSValueConst registry, int argc, JSV
        WHICH exception, which is exactly the thing a reordering is invisible in until someone catches it. */
     ext = idl_dict_get(ctx, argc > 2 ? argv[2] : JS_UNDEFINED, "extends");
     if (JS_IsString(ext)) {
-        JS_FreeValue(ctx, ext);
+        size_t elen = 0;
+        const char *e;
+
         /* step 7.1 is its OWN refusal and comes first: "if this's is scoped is true, then throw a
            NotSupportedError". A scoped registry may not define a customized built-in AT ALL, whatever the name
-           is, and saying so separately is what keeps the two reasons distinguishable once `extends` is real. */
+           is, and saying so separately is what keeps the two reasons distinguishable. */
         if (ce_reg_flag(ctx, registry, g_atom_scoped)) {
+            JS_FreeValue(ctx, ext);
             JS_ThrowDOMException(ctx, "NotSupportedError",
                                  "a scoped CustomElementRegistry cannot define a customized built-in");
             return -1;
         }
-        JS_ThrowDOMException(ctx, "NotSupportedError",
-                             "a customized built-in (`extends`) is not modelled: this engine has no built-in "
-                             "element to customize yet, and registering it as an autonomous element would "
-                             "define a tag the page never asked for");
-        return -1;
+        e = JS_ToCStringLen(ctx, &elen, ext);
+        if (!e) { JS_FreeValue(ctx, ext); return -1; }
+        /* step 7.2: "if extends is a VALID CUSTOM ELEMENT NAME, then throw a NotSupportedError". A custom
+           element cannot extend another custom element — `{extends:"my-other"}` names something no
+           specification gives an element interface, so there would be nothing for §3.2.3 step 8.1 to match. */
+        if (custom_elements_name_is_valid(e, elen)) {
+            JS_FreeCString(ctx, e);
+            JS_FreeValue(ctx, ext);
+            JS_ThrowDOMException(ctx, "NotSupportedError",
+                                 "`extends` must name a built-in element, not a custom element name");
+            return -1;
+        }
+        /* step 7.3: "if the ELEMENT INTERFACE for extends and the HTML namespace is HTMLUnknownElement (e.g.,
+           if extends does not indicate an element definition in this specification), then throw a
+           NotSupportedError". HTML §3.2.2's answer, compared as an object because an interface prototype
+           object is one per interface per realm — the same identity §3.2.3 step 8.2 compares, asked here so
+           that a name §3.2.3 could never match is refused at DEFINE rather than at the page's `super()`. */
+        {
+            JSValue got = html_element_interface_proto(ctx, e, elen);
+            JSValue unknown = html_unknown_element_proto(ctx);
+            bool no_such = JS_VALUE_GET_PTR(got) == JS_VALUE_GET_PTR(unknown);
+
+            JS_FreeValue(ctx, got);
+            JS_FreeValue(ctx, unknown);
+            if (no_such) {
+                JS_FreeCString(ctx, e);
+                JS_FreeValue(ctx, ext);
+                JS_ThrowDOMException(ctx, "NotSupportedError",
+                                     "`extends` names no element this specification defines an interface for");
+                return -1;
+            }
+        }
+        JS_FreeCString(ctx, e);
+        /* step 7.4: "set localName to extends". */
+        JS_FreeValue(ctx, *local);
+        *local = ext;                              /* handed over; `ext` is not freed below */
+        ext = JS_UNDEFINED;
     }
     JS_FreeValue(ctx, ext);
     /* STEPS 8-9: "element definition is running". It exists because everything after it READS THE PAGE'S
@@ -2681,13 +2955,15 @@ static int ce_define_checks(JSContext *ctx, JSValueConst registry, int argc, JSV
    stays that way: every value it needs is already real, and this is the part that touches only the component's
    own state. `proto` is step 14.1's answer, read as a request rather than here. */
 static JSValue ce_define_commit(JSContext *ctx, JSValueConst registry, JSValueConst *argv, JSValueConst names,
-                                JSValueConst proto, JSValueConst callbacks, uint32_t flags)
+                                JSValueConst proto, JSValueConst callbacks, JSValueConst local, uint32_t flags)
 {
-    const char *nm;
-    size_t nlen;
+    const char *nm, *lo;
+    size_t nlen, llen;
 
     nm = JS_ToCStringLen(ctx, &nlen, argv[0]);
     if (!nm) return JS_EXCEPTION;
+    lo = JS_ToCStringLen(ctx, &llen, local);
+    if (!lo) { JS_FreeCString(ctx, nm); return JS_EXCEPTION; }
     {
         JSValue def = JS_NewObjectProto(ctx, JS_NULL);
         JSAtom a;
@@ -2697,10 +2973,11 @@ static JSValue ce_define_commit(JSContext *ctx, JSValueConst registry, JSValueCo
         JS_SetProperty(ctx, def, g_atom_ctor, JS_DupValue(ctx, argv[1]));
         /* §4.13.4 step 15's NAME and LOCAL NAME. Two fields, equal for an autonomous custom element and
            different for a customized built-in — §3.2.3 step 7 tells them apart by comparing exactly these,
-           so folding them into one would make every definition look autonomous the moment `extends` lands.
-           The SAME string value in both, so the identity comparison there is the answer and not a strcmp. */
+           so folding them into one would make every definition look autonomous.
+           THE LOCAL NAME IS STEP 5's OR STEP 7.4's ANSWER, carried here from the checks stage rather than
+           re-derived: `extends` is read there, and the machine can park for the page's getters in between. */
         JS_SetProperty(ctx, def, g_atom_name, JS_DupValue(ctx, argv[0]));
-        JS_SetProperty(ctx, def, g_atom_local, JS_DupValue(ctx, argv[0]));
+        JS_SetProperty(ctx, def, g_atom_local, JS_DupValue(ctx, local));
         /* §4.13.3's CONSTRUCTION STACK, empty. It is per definition and it is an Array, so it forks with the
            flow that is inside a constructor and parks with it — a C list would revert its head POINTER on a
            context switch and leave the element being upgraded reachable from nothing. */
@@ -2733,10 +3010,11 @@ static JSValue ce_define_commit(JSContext *ctx, JSValueConst registry, JSValueCo
             JS_FreeValue(ctx, defs);
         }
         JS_FreeAtom(ctx, a);
-        ce_upgrade_candidates(ctx, registry, nm, nlen, def);   /* steps 17-18 */
-        ce_when_defined_resolve(ctx, registry, nm, nlen, argv[1]);   /* step 19 */
+        ce_upgrade_candidates(ctx, registry, nm, nlen, lo, llen, def);   /* the two upgrade steps */
+        ce_when_defined_resolve(ctx, registry, nm, nlen, argv[1]);       /* the when-defined promise map */
         JS_FreeValue(ctx, def);
     }
+    JS_FreeCString(ctx, lo);
     JS_FreeCString(ctx, nm);
     return JS_UNDEFINED;
 }
@@ -2752,7 +3030,7 @@ static int js_ce_define(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
         cb_result = JS_UNDEFINED;
         /* EVERY owned field before the first thing that can throw: the failure path tears this state down
            through ce_define_release, which frees exactly what the state holds and nothing else. */
-        s->proto = s->raw = s->registry = JS_UNDEFINED;
+        s->proto = s->raw = s->registry = s->local = JS_UNDEFINED;
         s->flags = 0;
         s->callbacks = JS_NewArray(ctx);
         s->names = JS_NewArray(ctx);
@@ -2766,7 +3044,7 @@ static int js_ce_define(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
                           "declaration requires — the count check belongs to Web IDL and it did not run");
         if (!ce_registry_this(ctx, hdr->this_val)) return -1;
         s->registry = JS_DupValue(ctx, hdr->this_val);
-        if (ce_define_checks(ctx, s->registry, argc, argv) < 0) return -1;
+        if (ce_define_checks(ctx, s->registry, argc, argv, &s->local) < 0) return -1;
         hdr->stage = CE_PROTOTYPE;
     }
     if (hdr->stage == CE_PROTOTYPE) {
@@ -2907,7 +3185,7 @@ static int js_ce_define(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
     }
     DCHECK(hdr->stage == CE_COMMIT, "customElements.define resumed into a stage §4.13.4 does not have");
     JS_FreeValue(ctx, cb_result);
-    *presult = ce_define_commit(ctx, s->registry, argv, s->names, s->proto, s->callbacks, s->flags);
+    *presult = ce_define_commit(ctx, s->registry, argv, s->names, s->proto, s->callbacks, s->local, s->flags);
     if (JS_IsException(*presult)) { *presult = JS_UNDEFINED; return -1; }
     return 0;
 }
@@ -2930,7 +3208,7 @@ static JSValue js_ce_get(JSContext *ctx, JSValueConst this_val, int argc, JSValu
     if (argc < 1) return JS_UNDEFINED;
     nm = JS_ToCStringLen(ctx, &nlen, argv[0]);   /* a real string by now: the declaration converted it */
     if (!nm) return JS_EXCEPTION;
-    def = ce_find_in(ctx, reg, nm, nlen);
+    def = ce_find_by_name(ctx, reg, nm, nlen);
     r = JS_IsObject(def) ? JS_GetProperty(ctx, def, g_atom_ctor) : JS_UNDEFINED;
     JS_FreeValue(ctx, def);
     JS_FreeCString(ctx, nm);
@@ -2982,7 +3260,7 @@ static JSValue js_ce_upgrade(JSContext *ctx, JSValueConst this_val, int argc, JS
         el = lxb_dom_interface_element(n);
         /* The same cheap name test the insertion steps make, and for the same reason: reading an element's
            state means minting its WRAPPER, and `upgrade(document)` walks every node in the document. */
-        if (!ce_upgradable_name(el))
+        if (!ce_upgradable_name(ctx, el))
             continue;
         wrap = node_wrap(ctx, n);
         /* step 1.2: "if candidate's custom element registry is not this, then continue". Without it a page
@@ -3058,7 +3336,7 @@ static JSValue js_ce_initialize(JSContext *ctx, JSValueConst this_val, int argc,
             mine = JS_VALUE_GET_PTR(cur) == JS_VALUE_GET_PTR(reg) && JS_IsObject(cur);
         }
         JS_FreeValue(ctx, cur);
-        if (mine && ce_upgradable_name(lxb_dom_interface_element(n)))
+        if (mine && ce_upgradable_name(ctx, lxb_dom_interface_element(n)))
             ce_try_upgrade(ctx, lxb_dom_interface_element(n), wrap);   /* steps 4.3-4.4 */
         JS_FreeValue(ctx, wrap);
     }
@@ -3112,6 +3390,10 @@ void custom_elements_init(JSContext *ctx)
     CHECK(!JS_IsException(g_state_key), "the custom element state slot key allocation failed");
     g_atom_state = JS_ValueToAtom(ctx, g_state_key);
     CHECK(g_atom_state != JS_ATOM_NULL, "the custom element state slot key could not be interned");
+    g_is_key = JS_NewSymbol(ctx, "customElementIsValue", false);
+    CHECK(!JS_IsException(g_is_key), "the custom element is-value slot key allocation failed");
+    g_atom_is = JS_ValueToAtom(ctx, g_is_key);
+    CHECK(g_atom_is != JS_ATOM_NULL, "the custom element is-value slot key could not be interned");
     for (k = 0; k < CE_CB_COUNT; k++) {
         g_cb_atoms[k] = JS_NewAtom(ctx, CE_CALLBACK_NAMES[k]);
         CHECK(g_cb_atoms[k] != JS_ATOM_NULL, "a §4.13.4 step 14 lifecycle callback name could not be interned");
@@ -3394,6 +3676,10 @@ void custom_elements_free(JSRuntime *rt)
     g_atom_state = JS_ATOM_NULL;
     JS_FreeValueRT(rt, g_state_key);
     g_state_key = JS_UNDEFINED;
+    JS_FreeAtomRT(rt, g_atom_is);
+    g_atom_is = JS_ATOM_NULL;
+    JS_FreeValueRT(rt, g_is_key);
+    g_is_key = JS_UNDEFINED;
     for (k = 0; k < CE_CB_COUNT; k++) {
         JS_FreeAtomRT(rt, g_cb_atoms[k]);
         g_cb_atoms[k] = JS_ATOM_NULL;

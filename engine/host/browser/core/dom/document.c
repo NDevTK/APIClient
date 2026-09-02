@@ -1180,11 +1180,25 @@ JSValue document_create_element_internal(JSContext *ctx, const char *local, size
 {
     /* THE HTML NAMESPACE, NAMED. §4.13.3 "Core concepts" admits a custom element name only for an element in
        the HTML namespace, so there is nothing conditional here and nothing to ask a document field about —
-       see document.h's document_create_element_html for why asking would have been the wrong shape. A
-       definition's local name is a valid custom element name, which is lowercase ASCII by §4.13.3's own
-       production, so §4.5 step 2's fold is a no-op over it and its absence changes no byte. */
-    lxb_dom_element_t *el = document_create_element_html(lxb_dom_interface_document(doc_here(ctx)->dom),
-                                                         local, len);
+       see document.h's document_create_element_html for why asking would have been the wrong shape.
+       §4.5 STEP 2's ASCII-LOWERCASE FOLD IS ABSENT AND THAT IS A CLAIM ABOUT THE CALLERS, so it is asserted
+       rather than argued. It used to be argued, from "a definition's local name is a valid custom element
+       name, which is lowercase ASCII by §4.13.3's own production" — and that reason is retired twice over:
+       §4.8.3's `new Image()` reaches here with the literal "img", which is no custom element name at all, and
+       HTML §4.13.4 step 7.4 sets a definition's local name to `extends`, which names a BUILT-IN element.
+       What is true of every caller is the CONCLUSION and not that reason: §4.13.3's production is lowercase,
+       §4.13.4 step 7.3 admits an `extends` only when HTML §3.2.2 gives it an element interface and every tag
+       §3.2.2 names is lowercase ASCII, and a literal passed from this engine's own C is lowercase because it
+       is written that way. A caller that breaks it would silently create an element under a name no selector,
+       no parser and no interface lookup would ever match, so the fold's absence is the thing to catch. */
+    lxb_dom_element_t *el;
+    size_t i;
+
+    for (i = 0; i < len; i++)
+        DCHECK(!(local[i] >= 'A' && local[i] <= 'Z'),
+               "DOM §4.5 step 2's ASCII-lowercase fold is not performed here, and a local name carrying an "
+               "ASCII upper alpha reached it — every caller is required to pass a name that is already folded");
+    el = document_create_element_html(lxb_dom_interface_document(doc_here(ctx)->dom), local, len);
 
     dom_cow_note_created(lxb_dom_interface_node(el));   /* this flow made it: the delta owns it */
     return element_wrap(ctx, el);

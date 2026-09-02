@@ -579,12 +579,52 @@ static int iface_is_base(const char *iface)
 }
 
 /* HTML §3.2.2 Elements in the DOM — "the element interface for an element with name name in the HTML
- * namespace", all seven steps. The answer is a BORROWED prototype read out of the realm's own class-proto slot,
- * so two documents get their own; Web IDL §3.7 Interfaces' per-realm
+ * namespace", all seven steps, KEYED ON THE NAME ALONE. The answer is a BORROWED prototype read out of the
+ * realm's own class-proto slot, so two documents get their own; Web IDL §3.7 Interfaces' per-realm
  * interface prototype object is why this file holds class ids and never prototypes.
  *
+ * IT IS A NAME QUESTION AND NOT AN ELEMENT QUESTION, which is why it takes a string. §3.2.2 is asked twice by
+ * the platform about names no element carries yet: HTML §4.13.4 The CustomElementRegistry interface step 7.3
+ * asks it of `options.extends` before any element with that name exists ("if the element interface for extends
+ * and the HTML namespace is HTMLUnknownElement … throw a NotSupportedError"), and HTML §3.2.3 HTML element
+ * constructors step 8.2 asks the INVERSE of it — whether a definition's local name is one of the names this
+ * interface serves. Both compare the ANSWER, which is one object per interface per realm, so neither needs an
+ * interface NAME and neither can be fooled by a page reassigning one.
+ *
+ * THE PROTOTYPE IS THE INTERFACE'S IDENTITY HERE, deliberately. Web IDL §3.7.3 Interface prototype object gives
+ * each interface exactly one per realm, so "the same interface" is a pointer comparison and never a strcmp on a
+ * name a page can shadow — and html_element_install's own DCHECK already holds two rows naming one interface to
+ * one class, which is what makes the pointer the whole answer. */
+JSValue html_element_interface_proto(JSContext *ctx, const char *name, size_t n)
+{
+    int i;
+
+    /* §3.2.2 STEPS 1 THROUGH 4, which are the generated rows. The steps are ORDERED and the rows are emitted in
+       that order, so the first match is the standard's answer; the table's own tags are disjoint across the
+       four steps, which the DCHECK in html_element_init asserts rather than leaves to the reader. */
+    for (i = 0; i < HTML_IFACE_N; i++)
+        if (strlen(HTML_IFACE[i].tag) == n && memcmp(HTML_IFACE[i].tag, name, n) == 0)
+            return JS_GetClassProto(ctx, g_iface_class[i]);
+    /* §3.2.2 STEP 5 — "If other applicable specifications define an appropriate interface for name, then return
+       the interface they define." No specification this agent implements defines an HTML-NAMESPACE element
+       interface of its own; the ones that define element interfaces at all (SVG, MathML) define them for their
+       own namespaces, which the caller's namespace gate has already sent elsewhere. A component that adds one
+       adds it here.
+       §3.2.2 STEP 6 — a VALID CUSTOM ELEMENT NAME is HTMLElement and not HTMLUnknownElement, so that a later
+       upgrade moves the element DOWN its prototype chain rather than sideways. The predicate is HTML §4.13.3 Core
+       concepts', asked of the component that owns it: a hyphen is only the fourth of its five requirements, so a `-`
+       search answered HTMLElement for `foo-BAR` (an ASCII upper alpha), for `å-bar` (not a valid element local
+       name) and for `annotation-xml` (one of the eight reserved names) — three answers WPT
+       html/semantics/interfaces.html asserts the other way. */
+    if (custom_elements_name_is_valid(name, n))
+        return JS_GetClassProto(ctx, g_html_class);
+    return JS_GetClassProto(ctx, g_unknown_class);   /* §3.2.2 STEP 7 */
+}
+
+/* THE SAME QUESTION ASKED OF AN ELEMENT — the namespace gate, then the name.
+ *
  * THE NAMESPACE IS PART OF THE QUESTION, and it used to be missing: node.c hands this resolver EVERY element
- * node it wraps, whatever namespace it is in, and this function answered out of HTML's table regardless — so
+ * node it wraps, whatever namespace it is in, and this answered out of HTML's table regardless — so
  * an `<a>` inside an `<svg>` was handed HTMLAnchorElement.prototype and answered `instanceof HTMLAnchorElement`
  * true, which is how a page tells a link from a shape. DOM §4.5 Interface Document states the default this
  * falls back to in its own sentence: "The element interface for any name and namespace is Element, unless
@@ -604,7 +644,6 @@ static JSValue html_proto_for(JSContext *ctx, lxb_dom_element_t *el)
 {
     size_t n = 0;
     const lxb_char_t *tag = lxb_dom_element_local_name(el, &n);
-    int i;
 
     if (lxb_dom_interface_node(el)->ns != LXB_NS_HTML)
         return element_proto(ctx);   /* DOM §4.5's default, and OWNED like every per-realm prototype read */
@@ -612,25 +651,7 @@ static JSValue html_proto_for(JSContext *ctx, lxb_dom_element_t *el)
            "an HTML-namespace element carries no local name — DOM §1.4 Name validation's valid element "
            "local name is one or more code points, so an element with an empty one was built by something "
            "that is not the parser and not createElement");
-    /* §3.2.2 STEPS 1 THROUGH 4, which are the generated rows. The steps are ORDERED and the rows are emitted in
-       that order, so the first match is the standard's answer; the table's own tags are disjoint across the
-       four steps, which the DCHECK in html_element_init asserts rather than leaves to the reader. */
-    for (i = 0; i < HTML_IFACE_N; i++)
-        if (strlen(HTML_IFACE[i].tag) == n && memcmp(HTML_IFACE[i].tag, tag, n) == 0)
-            return JS_GetClassProto(ctx, g_iface_class[i]);
-    /* §3.2.2 STEP 5 — "If other applicable specifications define an appropriate interface for name, then return
-       the interface they define." No specification this agent implements defines an HTML-NAMESPACE element
-       interface of its own; the ones that define element interfaces at all (SVG, MathML) define them for their
-       own namespaces, which the gate above has already sent elsewhere. A component that adds one adds it here.
-       §3.2.2 STEP 6 — a VALID CUSTOM ELEMENT NAME is HTMLElement and not HTMLUnknownElement, so that a later
-       upgrade moves the element DOWN its prototype chain rather than sideways. The predicate is HTML §4.13.3 Core
-       concepts', asked of the component that owns it: a hyphen is only the fourth of its five requirements, so a `-`
-       search answered HTMLElement for `foo-BAR` (an ASCII upper alpha), for `å-bar` (not a valid element local
-       name) and for `annotation-xml` (one of the eight reserved names) — three answers WPT
-       html/semantics/interfaces.html asserts the other way. */
-    if (custom_elements_name_is_valid((const char *)tag, n))
-        return JS_GetClassProto(ctx, g_html_class);
-    return JS_GetClassProto(ctx, g_unknown_class);   /* §3.2.2 STEP 7 */
+    return html_element_interface_proto(ctx, (const char *)tag, n);
 }
 
 /* The prototype an interface NAME was built for. A lookup rather than a stored handful, because this table is
@@ -1179,7 +1200,20 @@ void html_element_install(JSContext *ctx, JSValueConst global)
                "would install the interface object twice");
         if (j < i) continue;
         p = JS_GetClassProto(ctx, g_iface_class[i]);
-        node_install_interface(ctx, global, HTML_IFACE[i].iface, p);
+        /* HTML §3.2.3 "HTML element constructors": "To support the custom elements feature, ALL HTML ELEMENTS
+           have special constructor behavior. This is indicated via the [HTMLConstructor] IDL extended
+           attribute." Every interface this table names carries it, so every one of them is minted with the
+           SAME sixteen-step machine — the shared "Illegal constructor" throw was right for `new
+           HTMLButtonElement()` (which is step 1's TypeError) and wrong for the one call that is not that: the
+           implicit `super()` inside a CUSTOMIZED BUILT-IN's constructor, whose active function object is
+           HTMLButtonElement and whose NewTarget is the page's class.
+           THE MACHINE IS NOT PARAMETERISED BY THE INTERFACE and there is no per-interface arm: the one step
+           whose answer differs, 8.1's "the list of local names … that use the active function object as their
+           element interface", is asked of HTML §3.2.2 through this file's own name-to-interface table. So this
+           is one mechanism reached from sixty-nine interface objects rather than sixty-nine algorithms, which
+           is what §3.2.3's own "have the following OVERRIDDEN constructor steps" says it is. */
+        node_install_interface_ctor(ctx, global, HTML_IFACE[i].iface, p,
+                                    custom_elements_element_constructor(ctx, HTML_IFACE[i].iface));
         /* Web IDL §3.7.2's LEGACY FACTORY FUNCTION for §4.8.3's `Image`, which is a global name of its own
            beside `HTMLImageElement` and whose non-configurable `prototype` is the interface prototype object
            this loop is holding. It goes here rather than beside the interface object's own install because

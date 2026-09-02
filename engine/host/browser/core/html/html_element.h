@@ -27,6 +27,14 @@ bool html_element_is(JSValueConst v);
    custom element whose constructor threw is an HTMLUnknownElement with that local name, which is what makes
    `el instanceof HTMLUnknownElement` the page's way to see that the upgrade failed. */
 JSValue html_unknown_element_proto(JSContext *ctx);
+/* HTML §3.2.2 Elements in the DOM's "element interface for an element with name `name` in the HTML namespace",
+   AS THIS REALM'S INTERFACE PROTOTYPE OBJECT. OWNED. The caller has already decided the namespace is HTML —
+   this asks nothing about a node, so it is the form §4.13.4 step 7.3 (`options.extends`) and §3.2.3 step 8.2
+   (is this definition's local name one of the names the active function object's interface serves) need, both
+   of which run for names no element carries. Compare the ANSWER against another interface prototype object;
+   Web IDL §3.7.3 Interface prototype object gives an interface exactly one per realm, so identity of the
+   object IS identity of the interface, and no interface NAME crosses the seam to be shadowed. */
+JSValue html_element_interface_proto(JSContext *ctx, const char *name, size_t n);
 /* The interface OBJECTS as globals — `HTMLElement`, `HTMLAnchorElement`, … Separate from the prototypes because
    they need a global to hang off, which the document install has and this does not. */
 void html_element_install(JSContext *ctx, JSValueConst global);
