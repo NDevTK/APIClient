@@ -23,11 +23,12 @@
  * platform owns, so solver/absent.c answers a CONCRETE `undefined` for them rather than unknown input and
  * every `if (window.CSSUnitValue)` in a bundle is decided against the engine today.
  *
- * WHAT IS HONESTLY ABSENT AND WHY THAT IS NOT A STUB. §2's `parse`/`parseAll`, §4.3.1's `toSum` and its
- * static `parse` are NOT installed. They are not noops and not opaque getters — they are not there, so a page
- * that reaches one gets the TypeError a browser missing them would give, which is the forcing function this
- * project runs on. Nine of §4.3.1's eleven members ARE installed and live in core/css/css_numeric_value.c;
- * that file states what each of the two absentees is waiting on, and neither is waiting on this one.
+ * WHAT IS HONESTLY ABSENT AND WHY THAT IS NOT A STUB. §2's `parse`/`parseAll` and §4.3.1's static `parse` are
+ * NOT installed. They are not noops and not opaque getters — they are not there, so a page that reaches one
+ * gets the TypeError a browser missing them would give, which is the forcing function this project runs on.
+ * TEN of §4.3.1's eleven members ARE installed and live in core/css/css_numeric_value.c; that file states what
+ * the one absentee is waiting on, and it is not waiting on this one. `toSum` used to stand in this sentence
+ * and does not any more: it was waiting on §4.3.1's SUM VALUE, which core/css/css_sum_value.h now is.
  *
  * AND THIS FILE'S REALM INSTALL NOW BUILDS §4.3.4's CHAIN TOO, by calling core/css/css_math_value.c with the
  * CSSNumericValue.prototype it has just made. It is the same §3.7.3 Interface prototype object argument one

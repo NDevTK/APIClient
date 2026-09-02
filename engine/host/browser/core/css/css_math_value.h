@@ -16,10 +16,10 @@
  * WHAT IS HONESTLY ABSENT, AND EACH IS ABSENT FOR A REASON WRITTEN DOWN AT ITS SITE.
  *   §4.3.4's CSSMathClamp — SEE THE RESIDUAL BELOW. It is the one interface in this section that two of the
  *   normative algorithms it must take part in have no arm for at all, in the published draft.
- *   §4.3.1's `toSum` and §4.3.1's create-a-sum-value — a math value's arm of create-a-sum-value is the
- *   algorithm `to()` needs, and it is a separate abstraction (a list of (value, unit map) tuples with its own
- *   product-of-unit-maps and create-a-type-from-a-unit-map). `to()` DFAILs at a CSSMathValue receiver naming
- *   it, which is the forcing function; nothing here answers a stand-in for it.
+ *   §4.3.1's `toSum` and its create-a-sum-value used to stand here, and they do not any more: the six arms of
+ *   create-a-sum-value that walk THIS section's tree are core/css/css_sum_value.c, which is where the
+ *   (value, unit map) tuple list, the product of two unit maps and create-a-type-from-a-unit-map live. This
+ *   component is what that walk reads — `css_math_value_op`, `css_math_value_items` — and owns none of it.
  *
  * THE TYPE IS COMPUTED ONCE, AT THE MINT, AND THAT IS NOT A CACHE — IT IS WHAT KEEPS THE C STACK FLAT.
  * §4.3.4 states a math value's type recursively ("the result of adding the types of each of the items in its

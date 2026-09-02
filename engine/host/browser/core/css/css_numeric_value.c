@@ -18,6 +18,7 @@
 #include "core/css/css_math.h"
 #include "core/css/css_math_value.h"
 #include "core/css/css_numeric_value.h"
+#include "core/css/css_sum_value.h"
 #include "core/css/css_unit_value.h"
 #include "core/idl_args.h"
 #include "solver/concolic.h"
@@ -26,8 +27,8 @@
    pre-init for an id slot is -1 and 0 is a VALID pool id, so a table shorter than the enumeration would
    zero-fill its tail into ids that name someone else's declaration. The static assert below is what makes a
    member added to CssNumericMember without a row here a compile error rather than that. */
-static int g_id[CSS_NUMERIC_MEMBER_N] = { -1, -1, -1, -1, -1, -1, -1, -1, -1 };
-_Static_assert(CSS_NUMERIC_MEMBER_N == 9,
+static int g_id[CSS_NUMERIC_MEMBER_N] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
+_Static_assert(CSS_NUMERIC_MEMBER_N == 10,
                "CSS Typed OM 1 §4.3.1's member enumeration and this component's id table have come apart — "
                "core/agent_state.h's pre-init for an id is -1 and a zero-filled tail is a VALID pool id");
 
@@ -139,14 +140,20 @@ static bool nv_brand(JSContext *ctx, JSValueConst v)
  * is fixed by a specification — css-values-4 §6.2's seven absolute lengths (canonical `px`), §7.1's four
  * angles (`deg`), §7.2's two times (`s`), §7.3's two frequencies (`hz`) and §7.4's resolutions (`dppx`) — and
  * a font-relative, viewport-percentage or container-relative length is a set of ONE, which is why
- * `CSS.em(1).to("px")` is the TypeError §4.3.1 step 6 gives and `CSS.em(1).to("em")` is 1em.
+ * `CSS.em(1).to("px")` is the TypeError §4.3.1's to() step 3 gives and `CSS.em(1).to("em")` is 1em. (That
+ * citation read "step 6" until the algorithm was counted rather than remembered: `to()` is FOUR top-level
+ * steps, three of which carry two or three sentences apiece, and a flat count of its sentences is exactly
+ * the miscount CLAUDE.md warns is biased toward looking right.)
  *
  * THE TABLES ARE THE COMPONENTS' OWN. Each row below is one existing entry asked for the number of canonical
  * units ONE of `unit` is worth; a sixth table here would be the copy that disagrees about `dpcm` the day one
  * of them is edited. Writes nothing and answers false for a unit in no set at all — "number", "percent",
  * `em`, `cqw`, `fr` — which is a POSITIVE statement (this unit is compatible with itself alone) and not an
- * absence the caller has to default past. */
-static bool nv_canonical(const char *unit, size_t unit_len, double *per, const char **canon)
+ * absence the caller has to default past.
+ *
+ * See css_numeric_value.h for why this is an entry rather than a private helper: §4.3.1's sum value asks for
+ * the canonical unit as a NAME, which a composed ratio cannot answer. */
+bool css_numeric_canonical(const char *unit, size_t unit_len, double *per, const char **canon)
 {
     double v = 0.0;
 
@@ -187,8 +194,8 @@ bool css_numeric_convert_ratio(const char *from, const char *want, double *ratio
     double per_from = 1.0, per_want = 1.0;
     bool from_set, want_set;
 
-    from_set = nv_canonical(from, strlen(from), &per_from, &from_canon);
-    want_set = nv_canonical(want, strlen(want), &per_want, &want_canon);
+    from_set = css_numeric_canonical(from, strlen(from), &per_from, &from_canon);
+    want_set = css_numeric_canonical(want, strlen(want), &per_want, &want_canon);
     if (from_set != want_set) return false;
     if (!from_set) {
         if (!nv_unit_same(from, want)) return false;
@@ -288,6 +295,48 @@ static JSValue js_css_numeric_value_type(JSContext *ctx, JSValueConst this_val, 
     return result;
 }
 
+/* ---- §4.3.3's convert-a-CSSUnitValue, over the VALUE alone -------------------------------------------------- */
+
+/* "old value multiplied by the conversation ratio between old unit and unit" — §4.3.3's convert-a-CSSUnitValue
+ * last step, quoted with the published draft's own typo for "conversion" so a reader checking it against the
+ * text finds it there (§4.3.1's create-a-sum-value spells the same phrase correctly, one section over). It is
+ * the whole of what that algorithm does to a number, as the ONE entry both `to()`'s last step ("then converting it to
+ * unit") and `toSum()`'s step 5 ("Convert value to unit") are stated in terms of. `slot` is BORROWED; the
+ * answer is OWNED.
+ *
+ * A RATIO OF EXACTLY 1 IS THAT MULTIPLICATION for every value the slot can hold — Web IDL §3.2's RESTRICTED
+ * `double` refused a NaN at every boundary that writes one — so `CSS.px(x).to("px")` hands back the value the
+ * page put in rather than a second object that merely equals it, which is what `x * 1` evaluates to and what
+ * keeps one unknown one unknown instead of two that have to be compared. */
+static JSValue nv_scale(JSContext *ctx, JSValueConst slot, double ratio)
+{
+    double n = 0.0;
+    JSValue example, value;
+
+    if (ratio == 1.0) return JS_DupValue(ctx, slot);
+    /* `idl_number_of` is what a body reads a converted numeric slot through: for a Number it is the number,
+       and for unknown external input it is §3.2's conversion RUN ON THAT VALUE'S OWN EXAMPLE — the concrete
+       the page actually computed — answering false when there is no example yet. */
+    example = idl_number_of(ctx, IDL_DOUBLE, slot, &n) ? JS_NewFloat64(ctx, n * ratio) : JS_UNDEFINED;
+    if (!concolic_is(slot)) {
+        DCHECK(!JS_IsUndefined(example),
+               "§4.3.3's conversion produced no number for a `value` slot this engine knows the number of — a "
+               "Number always has an example by definition, so this is idl_number_of's two answers having "
+               "come apart");
+        return example;
+    }
+    /* THE VALUE IS UNKNOWN EXTERNAL INPUT, SO THE CONVERSION OF IT IS TOO. A concrete number here would
+       DE-TAINT what `CSS.px(attackerNumber).to("in")` carries into whatever consumes it, which is exactly the
+       placeholder solver/concolic.h's builtin seam exists instead of. The derived value keeps the operand's
+       source and root and carries the REAL multiplication on its example as its own — never a rule predicting
+       what the conversion would have produced. */
+    value = concolic_builtin_hook(ctx, slot, "CSS Typed OM 1 §4.3.3 convert a CSSUnitValue", example);
+    DCHECK(!JS_IsUninitialized(value),
+           "solver/concolic.h's builtin seam refused an operand this body had already established is unknown "
+           "external input — the two tests read the same value one line apart");
+    return value;
+}
+
 /* ---- §4.3.1's `to()` --------------------------------------------------------------------------------------- */
 
 /* "The to(unit) method converts an existing CSSNumericValue this into another one with the specified unit, if
@@ -299,14 +348,22 @@ static JSValue js_css_numeric_value_type(JSContext *ctx, JSValueConst this_val, 
    THE UNIT'S BYTES COME THROUGH `concolic_name_cstr`, exactly as §4.3.3's constructor's do: Web IDL's boundary
    passes unknown external input across as itself, and an unknown denotes its SHAPE — a real string, stable per
    source — which is not one of §4.3.2's branches, so `CSS.px(1).to(location.hash)` throws the SyntaxError the
-   standard gives for a unit that is not a unit. */
+   standard gives for a unit that is not a unit.
+   IT HAS ONE PATH FOR EVERY RECEIVER. A collapsed CSSUnitValue arm used to stand here behind an `if` on the
+   receiver's class, composing create-a-sum-value's canonicalisation and §4.3.3's convert into a single ratio,
+   with a DFAIL for the §4.3.4 receiver whose arm did not exist; core/css/css_sum_value.c is that arm, and the
+   collapsed one is DELETED rather than kept beside it. Both were correct for the receiver they answered, and
+   that is exactly what makes the pair the shape CLAUDE.md forbids: the surviving special case is where the
+   general path's gaps hide, and the ratio it composed is still one entry (`css_numeric_convert_ratio`) that
+   both halves of the general path reach. */
 static JSValue js_css_numeric_value_to(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                        int magic)
 {
     CssMathType want_type;
+    CssSumValue sum = { NULL, 0, 0 };
     const char *want, *from;
-    double ratio = 1.0, n = 0.0;
-    JSValue slot, value, example, r;
+    double ratio = 1.0;
+    JSValue item, slot, r;
 
     (void)magic;
     DCHECK(argc == 1, "§4.3.1's to() reached its body with an argument count its IDL does not declare — "
@@ -315,7 +372,8 @@ static JSValue js_css_numeric_value_to(JSContext *ctx, JSValueConst this_val, in
     if (!nv_brand(ctx, this_val)) return JS_EXCEPTION;
     want = concolic_name_cstr(ctx, argv[0]);
     CHECK(want != NULL, "css-typed-om: OOM encoding the `unit` argument of §4.3.1's to()");
-    /* STEPS 1-2. The type itself is not read: `to()` uses it only for the failure test, because the unit the
+    /* STEP 1. "Let type be the result of creating a type from unit. If type is failure, throw a
+       SyntaxError." The type itself is not read: `to()` uses it only for the failure test, because the unit the
        result carries is the ARGUMENT and not a canonical spelling derived from its type. */
     if (!css_numeric_type_from_unit(want, strlen(want), &want_type)) {
         r = JS_ThrowDOMException(ctx, "SyntaxError", "'%s' is not a CSS unit a CSSNumericValue can convert to",
@@ -323,31 +381,41 @@ static JSValue js_css_numeric_value_to(JSContext *ctx, JSValueConst this_val, in
         JS_FreeCString(ctx, want);
         return r;
     }
-    /* STEPS 3-5. §4.3.1's create-a-sum-value has a CSSUnitValue arm that cannot fail and yields exactly one
-       item, so over THAT receiver the two TypeErrors those steps guard against are unreachable and what is
-       left is §4.3.3's convert-a-CSSUnitValue, whose failure IS step 6's TypeError.
-       A §4.3.4 RECEIVER REACHES THE ARM THAT IS NOT BUILT. create-a-sum-value's other six arms are a walk over
-       the math tree into a list of (value, unit map) tuples, with a product-of-unit-maps and a
-       create-a-type-from-a-unit-map of their own; nothing in this engine holds that abstraction, so there is
-       no answer here that is not invented — `new CSSMathSum(CSS.px(1), CSS.px(2)).to("px")` is `3px` in a
-       browser and neither a TypeError nor a `1px`. It CRASHES naming the component, which is the forcing
-       function, rather than answering the collapsing receiver's answer for a receiver that is not one. */
-    if (!css_unit_value_is(this_val)) {
-        DFAIL("CSS Typed OM 1 §4.3.1's to() reached a CSSMathValue receiver, whose step 3 is \"Let sum be the "
-              "result of creating a sum value from this\" — and this engine builds only that algorithm's "
-              "CSSUnitValue arm. BUILD §4.3.1's SUM VALUE as its own component: the list of (value, unit map) "
-              "tuples, its create-a-sum-value arms for CSSMathSum, CSSMathProduct, CSSMathNegate, "
-              "CSSMathInvert, CSSMathMin and CSSMathMax, the product of two unit maps, create a type from a "
-              "unit map, and create a CSSUnitValue from a sum value item. §4.3.1's toSum() is the second "
-              "member waiting on exactly it");
+    /* STEP 2. "Let sum be the result of creating a sum value from this. If sum is failure, throw a
+       TypeError." */
+    if (!css_sum_value_create(ctx, this_val, &sum)) {
         JS_FreeCString(ctx, want);
-        return JS_UNDEFINED;
+        return JS_ThrowTypeError(ctx, "this CSS numeric value cannot be expressed as a sum value — CSS Typed "
+                                      "OM 1 §4.3.1's create-a-sum-value returns failure for it");
     }
-    from = css_unit_value_unit(this_val);
+    /* STEP 3's FIRST SENTENCE. "If sum has more than one item, throw a TypeError." — `calc(1px + 2em)`,
+       whose sum value is two
+       items because §5.4.1 relates no static factor between them. */
+    if (sum.n != 1) {
+        css_sum_value_release(ctx, &sum);
+        JS_FreeCString(ctx, want);
+        return JS_ThrowTypeError(ctx, "this CSS numeric value is a sum of %d values in different units and "
+                                      "cannot be converted to one unit", sum.n);
+    }
+    /* STEP 3's SECOND SENTENCE, first half: "Otherwise, let item be the result of creating a CSSUnitValue
+       from the sole item in sum". */
+    item = css_sum_value_unit_value(ctx, &sum.v[0]);
+    css_sum_value_release(ctx, &sum);
+    if (JS_IsUndefined(item)) {
+        JS_FreeCString(ctx, want);
+        return JS_ThrowTypeError(ctx, "this CSS numeric value has a compound unit and is not a value in any "
+                                      "single unit — CSS Typed OM 1 §4.3.1's create-a-CSSUnitValue-from-a-"
+                                      "sum-value-item returns failure for it");
+    }
+    /* STEP 3's SECOND SENTENCE, second half: "then converting it to unit", which is §4.3.3's
+       convert-a-CSSUnitValue and whose "If old unit and unit are not compatible units, return failure" is
+       this step's third sentence, "If item is failure, throw a TypeError". Step 4 is "Return item". */
+    from = css_unit_value_unit(item);
     if (!css_numeric_convert_ratio(from, want, &ratio)) {
         r = JS_ThrowTypeError(ctx, "a CSSUnitValue in '%s' cannot be converted to '%s' — css-values-4 §5.4.1 "
                                    "relates compatible units by a static factor and these two are in "
                                    "different sets", from, want);
+        JS_FreeValue(ctx, item);
         JS_FreeCString(ctx, want);
         return r;
     }
@@ -355,40 +423,10 @@ static JSValue js_css_numeric_value_to(JSContext *ctx, JSValueConst this_val, in
            "css-values-4 §5.4.1's conversion ratio between two COMPATIBLE units is not a usable factor. Both "
            "operands were found in one set whose ratios are positive constants of the specification that "
            "defines the family, so a NaN or a zero is a quotient of two table rows one of which is absent");
-    slot = css_unit_value_value(ctx, this_val);
-    /* §4.3.3's "old value multiplied by the conversion ratio between old unit and unit". A ratio of exactly 1
-       IS that multiplication for every value the slot can hold — Web IDL §3.2's RESTRICTED `double` refused a
-       NaN at the boundary — so `CSS.px(x).to("px")` hands back the value the page put in rather than a second
-       object that merely equals it, which is what `x * 1` evaluates to and what keeps one unknown one unknown
-       instead of two that have to be compared. */
-    if (ratio == 1.0)
-        value = slot;
-    else {
-        /* `idl_number_of` is what a body reads a converted numeric slot through: for a Number it is the
-           number, and for unknown external input it is §3.2's conversion RUN ON THAT VALUE'S OWN EXAMPLE —
-           the concrete the page actually computed — answering false when there is no example yet. */
-        example = idl_number_of(ctx, IDL_DOUBLE, slot, &n) ? JS_NewFloat64(ctx, n * ratio) : JS_UNDEFINED;
-        if (!concolic_is(slot)) {
-            DCHECK(!JS_IsUndefined(example),
-                   "§4.3.3's conversion produced no number for a `value` slot this engine knows the number of "
-                   "— a Number always has an example by definition, so this is idl_number_of's two answers "
-                   "having come apart");
-            value = example;
-        }
-        else {
-            /* THE VALUE IS UNKNOWN EXTERNAL INPUT, SO THE CONVERSION OF IT IS TOO. A concrete number here
-               would DE-TAINT what `CSS.px(attackerNumber).to("in")` carries into whatever consumes it, which
-               is exactly the placeholder solver/concolic.h's builtin seam exists instead of. The derived value
-               keeps the operand's source and root and carries the REAL multiplication on its example as its
-               own — never a rule predicting what the conversion would have produced. */
-            value = concolic_builtin_hook(ctx, slot, "CSS Typed OM 1 §4.3.3 convert a CSSUnitValue", example);
-            DCHECK(!JS_IsUninitialized(value),
-                   "solver/concolic.h's builtin seam refused an operand this body had already established is "
-                   "unknown external input — the two tests read the same value one line apart");
-        }
-        JS_FreeValue(ctx, slot);
-    }
-    r = css_unit_value_new(ctx, value, want);
+    slot = css_unit_value_value(ctx, item);
+    JS_FreeValue(ctx, item);
+    r = css_unit_value_new(ctx, nv_scale(ctx, slot, ratio), want);
+    JS_FreeValue(ctx, slot);
     JS_FreeCString(ctx, want);
     return r;
 }
@@ -749,8 +787,15 @@ static double nv_fold_step(NvArith k, double acc, double x)
  * that decided it, and naming one — which is all core/../concolic.h's one-operand builtin seam can do — would
  * give two folds differing only in the operand it did not name one identity, so a flow's record of either
  * would decide the other. The example is the REAL fold run left to right on the operands' own examples, and is
- * absent when ANY operand has none, because §@H never invents a number the code did not compute. */
-static JSValue nv_fold(JSContext *ctx, NvArith k, JSValueConst *slots, int n)
+ * absent when ANY operand has none, because §@H never invents a number the code did not compute.
+ *
+ * `op` IS A PARAMETER AND NOT `NV_ARITH_OP[k]`, because the ARITHMETIC and the ALGORITHM THAT ASKED FOR IT
+ * are two facts. The six arithmetic members pass their own row; §4.3.1's `toSum` performs an addition too —
+ * "Increment temp's value internal slot by the value of value's value internal slot" — and that is not the
+ * `add()` algorithm, so it must not compose `add()`'s key. Reading the name off `k` would have made every
+ * caller that folds an addition claim to be `add()`, which is one key for two operations and is the direction
+ * solver/concolic.h says decides a gate the flow never asked about. */
+static JSValue nv_fold(JSContext *ctx, NvArith k, const char *op, JSValueConst *slots, int n)
 {
     JSValue example = JS_UNDEFINED;
     double acc = 0.0;
@@ -776,7 +821,7 @@ static JSValue nv_fold(JSContext *ctx, NvArith k, JSValueConst *slots, int n)
         return example;
     }
     {
-        JSValue r = concolic_new_derived(ctx, NV_ARITH_OP[k], slots, n, example);
+        JSValue r = concolic_new_derived(ctx, op, slots, n, example);
 
         DCHECK(!JS_IsUninitialized(r),
                "solver/concolic.h's derivation refused an operand list this fold had already established holds "
@@ -1013,7 +1058,7 @@ static JSValue js_css_numeric_value_arith(JSContext *ctx, JSValueConst this_val,
 
             CHECK(slots != NULL, "css-typed-om: OOM folding a §4.3.1 collapsing arm");
             for (i = 0; i < values.n; i++) slots[i] = css_unit_value_value(ctx, values.v[i]);
-            r = css_unit_value_new(ctx, nv_fold(ctx, k, slots, values.n), unit);
+            r = css_unit_value_new(ctx, nv_fold(ctx, k, NV_ARITH_OP[k], slots, values.n), unit);
             for (i = 0; i < values.n; i++) JS_FreeValue(ctx, slots[i]);
             free(slots);
             nv_list_free(ctx, &values);
@@ -1029,6 +1074,193 @@ static JSValue js_css_numeric_value_arith(JSContext *ctx, JSValueConst this_val,
         return JS_ThrowTypeError(ctx, "these CSS numeric values have no combined type — CSS Typed OM 1 "
                                       "§4.3.2's %s of their types returns failure",
                                  k == NV_ARITH_MUL ? "multiplying" : "adding");
+    return r;
+}
+
+/* ---- §4.3.1's `toSum()` -------------------------------------------------------------------------------------- */
+
+/* THE NAME THE ADDITION §4.3.1's toSum PERFORMS IS KEYED BY. It is that member's own algorithm and not
+   `add()`'s: the two compute one number from one pair of slots and are two sentences of this section, and
+   solver/concolic.h states which way to be wrong — two keys for one value cost a frontier entry, one key for
+   two values decides a gate nobody asked about. */
+#define NV_TOSUM_OP "CSS Typed OM 1 §4.3.1 toSum"
+
+/* Infra's "remove", over the list §4.3.1's toSum removes from ("Remove value from values"), so its last step's
+   "If values is not empty" is the list's own length and not a tombstone a reader has to know about. */
+static void nv_list_remove(JSContext *ctx, NvList *l, int i)
+{
+    DCHECK(i >= 0 && i < l->n, "a §4.3.1 operand list was asked to remove an index it does not hold");
+    JS_FreeValue(ctx, l->v[i]);
+    memmove(&l->v[i], &l->v[i + 1], (size_t)(l->n - i - 1) * sizeof *l->v);
+    l->n--;
+}
+
+/* "sort values in code point order according to the unit internal slot of its items".
+   INSERTION SORT, AND STABILITY IS NOT THE REASON — the keys are DISTINCT. Every item of a sum value has a
+   unit map no other item of that list has (the CSSMathSum arm merges any that agree), and an item that
+   survived create-a-CSSUnitValue-from-a-sum-value-item has at most one entry at power 1, so two survivors
+   cannot name one unit. The sort is written out rather than handed to `qsort` because the comparison reaches
+   through a platform object's record, which is this component's question and not the C library's. */
+static void nv_sort_by_unit(NvList *l)
+{
+    int i, j;
+
+    for (i = 1; i < l->n; i++) {
+        JSValue v = l->v[i];
+        const char *u = css_unit_value_unit(v);
+
+        for (j = i; j > 0 && strcmp(css_unit_value_unit(l->v[j - 1]), u) > 0; j--)
+            l->v[j] = l->v[j - 1];
+        l->v[j] = v;
+    }
+}
+
+/* §4.3.1's toSum's LAST STEP — "Return a new CSSMathSum object whose values internal slot is set to values" —
+ * which is §4.3.4's SPEC-INTERNAL mint ("Return a new CSSMathSum whose values internal slot is set to args")
+ * and NOT its constructor, so the standard states no type step here at all. `values` is BORROWED.
+ *
+ * WHICH IS WHY THIS CRASHES RATHER THAN THROWING. core/css/css_math_value.c computes and STORES the type at
+ * every mint, because §4.3.4's own constructor makes a failing type a TypeError and because the answer has to
+ * be stored for `type()` to be readable without a walk — so this engine has no representation for the object
+ * the standard produces here when the types do not add. `CSS.px(1).toSum("px", "s")` is exactly that object: a
+ * CSSMathSum of `1px` and `0s` whose type is failure, which a browser hands back and whose `type()` a page can
+ * then read. A TypeError here would be a refusal §4.3.1 does not state, and a plausible type would be a
+ * fabrication, so the honest answer is to name the capability. */
+static JSValue nv_to_sum_result(JSContext *ctx, NvList *values)
+{
+    JSValue r;
+
+    DCHECK(values->n >= 1,
+           "§4.3.1's toSum reached its last step with NO values. Its no-units branch is over a sum value, "
+           "which is never empty because §4.3.4's mint refuses an empty operand list and the CSSUnitValue arm "
+           "yields exactly one item; its units branch appends one temp per unit and is reached only when "
+           "`units` is not empty");
+    r = css_math_value_new(ctx, CSS_MATH_OP_SUM, values->v, values->n);
+    if (!JS_IsUndefined(r)) return r;
+    DFAIL("CSS Typed OM 1 §4.3.1's toSum built a CSSMathSum whose §4.3.2 type is FAILURE — the standard's own "
+          "answer for `CSS.px(1).toSum(\"px\", \"s\")`, because that member's last step is §4.3.4's "
+          "spec-internal mint and states no type step. This engine STORES the type at every mint (core/css/"
+          "css_math_value.c) and CssMathType has no failure state, so the object cannot be represented. BUILD "
+          "the failure type as a representable state of core/css/css_math.h's CssMathType, and let §4.3.4's "
+          "CONSTRUCTOR — which is where the TypeError is stated — be the one place that refuses it");
+    return JS_ThrowInternalError(ctx, "CSS Typed OM 1 §4.3.1's toSum cannot represent a CSSMathSum whose type "
+                                      "is failure — core/css/css_math.h's type has no failure state");
+}
+
+/* "The toSum(...units) method converts an existing CSSNumericValue this into a CSSMathSum of only
+ * CSSUnitValues with the specified units, if possible. (It's like to(), but allows the result to have multiple
+ * units in it.) If called without any units, it just simplifies this into a minimal sum of CSSUnitValues."
+ *
+ * THE SYNTAX ERROR COMES FIRST FOR EVERY UNIT, WHICH IS OBSERVABLE. Step 1 is "For each unit in units, if the
+ * result of creating a type from unit is failure, throw a SyntaxError" — a loop over ALL of them, before step
+ * 2 runs — so `new CSSMathSum(CSS.px(1), CSS.em(1)).toSum("px", "bogus")` is a SyntaxError and not the
+ * TypeError its step 6 would otherwise give. A body that interleaved the two would answer the wrong exception
+ * for a page that catches by name.
+ *
+ * `temp` STARTS AT 0 AND THE ADDITION IS PERFORMED, NEVER SHORTCUT. "Let temp initially be a new CSSUnitValue
+ * whose unit internal slot is set to unit and whose value internal slot is set to 0", then "Increment temp's
+ * value internal slot by the value of value's value internal slot" — and `0 + -0` is `+0` under IEEE-754,
+ * which is a difference a page reads with `Object.is`. So the 0 is an OPERAND of the fold rather than a
+ * starting point a single incoming value may replace, and a unit that matches nothing answers a real 0. */
+static JSValue js_css_numeric_value_to_sum(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                           int magic)
+{
+    CssSumValue sum = { NULL, 0, 0 };
+    NvList values = { NULL, 0, 0 }, result = { NULL, 0, 0 };
+    JSValue r;
+    int i, j;
+
+    (void)magic;
+    if (!nv_brand(ctx, this_val)) return JS_EXCEPTION;
+    /* STEP 1, over every argument. The bytes come through `concolic_name_cstr` for the reason `to()` states:
+       an unknown denotes its SHAPE, which is not one of §4.3.2's nine branches. */
+    for (i = 0; i < argc; i++) {
+        CssMathType t;
+        const char *u = concolic_name_cstr(ctx, argv[i]);
+        bool named;
+
+        CHECK(u != NULL, "css-typed-om: OOM encoding a `units` argument of §4.3.1's toSum()");
+        named = css_numeric_type_from_unit(u, strlen(u), &t);
+        if (!named) {
+            r = JS_ThrowDOMException(ctx, "SyntaxError",
+                                     "'%s' is not a CSS unit a CSSNumericValue can be summed into", u);
+            JS_FreeCString(ctx, u);
+            return r;
+        }
+        JS_FreeCString(ctx, u);
+    }
+    /* STEP 2. "Let sum be the result of creating a sum value from this. If sum is failure, throw a
+       TypeError." */
+    if (!css_sum_value_create(ctx, this_val, &sum))
+        return JS_ThrowTypeError(ctx, "this CSS numeric value cannot be expressed as a sum value — CSS Typed "
+                                      "OM 1 §4.3.1's create-a-sum-value returns failure for it");
+    /* STEP 3. "Let values be the result of creating a CSSUnitValue for each item in sum. If any item of values
+       is failure, throw a TypeError." */
+    for (i = 0; i < sum.n; i++) {
+        JSValue uv = css_sum_value_unit_value(ctx, &sum.v[i]);
+
+        if (JS_IsUndefined(uv)) {
+            css_sum_value_release(ctx, &sum);
+            nv_list_free(ctx, &values);
+            return JS_ThrowTypeError(ctx, "this CSS numeric value has a compound unit and is not a sum of "
+                                          "values in single units — CSS Typed OM 1 §4.3.1's "
+                                          "create-a-CSSUnitValue-from-a-sum-value-item returns failure for "
+                                          "one of its items");
+        }
+        nv_list_push(&values, uv);
+    }
+    css_sum_value_release(ctx, &sum);
+    /* STEP 4. "If units is empty, sort values in code point order according to the unit internal slot of its
+       items, then return a new CSSMathSum object whose values internal slot is set to values." */
+    if (argc == 0) {
+        nv_sort_by_unit(&values);
+        r = nv_to_sum_result(ctx, &values);
+        nv_list_free(ctx, &values);
+        return r;
+    }
+    /* STEP 5. "Otherwise, let result initially be an empty list. For each unit in units", whose own sub-list
+       is the four steps written out below. */
+    for (i = 0; i < argc; i++) {
+        const char *u = concolic_name_cstr(ctx, argv[i]);
+        NvList terms = { NULL, 0, 0 };
+
+        CHECK(u != NULL, "css-typed-om: OOM encoding a `units` argument of §4.3.1's toSum()");
+        nv_list_push(&terms, JS_NewFloat64(ctx, 0.0));
+        for (j = 0; j < values.n; ) {
+            double ratio = 1.0;
+            JSValue slot;
+
+            /* "Let value unit be value's unit internal slot. If value unit is a compatible unit with unit" —
+               css-values-4 §5.4.1 Compatible Units' own question, which is the entry `to()`'s last step asks
+               too, so one place answers whether two units are related by a static factor. */
+            if (!css_numeric_convert_ratio(css_unit_value_unit(values.v[j]), u, &ratio)) { j++; continue; }
+            slot = css_unit_value_value(ctx, values.v[j]);
+            nv_list_push(&terms, nv_scale(ctx, slot, ratio));   /* "Convert value to unit." */
+            JS_FreeValue(ctx, slot);
+            nv_list_remove(ctx, &values, j);                    /* "Remove value from values." */
+        }
+        /* "Increment temp's value internal slot by the value of value's value internal slot", for each value
+           that landed here — one left-to-right fold over the 0 and them, which is the same association
+           §4.3.1 spells out for its own additions. */
+        nv_list_push(&result, css_unit_value_new(ctx, nv_fold(ctx, NV_ARITH_ADD, NV_TOSUM_OP, terms.v, terms.n),
+                                                 u));
+        nv_list_free(ctx, &terms);
+        JS_FreeCString(ctx, u);
+    }
+    /* "If values is not empty, throw a TypeError." — the step the draft annotates, in an aside rather than a
+       parenthetical, with "this had units that you didn't ask for." */
+    if (values.n != 0) {
+        r = JS_ThrowTypeError(ctx, "this CSS numeric value still has %d value(s) in units that were not asked "
+                                   "for, the first of them '%s'", values.n,
+                              css_unit_value_unit(values.v[0]));
+        nv_list_free(ctx, &values);
+        nv_list_free(ctx, &result);
+        return r;
+    }
+    nv_list_free(ctx, &values);
+    /* "Return a new CSSMathSum object whose values internal slot is set to result." */
+    r = nv_to_sum_result(ctx, &result);
+    nv_list_free(ctx, &result);
     return r;
 }
 
@@ -1053,6 +1285,13 @@ void css_numeric_value_init(JSContext *ctx)
 {
     /* `CSSUnitValue to(USVString unit)` — one required position, so Web IDL §3.7.7 Operations' `length` is 1. */
     static const IdlArgType TO_ARGS[1] = { IDL_USVSTRING };
+    /* `CSSMathSum toSum(USVString... units)` — ONE declared position carrying the tail's type, and §3.7.7
+       Operations' `length` is 0, because a variadic tail is not a required position: `x.toSum()` is that
+       member's own "If called without any units" branch and never a TypeError. It is a SECOND array rather
+       than TO_ARGS reused, because the two declarations agreeing today is a fact about the IDL and not a fact
+       about this file — `to()` has a required position and this has none, so a change to either must not be
+       able to move the other silently. */
+    static const IdlArgType TOSUM_ARGS[1] = { IDL_USVSTRING };
     /* `boolean equals(CSSNumberish... value)` — ONE declared position carrying the tail's type, which is what
        `T...` means to core/idl_args.h: the last declared type applies to every argument from there on. §3.7.7
        Operations' `length` is 0, because a variadic tail is not a required position. */
@@ -1068,6 +1307,8 @@ void css_numeric_value_init(JSContext *ctx)
     /* `CSSNumericType type()` takes no arguments. */
     g_id[CSS_NUMERIC_MEMBER_TYPE] = idl_method_id(ctx, NULL, 0, js_css_numeric_value_type, 0);
     g_id[CSS_NUMERIC_MEMBER_TO]   = idl_method_id(ctx, TO_ARGS, 1, js_css_numeric_value_to, 0);
+    g_id[CSS_NUMERIC_MEMBER_TOSUM] = idl_method_id(ctx, TOSUM_ARGS, 1, js_css_numeric_value_to_sum, 0);
+    idl_variadic();
     g_id[CSS_NUMERIC_MEMBER_EQUALS] =
         idl_method_id(ctx, EQUALS_ARGS, 1, js_css_numeric_value_equals, 0);
     idl_variadic();
@@ -1092,6 +1333,8 @@ void css_numeric_value_init(JSContext *ctx)
                    "CSS Typed OM 1 §4.3.1's type() declaration");
     agent_state_id("css_numeric_value", &g_id[CSS_NUMERIC_MEMBER_TO],
                    "CSS Typed OM 1 §4.3.1's to() declaration");
+    agent_state_id("css_numeric_value", &g_id[CSS_NUMERIC_MEMBER_TOSUM],
+                   "CSS Typed OM 1 §4.3.1's toSum() declaration");
     agent_state_id("css_numeric_value", &g_id[CSS_NUMERIC_MEMBER_EQUALS],
                    "CSS Typed OM 1 §4.3.1's equals() declaration");
     for (m = CSS_NUMERIC_MEMBER_ADD; m <= CSS_NUMERIC_MEMBER_MAX; m++)
