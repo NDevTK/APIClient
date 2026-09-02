@@ -52,27 +52,31 @@
 
 #include "core/css/css_length.h"
 
-/* css-sizing-3 §2.2 "Intrinsic Size Contributions"' OUTER SIZE at ONE SIDE of an INLINE BOX, in CSS pixels — the
-   trailing side for `trailing` true. §2.2 states both contributions as "based on the OUTER SIZE of the box; for
-   this purpose auto margins are treated as zero", so an inline box's own horizontal margin, border and padding
-   are part of what it puts on a line, and css-text-3 §5.5 "Line Breaking Details" is what says WHERE: "inline
-   box boundaries do not introduce a forced line break or soft wrap opportunity in the flow", so the two edges
-   sit at the box's boundaries and not at every break inside it.
-   IT IS EXPORTED BECAUSE THE SAME NUMBER IS AN OPERAND OF TWO SECTIONS, and a second copy of it would be the
-   one way they could disagree about how wide a line is. §5.2's intrinsic contribution sums it (this component),
-   and CSS 2.2 §9.4.2's line box holds it too — "horizontal margins, borders, and padding are respected between
-   these boxes" — which is core/layout/line_box.c's fill deciding where the line runs out. Both hand it to
-   core/layout/text_run.h as an EDGE item at a position, which is why neither of them adds it to a total.
-   A PERCENTAGE CRASHES rather than resolving, and the reason is the SHARING above rather than an unanswered
-   question. A percentage on any of the six resolves against the containing block width, which for a
-   shrink-to-fit box is CSS 2.2 §10.3.5's own output — the answer the measurement is being run to produce —
-   and css-sizing-3 §5.2.1 "Intrinsic Contributions of Percentage-Sized Boxes" DOES answer that case, with
-   zero, for a margin and for a padding alike. What it answers is the INTRINSIC CONTRIBUTION, which is one of
-   this entry's two callers and not the other: line_box.c fills at a width its containing block has already
-   determined, where the same percentage is not cyclic and resolves normally. So the zero belongs on the
-   intrinsic side of a SPLIT this entry does not yet have, and until it does, one predicate here would be
-   answering two questions with the stricter one's answer. */
-CssPx intrinsic_inline_box_edge_px(lxb_dom_element_t *el, bool trailing);
+/* CSS 2.2 §9.4.2 "Inline formatting contexts"' OUTER SIZE at ONE SIDE of an INLINE BOX, as USED VALUES, in CSS
+   pixels — the trailing side for `trailing` true. §9.4.2 is what puts it on the line ("horizontal margins,
+   borders, and padding are respected between these boxes") and css-text-3 §5.5 "Line Breaking Details" is what
+   says WHERE: "inline box boundaries do not introduce a forced line break or soft wrap opportunity in the
+   flow", so the two edges sit at the box's boundaries and not at every break inside it. core/layout/line_box.c
+   hands it to core/layout/text_run.h as an EDGE item at a POSITION, which is why it is never added to a total.
+   IT IS THE USED-VALUE HALF OF ONE FACT WHOSE OTHER HALF IS THIS COMPONENT'S OWN, which is why a line box's
+   operand is declared in the intrinsic-size header instead of in core/layout/used_value.h. The FACT is which
+   three properties one side of an inline box is — a margin, a padding and a border width — and css-sizing-3
+   §5.2.1 "Intrinsic Contributions of Percentage-Sized Boxes" asks TWO QUESTIONS of it that differ on exactly
+   one input. A percentage on any of the six resolves against the containing block's width; while an INTRINSIC
+   contribution is being measured that width is the number the measurement produces, and §5.2.1 states the
+   resolution for that case — "For the min size properties, as well as for margins and paddings (and gutters),
+   a cyclic percentage is resolved against zero for determining intrinsic size contributions." Its very next
+   paragraph states the other, "when calculating the used sizes and positions of the containing block's
+   contents": "Otherwise, the percentage is resolved against the containing block's size." That second one is a
+   LINE's case, because a line box is filled at a width its containing block has already determined, so the
+   percentage is not cyclic there at all and resolves normally.
+   SO THERE ARE TWO ENTRIES OVER ONE PROPERTY TRIPLE, never two triples. One predicate answering both questions
+   answered BOTH with the stricter one's refusal, and substituting §5.2.1's zero into that shared entry — which
+   is what its own crash message instructed — would have silently mis-laid-out every percentage-margined inline
+   box on a real line. THE INTRINSIC ANSWER IS NOT DECLARED HERE AND THAT IS THE STRUCTURAL HALF OF THE SPLIT:
+   it is `static` in intrinsic_size.c because it has no caller outside that walk, and being unreachable is what
+   stops it being asked at a used-value site, where its zero would be a wrong number no assert could see. */
+CssPx used_inline_box_edge_px(lxb_dom_element_t *el, bool trailing);
 
 /* css-sizing-3 §5.1's PAIR. They are returned together and never separately because §2.1 defines them over the
    same content with only the soft wrap opportunities differing, so one walk produces both — and because the

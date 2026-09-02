@@ -35,50 +35,139 @@ static bool is_computed_is(lxb_dom_element_t *el, const char *name, const char *
     return same;
 }
 
-/* css-sizing-3 §2.2's outer size at one side of an inline box — see intrinsic_size.h for the contract, for why
-   it is exported, and for why a percentage is a CYCLE rather than a gap.
-   `auto` IS ZERO BY THE SPEC'S OWN SENTENCE and not by this file's convenience — §2.2's "for this purpose auto
-   margins are treated as zero", which CSS 2.2 §10.3.1 "Inline, non-replaced elements" states again for the used
-   value ("a computed value of 'auto' for 'margin-left' or 'margin-right' becomes a used value of '0'"). */
-CssPx intrinsic_inline_box_edge_px(lxb_dom_element_t *el, bool trailing)
+/* ---- ONE SIDE OF AN INLINE BOX: ONE FACT, TWO QUESTIONS ---------------------------------------------------
+   THE FACT IS WHICH THREE PROPERTIES ONE SIDE IS, and it is written once. CSS 2 §8.1 "Box dimensions" nests
+   them around the content — padding, then border, then margin — and both of the sections that put an inline
+   box's own edge somewhere are stated over the same three: css-sizing-3 §2.2 "Intrinsic Size Contributions"'
+   outer size ("based on the outer size of the box; for this purpose auto margins are treated as zero") and CSS
+   2.2 §9.4.2 "Inline formatting contexts"' line ("horizontal margins, borders, and padding are respected
+   between these boxes"). A second copy of these six names is the one way the line's idea of which lengths
+   bracket a box could drift from the contribution's, so there is one table and the two entries below are
+   QUESTIONS asked of it rather than two derivations standing beside each other.
+   THE TWO QUESTIONS DIFFER ON EXACTLY ONE INPUT — A PERCENTAGE — AND css-sizing-3 §5.2.1 "Intrinsic
+   Contributions of Percentage-Sized Boxes" ANSWERS BOTH, in that one section. A percentage on any of the six
+   resolves against the containing block's width (CSS 2.1 §8.3 "Margin properties" and §8.4 "Padding
+   properties", which resolve against that width on BOTH axes). While an INTRINSIC contribution is being
+   measured that width is the number the measurement produces, which is §5.2.1's own opening — "creating a
+   cyclic dependency" — and its rule for these properties is one sentence: "For the min size properties, as
+   well as for margins and paddings (and gutters), a cyclic percentage is resolved against zero for determining
+   intrinsic size contributions." Its NEXT paragraph is the other question, "when calculating the used sizes
+   and positions of the containing block's contents" — "Otherwise, the percentage is resolved against the
+   containing block's size" — which is core/layout/line_box.c's fill, because a line box is filled at a width
+   its containing block has already determined and the percentage is not cyclic there at all. §5.2.1's own note
+   says these two rules are what "specify the previously-undefined behavior of this cyclic case" that CSS 2.1
+   §8.4 leaves "undefined in CSS 2.1".
+   WHAT STOOD HERE WAS ONE ENTRY REFUSING BOTH, and it refused the line's question with the contribution's
+   reason — a crash whose stated cause (the width is this walk's own output) is FALSE of the caller that meets
+   it most often. Its remedy clause was wrong as well as its scope: it said this function had FOUR call sites,
+   two of them line_box.c's, and it had SIX — the two edges bracketing an inline box's descent AND the two
+   inside `is_atomic_replaced`, both of which are this file's and neither of which the clause counted. Building
+   §5.2.1's zero into the one shared entry, as that clause instructed, would have mis-laid-out every
+   percentage-margined inline box on a real line, silently.
+   NEITHER ENTRY ASKS WHETHER THE PERCENTAGE IS CYCLIC, and that is a derivation rather than an omission. Every
+   box this walk reaches has the box being measured as its containing block — §9.4.2's inline formatting
+   context is established by that block container, `is_child` returns before an out-of-flow child (whose
+   containing block is another box) is ever measured, and the walk is run only to produce that box's own
+   intrinsic inline size — so a percentage here is cyclic by construction. §5.2.1's OTHER "otherwise" bullet is
+   unreachable through either entry for the same kind of reason: it is conditioned on a cyclic dependency
+   "introduced due to a block-axis size other than a minimum size on the containing block", and all six of
+   these resolve against the containing block's WIDTH, which is the INLINE axis. */
+static const char *const IS_EDGE[2][3] = {
+    { "margin-left",  "padding-left",  "border-left-width"  },
+    { "margin-right", "padding-right", "border-right-width" },
+};
+enum { IS_EDGE_MARGIN, IS_EDGE_PADDING, IS_EDGE_BORDER };
+
+/* THE BORDER WIDTH IS THE TERM WITH NO QUESTION IN IT, so it is one function both entries call rather than an
+   arm of each: css-backgrounds-3 §3.3 "Line Thickness: the border-width properties"' `Computed value:` line is
+   "absolute length, snapped as a border width", so there is no percentage for §5.2.1 to resolve and no `auto`
+   for §2.2 to zero — the computed value IS the used one on both sides of the split. */
+static CssPx is_edge_border_px(lxb_dom_element_t *el, const char *name)
 {
-    const char *const NAME[2][3] = {
-        { "margin-left",  "padding-left",  "border-left-width"  },
-        { "margin-right", "padding-right", "border-right-width" },
-    };
-    CssPx sum = css_px(0.0);
-    unsigned i;
+    CssLength len = css_computed_length(el, name);
 
-    for (i = 0; i < 3; i++) {
-        CssLength len = css_computed_length(el, NAME[trailing ? 1 : 0][i]);
+    DCHECKF(len.kind == CSS_LENGTH_ABSOLUTE,
+            "`%s` computed to something that is not an absolute length. css-backgrounds-3 §3.3 \"Line "
+            "Thickness: the border-width properties\" gives every arm of that derivation an absolute result — "
+            "0 for a `none`/`hidden` style, one of the three keywords' thicknesses, the absolutized length "
+            "otherwise — so a percentage or a keyword here is a rule that did not run. core/layout/"
+            "used_value.c's own surround asserts the same thing about the same six properties",
+            name);
+    return len.px;
+}
 
-        /* §2.2's auto-margin sentence. `auto` is the only keyword any of the six can compute to: a padding and
-           a border width have no keyword in their `Value:` lines at all, so a keyword that is not `auto` is a
-           cascade that produced a value the property does not have and leaves through the crash below. */
-        if (len.kind == CSS_LENGTH_KEYWORD && strcmp(len.keyword, "auto") == 0) continue;
-        if (len.kind == CSS_LENGTH_ABSOLUTE) { sum = css_px_add(sum, len.px); continue; }
-        DFAIL("css-sizing-3 §2.2 \"Intrinsic Size Contributions\" needs this INLINE BOX's own horizontal "
-              "margin, border or padding — the contributions \"are based on the outer size of the box\" — and "
-              "the cascade answered with a PERCENTAGE or a calculation rather than an absolute length. A "
-              "percentage on any of the six resolves against the CONTAINING BLOCK WIDTH, and for the "
-              "shrink-to-fit box these sizes are being measured for, that width is CSS 2.2 §10.3.5's own "
-              "output — so resolving it here would ask for the answer this walk exists to produce. CSS 2.1 "
-              "§8.4 states the same cycle for a percentage padding and leaves it \"undefined in CSS 2.1\". "
-              "THE ANSWER IS SPECIFIED AND IT IS ZERO, and the section is css-sizing-3 §5.2.1 \"Intrinsic "
-              "Contributions of Percentage-Sized Boxes\": its summary table gives a cyclic percentage on a "
-              "margin or a padding the value zero for BOTH contributions and for a replaced box and a "
-              "non-replaced one alike, so nothing here has to be chosen. WHAT IT MAY NOT BE BUILT INTO IS "
-              "THIS ENTRY, and that is why this crash is still here rather than a zero: §5.2.1's rule is "
-              "stated OF AN INTRINSIC SIZE CONTRIBUTION, and two of this function's four call sites are "
-              "core/layout/line_box.c's, which fills line boxes at an available width its own §9.4.2 comment "
-              "says the containing block determines — there the percentage is not cyclic and resolves "
-              "normally, so a zero substituted in this shared entry would silently mis-lay-out every "
-              "percentage-margined inline box on a real line. BUILD the two questions apart: this file's two "
-              "call sites take §5.2.1's zero, line_box.c's two resolve against the width they are filling at, "
-              "and the entry stops being one predicate answering two questions");
-        return sum;
+/* QUESTION ONE — css-sizing-3 §5.2.1's INTRINSIC CONTRIBUTION at one side, where a percentage is CYCLIC and
+   resolves against ZERO. It is `static` on purpose and that is the structural half of this split: it has no
+   caller outside this file, and being unreachable from anywhere else is what stops it being asked at a
+   used-value site, where its zero would be a wrong answer no assert could see. */
+static CssPx is_intrinsic_edge_px(lxb_dom_element_t *el, bool trailing)
+{
+    const char *const *side = IS_EDGE[trailing ? 1 : 0];
+    CssLength margin = css_computed_length(el, side[IS_EDGE_MARGIN]);
+    CssLength padding = css_computed_length(el, side[IS_EDGE_PADDING]);
+    CssPx sum;
+
+    /* §2.2's own sentence, which CSS 2.1 §10.3.1 "Inline, non-replaced elements" states again for the used
+       value ("A computed value of 'auto' for 'margin-left' or 'margin-right' becomes a used value of '0'"). It
+       is the only keyword §8.3's <margin-width> grammar admits. */
+    if (margin.kind == CSS_LENGTH_KEYWORD) {
+        DCHECKF(strcmp(margin.keyword, "auto") == 0,
+                "`%s` computed to the keyword `%s`. CSS 2.1 §8.3 \"Margin properties\"' <margin-width> grammar "
+                "admits a length, a percentage and `auto` and nothing else, so a fourth form is a declaration "
+                "lexbor's own validation should have dropped",
+                side[IS_EDGE_MARGIN], margin.keyword);
+        sum = css_px(0.0);
+    } else {
+        DCHECKF(margin.kind == CSS_LENGTH_ABSOLUTE || margin.kind == CSS_LENGTH_PERCENTAGE ||
+                    margin.kind == CSS_LENGTH_CALCULATED,
+                "`%s` computed to none of the three shapes CSS 2.1 §8.3 \"Margin properties\" admits",
+                side[IS_EDGE_MARGIN]);
+        /* §5.2.1 resolves the PERCENTAGE against zero and not the whole value, which is the contrast the same
+           section draws one paragraph up: a cyclic max or preferred size on a non-replaced box is "treated …
+           as that property's initial value", while a margin's cyclic percentage "is resolved against zero". So
+           `margin-left: calc(10px + 50%)` contributes 10px, and one basis handles both shapes in one step
+           because css-values-4 §10.11 "Computed Value" left the percentage inside the math function. */
+        sum = css_length_resolve_pct(margin, css_px(0.0));
     }
-    return sum;
+    /* §8.4's <padding-width> has no `auto` and no keyword at all. */
+    DCHECKF(padding.kind == CSS_LENGTH_ABSOLUTE || padding.kind == CSS_LENGTH_PERCENTAGE ||
+                padding.kind == CSS_LENGTH_CALCULATED,
+            "`%s` computed to a keyword. CSS 2.1 §8.4 \"Padding properties\"' <padding-width> grammar is a "
+            "length or a percentage and nothing else",
+            side[IS_EDGE_PADDING]);
+    /* THE FLOOR IS THE PROPERTY'S RANGE AND IT IS REACHED ONLY THROUGH A MATH FUNCTION. CSS 2.1 §8.4 says
+       outright that "Unlike margin properties, values for padding values cannot be negative", and §5.1's range
+       restriction drops a negative LITERAL — but css-values-4 §9.1 "Numeric Functions" exempts a math function
+       from that check and moves it to the result: "numeric functions returning out-of-range values never cause
+       a declaration to become invalid", and instead "the value of a numeric function is clamped to the range
+       allowed in the context it is used at computed value time if possible, and at used value time otherwise".
+       §5.2.1's ZERO BASIS is precisely what makes `calc(50% - 10px)` land out of range HERE and in range at a
+       real width, so this clamp belongs at this resolution and could not have run at the cascade. `css_px_max`
+       and not an `if`, so the clamped-away operand's environment facts stay in the domain —
+       core/layout/used_value.c's own padding arm states that reason in full, and this is the same arithmetic at
+       the other basis. A MARGIN IS NOT CLAMPED, which is §8.3's "negative values for margin properties are
+       allowed". */
+    sum = css_px_add(sum, css_px_max(css_length_resolve_pct(padding, css_px(0.0)), css_px(0.0)));
+    return css_px_add(sum, is_edge_border_px(el, side[IS_EDGE_BORDER]));
+}
+
+/* QUESTION TWO — §5.2.1's "Otherwise, the percentage is resolved against the containing block's size", which is
+   CSS 2.1 §8.3's and §8.4's ordinary basis and therefore core/layout/used_value.h's answer rather than a
+   second one written here. `used_value_px` owns §10.3's per-box-type rules for a margin (an inline box's
+   `auto` is §10.3.1's 0), §8.4's percentage basis and its clamp for a padding, and §10.1's chain that produces
+   the basis — every one of which this file would otherwise be re-deriving with nothing to keep the two
+   agreeing. THE BASIS EXISTS AT THE MOMENT OF THE CALL because used_value.h derives every used value PER READ
+   from the flow's own tree, so "the containing block has already determined its width" is a statement about
+   derivability and not about an ordering this file has to arrange. */
+CssPx used_inline_box_edge_px(lxb_dom_element_t *el, bool trailing)
+{
+    const char *const *side = IS_EDGE[trailing ? 1 : 0];
+    CssPx sum;
+
+    DCHECK(el != NULL, "CSS 2.2 §9.4.2's line-box edge was asked for with no element");
+    sum = used_value_px(el, side[IS_EDGE_MARGIN]);
+    sum = css_px_add(sum, used_value_px(el, side[IS_EDGE_PADDING]));
+    return css_px_add(sum, is_edge_border_px(el, side[IS_EDGE_BORDER]));
 }
 
 /* css-sizing-3 §5.2.1 "Intrinsic Contributions of Percentage-Sized Boxes"' CYCLIC PERCENTAGE SIZE on ONE
@@ -133,8 +222,9 @@ static void is_require_acyclic(lxb_dom_element_t *el, const char *name)
    width — correct there, because a line box is filled at a width its containing block already determined, and
    self-referential here. So the same number is composed out of the three terms CSS 2 §8.1 "Box dimensions"
    nests it from, each taken from the entry that refuses the input that would make it cyclic:
-     - `intrinsic_inline_box_edge_px` for the two horizontal edges (margin, border and padding per side), which
-       is css-sizing-3 §2.2's outer size and refuses a percentage on any of the six;
+     - `is_intrinsic_edge_px` for the two horizontal edges (margin, border and padding per side), which is
+       css-sizing-3 §2.2's outer size under §5.2.1's cyclic-percentage resolution — the ZERO basis, which is
+       exactly the half `used_inline_box_edge_px` answers differently for a real line;
      - `used_value_content_px` for CSS 2.1 §10.3.2 "Inline, replaced elements"' used CONTENT width over
        core/layout/replaced_element.h's natural dimensions, guarded by the five refusals above.
    THE EDGES ARE COMPUTED BEFORE THE CONTENT AND THAT IS AN ORDER AND NOT A STYLE: `used_value_content_px`
@@ -155,8 +245,8 @@ static void is_atomic_replaced(TextRunMeasure *m, lxb_dom_element_t *el)
     size_t i;
 
     for (i = 0; i < sizeof CYCLIC / sizeof CYCLIC[0]; i++) is_require_acyclic(el, CYCLIC[i]);
-    lead = intrinsic_inline_box_edge_px(el, false);
-    trail = intrinsic_inline_box_edge_px(el, true);
+    lead = is_intrinsic_edge_px(el, false);
+    trail = is_intrinsic_edge_px(el, true);
     text_run_measure_add_atomic(m, el,
                                 css_px_add(css_px_add(lead, used_value_content_px(el, false)), trail));
 }
@@ -277,9 +367,9 @@ static void is_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_
            run's own break-position mapping is what then puts each on the line its fragment is on. They are
            emitted even when both are ZERO, because an edge occupies a POSITION and that position is what says
            which line an otherwise-empty inline box sits on. */
-        text_run_measure_add_box_edge(m, el, intrinsic_inline_box_edge_px(el, false));
+        text_run_measure_add_box_edge(m, el, is_intrinsic_edge_px(el, false));
         is_walk(m, el);
-        text_run_measure_add_box_edge(m, el, intrinsic_inline_box_edge_px(el, true));
+        text_run_measure_add_box_edge(m, el, is_intrinsic_edge_px(el, true));
         return;
     }
     DFAIL("css-sizing-3 §5.2 \"Intrinsic Contributions\" is what an ELEMENT CHILD adds to this box's intrinsic "

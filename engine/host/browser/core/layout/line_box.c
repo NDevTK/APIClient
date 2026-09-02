@@ -734,14 +734,24 @@ static void lb_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_
        on — which is precisely what §9.4.2's zero-height rule is then asked about.
        THE SIZE IS core/layout/intrinsic_size.h's, NOT A SECOND COPY OF IT: §9.4.2's "horizontal margins,
        borders, and padding are respected between these boxes" and css-sizing-3 §2.2's outer size are the same
-       six lengths, and two derivations of them would be two answers to how wide this line is. */
-    text_run_measure_add_box_edge(m, el, intrinsic_inline_box_edge_px(el, false));
+       six lengths, and two derivations of them would be two answers to how wide this line is.
+       IT IS THE `used_` ENTRY AND NOT THE INTRINSIC ONE, and the two are a SPLIT rather than a preference:
+       they read the same six properties and differ only in how a PERCENTAGE resolves. css-sizing-3 §5.2.1
+       "Intrinsic Contributions of Percentage-Sized Boxes" resolves a cyclic one against ZERO while an
+       intrinsic contribution is being measured — because there the containing block's width IS what the
+       measurement produces — and states this caller's answer in its own next paragraph, "Otherwise, the
+       percentage is resolved against the containing block's size". A LINE IS NEVER THE CYCLIC CASE: it is
+       filled at a width its containing block has already determined, which is the same number `lb_fill` reads
+       for the available width, so `margin-left: 5%` on a `<span>` occupies 5% of that width here and
+       contributes zero to §5.2's shrink-to-fit measurement of the box around it. One entry answering both
+       questions refused BOTH, with the contribution's reason — see intrinsic_size.h. */
+    text_run_measure_add_box_edge(m, el, used_inline_box_edge_px(el, false));
     /* §10.8's step 1 is over EVERY inline-level box on the line, and a nested inline box is one — §10.8.1's
        "boxes of child elements do not influence this height" is about the PARENT box's own height, not about
        whether the child is on the line. So the walk descends and each box's own items carry it onto whichever
        lines the fill puts them on. */
     lb_walk(m, el);
-    text_run_measure_add_box_edge(m, el, intrinsic_inline_box_edge_px(el, true));
+    text_run_measure_add_box_edge(m, el, used_inline_box_edge_px(el, true));
 }
 
 static void lb_walk(TextRunMeasure *m, lxb_dom_element_t *el)
