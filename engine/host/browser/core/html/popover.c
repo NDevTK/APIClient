@@ -34,13 +34,17 @@
  * property write is captured by the COW delta, so a forked arm that showed a popover and one that did not each
  * read back their own state, and a parked flow resumes with the one it had.
  *
- * WHAT IS HONESTLY ABSENT, AND WHERE IT CRASHES. The AUTO and HINT states need TWO mechanisms this build has
- * none of — §6.12's hide popover stack until, and its topmost popover ancestor (a FLAT TREE descendant test).
- * That arm is show popover step 15, and it DFAILs there naming both: the split is the SPEC'S OWN and not a
- * convenience, because a Manual popover enters none of it — step 15's whole block, hide a popover step 11's
- * whole block, and every read of the showing auto/hint popover lists are reachable only from it.
- * `<div popover=manual>` is therefore complete here and `<div popover>` (whose empty value default is Auto) is
- * a named crash rather than a wrong answer.
+ * WHAT IS HONESTLY ABSENT, AND WHERE IT CRASHES. The AUTO and HINT states are split down the middle, and the
+ * line is whether the step runs the PAGE'S code. The READ half is here: the showing auto and hint popover
+ * lists, which are DERIVED each time from CSS Positioned Layout Level 4 §3's top layer rather than stored, and
+ * TOPMOST POPOVER ANCESTOR over them, which is a flat-tree question with no page code in it. The WRITE half is
+ * ONE algorithm — §6.12's HIDE POPOVER STACK UNTIL — and it is missing because its steps 5 and 8 run the hide a
+ * popover algorithm over other elements, firing `beforetoggle` at the page's own listeners, which a C question
+ * cannot host. Show popover step 15.3 is where that crashes, and it names the re-entrant hide a popover it
+ * needs first. The split is the SPEC'S OWN and not a convenience, because a Manual popover enters none of it —
+ * step 15's block, hide a popover step 11's block, and every read of the showing lists are reachable only from
+ * it. `<div popover=manual>` is therefore complete here and `<div popover>` (whose empty value default is Auto)
+ * is a named crash rather than a wrong answer.
  *   IT WAS THREE, AND THE THIRD WAS §6.10 Close requests and close watchers' close watcher, which step 15's
  * block establishes as its last sub-step. core/html/close_watcher.c holds ALL of §6.10.2 now — the manager,
  * establish and destroy, and the three algorithms that RUN a watcher's actions — so that one is a call this
@@ -60,6 +64,7 @@
 #include "core/dom/attr_list.h"
 #include "core/dom/document.h"
 #include "core/dom/node.h"
+#include "core/dom/shadow_root.h"
 #include "core/events/event_target.h"
 #include "core/html/enumerated_attribute.h"
 #include "core/html/focus.h"
@@ -281,6 +286,235 @@ static int popover_check_validity(JSContext *ctx, JSValueConst el, bool expected
                  "FULLSCREEN FLAG is set — Fullscreen's `requestFullscreen()` is what sets it, so with that "
                  "member in this build this disjunct must be written and must throw an \"InvalidStateError\"");
     return 1;                                                                                    /* step 4 */
+}
+
+/* ---- §6.12's AUTO/HINT STACK, READ SIDE ----------------------------------------------------------------------
+ *
+ * THE STACK IS NOT A SECOND STRUCTURE. §6.12 keeps NO list of showing popovers anywhere: its showing auto
+ * popover list and showing hint popover list are DERIVED, each time they are asked for, by filtering CSS
+ * Positioned Layout Level 4 §3's top layer — "For each Element element of document's top layer … then append
+ * element to popovers". So the ORDER of the stack is the top layer's order and nothing else, which is why this
+ * half of §6.12 is a read over core/css/top_layer.c and holds no state of its own. A cached list beside the
+ * layer would be the second copy of one fact that CLAUDE.md's §A-FIELD-A-CONSUMER-DEFAULTS is about, and it
+ * would drift on exactly the operation §3.3 exists for: a removal from the MIDDLE.
+ *
+ * WHAT THIS SECTION IS AND IS NOT. It is the READ side — the two lists and TOPMOST POPOVER ANCESTOR, all of them
+ * questions with no page code in them. The WRITE side is HIDE POPOVER STACK UNTIL, whose step 5 runs the hide a
+ * popover algorithm over each popover it hides, which fires `beforetoggle` at the page's own listeners: that one
+ * cannot be a C question and is named at the two sites that need it. */
+
+/* §6.12's "opened in popover mode … 'auto', 'hint', or null, initially null", as one of POPOVER_STATE_AUTO,
+   POPOVER_STATE_HINT, or POPOVER_STATE_NONE for the standard's null. The two spellings the standard writes as
+   strings are held as the SAME enum the `popover` attribute's four states use, because they are the same
+   vocabulary — "opened in popover mode" records which of §6.12's states the element was SHOWN in, and step 15's
+   effectiveType is what decides it. An ABSENT slot is the initial null. */
+static int popover_opened_mode(JSContext *ctx, JSValueConst el)
+{
+    JSValue v = ps_get(ctx, el, PS_OPENED_MODE);
+    int32_t mode = POPOVER_STATE_NONE;
+
+    if (!JS_IsUndefined(v)) JS_ToInt32(ctx, &mode, v);
+    JS_FreeValue(ctx, v);
+    DCHECK(mode == POPOVER_STATE_NONE || mode == POPOVER_STATE_AUTO || mode == POPOVER_STATE_HINT,
+           "an element's §6.12 OPENED IN POPOVER MODE slot held a state that is neither Auto nor Hint — the "
+           "standard's three values are \"auto\", \"hint\" and null, show popover step 15.9 is the only writer "
+           "of the first two and hide a popover step 15 the only writer of the third (as the slot's absence)");
+    return mode;
+}
+
+/* The predicate both list getters are, differing only in which mode they ask for. §6.12: "If all of the
+   following are true: element is an HTML element; element's opened in popover mode is "auto"; and element's
+   popover visibility state is showing, then append element to popovers."
+   IT RUNS NO PAGE CODE, which is the contract top_layer.h states for a collect predicate: a brand check and two
+   own-slot reads, no getter, no event, no §3.3 Top Layer Manipulation algorithm. */
+static bool popover_showing_in_mode(JSContext *ctx, JSValueConst el, void *opaque)
+{
+    const int *want = opaque;
+
+    DCHECK(want != NULL && (*want == POPOVER_STATE_AUTO || *want == POPOVER_STATE_HINT),
+           "§6.12's showing-popover-list filter was asked for a mode that is neither Auto nor Hint — the "
+           "standard defines exactly two such lists");
+    if (!html_element_is(el)) return false;
+    if (popover_opened_mode(ctx, el) != *want) return false;
+    return popover_is_showing(ctx, el);
+}
+
+/* §6.12's "To get the showing auto popover list for a Document document" and its hint twin, which are the same
+   three steps over the same set with one word changed. OWNED — a fresh Array in top layer order, which is what
+   "Let popovers be « »" is and what makes an index into it an index into a value. */
+static JSValue popover_showing_list(JSContext *ctx, JSValueConst doc, int mode)
+{
+    return top_layer_collect(ctx, doc, popover_showing_in_mode, &mode);
+}
+
+/* The length of one of the standard's own « » lists. These are this file's values, built by the collect above,
+   so `length` is a plain own property and no page code can answer it. */
+static uint32_t popover_list_len(JSContext *ctx, JSValueConst list)
+{
+    JSValue lv;
+    uint32_t n = 0;
+
+    DCHECK(JS_IsArray(list), "a §6.12 popover list was measured before it was built");
+    lv = JS_GetPropertyStr(ctx, list, "length");
+    JS_ToUint32(ctx, &n, lv);
+    JS_FreeValue(ctx, lv);
+    return n;
+}
+
+/* "`node` is a FLAT TREE DESCENDANT of `ancestor`" — CSS Scoping §4.1 "Flattening the DOM into an Element
+ * Tree", which is the tree §6.12's topmost popover ancestor walks and NOT the node tree.
+ *
+ * THE NODE TREE IS THAT TREE EXACTLY WHEN NO SHADOW HOST IS ON THE PATH, which §4.1's own note states: "the flat
+ * tree is the top-level DOM tree, but shadow hosts are filled with their shadow tree children instead of their
+ * light tree children (and this proceeds recursively if the shadow tree contains any shadow hosts)". So a node
+ * whose parent hosts a shadow root is not a flat-tree child of that parent at all — it is a child of whichever
+ * `slot` it is assigned to, or of nothing — and a node whose parent IS a shadow root has the HOST as its
+ * flat-tree parent. Both of those make the two trees different here, and this engine has only the second, so
+ * both CRASH rather than answering from the tree the standard does not name. core/html/html_element_view.c
+ * reaches the same wall from CSSOM VIEW §7's side and names the same two halves to build.
+ *
+ * THE WALK IS STRICT — DOM's "descendant" is not inclusive — and it is over NODES rather than elements, because
+ * §6.12 declares the subject a Node ("given a Node newPopoverOrTopLayerElement") and Fullscreen §2's caller
+ * hands it a top layer element that may not be a popover at all. */
+static bool popover_flat_tree_descendant(JSContext *ctx, const lxb_dom_node_t *node,
+                                         const lxb_dom_node_t *ancestor)
+{
+    const lxb_dom_node_t *cur;
+
+    DCHECK(node != NULL && ancestor != NULL,
+           "§6.12's flat tree descendant test was given no node or no candidate ancestor — its one caller "
+           "walks a list this file built out of live top layer members and holds the subject across no "
+           "suspension");
+    for (cur = node; cur != NULL && cur->parent != NULL; cur = cur->parent) {
+        lxb_dom_node_t *p = cur->parent;
+
+        if (shadow_root_is(p))
+            DFAIL("HTML §6.12 The popover attribute's topmost popover ancestor walks the FLAT TREE, and this "
+                  "node's parent IS A SHADOW ROOT — CSS Scoping §4.1 Flattening the DOM into an Element Tree "
+                  "puts a shadow root's children under the HOST, so the node tree's parent chain leaves the "
+                  "tree here and the flat tree does not. Walking on would answer a popover ancestry question "
+                  "with a chain the flat tree has no edge in — a WRONG ancestor, not an absent one. BUILD the "
+                  "flat-tree parent (the host, for a shadow root's own children; DOM §4.2.2's assigned slot, "
+                  "for a slottable) as one component and ask it here and at core/html/html_element_view.c's "
+                  "CSSOM VIEW §7 walk, which is stopped by the same absence");
+        if (p->type == LXB_DOM_NODE_TYPE_ELEMENT &&
+            shadow_root_of_element(ctx, lxb_dom_interface_element(p)) != NULL)
+            DFAIL("HTML §6.12 The popover attribute's topmost popover ancestor walks the FLAT TREE, and an "
+                  "element on this chain HOSTS A SHADOW ROOT — CSS Scoping §4.1 Flattening the DOM into an "
+                  "Element Tree fills a shadow host with its SHADOW tree's children instead of its light "
+                  "ones, so this node is a flat-tree child of the `slot` it is assigned to (or of nothing at "
+                  "all) and not of the host. Answering from the node tree would make a light child of a "
+                  "shadow host count as nested inside a popover the flat tree never nests it in. BUILD the "
+                  "flat-tree parent over DOM §4.2.2's assigned slot and slottable and ask it here");
+        if (p == ancestor) return true;
+    }
+    return false;
+}
+
+/* "the index of the LAST item in `list` of which `node` is a flat tree descendant, otherwise -1" — the one
+   question §6.12's topmost popover ancestor steps 5 and 7 both ask, of two different nodes over one list. The
+   scan runs BACKWARDS and stops at the first hit, because the last match is the answer. */
+static int64_t popover_last_flat_ancestor_index(JSContext *ctx, JSValueConst list, uint32_t n,
+                                                const lxb_dom_node_t *node)
+{
+    uint32_t i;
+
+    if (node == NULL) return -1;
+    for (i = n; i > 0; i--) {
+        JSValue cand = JS_GetPropertyUint32(ctx, list, i - 1);
+        bool hit = popover_flat_tree_descendant(ctx, node, node_of(cand));
+
+        JS_FreeValue(ctx, cand);
+        if (hit) return (int64_t)(i - 1);
+    }
+    return -1;
+}
+
+/* §6.12's TOPMOST POPOVER ANCESTOR, ten steps: "To find the topmost popover ancestor, given a Node
+ * newPopoverOrTopLayerElement, an HTML element or null source, and a boolean isPopover, perform the following
+ * steps. They return an HTML element or null."
+ *
+ * ITS ORDER IS `combinedPopovers`' AND NOT THE TOP LAYER'S, WHICH IS THE ONE THING A PLAUSIBLE VERSION GETS
+ * WRONG. Step 4 is "Let combinedPopovers be document's showing auto popover list extended with document's
+ * showing hint popover list" — a CONCATENATION, so every hint popover sorts after every auto popover in it
+ * whatever their relative positions in the top layer are. That is why this is not `top_layer_topmost` with a
+ * predicate: that walk answers over §3's order, and over combinedPopovers the two orders are different lists
+ * whenever both are non-empty. A single backwards walk of the top layer would answer with whichever of the two
+ * candidates was shown later, where the standard answers with the HINT one.
+ *
+ * AND IT ASKS FOR A MAXIMUM OF TWO RANKS, which is the second thing `top_layer_topmost` structurally cannot do
+ * and deliberately so — it answers with the member and never with its rank, precisely so no caller can record a
+ * position into a live set. Steps 5 through 8 need `max(popoverAncestorIndex, sourceAncestorIndex)`, and those
+ * are positions in the SNAPSHOT this algorithm itself built, which is a value nothing mutates: top_layer.h's
+ * collect exists for exactly that distinction. The two searches are written as the standard writes them rather
+ * than fused into one disjunctive scan, because the standard's two indices are two separate facts (a nesting
+ * relationship and a `source` relationship) and its own note explains them apart.
+ *
+ * `source` is an HTML element or JS_NULL. The answer is OWNED, and JS_NULL for the standard's null. */
+static JSValue popover_topmost_ancestor(JSContext *ctx, JSValueConst subject, JSValueConst source,
+                                        bool is_popover)
+{
+    JSValue doc, autos, hints, combined, found;
+    uint32_t na, nh, n, i;
+    int64_t popover_index, source_index, ancestor_index;
+
+    if (is_popover) {
+        /* Step 1's three asserts. */
+        lxb_dom_node_t *sn = node_of(subject);
+        int state;
+
+        DCHECK(html_element_is(subject),
+               "HTML §6.12 The popover attribute's topmost popover ancestor step 1 asserts that "
+               "newPopoverOrTopLayerElement is an HTML element when isPopover is true — show popover step 15.1 "
+               "is the caller that passes true, and its receiver has already been brand-checked");
+        DCHECK(sn != NULL && sn->type == LXB_DOM_NODE_TYPE_ELEMENT, "a §6.12 popover has no element node");
+        state = popover_attribute_state(lxb_dom_interface_element(sn));
+        DCHECK(state == POPOVER_STATE_AUTO || state == POPOVER_STATE_HINT,
+               "HTML §6.12 The popover attribute's topmost popover ancestor step 1 asserts that "
+               "newPopoverOrTopLayerElement's popover attribute is in neither the No Popover state nor the "
+               "Manual state — show popover step 15 is the caller, and its own condition is that originalType "
+               "is Auto or Hint");
+        DCHECK(!popover_is_showing(ctx, subject),
+               "HTML §6.12 The popover attribute's topmost popover ancestor step 1 asserts that "
+               "newPopoverOrTopLayerElement's popover visibility state is not showing — show popover step 3's "
+               "check popover validity has already certified it hidden, and step 20 is what makes it showing");
+    } else {
+        /* Step 2. The `false` caller is Fullscreen §2 Model's fullscreen an element ("Let hideUntil be the
+           result of running topmost popover ancestor given element, null, and false"), whose subject is a top
+           layer element that need not be a popover at all — §6.12's own note: "If the provided element is a
+           top layer element such as a dialog which is not showing as a popover, then topmost popover ancestor
+           will only look in the node tree to find the first popover." */
+        DCHECK(JS_IsNull(source) || JS_IsUndefined(source),
+               "HTML §6.12 The popover attribute's topmost popover ancestor step 2 asserts that source is null "
+               "when isPopover is false — a non-popover subject has no invoker, so a caller passing one has "
+               "confused the two entries");
+    }
+    doc = popover_document_of(ctx, subject);                                                     /* step 3 */
+    DCHECK(!JS_IsNull(doc), "§6.12's topmost popover ancestor was given a node with no node document");
+    /* Step 4 — EXTENDED WITH, so the whole hint list follows the whole auto list. */
+    autos = popover_showing_list(ctx, doc, POPOVER_STATE_AUTO);
+    hints = popover_showing_list(ctx, doc, POPOVER_STATE_HINT);
+    na = popover_list_len(ctx, autos);
+    nh = popover_list_len(ctx, hints);
+    combined = JS_NewArray(ctx);
+    CHECK(!JS_IsException(combined), "§6.12's combinedPopovers list could not be allocated");
+    for (i = 0; i < na; i++)
+        JS_SetPropertyUint32(ctx, combined, i, JS_GetPropertyUint32(ctx, autos, i));
+    for (i = 0; i < nh; i++)
+        JS_SetPropertyUint32(ctx, combined, na + i, JS_GetPropertyUint32(ctx, hints, i));
+    JS_FreeValue(ctx, hints);
+    JS_FreeValue(ctx, autos);
+    n = na + nh;
+
+    popover_index = popover_last_flat_ancestor_index(ctx, combined, n, node_of(subject));        /* step 5 */
+    source_index = -1;                                                                           /* step 6 */
+    if (!JS_IsNull(source) && !JS_IsUndefined(source))                                            /* step 7 */
+        source_index = popover_last_flat_ancestor_index(ctx, combined, n, node_of(source));
+    ancestor_index = popover_index > source_index ? popover_index : source_index;                /* step 8 */
+    found = ancestor_index < 0 ? JS_NULL                                                          /* step 9 */
+                               : JS_GetPropertyUint32(ctx, combined, (uint32_t)ancestor_index);  /* step 10 */
+    JS_FreeValue(ctx, combined);
+    return found;
 }
 
 /* ---- §6.12's QUEUE A POPOVER TOGGLE EVENT TASK ---------------------------------------------------------------
@@ -749,17 +983,21 @@ static int popover_body(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
             ps_set(ctx, s->doc, PS_DOC_NESTING, JS_NewInt32(ctx, popover_nesting(ctx, s->doc) + 1)); /* step 7 */
             s->nesting_taken = 1;                                                                   /* step 8 */
             /* Steps 9 and 10 read the SHOWING AUTO POPOVER LIST and the SHOWING HINT POPOVER LIST, and step 11
-               is the block those two booleans gate. Both lists are "for each Element element of document's top
-               layer … element's opened in popover mode is 'auto'/'hint'", and NOTHING in this build writes
-               that mode — show popover step 15 is its only writer and it DFAILs. So both lists are empty by
-               construction, step 11's condition is false, and step 13's "otherwise" is the arm every hide in
-               this build takes. The condition is EVALUATED at the step that asks it: */
+               is the block those two booleans gate. Both lists exist now (they are derived from the top layer
+               above), but NOTHING in this build writes an element's opened in popover mode — show popover step
+               15.9 is its only writer and step 15.3 DFAILs before it. So both lists are empty by construction,
+               step 11's condition is false, and step 13's "otherwise" is the arm every hide in this build
+               takes. The condition is EVALUATED at the step that asks it, and it is the standard's own —
+               "If element's opened in popover mode is 'auto' or 'hint'": */
             if (!ps_is_null(ctx, s->el, PS_OPENED_MODE))
                 DFAIL("HTML §6.12 The popover attribute's hide a popover step 11 runs HIDE POPOVER STACK UNTIL "
-                      "over the document's showing auto and hint popover lists — this build has no such "
-                      "algorithm, no TOPMOST POPOVER ANCESTOR (which needs a FLAT TREE descendant test) and no "
-                      "HINT STACK PARENT. Reaching here means show popover step 15's Auto/Hint arm was built "
-                      "and set this element's OPENED IN POPOVER MODE, so all three must now be written");
+                      "over the document's showing auto and hint popover lists, up to three times. The lists "
+                      "and TOPMOST POPOVER ANCESTOR are built; what is missing is HIDE POPOVER STACK UNTIL "
+                      "itself — see show popover step 15.3's crash for why it cannot be a C question and for "
+                      "the re-entrant hide a popover it needs first — and the document's HINT STACK PARENT, "
+                      "whose only writer is show popover step 19 inside that same block. Reaching here means "
+                      "step 15.9 was built and set this element's OPENED IN POPOVER MODE, so both must now be "
+                      "written");
             if (s->fire_events) {
                 s->ev = toggle_event_new(ctx, "beforetoggle", POPOVER_OPEN, POPOVER_CLOSED, s->source,
                                          /*bubbles*/ false, /*cancelable*/ false);
@@ -808,29 +1046,53 @@ static int popover_body(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
             lxb_dom_element_t *e = lxb_dom_interface_element(node_of(s->el));
             int type = popover_attribute_state(e);
 
-            /* Step 15 — the whole Auto/Hint block, which is where the mechanisms §6.12 has that this build has
-               not are reached: the topmost popover ancestor, hide popover stack until, the hint stack parent
-               and the opened-in-popover-mode writes. Its LAST sub-step, establish a close watcher, is no
-               longer among them — core/html/close_watcher.c holds §6.10.2's establish, so the block's own two
-               are all that is left. A Manual popover enters none of it, which is the SPEC's own split and the
-               reason this file is complete for one state and a named crash for the other two. */
-            if (type == POPOVER_STATE_AUTO || type == POPOVER_STATE_HINT)
-                DFAIL("HTML §6.12 The popover attribute's show popover step 15 is the Auto/Hint block, and it "
-                      "needs two mechanisms this build has none of, BOTH OF THEM §6.12'S OWN: TOPMOST POPOVER "
-                      "ANCESTOR (whose index walk is over FLAT TREE descendants of the showing auto and hint "
-                      "popover lists) and HIDE POPOVER STACK UNTIL. Its last sub-step, ESTABLISH A CLOSE "
-                      "WATCHER, is built — call close_watcher_establish (core/html/close_watcher.h) with "
-                      "CLOSE_WATCHER_KIND_POPOVER and this element, given the element's relevant global "
-                      "object, and keep the result in the element's popover close watcher slot for hide a "
-                      "popover step 8's cleanupSteps to destroy. §6.10 HOLDS THE HALF THAT RUNS A WATCHER'S "
-                      "ACTIONS NOW (request to close, close, process close watchers), and what it cannot yet "
-                      "reach is THIS FILE'S hide a popover: its close-action dispatch DFAILs for a "
-                      "POPOVER-kind watcher because this file exports that algorithm only as its two IDL "
-                      "members. So establishing one here without also exporting hide a popover as a request "
-                      "moves the crash rather than removing it, and the two belong in one diff. Build these "
-                      "two, then this block and that export, then hide a popover step "
-                      "11 and §6.12.2 Popover light dismiss, which are its other two consumers. `<div popover>` "
-                      "reaches here because §6.12's EMPTY VALUE DEFAULT is the Auto state");
+            /* Step 15 — the Auto/Hint block. It holds exactly ONE list, of ten items, so every `step 15.N`
+               below names an item of that one list and there is no second list under this step for a bare
+               sub-number to be ambiguous between. Its READ side runs here: step 15.1's TOPMOST POPOVER
+               ANCESTOR over the two showing-popover lists this file derives from the top layer, and step
+               15.2's effectiveType downgrade. What it stops at is step 15.3, the first HIDE POPOVER STACK
+               UNTIL — the WRITE side, which hides other popovers and so runs the page's own listeners. A
+               Manual popover enters none of this, which is the SPEC's own split and the reason this file is
+               complete for one state and a named crash for the other two. */
+            if (type == POPOVER_STATE_AUTO || type == POPOVER_STATE_HINT) {
+                JSValue ancestor = popover_topmost_ancestor(ctx, s->el, s->source, true);      /* step 15.1 */
+                int effective_type = type;                                       /* step 14's effectiveType */
+
+                /* Step 15.2's three conjuncts — "ancestor is not null", "ancestor's opened in popover mode is
+                   'hint'", and "effectiveType is the Auto state" — whose note says why: "Hint popovers are
+                   lower priority than Auto popovers, so an Auto popover cannot have a Hint popover as a
+                   'parent'. To resolve this case, the effectiveType is 'downgraded' to Hint." */
+                if (!JS_IsNull(ancestor) && popover_opened_mode(ctx, ancestor) == POPOVER_STATE_HINT &&
+                    effective_type == POPOVER_STATE_AUTO)
+                    effective_type = POPOVER_STATE_HINT;
+                JS_FreeValue(ctx, ancestor);
+                DFAILF("HTML §6.12 The popover attribute's show popover step 15.3 runs HIDE POPOVER STACK "
+                       "UNTIL given document, ancestor, Hint, shouldRestoreFocus and true, and step 15.4 runs "
+                       "it again for Auto when effectiveType is Auto — this show's effectiveType is %s. THAT "
+                       "IS THE ONE MECHANISM §6.12'S AUTO/HINT STACK IS STILL MISSING, and it is missing "
+                       "because of what its steps 5 and 8 do rather than because of its slicing: steps 1-4 and "
+                       "6-7 are slices of the two showing-popover lists this file now derives, while 5 and 8 "
+                       "RUN THE HIDE A POPOVER ALGORITHM over each popover they hide, which fires "
+                       "`beforetoggle` at the page's listeners. So hide a popover must first become RE-ENTRANT "
+                       "— invocable over an element that is NOT the receiver, with focusPreviousElement, "
+                       "fireEvents, throwExceptions=false and source=null passed in rather than hardcoded, "
+                       "which this file's PopoverState cannot express because it carries the member entry "
+                       "only — and hide popover stack until is then a `_run` with its own phase, like "
+                       "focus_element_run and event_target_fire_run, that suspends at each hide. THAT SAME "
+                       "EXPORT IS WHAT §6.10.2's close action already wants: core/html/close_watcher.c's "
+                       "dispatch DFAILs for a POPOVER-kind watcher for exactly this reason, so the two are one "
+                       "diff. With it, this block finishes: step 15.5's originalType re-read, steps 15.6 and "
+                       "15.7's second check popover validity, step 15.8's TOPMOST AUTO OR HINT POPOVER setting "
+                       "shouldRestoreFocus (which then makes step 17's originallyFocusedElement live, and step "
+                       "24 needs the FOCUSED AREA OF THE DOCUMENT exported from core/html/focus.c, which today "
+                       "exports only its two predicates), step 15.9's opened in popover mode write, and step "
+                       "15.10's close_watcher_establish. Its other consumers are hide a popover step 11, HIDE "
+                       "POPOVERS UNTIL — which Fullscreen §2 Model's fullscreen an element step 2 runs, its "
+                       "step 1 being the topmost popover ancestor this file now has — and §6.12.2 Popover "
+                       "light dismiss. `<div popover>` reaches here because the EMPTY VALUE DEFAULT that HTML "
+                       "§2.3.3 Keywords and enumerated attributes gives this attribute is the Auto state",
+                       effective_type == POPOVER_STATE_HINT ? "Hint" : "Auto");
+            }
             DCHECK(type == POPOVER_STATE_MANUAL,
                    "HTML §6.12 The popover attribute's show popover reached step 16 with a `popover` attribute "
                    "that is in neither the Auto, the Hint nor the Manual state — step 3's check popover "
@@ -893,7 +1155,9 @@ static int popover_body(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
         }
         /* Step 12's last two sub-steps: the removal is a REQUEST, so the element stays in the top layer until
            §8.1.7's update the rendering step 23 processes top layer removals — which is what CSS Positioned
-           Layout Level 4 §3.3's own note means by "most of the time, requesting removal is more appropriate".
+           Layout Level 4 §3.3's own note means by "Most of the time, requesting removal from the top layer is
+           more appropriate." (the note's own words, whose "from the top layer" this file used to drop — a
+           quotation trimmed where the sentence turns is the one shape citegen's quote channel exists for).
            The IMPLICIT ANCHOR ELEMENT write is the same residual named at show popover step 22. */
         top_layer_request_removal(ctx, s->el);
         STEP_GOTO(hdr->stage, PO_HIDE_END, &s->fphase, &s->ua_phase, &s->focus_phase, NULL);

@@ -88,6 +88,38 @@ bool top_layer_contains(JSContext *ctx, JSValueConst el);
 typedef bool (*TopLayerPredicate)(JSContext *ctx, JSValueConst el, void *opaque);
 JSValue top_layer_topmost(JSContext *ctx, JSValueConst document, TopLayerPredicate pred, void *opaque);
 
+/* ── §3's ORDER, READ AS A SEQUENCE ──────────────────────────────────────────────────────────────────────────
+ *
+ * THE SECOND DERIVED CONCEPT, AND IT ARRIVES WITH ITS CALLER for the same reason the first did. `top_layer_topmost`
+ * answers "WHICH ONE member"; this answers "WHICH MEMBERS, IN ORDER", and that is the shape every one of the
+ * standard's own derived ordered lists is written in. HTML §6.12 The popover attribute's get the showing auto
+ * popover list is the caller it arrives with, and it is written exactly that way: "Let popovers be « ». For each
+ * Element element of document's top layer: … then append element to popovers. Return popovers."
+ *
+ * IT IS HERE AND NOT AT THE CALLER FOR §3's OWN REASON — "The top layer (and the pending top layer removals)
+ * should not be interacted with directly by specification algorithms." A caller that walked the Array to build
+ * its own list would hold the second copy of the order that sentence exists to prevent, and it would hold it in
+ * the one component (§6.12) whose whole Auto/Hint stack is a function of that order.
+ *
+ * IT RUNS FORWARDS, WHICH IS NOT A CONTRADICTION OF THE BACKWARDS WALK ABOVE. That one is looking for the LAST
+ * match and stops at it; this one is BUILDING a list whose own order is §3's, so it appends in the order §3
+ * states and the caller's "last item" is then the caller's own question over its own value.
+ *
+ * A SNAPSHOT IS NOT THE RANK `top_layer_topmost` REFUSES TO GIVE, and the difference is the whole of why this may
+ * exist beside it. The hazard that walk avoids is a position into the LIVE set, which `showPopover()`,
+ * `hidePopover()`, `showModal()` and fullscreen-an-element mutate under a suspension, so a replayed index names
+ * whichever element shifted into it. What this returns is a FRESH Array the caller owns — the same « » the
+ * standard's own algorithms build and then index by position ("combinedPopovers[ancestorIndex]", "the index of
+ * endpoint in popoverList plus 1") — so an index into it is an index into a VALUE and not into a view. It is
+ * created by the running flow, so it is flow_local and the COW delta does not capture it.
+ *
+ * IT READS AND NEVER MINTS. An absent top layer answers the empty list, which is what "initially empty" is; a
+ * caller asking a QUESTION about a document must not leave a property write on shared baseline state behind it.
+ *
+ * `pred` carries the same contract as above: a C question about one member, running no page code and reaching no
+ * §3.3 Top Layer Manipulation algorithm. `document` is the Document WRAPPER. The answer is an OWNED Array. */
+JSValue top_layer_collect(JSContext *ctx, JSValueConst document, TopLayerPredicate pred, void *opaque);
+
 /* §3.3's PROCESS TOP LAYER REMOVALS, given a Document. HTML §8.1.7's update the rendering step 23 is its one
    caller, and its note says so: "this is intended to be called during the 'Update the Rendering' step of HTML's
    rendering algorithm. It is not intended to be called by other algorithms." */

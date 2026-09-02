@@ -268,6 +268,39 @@ JSValue top_layer_topmost(JSContext *ctx, JSValueConst document, TopLayerPredica
     return found;
 }
 
+/* §3's ORDER, READ AS A SEQUENCE — see top_layer.h for why this lives here rather than at the caller that
+   builds one of the standard's derived lists out of it, why it runs FORWARDS where the walk above runs
+   backwards, and why a snapshot the caller owns is not the rank that walk refuses to give. */
+JSValue top_layer_collect(JSContext *ctx, JSValueConst document, TopLayerPredicate pred, void *opaque)
+{
+    JSValue layer = tl_set(ctx, document, g_atom_layer, false);
+    uint32_t n = tl_len(ctx, layer);
+    JSValue out = JS_NewArray(ctx);
+    uint32_t i, k = 0;
+
+    CHECK(!JS_IsException(out), "a §3 Top Layer ordered-read snapshot could not be allocated");
+    DCHECK(pred != NULL,
+           "CSS Positioned Layout Level 4 §3 Top Layer's ordered sequence read was given no predicate — every "
+           "caller is building one of the standard's DERIVED ordered lists (HTML §6.12 The popover attribute's "
+           "showing auto popover list appends only the members whose opened in popover mode is \"auto\"), and a "
+           "null predicate would hand that caller the whole top layer under the name of its filtered list");
+    /* FORWARDS: the list being built carries §3's order, so the appends happen in it. */
+    for (i = 0; i < n; i++) {
+        JSValue el = JS_GetPropertyUint32(ctx, layer, i);
+
+        if (pred(ctx, el, opaque))
+            JS_SetPropertyUint32(ctx, out, k++, JS_DupValue(ctx, el));
+        JS_FreeValue(ctx, el);
+    }
+    DCHECK(tl_len(ctx, layer) == n,
+           "a §3 Top Layer ordered-read predicate CHANGED THE SET IT WAS BEING WALKED OVER — the contract "
+           "top_layer.h states is that a predicate is a C question about one element that runs no page code and "
+           "reaches no §3.3 Top Layer Manipulation algorithm, and a collect whose set moves under it answers "
+           "with a list that is neither the set before nor the set after");
+    JS_FreeValue(ctx, layer);
+    return out;
+}
+
 /* §3.3: "To PROCESS TOP LAYER REMOVALS, given a Document doc." One step, and it is a filtered drain:
    "for each element el in doc's pending top layer removals: if el's computed value of overlay is none, or el is
    not rendered, remove from the top layer immediately el."

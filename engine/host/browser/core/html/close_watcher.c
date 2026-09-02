@@ -507,8 +507,11 @@ static int cw_close_action_run(JSContext *wctx, CloseWatcherRun *r, JSValueConst
            and null." core/html/popover.c owns hide a popover and exports it only as the `hidePopover()` and
            `togglePopover()` members, so there is no door to call it through with those five arguments.
            THIS ARM IS UNREACHABLE IN THIS BUILD RATHER THAN WRONG: the one establisher of a POPOVER-kind
-           watcher is show popover step 15, whose Auto/Hint block DFAILs on topmost popover ancestor and hide
-           popover stack until BEFORE it establishes anything, so no watcher of this kind exists. */
+           watcher is show popover step 15, whose step 15.10 is that establish and whose step 15.3 DFAILs on
+           HIDE POPOVER STACK UNTIL before ever reaching it, so no watcher of this kind exists. (Its step
+           15.1's TOPMOST POPOVER ANCESTOR used to be named here as the other blocker and is built now; what
+           is left is the one algorithm, and the export this arm wants is the SAME re-entrant hide a popover
+           that hide popover stack until needs — so the two land together rather than in sequence.) */
         JS_FreeValue(wctx, in);
         DFAIL("HTML §6.10.2 Close watcher infrastructure's close a close watcher step 5 must run a POPOVER "
               "watcher's CLOSE ACTION, which HTML §6.12 The popover attribute's show popover step 15 states is "
