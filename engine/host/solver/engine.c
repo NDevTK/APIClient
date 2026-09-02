@@ -5411,54 +5411,18 @@ static lxb_dom_element_t *flow_dyn_el(const Flow *f) {
     return f->dyn_el[f->script_i];
 }
 
-/* BOTH ENTRIES BELOW ARE A TASK — so the tail IS their position and neither can be asked for another
-   (engine.h's DynPos) — and both are a CLASSIC SCRIPT, which is §8.1.4.4's answer for a program that has no
-   `<script>` element behind it rather than a default they happen to pick. An entry that DOES have an element
-   behind it says which of the two algorithms runs it — engine_queue_element_script below.
-   THEY ARE TWO BECAUSE HTML §8.1.4.1 "Scripts" gives them two different BASE URLs, and one entry that could
-   not express the difference gave both the inline answer — see engine.h. */
-/* HTML §8.7 "Timers"'s STRING HANDLER. Its base URL is §8.7's own "settings object's API base URL", which for
-   a Window is its Document's base URL — so the address column is NULL as a positive statement, and the
-   compile reads exactly that (`document_base_url` when flow_dyn_url answers NULL). engine.h names the
-   residual: §8.7's initiating-script case needs §8.1.4.1's active script, which this engine does not track.
-   THE ONE ENTRY THAT STILL TAKES A NUL-TERMINATED BODY, AND IT IS NOT THIS FILE'S TO FIX. Its shape is
-   `timer_set_script_sink`'s `void (*)(uint32_t, const char *)`, and the length is lost one level UP — at the
-   `JS_ToCString` in core/timing/timer.c that turns the handler DOMString into C. Widening this signature
-   without widening that hook and that conversion would move the truncation rather than remove it, so the
-   length goes end to end there or not at all: a `setTimeout("\0…")` is still read to the first NUL. The
-   `strlen` is written HERE, once, rather than left implicit in engine_queue, so that the site carrying the
-   remaining gap is the site that names it. */
-/* AND IT IS THE CONSUMER OF THE @S HOST SEAM'S COVERAGE (solver/solve.h's solve_eval_sink_announced), which is
-   a DIFFERENT question from the one JS_EvalInternal asks of a compile and is asked HERE for that reason.
-   §19.2.1.2 HostEnsureCanCompileStrings covers §19.2.1.1 PerformEval step 5 and §20.2.1.1.1
-   CreateDynamicFunction step 11 and nothing else, so the engine's own latch is silent about a program HTML
-   turns a string into — §8.7 Timers's substep 9.8.3 reaches CSP directly and substeps 9.8.7-9.8.8 create and
-   run an ordinary classic script, which compiles as JS_EVAL_TYPE_GLOBAL and announces nothing. That is correct
-   and must stay correct: a `<script>` element's program announcing itself would report every page script as a
-   code-execution sink. What it costs is that the ONE program in this file that IS a string-to-code sink has no
-   engine-side assert standing over it, so the assert stands here, where those bytes become a program. */
-void engine_queue_timer_script(uint32_t doc, const char *body) {
-    /* TAKEN INTO A LOCAL, NEVER SPELLED INSIDE THE DCHECK: the take CLEARS the seam, and a DCHECK's condition
-       is not evaluated in a release build — a consuming read there would leave the latch raised for whatever
-       queued next and turn a dev-only assert into a release-only state divergence. */
-    int announced = solve_eval_sink_announced();
-
-    DCHECK(body != NULL, "a §8.7 Timers string handler was queued with no source at all — the sink is called "
-                         "with the handler's DOMString and there is no program in a null one");
-    DCHECK(announced,
-           "a §8.7 Timers string handler became a program without passing the @S host seam — substep 9.8.3's "
-           "EnsureCSPDoesNotBlockStringCompilation is what makes these bytes a JS-context sink, and "
-           "solve_eval_sink_source is where they are announced and where the program TEXT comes from, in one "
-           "operation so the two cannot be spelled apart again. A caller that queues bytes it obtained some "
-           "other way fails SILENTLY in the worst direction there is: the timer fires, the page runs, the sink "
-           "is still DETECTED by the concolic arm, and every candidate run after it is invisible — no witness "
-           "is learned, no ECMAScript §12 escape is derived, and the search parks for ever reporting that it "
-           "tried. Take the text from solve_eval_sink_source at the new site; never relax this");
-    (void)announced;
-    engine_queue(doc, body, strlen(body), DYN_PAGE_SCRIPT, SCRIPT_TYPE_CLASSIC, NULL, DYN_POS_APPEND);
-}
-
-/* …AND A PROGRAM WHOSE BYTES CAME FROM A RESPONSE. §8.1.4.2 "Fetching scripts" creates the script with the
+/* THE ENTRY BELOW IS A TASK — so the tail IS its position and it cannot be asked for another (engine.h's
+   DynPos) — and it is a CLASSIC SCRIPT, which is §8.1.4.4's answer for a program that has no `<script>`
+   element behind it rather than a default it happens to pick. An entry that DOES have an element behind it
+   says which of the two algorithms runs it — engine_queue_element_script below.
+   IT USED TO HAVE A NEIGHBOUR AND THE NEIGHBOUR IS DELETED RATHER THAN MOVED. `engine_queue_timer_script`
+   queued HTML §8.7 "Timers"'s string handler as a row at the SET; §8.7 creates and runs that classic script at
+   the EXPIRY, inside step 9's task (substeps 9.8.7-9.8.8), so core/timing/timer.c compiles it there with
+   JS_EVAL_FLAG_TRAMP_CLOSURE and runs it on the firing flow's own trampoline chain. Two things went with it:
+   the TIMER TASK SOURCE stops being in both of a flow's queues (see the run-a-task arm below), and the
+   handler's LENGTH stops being lost — that entry took a NUL-terminated `const char *` and the `strlen` written
+   here was the truncation `setTimeout("\0…")` fell into. */
+/* A PROGRAM WHOSE BYTES CAME FROM A RESPONSE. §8.1.4.2 "Fetching scripts" creates the script with the
    RESPONSE'S URL, and §8.1.4.1 "Scripts" makes that the row's base URL — "the URL from which the script was
    obtained, for external scripts" — so this entry REQUIRES one. It is not a defaultable field: the document's
    address is a DIFFERENT script's answer rather than a weaker form of this one, and taking it silently is
@@ -5496,9 +5460,8 @@ void engine_queue_fetched_script(uint32_t doc, const char *body, size_t body_n, 
 void engine_queue_element_script(uint32_t doc, const char *body, size_t body_n, ScriptType stype,
                                  lxb_dom_element_t *el) {
     DCHECK(el != NULL, "a `<script>` element's program was queued with no element — this entry is the one an "
-                       "ELEMENT reaches; the element-less entries are engine_queue_timer_script and "
-                       "engine_queue_fetched_script, so a caller here with nothing to pass "
-                       "is a caller at the wrong entry");
+                       "ELEMENT reaches; the element-less entry is engine_queue_fetched_script, so a caller "
+                       "here with nothing to pass is a caller at the wrong entry");
     engine_queue_el(doc, body, body_n, DYN_PAGE_SCRIPT, stype, NULL, DYN_POS_APPEND, el);
 }
 
@@ -6715,8 +6678,8 @@ static int flow_step(JSContext *ctx, Flow *f) {
                  * to `if (f->script_i < f->dyn_n)` two hundred lines up, so a flow runs a queued TASK only with
                  * its cursor PAST THE LAST ROW — the same shape the networking task source's arm above the
                  * sequence was hoisted out of, one rung over. The sequence is a set the page's own programs
-                 * EXTEND (an injected `<script>`, a `javascript:` URL, a §8.7 Timers string handler, a lazy
-                 * chunk), so "the sequence is exhausted" is a condition page code can hold false, and a flow's
+                 * EXTEND (an injected `<script>`, a `javascript:` URL, a lazy chunk), so "the sequence is
+                 * exhausted" is a condition page code can hold false, and a flow's
                  * timer callbacks and delivered messages are then excluded for as long as it does.
                  *
                  * THE ARGUMENT THAT DECIDED THE REPLY CASE DOES NOT TRANSFER, AND SAYING SO IS THE POINT. There
@@ -6725,7 +6688,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                  * networking-first deferred the sequence by at most what the flow itself asked for, and exactly
                  * one of the two strict orders was free of permanent exclusion. Here BOTH sides are extended by
                  * the other. A task runs page code, and that code appends rows (engine_queue_javascript_url,
-                 * engine_queue_element_script for an injected element, engine_queue_timer_script); a program
+                 * engine_queue_element_script for an injected element); a program
                  * enqueues tasks (§8.7's expiry through JS_EnqueueCallTask, a routed delivery through
                  * flow_deliver). Neither strict order is free of permanent exclusion, so §scheduler's razor —
                  * "drops, starves, skips, reorders, or forgets ANY flow — it is a CAP, banned" — rules BOTH out
@@ -6736,28 +6699,33 @@ static int flow_step(JSContext *ctx, Flow *f) {
                  * while HTML §8.1.7.1 "Definitions" partitions by source and requires it: "For each event loop,
                  * every task source must be associated with a specific task queue", and the same section states
                  * what that buys — "Note that in this setup, the processing model still enforces that the user
-                 * agent would never process events from any one task source out of order." THE TIMER TASK
-                 * SOURCE IS IN BOTH OF THIS FLOW'S QUEUES: §8.7 Timers' step 9 task reaches `jobs` through
-                 * JS_EnqueueCallTask for a Function handler, and a STRING handler reaches `dyn` as a
-                 * DYN_POS_APPEND row through core/timing/timer.c's script sink. So
+                 * agent would never process events from any one task source out of order."
+                 * THE TIMER TASK SOURCE WAS IN BOTH OF THIS FLOW'S QUEUES AND IS NOT ANY MORE, which retires
+                 * the example this paragraph was written around. §8.7 Timers' step 9 task reached `jobs`
+                 * through JS_EnqueueCallTask for a Function handler while a STRING handler reached `dyn` as a
+                 * DYN_POS_APPEND row, so
                  *     setTimeout(f, 0); setTimeout("s()", 0);      must run f then s
                  *     setTimeout("s()", 0); setTimeout(f, 0);      must run s then f
-                 * and no ordering of two arms can produce both: whichever arm is above decides BOTH programs
-                 * the same way. Hoisting this arm does not repair that, it only moves which of the two is
-                 * wrong. §Do-subproblems-IN-ORDER: the order between two queues is not decidable while one
-                 * source lives in both of them.
-                 *
-                 * WHAT THE NEXT DIFF BUILDS, and it is at the SPLIT rather than at this ladder: §8.7's string
-                 * arm takes an ordinary timer entry like its Function arm and its classic script is queued from
-                 * step 9's TASK at the expiry — §8.7 puts the creation at substep 9.8.7 and the run at 9.8.8,
-                 * inside the task step 12's completionStep queues only after step 13's `run steps after a
-                 * timeout` has waited — instead of from step 12 at the SET, which is where timer.c queues it
-                 * today. That retires the split, `timer_set_script_sink`/`engine_queue_timer_script` go with
-                 * it, and only then is there one question left here to answer.
-                 * HOW ITS ABSENCE SHOWS, AND IT IS ALREADY WIRED: the DCHECK below fires on the naive repair.
-                 * Hoisted above the sequence, this arm becomes reachable with a DYN_POS_IMMEDIATE row at the
-                 * cursor — the one row flow_stack_empty holds the checkpoint off for — so the flow arrives here
-                 * holding a microtask and the assert says so. The reorder cannot be made silently. */
+                 * and no ordering of two arms could produce both: whichever arm was above decided BOTH the same
+                 * way. §8.7 creates and runs a string handler's classic script INSIDE step 9's task (substeps
+                 * 9.8.7-9.8.8), and core/timing/timer.c does that now — every entry of a global's map queues
+                 * exactly one step-9 task through JS_EnqueueCallTask, and that file queues no row at all, which
+                 * is what a grep of it for `engine_queue` answers.
+                 * WHAT IS STILL OPEN HERE IS THIS ARM'S OWN REACHABILITY, and it is unchanged: the `else` above
+                 * still binds to `f->script_i < f->dyn_n`, so a flow runs a queued TASK only with its cursor
+                 * past the last row, and a page that keeps appending rows still excludes its own timer
+                 * callbacks and delivered messages for as long as it does. Deciding the order between the two
+                 * CARRIERS is what that needs, and the question that gates it is whether any OTHER task source
+                 * still reaches `dyn`: the entries that put a row there are engine_queue_javascript_url,
+                 * engine_queue_element_script, engine_queue_script_immediate (which §4.12.1.1's "immediately
+                 * execute the script element" says is not a task at all) and engine_queue_fetched_script.
+                 * Establish that per entry against §8.1.7.4 "Generic task sources" and §4.12.1.1 before
+                 * reordering anything here; naming a repair before that is naming a mechanism nobody has
+                 * checked.
+                 * AND THE NAIVE REPAIR IS ALREADY WIRED TO FIRE: the DCHECK below is what catches it. Hoisted
+                 * above the sequence, this arm becomes reachable with a DYN_POS_IMMEDIATE row at the cursor —
+                 * the one row flow_stack_empty holds the checkpoint off for — so the flow arrives here holding
+                 * a microtask and the assert says so. The reorder cannot be made silently. */
                 DCHECK(!flow_job_microtask(f),
                        "a task was about to begin while this flow still held a microtask — the checkpoint runs "
                        "before every program in the sequence, so reaching the end of the sequence with one "

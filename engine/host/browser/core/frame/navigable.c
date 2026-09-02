@@ -504,9 +504,9 @@ static void navigable_seed_scripts(JSContext *cctx, lxb_html_document_t *dom, ui
                        "script element` with a type other than classic — §4.12.1.1 sends every module to one "
                        "of the three lists before that step, so the schedule and the type disagree about one "
                        "element");
-                /* THE ELEMENT ENTRY, because this row HAS an element: the element-less entries
-                   (engine_queue_timer_script, engine_queue_fetched_script) are for a program no `<script>`
-                   caused, and a row seeded out of a document's inventory is never one.
+                /* THE ELEMENT ENTRY, because this row HAS an element: the element-less entry
+                   (engine_queue_fetched_script) is for a program no `<script>` caused, and a row seeded out of
+                   a document's inventory is never one.
                    Same position (this seed builds the sequence in document order, so APPEND *is* in place) and
                    the same type the assert above has just pinned; what it adds is the element §4.12.1.1's
                    "execute the script element" switches on and sets §3.1.7's `currentScript` to.

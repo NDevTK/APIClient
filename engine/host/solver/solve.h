@@ -63,11 +63,13 @@ void solve_url_sink(JSContext *ctx, JSValueConst arg);
    AND IT IS NOT THE ECMAScript SEAM, WHICH IS WHY IT IS A SEPARATE ENTRY RATHER THAN A CALL INTO ONE. What
    §19.2.1.2 HostEnsureCanCompileStrings covers is §19.2.1.1 PerformEval step 5 and §20.2.1.1.1
    CreateDynamicFunction step 11, and §8.7 performs neither — it reaches CSP directly and then runs a plain
-   classic script, whose compile is JS_EVAL_TYPE_GLOBAL. The engine's per-compile announcement latch is an
-   ADJACENCY claim (the compile immediately following the announcement is the one that took the text), and a
-   host algorithm queues a task between the two, so raising that latch here would hand this announcement to
-   whatever compiled next and make the innocent compile the one that aborts. This entry therefore announces and
-   returns text and touches no latch — the engine's two-sided `is_sink`/`announced` assert is unmoved by it.
+   classic script, whose compile is JS_EVAL_TYPE_GLOBAL — so the engine's own two-sided `is_sink`/`announced`
+   assert, which fires when a compile that IS an eval arrives unannounced, would be answered YES by a program
+   that is not one. This entry therefore announces and returns text and touches THAT latch not at all; it
+   raises its own, below, whose consumer is the host site that compiles. (The reason written here used to be
+   that "a host algorithm queues a task between the two", and that stopped being true when §8.7's create-and-run
+   moved into step 9's task: the announcement and the compile are now adjacent statements of one stage. The
+   reason that survives is the one about the eval TYPE, which is a fact about what the two latches ask.)
    STEP 2's DECISION IS THE SOLVER'S TOO. A concolic carrying a STRING example is a source (§solver: the triple
    rides the value and every operator runs the real operation on the concrete), so a handler this engine has an
    example for names a real program and is returned as one — the same answer the engine gives `eval`, which is
@@ -75,17 +77,20 @@ void solve_url_sink(JSContext *ctx, JSValueConst arg);
    program: nothing is compiled and there is nothing to drop. */
 JSValue solve_eval_sink_source(JSContext *ctx, JSValueConst handler);
 
-/* …AND THAT SEAM'S COVERAGE, TAKEN ONCE PER PROGRAM THE HOST QUEUES OUT OF A STRING. Answers 1 iff the bytes
-   about to be queued are the ones the call above just returned, and CLEARS itself in the answering — so it is
+/* …AND THAT SEAM'S COVERAGE, TAKEN ONCE PER PROGRAM THE HOST COMPILES OUT OF A STRING. Answers 1 iff the
+   bytes about to be compiled are the ones the call above just returned, and CLEARS itself in the answering — so it is
    read into a local and asserted, never spelled inside a DCHECK, whose condition a release build does not
    evaluate at all and would leave raised for the next program.
-   IT EXISTS BECAUSE THE ARM IS ABOUT TO MOVE. §8.7 Timers puts the whole string arm inside step 9's task —
-   substep 9.8.3's CSP gate and substeps 9.8.7-9.8.8's create-and-run are the fire's steps, not the set's — and
-   a component that performs them at the SET is a component whose next diff relocates them. That relocation is
-   exactly the shape in which an announcement gets left behind: the queue call travels, the detector call does
-   not, and nothing breaks — the timer still fires, the page still runs, and every candidate run after it is
-   silently invisible again. Asserting at the CONSUMER is what makes a route added later FIRE instead of
-   quietly widening the old wrong answer, and the consumer is whoever turns those bytes into a program. */
+   IT EXISTED BECAUSE THE ARM WAS ABOUT TO MOVE, AND THE ARM HAS MOVED — which is the case it was built for
+   and not a reason to retire it. §8.7 Timers puts the whole string arm inside step 9's task (substep 9.8.3's
+   CSP gate and substeps 9.8.7-9.8.8's create-and-run are the fire's steps, not the set's), and
+   core/timing/timer.c performed them at the SET, queueing the program through a host edge whose own body took
+   this latch. Relocation is exactly the shape in which an announcement gets left behind — the queue call
+   travels, the detector call does not, and nothing breaks: the timer still fires, the page still runs, and
+   every candidate run after it is silently invisible again. It did not happen, because the assert is at the
+   CONSUMER: the consumer is whoever turns those bytes into a program, that is now the task machine's own
+   JS_Eval, and the DCHECK moved to stand over it. A route added later FIRES here instead of quietly widening
+   the old wrong answer. */
 int solve_eval_sink_announced(void);
 
 /* After detection, SEARCH breakout candidates for every recorded source: inject each at the source, re-run the

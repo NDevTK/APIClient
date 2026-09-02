@@ -32,7 +32,7 @@
  *
  * WHAT IS *NOT* HERE IS THE HOST'S EDGES, and that boundary is the whole reason this file can be one list.
  * A component is WHAT THE PLATFORM IS; an edge is WHO ANSWERS — the network provider (fetch_set_provider),
- * the string-handler sink (timer_set_script_sink), the child-realm builder (navigable_set_realm_builder), the
+ * the child-realm builder (navigable_set_realm_builder), the
  * runner's own `print`/`gc`, the fixture's sinks. Those genuinely differ per host, they are already
  * PARAMETERS rather than presence, and each component asserts its own edge at the first use that needs it —
  * fetch.c aborts on a fetch with no provider, which is the two-sided half an omission list could never have.

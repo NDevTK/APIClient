@@ -36,22 +36,19 @@ void timer_clear_map(JSContext *ctx);
    itself can be unknown so is that sum. The comparison is core/timing/event_loop.h's one moment order. */
 int timer_due_before(JSContext *ctx, JSValueConst moment);
 
-/* HTML §8.7 "Timers": a STRING handler is EVALUATED when the timer fires. Running it is the HOST's — the extension's host
-   queues it onto the flow that scheduled it, which is what keeps a `setTimeout("...")` payload explorable — and
-   naming that register here would make the browser half depend on the scheduler, and through it on the whole
-   solver, exactly as fetch.h says of its own provider. A host that registers none has not built the capability,
-   and a page that uses one crashes naming it rather than silently dropping the handler.
-   `doc` NAMES WHICH DOCUMENT'S PROGRAM IT IS — the realm the string is compiled in, which §8.7 Timers states
-   as `global`'s: step 9's task substep 4 takes GLOBAL's relevant settings object and substep 9.8.7 creates
-   the classic script with that one, and `global` is the timer initialization steps' first argument, which the
-   members give as `this`. So `frames[0].setTimeout("x = 1")` defines `x` on the CHILD's Window, and so does
-   `setTimeout.call(frames[0], "x = 1")`. THIS USED TO SAY THE ENTRY GLOBAL OBJECT'S, which §8.7 never
-   mentions; the two answers coincide for every spelling that reads the member off the window it is about, and
-   part company the moment a receiver is carried past the function. The queue is the scheduler's and
-   it keys the realm off the document (solver/flow.h), so the fact travels with the source instead of being
-   re-derived from whichever realm the scheduler is rooted in — which is the parent's for every child
-   navigable in the agent. */
-void timer_set_script_sink(void (*queue)(uint32_t doc, const char *src));
+/* THERE IS NO STRING-HANDLER HOST EDGE, AND ITS ABSENCE IS THE STATEMENT. HTML §8.7 "Timers" evaluates a
+   DOMString handler at the EXPIRY, inside step 9's task — substep 9.8.7 creates a classic script from it and
+   9.8.8 runs it — so the program is created and run by the task machine in timer.c, on the firing flow's own
+   trampoline chain, and never queued elsewhere at the set. What used to stand here was a registration
+   (`timer_set_script_sink`) each host had to make and one of them did not, so `setTimeout("…")` aborted the
+   whole document under the WPT gate while the two hosts that registered it ran the same code correctly. The
+   edge is not a parameter of this component any more; there is nothing for a host to forget.
+   WHICH DOCUMENT'S PROGRAM IT IS was that edge's one real argument and it is answered where it belongs: §8.7
+   states the compile against GLOBAL's relevant settings object (step 9's task substep 4, then 9.8.7), `global`
+   is the timer initialization steps' first argument, which the members give as `this`, and the task is minted
+   in the realm whose map held the entry — which js_timer_task_step asserts against step 1's `thisArg`. So
+   `frames[0].setTimeout("x = 1")` defines `x` on the CHILD's Window, and so does
+   `setTimeout.call(frames[0], "x = 1")`. */
 
 /* FIRE THE EARLIEST DUE TIMER — the event loop's step, asked by whoever DRIVES the loop and only when it has
    nothing else to run. Nothing is queued when a timer is set: §8.1.7 runs a task from a source that has one

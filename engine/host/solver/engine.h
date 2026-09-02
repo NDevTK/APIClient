@@ -51,15 +51,15 @@ typedef enum { DYN_POS_APPEND, DYN_POS_IMMEDIATE } DynPos;
    child's globals on its creator and reads the creator's back as the child's. There is no default: the caller
    knows which document's code it is holding, and a scheduler that guessed would guess the same way for every
    document this agent has.
-   BOTH ARE A TASK, so both are DYN_POS_APPEND and neither can be asked for anything else. The one script
-   source that is NOT a task has its own entry further below.
-   AND BOTH ARE A CLASSIC SCRIPT, which is HTML §8.1.4.4 "Calling scripts"'s answer for a program with no
-   `<script>` element behind it rather than a default these entries pick: §8.7 Timers's string handler is
-   evaluated as a classic script, and a lazy chunk's reply is the body an already-running program asked for. A
-   row that DOES have an element behind it states which of §8.1.4.4's two algorithms runs it.
+   IT IS A TASK, so it is DYN_POS_APPEND and cannot be asked for anything else. The one script source that is
+   NOT a task has its own entry further below.
+   AND IT IS A CLASSIC SCRIPT, which is HTML §8.1.4.4 "Calling scripts"'s answer for a program with no
+   `<script>` element behind it rather than a default this entry picks: a lazy chunk's reply is the body an
+   already-running program asked for. A row that DOES have an element behind it states which of §8.1.4.4's two
+   algorithms runs it.
 
-   THEY ARE TWO ENTRIES BECAUSE THEY ANSWER HTML §8.1.4.1 "Scripts"'s BASE URL DIFFERENTLY, and one entry that
-   could not express the difference answered it once for both. That field's own definition is the whole rule:
+   IT IS ITS OWN ENTRY BECAUSE HTML §8.1.4.1 "Scripts"'s BASE URL IS ITS OWN ANSWER, and an entry that could
+   not express the difference answered it once for two callers. That field's own definition is the whole rule:
    "Null or a base URL used for resolving module specifiers. When non-null, this will either be the URL from
    which the script was obtained, for external scripts, or the document base URL of the containing document,
    for inline scripts." So NULL in the row's address column is not an absent value — it is the positive
@@ -70,23 +70,15 @@ typedef enum { DYN_POS_APPEND, DYN_POS_IMMEDIATE } DynPos;
    against the page, and — because the compile reads a missing address as `JS_EVAL_FLAG_INLINE_SCRIPT` — every
    record the chunk published was filed as state the server rendered against THIS visitor's credentials, which
    is the opposite of what a subresource served identically to everybody is. */
-/* HTML §8.7 "Timers"'s STRING HANDLER, evaluated when the timer fires — the sink core/timing/timer.h names.
-   ITS BASE URL IS THE DOCUMENT'S, WHICH IS §8.7'S OWN ANSWER AND NOT THIS ENTRY'S CONVENIENCE: the timer
-   initialization steps read "Let base URL be settings object's API base URL", and for a Window that is its
-   associated Document's document base URL. So the row's address column is NULL, positively.
-   NAMED RESIDUAL — §8.7's very next step is "If initiating script is not null: … Set base URL to initiating
-   script's base URL", and this engine does not yet track HTML §8.1.4.1's ACTIVE SCRIPT, so a `setTimeout`
-   string scheduled from a chunk takes the document's base URL where the standard takes the chunk's. The next
-   diff builds active-script tracking (ECMAScript's GetActiveScriptOrModule, which is the FUNCTION's script and
-   not the running row, so `flow_dyn_url` is not it). Its absence shows as a `setTimeout("import('./y.js')")`
-   written in a bundle served from /assets/app.js resolving ./y.js against the page instead of /assets/.
-   A PROGRAM IS `(text, len)` EVERYWHERE ELSE IN THIS FILE, AND THIS IS THE ONE ENTRY THAT IS STILL A C STRING.
-   ECMAScript §11.1 "Source Text" permits every code point from U+0000 up, so a bundle carrying a NUL is a
-   bundle a browser runs whole and this engine used to run a PREFIX of — silently, with every endpoint and sink
-   past that byte unreachable. Every entry below therefore takes a length. This one cannot yet: its shape is
-   core/timing/timer.h's `void (*)(uint32_t, const char *)`, and the length is already gone by the time that
-   hook is called. `setTimeout("\0…")` is the remaining truncation and it is fixed in timer.c's conversion. */
-void engine_queue_timer_script(uint32_t doc, const char *body);
+/* HTML §8.7 "Timers"'s STRING HANDLER HAS NO ENTRY HERE, AND THAT IS THE ANSWER RATHER THAN A GAP. §8.7 puts
+   the create and the run at the EXPIRY, inside step 9's task (substeps 9.8.7-9.8.8), so the program is
+   compiled with JS_EVAL_FLAG_TRAMP_CLOSURE and run by that task's own step machine on the firing flow's
+   trampoline chain — core/timing/timer.c. Queued as a row here instead, at the SET, it put the TIMER TASK
+   SOURCE in BOTH of a flow's queues at once (its Function arm's task reaches `jobs` through
+   JS_EnqueueCallTask), which HTML §8.1.7.1 "Definitions" forbids: "For each event loop, every task source must
+   be associated with a specific task queue." It also lost the handler's LENGTH — the entry's shape was a bare
+   `const char *`, so `setTimeout("\0…")` was read to the first NUL — which the conversion in timer.c now
+   carries end to end. */
 /* …AND A PROGRAM WHOSE BYTES CAME FROM A RESPONSE — a lazy chunk, a body an already-running program asked for.
    `url` IS §8.1.4.1's base URL and is REQUIRED, which is the half the merged entry could not state. §8.1.4.2
    "Fetching scripts" creates the script with the response's URL, so a fetched program always has one: an entry

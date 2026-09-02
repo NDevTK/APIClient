@@ -63,9 +63,29 @@
  * enqueued, so nothing is enqueued in advance: the driver asks for the earliest entry only when it has nothing
  * else to run, and a cleared entry is simply not there to be found.
  *
- * A STRING HANDLER IS A SCRIPT, and an @S sink. `setTimeout("evil()")` compiles and runs its argument in the
- * global scope, which is the engine's existing "queue this source as a script flow" path — the same one an
- * injected <script> takes. It is not evaluated here: this component does not run page code.
+ * A STRING HANDLER IS A SCRIPT, and an @S sink — AND IT IS A TIMER FIRST, WHICH IS WHERE THIS FILE WAS WRONG.
+ * `setTimeout("evil()")` makes an ordinary entry of §8.7 Timers's map carrying the handler's source text,
+ * exactly as a Function handler makes one carrying the callback; step 9's TASK is what creates the classic
+ * script out of it (substep 9.8.7, "Let script be the result of creating a classic script given handler,
+ * settings object, base URL, and fetch options") and runs it (substep 9.8.8, "Run the classic script script"),
+ * at the EXPIRY. The string arm used to queue that program from step 12 AT THE SET, onto the flow's program
+ * sequence through a host edge, under a comment claiming that a string handler was no longer a timer at that
+ * point but a script — a claim about the standard that the standard contradicts, since substeps 9.8.2-9.8.8 sit INSIDE
+ * the task step 12's completionStep queues only after step 13's `run steps after a timeout` has waited, and
+ * step 14 then writes the entry `clearTimeout` removes. Four things followed from that one placement and every
+ * one of them was observable: `timeout` was ignored (`setTimeout("a()",100); setTimeout("b()",0)` ran a before
+ * b), no entry existed so `clearTimeout` found nothing, step 11's timer nesting level had no task to be set on,
+ * and the TIMER TASK SOURCE was in BOTH of a flow's queues at once — a Function handler's task through
+ * JS_EnqueueCallTask, a string handler's program through the sequence — which HTML §8.1.7.1 "Definitions"
+ * forbids outright: "For each event loop, every task source must be associated with a specific task queue."
+ * Every entry of the map now queues exactly one step-9 task, so there is one queueing of a timer and one
+ * cancellable record whatever the handler is.
+ * AND THIS COMPONENT DOES RUN THE PAGE'S CODE, THROUGH THE TASK. The old arm's reason for queueing elsewhere
+ * was that running page source inside a C activation is the drive-to-completion this engine aborts on — which
+ * is true and is not an argument about WHERE the program goes, only about WHAT runs it. Step 9's task is a step
+ * machine, which is the engine's one vehicle for a C algorithm that runs page code and continues afterwards, so
+ * substep 9.8.8's run is a `step_call_run` of the compiled closure on the flow's own trampoline chain — every
+ * loop inside the handler parks, exactly as substep 9.7's callback does.
  * THE SECOND HALF OF THAT SENTENCE WAS PROSE ONLY, and the body is where it became true. When this arm landed
  * nothing called an @S detector from anywhere in this engine's production path — `solve_eval_sink` had ONE
  * caller in the tree and it was the fixture — so solve_js.c's whole ECMAScript §12 derivation was reachable
@@ -74,8 +94,9 @@
  * intrinsics announce themselves (quickjs's JS_SetEvalSinkHook, which solve_init registers), so 19.2.1 eval in
  * both its direct spellings, indirect eval, 20.2.1.1.1's `new Function` and ShadowRealm.prototype.evaluate all
  * reach the same detector without this component. What stays HERE is exactly what the engine cannot see: §8.7's
- * handler is a DOMString this component compiles LATER through `g_script_sink`, so the value has to be
- * announced where it ARRIVES and not where some other algorithm evaluates it.
+ * handler is a DOMString this component compiles LATER, at the expiry, so the value has to be
+ * announced where the HOST turns it into a program, which is substep 9.8.3's own place in the algorithm — the
+ * task, at the expiry — and not where some other algorithm evaluates it.
  * Worse, it did not merely go unnoticed: the
  * union's non-callable arm resolves to DOMString, idl_args.c passes unknown external input across the boundary
  * AS ITSELF so opacity survives the coercion, and the body's `JS_IsString` assertion then fired on it — a
@@ -95,7 +116,8 @@
                                       the LINK it is built out of — the composed key, its naming rule and its
                                       asserts — is that component's */
 #include "core/realm.h"
-#include "core/dom/document.h"   /* §8.7 Timers compiles a STRING handler in the entry global's document */
+#include "core/dom/document.h"   /* §8.7 Timers's substep 9.8.5 base URL is `global`'s document's, and the
+                                    task that compiles a STRING handler runs in that document's realm */
 #include "solver/engine.h"
 #include "solver/concolic.h"   /* §8.7 Timers's handler may be unknown external input, which crosses the IDL as itself */
 #include "solver/solve.h"      /* …and an unknown handler string is the @S JS-context sink */
@@ -140,7 +162,14 @@
    states no this value at all — so its entries carry `undefined` here, and that is a positive statement rather
    than a hole. Deriving it at the fire from the realm instead would give the same object for §8.7's entries
    and would silently give it to the engine's own completion steps too, which is a claim no standard makes. */
-enum { TE_HANDLE = 0, TE_WHEN, TE_REPEAT, TE_TIMEOUT, TE_THIS, TE_NEST, TE_SEQ, TE_FN, TE_ARG0 };
+/* TE_HANDLER IS §8.7 Timers's `handler` AS THE UNION IT IS, NOT AS A CALLBACK. The IDL type is
+   `(DOMString or Function)` and substeps 9.7/9.8 are the two arms of it, asked INSIDE step 9's task — so what
+   the entry carries is whichever arm the page passed, plus the third value this engine's boundary admits:
+   unknown external input, which idl_args.c passes across as itself so opacity survives the coercion. It was
+   `TE_FN` and held a callable only, because the string arm made no entry at all; every consequence of that is
+   in this file's banner. `timer_after`'s entries are always callable, which is that algorithm's own statement
+   and not a property of the field. */
+enum { TE_HANDLE = 0, TE_WHEN, TE_REPEAT, TE_TIMEOUT, TE_THIS, TE_NEST, TE_SEQ, TE_HANDLER, TE_ARG0 };
 
 static int      g_slot = -1;
 static JSAtom   g_atom_map = JS_ATOM_NULL, g_atom_next = JS_ATOM_NULL;
@@ -161,7 +190,6 @@ static int      g_id_set_timeout = -1, g_id_set_interval = -1,
    than re-implementing the re-arm is the whole point — a second speller of steps 3-5 and 10-14 is the dual
    system §Disposition forbids, and it is exactly what stood in timer_run_due. */
 static int      g_id_rearm = -1;
-static void   (*g_script_sink)(uint32_t doc, const char *src);
 
 static void timer_install_map(JSContext *ctx);
 
@@ -470,16 +498,17 @@ int timer_due_before(JSContext *ctx, JSValueConst moment)
     return r;
 }
 
-void timer_set_script_sink(void (*queue)(uint32_t doc, const char *src)) { g_script_sink = queue; }
-
 /* §8.7 Timers's TIMER IDENTIFIER, out of THIS global's own counter — the timer initialization steps' step 2,
    "an implementation-defined integer that is greater than zero and does not already exist in global's map of
    setTimeout and setInterval IDs".
-   ONE SPELLER, because §8.7 hands a handle back on THREE paths and only one of them makes an entry: the
-   function form (timer_set below), and both string forms, which queue a script and leave nothing for
-   `clearTimeout` to find. Three copies of "read the counter, bump it, return the old value" is three places
-   for the bump to go missing, and a missing bump is two live timers sharing one identifier — where
-   `clearTimeout` clears the wrong one and nothing says so.
+   ONE SPELLER, AND NOW EXACTLY ONE CALLER, WHICH IS THE SHAPE THE FIX LEFT BEHIND. There used to be three:
+   the function form through timer_set below, and both STRING forms, which minted a handle, queued a script at
+   the set and left nothing for `clearTimeout` to find. Step 2 does not know what the handler is — "If
+   previousId was given, let id be previousId; otherwise, let id be an implementation-defined integer that is
+   greater than zero and does not already exist in global's map of setTimeout and setInterval IDs" — so a
+   second minting site was the string arm's placement showing through, not §8.7's own shape. Kept as one
+   function because a missing bump is two live timers sharing one identifier, where `clearTimeout` clears the
+   wrong one and nothing says so, and because the DCHECK below is the statement of what the counter promises.
    It is an ordinary property write, so the per-flow COW delta captures it: two arms of a fork mint the SAME
    handle for the same source line, which is what makes a replayed decision vector name the same timer. */
 static uint32_t timer_next_handle(JSContext *ctx)
@@ -522,9 +551,12 @@ static uint32_t timer_next_handle(JSContext *ctx)
    to uniqueHandle" is a write on a key that already exists), and a `clearInterval` between the fire and the
    re-arm has removed that key, which is what substep 9.9 checks before this is ever reached.
    `this_arg` IS STEP 1's, BORROWED — the value substep 9.7 invokes the handler with, `undefined` for a caller
-   that is not the timer initialization steps. See TE_THIS. */
+   that is not the timer initialization steps. See TE_THIS.
+   `handler` IS §8.7's OWN `handler` AND IS NOT ASSUMED CALLABLE, which is the whole of what moved: the two
+   arms of the `(DOMString or Function)` union are substeps 9.7 and 9.8, both INSIDE the task, so the arm is
+   the TASK's question and the entry carries the union value unexamined. See TE_HANDLER. */
 static int timer_set(JSContext *ctx, JSValueConst timeout, int repeat, int nest, uint32_t prev_id,
-                     JSValueConst this_arg, JSValueConst fn, int argc, JSValueConst *argv)
+                     JSValueConst this_arg, JSValueConst handler, int argc, JSValueConst *argv)
 {
     JSValue q, entry;
     uint32_t handle = prev_id ? prev_id : timer_next_handle(ctx), i, slot, n;
@@ -552,7 +584,7 @@ static int timer_set(JSContext *ctx, JSValueConst timeout, int repeat, int nest,
            "1 or above and every other caller of this passes step 3's own 0");
     JS_SetPropertyUint32(ctx, entry, TE_NEST, JS_NewInt32(ctx, nest));
     JS_SetPropertyUint32(ctx, entry, TE_SEQ, JS_NewFloat64(ctx, event_loop_task_seq(ctx)));
-    JS_SetPropertyUint32(ctx, entry, TE_FN, JS_DupValue(ctx, fn));
+    JS_SetPropertyUint32(ctx, entry, TE_HANDLER, JS_DupValue(ctx, handler));
     for (i = 0; i < (uint32_t)argc; i++)
         JS_SetPropertyUint32(ctx, entry, TE_ARG0 + i, JS_DupValue(ctx, argv[i]));
 
@@ -668,10 +700,19 @@ void timer_clear_map(JSContext *ctx)
  * 9.7's "report" IS NOT PERFORMED AT 9.7 — see the residual named at TT_TAIL. */
 enum { TT_ARG_HANDLER = 0, TT_ARG_THIS, TT_ARG_NEST, TT_ARG_ID, TT_ARG_REPEAT, TT_ARG_TIMEOUT, TT_ARG_N };
 
+/* AND SUBSTEP 9.8 IS THE TASK'S TOO, WHICH IS WHERE THE STRING ARM CAME FROM. §8.7 splits the handler union
+ * INSIDE step 9 — "If handler is a Function, then invoke handler …" at 9.7 and "Otherwise:" at 9.8, whose
+ * substeps assert it is a string, run substep 9.8.3's EnsureCSPDoesNotBlockStringCompilation, take substep
+ * 9.8.5's base URL, and then create (9.8.7) and run (9.8.8) a classic script. This component asked that
+ * question at the SET and queued the program there, which is the placement this file's banner is about. */
 #define TT_STAGES(X)                                                                                          \
     X(TT_INVOKE,                                                                                              \
       "HTML §8.7 Timers timer initialization steps step 9.7 (if handler is a Function, then invoke handler "   \
       "given arguments and \"report\")")                                                                      \
+    X(TT_SCRIPT,                                                                                              \
+      "HTML §8.7 Timers timer initialization steps substeps 9.8.2-9.8.8 (otherwise: assert handler is a "      \
+      "string, then create a classic script given handler, settings object, base URL, and fetch options, "     \
+      "and run it)")                                                                                          \
     X(TT_TAIL,                                                                                                \
       "HTML §8.7 Timers timer initialization steps steps 9.9-9.12 (the id and uniqueHandle re-checks, then "   \
       "the repeat's re-performance of the timer initialization steps or the map removal)")
@@ -683,17 +724,30 @@ typedef struct {
     /* HAVE I STARTED — a machine cannot answer that from its stage, because the first stage IS the entry
        stage, and the call buffers below must hold JS_UNDEFINEDs before anything that can fail. */
     uint8_t   started;
-    uint8_t   cphase;   /* substep 9.7's call of the handler */
+    /* SUBSTEP 9.7's CALL OF THE HANDLER, AND SUBSTEP 9.8.8's CALL OF THE CLASSIC SCRIPT — ONE CURSOR AND ONE
+       BUFFER, because 9.7 and 9.8 are the two arms of ONE `if` and no task can take both. That is the exact
+       opposite of `rphase` below, which is separate precisely because substep 9.11's call is SEQUENTIAL with
+       9.7's and both are live in one task. The exclusivity is not a claim this comment makes and the code
+       leaves unchecked: the transition into TT_SCRIPT goes through STEP_GOTO naming this cursor, so a 9.7 that
+       had issued a call and walked away from it aborts at the transition rather than letting 9.8.8 collect the
+       handler's answer. */
+    uint8_t   cphase;
     uint8_t   rphase;   /* substep 9.11's call of the timer initialization steps */
-    /* SUBSTEP 9.7 COMPLETED ABRUPTLY. Held rather than returned, because 9.9-9.12 are still the task's steps
-       — a throwing `setInterval` handler goes on firing in a browser, and returning here is what would stop
-       it. `threw` is its own byte for the reason `placed` is one in TimerInitState: a zeroed JSValue is the
-       INTEGER 0 and not undefined, so "is there an exception" cannot be read off the value. */
+    /* SUBSTEP 9.7 — OR 9.8.7/9.8.8 — COMPLETED ABRUPTLY. Held rather than returned, because 9.9-9.12 are still
+       the task's steps — a throwing `setInterval` handler goes on firing in a browser, and returning here is
+       what would stop it. `threw` is its own byte for the reason `placed` is one in TimerInitState: a zeroed
+       JSValue is the INTEGER 0 and not undefined, so "is there an exception" cannot be read off the value.
+       THE STRING ARM REACHES IT TWICE OVER AND BOTH ARE THE SAME COMPLETION. §8.1.4.3 "Creating scripts"'s
+       creating a classic script over source text that does not parse returns a script whose `error to rethrow`
+       is set rather than null, and §8.1.4.4 "Calling scripts"'s run a classic script then reports it — so a
+       SyntaxError at 9.8.7 and a throw out of 9.8.8 are one thing here, exactly as they are for a `<script>`
+       element (core/html/html_script.c takes the same two paths into one report). */
     uint8_t   threw;
     JSValue   exc;
     /* [this, handler] AND NOTHING MORE, which is timer_init's declaration read at the far end: §8.7's
        `any... arguments` tail is not declared, so no entry of the map carries extra arguments and
-       timer_run_due asserts that where it would have to copy them. */
+       timer_run_due asserts that where it would have to copy them. Substep 9.8.8's call needs exactly the same
+       two slots — [global, the compiled classic script] — and takes these, per `cphase` above. */
     JSValue   cb[2];
     /* [this, door, handler, timeout, previousId] — substep 9.11's own call, in its own buffer because the two
        requests are alive at different stages and one buffer would let the second collect the first's answer. */
@@ -766,6 +820,33 @@ static int js_timer_task_step(JSContext *ctx, void *stp, JSValue cb_result, JSVa
                    "another's steps and the inner one's level is about to be attributed to the outer");
             event_loop_set_timer_nesting(ctx, nest);
         }
+        /* §8.7's HANDLER UNION IS SPLIT HERE — "If handler is a Function" at 9.7, "Otherwise:" at 9.8 — AND
+           THE ORDER OF THE TEST IS THE WHOLE OF IT. Web IDL §3.2.25 Union types answers "is this the Function
+           arm" for `(DOMString or Function)` with IsCallable(V), and a concolic is an OBJECT CARRYING A
+           [[Call]] — solver/concolic.c installs one so `document.cookie.indexOf(x)` yields another unknown
+           instead of throwing — so IsCallable is TRUE over EVERY unknown external input, for a reason that is
+           a fact about this engine's value class and not about the page's value. Asking it first therefore
+           chooses an arm from the MODEL, which is the collapse §@S forbids, and it does not choose neutrally:
+           the callback arm over an unknown callee runs no page code and emits nothing (concolic_call mints a
+           derived unknown and returns), while the string arm is the code-execution sink this file exists to
+           announce. Measured on the shipped artifact: `eval(location.hash.substr(1))` produced a fire-verified
+           @S PoC and `setTimeout(location.hash.substr(1), 1)` on the same page shape produced no @S entry at
+           all. SO UNKNOWN INPUT TAKES THE STRING ARM, and that is not a guess standing in for a fork: it is
+           the only arm with an observable in it, and the @S search resolves it for real — a candidate run
+           substitutes a CONCRETE breakout at the source, at which point IsCallable is false, this same test
+           picks the same arm for the page's own reason, and the classic script runs the marker.
+           THIS TEST USED TO STAND AT THE SET, and moving it is what the entry's TE_HANDLER field is for: the
+           question belongs to step 9's task because §8.7 puts it there, and a task that has to ask it is a
+           task that has to carry the union rather than a callback. */
+        if (concolic_is(handler) || !JS_IsFunction(ctx, handler)) {
+            /* NOTHING WAS ASKED, SO NOTHING IS ANSWERED, and the completion this entry carries is discharged
+               here: `cb_result` is OWNED by this body (js_set_timer's own entry frees it for the same reason),
+               and every other exit hands it to a step_call_run that consumes it. This is the first arm of this
+               machine that leaves without one. */
+            JS_FreeValue(ctx, cb_result);
+            STEP_GOTO(s->hdr.stage, TT_SCRIPT, &s->cphase, NULL);
+            return JS_STEP_YIELD;
+        }
         /* §8.7 step 9.7's invocation. `argc` is 0 for the reason the buffer is two slots — see TimerTask.
            THE RECEIVER IS STEP 1's `thisArg`, WHICH IS NOT THE GLOBAL — "otherwise let thisArg be the
            WindowProxy that corresponds to global" — and the difference is one a page reads. A sloppy handler
@@ -795,6 +876,158 @@ static int js_timer_task_step(JSContext *ctx, void *stp, JSValue cb_result, JSVa
         JS_FreeValue(ctx, out);
         STEP_GOTO(s->hdr.stage, TT_TAIL, &s->cphase, NULL);
         return JS_STEP_YIELD;
+
+    /* §8.7's SUBSTEP 9.8 — "Otherwise:" — WHICH IS THE STRING HANDLER'S WHOLE ALGORITHM, AT THE EXPIRY.
+     *
+     * SUBSTEP 9.8.1's TRUSTED TYPES ARM IS ABSENT AND SO IS 9.8.3's CSP GATE, and neither is a hole this stage
+     * fills: this engine has no TrustedScript and no Content Security Policy object to ask, so the steps that
+     * consult them are not reachable rather than skipped. What IS performed of 9.8.3 is the half that belongs
+     * to this engine — the @S announcement, which solve.h explains is a JS-context sink for the same reason
+     * `eval`'s argument is and is not the ECMAScript seam.
+     *
+     * SUBSTEP 9.8.4's FETCH OPTIONS AND 9.8.5's BASE URL. "Let base URL be settings object's API base URL",
+     * which for a Window is its Document's document base URL, so document_base_url is the whole answer and the
+     * relative `import('./chunk.js')` inside a string handler resolves against it.
+     * NAMED RESIDUAL — substep 9.8.6 is "If initiating script is not null: … Set base URL to initiating
+     * script's base URL", and this engine does not track HTML §8.1.4.1 "Scripts"'s ACTIVE SCRIPT, so a
+     * `setTimeout` string scheduled BY a chunk takes the document's base URL where the standard takes the
+     * chunk's. WHAT THE NEXT DIFF BUILDS: active-script tracking — ECMAScript's GetActiveScriptOrModule, which
+     * is the FUNCTION's script and not the row the flow is standing on, so solver/engine.c's `flow_dyn_url` is
+     * not it and cannot be made into it. HOW ITS ABSENCE SHOWS: `setTimeout("import('./y.js')")` written in a
+     * bundle served from /assets/app.js resolves ./y.js against the PAGE instead of against /assets/. This
+     * residual stood in solver/engine.h over the queue entry this stage replaces; it is unchanged by the move
+     * and travels with the site that now takes the base URL.
+     *
+     * SUBSTEPS 9.8.7 AND 9.8.8 ARE ONE OPERATION HERE. JS_EVAL_FLAG_TRAMP_CLOSURE hands the compiled program
+     * back AS A CLOSURE so its body runs on this flow's own trampoline chain — preemptible per opcode, parkable
+     * at any loop back-edge or `await`, forkable at a concolic branch inside it — which is what makes running
+     * the page's code from this component correct rather than the drive-to-completion the old placement was
+     * avoiding. The receiver is the GLOBAL OBJECT and not step 1's `thisArg`: a classic script's program is
+     * global scope whatever its strictness, and 9.8.8 states no this value at all (it is 9.7, the OTHER arm,
+     * that carries one). JS_EVAL_FLAG_INLINE_SCRIPT preserves the answer the queued row produced — an
+     * address-less DYN_PAGE_SCRIPT row compiles as one — rather than deciding the question anew here; it is
+     * what solver/absent.h reads to tell state a server rendered against this visitor's credentials from a
+     * subresource served identically to everybody. */
+    STEP_ARM(TT_SCRIPT);
+    {
+        DCHECK(s->started,
+               "§8.7 Timers's step 9 task reached substep 9.8 without having run its entry stage — TT_INVOKE "
+               "is the only writer of the state this reads and it is where the handler union is split");
+        if (s->cphase != 0) {
+            /* THE RESUME LEG OF SUBSTEP 9.8.8's CALL — the request's second leg collects, and it must reach
+               THIS site rather than a re-derived one, which is what STEP_GOTO's cursor list is about. */
+            r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), JS_UNDEFINED, JS_UNDEFINED, 0, NULL,
+                              cb_result, &out, out_cb, out_argc);
+        } else {
+            const char *src, *base;
+            JSValue prog;
+            size_t src_n = 0;
+            JSValue text;
+            int announced;
+
+            DCHECK(JS_IsString(handler) || concolic_is(handler),
+                   "§8.7 Timers's substep 9.8 was reached over a handler that is neither a string nor unknown "
+                   "external input — 9.8.2 is \"Assert: handler is a string\", the arm above sends every "
+                   "callable that is not a concolic to 9.7, and idl_args.c's `(DOMString or Function)` "
+                   "conversion admits exactly those three values, so a fourth here is an entry of this "
+                   "global's map that reached it without going through timer_set");
+            /* SUBSTEP 9.8.2's ASSERT AND THE ENGINE'S HALF OF 9.8.3, IN ONE OPERATION — the announcement and
+               the program TEXT come out of the same call, because spelling them apart is what once made every
+               candidate run invisible: the unknown handler was announced and named no bytes, the string
+               handler was compiled and announced nothing, so the search's own context probe arrived here as a
+               real string, nothing scanned it, no witness was learned and no ECMAScript §12 escape was ever
+               derived. `JS_UNINITIALIZED` is "this handler names no program", which is an ABSENCE and not a
+               drop: an unknown carrying no string example has no bytes for anything to compile, and supplying
+               them is exactly what the @S search does. */
+            text = solve_eval_sink_source(ctx, handler);
+            if (JS_IsUninitialized(text)) {
+                JS_FreeValue(ctx, cb_result);   /* no request was made on this leg — see TT_INVOKE's arm */
+                STEP_GOTO(s->hdr.stage, TT_TAIL, &s->cphase, NULL);
+                return JS_STEP_YIELD;
+            }
+            /* THE LENGTH TRAVELS, which the old host edge could not carry: its shape was
+               `void (*)(uint32_t, const char *)`, so `setTimeout("\0…")` was read to the first NUL and every
+               endpoint and sink past that byte was unreachable. ECMAScript §11.1 "Source Text" permits every
+               code point from U+0000 up, so a program carrying a NUL is one a browser runs whole. */
+            src = JS_ToCStringLen(ctx, &src_n, text);
+            JS_FreeValue(ctx, text);
+            if (!src) {
+                /* THE COVERAGE GOES WITH THE PROGRAM IT COVERED. This is the ONE line between the announcement
+                   and the compile that can leave without compiling, so it is the one place the seam's latch
+                   can outlive the bytes it was raised for — and a latch that survives its own program is an
+                   assert that answers YES for whatever compiles next, which is the assert lying rather than
+                   firing. */
+                (void)solve_eval_sink_announced();
+                JS_FreeValue(ctx, cb_result);
+                return JS_STEP_ABRUPT;
+            }
+            /* TAKEN INTO A LOCAL, NEVER SPELLED INSIDE THE DCHECK: the take CLEARS the seam, and a DCHECK's
+               condition is not evaluated in a release build — a consuming read there would leave the latch
+               raised for whatever compiled next and turn a dev-only assert into a release-only divergence. */
+            announced = solve_eval_sink_announced();
+            DCHECK(announced,
+                   "a §8.7 Timers string handler became a program without passing the @S host seam — substep "
+                   "9.8.3 is what makes these bytes a JS-context sink, and solve_eval_sink_source is where "
+                   "they are announced AND where the program text comes from, in one operation so the two "
+                   "cannot be spelled apart again. A caller that compiles bytes it obtained some other way "
+                   "fails SILENTLY in the worst direction there is: the timer fires, the page runs, the sink "
+                   "is still DETECTED by the concolic arm, and every candidate run after it is invisible — no "
+                   "witness is learned, no ECMAScript §12 escape is derived, and the search parks for ever "
+                   "reporting that it tried. Take the text from solve_eval_sink_source; never relax this");
+            (void)announced;
+            base = document_base_url(ctx);
+            DCHECK(base != NULL,
+                   "§8.7 Timers's substep 9.8.5 base URL is \"settings object's API base URL\" and this "
+                   "document has none — HTML §2.4.3 \"Document base URLs\" ends its fallback base URL at "
+                   "\"return document's URL\", so every Document has one, and an absent one is a document "
+                   "built somewhere that never set its URL");
+            prog = JS_Eval(ctx, src, src_n, base,
+                           JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_TRAMP_CLOSURE | JS_EVAL_FLAG_INLINE_SCRIPT);
+            JS_FreeCString(ctx, src);
+            if (JS_IsException(prog)) {
+                /* §8.1.4.3 "Creating scripts"'s creating a classic script over source text that does not parse
+                   returns a script whose `error to rethrow` is set, and §8.1.4.4 "Calling scripts" step 6 then
+                   makes it the evaluation status — reported, with substeps 9.9-9.12 still to run. */
+                s->exc = JS_GetException(ctx);
+                s->threw = 1;
+                DCHECK(!JS_IsNull(s->exc),
+                       "§8.7 Timers's substep 9.8.7 answered an exception with nothing pending on the "
+                       "context — a compile that answers JS_EXCEPTION leaves its completion live, so a null "
+                       "here means something between the compile and this line already took it");
+                JS_FreeValue(ctx, cb_result);   /* no request was made on this leg — see TT_INVOKE's arm */
+                STEP_GOTO(s->hdr.stage, TT_TAIL, &s->cphase, NULL);
+                return JS_STEP_YIELD;
+            }
+            /* SUBSTEP 9.8.8 — "Run the classic script script." step_call_run DUPS the callee and the receiver
+               into the request buffer, which is what holds them across the suspension, so both are released
+               here and the parked call still owns its own. */
+            {
+                JSValue global = JS_GetGlobalObject(ctx);
+
+                r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), prog, global, 0, NULL,
+                                  cb_result, &out, out_cb, out_argc);
+                JS_FreeValue(ctx, global);
+                JS_FreeValue(ctx, prog);
+            }
+        }
+        if (r > 0)
+            return r;   /* PARKED ON THE PAGE'S CODE: the level stays published, exactly as at 9.7 */
+        if ((r < 0) || JS_IsException(out)) {
+            /* §8.1.4.4 "Calling scripts"'s run a classic script REPORTS an abrupt completion rather than
+               propagating it (its rethrow errors is false here), so this is 9.7's rule reached by the other
+               arm: the throw is held and substeps 9.9-9.12 still run, which is why an interval whose string
+               handler throws goes on firing. */
+            s->exc = JS_GetException(ctx);
+            s->threw = 1;
+            DCHECK(!JS_IsNull(s->exc),
+                   "§8.7 Timers's substep 9.8.8 reported an abrupt completion with nothing pending on the "
+                   "context — a call that answers JS_EXCEPTION leaves its completion live, so a null here "
+                   "means something between the call and this line already took it");
+        }
+        JS_FreeValue(ctx, out);
+        STEP_GOTO(s->hdr.stage, TT_TAIL, &s->cphase, NULL);
+        return JS_STEP_YIELD;
+    }
 
     STEP_ARM(TT_TAIL);
     {
@@ -970,7 +1203,7 @@ int timer_run_due(JSContext *ctx)
     double seq = 0;
     int idx = -1, nest = 0, repeat = 0;
     JSContext *docctx = timer_earliest(ctx, &idx, &whenv, &seq);
-    JSValue q, e, fn, timeout, this_arg;
+    JSValue q, e, handler, timeout, this_arg;
     uint32_t n, handle;
 
     if (!docctx)
@@ -1049,10 +1282,18 @@ int timer_run_due(JSContext *ctx)
        INPUTS with it: substeps 9.9-9.12 run after the handler, and by then this entry may have been removed by
        a `clearInterval` or rewritten by the re-performance, so the task carries its handler, its level, its
        `id`, its `repeat` and its `timeout` rather than reading any of them back off the entry. */
-    fn = JS_GetPropertyUint32(docctx, e, TE_FN);
-    DCHECK(JS_IsFunction(docctx, fn),
-           "§8.7 Timers's map held an entry whose handler is not callable — the string form became a script instead "
-           "of an entry, so nothing else can be in the map");
+    handler = JS_GetPropertyUint32(docctx, e, TE_HANDLER);
+    /* §8.7's `handler` IS THE UNION AND THIS ASSERT STATES ALL THREE VALUES IT CAN BE. It used to require a
+       CALLABLE, on the ground that the string form became a script instead of an entry — a rule this file no
+       longer obeys and never should have: substeps 9.7 and 9.8 are the arms of `(DOMString or Function)` and
+       they are asked INSIDE step 9's task, so an entry carrying a string is exactly what §8.7 describes. The
+       third value is unknown external input, which idl_args.c passes across the boundary as itself so opacity
+       survives the coercion; it is not a fourth arm, it is a value the STRING arm takes (see TT_INVOKE). */
+    DCHECK(JS_IsFunction(docctx, handler) || JS_IsString(handler),
+           "§8.7 Timers's map held an entry whose handler is neither a Function nor a string — those are the "
+           "two arms of the `(DOMString or Function)` union the declaration converts to, and unknown external "
+           "input arrives carrying a [[Call]], so a value that is neither reached this map without going "
+           "through the timer initialization steps");
     n = arr_len(docctx, e);
     DCHECK(n >= TE_ARG0,
            "an entry of §8.7 Timers's map of active timers is shorter than its own fixed head — the handle, "
@@ -1122,7 +1363,7 @@ int timer_run_due(JSContext *ctx)
         lvl = JS_NewInt32(docctx, nest);
         idv = JS_NewUint32(docctx, handle);
         repv = JS_NewBool(docctx, repeat != 0);
-        targ[TT_ARG_HANDLER] = fn;
+        targ[TT_ARG_HANDLER] = handler;
         targ[TT_ARG_THIS] = this_arg;
         targ[TT_ARG_NEST] = lvl;
         targ[TT_ARG_ID] = idv;
@@ -1140,7 +1381,7 @@ int timer_run_due(JSContext *ctx)
     }
     JS_FreeValue(docctx, timeout);
     JS_FreeValue(docctx, this_arg);
-    JS_FreeValue(docctx, fn);
+    JS_FreeValue(docctx, handler);
 
     /* §8.7 Timers's `run steps after a timeout` STEP 4.5 — "Remove global's map of active timers[timerKey]",
        which the spec performs immediately after step 4.4 performs completionSteps, and step 12's completionStep
@@ -1272,10 +1513,11 @@ static void ti_visit(JSContext *ctx, void *st, JSStepVisit *v)
 }
 
 /* THERE IS NO `release`. Everything this state owns is the one JSValue the visit above names, so the teardown
-   frees it through that ONE list — which is why no arm below frees `s->timeout` on its way out, including the
-   string arm, which reaches a return without ever reading it. A free at one exit is the second ownership list
-   this declaration exists to have only one of, and the arm that forgot it would leak while the arm that had it
-   would double-free the sibling's copy. */
+   frees it through that ONE list — which is why no arm below frees `s->timeout` on its way out. A free at one
+   exit is the second ownership list this declaration exists to have only one of, and the arm that forgot it
+   would leak while the arm that had it would double-free the sibling's copy. (There used to be an exit that
+   never read the value at all: the string arm, which returned from step 12 without making an entry. It is
+   gone, and the rule it was the awkward case for is unchanged.) */
 
 static int js_set_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSValueConst *argv,
                         JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
@@ -1546,126 +1788,31 @@ static int js_set_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
            "`thisArg` — steps 4, 3 and 1 are their only writers and all three stages precede this one, so an "
            "unwritten value means this machine was entered at a stage it did not leave");
 
-    /* THE STRING FORM IS A SCRIPT — compiled and run in global scope, which is the sink `setTimeout(str)` is
-       known for. It is queued as a script flow (the path an injected <script> takes), never evaluated here:
-       running the page's source inside this C activation is exactly what the flow machinery exists to avoid.
-       IT IS QUEUED FROM STEP 12 AT THE SET, AND §8.7 QUEUES IT FROM STEP 9'S TASK AT THE EXPIRY. What stood
-       here used to be `it has no cancellable entry because it is no longer a timer at that point; it is a
-       script` — a claim about the standard, and the standard says the opposite: substep 9.8.7 is "Let script be the
-       result of creating a classic script given handler, settings object, base URL, and fetch options" and 9.8.8
-       is "Run the classic script script", both INSIDE the task step 9 defines — the task step 12's completionStep
-       queues only after step 13's `run steps after a timeout` has waited `timeout` milliseconds, and step 14
-       writes the entry `clearTimeout` removes. A string handler is a timer until its task runs, exactly as a
-       Function handler is. Four things follow from queueing it here instead, and each is observable:
-       `timeout` is ignored (`setTimeout("a()",100); setTimeout("b()",0)` runs a before b, where §8.7 orders the
-       timer task source by expiry); no map entry exists, so `clearTimeout` finds nothing; step 11's timer
-       nesting level has no task to be set on; and — the one that reaches beyond this file — the TIMER TASK
-       SOURCE ends up in TWO of the flow's queues, since a Function handler's task goes to the flow's job queue
-       through JS_EnqueueCallTask while this row goes to its program sequence. HTML §8.1.7.1 "Definitions" says
-       "For each event loop, every task source must be associated with a specific task queue", and no ordering
-       of those two queues can then keep one source in arrival order; solver/engine.c's run-a-task arm carries
-       that derivation and is blocked on this site.
-       THE SPEC'S OWN WORKED EXAMPLE DOES NOT DISCRIMINATE, WHICH IS WORTH KNOWING BEFORE REACHING FOR IT: §8.7's
-       `setTimeout({toString(){ setTimeout("logger('ONE')",100); return "logger('TWO')" }},100)` logs "ONE TWO"
-       because argument conversion runs the inner call first, and this arm also logs "ONE TWO" — for the wrong
-       reason, since both are queued at the set with equal timeouts. Unequal timeouts are the discriminator.
-       WHAT THE NEXT DIFF BUILDS: this arm makes an ordinary entry carrying the handler's source text, and
-       timer_run_due's step 9 task queues the classic script at the fire — at which point the TI_MAGIC_REARM
-       DCHECK below and timer_run_due's matching one state a rule that no longer holds and go with it, as do
-       `g_script_sink`, timer_set_script_sink and solver/engine.c's engine_queue_timer_script. */
-    /* WHICH ARM UNKNOWN EXTERNAL INPUT TAKES IS THIS ALGORITHM'S QUESTION, AND IT IS ASKED BEFORE IsCallable —
-       which is the whole of what was wrong here, and it was invisible because both arms are real. §8.7's task
-       substeps split on "If handler is a Function … Otherwise: … Assert: handler is a string", and Web IDL
-       §3.2.25 Union types answers that for `(DOMString or Function)` with IsCallable(V). A concolic is an
-       object carrying a [[Call]] — solver/concolic.c installs one so `document.cookie.indexOf(x)` yields
-       another unknown instead of throwing — so IsCallable is TRUE over EVERY unknown external input, for a
-       reason that is a fact about this engine's value class and not about the page's value. Asking it here
-       therefore chose an arm from the model, which is the collapse §@S forbids, and it did not choose
-       neutrally: the callback arm over an unknown callee runs no page code and emits nothing (concolic_call
-       mints a derived unknown and returns), while the string arm is the code-execution sink this file exists to
-       announce. Measured on the shipped artifact: `eval(location.hash.substr(1))` produced a fire-verified @S
-       PoC and `setTimeout(location.hash.substr(1), 1)` on the same page shape produced no @S entry at all —
-       the arm below had never been entered by an attacker value in production.
-       SO UNKNOWN INPUT TAKES THE STRING ARM, and that is not a guess standing in for a fork: it is the only arm
-       with an observable in it, and the @S search resolves it for real — a candidate run substitutes a
-       CONCRETE breakout at this source, at which point IsCallable is false, this same test picks the same arm
-       for the page's own reason, and the classic script below runs the marker. idl_args.c's own assert states
-       the other half: the union may not be resolved over a concolic at the boundary either. */
-    if (concolic_is(argv[0]) || !JS_IsFunction(ctx, argv[0])) {
-        /* TimerHandler is `(DOMString or Function)`: the declaration converted the non-callable arm to a
-           string already, so this reads one rather than running the page's toString from C. */
-        const char *src;
-        JSValue text;
-
-        DCHECK(magic != TI_MAGIC_REARM,
-               "§8.7 Timers's substep 9.11 re-performed the timer initialization steps over a handler that is "
-               "not a Function — the string form of the algorithm never makes a map entry at all (it queues a "
-               "script and returns a handle naming nothing), so no entry can carry one to the fire, and "
-               "timer_run_due asserts the same fact from the other end");
-
-        /* §8.7 step 4 ran at the stage above, where the spec puts it, and this arm makes no entry for its
-           result to be the expiry of — it simply never reads it. Nothing is released here; ti_visit's one list
-           is what discharges the value, on every exit there is.
-           §8.7 Timers's STRING ARM OVER UNKNOWN EXTERNAL INPUT IS A CODE-EXECUTION SINK, NOT A BROKEN INVARIANT.
-           The assertion here used to be `JS_IsString(argv[0])`, and it FIRED on `setTimeout(location.hash)`.
-           The union's non-callable arm resolves to DOMString, and idl_args.c passes unknown external input
-           across the boundary AS ITSELF so that opacity survives the coercion — so a concolic arrives here
-           neither callable nor a string, and asserting on it is asserting on ATTACKER INPUT, which is the one
-           thing §Offensive programming names as never a @WHY. A canonical XSS sink took the document down.
-           AND IT IS THE @S JS-CONTEXT SINK THIS ENGINE HAD NO PRODUCTION CALL SITE FOR. §8.7 Timers creates a classic
-           script from the handler, which is an eval in every sense solve.h means, and `solve_eval_sink` had
-           exactly one caller in the tree: the fixture. So solve_js.c's whole §12 derivation was reachable only
-           from a test, and a real page's `setTimeout(taintedString)` was detected by nothing.
-           WHAT IS QUEUED IS NOTHING, AND THAT IS ABSENCE RATHER THAN A DROP: this engine cannot compile a
-           string it does not have, and the unknown handler names no program. Supplying one is exactly what the
-           @S search does — a candidate run substitutes a concrete breakout at this source, at which point the
-           value IS a string, the branch below queues it as §8.7 Timers requires, and a marker in it fires there.
-           AND THE ANNOUNCEMENT IS THE SAME OPERATION AS THAT SUPPLY, WHICH IS THE FIX. The two were spelled as
-           two arms of an `if`: the unknown handler was announced and queued nothing, the string handler was
-           queued and announced nothing. Detection therefore worked and every candidate run after it was
-           INVISIBLE — the search's context probe arrived here as a real string, nothing scanned it, no witness
-           was learned, no §12 escape was derived, and a real page's string-bodied timer sink parked at
-           probes == payloads for ever with the record honestly saying `witnessed:0`. So the program text comes
-           OUT of the announcing operation (solve.h's solve_eval_sink_source) and there is no arm left that can
-           queue bytes nothing looked at: `eval` and this share one detector, and now one ordering too. */
-        DCHECK(JS_IsString(argv[0]) || concolic_is(argv[0]),
-               "setTimeout's handler reached the body neither callable, nor a string, nor unknown external "
-               "input — the TimerHandler union's conversion is the declaration's, not this body's");
-        /* §8.7 Timers's substeps 9.8.2-9.8.3 — "Assert: handler is a string" and the
-           EnsureCSPDoesNotBlockStringCompilation beside it, which is what makes these bytes a JS-context sink
-           rather than an ordinary program. The answer is the text substep 9.8.7 creates a classic script from,
-           or the absence of one. */
-        text = solve_eval_sink_source(ctx, argv[0]);
-        if (JS_IsUninitialized(text)) {
-            *presult = JS_NewInt32(ctx, (int32_t)timer_next_handle(gctx));
-            return JS_STEP_DONE;
-        }
-        src = JS_ToCString(ctx, text);
-        JS_FreeValue(ctx, text);
-        if (!src) {
-            /* THE COVERAGE GOES WITH THE PROGRAM IT COVERED. This is the ONE line between the announcement and
-               the queue that can leave without queueing, so it is the one place the host seam's latch can
-               outlive the bytes it was raised for — and a latch that survives its own program is an assert
-               that answers YES for whatever queues next, which is the assert lying rather than firing. */
-            (void)solve_eval_sink_announced();
-            return JS_STEP_ABRUPT;
-        }
-        DCHECK(g_script_sink != NULL,
-               "setTimeout was given a STRING handler and this host registered no way to evaluate one — HTML "
-               "§8.7 Timers evaluates it when the timer fires, and dropping it would lose whatever it was going to do");
-        /* IN `global`'s DOCUMENT — step 9's task substep 4 takes GLOBAL's relevant settings object, and
-           substep 9.8.7 creates the classic script with that one, so the program belongs to the Window the
-           member was invoked on and not to the realm the member was installed in nor to the agent's root.
-           This named the ENTRY GLOBAL OBJECT's, which no edition of §8.7 says: the algorithm never mentions
-           the entry global at all, and reading it that way is what let `setTimeout.call(frames[0], "x = 1")`
-           define `x` on the PARENT. */
-        g_script_sink(document_doc(gctx), src);
-        JS_FreeCString(ctx, src);
-        /* §8.7 Timers still hands back a handle from `global`'s identifier, and it still names no entry — the
-           script is queued, and there is nothing left for `clearTimeout` to find. */
-        *presult = JS_NewInt32(ctx, (int32_t)timer_next_handle(gctx));   /* §8.7's return type is a `long` */
-        return JS_STEP_DONE;
-    }
+    /* THE STRING FORM IS A TIMER, AND ITS SCRIPT IS STEP 9'S TASK'S — SO THERE IS NO ARM HERE AT ALL.
+       This stage used to split on the handler and, for the string form, ANNOUNCE the @S sink, compile nothing,
+       queue the source onto the flow's program sequence through a host edge and hand back a handle naming no
+       entry — all at the SET, from step 12. §8.7 puts every one of those acts at the EXPIRY, inside step 9's
+       task (substeps 9.8.2-9.8.8), and the comment that stood here said the opposite of the standard — that
+       the string form had no cancellable entry because it was no longer a timer at that point but a script.
+       It is a timer until its task runs, exactly as a Function handler is, and step 14 — "Set global's map of
+       setTimeout and setInterval IDs[id] to uniqueHandle" — is what writes the record `clearTimeout` removes
+       for BOTH.
+       So steps 12-15 are one path now: timer_set makes the entry whatever the handler is, and the task asks
+       the union's question where §8.7 asks it. The four observable consequences of the old placement are named
+       in this file's banner; the fifth, which reached beyond this file, was that the TIMER TASK SOURCE sat in
+       BOTH of a flow's queues at once, and solver/engine.c's run-a-task arm carries what that cost.
+       THE UNION'S CONVERSION IS THE DECLARATION'S AND THIS IS WHERE IT IS ASSERTED. `TimerHandler` is
+       `(DOMString or Function)`, so idl_args.c has already resolved position 0 to a callable or to a string —
+       or has passed unknown external input across AS ITSELF, so opacity survives the coercion, which is why a
+       concolic is a third value here and is not a broken invariant. The assert that stood in the string arm
+       was `JS_IsString(argv[0])` and it FIRED on `setTimeout(location.hash)`: a canonical XSS sink took the
+       document down on an assert against attacker input, which §Offensive programming names as the one thing
+       that is never a @WHY. */
+    DCHECK(JS_IsString(argv[0]) || JS_IsFunction(ctx, argv[0]),
+           "§8.7 Timers's `handler` reached step 12 neither a string nor callable — `TimerHandler` is "
+           "`(DOMString or Function)` and its conversion is the declaration's, not this body's; unknown "
+           "external input arrives carrying a [[Call]], so a value that is neither means position 0 was never "
+           "converted by anything");
 
     /* AN UNKNOWN PERIOD IS NOT REFUSED HERE ANY MORE, AND THE DELETION IS THE DIFF. What stood here was a
        DFAIL on `setInterval(f, someUnknownValue)` — a real shape in a real bundle, a poll whose period comes
@@ -2163,7 +2310,6 @@ void timer_init(JSContext *ctx)
     agent_state_id("timer", &g_id_clear_interval, "§8.7 Timers's clearInterval declaration");
     agent_state_id("timer", &g_id_rearm, "§8.7 Timers's substep 9.11 re-performance declaration");
     agent_state_id("timer", &g_task_stepid, "§8.7 Timers's step 9 task machine");
-    agent_state_ptr("timer", &g_script_sink, "the host edge a string-bodied setTimeout is queued through");
 }
 
 /* THE MAP IS BUILT AT REALM INSTALL, which puts a top-level realm's in the pre-boot BASELINE. Built lazily on
@@ -2243,5 +2389,4 @@ void timer_free(JSRuntime *rt)
        that belongs to the RUNTIME, so a carried one would mint the next agent's tasks out of the last
        agent's entry. */
     g_task_stepid = -1;
-    g_script_sink = NULL;
 }

@@ -2647,13 +2647,14 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
        who reports a page error while the programs are the scheduler's rather than this file's. */
     { static const FetchProvider P = { wpt_owe }; fetch_set_provider(&P); }
     result_set_page_error_hook(wpt_page_error);
-    /* …AND WHO EVALUATES A STRING HANDLER, which is the same kind of edge and was the one this host did not
-       state. HTML §8.7's timer initialization steps compile a DOMString handler as a classic script when the
-       timer fires, and core/timing/timer.c aborts on a string handler with no sink registered — so every
-       `setTimeout("…")` in the corpus took its document down here while the two hosts that DO register it
-       (main.c, test_forced.c) ran the same code correctly. An edge absent from one host is not a weaker host,
-       it is an area this gate publishes a number for without having run it. */
-    timer_set_script_sink(engine_queue_timer_script);
+    /* THERE IS NO STRING-HANDLER EDGE TO STATE ANY MORE, and its removal is the general form of the defect
+       this line was the repair for. HTML §8.7's timer initialization steps compile a DOMString handler as a
+       classic script WHEN THE TIMER FIRES — substeps 9.8.7-9.8.8, inside step 9's task — and
+       core/timing/timer.c now does exactly that in the task's own step machine, so there is no registration
+       for a host to omit. When there was one, this host omitted it and every `setTimeout("…")` in the corpus
+       took its document down here while the two hosts that did register it ran the same code correctly: an
+       edge absent from one host is not a weaker host, it is an area this gate publishes a number for without
+       having run it. An edge that cannot be absent is better than an edge three hosts remember to state. */
 
     /* AND THEN THE FACTS, STATED AND NOT ASSIGNED. `requests_oac` is §7.5.1's, from the response the caller
        fetched — a WPT test document IS fetched from the corpus's own wptserver, so it has a response, and

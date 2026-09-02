@@ -1847,7 +1847,7 @@ JSValue solve_eval_sink_source(JSContext *ctx, JSValueConst handler) {
            "absence of it — its caller compiles whatever comes back, so a third answer here is a value handed "
            "to a compiler that has no bytes to read");
     /* RAISED ONLY WHERE THERE IS A PROGRAM, because that is the state the consumer's assert is about: an arm
-       that names no bytes queues nothing, so there is nothing downstream for it to cover. */
+       that names no bytes compiles nothing, so there is nothing downstream for it to cover. */
     g_host_sink_announced = !JS_IsUninitialized(text);
     return text;
 }

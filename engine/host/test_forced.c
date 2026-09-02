@@ -2516,16 +2516,40 @@ static const char *HTML =
     "setTimeout(function(){ _tk += 'C'; fetch('/api/timerfire?v=' + _tk); }, 0);"
     "Promise.resolve().then(function(){ _tk += 'A'; });"
 
-    /* §8.7's STRING HANDLER, AND STEP 2's IDENTIFIER ACROSS THE TWO ARMS THAT HAND ONE BACK. The three rows
-       above all pass a Function, so the arm of the timer initialization steps that returns a handle WITHOUT
-       making an entry — the one that compiles the handler as a classic script — ran in no test in this tree.
-       `strran` is that program having actually run; `next` is the two arms drawing from ONE per-global
-       counter, which is what makes a handle name at most one timer. A second counter, or an arm that forgets
-       to bump, gives two live timers one identifier and `clearTimeout` then clears the wrong one — a defect
-       with no other symptom, since both calls still return a plausible number. */
+    /* §8.7's STRING HANDLER, AND STEP 2's IDENTIFIER ACROSS THE TWO SPELLINGS OF THE HANDLER UNION. The three
+       rows above all pass a Function, so the arm of the timer initialization steps whose handler is compiled
+       as a classic script ran in no test in this tree. `strran` is that program having actually run; `next` is
+       the two spellings drawing from ONE per-global counter, which is what makes a handle name at most one
+       timer. A second counter, or a path that forgets to bump, gives two live timers one identifier and
+       `clearTimeout` then clears the wrong one — a defect with no other symptom, since both calls still return
+       a plausible number. (That the string form makes a map ENTRY at all is what the two rows below are for:
+       it did not, and `next` was true anyway, because a minted-and-discarded handle counts the same.) */
     "var _tsh1 = setTimeout(\"fetch('/api/timerstr?v=strran');\", 0);"
     "var _tsh2 = setTimeout(function(){ fetch('/api/timerhandle?h=' +"
     " (_tsh2 === _tsh1 + 1 ? 'next' : 'reused')); }, 0);"
+
+    /* §8.7's STRING HANDLER IS A TIMER, WHICH IS THE HALF THE ROW ABOVE CANNOT SEE. `strran` says the program
+       RAN; it says nothing about WHEN, and the two things a timer is — a `timeout` that orders it and a map
+       entry `clearTimeout` removes — were both absent while the string arm queued its script at the SET.
+       Neither has any other symptom: the call still returns a plausible handle and the program still runs.
+       `cleared` IS THE CANCELLATION. A string-handled timer that is cleared before it fires must leave no
+       record at all, so `notcleared` appearing is the whole defect in one token — `clearTimeout` looking up an
+       identifier that names nothing, and the program running anyway.
+       `ba` IS THE `timeout`. §8.7 orders the timer task source by expiry, so the 0-delay row runs before the
+       100-delay one and the later handler reads both letters; queued at the set instead, both went onto the
+       flow's program sequence in SOURCE order and the reading handler saw only its own. The two delays are the
+       discriminator the spec's own worked example is not: `setTimeout({toString(){ setTimeout("logger('ONE')",
+       100); return "logger('TWO')" }}, 100)` logs "ONE TWO" under either placement, because argument
+       conversion runs the inner call first and both timeouts are equal.
+       IT NEEDS THE VIRTUAL CLOCK TO MOVE FORWARD, which no other statement in this fixture asks for: every
+       other timer here is 0-delay, so `timerdelay` is also the first probe of core/timing/event_loop.c's
+       event_loop_may_advance under a document with live requests. A 0 on that row is therefore two claims at
+       once and its NOT-REACHED text says so. */
+    "var _tso = '';"
+    "var _tsc = setTimeout(\"fetch('/api/timerclr?v=notcleared');\", 0);"
+    "clearTimeout(_tsc);"
+    "setTimeout(\"_tso += 'a'; fetch('/api/timerdelay?v=' + _tso);\", 100);"
+    "setTimeout(\"_tso += 'b'; fetch('/api/timerclr?v=cleared');\", 0);"
 
     /* §8.7 STEP 4 OVER AN UNKNOWN `timeout` — "if timeout is less than 0, then set timeout to 0" asked about
        a value nothing computed, which is a question with two real answers and therefore a FORK.
@@ -5417,7 +5441,6 @@ static void tf_agent_init(JSContext *ctx, const char *origin, const char *top_le
     g_id_append_child = idl_method_id(ctx, ONE_STR, 1, js_append_child, 0);
     /* THIS FIXTURE'S EDGES — WHO answers, which is the half that is legitimately per-host. */
     { static const FetchProvider P = { engine_pending_fetch_url }; fetch_set_provider(&P); }
-    timer_set_script_sink(engine_queue_timer_script);   /* §8.7 Timers: a STRING handler is evaluated, as a flow */
     result_set_page_error_hook(tf_page_error);   /* …and WHO reads an uncaught page error — see tf_page_error */
     tf_declare_staged_page_errors();   /* …and which of them this document raises on purpose */
 
@@ -8219,6 +8242,28 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     fold_row(&timerstr_tt, &timerstr_why, param_value_is(js, "/api/timerstr", "v", "strran"),
              "the timer FIRED and /api/timerstr's `v` is not `strran` — the string handler reached its fetch "
              "without having been run as a program");
+    /* …AND THE TWO FACTS THAT MAKE A STRING HANDLER A TIMER RATHER THAN A SCRIPT. Separate rows from
+       `timer-string-handler` because they fail independently of it and of each other: the program can run
+       while being uncancellable, and it can be cancellable while ignoring its `timeout`. */
+    const char *timerclr_why = NULL; int timerclr_tt = 1;
+    fold_row(&timerclr_tt, &timerclr_why, !!strstr(js, "\"/api/timerclr\""),
+             "NOT REACHED: there is no /api/timerclr record at all, so no string-handled timer fired here. "
+             "That is the SCHEDULE and not the cancellation");
+    fold_row(&timerclr_tt, &timerclr_why, param_value_is(js, "/api/timerclr", "v", "cleared"),
+             "the surviving string-handled timer did not fire, so this run says nothing about the cleared one");
+    fold_row(&timerclr_tt, &timerclr_why, !param_value_is(js, "/api/timerclr", "v", "notcleared"),
+             "§8.7's clearTimeout did not remove a STRING handler's entry — the timer initialization steps "
+             "returned a handle that names nothing and the program ran anyway");
+    const char *timerdelay_why = NULL; int timerdelay_tt = 1;
+    fold_row(&timerdelay_tt, &timerdelay_why, !!strstr(js, "\"/api/timerdelay\""),
+             "NOT REACHED: there is no /api/timerdelay record at all. TWO claims share this row and it does "
+             "not separate them: either the 100ms string-handled timer never fired, or the event loop's "
+             "virtual clock never moved FORWARD in this document (core/timing/event_loop.c's "
+             "event_loop_may_advance declines while the host owes a reply) — this is the only statement in "
+             "this fixture with a nonzero delay. That is the SCHEDULE");
+    fold_row(&timerdelay_tt, &timerdelay_why, param_value_is(js, "/api/timerdelay", "v", "ba"),
+             "§8.7's `timeout` did not order two STRING handlers — the source order decided them, which is "
+             "what queueing the classic script at the SET rather than at the expiry does");
     /* AND `next` IS NOT THIS STATEMENT'S ALONE. The @S URL sink's source renders as `{state}.next` in
        `securitySinks` — the same spelling `s_poc`/`s_stage` ask for a few hundred lines down — so the old
        unscoped term read 1 on every run that recorded the location sink at all, whatever the counter did.
@@ -9982,6 +10027,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "xdoc-job", xdocjob_tt, "/api/xdocjob", SESS_EXPLORE, xdocjob_why },
         { "timer-order", timer_tt, "/api/timerfire", SESS_EXPLORE, timer_why },
         { "timer-string-handler", timerstr_tt, "/api/timerstr", SESS_EXPLORE, timerstr_why },
+        { "timer-string-clear", timerclr_tt, "/api/timerclr", SESS_EXPLORE, timerclr_why },
+        { "timer-string-delay", timerdelay_tt, "/api/timerdelay", SESS_EXPLORE, timerdelay_why },
         { "timer-handle-counter", timerhandle_tt, "/api/timerhandle", SESS_EXPLORE, timerhandle_why },
         { "timer-unknown-delay-fork", unkdelay_tt, "/api/unkdelay", SESS_EXPLORE, unkdelay_why },
         { "idl-index-key-one-predicate", idxkey_tt, "/api/idxkey", SESS_EXPLORE, idxkey_why },

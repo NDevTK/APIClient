@@ -159,7 +159,6 @@ static void engine_agent_init(JSContext *ctx, const char *origin, const char *to
        answer is to PARK the request on the flow's pending register and let the trusted zone fetch it.
        fetch.c aborts on a fetch issued with no provider, which is what asserts this line is here. */
     { static const FetchProvider P = { engine_pending_fetch_url }; fetch_set_provider(&P); }
-    timer_set_script_sink(engine_queue_timer_script);   /* HTML §8.7 Timers: a string handler is evaluated, as a flow */
     /* …AND WHO READS AN UNCAUGHT PAGE ERROR, which is an edge of the same kind and the one this host answers
        with its document: `qjs_result` publishes result_json for every page unconditionally, so `pageErrors`
        reaches the zone whether or not the frontier drained. Stated rather than left as a NULL hook — see
