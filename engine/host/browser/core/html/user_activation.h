@@ -16,9 +16,31 @@
  * at their spec-initial values, the three boolean states are COMPUTED from them at the moment they are asked,
  * and §6.4.2's notification and both consumptions are here for the moment an activation exists to report. What
  * this engine does not yet have is the SOURCE: it dispatches no trusted `keydown`/`mousedown`/`pointerdown`/
- * `pointerup`/`touchend`, so nothing calls user_activation_notify and every read answers false — the same
+ * `pointerup`/`touchend`, so no ACTIVATION TRIGGERING INPUT EVENT is fired here and every read answers false — the same
  * answer the constant gave, computed rather than asserted, and it changes the moment the first trusted input
  * event exists.
+ *
+ * AN ABSENT INPUT EVENT IS NOT AN ABSENT NOTIFICATION, AND THE SENTENCE ABOVE USED TO SAY IT WAS. What stood
+ * here was this file's own words and not §6.4.2's — "so nothing calls
+ * user_activation_notify" — which was a claim about THIS TREE of exactly the kind CLAUDE.md says
+ * goes stale while still reading as authoritative — and it has a counterexample. §6.4.2's activation
+ * notification steps are performed by algorithms that fire NO input event at all, and one of them is built:
+ * File System Access §3.3 "The showOpenFilePicker() method" ends "Perform the activation notification steps
+ * in global's browsing context.", which core/file/file_picker.c performs when a picker settles, and §3.4 and
+ * §3.5 end the same way. So this component is LIVE CODE with a live caller; an activation the engine has
+ * WATCHED ITSELF PERFORM writes a real timestamp, and from that write on §6.4.1's three questions are
+ * arithmetic for that Window and fork over nothing. What has no producer is the trusted INPUT EVENT, which is
+ * a narrower and different absence, and core/html/close_request.h's is narrower again.
+ *
+ * AND THE INPUT EVENT THAT IS MISSING WILL NEVER BE THE ESC KEY — which a reader arriving from
+ * core/html/close_request.h has to know before treating the two absences as one producer. §6.4.2 defines its
+ * trigger as "any event whose isTrusted attribute is true and whose type is one of" five types, and the first
+ * of the five is `keydown` "provided the key is neither the Esc key nor a shortcut key reserved by the user
+ * agent". HTML §6.10.1 "Close requests" names the single `keydown` its keyboard platform fires as that
+ * platform's one relevant event — so the event §6.10.1 needs is exactly the event §6.4.2 excludes. A
+ * trusted-keydown DISPATCH is one mechanism serving both sections; a trusted Esc keydown is not one act
+ * discharging both, and a diff that notified activation from it would report an interaction §6.4.2 says did
+ * not happen.
  *
  * PER WINDOW MEANS PER REALM, AND THE RECORD TIME-TRAVELS. The timestamps are a Window's, so they live in this
  * realm's own baseline record (realm.h's per-realm value), the shape §6.2's visibility state and §8.12 Animation frames's

@@ -25,8 +25,13 @@
  * relevant global object to perform the following close request steps:". A potential close request is a USER
  * GESTURE — §6.10.1's own four examples are the Esc key, an Android back button or gesture, an assistive
  * technology's dismiss gesture, and a game controller's back button — and this agent receives none of them:
- * it dispatches no trusted input events at all, which core/html/user_activation.h states from its own side as
- * the reason §6.4.1's sticky and transient activation timestamps have no source either.
+ * it dispatches no trusted input events at all, which core/html/user_activation.h states from its own side.
+ *   WHAT THAT HEADER DOES NOT SAY, AND WHAT THIS ONE SAID IT DID, is that §6.4.1's sticky and transient
+ * activation timestamps therefore have no source "either". They have one: §6.4.2's activation notification
+ * steps are performed by algorithms that fire no input event at all, and core/file/file_picker.c performs
+ * them for File System Access §3.3 "The showOpenFilePicker() method". So user activation has a live producer
+ * in this build and a close request has none — two absences of different sizes, which is why the residual at
+ * the end of this header now names a next diff that is smaller than the one it used to name.
  *   SO THIS ALGORITHM HAS NO LIVE CALLER IN THIS BUILD, and that is stated here rather than implied by an
  * absence, because the alternative — leaving a reader to infer reachability from the fact that the code
  * compiles — is how an unreachable path gets counted as a measured one. It is not a stub: every step below is
@@ -101,15 +106,33 @@
  *     step 3's keyboard-platform arm, which fires the single `keydown` §6.10.1 names and therefore parks on
  *     the page's own listeners, and step 5's cancelled-event return, which is unsatisfiable while step 4's
  *     `event` is null on every path.
- *   — WHAT THE NEXT DIFF BUILDS: a trusted input source that dispatches a `keydown` whose `isTrusted` is true,
- *     and the queue-a-global-task-on-the-user-interaction-task-source call that turns one into this task.
- *     core/html/user_activation.h names the same absent source as the blocker for §6.4.2's activation
- *     notification, so the two are one producer and not two, and whichever diff builds it discharges both.
+ *   — WHAT THE NEXT DIFF BUILDS: §6.10.1's OTHER conforming platform, which needs no event at all — "On
+ *     platforms where a back button is a potential close request, no event is involved, so when the back
+ *     button is pressed, the user agent proceeds directly to process close watchers." What must EXIST
+ *     AFTERWARD is therefore two things and not four: a modelled gesture that arrives at a Document, and the
+ *     queue-a-global-task-on-the-user-interaction-task-source call that turns one into this task. No
+ *     KeyboardEvent, no dispatch, no §6.4.2 notification — the nine steps below are already COMPLETE for that
+ *     platform, which is what the paragraph on steps 3 and 4 above says in the standard's own words. The
+ *     KEYBOARD platform is the diff after it and is strictly larger: a trusted `keydown` this engine mints,
+ *     dispatched at a target, whose listeners park the flow before step 5 can read its canceled flag.
+ *   — AND THE TWO SECTIONS ARE ONE DISPATCH MECHANISM, NEVER ONE EVENT. What stood here was this header's own
+ *     sentence, not the standard's: core/html/user_activation.h named the same absent source "so the two are
+ *     one producer and not two, and whichever diff builds it discharges both". That is SPEC-WRONG. §6.4.2
+ *     defines its trigger as "any event whose isTrusted attribute is true and whose type is one of" five
+ *     types, of which the first is `keydown` "provided the key is neither the Esc key nor a shortcut key
+ *     reserved by the user agent" — so the single `keydown` §6.10.1's keyboard platform fires is exactly the
+ *     one §6.4.2 excludes. A trusted-keydown dispatch is a mechanism both sections use; a trusted Esc keydown
+ *     discharges these nine steps and must leave every timestamp in §6.4.1 UNTOUCHED, and a diff that
+ *     notified activation from it would report an interaction the standard says did not happen.
  *   — HOW ITS ABSENCE WOULD SHOW: a page that constructs a `CloseWatcher` and registers `oncancel`/`onclose`
  *     sees both fire for its own `requestClose()` and `close()` and NEVER for a user's close request; and
- *     §6.10.2's `allowedNumberOfGroups` only ever rises, because process close watchers' step 3 decrement is
- *     the one fall it has and nothing reaches it. In the corpus: WPT `close-watcher/esc-key/` is the subtree
- *     that measures exactly this, and every file in it fails for want of a way to press a key.
+ *     §6.10.2's `allowedNumberOfGroups` rises without ever falling — the RISE has a live producer (§6.4.2's
+ *     step 5.2 notification, reached from the file picker), while process close watchers' step 3 decrement is
+ *     the one fall it has and nothing reaches it, so the two halves of that arithmetic are not equally
+ *     unreachable and only one of them is this residual's. In the corpus: WPT `close-watcher/esc-key/` is the
+ *     subtree that measures the keyboard platform, and `close-watcher/` is in engine/wpt.mjs's collection
+ *     list while its files are not on disk in this checkout — so what the subtree scores here has never been
+ *     measured, and "every file in it fails" is a prediction this residual is not entitled to make.
  */
 #ifndef ENGINE_HOST_BROWSER_CORE_HTML_CLOSE_REQUEST_H
 #define ENGINE_HOST_BROWSER_CORE_HTML_CLOSE_REQUEST_H
