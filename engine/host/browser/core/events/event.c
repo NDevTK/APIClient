@@ -220,7 +220,8 @@ void event_end_dispatch(JSContext *ctx, JSValueConst ev)
 
 /* §2.9's EVENT PATH, which is the event's own state and not the dispatch's — `composedPath()` reads "this's
    path", so a walk that kept it privately could only ever answer with the one target it happened to be standing
-   on. Set by dispatch as it appends (step 6.3 and step 6.8.7's append), cleared by step 9. */
+   on. Set by dispatch as it appends (step 6.3, and the walk's own appends at steps 6.9.6.2
+   and 6.9.8.3), cleared by step 9. */
 void event_set_path(JSContext *ctx, JSValueConst ev, JSValueConst path)
 {
     JSValue slots = event_slots(ctx, ev);

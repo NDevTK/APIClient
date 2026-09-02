@@ -16,7 +16,7 @@ void window_init(JSContext *ctx);
 void window_install(JSContext *ctx, JSValueConst global, const char *url);
 
 /* IS THIS A `Window` OBJECT — the class brand, which the global carries from window_install. DOM §2.9's event
-   path walk (step 6.9.5) is the caller: a Window is the one entry of a propagation path that is not a node, and
+   path walk (step 6.9.6) is the caller: a Window is the one entry of a propagation path that is not a node, and
    the branch it takes decides whether the event's target is retargeted there. No `ctx`, because a class id is
    the AGENT's registration and not a realm's — a child navigable's Window answers this in its parent's realm. */
 bool window_is(JSValueConst v);

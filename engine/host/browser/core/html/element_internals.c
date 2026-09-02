@@ -612,16 +612,16 @@ static JSValue js_internals_set_validity(JSContext *ctx, JSValueConst this_val, 
     return JS_UNDEFINED;
 }
 
-/* ---- §4.10.21.1's check/report validity steps ---------------------------------------------------------------
+/* ---- §4.10.21.3's check/report validity steps ---------------------------------------------------------------
  *
  * BOTH ARE MACHINES, and for the one reason anything here is: step 1.1 FIRES an `invalid` event at the
  * element, which is the page's own handlers — a loop, an `await`, a DOM mutation — and a C activation hosting
  * those is the drive-to-completion this engine aborts on. The two differ only in what the event's return value
  * is for, so they are ONE machine with a magic. */
 #define EI_VALIDITY_STAGES(X) \
-    X(EIV_DECIDE, "HTML §4.10.21.1 check/report validity steps step 1 (is element a candidate for constraint " \
+    X(EIV_DECIDE, "HTML §4.10.21.3 check/report validity steps step 1 (is element a candidate for constraint " \
                   "validation, and does it fail to satisfy its constraints)") \
-    X(EIV_FIRE,   "HTML §4.10.21.1 check/report validity steps step 1.1 (fire an event named invalid at " \
+    X(EIV_FIRE,   "HTML §4.10.21.3 check/report validity steps step 1.1 (fire an event named invalid at " \
                   "element, cancelable), and the report/return the verdict decides")
 enum { EI_VALIDITY_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const EI_VALIDITY_STEPS[] = { EI_VALIDITY_STAGES(JS_STEP_STAGE_LABEL) NULL };

@@ -502,7 +502,7 @@ static JSClassID g_window_class;
    component is declared" a fact separate from any one of the values it declares — see window_is. */
 static JSRuntime *g_window_rt;
 
-/* "IS A Window OBJECT" — the brand, off the class the global carries. DOM §2.9 step 6.9.5 asks it of every
+/* "IS A Window OBJECT" — the brand, off the class the global carries. DOM §2.9 step 6.9.6 asks it of every
    parent the event path walk reaches, because a Window is the one path entry that is NOT a node and so is the
    one the shadow-including ancestor test cannot answer for. Asking it as "is it not a node" would be an
    inference about who else can appear in a path rather than a fact about this object, and the class is what

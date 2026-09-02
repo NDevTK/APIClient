@@ -928,7 +928,7 @@ static bool traversable_is_script_closable(JSContext *ctx, JSValueConst proxy)
     return session_history_length(tctx) == 1;
 }
 
-/* IS `maybe_ancestor` AN ANCESTOR NAVIGABLE OF `node` — the relation §7.4.2.1's algorithm asks twice, in both
+/* IS `maybe_ancestor` AN ANCESTOR NAVIGABLE OF `node` — the relation §7.4.2.4's algorithm asks twice, in both
    directions, and the only tree question it has. STRICT: a navigable is not its own ancestor, which is what
    makes the algorithm's step 1 a separate step from its step 2. The walk is up the PARENT chain rather than
    down, so it costs the depth of one navigable rather than the size of the tree, and it uses the ENGINE
@@ -951,9 +951,10 @@ static bool proxy_is_ancestor_of(JSContext *ctx, JSValueConst maybe_ancestor, JS
     return hit;
 }
 
-/* HTML §7.4.2.1's "a navigable SOURCE is ALLOWED BY SANDBOXING TO NAVIGATE a second navigable TARGET, given a
- * source snapshot params sourceSnapshotParams", verbatim, for the one caller §7.2.2.1's close() has: source is
- * the incumbent global object's navigable — this realm's — and target is thisTraversable.
+/* HTML §7.4.2.4 "Preventing navigation"'s "a navigable SOURCE is ALLOWED BY SANDBOXING TO NAVIGATE a second
+ * navigable TARGET, given a source snapshot params sourceSnapshotParams", verbatim, for the one caller
+ * §7.2.2.1's close() has: source is the incumbent global object's navigable — this realm's — and target is
+ * thisTraversable.
  *
  * THE FLAGS ARE THE SOURCE'S, which is sourceSnapshotParams's "sandboxing flags — sourceDocument's active
  * sandboxing flag set" (§7.4.2.1's snapshot-source-snapshot-params). A sandbox restricts what the sandboxed
@@ -981,7 +982,7 @@ static bool allowed_by_sandboxing_to_navigate(JSContext *ctx, JSValueConst proxy
            `allow-top-navigation` — so it names the conversion rather than blocking one. */
         DCHECK(!(flags & (SANDBOX_TOP_LEVEL_NAVIGATION_WITH_USER_ACTIVATION |
                           SANDBOX_TOP_LEVEL_NAVIGATION_WITHOUT_USER_ACTIVATION)),
-               "§7.4.2.1 steps 3.2-3.3 need sourceSnapshotParams's HAS TRANSIENT ACTIVATION to decide whether "
+               "§7.4.2.4 steps 3.2-3.3 need sourceSnapshotParams's HAS TRANSIENT ACTIVATION to decide whether "
                "a sandboxed nested document may close its own top-level traversable, and §6.4's transient "
                "activation is a SUSPENDING read (core/html/user_activation.h) while §7.2.2.1's close() is a "
                "plain C body — make close() a step machine and take the answer from "
@@ -996,7 +997,7 @@ static bool allowed_by_sandboxing_to_navigate(JSContext *ctx, JSValueConst proxy
            and refuse a sandboxed opener the close() of its own popup, which is the exact case the field
            exists for. Unreachable without the flag. */
         DCHECK(!(flags & SANDBOX_NAVIGATION),
-               "§7.4.2.1 step 4.1 asks whether the source is the ONE PERMITTED SANDBOXED NAVIGATOR of this "
+               "§7.4.2.4 step 4.1 asks whether the source is the ONE PERMITTED SANDBOXED NAVIGATOR of this "
                "top-level traversable, and no navigable in this engine carries that field — §7.1's rules for "
                "choosing a navigable set it on a navigable a SANDBOXED document opened, and until it is "
                "carried a sandboxed opener cannot be told from an unrelated sandboxed document");

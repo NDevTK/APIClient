@@ -2254,7 +2254,7 @@ static int tree_steps_post_connection(JSContext *ctx, TreeStepBuf *b, JSValue in
        entry's post-connection steps may have removed this one. HTML §4.12.1.1 "Processing model" is the worked
        example: `body.append(script1, script2)` where script1 removes script2 prints nothing, "Because the
        second script is no longer connected, its HTML element post-connection steps do not run, and it does not
-       get prepared." element_tree_changed's test at the write is the answer for step 7.7 and is the WRONG
+       get prepared." element_tree_changed's test at the write is the answer for DOM §4.2.3 insert step 7.7 and is the WRONG
        answer here — it was taken before any of these steps ran. */
     if (node_is_connected(n) && n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
         lxb_dom_element_t *el = lxb_dom_interface_element(n);
@@ -2433,7 +2433,7 @@ static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h, JSVal
                    ever loads anything. It is here rather than on node.c's tree-hook list because that list is
                    the DOM's own step families and this is an HTML ELEMENT INSERTION STEPS entry, which needs
                    this seam's realm (the inserted node's document, not the mutating one) and its position
-                   (insert step 7.7, before step 8's mutation record). */
+                   (DOM §4.2.3 insert step 7.7, before step 8's mutation record). */
                 media_element_source_inserted(ctx, el);
                 /* HTML §4.8.4.3.2: "The img or source HTML element insertion steps … count the mutation as a
                    relevant mutation" — so an `img` created with `createElement`, given a `src` and then

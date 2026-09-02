@@ -2884,7 +2884,7 @@ Step numbers are the standard's own list numbering as of that date.
    inner invoke step 2's "whose removed is false". A clone with no `removed` field gets the second
    half backwards and re-runs a listener the page has just removed.
 5. **`AT_TARGET` is not "index 0", and a retargeted event is AT_TARGET more than once.** Steps
-   6.13.1 and 6.14.1 both say "if item's SHADOW-ADJUSTED TARGET is non-null", and step 6.9.7 gives a
+   6.13.1 and 6.14.1 both say "if item's SHADOW-ADJUSTED TARGET is non-null", and step 6.9.8 gives a
    non-null one to every item where the walk left a shadow tree. An event dispatched inside a shadow
    tree is therefore `AT_TARGET` at the node AND at the host, with `event.target` reading as a
    different object at each.
@@ -2956,12 +2956,12 @@ this list observes; dropping it from the live list alone is invisible to the wal
       false. — *(see §11.8)*
    4. Let **isActivationEvent** be true if event is a `MouseEvent` and its type is `"click"`. —
    5. If isActivationEvent and **target** has activation behavior, set activationTarget to target. —
-      *(no `bubbles` condition — this is the difference from 6.9.5.1)*
+      *(no `bubbles` condition — this is the difference from 6.9.6.1)*
    6. Let **slottable** be target if it is a slottable and is **assigned**, otherwise null. —
    7. Let **slotInClosedTree** be false. —
    8. Let parent be the result of invoking target's **get the parent** with event. — **[S]** *(the
       DOM's own get the parent is straight-line; a host that defines it otherwise makes this one)*
-   9. **While parent is non-null:** the nine sub-steps of §11.9 — **walk of page size**
+   9. **While parent is non-null:** the ten sub-steps of §11.9 — **walk of page size**
    10. Let clearTargetsItem be the last path item with a non-null shadow-adjusted target. —
    11. Set clearTargets if that item's shadow-adjusted target, its relatedTarget, or an EventTarget
        in its touch target list **is a node whose root is a shadow root**. —
@@ -3091,7 +3091,7 @@ is **per global**, which is why it lives on the global object and not in the rep
    that record is now `removed` and the walk would skip the very listener whose answer is arriving.
 5. **The activation behaviour is a stage after the cleanup**, not before it — a behaviour that reads
    `currentTarget` must see null.
-6. **The walk's own `target` is state, and it is NOT the walk's frontier.** Step 6.9.7.1 moves
+6. **The walk's own `target` is state, and it is NOT the walk's frontier.** Step 6.9.8.1 moves
    `target` at every shadow boundary while `parent` goes on climbing, so a machine that keeps one
    value for both appends every item with the same shadow-adjusted target — which is the bug this
    section was written to fix, in the shape it had before there were shadow trees to expose it. Two
@@ -3126,7 +3126,7 @@ has exactly one reader — inner invoke step 2.7.2, which suppresses HTML's `win
 is no `window.event` here either. A field with no producer and a field with no reader are both
 absent by name rather than carried as always-false state.
 
-### 11.9 §2.9 step 6.9's loop body — the nine sub-steps that are shadow DOM's whole effect on dispatch
+### 11.9 §2.9 step 6.9's loop body — the ten sub-steps that are shadow DOM's whole effect on dispatch
 
 **While parent is non-null:**
 
@@ -3134,30 +3134,31 @@ absent by name rather than carried as always-false state.
    root is a shadow root whose mode is `"closed"`, set **slotInClosedTree to true**. —
 2. If parent is a slottable and is assigned, set slottable to parent. —
 3. Let relatedTarget be retarget(event's relatedTarget, parent). — *(ABSENT)*
-4. Retarget each touch target against parent. — *(ABSENT)*
-5. **If parent is a `Window` object, OR parent is a node and target's root is a
+4. Let touchTargets be a new list. — *(ABSENT)*
+5. Retarget each touch target against parent into touchTargets. — *(ABSENT)*
+6. **If parent is a `Window` object, OR parent is a node and target's root is a
    SHADOW-INCLUDING INCLUSIVE ANCESTOR of parent:**
    1. If isActivationEvent, **event's bubbles is true**, activationTarget is null and parent has
       activation behavior, set activationTarget to parent. —
    2. **Append to an event path** with parent, **null**, relatedTarget, touchTargets,
       slotInClosedTree. —
-6. Otherwise, if parent is relatedTarget, then set parent to null. — *(ABSENT with relatedTarget)*
-7. **Otherwise:**
+7. Otherwise, if parent is relatedTarget, then set parent to null. — *(ABSENT with relatedTarget)*
+8. **Otherwise:**
    1. **Set target to parent.** —
    2. If isActivationEvent, activationTarget is null and target has activation behavior, set
-      activationTarget to target. — *(NO `bubbles` condition, unlike 6.9.5.1)*
+      activationTarget to target. — *(NO `bubbles` condition, unlike 6.9.6.1)*
    3. **Append to an event path** with parent, **parent** as the shadow-adjusted target,
       relatedTarget, touchTargets, slotInClosedTree. —
-8. If parent is non-null, set parent to the result of invoking parent's get the parent. —
-9. **Set slotInClosedTree to false.** — *(per ITERATION, not per tree)*
+9. If parent is non-null, set parent to the result of invoking parent's get the parent. —
+10. **Set slotInClosedTree to false.** — *(per ITERATION, not per tree)*
 
-**Step 5 is the retargeting decision, and it is stated as a containment test rather than as "did we
-cross a boundary".** The walk's own `target` moves (7.1), so the question is asked afresh at every
+**Step 6 is the retargeting decision, and it is stated as a containment test rather than as "did we
+cross a boundary".** The walk's own `target` moves (8.1), so the question is asked afresh at every
 ancestor: while the parent is still inside the tree the current target's root spans, the item gets
 NO shadow-adjusted target and `invoke` keeps answering with the one further in; the first parent
 that is not — the shadow HOST — becomes the new target and carries its own. The relation is
 **shadow-including**, so it climbs from a node to its root's host, which is why a plain ancestor walk
-gets step 5 backwards for every node in a shadow tree.
+gets step 6 backwards for every node in a shadow tree.
 
 **Step 1's assert is why §4.4 "Interface Node"'s get the parent has to be right.** The abstract
 algorithm is declared in §2.7 "Interface EventTarget" ("Nodes, shadow roots, and documents override
@@ -3218,13 +3219,13 @@ B**, return A; otherwise set A to **A's root's host**.
 
 **It has no caller here, and building it anyway would be dead code.** Retargeting in §2.9 is applied
 to exactly two things — the event's `relatedTarget` (steps 4 and 6.9.3) and each member of its
-`touch target list` (steps 6.1-6.2 and 6.9.4) — and neither exists in this engine: `relatedTarget` is
+`touch target list` (steps 6.1-6.2 and 6.9.4-6.9.5) — and neither exists in this engine: `relatedTarget` is
 a member of `MouseEvent` and `FocusEvent`, the touch target list of `TouchEvent`, and none of those
-three interfaces is built. Retargeting of the TARGET is not this algorithm at all: it is step 6.9.7's
-"set target to parent", which IS built.
+three interfaces is built. Retargeting of the TARGET is not this algorithm at all: it is step 6.9.8.1's
+"Set target to parent", which IS built.
 
 So what is absent, by name, is: `relatedTarget` and its retargeting, the touch target list and its
-retargeting, step 6.9.6's "otherwise, if parent is relatedTarget" arm of the walk, the relatedTarget
+retargeting, step 6.9.7's "Otherwise, if parent is relatedTarget" arm of the walk, the relatedTarget
 and touch-target halves of step 6.11's clearTargets condition, step 11's clearing of those two
 fields, and the two path-item fields that hold them. All of them land WITH the first typed event
 interface that carries a relatedTarget, which is also what makes step 6.4's isActivationEvent

@@ -457,7 +457,7 @@ static CvMatcher *cv_matcher_new(JSContext *ctx, JSValueConst wrap, const char *
     X(CVR_COLLECT, "HTML §4.10.21.2 statically validate the constraints step 3 (for each field in controls, in " \
                    "tree order: a candidate for constraint validation that does not satisfy its constraints is " \
                    "added to invalid controls)") \
-    X(CVR_FIRE,    "HTML §4.10.21.2 statically validate the constraints step 5.1 (fire an event named invalid " \
+    X(CVR_FIRE,    "HTML §4.10.21.2 statically validate the constraints step 6.1 (fire an event named invalid " \
                    "at field, with the cancelable attribute initialized to true)") \
     X(CVR_REPORT,  "HTML §4.10.21.2 interactively validate the constraints step 3 (report the problems with " \
                    "the constraints of at least one of the elements in unhandled invalid controls to the user)")

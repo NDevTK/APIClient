@@ -48,7 +48,7 @@ enum { EVENT_TREE_NOT_SHADOW_ROOT = -1, EVENT_TREE_SHADOW_OPEN = 0, EVENT_TREE_S
        ROOT and not the document. OWNED; JS_NULL for anything that is not a node, which is also how the walk
        tells a Window from a node without a second question.
      `shadow_root_mode` answers EVENT_TREE_NOT_SHADOW_ROOT for everything that is not a shadow root.
-     `is_window` is §2.9 step 6.9.5's first disjunct.
+     `is_window` is §2.9 step 6.9.6's first disjunct.
      `is_slot` is what step 6.9.1's assert is about.
      `is_assigned_slottable` is §4.2.2.2's "a slottable is assigned", which is also what makes a node's get the
        parent answer with its slot.

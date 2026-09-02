@@ -622,7 +622,8 @@ static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
     }
 
     if (hdr->stage == RESP_INIT) {
-        /* §5.5 step 1: the RANGE check, after Web IDL's `unsigned short` conversion and never instead of it. */
+        /* §5.5's initialize a response step 1: the RANGE check, after Web IDL's `unsigned short`
+           conversion and never instead of it. */
         v_status = idl_dict_get(ctx, init, "status");
         status = 200;
         if (!JS_IsUndefined(v_status)) {
@@ -636,7 +637,7 @@ static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
             JS_ThrowRangeError(ctx, "a Response status must be in the range 200 to 599");
             return -1;
         }
-        /* §5.5 step 2: statusText must match reason-phrase. */
+        /* §5.5's initialize a response step 2: statusText must match reason-phrase. */
         v_text = idl_dict_get(ctx, init, "statusText");
         {
             const char *t = NULL;
@@ -654,7 +655,8 @@ static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
                 JS_ThrowTypeError(ctx, "a Response statusText is not a reason-phrase");
                 return -1;
             }
-            /* §5.5 steps 3-6: the response exists now, with its status and its status message. The BODY and
+            /* §5.5's initialize a response steps 3-4: the response exists now — the constructor's step 1,
+               json()'s step 3 — with its status and its status message. The BODY and
                the HEADERS are the two things still to come, and both may run the page's code. */
             s->result = response_alloc(ctx, &d);
             if (JS_IsException(s->result)) {
@@ -663,8 +665,9 @@ static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
                 JS_FreeValue(ctx, cb_result);
                 return -1;
             }
-            /* §5.5 step 3 creates "a new response", whose URL list is « » — so `url` answers "" (its URL is
-               null) and `redirected` answers false, both computed from the list rather than declared. */
+            /* §5.5's `new Response(body, init)` step 1 creates "a new response", whose URL list is « » — so
+               `url` answers "" (its URL is null) and `redirected` answers false, both computed from the list
+               rather than declared. */
             r = response_set(ctx, d, JS_UNDEFINED, status, t ? t : "", RESPONSE_TYPE_DEFAULT, NULL, 0, NULL,
                              HEADERS_GUARD_RESPONSE);
             JS_FreeCString(ctx, t);
@@ -676,8 +679,9 @@ static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
     }
 
     if (hdr->stage == RESP_HEADERS) {
-        /* §5.5 step 7: fill the response's headers, which have guard "response" — so a page that puts
-           Set-Cookie on a Response it built silently gets nothing, which is the header wpt asserts by name. */
+        /* §5.5's initialize a response step 5: fill the response's headers, which have guard "response" — so
+           a page that puts Set-Cookie on a Response it built silently gets nothing, which is the header wpt
+           asserts by name. */
         v_headers = idl_dict_get(ctx, init, "headers");
         r = headers_fill_run(ctx, hdr, &s->fill, v_headers, &s->list, HEADERS_GUARD_RESPONSE,
                              cb_result, out_cb, out_argc);
@@ -697,9 +701,10 @@ static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
            "the Response constructor was re-entered at a stage §5.5 and §5.5 do not have between them");
     JS_FreeValue(ctx, cb_result);
     d = response_of(s->result);
-    /* §5.5 step 8: a non-null body. §5.1's extraction is body.c's — one implementation of the union for both
-       including interfaces — so what is left here is the two things §5.5 itself does: refuse a body on a
-       null-body status, and set Content-Type when the extraction produced one and the header list has none. */
+    /* §5.5's initialize a response step 6: a non-null body. §5.2's extraction is body.c's — one implementation
+       of the union for both including interfaces — so what is left here is the two things step 6 itself
+       does: refuse a body on a null-body status, and set Content-Type when the extraction produced one and
+       the header list has none. */
     if (entry == RESP_ENTRY_JSON || (!JS_IsNull(body) && !JS_IsUndefined(body))) {
         char *mime = NULL;
 
@@ -722,14 +727,15 @@ static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
             if (bad) return -1;
             mime = strdup("application/json");
             CHECK(mime, "response: OOM naming a JSON body's type");
-        /* §5.5 step 8.1 extracts with no keepalive flag at all — the flag is a REQUEST's, and a Response is
-           not one, which is what §5.2's `= false` default says for a caller that names none. */
+        /* §5.5's `new Response(body, init)` step 4 extracts with no keepalive flag at all — the flag is a
+           REQUEST's, and a Response is not one, which is what §5.2's `= false` default says for a caller
+           that names none. */
         } else if (body_extract(ctx, &d->body, body, /*keepalive*/ false, &mime) < 0) {
             free(mime);
             return -1;
         }
-        /* §5.5 step 8.2: the extracted body's type is set ONLY when the header list does not already carry
-           one — an init that named a Content-Type wins over the arm's default. */
+        /* §5.5's initialize a response step 6.3: the extracted body's type is set ONLY when the header list
+           does not already carry one — an init that named a Content-Type wins over the arm's default. */
         if (mime) {
             const HeaderList *hl = headers_list_of(d->headers);
             char *existing = header_list_get(hl, "content-type");

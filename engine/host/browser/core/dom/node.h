@@ -180,7 +180,7 @@ size_t node_cd_byte_of(const lxb_dom_node_t *n, uint32_t units);
    composition cannot. */
 lxb_dom_node_t *node_split_text(JSContext *ctx, lxb_dom_node_t *node, uint32_t offset);
 /* DOM §4.5 "ADOPT A NODE", given `node` and `document` — the whole algorithm, which is what §4.2.3's insert
-   reaches at its step 6.1 and what `Document.adoptNode()`/`importNode()` are stated over.
+   reaches at its step 7.1 and what `Document.adoptNode()`/`importNode()` are stated over.
    IT IS NOT A "SET THE OWNER DOCUMENT": step 3 walks `node`'s SHADOW-INCLUDING inclusive descendants in
    shadow-including tree order and, per node, sets its node document, sets the node document of every attribute
    in an element's attribute list, re-derives its custom element registry (custom_elements.c owns that arm),
@@ -287,8 +287,9 @@ typedef struct NodeCloneState {
     lxb_dom_node_t *croot;
     lxb_dom_node_t *cnode;   /* the copy of `src` — what its own children get inserted under */
     /* `clone a node`'s `subtree` FOR THE CURRENT LEVEL, which is not one value for the whole call: step 5 is
-       conditioned on it, HTML §4.12.3 returns early without it, and step 6.7 passes TRUE regardless — so
-       `host.cloneNode(false)` clones no light children and the whole shadow tree. */
+       conditioned on it, HTML §4.12.3 returns early without it, and DOM §4.4's `clone a node` step 6.7
+       passes TRUE regardless — so `host.cloneNode(false)` clones no light children and the whole shadow
+       tree. */
     bool deep;
     int  after;              /* the CALLER's stage this algorithm hands control back at, with `copy` filled */
     NodeCloneFrame *stack;   /* the levels above this one */

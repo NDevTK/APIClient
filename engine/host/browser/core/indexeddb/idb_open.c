@@ -13,7 +13,7 @@
  *   step 10.5 "wait until all connections in openConnections are closed" — satisfied by the PAGE calling
  *            `close()`, or by the last transaction of an already-close-pending connection finishing. Nothing
  *            the queue can order.
- *   step 10.6's own last step, §5.7 step 10 "wait for transaction to finish" — satisfied by the upgrade
+ *   step 10.6's own last step, §5.7 step 11 "wait for transaction to finish" — satisfied by the upgrade
  *            transaction's commit or abort task, which fires `complete` or `abort` at the page first.
  *
  * A machine RESTS at a stage and is resumed by the SCHEDULER; it cannot be resumed by an event that has not
@@ -94,13 +94,13 @@
    re-entered with its request's answer, and re-deriving the target there would re-run the very filter the fire
    has just invalidated. See OPN_STAGES. */
 #define E_TARGET       "versionChangeTarget"
-/* THE VERSION THE DATABASE HELD BEFORE THIS ALGORITHM RAN — §5.7 step 7's `old version`, fired at step 9.5,
+/* THE VERSION THE DATABASE HELD BEFORE THIS ALGORITHM RAN — §5.7 step 7's `old version`, fired at step 10.5,
    and §5.3 step 10's `version`, which is that algorithm's RETURN VALUE and what §4.3's delete completion task
    fires as the success event's `oldVersion`. One field because it is one fact, and §5.3 step 4's "otherwise,
    return 0 (zero)" is the 0 idb_open_request leaves here. */
 #define E_OLD_VERSION  "oldVersion"
 #define E_BLOCKED      "blockedFired"     /* whether step 10.4 has already fired `blocked` */
-/* §5.1 step 10.8's condition. §5.7 step 10 waits for the upgrade transaction to FINISH, and which of the two
+/* §5.1 step 10.8's condition. §5.7 step 11 waits for the upgrade transaction to FINISH, and which of the two
    endings it reached is the whole of what that step asks — see idb_open_upgrade_finished. FALSE for an open
    that never ran an upgrade at all, which is the same answer. */
 #define E_ABORTED      "upgradeAborted"
@@ -326,7 +326,7 @@ typedef struct {
     uint8_t     phase;    /* the dispatch request's own cursor */
     JSValue     ev;       /* the event in flight (owned) */
     EventFireCb cb;       /* the dispatch request's operand buffer */
-    uint8_t     did_throw;/* §4.2 step 7's legacyOutputDidListenersThrowFlag, which §5.7 step 9.6 reads */
+    uint8_t     did_throw;/* §4.2 step 7's legacyOutputDidListenersThrowFlag, which §5.7 step 10.6 reads */
 } JSIdbOpenState;
 
 static void js_idb_open_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -638,9 +638,9 @@ static int js_idb_open_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
 
     STEP_ARM(OPN_UPGRADE);
         JS_FreeValue(ctx, cb_result);
-        /* Step 10.6: "Run upgrade a database using connection, version and request." §5.7's own step 10 is a
-           wait for the transaction to finish, so it is a machine of its own and steps 10.7-10.8 continue in
-           §4.3's completion task, which idb_open_upgrade_finished enqueues. */
+        /* Step 10.6: "Run upgrade a database using connection, version and request." §5.7's own step 11 is a
+           wait for the transaction to finish, so it is a machine of its own and §5.1's steps 10.7-10.8 continue
+           in §4.3's completion task, which idb_open_upgrade_finished enqueues. */
         entry_enqueue(ctx, g_upgrade_stepid, entry);
         return JS_STEP_DONE;
 }
@@ -920,16 +920,16 @@ static const JSTrampStepDef js_idb_delete_finish_def = {
 /* ---- §5.7's UPGRADE A DATABASE ----------------------------------------------------------------------------- */
 
 #define UPG_STAGES(X) \
-    X(UPG_CREATE,   "Indexed Database §5.7 steps 1-8 — ONE O(1) engine action: the upgrade transaction is " \
+    X(UPG_CREATE,   "Indexed Database §5.7 steps 1-9 — ONE O(1) engine action: the upgrade transaction is " \
                     "created over the connection's object store set, the database points at it, it is made " \
                     "inactive and started, db's version is set to the new version, and the request's " \
                     "processed flag is set") \
-    X(UPG_DELIVER,  "Indexed Database §5.7 steps 9.1-9.4 — ONE O(1) engine action: the request's result is " \
+    X(UPG_DELIVER,  "Indexed Database §5.7 steps 10.1-10.4 — ONE O(1) engine action: the request's result is " \
                     "the connection, its transaction is the upgrade transaction, its done flag is set, and " \
                     "the transaction is made active for the dispatch") \
-    X(UPG_FIRE,     "Indexed Database §5.7 step 9.5 (fire a version change event named upgradeneeded at " \
+    X(UPG_FIRE,     "Indexed Database §5.7 step 10.5 (fire a version change event named upgradeneeded at " \
                     "request with old version and version)") \
-    X(UPG_SETTLE,   "Indexed Database §5.7 step 9.6 (if transaction's state is active, set it inactive and " \
+    X(UPG_SETTLE,   "Indexed Database §5.7 step 10.6 (if transaction's state is active, set it inactive and " \
                     "abort it when the listeners threw)")
 enum { UPG_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const UPG_STEPS[] = { UPG_STAGES(JS_STEP_STAGE_LABEL) NULL };
@@ -981,7 +981,7 @@ static int js_idb_upgrade_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
         }
         /* Step 4: "Set db's upgrade transaction to transaction." Step 5: "Set transaction's state to
            inactive." Step 6: "Start transaction" — DIRECTLY, which is why the creation does not queue
-           §2.7.1's start task for an upgrade transaction: step 9's `upgradeneeded` handler places requests
+           §2.7.1's start task for an upgrade transaction: step 10's `upgradeneeded` handler places requests
            against this transaction inside the same task, and a start one queue hop away would hold every one
            of them. §2.7.2's constraints are asserted inside the start, where §5.1 step 10's "wait until all
            connections are closed" is what makes them hold.
@@ -993,11 +993,11 @@ static int js_idb_upgrade_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
         idb_transaction_set_state(ctx, tx, IDB_TX_INACTIVE);
         idb_transaction_start(ctx, tx);
         /* Steps 7-8: "Let old version be db's version. Set db's version to version." The old version is
-           carried on the entry because step 9.5 fires it at the page AFTER this task has ended. */
+           carried on the entry because step 10.5 fires it at the page AFTER this task has ended. */
         old_version = idb_database_version(ctx, db);
         entry_set(ctx, entry, E_OLD_VERSION, JS_NewFloat64(ctx, old_version));
         idb_database_set_version(ctx, tx, db, version);
-        /* Step 8's last line: "Set request's processed flag to true." */
+        /* Step 9: "Set request's processed flag to true." */
         idb_request_set_processed(ctx, req, true);
         JS_FreeValue(ctx, tx);
         JS_FreeValue(ctx, req);
@@ -1012,10 +1012,10 @@ static int js_idb_upgrade_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
         conn = entry_get(ctx, entry, E_CONNECTION);
         db = idb_connection_database(ctx, conn);
         tx = idb_database_upgrade_transaction(ctx, db);
-        DCHECK(idb_transaction_is(tx), "§5.7 step 9 ran with no upgrade transaction on the database — step 4 "
+        DCHECK(idb_transaction_is(tx), "§5.7 step 10 ran with no upgrade transaction on the database — step 4 "
                                        "set one and only §5.4 step 2.5.1 and §5.5 step 7.1 clear it, neither "
                                        "of which can have run before the transaction has finished");
-        /* Steps 9.1-9.3: the request now REPORTS the connection, and §2.8.1's "the transaction of an open
+        /* Steps 10.1-10.3: the request now REPORTS the connection, and §2.8.1's "the transaction of an open
            request is null unless an upgradeneeded event has been fired" becomes true here. */
         idb_request_set_result(ctx, req, JS_DupValue(ctx, conn));
         idb_request_set_transaction(ctx, req, JS_DupValue(ctx, tx));
@@ -1067,7 +1067,7 @@ static int js_idb_upgrade_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
                    placed against the transaction, and the transaction has not been aborted." An upgrade
                    transaction has NO cleanup event loop, so §2.7.1's cleanup will never see it — this is the
                    other site that sentence applies at, and without it a migration that placed no request
-                   would leave the transaction inactive forever and §5.7 step 10 would never return. A
+                   would leave the transaction inactive forever and §5.7 step 11 would never return. A
                    transaction the handler DID place requests against commits from §5.9 step 8.3 instead. */
                 idb_transaction_commit(ctx, tx);
             }
@@ -1086,7 +1086,7 @@ static const JSTrampStepDef js_idb_upgrade_def = {
     .algorithm = "Indexed Database §5.7's upgrade a database", .steps = UPG_STEPS
 };
 
-/* §5.7 step 10's rendezvous. The transaction names its own open request; the ENTRY is the head of that
+/* §5.7 step 11's rendezvous. The transaction names its own open request; the ENTRY is the head of that
    database's connection queue, which §2.8.2 guarantees is this request's. `aborted` is WHICH of §2.7.1's two
    endings it reached, which is what §5.1 step 10.8 is about and what nothing else here can re-derive. */
 static void idb_open_upgrade_finished(JSContext *ctx, JSValueConst tx, bool aborted)

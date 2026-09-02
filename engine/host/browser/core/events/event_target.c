@@ -1457,7 +1457,7 @@ static const IdlStepDecl AEL_DECL = { ael_step, sizeof(AelState), ael_visit, NUL
     X("oncomplete", "complete", EH_IDB_TRANSACTION)                                                              \
     /* §4.1's IDBOpenDBRequest — "an extended interface to allow listening to the blocked and upgradeneeded      \
        events" — and the one of §4.4's four that something fires. Each arrived WITH its algorithm: §5.1 step     \
-       10.5's `blocked`, §5.7 step 9.5's `upgradeneeded` and §5.1 step 10.2's `versionchange`. §4.4's other      \
+       10.5's `blocked`, §5.7 step 10.5's `upgradeneeded` and §5.1 step 10.2's `versionchange`. §4.4's other      \
        three are NOT here: `onclose` needs §5.2's FORCED close, which no user-agent circumstance in this         \
        engine performs, and `onabort`/`onerror` reach a connection only by BUBBLING from a transaction, which    \
        needs §2.7's get-the-parent — until then each would be a handler attribute for an event nothing           \
@@ -2191,7 +2191,7 @@ typedef struct JSDispatchState {
     uint8_t   cphase;    /* the call request's own phase, so a stage can hold a call across a suspension */
     uint32_t  i, n;      /* THE RESUME POINT: the listener being called, and how many there are */
     uint32_t  ti, tn;    /* THE OTHER: how far into the current PASS, and how long the whole path is */
-    /* §2.9 step 6.4's isActivationEvent, decided once at step 6.4 and read again at 6.9.5.1 for every ancestor. */
+    /* §2.9 step 6.4's isActivationEvent, decided once at step 6.4 and read again at 6.9.6.1 for every ancestor. */
     uint8_t   is_activation;
     /* THE ACTIVATION BEHAVIOUR'S OWN SUSPENSION. §4.6.3's is a navigation and a navigation fetches, so the
        behaviour is a step like everything else that can wait on the host: `aphase` is its resume point and
@@ -2233,7 +2233,7 @@ typedef struct JSDispatchState {
     JSValue   path;      /* §2.9's propagation path — a list of event path ITEMS (owned) */
     JSValue   cur;       /* the target whose listeners are running, and the WALK's frontier while step 6.9
                             builds the path (owned) */
-    /* §2.9's `target` LOCAL, which the walk MOVES: step 6.9.7.1 sets it to the parent every time the walk
+    /* §2.9's `target` LOCAL, which the walk MOVES: step 6.9.8.1 sets it to the parent every time the walk
        crosses out of a shadow tree, and every later item is appended with the shadow-adjusted target that
        follows. It is not `cur` — `cur` is where the walk IS, this is what the walk currently calls the target —
        and conflating them is how every item ends up with path[0] as its target. (owned) */
@@ -2358,7 +2358,7 @@ static bool dispatch_root_is_shadow_root(JSContext *ctx, JSValueConst t, bool wa
 /* IS THIS EVENTTARGET THAT ONE. Platform objects have identity — a node's wrapper is the same object for as
    long as the node lives — so "target is relatedTarget" and "parent is relatedTarget" are pointer questions.
    Written once because BOTH of §2.9's uses compare against a POTENTIAL event target, and `null is null` is not
-   the answer either of them wants: step 6's condition is about an event with a relatedTarget, and step 6.9.6
+   the answer either of them wants: step 6's condition is about an event with a relatedTarget, and step 6.9.7
    ends the walk at the ancestor that IS one. */
 static bool same_target(JSValueConst a, JSValueConst b)
 {
@@ -2504,7 +2504,7 @@ static JSValue dispatch_retarget_touch_targets(JSContext *ctx, JSValueConst ev, 
     return out;
 }
 
-/* Step 6.9.5's second disjunct: "target's root is a shadow-including inclusive ancestor of parent". FALSE when
+/* Step 6.9.6's second disjunct: "target's root is a shadow-including inclusive ancestor of parent". FALSE when
    `target` is not a node, which is the answer that matters — it is what stops the walk treating the window as a
    boundary crossing on the way past a detached target. */
 static bool dispatch_target_root_contains(JSContext *ctx, JSValueConst target, JSValueConst parent)
@@ -2645,7 +2645,7 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                     if (t) JS_FreeCString(ctx, t);
                 }
                 /* §2.9 step 6.5: the TARGET is the activation target if it has one — no `bubbles` condition
-                   here, which is the difference from step 6.9.5.1's test on an ancestor. */
+                   here, which is the difference from step 6.9.6.1's test on an ancestor. */
                 if (s->is_activation && g_has_activation && g_has_activation(ctx, target))
                     s->act = JS_DupValue(ctx, target);
                 /* step 6.6: "Let slottable be target, if target is a slottable and is ASSIGNED, and null
@@ -2656,7 +2656,7 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                     s->slottable = JS_DupValue(ctx, target);
                 s->slot_in_closed_tree = 0;   /* step 6.7 */
                 /* step 6.8: the first get the parent. `cur` carries the walk's frontier from here to the end of
-                   6.9, and `tgt` carries the walk's own `target`, which 6.9.7.1 moves at every shadow
+                   6.9, and `tgt` carries the walk's own `target`, which 6.9.8.1 moves at every shadow
                    boundary. */
                 s->cur = JS_DupValue(ctx, target);
                 s->tgt = JS_DupValue(ctx, target);
@@ -2708,9 +2708,9 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
 
                 JS_FreeValue(ctx, er);
                 if (dispatch_is_window(ctx, parent) || dispatch_target_root_contains(ctx, s->tgt, parent)) {
-                    /* step 6.9.5: still inside the tree the walk currently calls the target's, so the item gets
+                    /* step 6.9.6: still inside the tree the walk currently calls the target's, so the item gets
                        NO shadow-adjusted target and `invoke` will keep answering with the one further in.
-                       6.9.5.1: an ANCESTOR becomes the activation target only for an event that BUBBLES, and
+                       6.9.6.1: an ANCESTOR becomes the activation target only for an event that BUBBLES, and
                        only while none has been picked — the nearest one, target first, wins. */
                     if (s->is_activation && !JS_IsObject(s->act) && event_bubbles(ctx, s->ev) &&
                         g_has_activation && g_has_activation(ctx, parent))
@@ -2718,15 +2718,15 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                     event_path_append(ctx, s->path, parent, JS_NULL, related, touch,
                                       dispatch_is_closed_shadow_root(ctx, parent), s->slot_in_closed_tree);
                 } else if (same_target(parent, related)) {
-                    /* step 6.9.6: the walk has reached the retargeted relatedTarget itself. "Set parent to
+                    /* step 6.9.7: the walk has reached the retargeted relatedTarget itself. "Set parent to
                        null" ENDS the walk without appending — the event never propagates past the object it is
                        reported as coming from, which is what makes `mouseout` stop at the common ancestor. */
                     ended = true;
                 } else {
-                    /* step 6.9.7: the walk has left the tree it was in — this parent is the shadow HOST — so
+                    /* step 6.9.8: the walk has left the tree it was in — this parent is the shadow HOST — so
                        the event RETARGETS here: everything from this item outward reports the host as `target`,
                        which is the whole of what a shadow tree hides.
-                       6.9.7.2 has NO `bubbles` condition, unlike 6.9.5.1 — the host of a shadow tree the event
+                       6.9.8.2 has NO `bubbles` condition, unlike 6.9.6.1 — the host of a shadow tree the event
                        came out of is an activation target for a non-bubbling event too. */
                     JS_FreeValue(ctx, s->tgt);
                     s->tgt = JS_DupValue(ctx, parent);
@@ -2743,7 +2743,7 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                     s->slot_in_closed_tree = 0;   /* step 6.9.9, and it is per ITERATION, not per tree */
                     return JS_STEP_YIELD;
                 }
-                /* step 6.9.6 set parent to null, so 6.9.8 does not ask again and the while ends: fall out of
+                /* step 6.9.7 set parent to null, so 6.9.9 does not ask again and the while ends: fall out of
                    the walk with the path exactly as it stands. */
             }
         }
@@ -2915,8 +2915,9 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
             }
 resolve_operation:
             /* §2.9 "inner invoke" step 2.11 is "CALL A USER OBJECT'S OPERATION with listener's callback and
-               `handleEvent`", and Web IDL §3.12 step 10 is what that means for a callback INTERFACE: a callable
-               callback is itself the operation and keeps the given `this`; a NON-callable one has `handleEvent`
+               `handleEvent`", and Web IDL §3.11 "Callback interfaces" step 10 is what that means for a callback
+               INTERFACE: a callable callback is itself the operation and keeps the given `this`; a NON-callable
+               one has `handleEvent`
                READ OFF IT — per invocation, so a page that swaps the method between two dispatches gets both —
                and is then the `this` of that call.
                The read is the page's code (an accessor, a Proxy trap), so it is a REQUEST and not a
@@ -2935,7 +2936,7 @@ resolve_operation:
                 if (r > 0) { s->lphase = 1; return r; }   /* parked ON THE READ; the resume comes back here */
                 s->lphase = 0;
                 if (r < 0) {
-                    /* Web IDL §3.12 step 10.2: an ABRUPT Get is RETURNED as it stands. The read reports it here
+                    /* Web IDL §3.11 step 10.2: an ABRUPT Get is RETURNED as it stands. The read reports it here
                        because this machine's definition declares catches_abrupt, and §2.9 "inner invoke" step
                        2.11 says what to do with it — REPORT it and carry on down the listener list, never
                        unwind the dispatch. `EventListener-handleEvent`'s "rethrows errors when getting
@@ -2943,13 +2944,13 @@ resolve_operation:
                     goto listener_threw;
                 }
                 if (!JS_IsFunction(ctx, m)) {
-                    /* Web IDL §3.12 step 10.4: a non-callable operation is a TypeError, reported the same way. */
+                    /* Web IDL §3.11 step 10.4: a non-callable operation is a TypeError, reported the same way. */
                     JS_ThrowTypeError(ctx, "the event listener's `handleEvent` is not callable");
                     JS_FreeValue(ctx, m);
                     goto listener_threw;
                 }
                 fn = m;
-                /* Web IDL §3.12 step 10.5: the receiver becomes the callback OBJECT, overriding currentTarget. */
+                /* Web IDL §3.11 step 10.5: the receiver becomes the callback OBJECT, overriding currentTarget. */
                 r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), fn, s->lcb, 1, (JSValueConst *)&s->ev,
                                   cb_result, &ignored, out_cb, out_argc);
                 JS_FreeValue(ctx, fn);

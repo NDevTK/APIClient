@@ -362,7 +362,7 @@ static JSValue node_get_parent(JSContext *ctx, JSValueConst target, JSValueConst
 }
 
 /* §4.4's ROOT as §2.9 asks it — of an EventTarget, which may be a Window. JS_NULL says "not a node", which is
-   the same answer the walk needs for step 6.9.5's "parent is a node and …". OWNED, like node_wrap. */
+   the same answer the walk needs for step 6.9.6's "parent is a node and …". OWNED, like node_wrap. */
 static JSValue node_event_root(JSContext *ctx, JSValueConst target)
 {
     lxb_dom_node_t *n = node_of(target);
@@ -808,7 +808,7 @@ void node_adopt(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_document_t *docume
    ask it would be the one place fragments quietly stopped working again.
    The children come OUT through the capturing chokepoint rather than a private detach: a fragment can be older
    than the fork that is running, so another flow's baseline may hold it. */
-/* §4.2.3 insert STEP 6.1 — "adopt node into parent's node document", which is where the ONE adopt above is
+/* §4.2.3 insert STEP 7.1 — "Adopt node into parent's node document", which is where the ONE adopt above is
    reached from. The realm is the PARENT'S DOCUMENT'S, because that is the document being adopted into and its
    registry is what step 3 re-derives against; `node_insert_at` carries no JSContext of its own, deliberately,
    and taking the running one instead would answer a second same-origin document's adoption out of whichever
