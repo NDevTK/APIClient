@@ -412,11 +412,22 @@ static const IdlDictMember REQUEST_INIT[] = {
        `Request` has fourteen getters and `priority` is not among them.
        NAMED RESIDUAL: step 27's "set request's priority to init["priority"]" stores nothing. §2.2.5 Requests
        gives a request a priority ("high", "low" or "auto", "auto" unless stated otherwise) and this engine's
-       RequestData does not hold one, because no reader exists for it — the endpoint surface records method,
-       URL, headers and body, and the trusted zone's chokepoint is handed those. The next diff carries the
-       request's priority on the record the chokepoint receives and states it beside the method, at which
-       point this member's value is read rather than only checked. ITS ABSENCE SHOWS the day a report
-       distinguishes a `priority: "low"` prefetch from an ordinary call: today the two records are identical.
+       RequestData does not hold one, because no reader exists for it.
+       WHICH RECORD, STATED EXACTLY, BECAUSE THIS CLAUSE USED TO NAME THE WRONG ONE. It said the endpoint
+       surface records method, URL, headers and body "and the trusted zone's chokepoint is handed those", then
+       sent the next diff to state priority "beside the method" on that record. There is no method there to
+       state it beside: `safeFetch(url, opts)` is handed the URL positionally and an opts bag whose keys are a
+       CLOSED SET — pageUrl, pageOrigin, destination, provenance, credentialed, headers, signal — enforced by
+       `_refuseUnreadOptions`, which DCHECKs on any other key and names `method` and `body` as the two that
+       matter, because that file hardcodes `method:"GET"` and reads neither. The method rides the OTHER record:
+       the pending line, which is keyed on method AND url together (see `qjs_provide`, which takes the method
+       first). The two are different records and this clause conflated them.
+       THE NEXT DIFF therefore carries the request's priority as a new key on the chokepoint's opts, added to
+       `_SAFEFETCH_OPTIONS` and read by that file's body in the same diff — the closed-set DCHECK is the forcing
+       function for the second half and fires on the author's own first call if it is forgotten. WHAT MUST
+       EXIST AFTERWARD: a reader in the trusted zone, so the member's value is read rather than only checked.
+       ITS ABSENCE SHOWS the day a report distinguishes a `priority: "low"` prefetch from an ordinary call:
+       today the two records are identical.
        (Step 27's OTHER arm — "if request's internal priority is not null, update it in an
        implementation-defined manner" — is unreachable from here: §2.2.5 makes internal priority null unless
        stated otherwise, and step 12 copies the input request's, which no path in this engine ever sets.) */
@@ -905,10 +916,19 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
            otherwise, it is unset." — and states what setting it buys: "The use-CORS-preflight flag being set
            is one of several conditions that results in a CORS-preflight request." The preflight itself is the
            trusted zone's, because `extension/lib/safe-fetch.js` is where a cross-origin decision is made by
-           construction. The next diff carries the flag on the request record that zone receives, so a
-           preflight is asked for by the request that requires one rather than inferred at the chokepoint.
-           ITS ABSENCE SHOWS as a streamed cross-origin POST reaching the chokepoint indistinguishable from a
-           byte-bodied one, which a browser preflights and it does not. */
+           construction. The next diff carries the flag as a new key on that file's opts, added to
+           `_SAFEFETCH_OPTIONS` and read by its body in the same diff, so a preflight is asked for by the
+           request that requires one rather than inferred at the chokepoint.
+           ITS ABSENCE SHOWS IN THE DERIVED RECORD AND NOT ON THE WIRE, which is the correction this clause
+           needed: it used to say a streamed cross-origin POST "reaching the chokepoint" is indistinguishable
+           from a byte-bodied one. No POST reaches it. `safeFetchMethodRefusal` returns a decline for every
+           non-GET and is asked at the CALL SITE — `extension/bridge.js` on both the pending and the XHR
+           paths, and `engine/trusted.mjs` — so a request that could require a preflight is refused before the
+           chokepoint sees it, and the flow stays parked rather than being fired. What the flag's absence
+           actually costs is the REPORT: CLAUDE.md's §A-REQUEST-CARRIES-THE-PROVENANCE says a derived-and-
+           unfired request IS the report, and a Request built with a stream body and a cross-origin mode
+           derives a record identical to the byte-bodied one, carrying nothing that says a browser would have
+           preflighted it. */
         {
             const BodyState *ioi = init_body ? &d->body : (input_body ? &from->body : NULL);
 
