@@ -2,8 +2,8 @@
  "spec": "CSSOM View Module",
  "key": "cssomview",
  "base": "https://drafts.csswg.org/cssom-view/",
- "specUpdated": "9 June 2026",
- "fetched": "2026-08-31",
+ "specUpdated": "12 July 2026",
+ "fetched": "2026-09-02",
  "sections": {
   "1": {
    "title": "Background",
@@ -187,7 +187,8 @@
    "11.1"
   ],
   "associated document": [
-   "2"
+   "2",
+   "11.1"
   ],
   "beginning edges": [
    "2"
@@ -209,6 +210,9 @@
   ],
   "caretpositionfrompoint(x y)": [
    "5"
+  ],
+  "check the documents for coordinate conversion": [
+   "11.1"
   ],
   "checkvisibility( options )": [
    "6"
@@ -397,7 +401,8 @@
    "18": 2
   },
   "associated document": {
-   "4": 2
+   "4": 2,
+   "18": 2
   },
   "beginning edges": {
    "6.1": 2

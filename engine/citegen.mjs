@@ -9,6 +9,9 @@
  *   node engine/citegen.mjs --unanchored  the citations naming no standard that only a file vote placed — the
  *                                         ones inside a DCHECK/DFAIL/CHECK message first, since a crash prints them
  *   node engine/citegen.mjs --gaps        the quotation check's verified/not-found split by distance from the §
+ *   node engine/citegen.mjs --steps       the step numbers the step check counted and REFUSED to accuse — those
+ *                                         whose cited section holds no list reaching them, which is not the same
+ *                                         claim as the section being wrong
  *   node engine/citegen.mjs --regen [key] fetch the standard(s), rewrite engine/specindex/<key>.json
  *
  * WHY THIS EXISTS. CLAUDE.md §Browser half: a named spec with no number cannot be looked up, so it cannot
@@ -229,6 +232,49 @@
  * such quotation as diverging — the normalizer manufacturing the finding, which the STEP_MARKER paragraph
  * below already records as this checker's one unacceptable failure.
  *
+ * AND A STEP IS A NUMBER NEITHER ARTIFACT ABOVE CAN SEE, WHICH IS WHY IT IS A THIRD. The section index holds
+ * HEADINGS and the text corpus holds WORDS with the markup flattened out of them by design — that flattening is
+ * what makes a quotation comparable — so a step, which is a POSITION IN A LIST, is invisible to both BY
+ * CONSTRUCTION rather than by omission. CLAUDE.md names the shape and the cost: one file carried 110 citations,
+ * produced zero findings, and had a whole cluster off by one; a nested list promotes its sub-items to peers so an
+ * algorithm of true length 36 counts as 39; and the drift starts one step LATER than anybody spot-checks, so the
+ * first number a reader tests is always the one that is still right. So --regen writes a THIRD artifact,
+ * engine/specindex/steps/<key>.json, holding each section's list structure — see collectCorpus, which fills it
+ * from the SAME boundary walk as the text so a step can never be filed under a section its own words are not.
+ * It costs a fifth of a megabyte across the standards, against the text corpus's eight, because it stores counts
+ * and indices rather than prose.
+ *
+ * WHAT IT ACCUSES IS ONLY A NUMBER THAT CANNOT EXIST, and everything else about a step is outside it. It cannot
+ * tell 6.4 from 6.5 where step 6 holds seven sub-steps — only MEANING separates those, and a reader must do it.
+ * What it catches is the number that ran off the end, which is what the drift produces once it passes the last
+ * item, and what the promoted-nested-list defect produces at every depth below the promotion.
+ *
+ * TWO BANDS, AND ONLY ONE OF THEM IS A CLAIM ABOUT THE CITATION — the same asymmetry check (1) draws when it
+ * refuses to ask whether a term-resolved standard HAS the cited number.
+ *   — CORROBORATED: the path's own PREFIX exists in the cited section, so that section demonstrably holds the
+ *     list the citation indexes into and the number that overflows it is wrong about that list. This is the
+ *     finding, STEP-OUT-OF-RANGE.
+ *   — NOT-IN-THIS-SECTION: no list under the section reaches the step at all. That is TRUE and it is NOT
+ *     evidence the citation is wrong, because it is equally consistent with the section being right for the
+ *     TERM while the step belongs to an algorithm the prose names IN WORDS one heading away — which is how this
+ *     tree's comments are written. It is counted in the census and listed under --steps, never accused.
+ * BOTH BANDS WERE READ AGAINST FETCHED TEXT BEFORE THE SPLIT WAS CHOSEN, which is the only reason it is a rule
+ * rather than a threshold. At the revision this was measured the uncorroborated band was noise — `range.c`
+ * numbering the EXTRACT algorithm's steps under a citation of `clone a node` that is exactly right, `node.c`'s
+ * bare `STEP 13` markers governed by whatever § came last, `navigation.h` saying outright "the inner algorithm's
+ * step 23" — while 26 of the corroborated band were read and 24 were real: Web IDL §3.12's `step 10.2/10.4/10.5`
+ * where `call a user object operation` is §3.11 and its step 10 has exactly those five sub-steps; eight
+ * IndexedDB §5.7 sites whose 9.x are the 10.x of `upgrade a database`; DOM §2.9's dispatch cluster, where 6.9.7
+ * is a leaf and `set target to parent` is 6.9.8.1; `initialize a response`'s six steps under Fetch §5.5's `step
+ * 8.1`; §4.10.21.1 "Definitions", which holds no algorithm while §4.10.21.2's fires the `invalid` event; and
+ * three sites citing HTML §7.4.2.1 for `allowed by sandboxing to navigate`, which is §7.4.2.4's.
+ * THE TWO THAT WERE WRONG SHARE ONE MECHANISM AND IT IS NAMED HERE RATHER THAN LEFT TO BE REDISCOVERED: a step
+ * reference carries no § of its own, so it is attributed to the nearest citation BEFORE it — PASS 4's rule,
+ * reused rather than restated — and a comment that cites HTML for one thing and then discusses a DOM step is
+ * charged with the wrong section. A number some OTHER citation in the same prose unit admits is confirmed and
+ * counted apart, which is what keeps that mechanism to the residue it is; what escapes is the case where the
+ * owning algorithm is named in ENGLISH and nowhere in a number.
+ *
  * A CITATION IS NOT ALWAYS SPELLED WITH A §, AND THE ONE THAT IS NOT IS WHERE THE ERRORS WERE. quickjs.c
  * writes `7.4.9 IteratorClose`, never `§7.4.9` — 58 times, and the §-only reader saw NONE of them. A bare
  * dotted number cannot be admitted on sight (`0.0` is a double, `1.5` is a factor, `13.2` is a version), so it
@@ -261,6 +307,13 @@ const INDEX_DIR = join(HERE, "specindex");
  * quotations all passed. */
 const TEXT_DIR = join(INDEX_DIR, "text");
 const textFileOf = (key) => join(TEXT_DIR, key + ".json");
+/* AND THE STEP CORPUS IS A THIRD ARTIFACT FOR THE SAME REASON THE SECOND IS ONE: a standard can have a section
+ * index, or that plus its words, or that plus the SHAPE of its lists, and the difference has to be
+ * REPRESENTABLE so that "this standard's steps are not checked" is a state the filesystem says out loud rather
+ * than a silence indistinguishable from a clean run. It is written by the same --regen walk as the text — see
+ * collectCorpus — so the two can never be keyed by different section boundaries. */
+const STEPS_DIR = join(INDEX_DIR, "steps");
+const stepsFileOf = (key) => join(STEPS_DIR, key + ".json");
 
 /* A section that LINKS a term this many times is a section the term is ABOUT. One passing reference is not a
  * subject, and treating it as one would confirm every citation of every chapter that mentions anything. */
@@ -708,35 +761,128 @@ function withBoundaries(body, marks) {
   return [...marks, ...stops].sort((a, b) => a.at - b.at);
 }
 
+/* THE LIST STRUCTURE OF A SECTION, WHICH IS THE ONE THING tokenText DESTROYS AND THE ONLY THING THAT CAN
+ * ANSWER A STEP NUMBER. `tokenText` flattens markup to words on purpose — that is what makes a quotation
+ * comparable — and a step is not a word, it is a POSITION IN A LIST. So the same slice is read twice, once for
+ * what it SAYS and once for how it is SHAPED, and the two readings share one boundary walk (see collectCorpus)
+ * so a step can never be filed under a section its own text is not.
+ *
+ * WHAT A STEP IS, READ OFF THE MARKUP RATHER THAN RESTATED: a standard's steps are the TOP-LEVEL <li>s of one
+ * <ol>, and CLAUDE.md's worked example is a step holding a nested list whose sub-items a flat count silently
+ * promotes to peers — an algorithm of true length 36 counted as 39. That defect is impossible here by
+ * construction rather than by care: an <li> belongs to the INNERMOST open list, so a nested list's items are
+ * counted into that list and never into its parent. Only an <ol> is NUMBERED, so only an <ol> becomes a node;
+ * a <ul> or a <dl> is a container the walk passes through, and an <ol> inside one attaches to the enclosing
+ * <li> of the nearest ol ANCESTOR. That last rule is the deliberate over-approximation: a sub-list reached
+ * through a <dl> switch renders restarting at 1 and a reader may well call its items `5.1`, so admitting them
+ * can only ever make a path EXIST, and this whole channel accuses only where no path exists.
+ *
+ * SEVERAL SIBLING LISTS IN ONE STEP ARE KEPT AS SEVERAL, which is the shape CLAUDE.md calls worse than a wrong
+ * number because every candidate reading confirms it. A step written as a catching list, then a
+ * regardless-list, then a finally-list is ONE step holding THREE <ol>s, and a bare `10.2` names three different
+ * things. Storing them merged would pick one; storing them as a list of lists lets the audit ask "does ANY
+ * reading admit this path", which is the only question about them that has an answer. */
+const LIST_TAG = /<\/?(ol|ul|dl|li|dd)\b[^>]*>/gi;
+
+function scanLists(slice) {
+  const clean = slice.replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, " ");
+  const roots = [];
+  const st = [];                                   /* the open list elements, innermost last */
+  LIST_TAG.lastIndex = 0;
+  for (let m; (m = LIST_TAG.exec(clean)); ) {
+    const name = m[1].toLowerCase(), close = m[0][1] === "/";
+    if (name === "li" || name === "dd") {
+      /* A WHATWG page omits `</li>`, so an item is COUNTED AT ITS OPEN TAG and closed by whatever follows.
+         Counting closes instead would count nothing at all on the standard this tool cites most.
+         AND AN ITEM'S NUMBER IS THE DOCUMENT'S, NOT THE COUNT — `start` and `value` are how a standard resumes
+         a numbering across a note or an example, so a list of five items can legitimately end at step 20, and
+         a checker that counted would report every one of those five as out of range. Reading the attributes
+         costs two lines; discovering the hazard later costs a category of false accusations. */
+      if (close || !st.length) continue;
+      const f = st[st.length - 1];
+      const v = name === "li" ? Number(attrOf(m[0], "value")) : NaN;
+      f.cur = Number.isInteger(v) && v > 0 ? v : f.next;
+      f.next = f.cur + 1;
+      if (f.cur > f.n) f.n = f.cur;
+      continue;
+    }
+    if (close) { for (let i = st.length - 1; i >= 0; i--) if (st[i].kind === name) { st.length = i; break; } continue; }
+    const start = name === "ol" ? Number(attrOf(m[0], "start")) : NaN;
+    const f = { kind: name, n: 0, cur: 0, next: Number.isInteger(start) && start > 0 ? start : 1, ch: new Map() };
+    /* ALL THREE LIST KINDS ARE NODES, AND A <ul> UNDER A STEP IS WHY. The corpus records what the markup IS;
+       which of those a citation may be NAMING is a question about convention and belongs to the audit, not
+       here — see how the audit flattens this tree. Recording only <ol> would decide that question in the
+       corpus, where it cannot be argued or changed. Measured, and it is the case that forced the split:
+       XHR's open() method step 11 is "Set variables associated with the object as follows:" over a BULLET
+       list, and this tree cites the third bullet as `step 11.3` — the only spelling available, since the
+       standard gives those items no number at all. A corpus holding <ol> alone reports five such sites as
+       steps that cannot exist, and the repair it implies does not exist either. */
+    const host = st.length ? st[st.length - 1] : null;
+    if (host && host.cur) { const a = host.ch.get(host.cur) || []; a.push(f); host.ch.set(host.cur, a); }
+    else roots.push(f);
+    st.push(f);
+  }
+  return roots;
+}
+
+/* A LIST WITH NO SUB-LIST IS ITS COUNT AND NOTHING ELSE — the corpus is one number per algorithm wherever it
+ * can be, because the alternative is a per-<li> record of a fact nobody asks: the audit's only question is
+ * whether a path can exist, so an item with no numbered children is indistinguishable from its own index. */
+function encList(l) {
+  if (!l.ch.size) return l.n;
+  const ch = {};
+  for (const [i, a] of [...l.ch].sort((x, y) => x - y)) ch[i] = a.map(encList);
+  return [l.n, ch];
+}
+
 /* A SECTION CONTAINS ITS SUBSECTIONS, and this stores each section's OWN slice so that containment is a JOIN
  * the audit performs rather than a duplication the corpus carries. The slices of a section and its descendants
  * are contiguous in the document, so concatenating them in numeric order reproduces the original stream — no
- * artificial adjacency is created at a boundary, and no byte is stored twice. */
-function collectText(body, marks, into) {
+ * artificial adjacency is created at a boundary, and no byte is stored twice.
+ * THE TWO CORPORA ARE FILLED BY ONE WALK AND TRAVEL IN ONE OBJECT, so a reader cannot collect one and forget
+ * the other, and the section boundaries a step is keyed by are BY CONSTRUCTION the ones its text is keyed by.
+ * Two walks would be two copies of the one rule this file's own header says must not be copied. */
+function collectCorpus(body, marks, into) {
   const b = withBoundaries(body, marks);
   for (let i = 0; i < b.length; i++) {
     if (!b[i].no) continue;
     const end = i + 1 < b.length ? b[i + 1].at : body.length;
-    const t = tokenText(body.slice(b[i].at, end));
-    if (!t) continue;
-    into.set(b[i].no, into.has(b[i].no) ? into.get(b[i].no) + " " + t : t);
+    const slice = body.slice(b[i].at, end);
+    const t = tokenText(slice);
+    if (t) into.texts.set(b[i].no, into.texts.has(b[i].no) ? into.texts.get(b[i].no) + " " + t : t);
+    const enc = scanLists(slice).filter((r) => r.n > 0).map(encList);
+    if (enc.length) into.steps.set(b[i].no, (into.steps.get(b[i].no) || []).concat(enc));
   }
 }
 
-/* The corpus records the SAME two staleness facts the resolver index does, and the audit refuses to use a
- * corpus whose pair disagrees with its index's — a text file regenerated at a different edition from the
- * section numbers it is keyed by would answer questions about a document no single fetch ever saw. */
-function writeText(spec, sections, texts, specUpdated) {
+/* The corpora record the SAME two staleness facts the resolver index does, and the audit refuses one whose
+ * pair disagrees with its index's — a corpus regenerated at a different edition from the section numbers it is
+ * keyed by would answer questions about a document no single fetch ever saw. */
+function writeCorpus(spec, sections, corpus, specUpdated) {
+  const { texts, steps } = corpus;
+  const stamp = { spec: spec.label, key: spec.key, base: spec.base, specUpdated: (specUpdated || "").trim(),
+    fetched: new Date().toISOString().slice(0, 10) };
   mkdirSync(TEXT_DIR, { recursive: true });
-  const out = { spec: spec.label, key: spec.key, base: spec.base, specUpdated: (specUpdated || "").trim(),
-    fetched: new Date().toISOString().slice(0, 10),
-    sections: Object.fromEntries([...texts].sort((a, b) => cmpNo(a[0], b[0]))) };
-  writeFileSync(textFileOf(spec.key), JSON.stringify(out, null, 1) + "\n");
+  writeFileSync(textFileOf(spec.key), JSON.stringify(
+    { ...stamp, sections: Object.fromEntries([...texts].sort((a, b) => cmpNo(a[0], b[0]))) }, null, 1) + "\n");
   let words = 0, missing = 0;
   for (const t of texts.values()) words += t.split(" ").length;
   for (const no of sections.keys()) if (!texts.has(no)) missing++;
   console.log(`  ${spec.key} text: ${texts.size} sections, ${words} words` +
     (missing ? `, ${missing} numbered section(s) with no text of their own` : ""));
+  /* WRITTEN COMPACT, because this artifact is read by a machine and never by a person: it is counts and
+     indices, so an indented spelling would triple a file whose whole content is punctuation. */
+  mkdirSync(STEPS_DIR, { recursive: true });
+  writeFileSync(stepsFileOf(spec.key), JSON.stringify(
+    { ...stamp, sections: Object.fromEntries([...steps].sort((a, b) => cmpNo(a[0], b[0]))) }) + "\n");
+  let lists = 0, deepest = 0;
+  const depth = (l, d) => {
+    deepest = Math.max(deepest, d);
+    if (Array.isArray(l)) for (const a of Object.values(l[1])) for (const x of a) depth(x, d + 1);
+  };
+  for (const ls of steps.values()) for (const l of ls) { lists++; depth(l, 1); }
+  console.log(`  ${spec.key} steps: ${steps.size} sections holding a list, ${lists} outermost lists, deepest nesting ${deepest}`);
 }
 
 /* A dfn whose whole content is a link OUT to another standard is an IMPORT, not a definition. HTML §2.1.9
@@ -830,7 +976,7 @@ function regenWhatwgMultipage(spec) {
   const secnos = (toc.match(/<span class=secno>/g) || []).length;
   if (parsed !== secnos) throw new Error(`${spec.key}: the TOC has ${secnos} secno spans and the parse read ${parsed} — the parse is wrong`);
 
-  const defs = new Map(), uses = new Map(), idToTerm = new Map(), bodies = [], texts = new Map();
+  const defs = new Map(), uses = new Map(), idToTerm = new Map(), bodies = [], corpus = { texts: new Map(), steps: new Map() };
   const sorted = [...pages].sort();
   for (const page of sorted) {
     const body = curl(spec.base + page);
@@ -851,9 +997,9 @@ function regenWhatwgMultipage(spec) {
     bodies.push({ page, body, marks });
     process.stderr.write(`  ${page}: ${marks.length} headings\n`);
   }
-  for (const b of bodies) { scanUses(b.body, b.marks, idToTerm, uses); collectText(b.body, b.marks, texts); }
+  for (const b of bodies) { scanUses(b.body, b.marks, idToTerm, uses); collectCorpus(b.body, b.marks, corpus); }
   writeIndex(spec, finish(spec, sections, defs, uses, updated));
-  writeText(spec, sections, texts, updated);
+  writeCorpus(spec, sections, corpus, updated);
 }
 
 /* ---- reader: W3C chapter-split HTML (CSS 2.1, CSS 2.2) --------------------------------------------------- */
@@ -923,7 +1069,7 @@ function regenW3cChapters(spec) {
   const anchors = (toc.match(/class="tocxref"/gi) || []).length;
   if (parsed !== anchors) throw new Error(`${spec.key}: the TOC has ${anchors} tocxref anchors and the parse read ${parsed} — the parse is wrong`);
 
-  const defs = new Map(), uses = new Map(), idToTerm = new Map(), bodies = [], texts = new Map();
+  const defs = new Map(), uses = new Map(), idToTerm = new Map(), bodies = [], corpus = { texts: new Map(), steps: new Map() };
   for (const page of [...pages].sort()) {
     const body = curl(spec.base + page);
     const want = new Set([...sections].filter(([, s]) => s.page === page).map(([no]) => no));
@@ -966,9 +1112,9 @@ function regenW3cChapters(spec) {
     bodies.push({ body, marks });
     process.stderr.write(`  ${page}: ${marks.length} headings\n`);
   }
-  for (const b of bodies) { scanUses(b.body, b.marks, idToTerm, uses); collectText(b.body, b.marks, texts); }
+  for (const b of bodies) { scanUses(b.body, b.marks, idToTerm, uses); collectCorpus(b.body, b.marks, corpus); }
   writeIndex(spec, finish(spec, sections, defs, uses, updated));
-  writeText(spec, sections, texts, updated);
+  writeCorpus(spec, sections, corpus, updated);
 }
 
 /* ---- reader: Bikeshed single page (DOM, URL, Fetch) ------------------------------------------------------ */
@@ -1032,10 +1178,10 @@ function regenBikeshed(spec) {
     if (id && (op || primary)) idToTerm.set(id, op || primary);
   }
   scanUses(body, marks, idToTerm, uses);
-  const texts = new Map(); collectText(body, marks, texts);
+  const corpus = { texts: new Map(), steps: new Map() }; collectCorpus(body, marks, corpus);
   console.error(`  ${spec.key}: ${marks.length} headings on one page, ${ops.size} declared abstract operations`);
   writeIndex(spec, finish(spec, sections, defs, uses, updated, ops));
-  writeText(spec, sections, texts, updated);
+  writeCorpus(spec, sections, corpus, updated);
 }
 
 /* ---- reader: ReSpec single page (Permissions) ------------------------------------------------------------ */
@@ -1092,10 +1238,10 @@ function regenRespec(spec) {
     if (id && (op || primary)) idToTerm.set(id, op || primary);
   }
   scanUses(body, marks, idToTerm, uses);
-  const texts = new Map(); collectText(body, marks, texts);
+  const corpus = { texts: new Map(), steps: new Map() }; collectCorpus(body, marks, corpus);
   console.error(`  ${spec.key}: ${marks.length} numbered headings on one page, ${ops.size} declared abstract operations`);
   writeIndex(spec, finish(spec, sections, defs, uses, updated, ops));
-  writeText(spec, sections, texts, updated);
+  writeCorpus(spec, sections, corpus, updated);
 }
 
 /* ---- reader: xmlspec (XML 1.0) --------------------------------------------------------------------------- */
@@ -1138,10 +1284,10 @@ function regenXmlspec(spec) {
     idToTerm.set(m[1], term);
   }
   scanUses(body, marks, idToTerm, uses);
-  const texts = new Map(); collectText(body, marks, texts);
+  const corpus = { texts: new Map(), steps: new Map() }; collectCorpus(body, marks, corpus);
   console.error(`  ${spec.key}: ${marks.length} numbered headings, ${defs.size} definitions`);
   writeIndex(spec, finish(spec, sections, defs, uses, updated));
-  writeText(spec, sections, texts, updated);
+  writeCorpus(spec, sections, corpus, updated);
 }
 
 /* ---- reader: tc39 multipage (ECMAScript) ----------------------------------------------------------------- */
@@ -1270,10 +1416,10 @@ function regenTc39(spec) {
     bodies.push({ body, marks });
     process.stderr.write(`  ${page}: ${marks.length} headings\n`);
   }
-  const texts = new Map();
-  for (const b of bodies) { scanUses(b.body, b.marks, idToTerm, uses); collectText(b.body, b.marks, texts); }
+  const corpus = { texts: new Map(), steps: new Map() };
+  for (const b of bodies) { scanUses(b.body, b.marks, idToTerm, uses); collectCorpus(b.body, b.marks, corpus); }
   writeIndex(spec, finish(spec, sections, defs, uses, updated));
-  writeText(spec, sections, texts, updated);
+  writeCorpus(spec, sections, corpus, updated);
 }
 
 function regen(keys) {
@@ -1651,6 +1797,96 @@ function precedingProse(src, spans, at) {
   return kind === "s" ? unescapeC(raw.replace(/(?<!\\)"\s*"/g, "")) : raw.replace(/\n\s*\*?\s*/g, " ");
 }
 
+/* ---- the STEP axis: a number no section index can see ---------------------------------------------------- */
+
+/* WHY THIS EXISTS AND WHAT IT CAN AND CANNOT SAY. Every other check here judges a SECTION — does the standard
+ * have it, does the algorithm live there, does the title match, are these its words. A STEP is none of those:
+ * it is a position in a list, and the resolver index holds section headings while the text corpus holds words
+ * with the markup flattened out of them, so a wrong step number is invisible to both BY CONSTRUCTION. CLAUDE.md
+ * names the shape and the cost — one file carried 110 citations, produced zero findings, and had a whole cluster
+ * off by one — and three separate clusters were found BY HAND in one session, each because somebody happened to
+ * open the standard.
+ *
+ * WHAT IT ACCUSES IS ONLY THE NUMBER THAT CANNOT EXIST, and that limit is the whole of its precision argument.
+ * A step that exists and means something ELSE is invisible here exactly as it is everywhere else: if `clone a
+ * node` step 6 holds seven sub-steps, this channel cannot tell 6.4 from 6.5, and only a reader comparing
+ * MEANING can. What it can state is that 6.8 is not a step of anything in that section — which is precisely the
+ * shape the drift produces once it runs off the end, and it is what the one hand-found cluster of this session
+ * that ran past the end would have tripped.
+ *
+ * EVERY REFUSAL IS AN OVER-APPROXIMATION, DELIBERATELY, because the accusation is "no reading admits this":
+ *   — a section is joined with its SUBSECTIONS, so an algorithm one heading down still answers;
+ *   — every numbered list in that region is a candidate, not only the algorithm the citation names, because
+ *     nothing at the site says WHICH algorithm and guessing one would be the invented-citation defect this file
+ *     already refuses twice;
+ *   — several sibling lists under one step are all admitted, which is CLAUDE.md's ambiguous sub-number: every
+ *     candidate reading confirms it, so no reading can be accused;
+ *   — a list reached through a <ul> or a <dl> is admitted as sub-steps of the enclosing <li>.
+ * Each widens what EXISTS, so each can only remove a finding. */
+const STEP_NO = "[1-9][0-9]*(?:\\.[1-9][0-9]*)*";
+/* A STEP IS WRITTEN `step N` AND A SECTION IS WRITTEN `§N` — the convention CLAUDE.md fixes and the one the
+ * bare-number reader already leans on from the other side, where a number the word `step` introduces is
+ * excluded from being read as a section. This reads the same population that exclusion creates. The trailing
+ * group takes a JOINED RUN (`steps 6.1-6.7`, `steps 3 and 4`, `steps 1, 2, 5`) because each operand is a step
+ * the author is claiming exists, which is the one place this differs from the section reader: there the right
+ * operand of a range is undecidable between a section and a step, and here the `step` lead-in has already
+ * decided it. */
+const STEP_REF = new RegExp(
+  `(?:^|[^\\w])steps?\\s+(${STEP_NO})((?:\\s*(?:,|&|and|or|to|through|[-‐‑‒–—―])\\s*${STEP_NO})*)`, "gi");
+const STEP_MORE = new RegExp(STEP_NO, "g");
+
+function stepRefs(prose) {
+  const out = [];
+  STEP_REF.lastIndex = 0;
+  for (let m; (m = STEP_REF.exec(prose)); ) {
+    const at = m.index + m[0].indexOf(m[1]);
+    out.push({ path: m[1].split(".").map(Number), raw: m[1], at });
+    if (!m[2]) continue;
+    STEP_MORE.lastIndex = 0;
+    for (let t; (t = STEP_MORE.exec(m[2])); )
+      out.push({ path: t[0].split(".").map(Number), raw: t[0], at: at + m[1].length + t.index });
+  }
+  return out;
+}
+
+/* A list is its ITEM COUNT when nothing under it is numbered, and `[count, {index: [sub-list …]}]` when
+ * something is — see encList for why the leaf form carries no per-item record. */
+const listN = (l) => (Array.isArray(l) ? l[0] : l);
+const listKids = (l, i) => (Array.isArray(l) && Object.hasOwn(l[1], i) ? l[1][i] : null);
+
+/* WHERE A PATH LEAVES THE STANDARD, or null when some reading admits it whole. This is ONE function rather than
+ * a predicate plus a diagnostic because two would be two statements of the same rule, and the one that drifts is
+ * the one the findings are not decided by: the frontier it descends is EXACTLY the set of lists a true prefix
+ * reaches, so "returns null" and "the path exists" are the same sentence rather than two that agree today. */
+function stepFail(lists, path) {
+  let cur = lists;
+  for (let k = 0; k < path.length; k++) {
+    let best = 0;
+    for (const l of cur) if (listN(l) > best) best = listN(l);
+    if (path[k] > best) return { depth: k, largest: best, sub: false };
+    if (k === path.length - 1) return null;
+    const next = [];
+    for (const l of cur) if (path[k] <= listN(l)) { const ch = listKids(l, path[k]); if (ch) next.push(...ch); }
+    if (!next.length) return { depth: k, largest: best, sub: true };
+    cur = next;
+  }
+  return null;
+}
+
+/* THE TWO FAILURES ARE ONE INDEX APART AND SAYING SO WRONG SENDS THE READER TO THE WRONG STEP. `sub` means the
+ * path reached `depth` and the step it landed on carries nothing numbered, so the LAST EXISTING step is
+ * path[0..depth] and the missing one is path[0..depth+1]; the other means the index AT `depth` overflowed, so
+ * the last existing step is path[0..depth-1]. Written as one expression they differ by exactly one slice
+ * boundary, which is why they are written apart. */
+function stepMsg(f, path, no, spec) {
+  const held = path.slice(0, f.depth + (f.sub ? 1 : 0)).join(".");
+  const missing = path.slice(0, f.depth + (f.sub ? 2 : 1)).join(".");
+  if (f.sub) return `${spec} §${no} has a step ${held} and no list under it, so there is no step ${missing}`;
+  return f.depth === 0
+    ? `no list anywhere under ${spec} §${no} reaches step ${path[0]} — the longest has ${f.largest} item(s)`
+    : `${spec} §${no}'s step ${held} holds at most ${f.largest} sub-step(s), so there is no step ${missing}`;
+}
+
 /* USE VERSUS MENTION — A CITATION THE PROSE IS TALKING ABOUT IS NOT A CITATION THE PROSE IS MAKING, AND
  * REPORTING ONE AS A FABRICATION IS A RED THE TOOL CANNOT BE RIGHT ABOUT.
  *
@@ -1966,6 +2202,25 @@ function audit(argv, opts = {}) {
     Object.setPrototypeOf(tx.sections, null);
     txt.set(key, tx);
   }
+  /* THE STEP CORPUS IS LOADED ON THE SAME TERMS AS THE TEXT — present or absent, and refused outright where its
+   * edition disagrees with the section numbers it is keyed by. The staleness rule bites harder here than it does
+   * for text: a quotation checked against a slightly older edition usually still matches, while a step COUNT is
+   * exactly the thing an editorial insertion changes, so an edition mismatch here is not a degraded answer, it is
+   * a wrong one. */
+  const stp = new Map(), stpStale = new Map();
+  for (const [key, ix] of idx) {
+    const f = stepsFileOf(key);
+    if (!existsSync(f)) continue;
+    const sp = JSON.parse(readFileSync(f, "utf8"));
+    for (const need of ["sections", "specUpdated", "fetched"])
+      if (!sp[need]) throw new Error(`${relative(ROOT, f)} has no "${need}" — re-run: node engine/citegen.mjs --regen ${key}`);
+    if (sp.specUpdated !== ix.specUpdated) {
+      stpStale.set(key, `the corpus is edition "${sp.specUpdated}" and the section index is "${ix.specUpdated}"`);
+      continue;
+    }
+    Object.setPrototypeOf(sp.sections, null);
+    stp.set(key, sp);
+  }
   if (!idx.size) {
     console.error(`no committed index in ${relative(ROOT, INDEX_DIR)} — run: node engine/citegen.mjs --regen`);
     process.exit(2);
@@ -2060,6 +2315,17 @@ function audit(argv, opts = {}) {
                   noCorpus: 0, noSection: 0, tooShort: 0, voted: 0 };
   const noCorpusBy = new Map();
   const gapHist = [];
+  const stepsOut = [], stepsAway = [];
+  /* THE STEP CENSUS PARTITIONS THE WHOLE POPULATION, INCLUDING EVERY REFUSAL, because CLAUDE.md's recurring
+   * defect is several states behind one answer: a step this channel cannot judge because the standard has no
+   * corpus, one it cannot judge because only a file vote placed the standard, and one it judged and found
+   * present are three different facts, and a single "checked N" would make the first two read like the third.
+   * `depth` counts the sub-numbered references apart from the plain ones because they are the population
+   * CLAUDE.md says the drift lives in — a promoted nested list renumbers sub-steps and leaves top-level ones
+   * untouched. */
+  const sstat = { seen: 0, sub: 0, checked: 0, exists: 0, okNearby: 0, out: 0, away: 0,
+                  noCorpus: 0, staleCorpus: 0, noSection: 0, noList: 0, voted: 0, foreign: 0, unresolved: 0, citeFlagged: 0 };
+  const stepNoCorpusBy = new Map(), stepForeignBy = new Map();
   /* One standard's whole text, joined once. The divergence probe asks it repeatedly and rebuilding a
    * four-megabyte string per finding would make the mode's cost quadratic in its own findings. */
   const wholes = new Map();
@@ -2942,6 +3208,13 @@ function audit(argv, opts = {}) {
       const COUNTED_OK = { "OK-USE": "confirmedByUse", "OK-CONTAINS": "confirmedByContainment", "OK-RUN": "confirmedByRun" };
       if (COUNTED_OK[verdict.kind]) { stat.confirmed++; stat[COUNTED_OK[verdict.kind]]++; continue; }
       if (verdict.kind.startsWith("OK")) { stat.confirmed++; continue; }
+      /* THE SITE IS NOW A FINDING, AND PASS 5 MUST NOT REPORT IT TWICE. A step number under a citation whose
+       * SECTION is already reported wrong is not a second defect — it is the same one seen from further down,
+       * and the section finding states it better: measured, six `Streams §6.3 …Enqueue step 5` sites, each
+       * already carrying "…Enqueue is defined in streams §6.4.2, and §6.3 is The TransformStreamDefaultController
+       * class", would have been repeated as "no list under §6.3 reaches step 5" — true, weaker, and inflating a
+       * count by restating a claim. Marked here rather than re-derived there, so the two can never disagree. */
+      c.flagged = verdict.kind;
       findings.push({ ...rec, ...verdict });
     }
 
@@ -3074,6 +3347,138 @@ function audit(argv, opts = {}) {
         }
       }
     }
+
+    /* PASS 5 — THE STEP NUMBERS EACH CITATION GOVERNS. It reuses PASS 4's attribution rule rather than
+     * restating it: a step reference belongs to the nearest citation BEFORE it, and the region a citation
+     * governs ends at the next citation or at the end of its prose unit. Deriving a second rule for which
+     * citation owns which number would be the copy this file's own header says drifts. */
+    {
+      const admitted = cites.filter((c) => c.admitted);
+      const bySpan = new Map();
+      for (const c of admitted) {
+        const k = spanIdxAt(spans, c.at);
+        if (k < 0) continue;
+        if (!bySpan.has(k)) bySpan.set(k, []);
+        bySpan.get(k).push(c);
+      }
+      /* The lists a citation's own section and its subsections hold, joined — the same containment JOIN the
+       * quotation check performs on text, for the same reason: the corpus stores each section's OWN slice. */
+      /* EVERY LIST IN THE REGION IS A CANDIDATE ROOT, WHICH IS THE CONVENTION HALF OF THIS CHECK AND THE HALF
+       * THAT WAS MEASURED WRONG FIRST. The corpus stores a faithful tree; what a reader may be NAMING is a
+       * separate question, and the answer this tree demonstrates is that an author cites an algorithm's steps
+       * RELATIVE TO THAT ALGORITHM, wherever it sits in the markup. HTML's window event loop runs three steps
+       * in parallel whose third queues a task with twenty-three steps in it, and every comment in this tree —
+       * correctly, and as Chromium's do — calls the focus fixup `step 17` rather than `step 3.17`. Reading only
+       * the section's outermost lists reported five of those as a step §8.1.7.3 does not reach, and the
+       * "repair" would have been to invent a prefix the standard never prints beside the number.
+       * SO A PATH IS SOUGHT FROM EVERY LIST, and what survives is the claim that no list anywhere under the
+       * cited section admits it — which is what this channel says out loud and all it ever says. */
+      const flatten = (l, out) => {
+        out.push(l);
+        if (Array.isArray(l)) for (const a of Object.values(l[1])) for (const x of a) flatten(x, out);
+      };
+      const listsFor = (spec, no) => {
+        const sx = stp.get(spec).sections;
+        const out = [];
+        for (const n of Object.keys(sx)) if (n === no || contains(no, n)) for (const l of sx[n]) flatten(l, out);
+        return out;
+      };
+      for (let i = 0; i < admitted.length; i++) {
+        const c = admitted[i];
+        const stop = i + 1 < admitted.length ? admitted[i + 1].at : null;
+        const prose = governedProse(src, spans, c.at, c.len, stop);
+        for (const s of stepRefs(prose)) {
+          sstat.seen++;
+          if (s.path.length > 1) sstat.sub++;
+          /* THREE SILENCES, KEPT APART, because merging them is the defect CLAUDE.md names and because two of
+           * them are not the same KIND of silence at all. A citation that NAMES a standard nothing here indexes
+           * is unchecked and stays unchecked — but it is also the population that has been measured being
+           * MISJUDGED by the checks that do run, when a file vote hands it to a standard that happens to own a
+           * section by that number and the words are then compared against a document the author never cited.
+           * A citation naming NO standard is a different fact, and one whose standard only a file vote placed is
+           * a third. This channel refuses the vote outright — THE FILE VOTE MAY RESOLVE AND MAY NOT JUDGE, this
+           * file's own division of labour, applied a third time — so a mis-vote cannot become a step finding
+           * here; the count is printed so that refusal is visible rather than assumed. */
+          /* A CITATION ALREADY REPORTED WRONG IS NOT ASKED ABOUT ITS STEPS — see where `flagged` is set. */
+          if (c.flagged) { sstat.citeFlagged++; continue; }
+          if (c.foreign) { sstat.foreign++; stepForeignBy.set(c.anchor.slice(6), (stepForeignBy.get(c.anchor.slice(6)) || 0) + 1); continue; }
+          if (!c.spec) { sstat.unresolved++; continue; }
+          if (c.how === "file") { sstat.voted++; continue; }
+          if (!stp.has(c.spec)) {
+            if (stpStale.has(c.spec)) sstat.staleCorpus++;
+            else { sstat.noCorpus++; stepNoCorpusBy.set(c.spec, (stepNoCorpusBy.get(c.spec) || 0) + 1); }
+            continue;
+          }
+          const lists = listsFor(c.spec, c.no);
+          if (!idx.get(c.spec).sections[c.no]) { sstat.noSection++; continue; }
+          /* A SECTION WITH NO NUMBERED LIST AT ALL IS NOT A SECTION THIS CHECK MAY ACCUSE. It is the shape a
+           * citation takes when the SECTION is right and the ALGORITHM the step belongs to is written one
+           * heading away — prose naming an interface, then a step of the operation that interface calls — and
+           * accusing it would be this channel asserting something it cannot demonstrate. Counted, never
+           * judged. */
+          if (!lists.length) { sstat.noList++; continue; }
+          sstat.checked++;
+          const fail = stepFail(lists, s.path);
+          if (!fail) { sstat.exists++; continue; }
+          /* A NUMBER THE AUTHOR WROTE IN THIS SAME COMMENT IS A NUMBER THE AUTHOR CITED — the rule PASS 4
+           * already states, and it matters more here, because a step is routinely written BEFORE the § it
+           * belongs to (`step 3 of §4.9`) and nearest-preceding then charges the wrong section. A path some
+           * other citation in the same prose unit admits is CONFIRMED, counted apart from a direct one. */
+          /* A CONFIRMATION MAY QUANTIFY OVER A RESOLUTION A FINDING MAY NOT REST ON, and the two are not in
+           * tension — they are the same asymmetry this file applies everywhere: a vote may not ACCUSE, and
+           * using one to WITHHOLD an accusation errs in the safe direction. The quotation check's own
+           * OK-NEARBY excludes a voted neighbour and that exclusion cost real silence here: `navigation.h`
+           * names §7.2.6.10.4 and §7.2.6.8 in one comment, says in words that the number belongs to "the
+           * inner algorithm", and §7.2.6.10.4 — resolved by the file's vote — carries the 33-step list that
+           * admits every one of steps 23, 28, 30 and 31.
+           * AND WHERE THE NEIGHBOUR'S OWN RESOLUTION IS PLAINLY BROKEN THE NUMBER IS STILL EVIDENCE. A vote
+           * that hands `§4.13.4` to a standard with no such section has not told us which standard the author
+           * meant; it has told us the vote failed. Asking every indexed standard that HAS that number is what
+           * a confirmation is allowed to do, and it is the difference between suppressing one measured false
+           * accusation and printing it: `custom_elements.c` writes `§4.13.4 step 14's lifecycleCallbacks` and
+           * `step 14.4` four lines apart, and HTML §4.13.4's step 14 carries the thirteen sub-steps that read
+           * the prototype. */
+          const admitsPath = (key, no) =>
+            stp.has(key) && idx.get(key).sections[no] &&
+            (() => { const ol = listsFor(key, no); return ol.length && !stepFail(ol, s.path); })();
+          const near = (bySpan.get(spanIdxAt(spans, c.at)) || []).find((o) => {
+            if (o === c) return false;
+            if (o.spec && idx.has(o.spec) && idx.get(o.spec).sections[o.no]) return admitsPath(o.spec, o.no);
+            return [...idx.keys()].some((k) => admitsPath(k, o.no));
+          });
+          if (near) { sstat.okNearby++; continue; }
+          /* TWO FAILURES, AND ONLY ONE OF THEM IS A CLAIM ABOUT THE CITATION. This is the same asymmetry
+           * check (1) draws when it refuses to ask whether a term-resolved standard HAS the cited number: a
+           * finding may assert only what it can demonstrate, and "no list under §N reaches step K" does not
+           * demonstrate that §N is the wrong section — it is equally consistent with the citation being RIGHT
+           * about the section while the step belongs to an algorithm the prose names IN WORDS one heading
+           * away, which is how this tree's comments are written. Measured, by reading them: of the
+           * uncorroborated band, `range.c`'s `§4.4's clone a node, PERFORMED — there are six of them here
+           * (steps 4, 16, 17, 19 and 20…)` numbers the EXTRACT algorithm's steps under a citation of `clone a
+           * node` that is exactly right; `node.c` writes bare `STEP 13`/`STEPS 19-20` markers governed by
+           * whatever § came last; `navigation.h` says outright "the inner algorithm's step 23"; `idb_get_all.h`
+           * says "step 9 is two conversions in sequence" about getAll while citing §2.9 for one of them. Every
+           * one is correct as written and a finding against it would name no repair.
+           * A CORROBORATED FAILURE IS A DIFFERENT CLAIM: the path's own prefix EXISTS in the cited section, so
+           * that section demonstrably holds the list the citation indexes into, and the number that runs off
+           * its end is wrong about that list. That band was read too — Web IDL §3.12's `step 10.2/10.4/10.5`,
+           * where `call a user object operation` is §3.11 and its step 10 has exactly the five sub-steps; the
+           * eight IndexedDB §5.7 sites whose 9.x are the 10.x of `upgrade a database`; DOM §2.9's dispatch
+           * cluster, where 6.9.7 is a leaf and the walk's `set target to parent` is 6.9.8.1; `initialize a
+           * response`'s six steps under Fetch §5.5's `step 8.1`; and §4.10.21.1 "Definitions", which holds no
+           * algorithm at all while the `invalid` event is fired by §4.10.21.2's.
+           * SO THE UNCORROBORATED BAND IS COUNTED AND LISTED AND NEVER ACCUSED — visible where it used to be
+           * silent, which is what this file does with every population it cannot judge. */
+          const rec = { file: relative(ROOT, file), line: lineOf(c.at), no: c.no, spec: c.spec, how: c.how,
+                        step: s.raw, depth: s.path.length, gap: s.at,
+                        crash: inCrashMessage(src, spans, c.at),
+                        msg: stepMsg(fail, s.path, c.no, c.spec),
+                        text: prose.slice(Math.max(0, s.at - 60), s.at + 60).trim() };
+          if (fail.depth > 0 || fail.sub) { sstat.out++; stepsOut.push(rec); }
+          else { sstat.away++; stepsAway.push(rec); }
+        }
+      }
+    }
   }
 
   /* A site the tool CANNOT decide, standing on a number whose other sites in the same file ARE diagnosed, is
@@ -3096,7 +3501,14 @@ function audit(argv, opts = {}) {
    * quotations under one citation can diverge identically, and a delta that could not tell them apart would
    * report a repaired one as still standing. */
   const quoteFindings = quotes.map((q) => ({ ...q, msg: quoteMsg(q), text: `"${q.quote}"`, qtext: q.quote }));
-  if (opts.quiet) return [...findings, ...quoteFindings];
+  /* A STEP FINDING IS A FINDING, SO --since MUST SEE IT, for the reason the line above gives about quotations:
+   * the number a lane gets wrong is the number that lane is writing right now. It needs no extra key field the
+   * way a quotation does: one citation can carry several step references, and each one's `msg` names its own
+   * step, so the delta key already tells them apart. The REFUSED band is deliberately not returned — it is not a finding, and
+   * handing it to a delta channel would turn every one of those sites into a red in the first diff to touch
+   * the file. */
+  const stepFindings = stepsOut.map((v) => ({ ...v, kind: "STEP-OUT-OF-RANGE" }));
+  if (opts.quiet) return [...findings, ...quoteFindings, ...stepFindings];
   /* WHAT THE OTHER SITES ON THIS NUMBER RESOLVED TO IS THE ONE THING THE READER NEEDS AND THE ONE THING THIS
    * CAN PROVE. A file writing `7.4.9 IteratorClose` six times and `7.4.9 IteratorStepValue` four times has
    * §the numbering of an older edition — and it is ALSO a file in which that one number means TWO different
@@ -3329,6 +3741,63 @@ function audit(argv, opts = {}) {
       }
       elided(ord, qlimit, label);
     }
+  }
+
+  /* THE STEP REPORT STATES ITS DENOMINATOR IN THE SAME LINE AS ITS NUMBER, and it has more denominators than
+   * any other check here because more things can stop it: a step reference is judged only where the citation
+   * over it resolved on its own evidence, the standard has a committed step corpus at the same edition, the
+   * section exists, and something under it is numbered. Each of those is a different reason for silence and
+   * each is counted, because a search cannot be directed toward a gap it reports with the same number as two
+   * others. */
+  {
+    console.log(`\nSTEP CHECK — can the step number a citation writes exist in the section it names?`);
+    console.log(`  (this asks about LIST STRUCTURE. It cannot tell a step that exists from the RIGHT step: where an`);
+    console.log(`   algorithm's step 6 holds seven sub-steps, 6.4 and 6.5 are both admitted and only MEANING separates`);
+    console.log(`   them. What it can falsify is a number no reading of the section admits — which is what the drift`);
+    console.log(`   CLAUDE.md describes produces once it runs past the end of a list.)`);
+    console.log(`  ${sstat.seen} step reference(s) stand in prose a citation governs (${sstat.sub} of them sub-numbered); ${sstat.checked} were compared against a section's own lists`);
+    console.log(`    EXISTS ${sstat.exists}  CONFIRMED-BY-A-NUMBER-THE-SAME-COMMENT-CITES ${sstat.okNearby}  OUT-OF-RANGE ${sstat.out}` +
+      `  NOT-IN-THIS-SECTION ${sstat.away} (listed, never accused — see --steps)`);
+    console.log(`  NOT CHECKED, and why: ${sstat.noCorpus} cite a standard with no committed step corpus` +
+      (stepNoCorpusBy.size ? ` (${[...stepNoCorpusBy].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}=${v}`).join(" ")})` : "") +
+      `; ${sstat.staleCorpus} cite one whose corpus is a different edition from its section index` +
+      `; ${sstat.foreign} name a standard this tool does not index` +
+      (stepForeignBy.size ? ` (${[...stepForeignBy].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, v]) => `${k}=${v}`).join(" ")})` : "") +
+      ` — those are NOT merely unchecked here: a citation naming an unindexed standard is what a file vote hands to whichever indexed standard owns a section by that number, and the other checks have been measured judging one against a document its author never cited` +
+      `; ${sstat.unresolved} resolved to no standard at all` +
+      `; ${sstat.citeFlagged} stand under a citation this run already reports as wrong, where the SECTION is the defect and the step number is a consequence of it` +
+      `; ${sstat.voted} stand under a citation whose standard only a file vote placed, which this channel refuses to judge on` +
+      `; ${sstat.noSection} cite a §N the standard does not have (the UNKNOWN-SECTION population above)` +
+      `; ${sstat.noList} cite a section holding no list at all — the shape a RIGHT section takes when the algorithm the step belongs to is written one heading away, which this channel counts and never judges`);
+    if (stpStale.size) for (const [k, why] of stpStale)
+      console.log(`  ${k}: step corpus REFUSED — ${why}; re-run: node engine/citegen.mjs --regen ${k}`);
+    /* THE BAND THIS CHANNEL WILL NOT ACCUSE IS PRINTED THE WAY --titles PRINTS ITS UNVERIFIED POPULATION: the
+     * count in the census, the list behind a flag. A refusal nobody can see is the same silent zero as a list
+     * nobody can see, and these sites were invisible to every check in this file before it existed — so the
+     * count says how many there are and the flag says which. Read one and you are reading a citation that may
+     * be perfectly right, which is exactly why it is not in the findings. */
+    if (argv.includes("--steps")) {
+      console.log(`\nSTEP-NOT-IN-THIS-SECTION: ${stepsAway.length} — the cited section holds no list reaching this step, which does NOT`);
+      console.log(`  establish the citation is wrong: the section can be right for the TERM while the step belongs to an algorithm`);
+      console.log(`  the prose names in words one heading away. Listed so a human can read them; never counted as a finding.`);
+      const acap = argv.includes("--all") ? Infinity : 60;
+      const aord = [...stepsAway].sort((a, b) => (a.crash ? 0 : 1) - (b.crash ? 0 : 1) || b.depth - a.depth);
+      for (const v of head(aord, acap)) {
+        console.log(`  ${v.file}:${v.line}  step ${v.step} — ${v.msg}`);
+        console.log(`      …${v.text}…`);
+      }
+      elided(aord, acap, "STEP-NOT-IN-THIS-SECTION");
+    }
+    const slimit = argv.includes("--all") ? Infinity : 60;
+    /* A CRASH PRINTS ITS MESSAGE TO SOMEONE WITH NO FILE OPEN, so a step number inside one is listed first —
+     * the same ordering and the same reason as --unanchored's and the quotation head's. */
+    const sord = [...stepsOut].sort((a, b) => (a.crash ? 0 : 1) - (b.crash ? 0 : 1) || b.depth - a.depth);
+    console.log(`\nSTEP-OUT-OF-RANGE: ${stepsOut.length}`);
+    for (const v of head(sord, slimit)) {
+      console.log(`  ${v.file}:${v.line}  step ${v.step} — ${v.msg}`);
+      console.log(`      …${v.text}…`);
+    }
+    elided(sord, slimit, "STEP-OUT-OF-RANGE");
   }
 
   const groups = new Map();

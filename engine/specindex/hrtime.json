@@ -2,8 +2,8 @@
  "spec": "High Resolution Time",
  "key": "hrtime",
  "base": "https://w3c.github.io/hr-time/",
- "specUpdated": "24 March 2026",
- "fetched": "2026-08-31",
+ "specUpdated": "1 September 2026",
+ "fetched": "2026-09-02",
  "sections": {
   "1": {
    "title": "Introduction",

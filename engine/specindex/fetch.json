@@ -2,8 +2,8 @@
  "spec": "Fetch Standard",
  "key": "fetch",
  "base": "https://fetch.spec.whatwg.org/",
- "specUpdated": "31 August 2026",
- "fetched": "2026-08-31",
+ "specUpdated": "1 September 2026",
+ "fetched": "2026-09-02",
  "sections": {
   "1": {
    "title": "Preface",

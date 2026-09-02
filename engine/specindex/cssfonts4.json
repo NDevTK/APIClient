@@ -2,8 +2,8 @@
  "spec": "CSS Fonts Module Level 4",
  "key": "cssfonts4",
  "base": "https://drafts.csswg.org/css-fonts-4/",
- "specUpdated": "28 August 2026",
- "fetched": "2026-08-31",
+ "specUpdated": "30 August 2026",
+ "fetched": "2026-09-02",
  "sections": {
   "1": {
    "title": "Introduction",

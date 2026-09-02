@@ -2,8 +2,8 @@
  "spec": "CSS Box Sizing Module Level 3",
  "key": "csssizing3",
  "base": "https://drafts.csswg.org/css-sizing-3/",
- "specUpdated": "15 February 2026",
- "fetched": "2026-08-31",
+ "specUpdated": "1 September 2026",
+ "fetched": "2026-09-02",
  "sections": {
   "1": {
    "title": "Introduction",
@@ -76,7 +76,7 @@
    "id": "max-size-properties"
   },
   "3.2": {
-   "title": "Sizing Values: the <length-percentage [0,∞]> , auto | none , min-content , max-content , and fit-content() values",
+   "title": "Sizing Values: the <length-percentage [0,∞]> , auto | none , stretch , min-content , max-content , and fit-content values",
    "page": "",
    "id": "sizing-values"
   },
@@ -96,7 +96,7 @@
    "id": "box-sizing"
   },
   "3.4": {
-   "title": "New Column Sizing Values: the min-content , max-content , and fit-content() values",
+   "title": "New Column Sizing Values: the stretch , min-content , max-content , and fit-content values",
    "page": "",
    "id": "column-sizing"
   },
@@ -104,6 +104,11 @@
    "title": "Percentage Sizing",
    "page": "",
    "id": "percentage-sizing"
+  },
+  "4.2": {
+   "title": "Stretch-fit Sizing: filling the containing block",
+   "page": "",
+   "id": "stretch-fit-sizing"
   },
   "5.1": {
    "title": "Intrinsic Sizes",
@@ -181,6 +186,10 @@
   "fallback size": [
    "2"
   ],
+  "fit content": [
+   "3.2",
+   "3.4"
+  ],
   "fit content block size": [
    "2.1"
   ],
@@ -189,15 +198,6 @@
   ],
   "fit content size": [
    "2.1"
-  ],
-  "fit content( length percentage )": [
-   "3.4"
-  ],
-  "fit content( length percentage [0 ] )": [
-   "3.2"
-  ],
-  "fit content()": [
-   "3.2"
   ],
   "indefinite size": [
    "2"
@@ -370,10 +370,10 @@
   },
   "available space": {
    "2.1": 3,
-   "3.2": 2,
    "5.2.2": 4
   },
   "behave as auto": {
+   "4.2": 2,
    "5.2.1": 4,
    "5.2.2": 3
   },
@@ -395,18 +395,19 @@
   "fallback size": {
    "5.2.2": 2
   },
+  "fit content": {
+   "5.2.2": 5
+  },
   "fit content size": {
    "5.2.2": 2
-  },
-  "fit content( length percentage [0 ] )": {
-   "5.2.2": 3
   },
   "indefinite size": {
    "2.1": 2,
    "5.2.2": 3
   },
   "inner size": {
-   "3.3": 4,
+   "3.3": 5,
+   "4.2": 2,
    "5.2.2": 5
   },
   "intrinsic size": {
@@ -421,11 +422,14 @@
   },
   "max content contribution": {
    "5.2.1": 3,
-   "5.2.2": 3
+   "5.2.2": 4
+  },
+  "max content inline size": {
+   "3.4": 2
   },
   "max content size": {
    "5.1": 6,
-   "5.2.2": 3
+   "5.2.2": 4
   },
   "max height": {
    "5.2.1": 2,
@@ -439,6 +443,7 @@
    "5.2.2": 2
   },
   "maximum width": {
+   "3.1": 2,
    "5.1": 2,
    "5.2.2": 4
   },
@@ -451,11 +456,14 @@
   },
   "min content contribution": {
    "5.2.1": 6,
-   "5.2.2": 4
+   "5.2.2": 5
+  },
+  "min content inline size": {
+   "3.4": 2
   },
   "min content size": {
    "5.1": 5,
-   "5.2.2": 2
+   "5.2.2": 3
   },
   "min height": {
    "5.1": 2,
@@ -470,11 +478,13 @@
    "5.2.2": 2
   },
   "minimum width": {
+   "3.1": 2,
    "5.1": 3,
    "5.2.1": 3,
-   "5.2.2": 5
+   "5.2.2": 6
   },
   "outer size": {
+   "4.2": 2,
    "5.2.2": 5
   },
   "preferred aspect ratio": {
@@ -483,6 +493,7 @@
   },
   "preferred height": {
    "2": 2,
+   "3.3": 2,
    "5.2.2": 2
   },
   "preferred size": {
@@ -490,11 +501,19 @@
   },
   "preferred width": {
    "2": 2,
+   "3.3": 2,
    "5.2.2": 2
   },
   "sizing properties": {
-   "3.3": 4,
+   "3.3": 5,
    "5.2.2": 4
+  },
+  "stretch fit inline size": {
+   "3.4": 2
+  },
+  "stretch fit size": {
+   "4.2": 2,
+   "5.2.2": 2
   }
  }
 }

@@ -2,8 +2,8 @@
  "spec": "CSS Color Module Level 4",
  "key": "csscolor4",
  "base": "https://drafts.csswg.org/css-color-4/",
- "specUpdated": "30 August 2026",
- "fetched": "2026-08-31",
+ "specUpdated": "1 September 2026",
+ "fetched": "2026-09-02",
  "sections": {
   "1": {
    "title": "Introduction",

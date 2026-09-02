@@ -2,8 +2,8 @@
  "spec": "ECMAScript Language Specification",
  "key": "ecmascript",
  "base": "https://tc39.es/ecma262/multipage/",
- "specUpdated": "Draft ECMA-262 / August 28, 2026",
- "fetched": "2026-08-31",
+ "specUpdated": "Draft ECMA-262 / September 2, 2026",
+ "fetched": "2026-09-02",
  "sections": {
   "1": {
    "title": "Scope",
