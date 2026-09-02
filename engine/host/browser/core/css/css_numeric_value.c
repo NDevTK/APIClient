@@ -265,6 +265,22 @@ static JSValue js_css_numeric_value_type(JSContext *ctx, JSValueConst this_val, 
     /* "For each baseType → power in the type of this" — the ONE entry that answers that for either subclass;
        §4.3.4's math values carry the type their own constructor computed and stored. */
     t = css_numeric_value_type_of(ctx, this_val);
+    /* THE ONE STATE THIS ALGORITHM HAS NO ARM FOR, and it is REACHABLE — see the DFAIL. */
+    if (css_math_type_is_failure(&t)) {
+        DFAIL("CSS Typed OM 1 §4.3.1's type() was asked of a CSSNumericValue whose §4.3.2 type is FAILURE, and "
+              "the published draft states no arm for it. Its step 2 is \"For each baseType → power in the type "
+              "of this\" and its step 3 reads \"the percent hint of this\" — a failure is not a "
+              "map and §4.3.2 gives it no percent hint, so there is nothing for either step to read. IT IS "
+              "REACHABLE because §4.3.1's toSum mints such an object with no type step ("
+              "`CSS.px(1).toSum(\"px\",\"s\")`) and because §4.3.4's CSSMathNegate and CSSMathInvert "
+              "constructors have no type step either, so `new CSSMathInvert(that)` builds a second one. "
+              "ANSWERING «[ ]» IS THE TRAP: it is what iterating a failure as though it were an empty map "
+              "gives, and it would make that object's type() deep-equal `CSS.number(1).type()` — a plausible "
+              "datum for a value that has no type at all. BUILD the arm the draft states, once it states one; "
+              "until then this is a fabrication refused rather than a capability missing");
+        return JS_ThrowInternalError(ctx, "CSS Typed OM 1 §4.3.1's type() has no defined answer for a "
+                                          "CSSNumericValue whose §4.3.2 type is failure");
+    }
     /* §3.2.17's step 1: "Let O be OrdinaryObjectCreate(%Object.prototype%)" — which is a plain object of THIS
        realm, and JS_NewObject is exactly that. */
     result = JS_NewObject(ctx);
@@ -1066,14 +1082,23 @@ static JSValue js_css_numeric_value_arith(JSContext *ctx, JSValueConst this_val,
         }
     }
 
-    /* THE LAST TWO STEPS, which §4.3.4's mint performs as one: the type fold whose failure is this member's
-       TypeError, and the object it returns. */
+    /* THE LAST TWO STEPS, AND THEY ARE TWO. "Let type be the result of adding the types of every item in
+       values. If type is failure, throw a TypeError" — `mul` multiplies where the other three add — and then
+       "Return a new CSSMathSum object whose values internal slot is set to values". The type step is THIS
+       member's and is asked of core/css/css_math_value.h's fold before the mint runs, because the mint serves
+       §4.3.1's toSum too and that member has no type step to refuse with. */
+    {
+        CssMathType t = css_math_value_type_fold(ctx, NV_ARITH_MATH[k], values.v, values.n);
+
+        if (css_math_type_is_failure(&t)) {
+            nv_list_free(ctx, &values);
+            return JS_ThrowTypeError(ctx, "these CSS numeric values have no combined type — CSS Typed OM 1 "
+                                          "§4.3.2's %s of their types returns failure",
+                                     k == NV_ARITH_MUL ? "multiplying" : "adding");
+        }
+    }
     r = css_math_value_new(ctx, NV_ARITH_MATH[k], values.v, values.n);
     nv_list_free(ctx, &values);
-    if (JS_IsUndefined(r))
-        return JS_ThrowTypeError(ctx, "these CSS numeric values have no combined type — CSS Typed OM 1 "
-                                      "§4.3.2's %s of their types returns failure",
-                                 k == NV_ARITH_MUL ? "multiplying" : "adding");
     return r;
 }
 
@@ -1117,34 +1142,22 @@ static void nv_sort_by_unit(NvList *l)
 
 /* §4.3.1's toSum's LAST STEP — "Return a new CSSMathSum object whose values internal slot is set to values" —
  * which is §4.3.4's SPEC-INTERNAL mint ("Return a new CSSMathSum whose values internal slot is set to args")
- * and NOT its constructor, so the standard states no type step here at all. `values` is BORROWED.
+ * and NOT its constructor, so the standard states no type step here at all.
  *
- * WHICH IS WHY THIS CRASHES RATHER THAN THROWING. core/css/css_math_value.c computes and STORES the type at
- * every mint, because §4.3.4's own constructor makes a failing type a TypeError and because the answer has to
- * be stored for `type()` to be readable without a walk — so this engine has no representation for the object
- * the standard produces here when the types do not add. `CSS.px(1).toSum("px", "s")` is exactly that object: a
- * CSSMathSum of `1px` and `0s` whose type is failure, which a browser hands back and whose `type()` a page can
- * then read. A TypeError here would be a refusal §4.3.1 does not state, and a plausible type would be a
- * fabrication, so the honest answer is to name the capability. */
+ * WHICH IS WHY IT NEITHER THROWS NOR CRASHES, AND WHY THAT IS THE WHOLE POINT OF THIS ENTRY. `CSS.px(1).toSum(
+ * "px", "s")` is a CSSMathSum of `1px` and `0s` whose §4.3.2 type is FAILURE, and a browser hands it back: the
+ * TypeError for a failing type belongs to §4.3.4's four LIST CONSTRUCTORS and to §4.3.1's own add/mul/min/max,
+ * and toSum passes through none of them. A TypeError here would be a refusal §4.3.1 does not state. So the type
+ * is a value core/css/css_math.h can hold (`css_math_type_failure`) and the mint stores it like any other.
+ * `values` is BORROWED. */
 static JSValue nv_to_sum_result(JSContext *ctx, NvList *values)
 {
-    JSValue r;
-
     DCHECK(values->n >= 1,
            "§4.3.1's toSum reached its last step with NO values. Its no-units branch is over a sum value, "
            "which is never empty because §4.3.4's mint refuses an empty operand list and the CSSUnitValue arm "
            "yields exactly one item; its units branch appends one temp per unit and is reached only when "
            "`units` is not empty");
-    r = css_math_value_new(ctx, CSS_MATH_OP_SUM, values->v, values->n);
-    if (!JS_IsUndefined(r)) return r;
-    DFAIL("CSS Typed OM 1 §4.3.1's toSum built a CSSMathSum whose §4.3.2 type is FAILURE — the standard's own "
-          "answer for `CSS.px(1).toSum(\"px\", \"s\")`, because that member's last step is §4.3.4's "
-          "spec-internal mint and states no type step. This engine STORES the type at every mint (core/css/"
-          "css_math_value.c) and CssMathType has no failure state, so the object cannot be represented. BUILD "
-          "the failure type as a representable state of core/css/css_math.h's CssMathType, and let §4.3.4's "
-          "CONSTRUCTOR — which is where the TypeError is stated — be the one place that refuses it");
-    return JS_ThrowInternalError(ctx, "CSS Typed OM 1 §4.3.1's toSum cannot represent a CSSMathSum whose type "
-                                      "is failure — core/css/css_math.h's type has no failure state");
+    return css_math_value_new(ctx, CSS_MATH_OP_SUM, values->v, values->n);
 }
 
 /* "The toSum(...units) method converts an existing CSSNumericValue this into a CSSMathSum of only

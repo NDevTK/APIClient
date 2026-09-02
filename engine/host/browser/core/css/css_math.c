@@ -52,6 +52,23 @@ CssMathType css_math_type_of(CssMathBase base)
     return t;
 }
 
+/* §4.3.2's "Return failure", as a value of the record — see css_math.h for why it must be storable and why it
+   is spelled in the hint rather than in a second field. */
+CssMathType css_math_type_failure(void)
+{
+    CssMathType t;
+
+    memset(&t, 0, sizeof t);
+    t.hint = CSS_MATH_HINT_FAILURE;
+    return t;
+}
+
+bool css_math_type_is_failure(const CssMathType *t)
+{
+    DCHECK(t != NULL, "a CSS numeric type was asked whether it is §4.3.2's failure through a NULL pointer");
+    return t->hint == CSS_MATH_HINT_FAILURE;
+}
+
 /* §4.3.2's "apply the percent hint hint to a type WITHOUT a percent hint". */
 static void mth_apply_hint(CssMathType *t, int hint)
 {
@@ -93,6 +110,9 @@ bool css_math_type_add(const CssMathType *type1, const CssMathType *type2, CssMa
     CssMathType t1 = *type1, t2 = *type2;
     unsigned hint;
 
+    /* A FAILURE OPERAND ABSORBS — see css_math.h for why this arm exists at all and why it is not a DCHECK.
+       It stands FIRST because everything below reads a hint, and a failure's is neither null nor a base type. */
+    if (css_math_type_is_failure(&t1) || css_math_type_is_failure(&t2)) return false;
     if (t1.hint != CSS_MATH_HINT_NULL && t2.hint != CSS_MATH_HINT_NULL && t1.hint != t2.hint) return false;
     if (t1.hint != CSS_MATH_HINT_NULL && t2.hint == CSS_MATH_HINT_NULL) mth_apply_hint(&t2, t1.hint);
     else if (t2.hint != CSS_MATH_HINT_NULL && t1.hint == CSS_MATH_HINT_NULL) mth_apply_hint(&t1, t2.hint);
@@ -134,6 +154,8 @@ bool css_math_type_mul(const CssMathType *type1, const CssMathType *type2, CssMa
     CssMathType t1 = *type1, t2 = *type2;
     unsigned i;
 
+    /* A FAILURE OPERAND ABSORBS — the same arm as add's, for the same reason and in the same position. */
+    if (css_math_type_is_failure(&t1) || css_math_type_is_failure(&t2)) return false;
     if (t1.hint != CSS_MATH_HINT_NULL && t2.hint != CSS_MATH_HINT_NULL && t1.hint != t2.hint) return false;
     if (t1.hint != CSS_MATH_HINT_NULL && t2.hint == CSS_MATH_HINT_NULL) mth_apply_hint(&t2, t1.hint);
     else if (t2.hint != CSS_MATH_HINT_NULL && t1.hint == CSS_MATH_HINT_NULL) mth_apply_hint(&t1, t2.hint);
@@ -150,6 +172,12 @@ CssMathType css_math_type_invert(const CssMathType *t)
     CssMathType out = *t;
     unsigned i;
 
+    /* A FAILURE COMES OUT A FAILURE WITH NO ARM HERE, AND THAT IS THE SPEC'S OWN SENTENCE RATHER THAN LUCK:
+       §4.3.2 opens this algorithm with "Let result be a new type with an initially empty ordered map and a
+       percent hint MATCHING THAT OF TYPE", and css_math.h spells failure IN the percent hint — so the one
+       thing invert is stated to carry through unchanged is the one thing failure is written in. The negation
+       below then runs over a failure's zeroed exponents and leaves them zero. Add and multiply need a real
+       arm because they READ both hints and a failure's is neither null nor a base type; invert reads none. */
     for (i = 0; i < CSS_MATH_BASE_COUNT; i++) out.exp[i] = -t->exp[i];
     return out;
 }
@@ -158,6 +186,10 @@ CssMathType css_math_type_invert(const CssMathType *t)
    type is fixed (`sin()` is a `<number>`, `atan()` an `<angle>`) still carries its argument's percent hint. */
 static bool mth_make_consistent(CssMathType *base, const CssMathType *input)
 {
+    DCHECK(!css_math_type_is_failure(base) && !css_math_type_is_failure(input),
+           "§10.9's make-a-type-consistent was handed §4.3.2's FAILURE. That algorithm reads a percent hint off "
+           "both operands and a failure has none — every caller here folds an argument whose own type step has "
+           "already returned false for a failure, so one arriving is a fold that stopped propagating");
     if (base->hint != CSS_MATH_HINT_NULL && input->hint != CSS_MATH_HINT_NULL && base->hint != input->hint)
         return false;
     if (base->hint == CSS_MATH_HINT_NULL) base->hint = input->hint;
@@ -214,6 +246,12 @@ static bool mth_type_matches(const CssMathType *t, CssMathProduction want)
 {
     bool null_hint = t->hint == CSS_MATH_HINT_NULL;
 
+    DCHECK(!css_math_type_is_failure(t),
+           "§10.9's last rule was asked to MATCH §4.3.2's failure against a production. Its own preceding rule "
+           "is \"For each of the above, if the type is failure, the math function is invalid\", so a failure "
+           "never reaches the matching question — a caller that skipped that rule would read a failure's zeroed "
+           "exponents and its answer would be \"this is not a <length>\", which is right for the wrong reason "
+           "and would be wrong the day a production matched the empty map with a non-null hint");
     switch (want) {
     /* §10.9: "Additionally, math functions that resolve to <number> can be used in any place that only accepts
        <integer>", so the two ask one question and differ only in the rounding the value takes. */

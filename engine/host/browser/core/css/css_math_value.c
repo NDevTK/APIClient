@@ -272,15 +272,13 @@ JSValue css_math_value_items(JSContext *ctx, JSValueConst v)
     return arr;
 }
 
-JSValue css_math_value_new(JSContext *ctx, CssMathOp op, JSValueConst *items, int n)
+/* The shape rule both entries below assert, spelled once so the mint and the type fold cannot come apart about
+   what an operand list for an operator looks like. */
+static void mv_check_operands(JSContext *ctx, CssMathOp op, JSValueConst *items, int n)
 {
-    CssMathValueData *d;
-    CssMathType t;
-    JSValue proto, obj, list;
     int i;
 
     DCHECK((unsigned)op < (unsigned)CSS_MATH_OP_N, "§4.3.4's mint was asked for an operator it does not name");
-    DCHECK(g_class[op] != 0, "a CSSMathValue was built before css_math_value_init declared the interface");
     DCHECK(items != NULL && n >= 1,
            "§4.3.4's mint was handed no operands. Its constructors' \"If args is empty, throw a SyntaxError\" "
            "is the CALLER's step because a SyntaxError is a JS exception and this entry is also reached from "
@@ -293,12 +291,25 @@ JSValue css_math_value_new(JSContext *ctx, CssMathOp op, JSValueConst *items, in
                "§4.3.4's mint was handed an operand that is not a CSSNumericValue — every constructor's step 1 "
                "is \"Replace each item of args with the result of rectifying a numberish value for the item\", "
                "and §4.3's rectify answers a CSSNumericValue on both of its branches");
+}
 
-    /* §4.3.4's "The type of a CSSMathValue depends on its class", run HERE because it is also the
-       constructors' own failure step and because the answer is stored (see the header). The fold is LEFT TO
-       RIGHT over the operand list, which is the order §4.3.4 states ("adding the types of each of the items in
-       its values internal slot") and is observable: §4.3.2's addition is not associative, since its
-       percent-hint arm applies a hint to both operands and keeps the first that makes their entries agree. */
+/* See css_math_value.h — §4.3.4's type table, which is also the "Let type be …" step of its four list
+ * constructors and of §4.3.1's add, mul, min and max.
+ *
+ * THE FOLD IS LEFT TO RIGHT over the operand list, which is the order §4.3.4 states ("adding the types of each
+ * of the items in its values internal slot") and is observable: §4.3.2's addition is not associative, since its
+ * percent-hint arm applies a hint to both operands and keeps the first that makes their entries agree.
+ *
+ * A FAILURE OPERAND MAKES THE ANSWER FAILURE, and that arm is core/css/css_math.h's rather than a test here:
+ * add and multiply return false for one and invert returns a failure, so the single-operand cases — a
+ * CSSMathNegate, whose type §4.3.4 states is "the same as the type of its value internal slot", and a one-item
+ * list, whose "adding the types of all the items" calls nothing — carry it through by simply not looking. */
+CssMathType css_math_value_type_fold(JSContext *ctx, CssMathOp op, JSValueConst *items, int n)
+{
+    CssMathType t;
+    int i;
+
+    mv_check_operands(ctx, op, items, n);
     t = css_numeric_value_type_of(ctx, items[0]);
     if (op == CSS_MATH_OP_INVERT) {
         /* "The type is the same as the type of its value internal slot, but with all values negated." */
@@ -310,9 +321,24 @@ JSValue css_math_value_new(JSContext *ctx, CssMathOp op, JSValueConst *items, in
         /* "…except that in step 3 it multiplies the types instead of adding" is the ONE line §4.3.4 states for
            CSSMathProduct; every other list operator adds. */
         if (op == CSS_MATH_OP_PRODUCT ? !css_math_type_mul(&t, &it, &sum) : !css_math_type_add(&t, &it, &sum))
-            return JS_UNDEFINED;   /* "If type is failure" — the CALLER's TypeError, see css_math_value.h */
+            return css_math_type_failure();
         t = sum;
     }
+    return t;
+}
+
+JSValue css_math_value_new(JSContext *ctx, CssMathOp op, JSValueConst *items, int n)
+{
+    CssMathValueData *d;
+    CssMathType t;
+    JSValue proto, obj, list;
+    int i;
+
+    mv_check_operands(ctx, op, items, n);
+    DCHECK(g_class[op] != 0, "a CSSMathValue was built before css_math_value_init declared the interface");
+    /* The type is computed here because it has to be STORED (see the header) — never to decide whether to
+       mint. A caller with a step 3 has already run the same fold and refused. */
+    t = css_math_value_type_fold(ctx, op, items, n);
 
     proto = JS_GetClassProto(ctx, g_class[op]);
     DCHECK(!JS_IsNull(proto), "a CSSMathValue was built in a realm with no prototype for its interface");
@@ -659,14 +685,27 @@ static JSValue js_mv_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSVal
         for (i = 0; i < argc; i++) items[i] = css_numeric_value_rectify(ctx, argv[i]);
         n = argc;
     }
+    /* Step 3, WHICH IS THIS SECTION'S AND NOT THE MINT'S: "Let type be the result of adding the types of all
+       the items of args. If type is failure, throw a TypeError." It runs BEFORE the mint because that is the
+       order §4.3.4 states it in, and it runs for the four LIST constructors only — the CSSMathNegate and
+       CSSMathInvert constructors state two steps and neither is a type step, so a failure-typed operand builds
+       a failure-typed object there rather than being refused. That asymmetry is the spec's, and it is why the
+       type step could not stay inside the mint: §4.3.1's toSum reaches the same mint with no step 3 at all. */
+    if (css_math_op_is_list(op)) {
+        CssMathType t = css_math_value_type_fold(ctx, op, items, n);
+
+        if (css_math_type_is_failure(&t)) {
+            for (i = 0; i < n; i++) JS_FreeValue(ctx, items[i]);
+            free(items);
+            return JS_ThrowTypeError(ctx, "the arguments to %s do not have a combined CSS numeric type — "
+                                          "CSS Typed OM 1 §4.3.2's %s of their types returns failure",
+                                     MV[op].iface,
+                                     op == CSS_MATH_OP_PRODUCT ? "multiplying" : "adding");
+        }
+    }
     r = css_math_value_new(ctx, op, items, n);
     for (i = 0; i < n; i++) JS_FreeValue(ctx, items[i]);
     free(items);
-    /* Step 3's failure half: "If type is failure, throw a TypeError." */
-    if (JS_IsUndefined(r))
-        return JS_ThrowTypeError(ctx, "the arguments to %s do not have a combined CSS numeric type — "
-                                      "CSS Typed OM 1 §4.3.2's adding of their types returns failure",
-                                 MV[op].iface);
     return r;
 }
 

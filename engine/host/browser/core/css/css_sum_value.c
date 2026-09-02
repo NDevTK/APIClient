@@ -185,11 +185,13 @@ static bool sv_type_of_map(const CssUnitMap *m, CssMathType *out)
                "having taken its Otherwise branch for the unit it is stated to exclude");
         if (sole < 0) return false;
         t.exp[sole] = m->e[i].power;
-        /* §4.3.2's multiply. Its ONE failure arm needs both operands to carry a non-null percent hint, and
-           create-a-type-from-a-string-unit ends "In all cases, the associated percent hint is null" — which is
-           also what makes the ORDER of this fold unobservable and the canonical sort in css_sum_value.h safe.
-           The call is still checked: an unreachable failure arm silently returning a plausible type is exactly
-           the shape CLAUDE.md names, and a hint arriving from somewhere new must show as a refusal here. */
+        /* §4.3.2's multiply. NEITHER of its failure arms is reachable here, which is what makes the ORDER of
+           this fold unobservable and the canonical sort in css_sum_value.h safe. §4.3.2's own arm needs both
+           operands to carry a non-null percent hint and create-a-type-from-a-string-unit ends "In all cases,
+           the associated percent hint is null"; core/css/css_math.h's arm needs an operand that IS §4.3.2's
+           failure, and that same entry answers a type or refuses rather than answering a failure type — the
+           refusal is the DFAIL above. The call is still checked: an unreachable failure arm silently returning
+           a plausible type is exactly the shape CLAUDE.md names, and either arm arriving must show here. */
         if (!css_math_type_mul(&acc, &t, &r)) return false;
         acc = r;
     }

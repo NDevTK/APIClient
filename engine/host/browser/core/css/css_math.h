@@ -94,6 +94,21 @@ typedef enum {
    matching rules below test it rather than defaulting past it. */
 #define CSS_MATH_HINT_NULL (-1)
 
+/* §4.3.2's FAILURE, WHICH IS A VALUE OF THIS RECORD AND NOT AN ABSENCE OF ONE — "The types can't be added.
+   Return failure", and the same for multiply. It has to be REPRESENTABLE, and CSS Typed OM 1 §4.3.1's toSum is
+   the member that forces it: its last step is "Return a new CSSMathSum object whose values internal slot is set
+   to result", which is §4.3.4's spec-internal mint and states NO type step at all — so `CSS.px(1).toSum("px",
+   "s")` is a CSSMathSum of `1px` and `0s` whose type is failure, handed back rather than refused. A TypeError
+   there would be a refusal §4.3.1 does not state; §4.3.4's constructors are where the TypeError lives ("If type
+   is failure, throw a TypeError"), and toSum does not go through one.
+   IT IS ENCODED IN THE HINT AND NOT IN A SECOND FIELD, so the record has exactly ONE representation of failure
+   and a `failure` flag cannot disagree with a hint beside it. It is also TRUE of a failure rather than a
+   sentinel chosen for convenience: §4.3.2 says "The percent hint is either null or a base type" of a TYPE, and
+   a failure is not a type, so it has neither. The encoding makes every hint test in this component a tripwire
+   in the direction that matters — a failure reaching §4.3.2's apply-the-percent-hint, or §4.3.1's type() member
+   reading a hint out, is neither null nor in range and aborts instead of answering plausibly. */
+#define CSS_MATH_HINT_FAILURE (-2)
+
 /* §4.3.2's TYPE: "a map of base types to integers (denoting the exponent of each type, so a <length>², such as
    from calc(1px * 1em), is «["length" → 2]»), and an associated percent hint". The map is DENSE here because
    there are seven keys and the spec fixes their order: an absent key and a zero exponent are the same fact in
@@ -101,7 +116,7 @@ typedef enum {
    same value"), so a sparse map would carry a distinction no algorithm reads. */
 typedef struct {
     int exp[CSS_MATH_BASE_COUNT];
-    int hint;                       /* CSS_MATH_HINT_NULL, or one of CssMathBase */
+    int hint;                       /* CSS_MATH_HINT_NULL, CSS_MATH_HINT_FAILURE, or one of CssMathBase */
 } CssMathType;
 
 /* THE PRODUCTION A CALLER WANTS, which is BOTH §10.9.1's calculation context and §10.9's last rule's question.
@@ -161,9 +176,32 @@ bool css_math_unit_base(const char *unit, size_t len, CssMathBase *base);
 CssMathType css_math_type_number(void);
 CssMathType css_math_type_of(CssMathBase base);
 
+/* §4.3.2's THIRD answer — "Return failure" — as a value of the record above, and the predicate that reads it.
+   See CSS_MATH_HINT_FAILURE for why it must be storable at all and why it is spelled in the hint.
+   THE EXPONENTS OF A FAILURE ARE ZEROED AND MEAN NOTHING; nothing may read them, which is what the predicate is
+   for. A caller holding a type that may be failure asks this BEFORE it asks anything else about it. */
+CssMathType css_math_type_failure(void);
+bool        css_math_type_is_failure(const CssMathType *t);
+
 /* §4.3.2 Numeric Value Typing's THREE OPERATIONS OVER A TYPE — "To add two types type1 and type2", "To
    multiply two types type1 and type2" and "To invert a type type". FALSE is the failure both binary ones can
-   answer ("return failure"); invert has no failure arm and so returns the type.
+   answer ("return failure"); invert has no way to refuse and answers a failure TYPE.
+   ALL THREE ARE TOTAL OVER A FAILURE OPERAND, AND THAT IS THIS PORT'S ANSWER WHERE THE DRAFT IS SILENT.
+   §4.3.2 states each of them over TYPES, and a failure is not one — both standards that call them PROPAGATE at
+   the caller instead (css-values-4 §10.9 Type Checking: "attempt to add the types of the left and right
+   arguments. If this returns failure, the entire calculation's type is failure"; §4.3.4's list constructors:
+   "If type is failure, throw a TypeError"). Propagation is nonetheless FORCED rather than chosen, by the one
+   operand that cannot be refused anywhere: §4.3.4's CSSMathInvert constructor has NO type step, so
+   `new CSSMathInvert(CSS.px(1).toSum("px","s"))` MUST be built and MUST have a type, and §4.3.4's rule for it
+   is "the same as the type of its value internal slot, but with all values negated" — which over a failure has
+   no answer but failure. Making the three TOTAL puts that propagation in ONE place instead of at each caller,
+   where a forgotten check would read a failure's zeroed exponents as «[ ]» and answer `<number>`: the absorbing
+   arm is compiled into release, unlike the DCHECK a strict version would have been guarded by.
+   ONLY TWO OF THE THREE CARRY AN ARM. Add and multiply READ both operands' percent hints before anything else,
+   and a failure's is neither null nor a base type, so each tests for it first. Invert reads no hint — §4.3.2
+   states it as "a percent hint matching that of type" — so the hint failure is written in is the one thing that
+   algorithm is defined to carry through unchanged, and its totality is a property of the encoding rather than a
+   branch. That is stated at the site, because a reader who does not know it would add the branch back.
    THEY ARE PUBLIC FOR THE REASON `css_math_unit_base` AND THE TWO CONSTRUCTORS ABOVE ARE, AND IT IS THE SAME
    SENTENCE: css-values-4 §10.9 Type Checking links to §4.3.2 by name rather than restating it, so this file is
    where §4.3.2 is PORTED and CSS Typed OM 1 is its second caller rather than its owner. Every algorithm in

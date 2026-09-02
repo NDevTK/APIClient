@@ -26,12 +26,18 @@
  * unit map" a fact about CONTENT, which is what the question means.
  *
  * THE ORDER IS UNOBSERVABLE EVERYWHERE ELSE, AND THAT IS WHAT LICENSES THE SORT. The only algorithm that
- * ITERATES a unit map is create a type from a unit map, which multiplies the resulting types together — and
- * §4.3.2 Numeric Value Typing's multiply fails in exactly one case, "If both type1 and type2 have non-null
- * percent hints with different values", while §4.3.2's create-a-type-from-a-string-unit ends with "In all
- * cases, the associated percent hint is null". So every type entering that multiplication has a null hint, the
- * failure arm is unreachable from here, and what is left is exponent addition, which is order-independent. A
- * sort would NOT have been safe under an operation that could fail on one ordering and not another.
+ * ITERATES a unit map is create a type from a unit map, which multiplies the resulting types together, and
+ * NEITHER of that multiply's two failure arms is reachable from here. §4.3.2 Numeric Value Typing's own arm is
+ * "If both type1 and type2 have non-null percent hints with different values", while §4.3.2's
+ * create-a-type-from-a-string-unit ends with "In all cases, the associated percent hint is null" — so every
+ * type entering that multiplication has a null hint. Its second arm is core/css/css_math.h's: a FAILURE
+ * operand absorbs, since §4.3.2's failure became a representable value of a type when §4.3.1's toSum forced it
+ * to. That arm is unreachable here too, and for a reason that is one line rather than an argument:
+ * create-a-type-from-a-string-unit answers a type or REFUSES — it never answers a failure type — so the
+ * accumulator and every operand of this fold are types. What is left in both cases is exponent addition, which
+ * is order-independent. A sort would NOT have been safe under an operation that could fail on one ordering and
+ * not another, so a future arm that CAN fail here is a change to this file's canonical order and not only to
+ * its arithmetic.
  *
  * NO ENTRY EVER HAS A POWER OF ZERO, AND IT IS ASSERTED RATHER THAN NORMALISED AT EVERY WRITE. The leaf arm
  * writes power 1, invert negates powers, and the ONLY place a zero can be produced is the product of two unit

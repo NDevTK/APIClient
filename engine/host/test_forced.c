@@ -13972,6 +13972,59 @@ static void css_numeric_type_selftest(void)
            where they name the same number. */
         if (got) CHECK(css_math_close(r / CONV[i].ratio, 1.0), CONV[i].why);
     }
+
+    /* §4.3.2's FAILURE AS A VALUE, and the property that separates a correct one from the PLAUSIBLE WRONG one.
+     * A failure's exponents are zeroed, so an operation that read them instead of testing for failure would
+     * answer «[ ]» — and «[ ]» is a real type, `<number>`. Every wrong answer below is therefore a WELL-FORMED
+     * type rather than a crash, which is why the case has to be checked rather than assumed: `mul(failure,
+     * «["length" → 1]»)` reading the zeros gives «["length" → 1]», a CSSMathProduct that a page would then be
+     * told is a `<length>`. `CSS.px(1).toSum("px","s")` is the value that reaches all of this. */
+    {
+        CssMathType len = css_math_type_of(CSS_MATH_LENGTH), tim = css_math_type_of(CSS_MATH_TIME);
+        CssMathType num = css_math_type_number(), fail, r;
+        unsigned b;
+
+        CHECK(!css_math_type_add(&len, &tim, &r),
+              "§4.3.2's add must FAIL for «[\"length\" → 1]» + «[\"time\" → 1]» — its entries do not agree and "
+              "neither carries a percent exponent for its second arm to hint. This is the addition CSS Typed "
+              "OM 1 §4.3.1's `CSS.px(1).toSum(\"px\", \"s\")` performs, and it is what makes that member's "
+              "result a CSSMathSum whose type is failure");
+        fail = css_math_type_failure();
+        CHECK(css_math_type_is_failure(&fail),
+              "§4.3.2's failure must be REPRESENTABLE — the whole reason it is a value of CssMathType is that "
+              "§4.3.1's toSum ends at §4.3.4's spec-internal mint, which states no type step and so cannot "
+              "refuse");
+        CHECK(!css_math_type_is_failure(&num) && !css_math_type_is_failure(&len),
+              "a type built by §4.3.2's create-a-type constructors must NOT read as failure — «[ ]» and a "
+              "failure are the two answers this fixture exists to keep apart");
+        for (b = 0; b < CSS_MATH_BASE_COUNT; b++)
+            CHECK(fail.exp[b] == 0, "a failure's exponents mean nothing and are zeroed, which is exactly why "
+                                    "an operation that reads them instead of testing for failure answers «[ ]»");
+        /* THE THREE OPERATIONS ARE TOTAL OVER IT. Each wrong answer here is a valid type: `<length>` for the
+           two multiplies, «[ ]» for the add and for the invert. */
+        CHECK(!css_math_type_mul(&fail, &len, &r) && !css_math_type_mul(&len, &fail, &r),
+              "§4.3.2's multiply must answer FAILURE for a failure operand on either side. Reading the zeroed "
+              "exponents instead would answer «[\"length\" → 1]» — a CSSMathProduct built over an untyped "
+              "operand that a page is then told is a <length>");
+        CHECK(!css_math_type_add(&fail, &num, &r) && !css_math_type_add(&num, &fail, &r),
+              "§4.3.2's add must answer FAILURE for a failure operand on either side. This is the step 3 of "
+              "§4.3.4's four list constructors and of §4.3.1's add/mul/min/max, so a plausible answer here is "
+              "the difference between `new CSSMathSum(CSS.px(1).toSum(\"px\",\"s\"), CSS.px(1))` throwing the "
+              "TypeError §4.3.4 states and quietly building a CSSMathSum of type <length>");
+        /* Invert carries a failure through with no arm of its own — §4.3.2 states it as "a percent hint
+           matching that of type", and core/css/css_math.h writes failure IN the hint. So unlike the two above,
+           this CHECK is not discriminating against a missing branch (there is none to miss); it holds the
+           ENCODING to the property the header claims for it, and it fails the day failure stops living in the
+           hint without invert gaining the arm that would then be needed. §4.3.4's CSSMathInvert constructor
+           has NO type step, so `new CSSMathInvert(CSS.px(1).toSum("px","s"))` must be BUILT — while
+           `new CSSMathSum(CSS.px(1).toSum("px","s"), CSS.px(1))` must THROW. That pair is what cannot be
+           passed by luck: no single wrong answer about failure satisfies both, and neither half is a crash. */
+        r = css_math_type_invert(&fail);
+        CHECK(css_math_type_is_failure(&r),
+              "§4.3.2's invert must answer FAILURE for a failure, or `new CSSMathInvert(CSS.px(1).toSum("
+              "\"px\",\"s\"))` — which §4.3.4 gives no type step and therefore cannot refuse — is an object "
+              "this engine reports as a <number>");
+    }
 }
 
 /* FILE API §6.3 Packaging data — the one part of the FileReader that is a PURE FUNCTION of four values, and

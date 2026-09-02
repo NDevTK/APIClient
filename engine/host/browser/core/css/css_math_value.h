@@ -25,11 +25,22 @@
  * §4.3.4 states a math value's type recursively ("the result of adding the types of each of the items in its
  * values internal slot"), and a C function that walked the tree to answer `type()` would be a self-contained
  * recursion whose depth the PAGE picks — `for (…) v = new CSSMathNegate(v)` — which engine/check_recursion.mjs
- * fails by name and which CLAUDE.md's flat-C-stack rule forbids outright. Every constructor here already
- * computes the type, because §4.3.4's own step 3 makes a failing type a TypeError, and the type is IMMUTABLE:
- * the `values`, `value`, `lower` and `upper` slots are `readonly`, and a leaf's contribution is its `unit`
- * slot, which §4.3.3 also declares `readonly`. (A leaf's `value` IS writable and the type does not read it.)
- * So the answer is stored, each mint reads only its CHILDREN's stored answers, and no walk is ever needed.
+ * fails by name and which CLAUDE.md's flat-C-stack rule forbids outright. The type is IMMUTABLE: the `values`,
+ * `value`, `lower` and `upper` slots are `readonly`, and a leaf's contribution is its `unit` slot, which
+ * §4.3.3 also declares `readonly`. (A leaf's `value` IS writable and the type does not read it.) So the answer
+ * is stored, each mint reads only its CHILDREN's stored answers, and no walk is ever needed.
+ *
+ * THE TYPE STEP BELONGS TO THE CALLER AND THE MINT IS THE MINT — they were one entry and are two, because the
+ * standard has THREE callers and only two of them refuse. §4.3.4's four list constructors state "Let type be
+ * the result of adding the types of all the items of args. If type is failure, throw a TypeError", and so do
+ * §4.3.1's add, mul, min and max in their own words. Its CSSMathNegate and CSSMathInvert constructors state NO
+ * type step at all. And §4.3.1's `toSum` ends at "Return a new CSSMathSum object whose values internal slot is
+ * set to result" — the SPEC-INTERNAL mint, with no type step — so `CSS.px(1).toSum("px", "s")` is a CSSMathSum
+ * of `1px` and `0s` whose type is FAILURE, which a browser hands back. A mint that refused for the caller
+ * therefore could not serve toSum, and a TypeError there would be a refusal §4.3.1 does not state. So the mint
+ * always mints and STORES whatever type the table gives it, failure included (core/css/css_math.h's
+ * `css_math_type_failure`), and the two callers that have a step 3 run it themselves, before they mint, in the
+ * order their own algorithms state it.
  *
  * THE `values` SLOT IS ITS CSSNumericArray, MINTED AT THE CONSTRUCTOR AND NEVER AT A READ. Two facts force it
  * and they point the same way. A getter that minted one per read would answer a DIFFERENT object each time,
@@ -87,10 +98,10 @@ bool css_math_op_is_list(CssMathOp op);
  * because a SyntaxError is a JS exception and this entry is also reached from §4.3.1's arithmetic, whose lists
  * are never empty). For a single-operand operator `n` is exactly 1.
  *
- * IT RUNS THE TYPE STEP AND ANSWERS FAILURE, because §4.3.4 makes the type the constructor's own step 3 and
- * because the answer has to be STORED (see the header). JS_UNDEFINED is that failure — the caller turns it
- * into §4.3.4's TypeError, or into §4.3.1's, which are two different sentences of two different sections and
- * so are not thrown from here.
+ * IT ALWAYS MINTS, AND IT NEVER REFUSES. The type is computed here because it has to be STORED (see the
+ * header), and a FAILURE type is stored like any other. The refusal is the CALLER's own step and is run BEFORE
+ * the call through `css_math_value_type_fold` below — see the header for the three callers and for why exactly
+ * one of them, §4.3.1's `toSum`, must not refuse at all.
  *
  * NAMED RESIDUAL — §4.3.4's CSSMathClamp IS NOT MINTED, AND THE REASON IS IN THE PUBLISHED DRAFT.
  * WHAT IS NOT COVERED: `CSSMathClamp`, its `lower`/`value`/`upper` slots and the `"clamp"` operator.
@@ -107,6 +118,15 @@ bool css_math_op_is_list(CssMathOp op);
  * HOW ITS ABSENCE WOULD SHOW: `new CSSMathClamp(...)` is the TypeError a browser without the interface gives,
  * which is the forcing function; it cannot show as a wrong answer, because nothing here mints one. */
 JSValue css_math_value_new(JSContext *ctx, CssMathOp op, JSValueConst *items, int n);
+
+/* §4.3.4's "The type of a CSSMathValue depends on its class", over an operator and the operand list a mint is
+   about to be given — which is ALSO, word for word, the type step of §4.3.4's four list constructors ("Let type
+   be the result of adding the types of all the items of args") and of §4.3.1's add, mul, min and max ("Let type
+   be the result of adding the types of every item in values"). ONE entry, because those are one sentence stated
+   in four places, and because the mint has to compute the same thing to store it.
+   THE ANSWER MAY BE core/css/css_math.h's FAILURE, which is what a caller with a step 3 tests for and turns
+   into its own TypeError. `items` is BORROWED and `n` obeys the same shape rule as the mint's. */
+CssMathType css_math_value_type_fold(JSContext *ctx, CssMathOp op, JSValueConst *items, int n);
 
 /* Web IDL §3.7.5's BRAND for the whole family: is this object one of §4.3.4's math values in this agent? */
 bool css_math_value_is(JSValueConst v);
