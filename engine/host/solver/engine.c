@@ -3353,9 +3353,18 @@ static void engine_queue_el_body(uint32_t doc, DynBody *body, DynKind kind, Scri
  * a permuted array, which is neither of the two defensible orders.
  * WHAT THE NEXT DIFF BUILDS: an arrival ordinal on the RECORD — a PENDING_FIELDS entry, PEND_SHARE for `value`'s
  * reason exactly (an answer that arrived before a fork was computed in a world both arms were in), minted
- * monotonically at the one write that settles a record, which is the `PEND_HAVE_VALUE` case pending.c's
- * pend_index_sync is already dispatched on from pending_set — and this scan choosing the SMALLEST rather than
- * the first, which is §8.1.7.3's oldest-first over the networking task source.
+ * monotonically at the `PEND_HAVE_VALUE` write pending.c's pend_index_sync already dispatches on — and this
+ * scan choosing the SMALLEST rather than the first, which is §8.1.7.3's oldest-first over the networking task
+ * source.
+ * AND THAT WRITE IS `pend_set_field`, NOT `pending_set`, WHICH IS THE HALF THIS CLAUSE USED TO NAME AND THE
+ * HALF A READER WOULD HAVE CONFIRMED RATHER THAN CHECKED. `pending_set` is one of TWO doors and it REFUSES
+ * exactly one write: `PEND_HAVE_VALUE` on a SYNCHRONOUS request, whose DCHECK says to use `pending_answer_sync`
+ * instead because that door is HANDED the register the count lives on — and it reaches `pend_set_field`
+ * directly. Both doors end there, which is why `pend_index_sync` hangs off `pend_set_field` and not off the
+ * public one, and pending.c states that convergence in its own words at the site. So an ordinal minted at
+ * `pending_set` is monotone over ONE door's settles: every synchronous answer THIS FILE writes (the
+ * pending_answer_sync call in engine_host_answer) would settle a record carrying no ordinal at all, which a
+ * scan reading the SMALLEST takes as the oldest arrival. The mint goes where the two doors meet.
  * HOW ITS ABSENCE SHOWS: engine/solvergate.mjs already drives a `lastreply` schedule ("one entry per turn, tail
  * first"), so a corpus document with two concurrently answered fetches whose `.then` handlers observe each
  * other disagrees between `lastreply` and the `direct` reference. That is the gate reporting a real reorder, and

@@ -841,8 +841,25 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
                  endpoints of one service demanding different scopes are reported as one scope set.
                WHAT THE NEXT DIFF BUILDS: `requiredScopes` as a DECLARED field on the endpoint record —
                  added to lib/endpoint-record.js's ENDPOINT_ABSENT with `null` meaning "no challenge has named
-                 a scope for this address", written through `endpointKeyFromParts` here, and given its reader
-                 in the Send panel beside the `requiredHeaders` row that already reads that record.
+                 a scope for this address", and given its reader in the Send panel beside the
+                 `requiredHeaders` row that already reads that record.
+               AND THE WRITE IS NOT A KEY MINTED AT THIS SITE. This clause used to say "written through
+                 `endpointKeyFromParts` here", which is the defect the paragraph above records arriving through
+                 the correct helper instead of a hand-rolled string — and it is the shape that gets EXECUTED
+                 rather than caught, because `endpointKeyFromParts` DOES exist and IS the one mint, so a reader
+                 checking that the entry is there would have found it and stopped. What is wrong is its INPUT.
+                 Its only two callers are both in lib/merge.js and both key on the CALL-SITE address
+                 (`_addr.path`), which carries `{placeholder}` segments — merge.js's structural-dedup arm
+                 exists because of them, normalising `{...}` to `{}` to collapse two spellings of one endpoint.
+                 This arm holds a FILLED address off a real reply (`url.pathname`, with `42` where the record
+                 has `{orgId}`), so a key minted here from it matches no record that a call site ever
+                 registered: the same never-matching lookup, one helper politer, and silent for the same
+                 reason. The filled→templated direction has no spelling in this extension —
+                 lib/popup-form.js's `applyPathParams` spells only templated→filled, and
+                 lib/popup-discovery.js's own residual names that missing hole grammar as ITS next diff — so
+                 either that grammar is built first and this site asks it, or the challenge's scopes TRAVEL to
+                 lib/merge.js's registration, where the record is minted and the templated path is in hand.
+                 Nothing here re-derives a key.
                HOW ITS ABSENCE WOULD SHOW: a 403 challenge on a non-Google API surfaces in the popup's
                  per-service scope rows while the Send panel for that exact endpoint shows no "Scopes:" row. */
           const _scDoc = globalStore.discoveryDocs.get(service)?.doc;
