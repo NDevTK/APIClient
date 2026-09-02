@@ -641,10 +641,17 @@ static JSValue js_css_style_sheet_ctor(JSContext *ctx, JSValueConst this_val, in
        object." THE REALM'S document and not some remembered one: a C member runs in the realm that DEFINED it
        (core/realm.h), so this is the realm whose `CSSStyleSheet` the `new` went through. */
     base = document_base_url(ctx);
-    DCHECK(base != NULL,
-           "§6.1's create a constructed CSSStyleSheet asked for the base URL of the associated Document for the "
-           "current global object and this realm has no document base URL — §2.4.3 Document base URLs gives "
-           "every Document one, an `about:blank` included");
+    /* A `CHECK` AND NOT A `DCHECK`, BECAUSE THIS LINE IS WHAT DEREFERENCES IT. §2.4.3 Document base URLs gives
+       every Document a base URL — the fallback base URL when no `<base href>` names one — so a NULL here is a
+       should-never-happen and would ordinarily be a DCHECK. But a DCHECK is compiled out in release and
+       `JS_NewString` reads the bytes in BOTH builds, so leaving it one would trade a named dev abort for a
+       release read of address zero inside quickjs. `document_base_url` can answer NULL (core/html/html_link.c
+       guards its own read), which is why this is asserted at all rather than assumed. */
+    CHECK(base != NULL,
+          "§6.1's create a constructed CSSStyleSheet asked for the base URL of the associated Document for the "
+          "current global object and this realm answered none — §2.4.3 Document base URLs gives every Document "
+          "one, an `about:blank` included, so this realm has no document address at all and every URL it builds "
+          "would be wrong");
     location = JS_NewString(ctx, base);
     if (JS_IsException(location)) return location;
     /* STEPS 1 and 4-10, which are the mint: a new object (1); parent CSS style sheet, owner node and owner CSS
