@@ -77,6 +77,16 @@
  * sound and not merely convenient: a record on this seam is JSON text, and JSON carries no functions.
  * The single-field case is NOT a pass — it is the AMBIGUOUS category, named with its place, because "is this
  * an endpoint or an AST node" is a question this cannot answer and answering it either way is the guess.
+ * AND THE SHAPE IS ASKED OF BOTH ZONES, BECAUSE A NAME COLLIDES ACROSS THEM IN BOTH DIRECTIONS AT ONCE. One C
+ * function body is one record and ONE JS OBJECT LITERAL IS ONE RECORD, off the same construct the whole-record
+ * default already reads. Without the second half the anchor had only ONE authority it could be decided by, so
+ * two generic names were enough to hand a record built entirely in JavaScript to a C emission — and then the
+ * WRITE question, asked of the CORPUS rather than of the anchored record, let any unrelated party holding that
+ * spelling stand in as its producer. Those are one defect seen from its two ends: identity by NAME ALONE. A JS
+ * literal declaring nothing the engine does not declare is a RESTATEMENT of the emission and not a rival to it,
+ * or a driver's own expectation would dispossess the record it was written to check.
+ * A BODY THAT DOES NOT OWN ITS BUFFER IS NOT A RECORD EITHER — see §the FRAGMENT, which is what keeps a record
+ * emitted by a composer plus a helper from being read as two records that each lack the other's fields.
  *
  * WHAT IS AUDITED AND WHAT IS DELIBERATELY NOT.
  *   THE SERIALIZED SEAM. A record is JSON text the engine PRINTS and the host PARSES, plus the `@TAG` stream
@@ -548,6 +558,17 @@ const cEmitted = new Set();
 const shapes = new Map();   // "file:offset" -> Set(name)
 const shapeOf = (id) => { let s = shapes.get(id); if (!s) shapes.set(id, (s = new Set())); return s; };
 
+/* A BODY THAT EMITS KEYS INTO A BUFFER IT DID NOT DECLARE IS A FRAGMENT OF ITS CALLERS' RECORD, NOT A RECORD.
+   "One C function's emissions are one record" is true of a body that OWNS the buffer, and json_buf.h states
+   which one that is in its own first sentence — "Zero-initialise one (`JsonBuf b = { 0 };`)". A body holding no
+   such declaration is writing into a `JsonBuf *` it was HANDED, so its keys are fields of whatever record the
+   caller is composing, and reading it as a record of its own splits one emitted shape in two. Both halves then
+   answer the anchor question wrongly and in opposite directions: a consumer of the whole record anchors to
+   whichever half it reads more of and every field of the OTHER half becomes a name its record does not emit.
+   Derived from the declaration rather than from a list of helper names, so a second fragment written tomorrow
+   is a fragment on the day it is written. */
+const cBodies = [];   // {id, file, name, root, calls:Set(name)}
+
 const fields = new Map();   // name -> {writes:[site], reads:[site]}
 const markers = new Map();  // "@TAG" -> {writes:[site], reads:[site]}
 const rec = (map, name) => {
@@ -887,6 +908,21 @@ function scanC(file, src) {
     }
   }
   const bodyOf = (off) => { for (const [a, b] of bodies) if (off >= a && off < b) return `${file}:${lineOf(src, a)}`; return `${file}:file-scope`; };
+
+  /* THE DECLARATOR IN FRONT OF THE BODY NAMES IT, and the body's own text says whether it owns its buffer. */
+  for (const [a, b] of bodies) {
+    const before = struct.slice(Math.max(0, a - 400), a);
+    const open = before.lastIndexOf("(");
+    const decl = open < 0 ? "" : before.slice(0, open);
+    const nm = /([A-Za-z_]\w*)\s*$/.exec(decl);
+    const body = struct.slice(a, b);
+    const calls = new Set();
+    let cm;
+    const CALL = /([A-Za-z_]\w*)\s*\(/g;
+    while ((cm = CALL.exec(body))) calls.add(cm[1]);
+    cBodies.push({ id: `${file}:${lineOf(src, a)}`, file, name: nm ? nm[1] : null,
+                   root: /\bJsonBuf\s+[A-Za-z_]\w*\s*(?:=|;)/.test(body), calls });
+  }
 
   const emit = (text, off, isWrite) => {
     const ks = keysIn(text);
@@ -2084,6 +2120,20 @@ function scanJS(file, src) {
 
   const localReads = [];   // {name, recv, key, off, form}
   const localWrites = [];  // {name, off}
+  /* ONE OBJECT LITERAL IS ONE RECORD — the JS half of §the SHAPE anchor, off the same construct the whole-record
+     default already reads. Without it this corpus's own records had no identity at all, so a JS receiver could
+     only ever be decided by a C emission, and two generic names were enough to do it.
+     NOT COVERED: a record the program composes as a literal AND THEN ADDS TO by member assignment on the same
+     binding — `const analysis = { _run: outcome }` followed by `analysis.fetchCallSites = result.fetchCallSites`
+     is ONE record and this sees only the literal half of it, so the C emission those three assigned names came
+     FROM out-scores the literal and wins the anchor. THE NEXT DIFF unions the two halves under the binding: the
+     member-assignment arm of §the MEMBER walk already computes `recv` and its scope-qualified key before it
+     branches on `isWrite` and throws both away, so what has to be built is the link from a literal to the
+     identifier it is assigned to — the literal arm below knows `prevCh === "="` and does not read back to the
+     declarator. IT SHOWS AS a receiver in OFF-RECORD whose off-record names are all written in ITS OWN FILE, on
+     lines that assign to the same receiver text: today that is `analysis`/`result` in bridge.js reporting
+     `_run`, `_fkey` and `_prior` against result.c's record, four of the fourteen rows that category prints. */
+  const litShapes = [];    // {off, keys}
   const wholeDefaults = [];// {off, keys, left, op} — a `|| { … }` substituting an entire record
 
   /* --- member expressions -------------------------------------------------------------------------------- */
@@ -2319,6 +2369,7 @@ function scanJS(file, src) {
        a false clean bill. The literal on the right of a `||`/`??` is the shape being substituted, so the
        substitution is only reported when that shape IS one the engine emits: an `opts || {}` for a caller's
        options object is a default over something no producer was ever supposed to write. */
+    if (kind === "literal" && litKeys.length >= 2) litShapes.push({ off: i, keys: litKeys.slice() });
     if (kind === "literal" && (prevCh === "|" || prevCh === "?") && struct[p - 1] === prevCh) {
       let q = p - 1;
       while (q > 0 && /\s/.test(struct[q - 1])) q--;
@@ -2403,7 +2454,7 @@ function scanJS(file, src) {
   collectDomainsJS(file, src, code, struct);
   collectAbiJS(file, src, code, struct);
 
-  return { file, src, localReads, localWrites, wholeDefaults, site, initOf, binderOf, paramSlot,
+  return { file, src, localReads, localWrites, litShapes, wholeDefaults, site, initOf, binderOf, paramSlot,
            localParamSlot, callArgsOf, guardedBy, foreignImports, importOf, iterOf, pushArgsOf, returnsOf,
            asserted: (off) => assertSpans.some(([a, b]) => off >= a && off < b) };
 }
@@ -3105,6 +3156,46 @@ for (const u of pendingUnresolved)
    is a name the corpus produces, and that set is what anchors every read below. */
 for (const s of jsScans) for (const w of s.localWrites) rec(fields, w.name).writes.push(s.site(w.off));
 
+/* A FRAGMENT'S KEYS ARE ITS CALLERS' KEYS. Folded before anything anchors, so no receiver is ever compared
+   against half of a record. A fragment nothing in its own file calls keeps its keys where they are rather
+   than losing them — that is a fragment this scan could not place, and dropping its fields would be the
+   silent third state §the REFUSAL discipline refuses. */
+{
+  const byName = new Map();
+  for (const b of cBodies) if (b.name && !b.root && shapes.has(b.id)) byName.set(b.name, b);
+  for (const [nm, frag] of byName) {
+    let placed = false;
+    for (const b of cBodies) {
+      if (b === frag || !b.root || !b.calls.has(nm) || b.file !== frag.file) continue;
+      for (const k of shapes.get(frag.id)) shapeOf(b.id).add(k);
+      placed = true;
+    }
+    if (placed) shapes.delete(frag.id);
+  }
+}
+
+/* THE CORPUS'S OWN JS RECORDS, and the ONE-DIRECTIONAL use this gate may make of them. They are not a second
+   authority over the serialized seam — the C emissions are that, exactly as the .idl is idlgen's. What they
+   are is the thing that can REFUTE a C anchor, and until they existed nothing could: a receiver reading `name`,
+   `type` and `location` was anchored to endpoint.c's parameter record on three of the commonest field names in
+   any JS corpus, and that is the wrong-anchor failure §the PLATFORM receiver already names, arriving through
+   the one door neither the IDL arm nor the foreign arm covers — the corpus's own JavaScript.
+   A LITERAL DECLARING NOTHING THE ENGINE DOES NOT DECLARE IS NOT A RIVAL. `{ _routedTasksFired: 0, … }` in a
+   driver and `record(p, { wTop: 3, wMin: 1 })` in a fixture are the ENGINE's field names written down on the
+   consumer's side — a restatement of the record, not a competing one. It makes no claim the emission does not
+   already make, so it cannot be evidence against it; counting it would let a driver's own expectation
+   dispossess the emission it was written to check. */
+const jsShapes = new Map();   // "file:line" -> Set(name), rivals only
+{
+  const emitted = new Set();
+  for (const [, shp] of shapes) for (const k of shp) emitted.add(k);
+  for (const s of jsScans)
+    for (const L of s.litShapes) {
+      if (L.keys.every((k) => emitted.has(k))) continue;
+      jsShapes.set(`${s.file}:${s.site(L.off).line}`, new Set(L.keys));
+    }
+}
+
 /* RECORD RECEIVERS, per file. A receiver is one when some field read on that exact text names a field the
    corpus produces. The reads are then replayed against that set, which is why this is two passes and not one:
    `f.cspBlocked` can only be judged after `f.sink` has said what `f` is. */
@@ -3125,6 +3216,9 @@ for (const s of jsScans)
    cannot tell what would answer it, which is the same "three states behind one answer" this file refuses in the
    engine. Grouped by reason on the way out, exactly as REFUSED is. */
 const ambiguous = [];   // {file, line, recv, reason, why}
+const TWO_RECORDS = "a receiver that an ENGINE EMISSION and a record this corpus CONSTRUCTS explain exactly" +
+                    " as well as each other — the identity is a disagreement this cannot collapse, and" +
+                    " anchoring to either would be deciding it by which authority was asked first";
 const ONE_FIELD = "a receiver reading exactly ONE field of an emitted record beside name(s) no producer writes" +
                   " — whether the object is that record is not decidable here, so neither is whether those" +
                   " names are the defect";
@@ -3340,6 +3434,18 @@ const foreignDecided = [];    // {file,line,recv,names,why,by} — a value some 
    anchor loop's own paragraph for why that answers the half of the question this gate is the auditor of. */
 const assertedDecided = []; // {file,line,recv,names}
 const offInterface = [];      // {file,line,recv,iface,missing} — that object, read for a member the spec denies
+/* A RECEIVER A RECORD THIS CORPUS CONSTRUCTS EXPLAINS BETTER THAN ANY ENGINE EMISSION DOES — its producer is
+   JavaScript, so the contract it is on is not the serialized seam this gate is the auditor of. The same
+   sentence as DECIDED PLATFORM with the corpus's own object literal as the authority instead of the IDL, and
+   printed in full for the same reason both of those are: a decided negative nobody can see is the concealment
+   this file exists to report, performed on its own output. Every row carries BOTH candidates and BOTH scores,
+   so the margin that decided it is on the page. */
+const corpusDecided = [];     // {file,line,recv,names,cShape,cN,jsShape,jsN}
+/* A READ THE ANCHORED RECORD DOES NOT EMIT, where some OTHER record in the corpus writes that name. This is
+   OFF-INTERFACE's sibling one layer down: there the authority is the IDL's member list, here it is the
+   emission's own key list, and the defect is identical — a field read off a record that does not have it,
+   excused until now by an unrelated party that happens to spell a field the same way. */
+const offRecord = [];         // {file,line,recv,shape,name,writes}
 
 /* The interface a receiver EXPRESSION evaluates to, or null. Every arm is a construct that names a type; the
    `seen` set is a cycle guard for `const a = b, const b = a`, not a depth bound. */
@@ -3913,6 +4019,46 @@ for (const s of jsScans) {
       for (const n of names) if (shp.has(n)) hit++;
       if (hit > bestN) { bestN = hit; best = id; }
     }
+    /* ASKED AFTER THE C SHAPE AND BEFORE ANY READ IS RECORDED. A JS record only ever REMOVES a C anchor, never
+       supplies one: where it explains strictly more of this receiver than the emission does, the receiver is
+       that JS record and the serialized seam is not the contract it is on — a DECIDED negative in the same
+       series as DECIDED PLATFORM and DECIDED FOREIGN, printed in full with both candidates and both scores so
+       the decision is somewhere a reader can disagree with it. Where the two explain EXACTLY as much, the
+       identity is a disagreement this cannot collapse, and the file's own answer to that is AMBIGUOUS — a
+       wrong anchor is worse than an undecided one, and picking the emission because it is this gate's subject
+       would be the tokenizer deciding. */
+    if (bestN >= 2) {
+      let jBest = null, jN = 0;
+      for (const [id, shp] of jsShapes) {
+        let hit = 0;
+        for (const n of names) if (shp.has(n)) hit++;
+        if (hit > jN) { jN = hit; jBest = id; }
+      }
+      if (jN >= bestN) {
+        const row = { ...s.site(rs[0].off), recv, names: [...names], cShape: best, cN: bestN, jsShape: jBest, jsN: jN };
+        if (jN > bestN) {
+          corpusDecided.push(row);
+          /* THE IDENTITY LEAVES THIS GATE'S SUBJECT; THE FORM DOES NOT. Being a corpus-local record answers
+             "whose contract is this" and says NOTHING about `|| 0` — §the CATEGORIES calls a default a defect
+             "on its own terms even where the writer exists today, because it is what will hide the writer's
+             removal tomorrow", and that sentence is about the CONSUMER's form, not about which producer is on
+             the other end. Dropping these rows with the anchor would have taken the DEFAULTED count from 32 to
+             ZERO in the same diff that fixed the anchor — every row individually justified and the category
+             emptied, which is the narrowing that makes an auditor read clean by asking less. So the reads are
+             not recorded into `fields` (that namespace is the serialized seam's, and this record is not on it)
+             and the defaulted form is reported exactly as before, against the record that actually owns it. */
+          for (const r of rs) {
+            const site = { ...s.site(r.off), recv, shape: jBest };
+            if (r.form) defaulted.push({ ...site, name: r.name, form: r.form });
+            else if (r.consumed) decidedOperand.push({ ...site, name: r.name, ...r.consumed });
+          }
+        }
+        else ambiguous.push({ ...s.site(rs[0].off), recv, reason: TWO_RECORDS,
+                              why: `reads ${bestN} field(s) of the emission at ${best} and the same ${jN} of the ` +
+                                   `record constructed at ${jBest} — \`${[...names].join("`, `")}\`` });
+        continue;
+      }
+    }
     if (bestN < 2) {
       /* ONE intersecting name is not an anchor and it is not a pass either. Reported only where the receiver
          also reads a name NO producer emits — which is the only configuration in which the undecided question
@@ -3941,6 +4087,22 @@ for (const s of jsScans) {
     }
     for (const r of rs) {
       const site = { ...s.site(r.off), recv, shape: best };
+      /* THE WRITE QUESTION IS ASKED OF THE RECORD THIS READ ANCHORED TO, WHICH IS THE ONLY PARTY THAT CAN
+         ANSWER IT. Asking it of the corpus — "does anything, anywhere, write this name" — lets ANY unrelated
+         record excuse a field of THIS one, and a collision is not a producer: a `_cold:` on a bridge resolver
+         literal, a `securitySinks:` on a merge record and a `printf` in a test driver were between them
+         standing in for sixteen keys of one engine composer, so the gate's silence about that seam was never a
+         clean bill and a rename on either side of it would have passed. A name the anchored record does not
+         emit is reported HERE, with the places it IS written, which is what tells a reader in one line which of
+         the two things they are looking at: a producer that renamed a field out from under a live consumer, or
+         a receiver whose identity this file got wrong. The name written NOWHERE is not diverted into this
+         category — it stays READ-NO-WRITER, which is louder and is already the right row for it. */
+      if (!shapes.get(best).has(r.name)) {
+        if (fields.get(r.name)?.writes.length)
+          offRecord.push({ ...site, name: r.name, writes: fields.get(r.name).writes.slice(0, 4) });
+        else rec(fields, r.name).reads.push(site);
+        continue;
+      }
       rec(fields, r.name).reads.push(site);
       if (r.form) defaulted.push({ ...site, name: r.name, form: r.form });
       else if (r.consumed) decidedOperand.push({ ...site, name: r.name, ...r.consumed });
@@ -4282,6 +4444,45 @@ if (platformDecided.length) {
   log(`  by interface: ${[...byIface].sort((a, b) => b[1] - a[1]).map(([i, n]) => `${ifaceLabel(i)}×${n}`).join(", ")}`);
 }
 
+/* PRINTED IN FULL FOR THE REASON THE TWO ABOVE ARE, and with the margin that decided each row, because this
+   is the arm that REMOVES receivers from the audit and a removal nobody can see is the concealment. */
+if (corpusDecided.length) {
+  log(`── DECIDED CORPUS-LOCAL — ${corpusDecided.length} receiver(s) a record THIS CORPUS CONSTRUCTS explains ` +
+      `better than any engine emission does. The producer is JavaScript, so the contract is not the serialized ` +
+      `seam — decided, not passed. Each row would otherwise have anchored to the emission beside it on the ` +
+      `handful of field names every JS corpus shares (\`name\`, \`type\`, \`url\`, \`method\`, \`source\`) ──`);
+  for (const c of corpusDecided.slice(0, 20))
+    log(`  ${place(c)}  \`${c.recv}\` — ${c.jsN} field(s) of ${c.jsShape} against ${c.cN} of ${c.cShape}: ` +
+        `${c.names.slice(0, 6).map((n) => `\`${n}\``).join(", ")}${c.names.length > 6 ? ` … (+${c.names.length - 6})` : ""}`);
+  if (corpusDecided.length > 20) log(`  … and ${corpusDecided.length - 20} more`);
+}
+
+/* THE COLLISION THE SHAPE ANCHOR USED TO SWALLOW, now that the write question is asked of the anchored record.
+   Every row prints where the name IS written, because that is the one thing that tells a reader which of the
+   two possible stories they are looking at without opening a file: a producer that renamed a field out from
+   under a live consumer, or a receiver whose identity this scan got wrong. */
+if (offRecord.length) {
+  const byRecv = new Map();
+  for (const o of offRecord) {
+    const k = `${o.file}\u0000${o.recv}\u0000${o.shape}`;
+    if (!byRecv.has(k)) byRecv.set(k, []);
+    byRecv.get(k).push(o);
+  }
+  log(`── OFF-RECORD — ${offRecord.length} read(s) of a name the record the receiver ANCHORS TO does not emit, ` +
+      `from ${byRecv.size} receiver(s). Until the write question was asked of the anchored record these were ` +
+      `excused by whichever unrelated party in the corpus happened to spell the field the same way ──`);
+  for (const [, os] of byRecv) {
+    log(`  ${os[0].file}  \`${os[0].recv}\` anchors to ${os[0].shape}`);
+    const seen = new Set();
+    for (const x of os) {
+      if (seen.has(x.name)) continue;
+      seen.add(x.name);
+      log(`      .${x.name.padEnd(20)} read at ${os.filter((y) => y.name === x.name).map((y) => y.line).join(", ")}` +
+          `; not emitted there; written at ${x.writes.map(place).join(", ")}`);
+    }
+  }
+}
+
 if (offInterface.length) {
   log(`── OFF-INTERFACE — ${offInterface.length} read(s) of a name the spec does not declare on the object the ` +
       `receiver's own declaration says it is. Web IDL is the whole member list, so an expando on a platform ` +
@@ -4430,6 +4631,7 @@ const cats = [
   ["mojo reply fields a CALLER reads that the boundary does not declare", replyFieldDefects.length],
   ["reads OFF the interface a platform receiver's own declaration names, that nothing else writes either",
    offInterface.length],
+  ["reads OFF the record a receiver anchors to, that an UNRELATED record in the corpus writes", offRecord.length],
   [`field names emitted through ${C_RAW} — ${C_KEY} is the only entry that may declare one`, rawKeys.length],
   ["receivers whose record identity is AMBIGUOUS — unanswerable, so unaudited", ambiguous.length],
   ["constructs REFUSED — unreadable, so unaudited", refusals.length],
