@@ -286,10 +286,25 @@ guarantees, in one auditable place:
   `blocked-cors-credentialed:<landed origin>` now names its ground like every other refusal in that file.
   **Credentialed reads also happen through the page-context relay** (see below), where the browser enforces
   SOP/CORS rather than us.
-- **GET only, enforced by ABSENCE** — `safe-fetch.js` hardcodes `method:"GET"` and never reads `opts.method`
-  or `opts.body` (grep: no occurrence). Forced execution explores many paths; it never replays a
-  state-changing method. A well-designed server does not mutate on GET, so even a credentialed GET replay is
-  side-effect-free; POST/PUT/DELETE endpoints are RECORDED by forced exec, never issued.
+- **GET only, enforced by ABSENCE — AND, SINCE ABSENCE CANNOT SPEAK, BY A REFUSAL BESIDE IT.**
+  `safe-fetch.js` hardcodes `method:"GET"` and never reads `opts.method` or `opts.body`. Forced execution
+  explores many paths; it never replays a state-changing method. A well-designed server does not mutate on
+  GET, so even a credentialed GET replay is side-effect-free; POST/PUT/DELETE endpoints are RECORDED by
+  forced exec, never issued.
+  **THIS BULLET USED TO OFFER A GREP AS THE ENFORCEMENT ("grep: no occurrence"), AND A GREP HOLDS ONLY ONE
+  OF THE TWO HALVES.** Absence stops a verb being SENT and says nothing whatever to a call site that
+  believes it sent one — so a new caller passing `method`/`body` was not refused, it was IGNORED, and the
+  reply to a GET came back attributed to its POST. That is the exact substitution the paragraph below
+  records paying for on the XHR path, arriving through the chokepoint's own front door instead. It is now
+  structural in both directions: `_refuseUnreadOptions` makes the option set `safeFetch` reads a CLOSED one
+  and refuses any field it will not read, so an option cannot be dropped in silence and a request carrying
+  a verb cannot be written. It is the general form of the `as` DCHECK, which is deleted rather than kept
+  beside it — a rule re-written per option has a hole for every option nobody thought of. It is a `DCHECK`
+  because release can still PROCEED (an unread option drops exactly as before, and every one of them lands
+  on the safe side: a dropped `method` fires the GET this file was always going to fire), and it may assert
+  at all because the KEYS are composed in trusted-zone source at every call site while the untrusted engine
+  supplies only VALUES. This is what makes the middle conjunct of CLAUDE.md's never-a-setting triple —
+  credentialed AND state-mutating AND forced — false by construction rather than by convention.
   **THE REFUSAL IS NO LONGER SILENT ON THE XHR PATH, and it is the CALLER's, not the chokepoint's.**
   `bridge.js` used to hand the chokepoint the page's real `method`/`body`/`credentials` and they were dropped
   without a word, so `xhr.open("POST", u)` was answered with the reply to a *GET* of `u` and the engine

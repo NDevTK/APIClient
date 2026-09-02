@@ -423,6 +423,59 @@ function _provenanceOf(opts) {
         "network. State `observed`, `derived` or `forced` and mean it");
   return opts.provenance;
 }
+/* ── AND WHAT THIS FUNCTION DOES *NOT* READ, WHICH IS THE HALF NO ASSERT WAS MAKING ──────────────────────
+   The two rules above refuse a VALUE this file cannot serve. This one refuses a FIELD it will not read, and
+   the failure it closes is the opposite shape: not a bad answer to a question this file asks, but a caller's
+   answer to a question this file never asks — DROPPED IN SILENCE, and read by the caller as carried.
+   THE OPTION THAT MATTERS IS `method`, AND IT IS THE MIDDLE CONJUNCT OF THE ONE COMBINATION CLAUDE.md
+   §A-REQUEST-CARRIES-THE-PROVENANCE SAYS IS NEVER A SETTING: credentialed AND state-mutating AND forced.
+   `_firingRefusal` argues that conjunct is false at every setting of the widening table "because this file
+   cannot issue a non-GET at all", and that is TRUE — `init` hardcodes `method: "GET"` and nothing below
+   reads `opts.method` or `opts.body`. What was missing is that the argument was enforced by a GREP, and
+   SECURITY.md said so in as many words ("GET only, enforced by ABSENCE … grep: no occurrence"). Absence
+   stops a method being SENT; it says NOTHING to the caller that believes it sent one. So a call site that
+   passed a verb was not refused, it was IGNORED, and the reply to a GET came back attributed to its POST.
+   THAT SUBSTITUTION IS NOT HYPOTHETICAL HERE — this project has paid for it once, on the XHR path, where
+   `xhr.open("POST", u)` was answered with the reply to a GET of `u`, and every @H example value and every
+   @S verdict downstream was derived from a response the server never gave for that request. A wrong answer
+   is worse than an absent one, and this is the shape that produces one without anybody writing a bug.
+   IT SUPERSEDES THE `as` DCHECK RATHER THAN STANDING BESIDE IT. That assert was this same rule written for
+   ONE dead keyword — a load-type word whose silent drop fetched a code load as data — and a rule that has to
+   be re-written per option has a hole for every option nobody thought of. `as` is not in the set below, so
+   the general rule refuses it and the special case is deleted rather than kept as a second copy.
+   A CLOSED SET IS A RESTATEMENT OF WHAT THE BODY READS, AND THE DRIFT DIRECTION IS WHY THAT IS SAFE HERE:
+   an option added to the body and forgotten in this list aborts on its AUTHOR's own first call, at the line
+   they just wrote — while the failure it closes is silent and belongs to somebody else, later. */
+var _SAFEFETCH_OPTIONS = ["pageUrl", "pageOrigin", "destination", "provenance", "credentialed",
+                          "headers", "signal"];
+/* DCHECK AND NOT CHECK, ON THE DISCRIMINATOR THIS FILE ALREADY STATES FOR `opts.pageUrl`: release must still
+   be able to PROCEED, and it can. With this compiled out every unread option is dropped exactly as it is
+   dropped today, and every one of them lands on the safe side — a dropped `method` fires the GET this file
+   was always going to fire, a dropped `credentials` fires uncredentialed, a dropped `pageOrigin` is
+   same-origin with nothing and takes strict CORB. Nothing here is a boundary failing open; what is lost is
+   the caller's belief about what it sent, which is an epistemic harm no release build could fix. The two
+   options whose bad VALUES do fail open — `destination` and `provenance` — are `CHECK`s of their own above.
+   AN ASSERT STANDS HERE AT ALL BECAUSE THE KEYS ARE OURS AND ARE NEVER ON THE WIRE. Every call site composes
+   an object LITERAL in trusted-zone source; the untrusted engine supplies VALUES — `headers` on the XHR path,
+   and the destination and provenance tokens — and never a KEY, so no bundle and no compromised renderer can
+   reach this abort. That is the same line SECURITY.md draws when it refuses to DCHECK a page-suggested
+   address: the discriminator is who determines the value, and here it is this zone in every frame. */
+function _refuseUnreadOptions(opts) {
+  for (var k in opts) {
+    if (!Object.prototype.hasOwnProperty.call(opts, k)) continue;
+    DCHECK(_SAFEFETCH_OPTIONS.indexOf(k) >= 0,
+           "safeFetch was passed the option `" + k + "`, which it does not read — so it would be DROPPED IN " +
+           "SILENCE and the request would not carry what its caller said about it. `method` and `body` are " +
+           "the ones that matter: this file hardcodes `method:\"GET\"`, which is RFC 9110 §9.2.1 \"Safe " +
+           "Methods\"' safe set enforced structurally and is what makes the state-mutating conjunct of " +
+           "CLAUDE.md's never-a-setting triple false — so a caller that states a verb gets the reply to a GET " +
+           "attributed to its own, which is the substitution this project already paid for once on the XHR " +
+           "path. `as` is refused by this same rule and no longer by one of its own: the CORB class is the " +
+           "request's DESTINATION now (Fetch §2.2.5 \"Requests\"). State only what this file reads (" +
+           _SAFEFETCH_OPTIONS.join(", ") + "); if the verb is not GET the request is refused AT THE CALL " +
+           "SITE, and `safeFetchMethodRefusal` is that answer in this file's own refusal vocabulary");
+  }
+}
 /* THE PER-ORIGIN EXPLORATION WIDENING — A PERSON'S SENTENCE, NEVER AN INFERENCE.
    CLAUDE.md §Attacker-sources: firing what a bundle only reaches past a forced gate is
    "CONFIGURABLE AND PER-ORIGIN, BECAUSE EXPERIMENTATION IS NOT ALWAYS WRONG AND A SINGLE
@@ -494,7 +547,12 @@ function safeFetchWidenedOrigins() { return Object.keys(_EXPLORED); }
    THE ONE COMBINATION THAT IS NEVER A SETTING IS UNREACHABLE HERE BY CONSTRUCTION, which is
    what makes this a whole answer rather than a hole with a flag over it: credentialed AND
    state-mutating AND forced. The middle conjunct is false at every setting of this table,
-   because this file cannot issue a non-GET at all. What is left of that sentence's concern
+   because this file cannot issue a non-GET at all.
+   AND THAT IS NOW ASSERTED RATHER THAN GREPPED, which is the difference between a request
+   carrying a verb being IGNORED and one being IMPOSSIBLE TO WRITE. `_refuseUnreadOptions`
+   at the entry refuses a caller that states a `method` or a `body`, so the conjunct is false
+   because no such request can be composed — not merely because nothing here reads one.
+   What is left of that sentence's concern
    — that §9.2.1's contract is the RESOURCE OWNER's to honour and not ours to verify — is
    the destructive-path deny list below, which is a FLOOR under this policy and never a
    substitute for it. */
@@ -833,13 +891,15 @@ function _urlList(requested, finalHref, redirected) {
 async function safeFetch(url, opts) {
   opts = opts || {};
   /* THE REQUEST'S SHAPE IS CHECKED BEFORE THE REQUEST IS MADE, which is the difference between an abort and a
-     network round trip followed by an abort. Both of these are about the CORB class — the one thing a caller
-     can get wrong here that ends with a cross-origin data body reaching a compiler — so they are asked at the
-     entry rather than beside the rule they feed, which runs only after the bytes are already back. */
-  DCHECK(!("as" in opts),
-         "safeFetch was passed the deleted `as` option — the CORB class is now the REQUEST'S DESTINATION " +
-         "(Fetch §2.2.5), stated by the engine on the pending line and passed as opts.destination. Ignoring " +
-         "`as` would fetch a code load as data, which is the defect the destination exists to end");
+     network round trip followed by an abort.
+     THIS SENTENCE USED TO READ "both of these are about the CORB class", and the pair it named was a
+     `DCHECK(!("as" in opts))` beside `_destinationOf` — one dead keyword refused by name, which is a rule
+     with a hole for every option nobody happened to think of. What stands here now is the general form of
+     it: the fields this file READS are a closed set, so a caller's statement it will not read is REFUSED
+     rather than dropped. The CORB class is one thing that goes wrong that way; the never-a-setting triple's
+     state-mutating conjunct is the other. Both are asked at the entry rather than beside the rule they feed,
+     which runs only after the bytes are already back. */
+  _refuseUnreadOptions(opts);
   _destinationOf(opts);
   /* AND WHAT THE REQUEST IS EVIDENCE OF, ASKED AT THE SAME DOOR AND FOR THE SAME REASON: it is a field this
      zone DECIDES from, its absent and invented values take the permissive arm, and the decision it feeds
