@@ -335,13 +335,30 @@ function _buildDiscoveryFieldShell(name, prop, requiredList) {
 // makes the truncation point visible to callers (form builders,
 // renderers) instead of silently dropping data.
 function _circularRefSentinel(schemaName) {
-  /* IT IS A FIELD LIKE ANY OTHER FIELD, and it used to be four names of a record whose other names the form
-     builder then read through `||` — so this sentinel rendered exactly like a real unconstrained string
-     field rather than like the truncation marker it is. Stating the whole record is what makes the two
-     distinguishable: `children: null` says there is no message to descend into, and every domain is stated
-     absent because a marker constrains nothing. */
+  /* IT IS A WHOLE RECORD LIKE EVERY OTHER RECORD, AND IT IS NOT A FIELD — a distinction this used to have no
+     way to draw. It was once four names of a record whose other names the form builder then read through
+     `||`, so it rendered exactly like a real unconstrained string field; stating the WHOLE record is what
+     made the two look different (`children: null` says there is no message to descend into, and every domain
+     is stated absent because a marker constrains nothing), and it left one claim behind that no name here
+     contradicted — that `name` is a key some document declared. Nothing else in this record can carry that,
+     which is why `isNameMarker` below is its own fact rather than a reading of one of these. */
   return makeFieldDef({
     name: "...",
+    /* AND `"..."` IS NOT A WIRE KEY, STATED AS A FACT OF THE RECORD RATHER THAN LEFT TO BE READ OFF THE
+       STRING. This is the ONE producer in the extension that MINTS a name: every other one takes it from a
+       document's own property key, a probe's field list, a captured body's key or a GraphQL variable, all of
+       which address something. The panel offered this position a RENAME control on the strength of that
+       assumption, and the rename is not cosmetic — lib/popup-handlers.js's RENAME_FIELD creates the property
+       when the schema does not declare it, so renaming a truncation marker WRITES `properties["..."]` into
+       the target's schema in the global discovery store, where `_stepResolveSchema` below then walks it into
+       a field like any other: named whatever the reviewer typed, `customName: true` (which every merge path
+       preserves), and carrying `number: fdDocKey(prop.id)` — the literal string `"..."` — with
+       `isNumberGuessed: false`, i.e. claiming a wire tag the document DECLARED. A marker the panel invented
+       becomes a field the panel sends.
+       IT IS A FACT THE PRODUCER STATES AND NOT A SHAPE THE CONSUMER INFERS, because the alternative is a
+       recognizer over the string `"..."` — CLAUDE.md §RUN-DON'T-MATCH — and a probe-produced message field
+       that describes no children is structurally identical to this record at every other name. */
+    isNameMarker: true,
     type: "message",
     required: false,
     /* THE SCHEMA THE CYCLE CLOSES ONTO, IN THE RECORD'S OWN VOCABULARY AND NOT ONLY IN PROSE. `messageType`

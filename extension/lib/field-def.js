@@ -146,6 +146,14 @@ const FIELD_DEF_ABSENT = Object.freeze({
   displayName: null,        // an alias to render INSTEAD of `name` (the GraphQL variables tree writes one);
                             // null = render the wire name itself.
   customName: false,        // the reviewer renamed this field in a previous session.
+  isNameMarker: false,      // `name` is a MARKER this panel MINTED to make a structural fact visible, and
+                            // addresses NOTHING — no wire key, no document declaration, no observation off a
+                            // wire. `false` = `name` is a wire key, which is what every other producer states
+                            // by silence for the same reason `customName: false` says the reviewer has not
+                            // renamed it. NO READER OF A THIRD-PARTY DOCUMENT WRITES IT, deliberately: a
+                            // document that named `isNameMarker` would be claiming its own property is not a
+                            // key, and the way to disbelieve a document is not to read it. That is what makes
+                            // this one of the record's OWN facts, asserted below rather than refused.
   parentSchema: null,       // the schema a rename persists under; null = this field has no rename target.
   number: null,             // protobuf/JSPB field number; null = this field is not numbered.
   isNumberGuessed: false,   // `number` is lib/discovery.js's POSITIONAL index, not one any document declared.
@@ -249,10 +257,26 @@ function makeFieldDef(parts, where) {
          where + ") — the builder branches on `repeated` to decide whether this field is a list at all, so a " +
          "fourth spelling silently renders an array as a single input");
   DCHECK(typeof fd.required === "boolean" && typeof fd.customName === "boolean" &&
-         typeof fd.isNumberGuessed === "boolean" && typeof fd._detectedEnum === "boolean",
-         "a FieldDef's required/customName/isNumberGuessed/_detectedEnum is not a boolean (" + where + ") — " +
-         "each is a claim the panel renders as a badge, and a non-boolean renders whichever way truthiness " +
-         "happens to fall");
+         typeof fd.isNumberGuessed === "boolean" && typeof fd._detectedEnum === "boolean" &&
+         typeof fd.isNameMarker === "boolean",
+         "a FieldDef's required/customName/isNumberGuessed/_detectedEnum/isNameMarker is not a boolean (" +
+         where + ") — each is a claim the panel renders or withholds a control on, and a non-boolean renders " +
+         "whichever way truthiness happens to fall");
+  /* A MARKER ADDRESSES NOTHING, AND THE THREE NAMES THAT WOULD PUT IT ON A WIRE STATE THEIR ABSENCE BESIDE
+     IT — which is what keeps `isNameMarker` from becoming a SECOND bit that can disagree with the ones this
+     record already carries (CLAUDE.md §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS: one FACT, and each name a
+     question asked of it, never two bits free to contradict each other). `number` is a WIRE TAG, and a
+     marker carrying one fills an encoder's slot under a key no document declared; `children: []` MEANS "a
+     message with no fields", which goes out as `{}` under that same key, while `null` is the marker's own
+     word for "there is nothing here to descend into"; and `customName: true` says a REVIEWER named this
+     field, which can only have happened through the rename this fact exists to withhold — so a marker
+     carrying one is the suppression already having failed, arriving as a record rather than as a click. */
+  DCHECK(!fd.isNameMarker ||
+         (fd.number === null && fd.children === null && fd.customName === false),
+         "a FieldDef states `isNameMarker: true` beside a wire tag, a children list or a reviewer's rename (" +
+         where + ") — a marker is a name this panel minted and no document declared, so it addresses nothing: " +
+         "a `number` would fill an encoder's slot under it, `children: []` would put `{}` on the wire under " +
+         "it, and `customName` would say a reviewer renamed a position that is not a field");
   DCHECK(_fdNullOr(fd.displayName, "string") && _fdNullOr(fd.parentSchema, "string") &&
          _fdNullOr(fd.location, "string") && _fdNullOr(fd.format, "string") &&
          _fdNullOr(fd.messageType, "string") && _fdNullOr(fd.description, "string") &&
@@ -341,6 +365,13 @@ function makeFieldDef(parts, where) {
    pushed with no `number` (its `_stepResolveSchema` branch returns before the positional-number loop), and
    BOTH protobuf encoders skip a field with no wire tag before they ever look at `children` — a probe field
    carries `fdDocKey(pf.number)`, so it is the one that would reach the JSPB slot and the protobuf sub-frame.
+     AND THEY DIFFER IN ONE MORE PLACE, WHICH IS WHERE THE NAME ITSELF IS READ AS A KEY. A probe's field name
+   is a name the TARGET's own error reply stated; the sentinel's `"..."` is one this extension MINTED, and no
+   name above could say so — so the Send panel offered the marker a RENAME control, and a rename on a key no
+   schema declares CREATES that property in the stored document (lib/popup-handlers.js RENAME_FIELD), which
+   the discovery walk then renders and sends as a field. `isNameMarker` is that fact, stated by the one
+   producer that mints a name; it is asserted here rather than refused because no reader of a third-party
+   document writes it. Neither this pair nor a name-shaped test could have told the two apart.
      WHAT NEITHER OF THEM REACHES IS AN ENCODER, AND THAT IS NOW A DECISION RATHER THAN AN ACCIDENT. Every
    record the encoders walk comes from `_collectShallow`, which returns `children: null` only for a SCALAR or
    a REPEATED field — and every encoder branches on `repeated` before it branches on `message`, so no

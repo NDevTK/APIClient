@@ -473,12 +473,26 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
     : (fieldDef.name !== "" ? fieldDef.name : name);
   let labelHtml = `<span class="field-name">${esc(displayName)}</span>`;
 
-  /* THE RENAME TARGET IS THE RECORD'S, and `parentSchema: null` means this field has none — which is a
-     statement, so it is read as one. It used to be `esc(fieldDef.parentSchema || "params")`, which wrote
-     every unowned field's rename into the URL-PARAMETER schema: a body field synthesized from a captured
-     JSON value carries no schema at all, and clicking its ✎ persisted the rename against `params`, where
-     nothing would ever read it back. The button is only offered where there is somewhere to persist it. */
-  if (fieldDef.parentSchema !== null &&
+  /* THERE MUST BE SOMETHING TO RENAME, AND A MARKER IS NOT IT. `isNameMarker` MEANS this record's `name` was
+     minted by this panel and addresses nothing (lib/field-def.js) — lib/discovery.js's `_circularRefSentinel`
+     is the one producer that states it. The row was offered a ✎ anyway, because `_buildMessageStep` re-mints
+     every child with `parentSchema: inheritedSchema` and the test below asked only whether there was a schema
+     to persist INTO, never whether the KEY named anything to persist ABOUT.
+     WHAT THAT COST IS NOT A BLEMISH. lib/popup-handlers.js's RENAME_FIELD, for a `fieldKey` the schema does
+     not declare, CREATES the property — so a rename here wrote `properties["..."]` into the target's schema
+     in the global discovery store, and lib/discovery.js's own walk then produced a real field from it on
+     every later render: named whatever the reviewer typed, `customName: true` so every merge preserves it,
+     and `number` the literal string `"..."` with `isNumberGuessed: false`, which claims a wire tag the
+     document declared. A marker the panel invented became a field the panel sends.
+     IT IS THE RECORD'S FACT AND NOT THIS ROW'S GUESS. Testing the string `"..."` here would be
+     CLAUDE.md §RUN-DON'T-MATCH performed on a wire key, and it could not tell this row from a probe-learned
+     message field that describes no children — the two are identical at every other name on the record.
+     THE RENAME TARGET ITSELF IS STILL READ AS ITSELF: `parentSchema: null` means this field has none, and it
+     used to be `esc(fieldDef.parentSchema || "params")`, which wrote every unowned field's rename into the
+     URL-PARAMETER schema — a body field synthesized from a captured JSON value carries no schema at all, and
+     clicking its ✎ persisted the rename against `params`, where nothing would ever read it back. */
+  if (!fieldDef.isNameMarker &&
+      fieldDef.parentSchema !== null &&
       (fieldDef.number !== null || name.startsWith("field") || category === "param" ||
        fieldDef.parentSchema !== "params")) {
     labelHtml += ` <span class="btn-rename" title="Rename field" data-schema="${esc(fieldDef.parentSchema)}" data-key="${esc(name)}">✎</span>`;
@@ -744,17 +758,27 @@ function _buildRepeatedItemStep(fieldDef, category, depth, itemValue, queue) {
   const schemaChildren = _itemKids === null ? [] : _itemKids;
   const rendered = new Set();
   for (const child of schemaChildren) {
-    rendered.add(child.name);
-    if (child.number != null) rendered.add(String(child.number));
+    /* THE RE-MINT IS HOISTED ABOVE EVERY READ OF THIS CHILD, so no name is read off it before the ONE
+       definition has asserted the child states it. It used to sit inside the `queue.push` below, which put
+       three reads of `child` in front of it — harmless while they were `name` and `number`, whose absence
+       `makeFieldDef` would have caught a statement later, and not harmless for a BOOLEAN, where an absent
+       name reads `undefined`, takes the `false` arm, and does the pre-existing thing on the way to a crash
+       that has not happened yet. */
+    const childDef = makeFieldDef(
+      { ...child, parentSchema: fieldDef.messageType !== null ? fieldDef.messageType : fieldDef.parentSchema },
+      "lib/popup-form.js repeated-item child `" + child.name + "`");
+    /* `rendered` IS THE SET OF CAPTURED KEYS THE SCHEMA HAS ALREADY SPOKEN FOR, so a MARKER claims none —
+       it named nothing (lib/field-def.js `isNameMarker`), and claiming its minted name here would silently
+       swallow a captured key that happened to be spelled the same, which is the one thing this set decides. */
+    if (!childDef.isNameMarker) rendered.add(childDef.name);
+    if (childDef.number !== null) rendered.add(String(childDef.number));
     const childVal = itemValue && typeof itemValue === "object"
-      ? (itemValue[child.name] ?? itemValue[child.number] ?? null)
+      ? (itemValue[childDef.name] ?? itemValue[childDef.number] ?? null)
       : null;
     queue.push({
       kind: "FIELD", parent: childContainer,
-      name: child.name,
-      fieldDef: makeFieldDef(
-        { ...child, parentSchema: fieldDef.messageType !== null ? fieldDef.messageType : fieldDef.parentSchema },
-        "lib/popup-form.js repeated-item child `" + child.name + "`"),
+      name: childDef.name,
+      fieldDef: childDef,
       category, depth: depth + 1, initialValue: childVal,
     });
   }
@@ -801,16 +825,23 @@ function _buildMessageStep(fieldDef, category, depth, initialValue, hasSchema, q
        rather than trusting the flag: the one queue-er of a `hasSchema: true` group tests `_kids !== null &&
        _kids.length > 0`, and a caller that ever stopped agreeing would iterate a `null` here. */
     for (const child of fdChildren(fieldDef, "lib/popup-form.js _buildMessageStep `" + fieldDef.name + "`")) {
-      rendered.add(child.name);
-      if (child.number != null) rendered.add(String(child.number));
+      /* THE RE-MINT IS HOISTED ABOVE EVERY READ, for the reason `_buildRepeatedItemStep` gives above: an
+         absent BOOLEAN reads `undefined`, takes the `false` arm and does the pre-existing thing, and the
+         crash that would have named the producer arrives a statement too late to have prevented it. */
+      const childDef = makeFieldDef({ ...child, parentSchema: inheritedSchema },
+                                    "lib/popup-form.js message child `" + child.name + "`");
+      /* A MARKER SPEAKS FOR NO CAPTURED KEY — the same statement `_buildRepeatedItemStep` makes above, and
+         for the same reason: `isNameMarker` MEANS this child's name addresses nothing, so adding it here
+         would let a minted name suppress a key the page actually sent. */
+      if (!childDef.isNameMarker) rendered.add(childDef.name);
+      if (childDef.number !== null) rendered.add(String(childDef.number));
       const childVal = initialValue
-        ? (initialValue[child.name] ?? initialValue[child.number] ?? null)
+        ? (initialValue[childDef.name] ?? initialValue[childDef.number] ?? null)
         : null;
       queue.push({
         kind: "FIELD", parent: childContainer,
-        name: child.name,
-        fieldDef: makeFieldDef({ ...child, parentSchema: inheritedSchema },
-                               "lib/popup-form.js message child `" + child.name + "`"),
+        name: childDef.name,
+        fieldDef: childDef,
         category, depth: depth + 1, initialValue: childVal,
       });
     }
