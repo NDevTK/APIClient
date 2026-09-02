@@ -122,12 +122,28 @@ typedef struct {
     char **sp_args;     /* every argument SPELLED, all of them or (when one is unspellable) none at all */
     int   sp_nargs;
     char *sp_subj;      /* …and the HOLE KEY of the RECEIVER, which is what the emission looks a domain up by */
+    /* …AND THE FOURTH CLASS, WHICH IS THE ONE WHOSE OPERANDS ARE PREDICATES RATHER THAN VALUES: the conjuncts
+       this value's truth is the conjunction of. It is a SET — sorted by identity and holding each member once
+       — so `p ∧ q` and `q ∧ p` compose ONE key and no flow can stand on both answers to one proposition.
+       IT IS RECORDED AS A FACT AND NEVER READ BACK OUT OF `ident`. The identity composes these same members
+       under the conjunction tag, so the set is recoverable from that string by PARSING it — which is the
+       matching §RUN-DON'T-MATCH forbids and what a change to the key format would silently break. The one
+       reader is the mint itself, which FLATTENS a conjunct that is already a conjunction.
+       PRESENT EXACTLY WHERE THE IDENTITY IS A SPELLED CONJUNCTION: `conj_n >= 2` iff this value is a
+       conjunction this engine could name, and 0 everywhere else — including on a conjunction one of whose
+       members was unspellable (its `ident` is NULL, so it contributes NULL to any parent and makes that
+       parent unspellable too, which is the same answer the list would have given), and including on a
+       NEGATION of one, because `!(p ∧ q)` is not a conjunction and flattening it would spell `p` and `q` as
+       conjuncts of something that is neither. */
+    char **conj;
+    int    conj_n;
 } Concolic;
 
-/* ONE DISPOSER FOR ONE SPELLED ARGUMENT LIST, because two records hold one — the value's `sp_args` and the
-   constraint's ConcolicPred — and a list freed at one site only is a leak the runtime's own GC walk cannot
-   see, since these are C strings and not GC objects. */
-static void strpred_args_free(char **args, int n) {
+/* ONE DISPOSER FOR AN OWNED LIST OF SPELLED STRINGS, because several records hold one — a call predicate's
+   arguments on the value (`sp_args`) and on the constraint (ConcolicPred), and a conjunction's conjuncts —
+   and a list freed at one site only is a leak the runtime's own GC walk cannot see, since these are C strings
+   and not GC objects. */
+static void ident_list_free(char **args, int n) {
     int i;
     for (i = 0; i < n; i++) free(args[i]);
     free(args);
@@ -151,7 +167,7 @@ void concolic_pred_copy(ConcolicPred *dst, const ConcolicPred *src) {
 
 void concolic_pred_release(ConcolicPred *p) {
     free(p->method);
-    strpred_args_free(p->args, p->nargs);
+    ident_list_free(p->args, p->nargs);
     p->method = NULL; p->args = NULL; p->nargs = 0;
 }
 
@@ -252,6 +268,30 @@ char *concolic_ident_compose(const char *tag, const char *const *fields, int n)
     out[at] = '\0';
     DCHECK(at == len, "an identity was composed to a different length than it was measured for");
     return out;
+}
+
+/* THE CANONICAL ORDER OVER A SET OF IDENTITY STRINGS, and it lives HERE, with the encoding, because it is the
+   second half of the same rule. The encoding above makes two different SEQUENCES compose two different keys;
+   this is what makes two spellings of one SET compose ONE key — a joint provenance's sources, a conjunction's
+   conjuncts. Without it a set's key would be a property of the order the arithmetic or the fold happened to
+   assemble it in, so one question would have as many keys as it had spellings and a flow that decided under
+   one would fork again under another while standing on both answers.
+   IT ORDERS BY `strcmp` AND NOTHING ELSE, which is what makes the order outlive the flow that composed it: an
+   identity is TEXT composed from program facts (an operand this engine cannot spell without an address has
+   NO identity at all — see the struct), so this order is the same on the flow that minted the key, on the
+   flow that resumes it from the cold tier, and in the next session.
+   `order` is filled with the members' indices and the members are never moved, so a caller can still reach
+   each one at the position its own record holds it in. */
+static void ident_set_order(const char *const *idents, int n, int *order)
+{
+    int i, j;
+
+    for (i = 0; i < n; i++) order[i] = i;
+    for (i = 1; i < n; i++) {
+        int cur = order[i];
+        for (j = i; j > 0 && strcmp(idents[order[j - 1]], idents[cur]) > 0; j--) order[j] = order[j - 1];
+        order[j] = cur;
+    }
 }
 
 /* THE DISPLAY SHAPE, SIZED FROM ITS PARTS. Every shape in this file was a fixed 192- or 224-byte buffer, and
@@ -1293,8 +1333,9 @@ static void concolic_finalizer(JSRuntime *rt, JSValueConst val) {
     free(c->rel_subj);
     free(c->member);
     free(c->sp_meth);
-    strpred_args_free(c->sp_args, c->sp_nargs);
+    ident_list_free(c->sp_args, c->sp_nargs);
     free(c->sp_subj);
+    ident_list_free(c->conj, c->conj_n);
     JS_FreeValueRT(rt, c->example);
     free(c);
 }
@@ -2210,7 +2251,15 @@ static void pred_set_strpred(JSValueConst v, const char *method, char **args, in
  *
  * `c->member` IS DELIBERATELY NOT CARRIED. It is the property NAME a member read went through, and a negation
  * is not a read of anything; carrying it would make `!x.foo` answer that it was read under `foo`, and the call
- * handler names the method it reports from exactly that field. */
+ * handler names the method it reports from exactly that field.
+ *
+ * `c->conj` IS NOT CARRIED EITHER, AND FOR A SHARPER REASON THAN THAT ONE. The three records above are
+ * OBSERVATIONS a branch reads together with its arm, so carrying them verbatim is exactly right; the conjunct
+ * list is a statement about WHAT THIS VALUE IS, and `!(p ∧ q)` is not a conjunction — it is a disjunction of
+ * two negations. Copying the list would let a later `(!(p ∧ q)) ∧ r` flatten `p` and `q` into its own set and
+ * compose the key of `p ∧ q ∧ r`, which is a DIFFERENT proposition that the flow would then decide off this
+ * one's record. The negation keeps its own identity and enters any parent set as one opaque member, which is
+ * both correct and all this engine claims: it files one entry per predicate and reasons inside none of them. */
 static void pred_carry_through_not(JSValueConst dst, JSValueConst src) {
     Concolic *d = JS_GetOpaque(dst, g_concolic_class);
     Concolic *s = JS_GetOpaque(src, g_concolic_class);
@@ -2223,6 +2272,10 @@ static void pred_carry_through_not(JSValueConst dst, JSValueConst src) {
            "a negation was given a second predicate — a value negates ONE operand, so a record that already "
            "holds an observation is two predicates wearing one identity and decide.c's own asserts would then "
            "fire naming a defect one mint away from here");
+    DCHECK(d->conj_n == 0,
+           "a negation was minted onto a record that already names a set of CONJUNCTS — a negation is not a "
+           "conjunction (`!(p ∧ q)` is a disjunction of two negations), so a parent conjunction would flatten "
+           "this value's members into its own set and compose the key of a proposition nothing here states");
     d->cmp_op = s->cmp_op;
     if (s->cmp_tok)        { d->cmp_tok        = strdup(s->cmp_tok);        CHECK(d->cmp_tok,        "concolic: OOM carrying an equality's token through a negation"); }
     d->cmp_kind = s->cmp_kind;   /* the token's other half — carried on the same line, for `cmp_tok`'s reason */
@@ -2320,6 +2373,134 @@ JSValue concolic_new_rel(JSContext *ctx, const char *op, JSValueConst a, JSValue
     return pred_new(ctx, op, concolic_src_c(opq), concolic_root_c(opq),
                     ident_of_operand(ctx, a), ident_of_operand(ctx, b),
                     OPCMP_NONE, CMP_ALGO_NONE, CONCOLIC_LIT_NONE, NULL, NULL);
+}
+
+/* THE TAG THAT PUTS A CONJUNCTION IN ITS OWN NAMESPACE. It cannot collide with any other composition in this
+   file — every field is written `<length>:<bytes>`, so no tag's bytes can spell another's boundary and a
+   two-member `&` (the bitwise arithmetic operator, carith_name) is a different string of a different length
+   from this one anyway. Spelled once because both the identity and the record's own invariant are about it. */
+#define CONCOLIC_CONJ_TAG "&&"
+
+/* THE CONJUNCTION'S EXAMPLE — the real `&&` run on the conjuncts' own examples, attached only when BOTH carry
+   one, because a conjunction whose second operand has no concrete answer has none itself.
+   IT IS READ THROUGH concolic_example AND NEVER OFF THE RECORD, which is what makes the example this flow's
+   rather than the value's: that reader withholds an example the RUNNING FLOW has proved wrong, so a
+   conjunction over a contradicted conjunct arrives with no example instead of with a witness its own path
+   already refuted — and decide.c then marks NEITHER arm primary rather than the wrong one. */
+static JSValue conj_example(JSContext *ctx, JSValueConst a, JSValueConst b)
+{
+    JSValue exa = concolic_example(ctx, a), exb = concolic_example(ctx, b), r = JS_UNDEFINED;
+
+    if (!JS_IsUndefined(exa) && !JS_IsUndefined(exb)) {
+        DCHECK(JS_IsBool(exa) && JS_IsBool(exb),
+               "a conjunct carries a concrete example that is not a BOOLEAN — a predicate's example is the "
+               "answer the comparison gave on the operands' own examples, so a third kind here is a value "
+               "that was minted as a predicate by something that computed something else");
+        r = JS_NewBool(ctx, JS_ToBool(ctx, exa) && JS_ToBool(ctx, exb));
+    }
+    JS_FreeValue(ctx, exa);
+    JS_FreeValue(ctx, exb);
+    return r;
+}
+
+/* …AND THE MINT OVER TWO PREDICATES — see concolic.h for why a component cannot answer this itself, why the
+ * identity is the SET of conjuncts, and why a duplicate is deduplicated here where a joint provenance's is a
+ * crash. Both operands are BORROWED; the result is OWNED. */
+JSValue concolic_new_conj(JSContext *ctx, JSValueConst a, JSValueConst b)
+{
+    Concolic *side[2], *c;
+    const char **members, **sorted;
+    int *order;
+    int n = 0, u, i, k;
+    char *ident;
+    JSValue res;
+
+    DCHECK(concolic_is(a) && concolic_is(b),
+           "a conjunction was minted over an operand that is NOT unknown — a decided boolean is one the "
+           "caller folds away by handing back the other operand, and composing a key over it would put a "
+           "fork in the frontier over a question this engine has already answered by running it");
+
+    side[0] = JS_GetOpaque(a, g_concolic_class);
+    side[1] = JS_GetOpaque(b, g_concolic_class);
+    /* THE MEMBERS, FLATTENED. A conjunct that is ITSELF a conjunction contributes its own members, so
+       `(p ∧ q) ∧ r` and `p ∧ (q ∧ r)` are ONE set and ONE key: associativity is a property of `∧`, and a fold
+       that could spell it two ways would let a flow decide one nesting and re-fork the other. */
+    for (i = 0; i < 2; i++) {
+        DCHECK(side[i] != NULL,
+               "a conjunct passed concolic_is and carries no record — the class and its opaque are written "
+               "together at the one mint every value goes through");
+        DCHECK(side[i]->conj_n == 0 || (side[i]->conj_n >= 2 && side[i]->conj != NULL),
+               "a value names a CONJUNCT COUNT that is not a set: a conjunction holds at least two distinct "
+               "members and a list to hold them, because a one-member set IS its member and this mint hands "
+               "that member back rather than composing a second key for it");
+        n += side[i]->conj_n ? side[i]->conj_n : 1;
+    }
+    members = reclaim_malloc((size_t)n * sizeof *members);
+    order   = reclaim_malloc((size_t)n * sizeof *order);
+    CHECK(members && order, "concolic: OOM composing a conjunction's identity — a predicate whose key could "
+                            "not be spelled would be decided by whatever constraint another value left under "
+                            "the key it fell back to");
+    for (i = 0, k = 0; i < 2; i++) {
+        if (side[i]->conj_n) { int j; for (j = 0; j < side[i]->conj_n; j++) members[k++] = side[i]->conj[j]; }
+        else members[k++] = side[i]->ident;
+    }
+    DCHECK(k == n, "a conjunction collected a different number of members than it measured for — the two "
+                   "loops read the same two records one after the other, so a mismatch is a record mutated "
+                   "between them");
+
+    /* AN UNSPELLABLE MEMBER MAKES THE WHOLE CONJUNCTION UNSPELLABLE, which is the same POSITIVE statement the
+       struct makes for every other absent identity: a value with no name is never decided from another
+       value's record, so both arms of every branch over it stay. It costs forks; a wrong name costs an arm. */
+    for (i = 0; i < n; i++)
+        if (!members[i]) {
+            free(members); free(order);
+            return concolic_alloc(ctx, "{cmp}", NULL, NULL, NULL, conj_example(ctx, a, b));
+        }
+
+    ident_set_order(members, n, order);
+    /* DEDUPLICATED, WHERE A JOINT PROVENANCE'S DUPLICATE IS A CRASH — concolic.h states which caller could
+       have known. `order[u - 1]` is the last member KEPT and `order[i]` has not been written yet, because
+       `u <= i` holds at every step. */
+    for (i = 1, u = 1; i < n; i++)
+        if (strcmp(members[order[u - 1]], members[order[i]]) != 0) order[u++] = order[i];
+    DCHECK(u >= 1 && u <= n, "a conjunction's set came back with a member count outside the multiset it was "
+                             "compacted from");
+    n = u;
+
+    if (n == 1) {
+        /* `p ∧ p` IS `p`, so the answer is that predicate and not a second key naming it. Only two ATOMS can
+           collapse this far: a conjunction operand already holds distinct members, so it contributes at least
+           two and the set cannot be one. */
+        DCHECK(side[0]->conj_n == 0 && side[1]->conj_n == 0,
+               "a conjunction over a set that collapsed to ONE member had a conjunction as an operand — that "
+               "operand's own members are distinct by construction, so this is a set that was stored without "
+               "going through this mint's deduplication");
+        free(members); free(order);
+        return JS_DupValue(ctx, a);
+    }
+
+    sorted = reclaim_malloc((size_t)n * sizeof *sorted);
+    CHECK(sorted, "concolic: OOM ordering a conjunction's conjuncts");
+    for (i = 0; i < n; i++) sorted[i] = members[order[i]];
+    ident = concolic_ident_compose(CONCOLIC_CONJ_TAG, sorted, n);
+    DCHECK(ident != NULL, "a conjunction's identity came back absent over members this mint had already "
+                          "established are all spellable — concolic_ident_compose answers NULL only for a "
+                          "NULL member, and the scan above rejected every one of those");
+
+    /* NOT A SOURCE READ (concolic_alloc, never concolic_derived): a conjunction is a boolean this engine
+       COMPUTED, so an @S candidate substituted into it would answer a predicate with a payload. */
+    res = concolic_alloc(ctx, "{cmp}", NULL, NULL, ident, conj_example(ctx, a, b));
+    c = JS_GetOpaque(res, g_concolic_class);
+    DCHECK(c != NULL, "a conjunction was minted as something that is not a concolic value");
+    c->conj = reclaim_malloc((size_t)n * sizeof *c->conj);
+    CHECK(c->conj, "concolic: OOM recording the conjuncts a predicate is the conjunction of");
+    for (i = 0; i < n; i++) {
+        c->conj[i] = strdup(sorted[i]);
+        CHECK(c->conj[i], "concolic: OOM copying a conjunct's identity");
+    }
+    c->conj_n = n;
+    free(members); free(order); free(sorted);
+    return res;
 }
 
 int concolic_cmp(JSValueConst v, const char **psrc, ConcolicLit *pkind, const char **ptok) {
@@ -2661,7 +2842,7 @@ static JSValue concolic_call(JSContext *ctx, JSValueConst func_obj, JSValueConst
                 }
             }
             if (ok) pred_set_strpred(r, c->member, spelled, argc, subj);   /* consumes `spelled` */
-            else strpred_args_free(spelled, argc);
+            else ident_list_free(spelled, argc);
             free(subj);
         }
     }
@@ -4092,18 +4273,6 @@ JSValue concolic_source_wrap(JSContext *ctx, const char *shape, const char *src,
 /* The permutation that sorts `srcs`, so the composed key is a property of the set. Insertion sort: `n` is a
    component's fact count and never a page's data, and the sort must be over the same order the shapes are then
    joined in or the display and the key would name their members in two different orders. */
-static void concolic_joint_order(const char *const *srcs, int n, int *order)
-{
-    int i, j;
-
-    for (i = 0; i < n; i++) order[i] = i;
-    for (i = 1; i < n; i++) {
-        int cur = order[i];
-        for (j = i; j > 0 && strcmp(srcs[order[j - 1]], srcs[cur]) > 0; j--) order[j] = order[j - 1];
-        order[j] = cur;
-    }
-}
-
 static char *concolic_joint_join(const char *const *parts, const int *order, int n)
 {
     size_t seplen = strlen(CONCOLIC_JOINT_SEP), len = 1, at = 0;
@@ -4152,7 +4321,7 @@ JSValue concolic_source_wrap_joint(JSContext *ctx, const char *const *shapes, co
     }
     order = reclaim_malloc((size_t)n * sizeof *order);
     CHECK(order, "concolic: OOM ordering a joint domain's members");
-    concolic_joint_order(srcs, n, order);
+    ident_set_order(srcs, n, order);
     for (i = 1; i < n; i++)
         DCHECK(strcmp(srcs[order[i - 1]], srcs[order[i]]) < 0,
                "the SAME source appears twice in one joint domain. A set holds each member once, so this key "

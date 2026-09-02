@@ -471,6 +471,14 @@ static JSValue nv_slot_predicate(JSContext *ctx, JSValueConst a, JSValueConst b)
    what lets `CSS.px(x).equals(CSS.px(1), CSS.em(1))` answer a plain false instead of forking over the first
    item and answering false on both arms.
 
+   TWO UNDECIDED COMPARISONS ARE ONE VALUE AND IT IS THEIR CONJUNCTION, minted by solver/concolic.h's
+   `concolic_new_conj` — which is what lets this loop hold a residue of ANY size in one place. Every
+   comparison here shares `this`'s slot, so two of them ask ONE question exactly when the two items' slots are
+   one value; that used to be tested here, against the FIRST undecided item's slot, and that test is GONE
+   rather than narrowed. The mint's identity is the SET of conjuncts, so two comparisons that ask one question
+   compose one member and collapse back to the single predicate — the identical answer, decided by comparing
+   the two predicates' own identities instead of by this component re-deriving when two slots are one value.
+
    THE RESULT OF AN UNDECIDED COMPARISON IS THE PREDICATE ITSELF, not a decision taken here. `equals` IS a
    comparison, so its unknown answer belongs at the page's own `if` — where §7.1.2 ToBoolean's branch seam
    forks it and files ONE constraint entry that `if (a.equals(b))` shares with every other read of that
@@ -481,7 +489,7 @@ static JSValue nv_slot_predicate(JSContext *ctx, JSValueConst a, JSValueConst b)
 static JSValue js_css_numeric_value_equals(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                            int magic)
 {
-    JSValue this_slot, held = JS_UNDEFINED, held_slot = JS_UNDEFINED;
+    JSValue this_slot, held = JS_UNDEFINED;
     const char *this_unit;
     int i;
 
@@ -509,40 +517,31 @@ static JSValue js_css_numeric_value_equals(JSContext *ctx, JSValueConst this_val
         }
         if (r == 0) {                              /* step 2's "return false", for this item */
             JS_FreeValue(ctx, slot);
-            JS_FreeValue(ctx, held_slot);
             JS_FreeValue(ctx, held);
             JS_FreeValue(ctx, this_slot);
             return JS_FALSE;
         }
         if (r > 0) { JS_FreeValue(ctx, slot); continue; }
-        if (JS_IsUndefined(held)) {
-            held = nv_slot_predicate(ctx, this_slot, slot);
-            held_slot = slot;
-            continue;
+        /* THIS ITEM'S OWN QUESTION, AND THEN THE CONJUNCTION OF IT WITH EVERYTHING STILL UNDECIDED. The mint
+           holds a SET, so an item asking a question an earlier item already asked adds no member and the
+           conjunction collapses back to the predicate that was already held — `CSS.px(x).equals(CSS.px(1),
+           CSS.px(1))` costs one entry, and `CSS.px(1).equals(CSS.px(x), CSS.px(y))` costs one entry naming
+           both. The fold's own shape does not reach the key: the set is canonically ordered and flattened, so
+           the arguments' order and this loop's left-association are unobservable in it — which is what makes
+           a fold here sound rather than a second spelling of an N-ary primitive. */
+        {
+            JSValue q = nv_slot_predicate(ctx, this_slot, slot);
+
+            JS_FreeValue(ctx, slot);
+            if (JS_IsUndefined(held)) { held = q; continue; }
+            {
+                JSValue both = concolic_new_conj(ctx, held, q);
+                JS_FreeValue(ctx, held);
+                JS_FreeValue(ctx, q);
+                held = both;
+            }
         }
-        /* A SECOND UNDECIDED COMPARISON. Every comparison in this loop shares `this`'s slot, so two of them
-           ask ONE question exactly when the two items' slots are one value — which is the ordinary case
-           (`CSS.px(x).equals(CSS.px(1), CSS.px(1))`) and costs one predicate, not two. */
-        if (nv_slot_equal(ctx, held_slot, slot) > 0) { JS_FreeValue(ctx, slot); continue; }
-        JS_FreeValue(ctx, slot);
-        /* TWO DIFFERENT QUESTIONS, AND THE ANSWER IS THEIR CONJUNCTION, WHICH NO VALUE IN THIS ENGINE SPELLS.
-           `equals` must hand back ONE value for the page's `if` to fork on, and solver/concolic.h mints a
-           predicate over a PAIR of operands (`concolic_new_rel`) and nothing over a pair of PREDICATES. What
-           must exist is that second mint — a value whose truth is the conjunction of two others, composing its
-           identity from BOTH of them, so that `p ∧ q` and `p ∧ r` are two constraint entries rather than one
-           deciding the other. Deriving it from one operand through the builtin seam is exactly that defect,
-           which is why this crashes rather than reaching for it.
-           IN RELEASE THE HELD PREDICATE STANDS, and the direction that leaves is the sound one: the flow forks
-           over one of the two questions and keeps both of its arms, where dropping the fork would prune an arm
-           nothing contradicts. `CSS.px(1).equals(CSS.px(x), CSS.px(y))` is what reaches this. */
-        DFAIL("§4.3.1's equals reached a SECOND undecided comparison over a DIFFERENT pair of operands, and "
-              "its answer is the conjunction of two predicates — solver/concolic.h mints one over two VALUES "
-              "and has no mint over two PREDICATES, so there is no single value to hand back for the page's "
-              "own branch to fork on. Build that mint beside concolic_new_rel, composing the result's identity "
-              "from BOTH predicates' identities so two conjunctions sharing one operand are two constraint "
-              "entries");
     }
-    JS_FreeValue(ctx, held_slot);
     JS_FreeValue(ctx, this_slot);
     /* "Return true" — reached when every item's comparison answered equal, which for an empty argument list is
        vacuously every one of them. `held` is the undecided residue where there was one. */

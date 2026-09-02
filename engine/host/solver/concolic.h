@@ -425,6 +425,52 @@ JSValue     concolic_new_cmp(JSContext *ctx, const char *src, int op, ConcolicLi
    of a constraint key. The result is a predicate value to hand to solver_decide; it pins nothing (an ordering
    determines no value, and an equality against an unknown has none to pin to). Operands are BORROWED. */
 JSValue     concolic_new_rel(JSContext *ctx, const char *op, JSValueConst a, JSValueConst b);
+/* …AND THE MINT OVER TWO PREDICATES, for a component whose own algorithm answers ONE boolean whose truth is
+ * the conjunction of two undecided comparisons over DIFFERENT operand pairs — CSS Typed OM 1 §4.3.1 Common
+ * Numeric Operations, and the CSSNumericValue Superclass's `equals`, over two items whose `value` internal
+ * slots are two different unknowns. Binary; a fold over the pair gives the N-ary case, and this mint's set
+ * semantics are what make the fold's shape not matter.
+ *
+ * WHY THE COMPONENT CANNOT ANSWER THIS ITSELF. It must hand ONE value back for the page's own `if` to fork
+ * on. Deciding either comparison inside the member would fork from a plain C activation, which has no flow
+ * base under it for a sibling to be snapshotted at, and would fork over a value the page may never branch on
+ * at all. Deriving the answer from ONE operand through the builtin seam is worse: it would file the pair's
+ * question under one conjunct's key, so `p ∧ q` and `p ∧ r` would be one constraint entry and the flow's
+ * record of either would decide the other — the collapse §Solver-half's "keyed by the PREDICATE's own
+ * identity … so the flow's record of one predicate decides that predicate and never its neighbour" forbids.
+ *
+ * THE IDENTITY IS THE SET OF CONJUNCTS, CANONICALLY ORDERED AND FLATTENED — the same rule
+ * concolic_source_wrap_joint states for a joint provenance, and for the same reason. `∧` is commutative and
+ * associative over booleans, so `p ∧ q`, `q ∧ p`, `(p ∧ q) ∧ r` and `p ∧ (q ∧ r)` name at most two
+ * propositions between them and must name at most two keys. Without that, ONE flow could take the true arm
+ * of `p ∧ q` and the false arm of `q ∧ p` — one proposition, two keys, a world holding both answers, every
+ * arm in range and every assert on the path satisfied. The order is `strcmp` over the members' identities,
+ * which are TEXT composed from program facts, so it is the same order on the flow that minted it, on the
+ * flow that resumes it from the cold tier, and in the next session.
+ *
+ * A DUPLICATE IS DEDUPLICATED HERE WHERE A JOINT PROVENANCE'S IS A CRASH, AND THE DIFFERENCE IS WHO COULD
+ * HAVE KNOWN. A joint domain's members are a list its caller ASSEMBLED, so a repeat is that caller having
+ * lost track of its own inventory. These two are VALUES, and whether they are the same proposition is a
+ * question about their identities that only this mint holds both of — pushing it back would put the
+ * comparison in every caller, which is the one-fact-answered-from-many-places defect, and a fold over N
+ * items is exactly the caller that cannot answer it. `p ∧ p` IS `p`, so a set that collapses to one member
+ * comes back as that predicate rather than as a second key naming it.
+ *
+ * IT DECOMPOSES NOTHING, WHICH IS THE SOUND DIRECTION AND NOT A LIMITATION. The true arm of `p ∧ q` proves
+ * both conjuncts and the false arm proves neither, and this engine files ONE entry for the conjunction and
+ * reasons inside none of them: propagating the true arm into `p`'s own entry would need the SAT layer
+ * §Re-execution forbids, and `p ∧ ¬p` therefore forks over a question that is unsatisfiable — which errs
+ * toward MORE exploration, exactly the direction §Headless requires.
+ *
+ * IT CARRIES NO `src` AND NO `root`, AND THAT IS A POSITIVE STATEMENT RATHER THAN A DROPPED FIELD. Both are
+ * facts about where BYTES entered and where an @S candidate substitutes; a conjunction is a boolean this
+ * engine COMPUTED from two predicates that may be about two different holes, so there is no single answer
+ * and naming one operand's would state half a provenance as the whole of it. The other predicate mints carry
+ * them only because a PIN needs them, and a conjunction pins nothing.
+ *
+ * Both operands are BORROWED and must be unknown (an already-decided boolean is one the caller folds away by
+ * handing back the other). The example is the real `&&` run on the two examples where both have one. */
+JSValue     concolic_new_conj(JSContext *ctx, JSValueConst a, JSValueConst b);
 /* THE PIN A TAKEN ARM CAN PERFORM, and nothing else — OPCMP_EQ/NE with the source and the concrete token, or
    OPCMP_NONE. An ordering answers NONE because it pins nothing (`x > 5` narrows a domain and determines no
    value; §Solver-half keeps that a domain-annotated shape rather than inventing a 6), and so does an equality
