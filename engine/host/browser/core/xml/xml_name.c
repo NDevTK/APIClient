@@ -15,9 +15,9 @@
  * diffing two lists, and that difference is the whole of the U+00B7 case.
  *
  * ONE TRANSLATION UNIT, ON THE EVIDENCE, AND BY core/fetch/port_blocking.c'S OWN TEST. That file keeps Fetch
- * §2.9's 83-row table with the three-step algorithm that reads it, because "those two files would only ever
- * change together, the algorithm is meaningless without the table and the table is unreadable without the
- * sentence that says what a row MEANS"; what core/url separates into idna_table.h and public_suffix_table.h is
+ * §2.9's 83-row table with the three-step algorithm that reads it, on the ground that the two files would only
+ * ever change together — the algorithm is meaningless without the table and the table is unreadable without
+ * the sentence that says what a row MEANS; what core/url separates into idna_table.h and public_suffix_table.h is
  * 9251 and 2596 lines of MACHINE-DERIVED data with no algorithm attached at all. Twenty-two ranges
  * hand-transcribed from three lines of spec text, read by two predicates that mean nothing without them, are
  * the first situation and not the second.

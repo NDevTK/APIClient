@@ -168,7 +168,9 @@ static void set_the_frozen_base_url(lxb_dom_element_t *element)
 }
 
 /* §4.2.3's TWO SITUATIONS, ASKED AS THE STATE CHANGE THEY ARE. The standard states them as facts about an
- * element ("the base element BECOMES the first …", "the base element IS the first … and its href IS CHANGED"),
+ * element — "The base element becomes the first base element in tree order with an href content attribute in
+ * its Document" and "The base element is the first base element in tree order with an href content attribute
+ * in its Document, and its href content attribute is changed" —
  * and both are decided by comparing WHICH element is first with WHICH one the document's frozen base URL
  * currently belongs to — so one comparison answers both, plus the `href_changed` element for the second.
  *

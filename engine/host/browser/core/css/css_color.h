@@ -48,7 +48,8 @@
    lch(), oklab(), oklch() or a wider `color()` space can legitimately lie outside the destination's gamut and
    §11 preserves that: it gamut maps only when the destination "is a physical output color space, such as a
    display", which a used value is not. The clip is the SERIALIZATION's, and each caller's spec says where —
-   HTML §4.10.5.1.14 step 4.2 rounds "into the range 0 to 255 inclusive", while §16.5's `color()` form keeps the
+   HTML §4.10.5.1.14 step 4.2 says "Round each of color's components so they are in the range 0 to 255,
+   inclusive", while §16.5's `color()` form keeps the
    out-of-gamut number, which is why HTML's own example of a Display P3 well's value is
    `color(display-p3 1.84 -0.19 0.72 / 0.6)`.
    `a` IS clamped to [0, 1] — CSS Color 4 §16.1.2: "<alpha-value>s which were specified outside the valid range

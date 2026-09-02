@@ -192,8 +192,9 @@ static bool pp_allowlist_matches(const PpAllowlist *a, const Origin *origin)
         DCHECK(ok, "§4.7 step 5 could not parse the serialization of a TUPLE origin as a URL — §7.1.1 "
                    "serializes a tuple origin as `scheme://host[:port]`, which the URL parser accepts by "
                    "construction, and step 4 has already refused the one origin that serializes to `null`");
-        /* THE FREE IS ON THE FAILURE PATH TOO, which URL §4.4's entry states as its contract: "`out` is left
-           initialised-and-empty on failure, so the caller frees it either way". Without it the release build —
+        /* THE FREE IS ON THE FAILURE PATH TOO, which is core/url/url.h's own contract for `url_parse` rather
+           than anything URL §4.4 says: `out` is left initialised-and-empty on failure, so the caller frees it
+           either way. Without it the release build —
            where the DCHECK above is compiled out and this branch is the only exit — would leak a record per
            call, on a path that runs once per source expression of every policy of every check. */
         if (!ok) {

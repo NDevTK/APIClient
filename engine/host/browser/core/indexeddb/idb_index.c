@@ -16,7 +16,7 @@
  * through that primary key, which is what makes an index a view rather than a second copy of the data.
  *
  * THE REFERENCED OBJECT STORE IS ON THE RECORD because §2.6 puts it there, and it is what every assert below
- * about "which store is this index of" is stated against. */
+ * about `which store is this index of` is stated against. */
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>

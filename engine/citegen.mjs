@@ -1506,6 +1506,17 @@ const OTHER_SPECS = [
      answers FSA's numbers out of the File System Standard — a wrong answer manufactured by adding a right one.
      A foreign row is what refuses that: an `other:` anchor is never judged at all. */
   "fsa",
+  /* THE COMPATIBILITY STANDARD, AND IT IS HERE FOR THE FSA REASON WITH THE VOTE POINTING SOMEWHERE ELSE. This
+     tree writes `CSS Compatibility §3.1` — the number WITH its standard, which is what CLAUDE.md asks for —
+     and the tail regex ends on a word neither this list nor ANCHOR_TO_KEY held, so every one of those sites
+     fell to its file's dominant anchor. `core/css/css_rule.c` and `test_forced.c` are HTML-dominant, so §3.1
+     was judged out of HTML, whose §3.1 is "Documents"; the Compatibility Standard's §3.1 is "CSS At-rules"
+     and holds the `-webkit-` at-rule alias table those sites are about. The cost of the wrong answer was
+     measurable: `must be supported as aliases of the corresponding unprefixed at-rules` is that section's own
+     sentence, pasted from its text, and stood in QUOTE-NOT-FOUND against HTML. Not indexed, so the sites are
+     counted and never checked — which is the honest state for a standard whose text this audit does not
+     hold. */
+  "compatibility",
   /* THE TWO STANDARDS THAT EXTEND Fetch's `RequestInit` BY A PARTIAL DICTIONARY, and they are here for the
      reason the whole list exists: a partial's member is declared beside Fetch's own, in a Fetch-dominant
      file, so a citation of the OTHER standard's numbering sits surrounded by evidence for Fetch. Their

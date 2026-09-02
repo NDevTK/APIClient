@@ -21,9 +21,9 @@
  * been activated), or negative infinity (indicating that the activation has been consumed). Initially positive
  * infinity." Three states in ONE double, and the arithmetic is the reason: every question §6.4.1 asks is a
  * COMPARISON against it, and both infinities answer all three comparisons correctly with no case analysis at
- * all. Never-activated is a moment in the infinite future, so "now is at or past it" is false — not sticky, not
- * transient. Consumed is a moment in the infinite past, so "now is at or past it" is TRUE (sticky survives a
- * consumption, which is exactly what §6.4.1 says) while "now is before it plus the duration" is false, because
+ * all. Never-activated is a moment in the infinite future, so `now is at or past it` is false — not sticky, not
+ * transient. Consumed is a moment in the infinite past, so `now is at or past it` is TRUE (sticky survives a
+ * consumption, which is exactly what §6.4.1 says) while `now is before it plus the duration` is false, because
  * negative infinity plus anything finite is still negative infinity — not transient. A `bool consumed` field
  * beside a timestamp would have been the same three states with two of them able to disagree.
  *

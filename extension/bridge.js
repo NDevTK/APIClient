@@ -925,7 +925,7 @@ function frontierPrefPut(name, value) {
    writer and its reader go through this, so a field written by neither crashes at the park rather than at the
    resume a session later. NOTHING IS DEFAULTED: `{}` is the honest header list of a response that carried no
    headers, so substituting it for a producer that stated none turns a CSP-protected page into an unprotected
-   one, and "CSP does not block this sink" is then a reported exploit that is not real. */
+   one, and `CSP does not block this sink` is then a reported exploit that is not real. */
 /* THE HALF OF AN ENTRY THAT IS TRUE OF IT WHETHER OR NOT IT STILL HOLDS ITS DOCUMENT — the address the
    recipes replay at, the environment they replay in, the principal they replay under, and the policy they are
    judged against. Split out of frontierDoc verbatim so a SHED entry (below) is asserted by the same sentences

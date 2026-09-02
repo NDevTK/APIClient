@@ -165,8 +165,8 @@
  * (which is what stops it being an EDGE), and CSS 2.2 §9.4.2 puts its whole box on the line — "horizontal
  * margins, borders, and padding are respected between these boxes" — so it occupies an inline size a forced
  * break does not have. CSS 2.2 §9.2.2 "Inline-level elements and inline boxes" says why one item is the whole
- * of it: an atomic inline-level box "participate[s] in [its] inline formatting context as a SINGLE OPAQUE BOX",
- * so it is never split across lines and there is nothing inside it for the run to hold.
+ * of it: atomic inline-level boxes are so called "because they participate in their inline formatting context
+ * as a single opaque box", so one is never split across lines and there is nothing inside it for the run to hold.
  * ONE KIND SERVES A REPLACED ELEMENT AND AN `inline-block` ALIKE, and that is §5.5's own sentence rather than a
  * generalisation: it names "each replaced element OR OTHER atomic inline" as one category. What differs between
  * them is only where the WIDTH comes from (CSS 2.2 §10.3.2 "Inline, replaced elements" for the first, §10.3.9
@@ -316,9 +316,9 @@ void text_run_measure_add_forced_break(TextRunMeasure *m, lxb_dom_element_t *sty
    dimensions": "the four margin edges define the box's margin box"), which is what CSS 2.2 §9.4.2 puts on the
    line: "horizontal margins, borders, and padding are respected between these boxes".
    IT IS ONE CALL AND NOT A PAIR OF EDGES, which is CSS 2.2 §9.2.2 "Inline-level elements and inline boxes"
-   rather than a shorthand: an atomic inline-level box "participate[s] in [its] inline formatting context as a
-   SINGLE OPAQUE BOX", so it is never split across two line boxes and there is no inside of it for the run to
-   hold. Bracketing it with two edges would additionally place two boundaries §5.5 says introduce no break
+   rather than a shorthand: atomic inline-level boxes are so called "because they participate in their inline
+   formatting context as a single opaque box", so one is never split across two line boxes and there is no
+   inside of it for the run to hold. Bracketing it with two edges would additionally place two boundaries §5.5 says introduce no break
    around a box whose whole point is that it introduces two.
    THE SIZE IS THE CALLER'S DERIVATION AND THE SECTION DEPENDS ON THE BOX TYPE — CSS 2.2 §10.3.2 "Inline,
    replaced elements" for a replaced element, §10.3.9 "'Inline-block', non-replaced elements in normal flow" for

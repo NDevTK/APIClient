@@ -10,8 +10,9 @@
  *       any getState();
  *     };
  *
- * THREE OF THE SIX MEMBERS ARE THE ENTRY'S OWN ANSWERS, NOT COPIES OF THEM. §7.2.6.10.3 writes `key`, `id` and
- * `index` as "return this's entry's key / ID / index", and the entry is a NavigationHistoryEntry whose own
+ * THREE OF THE SIX MEMBERS ARE THE ENTRY'S OWN ANSWERS, NOT COPIES OF THEM. §7.2.6.10.3 writes each of `key`,
+ * `id` and `index` as a two-step getter that defers to the entry — "The key getter steps are: If this's entry
+ * is null, then return the empty string. Return this's entry's key." — and the entry is a NavigationHistoryEntry whose own
  * getters already answer those questions — including the not-fully-active answers §7.2.6.5 gives them, which
  * are observably different from this interface's null-entry answers only in that BOTH are reached here. So the
  * three are asked of core/frame/navigation_history_entry.c rather than re-derived off the session history

@@ -23,8 +23,9 @@
  * real encoding, from a real declaration, that the standard says is not the one in force.
  *
  * THE SCAN NEVER READS PAST THE WINDOW IT WAS GIVEN. §13.2.3.2 states the abort as a property of the pointer —
- * "if the algorithm ... is aborted (meaning the position pointer created in the first step below goes beyond
- * the end of the byte stream obtained so far) ... then abort the prescan" — so every read below is guarded and
+ * "the user agent either runs out of bytes (meaning the position pointer created in the first step below goes
+ * beyond the end of the byte stream obtained so far) or reaches its end condition, then abort the prescan a
+ * byte stream to determine its encoding algorithm" — so every read below is guarded and
  * an overrun ABORTS rather than returning a partial answer. The guard is not defensive programming: running
  * off the end is a NORMAL outcome of prescanning a truncated window, and it has its own defined result. */
 #include <stdbool.h>

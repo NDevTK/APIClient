@@ -29,8 +29,8 @@
 /* HTML §7.2.1.3.1 CrossOriginProperties ( O ) FOR A Location, verbatim: « { [[Property]]: "href",
    [[NeedsGetter]]: false, [[NeedsSetter]]: true }, { [[Property]]: "replace" } », in the standard's order.
  *
- * THE FLAGS ARE PART OF THE LIST AND NOT A SECOND ONE. It was two bare names, which answers "which members
- * does this object expose" and cannot answer "is this ACCESS to that member permitted" — the question
+ * THE FLAGS ARE PART OF THE LIST AND NOT A SECOND ONE. It was two bare names, which answers `which members
+ * does this object expose` and cannot answer `is this ACCESS to that member permitted` — the question
  * §7.2.1.1 Integration with IDL decides, and the one where the two entries DISAGREE: `href`'s [[NeedsGetter]]
  * is FALSE, so `Location.prototype`'s href SETTER goes through with a cross-origin receiver and its GETTER is
  * a "SecurityError". A name-only list makes those one answer.

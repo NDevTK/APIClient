@@ -1223,13 +1223,15 @@ static JSValue js_encoder_encode_into(JSContext *ctx, JSValueConst this_val, int
            "Uint8Array, whose elements are numbers, so this engine has nowhere to write the unknown bytes and "
            "would report `read`/`written` over a buffer it never touched. Build concolic bytes in a typed "
            "array's backing store");
-    /* A DETACHED DESTINATION IS NOT THIS ALGORITHM'S ERROR — IT IS A WINDOW OF ZERO BYTES, AND §7.4 STATES
-       THAT WITHOUT A DETACH TEST OF ITS OWN. encodeInto is not one of §3.2.26's byte-COPY callers: it reads
-       "destination's byte length − written" and then "write the bytes in result into destination", which are
-       §3.2.26's OTHER two operations. `The byte length of a buffer source type instance` returns
+    /* A DETACHED DESTINATION IS NOT THIS ALGORITHM'S ERROR — IT IS A WINDOW OF ZERO BYTES, AND Encoding §7.4
+       STATES THAT WITHOUT A DETACH TEST OF ITS OWN. encodeInto is not one of Web IDL §3.2.26's byte-COPY
+       callers. Encoding §7.4's loop asks whether "destination's byte length − written is greater than or equal
+       to the number of bytes in result" and then says "Write the bytes in result into destination, with
+       startingOffset set to written", which are §3.2.26's OTHER two operations. `The byte length of a buffer
+       source type instance` returns
        jsBufferSource.[[ByteLength]] for a view, and ECMAScript §10.4.5.12 TypedArrayByteLength answers 0 for a
-       view whose buffer is detached — so the loop's very first "byte length − written ≥ result's bytes" test
-       is false, it breaks, and the method returns «[ "read" → 0, "written" → 0 ]». wpt
+       view whose buffer is detached — so that first test is false on the very first pass,
+       it breaks, and the method returns «[ "read" → 0, "written" → 0 ]». wpt
        encoding/encodeInto.any.js's "encodeInto() and a detached output buffer" requires exactly that pair, for
        both an empty and a non-empty source.
        SO THE ANSWER IS THE SAME SHAPE AS §3.2.26 STEP 7'S AND ARRIVES BY A DIFFERENT ROUTE, and the route is

@@ -698,7 +698,7 @@ void flow_credit_pick(Flow *f) {
    stack is now empty, perform a microtask checkpoint." That sentence is the precondition of a MICROTASK
    checkpoint and of a TASK alike — §8.1.7.3 "Processing model" runs one task and then performs a checkpoint,
    so neither may begin part-way through a program — and it has two halves here, only one of which is a field.
-   `Flow::frame` IS that stack ("the current script's live preemptible frame, NULL between scripts",
+   `Flow::frame` IS that stack (`the current script's live preemptible frame, NULL between scripts`,
    solver/flow.h), so a live frame answers no outright.
    THE OTHER HALF IS THE ROW AT THE CURSOR. §4.12.1.1 "Processing model" ends "prepare the script element" with
    "Otherwise, immediately execute the script element el, even if other scripts are already executing" — that

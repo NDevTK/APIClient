@@ -1,8 +1,8 @@
 /* THE XML SERIALIZATION ALGORITHM — DOM Parsing and Serialization §3.2.1 XML Serialization, as ONE machine,
  * embeddable in whichever member IS it. See xml_serialize.c.
  *
- * WHAT IT IS AND WHY IT IS NOT core/html/fragment_serializer.c. §3.2.1 opens by saying what separates it from
- * HTML §13.3 Serializing HTML fragments in its own words: "Elements and attributes will always be serialized
+ * WHAT IT IS AND WHY IT IS NOT core/html/fragment_serializer.c. What separates it from HTML §13.3 Serializing
+ * HTML fragments is stated by DOM Parsing §3.2.1 in its own words: "Elements and attributes will always be serialized
  * such that their namespaceURI is preserved. In some cases this means that an existing prefix, prefix
  * declaration attribute or default namespace declaration attribute might be dropped, substituted or changed. An
  * HTML serialization does not attempt to preserve the namespaceURI", and "Elements not in the HTML namespace

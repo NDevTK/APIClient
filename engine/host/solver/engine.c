@@ -9024,8 +9024,8 @@ static int engine_sched_slice(void) {
                run a unit of work" was the claim above and a PREEMPT is not the end of one: flow_step returns on
                a back-edge preempt too. HTML §8.1.4.4 Calling scripts states the precondition exactly — clean up
                after running script performs the checkpoint only "if the JavaScript execution context stack is
-               now EMPTY" — and `Flow::frame` IS that stack here ("the current script's live preemptible frame,
-               NULL between scripts", solver/flow.h). Without it the checkpoint ran at EVERY back-edge, and its
+               now EMPTY" — and `Flow::frame` IS that stack here (`the current script's live preemptible frame,
+               NULL between scripts`, solver/flow.h). Without it the checkpoint ran at EVERY back-edge, and its
                one registered consumer is HTML §8.1.7.3 Processing model's "Cleanup Indexed Database
                transactions" step, whose steps are STATE TRANSITIONS and not observation: deactivate an active
                transaction, and commit it when its request list is empty. So `db.transaction('s','readwrite')`

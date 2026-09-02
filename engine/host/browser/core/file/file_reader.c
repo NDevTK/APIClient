@@ -328,8 +328,10 @@ typedef struct {
     uint8_t     fphase;      /* the dispatch request's own phase, held across the suspension */
     JSValue     ev;          /* the event in flight (owned) */
     EventFireCb cb;          /* the dispatch's request buffer — the type carries §2.9's argument count */
-    /* §5.1's two operands, decided where the fire is decided. §6.2 does not name them (it says only "fire a
-       progress event called e at fr"), so they are the algorithm's OWN state at that point: the bytes it has
+    /* §5.1's two operands, decided where the fire is decided. §6.2 does not name them — each of step 10's
+       fires says only "fire a progress event called loadstart at fr" and the same shape for `progress`,
+       `error`, `load` and `loadend`, and §6.4's definition of what it MEANS to "fire a progress event called
+       e" is about the event's bubbles and cancelable flags and nothing else — so they are the algorithm's OWN state at that point: the bytes it has
        accumulated, and the byte sequence's size. A completion that failed has neither, so both are 0 — which is
        also what leaves `lengthComputable` false, exactly as §5.1 says a length of 0 does. */
     double      transmitted, length;

@@ -1752,7 +1752,7 @@ static int js_cd_op(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSVal
            "every one of them is required — the declaration's own argument-count check is what should have "
            "refused the call");
     length = cd_units(cd->data.data, cd->data.length);                  /* STEP 1 */
-    /* THE `offset` OPERAND. appendData declares none — §4.10 states it as "replace data with node, node's
+    /* THE `offset` OPERAND. appendData declares none — §4.10 states it as "replace data of this with this's
        length, 0, and data" — so its offset is a fact about the node and never a fork. */
     if (magic == 1) {
         offset = length;
@@ -2623,12 +2623,16 @@ static void clone_push(JSContext *ctx, NodeCloneState *s, int resume_stage)
 /* A `<template>`'s content fragment, or NULL for anything else. The children of a template are NOT under it —
    they hang off a separate fragment — so a walk that follows first_child copies the template and none of its
    markup, which is exactly what this did before the case was added: `<template><b>tc</b></template>` cloned to
-   `<template></template>` and the page got an empty one with no error anywhere. §4.4 states the contents are
-   cloned too. A shallow clone of a template already HAS its own empty fragment, because lexbor's
+   `<template></template>` and the page got an empty one with no error anywhere. §4.4's clone a node does not
+   state it — it DEFERS it, "Specifications may define cloning steps for all or some nodes" — and HTML §4.12.3
+   "The template element" is the specification that does: "For each child of node's template contents's
+   children, in tree order: clone a node given child with document set to copy's template contents's node
+   document, subtree set to true, and parent set to copy's template contents." A shallow clone of a template
+   already HAS its own empty fragment, because lexbor's
    clone_interface builds the template interface, so both sides have somewhere to go.
    EXPORTED, because a second tree walk needed the same question: core/html/tree_construction.c copies a
-   partial parse and has to descend into the same second tree for the same reason. Two spellings of "where a
-   template's markup actually is" is how one of them silently stops covering it. */
+   partial parse and has to descend into the same second tree for the same reason. Two spellings of `where a
+   template's markup actually is` is how one of them silently stops covering it. */
 lxb_dom_node_t *node_template_content(const lxb_dom_node_t *n)
 {
     lxb_html_template_element_t *t;
@@ -3395,8 +3399,10 @@ void node_install_non_doctype_child_mixin(JSContext *ctx, JSValueConst proto)
    EVERY match into a collection and then takes the first, so it walked the whole document after already having
    the answer — for a member whose entire definition is "the FIRST element in tree order".
    A MACHINE, because that walk is the document's size. One node per step, and the first match ends it. */
-/* WHERE THIS MACHINE RESTS. §4.2.4 states the member as one sentence — "the first element, in tree order,
-   within this's descendants, whose ID is elementId" — so the two stages are its two halves: fixing what is
+/* WHERE THIS MACHINE RESTS. §4.2.4 states the member as a call into one algorithm — "The getElementById(elementId)
+   method steps are to return the result of getting an element by ID given this and elementId" — and that
+   algorithm is one sentence: "return the first element, in tree order, within node's descendants, whose ID is
+   elementId; otherwise, if there is no such element, null". So the two stages are its two halves: fixing what is
    being searched for, and the walk that answers it, which rests once per node. */
 #define NODE_BYID_STAGES(X) \
     X(BYID_START, "DOM §4.2.4 getElementById (the id to search for; this's descendants, in tree order)") \

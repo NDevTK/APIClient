@@ -26,7 +26,7 @@
  * TIME IS VIRTUAL, AND THAT IS THE SPEC'S OWN MODEL. HTML orders the timer task source by expiry, and this
  * engine has no wall clock to wait on, so the clock JUMPS to the next expiry where a wait would have sat.
  * THAT JUMP IS A SUBSTITUTION AND IT CARRIES A PREMISE, WHICH THIS PARAGRAPH USED TO STATE AS A FACT: it said
- * "nothing else advances while a timer is outstanding", and that is FALSE of a flow the host still owes a
+ * `nothing else advances while a timer is outstanding`, and that is FALSE of a flow the host still owes a
  * reply. §8.7's own wait runs "in parallel" ("wait until global's associated Document has been fully active
  * for a further milliseconds milliseconds"), so a reply in flight can land first — and the jump cannot
  * represent that race, it DECIDES it, always for the timer, by more the longer the deadline. Measured: every
@@ -1438,8 +1438,8 @@ int timer_run_due(JSContext *ctx)
  * AND THE THREE INVOCATIONS ARE THREE DECLARATIONS OF ONE BODY, WHICH IS THE SAME SENTENCE. §8.7 states the
  * timer initialization steps ONCE and reaches them from three places — `setTimeout`, `setInterval`, and
  * substep 9.11's re-performance — differing only in `repeat` and in whether `previousId` was given. A magic is
- * exactly what a declaration carries for that ("one declaration serving two members is exactly what a magic is
- * for" — idl_args.h), so the re-arm is a third magic on TI_DECL and never a second implementation. The
+ * exactly what a declaration carries for that (`one declaration serving two members is exactly what a magic is
+ * for` — idl_args.h), so the re-arm is a third magic on TI_DECL and never a second implementation. The
  * alternative is what stood in timer_run_due: a hand-written re-speller of steps 5, 10, 11 and 13, which is
  * the dual system §Disposition forbids and which could not ask step 5's fork at all. */
 #define TI_MAGIC_TIMEOUT   0   /* setTimeout: repeat false, previousId not given */
@@ -2224,8 +2224,8 @@ static JSValue js_queue_microtask(JSContext *ctx, JSValueConst this_val, int arg
      undefined clearInterval(optional long id = 0);
    `handler` is that three-armed union and `timeout` is a long, so BOTH can run the page's code — a toString on
    the non-callable arm, a valueOf on the delay — and neither is a string.
-   THE `any...` TAIL IS NOT DECLARED, AND IT IS THEREFORE DROPPED — this said the opposite ("a position the
-   IDL does not name is passed through as it is") and that is measurably false: a NON-variadic member's
+   THE `any...` TAIL IS NOT DECLARED, AND IT IS THEREFORE DROPPED — this said the opposite (`a position the
+   IDL does not name is passed through as it is`) and that is measurably false: a NON-variadic member's
    argument count is min(passed, declared) (idl_args.c), so this body can never see a third position and
    `setTimeout(f, 0, x)` invokes f with no arguments where §8.7 step 9's task invokes it "given arguments".
    Declaring it is not one call to idl_variadic: a variadic member repeats its LAST declared type for the

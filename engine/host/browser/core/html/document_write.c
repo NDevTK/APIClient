@@ -226,7 +226,7 @@ static int dw_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
      * behavior "can in some cases be dependent on network latency" — so a write that the parser state happens
      * to swallow on this run is a write a browser can deliver on the next, and a detector that stayed silent
      * for it would be answering "no sink" because it could not ask. solve.c makes exactly that argument about
-     * its own fire oracle ("an oracle may not answer NO because it could not ask"), and §@S makes it about the
+     * its own fire oracle (`an oracle may not answer NO because it could not ask`), and §@S makes it about the
      * whole half: absence is never a safe verdict.
      *
      * AND IT IS THE VERIFYING PATH'S ARRIVAL TOO. During a candidate re-run the injected breakout is a real

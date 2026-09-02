@@ -496,8 +496,9 @@ static const char *HTML =
     /* ---- CSS Compatibility Standard §3.1 "CSS At-rules" — THE PREFIXED SPELLING OF A RULE WE HAVE ---------
        linear.app aborted the whole document at stage `create` — before one line of the page ran, so no
        endpoint, no sink and no flow — on `@-webkit-keyframes`, because CSSOM's builder had no arm for the
-       at-keyword and an unbuilt at-rule is a `@WHY`. §3.1 says that keyword "must be supported as an alias of
-       the corresponding unprefixed at-rule", so the fix is a NAME RESOLUTION and the fixture's job is to prove
+       at-keyword and an unbuilt at-rule is a `@WHY`. CSS Compatibility §3.1 lists that keyword among the
+       `-webkit-` prefixed at-rules that "must be supported as aliases of the corresponding unprefixed
+       at-rules", so the fix is a NAME RESOLUTION and the fixture's job is to prove
        it stayed one: the same interface, the same `type`, the same `<keyframes-name>` grammar, the same body,
        and the ONE thing that differs.
        THE SHEET WRITES SEVEN AT-RULES AND EXACTLY TWO OF THEM BECOME CSSOM RULES — that ratio is the design.
@@ -563,8 +564,8 @@ static const char *HTML =
        style sheet is actually used for rendering." — a statement about the UNSET case, which is the opposite
        end from the one relied on here. CSS Cascade 5 does not mention a disabled sheet at all, and the only
        place either standard states an EFFECT is a note in HTML §4.2.4 "The link element": "Removing the
-       disabled attribute dynamically … will fetch and apply the style sheet". So "a set flag keeps the sheet
-       out of the cascade" is an IMPLICATION of two notes about the other direction. That is enough for a
+       disabled attribute dynamically … will fetch and apply the style sheet". So `a set flag keeps the sheet
+       out of the cascade` is an IMPLICATION of two notes about the other direction. That is enough for a
        fixture to rest on and it is not enough to state as a quoted rule, and the difference between those two
        is exactly what the invented sentence erased. A fabricated quotation is the one citation error that
        tells its reader NOT to open the spec, which is why it outlived every number beside it.
@@ -12547,7 +12548,8 @@ static void xml_tag_selftest(void)
  * THE FIXTURE COMPARES AN ITEM STREAM AND NOT A TREE, because the walk builds no tree — so the rows that carry
  * it are the ones where two DIFFERENT documents must produce the SAME stream, and the ones where a stream must
  * have MORE items than a tree would have nodes.
- *   `<a/>` and `<a></a>` are the first: §3.1 says "The representation of an empty element is either a start-tag
+ *   `<a/>` and `<a></a>` are the first: XML §3.1 "Start-Tags, End-Tags, and Empty-Element Tags" says "The
+ * representation of an empty element is either a start-tag
  * immediately followed by an end-tag, or an empty-element tag", so [44]'s single construct reports a START and
  * then an END, and the two documents are byte-for-byte the same stream. A walk that reported [44] as one item
  * would push the difference into every consumer, which is exactly the sentence core/xml/xml_tag.h says belongs
@@ -13837,8 +13839,9 @@ static void css_property_grammar_selftest(void)
  * those two shortcuts each.
  *
  * THE PERCENT HINT IS EXERCISED THROUGH THE CONTEXT AND NOT THROUGH A FLAG, because that is how the spec poses
- * it: §10.9.1 "Calculation Contexts" says a math function "always inherits the calculation context from
- * wherever they're used", so the SAME text answers differently for `<length>` and for `<length-percentage>` —
+ * it: §10.9.1 "Calculation Contexts" opens "Numeric values can be interpreted in various calculation contexts,
+ * depending on where they are used, which defines how <percentage> values resolve", so the SAME text answers
+ * differently for `<length>` and for `<length-percentage>` —
  * `calc(1px + 50%)` is the second and not the first — and a row that only ever asked one production could not
  * tell a hint that is null from one that is wrong.
  *

@@ -282,9 +282,10 @@ static char *img_url_absolute(JSContext *ctx, const char *src, size_t src_len)
 
 /* ---- the queued element task: §4.8.4.3.5's `load` and `error` -------------------------------------------- */
 
-/* IT IS A TASK, WHICH IS WHAT §4.8.4.3.5 SAYS IT IS — every one of its event fires reads "queue an element
- * task on the DOM manipulation task source given the img element … to fire an event named load/error at the
- * img element". A synchronous fire inside the setter or inside the reply's delivery is two things wrong at
+/* IT IS A TASK, WHICH IS WHAT §4.8.4.3.5 SAYS IT IS — its `load` fire reads "queue an element task on the DOM
+ * manipulation task source given the img element to fire an event named load at the img element", and its
+ * `error` fire is that same sentence with `error` in place of `load`.
+ * A synchronous fire inside the setter or inside the reply's delivery is two things wrong at
  * once: it is the wrong position in HTML §8.1.7's event loop (a page's `img.src = u` would see its own
  * `onerror` run before the next statement), and it is unparkable — the listener list is the PAGE's, so the
  * dispatch runs the page's code and must have a flow base under it. */

@@ -6,8 +6,8 @@
  * container". When the child is CROSS-ORIGIN it lives in
  * another instance, so that clone is a CROSS-INSTANCE operation: the creator's container is serialized to the
  * child's instance, and the requesting flow SUSPENDS across the boundary the same way it suspends at an await.
- * WHICH SIDE OF THAT A CHILD FALLS ON IS ITS ORIGIN'S ANSWER, NOT A COST DECISION. This said "one WASM instance
- * is one DOCUMENT regardless of origin, so … same-origin is not an exemption", and that premise is the model
+ * WHICH SIDE OF THAT A CHILD FALLS ON IS ITS ORIGIN'S ANSWER, NOT A COST DECISION. This said that one WASM
+ * instance is one DOCUMENT regardless of origin, so same-origin was not an exemption, and that premise is the model
  * SECURITY.md rejects: an instance is an `(browsing-context group, origin)` AGENT CLUSTER, a same-origin child
  * is a second REALM in the creator's own heap (navigable.c's child_in_this_agent), and its clone is therefore
  * an ordinary in-heap copy — not because a memcpy is cheaper but because there is no boundary between them to

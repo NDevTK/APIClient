@@ -85,8 +85,9 @@
  * carry one indirectly, so the constraint is not partly checked here: it is closed.
  *
  * [WFC: Unique Att Spec] IS BY THE LITERAL Name, WHICH IS NOT THE WHOLE OF UNIQUENESS AND IS THE WHOLE OF THIS
- * SECTION'S. §3.1 says "An attribute name MUST NOT appear more than once in the same start-tag or
- * empty-element tag", and a Name is a byte run, so a byte comparison decides it exactly. Namespaces in XML 1.0
+ * SECTION'S. XML §3.1 "Start-Tags, End-Tags, and Empty-Element Tags" says "An attribute name MUST NOT appear
+ * more than once in the same start-tag or empty-element tag", and a Name is a byte run, so a byte comparison
+ * decides it exactly. Namespaces in XML 1.0
  * (Third Edition) §6.3 Uniqueness of Attributes adds a SECOND sentence — "Namespace constraint: Attributes
  * Unique" also forbids two attributes "with qualified names with the same local part and with prefixes which
  * have been bound to namespace names that are identical" — and that one cannot be answered here at all,

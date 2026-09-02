@@ -1533,9 +1533,10 @@ fail:
 }
 
 /* The FIRST FIVE STEPS of `createIndex` and the first five of `deleteIndex`, which §4.5 writes identically:
-   "let transaction be this's transaction. Let store be this's object store. If transaction is not an upgrade
-   transaction, throw an InvalidStateError. If store has been deleted, throw an InvalidStateError. If
-   transaction's state is not active, then throw a TransactionInactiveError." Both are OWNED on success. */
+   "Let transaction be this's transaction. Let store be this's object store. If transaction is not an upgrade
+   transaction, throw an "InvalidStateError" DOMException. If store has been deleted, throw an
+   "InvalidStateError" DOMException. If transaction's state is not active, then throw a
+   "TransactionInactiveError" DOMException." Both are OWNED on success. */
 static int os_upgrade_check(JSContext *ctx, JSValueConst h, JSValue *pstore, JSValue *ptx)
 {
     JSValue store = os_get(ctx, h, OS_STORE), tx = os_get(ctx, h, OS_TRANSACTION);

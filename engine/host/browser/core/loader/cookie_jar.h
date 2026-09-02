@@ -14,8 +14,9 @@
  *     same section says the sharing is deliberate and is why paths are not a security feature: "Since the
  *     cookie attribute is accessible ACROSS FRAMES, the path restrictions on cookies are only a tool to help
  *     manage which cookies are sent to which parts of the site."
- *   - CLAUDE.md's SECURITY.md section says what an instance is: "AN INSTANCE IS AN ORIGIN-KEYED AGENT CLUSTER —
- *     (browsing-context group, origin) — because that IS the spec's heap boundary." Two same-origin documents
+ *   - CLAUDE.md's SECURITY.md section says what an instance is, and the words are that document's rather than
+ *     a standard's: an instance is an ORIGIN-KEYED AGENT CLUSTER — `(browsing-context group, origin)` —
+ *     because that is the spec's heap boundary, and across one the COW delta synchronises. Two same-origin documents
  *     in one browsing-context group are ONE agent, and a cookie is a fact about an ORIGIN's host, not about a
  *     document. So `frame.contentDocument.cookie = "s=1"` followed by `document.cookie` in the parent read two
  *     jars where a browser has one, and a bundle that stores a session token from an iframe and reads it from

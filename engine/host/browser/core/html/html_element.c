@@ -1,5 +1,7 @@
-/* HTMLElement AND THE PER-TAG INTERFACES — HTML §3.2.2 and the element-interface table §4 states element by
- * element ("the a element uses the HTMLAnchorElement interface").
+/* HTMLElement AND THE PER-TAG INTERFACES — HTML §3.2.2 "Elements in the DOM" states the rule ("The nodes
+ * representing HTML elements in the DOM must implement, and expose to scripts, the interfaces listed for them
+ * in the relevant sections of this specification") and HTML §4's per-element definitions carry the list, one
+ * `DOM interface:` line each — `a` names `HTMLAnchorElement`.
  *
  * WHY THIS LAYER EXISTS AT ALL. Everything an element carries used to sit on Element.prototype, which is the DOM
  * layer, and the DOM layer does not know what HTML is. Three concrete things were wrong because of it.

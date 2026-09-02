@@ -2066,9 +2066,11 @@ JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url)
        sandboxing flags given targetNavigable's active browsing context and targetNavigable's CONTAINER". The
        container is the `<iframe>` element, and this engine's WindowProxy does not carry one: what it holds is
        the set computed when the navigable was CREATED. Those agree for every navigable created and navigated
-       in one operation, and §4.8.5 says they can disagree afterwards — "when the sandbox attribute is set or
-       changed while it has a content navigable, set the iframe sandboxing flag set … these flags only take
-       effect when the content navigable is NAVIGATED", which is this call. So a re-snapshot is owed exactly
+       in one operation, and §4.8.5 says they can disagree afterwards — "When an iframe element's sandbox
+       attribute is set or changed while it has a non-null content navigable, the user agent must parse the
+       sandboxing directive given the attribute's value and the iframe element's iframe sandboxing flag set",
+       and "These flags only take effect when the content navigable of the iframe element is navigated", which
+       is this call. So a re-snapshot is owed exactly
        when a SANDBOXED navigable is navigated a second time, and that is where it crashes rather than reading
        a set that may be one attribute write out of date. */
     DCHECK(window_proxy_creation_sandbox_flags(proxy) == 0,
