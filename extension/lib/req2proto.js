@@ -749,10 +749,17 @@ async function probeApiEndpoint(url, headers = {}, opts = {}) {
          `filter.max_results` (tag 2) ⇒ ONE record, `filter.max_results` gone. A tag identifies a field WITHIN
          ONE MESSAGE, so keying on it alone asserts that two fields of two different messages are the same one.
          THE PATH IS THE IDENTITY AND THE TAG IS A FACT ABOUT THE FIELD, merged like every other fact. Every
-         combination below is MONOTONE — it fills what one description left absent and never overwrites what
-         another stated — so the order the two probes ran in cannot change the answer. Where two descriptions
-         of ONE path state DIFFERENT tags the server has contradicted itself, and the first observation stands:
-         choosing between them would be inventing a tag neither description states on its own authority. */
+         combination below FILLS WHAT ONE DESCRIPTION LEFT ABSENT AND NEVER OVERWRITES WHAT ANOTHER STATED, so
+         where the two probes are complementary the order they ran in cannot change the answer.
+         WHERE THEY CONTRADICT EACH OTHER IT CAN, AND THAT IS THE HONEST OUTCOME RATHER THAN A GAP. Two
+         descriptions of ONE path stating DIFFERENT tags — or different types, which the generic patterns
+         reach: `'thing' is not a valid string` against `'thing' is not a valid integer` — are a server
+         contradicting itself, and the FIRST observation stands. Choosing between them on any other rule would
+         be inventing a fact neither description states on its own authority, and there is nowhere in this
+         record to carry both. testing/req2proto_dedup.cjs runs every case forwards AND with the two probe
+         answers swapped and prints which ones move, so the set of order-dependent cases is MEASURED here
+         rather than claimed: an earlier version of this comment said the order could never change the answer,
+         and the fixture refuted it on the very next run. */
       for (const field of result.fields || []) {
         /* `path` IS OURS, SO IT IS ASSERTED AND NEVER DEFAULTED. Every one of `parseJsonErrors`'s five pushes
            states it; a missing one is that producer broken, and the cost of reading it through a `||` instead

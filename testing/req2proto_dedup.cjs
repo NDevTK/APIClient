@@ -61,17 +61,26 @@ const MIME = { ".js": "text/javascript", ".html": "text/html", ".json": "applica
 
     const V = (field, desc) => ({ field, description: desc });
     const out = [];
+    const show = (r) => Object.entries(r.fields).map(([k, f]) =>
+      k + " => name=" + JSON.stringify(f.name) + " type=" + f.type + " number=" + f.number +
+      " label=" + f.label + " required=" + f.required);
+    /* EVERY CASE IS RUN FORWARDS AND WITH THE TWO PROBE ANSWERS SWAPPED, because the merge's central property
+       is that where the probes are COMPLEMENTARY the arrival order cannot change the answer — and a property
+       that is asserted in a comment instead of measured is one nobody finds out about. This found a real
+       over-claim on its first run: the merge fills what is absent and never overwrites what is stated, so two
+       descriptions CONTRADICTING each other (a path called a string by one probe and an integer by the other)
+       legitimately resolve to whichever arrived first. That is the no-invention answer, and it is order
+       dependent; the rows below say which cases move rather than leaving it to a sentence. */
     const run = async (name, strV, intV) => {
-      const r = await probeApiEndpoint("https://t.example/v1/x:list", {}, {
+      const fwd = await probeApiEndpoint("https://t.example/v1/x:list", {}, {
         fetchFn: twoAnswers(strV, intV), maxDepth: 0,
       });
-      out.push({
-        name,
-        keys: Object.keys(r.fields),
-        records: Object.entries(r.fields).map(([k, f]) =>
-          k + " => name=" + JSON.stringify(f.name) + " type=" + f.type + " number=" + f.number +
-          " label=" + f.label + " required=" + f.required),
+      const rev = await probeApiEndpoint("https://t.example/v1/x:list", {}, {
+        fetchFn: twoAnswers(intV, strV), maxDepth: 0,
       });
+      const a = show(fwd), b = show(rev);
+      const agree = a.slice().sort().join("\n") === b.slice().sort().join("\n");
+      out.push({ name, records: a, order: agree ? "agrees under swap" : "MOVES under swap: " + b.join(" | ") });
     };
 
     // 1. THE RELAY'S OWN CASE, aimed at the merge's OWN GUARD: the first description leaves `type` exactly
@@ -125,6 +134,7 @@ const MIME = { ".js": "text/javascript", ".html": "text/html", ".json": "applica
     console.log("\n── " + r.name);
     for (const rec of r.records) console.log("     " + rec);
     if (!r.records.length) console.log("     (no fields)");
+    console.log("     order: " + r.order);
   }
   await browser.close();
   srv.close();
