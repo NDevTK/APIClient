@@ -990,6 +990,12 @@ bool css_computed_models(const char *name)
            strcmp(name, "alignment-baseline") == 0 || strcmp(name, "baseline-source") == 0 ||
            strcmp(name, "text-align-all") == 0 || strcmp(name, "text-align-last") == 0 ||
            strcmp(name, "transform") == 0 ||
+           /* CSS 2.1 §17 Tables' four. Three state `Computed value: as specified` over a keyword-only `Value:`
+              line and are rows of the as-specified arm; `border-spacing` states "two absolute lengths" and has
+              its own entry, and it is IN this set because that is what routes §7.2's inheritance to that entry
+              rather than through the text one — the same reason `line-height` is in it. */
+           strcmp(name, "caption-side") == 0 || strcmp(name, "table-layout") == 0 ||
+           strcmp(name, "border-collapse") == 0 || strcmp(name, "border-spacing") == 0 ||
            css_computed_models_length(name) ||
            css_border_side_of(name, "style") >= 0;
 }
@@ -1020,11 +1026,14 @@ CssLength css_computed_length(lxb_dom_element_t *el, const char *name)
     DCHECK(css_computed_models_length(name),
            "css_computed_length was asked for a property whose `Computed value:` line is not a LENGTH. For a "
            "KEYWORD one — `display`, `float`, `position`, `box-sizing`, `direction`, `writing-mode`, "
-           "`alignment-baseline`, `baseline-source`, an "
+           "`alignment-baseline`, `baseline-source`, `caption-side`, `table-layout`, `border-collapse`, an "
            "overflow axis or a `border-*-style` — there is nothing to absolutize and nothing for a `CssPx` to "
            "carry, so `css_computed_value` is the entry and asking this one would report a keyword as the "
            "number zero. For `line-height` the line is a UNION of three shapes (css-inline-3 §5.1), which "
-           "neither of those entries can carry; `css_computed_line_height` is its own");
+           "neither of those entries can carry; `css_computed_line_height` is its own. For `border-spacing` it "
+           "is TWO absolute lengths (CSS 2.1 §17.6.1 \"The separated borders model\"), and this entry answers "
+           "ONE `CssLength` with nowhere to put the second, so it would report the horizontal spacing as the "
+           "whole of the property; `css_computed_border_spacing` answers the pair");
     css_cv_modelled(el, name);
     side = css_border_side_of(name, "width");
     cascaded = cssom_cascaded_value(el, name);
@@ -1177,6 +1186,102 @@ CssLineHeight css_computed_line_height(lxb_dom_element_t *el)
     return out;
 }
 
+/* ---- CSS 2.1 §17.6.1 "The separated borders model"'s `border-spacing` ------------------------------------- */
+
+CssBorderSpacing css_computed_border_spacing(lxb_dom_element_t *el)
+{
+    CssBorderSpacing out;
+    lxb_dom_element_t *parent;
+    char *cascaded, *sp, *first, *second;
+    CssLength h, v;
+
+    css_cv_modelled(el, "border-spacing");
+    cascaded = cssom_cascaded_value(el, "border-spacing");
+    switch (css_defaulting_of("border-spacing", cascaded)) {
+    case CSS_DEFAULTING_DECLARED:
+        break;
+    case CSS_DEFAULTING_INHERITED:
+        /* §7.2: "the property's specified and computed values are the inherited value", and §17.6.1 makes that
+           value TWO ABSOLUTE LENGTHS — so it is taken WHOLE from the parent's own answer. Serializing it and
+           re-parsing it here would resolve a `1em` against THIS element's font size, and the value being
+           inherited was absolutized against the PARENT's; §17.6's `Inherited: yes` is what makes that reachable
+           on every table in a document whose `body` declares one. */
+        free(cascaded);
+        parent = css_parent_element(el);
+        if (parent != NULL) return css_computed_border_spacing(parent);
+        cascaded = NULL;
+        break;
+    case CSS_DEFAULTING_INITIAL:
+        free(cascaded);
+        cascaded = NULL;
+        break;
+    }
+    /* §7.1's initial value, which is also §7.2's answer at the root: §17.6.1's `Initial:` line is `0`. */
+    if (cascaded == NULL) cascaded = cssom_initial_value("border-spacing");
+    DCHECK(cascaded != NULL,
+           "§7.1 produced no INITIAL value for `border-spacing`. CSS 2.1 §17.6.1 \"The separated borders "
+           "model\"' `Initial:` line is `0` and lexbor's property registry does not carry the property at all, "
+           "so the value comes from core/css/css_style_declaration.c's table of the initial values the registry "
+           "does not have — a NULL here is that row missing, and the answer would be no spacing rather than a "
+           "spacing of zero, which are different facts about a table nobody declared one on");
+    /* §17.6.1's `<length> <length>?`, split at the ONE space core/css/css_shorthand.c's grammar canonicalizes
+       the pair to. The two components are the cascade's own output — this codebase computed them — so their
+       shape is an invariant to assert rather than input to test. */
+    sp = strchr(cascaded, ' ');
+    if (sp == NULL) {
+        /* §17.6.1: "If one length is specified, it gives both the horizontal and vertical spacing." */
+        first = css_cv_strdup(cascaded);
+        second = css_cv_strdup(cascaded);
+    } else {
+        /* §17.6.1: "If two are specified, the first gives the horizontal spacing and the second the vertical
+           spacing." */
+        *sp = '\0';
+        first = css_cv_strdup(cascaded);
+        second = css_cv_strdup(sp + 1);
+        DCHECK(strchr(sp + 1, ' ') == NULL,
+               "a specified `border-spacing` carries a THIRD component value. CSS 2.1 §17.6.1 \"The separated "
+               "borders model\"' `Value:` line is `<length> <length>?`, and core/css/css_shorthand.c's grammar "
+               "drops a declaration with more — so a third component here means the cascade handed back a "
+               "value that did not come through that grammar, and the halves this split makes are not the "
+               "lengths the author wrote");
+    }
+    free(cascaded);
+    h = computed_length(el, "border-spacing", first);
+    v = computed_length(el, "border-spacing", second);
+    /* §17.6.1's `Percentages:` line is `N/A` and its `Value:` line admits no keyword, so BOTH components
+       absolutize — there is no arm of this property's computed value that survives as anything else. A
+       percentage or a calculation reaching here is the grammar and this derivation having come apart, and
+       reading `.px` past one would report a length the declaration does not state: `css_length.h` keeps a
+       calculation's unresolved percentage in `pct` and its dimension residue in `px`, so the number would be
+       real, wrong, and indistinguishable from a measured one. */
+    DCHECK(h.kind == CSS_LENGTH_ABSOLUTE && v.kind == CSS_LENGTH_ABSOLUTE,
+           "a `border-spacing` component computed to something that is not an absolute length, and CSS 2.1 "
+           "§17.6.1 \"The separated borders model\" defines no such value: its `Value:` line is `<length> "
+           "<length>?` and its `Percentages:` line is `N/A`. core/css/css_shorthand.c's grammar admits a "
+           "component only where `css_length_is_length` does, and that predicate answers TRUE for a MATH "
+           "FUNCTION on its css-values-4 §10.9 \"Type Checking\" type — which it computes with no property "
+           "context, so a `calc()` mixing a percentage into a length type passes it and arrives here as "
+           "CSS_LENGTH_CALCULATED. NARROW THE GRAMMAR rather than widening this: §17.6.1 resolves percentages "
+           "against nothing, so the declaration is invalid and belongs dropped at the cascade");
+    /* §17.6.1: "Lengths may not be negative." css-values-4 §5.1 "Range Restrictions and Range Definition
+       Notation" says what a value outside a property's range IS rather than what to do with it here — "If the
+       value is outside the allowed range, then unless otherwise specified, the declaration is invalid and must
+       be ignored" — so the answer is a DROPPED DECLARATION at the cascade and never a clamp at the computed
+       value, which would report a distance §17.6.1 defines no table as having. */
+    DCHECK(h.px.px >= 0.0 && v.px.px >= 0.0,
+           "a `border-spacing` computed NEGATIVE, and CSS 2.1 §17.6.1 \"The separated borders model\" states "
+           "\"Lengths may not be negative\" — so this declaration is one css-values-4 §5.1 \"Range "
+           "Restrictions and Range Definition Notation\" makes invalid, and an invalid declaration is dropped "
+           "rather than computed. core/css/css_shorthand.c's grammar tests the SIGN OF THE WRITTEN TOKEN, "
+           "which catches `-2px` and cannot catch `calc(1px - 2px)`: the sign of a math function is not in its "
+           "text and is known only once core/css/css_math.h has evaluated it. BUILD the range check where the "
+           "evaluation already happens, so the declaration is dropped at the cascade for both spellings, and "
+           "this assert then guards an impossible state rather than a reachable one");
+    out.horizontal = h.px;
+    out.vertical = v.px;
+    return out;
+}
+
 char *css_computed_value(lxb_dom_element_t *el, const char *name)
 {
     char *spec;
@@ -1202,6 +1307,17 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name)
               "environment fact it derives from (the reader's own default font size reaches a page through "
               "`line-height: 2em` exactly as it reaches one through `margin: 2em`), and a `<number>` is not a "
               "length at all. Ask `css_computed_line_height`, which answers the union");
+    /* AND THE FOURTH SHAPE LEAVES HERE BY NAME for the same reason. CSS 2.1 §17.6.1's `Computed value:` line
+       is "two absolute lengths", so neither of this file's two shapes can carry it: text would drop both
+       environment facts, and `css_computed_length` has one slot for two numbers. */
+    if (strcmp(name, "border-spacing") == 0)
+        DFAIL("`border-spacing`'s computed value was asked for through the TEXT entry. CSS 2.1 §17.6.1 \"The "
+              "separated borders model\" gives it a `Computed value:` of \"two absolute lengths\" — a PAIR, of "
+              "which this entry can carry neither half without losing what it derives from: a `border-spacing: "
+              "1em 2vw` is the reader's own default font size and the viewport's width, and serializing the "
+              "pair hands a page two numbers with both domains dropped. Ask `css_computed_border_spacing`, "
+              "which answers both halves as `CssPx` and doubles §17.6.1's one-length form into the two the "
+              "computed value has");
     spec = css_cv_specified(el, name);
     DCHECK(spec != NULL,
            "§7's defaulting produced no SPECIFIED value for a keyword-valued property this component models — "
@@ -1273,11 +1389,30 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name)
        two of the three would leave one third of one property's answer a specified value wearing the word
        computed. They are also what CSS 2 §10.8's step 2 will read when its line boxes exist ("the inline-level
        boxes are aligned vertically according to their `vertical-align` property"), and that step needs the
-       ALIGNMENT BASELINE and the SHIFT apart, which is exactly the split §4.2 makes. */
+       ALIGNMENT BASELINE and the SHIFT apart, which is exactly the split §4.2 makes.
+       CSS 2.1 §17.4.1 "Caption position and alignment" (`caption-side`, `top | bottom`), §17.5.2 "Table width
+       algorithms: the 'table-layout' property" (`table-layout`, `auto | fixed`) and §17.6 "Borders"
+       (`border-collapse`, `collapse | separate`) each state `Computed value: as specified` over a keyword-only
+       `Value:` line, so the as-specified arm is the whole of their rule too. THEY ARE HERE BECAUSE THREE
+       ALGORITHMS ASK FOR ONE OF THEM BY NAME AND COULD NOT: §17.5.2 cannot choose between §17.5.2.1 "Fixed
+       table layout" and §17.5.2.2 "Automatic table layout" without `table-layout` — the property the section is
+       titled after, and the one input that decides which of its two algorithms runs at all; §17.6 cannot say
+       which of its two border models a table is in without `border-collapse`, which is what §17.6.1 "The
+       separated borders model" and §17.6.2 "The collapsing border model" are the two arms of; and §17.4's
+       table wrapper box cannot order its children — "the wrapper contains the table box itself and any caption
+       boxes (in document order)" — without `caption-side`, whose two values are the whole of "Positions the
+       caption box above the table box" and "Positions the caption box below the table box".
+       LEXBOR'S PROPERTY REGISTRY CARRIES NONE OF THE THREE, which is why each needed two rows elsewhere before
+       this one meant anything: core/css/css_shorthand.c owns their `Value:` grammars, as it owns the eight
+       border longhands' for the identical reason, and core/css/css_style_declaration.c states their `Initial:`
+       values, without which §7.1 had nothing to fall to and the cascade answered NULL for every element that
+       declares none — which is every element on almost every page. */
     DCHECK(strcmp(name, "float") == 0 || strcmp(name, "position") == 0 || strcmp(name, "box-sizing") == 0 ||
                strcmp(name, "white-space") == 0 || strcmp(name, "direction") == 0 ||
                strcmp(name, "writing-mode") == 0 || strcmp(name, "alignment-baseline") == 0 ||
-               strcmp(name, "baseline-source") == 0 || css_border_side_of(name, "style") >= 0,
+               strcmp(name, "baseline-source") == 0 || strcmp(name, "caption-side") == 0 ||
+               strcmp(name, "table-layout") == 0 || strcmp(name, "border-collapse") == 0 ||
+               css_border_side_of(name, "style") >= 0,
            "a property this component claims to model reached the as-specified arm without a `Computed value: "
            "as specified` line to justify it — css_computed_models and this switch are one list and have come "
            "apart");
@@ -1320,6 +1455,11 @@ CssResolvedKind css_resolved_kind(const char *name)
         if (strcmp(USED_IF_POSITIONED[i], name) == 0) return CSS_RESOLVED_USED_IF_POSITIONED;
     if (strcmp(name, "line-height") == 0) return CSS_RESOLVED_LINE_HEIGHT;
     if (strcmp(name, "transform") == 0) return CSS_RESOLVED_TRANSFORM;
+    /* §9 puts `border-spacing` under "Any other property", so its resolved value IS its computed value — and
+       the kind exists anyway because that computed value is a PAIR, which `css_resolved_computed` below has no
+       shape for: it asks `css_computed_models_length` and then `css_computed_value`, and this property answers
+       neither. The row is the same accommodation `line-height` gets one line up, for the same reason. */
+    if (strcmp(name, "border-spacing") == 0) return CSS_RESOLVED_BORDER_SPACING;
     return CSS_RESOLVED_COMPUTED;
 }
 
@@ -1671,6 +1811,51 @@ JSValue css_resolved_value(JSContext *ctx, lxb_dom_element_t *el, const char *na
               "INTERSECTION OBSERVER §3.2.9 \"Calculate a target's Effective Transformation Matrix\" — so the "
               "MATRIX is the component "
               "and this member's string is one reader of it");
+        break;
+    }
+    case CSS_RESOLVED_BORDER_SPACING: {
+        /* §9 makes this property's resolved value its COMPUTED value, and CSS 2.1 §17.6.1 "The separated
+           borders model" makes that "two absolute lengths" — so §6.7.2 serializes both, in §17.6.1's own order
+           (horizontal first), which is the order the `Value:` line is read in and the order every user agent
+           reports. The computed value is asked for AS ONE rather than re-derived from the cascade here, for
+           the same reason the transform arm above does: §17.6.1's derivation absolutizes, and a resolved value
+           built from the SPECIFIED value would report a `1em` spacing as `1em`. */
+        CssBorderSpacing bs = css_computed_border_spacing(el);
+        char *h = css_length_serialize_px(bs.horizontal.px);
+        char *v = css_length_serialize_px(bs.vertical.px);
+        char *both;
+        size_t n = strlen(h) + strlen(v) + 2;
+
+        both = malloc(n);
+        CHECK(both != NULL, "cssom: OOM serializing a `border-spacing` — a dropped half would report one "
+                            "spacing where CSS 2.1 §17.6.1 defines two");
+        snprintf(both, n, "%s %s", h, v);
+        free(h);
+        free(v);
+        /* THE STRING IS A FUNCTION OF BOTH LENGTHS' FACTS AND THE SEAM TAKES ONE SET, which is why this is a
+           crash and not a nested pair of wraps. core/frame/viewport.h states the contract in its own words —
+           "A LENGTH IS A FUNCTION OF A SET OF THEM, AND THE SET IS ONE DOMAIN" — and `viewport_env_derived`
+           ends in `concolic_source_wrap_joint` over exactly one set, so wrapping twice would make the second
+           call's EXAMPLE the first call's concolic rather than widening one domain by the other's members.
+           The common case carries no fact at all and needs none: §17.6.1's initial `0`, and every declaration
+           in an absolute unit, reach here with `CSS_ENV_NONE` on both halves, and the string then crosses as
+           itself — which css_length.h calls a positive statement rather than a missing domain. */
+        if (bs.horizontal.env == CSS_ENV_NONE && bs.vertical.env == CSS_ENV_NONE) {
+            out = JS_NewString(ctx, both);
+            free(both);
+            return out;
+        }
+        free(both);
+        DFAIL("a `border-spacing` whose computed value DERIVES FROM AN ENVIRONMENT FACT reached the page, and "
+              "core/frame/viewport.h's one seam cannot express it. `border-spacing: 1em 2vw` is the reader's "
+              "own default font size AND the viewport's width in ONE string, so its domain is the UNION of two "
+              "fact sets — and `viewport_env_derived` takes ONE `CssPx`, whose `env`/`realm` pair css_length.h "
+              "says is written by `css_px_env` and by nothing else, so neither assembling a third `CssPx` "
+              "field-by-field nor wrapping twice is available: the second wrap would take the first wrap's "
+              "concolic as its own example. BUILD the union at the seam — an entry taking N lengths that ORs "
+              "their facts, asserts they name one realm, and calls `concolic_source_wrap_joint` ONCE over the "
+              "combined set — and this arm becomes one call to it. It is not this property's problem alone: "
+              "every multi-length computed value CSS defines reaches the page the same way");
         break;
     }
     }

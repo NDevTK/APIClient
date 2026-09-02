@@ -107,6 +107,40 @@ static const char *const LINE_STYLE_KEYWORDS[] = {
 };
 static const char *const LINE_WIDTH_KEYWORDS[] = { "thin", "medium", "thick" };
 
+/* CSS 2.1 §17 Tables' FOUR TABLE PROPERTIES, whose grammars are here for exactly the reason the two border
+   lists above are, and the reason is the same sentence about the same registry: lexbor carries NONE of these
+   four, so `caption-side: bottom` reaches the cascade as a `__CUSTOM` holding the name and the RAW TOKENS with
+   nothing having validated them and nothing having lower-cased them. A `caption-side: BOTTOM` would then fail
+   to compare equal to the keyword it is, and a `table-layout: nope` would reach the computed value as a
+   keyword no grammar admits — which is the state every one of the four is in until this row exists.
+   THE THREE KEYWORD-VALUED ONES SHARE A TABLE AND `border-spacing` DOES NOT, and the split is their own
+   `Value:` lines rather than a convenience: CSS 2.1 §17.4.1 Caption position and alignment gives
+   `caption-side` `top | bottom`, CSS 2.1 §17.5.2 Table width algorithms: the 'table-layout' property gives
+   `table-layout` `auto | fixed`, and CSS 2.1 §17.6 Borders gives `border-collapse` `collapse | separate` —
+   three two-keyword choices with no multiplier — while CSS 2.1 §17.6.1 The separated borders model gives
+   `border-spacing` `<length> <length>?`, which is a multiplier over a production and a member of no set.
+   `inherit` is on all four `Value:` lines and is NOT in these sets: CSS Cascade §7.3's keywords are a value
+   for every property in CSS and are handled once, ahead of every property's own grammar, below. */
+static const char *const CAPTION_SIDE_KEYWORDS[] = { "top", "bottom" };
+static const char *const TABLE_LAYOUT_KEYWORDS[] = { "auto", "fixed" };
+static const char *const BORDER_COLLAPSE_KEYWORDS[] = { "collapse", "separate" };
+
+static const struct { const char *name; const char *const *kw; unsigned n; } TABLE_KEYWORD_LONGHANDS[] = {
+    { "caption-side", CAPTION_SIDE_KEYWORDS, CSS_SH_N(CAPTION_SIDE_KEYWORDS) },
+    { "table-layout", TABLE_LAYOUT_KEYWORDS, CSS_SH_N(TABLE_LAYOUT_KEYWORDS) },
+    { "border-collapse", BORDER_COLLAPSE_KEYWORDS, CSS_SH_N(BORDER_COLLAPSE_KEYWORDS) },
+};
+
+/* The row `longhand` names in the table above, or -1. */
+static int table_keyword_longhand_index(const char *longhand)
+{
+    unsigned i;
+
+    for (i = 0; i < CSS_SH_N(TABLE_KEYWORD_LONGHANDS); i++)
+        if (strcmp(TABLE_KEYWORD_LONGHANDS[i].name, longhand) == 0) return (int)i;
+    return -1;
+}
+
 /* CSS 2.1 §8.3 and §8.4's FOUR-SIDE ROTATION, which `margin` and `padding` state in identical words: "If there
    is only one component value, it applies to all sides. If there are two values, the top and bottom … are set
    to the first value and the right and left … to the second. If there are three values, the top is set to the
@@ -639,11 +673,75 @@ char *css_shorthand_component(const char *shorthand, const char *value, const ch
     return css_sh_strdup(kw[axis]);
 }
 
+/* CSS 2.1 §17's four table longhands' OWN value grammars, over the table above. The answer is the SPECIFIED
+   value — canonicalized where the grammar is a keyword, verbatim where it is a length, which is the same split
+   the border longhands take one function down — or NULL for a value the grammar does not admit, which is a
+   declaration CSS Syntax drops. Only ever reached for a name `css_shorthand_validates_longhand` answers TRUE
+   for, and CSS Cascade §7.3's keywords have already been taken by the caller. */
+static char *table_longhand_value(const char *longhand, const char *value)
+{
+    const char *w[2], *kw;
+    size_t wl[2];
+    int idx = table_keyword_longhand_index(longhand), n, i;
+    char *out;
+    size_t len;
+
+    if (idx >= 0) {
+        /* Each of the three `Value:` lines is a two-keyword choice carrying NO multiplier, so a second
+           component value is an invalid declaration and css_words reports it by refusing to write past `max`. */
+        if (css_words(value, w, wl, 1) != 1) return NULL;
+        kw = css_sh_keyword(TABLE_KEYWORD_LONGHANDS[idx].kw, TABLE_KEYWORD_LONGHANDS[idx].n, w[0], wl[0]);
+        return kw ? css_sh_strdup(kw) : NULL;
+    }
+    DCHECK(strcmp(longhand, "border-spacing") == 0,
+           "a longhand outside CSS 2.1 §17 Tables' four reached the table-property grammar. This function and "
+           "`css_shorthand_validates_longhand`'s §17 arm are one list and have come apart, and the failure is "
+           "silent in the direction that matters: a property with a grammar of its own would have that grammar "
+           "replaced by `<length> <length>?`");
+    /* CSS 2.1 §17.6.1 The separated borders model's `<length> <length>?`, and its own two sentences about what
+       the components mean: "If one length is specified, it gives both the horizontal and vertical spacing. If
+       two are specified, the first gives the horizontal spacing and the second the vertical spacing." Which of
+       the two a reader gets is the COMPUTED value's question and not this one — this is the specified value,
+       so a one-length declaration stays one length and core/css/css_computed_value.h's entry is what doubles
+       it. A THIRD component is an invalid declaration, which css_words reports by refusing to write past 2. */
+    n = css_words(value, w, wl, 2);
+    if (n < 1) return NULL;
+    for (i = 0; i < n; i++) {
+        char *probe;
+        bool ok;
+
+        /* §17.6.1: "Lengths may not be negative." css_length_is_length answers the PRODUCTION and not the
+           range, so the sign is tested here exactly as css-backgrounds-3 §3.3's is for a border width. */
+        if (wl[i] > 0 && w[i][0] == '-') return NULL;
+        probe = css_sh_dupn(w[i], wl[i]);
+        ok = css_length_is_length(probe);
+        free(probe);
+        if (!ok) return NULL;
+    }
+    /* Rebuilt from the components rather than copied from `value`, so the specified value carries ONE space
+       between two lengths however the author spaced the declaration — the same canonicalization every keyword
+       grammar here performs, applied to the one production that has no keyword to canonicalize to. */
+    len = wl[0] + ((n > 1) ? wl[1] + 1 : 0);
+    out = malloc(len + 1);
+    CHECK(out != NULL, "cssom: OOM copying a `border-spacing` — a dropped one would read as undeclared, which "
+                       "is CSS 2.1 §17.6.1's initial `0` and a different distance");
+    memcpy(out, w[0], wl[0]);
+    if (n > 1) {
+        out[wl[0]] = ' ';
+        memcpy(out + wl[0] + 1, w[1], wl[1]);
+    }
+    out[len] = '\0';
+    return out;
+}
+
 bool css_shorthand_validates_longhand(const char *longhand)
 {
     int side, part;
 
     DCHECK(longhand != NULL, "the longhand-grammar question was asked about a NULL property name");
+    /* CSS 2.1 §17 Tables' four, whose grammars are above and whose registry gap is the one the border
+       longhands have — see the table for the sentence, which is the same sentence. */
+    if (table_keyword_longhand_index(longhand) >= 0 || strcmp(longhand, "border-spacing") == 0) return true;
     /* SEVEN OF css-backgrounds-3 §2.10's EIGHT, for the same reason and with the same split: lexbor's registry
        carries `background-color` and none of the other seven, so §2.10's component owns their grammars and
        lexbor's parser owns the colour's. The question is FORWARDED rather than answered here, because the list
@@ -675,6 +773,10 @@ char *css_shorthand_longhand_value(const char *longhand, const char *value)
     /* CSS Cascade §7.3's keywords are a value for EVERY property, so they precede the property's own grammar
        and are handed on for §7's DEFAULTING step to resolve (css_computed_value.h says where that crashes). */
     if (css_wide_keyword(value)) return css_sh_strdup(value);
+    /* CSS 2.1 §17 Tables' four, AFTER §7.3's keywords and before the border arm, because `border-spacing`'s
+       grammar needs two component slots and the border longhands' needs one. */
+    if (table_keyword_longhand_index(longhand) >= 0 || strcmp(longhand, "border-spacing") == 0)
+        return table_longhand_value(longhand, value);
     /* `<line-width>` and `<line-style>` are each ONE component value — no multiplier — so a second one is an
        invalid declaration and css_words reports it by refusing to write past `max`. */
     n = css_words(value, w, wl, 1);
@@ -1414,7 +1516,20 @@ bool css_shorthand_complete_for(const char *longhand)
        along and simply set no longhand — which is the quietest shape this defect has: nothing was dropped and
        nothing was unknown, the value was just filed under a name no consumer reads. CSS 2.2 §9.4.2's "their
        horizontal distribution within the line box is determined by the 'text-align' property" would have read
-       `start` for every line box in every document, with a real coordinate to show for it. */
+       `start` for every line box in every document, with a real coordinate to show for it.
+
+       CSS 2.1 §17 Tables' `caption-side`, `table-layout`, `border-collapse` and `border-spacing` — NO
+       shorthand in CSS sets any of the four. §17.4.1 Caption position and alignment, §17.5.2 Table width
+       algorithms: the 'table-layout' property, §17.6 Borders and §17.6.1 The separated borders model each
+       declare one of them as a standalone property with its own `Value:` line, and CSS 2.1 states no container
+       over any of them. THE ONE THAT LOOKS LIKE A COUNTEREXAMPLE IS `border`, AND IT IS NOT ONE: css-
+       backgrounds-3 §3.4 "Border Shorthand Property: the border property" sets the twelve `border-*-width`,
+       `border-*-style` and `border-*-color` longhands — the same twelve this list already records three
+       shorthands for — and neither `border-collapse` nor `border-spacing` is among them. The two share a
+       PREFIX with that family and nothing else: they are §17.6's two properties about which BORDER MODEL a
+       table is in and how far apart separated cell borders sit, not about any one box's own border edge.
+       All four are absent from lexbor's property registry, so their grammars are this component's (the §17
+       table above) and a declaration reaching the cascade has been through one. */
     static const char *const RECORDED[] = {
         "overflow-x", "overflow-y", "display", "float", "position", "box-sizing", "color", "white-space",
         "direction", "writing-mode", "transform",
@@ -1431,6 +1546,7 @@ bool css_shorthand_complete_for(const char *longhand)
         "border-top-width", "border-right-width", "border-bottom-width", "border-left-width",
         "border-top-style", "border-right-style", "border-bottom-style", "border-left-style",
         "border-top-color", "border-right-color", "border-bottom-color", "border-left-color",
+        "caption-side", "table-layout", "border-collapse", "border-spacing",
     };
     unsigned i;
 

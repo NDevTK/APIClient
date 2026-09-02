@@ -1853,6 +1853,25 @@ static const struct { const char *name; const char *initial; } CSSD_INITIAL_UNRE
        real name and the raw value), so this row completes the pair rather than standing in for it: declared
        values come through the cascade and undeclared ones come through here. */
     { "transform", "none" },
+    /* CSS 2.1 §17 Tables' four, each straight off its own `Initial:` line: §17.4.1 Caption position and
+       alignment gives `caption-side` `top`, §17.5.2 Table width algorithms: the 'table-layout' property gives
+       `table-layout` `auto`, §17.6 Borders gives `border-collapse` `separate`, and §17.6.1 The separated
+       borders model gives `border-spacing` `0`.
+       THE ROWS ARE WHAT MAKE THESE PROPERTIES ANSWERABLE AT ALL, exactly as `transform`'s does one line up and
+       for the identical reason: lexbor's registry carries none of the four, so with no row here css-cascade-5
+       §7.1 has no initial value to fall to and the cascade answers NULL for every element that does not
+       declare one — which is every element on almost every page. That is not `separate`, and a §17.6 consumer
+       asking which of the two border models a table is in would get an answer it could not read. THREE OF THE
+       FOUR ARE ALSO INHERITED (core/css/css_defaulting.c carries `caption-side`, `border-collapse` and
+       `border-spacing` on their `Inherited: yes` lines; `table-layout`'s line is `Inherited: no`), and §7.2
+       answers the ROOT element with the initial value — so without these rows the inherited three had no base
+       case either and the whole chain answered NULL from the root down.
+       `border-spacing`'s `0` IS A LENGTH WITH NO UNIT AND THAT IS THE SPEC'S OWN TEXT — css-values-4 §6
+       "Distance Units: the <length> type" states "For zero lengths the unit identifier is optional" — and
+       core/css/css_computed_value.h's entry is what turns it into the two absolute lengths §17.6.1's
+       `Computed value:` line asks for. */
+    { "caption-side", "top" }, { "table-layout", "auto" },
+    { "border-collapse", "separate" }, { "border-spacing", "0" },
 };
 
 /* THE INITIAL VALUES LEXBOR'S REGISTRY GETS WRONG, each with the answer it gives today so the row EXPIRES.

@@ -115,7 +115,8 @@ typedef enum {
     CSS_RESOLVED_USED_IF_RENDERED,  /* width/height/margin/padding: used, unless display is none or contents */
     CSS_RESOLVED_USED_IF_POSITIONED,/* the insets: used, unless the element is not positioned */
     CSS_RESOLVED_LINE_HEIGHT,       /* `normal` if the computed value is normal, the used value otherwise */
-    CSS_RESOLVED_TRANSFORM          /* css-transforms §3.2: a <transform-list> resolves to one matrix() */
+    CSS_RESOLVED_TRANSFORM,         /* css-transforms §3.2: a <transform-list> resolves to one matrix() */
+    CSS_RESOLVED_BORDER_SPACING     /* CSSOM §9 "Resolved Values"' computed-value arm, over a PAIR of lengths */
 } CssResolvedKind;
 
 CssResolvedKind css_resolved_kind(const char *name);
@@ -202,5 +203,38 @@ CssPx css_font_descent_px(lxb_dom_element_t *el);
    A VERTICAL WRITING MODE CRASHES in the direction resolution this shares with `ch` and `ic`, which is where
    css-writing-modes-4 §5.1's `text-orientation` is named as the row to add. */
 CssPx css_font_advance_measure_px(lxb_dom_element_t *el, uint32_t codepoint);
+
+/* CSS 2.1 §17.6.1 "The separated borders model" — THE FOURTH SHAPE A COMPUTED VALUE COMES IN, and the reason
+ * this property gets an entry of its own rather than a row in either list above. §17.6.1's `Computed value:`
+ * line is "two absolute lengths", and TWO is the whole of the difficulty: `css_computed_value` answers TEXT,
+ * which would carry the numbers and drop the environment facts they derive from, and `css_computed_length`
+ * answers ONE `CssLength` and has nowhere to put the second. Both refuse this property by name and say so, for
+ * the same reason both refuse `line-height` — a shape that cannot carry an answer must not be handed one.
+ *
+ * WHICH LENGTH IS WHICH IS §17.6.1'S OWN SENTENCE, AND THE ONE-LENGTH CASE IS A DERIVATION RATHER THAN A COPY:
+ * "If one length is specified, it gives both the horizontal and vertical spacing. If two are specified, the
+ * first gives the horizontal spacing and the second the vertical spacing." So a single specified length is
+ * DOUBLED here, which is a rule the spec states — the computed value has two lengths whatever the declaration
+ * had, which is exactly why the `Computed value:` line says "two" and the `Value:` line says `<length>?`.
+ *
+ * EACH IS A `CssPx` AND CARRIES ITS OWN ENVIRONMENT FACT, for the same reason every other absolute length this
+ * file answers does: `border-spacing: 1em 2vw` is one reader's default font size and one viewport width, and a
+ * page reading the pair back through getComputedStyle is reading both of those facts — a bare pair of doubles
+ * would be the numbers with the domains behind them dropped.
+ *
+ * THERE IS NO PERCENTAGE ARM AND NO KEYWORD ARM, which is what makes this a PAIR rather than a third union:
+ * §17.6.1's `Value:` line is `<length> <length>?` and its `Percentages:` line is `N/A`, so every arm of the
+ * derivation ends in an absolute length and there is nothing left unresolved for a used value to finish. */
+typedef struct {
+    CssPx horizontal;   /* §17.6.1's "the first gives the horizontal spacing" */
+    CssPx vertical;     /* §17.6.1's "the second the vertical spacing" */
+} CssBorderSpacing;
+
+/* §17.6.1's computed value of `border-spacing` on `el`, with CSS Cascade §7's defaulting applied. §7.2's
+   inherited value is taken WHOLE — the parent's own answer, in this same shape — for the same reason
+   `css_computed_length` and `css_computed_line_height` take theirs whole: serializing it would drop the two
+   environment facts and re-parsing it would resolve `1em` against the WRONG element's font size, since the
+   inherited value is the parent's computed value and the parent's `em` was its own. */
+CssBorderSpacing css_computed_border_spacing(lxb_dom_element_t *el);
 
 #endif
