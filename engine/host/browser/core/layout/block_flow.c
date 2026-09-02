@@ -15,6 +15,7 @@
 #include "core/layout/box_subject.h"
 #include "core/layout/line_box.h"
 #include "core/layout/table_box.h"
+#include "core/layout/table_wrapper.h"
 #include "core/layout/used_value.h"
 
 static char *bf_computed(lxb_dom_element_t *el, const char *name)
@@ -151,7 +152,14 @@ static bool bf_no_collapse_through_edges(lxb_dom_element_t *el)
     if (!bf_computed_is(el, "float", "none")) return true;
     d = bf_computed(el, "display");
     bfc = strcmp(d, "inline-block") == 0 || strcmp(d, "flow-root") == 0 ||
-          strcmp(d, "table-cell") == 0 || strcmp(d, "table-caption") == 0;
+          strcmp(d, "table-cell") == 0 || strcmp(d, "table-caption") == 0 ||
+          /* CSS 2.1 §17.4 Tables in the visual formatting model states it of the wrapper in its own sentence —
+             "The table wrapper box establishes a block formatting context" — and that box is what §9.4.1's
+             stack holds for both spellings, so §8.3.1's run cannot reach through either. It is listed here
+             rather than left to §9.4.1's own enumeration because §9.4.1 names "block containers … that are not
+             block boxes" and a table wrapper is a block box that is not a block container, which is the one
+             shape that list does not reach. */
+          table_wrapper_generates(d);
     free(d);
     if (bfc) return true;
     if (bf_computed_is(el, "overflow-x", "visible") && bf_computed_is(el, "overflow-y", "visible")) return false;
@@ -359,40 +367,21 @@ static BfChildKind bf_element_child(lxb_dom_element_t *el)
        §9.4.1's stack at all — §9.4.2's line boxes hold it, and which of the two formatting contexts this block
        container establishes is decided over the WHOLE child list rather than here (bf_content_kind). */
     if (inline_level) return BF_CHILD_INLINE;
-    if (table_box_kind_generates_table_box(table))
-        DFAILF("%s: "
-              "this child generates a TABLE box, and the box §9.4.1's stack has to place is NOT that box. CSS "
-              "2.1 §17.4 Tables in the visual formatting model puts another one between them: \"the table "
-              "generates a principal block box called the table wrapper box that contains the table box itself "
-              "and any caption boxes (in document order)\", and \"The table wrapper box is a 'block' box if the "
-              "table is block-level, and an 'inline-block' box if the table is inline-level.\" So the box on "
-              "this stack is that WRAPPER — a block box no element in the tree names — its height is §10.6.3's "
-              "over its own in-flow children, and those children are the caption boxes and the table box. "
-              "READING THE TABLE ELEMENT AS THE BOX IS A DIFFERENT RECTANGLE AND NOT AN APPROXIMATION OF THIS "
-              "ONE: §17.4 states which declarations land where — \"The computed values of properties "
-              "'position', 'float', 'margin-*', 'top', 'right', 'bottom', and 'left' on the table element are "
-              "used on the table wrapper box and not the table box; all other values of non-inheritable "
-              "properties are used on the table box and not the table wrapper box\" — so this walk's margin "
-              "run (§8.3.1) belongs to the wrapper and every border, padding and height belongs to the box "
-              "inside it. "
-              "THE TABLE BOX'S OWN HEIGHT IS §17.5.3 Table height algorithms' AND NOT §10.6.3's: \"A value of "
-              "'auto' means that the height is the sum of the row heights plus any cell spacing or borders. "
-              "Any other value is treated as a minimum height.\" A row's height is \"the maximum of the row's "
-              "computed 'height', the computed 'height' of each cell in the row, and the minimum height (MIN) "
-              "required by the cells\", and \"In CSS 2.1, the height of a cell box is the minimum height "
-              "required by the content\" — which is a block container's content height, so it is THIS WALK, "
-              "run over each cell. "
-              "THE BOX STRUCTURE IS NOT WHAT IS MISSING ANY MORE, and an earlier form of this crash said it "
-              "was: core/layout/table_box.h answers §17.2.1's first two stages — this table's rows in §17.2's "
-              "display order, each carrying the cells that section's second stage leaves it with, and §17.4's "
-              "caption boxes beside them. WHAT IS MISSING IS THE CELL'S USED WIDTH, without which its content "
-              "height is a height of nothing: a cell is as wide as the column it occupies, which column that "
-              "is comes from §17.5 Visual layout of table contents' grid (its rule 5 defers the span count to "
-              "the document language, so HTML's `rowspan` and `colspan` are the input), and the column's width "
-              "is §17.5.2 Table width algorithms: the 'table-layout' property's two algorithms. BUILD §17.5's "
-              "grid over table_box.h's rows, then §17.5.2, then §17.5.3 — and §17.4's wrapper box, which "
-              "core/layout/used_value.c's containing-block walk is stopped on for the same reason",
-              box_subject(el, nbuf, sizeof nbuf));
+    /* CSS 2.1 §17.4 Tables in the visual formatting model ANSWERS THIS CLASSIFICATION, and it used to abort
+       here. The box §9.4.1's stack places for a `display: table` element is not the table box at all: "the
+       table generates a principal block box called the table wrapper box that contains the table box itself
+       and any caption boxes (in document order)", and "The table wrapper box is a 'block' box if the table is
+       block-level" — so it is an ordinary block-level box on this stack, exactly like a `<div>`.
+       AN `inline-table` LEFT THROUGH `inline_level` ABOVE AND THAT IS THE SAME SENTENCE'S OTHER HALF — its
+       wrapper is "an 'inline-block' box if the table is inline-level", which is inline-level, so §9.4.2's line
+       boxes hold it and core/layout/line_box.c is where its own missing number is named. Neither spelling
+       needs an arm here any more.
+       WHAT THIS DOES NOT DECIDE is how TALL that wrapper is, which is `bf_box`'s question and crashes there —
+       naming §17.5 with the wrapper's own structure in hand instead of naming a box type this walk could not
+       classify. §9.2.1 is why one test could not answer both: "Except for table boxes, which are described in
+       a later chapter, and replaced elements, a block-level box is also a block container box", so a table is
+       block-LEVEL without being a block CONTAINER, and a walk that asked only the second stopped here. */
+    if (table_box_kind_generates_table_box(table)) return BF_CHILD_BLOCK;
     if (table != TABLE_BOX_NOT_A_TABLE_BOX)
         DFAILF("%s: "
               "this child is a TABLE-INTERNAL box — a row, a cell, a row group, a column, a column group or a "
@@ -1004,6 +993,10 @@ static BfBox bf_box(lxb_dom_element_t *el, bool baseline)
     bool sunk = false;
     char *d = bf_computed(el, "display");
     bool container = block_flow_display_is_block_container(d);
+    /* §17.4's wrapper is decided from the same string and BEFORE it is released, for the reason the two arms
+       below are written apart: a table is block-LEVEL and is not a block CONTAINER (§9.2.1), so `container`
+       cannot answer for it and the arm that handles a non-container is about flex and grid. */
+    bool wrapper = table_wrapper_generates(d);
     char nbuf[160];
     BfBox b;
 
@@ -1014,6 +1007,48 @@ static BfBox bf_box(lxb_dom_element_t *el, bool baseline)
     b.collapse_through = false;
     b.last_baseline = css_px(0.0);
     b.has_line_box = false;
+    /* CSS 2.1 §17.4 Tables in the visual formatting model's TABLE WRAPPER BOX, which is what §9.4.1's stack
+       placed and which is NOT the table box. Its two margins are already read above and that is §17.4's rule
+       running rather than an accident: "The computed values of properties 'position', 'float', 'margin-*',
+       'top', 'right', 'bottom', and 'left' on the table element are used on the table wrapper box and not the
+       table box" — core/layout/table_wrapper.h is that split, asked once. What the same sentence takes AWAY is
+       why this cannot fall through to the arm below: every other non-inherited value, `border-*`, `padding-*`
+       and `height` among them, is used on the TABLE BOX, and the wrapper gets the initial value instead — so
+       `used_value_border_edge_px` on the table ELEMENT is a measurement of the wrong box, and it would be one
+       whether or not it happened to succeed. */
+    if (wrapper)
+        DFAILF("%s: "
+               "CSS 2.1 §17.4 Tables in the visual formatting model's TABLE WRAPPER BOX is on §9.4.1's stack "
+               "and its BORDER-BOX HEIGHT is what this walk needs. The wrapper's own edges are settled and are "
+               "not what is missing: CSS 2.1 §17.4 Tables in the visual formatting model gives it the table "
+               "element's `margin-*` (read above) and the "
+               "INITIAL value of every other non-inherited property — \"(Where the table element's values are "
+               "not used on the table and table wrapper boxes, the initial values are used instead.)\" — so it "
+               "has NO border and NO padding, and its border box IS its content box. "
+               "THAT CONTENT HEIGHT IS §10.6.3's OVER ITS OWN IN-FLOW CHILDREN, and CSS 2.1 §17.4 Tables in the "
+               "visual formatting model says what they are: "
+               "the wrapper \"contains the table box itself and any caption boxes (in document order)\". "
+               "core/layout/table_box.h answers the caption boxes (`table_box_captions`) and the table box's "
+               "rows and cells (§17.2.1 Anonymous table objects' first two stages), so the STRUCTURE is in "
+               "hand. TWO NUMBERS ARE NOT. (1) The table box's own height is CSS 2.1 §17.5.3 Table height "
+               "algorithms' — \"A value of 'auto' means that the height is the sum of the row heights plus any "
+               "cell spacing or borders\" — over row heights that are each \"the maximum of the row's computed "
+               "'height', the computed 'height' of each cell in the row, and the minimum height (MIN) required "
+               "by the cells\", whose content term is a cell's content height and therefore needs the cell's "
+               "USED WIDTH: §17.5.2 Table width algorithms: the 'table-layout' property's, over §17.5 Visual "
+               "layout of table contents' grid, which is which column each cell occupies and what it spans. "
+               "(2) Each caption box's height is §10.6.3's over ITS used width, and CSS 2.1 §17.4 Tables in the "
+               "visual formatting model makes that the wrapper's content width: \"the border-edge width of "
+               "the table box inside it, as "
+               "described by section 17.5.2\" — the same §17.5.2 again. "
+               "AND THE CAPTIONS' ORDER IS A THIRD, SMALLER GAP WITH A NAME: which captions sit above the "
+               "table box and which below is `caption-side`'s (§17.4.1 Caption position and alignment), and "
+               "that property is not in core/css/css_computed_value.c's modelled set, so it cannot be read at "
+               "all. §17.4.1 gives it `Computed value: as specified`, which makes it ONE ROW of that file's "
+               "as-specified arm; core/css/css_defaulting.c already carries it among the inherited properties, "
+               "as §17.4.1's `Inherited: yes` requires. BUILD §17.5's grid, then §17.5.2, then §17.5.3, and "
+               "record `caption-side` alongside — this walk then measures the wrapper with no arm added to it",
+               box_subject(el, nbuf, sizeof nbuf));
     /* Not a block container: a flex or grid CONTAINER, whose height is its own spec's and which establishes an
        independent formatting context, so its margins are its own and nothing inside it is this walk's. The
        height is asked for and crashes in the section that owns it. */

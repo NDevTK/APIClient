@@ -54,15 +54,17 @@
  *   - A FLOAT in the formatting context is §9.5's own placement, and it is not enough to note that §10.6.3
  *     ignores floats: §9.5.2's `clear` on a LATER sibling introduces CLEARANCE, which §8.3.1 makes
  *     non-adjoining, so one float invalidates every collapse below it.
- *   - A TABLE box is §17.5's two algorithms and a FLEX or GRID container is its own spec's; neither's height
- *     is §10.6.3's walk, and a container whose children this walk placed would be a wrong number rather than
- *     an absent one. The table is the one of the two whose box this walk does not even see: CSS 2.1 §17.4
- *     Tables in the visual formatting model puts a TABLE WRAPPER BOX on this stack instead ("the table
+ *   - A FLEX or GRID container's height is its own spec's, not §10.6.3's walk, and a container whose children
+ *     this walk placed would be a wrong number rather than an absent one.
+ *   - A TABLE is CLASSIFIED and not measured, and the two halves are deliberately in different places. CSS 2.1
+ *     §17.4 Tables in the visual formatting model puts a TABLE WRAPPER BOX on this stack — "the table
  *     generates a principal block box called the table wrapper box that contains the table box itself and any
- *     caption boxes"), and that wrapper's height IS §10.6.3's — over the caption boxes and the table box,
- *     whose own height is §17.5.3's. core/layout/table_box.h answers §17.2.1's box generation underneath it;
- *     what stops the chain is §17.5.2's used column widths, which a cell's content height needs before this
- *     walk can be run over the cell.
+ *     caption boxes" — and that box is block-level, establishes a block formatting context, and carries the
+ *     table element's `margin-*`, so the CHILD CLASSIFICATION is answered here like any other block-level box
+ *     (core/layout/table_wrapper.h owns §17.4's declaration split). Its HEIGHT is §10.6.3's over the caption
+ *     boxes and the table box, and the table box's own height is §17.5.3's — so the walk stops in `bf_box`,
+ *     with §17.2.1's box generation already in hand (core/layout/table_box.h) and §17.5.2's used column widths
+ *     the number it is waiting on.
  *   - An OUT-OF-FLOW child is not a gap at all: §10.6.3 states outright that "absolutely positioned boxes are
  *     ignored", so skipping one is the rule running, and the box's own position is §9.3.2's over a static
  *     position that this walk is what will one day provide.
