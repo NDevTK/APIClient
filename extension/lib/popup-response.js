@@ -493,56 +493,159 @@ function renderPbTree(rootNodes, rootSchema = null, rootFallbackSchemaId = "", r
   return out.join("");
 }
 
+/* A WIRE ADDRESS AS TEXT, OR NOTHING — AND AN ABSENCE MUST NEVER BECOME TEXT A DOCUMENT CAN SPELL.
+   Both lookups below compare a field's address against `String(node.field)`, which for a decoded JSON body
+   is a PROPERTY KEY THE SERVER CHOSE. `String(null)` is "null" and `String(undefined)` is "undefined", and
+   both are keys a JSON object can literally carry — a producer that writes `obj[maybeUndefined] = v` emits
+   the second one routinely. So a field whose address the document never stated used to MATCH such a key,
+   and matched it FIRST, because the absence stringified into exactly the token being searched for. That is
+   CLAUDE.md §A-FIELD-A-CONSUMER-DEFAULTS with no `||` in sight: the hole is filled by `String` rather than
+   by a default, and what comes out is a plausible datum — a field identity, a type badge and a rename
+   button, all describing a field nothing described. The empty string goes the same way: `properties[""]`
+   is an entry no rename can address, which is the reason lib/discovery-probe.js gives for refusing it as a
+   schema name. */
+function _pbAddressText(k) {
+  if (k === null || k === undefined || k === "") return null;
+  return String(k);
+}
+
+/* THE STATED KIND — lib/discovery.js's `resolveDiscoverySchema` output, an ARRAY of `makeFieldDef` records.
+   These are OURS, so this asks the record for the ONE name it carries an address under and ASSERTS the
+   shape rather than refusing it (CLAUDE.md §Offensive programming, and lib/field-def.js's trust split).
+
+   `id` IS NOT THAT NAME. `FIELD_DEF_ABSENT` does not carry it and `makeFieldDef` rejects an unknown key, so
+   `f.id` was `undefined` on every element this branch has ever seen — a read whose writer does not exist on
+   this kind. The writer it looked like it had is one level out: `resolveDiscoverySchema` sets `fields.id`
+   on the ARRAY, which line `currentSchemaId` below reads through `schema?.id`, so the name is live and the
+   RECEIVER was the container rather than its elements. The document's `id` is not lost either — the shell
+   builder reads it into `number` (`number: fdDocKey(prop.id)`), which is the one address this record
+   states, and a positional index with `isNumberGuessed` set where the document stated none.
+
+   TWO PASSES BECAUSE THIS KIND CAN TELL THEM APART: a declared field number outranks the positional index
+   lib/discovery.js invents, and `isNumberGuessed` is how this record says which it is holding. */
+function _pbFindStated(fieldDefs, wire) {
+  for (const declaredOnly of [true, false]) {
+    for (const fd of fieldDefs) {
+      DCHECK(!!fd && typeof fd === "object" && typeof fd.isNumberGuessed === "boolean" &&
+             (fd.number === null || typeof fd.number === "string" || typeof fd.number === "number"),
+             "a pb-tree field map is an array whose elements are not FieldDef records — an array reaches " +
+             "this renderer from lib/discovery.js's resolveDiscoverySchema and from a FieldDef's own " +
+             "`children`, both of which are makeFieldDef output, so anything else here is a producer " +
+             "handing this panel the document kind in the stated kind's shape and every address below " +
+             "would be read under the wrong vocabulary");
+      if (declaredOnly && fd.isNumberGuessed) continue;
+      if (_pbAddressText(fd.number) === wire) return fd;
+    }
+  }
+  return null;
+}
+
+/* THE DOCUMENT KIND — a discovery/OpenAPI schema's own `properties` map. These bytes are a target's server's
+   or a spec file the researcher was handed, so every read REFUSES through lib/field-def.js instead of
+   asserting: a DCHECK here would be the trusted zone aborting on a stranger's document.
+
+   `isNumberGuessed` IS NOT A NAME ANY DOCUMENT WRITES — it is the stated kind's, set only by
+   lib/discovery.js on a shell it built — so the declared-first pass and the fallback pass were the SAME
+   predicate written twice on this kind, and the second could never find anything the first had not. One
+   pass is the whole of what this kind can distinguish.
+
+   `id` AND `number` ARE THE DISCOVERY VOCABULARY'S TWO SPELLINGS OF ONE WIRE ADDRESS — lib/discovery-probe.js
+   mints both on every property it derives and reads them as one in `mergeProbeInto`. A property that is not
+   a record states neither: `{"widget": null}` reached `.isNumberGuessed` off `null` and threw a TypeError
+   out of this renderer on bytes a server chose, which is the crash `fdDocRecord` exists to prevent,
+   arriving through the one reader that did not have the guard. */
+/* A MATCHED FIELD'S NESTED FIELD MAP, OR NOTHING — the ONE name both kinds spell, and the one place their
+   two shapes are both correct. A FieldDef's `children` is an ARRAY of FieldDefs (`null` = not a message,
+   `[]` = a message with no fields, and lib/field-def.js keeps those apart); a document property's is the
+   `properties` MAP lib/discovery-probe.js attaches from the nested schema it minted. `pushNestedTree` below
+   already tells them apart by `Array.isArray`, so what this adds is the refusal the document side needs: a
+   `children` that is a string or a number describes no fields, and admitting one would hand the recursion
+   `Object.entries("ab")` as though a document had named two properties `0` and `1`. */
+function _pbChildMap(v) {
+  return Array.isArray(v) ? v : fdDocRecord(v);
+}
+
+function _pbFindDocument(propMap, wire) {
+  for (const [key, raw] of Object.entries(propMap)) {
+    const prop = fdDocRecord(raw);
+    if (prop === null) continue;
+    if (_pbAddressText(fdDocKey(prop.id)) === wire ||
+        _pbAddressText(fdDocKey(prop.number)) === wire) return { key, prop };
+  }
+  return null;
+}
+
 // Render one pb-tree node into `out` and push any nested children/items
 // onto the stack as interleaved literal+node entries. The original
 // recursive form returned a string per call; here we stream fragments
 // into `out` and defer nested expansion to the outer driver loop.
 function _renderPbNode(item, out, stack) {
   const { node, schema, fieldMap, fallbackSchemaId, doc } = item;
-  // Field definition lookup mirrors the original logic exactly.
+  /* ONE VARIABLE, TWO RECORD KINDS, AND NO SINGLE TREATMENT IS RIGHT FOR BOTH — which is why the identity
+     resolution is split rather than shared. `Array.isArray(fieldMap)` is a FACT about which producer built
+     the map (CLAUDE.md §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS: the bit stays one bit and each kind gets
+     its own question asked of it). What must not be shared is the VOCABULARY: the stated kind carries its
+     address under `number` and is ours to assert, the document kind carries it under `id`-or-`number` and
+     is a stranger's to refuse, and a lookup that reads both names off both kinds asks each of them for a
+     name it does not have — which is how an absence became an address. */
   let fieldDef = null;
   let fieldName = node.isJson ? String(node.field) : `Field ${node.field}`;
-  if (fieldMap) {
+  /* `renameKey` IS WHAT lib/popup-handlers.js's RENAME_FIELD LOOKS THE PROPERTY UP BY, so it is resolved
+     per kind beside the name rather than re-derived from a record whose kind is no longer in view. */
+  let renameKey = null;
+  /* `typeText` IS THE DOCUMENT'S OR OUR OWN CLAIM ABOUT THE TYPE, and `null` MEANS none was made — which is
+     a different fact from the empty badge `fieldDef.type || ""` rendered, since that is also what a document
+     stating `type: ""` produces. A field matched but untyped falls through to the same badge an unmatched
+     node gets, which is the one type statement still standing: the wire form, or the JSON value's own. */
+  let typeText = null;
+  const wire = _pbAddressText(node.field);
+  if (fieldMap && wire !== null) {
     if (Array.isArray(fieldMap)) {
-      fieldDef = fieldMap.find(
-        (f) => !f.isNumberGuessed &&
-          (String(f.number) == String(node.field) || String(f.id) == String(node.field)),
-      );
-      if (!fieldDef) {
-        fieldDef = fieldMap.find(
-          (f) => String(f.number) == String(node.field) || String(f.id) == String(node.field),
-        );
+      fieldDef = _pbFindStated(fieldMap, wire);
+      if (fieldDef) {
+        /* `name` and `type` HAVE NO ABSENT VALUE ON THIS KIND — makeFieldDef asserts both are stated text,
+           so they are read as themselves and not through a fallback that could only fire if that assert
+           had already been bypassed. */
+        fieldName = fieldDef.name;
+        typeText = fieldDef.type;
+        renameKey = _pbAddressText(fieldDef.number) === null ? fieldName : String(fieldDef.number);
       }
-      if (fieldDef) fieldName = fieldDef.name || fieldName;
     } else {
-      const entries = Object.entries(fieldMap);
-      let foundEntry = entries.find(([k, v]) =>
-        !v.isNumberGuessed &&
-        (String(v.id) == String(node.field) || String(v.number) == String(node.field)),
-      );
-      if (!foundEntry) {
-        foundEntry = entries.find(([k, v]) =>
-          String(v.id) == String(node.field) || String(v.number) == String(node.field),
-        );
-      }
-      if (foundEntry) {
-        fieldName = foundEntry[0];
-        fieldDef = foundEntry[1];
-        if (fieldDef.name) fieldName = fieldDef.name;
+      const found = _pbFindDocument(fieldMap, wire);
+      if (found) {
+        fieldDef = found.prop;
+        const stated = fdDocString(found.prop.name);
+        fieldName = (stated === null || stated === "") ? found.key : stated;
+        typeText = fdDocString(found.prop.type);
+        renameKey = _pbAddressText(fdDocKey(found.prop.id)) ??
+                    _pbAddressText(fdDocKey(found.prop.number)) ?? fieldName;
       }
     }
   }
   let typeLabel;
-  if (fieldDef) {
-    typeLabel = `<span class="pb-type-badge">${esc(fieldDef.type || "")}</span>`;
+  if (typeText !== null && typeText !== "") {
+    typeLabel = `<span class="pb-type-badge">${esc(typeText)}</span>`;
   } else if (node.isJson) {
     const jsType = node.jsType || (node.string != null ? "string" : typeof node.value);
     typeLabel = `<span class="pb-type-badge">${esc(jsType)}</span>`;
   } else {
     typeLabel = `<span class="pb-wire-badge">${node.wire === 0 ? "varint" : node.wire === 1 ? "64bit" : node.wire === 2 ? "len" : "32bit"}</span>`;
   }
+  /* THE MATCHED FIELD'S OTHER THREE CLAIMS, RESOLVED ONCE, WHILE THE KIND IS STILL IN VIEW. `fieldDef` is
+     `null` when NO field in this map carries this node's address, and that is a POSITIVE STATEMENT — the
+     server sent a field this schema does not describe — so it is read as one here rather than through a
+     `?.` at each of the five sites below, where the same absence would be indistinguishable from a matched
+     field whose producer had stopped stating `children`, `label` or `type`. */
+  const childMap = fieldDef === null ? null : _pbChildMap(fieldDef.children);
+  const isRepeated = fieldDef !== null && fieldDef.label === "repeated";
+  const isMessage = fieldDef !== null && fieldDef.type === "message";
   const currentSchemaId = schema?.id || (schema?.$ref) || fallbackSchemaId;
-  const renameAttr = `data-schema="${esc(currentSchemaId)}" data-key="${esc(fieldDef ? (fieldDef.id || fieldDef.number || fieldName) : node.field)}" data-is-raw="${!fieldDef}"`;
+  /* `data-is-raw` DELETED. popup.js's rename listener reads `{schema, key}` off this element's dataset and
+     nothing anywhere reads `isRaw` — not a script, not a stylesheet — so it was a producer emitting into a
+     reader that does not exist, the write side of the same broken contract this function's `f.id` read was
+     the read side of. What it claimed is still stated where a reader could use it: an unmatched node's
+     `data-key` is the server's own key rather than a schema address. */
+  const renameAttr = `data-schema="${esc(currentSchemaId)}" data-key="${esc(fieldDef ? renameKey : node.field)}"`;
   const renameBtn = currentSchemaId ? ` <span class="btn-rename" title="Rename field" ${renameAttr}>✎</span>` : "";
 
   out.push(`<div class="pb-node">
@@ -585,9 +688,9 @@ function _renderPbNode(item, out, stack) {
   stack.push({ kind: "literal", text: "</div>" });
 
   if (node.message) {
-    let childrenSchema = fieldDef?.children || null;
+    let childrenSchema = childMap;
     const childFallback = currentSchemaId ? `${currentSchemaId}.${node.field}` : "";
-    if (!childrenSchema && childFallback && doc?.schemas?.[childFallback]) {
+    if (childrenSchema === null && childFallback && doc?.schemas?.[childFallback]) {
       childrenSchema = doc.schemas[childFallback];
     }
     pushNestedTree('<div class="pb-nested"><div class="pb-tree">', '</div></div>',
@@ -608,8 +711,6 @@ function _renderPbNode(item, out, stack) {
     frag += "</div>";
     stack.push({ kind: "literal", text: frag });
   } else if (Array.isArray(node.value) && node.isJspb) {
-    const isRepeated = fieldDef?.label === "repeated";
-    const isMessage = fieldDef?.type === "message";
     if (isRepeated) {
       // Sequence: <div class="pb-repeated">[items]</div>
       stack.push({ kind: "literal", text: "</div>" });
@@ -621,7 +722,7 @@ function _renderPbNode(item, out, stack) {
           const itemNodes = jspbToTree(itemv);
           const childFallback = currentSchemaId ? `${currentSchemaId}.${node.field}` : "";
           pushNestedTree('<div class="pb-nested-item"><div class="pb-tree">', '</div></div>',
-            itemNodes, fieldDef?.children, childFallback);
+            itemNodes, childMap, childFallback);
         } else {
           stack.push({ kind: "literal", text: `<span class="pb-scalar-item">${esc(JSON.stringify(itemv))}</span>` });
         }
@@ -631,7 +732,7 @@ function _renderPbNode(item, out, stack) {
       const nestedNodes = jspbToTree(node.value);
       const childFallback = currentSchemaId ? `${currentSchemaId}.${node.field}` : "";
       pushNestedTree('<div class="pb-nested"><div class="pb-tree">', '</div></div>',
-        nestedNodes, fieldDef?.children, childFallback);
+        nestedNodes, childMap, childFallback);
     } else {
       stack.push({ kind: "literal", text: `<span class="pb-string">${esc(JSON.stringify(node.value))}</span>` });
     }
@@ -640,9 +741,9 @@ function _renderPbNode(item, out, stack) {
   } else if (node.value !== undefined) {
     if (typeof node.value === "object" && node.value !== null) {
       const childNodes = jsonToTree(node.value);
-      let childrenSchema = fieldDef?.children || null;
+      let childrenSchema = childMap;
       const childFallback = currentSchemaId ? `${currentSchemaId}.${node.field}` : "";
-      if (!childrenSchema && childFallback && doc?.schemas?.[childFallback]) {
+      if (childrenSchema === null && childFallback && doc?.schemas?.[childFallback]) {
         childrenSchema = doc.schemas[childFallback];
       }
       pushNestedTree('<div class="pb-nested"><div class="pb-tree">', '</div></div>',
