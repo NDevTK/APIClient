@@ -2126,6 +2126,56 @@ function containsFragments(hay, frags) {
   return true;
 }
 
+/* A STANDARD WRITES ONE CONCEPT IN TWO REGISTERS, AND THE CORPUS'S OWN NORMALIZER IS WHAT SEPARATES THEM —
+ * SO ASKING ONLY THE PROSE REGISTER IS HALF A QUESTION. Every spec prints a compound concept as spaced words
+ * in running text (`page rule`, `remove unsafe`, `toggle popover`) and as ONE IDENTIFIER in its IDL, its
+ * algorithm names and its at-rule spellings (`CSSPageRule`, `removeUnsafe`, `togglePopover`). Both are that
+ * SECTION'S OWN WORDS; nothing is being transformed into anything. What makes them two questions instead of
+ * one is `tokenText`: it lowercases, so the case that separated the identifier's parts is gone, and the only
+ * residue of the identifier register is that its words carry NO SEPARATOR. `containsFragments` pads both
+ * sides with spaces — which is exactly right for the prose register and structurally blind to the other one.
+ *
+ * A ONE-WORD PHRASE HAS NO SEPARATOR TO BE MISSING, SO THIS PROBE ASKS IT NOTHING — IT DEGENERATES INTO A
+ * BARE SUBSTRING TEST OVER ENGLISH WORDS, AND THAT WAS MEASURED RATHER THAN ARGUED. The evidence this check
+ * rests on is the ABSENCE of the separator the prose register would have; below two words there is no such
+ * absence to observe, and `includes` is then asking whether one word happens to sit inside another. Built
+ * without the floor and run on the whole tree, it confirmed three one-word sites: two are `getiterator` at
+ * ECMAScript §7.4.2 "GetIteratorDirect ( obj )" and §7.4.3 "GetIteratorFromMethod ( obj, method )", which
+ * are real misattributions of an older edition's numbering (GetIterator is §7.4.4 "GetIterator ( obj, kind )")
+ * that this audit is RIGHT about, and the third confirmed `[[Get]]` at HTML §7.2.3 "The WindowProxy exotic
+ * object" on the strength of the token `target` — a word with nothing whatever to do with [[Get]]. That third
+ * one is the case that decides the floor: the citation is correct, and the check certified it BY LUCK, which
+ * MIN_FRAGMENT_WORDS' own paragraph calls worse than no check at all. The floor is not a coincidence-RATE
+ * threshold and must not be read as one — the random rate at one word (0.25%) is LOWER than at two (0.43%).
+ *
+ * AND THE DISQUALIFIER IS A SECOND GATE, ASKING THE STANDARD'S OWN DEFINITION INDEX RATHER THAN A SPELLING
+ * RULE, BECAUSE THE FLOOR ALONE ONLY FITS TODAY'S POPULATION. A substring of a longer identifier is usually a
+ * DIFFERENT concept, and the two `getiterator` sites above are that shape at one word; the same shape exists
+ * at two, and what separates `getiterator` inside `getiteratordirect` from `page rule` inside `csspagerule` is
+ * neither prefix-versus-suffix nor word count — it is that `GetIteratorDirect` is a term ECMAScript DEFINES
+ * and `CSSPageRule` is not a term CSSOM defines. So the containing token is asked of that standard's own
+ * `dfns`/`ops`, and a token it names as a concept of its own DISQUALIFIES the hit: the section is then talking
+ * about that other definition and the overlap is an accident of spelling. It refuses nothing in today's
+ * accused population, which is exactly why it is written down rather than dropped — counted EXHAUSTIVELY over
+ * every committed corpus, 578 of the 2958 (2+-word term × unrelated section) pairs whose join lands inside a
+ * token have every containing token defined by that standard, 528 of them in ECMAScript and 47 in Streams, the
+ * two that compose operation names out of other operation names. The population that reaches this check has
+ * none today; the corpora say that is the accident, not the rule.
+ *
+ * HOW CONSERVATIVE THIS IS, MEASURED THE WAY MIN_FRAGMENT_WORDS WAS: over 73125 (random multi-word term ×
+ * unrelated section) draws across every committed corpus, the join lands inside a token 0.14% of the time
+ * against 2.92% for the spaced matcher this stands beside — so it is twenty times MORE conservative than the
+ * probe already in use, and it is not a loosening of it. */
+const MIN_JOIN_WORDS = 2;
+
+function joinedInToken(hay, phrase, isTerm) {
+  const w = phrase.split(" ").filter(Boolean);
+  if (w.length < MIN_JOIN_WORDS) return false;
+  const j = w.join("");
+  for (const tok of hay.split(" ")) if (tok.includes(j) && !isTerm(tok)) return true;
+  return false;
+}
+
 /* A BARE "NOT FOUND" IS THREE ANSWERS WEARING ONE NAME, AND WHICH ONE IT IS DECIDES WHAT THE READER DOES.
  * A quotation whose FIRST NINE WORDS are the standard's and whose tenth is not has been mis-transcribed: the
  * passage is real, the author dropped or reworded a clause, and the repair is to paste the sentence again. A
@@ -2379,7 +2429,7 @@ function audit(argv, opts = {}) {
   };
   const stat = { total: 0, bare: 0, anchored: 0, byTerm: 0, byFile: 0, other: 0, skipped: 0,
                  confirmed: 0, confirmedByUse: 0, confirmedByContainment: 0, confirmedByRun: 0,
-                 confirmedByText: 0, textRefused: 0,
+                 confirmedByText: 0, confirmedByIdent: 0, textRefused: 0,
                  unverified: 0, multiSpec: 0,
                  foreignTerm: 0, titleRefused: 0, byTitle: 0, numberRefused: 0,
                  titled: 0, titledQuoted: 0, titledEv: 0, titledOK: 0, titledMis: 0, titledMisInTitle: 0,
@@ -3029,6 +3079,18 @@ function audit(argv, opts = {}) {
            * FINDINGS with questions asked for a CENSUS. */
           const tsec = txt.has(spec) ? txt.get(spec).sections[no] : undefined;
           const inText = tsec !== undefined && containsFragments(tsec, [quoteTokens(ev.phrase, false)]);
+          /* THE SAME QUESTION, ASKED OF THE OTHER REGISTER — see joinedInToken for why that is two questions
+           * and for the guard that keeps the second one honest. It is asked HERE, immediately after the prose
+           * register and still ABOVE the foreign-term refusal, because the two are one claim about the cited
+           * section's own words and splitting them across that refusal would leave the identifier register
+           * answering only for standards that happen to own the term — the exact silent zero the line below
+           * this pair was moved above the refusal to end. Nothing existing is reordered.
+           * The `noText` refusal already carried by the finding covers this probe too: both read `tsec`, so a
+           * standard with no committed corpus is unasked by both and counted once. */
+          const identOwn = idx.get(spec);
+          const inIdent = tsec !== undefined && !inText
+            && joinedInToken(tsec, quoteTokens(ev.phrase, false),
+                             (t) => identOwn !== undefined && (identOwn.dfns[t] !== undefined || identOwn.ops[t] !== undefined));
           /* AND THE OTHER MEMBERS OF THIS CITATION'S OWN RUN COUNT AS CITED, because the author wrote them.
            * The claim a MISATTRIBUTED makes — "you cited §N and the thing is numbered somewhere else" — is
            * simply FALSE when "somewhere else" is a number standing three characters to the left under the
@@ -3059,6 +3121,7 @@ function audit(argv, opts = {}) {
           if (under) return { kind: "OK-CONTAINS" };
           if (used) return { kind: "OK-USE" };
           if (inText) return { kind: "OK-TEXT" };
+          if (inIdent) return { kind: "OK-IDENT" };
           if (inRun) return { kind: "OK-RUN" };
           if (!owned) return { kind: "FOREIGN-TERM" };
           const where = ev.hits.map((h) => {
@@ -3075,7 +3138,7 @@ function audit(argv, opts = {}) {
             msg: `"${ev.phrase}" is defined in ${where} — no indexed standard defines it at §${no}, nor under it, ` +
                  (tsec === undefined
                    ? `and no committed corpus could be asked whether §${no}'s own words use it`
-                   : `nor is any §${no} about it: §${no}'s own text does not contain the phrase`) +
+                   : `nor is any §${no} about it: §${no}'s own text carries the phrase neither as spaced words nor inside an identifier of its own`) +
                  (sections[no] ? ` (${spec} §${no} is "${sections[no].title}"` : " (") +
                  (men ? `, which links the term ${men}×)` : ")") };
         };
@@ -3322,7 +3385,7 @@ function audit(argv, opts = {}) {
         continue;
       }
       const COUNTED_OK = { "OK-USE": "confirmedByUse", "OK-CONTAINS": "confirmedByContainment", "OK-RUN": "confirmedByRun",
-                           "OK-TEXT": "confirmedByText" };
+                           "OK-TEXT": "confirmedByText", "OK-IDENT": "confirmedByIdent" };
       if (COUNTED_OK[verdict.kind]) { stat.confirmed++; stat[COUNTED_OK[verdict.kind]]++; continue; }
       if (verdict.kind.startsWith("OK")) { stat.confirmed++; continue; }
       /* THE SITE IS NOW A FINDING, AND PASS 5 MUST NOT REPORT IT TWICE. A step number under a citation whose
@@ -3763,6 +3826,7 @@ function audit(argv, opts = {}) {
     `${[...byKey].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}=${v}(${byKeyVoted.get(k) || 0})`).join(" ")}`);
   console.log(`  ${stat.confirmed} confirmed (${stat.confirmedByContainment} by a subsection of the cited number, ${stat.confirmedByUse} by a prominent use rather than the definition site, ` +
     `${stat.confirmedByText} by the cited section's OWN WORDS using the term where its markup links it fewer than the floor, ` +
+    `${stat.confirmedByIdent} by the cited section spelling the same concept as ONE IDENTIFIER rather than as spaced words, ` +
     `${stat.confirmedByRun} by another number in the same citation's own run), ` +
     `${stat.unverified} carry no title and no term any index knows, ${stat.multiSpec} name a term more than one standard defines`);
   console.log(`  ${stat.foreignTerm} name a term only ANOTHER standard defines, so the standard they cite numbers nothing this audit could hold them to`);
@@ -4044,9 +4108,9 @@ function audit(argv, opts = {}) {
        * refused sites are subtracted from it IN THE SENTENCE rather than named afterwards, because a reader
        * who takes "every one of these" at face value and then meets a count of ones that were never asked has
        * been handed two statements that cannot both be true. */
-      console.log(`  (${g.length - stat.textRefused} of these stand at a section whose own committed text does NOT contain the phrase, ` +
+      console.log(`  (${g.length - stat.textRefused} of these stand at a section whose own committed text carries the phrase neither as spaced words nor inside an identifier of its own, ` +
         `and the other ${stat.textRefused} could not be asked that question at all because their standard carries no usable corpus; ` +
-        `${stat.confirmedByText} citation(s) whose cited section DOES state it in its own words are confirmed above rather than accused here. ` +
+        `${stat.confirmedByText} citation(s) whose cited section DOES state it in its own words, and ${stat.confirmedByIdent} whose cited section spells it as one identifier, are confirmed above rather than accused here. ` +
         `A count over the citations the term check was ASKED of. ${stat.titled} more were confirmed by a stated TITLE and never asked; ` +
         `on their own evidence the term check would have added ${stat.titledMis} claims here, ${stat.titledMisInTitle} of them naming a phrase inside that same title. ` +
         `Adding a correct title to a citation MOVES it out of this number — see the title-channel lines in the census above for both halves.)`);
