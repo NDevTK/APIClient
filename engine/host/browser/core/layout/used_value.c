@@ -283,7 +283,9 @@ static UvBox uv_box_kind(lxb_dom_element_t *el)
                "INLINE-LEVEL box and §10.3.3 was not merely the wrong algorithm but the wrong half of §10. "
                "WHAT TO BUILD, in this order: css-ruby-1 §2.2 \"Anonymous Ruby Box Generation\" is the box "
                "tree — the internal box types are generated around whatever the author wrote, exactly as CSS "
-               "2.1 §17.2's anonymous table objects are — then §2.3 \"Annotation Pairing\" is the column "
+               "2.1 §17.2.1 Anonymous table objects' are, and core/layout/table_box.h is that section built "
+               "and therefore the worked example to write this one against — then §2.3 \"Annotation Pairing\" "
+               "is the column "
                "structure, and §3.1.1 \"Inline-axis Interlinear Layout\" is the sizing. WHAT THE SIZE RULES "
                "ARE ONCE THAT EXISTS is css-ruby-1 §3.3 \"Styling Ruby Boxes\", and it SPLITS THE FIVE rather "
                "than giving them one arm: \"Ruby bases and ruby containers are treated as inline boxes\", "
@@ -682,12 +684,20 @@ lxb_dom_element_t *used_value_containing_block(lxb_dom_element_t *el)
                   "uses `position`, `float`, `margin-*` and the four offsets on the wrapper and every other "
                   "non-inherited value on the table box INSIDE it, and gives the wrapper's own width as \"the "
                   "border-edge width of the table box inside it, as described by section 17.5.2\" — a border "
-                  "edge where this entry's callers take a content edge. BUILD CSS 2 §17.2.1 Anonymous table "
-                  "objects' box generation first, then the wrapper as a box this walk can answer with, then "
-                  "§17.5.2 Table width algorithms: the 'table-layout' property over it. "
-                  "core/layout/flow_position.c's table-internal placement abort and core/layout/block_flow.c's "
-                  "table-child abort name the same two sections and are the same subproblem seen from the "
-                  "POSITION side; all three delete together",
+                  "edge where this entry's callers take a content edge. "
+                  "THE BOX GENERATION IS BUILT AND THIS LINE USED TO ASK FOR IT FIRST: CSS 2 §17.2.1 Anonymous "
+                  "table objects' first two stages are core/layout/table_box.h's, so what is left between this "
+                  "walk and an answer is the WRAPPER as a box it can name, and then §17.5.2 Table width "
+                  "algorithms: the 'table-layout' property, which is where its border-edge width comes from. "
+                  "WHO IS WAITING ON IT IS NOT TWO FILES, and the sentence that stood here said it was: this "
+                  "entry has FOUR callers inside used_value.c and SEVEN call sites outside it in FOUR files, "
+                  "and they do not all want the same thing. core/layout/flow_position.c's placement and "
+                  "core/layout/block_flow.c's stack want a RECTANGLE and are the same subproblem seen from the "
+                  "position side; core/layout/scrolling_area.c's `sa_excluded` asks per DESCENDANT, so it "
+                  "reaches a cell by walking into a table that nothing upstream classified; and "
+                  "core/intersection_observer/intersection_observer.c walks the containing-block CHAIN itself "
+                  "(its steps 2 and 3.5) and wants each LINK, not any box's edges — so it does not delete with "
+                  "the other three and a wrapper it cannot name breaks its loop rather than its geometry",
                   box_subject(el, nbuf, sizeof nbuf), box_subject(anc, abuf, sizeof abuf));
         if (grid)
             DFAILF("%s, whose ancestor %s is a GRID CONTAINER: "
@@ -1406,9 +1416,14 @@ static CssPx uv_margin(lxb_dom_element_t *el, const char *name, const char *oppo
     if (box == UV_BOX_TABLE)
         DFAIL("a horizontal `auto` margin on a TABLE box. CSS 2.1 §17.5.2 derives the table's own width first "
               "— an intrinsic size over its columns — and only then is there a slack for §10.3.3's margin "
-              "rules to divide, which is what makes `table { margin: 0 auto }` centre it. BUILD §17.2's "
-              "anonymous table-object generation and §17.5.2's algorithms; the margin rule is then the same "
-              "code the block-level arm above already runs");
+              "rules to divide, which is what makes `table { margin: 0 auto }` centre it. THE BOX GENERATION "
+              "IS BUILT — §17.2.1 Anonymous table objects' first two stages are core/layout/table_box.h's — so "
+              "BUILD §17.5 Visual layout of table contents' grid over its rows and then §17.5.2's algorithms; "
+              "the margin rule is then the same "
+              "code the block-level arm above already runs. AND THE MARGIN IS NOT THIS BOX'S ANYWAY, which is "
+              "the half this line did not say: §17.4 Tables in the visual formatting model uses `margin-*` on "
+              "the TABLE WRAPPER BOX and not on the table box, so what §10.3.3's rules divide is the wrapper's "
+              "slack over the border-edge width §17.5.2 gives the box inside it");
     if (box == UV_BOX_ITEM)
         DFAIL("a horizontal `auto` margin on a FLEX or GRID ITEM, which css-flexbox §9.5 answers before "
               "alignment does: 'if the remaining free space is positive and at least one main-axis auto margin "
@@ -1706,9 +1721,13 @@ static CssPx uv_replaced_size(lxb_dom_element_t *el, const ReplacedElement *rep,
     if (box == UV_BOX_TABLE)
         DFAIL("a REPLACED element whose computed `display` makes it a TABLE BOX. CSS 2.1 §17.5 owns a table's "
               "width and height and §10.3.2's intrinsic-dimension arms do not apply to it — §17.5.2's two "
-              "algorithms derive the width from the COLUMNS, and a replaced element has none. BUILD §17.2's "
-              "anonymous table-object generation and §17.5's algorithms; what a table box does with a replaced "
-              "element's own natural dimensions is then their question and not this section's");
+              "algorithms derive the width from the COLUMNS, and a replaced element has none. THE BOX "
+              "GENERATION IS BUILT — §17.2.1 Anonymous table objects' first two stages are "
+              "core/layout/table_box.h's — so BUILD §17.5's grid and then its algorithms; what a table box "
+              "does with a replaced "
+              "element's own natural dimensions is then their question and not this section's. CSS 2.1 §17.2 "
+              "The CSS table model is the sentence that puts this element here at all: \"Replaced elements with these "
+              "'display' values are treated as their given display types during layout\"");
     if (box == UV_BOX_ITEM)
         DFAIL("a REPLACED element that is a FLEX or GRID ITEM, whose used main and cross sizes come from its "
               "container's algorithm. css-flexbox §9.7 makes a declared size the FLEX BASE SIZE and then "
@@ -1788,9 +1807,12 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
             DFAIL("CSS 2.1 §17.5 owns a TABLE box's width and height, and §10 does not apply to it. A declared "
                   "`width` on a table is a MINIMUM in both of §17.5.2's algorithms — the fixed layout "
                   "algorithm distributes it over the columns and the automatic one may widen the table past it "
-                  "to fit the content — and §17.5.3's height behaves the same way over the rows. BUILD §17.5's "
-                  "two table layout algorithms, which need the table's internal box structure (§17.2's "
-                  "anonymous table-object generation) before either can run");
+                  "to fit the content — and CSS 2.1 §17.5.3 Table height algorithms says the same of a declared height "
+                  "in its own words: \"Any other value is treated as a minimum height.\" BUILD §17.5's "
+                  "two table layout algorithms. THE INTERNAL BOX STRUCTURE IS NO LONGER WHAT THEY ARE WAITING "
+                  "ON and this line said it was: §17.2.1 Anonymous table objects' first two stages are "
+                  "core/layout/table_box.h's, so what stands between them and this arm is §17.5 Visual layout "
+                  "of table contents' grid — which column each cell occupies and what it spans");
         if (box == UV_BOX_ITEM)
             DFAIL("this box is a FLEX or GRID ITEM, so its used main and cross sizes come from its container's "
                   "algorithm and not from CSS 2.1 §10 at all — css-flexbox §9.7 resolves the flexible lengths "
@@ -1856,11 +1878,25 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
                   "§10.6.3 is what keeps an out-of-flow child out of its walk, so EXTEND core/layout/"
                   "block_flow.c to report a skipped child's would-be position, then §10.6.4 over it");
         if (box == UV_BOX_TABLE)
-            DFAIL("a TABLE box with `height: auto` is CSS 2.1 §17.5.3's, not §10.6.3's: the table's height is "
-                  "distributed over its ROWS, each row's height comes from the content of its cells, and a "
-                  "declared height on the table is a MINIMUM the algorithm may exceed. It needs the table's "
-                  "internal box structure first — §17.2's anonymous table-object generation. BUILD §17.2 and "
-                  "then §17.5.3");
+            DFAIL("a TABLE box with `height: auto` is not §10.6.3's but CSS 2.1 §17.5.3 Table height "
+                  "algorithms', and this line used to state that section BACKWARDS IN BOTH OF ITS TERMS. "
+                  "CSS 2.1 §17.5.3 Table height algorithms is a SUM and "
+                  "not a distribution: \"A value of 'auto' means that the height is the sum of the row heights "
+                  "plus any cell spacing or borders. Any other value is treated as a minimum height\". The distribution "
+                  "this line described is the case CSS 2.1 §17.5.3 Table height algorithms explicitly "
+                  "DECLINES: \"CSS 2.1 "
+                  "does not define how extra space is distributed when the 'height' property causes the table "
+                  "to be taller than it otherwise would be\". And a row's height is not its cells' content "
+                  "either. CSS 2.1 §17.5.3 Table height algorithms makes it the MAXIMUM OF THREE TERMS: \"it is the "
+                  "maximum of the row's computed "
+                  "'height', the computed 'height' of each cell in the row, and the minimum height (MIN) "
+                  "required by the cells\". Only the third of those is content, and CSS 2.1 §17.5.3 Table height "
+                  "algorithms measures it through a cell: \"In CSS 2.1, the height of a cell box is the "
+                  "minimum height required by the content\" — a BLOCK CONTAINER's content height over the "
+                  "cell's USED WIDTH. "
+                  "THAT WIDTH IS WHAT IS MISSING, NOT THE BOX STRUCTURE: §17.2.1 Anonymous table objects' "
+                  "first two stages are core/layout/table_box.h's, and a cell is as wide as its column, so "
+                  "BUILD §17.5 Visual layout of table contents' grid and §17.5.2, and only then §17.5.3");
         if (box == UV_BOX_ITEM)
             DFAIL("a FLEX or GRID ITEM with `height: auto`. Its cross size is its CONTAINER's algorithm — "
                   "css-flexbox §9.4 collects the items into flex lines and §9.7 resolves the flexible lengths, "
@@ -1921,9 +1957,13 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
     if (box == UV_BOX_TABLE)
         DFAIL("a TABLE box with `width: auto` is sized by CSS 2.1 §17.5.2's AUTOMATIC table layout algorithm: "
               "the table's width comes from its COLUMNS, each of which is derived from its cells' minimum and "
-              "maximum content widths — an intrinsic size over the box structure §17.2's anonymous table-object "
-              "generation builds, and not §10.3.3's equation, which does not apply to a table at all. BUILD "
-              "§17.2 and then §17.5.2's two algorithms");
+              "maximum content widths — an intrinsic size over the box structure §17.2.1 Anonymous table "
+              "objects generates, and not §10.3.3's equation, which does not apply to a table at all. THAT "
+              "STRUCTURE IS BUILT and this line used to ask for it first: core/layout/table_box.h answers "
+              "§17.2.1's first two stages, so what §17.5.2 still needs over it is §17.5 Visual layout of table "
+              "contents' grid — which column each cell is in, since a COLUMN's minimum and maximum are taken "
+              "across the cells that occupy it and nothing here yet says which those are. BUILD §17.5's grid "
+              "and then §17.5.2's two algorithms");
     if (box == UV_BOX_ITEM)
         DFAIL("a FLEX or GRID ITEM with `width: auto`. css-flexbox §9.7 makes the FLEX BASE SIZE the item's "
               "max-content contribution and then flexes it against the container's free space; css-grid §11 "
@@ -2203,11 +2243,19 @@ CssPx used_value_border_edge_from_content_px(lxb_dom_element_t *el, CssPx conten
        §17.5's message here rather than through `uv_limits`' assert, which is about the two classifications
        agreeing and would say the wrong thing about a real page. */
     if (box == UV_BOX_TABLE)
-        DFAIL("a TABLE-INTERNAL box reached §8.1's border edge through §10.6.3's walk. CSS 2.1 §17.5.3 "
-              "\"Table height algorithms\" owns a cell's and a caption's height — a cell's is distributed over "
-              "its ROW and the row's comes from every cell in it, so no cell's height is a fact about that "
-              "cell alone — and §10.4/§10.7 say outright that their own effect on table boxes is undefined. "
-              "BUILD §17.2's anonymous table-object generation and §17.5.3; until then the walk must not "
+        DFAIL("a TABLE-INTERNAL box reached §8.1's border edge through §10.6.3's walk. CSS 2.1 §17.5.3 Table "
+              "height algorithms owns a cell's and a caption's height, and the reason no cell's height is a "
+              "fact about that cell alone is the ROW's rule rather than a distribution this line used to "
+              "describe. CSS 2.1 §17.5.3 Table height algorithms gives a row's height as \"the maximum of the "
+              "row's computed 'height', the computed 'height' "
+              "of each cell in the row, and the minimum height (MIN) required by the cells\", so every cell in "
+              "the row is an input to the row and the row is then what the cell is sized against. CSS 2.1 "
+              "§17.5.3 Table height algorithms gives the cell's own box height as \"the minimum height "
+              "required by the content\", and that section's only "
+              "distribution sentence is the one it DECLINES to define. §10.4/§10.7 say outright that their own "
+              "effect on table boxes is undefined. THE BOX STRUCTURE IS BUILT — §17.2.1 Anonymous table "
+              "objects' first two stages are core/layout/table_box.h's — so BUILD §17.5 Visual layout of table "
+              "contents' grid, §17.5.2's column widths and then §17.5.3; until then the walk must not "
               "descend into one");
     lim = uv_limits(el, box, vertical);
     /* The tentative value in the box css-sizing-3 §3.3 exposes, which is the box the two limits are measured
