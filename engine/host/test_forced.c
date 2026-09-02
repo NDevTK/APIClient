@@ -1958,6 +1958,118 @@ static const char *HTML =
     /* §3.2: a second abort() fires nothing — the state half answers whether there is anything to fire. */
     "var sonce = sflag; sc.abort();"
     "fetch('/api/abortonce?v=' + (sflag === sonce ? 'isonce' : 'wrong'));"
+    /* WEB IDL §3.2.25 Union types STEP 4 — "If V is null or undefined, then:" over a sub-step reading "If
+       types includes a dictionary type, then return the result of converting V to that dictionary type." It
+       sits ABOVE step 11's Object test and step 12/18's boolean, and a `(boolean or D)` union that asks only
+       "is it an Object" answers steps 11/12/18 and NOTHING about step 4 — so the two values step 4 names took
+       the BOOLEAN arm. That is not an edge case: §3.6 hands a declared DICTIONARY POSITION `undefined` when
+       the page stops short of it, so the OMITTED CALL of every member declaring such a union arrived there.
+       THE PLAINEST SPELLING IS WHERE IT SHOWS. HTML §6.12 The popover attribute's togglePopover step 1 is
+       "Let force be null", step 5 hides when the popover is showing "and force is null or false", and step 6
+       shows "if force is null or true" — so `el.togglePopover()` on a HIDDEN popover shows it. Handed the
+       boolean `false` instead, step 2 sets force, step 5 does not apply (not showing) and step 6's condition
+       is false, so control reaches step 7 and NOTHING HAPPENS. The popover never opened, and the member
+       returned false where a browser returns true.
+       AND THE MEMBER'S OWN DECLARATION WAS WRONG A SECOND TIME, INDEPENDENTLY, which is why the `{}` rows are
+       here beside the omitted ones and why either fix alone leaves this sequence wrong.
+       `dictionary TogglePopoverOptions : ShowPopoverOptions { boolean force; }` writes NO default and step 3
+       is "Otherwise, if options["force"] exists, set force to options["force"]." — Infra's map `exists`.
+       IDL_BOOLEAN carries its `= false` in the TYPE (ToBoolean(undefined) is false, which IS the default such
+       a member declares), so an absent `force` was PLACED as false and step 3 saw a member that exists.
+       IDL_BOOLEAN_NO_DEFAULT is the type that keeps absence and false apart.
+       EVERY ROW IS A TRANSITION AND THE NEGATIVE CONTROLS ARE WHAT MAKE THE TOKEN DISCRIMINATING. An engine
+       that ignored `force` entirely would show on every call and read `1010111110`; one with either defect
+       above reads `0` where this reads `1`. The two `false` rows are step 6's condition failing (rows 6 and
+       7) and the two `true` rows are step 5's failing (rows 8 and 9) — row 9 shows an ALREADY-showing
+       popover, which §6.12's show popover step 1 answers by returning through check popover validity step 2
+       ("expectedToBeShowing is false and element's popover visibility state is not hidden, then return
+       false"), NOT by throwing, so step 8 still reads showing. `manual` and not `auto` on purpose: show
+       popover step 15 is gated on "If originalType is Auto or Hint", so this row establishes no close watcher
+       and stays a statement about the union and the member type. */
+    "var uapop = document.createElement('div'); uapop.setAttribute('popover','manual');"
+    "document.body.appendChild(uapop); var uaseq = '';"
+    /* THE SEQUENCE IS WRAPPED SO A THROW IS A RESULT AND NOT A CASUALTY. None of these ten rows may throw —
+       every check popover validity below reaches its step 2's plain `false` rather than a DOMException, which
+       is why row 9 (show on an ALREADY-showing popover) is a legal row at all. But an uncaught one here would
+       take the three unrelated claims below it down with the whole script, and a row that can silence its
+       neighbours is a row that reports the wrong defect. `E` ends the sequence at the call that threw. */
+    "try {"
+    "uaseq += uapop.togglePopover() ? '1' : '0';"                    /* hidden, force null   -> show   */
+    "uaseq += uapop.togglePopover() ? '1' : '0';"                    /* showing, force null  -> hide   */
+    "uaseq += uapop.togglePopover({}) ? '1' : '0';"                  /* member absent        -> show   */
+    "uaseq += uapop.togglePopover({}) ? '1' : '0';"                  /* member absent        -> hide   */
+    "uaseq += uapop.togglePopover(null) ? '1' : '0';"                /* step 4's other value -> show   */
+    "uaseq += uapop.togglePopover(false) ? '1' : '0';"               /* showing, force false -> hide   */
+    "uaseq += uapop.togglePopover(false) ? '1' : '0';"               /* hidden,  force false -> step 7 */
+    "uaseq += uapop.togglePopover(true) ? '1' : '0';"                /* hidden,  force true  -> show   */
+    "uaseq += uapop.togglePopover(true) ? '1' : '0';"                /* showing, force true  -> step 6 */
+    "uaseq += uapop.togglePopover({ force: false }) ? '1' : '0';"    /* present false        -> hide   */
+    "} catch (uaerr) { uaseq += 'E'; }"
+    "fetch('/api/toggleforce?v=' + (uaseq === '1010100110' ? 'istoggle' : 'seq' + uaseq));"
+    /* …AND THE REGRESSION GUARD ON THE OTHER MEMBER OF THAT UNION SHAPE, which is the half this change could
+       have broken rather than fixed. `addEventListener`'s third argument is `(AddEventListenerOptions or
+       boolean)`, so an omitted or null one now runs the §3.2.17 walk where it used to get a hand-built
+       `{capture: false}`. DOM §2.7 Interface EventTarget's flatten options is "If options is a boolean, then
+       return options" over the CONVERTED value, so `capture` must still be false on both spellings: two
+       non-capturing listeners on the ANCESTOR, dispatched from the child, run in registration order at
+       BUBBLING_PHASE. A capturing one would run first and at phase 1, which `D3N3` refuses. */
+    "var uacap = '';"
+    "bpar.addEventListener('uadef', function(e){ uacap += 'D' + e.eventPhase; });"
+    "bpar.addEventListener('uadef', function(e){ uacap += 'N' + e.eventPhase; }, null);"
+    "bkid.dispatchEvent(new Event('uadef', { bubbles: true }));"
+    "fetch('/api/aelcapdef?v=' + (uacap === 'D3N3' ? 'iscapdef' : 'cap' + uacap));"
+    /* …AND `passive` MUST STILL BE UNSET, which is the half the walk could have filled in. DOM §2.7's flatten
+       more options leaves it null when the member does not exist and add an event listener step 4 then fills
+       it from the DEFAULT PASSIVE VALUE — true for a "wheel" listener on a Window, a Document, its document
+       element or its body, and false anywhere else. Both sides are asked with the SAME registration spelling
+       (options omitted) and differ only in the TARGET, so what the pair reads is the tristate itself: the
+       body's listener is passive, so DOM §2.2's in passive listener flag is set around it and
+       `preventDefault` does nothing; the `<section>`'s is not, so the same call cancels. A walk that placed
+       `passive` as `false` instead of leaving it absent would read `U-cancel` here and would be the same
+       IDL_BOOLEAN-folds-absence defect the popover rows above are about, arriving at a different member. */
+    "var uawh = '';"
+    "document.body.addEventListener('wheel', function(e){ e.preventDefault();"
+    " uawh += e.defaultPrevented ? 'U-cancel' : 'U-passive'; });"
+    "document.body.dispatchEvent(new Event('wheel', { bubbles: true, cancelable: true }));"
+    "var uawhx = '';"
+    "bpar.addEventListener('wheel', function(e){ e.preventDefault();"
+    " uawhx += e.defaultPrevented ? 'E-cancel' : 'E-passive'; });"
+    "bpar.dispatchEvent(new Event('wheel', { cancelable: true }));"
+    "fetch('/api/aelunset?v=' + (uawh === 'U-passive' && uawhx === 'E-cancel' ? 'isunsetpassive'"
+    " : uawh + '/' + uawhx));"
+    /* …AND THE SECOND MEMBER THAT DECLARES A `(boolean or D)` UNION, REACHED. CSSOM VIEW §6 Extensions to the
+       Element Interface's `scrollIntoView(optional (boolean or ScrollIntoViewOptions) arg = {})` is where
+       step 4 costs an ALIGNMENT: its step 5 is the dictionary clause and its step 6 is "Otherwise, if arg is
+       false, then set block to "end"", so an omitted call handed the boolean `false` set `block` to "end"
+       where step 2's "start" should stand.
+       WHAT THIS ROW ASSERTS IS REACHABILITY AND THE DECLARATION, NOT THE ALIGNMENT, and that limit is stated
+       rather than papered over: this engine's viewport scrolling area equals its viewport, so nothing
+       scrolls and "start" and "end" are the same observable ZERO — a row comparing them would pass whichever
+       arm ran, which is worse than no row. What IS observable with no layout is that the four spellings do
+       not throw and that a bogus enumeration DOES: Web IDL §3.2.18 Enumeration types' membership test belongs
+       to the DECLARED member, so `X` is the proof that the dictionary arm's declaration ran at all, and `o`
+       and `n` are the two values §3.2.25 step 4 routes through it. It also puts both of this change's own
+       asserts within reach of one run — element_view.c's `JS_IsObject(argv[0])` at the dictionary arm, and
+       idl_dict_walk_begin's frames-capacity DCHECK, neither of which an omitted argument could reach while
+       the boolean arm swallowed it. */
+    "var uasc = document.createElement('p'); bpar.appendChild(uasc); var uascarm = '';"
+    "try { uasc.scrollIntoView(); uascarm += 'o'; } catch (e) { uascarm += 'O'; }"
+    "try { uasc.scrollIntoView(null); uascarm += 'n'; } catch (e) { uascarm += 'N'; }"
+    "try { uasc.scrollIntoView({}); uascarm += 'd'; } catch (e) { uascarm += 'D'; }"
+    "try { uasc.scrollIntoView(false); uascarm += 'b'; } catch (e) { uascarm += 'B'; }"
+    "try { uasc.scrollIntoView({ block: 'bogus' }); uascarm += 'x'; } catch (e) { uascarm += 'X'; }"
+    "fetch('/api/scrollarm?v=' + (uascarm === 'ondbX' ? 'isscrollarm' : 'arm' + uascarm));"
+    /* …AND THE MEASUREMENT THE ROW ABOVE REFUSES TO ASSERT, EMITTED ANYWAY AND ASSERTED BY NOTHING. `na` says
+       CSSOM VIEW §5's `scrollingElement` is not on this Document, and two equal numbers say the layout model
+       has no scrolling area to align within — either answer is the reason the alignment has no row yet, and
+       the day they differ this becomes one. An absent record and a zero are different facts, so it is emitted
+       unconditionally rather than only when it has something to say. */
+    "var uapos = 'na';"
+    "if (document.scrollingElement) {"
+    " uasc.scrollIntoView(); var uap0 = document.scrollingElement.scrollTop;"
+    " uasc.scrollIntoView(false); var uap1 = document.scrollingElement.scrollTop;"
+    " uapos = 'start' + uap0 + '-end' + uap1; }"
+    "fetch('/api/scrollpos?v=' + uapos);"
     /* §4.10 FORMS — a submission is a REQUEST the page's own code composes, and submit() DERIVES it without
        sending anything, which is the rule for a state-mutating request. The value a field carries is the
        endpoint's example value, and when it is an ATTACKER SOURCE the finding says so rather than inventing
@@ -9183,6 +9295,24 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "/api/dclbubble",  "isdcl"   },   /* the ENGINE's own fire walks the same path to the window */
         { "/api/abortsync",  "issync"  },   /* §3.2 abort() has run its listeners before it returns */
         { "/api/abortonce",  "isonce"  },   /* and a second abort() fires nothing */
+        /* Web IDL §3.2.25 Union types step 4 at a `(boolean or D)` position, and the member-type half beside
+           it. The token is a TEN-STEP TRANSITION SEQUENCE and not a boolean because each defect changes a
+           different subset of it: the omitted and null rows are step 4's, the `{}` rows are
+           IDL_BOOLEAN_NO_DEFAULT's, and the four explicit-boolean rows are the controls that refuse an engine
+           which simply ignores `force`. A failure reports the sequence it actually produced. */
+        { "/api/toggleforce", "istoggle" },
+        /* …and the two guards on the OTHER member of that union shape, which the same change routes through
+           the §3.2.17 walk for the first time: `capture` must still flatten to false on an omitted AND on a
+           null options argument, and `passive` must still arrive ABSENT so §2.7's default passive value can
+           fill it — true on the body, false on a `<section>`, from the same registration spelling. */
+        { "/api/aelcapdef",  "iscapdef" },
+        { "/api/aelunset",   "isunsetpassive" },
+        /* …and CSSOM VIEW §6's `scrollIntoView`, asserted for REACHABILITY and the declaration rather than for
+           the alignment: `ondbX` is four spellings that must not throw and one bogus enumeration that must,
+           which is §3.2.18's membership test belonging to the declared member. The alignment itself is
+           unobservable while the viewport's scrolling area equals the viewport — /api/scrollpos carries that
+           measurement and is deliberately asserted by nothing. */
+        { "/api/scrollarm",  "isscrollarm" },
         { "/api/formstate",  "isform"  },   /* a control's value state, the form's listed elements */
         { "/api/celife",     "isce"    },   /* §4.13 connectedCallback ran — code nothing else calls */
         { "/api/ceearly",    "isearly" },   /* the retroactive upgrade, and the wrapper's identity surviving */
