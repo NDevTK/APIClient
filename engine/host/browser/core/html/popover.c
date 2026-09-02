@@ -58,10 +58,14 @@
  *   WHAT REMAINS OWED TO §6.12, AND IT IS OWED FROM ELSEWHERE. §6.12.2 Popover light dismiss and §6.12's HIDE
  * POPOVERS UNTIL — which Fullscreen §2 Model's fullscreen an element step 2 runs — are the two other consumers
  * of the stack, and each belongs with the caller that needs it; core/fullscreen/fullscreen.h names the second
- * as part of what its next diff builds. And §6.10.2's close-action dispatch for a POPOVER watcher is written
- * and its watcher is now established and the action is still UNRUN — not because §6.10.1 Close requests has no
- * home (core/html/close_request.c is those nine steps) but because nothing DELIVERS a potential close request,
- * which is close_request.h's own named residual and what close_watcher.h's residuals (a) and (b) now say. */
+ * as part of what its next diff builds. §6.10.2's close-action dispatch for a POPOVER watcher is written, its
+ * watcher is established by show popover step 15.10 below, and the arrival that reaches it is MODELLED — HTML
+ * §6.10.1 Close requests' nine steps are core/html/close_request.c and its preamble's task is queued by the
+ * solver — so this element's `popover close watcher` is on a live road rather than a dead one. The sentence
+ * that stood here said the action was UNRUN because nothing delivered a potential close request, which was
+ * true when written — paraphrased rather than quoted, since a quoted run beside a citation is read as the
+ * STANDARD's words. What remains true is narrower and lives where it can be checked: close_request.h's named
+ * residual is the KEYBOARD platform's trusted `keydown`, and a modelled back-gesture arrival needs none. */
 #include <string.h>
 
 #include <lexbor/dom/dom.h>

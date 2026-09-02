@@ -50,29 +50,24 @@
  * and not as functions: a C activation hosting a `cancel` handler is the drive-to-completion this engine
  * aborts on.
  *
- * WHAT IS HONESTLY ABSENT NOW, AND WHY EACH IS A RESIDUAL RATHER THAN A CRASH.
- *   (a) §6.10.1's CLOSE REQUEST STEPS HAVE A HOME AND NO PRODUCER — which is a narrower absence than the one
- * this paragraph used to describe, and the correction matters because the sentence sent readers to build a
- * component that exists. The nine steps are core/html/close_request.c, and their step 7 calls process close
- * watchers below. What nothing in this build does is DELIVER a potential close request — no trusted `keydown`,
- * no Esc, no back gesture — which is close_request.h's own named residual, stated there as THE PRODUCER. So
- * process close watchers is reachable only from a component that will hand §6.10.1 an event, and it shows as a
- * page whose `CloseWatcher` fires `cancel`/`close` for `requestClose()`/`close()` and NEVER for a user's close
- * request, and as an `allowedNumberOfGroups` that only ever rises, since step 3's decrement is the only fall
- * it has.
- *   (b) THE CLOSE ACTION §6.12 SUPPLIES — hide a popover — is WRITTEN, its watcher is now ESTABLISHED, and the
- * action itself is still UNRUN. Those were three facts and they are down to two, which is worth writing because
- * the reason changed rather than the code. It is written: core/html/popover.h exports hide a popover as a
- * function object of the realm taking the standard's own five arguments, and the dispatch below CALLS it with
- * the five §6.12's show popover step 15 states, "to hide a popover given element, true, true, false, and null".
- * It is established: §6.12's show popover step 15.10 runs on every Auto or Hint popover that completes a show,
- * so this manager's groups hold POPOVER watchers on any page with a `<div popover>` in it. What is missing is
- * the DISPATCH — the three action-running algorithms are reached from §6.10.3's `requestClose()` and `close()`,
- * which act on a CloseWatcher instance's own watcher, and from process close watchers, which §6.10.1's step 7
- * calls and which residual (a) says nothing produces a close request to reach. So (b) is now a consequence of
- * (a) rather than an absence of its own: the day a potential close request has a producer, this arm runs code
- * nothing has executed, and nothing in §6.10.2 or §6.12 has to change with it. It shows as an Esc on a
- * `<div popover=auto>` closing it.
+ * WHAT IS HONESTLY ABSENT NOW, AND WHY IT IS A RESIDUAL RATHER THAN A CRASH.
+ *   THE TWO RESIDUALS THAT STOOD HERE ARE RETIRED, AND THEY ARE REWRITTEN RATHER THAN DELETED because each was
+ * TRUE WHEN WRITTEN and each named a thing to build that now exists — which is exactly the shape a reader
+ * re-derives and re-introduces. (a) said §6.10.1's close request steps had a home and no producer, so process
+ * close watchers below "is reachable only from a component that will hand §6.10.1 an event"; (b) said the close
+ * action §6.12 supplies was written and established and UNRUN because the dispatch had no way to be reached,
+ * and was therefore a consequence of (a). BOTH PREMISES ARE NOW FALSE: §6.10.1's preamble has a producer — the
+ * arrival is MODELLED as a task on the solver's one frontier, which core/html/close_request.h states in full
+ * and grades FORCED — so `close_watcher_process_run` below has a live caller (§6.10.1's step 7), a POPOVER
+ * watcher's close action is reached through it, and `allowedNumberOfGroups` has its fall back as well as its
+ * rise. What (a) is DOWN TO is one of §6.10.1's two platforms: no trusted `keydown` is dispatched here, which
+ * is close_request.h's own named residual and is stated there rather than restated here.
+ *   WHAT IS TRUE OF THIS FILE AND IS NOT AN ABSENCE. No run has yet TRAVERSED the whole road — establish, the
+ * modelled arrival, step 7, process close watchers, request to close, close, the POPOVER arm's call of hide a
+ * popover — and an untraversed road is a seam question, not a missing capability. It is answered by asserts at
+ * the joins (process close watchers' own step-4 answer invariant below, and the arity and brand checks §6.12's
+ * hide a popover states at its entry), never by a paragraph here saying which link is thought to be weak: a
+ * paragraph like that is precisely what (a) and (b) became.
  *
  * WHERE FULLSCREEN MEETS THIS, AND WHERE IT DOES NOT. §6.10.1's close request steps are 9 steps whose step 1
  * is "If document's fullscreen element is not null", whose two sub-steps are "Fully exit fullscreen given
@@ -225,8 +220,12 @@ int close_watcher_close_run(JSContext *wctx, CloseWatcherRun *r, JSValueConst wa
 /* §6.10.2's "To PROCESS CLOSE WATCHERS given a Window window", 4 steps — `wctx` is that Window's realm.
    `*pprocessed` takes step 4's processedACloseWatcher, which §6.10.1's close request steps step 7 reads as
    `closedSomething` and nothing else does. Same return contract as above.
-   IT HAS NO CALLER IN THIS BUILD and close_watcher.h's residual paragraph says so: §6.10.1's 9 steps are the
-   one algorithm of §6.10 this component does not hold, because their step 1 asks the fullscreen model. */
+   ITS ONE CALLER IS §6.10.1's STEP 7, which core/html/close_request.c holds — those 9 steps are the one
+   algorithm of §6.10 this component does not own, because their step 1 asks the fullscreen model instead. The
+   sentence that stood here said this function HAD no caller, which was true when written and is the reason the
+   answer invariant at its step 4 exists: that answer leaves this file, is read as `closedSomething`, and its
+   step 9 form is LATCHED by whoever modelled the arrival, so it is a fact two components share rather than a
+   return value. */
 int close_watcher_process_run(JSContext *wctx, JSStepHdr *hdr, CloseWatcherRun *r,
                               JSValue in, bool *pprocessed, JSValue **out_cb, int *out_argc);
 

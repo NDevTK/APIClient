@@ -122,10 +122,18 @@
  *   — HOW ITS ABSENCE WOULD SHOW: a page that calls `preventDefault()` on a `keydown` to suppress a close
  *     request cannot suppress one here — its `cancel`/`close` handlers fire for a modelled back gesture that a
  *     real Esc press would never have reached them with, so the suppression a browser honours is missing and
- *     nothing in the run says which platform it was modelling. In the corpus: WPT `close-watcher/esc-key/` is
- *     the subtree that measures it, and `close-watcher/` is in engine/wpt.mjs's collection list while its
- *     files are not on disk in this checkout — so what that subtree scores here has never been measured, and
- *     "every file in it fails" is a prediction this residual is not entitled to make.
+ *     nothing in the run says which platform it was modelling. In the corpus, the subtree that measures it is
+ *     WPT `close-watcher/esc-key/`, whose files are named for the three key events and for the two questions
+ *     this residual is about — `keydown.html`, `keypress.html`, `keyup.html`, `not-user-activation.html` and
+ *     `synthetic-keyboard-event.html` — and `close-watcher` is a top-level entry of engine/wpt.mjs's
+ *     collection list, which is where that membership is stated and checked. WHETHER THOSE BYTES ARE PRESENT
+ *     IS NOT A FACT ABOUT THIS CHECKOUT and the clause that stood here made it one: the corpus is materialized
+ *     under a gitignored working directory, so a claim that its files are not on disk is true of a tree the
+ *     gate has not fetched and false of one it has, and either way it dates the moment it is written (that
+ *     claim is this header's own retired prose, paraphrased rather than quoted, because a quoted run beside a
+ *     citation is read as the STANDARD's words). What is durable is
+ *     which subtree asks the question; what it SCORES is a measurement, and a measurement belongs beside the
+ *     revision it was taken at rather than in a header.
  */
 #ifndef ENGINE_HOST_BROWSER_CORE_HTML_CLOSE_REQUEST_H
 #define ENGINE_HOST_BROWSER_CORE_HTML_CLOSE_REQUEST_H

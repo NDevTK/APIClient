@@ -513,14 +513,21 @@ static int cw_close_action_run(JSContext *wctx, CloseWatcherRun *r, JSValueConst
            destroying the close.
            THE SUBJECT IS THE ELEMENT, which is what establish was given — §6.12 passes the popover element as
            the watcher's subject precisely so this dispatch has it.
-           THE WATCHER NOW EXISTS AND THIS LINE IS STILL UNRUN, AND THE REASON HAS MOVED. It used to be that
-           show popover step 15 DFAILed before establishing anything, so no watcher of this kind could exist;
-           step 15 now establishes one on every `<div popover>` and `<div popover=hint>` that completes a show.
-           What is missing is a DISPATCH: the three action-running algorithms are reached from §6.10.3's
-           `requestClose()`/`close()`, which act on a CloseWatcher instance's OWN watcher, and from process
-           close watchers, which §6.10.1's step 7 calls and which nothing produces a close request to reach —
-           core/html/close_request.h's own named residual, THE PRODUCER. So residual (b) has collapsed into
-           residual (a). See close_watcher.h. */
+           EVERY LINK BETWEEN A GESTURE AND THIS LINE NOW EXISTS, and the sentence that stood here said the
+           opposite for long enough to be worth the correction rather than the deletion. It read that a
+           dispatch was missing because nothing produced a close request that could reach process close
+           watchers, and that was true when written: §6.10.1's nine steps had a home and no producer. (That
+           retired sentence is paraphrased and NOT put in quotation marks: a quoted run standing beside a
+           citation is read as the STANDARD's words, and engine/citegen.mjs cannot tell a fabricated sentence
+           from a piece of this tree quoting itself.) They have one —
+           the arrival is MODELLED, as a task on the solver's own frontier (core/html/close_request.h's
+           preamble section, and the scheduler arm it names) — so the road is show popover step 15.10's
+           establish, the modelled arrival's task, §6.10.1's step 7, this file's process close watchers, its
+           request to close, its close, and this arm. What no run has ever done is TRAVERSE it end to end, and
+           that is a different claim from a missing link: the failure it would show is not an absent
+           capability but a seam, so it is asserted at each end (the answer invariant at step 4 below, and the
+           arity and element brand checks §6.12's hide a popover states at its own entry) rather than
+           described here. */
         JSValueConst hide_argv[POPOVER_HIDE_ARGC];
         JSValue hide = popover_hide_algorithm(wctx);
         JSValue ignored = JS_UNDEFINED;
@@ -847,6 +854,34 @@ int close_watcher_process_run(JSContext *wctx, JSStepHdr *hdr, CloseWatcherRun *
         JSValue mgr = cw_manager(wctx);
         int32_t allowed = cw_allowed(wctx, mgr);
 
+        /* STEP 4'S ANSWER IS NOT THIS ALGORITHM'S ALONE, WHICH IS WHY IT IS ASSERTED HERE AND NOT MERELY
+           RETURNED. §6.10.1's step 8 reads it as `closedSomething` and its step 9 is the fact a caller LATCHES:
+           a task that fell through to alternative processing has established that nothing in this timeline is
+           watching, and a caller that models the arrival is entitled to stop modelling it (core/html/
+           close_request.h states the completion value). That entitlement is sound only while a FALSE answer
+           means the manager had NOTHING for a close request to do — and step 2.2.1 raises the flag for every
+           member whose get enabled state is true, which BOTH kinds in close_watcher.h's registry answer
+           unconditionally. So today a bound group implies the flag, and the day it does not, the caller's latch
+           is recording "nothing is watching" over a group that is merely DISABLED.
+           WHAT FIRING IT MEANS, IN ORDER OF WHICH IS POSSIBLE. HTML §4.11.4 The dialog element's get enabled
+           state is the one the standard has that can answer false, and the clause that makes it so is the one a
+           shortened quotation drops, so it is written out whole: "getEnabledState being to return true if
+           dialog's enable close watcher for request close is true or dialog's computed closed-by state is not
+           None; otherwise false." A disabled group is not an absent one — the page can enable it again with no
+           close request in between — so adding that kind owes the LATCH a way to be given back, and not only an
+           arm in the dispatch above. The other reading is a last group with no members at all, which HTML
+           §6.10.2 Close watcher infrastructure's destroy a close watcher step 3 is what excludes: "Remove any
+           item from manager's groups that is empty." A group that survived empty is that walk not having
+           reached it. */
+        DCHECK(r->processed || JS_IsUndefined(r->group),
+               "HTML §6.10.2 Close watcher infrastructure's process close watchers is about to answer step 4's "
+               "processedACloseWatcher FALSE while its step 2.1 bound a group. Step 2.2.1 raises that flag for "
+               "every member whose get enabled state is true and both kinds in close_watcher.h's registry "
+               "answer it unconditionally, so a false answer over a bound group is a kind whose get enabled "
+               "state can say NO — and §6.10.1 Close requests' step 9 answer that this feeds is LATCHED by "
+               "whoever models the arrival, which would then stop asking a manager whose group is disabled "
+               "rather than absent. Give that latch a way to be released when a watcher's enabled state "
+               "changes, in the same diff that adds the kind");
         JS_FreeValue(wctx, in);
         /* Step 3 — "If window's close watcher manager's allowed number of groups is greater than 1, decrement
            it by 1." This is the ONLY fall the allowance has, which is why establish's "always at least 1"
