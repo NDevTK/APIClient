@@ -286,6 +286,45 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       import are all in there. A bad first number is the measurement. */
                    "html/semantics/scripting-1/the-script-element",
                    "html/semantics/scripting-1/the-template-element",
+                   /* HTML §6.12 "The popover attribute" and §6.5.1 "The ToggleEvent interface" —
+                      core/html/popover.c, core/html/toggle_event.c, and the ordered set both of them move
+                      elements through, core/css/top_layer.c. Three built components whose spec directory this
+                      list did not name, which is the excluded-test failure this file catches twice above
+                      wearing its hardest shape yet: the PARENT was already in a list. `html/semantics` is a
+                      WPT_OWN_LEVEL entry, so the standard is on disk, appears in a list, and reports a row —
+                      and `popovers/` was in NEITHER list, so a reader checking whether the area was accounted
+                      for found the name and stopped. A parent in the own-level list is the strongest possible
+                      false COMPLETE here, because that list's whole meaning is that the subtree stays absent.
+                      WHAT IS ASKED ABOUT THOSE MEMBERS TODAY, COUNTED AT THE PINNED REVISION RATHER THAN
+                      ESTIMATED. `togglePopover` is named by 11 files in this corpus, TEN of them under this
+                      directory, and by ZERO files under any path either list carries — so §6.12's toggle
+                      popover has no collected test that names it at all. `showPopover` is named by 203 files
+                      and 7 of those are collected: four under `close-watcher/user-activation/`, one under
+                      `dom/nodes/moveBefore/`, one under `shadow-dom/reference-target/tentative/`, and one
+                      helper. `hidePopover` is 97 and 4, all four under
+                      `shadow-dom/reference-target/tentative/`. Every one of those is a test written about a
+                      DIFFERENT standard that reaches a popover on its way past, which is coverage by accident
+                      — and accidental coverage is what makes a component look measured while the directory
+                      written about it is not on disk.
+                      ITS FIXTURES WERE CHECKED BEFORE IT WAS ADDED, which is the idlharness lesson applied in
+                      the one direction that costs nothing. Its 133 files name 15 distinct scripts between
+                      them and every one already resolves under a listed entry, so this is not another family
+                      that collects, runs, and reports a floor of two subtests apiece because the thing it
+                      fetches is on nobody's disk. Its own `resources/` holds five helpers and no test
+                      document; 82 of the 133 load `/resources/testharness.js` and none is a `.any`/`.window`/
+                      `.worker.js`.
+                      IT COSTS 133 BLOBS AND 356 KiB, AND IT MUST BE A WPT_PATHS ENTRY. Naming it in
+                      WPT_OWN_LEVEL would add nothing to the checkout — that is the whole difference between
+                      the two lists — and nothing else puts this subtree on disk, since `html/semantics`'s own
+                      level is materialized by the two rows directly above. Naming the PARENT instead is the
+                      3970-file checkout that own-level list exists to avoid. Six files under
+                      `interactive-elements/the-dialog-element` and one more name
+                      `popovers/resources/popover-utils.js` and `popovers/resources/toggle-event-source-test.js`,
+                      so this entry also serves them the day that directory is taken.
+                      NOTHING IS PREDICTED HERE ABOUT WHAT IT SCORES. The subtree is UNMEASURED, which is a
+                      different statement from either passing or failing, and what each failure NAMES is the
+                      work queue, read off the run. */
+                   "html/semantics/popovers",
                    /* XHR §3 and §5 — core/xhr. Its two SUPPORT directories were listed and the standard's own
                       was not, so the 305 test files of the standard this engine had no component for were the
                       largest single uncollected population in the checkout. `xhr` is the standard; the two
