@@ -834,6 +834,32 @@ static const char *HTML =
        shared no-op over a public property the page could simply assign. */
     "ev.preventDefault();"
     "fetch('/api/evcancel?v=' + (ev.defaultPrevented && ev.returnValue === false ? 'iscancel' : 'wrong'));"
+    /* WEB IDL §3.2.17 Dictionary types' CONVERSION IS INSIDE THE MEMBER LOOP, WHICH IS OBSERVABLE. Step
+       4.1.4.1 converts a member "to an IDL value whose type is the type member is declared to be of", and it
+       runs before the NEXT member's step 4.1.3.1 `Get(jsDict, key)` — so a member whose type refuses the value
+       throws while every member after it is still unread. `screenX` sorts after `relatedTarget` among
+       MouseEventInit's own members and `which` sorts after `view` among UIEventInit's, so each getter below is
+       one a browser never calls. It is a fixture rather than an assert because the thing under test is
+       ORDER: the engine cannot assert that a getter it never ran did not run, and only the page can see it.
+       These two members were IDL_ANY and brand-checked by their event bodies, which runs after the whole walk
+       — `ran` came back true and the error was the body's, one full dictionary late. */
+    "var mo = { ran: false, threw: 'none' };"
+    "try { new MouseEvent('mo', { relatedTarget: 42, get screenX(){ mo.ran = true; return 0; } }); }"
+    " catch (e) { mo.threw = (e instanceof TypeError) ? 'TypeError' : 'other'; }"
+    "var vo = { ran: false, threw: 'none' };"
+    "try { new UIEvent('vo', { view: 42, get which(){ vo.ran = true; return 0; } }); }"
+    " catch (e) { vo.threw = (e instanceof TypeError) ? 'TypeError' : 'other'; }"
+    "fetch('/api/dictorder?v=' + (mo.threw === 'TypeError' && mo.ran === false &&"
+    " vo.threw === 'TypeError' && vo.ran === false ? 'isorder'"
+    " : mo.threw + mo.ran + '/' + vo.threw + vo.ran));"
+    /* AND THE OTHER SIDE OF THE SAME DECLARATION, because a type that refuses everything passes the test above.
+       `Window? view = null` takes this realm's own Window and `EventTarget? relatedTarget = null` takes a node
+       — two interfaces no JSClassID can name, branded per member by their owning component's realm-taking
+       predicate — and each `= null` is what an omitted member IS, not a hole a body filled. */
+    "var okev = new MouseEvent('ok', { view: window, relatedTarget: document.body });"
+    "var bare = new MouseEvent('bare');"
+    "fetch('/api/dictiface?v=' + (okev.view === window && okev.relatedTarget === document.body &&"
+    " bare.view === null && bare.relatedTarget === null ? 'isbrand' : 'wrong'));"
     /* §2.9 DISPATCH — SYNCHRONOUS, and its answer depends on what the listeners did. The first listener holds a
        LOOP, so the walk suspends inside it and resumes at the listener it was on; the second calls
        preventDefault, which is what dispatchEvent's false return reports. A job-enqueued dispatch would answer

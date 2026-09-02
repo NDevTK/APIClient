@@ -93,7 +93,7 @@ bool focus_event_is(JSContext *ctx, JSValueConst v)
    EVENT'S: §2.2's relatedTarget. Returns -1 with the throw live. */
 static int fe_init_slots(JSContext *ctx, JSValueConst ev, JSValueConst init)
 {
-    JSValue slots, given, related;
+    JSValue slots, related;
     JSAtom k;
 
     DCHECK(g_ready, "a FocusEvent was minted before focus_event_init declared the interface — the slot key it "
@@ -105,16 +105,11 @@ static int fe_init_slots(JSContext *ctx, JSValueConst ev, JSValueConst init)
         if (k != JS_ATOM_NULL) JS_FreeAtom(ctx, k);
         return -1;
     }
-    /* `EventTarget? relatedTarget = null` — the type's own conversion, which is event_target.c's because the
-       question it asks is "does this implement EventTarget". */
-    given = idl_dict_get(ctx, init, "relatedTarget");
-    related = event_target_nullable_of(ctx, given, "a FocusEvent's `relatedTarget`");
-    JS_FreeValue(ctx, given);
-    if (JS_IsException(related)) {
-        JS_FreeValue(ctx, slots);
-        JS_FreeAtom(ctx, k);
-        return -1;
-    }
+    /* `EventTarget? relatedTarget = null` — CONVERTED BY THE DECLARATION, and read here. The brand and
+       §3.2.20's null rule are the TYPE's (IDL_INTERFACE_NULLABLE plus the member's own `iface_is`), so this
+       cannot throw and there is no exception arm to unwind: what the reader answers is the IDL null or an
+       EventTarget, both of which §2.2's associated relatedTarget takes as they are. */
+    related = event_target_nullable_of_dict(ctx, init, "relatedTarget");
     JS_SetProperty(ctx, (JSValue)ev, k, slots);
     JS_FreeAtom(ctx, k);
     /* §2.2's associated relatedTarget, on the EVENT — see the file comment. */
@@ -212,7 +207,16 @@ static JSValue js_fe_get_related_target(JSContext *ctx, JSValueConst this_val, i
 static const IdlArgType FE_CTOR_ARGS[2] = { IDL_DOMSTRING, IDL_DICT };
 static const IdlDictMember FE_INIT[] = {
     UI_EVENT_INIT_MEMBERS,
-    { "relatedTarget", IDL_ANY, false, NULL, 2 },
+    /* UI Events §3.3.1.2 FocusEventInit: `EventTarget? relatedTarget = null`. §3.2.15's `I` is stated as this
+       member's own PREDICATE and not as a class, because EventTarget is implemented by every node wrapper, by
+       a Window and by an XMLHttpRequest — no JSClassID names it and no narrowing of one class can, so the test
+       is a walk to THIS realm's EventTarget.prototype and takes a JSContext (core/events/event_target.h).
+       IT IS THE LAST MEMBER OF THIS DICTIONARY, so FocusEventInit is the one place this type's order is NOT
+       observable through a later member's getter — the reason it is declared here anyway is that a member
+       accepted as `any` and brand-checked afterwards by a body is the shape a declared type exists to replace,
+       whether or not a page can time the difference. */
+    { "relatedTarget", IDL_INTERFACE_NULLABLE, false, NULL, 2, NULL, IDL_DEFAULT_NULL,
+      .iface_is = event_target_is_value, .iface_name = "EventTarget" },
 };
 
 static JSValue js_fe_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
@@ -245,8 +249,11 @@ void focus_event_init(JSContext *ctx)
     g_ctor_stepid = idl_method_id_dict(ctx, FE_CTOR_ARGS, 2, FE_INIT,
                                        (int)(sizeof(FE_INIT) / sizeof(FE_INIT[0])), js_fe_ctor, 0);
     idl_optional_from(1);   /* `constructor(DOMString type, optional FocusEventInit eventInitDict = {})` */
-    idl_iface_brand(input_device_capabilities_class());   /* FocusEventInit's one interface-typed member,
-                                                             UIEventInit's `sourceCapabilities` */
+    /* THE DECLARATION-WIDE CLASS, which is now the brand of exactly ONE of this dictionary's three
+       interface-typed members: UIEventInit's `sourceCapabilities`. The other two — UIEventInit's `view` and
+       this dictionary's own `relatedTarget` — state §3.2.15's `I` as their OWN realm-taking predicate, which
+       idl_member_implements takes in preference to the class, so this line never decides for them. */
+    idl_iface_brand(input_device_capabilities_class());
     g_ready = 1;
     /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — AND IT NAMES THE `event` ROW, NOT THIS FILE.
        core/agent_state.h: a sub-component names the row whose RELEASE gives its slots back, which for every

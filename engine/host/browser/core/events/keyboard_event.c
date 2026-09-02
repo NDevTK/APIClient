@@ -262,9 +262,10 @@ static JSValue js_ke_get_modifier_state(JSContext *ctx, JSValueConst this_val, i
  * The four modifier arguments arrive ctrl, ALT, SHIFT, meta — not the order KE_MODIFIER is written in, so the
  * pairing is stated once, below. */
 /* `optional Window? viewArg = null` IS A DECLARED TYPE and it was IDL_ANY, so §3.2.15's brand test and
-   §3.2.20's null rule were both the body's, run by hand through ui_event_view_of. `Window` is one of the
-   interfaces no JSClassID names (the realm's own global OR a WindowProxy), so the position states its
-   interface as idl_arg_iface's PREDICATE rather than as a class. */
+   §3.2.20's null rule were both the body's. `Window` is one of the interfaces no JSClassID names (the realm's
+   own global OR a WindowProxy), so the position states its interface as idl_arg_iface's PREDICATE rather than
+   as a class — the same predicate KeyboardEventInit's inherited `view` member states as
+   IdlDictMember::iface_is. */
 static const IdlArgType KE_INIT_KB_ARGS[10] = {
     IDL_DOMSTRING, IDL_BOOLEAN, IDL_BOOLEAN, IDL_INTERFACE_NULLABLE,
     IDL_DOMSTRING, IDL_UNSIGNED_LONG,
@@ -406,8 +407,10 @@ void keyboard_event_init(JSContext *ctx)
     g_ctor_stepid = idl_method_id_dict(ctx, KE_CTOR_ARGS, 2, KE_INIT,
                                        (int)(sizeof(KE_INIT) / sizeof(KE_INIT[0])), js_ke_ctor, 0);
     idl_optional_from(1);   /* `constructor(DOMString type, optional KeyboardEventInit eventInitDict = {})` */
-    idl_iface_brand(input_device_capabilities_class());   /* KeyboardEventInit's one interface-typed member,
-                                                             UIEventInit's `sourceCapabilities` */
+    /* THE DECLARATION-WIDE CLASS, the brand of exactly ONE of this dictionary's two interface-typed members:
+       UIEventInit's `sourceCapabilities`. The other, UIEventInit's `view`, states §3.2.15's `I` as its own
+       realm-taking predicate, which idl_member_implements takes in preference to the class. */
+    idl_iface_brand(input_device_capabilities_class());
     g_ready = 1;
     /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — AND IT NAMES THE `event` ROW, NOT THIS FILE.
        core/agent_state.h: a sub-component names the row whose RELEASE gives its slots back, which for every

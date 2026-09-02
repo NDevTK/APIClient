@@ -2573,27 +2573,53 @@ bool event_target_is_value(JSContext *ctx, JSValueConst v)
     return ok;
 }
 
-/* WEB IDL §3.2.15's `EventTarget?` — see event_target.h for why the conversion is stated here and once.
-   RESIDUAL — WHAT IS NOT COVERED: its two remaining callers are DICTIONARY members (FocusEventInit's and
-   MouseEventInit's `relatedTarget`); the argument position that used to come through here states the predicate
-   above with idl_arg_iface, and a dictionary member cannot, because IdlDictMember carries a `JSClassID iface`
-   and idl_dict_walk_start takes a walk-wide `bool (*narrow)(JSValueConst)` with no realm — and `EventTarget` is
-   an interface no class id names.
-   WHAT THE NEXT DIFF BUILDS: the dictionary counterpart of idl_arg_iface — a per-member predicate taking a
-   JSContext, on IdlDictMember beside its `iface`.
-   HOW ITS ABSENCE SHOWS: the throw is the event body's and runs AFTER §3.2.17 has read every member, so
-   `new FocusEvent("f", {relatedTarget: 42, get view(){ throw new Error("ran"); }})` reports `ran` where a
-   browser reports the TypeError — `relatedTarget` sorts before `view` at the same level. */
-JSValue event_target_nullable_of(JSContext *ctx, JSValueConst v, const char *what)
+/* WEB IDL §3.2.15 Interface types' `EventTarget?` MEMBER, READ OFF THE CONVERTED DICTIONARY — see
+   event_target.h. The BRAND is the declaration's at both of this type's dictionary members now: FocusEventInit's
+   and MouseEventInit's `relatedTarget` are IDL_INTERFACE_NULLABLE carrying `.iface_is = event_target_is_value`
+   and `.iface_name = "EventTarget"`, which is §3.2.15's `I` stated as the realm-taking predicate the walk
+   resolves through idl_member_implements. So §3.2.17 Dictionary types step 4.1.4.1 converts the member AT ITS
+   OWN PLACE in the read order, and this performs no test the type has not already performed.
+   WHAT THE MOVE FIXED IS AN ORDER A PAGE COULD SEE. The conversion used to be this body's, so it ran after the
+   member loop had read EVERY member of the dictionary:
+   `new MouseEvent("m", {relatedTarget: 42, get screenX(){ throw new Error("ran"); }})` reported `ran`, because
+   `screenX` sorts after `relatedTarget` among MouseEventInit's OWN members and its step 4.1.3.1 Get ran the
+   getter that a browser's step 4.1.4.1 TypeError had already made unreachable. It now reports the TypeError.
+   AND NOT THE FocusEvent SPELLING, which an earlier statement of this gave and which distinguishes NOTHING —
+   recorded here because it is the kind of claim a reader re-derives: §3.2.17 step 4 reads inherited
+   dictionaries first, "in order from least to most derived", and only then each dictionary's own members
+   lexicographically. `view` is declared on UIEventInit and `relatedTarget` on FocusEventInit, so `view` is read
+   FIRST and a browser runs that getter exactly as this engine does; the two do not sort "at the same level",
+   which core/events/focus_event.c's own constructor comment states in the file the caller lived in.
+   FocusEventInit has no member after `relatedTarget` at all, so its order is not observable through a later
+   member's getter and MouseEventInit's is the only spelling that shows this.
+   ITS ONE REMAINING JUDGEMENT IS THE ABSENT DICTIONARY, and that is a POSITIVE statement rather than a hole a
+   `?:` fills: §3.2.17 step 4.1.2's "If jsDict is either undefined or null" arm gives every member the value
+   undefined, and DOM §2.2's un-initialized value of the associated relatedTarget is null — the same null
+   `EventTarget? relatedTarget = null` places at step 4.1.5 for a page that passed a dictionary and left the
+   member out. One fact, so the engine's own events and a page's constructed ones agree without a second table
+   of defaults. */
+JSValue event_target_nullable_of_dict(JSContext *ctx, JSValueConst init, const char *member)
 {
-    DCHECK(what != NULL && *what,
-           "the `EventTarget?` conversion was asked to convert a value for a member it cannot name — the name "
-           "is the whole of what the TypeError tells the page");
-    if (JS_IsUndefined(v) || JS_IsNull(v))
+    JSValue v;
+
+    DCHECK(member != NULL && *member,
+           "an `EventTarget?` member was read off a converted dictionary with no member name — the name is "
+           "what identifies the declaration a wrong shape would have to be fixed at");
+    v = idl_dict_get(ctx, init, member);
+    if (JS_IsUndefined(v)) {
+        JS_FreeValue(ctx, v);
         return JS_NULL;
-    if (!event_target_is_value(ctx, v))
-        return JS_ThrowTypeError(ctx, "%s must be an EventTarget or null", what);
-    return JS_DupValue(ctx, v);
+    }
+    /* THE BRAND REFUSED A WRONG VALUE BEFORE ANY BODY WAS ENTERED AND DOES NOT SEE AN UNKNOWN ONE — the same
+       reading input_device_capabilities_of_dict makes of the same arm: §3.2.15's test is
+       IDL_INTERFACE_NULLABLE's, and the §3.2.17 member loop rewrites a CONCOLIC member's type to IDL_ANY
+       before that arm is asked, so `{relatedTarget: <unknown>}` is the one shape that reaches here having
+       passed no brand at all, and it is the shape a message about a wrong value misnames. */
+    IDL_DCHECK_MEMBER(JS_IsNull(v) || event_target_is_value(ctx, v), v, member,
+                      "`EventTarget?` with a `= null` default — UI Events §3.3.1.2 FocusEventInit and Pointer "
+                      "Events 4 §11.1 MouseEvent interface each write `EventTarget? relatedTarget = null` — "
+                      "branded per member by IdlDictMember::iface_is over IDL_INTERFACE_NULLABLE");
+    return v;
 }
 
 /* §2.9 steps 6.1-6.2 and 6.9.3-6.9.4: a NEW LIST holding each of the event's touch targets RETARGETED against

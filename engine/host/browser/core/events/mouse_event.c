@@ -211,7 +211,7 @@ static bool md_arg_bool(JSContext *ctx, int argc, JSValueConst *argv, int i)
    value that is the EVENT'S: §2.2's relatedTarget. Returns -1 with the throw live. */
 static int md_init_slots(JSContext *ctx, JSValueConst ev, JSValueConst init)
 {
-    JSValue slots, given, related;
+    JSValue slots, related;
     JSAtom k;
 
     DCHECK(g_ready, "a MouseEvent was minted before mouse_event_init declared the interface — the slot key it "
@@ -223,17 +223,11 @@ static int md_init_slots(JSContext *ctx, JSValueConst ev, JSValueConst init)
         if (k != JS_ATOM_NULL) JS_FreeAtom(ctx, k);
         return -1;
     }
-    /* `EventTarget? relatedTarget = null` — the type's own conversion, which is event_target.c's because the
-       question it asks is "does this implement EventTarget", and because FocusEventInit declares the same
-       member over the same §2.2 value. */
-    given = idl_dict_get(ctx, init, "relatedTarget");
-    related = event_target_nullable_of(ctx, given, "a MouseEvent's `relatedTarget`");
-    JS_FreeValue(ctx, given);
-    if (JS_IsException(related)) {
-        JS_FreeValue(ctx, slots);
-        JS_FreeAtom(ctx, k);
-        return -1;
-    }
+    /* `EventTarget? relatedTarget = null` — CONVERTED BY THE DECLARATION, and read here through the reader
+       event_target.c states once, because FocusEventInit declares the same member over the same §2.2 value.
+       IT CANNOT THROW, so there is no exception arm to unwind: the brand and §3.2.20's null rule ran inside
+       §3.2.17's member loop, at this member's own place in the read order, before this body was entered. */
+    related = event_target_nullable_of_dict(ctx, init, "relatedTarget");
     JS_SetPropertyStr(ctx, slots, "screenX", JS_NewInt32(ctx, ui_event_dict_i32(ctx, init, "screenX")));
     JS_SetPropertyStr(ctx, slots, "screenY", JS_NewInt32(ctx, ui_event_dict_i32(ctx, init, "screenY")));
     JS_SetPropertyStr(ctx, slots, "clientX", JS_NewInt32(ctx, ui_event_dict_i32(ctx, init, "clientX")));
@@ -545,7 +539,18 @@ static const IdlDictMember MD_INIT[] = {
        a block of their own after them. Which spec contributed a member is not something §3.2.17's read order
        can see. */
     { "movementX", IDL_DOUBLE, false, NULL, 3 }, { "movementY", IDL_DOUBLE, false, NULL, 3 },
-    { "relatedTarget", IDL_ANY, false, NULL, 3 },
+    /* Pointer Events 4 §11.1 MouseEvent interface: `EventTarget? relatedTarget = null`. §3.2.15's `I` is this
+       member's own PREDICATE and not a class — EventTarget is implemented by every node wrapper, by a Window
+       and by an XMLHttpRequest, so no JSClassID names it and the test is a walk to THIS realm's
+       EventTarget.prototype (core/events/event_target.h).
+       THIS ROW IS WHERE THE TYPE'S READ ORDER BECOMES OBSERVABLE, which is why the member had to move off
+       IDL_ANY rather than keep a body-side check: `screenX` and `screenY` sort AFTER it among this
+       dictionary's own members, so with the brand in the body
+       `new MouseEvent("m", {relatedTarget: 42, get screenX(){ throw new Error("ran"); }})` ran that getter —
+       §3.2.17 step 4.1.3.1's Get for a member a browser never reaches, because its step 4.1.4.1 threw one
+       member earlier. */
+    { "relatedTarget", IDL_INTERFACE_NULLABLE, false, NULL, 3, NULL, IDL_DEFAULT_NULL,
+      .iface_is = event_target_is_value, .iface_name = "EventTarget" },
     { "screenX", IDL_LONG, false, NULL, 3 }, { "screenY", IDL_LONG, false, NULL, 3 },
 };
 
@@ -618,8 +623,12 @@ void mouse_event_init(JSContext *ctx)
     g_ctor_stepid = idl_method_id_dict(ctx, MD_CTOR_ARGS, 2, MD_INIT,
                                        (int)(sizeof(MD_INIT) / sizeof(MD_INIT[0])), js_md_ctor, 0);
     idl_optional_from(1);   /* `constructor(DOMString type, optional MouseEventInit eventInitDict = {})` */
-    idl_iface_brand(input_device_capabilities_class());   /* MouseEventInit's one interface-typed member,
-                                                             UIEventInit's `sourceCapabilities` */
+    /* THE DECLARATION-WIDE CLASS, the brand of exactly ONE of this dictionary's three interface-typed members:
+       UIEventInit's `sourceCapabilities`. UIEventInit's `view` and this dictionary's own `relatedTarget` state
+       §3.2.15's `I` as their own realm-taking predicate, which idl_member_implements takes in preference to
+       the class — the same two interfaces the two argument positions above name, stated once per member
+       instead of once per position. */
+    idl_iface_brand(input_device_capabilities_class());
     g_ready = 1;
     /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — AND IT NAMES THE `event` ROW, NOT THIS FILE.
        core/agent_state.h: a sub-component names the row whose RELEASE gives its slots back, which for every

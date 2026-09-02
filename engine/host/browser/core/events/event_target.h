@@ -96,19 +96,23 @@ bool event_target_is_window(JSContext *ctx, JSValueConst target);
    LOOP, and the first site to get either wrong reports a node out of a closed tree to a listener that must not
    see it. */
 JSValue event_target_retarget(JSContext *ctx, JSValueConst a, JSValueConst b);
-/* WEB IDL §3.2.15's `EventTarget?`, over the ONE value DOM §2.2 gives every Event — the associated
-   relatedTarget, which §2.9 step 4 retargets and which MouseEventInit and FocusEventInit each declare a member
-   over. It is stated HERE, once, because "does this value implement EventTarget" is this component's question
-   and neither event interface's: written out in one of them, the second copy is a brand test a body wrote by
-   hand, which is exactly what a declared type exists to replace.
-   THERE IS NO SINGLE CLASS TO BRAND AGAINST — every Node, every Window, every MessagePort, every AbortSignal
-   and every `new EventTarget()` implements the interface — so the question is asked of the object's PROTOTYPE
-   CHAIN, which is where an interface's members actually live: a platform object implements EventTarget exactly
-   when this realm's EventTarget.prototype is on its chain.
-   `what` NAMES THE MEMBER being converted ("a FocusEvent's `relatedTarget`") and is the subject of the
-   TypeError, because the one thing a page needs from it is which value it handed over was wrong.
-   Answers JS_NULL / an owned dup, or JS_EXCEPTION with the TypeError live. */
-JSValue event_target_nullable_of(JSContext *ctx, JSValueConst v, const char *what);
+/* WEB IDL §3.2.15's `EventTarget?` MEMBER, READ OFF THE CONVERTED DICTIONARY — over the ONE value DOM §2.2
+   gives every Event, the associated relatedTarget, which §2.9 step 4 retargets and which MouseEventInit and
+   FocusEventInit each declare a member over. It is stated HERE, once, because which shapes a converted
+   `EventTarget?` member may hold is this component's question and neither event interface's.
+   IT PERFORMS NO CONVERSION AND CANNOT THROW, which is the difference from the body-side conversion it
+   replaced. The member is declared IDL_INTERFACE_NULLABLE with `iface_is` = event_target_is_value, so Web IDL
+   §3.2.17 Dictionary types step 4.1.4.1 has already run §3.2.15's brand and §3.2.20's null rule at the
+   member's own place in the read order — before the next member's step 4.1.3.1 Get and long before any body is
+   entered. What is left for a body is to READ what the declaration placed, which is what this does.
+   THE ONE SHAPE THE DECLARATION DOES NOT ANSWER FOR is an ABSENT DICTIONARY — DOM §2.5's create an event
+   passes JS_UNDEFINED as the init, so no walk ran and no §3.2.17 step 4.1.5 default was placed. That
+   `undefined` is the un-initialized value §2.2 states as null, and answering it is this function's other half.
+   `member` NAMES THE MEMBER on the dictionary ("relatedTarget"); the DCHECK below is the only reader of it,
+   and it is what makes a declaration that did not brand this member crash at the body rather than hand a
+   listener a relatedTarget that is not an EventTarget.
+   Answers JS_NULL or an owned dup. */
+JSValue event_target_nullable_of_dict(JSContext *ctx, JSValueConst init, const char *member);
 /* THE TYPE TEST ALONE — Web IDL §3.2.15's "If V implements I", with no null rule and no throw, which is what a
    DECLARED argument position asks for: the argument machine resolves §3.2.20's `?` before any brand is read
    and throws the TypeError itself, so a position declared `EventTarget?` states this predicate through

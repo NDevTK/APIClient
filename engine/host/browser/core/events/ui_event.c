@@ -177,30 +177,37 @@ double ui_event_dict_f64(JSContext *ctx, JSValueConst init, const char *name)
     return n;
 }
 
-/* `Window?` — Web IDL §3.2.15 over the `view` member of UIEventInit. null and undefined are the IDL null; a
-   Window (which in this engine is the realm's global, and is also what `window` hands a page) crosses as
-   itself; anything else matches the type not at all, which is Web IDL's own TypeError and not a rule this file
-   invents. Answers JS_NULL / an owned dup, or JS_EXCEPTION with the throw live.
-   RESIDUAL — WHAT IS NOT COVERED: the three legacy initializers' `viewArg` no longer comes through here, because
-   an ARGUMENT position states its interface with idl_arg_iface's predicate; a DICTIONARY member cannot, because
-   IdlDictMember carries a `JSClassID iface` and idl_dict_walk_start takes a walk-wide
-   `bool (*narrow)(JSValueConst)` with no realm — and `Window` is an interface no class id names.
-   WHAT THE NEXT DIFF BUILDS: the dictionary counterpart of idl_arg_iface — a per-member predicate taking a
-   JSContext, on IdlDictMember beside its `iface`, so `{ "view", IDL_INTERFACE_NULLABLE, … }` is declarable.
-   HOW ITS ABSENCE SHOWS: the throw is this body's and runs AFTER §3.2.17 has read every member, so
-   `new UIEvent("x", {view: 42, get which(){ throw new Error("ran"); }})` reports `ran` where a browser reports
-   the TypeError — `view` sorts before `which` at the same level, so a declared member would refuse it first. */
-JSValue ui_event_view_of(JSContext *ctx, JSValueConst v)
+/* `Window? view = null` — UI Events §3.2.1.2 UIEventInit's member, READ OFF THE CONVERTED DICTIONARY. §3.2.15's
+   brand and §3.2.20's null rule are the DECLARATION's: the row in ui_event.h states `I` as
+   `window_proxy_is_window`, the same predicate the three legacy initializers' `viewArg` positions state, so a
+   Window (which in this engine is the realm's global, and is also what `window` hands a page) or a WindowProxy
+   crosses as itself and everything else is Web IDL's own TypeError — thrown inside §3.2.17's member loop, at
+   `view`'s own place in the read order, before `which`'s step 4.1.3.1 Get and long before this body runs.
+   THE ONE SHAPE THE DECLARATION DOES NOT ANSWER FOR IS AN ABSENT DICTIONARY, and it is a POSITIVE statement
+   rather than a hole: DOM §2.5 Constructing events' create an event passes JS_UNDEFINED as the init, so no
+   walk ran and step 4.1.5 placed no default — and §3.2.1's own un-initialized value for `view` is the null
+   that `= null` would have placed. The same reading input_device_capabilities_of_dict makes of the same
+   absence, over the member that sorts immediately before this one. */
+static JSValue ue_view_of_dict(JSContext *ctx, JSValueConst init)
 {
-    if (JS_IsUndefined(v) || JS_IsNull(v))
+    JSValue v = idl_dict_get(ctx, init, "view");
+
+    if (JS_IsUndefined(v)) {
+        JS_FreeValue(ctx, v);
         return JS_NULL;
-    if (window_proxy_is_window(ctx, v))
-        return JS_DupValue(ctx, v);
-    return JS_ThrowTypeError(ctx, "a UIEvent's `view` must be a Window or null");
+    }
+    /* THE BRAND REFUSED A WRONG VALUE BEFORE THIS BODY WAS ENTERED AND DOES NOT SEE AN UNKNOWN ONE: the
+       §3.2.17 member loop rewrites a CONCOLIC member's type to IDL_ANY before IDL_INTERFACE_NULLABLE's arm is
+       asked, so `{view: <unknown>}` is the one shape that reaches here having passed no brand at all. */
+    IDL_DCHECK_MEMBER(JS_IsNull(v) || window_proxy_is_window(ctx, v), v, "view",
+                      "`Window?` with a `= null` default — UI Events §3.2.1.2 UIEventInit writes "
+                      "`Window? view = null` — branded per member by IdlDictMember::iface_is over "
+                      "IDL_INTERFACE_NULLABLE, with the predicate core/frame/window_proxy.h owns");
+    return v;
 }
 
-/* §3.2.1's `view`, RESOLVED TO ITS REALM — see ui_event.h for why the resolution lives beside the conversion
-   that wrote the slot. NULL is the IDL null and is a statement, never an absence. */
+/* §3.2.1's `view`, RESOLVED TO ITS REALM — see ui_event.h for why the resolution lives beside the reader that
+   wrote the slot. NULL is the IDL null and is a statement, never an absence. */
 JSContext *ui_event_view_realm(JSContext *ctx, JSValueConst ev)
 {
     JSValue slots = ue_slots(ctx, ev), view;
@@ -231,8 +238,9 @@ JSContext *ui_event_view_realm(JSContext *ctx, JSValueConst ev)
                "those two produces");
         return realm;
     }
-    /* The only other shape ui_event_view_of admits is a realm's OWN GLOBAL, and it admits one only for the
-       realm it is asked in — so when this holds, `ctx` IS that Window's realm and nothing else can be. */
+    /* The only other shape `Window?` admits is a realm's OWN GLOBAL, and window_proxy_is_window admits one
+       only for the realm it is asked in — so when this holds, `ctx` IS that Window's realm and nothing else
+       can be. */
     own_global = window_proxy_is_window(ctx, view);
     JS_FreeValue(ctx, view);
     DCHECK(own_global,
@@ -265,7 +273,7 @@ static JSValue ui_modifiers_of(JSContext *ctx, JSValueConst init)
 /* The four own slots, placed on an event whose Event half is already built. Returns -1 with the throw live. */
 static int ui_init_slots(JSContext *ctx, JSValueConst ev, JSValueConst init)
 {
-    JSValue slots, given, view, mods, source;
+    JSValue slots, view, mods, source;
     JSAtom k;
 
     DCHECK(g_ready, "a UIEvent was minted before ui_event_init declared the interface — the slot key it hangs "
@@ -277,14 +285,10 @@ static int ui_init_slots(JSContext *ctx, JSValueConst ev, JSValueConst init)
         if (k != JS_ATOM_NULL) JS_FreeAtom(ctx, k);
         return -1;
     }
-    given = idl_dict_get(ctx, init, "view");
-    view = ui_event_view_of(ctx, given);
-    JS_FreeValue(ctx, given);
-    if (JS_IsException(view)) {
-        JS_FreeValue(ctx, slots);
-        JS_FreeAtom(ctx, k);
-        return -1;
-    }
+    /* `Window? view = null`, READ. The declaration has branded it, so this cannot throw and needs no unwind
+       arm — the same standing as the `sourceCapabilities` read below, which is what the two members having the
+       same kind of declared type is supposed to mean. */
+    view = ue_view_of_dict(ctx, init);
     mods = ui_modifiers_of(ctx, init);
     if (JS_IsException(mods)) {
         JS_FreeValue(ctx, view);
@@ -294,7 +298,7 @@ static int ui_init_slots(JSContext *ctx, JSValueConst ev, JSValueConst init)
     }
     /* INPUT DEVICE CAPABILITIES §"Extensions to the UIEvent interface and UIEventInit dictionary". The
        declaration has already branded it, so this read runs none of the page's code and cannot throw — which
-       is why it comes after the two conversions that can. */
+       is now true of `view` too, and the one allocation left that can fail is the modifier record's. */
     source = input_device_capabilities_of_dict(ctx, init, "sourceCapabilities");
     JS_SetPropertyStr(ctx, slots, "view", view);
     JS_SetPropertyStr(ctx, slots, "detail", JS_NewInt32(ctx, ui_event_dict_i32(ctx, init, "detail")));
@@ -408,10 +412,12 @@ JSValue ui_event_get_modifier_state(JSContext *ctx, JSValueConst ev, JSValueCons
  * sets it. Every interface that inherits UIEvent inherits this member too, which is exactly §6's point that
  * "initializing all the attributes requires calls to two initializer methods". */
 /* `optional Window? viewArg = null` IS A DECLARED TYPE and it was IDL_ANY, so §3.2.15's brand test and
-   §3.2.20's null rule were both the body's, run by hand through ui_event_view_of — the brand written out in a
-   body that a declared type exists to replace. `Window` is one of the interfaces no JSClassID names (the
-   realm's own global OR a WindowProxy — core/frame/window_proxy.h states why those are one type test), so the
-   position states its interface as idl_arg_iface's PREDICATE rather than as a class. */
+   §3.2.20's null rule were both the body's — the brand written out in a body that a declared type exists to
+   replace. `Window` is one of the interfaces no JSClassID names (the realm's own global OR a WindowProxy —
+   core/frame/window_proxy.h states why those are one type test), so the position states its interface as
+   idl_arg_iface's PREDICATE rather than as a class. UIEventInit's `view` states the SAME predicate as
+   IdlDictMember::iface_is, so this engine has one answer to "is this a Window" and no body left that asks it
+   by hand. */
 static const IdlArgType UE_INIT_UI_ARGS[5] = {
     IDL_DOMSTRING, IDL_BOOLEAN, IDL_BOOLEAN, IDL_INTERFACE_NULLABLE, IDL_LONG,
 };
@@ -553,7 +559,11 @@ void ui_event_init(JSContext *ctx)
     g_ctor_stepid = idl_method_id_dict(ctx, UE_CTOR_ARGS, 2, UE_INIT,
                                        (int)(sizeof(UE_INIT) / sizeof(UE_INIT[0])), js_ue_ctor, 0);
     idl_optional_from(1);   /* §3.2.1: `constructor(DOMString type, optional UIEventInit init = {})` */
-    idl_iface_brand(input_device_capabilities_class());   /* UIEventInit's one interface-typed member */
+    /* THE DECLARATION-WIDE CLASS, the brand of exactly ONE of UIEventInit's two interface-typed members:
+       `sourceCapabilities`. `view` states §3.2.15's `I` as its own realm-taking predicate on the member row
+       (ui_event.h), which idl_member_implements takes in preference to the class — so this line and that row
+       never decide the same member and the seal's "twice" refusal has nothing to refuse. */
+    idl_iface_brand(input_device_capabilities_class());
     g_ready = 1;
     /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — AND IT NAMES THE `event` ROW, NOT THIS FILE.
        core/agent_state.h: a sub-component names the row whose RELEASE gives its slots back, which for every

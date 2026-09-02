@@ -6,6 +6,11 @@
 
 #include "quickjs.h"
 #include "core/idl_args.h"
+/* UI_EVENT_INIT_MEMBERS names `window_proxy_is_window` as `view`'s §3.2.15 predicate, so the macro carries its
+   own declaration rather than relying on each splicing file to have included it — a fifth dictionary that
+   spliced the macro without this include would fail to compile, which is the good failure, but only because
+   the name is a function and not a macro. The include is what makes the macro self-contained. */
+#include "core/frame/window_proxy.h"
 
 void ui_event_init(JSContext *ctx);            /* the slot key + the IDL declarations (agent init) */
 void ui_event_install_protos(JSContext *ctx);  /* §3.7: one prototype AND one interface object per REALM */
@@ -33,22 +38,16 @@ JSValue ui_event_new_derived(JSContext *ctx, JSValue proto, JSValueConst type, J
 /* Does this object carry UIEvent's own slot record — the brand a derived interface's members share. */
 bool ui_event_is(JSContext *ctx, JSValueConst v);
 
-/* §3.2.1's `Window?` CONVERSION, over `view` and over every legacy initializer's `viewArg`. null and undefined
-   are the IDL null, a Window crosses as itself, and anything else is Web IDL's own TypeError. It is public
-   because it is a CONVERSION and not an algorithm step: Web IDL performs it before the initializer's first
-   step, so an initializer whose other arguments also need converting has to be able to order the two.
-   Answers JS_NULL, an owned dup, or JS_EXCEPTION with the TypeError live. */
-JSValue ui_event_view_of(JSContext *ctx, JSValueConst v);
-
 /* §3.2.1's `view` AS THE REALM IT NAMES — the answer to "the event's associated Window object, IF THERE IS ONE"
  * that CSSOM VIEW §10's `pageX`/`pageY` step 2 asks, resolved to the JSContext every per-realm fact about that
  * Window is answered out of. NULL is the "or zero otherwise" arm and is a POSITIVE statement: the IDL's
  * `Window? view = null` means an event constructed without one has no Window, not that its Window is unknown.
  *
- * IT IS HERE RATHER THAN AT THE MEMBER THAT NEEDS IT because `view` is THIS interface's slot and the mapping
- * from a Window value to its realm is this interface's business twice over: `ui_event_view_of` is what put
- * either shape in the slot, so the two functions are the two halves of one type and a second reader that
- * re-derived the mapping could disagree with the writer about which shapes are admissible.
+ * IT IS HERE RATHER THAN AT THE MEMBER THAT NEEDS IT because `view` is THIS interface's slot, and the two
+ * shapes that can be IN that slot are decided by ONE statement of `Window`: `window_proxy_is_window`, which is
+ * what UIEventInit's `view` row brands with (IdlDictMember::iface_is), what the three legacy initializers'
+ * `viewArg` positions brand with (idl_arg_iface), and what the second arm below asks again. A reader that
+ * re-derived which shapes are admissible could disagree with the type that admitted them.
  *
  * THE VIEWPORT IS PER REALM AND THAT IS THE WHOLE POINT — a child navigable's is 300 CSS pixels wide and the
  * top-level traversable's is 1280 (core/frame/viewport.h) — so `new MouseEvent('m', {view: frame.contentWindow})`
@@ -61,7 +60,8 @@ JSContext *ui_event_view_realm(JSContext *ctx, JSValueConst ev);
    Pointer Events 4's initMouseEvent and §6.1.2's initKeyboardEvent — begin with the same four arguments and
    the same sentence ("this method has the same behavior as initEvent()", then `view`), so it is one
    implementation rather than the same four lines written in three files with three chances to drop the early
-   return. `view` is CONSUMED (pass what ui_event_view_of answered).
+   return. `view` is CONSUMED — pass the `viewArg` position the DECLARATION converted, dup'd; it is the IDL
+   null or a Window and its `Window?` brand is idl_arg_iface's, never a check the caller repeats.
    Answers FALSE when the event's DISPATCH FLAG is set: §2.2's initialise-an-existing-event returns early, and
    a derived initializer must honour that before writing a single slot of its own. */
 bool ui_event_reinit(JSContext *ctx, JSValueConst ev, JSValueConst type, bool bubbles, bool cancelable,
@@ -98,15 +98,28 @@ JSValue ui_event_get_modifier_state(JSContext *ctx, JSValueConst ev, JSValueCons
 
    INPUT DEVICE CAPABILITIES' `InputDeviceCapabilities? sourceCapabilities = null` IS ONE OF UIEventInit's OWN
    MEMBERS AND SORTS AMONG THEM, between `detail` and `view` — §3.2.17's lexicographic order is over the
-   dictionary's members and knows nothing about which specification wrote each one. It is the ONE member here
-   with a declared INTERFACE type, so the class it brands against is stated once per DECLARATION with
-   `idl_iface_brand(input_device_capabilities_class())` — which every constructor that splices this macro in
-   must state, and a declaration that forgets brands against class zero, which the conversion asserts on. */
+   dictionary's members and knows nothing about which specification wrote each one.
+
+   TWO OF THESE MEMBERS HAVE AN INTERFACE TYPE AND THEY STATE §3.2.15's `I` IN THE TWO DIFFERENT SPELLINGS,
+   which is the whole of why one is written on the row and the other is not.
+     - `sourceCapabilities` is one CLASS, so it is branded once per DECLARATION with
+       `idl_iface_brand(input_device_capabilities_class())` — which every constructor that splices this macro in
+       must state, and a declaration that forgets brands against class zero, which the conversion asserts on.
+     - `Window? view = null` is not. `Window` is a realm's own global OR a WindowProxy (core/frame/window_proxy.h
+       states why those are one type test), so no JSClassID names it and the question takes a JSContext. The row
+       therefore carries `IdlDictMember::iface_is` — §3.2.15's `I` as a PREDICATE — and idl_member_implements
+       takes it in preference to the declaration's class, so the two never decide the same member.
+     The predicate is the SAME one the three legacy initializers state at their `viewArg` position with
+     idl_arg_iface, so a `view` written through a constructor and a `viewArg` passed to initUIEvent are one
+     test, and this member no longer reaches a body unconverted for the body to brand by hand — which ran
+     `which`'s getter for `new UIEvent("x", {view: 42, get which(){ throw new Error("ran"); }})`, one member
+     past the §3.2.17 step 4.1.4.1 conversion a browser throws at. */
 #define UI_EVENT_INIT_MEMBERS                                                                             \
     { "bubbles", IDL_BOOLEAN }, { "cancelable", IDL_BOOLEAN }, { "composed", IDL_BOOLEAN },                \
     { "detail", IDL_LONG, false, NULL, 1 },                                                               \
     { "sourceCapabilities", IDL_INTERFACE_NULLABLE, false, NULL, 1, NULL, IDL_DEFAULT_NULL },             \
-    { "view", IDL_ANY, false, NULL, 1 },                                                                  \
+    { "view", IDL_INTERFACE_NULLABLE, false, NULL, 1, NULL, IDL_DEFAULT_NULL,                             \
+      .iface_is = window_proxy_is_window, .iface_name = "Window" },                                        \
     { "which", IDL_UNSIGNED_LONG, false, NULL, 1 }
 /* §3.5.3's fourteen: the four named for the attribute they also initialize, and the ten `modifier<Name>` ones
    whose key modifier name is the member's name minus that prefix. */
