@@ -3385,6 +3385,15 @@ static const char *HTML_POPOVER =
     "pv.addEventListener('beforetoggle', function(...a){"
       "fetch('/api/popover?old=' + a[0].oldState + '&state=' + a[0].newState + '&n=' + a.length);"
     "});"
+    /* AND THE `toggle` HALF, WHICH IS THE ONLY THING THAT CAN SEE THE STATE ACTUALLY CHANGE. §6.12's hide a
+       popover fires `beforetoggle` at its step 12 and QUEUES the `toggle` at its step 18, three steps past the
+       clears of the popover trigger, the opened-in-popover mode and the popover visibility state — so a hide
+       that fired its `beforetoggle` and then lost its way out of that stage is indistinguishable from a
+       complete one to a `beforetoggle` listener and is named by this one. It is a TASK, so it also puts a
+       queued job of the flow's own between the two modelled arrivals. */
+    "pv.addEventListener('toggle', function(e){"
+      "fetch('/api/popovertoggle?state=' + e.newState);"
+    "});"
     "pv.showPopover();"
     "</script>"
     "</body></html>";
@@ -9932,9 +9941,10 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "second time");
 
     /* ─── HTML §6.12 The popover attribute → §6.10.1 Close requests → §6.10.2 Close watcher infrastructure ────
-       FIVE RUNGS OF ONE ROAD, LOWEST FIRST, because the road has five joins and a single folded row would say
-       "the popover did not close" for a failure at any of them. See HTML_POPOVER for why this document has one
-       flow and what each of its three no-fork properties is doing there.
+       ONE ROW PER JOIN OF ONE ROAD, LOWEST FIRST, because a single folded row would say "the popover did not
+       close" for a failure at any of them and every one of those failures is a different file. See
+       HTML_POPOVER for why this document has one flow and what each of its three no-fork properties is doing
+       there.
 
        THE STEP COUNT IS READ OFF THE ENGINE AND NOT OFF THE RESULT DOCUMENT, even though result.c composes the
        same histogram into `stepUnitRuns`. The document is a STRING this function is handed, and a row that
@@ -10005,7 +10015,25 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "the hide fired and its ToggleEvent's `oldState` is not \"open\" — §6.12's hide a popover step 12 "
              "states oldState \"open\" and newState \"closed\", so one right and one wrong is the two slots "
              "crossed on the hide's side only");
-    /* RUNG 5 — WHAT THE ARRIVAL COST THE PROVENANCE. Nobody performed the gesture, so CLAUDE.md
+    /* RUNG 5 — AND THE STATE ACTUALLY CHANGED. §6.12's hide a popover clears the popover trigger, the opened-in
+       -popover mode and the popover VISIBILITY STATE at its steps 14, 15 and 16 and queues the `toggle` at its
+       step 18, so a `toggle` carrying newState "closed" is the first observation downstream of those clears —
+       and the row above it, which is about step 12, cannot see any of them. The show's own `toggle` (step 26)
+       is asked first as the control: without it a 0 here is the toggle TASK never running rather than the hide
+       stage never finishing, and those are two different files. */
+    const char *pop_hidden_why = NULL; int pop_hidden = 1;
+    fold_row(&pop_hidden, &pop_hidden_why, pop_close, pop_close_why);
+    fold_row(&pop_hidden, &pop_hidden_why, param_value_is(js, "/api/popovertoggle", "state", "open"),
+             "the SHOW's queued `toggle` never reached the page — HTML §6.12 The popover attribute's show "
+             "popover step 26 queues a popover toggle event task, and a flow runs its own task queue before it "
+             "can reach the end of its work, so this is the task pump and not the hide");
+    fold_row(&pop_hidden, &pop_hidden_why, param_value_is(js, "/api/popovertoggle", "state", "closed"),
+             "the hide fired its step 12 `beforetoggle` and never queued its step 18 `toggle` — the machine "
+             "left the stage that holds steps 13 through 20.1 without finishing it, so the popover's "
+             "VISIBILITY STATE (step 16) and its opened-in-popover mode (step 15) are the things to read: a "
+             "close request that fires the event and leaves the popover showing is the one failure a "
+             "`beforetoggle` listener cannot see");
+    /* RUNG 6 — WHAT THE ARRIVAL COST THE PROVENANCE. Nobody performed the gesture, so CLAUDE.md
        §A-REQUEST-CARRIES-THE-PROVENANCE grades every request built past it FORCED — and the SHOW's fetch is
        not forced, so the one address carries two records that differ by grade. That split is asserted by
        emitted_recs_one_statement above (two records of one address sharing a grade is a DCHECK); this row is
@@ -10019,7 +10047,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "says a real load of this document makes it. flow_mark_forced_arm is taken in the same operation "
              "as the task frame (engine.c), so a derived grade here is that mark not reaching "
              "pending_prov_compose rather than a policy decision");
-    /* RUNG 6 — §6.10.1's STEP 9, AND THE ARITHMETIC THAT IS THE WHOLE REASON THIS DOCUMENT IS ITS OWN. A run
+    /* RUNG 7 — §6.10.1's STEP 9, AND THE ARITHMETIC THAT IS THE WHOLE REASON THIS DOCUMENT IS ITS OWN. A run
        that closes a group answers `closedSomething` TRUE and does not latch, so the manager is asked ONCE MORE
        and that second task is the one that reaches "Alternative processing: Otherwise, there was nothing
        watching for a close request" — which is the fact engine_close_request_fork latches and the reason it
@@ -10375,6 +10403,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "popover-rest", pop_rest, "pv.showPopover()", SESS_EXPLORE, pop_rest_why },
         { "popover-modelled", pop_model, "pv.showPopover()", SESS_EXPLORE, pop_model_why },
         { "popover-closed", pop_close, "pv.showPopover()", SESS_EXPLORE, pop_close_why },
+        { "popover-hidden", pop_hidden, "pv.showPopover()", SESS_EXPLORE, pop_hidden_why },
         { "popover-forced", pop_forced, "pv.showPopover()", SESS_EXPLORE, pop_forced_why },
         { "popover-alternative", pop_alt, "pv.showPopover()", SESS_EXPLORE, pop_alt_why },
         { "popover-once", pop_once, "pv.showPopover()", SESS_EXPLORE, pop_once_why },
