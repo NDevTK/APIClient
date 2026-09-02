@@ -220,6 +220,25 @@ const COLD_FIELDS = ["live", "framed", "blocked", "owed",
                         door's `replyAsked`/`replyAnswered` count RECORDS while a delivery consumes a NAMING,
                         so those two are a predicate on the arm being zero and never a denominator for it. */
                      "domHeadEntries", "domHeadKiB", "jobs", "pend", "pendReady", "pendKiB",
+                     /* AND THE SAME DEBT COUNTED IN MEMBERS, WHICH IS THE HALF `pendReady` STRUCTURALLY CANNOT
+                        SUPPLY AND WHICH THIS LIST DID NOT READ. `pendReady` is over ENTRIES, so it says how
+                        large the undelivered debt is and nothing whatever about whether anybody may take it:
+                        solver/engine.c guards the reply-delivery arm on `flow_stack_empty(f) &&
+                        flow_pending_ready(f)`, and `stackEmpty` is that left conjunct counted over members
+                        while `canDeliver` is the whole guard. So a run whose reply door is paid in full with
+                        `deliver-one-reply` at 0 has TWO opposite readings — the members that could take a
+                        reply are not being CHOSEN, or there are none because the frontier is inside its
+                        programs — and the reply-door paragraph below could state the arm's zero without being
+                        able to name which. `framed` is not the answer: solver/flow.c's flow_stack_empty has a
+                        second half (a DYN_POS_IMMEDIATE row at the cursor is a non-empty stack with no live
+                        frame), so `live - framed` is an upper bound and never the count, which is the reason
+                        that function exists rather than a field read.
+                        THE PAIR IS ALSO A SUBSET CHAIN AND THE ENGINE ASSERTS IT — solver/result.c's
+                        `can_deliver <= stack_empty <= flows` — in a DCHECK that is compiled out of a release
+                        build this reader still runs on. It is checked below for that reason and for the one
+                        every row here is listed for: the two are summed in ONE walk of ONE frontier, so an
+                        excess is two counters over different populations rather than a large number. */
+                     "stackEmpty", "canDeliver",
                      "miscKiB", "perFlowKiB",
                      "segKiB", "domSegKiB", "pinSegs", "pinSegEntries", "pinSegKiB",
                      "decSegs", "decSegEntries", "decSegKiB", "dynBodies", "dynKiB", "sharedKiB",
@@ -743,7 +762,28 @@ const WFQ_FIELDS = ["members", "valMin", "valMax", "valTop", "valZero", "selfEmi
                        aging's zero), and a reader that re-derived it would be a second copy that goes stale the
                        day a rung is added. It is EMITTED rather than grepped because `hostDefine` reads plain
                        numeric defines and this one is an expression. */
-                    "topSvc", "topSvcFam", "nonrewardMax"];
+                    "topSvc", "topSvcFam", "nonrewardMax",
+                    /* AND THE SAME FOUR ROWS FOR THE OTHER BACKLOG, WHICH THE ENGINE HAS EMITTED SINCE
+                       solver/flow.h CALLED THEM "the missing twin of the four rows above" AND WHICH NO READER
+                       ANYWHERE TOOK. `jobsReady`/`jobsFramed`/`jobsOwed`/`jobWGap` split the JOB backlog by
+                       what each job waits on; `deliv*` split the REPLY backlog the same way and for the same
+                       reason, and that backlog is the larger of the two by orders of magnitude — a frontier
+                       can stand on hundreds of thousands of answered-and-undelivered register entries while
+                       its job queue holds a handful. Emitted, asserted in C, and consumed by nothing: the
+                       computed-writer-with-no-reader defect (§Architecture) in the one instrument built to
+                       report it, which is why it survived — the value is real, so nothing reads wrong.
+                       THE THREE COUNTS ARE OVER MEMBERS AND THE JOB THREE ARE OVER JOBS, deliberately, and a
+                       reader that adds them or quotes them as one population is comparing two units.
+                       solver/flow.h states why: `pending_deliverable_count` is a WALK of a register holding
+                       hundreds of entries and the census walk is already over a frontier in the thousands, so
+                       the delivery rows ask the cheap half — not how big the debt is, but WHO is holding it.
+                       AND `delivReady` IS NOT THE @COLD CENSUS'S `canDeliver`, WHICH IS THE READING THIS PAIR
+                       MAKES POSSIBLE AND THE ONE NOBODY HAD. That row is `flow_stack_empty && pending_ready`
+                       and this one subtracts the members flow_pick REFUSES for carrying the host-owed mark, so
+                       `canDeliver - delivReady` is exactly the population the ARM could serve and the PICK
+                       will not offer the thread to. Two questions, two answers, and until both were read the
+                       difference between them was a reading nobody could perform. */
+                    "delivReady", "delivFramed", "delivOwed", "delivWGap"];
 /* A CONSTANT OF THE ENGINE IS READ FROM THE ENGINE, NEVER RESTATED HERE — the rule `ageQuantum` was written
    for and which now has a second reader (`hungCause`'s census cadence), so it is one function rather than two
    copies of one regex. Throws on an absent or unparseable define, because the alternative is this reader
@@ -858,6 +898,34 @@ function wfqReading(out) {
                     `gap is measured to the best READY holder, so with none there is nothing to measure to ` +
                     `and solver/result.c states the row is 0 by construction. A distance to a holder the ` +
                     `census did not count is the pick and the census disagreeing about who is waiting.`);
+  /* THE SAME TWO CHECKS FOR THE DELIVERY BACKLOG, which is the identical shape over the identical rows and is
+     stated separately for the identical reason: the C DCHECK on the sign is compiled out of a release build
+     that this reader still runs on, and the implication is ONE-directional because with no ready holder there
+     is nothing to measure a distance TO. A gap of 0 WITH a non-zero count is the state the row exists to
+     report — solver/flow.h: "0 means the front of the queue ITSELF is holding an undelivered reply and the
+     backlog is not an ordering problem at all" — and refusing it would fire on the healthiest reading the pair
+     can produce, which is the mistake the job pair above already made once and had corrected.
+     THE THIRD CHECK IS THE PARTITION, WHICH THE JOB ROWS CANNOT HAVE AND THESE CAN. solver/flow.h states the
+     three delivery rows are "disjoint and exhaustive over the members that hold one", so their sum is a count
+     of MEMBERS and is bounded by `members`; the job three are over JOBS and have no such total here. A sum
+     above the frontier's own size is three counts taken over different populations, and every sentence below
+     would then be a reading of the disagreement. */
+  if (!(w.delivWGap >= 0))
+    throw new Error(`[build] the @WFQ census reports delivWGap ${w.delivWGap} — it is \`wTop\` minus the best ` +
+                    `READY reply holder's weight, and the front of the order cannot be behind a member of it, ` +
+                    `so a negative gap is the pick and the census reading two different comparators.`);
+  if (w.delivReady === 0 && w.delivWGap !== 0)
+    throw new Error(`[build] the @WFQ census reports no reply holder waiting on rank and a gap of ` +
+                    `${w.delivWGap} — the gap is measured to the best READY holder, so with none there is ` +
+                    `nothing to measure to and solver/flow.h states the row is 0 for that too. A distance to ` +
+                    `a holder the census did not count is the pick and the census disagreeing about who is ` +
+                    `waiting.`);
+  if (w.delivReady + w.delivFramed + w.delivOwed > w.members)
+    throw new Error(`[build] the @WFQ census reports ${w.delivReady} ready + ${w.delivFramed} framed + ` +
+                    `${w.delivOwed} host-owed reply holders against ${w.members} members — solver/flow.h ` +
+                    `states the three are disjoint and exhaustive over the members that hold an undelivered ` +
+                    `reply, so a sum above the frontier is three counts over different populations and not a ` +
+                    `backlog.`);
   /* THE SAME TWO CHECKS FOR THE STARVATION PAIR, which is the same shape one row over and is worth stating
      separately for the reason the job pair is: the C DCHECK on the sign is compiled out of a release build and
      this reader still runs, and the population check spans two rows that no assert anywhere covers. The
@@ -994,6 +1062,43 @@ function wfqReading(out) {
             : `, standing ${w.jobWGap.toFixed(3)} points behind the front — inside this frontier's reward ` +
               `spread (${rangeVal.toFixed(3)}), so the backlog is behind but not buried` +
               (jobNotches === null ? `` : ` (${jobNotches} quanta of silence for the aging term to close)`));
+  /* AND WHAT THE ORDER IS COSTING THE REPLY BACKLOG, WHICH IS THE SAME QUESTION OVER THE LARGER DEBT AND WHICH
+     THIS READER COULD NOT ASK AT ALL. §Learning-from-replies calls learning from replies THE POINT, and the
+     @COLD line can say a document was paid in full and delivered nothing (`replyAnswered == replyAsked` with
+     the `deliver-one-reply` arm at 0) without being able to say WHY — three states behind one zero: the
+     holders are FRAMED (a spec precondition, HTML §8.1.4.4 "Calling scripts"' clean up after running script
+     step 3, and no ordering change reaches them), the holders are HOST-OWED (flow_pick refuses them, so no
+     ranking can move them either), or they wait on RANK ALONE, which is the only one the WFQ owns. Exactly one
+     of the three is a finding about the order and the other two are findings about other subsystems.
+     THE GAP IS READ BESIDE THE COUNT AND NEVER AFTER IT, for the job backlog's reason exactly: a large ready
+     count AT THE FRONT of the order is a backlog being served and no finding at all, and the same count buried
+     behind the reward spread is the order costing this run the replies it was paid. The yardsticks are this
+     frontier's own — its reward spread and the aging term's notch — never a constant, which would be a number
+     true of one fixture. */
+  const delivTotal = w.delivReady + w.delivFramed + w.delivOwed;
+  const delivNotches = AGE_QUANTUM > 0 ? Math.ceil(w.delivWGap / AGE_QUANTUM) : null;
+  const deliv = delivTotal === 0
+    ? `no member holds an undelivered reply, so this order is costing the reply backlog nothing`
+    : w.delivReady === 0
+      ? `${delivTotal} member(s) hold an undelivered reply and NOT ONE waits on rank — ${w.delivFramed} are ` +
+        `inside a program (HTML §8.1.4.4 "Calling scripts", clean up after running script step 3: a spec ` +
+        `precondition, not an ordering problem) and ${w.delivOwed} carry the host-owed mark, which flow_pick ` +
+        `refuses. None of it is the WFQ's to move, and re-pricing a weight term would reach none of it`
+      : `${w.delivReady} of ${delivTotal} member(s) holding an undelivered reply wait on RANK ALONE ` +
+        `(${w.delivFramed} framed, ${w.delivOwed} owed by the host)` +
+        (w.delivWGap === 0
+          ? `, and the front of the order is itself one of them — the backlog is NOT outranked, so nothing ` +
+            `the ordering can do would deliver these sooner and the finding is upstream of the WFQ`
+          : rangeVal > 0 && w.delivWGap >= rangeVal
+            ? `, standing ${w.delivWGap.toFixed(3)} points behind the front — at or beyond this frontier's ` +
+              `whole reward spread (${rangeVal.toFixed(3)}), so the backlog IS outranked and it is the ` +
+              `REWARD spread burying it` +
+              (delivNotches === null ? `` : `; the aging term would need ${delivNotches} quanta of silence ` +
+                                            `to close that`)
+            : `, standing ${w.delivWGap.toFixed(3)} points behind the front — inside this frontier's reward ` +
+              `spread (${rangeVal.toFixed(3)}), so the backlog is behind but not buried` +
+              (delivNotches === null ? `` : ` (${delivNotches} quanta of silence for the aging term to ` +
+                                            `close)`));
   /* AND WHO CARRIES THE OPTIMISM TERM AT ITS MAXIMUM. `visMin`/`visMax` give the term's RANGE and cannot say
      how much of the frontier sits at the top of it; `visZero` is that population, and where it is the WHOLE
      frontier the bonus is one flat maximum and orders nothing — which is the same arithmetic as `rangeUcb: 0`
@@ -1198,7 +1303,7 @@ function wfqReading(out) {
           `${w.unrun} at zero own silence (never charged since their family last emitted); ` +
           `${w.cands} @S candidates of which ${w.candUnrun} never ran, deepest one ${w.candDecMax} of ` +
           `${w.decMax} gates in; weight ${w.wTop} at the front against ${w.candWMax} for the best candidate; ` +
-          `${cand}; ${jobs}; ` + terms,
+          `${cand}; ${jobs}; ${deliv}; ` + terms,
   };
 }
 
@@ -1577,6 +1682,19 @@ function censusReading(out) {
   const h = lastTwo(out, "@HEAP", HEAP_FIELDS, "solver/result.c's result_heap_json");
   const w = lastTwo(out, "@SWAP", SWAP_FIELDS, "solver/result.c's result_swap_json");
   const c = lastTwo(out, "@COLD", COLD_FIELDS, "solver/result.c's result_cold_json");
+  /* THE MEMBER-SIDE SUBSET CHAIN, CHECKED HERE FOR THE REASON THE @WFQ PAIRS ARE CHECKED IN THEIR OWN READER:
+     solver/result.c asserts `can_deliver <= stack_empty <= flows` in a DCHECK that is compiled out of a
+     release build, and this reader still runs on that build's bytes. The three rows are one walk of one
+     frontier — `canDeliver` is the reply-delivery arm's whole guard and `stackEmpty` its left conjunct — so an
+     excess is not a large number, it is two sums over different populations, and every sentence composed out
+     of the pair below would then be a reading of the disagreement rather than of the run. */
+  for (const x of [c.a, c.b])
+    if (x.canDeliver > x.stackEmpty || x.stackEmpty > x.live)
+      throw new Error(`[build] the @COLD census reports ${x.canDeliver} member(s) that can DELIVER a reply, ` +
+                      `${x.stackEmpty} whose execution context stack is empty and ${x.live} live — the first ` +
+                      `is the reply-delivery arm's whole guard and the second its left conjunct, counted in ` +
+                      `one pass of cold_census over one frontier, so this is two sums over different ` +
+                      `populations and not a frontier state.`);
   const parts = [];
   if (h) {
     const grew = (k) => h.b[k] - h.a[k];
@@ -1665,6 +1783,41 @@ function censusReading(out) {
                `(${c.b.pendReady} awaiting their own flow's delivery), ` +
                `${c.b.dynBodies} shared program(s); frozen: ${c.b.pinSegs}/${c.b.pinSegEntries} pin, ` +
                `${c.b.decSegs}/${c.b.decSegEntries} decision`);
+    /* AND WHO COULD TAKE ANY OF THAT, WHICH IS THE HALF THE LINE ABOVE COUNTS IN THE WRONG UNIT. `pendReady`
+       is over ENTRIES and so is silent about eligibility; solver/engine.c guards the reply-delivery arm on
+       `flow_stack_empty(f) && flow_pending_ready(f)`, and those two rows are that guard and its left conjunct
+       counted over MEMBERS. Without them a debt of hundreds of thousands of answered entries beside
+       `deliver-one-reply: 0` has two opposite readings and the census could state neither: the members that
+       may take a reply are not being CHOSEN (an ordering finding, and the @WFQ census's `delivReady`/
+       `delivWGap` are where it is read), or there are almost none because the frontier is INSIDE its programs
+       (a resume-seam finding, which no re-pricing of a weight term touches).
+       IT IS RENDERED ON EVERY CENSUS AND NOT ONLY WHERE THE DEBT IS LARGE, for the reason the @WFQ leader row
+       is: computed on one arm and dropped on the others it would be a reading with a writer and no reader on
+       most runs, which is the defect this whole instrument exists to end.
+       `stackEmpty` IS NOT `live - framed` AND THE DIFFERENCE IS THE POINT. flow_stack_empty has a second half
+       — HTML §4.12.1.1 "Processing model"'s prepare the script element ends "Otherwise, immediately execute
+       the script element el, even if other scripts are already executing", so that program runs INSIDE the one
+       that inserted it and the stack has NOT emptied across it — and a member holding such a row at its cursor
+       has no live frame and a non-empty stack. So `framed` bounds this row and never counts it, which is why
+       the engine asks the predicate rather than the field, and why the gap between the two is reported here
+       instead of being subtracted into silence. */
+    const immediate = c.b.live - c.b.framed - c.b.stackEmpty;
+    parts.push(`reply eligibility: ${c.b.stackEmpty} of ${c.b.live} member(s) stand with an EMPTY JavaScript ` +
+               `execution context stack (${c.b.framed} are inside a program` +
+               (immediate > 0
+                 ? `, and ${immediate} more hold an immediately-executed row at the cursor, which is a ` +
+                   `non-empty stack with NO live frame — HTML §4.12.1.1 "Processing model"`
+                 : ``) +
+               `), of which ${c.b.canDeliver} hold a reply they could take` +
+               (c.b.pendReady === 0
+                 ? ` — there is no undelivered reply on this frontier, so the arm having nothing to do is not ` +
+                   `a finding`
+                 : c.b.canDeliver === 0
+                   ? ` — so the ${c.b.pendReady} answered entr(ies) awaiting delivery are held by NOBODY who ` +
+                     `may take one, and no ordering change reaches them: the frontier is inside its programs ` +
+                     `and this is a resume-seam reading, not a WFQ one`
+                   : ` — so the delivery arm IS reachable and whether it runs is a question about the ORDER, ` +
+                     `which the @WFQ census's delivReady/delivWGap answer and this pair cannot`));
     /* AND WHETHER THE HOST PAID, WHETHER THE DOCUMENT GOT ANYWHERE, AND WHAT THE INHERITED DRIVES DID — three
        questions the frontier's size cannot answer and which each have a row that nothing read. `deepest`
        against `completed` says whether this document reaches its later programs at all; `orphanClaimsUnmet` is
