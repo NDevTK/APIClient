@@ -120,9 +120,11 @@
  *     popover lists it derives from css-position-4 §3's top layer, and it is static because this caller is not
  *     in the tree yet, so building fullscreen an element is also what EXPORTS it. What popover.c still lacks is
  *     HIDE POPOVER STACK UNTIL, which §6.12's hide popovers until is two calls to; its show popover step 15.3
- *     DFAILs there and names what it needs first (a re-entrant hide a popover, because that algorithm fires
- *     `beforetoggle` at the page). So the popover half is still a real prerequisite and not a citation, and it
- *     is now ONE algorithm rather than two. Over those: §2's list
+ *     DFAILs there and now names only that one algorithm, because the thing it used to name as needed FIRST —
+ *     a hide a popover invocable over an element that is not the receiver, with the standard's four other
+ *     arguments passed rather than hardcoded — is built: core/html/popover.h exports it as a per-realm function
+ *     object a caller reaches through step_call_run. So the popover half is still a real prerequisite and not a
+ *     citation, and it is now ONE algorithm rather than two. Over those: §2's list
  *     of pending fullscreen events, RUN THE FULLSCREEN STEPS as a step machine (it fires events, so it runs the
  *     page's listeners and must park), and update-the-rendering STEP 12, which is where those steps are invoked
  *     and which core/rendering/rendering.c still asserts is unwritten — its `realm_awaits` there is keyed on

@@ -48,6 +48,7 @@
 #include "core/events/event_target.h"
 #include "core/html/close_watcher.h"
 #include "core/html/close_watcher_interface.h"
+#include "core/html/popover.h"
 #include "core/html/user_activation.h"
 
 /* The manager's three items, §6.10.2's own names. */
@@ -502,25 +503,39 @@ static int cw_close_action_run(JSContext *wctx, CloseWatcherRun *r, JSValueConst
     int rc;
 
     switch (kind) {
-    case CLOSE_WATCHER_KIND_POPOVER:
+    case CLOSE_WATCHER_KIND_POPOVER: {
         /* §6.12 show popover step 15: "closeAction being to hide a popover given element, true, true, false,
-           and null." core/html/popover.c owns hide a popover and exports it only as the `hidePopover()` and
-           `togglePopover()` members, so there is no door to call it through with those five arguments.
-           THIS ARM IS UNREACHABLE IN THIS BUILD RATHER THAN WRONG: the one establisher of a POPOVER-kind
-           watcher is show popover step 15, whose step 15.10 is that establish and whose step 15.3 DFAILs on
-           HIDE POPOVER STACK UNTIL before ever reaching it, so no watcher of this kind exists. (Its step
-           15.1's TOPMOST POPOVER ANCESTOR used to be named here as the other blocker and is built now; what
-           is left is the one algorithm, and the export this arm wants is the SAME re-entrant hide a popover
-           that hide popover stack until needs — so the two land together rather than in sequence.) */
-        JS_FreeValue(wctx, in);
-        DFAIL("HTML §6.10.2 Close watcher infrastructure's close a close watcher step 5 must run a POPOVER "
-              "watcher's CLOSE ACTION, which HTML §6.12 The popover attribute's show popover step 15 states is "
-              "\"to hide a popover given element, true, true, false, and null\" — core/html/popover.c exports "
-              "hide a popover only as its two IDL members and this dispatch has no door with those five "
-              "arguments. Export hide a popover from popover.c as the request its own machine already is, and "
-              "call it here. Reaching this line ALSO means show popover step 15's Auto/Hint block was built, "
-              "since it is the only establisher of this kind");
+           and null." Those five are passed as five, in the standard's order, through the function object
+           core/html/popover.h exports for exactly this — the algorithm §6.12's prose reaches WITHOUT the Web
+           IDL bindings, so a page that reassigns `HTMLElement.prototype.hidePopover` does not change what an
+           Esc does. throwExceptions is the FALSE here: a close request is not a member invocation and has
+           nobody to throw to, so a popover that check popover validity refuses is left alone rather than
+           destroying the close.
+           THE SUBJECT IS THE ELEMENT, which is what establish was given — §6.12 passes the popover element as
+           the watcher's subject precisely so this dispatch has it.
+           STILL UNREACHABLE, AND NOW WRITTEN: show popover step 15 is the only establisher of this kind and it
+           DFAILs at step 15.3, so nothing has ever run this line. See close_watcher.h's residual (b). */
+        JSValueConst hide_argv[POPOVER_HIDE_ARGC];
+        JSValue hide = popover_hide_algorithm(wctx);
+        JSValue ignored = JS_UNDEFINED;
+
+        subject = cw_subject(wctx, watcher);
+        hide_argv[0] = subject;
+        hide_argv[1] = JS_TRUE;    /* focusPreviousElement */
+        hide_argv[2] = JS_TRUE;    /* fireEvents */
+        hide_argv[3] = JS_FALSE;   /* throwExceptions */
+        hide_argv[4] = JS_NULL;    /* source */
+        rc = step_call_run(wctx, &r->hphase, STEP_CB(r->hide_cb), hide, JS_UNDEFINED,
+                           POPOVER_HIDE_ARGC, hide_argv, in, &ignored, out_cb, out_argc);
+        JS_FreeValue(wctx, subject);
+        JS_FreeValue(wctx, hide);
+        if (rc) return rc;
+        DCHECK(JS_IsUndefined(ignored),
+               "HTML §6.12's hide a popover answered a close action with a value — it returns nothing, and "
+               "with throwExceptions false it has no abrupt completion to hand back either");
+        JS_FreeValue(wctx, ignored);
         return 0;
+    }
     case CLOSE_WATCHER_KIND_CLOSE_WATCHER:
         break;
     case CLOSE_WATCHER_KIND_COUNT:
@@ -557,11 +572,12 @@ void close_watcher_run_init(CloseWatcherRun *r)
 {
     int k;
 
-    r->rphase = r->cphase = r->pphase = r->fphase = r->ua_phase = 0;
+    r->rphase = r->cphase = r->pphase = r->fphase = r->ua_phase = r->hphase = 0;
     r->can_prevent = r->processed = 0;
     r->i = 0;
     r->group = r->cur = r->ev = r->running = JS_UNDEFINED;
     STEP_CB_FOREACH(r->cb, k) r->cb[k] = JS_UNDEFINED;
+    STEP_CB_FOREACH(r->hide_cb, k) r->hide_cb[k] = JS_UNDEFINED;
 }
 
 void close_watcher_run_visit(JSContext *ctx, CloseWatcherRun *r, JSStepVisit *v)
@@ -574,6 +590,8 @@ void close_watcher_run_visit(JSContext *ctx, CloseWatcherRun *r, JSStepVisit *v)
     v->val(ctx, &r->running);
     STEP_CB_FOREACH(r->cb, k)
         v->val(ctx, &r->cb[k]);
+    STEP_CB_FOREACH(r->hide_cb, k)
+        v->val(ctx, &r->hide_cb[k]);
 }
 
 void close_watcher_run_unlock(JSContext *ctx, CloseWatcherRun *r)

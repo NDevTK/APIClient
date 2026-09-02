@@ -56,11 +56,15 @@
  * REACHABLE ONLY from the component that will own those 9 steps. It shows as a page whose `CloseWatcher` fires
  * `cancel`/`close` for `requestClose()`/`close()` and NEVER for a user's close request, and as an
  * `allowedNumberOfGroups` that only ever rises, since step 3's decrement is the only fall it has.
- *   (b) THE CLOSE ACTION §6.12 SUPPLIES — hide a popover — is not reachable from the dispatch below, because
- * core/html/popover.c exports show popover and hide a popover only as IDL members and its show popover step 15
- * (the one establisher of a POPOVER-kind watcher) DFAILs before it establishes anything. So that arm of the
- * close-action dispatch DFAILs naming the export to make, and it is unreachable in this build rather than
- * wrong: no watcher of that kind exists to reach it.
+ *   (b) THE CLOSE ACTION §6.12 SUPPLIES — hide a popover — is WRITTEN and still UNREACHABLE, and those are now
+ * two different facts rather than one. It is written: core/html/popover.h exports hide a popover as a function
+ * object of the realm taking the standard's own five arguments, and the dispatch below CALLS it with the five
+ * §6.12's show popover step 15 states, "to hide a popover given element, true, true, false, and null". It is
+ * unreachable because that same step 15 is the ONLY establisher of a POPOVER-kind watcher and it DFAILs at its
+ * step 15.3 before establishing anything, so no watcher of that kind exists yet. The distinction is what a
+ * reader has to be told: nothing in §6.10.2 has to change on the day step 15 lands, and the first POPOVER
+ * watcher ever established will run code that has never executed — which is the honest limit on what this arm
+ * can be said to be tested by. It shows as an Esc on an `<div popover=auto>` closing it.
  *
  * WHERE FULLSCREEN MEETS THIS, AND WHERE IT DOES NOT. §6.10.1's close request steps are 9 steps whose step 1
  * is "If document's fullscreen element is not null", whose two sub-steps are "Fully exit fullscreen given
@@ -79,6 +83,10 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/events/event_target.h"   /* EventFireCb — the width of the fire request an ACTION parks on */
+#include "core/html/popover.h"     /* PopoverHideCb — the width of the CALL the close action §6.12 supplies
+                                      parks on. THE POSSESSIVE IS WRONG HERE and this file's older prose is
+                                      careful about it: "close action" is §6.10.2's own term, and §6.12
+                                      SUPPLIES one rather than defining one. */
 
 /* WHICH ALGORITHM TRIPLE A WATCHER CARRIES — see the header note above for why this is an id and not a
    closure. TWO ENTRIES, because two establishers are in this build:
@@ -161,6 +169,14 @@ typedef struct {
     JSValue  group;     /* process close watchers step 2.1's group, COPIED — see close_watcher.c (owned) */
     JSValue  cur;       /* the watcher step 2.2 is standing on (owned) */
     JSValue  ev;        /* the `cancel` or `close` event, held across its dispatch (owned) */
+    /* THE CLOSE ACTION §6.12 SUPPLIES IS A CALL AND NOT A FIRE, so it parks on its own cursor and its own
+       buffer. The two
+       never collide — a POPOVER watcher's close action hides a popover and never fires `close`, and a
+       CLOSE_WATCHER one fires `close` and never hides — but they are kept APART rather than overlaid, because
+       one buffer serving two algorithms is one width two callers must both stay abreast of, which is the
+       mistake core/events/event_target.h's EventFireCb note records. Each is named by ITS algorithm's type. */
+    uint8_t  hphase;            /* the hide a popover CALL's own phase */
+    PopoverHideCb hide_cb;      /* step_call_run's [this, hide, element, focusPrev, fireEvents, throws, source] */
     /* THE WATCHER WHOSE "is running cancel action" THIS RUN SET AND STILL OWES A CLEAR (owned), or undefined.
        It is a FLAG and not a reference, which is why it is here rather than left to the declaration: a flow
        abandoned inside the page's `cancel` handler must not leave that watcher refusing every later request at
@@ -192,9 +208,9 @@ int close_watcher_request_to_close_run(JSContext *wctx, JSStepHdr *hdr, CloseWat
 /* §6.10.2's "To CLOSE A CLOSE WATCHER closeWatcher", 5 steps. It returns nothing: steps 1-3 are silent
    refusals the standard writes as a bare "return", which is why there is no out-parameter to distinguish them
    from a close that ran. Same return contract as above, minus JS_STEP_FORK — it takes no JSStepHdr because
-   nothing in its 5 steps asks a question over unknown state; the day the close action §6.12 supplies is
-   routed into it,
-   that arm's own §6.6.6 fork is what adds one. */
+   nothing in its 5 steps asks a question over unknown state, and the close action §6.12 supplies does not
+   change that: hide a popover is reached as a CALL, so whatever it forks at forks in ITS OWN frame and its
+   answer arrives here as an ordinary request result. */
 int close_watcher_close_run(JSContext *wctx, CloseWatcherRun *r, JSValueConst watcher,
                             JSValue in, JSValue **out_cb, int *out_argc);
 

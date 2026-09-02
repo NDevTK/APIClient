@@ -31,8 +31,51 @@ extern const EnumeratedAttribute POPOVER_ATTRIBUTE;
 /* §2.3.3's DETERMINE THE STATE for this element's `popover` attribute — one of the four above. */
 int popover_attribute_state(const lxb_dom_element_t *el);
 
-/* Declared ONCE PER AGENT (the slot keys and the three members' pool ids); installed onto each realm's
-   HTMLElement.prototype, which core/html/html_element.c owns and hands over. */
+/* ---- §6.12's HIDE A POPOVER, as an algorithm SPEC PROSE REACHES WITHOUT A MEMBER ---------------------------
+ *
+ * "To hide a popover given an HTML element element, a boolean focusPreviousElement, a boolean fireEvents, a
+ * boolean throwExceptions, and an HTML element or null source", 21 steps. Both IDL members state the same five
+ * arguments — `hidePopover()`'s one step is "Run the hide popover algorithm given this, true, true, true, and
+ * null" and `togglePopover()`'s step 5 is word for word the same — and THREE other callers state different
+ * ones: §6.12's hide popover stack until steps 5 and 8 ("run the hide popover algorithm given popover,
+ * focusPreviousElement, fireEvents, false, and null", and the same with fireEvents replaced by false), and
+ * §6.12's show popover step 15 supplies it to §6.10.2 Close watcher infrastructure as a close action, "to hide
+ * a popover given element, true, true, false, and null". So the four booleans are ARGUMENTS and not the
+ * member's constants.
+ *
+ * IT IS A CALL AND NOT A `_run` CURSOR, AND THE REASON IS THAT §6.12 IS MUTUALLY RECURSIVE. Hide a popover step
+ * 11 runs hide popover stack until, and that algorithm's steps 5 and 8 run the hide popover algorithm over each
+ * popover they hide — so a hide contains a stack-until contains a hide, to a depth the page's own markup
+ * decides. A cursor struct embedded in the caller's state, which is what core/html/close_watcher.h's
+ * CloseWatcherRun and core/html/focus.h's focus_element_run are, cannot express that: a fixed struct cannot
+ * contain itself, and those three algorithms may be one record precisely because their nesting is fixed and
+ * acyclic. A registered step machine reached through step_call_run is a HEAP FRAME, which is where CLAUDE.md's
+ * §C-stack puts every call, and that is what makes the recursion unbounded, preemptible and parkable at any
+ * depth. It is also why hide popover stack until may still be a `_run` when it lands: the recursion passes
+ * through the CALL, so each frame holds at most one stack-until cursor.
+ *
+ * IT IS A FUNCTION OBJECT AND NOT AN EXPORTED C FUNCTION, for core/dom/observable.c's reason, which that file
+ * states for §2.2.1's subscribe-to: an algorithm the standard's prose reaches WITHOUT going through the Web IDL
+ * bindings must not be redirected by a page that replaces the member. §6.10.2's close action is "to hide a
+ * popover given element, true, true, false, and null" and not "call this.hidePopover()", so a page assigning
+ * `HTMLElement.prototype.hidePopover` must not change what a close request does. It is minted PER REALM because
+ * a C function runs in the realm that DEFINED it, and this one fires `beforetoggle` at an element of that
+ * realm's document.
+ *
+ * OWNED — the caller frees. */
+#define POPOVER_HIDE_ARGC 5
+/* THE CALL REQUEST BUFFER, AS A TYPE, for core/events/event_target.h's EventFireCb reason: step_call_run's
+   operand shape is [this, func, args…], and a width every caller restates is a width every caller is free to be
+   behind on. A caller passing this type cannot be an argument behind the algorithm, because there is no number
+   at its call site to be behind with. */
+#define POPOVER_HIDE_CB_SLOTS (2 + POPOVER_HIDE_ARGC)
+typedef JSValue PopoverHideCb[POPOVER_HIDE_CB_SLOTS];
+
+JSValue popover_hide_algorithm(JSContext *ctx);
+
+/* Declared ONCE PER AGENT (the slot keys, the three members' pool ids, hide a popover's step-def id and its
+   realm slot); installed onto each realm's HTMLElement.prototype, which core/html/html_element.c owns and hands
+   over — and that install is also where hide a popover's function object is minted for the realm. */
 void popover_declare(JSContext *ctx);
 void popover_install(JSContext *ctx, JSValueConst html_proto);
 void popover_free(JSRuntime *rt);
