@@ -3890,9 +3890,13 @@ function audit(argv, opts = {}) {
      * that is without reconstructing it — the same reason the quotation check names its axis in its own
      * banner rather than leaving a zero to read as a clean bill. */
     if (kind === "MISATTRIBUTED")
-      console.log(`  (every one of these stands at a section whose own committed text does NOT contain the phrase; ` +
-        `${stat.confirmedByText} citation(s) whose cited section DOES state it in its own words are confirmed above rather than accused here, ` +
-        `and ${stat.textRefused} of the findings below could not be asked that question at all because their standard carries no usable corpus. ` +
+      /* AND THE FIRST CLAUSE IS WRITTEN SO IT CANNOT BECOME AN OVER-CLAIM THE DAY A CORPUS GOES STALE — the
+       * refused sites are subtracted from it IN THE SENTENCE rather than named afterwards, because a reader
+       * who takes "every one of these" at face value and then meets a count of ones that were never asked has
+       * been handed two statements that cannot both be true. */
+      console.log(`  (${g.length - stat.textRefused} of these stand at a section whose own committed text does NOT contain the phrase, ` +
+        `and the other ${stat.textRefused} could not be asked that question at all because their standard carries no usable corpus; ` +
+        `${stat.confirmedByText} citation(s) whose cited section DOES state it in its own words are confirmed above rather than accused here. ` +
         `A count over the citations the term check was ASKED of. ${stat.titled} more were confirmed by a stated TITLE and never asked; ` +
         `on their own evidence the term check would have added ${stat.titledMis} claims here, ${stat.titledMisInTitle} of them naming a phrase inside that same title. ` +
         `Adding a correct title to a citation MOVES it out of this number — see the title-channel lines in the census above for both halves.)`);
