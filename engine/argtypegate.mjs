@@ -29,6 +29,13 @@
  * judged against nothing: that is a statement about this audit's reach and never about the engine, and
  * collapsing the two into one number is the bucket collapse that makes a count unreadable.
  *
+ * THE LARGEST SINGLE POPULATION UNDER UNPLACEABLE IS THE UNION, because idl_typename.mjs's convention answers
+ * `null` for one by construction (`if (t.union || t.generic) return null;`) — a union's enumerator names its
+ * §3.2.25 RULE and not its member types, so there is no name to compose. engine/uniongate.mjs asks the
+ * question that survives that: it does not try to name the type, it computes Web IDL §3.2.25 Union types'
+ * arm partition from the IDL and reports any one enumerator standing over two different partitions. It is a
+ * different axis and not a widening of this one — this audit stays silent about unions and should.
+ *
  * ITS BLIND SPOTS ARE PART OF THE INSTRUCTION, because a checker trusted past its evidence is worse than none:
  *
  *   - AN OVERLOADED MEMBER IS COUNTED AND NEVER JUDGED. Web IDL §3.6 gives one member several signatures and
@@ -72,7 +79,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, relative } from "node:path";
 import { loadEnvironment, installedMembers } from "./idl_installed.mjs";
 import { loadIdl } from "./idl_members.mjs";
-import { contract, declarations, strip, args, callText, lineOf, INTERPRETED_MODS } from "./idl_argdecl.mjs";
+import { contract, declarationIndex, INTERPRETED_MODS } from "./idl_argdecl.mjs";
 import { typeConvention } from "./idl_typename.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -113,53 +120,11 @@ const anyTail = (op) => {
 const env = loadEnvironment(HOST);
 const cFiles = [...env.sources.keys()].filter((p) => p.endsWith(".c"));
 
-const declByLhs = new Map();        /* "file\0lhs" -> decl */
-const declByLhsGlobal = new Map();  /* lhs -> [ {file, decl} … ] */
-/* §3.2.18's value lists, corpus-wide: identifier -> [ {file, values} … ]. It is GLOBAL because an enumeration
-   two members share is written once and declared `extern` (IDBCursorDirection is written in idb_cursor.c and
-   declared at four positions in two other files), so resolving it from the declaring file alone would report
-   every shared list as unreadable. A name two files define is carried as two entries and reported as
-   ambiguous, exactly as a step id assigned twice is — the audit says which question it could not answer rather
-   than picking an answer. */
-const enumListsGlobal = new Map();
-const stripped = new Map();
-for (const path of cFiles) {
-  const raw = env.sources.get(path).orig;
-  const src = strip(raw);
-  stripped.set(path, src);
-  const reader = declarations(src, raw);
-  for (const [name, values] of reader.enumLists) {
-    if (!enumListsGlobal.has(name)) enumListsGlobal.set(name, []);
-    enumListsGlobal.get(name).push({ file: path, values });
-  }
-  const { decls } = reader.read(C);
-  for (const d of decls) {
-    if (!d.lhs) continue;
-    d.file = path;
-    d.line = lineOf(src, d.at);
-    declByLhs.set(`${path}\0${d.lhs}`, d);
-    if (!declByLhsGlobal.has(d.lhs)) declByLhsGlobal.set(d.lhs, []);
-    declByLhsGlobal.get(d.lhs).push(d);
-  }
-}
-
-/* The `stepid` expression of the install written at this file and line — the third leg of the join. The forms
-   that take one are named by their own header: idl_install_method / _unforgeable / _exposed put it at index 3,
-   idl_install_step_method declares a `length` first and puts it at index 4. */
-const STEPID_AT = { idl_install_method: 3, idl_install_method_unforgeable: 3, idl_install_method_exposed: 3,
-                    idl_install_step_method: 4 };
-function stepidAt(path, line) {
-  const src = stripped.get(path);
-  if (!src) return null;
-  for (const m of src.matchAll(/\b(idl_install_(?:method|method_unforgeable|method_exposed|step_method))\s*\(/g)) {
-    if (lineOf(src, m.index) !== line) continue;
-    const { text } = callText(src, m.index + m[0].length - 1);
-    const a = args(text);
-    const at = STEPID_AT[m[1]];
-    return a[at] == null ? null : { expr: a[at].replace(/\s+/g, ""), form: m[1] };
-  }
-  return null;
-}
+/* The walk from an install to the declaration it names is idl_argdecl.mjs's — it is a rule about how this
+   engine spells a member (which install forms carry a step id, at which index, and what an unresolvable name
+   means), and uniongate.mjs asks the same walk of the same corpus. It was written here and moved out unchanged
+   when the second consumer arrived, exactly as idl_typename.mjs's naming convention was. */
+const { enumListsGlobal, declarationFor } = declarationIndex(cFiles, env, C);
 
 /* ---- the join --------------------------------------------------------------------------------------------- */
 const world = installedMembers(cFiles, env);
@@ -188,19 +153,9 @@ for (const rec of world.records) {
   const at = `${relative(ROOT, rec.file)}:${rec.line}`;
   const who = `${iface}.${rec.name}`;
 
-  const sid = stepidAt(rec.file, rec.line);
-  if (!sid) { push("UNJOINED", { at, who, why: "the install at this line names no step id this can read — an "
-    + "accessor, a generated form, or a construct whose stepid argument is not written here" }); continue; }
-  let decl = declByLhs.get(`${rec.file}\0${sid.expr}`);
-  if (!decl) {
-    const g = declByLhsGlobal.get(sid.expr) || [];
-    if (g.length === 1) decl = g[0];
-    else { push("UNJOINED", { at, who, why: g.length
-      ? `the step id \`${sid.expr}\` is assigned by ${g.length} declarations across the corpus, so which one `
-        + "this install names cannot be read from text"
-      : `the step id \`${sid.expr}\` is not the target of any idl_method_id* assignment this can see — an array `
-        + "element, a local, or a declaration made through a helper" }); continue; }
-  }
+  const j = declarationFor(rec.file, rec.line);
+  if (j.unjoined) { push("UNJOINED", { at, who, why: j.unjoined }); continue; }
+  const decl = j.decl;
   joined++;
 
   if (ops.length > 1) {

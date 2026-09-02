@@ -311,3 +311,92 @@ export function declarations(strippedSrc, rawSrc) {
       return { decls: out, orphans };
     } };
 }
+
+/* ---- THE INSTALL→DECLARATION JOIN, stated once for every audit that asks it -------------------------------
+ *
+ * A declaration carries no member name — `idl_method_id(…)` states TYPES and an arity, and the only thing
+ * tying it to the member it converts for is the step-id variable it is assigned to and the install that names
+ * that variable. So every audit that wants to ask a question about a POSITION has to walk installs → step id →
+ * declaration first, and that walk is a RULE about how this engine spells a member: which install forms carry
+ * a step id, at which argument index, and what it means when the name resolves to none or to several.
+ *
+ * IT LIVED IN argtypegate.mjs AND MOVED HERE UNCHANGED when a second audit needed it, for the reason
+ * idl_typename.mjs gives about the same move: two copies of one rule is the defect CLAUDE.md names by
+ * construction, and the copy that drifts is whichever gate is run less often. The UNJOINED reasons are part of
+ * the rule and not decoration — an audit that says "the step id is assigned by 3 declarations" has named the
+ * question it could not answer, where one that silently picked the first would have answered it wrong.
+ *
+ * IT RESOLVES AND NEVER JUDGES. What a joined declaration is then compared against is the caller's question:
+ * argtypegate asks whether the types match the IDL, uniongate asks whether one enumerator is being made to
+ * answer two §3.2.25 partitions. Neither is decided here. */
+
+/* The install forms that carry a step id, and where each writes it. Named by their own header:
+   idl_install_method / _unforgeable / _exposed put it at index 3, and idl_install_step_method declares a
+   `length` first and puts it at index 4. */
+export const STEPID_AT = { idl_install_method: 3, idl_install_method_unforgeable: 3,
+                           idl_install_method_exposed: 3, idl_install_step_method: 4 };
+
+export function declarationIndex(cFiles, env, C) {
+  const declByLhs = new Map();        /* "file\0lhs" -> decl */
+  const declByLhsGlobal = new Map();  /* lhs -> [ decl … ] */
+  /* §3.2.18's value lists, corpus-wide: identifier -> [ {file, values} … ]. It is GLOBAL because an
+     enumeration two members share is written once and declared `extern` (IDBCursorDirection is written in
+     idb_cursor.c and declared at four positions in two other files), so resolving it from the declaring file
+     alone would report every shared list as unreadable. A name two files define is carried as two entries and
+     reported as ambiguous, exactly as a step id assigned twice is — the audit says which question it could not
+     answer rather than picking an answer. */
+  const enumListsGlobal = new Map();
+  const stripped = new Map();
+  for (const path of cFiles) {
+    const raw = env.sources.get(path).orig;
+    const src = strip(raw);
+    stripped.set(path, src);
+    const reader = declarations(src, raw);
+    for (const [name, values] of reader.enumLists) {
+      if (!enumListsGlobal.has(name)) enumListsGlobal.set(name, []);
+      enumListsGlobal.get(name).push({ file: path, values });
+    }
+    const { decls } = reader.read(C);
+    for (const d of decls) {
+      if (!d.lhs) continue;
+      d.file = path;
+      d.line = lineOf(src, d.at);
+      declByLhs.set(`${path}\0${d.lhs}`, d);
+      if (!declByLhsGlobal.has(d.lhs)) declByLhsGlobal.set(d.lhs, []);
+      declByLhsGlobal.get(d.lhs).push(d);
+    }
+  }
+
+  /* The `stepid` expression of the install written at this file and line — the third leg of the join. */
+  function stepidAt(path, line) {
+    const src = stripped.get(path);
+    if (!src) return null;
+    for (const m of src.matchAll(/\b(idl_install_(?:method|method_unforgeable|method_exposed|step_method))\s*\(/g)) {
+      if (lineOf(src, m.index) !== line) continue;
+      const { text } = callText(src, m.index + m[0].length - 1);
+      const a = args(text);
+      const at = STEPID_AT[m[1]];
+      return a[at] == null ? null : { expr: a[at].replace(/\s+/g, ""), form: m[1] };
+    }
+    return null;
+  }
+
+  /* The declaration the install at `file:line` names, or the REASON it cannot be named. A caller reports the
+     reason as its own reach; nothing here guesses. */
+  function declarationFor(file, line) {
+    const sid = stepidAt(file, line);
+    if (!sid) return { unjoined: "the install at this line names no step id this can read — an "
+      + "accessor, a generated form, or a construct whose stepid argument is not written here" };
+    const local = declByLhs.get(`${file}\0${sid.expr}`);
+    if (local) return { decl: local, sid };
+    const g = declByLhsGlobal.get(sid.expr) || [];
+    if (g.length === 1) return { decl: g[0], sid };
+    return { unjoined: g.length
+      ? `the step id \`${sid.expr}\` is assigned by ${g.length} declarations across the corpus, so which one `
+        + "this install names cannot be read from text"
+      : `the step id \`${sid.expr}\` is not the target of any idl_method_id* assignment this can see — an array `
+        + "element, a local, or a declaration made through a helper", sid };
+  }
+
+  return { declByLhs, declByLhsGlobal, enumListsGlobal, stripped, stepidAt, declarationFor };
+}
