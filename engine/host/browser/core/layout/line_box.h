@@ -202,16 +202,17 @@ void line_box_content_span(lxb_dom_element_t *style, lxb_dom_node_t *first, lxb_
  * of the table") and to an `inline-block` ("The baseline of an 'inline-block' is the baseline of its last line
  * box in the normal flow, unless it has either no in-flow line boxes or if its 'overflow' property has a
  * computed value other than 'visible', in which case the baseline is the bottom margin edge") and to NOTHING
- * else. THAT SECOND SENTENCE'S OWN EXCEPTION IS A COMPLETE ANSWER AND NOT A CONDITION ON ONE, so an
- * `inline-block` whose `overflow` computes to other than `visible` takes this same derivation and is placed on
- * the line by it; what an `inline-block` still waits on is the sentence's MAIN arm — the split named below,
- * over the last line box INSIDE the box — and the "no in-flow line boxes" test that chooses between the two.
- * So a REPLACED element's bottom
+ * else. THAT SECOND SENTENCE IS ANSWERED IN FULL — the standard writes it under §10.8.1 "Leading and
+ * half-leading", which is where this component cites it — and its three arms do not produce the same geometry:
+ * an `inline-block` sent to its bottom margin edge by either disjunct hangs its whole margin box above the
+ * line, while one measured by the MAIN arm has the line's baseline running THROUGH it, at the baseline of the
+ * last line box of the formatting context inside it. So a REPLACED element's bottom
  * margin edge sits ON the line's baseline — which is why an image on a line of text leaves the font's
  * descender visible below it. Its border area is then that baseline less its own `margin-bottom`, extending
  * one used BORDER EDGE EXTENT upward (§10.6.2 "Inline replaced elements, block-level replaced elements in
  * normal flow, 'inline-block' replaced elements in normal flow and floating replaced elements"). It is the
- * same pair `lb_atomic_extent` puts above the baseline for §10.8's step 1, read back through §8.1's nesting.
+ * same pair `lb_atomic_extent` puts above the baseline for §10.8's step 1, read back through §8.1's nesting —
+ * and it is that box's pair BECAUSE it has no baseline, never because every atomic inline's `below` is zero.
  *
  * §7.1's ALIGNMENT IS APPLIED HERE AND THE COORDINATE IS COMPLETE. css-text-4 §7.1 "Text Alignment: the
  * text-align shorthand" is a shorthand with a `Computed value:` line of "see individual properties", so what
@@ -237,10 +238,13 @@ typedef struct {
  * `lb_child` collects for it and is always exactly ONE fragment — CSS 2.2 §9.2.2 "Inline-level elements and
  * inline boxes" makes it an atomic inline-level box that "participate[s] in [its] inline formatting context as
  * a SINGLE OPAQUE BOX", so it is never the box §9.4.2 "SPLIT[s] into several boxes". Both are asserted.
- * THE OTHER ATOMIC INLINE-LEVEL BOXES ARE NOT HERE YET, and it is their COLLECTION and not this delimitation
- * that is missing: an `inline-block`, `inline-table`, `inline-flex` or `inline-grid` crashes in this
- * component's own walk, which names §10.8's inner baseline each of them HAS and the used inline size its own
- * module owns. The day that walk collects one it reaches this entry through the same single-item arm.
+ * THE OTHER ATOMIC INLINE-LEVEL BOXES ARE NOT HERE YET, AND WHAT IS MISSING IS NO LONGER THE SAME FOR ALL OF
+ * THEM. A non-replaced `inline-block` IS collected by this component's walk and IS measured against the line
+ * through §10.8.1's whole sentence, so for that box neither the collection nor the baseline is absent — what
+ * stops it here is this entry's own `display` test together with the block-axis derivation below, which hangs
+ * an atomic's BOTTOM MARGIN EDGE on the line's baseline and is therefore right only for a box §10.8 gives no
+ * baseline. An `inline-table`, `inline-flex` or `inline-grid` still crashes in the walk, which names the inner
+ * baseline each of them HAS and the used inline size its own module owns.
  *
  * IT FINDS THE FORMATTING CONTEXT ITSELF, and that is why it takes an element where the two entries above take
  * a run: the question "which inline formatting context is this box in" is answered by walking PAST every inline

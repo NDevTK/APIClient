@@ -125,6 +125,29 @@ bool block_flow_text_child_generates_box(lxb_dom_element_t *parent, const lxb_do
    disagree about whether a run of white space is content (§9.2.2.1, the predicate above). */
 bool block_flow_establishes_inline_context(lxb_dom_element_t *el);
 
+/* CSS 2.2 §9.4.2's ESTABLISHING CONDITION READ AS THE FACT IT IS STATED OVER: does `el`'s box contain an
+   IN-FLOW BLOCK-LEVEL BOX? §9.4.2's first sentence is that an inline formatting context "is established by a
+   block container box that contains no block-level boxes", so this is that condition NEGATED and is not a
+   second classification — it is the same `display` reading over the same child list, so a caller asking here
+   and the walk that lays the box out cannot come to disagree about what is on §9.4.1's stack.
+   IT IS A SECOND ENTRY BESIDE THE PREDICATE ABOVE BECAUSE THE TWO DISAGREE ABOUT THE EMPTY BOX, AND THAT
+   DISAGREEMENT IS THE WHOLE REASON IT EXISTS. A block container with no in-flow child contains no block-level
+   box, so §9.4.2's condition HOLDS of it — while the predicate above answers FALSE, because its question is
+   whether this element is where core/layout/line_box.h's RUN is the whole child list, and a box with nothing
+   to flow is not a context anyone wants delimited. A caller that needs to know whether this box's line boxes,
+   IF ANY,
+   are its own therefore cannot read that answer: FALSE there means "it holds a block-level box" OR "it holds
+   no content", and those two want opposite treatment.
+   ITS CALLER IS CSS 2.2 §10.8.1 "Leading and half-leading"'s `inline-block` BASELINE, whose whole sentence is
+   "The baseline of an 'inline-block' is the baseline of its last line box in the normal flow, unless it has
+   either no in-flow line boxes or if its 'overflow' property has a computed value other than 'visible', in
+   which case the baseline is the bottom margin edge." That caller answers the empty box itself — no in-flow
+   child means no line box, so the exception fires — and has to send a box holding a block-level one to this
+   file's stack, because a line box inside a block-level descendant is at that descendant's own offset down it.
+   TRUE is therefore that caller's crash and FALSE is its measurement, which a single "establishes a context"
+   answer cannot separate. */
+bool block_flow_contains_block_level_box(lxb_dom_element_t *el);
+
 /* CSS 2.2 §9.2.1.1 "Anonymous block boxes"' OTHER SHAPE OF §9.4.2's CONTEXT — the one with no element to name
    it. §9.2.1.1: "if a block container box (such as that generated for the DIV above) has a block-level box
    inside it (such as the P above), then we force it to have only block-level boxes inside it", and the boxes

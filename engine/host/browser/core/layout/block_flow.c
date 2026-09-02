@@ -448,6 +448,30 @@ bool block_flow_establishes_inline_context(lxb_dom_element_t *el)
     return bf_content_kind(el) == BF_CONTENT_INLINE;
 }
 
+bool block_flow_contains_block_level_box(lxb_dom_element_t *el)
+{
+    BfContent kind;
+    char *d;
+    bool container;
+
+    DCHECK(el != NULL, "CSS 2.2 §9.4.2's establishing condition was asked with no element");
+    d = bf_computed(el, "display");
+    container = block_flow_display_is_block_container(d);
+    free(d);
+    /* §9.4.2 states its condition over a BLOCK CONTAINER BOX and §9.2.1 states the alternative over the same
+       box — "either contains only block-level boxes or establishes an inline formatting context" — so the
+       question has no answer for a box that is neither. An inline box's inline content is on its ANCESTOR's
+       lines and a flex or grid container's children are css-flexbox §4's flex items, so answering FALSE for
+       either would report an inline formatting context that is not there. */
+    DCHECK(container,
+           "CSS 2.2 §9.4.2's establishing condition was asked of a box that is not a BLOCK CONTAINER, and "
+           "§9.2.1's \"either contains only block-level boxes or establishes an inline formatting context\" is "
+           "stated over exactly that box. The caller has classified the box type before asking, so the two "
+           "lists have come apart");
+    kind = bf_content_kind(el);
+    return kind == BF_CONTENT_BLOCK || kind == BF_CONTENT_MIXED;
+}
+
 /* ---- CSS 2.2 §9.2.1.1 "Anonymous block boxes" -------------------------------------------------------------
    THE BOX THIS WALK ITERATES IS NOT THE ELEMENT LIST. "In a document like this: <DIV> Some text <P>More text
    </DIV> … we assume that there is an ANONYMOUS BLOCK BOX around 'Some text'", and generally "if a block
