@@ -41,13 +41,31 @@ void top_layer_add(JSContext *ctx, JSValueConst el);
 void top_layer_request_removal(JSContext *ctx, JSValueConst el);
 void top_layer_remove_immediately(JSContext *ctx, JSValueConst el);
 
-/* "el is contained in doc's top layer" — the raw SET membership, which is the question §3.3's own three
-   algorithms ask and the one HTML §6.12 The popover attribute's show popover step 6 asserts over.
-   §3.3's derived concepts are NOT here and will arrive with their callers: "an element el IS IN the top layer"
-   (contained, and not pending removal) has no consumer until HTML §6.12's Auto/Hint stack is built, and
-   "rendered in the top layer" needs the `overlay` computed value this cascade has no property for. An exported
-   predicate nothing asks is a reader with no writer wearing the other costume. */
-bool top_layer_contains(JSContext *ctx, JSValueConst el);
+/* §3.3's FIRST DERIVED CONCEPT, VERBATIM: "An element el is in the top layer if el is contained in its node
+   document's top layer but not contained in its node document's pending top layer removals."
+   IT ARRIVED WITH ITS CONSUMER, AND THE CONSUMER WAS ALREADY WRITTEN AGAINST THE WRONG PREDICATE. What stood
+   here was `top_layer_contains`, the RAW SET MEMBERSHIP, exported for exactly one caller — HTML §6.12 The
+   popover attribute's show popover step 6, "Assert: element is not in document's top layer" — and that step
+   means THIS term and not the raw one. §3.3 settles it twice over. Its own note says which concept a
+   manipulating algorithm takes: "Specs should use this concept, rather than rendered in the top layer, when
+   they are manipulating the top layer itself." And add-an-element-to-the-top-layer's step 2 EXISTS for the
+   case the raw reading forbids — "If el is already contained in doc's top layer: Assert: el is also in doc's
+   pending top layer removals." — which is unreachable from §6.12 if step 6 has already refused every
+   contained element.
+   THE ORACLE IS CHECKED OUT AND SAYS SO OUTRIGHT. wpt/html/semantics/popovers/popover-events.html runs
+   `popover.hidePopover(); popover.showPopover(); // Immediate re-show` in ONE task and then asserts
+   `:popover-open` — no rendering update between them, so process-top-layer-removals has not run and the
+   element is still CONTAINED with its removal pending. Under the raw predicate that ordinary sequence is a
+   spec violation; under this one it is what the standard describes.
+   THE RAW PREDICATE IS DELETED RATHER THAN KEPT BESIDE THIS ONE. It had one caller, this replaces it, and a
+   second membership question exported next to the standard's own term is the shape that gets asked by
+   accident — the header's rule below applies to it exactly: an exported predicate nothing asks is a reader
+   with no writer wearing the other costume. The raw question survives INSIDE this file, where §3.3's three
+   manipulation algorithms ask it about their own sets, and in top_layer_topmost, which reads the `top layer`
+   deliberately and says why.
+   "Rendered in the top layer" is still absent and still has no consumer: it needs the `overlay` computed
+   value this cascade has no property for. */
+bool top_layer_is_in(JSContext *ctx, JSValueConst el);
 
 /* ── §3's ORDER, READ ────────────────────────────────────────────────────────────────────────────────────────
  *

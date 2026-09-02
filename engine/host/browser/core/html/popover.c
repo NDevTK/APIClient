@@ -1775,10 +1775,36 @@ static int popover_body(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
                    "TRIGGER is null — hide a popover step 14 is the only thing that clears it and show popover "
                    "step 21 the only thing that sets it, so a non-null trigger on an element step 3 has just "
                    "certified hidden means those two writes have gone out of step");              /* step 5 */
-            DCHECK(!top_layer_contains(ctx, s->el),
+            /* STEP 6 IS §3.3's DERIVED TERM AND NOT RAW SET MEMBERSHIP, and asking the raw one made an
+               ORDINARY SEQUENCE abort. `hidePopover()` with fireEvents true takes step 12.4, which REQUESTS
+               removal — the element stays CONTAINED in the top layer with its removal pending until HTML
+               §8.1.7.3 Processing model's update the rendering step 23 processes it — so every hide-then-show
+               inside one task reached
+               this line with the element still in the set. CSS Positioned Layout Level 4 §3.3 Top Layer
+               Manipulation is what the step's "in document's top layer" means: "An element el is in the top
+               layer if el is contained in its node document's top layer but not contained in its node
+               document's pending top layer removals." Its own add-an-element-to-the-top-layer step 2 is
+               written for exactly the state the raw reading refuses, and
+               wpt/html/semantics/popovers/popover-events.html asserts the sequence works —
+               `popover.hidePopover(); popover.showPopover(); // Immediate re-show`.
+               THE MESSAGE THAT STOOD HERE NAMED A REMEDY THAT IS FALSE, which is why it is rewritten rather
+               than repointed: it sent the reader to `hide a popover's removal (step 12 or step 13)` as the
+               thing that did not run, and both
+               of those run correctly — step 12.4's `top_layer_request_removal` and step 13's
+               `top_layer_remove_immediately` are each at their step. A reader obeying it would have gone to
+               rebuild working code, which is the stale-`DFAIL` failure mode arriving in a crash nobody had
+               reached yet. What a failure HERE means now is the one thing left: the element is contained and
+               NOT pending, so it was added to the layer and never hidden — show popover step 18's
+               `top_layer_add` ran without its matching hide, and §3.3's own add step 2.1 assert is the other
+               side of that same statement. */
+            DCHECK(!top_layer_is_in(ctx, s->el),
                    "HTML §6.12 The popover attribute's show popover step 6 asserts that the element is not in "
-                   "the document's TOP LAYER — an element hidden by step 2's check but still in the layer "
-                   "means hide a popover's removal (step 12 or step 13) did not run");            /* step 6 */
+                   "the document's TOP LAYER — CSS Positioned Layout Level 4 §3.3 Top Layer Manipulation's "
+                   "term, which is CONTAINED AND NOT PENDING REMOVAL. Step 3's check popover validity has "
+                   "just certified this element hidden, so a live membership means show popover step 18 added "
+                   "it to the layer for a show that no hide ever undid — not a pending removal, which this "
+                   "term admits and which an immediate re-show inside one task legitimately leaves behind");
+                                                                                                  /* step 6 */
             ps_set(ctx, s->doc, PS_DOC_SHOWING, JS_TRUE);                                        /* step 7 */
             s->showing_taken = 1;                                                                /* step 8 */
             s->ev = toggle_event_new(ctx, "beforetoggle", POPOVER_CLOSED, POPOVER_OPEN, s->source,

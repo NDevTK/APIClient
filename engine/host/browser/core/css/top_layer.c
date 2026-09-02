@@ -222,12 +222,20 @@ void top_layer_remove_immediately(JSContext *ctx, JSValueConst el)
     JS_FreeValue(ctx, doc);
 }
 
-bool top_layer_contains(JSContext *ctx, JSValueConst el)
+/* §3.3: "An element el is in the top layer if el is contained in its node document's top layer but not
+   contained in its node document's pending top layer removals." BOTH sets are read, which is the whole of the
+   term — see top_layer.h for why the raw one-set predicate that stood here was the wrong question for its one
+   caller, and for the WPT document that settles it.
+   NEITHER SET IS MINTED. This is a QUESTION about a document, so an absent layer answers false rather than
+   leaving a property write on shared baseline state behind it — the same rule top_layer_collect states. */
+bool top_layer_is_in(JSContext *ctx, JSValueConst el)
 {
     JSValue doc = tl_document_of(ctx, el);
     JSValue layer = tl_set(ctx, doc, g_atom_layer, false);
-    bool in = tl_index_of(ctx, layer, el) >= 0;
+    JSValue pending = tl_set(ctx, doc, g_atom_pending, false);
+    bool in = tl_index_of(ctx, layer, el) >= 0 && tl_index_of(ctx, pending, el) < 0;
 
+    JS_FreeValue(ctx, pending);
     JS_FreeValue(ctx, layer);
     JS_FreeValue(ctx, doc);
     return in;
