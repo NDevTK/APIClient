@@ -31,8 +31,10 @@ JSValue event_path_new(JSContext *ctx);
    the node. `touch_targets` is JS_NULL for the EMPTY LIST — the same state one allocation cheaper, and the
    spelling the event's own touch target list uses.
    ONE OF THE STANDARD'S SEVEN ITEM FIELDS IS ABSENT, BY NAME: `invocation-target-in-shadow-tree`, whose only
-   reader is inner invoke step 2.7.2, which suppresses HTML's `window.event`, and this engine has no
-   `window.event`. */
+   reader is DOM §2.9 "Dispatching events"' inner invoke step 2.8.2, which suppresses HTML's `window.event`,
+   and this engine has no `window.event`. The number stood as 2.7.2 and no reading of the algorithm admits it:
+   step 2.7 is "Let currentEvent be undefined" and holds no list, while step 2.8 is "If global is a Window
+   object:" and holds the two sub-steps — 2.8.1 saves the current event, 2.8.2 is the one that reads this flag. */
 void event_path_append(JSContext *ctx, JSValueConst path, JSValueConst invocation_target,
                        JSValueConst shadow_adjusted_target, JSValueConst related_target,
                        JSValueConst touch_targets, bool root_of_closed_tree, bool slot_in_closed_tree);

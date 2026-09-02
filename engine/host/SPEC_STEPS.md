@@ -3211,29 +3211,67 @@ single-shadow-root test can see.
 fall out of step 10 rather than out of a rule of their own: the inside listener starts at level 1, so
 the level-1 entries pass; the outside listener starts at 0, so they do not.
 
-### 11.11 §4.2 `retarget`, and what is honestly ABSENT
+### 11.11 DOM §4.8 "Interface ShadowRoot"'s `retarget`, and what is honestly ABSENT
 
 **To retarget an object A against an object B, repeat until it returns:** if A is not a node, or A's
 root is not a shadow root, or B is a node and **A's root is a shadow-including inclusive ancestor of
 B**, return A; otherwise set A to **A's root's host**.
 
-**It has no caller here, and building it anyway would be dead code.** Retargeting in §2.9 is applied
-to exactly two things — the event's `relatedTarget` (steps 4 and 6.9.3) and each member of its
-`touch target list` (steps 6.1-6.2 and 6.9.4-6.9.5) — and neither exists in this engine: `relatedTarget` is
-a member of `MouseEvent` and `FocusEvent`, the touch target list of `TouchEvent`, and none of those
-three interfaces is built. Retargeting of the TARGET is not this algorithm at all: it is step 6.9.8.1's
-"Set target to parent", which IS built.
+This heading used to number that algorithm **§4.2**, which is DOM's "Node tree" — the section the
+shadow-tree definitions sit under, and not the one that defines this. DOM's own index files both
+`retarget` and `retargeting` under §4.8, one heading before §4.9 "Interface Element", and
+`event_target.c`'s banner had it right the whole time. The number is corrected here rather than
+struck, because a reader who re-derives "retargeting is a shadow-tree thing, and shadow trees are
+§4.2.2" arrives back at the wrong section by exactly the route that produced it.
 
-So what is absent, by name, is: `relatedTarget` and its retargeting, the touch target list and its
-retargeting, step 6.9.7's "Otherwise, if parent is relatedTarget" arm of the walk, the relatedTarget
-and touch-target halves of step 6.11's clearTargets condition, step 11's clearing of those two
-fields, and the two path-item fields that hold them. All of them land WITH the first typed event
-interface that carries a relatedTarget, which is also what makes step 6.4's isActivationEvent
-("event is a MouseEvent object and …") askable as more than the type string.
+**IT IS BUILT AND IT HAS CALLERS, and the paragraph that stood here saying otherwise is retired.**
+That paragraph said retargeting had no caller and that building it anyway would be dead code, on the
+ground that §2.9 applies it to exactly two things — the event's `relatedTarget` (steps 4 and 6.9.3)
+and each member of its `touch target list` (steps 6.1-6.2 and 6.9.4-6.9.5) — neither of which
+existed, because `relatedTarget` is a member of `MouseEvent` and `FocusEvent`, the touch target list
+of `TouchEvent`, and none of those three interfaces was built. THE READING OF §2.9 IS STILL EXACTLY
+RIGHT; the claim about this tree is not. `event_target.c` owns `event_target_retarget` as §4.8's
+loop — re-asking all three of step 1's disjuncts about each host it climbs to — and it is reached
+from §2.9's own dispatch walk, from `focus.c`, from `fullscreen.c` and from `toggle_event.c`. Two of
+the three interfaces exist (`mouse_event.c`, `focus_event.c`), and `mouse_event.c`'s `relatedTarget`
+attribute reads §2.2's slot ON THE EVENT, which is what §2.9 retargets. Retargeting of the TARGET is
+still not this algorithm at all: it is step 6.9.8.1's "Set target to parent", which IS built.
 
-Also absent, for its own reason: **`invocation-target-in-shadow-tree`**, whose only reader is inner
-invoke step 2.7.2's `window.event` suppression, and **§2.9's legacy target override flag**, which
-only HTML passes and only for a `Window`, so `targetOverride` here is always the target itself.
+So what §2.9 RUNS here, rather than lacks, is: step 4's retargeting of the event's `relatedTarget`
+against the target; steps 6.1-6.2 and 6.9.4-6.9.5's retargeting of each touch target; step 6.9.3's
+per-ancestor relatedTarget; step 6.9.7's "Otherwise, if parent is relatedTarget" arm of the walk;
+the relatedTarget and touch-target halves of step 6.11's clearTargets condition; step 11's clearing
+of all three fields; and both of the path-item fields that hold them.
+
+What is still absent, by name, is smaller, and it is these:
+
+- **`TouchEvent`** — the only thing that ever puts a member in an event's touch target list. Steps
+  6.1-6.2 and 6.9.4-6.9.5 RUN on every dispatch and retarget an EMPTY list, which is why nothing
+  crashes and why nothing is observable either: `dispatch_retarget_touch_targets` answers the empty
+  list's spelling for every event this engine can construct. The retargeting does not land with the
+  interface — it is already here — so what lands with `TouchEvent` is a non-empty operand for it.
+- **Step 6.4's isActivationEvent still asks only the TYPE.** The step is "event is a MouseEvent
+  object and event's type attribute is …", and `event_target.c` decides it on the type string alone,
+  with a comment saying this engine has no `MouseEvent` interface yet. It has one. So this is now a
+  BRAND TEST that CAN be asked and is not, which is a WRONG answer rather than an absence: a plain
+  `new Event("click")` is treated as an activation event where a browser would not treat it as one.
+  What lands is the class-id check beside the type comparison, in the one place step 6.4 is decided.
+- **`invocation-target-in-shadow-tree`** — the one of §2.9's seven event-path item fields
+  `event_path.c` does not carry (it says so in its own header, by name), whose only reader is inner
+  invoke **step 2.8.2**'s `window.event` suppression. That number stood as **2.7.2** here and in
+  `event_path.h`, and it is the drift CLAUDE.md describes, caught by the step checker: inner invoke's
+  step 2.7 is "Let currentEvent be undefined" and holds NO list, so 2.7.2 does not exist; 2.8 is
+  "If global is a Window object:" and holds the two sub-items, of which 2.8.2 is the one that reads
+  the flag. Every number BEFORE 2.8 is unaffected, which is why sampling the cluster's head would
+  have confirmed it.
+
+**§2.9's legacy target override flag came OFF this list.** The entry used to pair it with the
+standard's own note — the flag is only used by HTML and only when target is a `Window` — and conclude
+that `targetOverride` here is always the target itself. The note is still the standard's; the
+conclusion is false of this tree. Step 2's `targetOverride` is a real ARGUMENT of this engine's
+dispatcher rather than state on the event: `event_target.h` declares it as the third argument and as
+the fifth slot of the fire-request buffer, and `document_lifecycle.c` passes one where it fires
+`unload` at the relevant global object.
 
 ## 12. DOM §5 "Ranges" and §4.10/§4.11 — the live range, and the three tree algorithms that move it
 
@@ -3810,8 +3848,21 @@ regardless-list step 3 pops the entry either way.
 
 ### 14.5 What is honestly ABSENT, by name
 
-- `adoptedCallback` — there is no adoption reaction; the callback is collected by §4.13.4 step 14
-  and nothing enqueues it.
+- ~~`adoptedCallback`~~ — **built.** This entry used to say there is no adoption reaction and that
+  nothing enqueues it. Half of that was never a claim about the callback at all: it is collected by
+  §4.13.4 step 14 exactly like every other lifecycle callback, and it always was — `CE_CB_ADOPTED` is
+  a row of the one list that is step 14.4's map and the enqueue's id space at once. The other half is
+  now false. DOM §4.5 "Interface Document"'s adopt step 3.3.3 is the enqueue, over the shadow-including
+  inclusive descendant the walk is standing at: "If inclusiveDescendant is custom", then "enqueue a
+  custom element callback reaction with inclusiveDescendant" under the `adoptedCallback` name with
+  « oldDocument, document ». `custom_elements_node_adopted` IS steps 3.2, 3.3.2 and 3.3.3, `node.c`'s
+  adopt walk calls it once per inclusive descendant whose document changed, and the 3.3.3 arm takes the
+  element's own definition and enqueues `CE_CB_ADOPTED` with the two document wrappers — after which
+  §14.2's reaction switch drains it like any other reaction. What made the old entry plausible is worth
+  keeping, because it is the reason nobody found the enqueue by looking where enqueues usually are:
+  adopt has NO deferred half for it to hide in. Step 3.3.3 fires from inside the tree walk,
+  synchronously, so there is no queued job anywhere naming the adoption — the reaction is the only
+  trace it leaves.
 - **§3.2.3 step 11.1's `GetFunctionRealm(NewTarget)`** — a NAMED RESIDUAL at the site, not an absent
   feature: step 11's fallback prototype is taken from the ACTIVE FUNCTION OBJECT's realm, which the
   spec's own note says "might not be" NewTarget's. Correct for a same-realm NewTarget, wrong for a
@@ -5089,10 +5140,13 @@ which is what the standard says happens and is not a should-never-happen.
   see §11.8-§11.11, which is where they belong, beside the rest of §2.9. The path is a list of items;
   §4.4 "Interface Node"'s node override of get the parent answers with a slottable's assigned slot;
   the walk retargets at each shadow
-  boundary and records both closed-tree flags; `composedPath()` runs the three walks. **§4.2's
-  `retarget` and the `relatedTarget` path-item field are BUILT TOO** — this entry used to call them
-  absent "because the interfaces that carry them — `MouseEvent`, `FocusEvent`, `TouchEvent` — do not
-  exist here", and two of those three now do: `event_target.c` has `event_target_retarget` and
+  boundary and records both closed-tree flags; `composedPath()` runs the three walks. **§4.8's
+  `retarget` and the `relatedTarget` path-item field are BUILT TOO** (this bullet said **§4.2** until
+  §11.11's heading was corrected; DOM files `retarget` under §4.8 "Interface ShadowRoot") — this entry
+  used to call them absent on the ground that the interfaces carrying them — `MouseEvent`,
+  `FocusEvent`, `TouchEvent` — did not exist here (this file's own retired wording, never the
+  standard's, and it stood in quotation marks until the quotation check could not tell it from a
+  fabricated sentence of DOM's), and two of those three now do: `event_target.c` has `event_target_retarget` and
   retargets the relatedTarget against the target at each ancestor, and `mouse_event.c` and
   `focus_event.c` are the interfaces. What is left is the TOUCH TARGET LIST, whose `TouchEvent` is
   the one of the three still absent; SPEC_STEPS §11.11 names each piece and what lands with it.
