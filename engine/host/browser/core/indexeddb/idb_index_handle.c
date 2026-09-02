@@ -93,16 +93,29 @@ bool idb_index_handle_is(JSValueConst v)
 
    NAMED RESIDUAL. WHAT IS NOT COVERED: §4.6's five attribute GETTERS — `name`, `objectStore`, `keyPath`,
    `multiEntry` and `unique` (so `name` is SPLIT: its setter is converted and its getter is not) — whose four
-   bodies are the four call sites left below. idl_install_accessor mints a getter as a plain
-   JS_CFUNC_getter_magic with NO pool entry, so nothing about one converges on that machine and NEITHER of
-   §3.7's two steps runs for it: not §3.5 Security's "getter" check and not step 3's brand. The test below is
-   therefore CORRECT and merely narrower rather than mis-ordered — a getter declares no argument, so it converts
-   nothing and has no page code to run ahead of itself, and §3.7.6 Attributes' creating an attribute getter puts
-   the brand at its try-list's step 1.1.2.3, two steps ahead of 1.1.3's own getter steps with nothing between
-   them that runs the page's code.
-   WHAT THE NEXT DIFF BUILDS: a pool entry minted for a plain getter at idl_define_accessor — idl_mint_accessor
-   takes a STEP id and asks the pool for it, so an IdlGetter has no entry to be routed through and one has to be
-   made. When that exists, these four calls and this function go with it.
+   bodies are the four call sites left below. All five are installed on the INTERFACE PROTOTYPE, and
+   idl_install_accessor hands their `IdlGetter` down as a plain JS_CFUNC_getter_magic with NO pool entry, so
+   nothing about one converges on that machine and NEITHER of §3.7's two steps runs for it: not §3.5 Security's
+   "getter" check and not step 3's brand. The test below is therefore CORRECT and merely narrower rather than
+   mis-ordered — a getter declares no argument, so it converts nothing and has no page code to run ahead of
+   itself, and §3.7.6 Attributes' creating an attribute getter puts the brand at its try-list's step 1.1.2.3,
+   two steps ahead of 1.1.3's own getter steps with nothing between them that runs the page's code.
+   WHAT THE NEXT DIFF BUILDS: a pool entry for a plain getter, minted at core/idl_args.c's
+   idl_mint_plain_getter, which is THE ONE PLACE a plain-C attribute getter is created — idl_mint_accessor takes
+   a STEP id and asks the pool for it, so an IdlGetter has no entry to be routed through and one has to be made.
+   When that exists, these four calls and this function go with it.
+   THAT CLAUSE NAMED idl_define_accessor AND IS REWRITTEN RATHER THAN DELETED, because the reason it named that
+   site is one the next reader re-derives: idl_define_accessor is what idl_install_accessor calls, so from here
+   it looks like the mint. It is not, and it was never the only one. It is a SHARED HELPER one level ABOVE the
+   mint with THREE callers — idl_install_accessor, idl_install_accessor_no_user_code and
+   idl_install_accessor_unforgeable — and the mint below it has a SECOND caller it does not reach:
+   idl_install_replaceable's readonly form, which installs HTML §7.2.2.4's `parent` and `length` and CSSOM VIEW
+   §4's thirteen Window members. A diff obeying the retired clause would have added the entry at the helper,
+   left those fifteen global attributes unrouted, and believed itself finished — which is why the two mints were
+   made one, and why this clause names that one. core/idl_args.c states the same residual from the other end, at
+   js_idl_args_step_inner's idl_implementation_check call, and it is the PROTOTYPE half that is left: a plain
+   getter installed as an own property of the realm's [Global] object already has both of §3.7's steps, because
+   there the TARGET settles the interface and the member has nothing to declare.
    HOW ITS ABSENCE SHOWS: `Object.getOwnPropertyDescriptor(IDBIndex.prototype, "keyPath").get.call({})` throws
    the message below, naming IDBIndex in this file's own words, rather than idl_implementation_check's
    "'keyPath' called on an object that does not implement interface IDBIndex"; and the same getter reached on a
