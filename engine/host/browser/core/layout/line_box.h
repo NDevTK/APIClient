@@ -202,8 +202,11 @@ void line_box_content_span(lxb_dom_element_t *style, lxb_dom_node_t *first, lxb_
  * of the table") and to an `inline-block` ("The baseline of an 'inline-block' is the baseline of its last line
  * box in the normal flow, unless it has either no in-flow line boxes or if its 'overflow' property has a
  * computed value other than 'visible', in which case the baseline is the bottom margin edge") and to NOTHING
- * else — and that second sentence's OWN exception is why the split named below is the work an `inline-block`
- * still waits on rather than a detail of it. So a REPLACED element's bottom
+ * else. THAT SECOND SENTENCE'S OWN EXCEPTION IS A COMPLETE ANSWER AND NOT A CONDITION ON ONE, so an
+ * `inline-block` whose `overflow` computes to other than `visible` takes this same derivation and is placed on
+ * the line by it; what an `inline-block` still waits on is the sentence's MAIN arm — the split named below,
+ * over the last line box INSIDE the box — and the "no in-flow line boxes" test that chooses between the two.
+ * So a REPLACED element's bottom
  * margin edge sits ON the line's baseline — which is why an image on a line of text leaves the font's
  * descender visible below it. Its border area is then that baseline less its own `margin-bottom`, extending
  * one used BORDER EDGE EXTENT upward (§10.6.2 "Inline replaced elements, block-level replaced elements in
