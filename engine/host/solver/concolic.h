@@ -525,6 +525,48 @@ JSValue     concolic_key_read_hook(JSContext *ctx, JSValueConst obj, JSValueCons
 /* JSConcolicHooks.key_name — the real string an unknown key denotes (its shape), stable per source. */
 JSValue     concolic_key_name_hook(JSContext *ctx, JSValueConst key);
 JSValue     concolic_builtin_hook(JSContext *ctx, JSValueConst v, const char *op, JSValue example);
+/* …AND THE SAME DERIVATION OVER SEVERAL OPERANDS AT ONCE — the VALUE twin of concolic_new_rel, for a component
+ * whose own algorithm COMPUTES a result from more than one operand and cannot say which of them decided it.
+ *
+ * IT EXISTS BECAUSE ONE-OPERAND DERIVATION IS THE WRONG ANSWER AND WAS WRITTEN DOWN AS SUCH. concolic_builtin_hook
+ * composes `(operand, operation)`, so a component with two unknown operands had to pick one and name it, and two
+ * flows differing only in the operand it did NOT pick then share a derivation identity — one constraint entry
+ * for two propositions, so the second flow's gate is decided by the first's record. That is not a hypothesis:
+ * core/html/html_progress.c and core/html/html_meter.c each carried a named residual asking for exactly this
+ * entry, and CSS Typed OM 1 §4.3.1's arithmetic reaches it on its first line (`CSS.px(x).add(CSS.px(y))` is
+ * defined as "the sum of the value internal slots", over two slots either of which may be unknown).
+ *
+ * THE IDENTITY IS THE OPERANDS **IN ORDER**, WHICH IS WHERE THIS PARTS COMPANY WITH concolic_new_conj. That mint
+ * composes a flattened, sorted, deduplicated SET, and it is right to, because `∧` is commutative and
+ * associative so `p ∧ q` and `q ∧ p` name ONE proposition. An arithmetic or spec-algorithm derivation is not:
+ * `a - b` and `b - a` are two values, `min(a, b)` and `min(b, a)` are one value only for operations the caller
+ * happens to know are commutative, and a mint that sorted would answer BOTH subtractions from one key — the
+ * two-arms-of-one-proposition defect with the halves swapped. So the order the caller passes is the order the
+ * key states, and a caller whose operation IS commutative gains nothing by sorting: two orderings of one
+ * commutative operation are two keys for one value, which costs an extra frontier entry and decides nothing
+ * wrongly, where one key for two values decides a gate the flow never asked about.
+ *
+ * IT IS ONE SPELLER WITH concolic_builtin_hook AND NOT A SECOND ONE. That entry is this composition at n == 1 —
+ * `(ident, op)` under the same tag — and it now calls this, so a derivation named through either spelling
+ * composes the same bytes and no existing constraint key moves. n MUST BE AT LEAST 1 and the DISPLAY shape is
+ * the only thing that branches on it: `{x}.op()` reads as a method on the operand and is what every existing
+ * one-operand derivation already renders as, while `op({x}, {y})` is the only honest rendering of a result
+ * neither operand is the subject of.
+ *
+ * `op` NAMES THE SPEC ALGORITHM, not the C operator, for concolic_new_rel's reason: the name IS half the key,
+ * so two different operations over one operand list must not compose to one identity.
+ *
+ * `src` AND `root` COME FROM THE FIRST UNKNOWN OPERAND, which is the rule concolic_arith_hook already applies to
+ * the interpreter's own `x + y` (it reads both from `a` when `a` is unknown and from `b` otherwise). Matching it
+ * is the point: a component performing an addition and a page performing the same addition must state the same
+ * provenance, or one @H record splits into two that do not compare.
+ *
+ * The operands are BORROWED; `example` is CONSUMED and is the REAL operation run by the CALLER on the operands'
+ * own examples (concolic_example) — never predicted here, and JS_UNDEFINED where any operand has none, because
+ * @H never invents. Answers JS_UNINITIALIZED when NO operand is unknown, exactly as concolic_builtin_hook does
+ * for a known operand: the caller already computed the answer and there is nothing to derive. */
+JSValue     concolic_new_derived(JSContext *ctx, const char *op, const JSValueConst *operands, int n,
+                                 JSValue example);
 /* THE BYTES A DOM MEMBER NEEDS FROM AN ARGUMENT THAT MAY BE UNKNOWN — a selector, an attribute name, a class
    token, an id. An unknown denotes its SHAPE (a real string, stable per source, the key_name rule); anything
    else converts normally. OWNED either way: free with JS_FreeCString. */

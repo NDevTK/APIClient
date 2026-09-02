@@ -23,12 +23,16 @@
  * platform owns, so solver/absent.c answers a CONCRETE `undefined` for them rather than unknown input and
  * every `if (window.CSSUnitValue)` in a bundle is decided against the engine today.
  *
- * WHAT IS HONESTLY ABSENT AND WHY THAT IS NOT A STUB. §2's `parse`/`parseAll`, §4.3.1's six arithmetic
- * operations, its `toSum` and its static `parse` are NOT installed. They are not noops and not opaque getters
- * — they are not there, so a page that reaches one gets the TypeError a browser missing them would give, which
- * is the forcing function this project runs on. §4.3.1's `type()`, `to()` and `equals()` ARE installed and
- * live in core/css/css_numeric_value.c, which states why those are the three whose algorithms terminate inside
- * this subclass and the others are not.
+ * WHAT IS HONESTLY ABSENT AND WHY THAT IS NOT A STUB. §2's `parse`/`parseAll`, §4.3.1's `toSum` and its
+ * static `parse` are NOT installed. They are not noops and not opaque getters — they are not there, so a page
+ * that reaches one gets the TypeError a browser missing them would give, which is the forcing function this
+ * project runs on. Nine of §4.3.1's eleven members ARE installed and live in core/css/css_numeric_value.c;
+ * that file states what each of the two absentees is waiting on, and neither is waiting on this one.
+ *
+ * AND THIS FILE'S REALM INSTALL NOW BUILDS §4.3.4's CHAIN TOO, by calling core/css/css_math_value.c with the
+ * CSSNumericValue.prototype it has just made. It is the same §3.7.3 Interface prototype object argument one
+ * level down: a CSSMathSum.prototype inherits a CSSMathValue.prototype which inherits the object built here,
+ * so one place creates the graph and each component installs its own members onto its own object.
  *
  * THE `value` SLOT IS A JSValue AND NOT A `double`, WHICH IS THE ONE DESIGN DECISION IN THIS FILE.
  * §4.3.3 declares `attribute double value` — WRITABLE — so the slot is mutable shared state that must ride the
@@ -92,6 +96,16 @@ JSValue     css_unit_value_value(JSContext *ctx, JSValueConst v);
  * has a subclass for. OWNED: a JS string, or the unknown a §6.4 run over an unknown `value` slot derives.
  * `v` must be a CSSUnitValue; the caller has already asked css_unit_value_is. */
 JSValue css_unit_value_serialize(JSContext *ctx, JSValueConst v);
+
+/* §6.4 step 3's THREE ARMS, as the one thing they differ in — the text appended after the digits. It is a list
+   headed "If unit is:" whose arms are, for `"number"`, "Do nothing."; for `"percent"`, "Append "%" to s."; and
+   for `anything else`, "Append unit to s."
+   PUBLIC BECAUSE §6.5 REACHES §6.4 AT EVERY LEAF. CSS Typed OM 1 §6.5 CSSMathValue Serialization serializes
+   each operand, and §6.3's dispatch sends a CSSUnitValue operand to §6.4 — so core/css/css_math_value.c writes
+   the digits and this suffix for every leaf of a tree. A second copy of the three arms there would be the copy
+   that disagrees about `"percent"` the day one of them is edited. BORROWED: the answer is either a literal or
+   `unit` itself, and §4.3.3 declares that slot `readonly`. */
+const char *css_unit_value_suffix(const char *unit);
 
 void css_unit_value_init(JSContext *ctx);
 void css_unit_value_free(void);

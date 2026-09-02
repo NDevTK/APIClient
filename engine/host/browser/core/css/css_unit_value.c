@@ -16,6 +16,7 @@
 
 #include "core/agent_state.h"
 #include "core/css/css_length.h"
+#include "core/css/css_math_value.h"
 #include "core/css/css_numeric_value.h"
 #include "core/css/css_unit_value.h"
 #include "core/idl_args.h"
@@ -173,8 +174,9 @@ JSValue css_unit_value_new(JSContext *ctx, JSValue value, const char *unit)
 
 /* §6.4 step 3, which is a list headed "If unit is:" with three arms: for `"number"`, "Do nothing."; for
    `"percent"`, "Append "%" to s."; and for `anything else`, "Append unit to s." This function answers them as
-   the SUFFIX, because what the arms differ in is the text appended after the digits and nothing else. */
-static const char *uv_suffix(const char *unit)
+   the SUFFIX, because what the arms differ in is the text appended after the digits and nothing else.
+   PUBLIC — see css_unit_value.h for the second caller, which is §6.5's walk over a math tree's leaves. */
+const char *css_unit_value_suffix(const char *unit)
 {
     if (strcmp(unit, "number") == 0) return "";
     if (strcmp(unit, "percent") == 0) return "%";
@@ -195,7 +197,7 @@ JSValue css_unit_value_serialize(JSContext *ctx, JSValueConst v)
        ON THAT VALUE'S OWN EXAMPLE — the concrete the page actually computed — with 0 meaning there is no
        example yet rather than meaning the value is zero. */
     if (idl_number_of(ctx, IDL_DOUBLE, u->value, &n)) {
-        s = css_length_serialize_number(n, uv_suffix(u->unit));
+        s = css_length_serialize_number(n, css_unit_value_suffix(u->unit));
         DCHECK(s != NULL, "CSSOM §6.7.2's serializer answered nothing at all — it returns an owned string for "
                           "every finite number including zero, so a null is an allocation that was not checked");
         example = JS_NewStringLen(ctx, s, strlen(s));
@@ -231,13 +233,20 @@ JSValue css_unit_value_serialize(JSContext *ctx, JSValueConst v)
    states its behavior by reference: "The stringification behavior of CSSStyleValue objects is defined in § 6
    CSSStyleValue Serialization."
  *
- * NAMED RESIDUAL — §6 DISPATCHES OVER EIGHT SUBCLASSES AND THIS ENGINE HAS BUILT ONE.
- * WHAT IS NOT COVERED: §6.1 CSSUnparsedValue, §6.2 CSSKeywordValue, §6.3 CSSNumericValue (the abstract arm),
- * §6.5 CSSMathValue and §6.6 CSSTransformValue Serialization have no arm here, because no component mints an
- * object of any of those interfaces — so the brand test below, which asks whether `this` is a CSSUnitValue, is
- * today exactly the question "is `this` a CSSStyleValue at all".
+ * §6.3 CSSNumericValue Serialization IS THE DISPATCH, IN THE SPEC'S OWN TWO SENTENCES: "If this is a
+ * CSSUnitValue, serialize a CSSUnitValue from this, passing minimum and maximum. Return the result." and
+ * "Otherwise, serialize a CSSMathValue from this, and return the result." Neither minimum nor maximum is
+ * passed by a stringifier, so §6.4's fourth step cannot run from here.
+ *
+ * NAMED RESIDUAL — §6 DISPATCHES OVER EIGHT SUBCLASSES AND THIS ENGINE HAS BUILT SEVEN.
+ * WHAT IS NOT COVERED: §6.1 CSSUnparsedValue Serialization, §6.2 CSSKeywordValue Serialization and §6.6 CSSTransformValue
+ * and CSSTransformComponent Serialization
+ * have no arm here, because no component mints an object of any of those interfaces. §6.5's arm IS built —
+ * it arrived with core/css/css_math_value.c, which is what the previous form of this residual named as the
+ * next diff — and §6.3's is the two-way dispatch below rather than an arm of its own.
  * WHAT THE NEXT DIFF BUILDS: the subclass it adds arrives with its own §6 arm and this body grows the branch,
- * so the two facts stop coinciding at the same moment one of them stops being true.
+ * so the brand test and the question "is `this` a CSSStyleValue at all" stop coinciding at the same moment one
+ * of them stops being true.
  * HOW ITS ABSENCE WOULD SHOW: it cannot show as a wrong answer while it holds — there is no object for the
  * missing arms to be reached on — which is why it is stated rather than asserted. It would show the day a
  * subclass is minted and its `toString` throws the TypeError below instead of serializing. */
@@ -245,6 +254,7 @@ static JSValue js_css_style_value_to_string(JSContext *ctx, JSValueConst this_va
                                             JSValueConst *argv, int magic)
 {
     (void)argc; (void)argv; (void)magic;
+    if (css_math_value_is(this_val)) return css_math_value_serialize(ctx, this_val);
     if (!css_unit_value_is(this_val))
         return JS_ThrowTypeError(ctx, "CSSStyleValue.prototype.toString was reached on something that is not "
                                       "a CSSStyleValue");
@@ -348,21 +358,33 @@ static void css_unit_value_install_realm(JSContext *ctx)
     /* §4.3.1's CSSNumericValue. §3.7.3 Interface prototype object: "if interface is declared to inherit from
        another interface, then set proto to the interface prototype object IN REALM of that inherited
        interface" — the object one line up, which core/idl_args.c asserts by reading the §3.7.3 Interface
-       prototype object class string back off it. Three of its eleven members land on it here — the BODIES are
+       prototype object class string back off it. Nine of its eleven members land on it here — the BODIES are
        core/css/css_numeric_value.c's, and only the install is this file's, because §3.7.3 makes the chain one
        object graph and splitting the creation of it across two components would be two files that have to
-       agree about an order. The other eight are honest absence rather than stubs: a page reaching `add` gets
-       the TypeError a browser without it gives, and engine/idlgen.mjs reports all eight as the gaps they are. */
+       agree about an order. The other two are honest absence rather than stubs: a page reaching `toSum` gets
+       the TypeError a browser without it gives, and engine/idlgen.mjs reports both as the gaps they are. */
     nv_proto = JS_NewObjectProto(ctx, sv_proto);
     CHECK(!JS_IsException(nv_proto), "CSSNumericValue.prototype could not be allocated");
     idl_interface_tag(ctx, nv_proto, "CSSNumericValue");
     idl_install_method(ctx, nv_proto, "type", css_numeric_value_member_id(CSS_NUMERIC_MEMBER_TYPE));
     idl_install_method(ctx, nv_proto, "to", css_numeric_value_member_id(CSS_NUMERIC_MEMBER_TO));
     idl_install_method(ctx, nv_proto, "equals", css_numeric_value_member_id(CSS_NUMERIC_MEMBER_EQUALS));
+    idl_install_method(ctx, nv_proto, "add", css_numeric_value_member_id(CSS_NUMERIC_MEMBER_ADD));
+    idl_install_method(ctx, nv_proto, "sub", css_numeric_value_member_id(CSS_NUMERIC_MEMBER_SUB));
+    idl_install_method(ctx, nv_proto, "mul", css_numeric_value_member_id(CSS_NUMERIC_MEMBER_MUL));
+    idl_install_method(ctx, nv_proto, "div", css_numeric_value_member_id(CSS_NUMERIC_MEMBER_DIV));
+    idl_install_method(ctx, nv_proto, "min", css_numeric_value_member_id(CSS_NUMERIC_MEMBER_MIN));
+    idl_install_method(ctx, nv_proto, "max", css_numeric_value_member_id(CSS_NUMERIC_MEMBER_MAX));
     ctor = idl_interface_object(ctx, "CSSNumericValue", nv_proto);
     CHECK(!JS_IsException(ctor), "the CSSNumericValue interface object could not be allocated");
     JS_SetPropertyStr(ctx, global, "CSSNumericValue", ctor);
     JS_FreeValue(ctx, sv_proto);
+    /* §4.3.4's SEVEN INTERFACES AND CSSNumericArray, over the object one line up. They are built HERE rather
+       than from a realm intrinsic of their own for the §3.7.3 Interface prototype object reason this whole
+       install exists for — the chain is one object graph, and two intrinsics ordered independently would be
+       two files that have to agree about an order. Each component still owns its own objects and its own
+       members; what crosses is the one prototype §3.7.3 makes their proto. */
+    css_math_value_install_realm(ctx, nv_proto);
 
     /* §4.3.3's CSSUnitValue, over §4.3.1's object for the same §3.7.3 Interface prototype object reason. */
     uv_proto = JS_NewObjectProto(ctx, nv_proto);

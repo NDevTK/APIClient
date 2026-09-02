@@ -6,6 +6,7 @@
 #include "core/agent_state.h"
 #include "core/console/console.h"
 #include "core/crypto/crypto.h"
+#include "core/css/css_math_value.h"
 #include "core/css/css_namespace.h"
 #include "core/css/css_numeric_value.h"
 #include "core/css/css_unit_value.h"
@@ -153,6 +154,7 @@ typedef struct {
 static void d_console(JSContext *c, const PlatformAgent *a) { (void)a; console_init(c); }
 static void d_css_namespace(JSContext *c, const PlatformAgent *a) { (void)a; css_namespace_init(c); }
 static void d_css_numeric_value(JSContext *c, const PlatformAgent *a) { (void)a; css_numeric_value_init(c); }
+static void d_css_math_value(JSContext *c, const PlatformAgent *a) { (void)a; css_math_value_init(c); }
 static void d_css_unit_value(JSContext *c, const PlatformAgent *a) { (void)a; css_unit_value_init(c); }
 static void d_url(JSContext *c, const PlatformAgent *a) { (void)a; url_init(c); }
 static void d_usp(JSContext *c, const PlatformAgent *a) { (void)a; usp_init(c); }
@@ -250,6 +252,7 @@ static void r_input_device_capabilities(JSRuntime *rt) { input_device_capabiliti
 static void r_console(JSRuntime *rt) { (void)rt; console_free(); }
 static void r_css_namespace(JSRuntime *rt) { (void)rt; css_namespace_free(); }
 static void r_css_numeric_value(JSRuntime *rt) { (void)rt; css_numeric_value_free(); }
+static void r_css_math_value(JSRuntime *rt) { css_math_value_free(rt); }
 static void r_css_unit_value(JSRuntime *rt) { (void)rt; css_unit_value_free(); }
 static void r_hr_time(JSRuntime *rt) { (void)rt; hr_time_free(); }
 static void r_performance(JSRuntime *rt) { (void)rt; performance_free(); }
@@ -949,6 +952,14 @@ static const PlatformComponent PLATFORM[] = {
        of an id that has not been declared, which is what makes a reordering here a crash rather than a member
        silently installed under a pool entry belonging to someone else. */
     { "css_numeric_value",   d_css_numeric_value,   NULL,        r_css_numeric_value },
+    /* §4.3.4's MATH VALUES, BEFORE the row that installs them, for the same reason the row above is: this
+       component owns no realm state either — its seven interface prototype objects and CSSNumericArray's are
+       built from `css_unit_value`'s realm intrinsic, which is where §3.7.3 Interface prototype object's chain
+       is created — so what it declares is eight class ids and six argument-pool entries, and an id read before
+       it was declared aborts rather than installing a constructor under a pool entry belonging to someone
+       else. It sits AFTER `css_numeric_value` because its constructors brand their `CSSNumberish` arm against
+       that component's predicate, and BEFORE `css_unit_value` because that row's install reads these ids. */
+    { "css_math_value",      d_css_math_value,      NULL,        r_css_math_value },
     { "css_unit_value",      d_css_unit_value,      NULL,        r_css_unit_value },
     { "css_namespace",       d_css_namespace,       NULL,        r_css_namespace },
     /* INTERSECTION OBSERVER, AFTER `element` and after the two GEOMETRY rows. After element because its
@@ -1069,6 +1080,19 @@ static const struct { const char *name, *component; IdlExposure exposure; } PLAT
     { "CSSStyleValue",         "css_unit_value" },
     { "CSSNumericValue",       "css_unit_value" },
     { "CSSUnitValue",          "css_unit_value" },
+    /* §4.3.4's eight, whose interface objects this realm's `css_unit_value` install puts on the global by
+       calling core/css/css_math_value.c — so the WITNESS is attributed to the row that owns the install, which
+       is the row whose failure would take them all with it. `x instanceof CSSMathSum` is how a page tells one
+       of §4.3.1's arithmetic results from a CSSUnitValue, which is the second of the two ways this column
+       matters. */
+    { "CSSMathValue",          "css_unit_value" },
+    { "CSSMathSum",            "css_unit_value" },
+    { "CSSMathProduct",        "css_unit_value" },
+    { "CSSMathNegate",         "css_unit_value" },
+    { "CSSMathInvert",         "css_unit_value" },
+    { "CSSMathMin",            "css_unit_value" },
+    { "CSSMathMax",            "css_unit_value" },
+    { "CSSNumericArray",       "css_unit_value" },
     /* HTML §8.9.1's three members, and the witness matters more than most for the reason Web Storage's two do:
        all three are on browser/platform_names.h, so solver/absent.c's read hook leaves a miss on them ALONE —
        a name the platform owns is a component this engine owes, and that file declines to mint a concolic for

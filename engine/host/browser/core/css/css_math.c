@@ -87,8 +87,8 @@ static bool mth_entries_equal(const CssMathType *a, const CssMathType *b)
     return true;
 }
 
-/* §4.3.2's "To add two types type1 and type2". */
-static bool mth_type_add(const CssMathType *type1, const CssMathType *type2, CssMathType *out)
+/* §4.3.2's "To add two types type1 and type2". PUBLIC — see css_math.h for which second standard asks. */
+bool css_math_type_add(const CssMathType *type1, const CssMathType *type2, CssMathType *out)
 {
     CssMathType t1 = *type1, t2 = *type2;
     unsigned hint;
@@ -128,8 +128,8 @@ static bool mth_type_add(const CssMathType *type1, const CssMathType *type2, Css
     return false;
 }
 
-/* §4.3.2's "To multiply two types type1 and type2". */
-static bool mth_type_mul(const CssMathType *type1, const CssMathType *type2, CssMathType *out)
+/* §4.3.2's "To multiply two types type1 and type2". PUBLIC — see css_math.h. */
+bool css_math_type_mul(const CssMathType *type1, const CssMathType *type2, CssMathType *out)
 {
     CssMathType t1 = *type1, t2 = *type2;
     unsigned i;
@@ -143,8 +143,9 @@ static bool mth_type_mul(const CssMathType *type1, const CssMathType *type2, Css
     return true;
 }
 
-/* §4.3.2's "To invert a type type" — every exponent negated, the percent hint kept. */
-static CssMathType mth_type_inv(const CssMathType *t)
+/* §4.3.2's "To invert a type type" — every exponent negated, the percent hint kept. PUBLIC — see
+   css_math.h. */
+CssMathType css_math_type_invert(const CssMathType *t)
 {
     CssMathType out = *t;
     unsigned i;
@@ -569,7 +570,7 @@ static bool mth_add(const MthVal *a, const MthVal *b, MthVal *out)
 {
     CssMathType ty;
 
-    if (!mth_type_add(&a->type, &b->type, &ty)) return false;
+    if (!css_math_type_add(&a->type, &b->type, &ty)) return false;
     out->type = ty;
     out->num = css_px_add(a->num, b->num);
     out->pct = a->pct + b->pct;
@@ -598,7 +599,7 @@ static bool mth_multiply(const MthVal *a, const MthVal *b, MthVal *out)
 {
     CssMathType ty;
 
-    if (!mth_type_mul(&a->type, &b->type, &ty)) return false;
+    if (!css_math_type_mul(&a->type, &b->type, &ty)) return false;
     out->type = ty;
     out->blocked = mth_worse(a->blocked, b->blocked);
     if (!a->pct_term && !b->pct_term) {
@@ -644,7 +645,7 @@ static bool mth_divide(const MthVal *a, const MthVal *b, MthVal *out)
        or −∞, according to the standard sign rules", which is IEEE-754's answer and is what `calc(1 / 0)` must
        give rather than a crash. The environment facts still ride the operand, so the union is unaffected. */
     inv = *b;
-    inv.type = mth_type_inv(&b->type);
+    inv.type = css_math_type_invert(&b->type);
     if (b->pct_term) {
         inv.num = css_px(0.0);
         inv.pct = 0.0;
@@ -904,7 +905,7 @@ static bool mth_variadic(Mth *m, int kind, MthVal *out)
                TYPES add here — the VALUE is a fold and not a sum, which is why this is not `mth_add`. */
             CssMathType ty;
 
-            if (!mth_type_add(&acc.type, &a.type, &ty)) return false;
+            if (!css_math_type_add(&acc.type, &a.type, &ty)) return false;
             acc.type = ty;
         }
         if (a.pct_term) any_pct = true;
@@ -1003,7 +1004,7 @@ static bool mth_clamp(Mth *m, MthVal *out)
 
         if (!present[i]) continue;
         if (!have_ty) { ty = arg[i].type; have_ty = true; continue; }
-        if (!mth_type_add(&ty, &arg[i].type, &sum)) return false;
+        if (!css_math_type_add(&ty, &arg[i].type, &sum)) return false;
         ty = sum;
     }
     DCHECK(have_ty, "clamp()'s central calculation is absent — §10.8's grammar makes only the FIRST and THIRD "
@@ -1080,7 +1081,7 @@ static bool mth_round(Mth *m, MthVal *out)
     if (have_b) {
         CssMathType sum;
 
-        if (!mth_type_add(&a.type, &b.type, &sum)) return false;
+        if (!css_math_type_add(&a.type, &b.type, &sum)) return false;
         ty = sum;
     }
     *out = a;
@@ -1178,7 +1179,7 @@ static bool mth_function(Mth *m, MthVal *out)
         CssMathType ty;
 
         if (!mth_fixed_args(m, 2, arg)) goto done;
-        if (!mth_type_add(&arg[0].type, &arg[1].type, &ty)) goto done;
+        if (!css_math_type_add(&arg[0].type, &arg[1].type, &ty)) goto done;
         *out = arg[0];
         out->type = ty;
         out->blocked = mth_worse(arg[0].blocked, arg[1].blocked);
@@ -1252,7 +1253,7 @@ static bool mth_function(Mth *m, MthVal *out)
         CssMathType sum, ty = css_math_type_of(CSS_MATH_ANGLE);
 
         if (!mth_fixed_args(m, 2, arg)) goto done;
-        if (!mth_type_add(&arg[0].type, &arg[1].type, &sum)) goto done;
+        if (!css_math_type_add(&arg[0].type, &arg[1].type, &sum)) goto done;
         if (!mth_make_consistent(&ty, &sum)) goto done;
         *out = arg[0];
         out->type = ty;

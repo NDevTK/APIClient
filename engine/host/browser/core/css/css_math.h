@@ -161,6 +161,29 @@ bool css_math_unit_base(const char *unit, size_t len, CssMathBase *base);
 CssMathType css_math_type_number(void);
 CssMathType css_math_type_of(CssMathBase base);
 
+/* §4.3.2 Numeric Value Typing's THREE OPERATIONS OVER A TYPE — "To add two types type1 and type2", "To
+   multiply two types type1 and type2" and "To invert a type type". FALSE is the failure both binary ones can
+   answer ("return failure"); invert has no failure arm and so returns the type.
+   THEY ARE PUBLIC FOR THE REASON `css_math_unit_base` AND THE TWO CONSTRUCTORS ABOVE ARE, AND IT IS THE SAME
+   SENTENCE: css-values-4 §10.9 Type Checking links to §4.3.2 by name rather than restating it, so this file is
+   where §4.3.2 is PORTED and CSS Typed OM 1 is its second caller rather than its owner. Every algorithm in
+   §4.3.4 Complex Numeric Values: CSSMathValue objects is stated over exactly these three — a CSSMathSum's type
+   is "the result of adding the types of each of the items in its values internal slot", a CSSMathProduct's is
+   the same sentence with multiplying, and a CSSMathInvert's is "the same as the type of its value internal
+   slot, but with all values negated" — and so are §4.3.1's six arithmetic operations, whose type step is what
+   decides between a collapsed CSSUnitValue and a TypeError. A second copy of the hint machinery there would be
+   the copy that disagrees about `calc(1px + 50%)` the day one of them is edited, and it would disagree
+   SILENTLY, because both copies answer a plausible type for every input either of them was tested on.
+   ADDITION IS NOT ASSOCIATIVE UNDER §4.3.2 AND CALLERS FOLDING OVER A LIST MUST KNOW IT. The percent-hint arm
+   provisionally applies a hint to BOTH operands and keeps the first hint that makes their entries agree, so
+   `(«[percent → 1]» + «[length → 1]») + «[time → 1]»` fails where a different association could not have
+   been asked at all. §4.3.4 states its own fold as "adding the types of each of the items", left to right over
+   the values internal slot, and that order is the observable one — the same reason §4.3.1's own arithmetic
+   spells out that its sums are done "left to right". */
+bool        css_math_type_add(const CssMathType *type1, const CssMathType *type2, CssMathType *out);
+bool        css_math_type_mul(const CssMathType *type1, const CssMathType *type2, CssMathType *out);
+CssMathType css_math_type_invert(const CssMathType *t);
+
 /* §10.9's LAST RULE, answered over the text of one math function: "A math function resolves to <number>,
    <length>, <angle>, <time>, <frequency>, <resolution>, <flex>, or <percentage> according to which of those
    productions its type matches. (These categories are mutually exclusive.) If it can't match any of these, the

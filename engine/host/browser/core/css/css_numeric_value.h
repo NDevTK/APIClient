@@ -24,25 +24,27 @@
  * unit below, whose two literal branches ("number", "percent") are not dimension units and must not be
  * answered from a dimension table — see core/css/css_math.h for why that split is one table and two questions.
  *
- * WHAT IS HONESTLY ABSENT. Of §4.3.1's eleven members this file installs `type()`, `to()` and `equals()`. The
- * six arithmetic operations (add, sub, mul, div, min, max) and `toSum()` are NOT installed and are not stubs:
- * each of them is defined to RETURN a §4.3.4 Complex Numeric Values: CSSMathValue object on the arm where its
- * operands do not collapse to one unit, and no component in this engine mints one, so a member that answered
- * for the collapsing arm alone would be wrong for input a browser answers rather than narrower. The static
- * `parse()` needs CSS Syntax 3's parse-a-component-value and §5.6 <number>, <percentage>, and <dimension>
- * values' reification, neither of which this file can reach. A page that touches one gets the TypeError a
- * browser without it gives, which is the forcing function.
+ * WHAT IS HONESTLY ABSENT. Of §4.3.1's eleven members this file installs nine: `type()`, `to()`, `equals()`
+ * and the six arithmetic operations. `toSum()` and the static `parse()` are NOT installed and are not stubs.
+ * `toSum` is defined over §4.3.1's SUM VALUE — a list of (value, unit map) tuples with its own
+ * product-of-unit-maps and create-a-type-from-a-unit-map — which no component in this engine builds; `parse()`
+ * needs CSS Syntax 3's parse-a-component-value and §5.6 <number>, <percentage>, and <dimension> values'
+ * reification, neither of which this file can reach. A page that touches one gets the TypeError a browser
+ * without it gives, which is the forcing function.
  *
- * `equals` IS THE ONE OF THE EIGHT THAT OWES §4.3.4 NOTHING, and that is a fact about its RETURN TYPE rather
- * than a narrowing of its algorithm. It answers a `boolean`, so the only §4.3.4 objects its steps can meet are
- * ones some other member already minted — and while nothing mints one, "If value1 and value2 are not members
- * of the same interface, return false" and "If value1 and value2 are both CSSUnitValues, return true if they
- * have equal unit and value internal slots, or false otherwise" are the whole of what equal-numeric-values can
- * reach. What blocked it was never §4.3.4; it was that all seven members take `CSSNumberish`, a union
- * core/idl_args.h had no row for, and a member that declared it `IDL_ANY` and sorted the arms in its body
- * would run the page's `valueOf` from a plain C activation and would get `equals(null)` and `equals(undefined)`
- * wrong in opposite directions. That row is IDL_DOUBLE_UNLESS_IFACE, and it is what the other six are still
- * waiting on §4.3.4 BEHIND. */
+ * AND `to()` IS INSTALLED AND ANSWERS FOR ONE RECEIVER, WHICH IS THE SAME ABSENCE ONE MEMBER OVER. Its steps 3
+ * to 5 are stated over create-a-sum-value, and the CSSUnitValue arm of that algorithm is the one this file can
+ * compose out of §4.3.3's convert-a-CSSUnitValue. A §4.3.4 CSSMathValue receiver reaches the arm that is not
+ * built and DFAILs there naming it, rather than answering something no standard states.
+ *
+ * WHAT UNBLOCKED THE SIX. All seven of §4.3.1's `CSSNumberish`-taking members waited on TWO things, and they
+ * were different things. The first was a Web IDL union core/idl_args.h had no row for: a member that declared
+ * it `IDL_ANY` and sorted the arms in its body would run the page's `valueOf` from a plain C activation and
+ * would get `equals(null)` and `equals(undefined)` wrong in opposite directions. That row is
+ * IDL_DOUBLE_UNLESS_IFACE. The second was §4.3.4 itself — each of the six arithmetic operations RETURNS a
+ * CSSMathValue on the arm where its operands do not collapse to one unit, so a member answering only the
+ * collapsing arm would be WRONG for input a browser answers rather than narrower. `equals` owed §4.3.4 nothing
+ * because it answers a `boolean`, which is why it landed first; the six landed with core/css/css_math_value.c. */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_NUMERIC_VALUE_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_NUMERIC_VALUE_H
 
@@ -94,20 +96,33 @@ bool css_numeric_convert_ratio(const char *from, const char *to, double *ratio);
    there: an interface reached through a PROTOTYPE CHAIN is a per-realm fact. This one is not — it is a class
    brand, and a class id belongs to the runtime — so the parameter is accepted and unread rather than the
    declaration being handed a predicate that cannot answer for the interfaces that do need a realm.
-
-   NAMED RESIDUAL — IT ASKS FOR THE ONE SUBCLASS THAT EXISTS, NOT FOR THE INTERFACE.
-   WHAT IS NOT COVERED: `css_unit_value_is` answers "is this a §4.3.3 CSSUnitValue", and §3.2.15's question
-   here is "does this implement §4.3.1's CSSNumericValue". They coincide over every object that exists, because
-   §4.3.4 Complex Numeric Values: CSSMathValue objects is unbuilt and CSSUnitValue is the only subclass any
-   component mints — so this is correct today and narrower than the interface.
-   WHAT THE NEXT DIFF BUILDS: the CSSMathValue family, whose first member brings a second brand; this predicate
-   must be the disjunction of the two at that moment, and every algorithm stated over it grows the CSSMathValue
-   arm it DCHECKs against today.
-   HOW ITS ABSENCE WOULD SHOW: it cannot show as a wrong answer while it holds — there is no other object for
-   it to be wrong about — which is why it is stated rather than asserted. It shows the day a CSSMathValue is
-   minted and `mathValue.type()` throws a TypeError instead of answering, and the day
-   `CSS.px(1).equals(mathValue)` answers true for two values of different interfaces. */
+   IT IS THE DISJUNCTION OF THE SUBCLASS BRANDS AND MUST GROW WITH THEM. §4.3.3's CSSUnitValue and §4.3.4's six
+   CSSMathValue subclasses are what "implements CSSNumericValue" means in this engine today; §4.3.4's
+   CSSMathClamp is the one the standard declares and core/css/css_math_value.h states the absence of. A brand
+   left out here is a platform object the union's arm silently rejects, which a page sees as a TypeError on a
+   value its own constructor just handed it. */
 bool css_numeric_value_is(JSContext *ctx, JSValueConst v);
+
+/* CSS Typed OM 1 §4.3 Numeric Values:'s "To rectify a numberish value num" — "If num is a CSSNumericValue,
+   return num. If num is a double, return a new CSSUnitValue with its value internal slot set to num and its
+   unit internal slot set to unit" (the optional unit defaulting to "number").
+   PUBLIC BECAUSE §4.3.4's CONSTRUCTORS PERFORM IT TOO — every one of them opens with "Replace each item of
+   args with the result of rectifying a numberish value for the item", which is the same sentence §4.3.1's
+   seven `CSSNumberish`-taking members open with. One speller, because the union's two arms are read off the
+   value and a second reader is what admits a third thing.
+   OWNED either way: the CSSNumericValue arm DUPS rather than borrowing, so one release frees whichever arm
+   ran and no caller has to know which. */
+JSValue css_numeric_value_rectify(JSContext *ctx, JSValueConst num);
+
+/* THE TYPE OF ANY CSSNumericValue — §4.3.3's "The type of a CSSUnitValue is the result of creating a type from
+   its unit internal slot" and §4.3.4's "The type of a CSSMathValue depends on its class", as the ONE question
+   every algorithm stated over "the type of this" asks. `v` must be a CSSNumericValue.
+   IT CANNOT FAIL AND SO ANSWERS THE TYPE ITSELF. A CSSUnitValue's unit is one §4.3.2's create-a-type admits —
+   §4.3.3's constructor throws for any other and §4.3.5's factories name units the tables carry — and a
+   CSSMathValue's type was computed and stored by its own constructor, whose failure arm threw before the
+   object existed. A unit that has no type is therefore a mint that went past its own step 1, which is a DFAIL
+   at that site and not a value for this entry to answer. */
+CssMathType css_numeric_value_type_of(JSContext *ctx, JSValueConst v);
 
 /* §4.3.1's MEMBERS THIS COMPONENT DECLARES, named so the one realm install can spell each install site with a
    literal IDL name beside the id it was declared under. */
@@ -115,6 +130,15 @@ typedef enum {
     CSS_NUMERIC_MEMBER_TYPE = 0,   /* `CSSNumericType type()` */
     CSS_NUMERIC_MEMBER_TO,         /* `CSSUnitValue to(USVString unit)` */
     CSS_NUMERIC_MEMBER_EQUALS,     /* `boolean equals(CSSNumberish... value)` */
+    /* §4.3.1's SIX ARITHMETIC OPERATIONS, in the order its IDL declares them. They are six ids and not one,
+       because Web IDL §3.7.7 Operations gives each its own function object with its own `name`, even where
+       four of them share a body magic'd by the operator. */
+    CSS_NUMERIC_MEMBER_ADD,        /* `CSSNumericValue add(CSSNumberish... values)` */
+    CSS_NUMERIC_MEMBER_SUB,        /* `CSSNumericValue sub(CSSNumberish... values)` */
+    CSS_NUMERIC_MEMBER_MUL,        /* `CSSNumericValue mul(CSSNumberish... values)` */
+    CSS_NUMERIC_MEMBER_DIV,        /* `CSSNumericValue div(CSSNumberish... values)` */
+    CSS_NUMERIC_MEMBER_MIN,        /* `CSSNumericValue min(CSSNumberish... values)` */
+    CSS_NUMERIC_MEMBER_MAX,        /* `CSSNumericValue max(CSSNumberish... values)` */
     CSS_NUMERIC_MEMBER_N
 } CssNumericMember;
 

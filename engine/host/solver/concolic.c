@@ -3255,27 +3255,103 @@ JSValue concolic_tobool_hook(JSContext *ctx, JSValueConst v, int negate) {
    about their call sites and is stated at each of them, never here — a list here would be the next sentence to
    go stale. What is true of THIS function is only its contract: it derives from the operand and attaches
    whatever example it is handed, JS_UNDEFINED included, and never computes or predicts one itself. */
-JSValue concolic_builtin_hook(JSContext *ctx, JSValueConst v, const char *op, JSValue example) {
-    const char *src, *root, *sh, *f[2];
-    char *shape, *ident;
-    JSValue r;
+/* ONE OPERAND'S DISPLAY, FOR THE JOINED SHAPE BELOW — an unknown renders as its own hole shape and a concrete
+   one as the text it spells, which is exactly the pair concolic_arith_hook renders for `x + 2`. A concrete
+   operand this engine may not spell at all (an Object or a Symbol — operand_kind's own last line) renders "?",
+   and it has already made the whole IDENTITY absent through concolic_ident_compose's unspellable-member rule,
+   so the shape is the only thing left for it to say. OWNED by the caller. */
+static char *derived_operand_shape(JSContext *ctx, JSValueConst v)
+{
+    char *r;
 
-    if (!concolic_is(v)) { JS_FreeValue(ctx, example); return JS_UNINITIALIZED; }
+    if (concolic_is(v)) {
+        const char *sh = concolic_shape_c(v);
+        return shapef("%s", sh ? sh : "{}");
+    }
+    /* literal_tok AND NOT JS_ToCString, which is the same distinction operand_kind's own comment draws: §7.1.19
+       ToString step 10 sends an Object to ToPrimitive, running the page's own valueOf from a C activation with
+       no flow base under it. */
+    r = literal_tok(ctx, v);
+    return r ? r : shapef("?");
+}
+
+/* SEE concolic.h — the VALUE twin of concolic_new_rel, over an ORDERED operand list, and the one speller
+   concolic_builtin_hook is the n == 1 case of. */
+JSValue concolic_new_derived(JSContext *ctx, const char *op, const JSValueConst *operands, int n,
+                             JSValue example)
+{
+    const char *src, *root, **fields;
+    char **parts, *shape, *args = NULL, *ident;
+    JSValue r;
+    int i, first = -1;
+
     DCHECK(op != NULL,
-           "a builtin derived an unknown result without naming the OPERATION it was performing — the operation "
-           "is what tells two derivations from one operand apart, and a value that dropped it would be decided "
-           "by whichever of them this flow reached first");
-    src = concolic_src_c(v);
-    root = concolic_root_c(v);
-    sh = concolic_shape_c(v);
-    shape = shapef("%s.%s()", sh ? sh : "{}", op);
-    f[0] = concolic_ident_c(v); f[1] = op;
-    ident = concolic_ident_compose("b", f, 2);
-    /* `example` is what the operator got by RUNNING THE REAL OPERATION on this operand's own example. It is
-       never computed here and never predicted: the codec really encoded, the parser really parsed. */
+           "a component derived an unknown result without naming the OPERATION it was performing — the "
+           "operation is what tells two derivations over one operand list apart, and a value that dropped it "
+           "would be decided by whichever of them this flow reached first");
+    DCHECK(n >= 1, "a derivation was minted over NO operands — a value derived from nothing is a source read, "
+                   "which is concolic_new's question and carries a provenance this entry has no operand to "
+                   "take one from");
+    DCHECK(operands != NULL, "a derivation was minted with an operand count and no operands");
+    DCHECK(!JS_IsObject(example),
+           "a derivation was handed an OBJECT as its concrete example — an example is the value the caller "
+           "COMPUTED by running the real operation on the operands' own examples, so it is a primitive; a "
+           "later §7.1.4 ToNumber over an object one reaches ToPrimitive from C");
+    for (i = 0; i < n; i++)
+        if (concolic_is(operands[i])) { first = i; break; }
+    /* NO OPERAND IS UNKNOWN, so the caller already has the answer and there is nothing to derive — the same
+       answer concolic_builtin_hook gives for a known operand, and the reason this is JS_UNINITIALIZED rather
+       than a mint: a derivation over wholly concrete operands would put a fork in the frontier over a question
+       the engine can already answer. */
+    if (first < 0) { JS_FreeValue(ctx, example); return JS_UNINITIALIZED; }
+    /* See concolic.h: the FIRST UNKNOWN operand's, which is the rule concolic_arith_hook applies to the
+       interpreter's own binary arithmetic. */
+    src = concolic_src_c(operands[first]);
+    root = concolic_root_c(operands[first]);
+
+    parts = malloc((size_t)n * sizeof *parts);
+    fields = malloc(((size_t)n + 1) * sizeof *fields);
+    CHECK(parts != NULL && fields != NULL, "concolic: OOM composing a derivation over several operands");
+    for (i = 0; i < n; i++) {
+        parts[i] = derived_operand_shape(ctx, operands[i]);
+        fields[i] = ident_of_operand(ctx, operands[i]);   /* OWNED; NULL is an unspellable operand */
+    }
+    /* THE OPERATION IS THE LAST FIELD AND THE OPERANDS COME FIRST, which is concolic_builtin_hook's own order
+       written out — so its two-field `(ident, op)` is literally this composition at n == 1 and no key that
+       entry has ever minted moves. A different order here would be a second namespace for one question. */
+    fields[n] = op;
+    ident = concolic_ident_compose("b", fields, n + 1);
+    /* THE SHAPE. One operand renders as a method ON that operand, which is what every derivation minted before
+       this entry existed already reads as; two or more render as the operation APPLIED to them, because a
+       result that no one operand is the subject of has no subject to hang a method off. */
+    if (n == 1) {
+        shape = shapef("%s.%s()", parts[0], op);
+    } else {
+        for (i = 0; i < n; i++) {
+            char *next = args ? shapef("%s, %s", args, parts[i]) : shapef("%s", parts[i]);
+            free(args);
+            args = next;
+        }
+        shape = shapef("%s(%s)", op, args);
+    }
+    /* `example` is what the CALLER got by RUNNING THE REAL OPERATION on the operands' own examples. It is
+       never computed here and never predicted. */
     r = concolic_derived(ctx, shape, src ? src : shape, root ? root : shape, ident, example);
+    for (i = 0; i < n; i++) { free(parts[i]); free((char *)fields[i]); }
+    free(parts);
+    free((void *)fields);
+    free(args);
     free(shape);
     return r;
+}
+
+JSValue concolic_builtin_hook(JSContext *ctx, JSValueConst v, const char *op, JSValue example) {
+    if (!concolic_is(v)) { JS_FreeValue(ctx, example); return JS_UNINITIALIZED; }
+    /* ONE OPERAND, THROUGH THE ONE SPELLER. This body composed `("b", {ident, op})` and the shape
+       `{x}.op()` itself; both are now concolic_new_derived's n == 1 case, byte for byte, so a component that
+       reaches for the several-operand entry with one operand and a component that reaches for this one compose
+       the same key instead of two keys for one derivation. */
+    return concolic_new_derived(ctx, op, &v, 1, example);
 }
 
 /* THE BYTES A DOM MEMBER NEEDS FROM AN ARGUMENT THAT MAY BE UNKNOWN — a selector, an attribute name, a class
