@@ -13,7 +13,17 @@ const PROBE_BATCH_SIZE = 300;
 
 // ─── Type Map (main.go lines 33-49) ─────────────────────────────────────────
 
-const ERROR_TYPE_MAP = {
+/* A MAP AND NOT AN OBJECT LITERAL, BECAUSE THE KEY IS A STRANGER'S TEXT. `typeStr` is capture group 2 of
+   GOOGLE_FIELD_DESC_RE — everything a target chose to put between the parentheses of "Invalid value at 'x'
+   (…)" — and an object literal answers `constructor`, `toString`, `valueOf` and `hasOwnProperty` from
+   `Object.prototype` with a FUNCTION, which `if (ERROR_TYPE_MAP[typeStr])` reads as a hit. Measured in a real
+   Chrome DOM on a target's own reply: `Invalid value at 'evil' (constructor), 1` produced a field record
+   whose `type` was the `Object` CONSTRUCTOR, which `checkStoreRecord` admits (`fields` is asked to be an
+   object, not walked) and which then rides `globalStore.probeResults` into lib/serialize.js's projection —
+   where `chrome.runtime.sendMessage`'s structured clone throws DataCloneError on a function, so one probe
+   answer stopped every popup open and every IndexedDB save for that profile. A `Map` has no inherited keys,
+   so the table answers only for the sixteen names it states. */
+const ERROR_TYPE_MAP = new Map(Object.entries({
   TYPE_STRING: "string",
   TYPE_BOOL: "bool",
   TYPE_INT64: "int64",
@@ -29,7 +39,7 @@ const ERROR_TYPE_MAP = {
   TYPE_SINT32: "sint32",
   TYPE_SFIXED64: "sfixed64",
   TYPE_SFIXED32: "sfixed32",
-};
+}));
 
 // ─── Regex Patterns (verbatim from main.go lines 25-28) ─────────────────────
 
@@ -54,15 +64,68 @@ const GENERIC_ERROR_PATTERNS = [
   { re: /unknown field ['"]?([^'"]+)['"]?/i, fieldIdx: 1 },
 ];
 
-/* A `google.rpc.BadRequest.FieldViolation`'s OWN FIELD PATH, or nothing — the one refusal this file makes of
-   the one value it reads off a violation rather than out of a description it has already matched. It is
-   `fdDocString` plus the empty string, because `""` is a path that addresses no field and both readers below
-   already fell through it: this keeps the `||` these two call sites used to spell, and adds the case a `||`
-   could not survive (a non-string, which reaches `.split` and throws). Non-empty text is returned as-is —
-   this refuses a SHAPE and never edits a path a server stated. */
-function _statedFieldPath(v) {
+/* ─── WHAT A STRANGER'S `google.rpc.Status` STATES, ASKED ONE VALUE AT A TIME ──────────────────────────────
+   EVERY value below this line comes out of a TARGET'S OWN ERROR REPLY — bytes a server chose, or the same
+   bytes round-tripped through IndexedDB — so not one of them may be asserted. lib/field-def.js states the
+   rule these four obey ("each reader of an untrusted document REFUSES a value in a form this record does not
+   carry … refusing yields the declared absent value, which is the true statement about it"), and this file
+   asks it of a `google.rpc.Status` instead of a discovery document.
+     THE COST OF NOT ASKING IS NOT A WRONG FIELD, IT IS EVERY FIELD. `parseJsonErrors` is one pass over one
+   reply, so a `TypeError` raised on ONE malformed violation unwinds the whole parse and discards every
+   violation the same reply described correctly — and `sendProbe`'s catch (which `RETHROW_FATAL` passes over,
+   a TypeError carrying no `apiclientFatal`) then reports the loss to the operator as `{error}`, the one
+   reading in which the SERVICE refused the probe rather than this parser breaking on it. Measured in a real
+   Chrome DOM against constructed `google.rpc.Status` replies, each carrying ONE malformed value beside a
+   violation the same reply described properly: TEN distinct shapes threw, and every one of them answered
+   `fieldCount: 0` with the good field's name nowhere in the result.
+     THE BINARY PATH IS NOT PART OF THAT POPULATION AND IS NOT REFUSED HERE. `sendProbe` and
+   `discoverServiceInfo` reach `pbDecodeRpcStatus` for a protobuf envelope, and that decoder is OURS: it
+   writes `details` as an array, `"@type"`/`field`/`description`/`message` through `pbGetString(...) || ""`
+   and each metadata value likewise, so every value it hands over is already the type this file reads. What
+   arrives untyped is `JSON.parse(resp.body)` — a stranger's document verbatim — which is why the refusals
+   sit on the JSON side of each fork and nowhere else. */
+
+/* A THIRD-PARTY DOCUMENT'S NON-EMPTY TEXT, or nothing — `fdDocString` plus the empty string, because every
+   text an error envelope states is a CLAIM ABOUT SOMETHING (a field path, a type URL, a service name, an
+   error message) and `""` claims nothing. Non-empty text is returned as-is: this refuses a SHAPE and never
+   edits what a server said. */
+function _docText(v) {
   const s = fdDocString(v);
   return s === null || s === "" ? null : s;
+}
+
+/* A `google.rpc.BadRequest.FieldViolation` AS THIS FILE READS ONE — `{field, description}`, each non-empty
+   text or `null`, or nothing at all when the violation states neither. It returns THIS FILE'S OWN RECORD
+   rather than the document's, which is what makes every read below a read of a value we minted: the two
+   passes used to ask `v.field` and `v.description` at four sites between them, and a refusal repeated at four
+   sites is four chances to forget one.
+     `v.field` IS THE VALUE THAT ALREADY COST A PARSE. A reply is free to spell it as a NUMBER —
+   `{"field": 7, "description": "Invalid value at 'userId' …"}` NUMBERED the field and did not name it — and
+   `(7).split` is the TypeError the paragraph above describes. `v.description` is the same claim one property
+   over and was never refused at all: `{"description": 7}` is truthy, so it was collected, and Pass 1's
+   `.startsWith` threw on it before Pass 2 ever ran.
+     A violation that states NEITHER is dropped here rather than downstream, which is the gate
+   `if (violation.field || violation.description)` already spelled — this only adds the shapes that gate could
+   not survive (a `null` entry, whose `.field` read threw; a bare string, whose properties are all undefined). */
+function _statedViolation(v) {
+  const r = fdDocRecord(v);
+  if (r === null) return null;
+  const field = _docText(r.field);
+  const description = _docText(r.description);
+  return field === null && description === null ? null : { field, description };
+}
+
+/* A PROTOBUF FIELD NUMBER A REJECTION STATED, or nothing. Capture group 3 of GOOGLE_FIELD_DESC_RE is the
+   field number for a numbered violation and the REFLECTED VALUE for the generic patterns, so what parses out
+   of it is whatever the target put there. `parseInt(x, 10) || null` was the Google branch's answer and it
+   admits a NEGATIVE number (`-3 || null` is `-3`), and the generic branch's `!isNaN(v) ? parseInt(v) : null`
+   admits `NaN` outright — `isNaN(" ")` is false and `parseInt(" ")` is `NaN`, so a description reflecting a
+   blank value produced a field record whose `number` was `NaN`, which survives every door in the store and
+   reaches lib/encode.js as a wire tag. protobuf field numbers are positive integers; anything else is a
+   document that numbered nothing. */
+function _statedFieldNumber(v) {
+  const n = parseInt(v, 10);
+  return Number.isInteger(n) && n > 0 ? n : null;
 }
 
 const REQUIRED_FIELD_RE = /Missing required field (.+) at '([^']+)'/g;
@@ -181,30 +244,66 @@ function parseJsonErrors(body) {
     }
   }
 
-  if (!body.error) return { fields, metadata };
+  /* `error` IS A RECORD OR THIS DOCUMENT DESCRIBES NO ERROR. `if (!body.error)` let a STRING or a NUMBER
+     through — harmlessly, since `.details` and `.message` on a primitive are `undefined` — but it also let
+     through the only two readers below that could throw, so the question is asked once here and the reads are
+     of a record from this line down. */
+  const errRec = fdDocRecord(body.error);
+  if (errRec === null) return { fields, metadata };
 
-  // Collect all violations into a single list
+  // Collect all violations into a single list, each one THIS FILE'S record (see `_statedViolation`).
   const violations = [];
 
-  // Pass 0a: From details (standard)
-  for (const detail of body.error.details || []) {
-    if (detail["@type"]?.includes("BadRequest")) {
-      for (const violation of detail.fieldViolations || []) {
-        if (violation.field || violation.description) {
-          violations.push(violation);
-        }
+  /* Pass 0a: From details (standard). `details` and `fieldViolations` are LIST claims and a document is free
+     to state something else under either name — `{"details": {"0": …}}` and `{"fieldViolations": {}}` both
+     reach `for…of` and throw "is not iterable", which took the whole reply down. `fdDocList` reads a non-list
+     as the list claim it is not, and the declared absence of a list is no entries. */
+  for (const rawDetail of fdDocList(errRec.details) || []) {
+    /* A DETAIL IS A RECORD. `null` in the details array made `detail["@type"]` throw outright, and a bare
+       string or number made every property read `undefined` — the same answer this refusal gives, said once
+       instead of at each read. */
+    const detail = fdDocRecord(rawDetail);
+    if (detail === null) continue;
+
+    /* `@type` IS TEXT. `detail["@type"]?.includes(…)` guards only NULLISH: a NUMBER answers `undefined` for
+       `.includes` and the call then throws "is not a function". An ARRAY does answer `.includes`, and answers
+       it by ELEMENT EQUALITY — `["type.googleapis.com/google.rpc.BadRequest"].includes("BadRequest")` is
+       false — so the type URL a detail states is text or it is no type URL. */
+    const atType = _docText(detail["@type"]);
+    if (atType === null) continue;
+
+    if (atType.includes("BadRequest")) {
+      for (const rawViolation of fdDocList(detail.fieldViolations) || []) {
+        const violation = _statedViolation(rawViolation);
+        if (violation !== null) violations.push(violation);
       }
     }
     // Extract service/method metadata from ErrorInfo
-    if (detail["@type"]?.includes("ErrorInfo") && detail.metadata) {
-      if (detail.metadata.service) metadata.service = detail.metadata.service;
-      if (detail.metadata.method) metadata.method = detail.metadata.method;
+    if (atType.includes("ErrorInfo")) {
+      /* THE SERVICE AND METHOD AN ErrorInfo NAMED, AS NAMES. A non-string here is not a wrong label, it is an
+         ABORT: `discoverServiceInfo` writes the same two values onto the record lib/store-record.js declares
+         as `service: _srStrOrNull`, and lib/serialize.js and lib/persistence.js ask that shape of every
+         probe answer in the cumulative moat on every popup open and every save. Measured in a real Chrome
+         DOM: a reply stating `{"metadata": {"service": 7}}` produced `service: 7`, and the store's own door
+         then fired `@WHY DCHECK failed` — this extension's assertion mechanism aborting the trusted zone on a
+         value a stranger's server chose, which is the one thing lib/field-def.js's header says an assert must
+         never do. Refused at the boundary, so the door only ever asks about values we minted. */
+      const meta = fdDocRecord(detail.metadata);
+      if (meta !== null) {
+        const statedService = _docText(meta.service);
+        const statedMethod = _docText(meta.method);
+        if (statedService !== null) metadata.service = statedService;
+        if (statedMethod !== null) metadata.method = statedMethod;
+      }
     }
   }
 
-  // Pass 0b: From message (fallback for some APIs)
-  if (body.error.message) {
-    const lines = body.error.message.split("\n");
+  /* Pass 0b: From message (fallback for some APIs). `message` is TEXT — `{"error":{"message":400}}` is
+     truthy and `.split` is not a function on it, and the JSPB array form reaches the same line through
+     `message: body[1] || ""` for an envelope whose second element is a number. */
+  const statedMessage = _docText(errRec.message);
+  if (statedMessage !== null) {
+    const lines = statedMessage.split("\n");
     for (const line of lines) {
       if (
         line.includes("Invalid value at ") ||
@@ -212,35 +311,44 @@ function parseJsonErrors(body) {
       ) {
         // Only add if not already present in details (dedup by description)
         if (!violations.some((v) => v.description === line.trim())) {
-          violations.push({ description: line.trim() });
+          violations.push({ field: null, description: line.trim() });
         }
       }
     }
   }
 
-  // Pass 1: Build required field map (Go main.go lines 223-236)
-  const requiredFieldMap = {};
+  /* Pass 1: Build required field map (Go main.go lines 223-236).
+     A MAP AND NOT AN OBJECT LITERAL, FOR THE REASON `ERROR_TYPE_MAP` IS ONE, ONE STEP WORSE: the key here is
+     a FIELD PATH a target stated, and an object literal already HAS an entry under `__proto__`,
+     `constructor`, `toString` and every other name on `Object.prototype` — so `if (!requiredFieldMap[p])`
+     was FALSE for them, the initialisation was skipped, and `.push` was called on `Object.prototype` or on
+     the `Object` constructor. Measured in a real Chrome DOM on a reply stating
+     `{"field": "__proto__", "description": "Missing required field pageToken at 'request'"}`: TypeError,
+     whole parse discarded, `fieldCount: 0`. The read side had the same hole — `(requiredFieldMap["constructor"]
+     || []).includes(name)` calls `.includes` on the `Object` constructor. */
+  const requiredFieldMap = new Map();
   for (const v of violations) {
-    if (v.description && v.description.startsWith("Missing required field")) {
+    if (v.description !== null && v.description.startsWith("Missing required field")) {
       REQUIRED_FIELD_RE.lastIndex = 0;
       const reqMatch = REQUIRED_FIELD_RE.exec(v.description);
       if (reqMatch) {
         const requiredFieldName = reqMatch[1];
-        /* THE SAME REFUSAL PASS 2 MAKES, ON THE SAME CLAIM. `v.field` is one fact read in two places, and
-           reading it raw here while refusing it there is the two passes disagreeing about what the document
-           said: a non-string `field` keyed this map under its coercion (`requiredFieldMap[7]` is the entry
-           `"7"`) while Pass 2 filed the same violation under the regex-stated path, so the required-field
-           lookup missed a parent it had just recorded. */
-        const parentPath = _statedFieldPath(v.field) ?? (reqMatch[2] || "");
-        if (!requiredFieldMap[parentPath]) requiredFieldMap[parentPath] = [];
-        requiredFieldMap[parentPath].push(requiredFieldName);
+        /* THE VIOLATION'S OWN FIELD PATH WHERE IT STATED ONE, else the path its description named. Both
+           passes read the same `v.field`, and both read it through `_statedViolation` now — reading it raw in
+           one pass and refused in the other was the two disagreeing about what the document said: a
+           non-string `field` keyed this map under its coercion (`7` became the entry `"7"`) while Pass 2 filed
+           the same violation under the regex-stated path, so the required-field lookup missed a parent it had
+           just recorded. */
+        const parentPath = v.field ?? (reqMatch[2] || "");
+        if (!requiredFieldMap.has(parentPath)) requiredFieldMap.set(parentPath, []);
+        requiredFieldMap.get(parentPath).push(requiredFieldName);
       }
     }
   }
 
   // Pass 2: Parse field descriptions for type/number info
   for (const v of violations) {
-    if (!v.description) continue;
+    if (v.description === null) continue;
     if (v.description.startsWith("Missing required field")) continue;
 
     GOOGLE_FIELD_DESC_RE.lastIndex = 0;
@@ -253,19 +361,12 @@ function parseJsonErrors(body) {
 
       /* THE VIOLATION'S OWN FIELD PATH WHERE IT STATED ONE AS TEXT, else the path its description named.
          `v.field || regexFieldPath` was already that alternative — it just could not survive the case that
-         makes an alternative necessary. These bytes are a target's `google.rpc.Status`, so a document is
-         free to spell `field` as a NUMBER: `{"field": 7, "description": "Invalid value at 'userId' …"}` is a
-         reply that NUMBERED the field and did not name it, `(7).split` is a TypeError, and `sendProbe`'s
-         catch (which RETHROW_FATAL passes over, since a TypeError carries no `apiclientFatal`) turned it
-         into `{ error, fields: [] }` — reported as "the service refused the probe". One malformed violation
-         therefore discarded EVERY field the same reply legitimately described, and the only trace was the
-         error string. Refused through lib/field-def.js like every other value a stranger's document states:
-         a `field` that is not text makes no path claim, and the description's own path is what remains. */
-      const statedPath = _statedFieldPath(v.field);
-      const rawFieldPath = statedPath ?? regexFieldPath;
+         makes an alternative necessary, and `_statedViolation` is where that case is now decided: a `field`
+         that is not text makes no path claim, and the description's own path is what remains. */
+      const rawFieldPath = v.field ?? regexFieldPath;
       const pathParts = rawFieldPath.split(".");
       const fieldName = pathParts[pathParts.length - 1];
-      const fieldNumber = parseInt(valueOrNumber, 10) || null;
+      const fieldNumber = _statedFieldNumber(valueOrNumber);
       const isRepeated = fieldName.endsWith("]");
       const cleanName = isRepeated
         ? fieldName.replace(/\[\d*\]$/, "")
@@ -274,13 +375,14 @@ function parseJsonErrors(body) {
       const parentPath =
         pathParts.length > 1 ? pathParts.slice(0, -1).join(".") : "";
       const isRequired =
-        (requiredFieldMap[parentPath] || []).includes(cleanName) ||
-        (requiredFieldMap[rawFieldPath] || []).length > 0;
+        (requiredFieldMap.get(parentPath) || []).includes(cleanName) ||
+        (requiredFieldMap.get(rawFieldPath) || []).length > 0;
 
-      if (ERROR_TYPE_MAP[typeStr]) {
+      const mappedType = ERROR_TYPE_MAP.get(typeStr);
+      if (mappedType) {
         fields.push({
           name: cleanName,
-          type: ERROR_TYPE_MAP[typeStr],
+          type: mappedType,
           number: fieldNumber,
           messageType: null,
           required: isRequired,
@@ -323,7 +425,7 @@ function parseJsonErrors(body) {
           messageName: nameMatch ? nameMatch[2] : fullType,
           required: isRequired,
           label: isRepeated ? "repeated" : isRequired ? "required" : "optional",
-          requiredChildren: requiredFieldMap[rawFieldPath] || [],
+          requiredChildren: requiredFieldMap.get(rawFieldPath) || [],
         });
         continue;
       }
@@ -352,10 +454,7 @@ function parseJsonErrors(body) {
           fields.push({
             name: fieldName,
             type: typeStr.toLowerCase(),
-            number:
-              reflectedVal && !isNaN(reflectedVal)
-                ? parseInt(reflectedVal)
-                : null,
+            number: _statedFieldNumber(reflectedVal),
             required: pattern.required || false,
             label: pattern.required ? "required" : "optional",
           });
@@ -892,14 +991,25 @@ async function discoverServiceInfo(url, headers = {}, opts = {}) {
         !respCt.includes("json+protobuf")
       ) {
         try {
+          /* THE SAME FOUR REFUSALS `parseJsonErrors` MAKES, ON THE SAME BYTES. This arm reads a stranger's
+             `JSON.parse` output exactly as that function does, and it reads the ONE pair whose type the store
+             asserts: lib/store-record.js declares `service`/`method` as `_srStrOrNull` on this function's
+             record, so a reply naming `{"metadata": {"service": 7}}` did not merely mislabel a service — it
+             put a number on a record that lib/serialize.js and lib/persistence.js ask about on every popup
+             open and every save, and the DCHECK fired there, in the trusted zone, on bytes a target chose.
+             The binary arm above needs none of this: `pbDecodeRpcStatus` is our own decoder and types every
+             value it writes. */
           const body = JSON.parse(resp.body);
-          if (body?.error?.details) {
-            for (const detail of body.error.details) {
-              if (detail.metadata?.service)
-                service = service || detail.metadata.service;
-              if (detail.metadata?.method)
-                method = method || detail.metadata.method;
-            }
+          const errRec = fdDocRecord(body && body.error);
+          for (const rawDetail of (errRec && fdDocList(errRec.details)) || []) {
+            const detail = fdDocRecord(rawDetail);
+            if (detail === null) continue;
+            const meta = fdDocRecord(detail.metadata);
+            if (meta === null) continue;
+            const statedService = _docText(meta.service);
+            const statedMethod = _docText(meta.method);
+            if (statedService !== null) service = service || statedService;
+            if (statedMethod !== null) method = method || statedMethod;
           }
         } catch (e) {
           // JSON error-details parse failed — body isn't valid JSON despite
