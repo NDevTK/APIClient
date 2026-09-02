@@ -733,6 +733,9 @@ static const char *const FWM_STEPS[] = { FWM_STAGES(JS_STEP_STAGE_LABEL) NULL };
 enum { FWM_WRITE_M = 0, FWM_SEEK_M, FWM_TRUNCATE_M };
 
 typedef struct {
+    /* THE ONE-TIME PROLOGUE'S LATCH, and it is a FIELD rather than the stage because step 1 is a stage that
+       PARKS. See fwm_step for what re-running the prologue did. */
+    uint8_t started;
     uint8_t cphase;
     JSValue writer;    /* owned */
     JSValue result;    /* the write's promise — this member's answer (owned) */
@@ -771,15 +774,44 @@ static int fwm_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
 
     *presult = JS_UNDEFINED;
 
-    if (hdr->stage == FWM_GET_WRITER) {
-        JSValue rec = fw_record(ctx, hdr->this_val), op;
+    /* THE ONE-TIME PROLOGUE IS GUARDED BY `started` AND NOT BY THE STAGE: A REQUEST THAT SUSPENDS RE-ENTERS AT
+       THE SAME STAGE, and step 1 below is a stage that requests. It was written under `hdr->stage ==
+       FWM_GET_WRITER`, so every resume of the get-a-writer call re-ran it, and each of the three lines cost
+       something:
+         `s->cphase = 0` put step_call_run's cursor back to "no request outstanding", so the resume RE-ISSUED
+       the call instead of collecting its answer. Streams §9.2.2 Writing's get a writer is §5.5.1 Working with
+       writable streams' AcquireWritableStreamDefaultWriter, whose SetUpWritableStreamDefaultWriter opens with
+       "If ! IsWritableStreamLocked(stream) is true, throw a TypeError exception." — and the first call had just
+       locked it. So the second call threw a TypeError about a lock this member itself had taken, the abrupt
+       reached Web IDL §3.7.7 Operations' create an operation function through the declared promise return type,
+       and `stream.write(data)`, `stream.seek(p)` and `stream.truncate(n)` ALWAYS rejected with it. Step 2 was
+       unreachable, so no chunk was ever written through the three members File System Standard §2.5.1 The
+       write() method, §2.5.2 The seek() method and §2.5.3 The truncate() method define — and the round trip
+       this component exists for (a byte written through a FileSystemWritableFileStream is a byte a later
+       getFile().text() reads back) held only for a page that reached past them to `stream.getWriter()`.
+         `STEP_CB_FOREACH(...) = JS_UNDEFINED` dropped the receiver and the function step_call_run had dupped
+       into the buffer — two references leaked per call, invisible to JS_FreeRuntime's censuses only because the
+       objects stayed reachable from the realm.
+         And step_call_run's phase-0 arm frees its `in`, which on that entry was the WRITER. The stream was left
+       locked by a writer nothing else named, so a page that fell back to `stream.getWriter()` after the
+       rejection was refused too.
+       THE RULE THIS COST IS WORTH STATING AS A RULE: a stage guard is a one-time guard ONLY for a stage that
+       makes no request, because such a stage is left in the same invocation it is entered in and can never be
+       re-entered. The moment a request appears in a stage, everything that stage does before the request
+       becomes per-resume work — so the prologue moves out, behind a latch of its own. Reading it the other way
+       is an argument about the FIRST entry, which is right about the first entry and silent about the second. */
+    if (!s->started) {
+        JSValue rec = fw_record(ctx, hdr->this_val);
+        int k;
 
+        s->started = 1;
         s->writer = s->result = JS_UNDEFINED;
-        STEP_CB_FOREACH(s->cb, r) s->cb[r] = JS_UNDEFINED;
+        STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
         s->cphase = 0;
         /* WEB IDL §3.7.7 Operations' BRAND CHECK.
            `FileSystemWritableFileStream.prototype.write.call(new WritableStream)` is a TypeError, and a page
-           tells that apart from the stream simply refusing the chunk. */
+           tells that apart from the stream simply refusing the chunk. It is asked ONCE, here, because the
+           receiver a member was called on cannot change between two of that member's own stages. */
         if (!JS_IsObject(rec)) {
             JS_FreeValue(ctx, rec);
             JS_ThrowTypeError(ctx, "a FileSystemWritableFileStream method was called on something that is not "
@@ -787,12 +819,24 @@ static int fwm_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
             return -1;
         }
         JS_FreeValue(ctx, rec);
-        op = writable_stream_op(ctx, WS_OP_GET_WRITER);
+    }
+
+    if (hdr->stage == FWM_GET_WRITER) {
+        JSValue op = writable_stream_op(ctx, WS_OP_GET_WRITER);
+
         r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), op, hdr->this_val, 0, NULL, cb_result, &s->writer,
                           out_cb, out_argc);
         JS_FreeValue(ctx, op);
         if (r > 0) return r;
         if (JS_IsException(s->writer)) return -1;
+        /* §2.5.1-3 step 1's answer, asserted at its origin: Streams §9.2.2 Writing's get a writer either
+           constructs a WritableStreamDefaultWriter or throws, so there is no third answer for step 2 to try to
+           write a chunk through. */
+        DCHECK(JS_IsObject(s->writer),
+               "File System Standard §2.5.1 The write() method step 1's get a writer answered with something "
+               "that is not a writer — Streams §9.2.2 Writing's get a writer is §5.5.1 Working with writable "
+               "streams' AcquireWritableStreamDefaultWriter, which constructs a WritableStreamDefaultWriter or "
+               "throws, and the throw is the arm above this one");
         cb_result = JS_UNDEFINED;
         STEP_GOTO(hdr->stage, FWM_WRITE, &s->cphase, NULL);
     }

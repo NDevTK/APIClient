@@ -176,9 +176,13 @@ JSValue fs_handle_new(JSContext *ctx, bool directory, const char *root, const ch
     return obj;
 }
 
-/* §2.3 and §2.4's "CREATE A CHILD FileSystemFileHandle / FileSystemDirectoryHandle given a directory locator
-   parentLocator and a string name": childRoot is a copy of the parent's root, and childPath is the parent's
-   path cloned with `name` appended. OWNED. */
+/* §2.3's "To create a child FileSystemFileHandle given a directory locator parentLocator and a string name in
+   a Realm realm" AND §2.4's create-a-child FileSystemDirectoryHandle, which is the same sentence with the other
+   interface in it. THEY ARE TWO OPERATIONS AND THIS IS ONE FUNCTION, so the two names are written out rather
+   than folded into one quotation with a slash in it: no section of the standard contains the merged sentence,
+   and a reader who went looking for it would find neither. childRoot is a copy of the parent's root, and
+   childPath is the parent's path cloned with `name` appended. The `realm` both operations take is this one —
+   a C member runs in the realm that defined it. OWNED. */
 static JSValue fsh_child(JSContext *ctx, const FsLocator *parent, const char *name, bool directory)
 {
     const char **path;
@@ -321,15 +325,27 @@ static JSValue fsh_resolve_path(JSContext *ctx, const FsLocator *root, const FsL
     JSValue out;
     int i;
 
-    if (strcmp(child->root, root->root)) return JS_NULL;       /* "if child's root is not root's root" */
+    /* "If child's locator's root is not root's locator's root, resolve result with null, and abort these
+       steps." */
+    if (strcmp(child->root, root->root)) return JS_NULL;
     if (root->npath > child->npath) return JS_NULL;
     for (i = 0; i < root->npath; i++)
         if (strcmp(root->path[i], child->path[i])) return JS_NULL;
     out = JS_NewArray(ctx);
     CHECK(!JS_IsException(out), "file system handle: File System Standard §2.1 Concepts' resolve a file "
                                 "system locator could not allocate its relative path");
-    /* "For each index of the range from rootPath's size to childPath's size, exclusive, append
-       childPath.[[index]] to relativePath" — which for the same path is the empty list §2.4.5 promises. */
+    /* STEP 2.8, AND THE STANDARD'S OWN WORDS FOR IT ARE "For each index of the range from rootPath's size to
+       rootPath's size, exclusive, append childPath.[[index]] to relativePath." — a range from a number to
+       ITSELF, which is empty, so read literally §2.1 Concepts' resolve a file system locator answers « » for
+       EVERY descendant. This loop runs to childPath's size instead, and that is a DEPARTURE rather than a
+       transcription: §2.4.5 The resolve() method's own prose says "If child is a direct child of directory,
+       path will be an array containing child's name" and its example asserts `relative_path.pop() ===
+       file_ref.name`, both of which the literal reading contradicts. The empty range is what the SAME-PATH case
+       wants, and step 2.4 has already answered « » for that four steps earlier — which is what makes the second
+       `rootPath` a typo for `childPath` rather than a rule. Steps 2.4 and 2.8 are one loop here: for equal paths
+       it appends nothing, which is step 2.4's « ». The quotation stays verbatim so the next reader compares this
+       loop against what the standard SAYS and not against what it meant; the sub-numbers are counted with LIST
+       DEPTH, and step 2.6 holds a nested one-item list that a flat count would promote to a peer. */
     for (i = root->npath; i < child->npath; i++)
         JS_DefinePropertyValueUint32(ctx, out, (uint32_t)(i - root->npath),
                                      JS_NewString(ctx, child->path[i]), JS_PROP_C_W_E);
