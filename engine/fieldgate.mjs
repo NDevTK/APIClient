@@ -85,6 +85,15 @@
  * spelling stand in as its producer. Those are one defect seen from its two ends: identity by NAME ALONE. A JS
  * literal declaring nothing the engine does not declare is a RESTATEMENT of the emission and not a rival to it,
  * or a driver's own expectation would dispossess the record it was written to check.
+ * AND A JS RECORD IS NOT ALWAYS FINISHED WHERE IT IS OPENED, WHICH IS THE HALF THAT BIT HARDEST — because the
+ * fields a record adds by MEMBER ASSIGNMENT are exactly the ones it copies off an emission, so the literal was
+ * left holding only the record's OWN names, scored one against the emission's several, and lost an anchor it
+ * should have taken. The two halves are unioned under §the BINDING, which is a construct and not a proximity
+ * rule: the literal must be the operand of an `=` whose left side is a bare identifier, and that binding's
+ * DECLARATION — the same one the platform arm types a receiver off — must be exactly one write whose text is
+ * that literal, so a name re-assigned to a second object cannot merge two records. A record assembled entirely
+ * out of an emission's own field names is still a RESTATEMENT and is still dropped: the fold widens what a
+ * rival can be, never what counts as one.
  * A BODY THAT DOES NOT OWN ITS BUFFER IS NOT A RECORD EITHER — see §the FRAGMENT, which is what keeps a record
  * emitted by a composer plus a helper from being read as two records that each lack the other's fields.
  *
@@ -2123,17 +2132,14 @@ function scanJS(file, src) {
   /* ONE OBJECT LITERAL IS ONE RECORD — the JS half of §the SHAPE anchor, off the same construct the whole-record
      default already reads. Without it this corpus's own records had no identity at all, so a JS receiver could
      only ever be decided by a C emission, and two generic names were enough to do it.
-     NOT COVERED: a record the program composes as a literal AND THEN ADDS TO by member assignment on the same
-     binding — `const analysis = { _run: outcome }` followed by `analysis.fetchCallSites = result.fetchCallSites`
-     is ONE record and this sees only the literal half of it, so the C emission those three assigned names came
-     FROM out-scores the literal and wins the anchor. THE NEXT DIFF unions the two halves under the binding: the
-     member-assignment arm of §the MEMBER walk already computes `recv` and its scope-qualified key before it
-     branches on `isWrite` and throws both away, so what has to be built is the link from a literal to the
-     identifier it is assigned to — the literal arm below knows `prevCh === "="` and does not read back to the
-     declarator. IT SHOWS AS a receiver in OFF-RECORD whose off-record names are all written in ITS OWN FILE, on
-     lines that assign to the same receiver text: today that is `analysis`/`result` in bridge.js reporting
-     `_run`, `_fkey` and `_prior` against result.c's record, four of the fourteen rows that category prints. */
-  const litShapes = [];    // {off, keys}
+     AND A RECORD IS NOT ALWAYS FINISHED WHERE IT IS OPENED. `const analysis = { _run: outcome }` followed by
+     `analysis.fetchCallSites = result.fetchCallSites` is ONE record written in two constructs, and a
+     literal-only shape sees the smaller half of it — so the engine emission those assigned names were copied
+     FROM out-scores the literal and wins an anchor the JS record should have taken. The two halves are unioned
+     under §the BINDING below; what is collected here is the raw material for it, which is the receiver-and-key
+     the write arm already computed and used to throw away. */
+  const litShapes = [];    // {off, keys, binding} — `binding` is the scope-qualified key §the BINDING resolved
+  const memberAssigns = []; // {key, name, off} — one `recv.name = …`, keyed like a read of the same receiver
   const wholeDefaults = [];// {off, keys, left, op} — a `|| { … }` substituting an entire record
 
   /* --- member expressions -------------------------------------------------------------------------------- */
@@ -2160,7 +2166,11 @@ function scanJS(file, src) {
       refuse(file, lineOf(src, m.index), "a member read whose receiver is not a normalizable expression — it cannot be anchored to a record", struct.slice(Math.max(0, m.index - 40), m.index + 20));
       continue;
     }
-    if (isWrite) { localWrites.push({ name: m[2], off: nameAt }); continue; }
+    if (isWrite) {
+      localWrites.push({ name: m[2], off: nameAt });
+      memberAssigns.push({ key: keyOf(recv, m.index), name: m[2], off: nameAt });
+      continue;
+    }
     /* An awaited mojo call has a BETTER anchor than the shape rule — the method's own declared reply — so it
        is routed to that diff instead of into the record namespace, where one field read off one call could
        only ever have been ambiguous. */
@@ -2192,7 +2202,11 @@ function scanJS(file, src) {
     if (!recv) continue;   /* an index on a literal, or a receiver this cannot normalize */
     const after = sig(struct, at + m[0].length, struct.length);
     const nxt = struct.slice(after, after + 3);
-    if (/^=[^=>]/.test(nxt) || /^=$/.test(nxt)) { localWrites.push({ name, off: at }); continue; }
+    if (/^=[^=>]/.test(nxt) || /^=$/.test(nxt)) {
+      localWrites.push({ name, off: at });
+      memberAssigns.push({ key: keyOf(recv, at), name, off: at });
+      continue;
+    }
     let form = null, consumed = null;
     if (m[1]) form = "?.[]";
     else if (/^(\|\||\?\?)/.test(nxt)) {
@@ -2241,10 +2255,54 @@ function scanJS(file, src) {
     }
     for (const nm of ans.names) {
       if (!/^[A-Za-z_$][\w$]*$/.test(nm)) continue;
-      if (isWrite) localWrites.push({ name: nm, off: at });
+      if (isWrite) { localWrites.push({ name: nm, off: at }); memberAssigns.push({ key: keyOf(recv, at), name: nm, off: at }); }
       else localReads.push({ name: nm, recv, key: keyOf(recv, at), off: at, form, consumed });
     }
   }
+
+  /* --- §the BINDING: which record an object literal OPENS, so a later assignment can finish it -------------- */
+  /* WHAT COUNTS AS "THE SAME RECORD" HAS TO BE SOMETHING THE CODE STATES, NEVER PROXIMITY. Member assignment
+   * spreads across a function, a constructor, several files; a rule that folded whatever it found near a
+   * literal would be the tokenizer deciding which writes belong to which object, which is the guess this file
+   * refuses everywhere. What the code states is a BINDING, and this asks TWO constructs of it, both already
+   * read here for other questions:
+   *   1. THE LITERAL IS THE OPERAND OF AN `=` WHOSE LEFT SIDE IS A BARE IDENTIFIER. That is syntax — `analysis
+   *      = {` — and it is what says which name this literal is the record of. A member path (`a.b = {`), a
+   *      comparison and a compound write all fail it on the character before the `=`.
+   *   2. THAT BINDING'S DECLARATION, ASKED OF §initOf, IS EXACTLY ONE WRITE AND ITS TEXT IS AN OBJECT LITERAL.
+   *      This is the same construct the PLATFORM arm types a receiver off — "a binding's `= <expr>` is a
+   *      DECLARATION in the same sense a `#define` body is" — and it is what makes the fold sound rather than
+   *      merely local. `initOf` is already null for a name declared twice in one scope, for a compound write,
+   *      and for a binding written more than once; so a `let o = {a:1}; … o = somethingElse; o.b = 2` cannot
+   *      merge two objects under one name, because the second write is what makes the declaration doubtful.
+   *      A `const` satisfies it by the language; a once-assigned `let` satisfies it by measurement, which is
+   *      why the test is the declaration and not the keyword.
+   * The key is `keyOf(name, …)` — the receiver text qualified by the scope that binds it, the SAME key a read
+   * of that receiver is filed under — so an assignment naming a shadowing binding in a nested function keys
+   * differently and cannot join this record. And a binding with assignments but NO readable literal declares
+   * no record here: `const result = linesToAnalysis(…); result._fkey = …` names a record whose identity is the
+   * answer of a CALL, and following a value out of a call is the flowed identity this file refuses. Those
+   * assignments stay writes and anchor nothing, which is why the read of one still reports OFF-RECORD.
+   * AND NEITHER OF THOSE IS A REFUSAL, which is the line §the REFUSAL discipline draws: a refusal is a place a
+   * field NAME could be hiding, and no name hides here — every key of the literal and every assigned name is
+   * already a write in the field namespace whatever this answers. What a doubtful binding costs is an IDENTITY,
+   * and the file already has a category for an identity it cannot decide. Refusing over each of them would put
+   * every object literal in the corpus in the refusal list, which is the language rather than the seam. */
+  const bindingOfLiteral = (eq) => {
+    if (struct[eq] !== "=") return null;
+    if ("=!<>+-*/%&|^~".includes(struct[eq - 1])) return null;   /* a comparison or a compound write */
+    let q = eq - 1;
+    while (q >= 0 && /\s/.test(struct[q])) q--;
+    if (q < 0 || !/[\w$]/.test(struct[q])) return null;
+    const e = q;
+    while (q >= 0 && /[\w$]/.test(struct[q])) q--;
+    if (q >= 0 && (struct[q] === "." || struct[q] === "?")) return null;   /* `a.b = {` — a member, not a binding */
+    const name = code.slice(q + 1, e + 1);
+    if (!/^[A-Za-z_$][\w$]*$/.test(name)) return null;
+    const decl = initOf(name, q + 1);
+    if (!decl || decl.length !== 1 || decl[0][0] !== "{") return null;
+    return keyOf(name, q + 1);
+  };
 
   /* --- braces: object literal (writes), destructuring pattern (reads), or a block ------------------------- */
   for (let i = 0; i < struct.length; i++) {
@@ -2369,7 +2427,15 @@ function scanJS(file, src) {
        a false clean bill. The literal on the right of a `||`/`??` is the shape being substituted, so the
        substitution is only reported when that shape IS one the engine emits: an `opts || {}` for a caller's
        options object is a default over something no producer was ever supposed to write. */
-    if (kind === "literal" && litKeys.length >= 2) litShapes.push({ off: i, keys: litKeys.slice() });
+    /* THE KEY COUNT IS ASKED OF THE WHOLE RECORD, WHICH IS WHY THE BINDING IS RESOLVED FIRST. `const analysis =
+       { _run: outcome }` is a one-key literal and a six-field record, so a `>= 2` on the literal alone drops
+       exactly the case §the BINDING exists for — the record whose literal half is the smaller one. A literal
+       that opens a binding is kept whatever it declares; the two-name floor is then applied to the UNION, where
+       it means what it was written to mean. */
+    if (kind === "literal") {
+      const binding = bindingOfLiteral(p);
+      if (binding || litKeys.length >= 2) litShapes.push({ off: i, keys: litKeys.slice(), binding });
+    }
     if (kind === "literal" && (prevCh === "|" || prevCh === "?") && struct[p - 1] === prevCh) {
       let q = p - 1;
       while (q > 0 && /\s/.test(struct[q - 1])) q--;
@@ -2454,7 +2520,7 @@ function scanJS(file, src) {
   collectDomainsJS(file, src, code, struct);
   collectAbiJS(file, src, code, struct);
 
-  return { file, src, localReads, localWrites, litShapes, wholeDefaults, site, initOf, binderOf, paramSlot,
+  return { file, src, localReads, localWrites, litShapes, memberAssigns, wholeDefaults, site, initOf, binderOf, paramSlot,
            localParamSlot, callArgsOf, guardedBy, foreignImports, importOf, iterOf, pushArgsOf, returnsOf,
            asserted: (off) => assertSpans.some(([a, b]) => off >= a && off < b) };
 }
@@ -3185,15 +3251,41 @@ for (const s of jsScans) for (const w of s.localWrites) rec(fields, w.name).writ
    consumer's side — a restatement of the record, not a competing one. It makes no claim the emission does not
    already make, so it cannot be evidence against it; counting it would let a driver's own expectation
    dispossess the emission it was written to check. */
+/* AND A RECORD ASSEMBLED BY ASSIGNMENT IS THE SAME RECORD AS THE LITERAL THAT OPENED IT — §the BINDING says
+   which literal that is, and this is where the two halves become one shape. Until they did, a record built
+   field-by-field was invisible to the identity half of this gate exactly where it mattered most: the assigned
+   names are the ones a JS record COPIES OFF an engine emission, so the literal kept only the record's OWN
+   fields, scored one against the emission's several, and lost the anchor — after which every one of those own
+   fields printed as a read OFF the engine's record, which is a wrong reason with a producer's name behind it.
+   THE RESTATEMENT TEST IS THEN ASKED OF THE UNION, WHICH IS ALSO WHAT ANSWERS THE COPY. A record that
+   transcribes an emission field-by-field and adds NOTHING declares nothing the engine does not declare, so it
+   is a restatement and is dropped here exactly as a copy written as one literal already was — the fold cannot
+   turn a copy into a rival. What it can do is let a record that copies an emission AND states fields of its
+   own be scored on all of them, which is what it is: `{sourceUrl, _run, resolverErrors}` plus the three
+   document arrays is bridge.js's analysis, and the receiver reading four of those is reading an analysis. */
 const jsShapes = new Map();   // "file:line" -> Set(name), rivals only
 {
   const emitted = new Set();
   for (const [, shp] of shapes) for (const k of shp) emitted.add(k);
-  for (const s of jsScans)
-    for (const L of s.litShapes) {
-      if (L.keys.every((k) => emitted.has(k))) continue;
-      jsShapes.set(`${s.file}:${s.site(L.off).line}`, new Set(L.keys));
+  for (const s of jsScans) {
+    const assigned = new Map();   // binding key -> Set(name)
+    for (const a of s.memberAssigns) {
+      if (!assigned.has(a.key)) assigned.set(a.key, new Set());
+      assigned.get(a.key).add(a.name);
     }
+    for (const L of s.litShapes) {
+      const keys = new Set(L.keys);
+      /* ABSENCE IS A POSITIVE STATEMENT HERE, NOT A HOLE TO FILL: a binding no member assignment names is a
+         record that is finished at its literal, which is the majority and is the case the fold must not
+         change. Asked with `has`, never defaulted to an empty list — §A-FIELD-A-CONSUMER-DEFAULTS. */
+      if (L.binding !== null && assigned.has(L.binding)) for (const n of assigned.get(L.binding)) keys.add(n);
+      if (keys.size < 2) continue;   /* the two-name floor, applied to the whole record — see §the KEY COUNT */
+      let own = false;
+      for (const k of keys) if (!emitted.has(k)) { own = true; break; }
+      if (!own) continue;            /* declares nothing the engine does not — a restatement, never a rival */
+      jsShapes.set(`${s.file}:${s.site(L.off).line}`, keys);
+    }
+  }
 }
 
 /* RECORD RECEIVERS, per file. A receiver is one when some field read on that exact text names a field the
