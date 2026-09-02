@@ -266,10 +266,13 @@ JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url);
  *     two writers (core/frame/session_history.h), and §7.4.4's URL and history update steps move one without
  *     the other in the general case; reading the wrong one is how a reload would fetch an address the page
  *     never asked for.
- *   — §7.4.2.2 STEP 11'S FRAGMENT ARM MUST NOT RUN. `https://x/y#a` reloaded satisfies every conjunct of
- *     that test — the destination equals the active entry's URL with exclude fragments set to true and its
- *     fragment is non-null — so routing a reload through navigate would answer `location.reload()` on any
- *     page with a fragment by firing `popstate` and fetching nothing at all. §7.4.3 has no same-document arm.
+ *   — §7.4.2.2 "Beginning navigation" STEP 15'S FRAGMENT ARM MUST NOT RUN. `https://x/y#a` reloaded satisfies
+ *     every conjunct of that test — the destination equals the active entry's URL with exclude fragments set
+ *     to true and its fragment is non-null — so routing a reload through navigate would answer
+ *     `location.reload()` on any page with a fragment by firing `popstate` and fetching nothing at all.
+ *     §7.4.3 has no same-document arm. (This read STEP 11, and 11 is the lazy-load step — "if container is an
+ *     iframe element and will lazy load element steps given container returns true, …" — so it is named here
+ *     to keep 15 from being "corrected" back; core/frame/location.c carries the depth-tracked count.)
  *   — ITS NAVIGATE EVENT'S NavigationType IS "reload", which a router's own `navigate` listener branches on,
  *     and its destinationNavigationAPIState is the ENTRY's rather than the wrapper's default.
  *

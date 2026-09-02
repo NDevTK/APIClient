@@ -479,13 +479,31 @@ static JSValue js_loc_to_string(JSContext *ctx, JSValueConst this_val, int argc,
  * naming itself, instead of twelve bodies each deciding separately what to do about it.
  *
  * §7.4.2.2 "BEGINNING NAVIGATION" IS WHAT PERFORMS IT, AND IT HAS TWO ARMS. Its steps 9-10 resolve
- * historyHandling, and its step 11 then asks four conjuncts — "documentResource is null; response is null; url
+ * historyHandling, and its step 15 then asks four conjuncts — "documentResource is null; response is null; url
  * equals navigable's active session history entry's URL WITH EXCLUDE FRAGMENTS SET TO TRUE; and url's fragment
  * is non-null" — and when they hold it runs §7.4.2.3.3 "Fragment navigations"'s NAVIGATE TO A FRAGMENT and
  * RETURNS. That is a SAME-DOCUMENT operation: it appends a session history entry, fires `popstate` and queues
  * `hashchange`, and the Document, its realm and every flow suspended in it survive. The other arm FETCHES and
  * builds a new Document. Taking the second where the spec takes the first is not a weaker answer, it is a
  * different one — `location.hash = "#/route"` would tear down the router that ran it.
+ *
+ * THE NUMBER READ 11 EVERYWHERE THIS TEST IS NAMED, AND 11 IS THE LAZY-LOAD STEP — "if container is an iframe
+ * element and will lazy load element steps given container returns true, then stop intersection-observing a
+ * lazy loading element container and set container's lazy load resumption steps to null" — so a reader who
+ * opened 11 landed on `<iframe loading=lazy>` with not a word about fragments in it, which is why the old
+ * number is written down here rather than merely replaced: nothing at 11 can be mistaken for this test, so a
+ * later reader cannot "correct" 15 back. 15 is a DEPTH-TRACKED count of §7.4.2.2's top-level `<li>`s over the
+ * fetched text — the algorithm has 24 steps, and eight of them (5, 6, 13, 15, 19, 21, 22, 24) hold a nested
+ * list whose sub-items a flat `<li>` count promotes to peers. It is not one reader's recount: it lands
+ * simultaneously on the two independent counts of this same algorithm already in the tree —
+ * core/dom/document.c's 16 "if navigable's parent is non-null, then set navigable's is delaying load events to
+ * true" and 17 "let targetSnapshotParams be the result of snapshotting target snapshot params given
+ * navigable", and core/frame/navigable.c's 21 `javascript:` scheme test — and agreement on three numbers this
+ * count did not derive is what makes the fourth checkable.
+ *
+ * THE "steps 9-10" ABOVE IS NOT PART OF THAT CORRECTION AND IS LEFT AS IT STANDS, deliberately and not by
+ * oversight: it is a different claim (which steps resolve historyHandling) and the same count says those are
+ * 13 and 14, so it is a lead for whoever takes that cluster rather than something swept in behind this one.
  *
  * THE TEST IS NOT ASKED HERE. core/frame/session_history.h's session_history_is_fragment_navigation is the one
  * implementation, because §7.4.2.2 compares against the ACTIVE SESSION HISTORY ENTRY's URL — that component's
@@ -721,7 +739,7 @@ static bool loc_encoding_parse(JSContext *ctx, const char *v, size_t vlen, UrlRe
     X(LOC_NAV_COMPUTE,  "HTML §7.2.4's attribute setters and its `assign`/`replace` (the relevant-Document "   \
                         "and same origin-domain checks, and the one write into a copy of this Location's "     \
                         "url that the member is), ending at §7.2.4's Location-object navigate step 4")         \
-    X(LOC_NAV_FRAGMENT, "HTML §7.4.2.2 beginning navigation step 11 (navigate to a fragment given navigable, " \
+    X(LOC_NAV_FRAGMENT, "HTML §7.4.2.2 beginning navigation step 15 (navigate to a fragment given navigable, " \
                         "url, historyHandling, userInvolvement, sourceElement, navigationAPIState and "        \
                         "navigationId — §7.4.2.3.3, whose own steps its work record names)")
 enum { IDL_STEP_STAGE_BASE(LOC_NAV_STAGES) LOC_NAV_STAGES(JS_STEP_STAGE_ENUM) };
