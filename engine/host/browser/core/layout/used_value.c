@@ -13,6 +13,7 @@
 #include "core/frame/screen.h"
 #include "core/frame/viewport.h"
 #include "core/layout/block_flow.h"
+#include "core/layout/box_subject.h"
 #include "core/layout/intrinsic_size.h"
 #include "core/layout/replaced_element.h"
 #include "core/layout/used_value.h"
@@ -560,14 +561,17 @@ static CssPx uv_icb(lxb_dom_element_t *el, bool vertical)
 
 /* §10.1's four cases, in the spec's own order, answering the ELEMENT whose CONTENT EDGE is the rectangle —
    NULL for the first case, the initial containing block, which is no element's box. Each case this component
-   cannot answer crashes naming ITS case and not the neighbouring one, because the three that are missing are
-   missing for three different reasons.
+   cannot answer crashes naming ITS case and not the neighbouring one, because they are missing for different
+   reasons — and the SECOND case, which this component does answer, has crash arms of its own for the same
+   reason one level down: an ancestor that is not a block container box is not one missing algorithm, it is
+   four different ones and two sentences from other modules.
    THE BOX IS THE ANSWER AND THE WIDTH IS DERIVED FROM IT, which is the split used_value.h states: §10 needs
    only the width, and §9.4.1's placement needs the box's origin and its child list, so a second walk for the
    second question would be these four cases implemented twice. */
 lxb_dom_element_t *used_value_containing_block(lxb_dom_element_t *el)
 {
     lxb_dom_node_t *n, *a;
+    char nbuf[160], abuf[160];
 
     DCHECK(el != NULL, "§10.1's containing block was asked for with no element");
     n = lxb_dom_interface_node(el);
@@ -597,39 +601,136 @@ lxb_dom_element_t *used_value_containing_block(lxb_dom_element_t *el)
               "STATIC POSITION §10.3.7's and §10.6.4's `auto` cases fall back to, which is a would-be position "
               "for a box §10.6.3 tells core/layout/block_flow.c's walk to skip");
     /* §10.1's SECOND case: "For other elements, if the element's position is 'relative' or 'static', the
-       containing block is formed by the CONTENT EDGE of the nearest BLOCK CONTAINER ANCESTOR BOX." The walk
-       asks for a BOX, so an ancestor whose computed `display` is `contents` is stepped over rather than
-       answered — it generates none, and §10.1 is asking which box the rectangle is the content edge of. */
+       containing block is formed by the CONTENT EDGE of the nearest BLOCK CONTAINER ANCESTOR BOX."
+       "NEAREST" IS A SEARCH AND NOT A TEST ON THE PARENT, and §10.1's own worked example is what makes that
+       checkable without a layout. For `<P id="p2">This is text <EM id="em1"> in the <STRONG id="strong1">
+       second</STRONG> paragraph.</EM></P>` the section's table of containing blocks gives BOTH `em1` and
+       `strong1` the block established by `p2` — so the walk steps straight OVER the inline `em1` rather than
+       stopping at it, and an inline ancestor is not a case this component is missing. §10.1's inline exception
+       ("the bounding box around the padding boxes of the first and the last inline boxes generated for that
+       element") is written in the FOURTH case, about the nearest POSITIONED ancestor of a `position: absolute`
+       box, and reading it into the second case is what used to make an ordinary `<label><input></label>`
+       unanswerable here. AND THE BOX THE STEP LANDS ON IS THE RIGHT ONE EVEN WHERE AN ANONYMOUS BOX SITS
+       BETWEEN, which is the one way this could have been a silent wrong answer rather than a crash. CSS 2
+       §9.2.1.1 Anonymous block boxes covers both shapes: where the inline holds only inline content its run is
+       wrapped in an anonymous block box whose "Non-inherited properties have their initial value ... the
+       margins will be 0", and whose last paragraph says such a box "[is] ignored when resolving percentage
+       values that would refer to it: the closest non-anonymous ancestor box is used instead"; and where the
+       inline holds an in-flow BLOCK-LEVEL box, "the inline box ... are broken around the block-level box ...
+       and the block-level box becomes a SIBLING of those anonymous boxes" — a sibling inside the same block
+       container this walk returns. Either way the content edge is the one below.
+       WHICH ANCESTORS ARE STEPPED OVER AND WHICH CRASH IS DECIDED PER `display`, NEVER BY AN `else`, because
+       the ancestors that are not block container boxes are not one problem. Two of them ARE this case's answer
+       by another module's own sentence, two need a box the ELEMENT tree does not name, and one has no subject
+       at all — and an `else` here would return a rectangle for every one of them. */
     for (a = n->parent; a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = a->parent) {
         lxb_dom_element_t *anc = lxb_dom_interface_element(a);
         char *d = uv_computed(anc, "display");
-        bool contents = strcmp(d, "contents") == 0;
         bool container = block_flow_display_is_block_container(d);
+        /* css-flexbox-1 §3 Flex Containers: the flex and inline-flex display values — "Flex containers form a
+           containing block for their contents exactly like block containers do. [CSS2]" That is an ELEMENT's
+           content edge, stated in the module's own words, so a flex container IS this case's answer even
+           though CSS 2 §9.2.1 does not call it a block container box; §3 defines the pair as one container
+           differing only in outer display type, so both spellings answer. css-grid-1 says the OPPOSITE of a
+           grid container in its own §5.1, which is why the two are split here rather than sharing
+           `uv_display_is_flex_or_grid`'s single predicate — that predicate answers "is this box a flex or grid
+           CONTAINER", a question with one answer, and this is a question with two. */
+        bool flex = strcmp(d, "flex") == 0 || strcmp(d, "inline-flex") == 0;
+        bool grid = strcmp(d, "grid") == 0 || strcmp(d, "inline-grid") == 0;
+        /* `table-cell` and `table-caption` are block containers (CSS 2 §9.2.1: "non-replaced inline blocks and
+           non-replaced table cells are block containers but not block-level boxes") and are returned above, so
+           what reaches the table arm is only the table box and the row/column machinery. */
+        bool table = uv_display_is_table(d);
+        bool none = strcmp(d, "none") == 0;
+        /* THE TWO VALUES THE WALK STEPS OVER, for two different reasons that both end in "this ancestor is not
+           the box §10.1 is asking about". css-display-3 §2.5 Box Generation: the none and contents keywords
+           gives `contents` no box at all ("The element itself does not generate any boxes, but its children
+           and pseudo-elements still generate boxes and text sequences as normal"), and §10.1 asks which BOX
+           the rectangle is the content edge of; `inline` generates a box and it is simply not a block
+           container one, which the section's own example above resolves. */
+        bool step_over = strcmp(d, "contents") == 0 || strcmp(d, "inline") == 0;
 
-        if (container) {
-            free(d);
-            return anc;
-        }
-        if (!contents)
-            DFAIL("CSS 2.1 §10.1's second case asks for the nearest BLOCK CONTAINER ancestor box, and the "
-                  "nearest ancestor that generates a box is not one — its computed `display` makes it a table "
-                  "box, a table row or row group, a flex or grid container, an inline box, or a box whose "
-                  "`display: none` means it generates nothing at all and neither does this element. Each of "
-                  "those establishes a containing block by a DIFFERENT spec: CSS 2.1 §17.5's table layout owns "
-                  "the first three, css-flexbox §4.1 and css-grid §9 make a flex or grid container establish "
-                  "one for its items (which is why a box whose parent is one is a flex ITEM here and is sized "
-                  "by that container's algorithm rather than by §10), and an INLINE ancestor is §10.1's own "
-                  "exception — the bounding box around the padding boxes of its first and last inline boxes. "
-                  "A `display: none` ancestor is not a missing algorithm at all: this element generates no box "
-                  "either, and the answer is CSSOM §9's computed-value escape over element_view.h's has-a-box "
-                  "predicate, which uv_icb above names in full");
         free(d);
-        /* CSS Display §2.8: "a display of contents computes to block on the root element", so the walk can
-           never step OVER the root — it is a block container however it was declared. */
-        DCHECK(!uv_is_root(a),
-               "the containing-block walk stepped over the ROOT ELEMENT as a `display: contents` box. CSS "
-               "Display §2.8 makes `contents` compute to `block` on the root, so a root that reached this line "
-               "is a computed-value rule that did not run");
+        if (container || flex) return anc;
+        if (none)
+            DFAILF("%s, whose ancestor %s generates no box: "
+                  "§10.1's second case walked up to an ancestor whose computed `display` is `none`, and "
+                  "css-display-3 §2.5 Box Generation: the none and contents keywords states what that means "
+                  "for everything below it — \"The element and its descendants generate no boxes or text "
+                  "sequences\" — so this element has no box either. That is not a missing algorithm: §10.1 has "
+                  "no SUBJECT here, and a rectangle returned for it would be a containing block for a box that "
+                  "does not exist. THE ANSWER IS CSSOM §9 Resolved Values' computed-value escape over "
+                  "core/dom/element_view.h's `element_view_has_box`, taken at the RESOLVED-VALUE entry before "
+                  "§10 is asked at all — the same escape `uv_icb` above names in full. A caller INSIDE layout "
+                  "that reached here is that predicate and its own has-a-box test having come apart, since "
+                  "every layout walk in this engine descends only through boxes that exist",
+                  box_subject(el, nbuf, sizeof nbuf), box_subject(anc, abuf, sizeof abuf));
+        if (table)
+            DFAILF("%s, whose ancestor %s generates a TABLE box or a table-internal one: "
+                  "CSS 2 §9.2.1 Block-level elements and block boxes excludes it from this case by name — "
+                  "\"Except for table boxes, which are described in a later chapter, and replaced elements, a "
+                  "block-level box is also a block container box\" — so the walk cannot stop here. IT MUST NOT "
+                  "STEP OVER IT EITHER, AND THAT IS THE WHOLE OF WHAT IS MISSING: CSS 2 §17.4 Tables in the "
+                  "visual formatting model puts a real block container between a table's internals and "
+                  "whatever is above them — \"the table generates a principal block box called the table "
+                  "wrapper box that contains the table box itself and any caption boxes (in document order)\", "
+                  "and \"The table wrapper box is a 'block' box if the table is block-level, and an "
+                  "'inline-block' box if the table is inline-level\" — BOTH halves, because `inline-table` "
+                  "reaches this arm too and its wrapper is the inline-block one. So the answer is that "
+                  "WRAPPER, and the wrapper is an ANONYMOUS box that no element in this tree names. RETURNING "
+                  "`table` ELEMENT WOULD BE A DIFFERENT RECTANGLE AND NOT AN APPROXIMATION OF THIS ONE: §17.4 "
+                  "uses `position`, `float`, `margin-*` and the four offsets on the wrapper and every other "
+                  "non-inherited value on the table box INSIDE it, and gives the wrapper's own width as \"the "
+                  "border-edge width of the table box inside it, as described by section 17.5.2\" — a border "
+                  "edge where this entry's callers take a content edge. BUILD CSS 2 §17.2.1 Anonymous table "
+                  "objects' box generation first, then the wrapper as a box this walk can answer with, then "
+                  "§17.5.2 Table width algorithms: the 'table-layout' property over it. "
+                  "core/layout/flow_position.c's table-internal placement abort and core/layout/block_flow.c's "
+                  "table-child abort name the same two sections and are the same subproblem seen from the "
+                  "POSITION side; all three delete together",
+                  box_subject(el, nbuf, sizeof nbuf), box_subject(anc, abuf, sizeof abuf));
+        if (grid)
+            DFAILF("%s, whose ancestor %s is a GRID CONTAINER: "
+                  "css-grid-1 §5.1 Establishing Grid Containers: the grid and inline-grid display values says "
+                  "outright that \"Grid containers are not block containers\", so §10.1's second case does not "
+                  "stop here — and unlike a flex container it does not answer this case by a sentence of its "
+                  "own either, because the rectangle it establishes is not its content edge. css-grid-1 §3.3 "
+                  "Grid Areas states where it is: \"A grid item's grid area forms the containing block into "
+                  "which it is laid out.\" A grid area is a rectangle INSIDE the container that no element's "
+                  "content edge is — the same shape §10.1's fourth case is blocked on — and its four edges are "
+                  "grid lines that only css-grid-1's track sizing produces. THAT IS THE ONE DIFFERENCE FROM "
+                  "THE FLEX ARM ABOVE, and it is the modules' own disagreement rather than a distinction drawn "
+                  "here: css-flexbox-1 §3 Flex Containers: the flex and inline-flex display values says a flex "
+                  "container forms the containing block \"for their contents exactly like block containers "
+                  "do\", which IS an element's content edge and is answered. BUILD css-grid-1's track sizing "
+                  "and the grid area as a rectangle this entry can report; until then a grid item's "
+                  "percentages and its `auto` margins have no rectangle to resolve against",
+                  box_subject(el, nbuf, sizeof nbuf), box_subject(anc, abuf, sizeof abuf));
+        if (!step_over)
+            DFAILF("%s, whose ancestor %s generates a box §10.1's second case cannot classify: "
+                  "its computed `display` is not a BLOCK CONTAINER box (CSS 2 §9.2.1 Block-level elements and "
+                  "block boxes), not a flex or grid container, not a table box, not `none`, and not one of the "
+                  "two values this walk steps over. core/css/css_computed_value.c's css-display-3 §2.7 "
+                  "Automatic Box Type Transformations blockification carries spellings this walk has never "
+                  "been asked about — `run-in`, the four `ruby-*` values, a bare inner `flow`, and the "
+                  "two-value `<display-outside> <display-inside>` syntax that file's own §2.7 crash names — "
+                  "and each is a box type with a formatting context of its own. DECIDE THIS VALUE HERE, in the "
+                  "same three-way shape the arms above have: it is a block container box (stop and return it), "
+                  "a box §10.1 walks past because it is not one (continue), or a box whose OWN module owns the "
+                  "rectangle (crash naming that module). An `else` that picked one of the three would answer "
+                  "every future spelling the same way",
+                  box_subject(el, nbuf, sizeof nbuf), box_subject(anc, abuf, sizeof abuf));
+        /* css-display-3 §2.8 The Root Element's Principal Box: "The root element's display type is always
+           blockified", and "Additionally, a display of contents computes to block on the root element" — so
+           the root is a block container however it was declared and the walk stops AT it, never over it. */
+        DCHECKF(!uv_is_root(a),
+               "%s: "
+               "the containing-block walk stepped OVER the ROOT ELEMENT. css-display-3 §2.8 The Root Element's "
+               "Principal Box forbids it twice — the root's display type \"is always blockified\", and a "
+               "`display` of `contents` \"computes to block on the root element\" — so neither value this walk "
+               "steps over can survive the cascade on a root. A root reaching this line is a computed-value "
+               "rule that did not run",
+               box_subject(anc, abuf, sizeof abuf));
     }
     DFAIL("the containing-block walk ran out of ancestors without finding a block container box. Every walk "
           "starts below the ROOT ELEMENT — §10.1's first case answers the root itself — and the root is a "

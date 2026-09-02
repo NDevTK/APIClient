@@ -1110,6 +1110,7 @@ CssPx block_flow_child_top(lxb_dom_element_t *el)
     lxb_dom_element_t *cb;
     CssPx top = css_px(0.0);
     bool found = false;
+    char nbuf[160], cbuf[160], pbuf[160];
 
     DCHECK(el != NULL, "a box's vertical placement was asked for with no element");
     cb = used_value_containing_block(el);
@@ -1118,12 +1119,24 @@ CssPx block_flow_child_top(lxb_dom_element_t *el)
            "the initial containing block — that is the ROOT ELEMENT, and core/layout/flow_position.c answers it "
            "from §10.1 directly rather than by walking a parent's children. The caller's own root test and this "
            "one have come apart");
-    DCHECK(lxb_dom_interface_node(cb) == lxb_dom_interface_node(el)->parent,
+    DCHECKF(lxb_dom_interface_node(cb) == lxb_dom_interface_node(el)->parent,
+           "%s, whose containing block is %s and whose parent is %s: "
            "§10.1's containing block for this box is NOT its parent element, so §9.4.1's walk over that block's "
-           "own children can never reach it. The two ways to get here are the two that walk crashes on for their "
-           "own reasons — a `display: contents` ancestor, whose children css-display-3 §2.5 splices into the "
-           "grandparent's box list, and an ancestor that generates no block container box at all — so the walk "
-           "below would raise one of those messages a step late. Decide it HERE, where the discrepancy is");
+           "own children can never reach it. WHAT REACHES HERE IS AN ANCESTOR THE CONTAINING-BLOCK WALK STEPS "
+           "OVER, and there are two of them, each naming a BOX-TREE construction step this walk does not "
+           "perform. A `display: contents` ancestor: css-display-3 §2.5 Box Generation: the none and contents "
+           "keywords splices its children into the grandparent's box list — \"the element must be treated as if "
+           "it had been replaced in the element tree by its contents\" — so those children are boxes in this "
+           "block's list that this walk over ELEMENT children never visits. An `inline` ancestor holding this "
+           "in-flow BLOCK-LEVEL box: CSS 2 §9.2.1.1 Anonymous block boxes breaks the inline around it, and "
+           "\"the block-level box becomes a sibling of those anonymous boxes\" — a sibling in this same block "
+           "container's box list, again reached by no walk over element children. BUILD THE BOX LIST §9.2.1.1 "
+           "AND §2.5 DESCRIBE as the thing this walk iterates; `bf_element_child`'s own `contents` crash names "
+           "the first half and this is where both halves are noticed. Deciding it HERE and not below is why "
+           "the message can name which of the two it is: the walk below would report only that it never "
+           "reached the box",
+           box_subject(el, nbuf, sizeof nbuf), box_subject(cb, cbuf, sizeof cbuf),
+           box_subject_node(lxb_dom_interface_node(el)->parent, pbuf, sizeof pbuf));
     (void)bf_layout(cb, el, &top, &found, NULL, false);
     if (!found)
         DFAIL("CSS 2 §9.4.1's walk over this box's containing block placed every in-flow block-level child it "

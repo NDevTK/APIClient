@@ -270,11 +270,20 @@ typedef struct {
  *
  * IT FINDS THE FORMATTING CONTEXT ITSELF, and that is why it takes an element where the two entries above take
  * a run: the question "which inline formatting context is this box in" is answered by walking PAST every inline
- * ancestor to the nearest block container, which is NOT §10.1's containing block — §10.1's second case stops at
- * the nearest block container too but its own exception makes an INLINE ancestor a containing block of a
- * different shape ("the bounding box around the padding boxes of the first and the last inline boxes"), so
- * core/layout/used_value.h answers a different question and crashes there rather than stepping over it. One
- * walk, here, because both of §6's and §7's consumers would otherwise carry a copy.
+ * ancestor to the nearest block container. WHAT STOOD HERE SAID THAT IS NOT §10.1's WALK BECAUSE "its own
+ * exception makes an INLINE ancestor a containing block of a different shape", quoting §10.1's "the bounding box
+ * around the padding boxes of the first and the last inline boxes" — and that exception is written in §10.1's
+ * FOURTH case, about the nearest POSITIONED ancestor of a `position: absolute` box, not in its second. The
+ * section's own worked example settles the second case in the opposite direction: for
+ * `<P id="p2">... <EM id="em1"> ... <STRONG id="strong1">second</STRONG> ...</EM></P>` its table of containing
+ * blocks gives BOTH `em1` and `strong1` the block established by `p2`, so §10.1's second case steps over an
+ * inline ancestor exactly as this walk does, and core/layout/used_value.h now does too rather than crashing
+ * there. THE TWO QUESTIONS STILL DIFFER AND THE DIFFERENCE IS NO LONGER THE INLINE STEP: §10.1's OTHER cases
+ * answer something else entirely — the root's is the initial containing block (no element at all), a `fixed`
+ * box's is the viewport, and an `absolute` box's is a positioned ancestor's PADDING edge, which is where that
+ * inline exception actually lives — while "which context is this box on a line of" is the same block container
+ * whatever this box's `position` is. So the walks agree on one case out of four and are not the same entry.
+ * One walk, here, because both of §6's and §7's consumers would otherwise carry a copy.
  *
  * FINDING IT MEANS FINDING THE RUN AS WELL, because the container is only half an answer when it is MIXED. CSS
  * 2.2 §9.2.1.1 "Anonymous block boxes" — "if a block container box (such as that generated for the DIV above)
