@@ -606,11 +606,26 @@ static JSValue js_conn_transaction(JSContext *ctx, JSValueConst this_val, int ar
 
     (void)argc; (void)magic;
     if (!conn_brand(ctx, this_val)) return JS_EXCEPTION;
-    DCHECK(JS_IsString(argv[1]),
-           "§4.4's transaction was handed a mode that is not a string — `optional IDBTransactionMode mode = "
-           "\"readonly\"` is an enumeration WITH a default, so §3.6 steps 15.4.1 and 16.1 place one whether "
-           "or not the "
-           "page passed one");
+    /* THE ONE VALUE THIS ASSERT DOES NOT SPEAK FOR IS THE ONE THE MEMBER IS EXPLORED WITH, AND THE DISJUNCT IS
+       THE WHOLE OF THIS HUNK. Web IDL §3.2.18 Enumeration types is a MEMBERSHIP TEST, and the paragraph at
+       step 6 below is this file's own statement that unknown external input therefore has no arm to cross as —
+       but core/idl_args.h's idl_concolic_rule answers IDL_CONCOLIC_CROSSES for IDL_ENUM all the same, so
+       `db.transaction(store, location.hash)` reaches THIS line still holding the unknown.
+       WRITTEN WITHOUT THE DISJUNCT IT ABORTED THE WHOLE DOCUMENT HERE — seventy-odd lines ABOVE the
+       `concolic_is(argv[1])` ask that is the correct crash for that value, names the fork this member owes and
+       gives the arm set the enumeration itself supplies. A reader got an authoritative, reproducible and WRONG
+       diagnosis ("this member's declaration is not the one that was invoked", which sends them to
+       core/idl_args.c) in place of the right one further down the same body. That is the stale-`DFAIL` failure
+       mode with the two crashes in ONE function: the assert was true of every value except the one that
+       reaches it, and being nearly true is what made it worse than silence.
+       WHAT IT STILL STATES is what the declaration actually guarantees — every value that is NOT unknown
+       external input arrives converted — which is the half a body may rely on. */
+    DCHECK(JS_IsString(argv[1]) || concolic_is(argv[1]),
+           "§4.4's transaction was handed a mode that is neither a string nor unknown external input — "
+           "`optional IDBTransactionMode mode = \"readonly\"` is an enumeration WITH a default, so §3.6 steps "
+           "15.4.1 and 16.1 place one whether or not the page passed one, and Web IDL §3.2.18 Enumeration "
+           "types converts every other value a page can write. An unknown crosses as itself and is answered "
+           "at step 6 below, which is where this member's missing fork is named");
     DCHECK(JS_IsObject(options),
            "§4.4's transaction was handed no options dictionary — the IDL writes `optional "
            "IDBTransactionOptions options = {}`, so the conversion builds one carrying every declared default");

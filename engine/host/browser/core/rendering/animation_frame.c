@@ -167,9 +167,57 @@ static JSValue js_cancel_animation_frame(JSContext *ctx, JSValueConst this_val, 
     DCHECK(argc >= 1,
            "cancelAnimationFrame reached its body with no handle — §3.6 step 5's TypeError is the "
            "declaration's, not this body's");
+    /* AN UNKNOWN HANDLE IS A FORK, AND THE FORK THIS ENGINE ALREADY HAS IS THE WRONG ONE — which is why this
+       crashes here rather than reaching for it. §3.2's conversion is a BOUNDARY unknown external input crosses
+       AS ITSELF (core/idl_args.h's idl_concolic_rule answers IDL_CONCOLIC_CROSSES for IDL_UNSIGNED_LONG), so
+       `cancelAnimationFrame(location.hash.length)` reaches this body still holding the unknown, and both the
+       tag assert below and the JS_ToUint32 under it are FALSE for it — the coercion aborting inside ToNumber,
+       one frame below this file, where there is no return to check.
+       WHAT IS NOT COVERED. §8.12 step 3 is "Remove callbacks[handle]" over "this's target object's map of
+       animation frame callbacks", whose KEYS are the handles requestAnimationFrame minted ("Increment target's
+       animation frame callback identifier by one, and let handle be the result … Set callbacks[handle] to
+       callback"). So the worlds this algorithm tells apart are exactly the keys that map holds, plus ONE
+       remainder — a handle the map does not hold, which §8.12 answers by doing nothing, which is why there is
+       no throw on this path.
+       WHY IT IS NOT core/idl_index_arg.h's CHAIN. That component decomposes a §3.2.4.6 `unsigned long` into
+       `npositions` singleton worlds by asking `index == k` for k ASCENDING FROM 0 — its links are POSITIONS,
+       and its own banner requires each to be a world the algorithm tells apart. A handle is not a position:
+       the map is sparse (every fired frame and every cancel removes a key) and the identifier only ever grows,
+       so running that chain with `npositions` set to the animation frame callback identifier would ask about
+       handles naming NOTHING while claiming, in the component's own words, to separate worlds §8.12 does not
+       separate.
+       WHAT THE NEXT DIFF BUILDS, AND THE FIRST DRAFT OF THIS PARAGRAPH HAD IT WRONG IN THE WAY CLAUDE.md SAYS
+       A NEXT-DIFF CLAUSE GOES WRONG — it said the handle-keyed chain had to be invented, and the grep that rule
+       demands found it already written: core/timing/timer.c's js_clear_timer/ClearTimerState is exactly this
+       question for §8.7 Timers, asked one identifier at a time, ascending, keyed by "is `id` the timer with
+       identifier H" so the completion carries its NAME and never its rank in a map the page mutates. §8.12's
+       handles obey the same two facts that make that sound: they are strictly monotone per global, and they
+       start at 1 (see af_reset), so a zeroed cursor is unambiguously before the first and
+       `cancelAnimationFrame(0)` is the remainder world both members answer with nothing. So what must exist
+       afterward is ONE component both reach — the name-keyed sibling of core/idl_index_arg.h, taking the
+       caller's entry enumeration, since a second inline copy of that chain is the copy CLAUDE.md says drifts —
+       and this member becomes an IdlStepBody, because a chain parks and a plain C activation has nowhere to.
+       HOW ITS ABSENCE WOULD SHOW: exactly this abort — a bundle that cancels a frame at a handle it computed
+       from a URL ends the document and every sibling flow parked behind it. Once built, the world that
+       answered `handle == h` and the world that exhausted the chain must differ observably at the next frame,
+       in whether callback h runs. */
+    if (concolic_is(argv[0]))
+        DFAIL("cancelAnimationFrame's `handle` is UNKNOWN EXTERNAL INPUT and this member has no fork to ask "
+              "over it. HTML §8.12 Animation frames step 3 removes callbacks[handle] from a map whose keys are "
+              "the handles requestAnimationFrame minted, so the arm set is GIVEN — one world per key the map "
+              "holds, plus one remainder that does nothing — and it is a set of platform-assigned NAMES rather "
+              "than a range of positions. core/idl_index_arg.h's elimination chain asks `index == k` ascending "
+              "from 0 and does NOT serve this member: the map is sparse and the identifier only grows, so that "
+              "chain would ask about handles naming nothing while claiming to separate worlds §8.12 does not "
+              "separate. The chain that DOES answer this is written — core/timing/timer.c's js_clear_timer asks "
+              "\"is `id` the timer with identifier H\" one monotone identifier at a time, and §8.12's handles "
+              "are monotone and start at 1 exactly as §8.7's do. Lift it into one name-keyed component both "
+              "members reach, taking the caller's entry enumeration, and make this member an IdlStepBody so it "
+              "can park at a link");
     DCHECK(JS_VALUE_GET_TAG(argv[0]) == JS_TAG_INT || JS_TAG_IS_FLOAT64(JS_VALUE_GET_TAG(argv[0])),
-           "cancelAnimationFrame's `handle` reached the body unconverted — the IDL declaration is what "
-           "converts an `unsigned long`, and that conversion is the page's code");
+           "cancelAnimationFrame's `handle` reached the body neither converted nor unknown — the IDL "
+           "declaration is what converts an `unsigned long`, and that conversion is the page's code; the one "
+           "value it does NOT produce a Number for is unknown external input, which the ask above answers");
     JS_ToUint32(ctx, &want, argv[0]);
     q = af_queue(ctx);
     n = af_len(ctx, q);
