@@ -6296,37 +6296,14 @@ static void flow_run_one_job(JSContext *ctx, Flow *f) {
     JS_FreeValue(ctx, job);
 }
 
-/* IS THIS FLOW'S JAVASCRIPT EXECUTION CONTEXT STACK EMPTY?
-   HTML §8.1.4.4 "Calling scripts", clean up after running script step 3: "If the JavaScript execution context
-   stack is now empty, perform a microtask checkpoint." That sentence is the precondition of a MICROTASK
-   checkpoint and of a TASK alike — §8.1.7.3 "Processing model" runs one task and then performs a checkpoint,
-   so neither may begin part-way through a program — and it has two halves here, only one of which is a field.
-   `Flow::frame` IS that stack ("the current script's live preemptible frame, NULL between scripts",
-   solver/flow.h), so a live frame answers no outright.
-   THE OTHER HALF IS THE ROW AT THE CURSOR. §4.12.1.1 "Processing model" ends "prepare the script element" with
-   "Otherwise, immediately execute the script element el, even if other scripts are already executing" — that
-   program runs INSIDE the one that inserted it, so the stack has NOT emptied across it and nothing the event
-   loop would otherwise pick may run in front of it. Every OTHER program the flow has left is a task: the
-   document's next <script>, a lazy chunk, a `javascript:` URL, a §8.7 Timers string handler, a peer's
-   operation.
-   IT IS ONE PREDICATE AND NOT A CONDITION EACH ARM RESTATES, which is the whole reason it is a function: the
-   microtask checkpoint below and the networking task source's arm in flow_step are two consumers of ONE spec
-   sentence, and a second spelling of it is a second copy that disagrees eventually. A caller that has already
-   established `!f->frame` pays one field read for the half it knows. */
-static int flow_stack_empty(const Flow *f) {
-    int row;
-
-    if (f->frame) return 0;
-    row = f->script_i;
-    if (row < f->dyn_n) {
-        DCHECK(f->dyn_pos != NULL,
-               "a flow holds queued programs with no position column — the row the cursor names cannot say "
-               "whether it is a task or the synchronous tail of the program that queued it, and the microtask "
-               "checkpoint is placed against exactly that");
-        if (f->dyn_pos[row] == DYN_POS_IMMEDIATE) return 0;
-    }
-    return 1;
-}
+/* flow_stack_empty IS solver/flow.h'S NOW, AND THE MOVE IS THE POINT RATHER THAN TIDYING. It is a question
+   about a FLOW — its frame and the position column of its own sequence — and it had a SECOND consumer that
+   could not reach it: cold_census, which reports what the frontier is standing in. The delivery arm below is
+   guarded on it, so a census that cannot state it cannot say whether a debt of hundreds of thousands of
+   answered replies is held by members that COULD take them or by members that could not, and those two take
+   opposite work. Restating the test in cold.c would have been a second spelling of one spec sentence — the
+   drift solver/pending.h refuses for the word "owed" — so the predicate is exported and this file is one of
+   its callers instead of its owner. */
 
 /* IS A MICROTASK CHECKPOINT DUE BEFORE THIS FLOW'S NEXT PROGRAM? — the stack being empty, and a microtask to
    run. §8.1.7.3 "Processing model" performs the checkpoint at the END of each task, so every task of this

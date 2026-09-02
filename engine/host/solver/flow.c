@@ -693,6 +693,46 @@ void flow_credit_pick(Flow *f) {
     f->picks++;
 }
 
+/* IS THIS FLOW'S JAVASCRIPT EXECUTION CONTEXT STACK EMPTY?
+   HTML §8.1.4.4 "Calling scripts", clean up after running script step 3: "If the JavaScript execution context
+   stack is now empty, perform a microtask checkpoint." That sentence is the precondition of a MICROTASK
+   checkpoint and of a TASK alike — §8.1.7.3 "Processing model" runs one task and then performs a checkpoint,
+   so neither may begin part-way through a program — and it has two halves here, only one of which is a field.
+   `Flow::frame` IS that stack ("the current script's live preemptible frame, NULL between scripts",
+   solver/flow.h), so a live frame answers no outright.
+   THE OTHER HALF IS THE ROW AT THE CURSOR. §4.12.1.1 "Processing model" ends "prepare the script element" with
+   "Otherwise, immediately execute the script element el, even if other scripts are already executing" — that
+   program runs INSIDE the one that inserted it, so the stack has NOT emptied across it and nothing the event
+   loop would otherwise pick may run in front of it. Every OTHER program the flow has left is a task: the
+   document's next <script>, a lazy chunk, a `javascript:` URL, a §8.7 Timers string handler, a peer's
+   operation.
+   IT IS ONE PREDICATE AND NOT A CONDITION EACH ARM RESTATES, which is the whole reason it is a function: the
+   microtask checkpoint below and the networking task source's arm in flow_step are two consumers of ONE spec
+   sentence, and a second spelling of it is a second copy that disagrees eventually. A caller that has already
+   established `!f->frame` pays one field read for the half it knows. */
+int flow_stack_empty(const Flow *f) {
+    int row;
+
+    if (f->frame) return 0;
+    row = f->script_i;
+    if (row < f->dyn_n) {
+        DCHECK(f->dyn_pos != NULL,
+               "a flow holds queued programs with no position column — the row the cursor names cannot say "
+               "whether it is a task or the synchronous tail of the program that queued it, and the microtask "
+               "checkpoint is placed against exactly that");
+        if (f->dyn_pos[row] == DYN_POS_IMMEDIATE) return 0;
+    }
+    return 1;
+}
+
+/* AND ITS SECOND CONSUMER IS THE CENSUS, WHICH IS WHY IT LIVES HERE AND NOT IN THE SCHEDULER'S FILE. The
+   engine's reply-delivery arm is guarded on this predicate, so the number of members it is TRUE of is the size
+   of the population that can take a reply at all — and `framed` is not that number: it answers only the first
+   of the two halves below, so `flows - framed` is an upper bound and never the count. cold_census asks this
+   directly (solver/cold.h's `stack_empty`), which is what lets a run distinguish "the frontier is drowning in
+   replies its members cannot take" from "the arm is not being reached for some other reason". Those are two
+   readings of one zero and they take opposite work. */
+
 /* A FORKED SIBLING IS A CONTINUATION, NOT A NEWCOMER — so it inherits EVERY term of its parent's account, and
  * this is the one place that says so.
  *

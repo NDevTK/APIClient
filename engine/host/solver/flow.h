@@ -856,6 +856,19 @@ long flow_created_count(void);
    arrive while it holds the thread. */
 int flow_blocked(const Flow *f);
 
+/* IS THIS FLOW'S JAVASCRIPT EXECUTION CONTEXT STACK EMPTY? — HTML §8.1.4.4 "Calling scripts", clean up after
+   running script step 3: "If the JavaScript execution context stack is now empty, perform a microtask
+   checkpoint." That sentence is the precondition of a MICROTASK checkpoint and of a TASK alike, so it is what
+   both the checkpoint arm and the reply-delivery arm of the scheduler's ladder are guarded on, and the full
+   derivation of its two halves is at the definition in flow.c.
+   IT IS EXPORTED BECAUSE IT HAS TWO CONSUMERS AND ONE OF THEM IS THE CENSUS. `framed` answers only the first
+   half — a live frame — so the number of members that can take a task is NOT `flows - framed`, and a run that
+   reads the second for the first cannot tell a frontier whose members are all mid-program from one whose
+   delivery arm is unreachable for some other reason. Restated in the census it would be a second spelling of
+   one spec sentence, which is the drift solver/pending.h refuses for the word "owed": what may differ between
+   readers is what they DO, never what the question means. */
+int flow_stack_empty(const Flow *f);
+
 /* HOW MANY ROUTED CROSS-DOCUMENT DELIVERIES THIS FLOW IS HOLDING — the length of `deliver_q`, asked here
    rather than read at the call sites so the queue's shape has ONE reader (the twin below says what a second
    reader costs: it is always the one missing the tag assert). 0 for the JS_UNDEFINED an untouched flow

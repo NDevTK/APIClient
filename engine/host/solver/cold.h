@@ -155,6 +155,36 @@ typedef struct {
        `pending_index_answered_total`, which is what the census publishes as `replyAsked`/`replyAnswered`. */
     long pend_count;
     long pend_bytes;
+    /* HOW MANY MEMBERS COULD TAKE A REPLY AT ALL, AND HOW MANY ACTUALLY HAVE ONE TO TAKE — the reply-delivery
+     * arm's own guard, counted in MEMBERS, beside the two rows above that are counted in ENTRIES. Emitted as
+     * `stackEmpty` and `canDeliver`.
+     *
+     * WHY A DEBT IN ENTRIES CANNOT ANSWER IT. `pend_ready` below is the deliverable population summed over
+     * every register, and a run in which it equals `pend_count` exactly, census after census, says every entry
+     * the frontier holds has been answered and none delivered. What it CANNOT say is why, and the two
+     * candidates take opposite work: the arm is being reached and consuming one entry at a time against a debt
+     * that forks faster than it drains, or the arm is not being reached at all because its guard is false for
+     * nearly every member. Those differ in what to fix — the drain's granularity, or whatever is upstream of a
+     * flow ever reaching an empty stack — and no row of this census separated them.
+     *
+     * AND `framed` IS NOT THIS NUMBER, WHICH IS THE PART THAT LOOKS DERIVABLE AND IS NOT. The guard is
+     * flow_stack_empty (solver/flow.h), and that is a CONJUNCTION: no live frame, AND the row at the cursor is
+     * not a DYN_POS_IMMEDIATE one — §4.12.1.1 "Processing model"'s "immediately execute the script element",
+     * which runs INSIDE the program that inserted it and so does not empty the stack either. `framed` answers
+     * the first half only, so `flows - framed` is an UPPER BOUND on `stack_empty` and a reader who takes it for
+     * the count is reading a different question's answer. That is why this is asked through the predicate the
+     * arm itself is guarded on rather than recomputed here.
+     *
+     * `can_deliver` IS THE WHOLE GUARD — stack-empty AND holding a deliverable entry — so it is a subset of
+     * `stack_empty` by construction, which result.c asserts. It is the number that decides the question above:
+     * `can_deliver` at 0 across a run whose `pend_ready` is in the hundreds of thousands says the debt is held
+     * entirely by members that cannot take it, and the drain is not where the defect is.
+     *
+     * A REPORT AND NEVER A BOUND (§NO BOUNDS), for `program_cursors`' reason exactly: nothing in the engine
+     * reads either, and "how many members can make progress" is precisely the shape a no-progress detector
+     * would be built from. */
+    long stack_empty;
+    long can_deliver;
     /* …AND THE ONE POPULATION INSIDE THAT LENGTH THAT IS A DEBT THE FRONTIER OWES ITSELF: entries the host has
        ANSWERED which the flow naming them has not yet delivered (solver/pending.h's pending_deliverable_count).
        IT IS THE DENOMINATOR OF `deliver-one-reply` AND NOTHING ELSE IN THIS CENSUS IS. That arm consumes exactly

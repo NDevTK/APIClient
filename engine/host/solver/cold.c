@@ -144,6 +144,16 @@ void cold_census(ColdCensus *out)
            flow_deliver_one_reply may take belongs beside the register's other questions and not restated here,
            where the next kind added would silently be counted as deliverable. */
         out->pend_ready += pending_deliverable_count(f->pending);
+        /* …AND THE SAME TWO QUESTIONS IN MEMBERS RATHER THAN IN ENTRIES — the reply-delivery arm's own guard,
+           asked through the very predicate that arm is guarded on (solver/flow.h's flow_stack_empty) rather
+           than restated here. See cold.h for why `framed` above cannot answer the first of them and why the
+           two rows are what separates a debt that is not being drained from a debt that CANNOT be. The second
+           read is short-circuited behind the first, so a member with a live frame costs one field test —
+           pending_deliverable_count is a walk of its register and this walk is over every member. */
+        if (flow_stack_empty(f)) {
+            out->stack_empty++;
+            if (pending_ready(f->pending)) out->can_deliver++;
+        }
         /* THE PROGRAM TEXT IS NOT A PER-FLOW ROW ANY MORE — see the shared block below. What this walk used to
            add here was `strlen` over every row of every flow, which both multiplied the sharing back out and
            made the census itself a pass over every byte of every bundle the frontier holds. */

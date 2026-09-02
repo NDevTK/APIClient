@@ -976,6 +976,19 @@ char *result_cold_json(void) {
        same registers that flow_deliver_one_reply may take — so an excess is not a large debt, it is the two
        counters having been summed over different populations, and `pendReady` would then publish as a debt the
        frontier does not hold. */
+    /* AND THE MEMBER-SIDE PAIR IS A SUBSET CHAIN FOR THE SAME REASON THE ENTRY-SIDE ONE IS, asserted here
+       because this is where both are in one hand. `can_deliver` is the reply-delivery arm's WHOLE guard and
+       `stack_empty` is its left conjunct, counted on ONE walk of ONE frontier (cold_census), so an excess is
+       not a large number — it is the two counters having been summed over different populations, and the pair
+       is about to be published as the reading that says whether the frontier's delivery debt is held by
+       members that could take it. `stack_empty` is bounded by the walk's own member count for the same
+       reason. */
+    DCHECK(c.can_deliver <= c.stack_empty && c.stack_empty <= c.flows,
+           "the frontier holds more members that can DELIVER than members whose execution context stack is "
+           "empty, or more of the latter than there are members at all — the two rows are the whole of "
+           "flow_stack_empty's guard and its left conjunct, counted in one pass of cold_census over one "
+           "frontier, so this is two sums over different populations and `canDeliver`/`stackEmpty` are about "
+           "to be published as a reading of a frontier that was never walked");
     DCHECK(c.pend_ready <= c.pend_count,
            "more of the frontier's register entries are DELIVERABLE than there are register entries — the two "
            "rows are counted in one pass of cold_census over one frontier and the deliverable set is a subset "
@@ -1028,6 +1041,7 @@ char *result_cold_json(void) {
                  "\"pagedAsks\":%ld,\"pagedUnarmed\":%ld,\"pagedFloor\":%ld,"
                  "\"decEntries\":%ld,\"decKiB\":%ld,\"headEntries\":%ld,\"headKiB\":%ld,"
                  "\"domHeadEntries\":%ld,\"domHeadKiB\":%ld,\"jobs\":%ld,\"pend\":%ld,\"pendReady\":%ld,"
+                 "\"stackEmpty\":%ld,\"canDeliver\":%ld,"
                  "\"pendKiB\":%ld,"
                  "\"miscKiB\":%ld,\"perFlowKiB\":%ld,"
                  "\"segKiB\":%ld,\"domSegKiB\":%ld,\"pinSegs\":%ld,\"pinSegEntries\":%ld,"
@@ -1048,6 +1062,7 @@ char *result_cold_json(void) {
                  e.paged_asks, e.paged_unarmed, e.paged_floor,
                  c.dec_entries, c.dec_bytes / 1024, c.head_entries, c.head_bytes / 1024,
                  c.dom_head_entries, c.dom_head_bytes / 1024, c.job_count, c.pend_count, c.pend_ready,
+                 c.stack_empty, c.can_deliver,
                  c.pend_bytes / 1024, c.misc_bytes / 1024,
                  (c.dec_bytes + c.head_bytes + c.dom_head_bytes + c.pend_bytes + c.misc_bytes) / 1024,
                  c.seg_bytes / 1024, c.dom_seg_bytes / 1024,
