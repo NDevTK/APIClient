@@ -752,13 +752,46 @@ function tokenText(html) {
  * IDL Index, the References — which is thousands of words of the standard's own vocabulary, filed under one
  * number. A quotation checked against it would VERIFY against text that section does not contain, and a false
  * VERIFY is the silent direction: the tool would certify a fabrication. So every <hN> and every <footer> is a
- * boundary, and only the ones the reader numbered start a section. */
+ * boundary, and only the ones the reader numbered start a section.
+ *
+ * BUT AN UNNUMBERED SUB-HEADING IS NOT BACK MATTER, AND READING IT AS ONE THREW AWAY HALF OF A STANDARD.
+ * The paragraph above is right about a heading that FOLLOWS the last numbered section and wrong about one that
+ * stands INSIDE a numbered section — and a standard writes both. XML 1.0 titles every grammar production with
+ * an unnumbered <h5> (`Document`, `Character Range`, thirty-five of them), and tc39's multipage renders
+ * `Syntax` and each internal method as an unnumbered <h2> inside a numbered <h1> clause. With every heading a
+ * boundary, a section's stored text STOPS at its first such sub-heading and everything after it is filed under
+ * NO number and dropped from the corpus outright. MEASURED at the revision this landed, against the live
+ * documents: the XML corpus held 54.6% of the standard's own words and ECMAScript's held 91.4%.
+ * THE FAILURE IS THE ONE THIS CHECKER MUST NOT HAVE, which is why it is a boundary rule and not a tolerance:
+ * fifteen quotations pasted correctly out of those documents were reported as words the standard does not
+ * contain — the corpus manufacturing the finding, the same defect STEP_MARKER and stripMarkup each record one
+ * layer down. It is also SILENT IN A SECOND DIRECTION, and that half is worse: the `foreign` probe names the
+ * standard a quotation really belongs to, so a truncated corpus does not merely mis-report its OWN citations,
+ * it suppresses the WRONG-STANDARD verdict on everyone else's. `xml_tag.h` quotes XML §3.1's Unique Att Spec
+ * verbatim under a bare §3.1 the resolver placed on HTML, and the finding could not say so because XML's own
+ * §3.1 had been cut to 127 characters.
+ * THE RULE IS THE DOCUMENT'S OUTLINE, NOT A LIST OF SPELLINGS: a heading closes the open section when it is
+ * numbered, or when its LEVEL is at or above the level of the numbered heading that opened it. A deeper
+ * unnumbered heading is a sub-heading of the section it stands in and is passed through. Back matter is
+ * unaffected — an Index or a References heading sits at or above the level of the sections it follows, which
+ * is what made it a boundary in the first place — and a <footer> carries no level, so it always closes. */
 function withBoundaries(body, marks) {
   const at = new Set(marks.map((m) => m.at));
+  /* Every mark producer records the offset of the heading's own `<`, so the level is the third byte. A stop
+   * that is not a heading (a <footer>) reads 0 and can never be deeper than an open section. */
+  const level = (i) => { const c = body.charCodeAt(i + 2); return c >= 0x31 && c <= 0x36 ? c - 0x30 : 0; };
   const stops = [];
   const re = /<(?:h[1-6]|footer)\b/gi;
   for (let m; (m = re.exec(body)); ) if (!at.has(m.index)) stops.push({ at: m.index, no: null });
-  return [...marks, ...stops].sort((a, b) => a.at - b.at);
+  const all = [...marks, ...stops].sort((a, b) => a.at - b.at);
+  const out = [];
+  let open = 0;                          /* level of the numbered heading currently open; 0 = none */
+  for (const n of all) {
+    if (n.no) { open = level(n.at); out.push(n); continue; }
+    const l = level(n.at);
+    if (!open || !l || l <= open) { out.push(n); open = 0; }
+  }
+  return out;
 }
 
 /* THE LIST STRUCTURE OF A SECTION, WHICH IS THE ONE THING tokenText DESTROYS AND THE ONLY THING THAT CAN
@@ -2033,8 +2066,36 @@ function quotedRuns(prose) {
     if (prose[i - 1] === "\\") continue;
     if (ch !== '"' && ch !== "\u201c") continue;
     const close = ch === '"' ? '"' : "\u201d";
-    let j = prose.indexOf(close, i + 1);
-    while (j > 0 && prose[j - 1] === "\\") j = prose.indexOf(close, j + 1);
+    const nextMark = (from) => {
+      let k = prose.indexOf(close, from);
+      while (k > 0 && prose[k - 1] === "\\") k = prose.indexOf(close, k + 1);
+      return k;
+    };
+    let j = nextMark(i + 1);
+    /* A QUOTATION MAY CONTAIN A QUOTATION, AND THE STANDARDS' OWN SENTENCES DO. The paragraph above closes the
+     * ESCAPED nested mark; this closes the UNESCAPED one, which is the same defect from the other direction and
+     * the one a comment writes without noticing. HTML \u00a77.1.4's obtain reads `parsedItem[1]["report-to"]` and
+     * Fetch \u00a73.5's legacy extract reads `mimeType["charset"]`, so a comment quoting either has a bare `"` in
+     * the middle of its quotation \u2014 the scan then pairs the opening mark with THAT one, and re-pairs every
+     * mark after it, so the tail of the quotation is handed to the checker as a fragment that starts on a `]`
+     * and belongs to no quotation at all. Measured: `] exists, then set policy's endpoint to parsedItem[1][`
+     * was reported as a finding against HTML, and the real quotation it came out of \u2014 which IS wrong, and
+     * whose wrongness the file had reasoned from \u2014 was invisible because no run of it was ever compared.
+     * THE DISCRIMINATOR IS THE CHARACTER AFTER THE MARK, and it is a fact about English rather than a guess: a
+     * closing quotation mark is followed by whitespace or punctuation and never by a letter or a digit. So a
+     * mark that is followed by a word character is a nested OPENER, and the scan resumes after ITS partner.
+     * A nested run with no partner falls through to the old reading rather than swallowing the rest of the
+     * comment, which is the direction that costs a finding instead of planting one. Straight marks only:
+     * the curly pair is already asymmetric and cannot mis-pair this way. */
+    if (ch === '"') {
+      while (j >= 0 && /[A-Za-z0-9]/.test(prose[j + 1] || " ")) {
+        const nestedClose = nextMark(j + 1);
+        if (nestedClose < 0) break;
+        const resumed = nextMark(nestedClose + 1);
+        if (resumed < 0) break;
+        j = resumed;
+      }
+    }
     if (j < 0) break;
     out.push({ text: prose.slice(i + 1, j), at: i });
     i = j;
@@ -2082,6 +2143,22 @@ const MIN_FRAGMENT_WORDS = 4;
 const MIN_COMPARED_WORDS = 6;
 const ALT_FLOOR = 10;
 
+/* SQUARE BRACKETS INSIDE A QUOTATION ARE THE AUTHOR SAYING THESE ARE NOT THE STANDARD'S EXACT LETTERS, and a
+ * checker that punishes the notation punishes the more honest transcription. `participate[s] in [its] inline
+ * formatting context` is CSS 2.2 §9.2.2's sentence carrying the inflection the surrounding English needs,
+ * marked so a reader can see the join; an unmarked `never causes` for the document's `never cause` claims more
+ * than it can support and looks CLEANER to this tool. The tokenizer already deletes the brackets themselves —
+ * every non-alphanumeric run becomes a space on both sides — so `[[Set]]` and `[EnforceRange]`, which are the
+ * standards' OWN markup, compare correctly as typed. What it cannot absorb is a bracket INSIDE a word:
+ * `participate[s]` becomes two tokens where the document has one, and a correctly-pasted quotation is then
+ * reported as diverging at its first word.
+ * SO THE QUOTATION IS OFFERED IN MORE FORMS, WHICH IS THE MECHANISM STEP_MARKER ALREADY ESTABLISHED and not a
+ * second one: the brackets removed with their contents KEPT (an adapted inflection — `participate[s]` for the
+ * document's `participates`), and removed WITH their contents (a word inserted for the sentence that the
+ * standard does not have). Adding a form can only ever VERIFY something that was reported, never accuse
+ * something that was not, so this cannot manufacture a finding — measured at the revision it landed, it retired
+ * 14 QUOTE-NOT-FOUND and turned one more into the WRONG-SECTION it had been all along. */
+const BRACKETED_ALTERATION = /\[([^\][]*)\]/g;
 function fragmentsOf(quote) {
   const parts = String(quote).split(ELLIDED);
   const all = parts.map((p) => quoteTokens(p, false)).filter(Boolean);
@@ -2090,7 +2167,20 @@ function fragmentsOf(quote) {
   const bigCut = cut.filter((f) => f.split(" ").length >= MIN_FRAGMENT_WORDS);
   const words = all.reduce((n, f) => n + f.split(" ").length, 0);
   const compared = big.reduce((n, f) => n + f.split(" ").length, 0);
-  return { all, big, forms: bigCut.join("\u0000") === big.join("\u0000") ? [big] : [big, bigCut],
+  const forms = [], seenForm = new Set();
+  const addForm = (frags) => {
+    const k = frags.join("\u0000");
+    if (frags.length && !seenForm.has(k)) { seenForm.add(k); forms.push(frags); }
+  };
+  addForm(big);
+  addForm(bigCut);
+  if (/\[[^\][]*\]/.test(String(quote)))
+    for (const dropContents of [false, true])
+      for (const dropMarkers of [false, true])
+        addForm(String(quote).replace(BRACKETED_ALTERATION, dropContents ? "" : "$1")
+          .split(ELLIDED).map((p) => quoteTokens(p, dropMarkers)).filter(Boolean)
+          .filter((f) => f.split(" ").length >= MIN_FRAGMENT_WORDS));
+  return { all, big, forms: forms.length ? forms : [big],
            words, compared, elided: all.length - big.length };
 }
 

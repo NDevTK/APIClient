@@ -160,8 +160,10 @@ static bool img_length_predicate(const char *w, size_t n, bool percentage_too)
 
 /* The `[0,∞]` RANGE that §3.2.1 writes on both of `<radial-size>`'s numeric arms. css-values-4 §5.1 "Range
    Restrictions and Range Definition Notation" makes a negative LITERAL outside the range a dropped
-   declaration, while §9.1 "Numeric Functions" says a math function "never causes a declaration to become
-   invalid" and is clamped later instead — so the sign is read off the literal and a `calc()` is admitted. */
+   declaration, while §9.1 "Numeric Functions" says a math function "never cause[s] a declaration to become
+   invalid" and is clamped later instead — so the sign is read off the literal and a `calc()` is admitted. The
+   bracket is the standard's plural subject adapted to this sentence's singular one: §9.1 writes "numeric
+   functions returning out-of-range values never cause a declaration to become invalid". */
 static bool img_nonneg(const char *w, size_t n, bool percentage_too)
 {
     if (n > 0 && w[0] == '-' && !css_math_is_lone_function(w, n)) return false;

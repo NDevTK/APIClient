@@ -22,7 +22,7 @@
  * outlive the list; csp_list_free frees the ARRAYS this parse allocated and never the text.
  *
  * THE NAME IS NOT LOWERCASED IN PLACE, AND THAT IS A DELIBERATE DEPARTURE FROM §2.2.1's LETTER. The standard
- * says "set directive name to the result of running ASCII lowercase on directive name"; here the slice is kept
+ * says "Set directive name to be the result of running ASCII lowercase on directive name"; here the slice is kept
  * as written and every comparison against it is ASCII case-insensitive, which is the same relation. It is done
  * this way because the bytes are the caller's and are also what a violation report has to quote back — a
  * report that renames the page's own `script-SRC` is a report about a policy the server did not send. The

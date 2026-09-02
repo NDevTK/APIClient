@@ -450,7 +450,7 @@ lxb_dom_attr_t *dom_attr_write(lxb_dom_element_t *el, const char *ns, const char
  * No C recursion — depth here is the page's data.
  *
  * AND THE SECOND CORRECTION, WHICH IS THE SAME BOUNDARY: HTML §13.2.6.1's "adjust SVG attributes" says to
- * "change the attribute's NAME to the name given in the corresponding cell of the second column" — one name,
+ * "change the attribute's name to the name given in the corresponding cell in the second column" — one name,
  * because DOM §4.9.1 defines an attribute's qualified name AS its local name when its namespace prefix is
  * null. lexbor's lxb_html_tree_adjust_svg_attributes writes only `attr->qualified_name` and leaves the
  * tokenizer's lower-cased `local_name` in place, so a parsed `<svg viewBox="…">` held the two spellings at

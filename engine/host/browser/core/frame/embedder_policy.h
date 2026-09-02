@@ -1,11 +1,15 @@
 /* CROSS-ORIGIN EMBEDDER POLICIES — HTML §7.1.4, and the half of cross-origin isolation a response states
  * about ITSELF.
  *
- * IT IS ONE OF §7.1.7'S FIVE POLICY-CONTAINER ITEMS, and that is the fact this file is written to serve. A
- * policy container holds "a CSP list, an embedder policy, a referrer policy, an integrity policy and a report
- * only integrity policy" — no sandboxing flag set and no opener policy, which are two SEPARATE rows of §7.5.1's
- * Document creation table — and §7.1.7's create-a-policy-container-from-a-fetch-response builds the embedder
- * policy item by "obtaining an embedder policy given response and environment". That is the algorithm below.
+ * IT IS ONE OF §7.1.7'S FIVE POLICY-CONTAINER ITEMS, and that is the fact this file is written to serve. §7.1.7
+ * Policy containers lists them one per item — a CSP list, an embedder policy, a referrer policy, an integrity
+ * policy, a report-only integrity policy — and that enumeration is this file's own, assembled from the item
+ * headings, so it is NOT written here as a quotation: the standard states each item in a sentence of its own
+ * ("An embedder policy, which is an embedder policy. It is initially a new embedder policy."), and running the
+ * five together into one comma list is a shape no sentence of §7.1.7 has. No sandboxing flag set and no opener
+ * policy, which are two SEPARATE rows of §7.5.1's Document creation table — and §7.1.7's
+ * create-a-policy-container-from-a-fetch-response builds the embedder policy item by "obtaining an embedder
+ * policy given response and environment". That is the algorithm below.
  *
  * WHY A THREE-VALUED ENUM AND NOT A BOOLEAN. §7.1.4 gives `unsafe-none`, `require-corp` and `credentialless`,
  * and TWO of them are "compatible with cross-origin isolation" while the three differ in what they do to a
@@ -19,12 +23,22 @@
  * only way a value becomes non-default is a well-formed token that IS compatible with cross-origin isolation.
  * That is why `obtain` has no failure return: every response has an embedder policy.
  *
- * THE REPORT-ONLY BRANCH WRITES `endpoint`, NOT `report only reporting endpoint`, AND THAT IS THE SPEC'S OWN
- * TEXT rather than a transcription slip here — §7.1.4's obtain reads, verbatim, "Set policy's report only
- * value to parsedItem[0]. If parsedItem[1]["report-to"] exists, then set policy's endpoint to
- * parsedItem[1]["report-to"]" in BOTH branches. Implementing what the sentence says rather than what it
- * evidently means is the discipline CLAUDE.md asks for — the spec is the source of truth and a divergence
- * invented here would be invisible the day Reporting is built. */
+ * THE TWO ENDPOINT FIELDS ARE SHORTENED SPELLINGS OF §7.1.4'S TWO ITEMS, AND THE STANDARD DISTINGUISHES THEM.
+ * §7.1.4 Cross-origin embedder policies writes the four items as "A value, which is an embedder policy value,
+ * initially "unsafe-none". A reporting endpoint string, initially the empty string. A report-only value, which
+ * is an embedder policy value, initially "unsafe-none". A report-only reporting endpoint string, initially the
+ * empty string." — so `endpoint` here is the REPORTING ENDPOINT and `report_only_endpoint` is the REPORT-ONLY
+ * REPORTING ENDPOINT, and each branch of obtain writes its own: the value branch sets policy's reporting
+ * endpoint, the report-only branch sets policy's report-only reporting endpoint. They are two items, never one
+ * written twice.
+ * THIS PARAGRAPH USED TO SAY THE OPPOSITE, ON A QUOTATION THAT DOES NOT EXIST, AND THE ARGUMENT WAS ACTED ON.
+ * It claimed §7.1.4's obtain reads "verbatim" a sentence setting "policy's endpoint" in BOTH branches, and
+ * reasoned from it that implementing the collapse was the spec-faithful choice. The phrase `report only value`
+ * occurs NOWHERE in HTML and no step of obtain writes a bare `endpoint`; the sentence was never anybody's. That
+ * is CLAUDE.md's worst failure in this class stated exactly — a wrong number sends a reader to the wrong place
+ * where they find out, and a fabricated quotation tells them not to go — and it stood here because every other
+ * check passed: the number resolves, §7.1.4 is real, the algorithm does live there. Only the words were made
+ * up, and only reading the section could say so. */
 #ifndef ENGINE_HOST_BROWSER_CORE_FRAME_EMBEDDER_POLICY_H
 #define ENGINE_HOST_BROWSER_CORE_FRAME_EMBEDDER_POLICY_H
 #include <stdbool.h>
