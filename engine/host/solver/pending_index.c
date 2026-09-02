@@ -52,6 +52,48 @@ static PendIndexNode    *g_nodes_tail;  /* appended in creation order, so the jo
    order a hash happens to bucket. A zone's firing decision reading a list whose order moved between two runs
    of one document is the same defect as a value read two ways on two runs. */
 
+/* HOW MANY REQUESTS THIS DOCUMENT HAS EVER PUT TO THE REPLY DOOR, AND HOW MANY REPLIES SETTLED ONE — the reply
+ * door's half of the pair engine.c states for the SYNCHRONOUS door, sitting at the two ends of the membership
+ * this file owns and for exactly the reason that pair exists: "Starvation is a RATE", and until this line the
+ * reply door had none. The census held `pend` (every register's LENGTH), `owed` (flows marked host-owed) and
+ * `blocked` (flows parked on a SYNCHRONOUS request) — three LEVELS, and engine.c's own argument is that no
+ * single reading of a level can tell a host that is paying promptly from one that has never paid at all.
+ *
+ * WHAT IT COST TO NOT HAVE IT, WHICH IS WHY IT IS HERE AND NOT A ROW SOMEBODY MIGHT LIKE. `hostAsked` and
+ * `hostAnswered` are minted at engine.c's `mint_req`, whose only two callers push FLOW_PENDING_HOSTREQ — so
+ * they count cross-instance rendezvous and NOTHING ELSE, and a document that makes no cross-document read
+ * reads `0/0` for ever, correctly. That pair was rendered under a caption asking whether "a waiting frontier
+ * is waiting because of the RANKING or because nobody paid it", which is the GENERAL question, and a reader
+ * took the general answer from it: `hostAsked: 0` was reported as "nothing is ever asked of the host" for a
+ * fixture whose registers held hundreds of thousands of records. Nothing was wrong with the number. What was
+ * wrong is that the door §Learning-from-replies calls "the POINT" had no number at all, and an absent one is
+ * filled by whichever plausible neighbour is printed next to it — CLAUDE.md's defaulted-field defect performed
+ * on a report rather than on a record.
+ *
+ * THE TWO SITES ARE THE TWO ENDS OF ONE MEMBERSHIP, which is what makes the pair balanced rather than two
+ * counts that happen to be printed together. A record ENTERS the set the host is shown when its (method, url)
+ * pair completes (`pending_index_key`, which DCHECKs it is keyed at most once) and LEAVES answered when a
+ * reply writes its value (`pending_index_answered`, which untracks it so it can never re-enter). Each record
+ * therefore contributes at most one to each, and answered implies keyed — so `answered <= asked` is a real
+ * invariant and result.c asserts it, exactly as engine.c asserts the synchronous door's.
+ *
+ * THE UNIT IS THE RECORD AND NOT THE ISSUED REQUEST, and the difference is the sharing this file is built on:
+ * N arms share ONE record (pending.h's PEND_SHARE), the join dedups over the pair, so one issued request may
+ * settle several records and does so with one `engine_provide`. That is the same unit `engine_provide` returns
+ * and the same unit the census's `pend` is a length of, which is what lets the three be read together.
+ *
+ * WHAT IT IS READ AGAINST, because a payment is not yet a thing learned. `replyAnswered` is the host's value
+ * reaching the REGISTER; the flow still has to take it (flow_deliver_one_reply), which the census already
+ * counts as a step-unit arm. `replyAnswered` climbing with that arm at zero is a document being paid and
+ * consuming nothing — the exact shape CLAUDE.md records as having happened once already, where every flow a
+ * page's fetch parked "stayed parked forever" and the learning "had never once happened".
+ *
+ * NOT RESET AT A SESSION BOUNDARY, with engine.c's five and for their reason: a rate whose numerator and
+ * denominator are cleared at different moments is not a rate. `pending_index_reset` frees the table below and
+ * leaves these two alone. They are read by NOTHING but the census (§NO BOUNDS): no pick, no weight, no exit. */
+static long g_asked_total;
+static long g_answered_total;
+
 static uint32_t pend_hash_bytes(const char *s, uint32_t h)
 {
     while (*s) { h ^= (unsigned char)*s++; h *= 16777619u; }
@@ -246,6 +288,10 @@ void pending_index_key(JSValueConst rec, const char *method, const char *url)
     }
     n->mem[n->n_mem++] = m;
     m->node = n;
+    /* THE ASK, COUNTED WHERE THE RECORD BECOMES ASKABLE and not where it was pushed. A record is born with
+       neither half of its identity and the park writes them one at a time, so a push is not yet a request the
+       host can be shown; this line is the moment it is one, and it is guarded by the once-only DCHECK above. */
+    g_asked_total++;
 }
 
 void pending_index_answered(JSValueConst rec)
@@ -255,7 +301,11 @@ void pending_index_answered(JSValueConst rec)
     DCHECK(m != NULL, "a reply landed on a record this index is not tracking — a fetch record is tracked from "
                       "its push until it is answered, so this is a second answer to one request or a write "
                       "onto a record every register has already dropped");
-    if (m->node) m->node->answered++;
+    /* THE PAYMENT, AND ONLY FOR A RECORD THAT WAS ON THE SET — the same condition the per-node count above is
+       under, and it is what makes `answered <= asked` an invariant rather than a hope. An unkeyed record was
+       never a request the host could be shown, so a value arriving on one is not a reply being paid; it is
+       counted by neither term and the two stay describing one population. */
+    if (m->node) { m->node->answered++; g_answered_total++; }
     /* AND IT STOPS BEING TRACKED, NOT MERELY UNKEYED. An answered record can never re-enter the outstanding
        set — nothing ever clears `haveValue` — so keeping a member for it would grow this index with the very
        thing it exists to stop walking. The namer count goes with it, which is why the two calls above are
@@ -308,10 +358,19 @@ PendIndexNode *pending_index_find(const char *method, const char *url)
     return NULL;
 }
 
+long pending_index_asked_total(void)    { return g_asked_total; }
+long pending_index_answered_total(void) { return g_answered_total; }
+
 void pending_index_reset(JSContext *ctx)
 {
     PendIndexNode *n;
     uint32_t i;
+
+    /* THE TWO TOTALS ARE NOT ON THIS FUNCTION'S LIST, and their absence is the statement. Everything below is
+       the SET — a derived lookup rebuilt by the same pushes that rebuild the registers — and the two counts
+       above are a RATE over the whole life of this instance, which is what makes them able to say a host has
+       never paid at all. Clearing them here would clear the numerator and the denominator at a moment that
+       means nothing to either, and would reset them to a state a resumed frontier is not in. */
 
     /* EVERY REGISTER IS GONE BY HERE, SO EVERY NAMING IS TOO — flow_registry_free releases each flow's register
        before it reaches this line, and each release gives back one naming per entry. A member still standing is

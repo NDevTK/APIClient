@@ -93,6 +93,44 @@ PendIndexNode *pending_index_find(const char *method, const char *url);
    answer that collapses two states reports neither. */
 long pending_index_node_answered(const PendIndexNode *n);
 
+/* ---- the reply door's RATE ------------------------------------------------------------------------------- */
+
+/* HOW MANY REQUESTS THIS INSTANCE HAS EVER PUT TO THE REPLY DOOR, AND HOW MANY REPLIES SETTLED ONE — the
+ * counterpart of engine.h's `host_asked`/`host_answered`, which count the SYNCHRONOUS door and only it. Read
+ * them for the reason that pair states: the census's `pend`, `owed` and `blocked` are LEVELS, and no single
+ * reading of a level separates a host that is paying promptly from one that has never paid at all.
+ *
+ * THE UNIT IS THE RECORD, NOT THE ISSUED REQUEST. N arms share one record and the join dedups over the pair,
+ * so one issued request may settle several records in one `engine_provide` — which is the same unit that
+ * function returns and the same unit `pend` is a length of, so the three can be read together.
+ *
+ * `answered <= asked` HOLDS BY CONSTRUCTION: a record is keyed at most once (asserted at pending_index_key)
+ * and untracked when answered, so it can contribute at most one to each and cannot be answered unkeyed.
+ * result.c asserts it. Neither is reset at a session boundary; see pending_index_reset for why.
+ *
+ * AND A PAYMENT IS NOT YET A THING LEARNED — the value has reached the REGISTER, and the flow still has to
+ * take it. Read `pending_index_answered_total` against the census's `deliver-one-reply` step-unit arm: the
+ * first climbing with the second at zero is a document being paid and consuming nothing.
+ *
+ * THAT PAIRING IS NOT HYPOTHETICAL AND IT IS WHY THIS PAIR WAS BUILT. Measured on the wasm smoke at 74eb1d62
+ * (build-full.log, 13 censuses, 5857 steps, the run killed at its CPU budget): `deliver-one-reply` NEVER RAN,
+ * and neither did `await-fetch-record`, `await-owed-reply` or `scheme-fetch-answered`. Every reply-dependent
+ * probe row read 0 — `fetch then-chain clone-body body-bytes body-iso`, the surface entire. The census said
+ * `blocked 0`, `owed 0`, `payment: 0/0 asks paid` and `299306 owed repl(ies)`, and every one of those four
+ * numbers was TRUE and none of them was about this door: the first three are the SYNCHRONOUS door's, and the
+ * fourth is `pend`, the sum of every register's LENGTH. A reader took the whole set to mean the host is never
+ * asked. It is asked, and it pays: test_forced.c's provider answers every line at every slice and engine.c's
+ * run_scheduler asserts UNCONDITIONALLY after each payment that `engine_pending_fetches()` is EMPTY — an
+ * assert armed in that build (`-DAPICLIENT_DEV=1`) and silent for the whole run. `engine_pending_fetches`
+ * skips an entry on exactly three conditions — it carries no URL, it has a value, or it was declined — and a
+ * park writes its address in the same C activation that pushed it, while the smoke's provider declines
+ * nothing. So the residue those 299306 register slots are made of is ANSWERED REPLIES NO FLOW HAS EVER TAKEN,
+ * at 67076 KiB: 55% of the frontier's entire per-flow memory.
+ * A rate over THIS door is what says that in one reading, and until it existed the census could not say it at
+ * all: not one of its rows separates "never asked" from "asked, paid, and never consumed". */
+long pending_index_asked_total(void);
+long pending_index_answered_total(void);
+
 /* ---- teardown -------------------------------------------------------------------------------------------- */
 
 /* Release the whole index. Named beside pending_free_ctx and called from it, because the atoms and this have

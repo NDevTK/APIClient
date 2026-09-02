@@ -140,7 +140,19 @@ typedef struct {
     long dom_head_entries;   /* the DOM half of the same */
     long dom_head_bytes;
     long job_count;          /* queued microtasks/tasks */
-    long pend_count;         /* replies the host still owes */
+    /* EVERY REGISTER'S LENGTH, SUMMED — a FOOTPRINT and not a debt, which is what this line used to call it
+       and what `build.mjs` used to render it as ("N owed repl(ies)"). It counts every entry of every live
+       flow's register whatever state it is in: outstanding, ALREADY ANSWERED (a flow keeps an answered entry
+       until IT delivers), declined, and synchronous. On the wasm smoke at 74eb1d62 it read 299306 beside
+       `owed: 0` and `blocked: 0` in the same census, which as rendered was a flat contradiction and in fact
+       was not one — every one of those entries had been answered and none delivered. A reader reasoned from
+       it as a debt and reported the host was never asked.
+       IT IS PAIRED WITH `pend_bytes` AND THAT IS ITS JOB: the two are one row of the per-flow memory census,
+       so a rising count beside a rising KiB is what says the registers are where the frontier's memory is.
+       THE DEBT IS A DIFFERENT NUMBER AND IT ALREADY HAS A FUNCTION — `pending_owed_replies` (solver/pending.h)
+       — and the RATE that says whether the debt is being paid is `pending_index_asked_total` against
+       `pending_index_answered_total`, which is what the census publishes as `replyAsked`/`replyAnswered`. */
+    long pend_count;
     long pend_bytes;
     long misc_bytes;         /* the Flow struct, its candidate substitution, a routed record, the blob headers */
 

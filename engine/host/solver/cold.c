@@ -112,10 +112,15 @@ void cold_census(ColdCensus *out)
         out->dom_head_bytes += dom_cow_head_bytes(f->dom_cap);
 
         out->job_count += flow_job_pending(f);
-        /* THE REPLIES THE HOST STILL OWES, asked of the register itself rather than measured here — the same
-           rule the rest of this walk keeps. It is a JS Array of records now, so its bytes are quickjs's and its
-           strings are shared with everything else that names them; a `sizeof` restated here would have to know
-           the record's shape, which is exactly what drifts the next time a field is added. */
+        /* THE REGISTER'S LENGTH AND ITS BYTES — a FOOTPRINT row of this memory walk, not a debt, which is what
+           this comment used to call it. `pending_count` is the array's length whatever state its entries are
+           in, and the overwhelming majority of them on a document that fetches are entries the host has
+           ALREADY ANSWERED and the flow has not yet delivered. cold.h states what that cost a reader and names
+           the two functions that answer the debt and the rate instead.
+           ASKED OF THE REGISTER ITSELF rather than measured here — the same rule the rest of this walk keeps.
+           It is a JS Array of records now, so its bytes are quickjs's and its strings are shared with
+           everything else that names them; a `sizeof` restated here would have to know the record's shape,
+           which is exactly what drifts the next time a field is added. */
         out->pend_count += pending_count(f->pending);
         out->pend_bytes += pending_bytes(f->pending);
         /* THE PROGRAM TEXT IS NOT A PER-FLOW ROW ANY MORE — see the shared block below. What this walk used to

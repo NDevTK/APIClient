@@ -6613,7 +6613,27 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    entry is delivered — the awaiting body's reaction is enqueued as a job in this flow's queue
                    (we are switched in, flow_running == f) — and the step ends there. The checkpoint arm above
                    runs that reaction on the next pass and this arm delivers the next reply after it, which is
-                   §8.1.7.3 "Processing model"'s task-then-checkpoint and not a pass that settles them all. */
+                   §8.1.7.3 "Processing model"'s task-then-checkpoint and not a pass that settles them all.
+                   AND ITS REACHABILITY IS THE CONJUNCTION OF EVERY `else` ABOVE IT, WHICH IS A STRONGER
+                   CONDITION THAN ITS FIRST SENTENCE SAYS AND WAS MEASURED TO BE UNREACHABLE. To arrive here a
+                   flow must have NO live frame, be PAST THE END of its program sequence (`script_i >= dyn_n`)
+                   and hold ZERO queued jobs — so a flow that calls `fetch()` and still has one program row or
+                   one job left does not take its reply on this turn, and on a forking document it may not take
+                   it at all. The `DYN_SCRIPT_SRC` arm above is the only other delivery, and it is reached only
+                   by a flow standing AT an external-script row. Measured on the wasm smoke at 74eb1d62
+                   (build-full.log): over 5857 steps and 13 censuses this arm and that one ran ZERO times
+                   between them — `deliver-one-reply` is in the never-run list — while the host answered every
+                   record at every slice (run_scheduler's post-payment `engine_pending_fetches()` empty assert
+                   was armed at `-DAPICLIENT_DEV=1` and silent throughout). The result was 299306 register
+                   entries, all answered and none taken, at 55% of the frontier's per-flow memory, with the
+                   reply-dependent probe rows (`fetch`, `then-chain`, `clone-body`, `body-bytes`, `body-iso`)
+                   all 0 — §Learning-from-replies' whole surface, from a run that was paid in full.
+                   WHAT IS NOT ESTABLISHED, AND IT IS THE PART THAT DECIDES THE FIX: §8.1.7.3 step 2 chooses
+                   among task queues "in an implementation-defined manner", so the ORDER of this arm against
+                   the two above it is not settled by that sentence and must not be re-ordered on the strength
+                   of this note. What the note asserts is the REACHABILITY and the measurement, both of which
+                   are checkable — `replyAnswered` (solver/pending_index.h) equal to `replyAsked` with the
+                   `deliver-one-reply` step-unit arm at 0 is this state, in one reading, on any document. */
                 g_step_unit = STEP_UNIT_DELIVER_REPLY;
                 flow_deliver_one_reply(ctx, f);
                 return 0;

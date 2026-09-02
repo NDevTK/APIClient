@@ -12,6 +12,9 @@
 #include "solver/world.h"   /* what the cross-instance seam materialized here — see world_segment_stats */
 #include "solver/concolic.h"   /* whether this run ever acquired attacker input — see concolic_source_reads */
 #include "solver/cold.h"    /* …and what it PARKED, if the host asked this engine to page out */
+/* THE REPLY DOOR'S RATE, asked of the component that owns both ends of the membership it is a rate over —
+   never recomputed here, which would be a second producer of a fact one file already holds. */
+#include "solver/pending_index.h"
 #include "solver/dom_cow.h"   /* the DOM half of the swap census — see result_swap_json */
 #include "solver/decide.h"    /* …and which predicate grew the frontier — see decide_fork_json */
 /* …and what the ORDER above them was denominated in, which is the fact that decides whether two of these
@@ -746,6 +749,16 @@ char *result_swap_json(void) {
    have and are held by a job, a timer, a lifecycle event, a rendering opportunity or an owed reply", which are
    different files to open. See solver/cold.h.
 
+   `replyAsked`/`replyAnswered` ARE THE OTHER DOOR'S PAIR AND THEY ARE NOT `hostAsked`/`hostAnswered`. Those
+   two are minted at engine.c's `mint_req`, whose only callers push FLOW_PENDING_HOSTREQ, so they count
+   CROSS-INSTANCE RENDEZVOUS and nothing else — a document that makes no cross-document read reads `0/0` for
+   ever and is right to. The reply door — a fetch, an injected `<script src>`, the document's own script slots,
+   a dynamic `import()` — had no rate here at all, only the three levels `pend`, `owed` and `blocked`, which is
+   exactly the gap engine.c argues the synchronous pair out of ("Starvation is a RATE"). It is the door
+   §Learning-from-replies calls the POINT, and an absent number on a report is read off whichever plausible
+   neighbour is printed beside it: `hostAsked: 0` has already been relayed as "nothing is ever asked of the
+   host" for a document holding hundreds of thousands of records. Both pairs, each naming its door.
+
    `hostAnswersExtra` IS BESIDE `hostAnswered` AND IS NOT PART OF IT. One rendezvous has one answer per peer
    TIMELINE and every one of them is true, but only the FIRST settles the ask; the rest each fork an arm and
    unblock nothing. They were being added into `hostAnswered`, which made a peer holding four timelines read as
@@ -945,6 +958,18 @@ char *result_cold_json(void) {
            "ever STARTED — a cursor is one-past-the-program-it-left, so those two numbers are the same fact "
            "read twice and a member cannot stand beyond a program nothing began. Either the cursor advanced "
            "for something that was not a started program, or a program started without raising `deepest`");
+    /* THE REPLY DOOR'S PAIR DESCRIBES ONE POPULATION, said here for the reason engine.c says it of the
+       synchronous door's: this is a RATE, and a rate whose numerator can exceed its denominator is two counts
+       that have stopped being about the same thing. It holds by construction — pending_index_key DCHECKs a
+       record is keyed at most once and pending_index_answered untracks the record it credits, so each record
+       contributes at most one to each term and cannot be answered without having been keyed. A break is
+       therefore a record credited outside that pair of sites, and the census is about to publish a document
+       that was paid more replies than it ever put requests. */
+    DCHECK(pending_index_answered_total() <= pending_index_asked_total(),
+           "the reply door was answered more times than it was asked — a record is keyed once and untracked "
+           "when it is answered, so a payment credited without a key is a reply settling a record the host was "
+           "never shown, and `replyAnswered/replyAsked` is about to be published as a rate over two different "
+           "populations. Both terms are written in solver/pending_index.c and nowhere else");
     ran = resumed.flows + resumed.cands > 0;
     /* A REBUILD IS ALL OF ITSELF OR NONE OF IT, asserted here because `resumed: 0` is a POSITIVE claim that this
        session was handed no residue and this is the one place both halves of that claim are in one hand.
@@ -987,7 +1012,8 @@ char *result_cold_json(void) {
                  "\"resumedWorlds\":%ld,"
                  "\"orphanClaims\":%ld,\"orphanClaimsMet\":%ld,\"orphanClaimsUnmet\":%ld,"
                  "\"hostAsked\":%ld,\"hostAnswered\":%ld,\"hostAnswersExtra\":%ld,"
-                 "\"hostAnswersLate\":%ld,\"hostTerminated\":%ld,\"pagedReqs\":%ld,"
+                 "\"hostAnswersLate\":%ld,\"hostTerminated\":%ld,"
+                 "\"replyAsked\":%ld,\"replyAnswered\":%ld,\"pagedReqs\":%ld,"
                  "\"pagedAsks\":%ld,\"pagedUnarmed\":%ld,\"pagedFloor\":%ld,"
                  "\"decEntries\":%ld,\"decKiB\":%ld,\"headEntries\":%ld,\"headKiB\":%ld,"
                  "\"domHeadEntries\":%ld,\"domHeadKiB\":%ld,\"jobs\":%ld,\"pend\":%ld,\"pendKiB\":%ld,"
@@ -1005,6 +1031,7 @@ char *result_cold_json(void) {
                  ran, resumed.segs, resumed.flows, resumed.cands, resumed.worlds,
                  resumed.orphans, e.claims_met, e.claims_unmet,
                  e.host_asked, e.host_answered, e.host_answers_extra, e.host_answers_late, e.host_terminated,
+                 pending_index_asked_total(), pending_index_answered_total(),
                  e.paged_reqs,
                  e.paged_asks, e.paged_unarmed, e.paged_floor,
                  c.dec_entries, c.dec_bytes / 1024, c.head_entries, c.head_bytes / 1024,

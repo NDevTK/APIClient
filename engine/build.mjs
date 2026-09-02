@@ -194,6 +194,15 @@ const COLD_FIELDS = ["live", "framed", "blocked", "owed",
                      "resumed", "resumedSegs", "resumedFlows", "resumedCands", "resumedWorlds",
                      "orphanClaims", "orphanClaimsMet", "orphanClaimsUnmet",
                      "hostAsked", "hostAnswered", "hostAnswersExtra", "hostAnswersLate", "hostTerminated",
+                     /* AND THE OTHER DOOR'S PAIR. The five above count SYNCHRONOUS cross-instance rendezvous
+                        and only those (engine.c's `mint_req` has two callers and both push
+                        FLOW_PENDING_HOSTREQ), so a document that makes no cross-document read reads `0/0`
+                        for ever and is correct to. The REPLY door — fetch, injected `<script src>`, the
+                        document's own script slots, `import()` — had no rate at all, only levels, and the
+                        zero belonging to the first pair was read as the answer for the second: `hostAsked: 0`
+                        was relayed as "nothing is ever asked of the host" for a run whose registers held
+                        hundreds of thousands of records. Two pairs, each rendered naming its door. */
+                     "replyAsked", "replyAnswered",
                      /* `pagedAsks` IS TO `sold` WHAT `resumed` IS TO THE THREE orphanClaims ROWS, and it is
                         listed here for the same reason they are: `sold: 0` reads identically for a run whose
                         frontier FITTED (the allocator never refused), one whose refusal arrived where the
@@ -1632,15 +1641,27 @@ function censusReading(out) {
        frontier's size rather than with its depth is that sharing having stopped working. */
     parts.push(`frontier shape: ${c.b.framed} framed of ${c.b.live} live, ` +
                `${c.b.decEntries} decision + ${c.b.headEntries} heap + ${c.b.domHeadEntries} DOM head ` +
-               `entries, ${c.b.jobs} queued job(s), ${c.b.pend} owed repl(ies), ` +
+               /* `pend` IS A REGISTER LENGTH AND NOT A DEBT, and rendering it as one cost a reading. It sums
+                  every entry of every live flow's register whatever state it is in — outstanding, ALREADY
+                  ANSWERED and awaiting that flow's own delivery, declined, synchronous — so it stood at
+                  299306 beside `owed 0` and `blocked 0` in the same census, which read as a contradiction and
+                  was not one. The debt is `pending_owed_replies` and the RATE is the `reply` pair below. */
+               `entries, ${c.b.jobs} queued job(s), ${c.b.pend} pending register entr(ies), ` +
                `${c.b.dynBodies} shared program(s); frozen: ${c.b.pinSegs}/${c.b.pinSegEntries} pin, ` +
                `${c.b.decSegs}/${c.b.decSegEntries} decision`);
     /* AND WHETHER THE HOST PAID, WHETHER THE DOCUMENT GOT ANYWHERE, AND WHAT THE INHERITED DRIVES DID — three
-       questions the frontier's size cannot answer and which each have a row that nothing read. `hostAsked`
-       against `hostAnswered` says whether a waiting frontier is waiting because of the RANKING or because
-       nobody paid it; `deepest` against `completed` says whether this document reaches its later programs at
-       all; `orphanClaimsUnmet` is the cold round trip's loss, exactly. */
-    parts.push(`payment: ${c.b.hostAnswered}/${c.b.hostAsked} asks paid` +
+       questions the frontier's size cannot answer and which each have a row that nothing read. `deepest`
+       against `completed` says whether this document reaches its later programs at all; `orphanClaimsUnmet` is
+       the cold round trip's loss, exactly.
+       AND THERE ARE TWO DOORS, WHICH IS WHAT THIS LINE USED TO SAY WITH ONE NUMBER. It read `N/M asks paid`
+       under a caption asking whether "a waiting frontier is waiting because of the RANKING or because nobody
+       paid it" — the GENERAL question — while the pair it printed counts SYNCHRONOUS cross-instance
+       rendezvous alone (engine.c's `mint_req`: two callers, both FLOW_PENDING_HOSTREQ). A document with no
+       cross-document read therefore prints `0/0` for ever, correctly, and a reader took the general answer
+       from it and reported that nothing is ever asked of the host. CLAUDE.md: a coverage figure states WHAT
+       IT IS A FRACTION OF, in the same line, or it is not a coverage figure — so each ratio now names its
+       door, and the reply door has a ratio to name. */
+    parts.push(`payment: sync ${c.b.hostAnswered}/${c.b.hostAsked} rendezvous paid` +
                /* AND HOW MANY PEER TIMELINES ANSWERED BEYOND THE FIRST, which is a different population and
                   used to be added into the numerator above — a peer holding four timelines then read as four
                   payments for one ask, and the ratio this line exists to show was three times the truth. */
@@ -1652,6 +1673,17 @@ function censusReading(out) {
                   fetches the page itself cancelled. */
                (c.b.hostTerminated ? `, ${c.b.hostTerminated} withdrawn` : ``) +
                (c.b.pagedReqs ? `, ${c.b.pagedReqs} taken by a sale` : ``) +
+               /* AND THE REPLY DOOR, WHICH IS THE ONE §Learning-from-replies CALLS THE POINT AND WHICH THIS
+                  LINE HAD NO NUMBER FOR AT ALL. A record enters the set the host is shown when its (method,
+                  url) pair completes and leaves it answered, so this ratio is over RECORDS — the same unit
+                  `engine_provide` returns and the same unit `pend` is a length of.
+                  AND IT IS READ AGAINST `deliver-one-reply`, WHICH IS THE HALF IT CANNOT SEE. A payment is the
+                  value reaching the REGISTER; the flow still has to take it, and that take is a step-unit arm
+                  the histogram beside this already counts. `asked == answered` with that arm at 0 is a
+                  document being paid in full and consuming nothing — measured exactly so on the wasm smoke at
+                  74eb1d62, where the reply-dependent probe rows (fetch, then-chain, clone-body, body-bytes,
+                  body-iso) were all 0 and 55% of the frontier's per-flow memory was undelivered replies. */
+               `; reply ${c.b.replyAnswered}/${c.b.replyAsked} record(s) answered` +
                `; programs: deepest ${c.b.deepest}, completed ${c.b.completed}` +
                `; forks ${c.b.forks}` +
                /* THREE STATES, THREE SENTENCES — and the middle one is why this is not a ternary. `no inherited
