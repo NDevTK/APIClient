@@ -2338,6 +2338,7 @@ function audit(argv, opts = {}) {
   };
   const stat = { total: 0, bare: 0, anchored: 0, byTerm: 0, byFile: 0, other: 0, skipped: 0,
                  confirmed: 0, confirmedByUse: 0, confirmedByContainment: 0, confirmedByRun: 0,
+                 confirmedByText: 0, textRefused: 0,
                  unverified: 0, multiSpec: 0,
                  foreignTerm: 0, titleRefused: 0, byTitle: 0, numberRefused: 0,
                  titled: 0, titledQuoted: 0, titledEv: 0, titledOK: 0, titledMis: 0, titledMisInTitle: 0,
@@ -2920,6 +2921,73 @@ function audit(argv, opts = {}) {
           const ok = ev.hits.find((h) => h.defAt);
           const under = ev.hits.find((h) => h.underAt);
           const used = ev.hits.find((h) => h.useAt);
+          /* AND THE SECTION'S OWN WORDS ANSWER THE SAME QUESTION THE LINK COUNT DOES, WHICH IS WHY THE THIRD
+           * CLAUSE OF THIS FINDING WAS FALSE FOR NEARLY HALF OF WHAT IT ACCUSED. The claim a MISATTRIBUTED
+           * makes has three parts — not defined here, not defined under here, and no section here is ABOUT it
+           * — and until this line the third part was decided ENTIRELY by `scanUses`, which counts `href`
+           * ATTRIBUTES pointing at the dfn and which `finish` then discards below two. So the whole question
+           * "is this section about the term" was being asked of the editors' CROSS-REFERENCE MARKUP and never
+           * of the standard's PROSE, and a section that states the term in its own sentence — without linking
+           * it, or linking it once — was reported as having nothing to do with it.
+           *
+           * THE CORPUS THAT ANSWERS IT IS ALREADY COMMITTED AND ALREADY LOAD-BEARING, which is what makes this
+           * a derivation rather than a new rule: `txt` is the per-section word stream the quotation channel
+           * compares against, check (5) already asks it the identical question about a QUOTED TITLE, and
+           * `containsFragments` is the same word-boundary matcher both use. Nothing here restates a rule the
+           * corpus owns — the phrase is whatever `lookup` resolved, so the one-word floor and the
+           * identifier gate that admit a bare operation name stay where they are and are not copied.
+           *
+           * MEASURED, by reading EVERY distinct claim rather than a sample: on the revision this landed
+           * against, the term check produced 510 MISATTRIBUTED verdicts, 231 of which stood at a section whose
+           * own text uses the phrase. Those 231 collapse to 110 distinct (standard, section, phrase) claims
+           * and ALL 110 are correct citations — an abstract operation named by the clause that CALLS it
+           * (ECMAScript is where this is thickest, because its clauses are written as sequences of other
+           * operations), a CSS term stated by the section that fixes its value for one type, a DOM or HTML
+           * concept invoked by the algorithm the comment is about. Four of them QUOTE the cited section's own
+           * sentence back, which is the shape CLAUDE.md asks authors for, and the audit was charging them for
+           * it. The strongest single case: css-values-4 defines `canonical unit` in its Compatible Units
+           * section, and each of its four unit sections says in its own words that all units of that type are
+           * compatible and names the canonical one — so four citations that quote those sentences verbatim
+           * were four accusations.
+           *
+           * THE TEST IS THE SECTION'S OWN TEXT AND DELIBERATELY NOT ITS SUBTREE, AND THAT WAS MEASURED TOO,
+           * BECAUSE THE SUBTREE VARIANT IS THE ONE THAT LOOKS MORE GENEROUS AND DESTROYS REAL FINDINGS.
+           * Widening the haystack to the cited number's descendants confirms 61 more, and among them are the
+           * TransformStreamDefaultController sites this file's own PASS-5 paragraph records as REAL: the
+           * controller CLASS's subsections invoke the abstract operations, so their words contain the names
+           * while the STEPS the comments cite live in another clause entirely. A container chapter's
+           * descendants can be made to agree with almost any term of that standard, so a subtree hit is a
+           * claim about a subsection the citation did not name. Every one of those 61 stays accused.
+           *
+           * IT IS ASKED BEFORE THE FOREIGN-TERM REFUSAL BELOW, WHICH TURNS 28 DECLINES INTO ANSWERS AND TAKES
+           * NO ACCUSATION AWAY, and those 28 were read too. A site whose phrase only ANOTHER standard defines
+           * is refused down there because a finding may only assert what it can prove — but the cited
+           * section's OWN WORDS are positive evidence about the standard the citation actually named, so a
+           * refusal there is a silent zero where a confirmation is available. The 28 are 20 distinct claims
+           * and every one is right: `[[Delete]]` cited at the Web IDL clause of that name, the img element's
+           * legacy factory function — which is the very example the refusal's own paragraph gives for
+           * vocabulary a correct comment borrows — the iframe element's removing and post-connection steps,
+           * and Streams' asynchronous-iteration algorithms cited at the section that states them. This does
+           * not weaken that paragraph's argument; it answers the sites the argument had nothing to say about.
+           *
+           * AND ONE SUPPRESSED STEP FINDING COMES BACK, WHICH IS NOT A WIN AND IS RECORDED SO IT IS NOT READ
+           * AS ONE. PASS 5 declines to re-report a step whose SECTION is already flagged, so a false
+           * misattribution was hiding a step claim on the same citation — and that step claim is itself
+           * false, by a different rule: the step belongs to the dispatch algorithm the surrounding comment
+           * cites twice by number, and the step channel attributes a step to the NEAREST preceding citation,
+           * which in that sentence is a different section. Two wrong answers were cancelling. The right
+           * response is not to keep the false accusation that hid it; it is to name what the step channel
+           * still cannot do — decide which of a sentence's several citations a step number belongs to — and
+           * leave that to a diff that changes the step channel rather than this one.
+           * The refusal is COUNTED rather than silent: a standard whose corpus is absent or stale is asked
+           * nothing here, so the finding CARRIES that fact (`noText`) and the caller counts it — zero on the
+           * revision this landed against, since every accused citation's standard carries a corpus, and the
+           * counter is what makes that a measured zero instead of an assumed one. IT IS COUNTED BY THE CALLER
+           * FOR THE REASON `stat.foreignTerm` IS: this function is run a second time by the census below, on
+           * sites a title already confirmed, and a counter incremented in here would charge a number about
+           * FINDINGS with questions asked for a CENSUS. */
+          const tsec = txt.has(spec) ? txt.get(spec).sections[no] : undefined;
+          const inText = tsec !== undefined && containsFragments(tsec, [quoteTokens(ev.phrase, false)]);
           /* AND THE OTHER MEMBERS OF THIS CITATION'S OWN RUN COUNT AS CITED, because the author wrote them.
            * The claim a MISATTRIBUTED makes — "you cited §N and the thing is numbered somewhere else" — is
            * simply FALSE when "somewhere else" is a number standing three characters to the left under the
@@ -2949,6 +3017,7 @@ function audit(argv, opts = {}) {
           if (ok) return { kind: "OK-TERM" };
           if (under) return { kind: "OK-CONTAINS" };
           if (used) return { kind: "OK-USE" };
+          if (inText) return { kind: "OK-TEXT" };
           if (inRun) return { kind: "OK-RUN" };
           if (!owned) return { kind: "FOREIGN-TERM" };
           const where = ev.hits.map((h) => {
@@ -2958,8 +3027,14 @@ function audit(argv, opts = {}) {
           const men = Math.max(...ev.hits.map((h) => h.mentions));
           const one = ev.hits.length === 1 && ev.hits[0].where.length === 1
             ? `${ev.hits[0].key} §${ev.hits[0].where[0]}` : null;
-          return { kind: "MISATTRIBUTED", target: one,
-            msg: `"${ev.phrase}" is defined in ${where} — no indexed standard defines it at §${no}, nor under it, nor is any §${no} about it` +
+          return { kind: "MISATTRIBUTED", target: one, noText: tsec === undefined,
+            /* THE THIRD CLAUSE NAMES BOTH INSTRUMENTS THAT ANSWERED IT, because a reader triaging this has to
+             * know whether the words were read or only the links were counted — an unasked question and a
+             * negative answer are the two facts this file refuses to average anywhere else. */
+            msg: `"${ev.phrase}" is defined in ${where} — no indexed standard defines it at §${no}, nor under it, ` +
+                 (tsec === undefined
+                   ? `and no committed corpus could be asked whether §${no}'s own words use it`
+                   : `nor is any §${no} about it: §${no}'s own text does not contain the phrase`) +
                  (sections[no] ? ` (${spec} §${no} is "${sections[no].title}"` : " (") +
                  (men ? `, which links the term ${men}×)` : ")") };
         };
@@ -3205,7 +3280,8 @@ function audit(argv, opts = {}) {
         undecided.push(rec);
         continue;
       }
-      const COUNTED_OK = { "OK-USE": "confirmedByUse", "OK-CONTAINS": "confirmedByContainment", "OK-RUN": "confirmedByRun" };
+      const COUNTED_OK = { "OK-USE": "confirmedByUse", "OK-CONTAINS": "confirmedByContainment", "OK-RUN": "confirmedByRun",
+                           "OK-TEXT": "confirmedByText" };
       if (COUNTED_OK[verdict.kind]) { stat.confirmed++; stat[COUNTED_OK[verdict.kind]]++; continue; }
       if (verdict.kind.startsWith("OK")) { stat.confirmed++; continue; }
       /* THE SITE IS NOW A FINDING, AND PASS 5 MUST NOT REPORT IT TWICE. A step number under a citation whose
@@ -3215,6 +3291,7 @@ function audit(argv, opts = {}) {
        * class", would have been repeated as "no list under §6.3 reaches step 5" — true, weaker, and inflating a
        * count by restating a claim. Marked here rather than re-derived there, so the two can never disagree. */
       c.flagged = verdict.kind;
+      if (verdict.noText) stat.textRefused++;
       findings.push({ ...rec, ...verdict });
     }
 
@@ -3541,6 +3618,7 @@ function audit(argv, opts = {}) {
   console.log(`  audited by standard (in parentheses, how many of them only a file vote placed there): ` +
     `${[...byKey].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}=${v}(${byKeyVoted.get(k) || 0})`).join(" ")}`);
   console.log(`  ${stat.confirmed} confirmed (${stat.confirmedByContainment} by a subsection of the cited number, ${stat.confirmedByUse} by a prominent use rather than the definition site, ` +
+    `${stat.confirmedByText} by the cited section's OWN WORDS using the term where its markup links it fewer than the floor, ` +
     `${stat.confirmedByRun} by another number in the same citation's own run), ` +
     `${stat.unverified} carry no title and no term any index knows, ${stat.multiSpec} name a term more than one standard defines`);
   console.log(`  ${stat.foreignTerm} name a term only ANOTHER standard defines, so the standard they cite numbers nothing this audit could hold them to`);
@@ -3812,7 +3890,10 @@ function audit(argv, opts = {}) {
      * that is without reconstructing it — the same reason the quotation check names its axis in its own
      * banner rather than leaving a zero to read as a clean bill. */
     if (kind === "MISATTRIBUTED")
-      console.log(`  (a count over the citations the term check was ASKED of. ${stat.titled} more were confirmed by a stated TITLE and never asked; ` +
+      console.log(`  (every one of these stands at a section whose own committed text does NOT contain the phrase; ` +
+        `${stat.confirmedByText} citation(s) whose cited section DOES state it in its own words are confirmed above rather than accused here, ` +
+        `and ${stat.textRefused} of the findings below could not be asked that question at all because their standard carries no usable corpus. ` +
+        `A count over the citations the term check was ASKED of. ${stat.titled} more were confirmed by a stated TITLE and never asked; ` +
         `on their own evidence the term check would have added ${stat.titledMis} claims here, ${stat.titledMisInTitle} of them naming a phrase inside that same title. ` +
         `Adding a correct title to a citation MOVES it out of this number — see the title-channel lines in the census above for both halves.)`);
     for (const f of head(g, limit)) {
