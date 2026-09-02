@@ -3878,11 +3878,76 @@ function audit(argv, opts = {}) {
 
   /* AND THE LAST LINE CARRIES THE SAME FACT ON THE SAME AXIS, because it is the line a reader keeps. A count
    * of findings says nothing about whether this output mentioned the file they came to ask about, and this is
-   * the one place a per-file coverage figure can be stated once for every list above it. */
-  const allFiles = new Set([...findings, ...suspects, ...quoteFindings].map((f) => f.file));
-  console.log(`\n${findings.length} finding(s), ${suspects.length} undecided beside them, ` +
-    `standing in ${allFiles.size} file(s) of which ${named.size} are named above (the rest are rolled up by the "NOT PRINTED" lines). ` +
-    `This auditor REPORTS; it exits 0 by design — see the header.`);
+   * the one place a per-file coverage figure can be stated once for every list above it.
+   *
+   * AND IT WAS A FRACTION OF THE POPULATION IT DID NOT NAME, WHICH IS THIS FILE COMMITTING ITS OWN SUBJECT.
+   * CLAUDE.md §Testing: a coverage figure states what it is a fraction of, in the same line, or it is not a
+   * coverage figure. The line above printed `findings.length` under the bare word "finding(s)", and
+   * `findings` is ONE of the THREE arrays this same function calls findings — the quotation channel and the
+   * step channel are the other two, and the comments beside them say so in capitals ("A QUOTATION FINDING IS
+   * A FINDING, SO --since MUST SEE IT"; "A STEP FINDING IS A FINDING"). So the disagreement was never about
+   * what ought to count: the --since return two dozen lines up already unions all three, and only the report
+   * printed a third of them under the whole name. MEASURED at the revision this was written: 504 printed,
+   * 871 quotation and 20 step findings NOT printed — the headline was 36% of its own population, and it is
+   * the number this project quotes at each other, so before/after deltas were being taken against a third of
+   * the tree's citation defects. The repair is not a new rule about what a finding is; it is the report using
+   * the set the delta channel next to it already uses, with each channel NAMED so nobody has to sum four
+   * category headers by hand to learn what the total covers.
+   *
+   * THE SECOND HALF IS THE FILE FIGURE, AND IT WAS A RATIO OF TWO DIFFERENT POPULATIONS. `allFiles` was built
+   * from findings+suspects+quotations — the step channel was in NO denominator anywhere, so 3 files carrying
+   * only a step finding appeared in no count on this line. `named` is filled by every printed head, INCLUDING
+   * the three lists that are deliberately not findings (MENTION-NOT-CLAIM, TITLE-STATED-AND-UNPLACED,
+   * STEP-NOT-IN-THIS-SECTION), so "standing in N file(s) of which M are named above" asserted M ⊆ N while 13
+   * of the 164 were in no part of the 345. A containment claim whose two sides are gathered from different
+   * sets is the same defect as the headline, one clause along: both sides are real counts and the sentence
+   * joining them is not true of anything. So the denominator is the union of the three FINDING channels, and
+   * the numerator is intersected with it — the files named above that carry a finding — while the files named
+   * only by a non-finding list are stated apart rather than folded in.
+   *
+   * AND THE DENOMINATOR OF THE FINDINGS THEMSELVES IS PRINTED, BECAUSE WITHOUT IT A REPAIR READS AS A
+   * REGRESSION. Every check here is asked only of a citation resolved on its OWN evidence; the INFERRED
+   * population is placed by a file vote and the census line above says outright that nothing below judges it.
+   * So writing a standard's name at an unanchored site MOVES that citation out of the unjudged population and
+   * into the judged one, where it is checked for the first time — and the finding count can RISE because the
+   * tool now sees a site it was previously blind to. That happened: a lane repaired 18 quotation findings and
+   * watched a count go UP, which is correct behaviour reported by a number with no denominator on it. Stating
+   * both sides makes the movement legible in the one line a reader keeps: the judged population is what a
+   * repair grows, and a finding count is only comparable against the population it was drawn from. */
+  const findingChannels = [["section/term/title", findings], ["quotation", quoteFindings], ["step", stepFindings]];
+  const allFindings = findingChannels.flatMap(([, g]) => g);
+  const allFiles = new Set(allFindings.map((f) => f.file));
+  const namedWithFinding = [...named].filter((f) => allFiles.has(f));
+  const judged = stat.anchored + stat.byTerm + stat.byTitle;
+  const unjudged = stat.byFile + stat.other + stat.skipped;
+  /* THE PARTITION IS ASSERTED RATHER THAN TRUSTED. These six counters are incremented at six different sites
+   * and the sentence below claims they tile `stat.total` exactly; if a later resolver adds a seventh outcome,
+   * the line would go on printing two numbers that no longer account for the corpus — a coverage figure whose
+   * denominator has quietly stopped being the population. That is the defect this whole block exists to end,
+   * so it crashes here instead of printing. */
+  if (judged + unjudged !== stat.total)
+    throw new Error(`citegen: the resolution census does not tile the corpus — judged ${judged} + unjudged ${unjudged} != ${stat.total} citations. ` +
+      `A resolution outcome was added without a counter, and the coverage line below would understate its own denominator.`);
+  console.log(`\n${allFindings.length} finding(s) = ${findingChannels.map(([n, g]) => `${g.length} ${n}`).join(" + ")}` +
+    ` — the total over EVERY channel this run judges, which is the set --since compares. The four category headers above` +
+    ` (UNKNOWN-SECTION, MISATTRIBUTED, TITLE-MISMATCH, RETIREMENT-NOTE-WRONG) sum to ${findings.length} and are one of the three.`);
+  console.log(`  drawn from ${judged} citation(s) resolved on their own evidence, of ${stat.total} read` +
+    ` — the other ${unjudged} (${stat.byFile} placed only by a file vote, ${stat.other} naming an unindexed standard, ${stat.skipped} naming no standard and no term)` +
+    ` are outside every check here. Writing a standard, term or title at one of those MOVES it into the judged population,` +
+    ` so a repair can RAISE this count: compare a finding total only against the judged number printed beside it.`);
+  console.log(`  ${suspects.length} undecided beside them (not findings — see UNDECIDED-ON-A-DIAGNOSED-NUMBER).` +
+    ` The findings stand in ${allFiles.size} file(s), ${namedWithFinding.length} of them named above; the rest are rolled up by the "NOT PRINTED" lines.` +
+    ` A further ${named.size - namedWithFinding.length} file(s) are named above by a list that is NOT a finding channel.`);
+  /* AND THE HEADS ARE HEADS, WHICH MAKES A CROSS-RUN SET-DIFF OF PRINTED LINES INVALID. Every list above is
+   * capped and ordered by file, so a finding entering the head EVICTS another, and the evicted one reads
+   * exactly like a repair while the entrant reads exactly like a regression. That is not a caveat about
+   * precision, it is a wrong answer in both directions at once, and it lands on precisely the rolled-up
+   * categories a reader most wants to compare. The three untruncated forms are named here because a reader
+   * comparing two runs has no other way to know the printed lines are not the population. */
+  console.log(`  The lists above are HEADS, in file order, not samples: an entry entering one EVICTS another, so diffing two runs'` +
+    ` printed lines reports repairs and regressions that did not happen. Compare populations, not heads —` +
+    ` \`--all\`, \`node engine/citegen.mjs <path>\` and \`--since <ref>\` each print or compare an untruncated set.`);
+  console.log(`  This auditor REPORTS; it exits 0 by design — see the header.`);
 }
 
 /* ---- --since: what THIS diff introduced ------------------------------------------------------------------ */
@@ -3890,8 +3955,13 @@ function audit(argv, opts = {}) {
 /* A DELTA IS THE RIGHT MEASUREMENT AND A DELTA GATE IS STILL THE WRONG MECHANISM, and the two halves of that
  * are worth stating apart because the first is what this builds and the second is what it refuses to build.
  *
- * THE MEASUREMENT. Five hundred standing findings is a number nobody reads, so "run it on what you write" —
+ * THE MEASUREMENT. A four-figure standing population is a number nobody reads, so "run it on what you write" —
  * which CLAUDE.md §Browser half now requires — is an instruction that costs a lane more attention than it has.
+ * That figure USED TO BE WRITTEN HERE AS "five hundred", and it was the report's headline rather than the
+ * population: the headline counted the section/term/title channel alone while this function's own return
+ * unions three, so the sentence justifying THIS mode was quoting a third of the set THIS mode compares. The
+ * count is deliberately not restated as a digit now — see the roll-up at the end of the report, which prints
+ * the three channels by name at the revision it ran.
  * What a lane actually needs is the handful its own diff ADDED, and that is computable exactly: audit the
  * files the diff touches with their WORKING-TREE bytes, audit the SAME files with the bytes at <ref>, and
  * report the difference. Both runs read the same committed indexes and the same resolver, so an upstream
