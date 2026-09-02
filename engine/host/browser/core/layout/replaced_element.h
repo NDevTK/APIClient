@@ -45,14 +45,32 @@
  * core/frame/viewport.c derives a child navigable's viewport from. An `img` is answered from the image
  * request state core/html/html_image.h already models, which is the same state a real browser is in: while the
  * fetch is outstanding the user agent has not yet learned that it cannot decode the reply, and §15.4.2's
- * second rule is written about exactly that moment. An `embed` is answered wherever HTML §4.8.6 "The embed
- * element" says it REPRESENTS NOTHING — an element with neither a `src` nor a `type` attribute, or one with a
- * media element ancestor — which needs no plugin, no decoder and no fetch, because there is no content to
- * classify; §10.3.2's last arm gives it the same 300 x 150 as an `iframe` by a different route, and the two
- * derivations are kept apart in replaced_element.c for that reason. What is genuinely absent — a DECODED
- * image's natural dimensions, a video frame's, and the RESOURCE an `embed` with a `src` has never fetched —
- * crashes at the arm that would have to read it, naming what to build rather than answering a plausible
- * number.
+ * second rule is written about exactly that moment.
+ *
+ * AND THE DISPATCH IS TOTAL — every element §15.4's list names leaves with an answer this component DERIVED,
+ * which is what the sentence that stood here got wrong in the direction that matters. It said the missing
+ * decoder, the missing video frame and the never-fetched `embed` resource each "crashes at the arm that would
+ * have to read it", and a crash is not what a missing capability produces on its own: `DFAIL` is `((void)0)`
+ * at `-DAPICLIENT_DEV=0`, so in release those arms fell THROUGH — into §15.4.2's `img` rules, past a `DCHECK`
+ * that the element is an `img` which the same build compiles out, and on into a read of an image request off a
+ * `<video>`'s wrapper. The fix was not a louder assert. It was that NONE OF THOSE ARMS HAD TO READ THE THING
+ * IT WAS CRASHING FOR:
+ *   - an `embed` represents NOTHING however §4.8.6 is entered, because every non-null arm of its
+ *     determine-the-type steps is conditioned on a PLUGIN and §2.1.6 "Plugins" lets an agent have none;
+ *   - a `video`'s natural width and height are §4.8.8's own "otherwise the natural width is missing", because
+ *     neither a poster frame nor a resource frame size is available in this build at any ready state;
+ *   - a `canvas` is §4.12.5's bitmap, whose natural dimensions ARE its two content attributes with the
+ *     section's defaults of 300 and 150 — a computed pair, and never §10.3.2's default borrowed;
+ *   - an `object` represents its FALLBACK CONTENT, which is the label §4.8.7's own not-yet-available jump
+ *     sends every element to in an agent that has not fetched, so §15.4.1 makes it an ordinary element;
+ *   - an `audio` is replaced only "when it is exposing a user interface" (§15.4.1) and this agent exposes none.
+ * What each of those still owes is recorded at its arm as a NAMED RESIDUAL — a fetch that is an @H ENDPOINT,
+ * a frame size the mock device does not state, §15.4.1's forced `display: none` — because the code there is
+ * RIGHT for every element this build can produce and narrower than the standard, which is a different thing
+ * from unfinished. The two arms that genuinely cannot answer are always fatal in BOTH builds rather than
+ * dev-only: an `input` in the Image Button state, whose every §15.4.2 rule turns on an image request
+ * §4.10.5.1.19 would create and nothing here does, and an `img` in a document no navigable presents, where the
+ * realm §4.8.4.3's per-flow record lives in does not exist and the read of it would be through a NULL.
  */
 #ifndef ENGINE_HOST_BROWSER_CORE_LAYOUT_REPLACED_ELEMENT_H
 #define ENGINE_HOST_BROWSER_CORE_LAYOUT_REPLACED_ELEMENT_H

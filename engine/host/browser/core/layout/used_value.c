@@ -990,21 +990,23 @@ static UvLimits uv_limits(lxb_dom_element_t *el, UvBox box, bool vertical)
  * of the same arithmetic, it is a different answer: the table PRESERVES THE RATIO, which two independent
  * clamps cannot.
  *
- * WHY IT CANNOT BE REACHED, AS A FACT ABOUT THIS TREE RATHER THAN A CLAIM ABOUT THE SPEC. The antecedent needs
- * `has_ratio`, and core/layout/replaced_element.c mints it in exactly one place — `rep_sized`, whose only call
- * is `rep_sized(0.0, 0.0)` for HTML §15.4.2's fourth rule. css-images-3 §4.1's degenerate test then makes that
- * object's ratio ABSENT ("at least one part being zero or infinity ... treated as having no natural aspect
- * ratio"), so no element in this build has one. Every other replaced element is `rep_bare` (no natural
- * dimensions at all) or a DFAIL naming a decoder.
+ * IT IS REACHED BY A `canvas`, AND THE SENTENCE THAT STOOD HERE SAID IT COULD NOT BE. That sentence was an
+ * argument about THIS TREE and not about the spec — "core/layout/replaced_element.c mints `has_ratio` in
+ * exactly one place, `rep_sized(0.0, 0.0)`, whose degenerate ratio css-images-3 §4.1 denies" — and it stopped
+ * being true the moment that component derived HTML §4.12.5 "The canvas element"'s bitmap: a `<canvas>` has a
+ * natural width of 300 and a natural height of 150 from its own content attributes, so it has a natural ratio
+ * of 2, which is the first non-degenerate one this engine has ever produced. THE TRIGGER IS ORDINARY
+ * RESPONSIVE CSS — `canvas { max-width: 100% }` with neither `width` nor `height` declared — so this abort is
+ * a work queue rather than an edge case, and the per-axis clamp it stands in front of is the WRONG answer for
+ * exactly the element that now reaches it.
  *
- * SO THE CLAMP BELOW DOES NOT MAKE IT REACHABLE, AND NEITHER DOES HTML §15.4.3 "Attributes for embedded
- * content and images". §15.4.3 maps the `width`/`height` CONTENT ATTRIBUTES to presentational hints on the
- * `width`/`height` PROPERTIES, which makes the antecedent's "both specified as 'auto'" FALSE — it moves this
- * table further out of reach, not nearer. The one thing that reaches it is an image DECODER: the moment
- * §15.4.2's first rule can answer with real natural dimensions, an `<img src=x>` under `img { max-width: 100% }`
- * has a ratio and two `auto` sizes and IS this table's subject, which is what makes a narrow viewport scale a
- * photograph's height instead of leaving it at its natural one. BUILD the decoder, and write the eleven rows
- * beside a fixture that fires. */
+ * HTML §15.4.3 "Attributes for embedded content and images" WOULD MOVE IT OUT OF REACH AGAIN, and that is
+ * worth knowing before anyone reads a green run as this being fixed: §15.4.3 maps the `width`/`height` CONTENT
+ * attributes to presentational hints on the `width`/`height` PROPERTIES, which makes the antecedent's "both
+ * specified as 'auto'" FALSE for every `<canvas width=… height=…>`. A bare `<canvas>` under a `max-width`
+ * still reaches it, and so does an `<img>` the day a DECODER gives §15.4.2's first rule real natural
+ * dimensions — which is the case that matters most, because it is what makes a narrow viewport scale a
+ * photograph's height instead of leaving it at its natural one. BUILD the eleven rows. */
 static void uv_require_no_ratio_table(lxb_dom_element_t *el, const UvLimits *lim)
 {
     ReplacedElement rep;
@@ -1024,9 +1026,11 @@ static void uv_require_no_ratio_table(lxb_dom_element_t *el, const UvLimits *lim
           "eleven rows are over `w` and `h`, \"the results of the width and height computations IGNORING the "
           "'min-width', 'min-height', 'max-width' and 'max-height' properties\" — which is the tentative pass "
           "this component already runs on each axis — after \"take the max-width and max-height as "
-          "max(min, max) so that min <= max holds true\". WHAT MADE THIS REACHABLE IS AN INTRINSIC RATIO: "
-          "core/layout/replaced_element.c mints one only in `rep_sized`, whose 0-by-0 object css-images-3 "
-          "§4.1's degenerate test denies a ratio, so until now nothing in this build had one. BUILD the eleven "
+          "max(min, max) so that min <= max holds true\". WHAT REACHED THIS IS AN INTRINSIC RATIO, AND THE "
+          "ELEMENT THAT HAS ONE IS A `canvas`: core/layout/replaced_element.c derives HTML §4.12.5 \"The "
+          "canvas element\"'s bitmap from the element's own `width` and `height` content attributes, whose "
+          "§4.12.5 defaults are 300 and 150, so its ratio is 2 — the first non-degenerate one in this build. "
+          "`canvas { max-width: 100% }` with neither size declared is the whole trigger. BUILD the eleven "
           "rows over the two tentative values, and note that the row conditions are a DISJOINT partition — the "
           "four single-violation rows must be tested AFTER the six double-violation ones or a box violating "
           "both takes the wrong one");
@@ -1593,7 +1597,7 @@ static CssPx uv_replaced_height(lxb_dom_element_t *el, const ReplacedElement *re
    table, "for replaced elements with an INTRINSIC RATIO and both 'width' and 'height' specified as 'auto'" —
    replaces the ordinary three steps for exactly the subject this function computes. Its antecedent is tested
    in `uv_require_no_ratio_table`, one level up, because it is a fact about BOTH axes at once and this function
-   sees one; and it is false in this build for the reason stated there. */
+   sees one; a `canvas` under a declared limit satisfies it and aborts there, for the reason stated there. */
 static CssPx uv_replaced_size(lxb_dom_element_t *el, const ReplacedElement *rep, UvBox box, bool vertical)
 {
     CssPx content;

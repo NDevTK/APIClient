@@ -189,6 +189,28 @@ void  element_attr_set(JSContext *ctx, JSValueConst el, const char *name, const 
  * carrying its provenance, and the name is what tells two members' derivations apart. */
 JSValue element_reflect_url_get(JSContext *ctx, lxb_dom_element_t *el, JSValue raw, const char *member);
 
+/* HTML §2.6.1 "Reflecting content attributes in IDL attributes" — THE `unsigned long` MODEL'S ARITHMETIC, over
+ * the attribute's BYTES rather than over a wrapper.
+ *
+ * WHY IT IS EXPORTED AND NOT PRIVATE TO THE REFLECTION. §2.6.1's steps answer "what NUMBER do these attribute
+ * bytes denote", and an IDL getter is not the only reader of that number: HTML §4.12.5 "The canvas element"
+ * states the element's bitmap as having "a natural width equal to the numeric value of the element's width
+ * attribute", which core/layout/replaced_element.c reads as a css-images-3 §4.1 natural dimension — no wrapper,
+ * no realm, no registry index, and the same defaults and the same range as the member. Two implementations of
+ * one number is what this export removes, and the disagreement it removes is a real one: §2.3.4.2's rules have
+ * NO upper bound (core/html/integer_microsyntax.h reports an overflowing run rather than a number, precisely so
+ * that each CONSUMER states its own range), so a second reader would have had to pick a maximum and could have
+ * picked a different one — `canvas.width` answering 300 for `width="99999999999"` while the box it sizes is
+ * 99999999999 CSS pixels wide.
+ *
+ * `s` IS THE ATTRIBUTE'S BYTES AND IS BORROWED; NULL is "there is nothing to parse", which is both an absent
+ * attribute and a value that is not a string, because §2.6.1 gives those two the same answer — the default when
+ * the member declares one, and `minimum` when it does not. The three pairs are the row's own declarations
+ * (§2.6.2's `[ReflectDefault]` and `[ReflectRange]`), each read only through the flag beside it, so an absent
+ * default is a POSITIVE statement about the member and never a hole. */
+long long element_reflect_ulong_value(const char *s, size_t len, long long dflt, bool has_dflt,
+                                      long long rmin, long long rmax, bool has_range);
+
 /* HTML §2.6.1 "Reflecting content attributes in IDL attributes" — THE `double` MODEL, both directions, for the
  * members the enum above deliberately does not carry.
  *

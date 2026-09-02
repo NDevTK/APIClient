@@ -1283,33 +1283,47 @@ JSValue element_reflect_url_get(JSContext *ctx, lxb_dom_element_t *el, JSValue r
  * exactly as 4000 does. Calling it a parse failure would answer the DEFAULT — 1 where a browser says 1000.
  *
  * THE ANSWER IS A NUMBER, so a concolic attribute keeps its provenance THROUGH the parse: the real rules run on
- * the concrete example and the numeric result is re-wrapped, the shape element_reflect_url_get uses. */
+ * the concrete example and the numeric result is re-wrapped, the shape element_reflect_url_get uses.
+ *
+ * THE SELECTION ITSELF TAKES BYTES AND IS EXPORTED, and that split is not a tidy-up — it is what stops the one
+ * number being computed twice. §2.6.1's model is the answer to "what NUMBER do these attribute bytes denote",
+ * and a member's IDL getter is only one of the things that asks: HTML §4.12.5 "The canvas element" states the
+ * bitmap's natural width as "the numeric value of the element's width attribute", which is a LAYOUT read of the
+ * same bytes with the same defaults and the same range, made without a wrapper, a realm or a magic index.
+ * Written a second time at that reader it would be a second §2.6.1, free to disagree with this one about an
+ * overflowing run — and `canvas.width` answering 300 while the box it sizes is 99999999999 pixels wide is
+ * exactly the kind of disagreement no test asks about. */
+long long element_reflect_ulong_value(const char *s, size_t len, long long dflt, bool has_dflt,
+                                      long long rmin, long long rmax, bool has_range)
+{
+    long long minimum = has_range ? rmin : 0;
+    long long maximum = has_range ? rmax : 2147483647LL;
+    HtmlInteger n;
+    bool ok = s != NULL && html_parse_non_negative_integer(s, len, &n);
+
+    DCHECK(!has_range || rmin <= rmax,
+           "a [ReflectRange] was declared with its ends swapped — §2.6.2's list is (clampedMin, clampedMax) in "
+           "that order, and a reversed pair clamps every value to the smaller end");
+    if (ok && !n.overflow && n.value >= minimum && n.value <= maximum) return n.value;
+    if (ok && has_range) return (!n.overflow && n.value < minimum) ? minimum : maximum;
+    return has_dflt ? dflt : minimum;
+}
+
 static JSValue el_reflect_ulong(JSContext *ctx, const ElReflect *r, JSValue raw)
 {
     JSValue concrete = concolic_is(raw) ? concolic_example(ctx, raw) : JS_DupValue(ctx, raw);
-    long long minimum = r->has_range ? r->rmin : 0;
-    long long maximum = r->has_range ? r->rmax : 2147483647LL;
     long long answer;
-    HtmlInteger n;
     const char *s = NULL;
     size_t len = 0;
-    bool ok = false;
 
     DCHECK(r->kind == REFLECT_ULONG, "el_reflect_ulong was handed a row of another kind");
-    DCHECK(!r->has_range || r->rmin <= r->rmax,
-           "a [ReflectRange] was declared with its ends swapped — §2.6.2's list is (clampedMin, clampedMax) in "
-           "that order, and a reversed pair clamps every value to the smaller end");
     if (JS_IsString(concrete)) {
         s = JS_ToCStringLen(ctx, &len, concrete);
         if (!s) { JS_FreeValue(ctx, concrete); JS_FreeValue(ctx, raw); return JS_EXCEPTION; }
-        ok = html_parse_non_negative_integer(s, len, &n);
     }
     JS_FreeValue(ctx, concrete);
 
-    if (ok && !n.overflow && n.value >= minimum && n.value <= maximum) answer = n.value;
-    else if (ok && r->has_range) answer = (!n.overflow && n.value < minimum) ? minimum : maximum;
-    else if (r->has_dflt) answer = r->dflt;
-    else answer = minimum;
+    answer = element_reflect_ulong_value(s, len, r->dflt, r->has_dflt, r->rmin, r->rmax, r->has_range);
     if (s) JS_FreeCString(ctx, s);
 
     {

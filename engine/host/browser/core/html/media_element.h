@@ -21,12 +21,16 @@ bool media_device_renders(const MimeType *m);
 
 /* §4.8.11 "Media elements"' FIRST SENTENCE — "HTMLMediaElement objects (audio and video, in this
  * specification) are simply known as media elements" — asked of a node that is not itself the subject of the
- * question. HTML §4.8.6 "The embed element" states one of the conditions under which an `embed` represents
- * nothing as "The element has a media element ancestor", so core/layout/replaced_element.c walks ancestors and
- * has to name this set; a tag list written at that walk would be the second answer `media_device_renders`
- * above is exported to prevent, and it would be the WRONG one in the way this file's own definition records —
- * the test is over the interned tag id AND the namespace, so an SVG `<video>` is not a media element and a
- * name-only copy would say it is. */
+ * question. solver/dom_cow.c asks it of every node a fork is about to copy into a flow-private tree, because
+ * §4.8.11's state lives on the ORIGINAL's wrapper and §4.8.11 states no cloning steps; a tag list written at
+ * that walk would be the second answer `media_device_renders` above is exported to prevent, and it would be
+ * the WRONG one in the way this file's own definition records — the test is over the interned tag id AND the
+ * namespace, so an SVG `<video>` is not a media element and a name-only copy would say it is.
+ * THE SENTENCE THAT STOOD HERE NAMED A CALLER THAT IS GONE, and the reason it went is worth one line: it said
+ * core/layout/replaced_element.c walks ancestors for HTML §4.8.6's "The element has a media element ancestor"
+ * condition, and that walk no longer decides anything. Every route through §4.8.6 ends with an `embed`
+ * representing nothing in an agent with no plugins, so the condition list and the setup steps agree and the
+ * ancestor walk selected between two identical answers. */
 bool media_element_is(const lxb_dom_node_t *n);
 
 /* Declared ONCE PER AGENT, from html_element_init — the interfaces, the reflections §4.8.11 puts on
