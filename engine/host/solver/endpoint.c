@@ -857,10 +857,20 @@ char *endpoint_json_array(void) {
         for (int j = 0; j < e->np; j++) {
             if (j) json_buf_raw(&b, ",");
             json_buf_raw(&b, "{"); json_buf_key(&b, "name"); json_buf_str(&b, e->params[j].name);
-            DCHECK(e->params[j].loc == EP_QUERY || e->params[j].loc == EP_PATH || e->params[j].loc == EP_BODY,
-                   "an endpoint param carries a location this surface has no name for — the enum and its "
-                   "name table are read together at exactly this line, so one grown without the other is "
-                   "caught here rather than emitted as a field the consumer cannot classify");
+            /* `CHECK` AND NOT `DCHECK`, BECAUSE THE SUBSCRIPT IS ON THE NEXT LINE AND IS IN EVERY BUILD. The
+               message below already named what it was preventing — a field the consumer cannot classify — and
+               a dev-only guard prevents it in the one build where nobody is reading the report. `ep_loc_name`
+               is a THREE-element table of `const char *`, so an out-of-range read hands `json_buf_str` a
+               pointer assembled out of whatever the link placed after it, and check.h's header says the wasm
+               build does not fault on that: it reads bytes from that address and emits them as this param's
+               `location`. That is not a missing field a consumer can see is missing — it is a plausible
+               location token in the @H record, which §@H forbids by name, and it is the same shape one
+               indirection further out as `provenance` defaulting to `observed`. */
+            CHECK(e->params[j].loc == EP_QUERY || e->params[j].loc == EP_PATH || e->params[j].loc == EP_BODY,
+                  "engine: an endpoint param carries a location this surface has no name for — the enum and "
+                  "its name table are read together at exactly this line, so one grown without the other "
+                  "would index outside a three-entry table and emit whatever that address holds as the "
+                  "param's location");
             json_buf_raw(&b, ","); json_buf_key(&b, "location"); json_buf_str(&b, ep_loc_name[e->params[j].loc]);
             json_buf_raw(&b, ","); json_buf_key(&b, "validValues"); json_buf_raw(&b, "[");
             for (int k = 0; k < e->params[j].nvals; k++) { if (k) json_buf_raw(&b, ","); json_buf_str(&b, e->params[j].vals[k]); }

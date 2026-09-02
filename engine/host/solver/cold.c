@@ -36,11 +36,20 @@ void cold_census(ColdCensus *out)
         /* …AND WHICH ARM OF flow_step THIS MEMBER LAST RETURNED THROUGH. Asserted in range rather than
            trusted: the field is written at one place from an enum, so a value outside the list is a cast or a
            corrupted Flow, and indexing on it would then scribble past the histogram inside the census that
-           exists to explain the frontier. */
-        DCHECK((unsigned)f->step_unit < (unsigned)STEP_UNIT_N,
-               "a member carries a step unit that is not one of solver/step_unit.h's arms — the field is only "
-               "ever written from that enum at the scheduler's convergence point, so this is a corrupted Flow "
-               "and the index below would write outside the census");
+           exists to explain the frontier.
+           WHICH IS WHY IT IS A `CHECK` AND WAS A `DCHECK`, AND THE REASON IS THE SENTENCE ABOVE IT RATHER THAN
+           THE RARITY OF THE STATE. The message already named the consequence — "the index below would write
+           outside the census" — and named it for a build the assert is not compiled into: `out->step_units[…]`
+           is a WRITE in every build, so a dev-only guard vanishes in exactly the build where the store
+           happens. check.h's own header states what that costs here: a WebAssembly store past the end of an
+           object does not fault, it lands in whatever the link put after it, so the scribble is silent and the
+           field it corrupts belongs to a different question entirely. This is not a wrong number in a
+           diagnostic; it is an out-of-bounds write, and there is no build in which proceeding past it is
+           better than stopping. */
+        CHECK((unsigned)f->step_unit < (unsigned)STEP_UNIT_N,
+              "engine: a member carries a step unit that is not one of solver/step_unit.h's arms — the field "
+              "is only ever written from that enum at the scheduler's convergence point, so this is a "
+              "corrupted Flow and the index below would write outside the census in every build");
         out->step_units[f->step_unit]++;
         /* …AND WHERE IN ITS DOCUMENT THIS MEMBER IS STANDING — see cold.h for why `deepest` and `completed`
            structurally cannot answer this and why the zeroes between the mass and the deepest member are the
@@ -50,10 +59,17 @@ void cold_census(ColdCensus *out)
            THE ROW SET GROWS TO THE CURSOR IN HAND rather than being sized before the walk, because there is no
            list to size it from: the extent is the population's own. A member standing past a fixed end is the
            one thing that would silently truncate this back into the maximum `deepest` already is. */
-        DCHECK(f->script_i >= 0,
-               "a member of the frontier stands at a NEGATIVE program cursor — `script_i` is a position in the "
-               "flow's own program sequence and is only ever advanced upward from 0, so a value below it is a "
-               "corrupted Flow and the histogram below would write outside its own allocation");
+        /* `CHECK`, FOR THE STORE RATHER THAN FOR THE CURSOR, and this one is sharper than the arm above
+           because the grow beneath it CANNOT catch a negative: `f->script_i >= out->program_cursor_n` is FALSE
+           for every negative cursor, so the realloc is skipped, the histogram is never widened, and
+           `program_cursors[f->script_i]` stores BEFORE the allocation the CHECK on that realloc protects. The
+           two asserts are therefore not layered — the bounds one is the only thing standing there, and in a
+           release build it was standing there compiled out. */
+        CHECK(f->script_i >= 0,
+              "engine: a member of the frontier stands at a NEGATIVE program cursor — `script_i` is a position "
+              "in the flow's own program sequence and is only ever advanced upward from 0, so a value below it "
+              "is a corrupted Flow; the grow below tests only the UPPER end, so the histogram store would land "
+              "before its own allocation in every build");
         /* …AND THE OTHER END OF ITS RANGE, WHICH IS CLOSED. `dyn_n` is a legal cursor and is what a member
            holds between two programs at the tail (solver/flow.h), so the bound here is `<=` and not `<`;
            anything ABOVE it is the defect flow.c's flow_programs_unstarted_for_document describes, a cursor

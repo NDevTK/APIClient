@@ -95,17 +95,39 @@ static JSValue pend_own(JSValueConst obj, JSAtom a)
     return v;
 }
 
+/* HOW MANY ENTRIES THIS REGISTER HOLDS — and `CHECK` for the reason its sibling `pend_sync_owed` gives one
+   paragraph down, which applies here MORE strongly rather than less. Both asserts used to be dev-only, and the
+   release continuation was not an abort and not a fallback: `JS_GetOwnSlot` writes JS_UNDEFINED into `*pval`
+   before it looks (quickjs.c, its first statement), whose int payload is 0, so a register with no `length`
+   answered EMPTY — and so did one whose length is not a small integer, `JS_VALUE_GET_INT` reading the union's
+   int32 field whatever tag is on it. A plausible datum where no measurement exists, which is §Architecture's
+   defaulted-field defect with the default supplied by the accessor instead of by an author.
+   WHAT 0 DOES HERE IS NOT A WRONG READING, IT IS A LOST FLOW, and that is what makes proceeding worse than
+   aborting in production. Every walk in this file is `for (i = 0; i < pend_len(reg); i++)`, so an empty answer
+   makes every entry the register holds invisible: `pending_ready` reports nothing to deliver and the flow
+   parked on that request is never resumed, while `pending_count_kind` reports no debt of any kind. Worse, the
+   count is also where the next entry LANDS — `JS_SetPropertyUint32(reg, pend_len(reg), e)` — so a register
+   reading 0 overwrites index 0 on every append, dropping one outstanding request per new one. §check.h names a
+   dropped flow corrupting the frontier as the archetype of an always-fatal invariant, and this drops them
+   silently and forever: the frontier is never reset, so the parked flows a release session loses this way are
+   lost across every session that resumes from it.
+   IT IS THIS FILE'S OWN INVARIANT AND NOTHING OUTSIDE CAN BREAK IT. The register is the plain Array allocated
+   here, null-prototype so a page cannot answer for it, and `length` is present from its first instant — so a
+   violation is a register something outside this file created, not input. */
 static int pend_len(JSValueConst arr)
 {
     JSValue v;
     int n = 0;
     if (!JS_IsObject(arr)) return 0;
     pend_atoms();
-    if (JS_GetOwnSlot(pend_ctx(), &v, arr, g_len_atom) <= 0)
-        DFAIL("a pending register has no own `length` — it is not the Array this file builds");
-    DCHECK(JS_VALUE_GET_TAG(v) == JS_TAG_INT,
-           "a pending register's length is not a small integer — the register is this file's own Array and "
-           "nothing outside it appends");
+    CHECK(JS_GetOwnSlot(pend_ctx(), &v, arr, g_len_atom) > 0,
+          "engine: a pending register has no own `length` — it is not the Array this file builds. Reading past "
+          "this would answer EMPTY for a register that holds outstanding requests, so every flow parked on one "
+          "of them is never resumed and the next append overwrites index 0");
+    CHECK(JS_VALUE_GET_TAG(v) == JS_TAG_INT,
+          "engine: a pending register's length is not a small integer — the register is this file's own Array "
+          "and nothing outside it appends, so the int this would read out of another tag's payload is not a "
+          "count of anything and decides both which entries are walked and where the next one lands");
     n = JS_VALUE_GET_INT(v);
     JS_FreeValue(pend_ctx(), v);
     return n;

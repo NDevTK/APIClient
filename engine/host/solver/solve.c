@@ -1243,13 +1243,27 @@ static void derive_from_witness(Cand *e) {
            "context probe's own run handed this sink, so without one there is no observation to read a state "
            "off and the re-derivation would be a static shape of the expression");
     derive = sink_class(e->sink)->derive;
+    /* THE ASSERT STAYS A `DCHECK` AND THE DISPATCH BELOW STOPS BEING AN `else`, WHICH ARE TWO DIFFERENT
+       ANSWERS TO THE SAME OBJECTION. The state this guards is a fact about the SINKS table, and that table is
+       a static of this build whose columns sink_declare_check already asserts against each other — a class
+       carries written-down vectors XOR a derivation — so a violation here is caught once at startup and is
+       not something a page can reach. Dev-only is therefore right, and promoting it would put an
+       always-fatal abort on a table this build cannot change while it runs.
+       WHAT WAS NOT RIGHT IS WHAT THE RELEASE BUILD DID NEXT. The loop's `else` answered two questions with one
+       branch — "is this JS" and "is this not HTML" — so with the assert compiled out a class with NO routed
+       parser was handed to the JS derivation, and ECMAScript §12's lexical-state escape was constructed for
+       bytes that landed in an HTML tokenizer state. That is a derivation running on a context nothing said it
+       reads, and its output is a payload, not a blank: §@S's fire-verification bounds what such a candidate
+       can be REPORTED as, and it does not stop the search spending its runs on escapes derived for the wrong
+       grammar. Naming both arms costs nothing and makes the unrouted class construct nothing, which is the
+       state `built == 0` below already describes. */
     if (derive != SINK_DERIVE_HTML && derive != SINK_DERIVE_JS)
         DFAIL("a sink class stored a context witness and declares no derivation to read it with — a class "
               "whose breakouts are written down never stores one, so this is a class whose derivation column "
               "was set without a parser being routed for it");
     for (int i = 0; i < e->nwit; i++) {
-        if (derive == SINK_DERIVE_HTML) built += solve_html_breakouts(e->wit[i], &e->deliv, queue_derived, e);
-        else                            built += solve_js_breakouts(e->wit[i], &e->deliv, queue_derived, e);
+        if      (derive == SINK_DERIVE_HTML) built += solve_html_breakouts(e->wit[i], &e->deliv, queue_derived, e);
+        else if (derive == SINK_DERIVE_JS)   built += solve_js_breakouts(e->wit[i], &e->deliv, queue_derived, e);
     }
     DCHECK(built == 0 || cand_has_escape(e),
            "a derivation constructed an escape that this search does not hold — the constructed count and the "

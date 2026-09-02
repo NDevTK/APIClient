@@ -245,16 +245,47 @@ static int dec_total(void) { return g_dec_below + g_dec_n; }
 /* …AND IT ANSWERS BOTH COLUMNS IN ONE WALK, through `asked`. The arm and the question that produced it are one
    fact about one slot, and reading them with two descents of the chain would be two walks that can disagree
    about which slot they landed on the first time an index calculation moves. */
+/* BOTH ASSERTS BELOW ARE `CHECK`s, AND THE THING THAT DECIDED THAT IS THE LINE UNDER EACH OF THEM RATHER THAN
+   THE SEVERITY OF THE STATE. `k` is an ARRAY INDEX and the subscript on the next line is compiled into EVERY
+   build, so a dev-only guard is compiled out in precisely the build where the dereference happens — check.h's
+   own header states what that costs on the target this engine ships on: a WebAssembly load has one trap
+   condition, running past the CURRENT MEMORY SIZE, so an index outside this vector does not fault, it RETURNS
+   A VALUE. A negative `k` reads `g_dec[k - g_dec_below]` before the allocation and `*asked` comes back a
+   uint32 nobody wrote; both are in range as far as anything downstream can tell.
+   AND WHAT IS DOWNSTREAM IS THE REPLAY ITSELF, which is why proceeding is worse than aborting even in
+   production. dec_replay compares the `asked` this writes against the question the branch just computed: a
+   garbage value that MISSES makes the flow declare a divergence and dec_leave_path TRUNCATES its recorded
+   vector at the cursor, discarding real recorded arms; a garbage value that MATCHES makes the flow take an arm
+   nothing ever recorded and advance the cursor over it. Either one is §scheduler's razor — a resume that is
+   not byte-identical, that drops or reorders or forgets — arriving as a silently different flow rather than as
+   a crash, and a frontier whose members no longer describe the paths they were parked on cannot be repaired by
+   a later run.
+   THE SECOND IS `CHECK_FAIL` FOR A REASON THE FIRST DOES NOT HAVE: falling out of this function leaves `*asked`
+   UNWRITTEN. dec_replay's `recorded` is an automatic, so the release continuation is not a plausible datum, it
+   is a read of an uninitialised object — which the compiler is entitled to reason from, and this project has
+   already measured what that entitlement produces (a self-jump emitted from an out-of-bounds scan the optimiser
+   assumed could not happen). Writing a default into `*asked` here would be the defaulted-field defect in its
+   purest form: it would make "no slot answered" indistinguishable from "the slot answered question 0".
+   IT IS ALSO UNREACHABLE ONCE THE FIRST CHECK HOLDS, and that is stated rather than removed. The chain's
+   bottom-most segment is built with `below == 0` (dec_seg_arm with a NULL base, and the first dec_freeze off a
+   cleared head), and dec_leave_path's replacement prefix keeps `ns->below = s->below`, so the descent matches
+   at the bottom for every `k >= 0`. Reaching it therefore means the chain's `below` offsets and the head's
+   origin disagree — an invariant of the CHAIN, which is why the assert stays here rather than collapsing into
+   the bounds test above it. */
 static int dec_at(int k, uint32_t *asked) {
     const DecSeg *s;
-    DCHECK(k >= 0 && k < dec_total(),
-           "a decision was read outside the vector — a branch would take an arm this flow never recorded");
+    CHECK(k >= 0 && k < dec_total(),
+          "engine: a decision was read outside the vector — a branch would take an arm this flow never "
+          "recorded. The subscript below is in every build, so this index is dereferenced in release too, and "
+          "on wasm an out-of-range load returns a value instead of trapping: the replay would then either "
+          "truncate the flow's real recorded arms as a divergence or step over an arm nothing chose");
     if (k >= g_dec_below) { *asked = g_dec_k[k - g_dec_below]; return g_dec[k - g_dec_below]; }
     for (s = g_dec_base; s; s = s->base)
         if (k >= s->below) { *asked = s->k[k - s->below]; return s->e[k - s->below]; }
-    DFAIL("a decision index below the head was not in any frozen segment — the chain's `below` offsets and the "
-          "head's origin disagree, so the vector has a hole in it");
-    return 0;
+    CHECK_FAIL("engine: a decision index below the head was not in any frozen segment — the chain's `below` "
+               "offsets and the head's origin disagree, so the vector has a hole in it. Returning from here "
+               "leaves the caller's `asked` UNWRITTEN, so the replay would compare the branch's question "
+               "against an uninitialised automatic and take whichever arm that comparison fell out on");
 }
 
 /* Append one decision to the head, WITH the question it answers. The two are written by the same statement
