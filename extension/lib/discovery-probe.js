@@ -663,16 +663,47 @@ function updateOrCreateVirtualDoc(service, seedUrl, probeResult, existingDoc) {
   // Merge probe properties into request and response schemas.
   // Probe data has verified field numbers/types — prefer it over learned data,
   // but always preserve user's customName renames.
+  /* THE TWO SIDES OF THIS MERGE HAVE DIFFERENT OWNERS, AND THAT DECIDES REFUSE-VERSUS-ASSERT AT EVERY READ.
+     `target.properties` is a DISCOVERY DOCUMENT'S schema — bytes the target's server published, a spec file
+     the researcher imported, or a store written by an earlier build — so every read of one is refused through
+     lib/field-def.js. `probeProps` is `newProperties` from `convertProbeFieldsToSchema` below, at both call
+     sites and no other, so it is OURS and a gap in it is this file broken: asserted, per CLAUDE.md
+     §Offensive-programming, and asserted at the merge because that is where the record is first read back.
+     WHICH TYPE SPELLINGS ARE "THE DOCUMENT SAID NOTHING". `"string"` is what lib/discovery.js's
+     `mapJsonSchemaType` answers for a property whose document declared no type, and `"unknown"` is
+     lib/req2proto.js's spelling of the same absence in the probe's own vocabulary. This merge knew only the
+     first, so an untyped probe field — which arrives as `"unknown"` and is exactly the field most in need of
+     a type — could never be upgraded by a later probe that had learned one. lib/req2proto.js's own merge has
+     always asked the `"unknown"` half; this is the other half of that same question. */
+  const PROBE_TYPE_UNSTATED = ["string", "unknown"];
   function mergeProbeInto(target, probeProps) {
     if (!target.properties) target.properties = {};
     // Build field-number → key index for deduplication
     const numToKey = {};
     for (const [k, p] of Object.entries(target.properties)) {
-      const n = p.number ?? p.id;
-      if (n != null) numToKey[n] = k;
+      /* A DOCUMENT'S FIELD NUMBER OR NOTHING. `?? ` asked whether the KEY was present, which admits
+         `{"number": {}}` and files this property under the index `"[object Object]"` — a wire address no
+         request can carry, minted out of a server's bytes. `{"widget": null}` reached `.number` off a null
+         property, which is the TypeError lib/field-def.js's `fdDocRecord` was written for. */
+      const rec = fdDocRecord(p) === null ? {} : p;
+      const stated = fdDocKey(rec.number);
+      const n = stated === null ? fdDocKey(rec.id) : stated;
+      if (n !== null) numToKey[n] = k;
     }
     for (const [key, probeProp] of Object.entries(probeProps)) {
-      const fieldNum = probeProp.number ?? probeProp.id;
+      const _scalarOrNull = (v) => v === null || typeof v === "string" || typeof v === "number";
+      DCHECK(!!probeProp && typeof probeProp === "object" &&
+             _scalarOrNull(probeProp.number) && _scalarOrNull(probeProp.id) &&
+             typeof probeProp.type === "string" && probeProp.type !== "",
+             "a probe-derived schema property arrived without the identity convertProbeFieldsToSchema states " +
+             "for every one it mints (key `" + key + "`) — `number`/`id` are that function's refusal of the " +
+             "server's field number, so `null` MEANS the rejection named none and a MISSING key means this " +
+             "producer stopped stating it; a merge reading that absence as \"no match\" would file the " +
+             "property under a fresh key and split one field into two");
+      /* BOTH NAMES ARE STATED BY OUR OWN MINT, so this is the record's declared absence read as one — not a
+         `??` asking which key happens to exist. `id` and `number` are the discovery vocabulary's two
+         spellings of one wire address and this reads them in that order. */
+      const fieldNum = probeProp.number === null ? probeProp.id : probeProp.number;
       const matchKey = target.properties[key] ? key
         : (fieldNum != null && numToKey[fieldNum]) ? numToKey[fieldNum]
         : null;
@@ -690,7 +721,14 @@ function updateOrCreateVirtualDoc(service, seedUrl, probeResult, existingDoc) {
         // Probe has authoritative field numbers and types
         if (probeProp.id != null) existing.id = probeProp.id;
         if (probeProp.number != null) existing.number = probeProp.number;
-        if (probeProp.type && existing.type === "string" && probeProp.type !== "string") {
+        /* AN UPGRADE NEEDS A REAL TYPE ON ONE SIDE AND AN UNSTATED ONE ON THE OTHER, and `"unknown"` belongs
+           on BOTH lists — as a probe type it is the rejection having named none, so it must not overwrite a
+           document's declaration, and as an existing type it is the very property a later probe should be
+           allowed to fill in. A type this document does not state AT ALL is left alone deliberately: a
+           property carrying a `$ref` has its `type` deleted, and writing a scalar type onto one would replace
+           a message reference with a claim about a leaf. */
+        if (PROBE_TYPE_UNSTATED.indexOf(probeProp.type) < 0 &&
+            PROBE_TYPE_UNSTATED.indexOf(fdDocString(existing.type)) >= 0) {
           existing.type = probeProp.type;
         }
         if (probeProp.$ref && !existing.$ref) existing.$ref = probeProp.$ref;
@@ -750,20 +788,68 @@ function convertProbeFieldsToSchema(rootFieldsObj, schemas, rootPrefix = "") {
       : fieldsObj instanceof Map
         ? [...fieldsObj.values()]
         : Object.values(fieldsObj || {});
-    for (const field of fields) {
+    for (const raw of fields) {
+      /* THE RECORD'S SHAPE IS OURS AND ITS VALUES ARE THE SERVER'S, which is lib/field-def.js's TRUST split
+         and decides every line below. lib/req2proto.js writes these object literals in the trusted zone, so
+         the NAMES are ours — but every value in them is a capture group off the target's own rejection text
+         (`cleanName` is the tail of a path the error names; `typeStr || "unknown"` is whatever the message
+         spelled), and a probe answer restored from IndexedDB was written by whatever build shipped then:
+         lib/store-record.js's `_SR_PROBE_FIELDS` states `fields: _srObj` and says nothing about an element.
+         So these are third-party bytes and every read of one REFUSES rather than asserts — a DCHECK here
+         would be the trusted zone aborting on a stranger's error string. */
+      const field = fdDocRecord(raw) === null ? {} : raw;
+      /* THE WIRE KEY, DERIVED ONCE. It was derived twice — at the bottom for the properties map, and again
+         inside each nested-message arm as `field.name.charAt(0)…` — and the second spelling had no refusal in
+         front of it at all: a probe field the server described with a type and children but no name reached
+         `undefined.charAt(0)` and threw a TypeError out of the trusted zone, which `probeEndpoint`'s catch
+         then swallowed as "Probe fallback failed". The whole virtual document was lost on one malformed
+         field, and the only trace was a console line. */
+      const named = fdDocString(field.name);
+      const number = fdDocKey(field.number);
+      /* A FIELD THE REPLY GAVE NEITHER A NAME NOR A NUMBER HAS NO WIRE ADDRESS, and a discovery `properties`
+         map is KEYED BY ONE. This used to key it `field_undefined` — an address no client can send and the
+         Send panel renders as a real field name, which is §@H's fabricated value one layer up. Skipping is
+         the true statement about it: the rejection said a field exists and said nothing this map can file it
+         under. (`field_<n>` where a number IS stated is not the same thing — the number is the wire address,
+         and the key is only how this document spells it.) */
+      if (named === null && number === null) continue;
+      const fieldKey = named === null ? `field_${number}` : named;
+      /* `"unknown"` AND NOT `"string"`, BECAUSE THE TWO ARE DIFFERENT FACTS AND ONE OF THEM IS A REAL TYPE.
+         `"unknown"` is lib/req2proto.js's own spelling for "the rejection named no type" (its enum/default
+         arm mints exactly that, and its merge reads it back as the value a later probe may replace), so this
+         is that vocabulary carried rather than a second one coined. `|| "string"` claimed the server had said
+         `string` — the same bytes a genuinely string-typed field produces — while the DESCRIPTION built on
+         the very next line said "unknown" about the same absence: one field, two spellings, and the
+         confident one was the invented one. Downstream is unmoved either way: lib/discovery.js's
+         `mapJsonSchemaType` answers "string" for an unrecognised type and for an absent one alike. */
+      const type = fdDocString(field.type) === null ? "unknown" : field.type;
       const prop = {
-        id: field.number,
-        number: field.number,
-        name: field.name,
-        type: field.type || "string",
-        description: `Field ${field.number} (${field.type || "unknown"})`,
+        id: number,
+        number,
+        name: named,
+        type,
+        description: number === null
+          ? `Probed field \`${fieldKey}\` (${type})`
+          : `Field ${number} (${type})`,
+      };
+      /* `messageType` IS THE SCHEMA NAME THE REJECTION STATED, and its absence means the rejection named
+         none — so the name is synthesized from the key this document already files the field under, which is
+         the one identity available here. It is derived from `fieldKey` rather than from `field.name` so a
+         field with a number and no name gets `…Field_3Entry` instead of reaching through a refusal. */
+      const nestedFrom = (suffix) => {
+        /* THE EMPTY STRING IS TEXT AND IS NOT A SCHEMA NAME, which is the same distinction the wire key above
+           turns on: `fdDocString` admits `""` because a document may legitimately say a field's description
+           is empty, and `schemas[""]` is an entry no `$ref` can address. The truthiness test this replaced
+           happened to reject it; stating the reason is what keeps that true. */
+        const stated = fdDocString(field.messageType);
+        if (stated !== null && stated !== "") return stated;
+        return `${prefix}${fieldKey.charAt(0).toUpperCase()}${fieldKey.slice(1)}${suffix}`;
       };
       if (field.label === "repeated") {
         prop.type = "array";
-        prop.items = { type: field.type || "string" };
-        if (field.type === "message" && field.children) {
-          const nestedName = field.messageType ||
-            `${prefix}${field.name.charAt(0).toUpperCase() + field.name.slice(1)}Entry`;
+        prop.items = { type };
+        if (type === "message" && field.children) {
+          const nestedName = nestedFrom("Entry");
           if (!schemas[nestedName] && !visited.has(nestedName)) {
             visited.add(nestedName);
             const nestedProperties = {};
@@ -774,9 +860,8 @@ function convertProbeFieldsToSchema(rootFieldsObj, schemas, rootPrefix = "") {
           delete prop.items.type;
           pendingAttach.push({ target: prop.items, key: "children", schemaName: nestedName });
         }
-      } else if (field.type === "message" && field.children) {
-        const nestedName = field.messageType ||
-          `${prefix}${field.name.charAt(0).toUpperCase() + field.name.slice(1)}`;
+      } else if (type === "message" && field.children) {
+        const nestedName = nestedFrom("");
         if (!schemas[nestedName] && !visited.has(nestedName)) {
           visited.add(nestedName);
           const nestedProperties = {};
@@ -787,7 +872,6 @@ function convertProbeFieldsToSchema(rootFieldsObj, schemas, rootPrefix = "") {
         delete prop.type;
         pendingAttach.push({ target: prop, key: "children", schemaName: nestedName });
       }
-      const fieldKey = field.name || `field_${field.number}`;
       dst[fieldKey] = prop;
     }
   }
