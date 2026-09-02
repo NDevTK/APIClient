@@ -1009,9 +1009,24 @@ void popover_install(JSContext *ctx, JSValueConst html_proto)
     DCHECK(g_id_show >= 0, "§6.12's members were installed on a realm's prototype before popover_declare "
                            "declared them");
     DCHECK(JS_IsObject(html_proto), "§6.12's members were installed with no HTMLElement.prototype");
-    idl_install_step_method(ctx, html_proto, "showPopover", 0, g_id_show);
-    idl_install_step_method(ctx, html_proto, "hidePopover", 0, g_id_hide);
-    idl_install_step_method(ctx, html_proto, "togglePopover", 0, g_id_toggle);
+    /* `idl_install_method` AND NOT `idl_install_step_method`, WHICH IS A STATEMENT ABOUT THE DECLARATION AND
+       NOT ABOUT THE ALGORITHM. Both installers mint a JS_CFUNC_step, so the choice is not "is this member a
+       step machine" — all three of these are one. It is "does this member have a POOL ENTRY", and these three
+       do: each is declared through idl_method_id_step above, which is what converts their `options` dictionary
+       and what §3.7.7 Operations' `length` is then DERIVED from. idl_install_step_method exists for the other
+       kind — a raw JS_RegisterStepDef machine with no declared arguments (core/html/html_form.c's `submit`,
+       observable_ops.c's operators) — and it takes a hand-written `length` precisely because there is no
+       declaration to compute one from. Its own residual comment says so, and the two installers assert against
+       each other so neither can be used for the other by mistake.
+       THIS FILE USED THE WRONG ONE FOR ALL THREE, and the number it was passing (0) happened to equal the
+       derived answer, so the mistake was invisible in behaviour and visible only to that assert: `showPopover`
+       and `togglePopover` declare their one argument optional (idl_optional_from(0)) and `hidePopover`
+       declares none, so §3.7.7's length is 0 either way. What the wrong installer really costs is the
+       derivation — the day an argument of one of these stops being optional, the pool would know and a
+       hand-written 0 would not. */
+    idl_install_method(ctx, html_proto, "showPopover", g_id_show);
+    idl_install_method(ctx, html_proto, "hidePopover", g_id_hide);
+    idl_install_method(ctx, html_proto, "togglePopover", g_id_toggle);
 }
 
 void popover_free(JSRuntime *rt)
