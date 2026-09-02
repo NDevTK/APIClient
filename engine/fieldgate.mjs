@@ -597,9 +597,18 @@ const SHELL_ECHO = /\becho\s+(?:-[neE]+\s+)*(?:\\?["'])?$/;
 
 /* ---- C side ---------------------------------------------------------------------------------------------- */
 
-/* The emission vocabulary. `printf`/`fprintf`/`js_printf` write the seam directly; `snprintf`/`sprintf` build a
-   buffer whose fate is decided below. Anything else that could carry a JSON key is a refusal, not an
-   assumption. */
+/* The emission vocabulary LIBC SUPPLIES. `printf`/`fprintf`/`js_printf` write the seam directly;
+   `snprintf`/`sprintf` build a buffer whose fate is decided below. These are compiled in because they cannot
+   go missing; the names this FORK declares are DERIVED instead, below, off the attribute the compiler already
+   reads — a hand-kept list cannot hold them and did not.
+   THIS COMMENT USED TO END "anything else that could carry a JSON key is a refusal, not an assumption", AND
+   THAT WAS THE WHOLE OF HOW THE DEFECT SURVIVED. It was not true and nothing made it true: a call to a
+   format-taking function outside these two lists matches no loop here, so its keys were neither read NOR
+   refused — they were dropped in silence, while the sentence promised a reader that the third case was
+   impossible. A completeness claim a scan does not enforce is worse than no claim, because it is exactly the
+   sentence that stops the next person looking. What holds now is narrower and checkable: a JSON key can reach
+   this seam through libc's names, through the key entry, or through a declaration carrying `APICLIENT_PRINTF`,
+   and the derivation of that third set prints itself beside the corpus so its collapse is legible. */
 /* core/json_buf.h's writer is NOT in this list, and that is the fix rather than an omission. Its entries name
    their ROLE — `json_buf_key` a field name, `json_buf_raw` structure and formatted values, `json_buf_str` a
    string value — so which one a call is is a fact about the CALLEE and not about what its argument happens to
@@ -620,6 +629,147 @@ const C_RAW = "json_buf_raw";
 const rawKeys = [];   // {file,line,keys,text}
 const C_BUILD = { snprintf: 2, sprintf: 1 };
 const C_MATCH = ["strstr", "strcasestr", "strncmp", "strcmp", "memmem", "strnstr"];
+
+/* AND THE FORMAT-TAKING FUNCTIONS THIS FORK DECLARES FOR ITSELF, WHICH A HAND-KEPT LIST IS STRUCTURALLY UNABLE
+   TO HOLD. Every name above is libc's, and libc is not where this engine's documents are composed:
+   solver/compose.h's `composef` sizes a document by what it writes and RETURNS it on the heap, and it carries
+   every JSON key the result document and the quantum census emit. A vocabulary typed here could not know that,
+   and did not — so a key composed through it was READ by a consumer and emitted, as far as this gate could
+   tell, by nobody. That produced a whole category of confident false red: the extension's result-document
+   reader asserts each of those names field for field, exactly as §Architecture demands, and was reported as
+   the defect that rule exists to catch.
+   THE QUIETER HALF IS WHY THIS IS A ROOT FIX AND NOT A SPELLING ONE. The keys of that SAME composition which
+   did NOT appear in the report were not seen either; they were EXCUSED, each by an unrelated name that
+   happened to collide with it — a `_cold:` on a bridge resolver record, a `securitySinks:` on a merge record,
+   a `printf` in the test driver. A collision is not a producer, so this gate's silence about that seam was
+   never a clean bill, and a rename on either side of it would have passed.
+   SO THE VOCABULARY IS DERIVED FROM THE DECLARATION THE ENGINE ALREADY OBEYS, exactly as idlgen reads the real
+   `.idl` rather than a table of member names somebody typed, and for the same reason: a restated rule is a
+   second copy, and the copy that drifts is the one nobody runs against reality. check.h's
+   `APICLIENT_PRINTF(f, a)` IS this tree's statement that a function takes a printf format at argument `f`, and
+   compose.h says at its own declaration that the attribute is load-bearing rather than decoration. It answers
+   WHERE THE FORMAT IS. It does not answer where the composed text GOES, so that is read off the declarator's
+   TYPES, which do:
+     a `char *` RETURN            the document IS the result. Its role then follows the identifier it is
+                                  assigned to, exactly as a build destination's does; a composition that is
+                                  RETURNED has no name in this file for a matcher to hold, so it is a write.
+     a non-const `char *` at 0    an out-parameter, identical in every respect to `snprintf`, so it joins THAT
+                                  vocabulary rather than getting a second one that could disagree with it.
+     neither                      every parameter is unwritable and the result is not text, so the composed
+                                  bytes have no destination the caller can name. That is DECIDED by the types
+                                  and is not a refusal — check.h's release-mode format check exists precisely
+                                  to compose nothing, and refusing it would report the language as a hole. */
+const C_COMPOSE = {};   /* name -> format argument index; the destination is the RETURN value */
+
+/* A KEYWORD BEFORE A PARENTHESIS IS THE LANGUAGE, NOT A DECLARATOR, and the distinction is load-bearing here
+   rather than tidy: the declaration span reaches back to the end of the previous statement, so the `} while
+   (0)` that closes the macro above check.h's own release-mode format check sits inside it. Read as a
+   declarator that is a SECOND candidate, and a declaration this file can read perfectly becomes a refusal —
+   the scan reporting the language as a place a field name might be hiding, which is the failure `idl_installed`
+   records in the opposite direction. Every name here can be followed by `(` and none of them can be declared. */
+const C_NOT_A_DECLARATOR = new Set(["while", "if", "for", "switch", "return", "sizeof", "do", "else",
+                                    "case", "defined", "catch", "_Alignof", "_Static_assert"]);
+
+/* WHERE A RETURNED DOCUMENT WENT, asked of the construct at the call and never of a dataflow. `out = composef(`
+   names a destination whose role the file's own matcher operands decide, and `return composef(` hands the
+   bytes out of this translation unit, where nothing here can match on them. Anything else — a composition
+   passed straight into another call — is a place this cannot say whether the text is emitted or looked for,
+   and it is refused with its line rather than guessed at. */
+function composeDest(code, struct, at) {
+  let i = at - 1;
+  while (i >= 0 && /\s/.test(struct[i])) i--;
+  if (i < 0) return null;
+  if (struct[i] === "=" && (i === 0 || !"=!<>+-*/%&|^".includes(struct[i - 1]))) {
+    let j = i - 1;
+    while (j >= 0 && /\s/.test(struct[j])) j--;
+    const end = j + 1;
+    while (j >= 0 && /[\w$]/.test(struct[j])) j--;
+    const name = code.slice(j + 1, end);
+    return /^[A-Za-z_]\w*$/.test(name) ? { kind: "name", name } : null;
+  }
+  const end = i + 1;
+  let j = i;
+  while (j >= 0 && /[\w$]/.test(struct[j])) j--;
+  return code.slice(j + 1, end) === "return" ? { kind: "return" } : null;
+}
+
+/* THE DECLARATION SPAN THE ATTRIBUTE ATTACHES TO. It is written BEFORE the declarator (check.h) or AFTER it
+   (compose.h), so the span — bounded by the previous statement end or preprocessor line and by the `;` or `{`
+   that ends this one — is what holds both spellings without this file guessing which one it is looking at.
+   Inside it, exactly ONE parenthesised group other than the attribute's own may be preceded by an identifier:
+   that identifier is the function and that group is its parameter list. Zero or several is a declaration this
+   cannot read, and it is refused with its place — a format-taking function credited to the wrong name would
+   attribute a whole document's keys to something that never emits one. */
+function collectCFormatDecls(file, src) {
+  const { code, struct } = maskC(src);
+  if (bracketFault(struct)) return;   /* scanC refuses this file by name; one report of the same fault is enough */
+  for (const c of callSites(struct, "APICLIENT_PRINTF")) {
+    const at = c.at, lineStart = src.lastIndexOf("\n", at - 1) + 1;
+    /* The attribute's own definition names its PARAMETERS where a use names positions — the same construct
+       the field-name entry already skips, and for the same reason: reading it as a use makes the writer of
+       the rule its own first violation. */
+    if (/^\s*#\s*define\s+$/.test(code.slice(lineStart, at))) continue;
+    if (!c.args || c.args.length !== 2 || c.close < 0) {
+      refuse(file, lineOf(src, at), "an APICLIENT_PRINTF( whose two positions cannot be delimited — which argument carries the format is what decides every key the declaration beside it emits");
+      continue;
+    }
+    const f = Number(code.slice(c.args[0][0], c.args[0][1]).trim());
+    if (!Number.isInteger(f) || f < 1) {
+      refuse(file, lineOf(src, at), "an APICLIENT_PRINTF( whose format position is not a literal integer", code.slice(c.args[0][0], c.args[0][1]));
+      continue;
+    }
+    let lo = lineStart;
+    for (let i = at - 1; i >= 0; i--) {
+      const ch = struct[i];
+      if (ch === ";" || ch === "}" || ch === "{") { lo = i + 1; break; }
+      if (ch === "\n") {
+        const ls = i + 1;
+        let k = ls; while (k < at && /[ \t]/.test(struct[k])) k++;
+        if (struct[k] === "#") { lo = i + 1; break; }
+      }
+      if (i === 0) lo = 0;
+    }
+    let hi = struct.length;
+    for (let i = c.close; i < struct.length; i++)
+      if (struct[i] === ";" || struct[i] === "{") { hi = i; break; }
+    const groups = [];
+    for (let i = lo; i < hi; i++) {
+      if (struct[i] !== "(" || i === c.open) continue;
+      const close = matchAt(struct, i);
+      if (close < 0 || close > hi + 1) continue;
+      let j = i - 1;
+      while (j >= lo && /\s/.test(struct[j])) j--;
+      const end = j + 1;
+      while (j >= lo && /[\w$]/.test(struct[j])) j--;
+      const name = code.slice(j + 1, end);
+      if (/^[A-Za-z_]\w*$/.test(name) && !C_NOT_A_DECLARATOR.has(name)) groups.push({ name, nameAt: j + 1, open: i, close });
+      i = close - 1;
+    }
+    if (groups.length !== 1) {
+      refuse(file, lineOf(src, at), `an APICLIENT_PRINTF( beside ${groups.length === 0 ? "no" : groups.length} function declarator(s) — which function takes the format is not readable here`);
+      continue;
+    }
+    const g = groups[0], fmtIdx = f - 1;
+    const params = splitTop(struct, g.open + 1, g.close - 1);
+    if (!params[fmtIdx]) {
+      refuse(file, lineOf(src, at), `an APICLIENT_PRINTF( naming argument ${f} of a declarator that has fewer`);
+      continue;
+    }
+    const before = code.slice(lo, g.nameAt).replace(/\s+/g, " ").trim();
+    if (/\bchar\s*\*\s*$/.test(before)) { C_COMPOSE[g.name] = fmtIdx; continue; }
+    let outIdx = -1;
+    for (let p = 0; p < fmtIdx; p++) {
+      const t = code.slice(params[p][0], params[p][1]);
+      if (/\bchar\s*\*/.test(t) && !/\bconst\b/.test(t)) { outIdx = p; break; }
+    }
+    if (outIdx === 0) { C_BUILD[g.name] = fmtIdx; continue; }
+    if (outIdx > 0) {
+      refuse(file, lineOf(src, at), `an APICLIENT_PRINTF( on a composer whose writable destination is argument ${outIdx} — the build side reads a destination at argument 0`);
+      continue;
+    }
+    /* Decided, not refused: nothing in this signature can carry the composed bytes anywhere. */
+  }
+}
 
 /* Adjacent string literals, concatenated and unescaped, or null when the span holds anything else. A macro, a
    variable, a ternary — each is a format this cannot resolve, and resolving it wrong invents a field. */
@@ -709,6 +859,17 @@ function scanC(file, src) {
       if (cLiteral(code, struct, f[0], f[1]) === null && !cTernaryArms(code, struct, f[0], f[1])) continue;
       const dst = code.slice(c.args[0][0], c.args[0][1]).trim();
       if (/^[A-Za-z_]\w*$/.test(dst)) builtDests.add(dst);
+    }
+  /* A RETURNING COMPOSER'S DESTINATION IS ITS ASSIGNMENT TARGET, and it belongs in the same set for the same
+     reason: `out = composef(…)` then `printf(out)` is one emission written in two statements, and refusing
+     over the second would be this file counting its own resolved answer as a hole. */
+  for (const [fn, fmtIdx] of Object.entries(C_COMPOSE))
+    for (const c of callSites(struct, fn)) {
+      if (!c.args || !c.args[fmtIdx]) continue;
+      const f = c.args[fmtIdx];
+      if (cLiteral(code, struct, f[0], f[1]) === null && !cTernaryArms(code, struct, f[0], f[1])) continue;
+      const d = composeDest(code, struct, c.at);
+      if (d && d.kind === "name") builtDests.add(d.name);
     }
   const site = (off) => ({ file, line: lineOf(src, off) });
 
@@ -837,6 +998,30 @@ function scanC(file, src) {
         continue;
       }
       emit(lit, a[0], !patterns.has(dst));
+    }
+
+  /* THE RETURNING COMPOSER, read exactly like the build side above and differing in one place only: its
+     destination is a construct at the CALL rather than an argument in it. A composition that is RETURNED is a
+     write because nothing in this file holds a name for it; one assigned to an identifier is a write unless
+     that identifier is a matcher operand, which is the same question the build side asks of `snprintf`. */
+  for (const [fn, fmtIdx] of Object.entries(C_COMPOSE))
+    for (const c of callSites(struct, fn)) {
+      if (!c.args) { refuse(file, lineOf(src, c.at), `an unbalanced ${fn}( — the composed text cannot be delimited`); continue; }
+      const a = c.args[fmtIdx];
+      if (!a) { refuse(file, lineOf(src, c.at), `a ${fn}( with too few arguments to hold a format`); continue; }
+      let lit = cLiteral(code, struct, a[0], a[1]);
+      if (lit === null) {
+        const arms = cTernaryArms(code, struct, a[0], a[1]);
+        if (!arms) { pendingUnresolved.push({ file, line: lineOf(src, c.at), fn, text: code.slice(a[0], Math.min(a[1], a[0] + 60)) }); continue; }
+        lit = arms.join("");
+      }
+      if (!keysIn(lit).length) continue;
+      const d = composeDest(code, struct, c.at);
+      if (!d) {
+        refuse(file, lineOf(src, c.at), `a ${fn}( carrying a JSON key to a destination this cannot name — whether the document is emitted or matched is not decidable here`);
+        continue;
+      }
+      emit(lit, a[0], d.kind === "return" || !patterns.has(d.name));
     }
 
   /* The read side of the seam in C: a JSON key literal handed to a matcher. HELD, not credited here, because
@@ -2884,6 +3069,16 @@ const jsScans = [];
 /* The scans, keyed by their repo-relative path, so a relative import specifier resolves to the module that
    declares the name — which is how §the ORIGIN of a value follows a producer one module further. */
 const scanByFile = new Map();
+/* THE FORMAT-TAKING DECLARATIONS BEFORE ANY OF THEM IS READ. A composer is DECLARED in one header and CALLED
+   in another file, so a vocabulary assembled while scanning would credit whichever file the walk reached
+   first — the composed keys of every file ahead of the declaration would read as emitted by nobody, which is
+   the exact defect this pass exists to end, reproduced by the order it was collected in. */
+for (const f of files) {
+  if (f.lang !== "c") continue;
+  let src;
+  try { src = readFileSync(f.path, "utf8"); } catch { continue; }
+  collectCFormatDecls(relative(ROOT, f.path), src);
+}
 for (const f of files) {
   let src;
   try { src = readFileSync(f.path, "utf8"); } catch { continue; }
@@ -3957,6 +4152,20 @@ const byArea = new Map();
 for (const f of files) byArea.set(f.area, (byArea.get(f.area) || 0) + 1);
 log(`corpus — ${[...byArea].map(([a, n]) => `${a} ${n}`).join(", ")}; ` +
     `${fields.size} record field names and ${markers.size} stream markers carry a construct on at least one side`);
+/* AND WHICH FORMAT-TAKING FUNCTIONS THIS TREE DECLARED FOR ITSELF, printed because a DERIVED vocabulary can
+   collapse to nothing in total silence. The libc names are compiled in and cannot go missing; these are read
+   off `APICLIENT_PRINTF` at each declaration, so removing that attribute — or spelling the declarator in a way
+   this cannot parse — does not fail anything: it quietly returns this gate to the state it was fixed out of,
+   where every key composed through the missing name reads as emitted by nobody and the SAME keys that happen
+   to collide with an unrelated record read as fine. A count nobody can see is the concealment this file exists
+   to report, performed on its own output, so the derivation states itself and an empty list is legible. */
+{
+  const derived = [...Object.entries(C_COMPOSE).map(([n, i]) => `${n}(→return, fmt@${i})`),
+                   ...Object.entries(C_BUILD).filter(([n]) => !["snprintf", "sprintf"].includes(n))
+                                             .map(([n, i]) => `${n}(→arg0, fmt@${i})`)];
+  log(`derived C composers — ${derived.length ? derived.join(", ") : "NONE; only libc's printf/snprintf are " +
+      "read, so any document composed through this fork's own format-taking helper is invisible as a write"}`);
+}
 
 const place = (s) => `${s.file}:${s.line}`;
 const show = (title, rows, render, cap = 25) => {
