@@ -24,11 +24,11 @@
  * every `if (window.CSSUnitValue)` in a bundle is decided against the engine today.
  *
  * WHAT IS HONESTLY ABSENT AND WHY THAT IS NOT A STUB. §2's `parse`/`parseAll`, §4.3.1's six arithmetic
- * operations, its `equals` and `toSum` and its static `parse` are NOT installed. They are not noops and not
- * opaque getters — they are not there, so a page that reaches one gets the TypeError a browser missing them
- * would give, which is the forcing function this project runs on. §4.3.1's `type()` and `to()` ARE installed
- * and live in core/css/css_numeric_value.c, which states why they are the two whose algorithms terminate
- * inside this subclass and the others are not.
+ * operations, its `toSum` and its static `parse` are NOT installed. They are not noops and not opaque getters
+ * — they are not there, so a page that reaches one gets the TypeError a browser missing them would give, which
+ * is the forcing function this project runs on. §4.3.1's `type()`, `to()` and `equals()` ARE installed and
+ * live in core/css/css_numeric_value.c, which states why those are the three whose algorithms terminate inside
+ * this subclass and the others are not.
  *
  * THE `value` SLOT IS A JSValue AND NOT A `double`, WHICH IS THE ONE DESIGN DECISION IN THIS FILE.
  * §4.3.3 declares `attribute double value` — WRITABLE — so the slot is mutable shared state that must ride the

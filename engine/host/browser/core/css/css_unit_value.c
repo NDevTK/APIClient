@@ -348,16 +348,17 @@ static void css_unit_value_install_realm(JSContext *ctx)
     /* §4.3.1's CSSNumericValue. §3.7.3 Interface prototype object: "if interface is declared to inherit from
        another interface, then set proto to the interface prototype object IN REALM of that inherited
        interface" — the object one line up, which core/idl_args.c asserts by reading the §3.7.3 Interface
-       prototype object class string back off it. Two of its eleven members land on it here — the BODIES are
+       prototype object class string back off it. Three of its eleven members land on it here — the BODIES are
        core/css/css_numeric_value.c's, and only the install is this file's, because §3.7.3 makes the chain one
        object graph and splitting the creation of it across two components would be two files that have to
-       agree about an order. The other nine are honest absence rather than stubs: a page reaching `add` gets
-       the TypeError a browser without it gives, and engine/idlgen.mjs reports all nine as the gaps they are. */
+       agree about an order. The other eight are honest absence rather than stubs: a page reaching `add` gets
+       the TypeError a browser without it gives, and engine/idlgen.mjs reports all eight as the gaps they are. */
     nv_proto = JS_NewObjectProto(ctx, sv_proto);
     CHECK(!JS_IsException(nv_proto), "CSSNumericValue.prototype could not be allocated");
     idl_interface_tag(ctx, nv_proto, "CSSNumericValue");
     idl_install_method(ctx, nv_proto, "type", css_numeric_value_member_id(CSS_NUMERIC_MEMBER_TYPE));
     idl_install_method(ctx, nv_proto, "to", css_numeric_value_member_id(CSS_NUMERIC_MEMBER_TO));
+    idl_install_method(ctx, nv_proto, "equals", css_numeric_value_member_id(CSS_NUMERIC_MEMBER_EQUALS));
     ctor = idl_interface_object(ctx, "CSSNumericValue", nv_proto);
     CHECK(!JS_IsException(ctor), "the CSSNumericValue interface object could not be allocated");
     JS_SetPropertyStr(ctx, global, "CSSNumericValue", ctor);

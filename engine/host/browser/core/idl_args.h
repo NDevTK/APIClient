@@ -419,6 +419,34 @@ typedef enum {
        brand check: an object of the interface's CLASS crosses as itself, anything else is a DOMString. The
        class is declared beside the type, so this file needs to know nothing about what a Node is. */
     IDL_STRING_UNLESS_IFACE,
+    /* `(double or T)` WHERE T IS AN INTERFACE TYPE — CSS Typed OM 1 §4.3 Numeric Values:'s
+       `typedef (double or CSSNumericValue) CSSNumberish`, which that section introduces with "Any place that
+       accepts a CSSNumericValue also accepts a raw double", and `CSS.px(1).equals(2)` is the ordinary way a
+       page writes the second half. It is the row directly above with the OTHER arm, and the two are separate
+       rows for the reason every pair here is: the arm a value that is NOT the interface takes IS the type.
+       §3.2.25 Union types DECIDES IT IN TWO CLAUSES AND THE REST OF THAT ALGORITHM IS SKIPPED BY WHAT THE
+       UNION DOES NOT NAME. Its interface clause is reached first — "If V is a platform object, then: If types
+       includes an interface type that V implements, then return the IDL value that is a reference to the
+       object V" — and every value that is not one falls past every Object clause, because this union names no
+       dictionary, no sequence, no record, no callback and no string type, to "If types includes a numeric
+       type, then return the result of converting V to that numeric type".
+       SO THE OTHER ARM IS §3.2.7's RESTRICTED `double`, AND THAT IS OBSERVABLE AT BOTH ENDS OF THE ALGORITHM.
+       §3.2.7 is "Let x be ? ToNumber(V). If x is NaN, +∞, or −∞, then throw a TypeError" — so `equals(null)`
+       is a comparison against +0 (no clause above the numeric one names null, and ToNumber(null) is +0) while
+       `equals(undefined)` is a TypeError, and a declaration that sorted the two arms in a BODY instead would
+       get both of those wrong in one line and would run the page's `valueOf` from a plain C activation
+       besides. The unrestricted spelling is not this row: `(unrestricted double or T)` admits a NaN, and no
+       member of this platform writes one.
+       WHAT UNKNOWN EXTERNAL INPUT DOES HERE IS DECIDED AND NOT FORKED, which is idl_concolic_rule's default
+       CROSSES and is stated here because the neighbouring unions are the opposite. §3.2.25's first clause
+       asks whether V is a PLATFORM OBJECT IMPLEMENTING T, and a concolic is the solver's own value class and
+       implements nothing — so the numeric arm is the arm for every unknown, exactly as it is for every other
+       non-T value, and §3.2's numeric boundary then passes the unknown through as itself. The rows above fork
+       because their arm asks "is V an Object", which a concolic wears; this one does not ask that.
+       The class or predicate is declared beside the type exactly as IDL_STRING_UNLESS_IFACE's is
+       (idl_iface_brand for an interface one class names exactly, idl_arg_iface for one it does not), so this
+       file needs to know nothing about what a CSSNumericValue is. */
+    IDL_DOUBLE_UNLESS_IFACE,
     /* `(object or DOMString)` — Web Cryptography §14's `typedef (object or DOMString) AlgorithmIdentifier`,
        and the only union in this platform whose object arm is the IDL type `object` itself. Its rule is the
        same shape as the two above with a broader test: any Object crosses as itself, and EVERYTHING else —
@@ -649,6 +677,10 @@ static inline bool idl_type_brands_interface(IdlArgType t)
     /* The union's ARM is the brand test itself — `(Node or DOMString)` picks the object arm exactly when the
        value implements the interface — so a declaration with no brand cannot even choose an arm. */
     case IDL_STRING_UNLESS_IFACE:
+    /* `(double or T)`, for the same sentence: §3.2.25's interface clause IS this union's arm, so a declaration
+       with no brand has nothing to ask and every value would take the numeric arm — including the
+       CSSNumericValue the member exists to receive. */
+    case IDL_DOUBLE_UNLESS_IFACE:
         return true;
     default:
         return false;

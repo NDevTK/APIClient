@@ -24,14 +24,25 @@
  * unit below, whose two literal branches ("number", "percent") are not dimension units and must not be
  * answered from a dimension table — see core/css/css_math.h for why that split is one table and two questions.
  *
- * WHAT IS HONESTLY ABSENT. Of §4.3.1's eleven members this file installs `type()` and `to()`. The six
- * arithmetic operations (add, sub, mul, div, min, max), `equals()` and `toSum()` are NOT installed and are not
- * stubs: each of them is defined to RETURN a §4.3.4 Complex Numeric Values: CSSMathValue object on the arm
- * where its operands do not collapse to one unit, and no component in this engine mints one, so a member that
- * answered for the collapsing arm alone would be wrong for input a browser answers rather than narrower. The
- * static `parse()` needs CSS Syntax 3's parse-a-component-value and §5.6 <number>, <percentage>, and
- * <dimension> values' reification, neither of which this file can reach. A page that touches one gets the
- * TypeError a browser without it gives, which is the forcing function. */
+ * WHAT IS HONESTLY ABSENT. Of §4.3.1's eleven members this file installs `type()`, `to()` and `equals()`. The
+ * six arithmetic operations (add, sub, mul, div, min, max) and `toSum()` are NOT installed and are not stubs:
+ * each of them is defined to RETURN a §4.3.4 Complex Numeric Values: CSSMathValue object on the arm where its
+ * operands do not collapse to one unit, and no component in this engine mints one, so a member that answered
+ * for the collapsing arm alone would be wrong for input a browser answers rather than narrower. The static
+ * `parse()` needs CSS Syntax 3's parse-a-component-value and §5.6 <number>, <percentage>, and <dimension>
+ * values' reification, neither of which this file can reach. A page that touches one gets the TypeError a
+ * browser without it gives, which is the forcing function.
+ *
+ * `equals` IS THE ONE OF THE EIGHT THAT OWES §4.3.4 NOTHING, and that is a fact about its RETURN TYPE rather
+ * than a narrowing of its algorithm. It answers a `boolean`, so the only §4.3.4 objects its steps can meet are
+ * ones some other member already minted — and while nothing mints one, "If value1 and value2 are not members
+ * of the same interface, return false" and "If value1 and value2 are both CSSUnitValues, return true if they
+ * have equal unit and value internal slots, or false otherwise" are the whole of what equal-numeric-values can
+ * reach. What blocked it was never §4.3.4; it was that all seven members take `CSSNumberish`, a union
+ * core/idl_args.h had no row for, and a member that declared it `IDL_ANY` and sorted the arms in its body
+ * would run the page's `valueOf` from a plain C activation and would get `equals(null)` and `equals(undefined)`
+ * wrong in opposite directions. That row is IDL_DOUBLE_UNLESS_IFACE, and it is what the other six are still
+ * waiting on §4.3.4 BEHIND. */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_NUMERIC_VALUE_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_NUMERIC_VALUE_H
 
@@ -75,11 +86,35 @@ bool css_numeric_type_from_unit(const char *unit, size_t unit_len, CssMathType *
  * refusal of `em` to `px`) with nothing under it. */
 bool css_numeric_convert_ratio(const char *from, const char *to, double *ratio);
 
+/* Web IDL §3.2.15 Interface types' "If V implements I" FOR I = CSSNumericValue — the predicate the
+   `(double or CSSNumericValue)` union's arm is, and the one §3.7.5 brand every member of this superclass
+   checks its receiver with. ONE entry, because those are the same question asked at two ends of a call and a
+   second spelling of it is the copy that goes on admitting one subclass after another is minted.
+   IT TAKES A REALM AND IGNORES IT, which is core/idl_args.h's `idl_arg_iface` signature and is deliberate
+   there: an interface reached through a PROTOTYPE CHAIN is a per-realm fact. This one is not — it is a class
+   brand, and a class id belongs to the runtime — so the parameter is accepted and unread rather than the
+   declaration being handed a predicate that cannot answer for the interfaces that do need a realm.
+
+   NAMED RESIDUAL — IT ASKS FOR THE ONE SUBCLASS THAT EXISTS, NOT FOR THE INTERFACE.
+   WHAT IS NOT COVERED: `css_unit_value_is` answers "is this a §4.3.3 CSSUnitValue", and §3.2.15's question
+   here is "does this implement §4.3.1's CSSNumericValue". They coincide over every object that exists, because
+   §4.3.4 Complex Numeric Values: CSSMathValue objects is unbuilt and CSSUnitValue is the only subclass any
+   component mints — so this is correct today and narrower than the interface.
+   WHAT THE NEXT DIFF BUILDS: the CSSMathValue family, whose first member brings a second brand; this predicate
+   must be the disjunction of the two at that moment, and every algorithm stated over it grows the CSSMathValue
+   arm it DCHECKs against today.
+   HOW ITS ABSENCE WOULD SHOW: it cannot show as a wrong answer while it holds — there is no other object for
+   it to be wrong about — which is why it is stated rather than asserted. It shows the day a CSSMathValue is
+   minted and `mathValue.type()` throws a TypeError instead of answering, and the day
+   `CSS.px(1).equals(mathValue)` answers true for two values of different interfaces. */
+bool css_numeric_value_is(JSContext *ctx, JSValueConst v);
+
 /* §4.3.1's MEMBERS THIS COMPONENT DECLARES, named so the one realm install can spell each install site with a
    literal IDL name beside the id it was declared under. */
 typedef enum {
     CSS_NUMERIC_MEMBER_TYPE = 0,   /* `CSSNumericType type()` */
     CSS_NUMERIC_MEMBER_TO,         /* `CSSUnitValue to(USVString unit)` */
+    CSS_NUMERIC_MEMBER_EQUALS,     /* `boolean equals(CSSNumberish... value)` */
     CSS_NUMERIC_MEMBER_N
 } CssNumericMember;
 

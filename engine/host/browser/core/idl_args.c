@@ -3487,6 +3487,20 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                statement two arms of one file disagreed about. */
             t = idl_arg_implements(ctx, m, ti, a) ? IDL_ANY : IDL_DOMSTRING;
         }
+        /* §3.2.25 over `(double or T)` — the row above's interface clause with the OTHER arm, so it is the
+           same §3.2.15 resolution and for the same reason. Everything the union does NOT name is what makes
+           the rest of §3.2.25 skippable here: no dictionary, no sequence, no record, no callback and no string
+           type, so a value that is not a platform object implementing T falls past every Object clause to
+           "If types includes a numeric type, then return the result of converting V to that numeric type" —
+           which is the restricted `double` the numeric arm below converts, ToNumber included, so `equals({})`
+           is §3.2.7's TypeError for a NaN rather than an argument silently read as an object. */
+        if (t == IDL_DOUBLE_UNLESS_IFACE) {
+            DCHECK(idl_arg_iface_stated(m, ti),
+                   "a member declared an interface-or-double union with no interface to brand against — the "
+                   "interface is half of what that type states, and it is stated by idl_iface_brand for one a "
+                   "class names exactly or by idl_arg_iface for one it does not");
+            t = idl_arg_implements(ctx, m, ti, a) ? IDL_ANY : IDL_DOUBLE;
+        }
         /* §3.2.25 over `(object or DOMString)`, read in the union algorithm's own ORDER — which is the whole
            of the difference between this and IDL_STRING_OR_DICT. The union names no nullable and no dictionary
            type, so `null` never reaches an object arm: it falls past every Object clause to the string one and

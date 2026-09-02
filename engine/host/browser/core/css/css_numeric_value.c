@@ -21,7 +21,7 @@
 #include "core/idl_args.h"
 #include "solver/concolic.h"
 
-static int g_id[CSS_NUMERIC_MEMBER_N] = { -1, -1 };
+static int g_id[CSS_NUMERIC_MEMBER_N] = { -1, -1, -1 };
 
 /* ---- §4.3.2 Numeric Value Typing's "create a type from a string unit" -------------------------------------- */
 
@@ -71,23 +71,22 @@ bool css_numeric_type_from_unit(const char *unit, size_t unit_len, CssMathType *
 
 /* ---- §4.3.1's brand, and the one subclass this engine can answer for --------------------------------------- */
 
+/* See css_numeric_value.h, which carries this predicate's named residual — it is stated there because the
+   union arm the declaration names reads it from outside this file and the residual is about the ANSWER, not
+   about either caller. */
+bool css_numeric_value_is(JSContext *ctx, JSValueConst v)
+{
+    (void)ctx;
+    return css_unit_value_is(v);
+}
+
 /* Web IDL §3.7.5 Operations' brand check: a member of CSSNumericValue.prototype reached on something that is
- * not a CSSNumericValue is a TypeError, and a page tells that apart from `undefined`.
- *
- * NAMED RESIDUAL — THE BRAND ASKS FOR THE ONE SUBCLASS THAT EXISTS, NOT FOR THE INTERFACE.
- * WHAT IS NOT COVERED: `css_unit_value_is` answers "is this a §4.3.3 CSSUnitValue", and the question Web IDL
- * asks here is "is this a §4.3.1 CSSNumericValue". They coincide over every object that exists, because
- * §4.3.4 Complex Numeric Values: CSSMathValue objects is unbuilt and CSSUnitValue is the only subclass any
- * component mints — so this is correct today and narrower than the interface.
- * WHAT THE NEXT DIFF BUILDS: the CSSMathValue family, whose first member brings a second brand; this predicate
- * becomes the disjunction of the two at that moment, and the members below grow the CSSMathValue arms of
- * §4.3.1's create-a-sum-value that they DCHECK against today.
- * HOW ITS ABSENCE WOULD SHOW: it cannot show as a wrong answer while it holds — there is no other object for
- * it to be wrong about — which is why it is stated rather than asserted. It shows the day a CSSMathValue is
- * minted and `mathValue.type()` throws a TypeError instead of answering. */
+ * not a CSSNumericValue is a TypeError, and a page tells that apart from `undefined`. It is §3.2.15's own
+ * question, so it is the entry above and never a second test — the receiver of `equals` and its arguments are
+ * branded against one predicate, which is what stops the two from admitting different sets of objects. */
 static bool nv_brand(JSContext *ctx, JSValueConst v)
 {
-    if (css_unit_value_is(v)) return true;
+    if (css_numeric_value_is(ctx, v)) return true;
     JS_ThrowTypeError(ctx, "a CSSNumericValue member was reached on something that is not a CSSNumericValue");
     return false;
 }
@@ -301,7 +300,8 @@ static JSValue js_css_numeric_value_to(JSContext *ctx, JSValueConst this_val, in
     }
     /* STEPS 3-5 over the one subclass that exists. §4.3.1's create-a-sum-value has a CSSUnitValue arm that
        cannot fail and yields exactly one item, so the two TypeErrors those steps guard against are unreachable
-       from here — see nv_brand's residual for the arm that makes them reachable. What is left is §4.3.3's
+       from here — see css_numeric_value.h's residual on `css_numeric_value_is` for the arm that makes them
+       reachable. What is left is §4.3.3's
        convert-a-CSSUnitValue, whose failure IS step 6's TypeError. */
     from = css_unit_value_unit(this_val);
     if (!css_numeric_convert_ratio(from, want, &ratio)) {
@@ -353,6 +353,202 @@ static JSValue js_css_numeric_value_to(JSContext *ctx, JSValueConst this_val, in
     return r;
 }
 
+/* ---- §4.3's rectify a numberish value, and §4.3.1's `equals` ----------------------------------------------- */
+
+/* THE RELATION §4.3.1's equality PERFORMS, as the name solver/concolic.h's `concolic_new_rel` composes into a
+   predicate's identity. It is the SPEC ALGORITHM and not the C operator, because that identity is what the
+   flow's path constraint is keyed by: two different comparisons of one pair of values must not compose to one
+   key, or a flow's record of either decides the other. */
+#define NV_EQUAL_REL "CSS Typed OM 1 §4.3.1 equal numeric values"
+
+/* CSS Typed OM 1 §4.3 Numeric Values:'s "To rectify a numberish value num, optionally to a given unit unit
+ * (defaulting to "number"), perform the following steps" — over an argument whose union §3.2.25 has ALREADY
+ * resolved, so the two branches are read off the value rather than sorted here: "If num is a CSSNumericValue,
+ * return num." and "If num is a double, return a new CSSUnitValue with its value internal slot set to num and
+ * its unit internal slot set to unit."
+ *
+ * THE OPTIONAL UNIT IS NOT A PARAMETER YET, and that is a statement about the callers rather than a narrowing.
+ * §4.3.1's six arithmetic members and its `equals` all rectify at the default; the members that pass one are
+ * §4.4 CSSTransformValue objects' components, none of which this engine builds. The day one of those is built
+ * this grows the parameter — writing `"number"` at every call site instead is the same fact seven sites are
+ * each asked to remember.
+ *
+ * OWNED EITHER WAY. The CSSNumericValue arm DUPS rather than borrowing, so one release frees whichever arm
+ * ran and no caller has to know which. */
+static JSValue nv_rectify(JSContext *ctx, JSValueConst num)
+{
+    if (css_numeric_value_is(ctx, num)) return JS_DupValue(ctx, num);
+    /* §3.2.7's `double` produces a Number, and Web IDL's boundary passes unknown external input across as
+       itself so opacity survives the coercion — which is exactly what §4.3.3's `value` internal slot is a
+       JSValue to hold. A third thing means the position was declared as something other than the union. */
+    DCHECK(JS_IsNumber(num) || concolic_is(num),
+           "§4.3's rectify-a-numberish-value was handed a value that is neither a CSSNumericValue nor a "
+           "double. core/idl_args.h's IDL_DOUBLE_UNLESS_IFACE resolves §3.2.25's two arms before any body "
+           "runs — the interface arm crosses the platform object as itself and the other is §3.2.7's "
+           "restricted double — so anything else is a member that declared this position as some other type");
+    return css_unit_value_new(ctx, JS_DupValue(ctx, num), "number");
+}
+
+/* §4.3.1's "equal ... value internal slots" ASKED OF THE VALUE SLOTS ALONE, over the two things §4.3.3's slot
+ * can hold. 1 equal, 0 not equal, and -1 for the residue this component cannot answer by arithmetic: a
+ * comparison one of whose operands is unknown external input, which the caller mints a predicate for.
+ *
+ * THE SAME VALUE IS EQUAL WHATEVER IT IS, so identity is asked first: without it `x.equals(x)` would carry a
+ * predicate with one feasible answer, and a derivation this engine cannot spell would be reported undecided
+ * against ITSELF. Two unknowns that are the same DERIVATION are likewise one value — solver/concolic.h
+ * composes identity at every derivation precisely so that a question about one is a question about the other —
+ * and that second test is what keeps `CSS.px(x).equals(CSS.px(1), CSS.px(1))` one question rather than two.
+ *
+ * A CONCOLIC AND A NUMBER ARE NEVER "NOT EQUAL" HERE. The unknown may be any number at all, including that
+ * one, so 0 would be a control-flow decision over unknown input — the collapse §@S forbids — where -1 is the
+ * honest "this needs a predicate". */
+static int nv_slot_equal(JSContext *ctx, JSValueConst a, JSValueConst b)
+{
+    bool ca = concolic_is(a), cb = concolic_is(b);
+    double x = 0.0, y = 0.0;
+
+    if (ca != cb) return -1;
+    if (ca) {
+        const char *ia, *ib;
+
+        /* ONE OBJECT IS ONE VALUE. The pointer test is asked of concolics ONLY and never of the numeric case:
+           a JSValue's payload union is a pointer for an object and the double itself for a Number, so on a
+           32-bit target two different doubles sharing their low word would compare identical. */
+        if (JS_VALUE_GET_PTR(a) == JS_VALUE_GET_PTR(b)) return 1;
+        ia = concolic_ident_c(a);
+        ib = concolic_ident_c(b);
+        return (ia != NULL && ib != NULL && strcmp(ia, ib) == 0) ? 1 : -1;
+    }
+    DCHECK(JS_IsNumber(a) && JS_IsNumber(b),
+           "§4.3.1's equality was asked about a `value` internal slot that is neither a Number nor unknown "
+           "external input — §4.3.3's mint asserts those are the only two things that reach a slot, so a "
+           "third here is a record written past that mint");
+    JS_ToFloat64(ctx, &x, a);
+    JS_ToFloat64(ctx, &y, b);
+    /* §3.2.7's restricted `double` refused a NaN at every boundary that writes this slot, so `==` is total
+       here and the reflexive case above has already answered the one pair it would get wrong. */
+    return x == y ? 1 : 0;
+}
+
+/* THE PREDICATE nv_slot_equal's -1 STANDS FOR, with §4.3.1's equality run on the operands' own examples as its
+   example. The example is what marks the arm a real session takes PRIMARY at the page's own branch; it is
+   attached only when BOTH operands carry one, because `idl_number_of` answering false means there is no
+   concrete the code computed and a number chosen here would be invented. */
+static JSValue nv_slot_predicate(JSContext *ctx, JSValueConst a, JSValueConst b)
+{
+    JSValue pred = concolic_new_rel(ctx, NV_EQUAL_REL, a, b);
+    double x = 0.0, y = 0.0;
+
+    if (idl_number_of(ctx, IDL_DOUBLE, a, &x) && idl_number_of(ctx, IDL_DOUBLE, b, &y))
+        concolic_set_example(ctx, pred, JS_NewBool(ctx, x == y));
+    return pred;
+}
+
+/* "The equals(...values) method, when called on a CSSNumericValue this, must perform the following steps:
+   Replace each item of values with the result of rectifying a numberish value for the item. For each item in
+   values, if the item is not an equal numeric value to this, return false. Return true."
+   Its equality is §4.3.1's own, and that section says how exacting it is meant to be: "This notion of equality
+   is purposely fairly exacting; all the values must be the exact same type and value, in the same order."
+
+   §4.3.1's equal-numeric-values REACHES ITS SECOND STEP FOR EVERY PAIR THIS ENGINE CAN BUILD. "If value1 and
+   value2 are not members of the same interface, return false" is step 1, and both operands here are
+   CSSUnitValues — `this` because §3.7.5's brand admits nothing else, and each item because §4.3's rectify
+   returns either the argument (a CSSNumericValue, which today is a CSSUnitValue) or a fresh CSSUnitValue — so
+   step 2 is what runs: "If value1 and value2 are both CSSUnitValues, return true if they have equal unit and
+   value internal slots, or false otherwise." See css_numeric_value.h's residual on `css_numeric_value_is` for
+   the diff that makes step 1 able to answer false.
+
+   THE UNITS ARE COMPARED BY CODE POINTS AND NOT CASE-INSENSITIVELY, which is a real divergence from §4.3.2 one
+   member over: create-a-type-from-a-string-unit matches unit IDENTIFIERS the way CSS does, so `new
+   CSSUnitValue(1, "PX")` is a length, while §4.3.1 says "equal unit ... internal slots" and §4.3.3's
+   constructor sets that slot to the argument it was given. So `CSS.px(1).equals(new CSSUnitValue(1, "PX"))` is
+   FALSE by the standard's own two sentences, and it is written that way here rather than smoothed.
+
+   THE LOOP IS SCANNED WHOLE RATHER THAN SHORT-CIRCUITED, AND THAT IS SOUND BECAUSE STEP 1 ALREADY RAN. §4.3.1
+   rectifies EVERY item before it compares any of them, and rectification of an already-converted argument
+   observes nothing and runs no page code — so the order the comparisons are made in is unobservable, and a
+   definite `false` found at the LAST item is the algorithm's answer whatever the earlier items did. That is
+   what lets `CSS.px(x).equals(CSS.px(1), CSS.em(1))` answer a plain false instead of forking over the first
+   item and answering false on both arms.
+
+   THE RESULT OF AN UNDECIDED COMPARISON IS THE PREDICATE ITSELF, not a decision taken here. `equals` IS a
+   comparison, so its unknown answer belongs at the page's own `if` — where §7.1.2 ToBoolean's branch seam
+   forks it and files ONE constraint entry that `if (a.equals(b))` shares with every other read of that
+   predicate — rather than inside a plain C activation, which has no frame for a sibling to be snapshotted at
+   and would fork over a value the page may never branch on. It is the shape core/dom/page_visibility.c's
+   `hidden` already answers `document.visibilityState === "hidden"` with, and for the same sentence of the
+   spec: a member whose IDL type is `boolean` and whose definition is a comparison. */
+static JSValue js_css_numeric_value_equals(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                           int magic)
+{
+    JSValue this_slot, held = JS_UNDEFINED, held_slot = JS_UNDEFINED;
+    const char *this_unit;
+    int i;
+
+    (void)magic;
+    if (!nv_brand(ctx, this_val)) return JS_EXCEPTION;
+    this_unit = css_unit_value_unit(this_val);
+    this_slot = css_unit_value_value(ctx, this_val);
+    for (i = 0; i < argc; i++) {
+        JSValue item = nv_rectify(ctx, argv[i]);   /* step 1, for this item */
+        JSValue slot;
+        int r;
+
+        DCHECK(css_numeric_value_is(ctx, item),
+               "§4.3's rectify-a-numberish-value answered with something that is not a CSSNumericValue — both "
+               "its branches return one (the argument itself, or a fresh CSSUnitValue), so this is that entry "
+               "having grown a third");
+        /* STEP 2's TWO CONJUNCTS. The unit decides on its own — two different units are "false otherwise"
+           whatever the values are — and only a matching unit leaves the value slots to answer. */
+        {
+            bool same_unit = strcmp(this_unit, css_unit_value_unit(item)) == 0;
+
+            slot = css_unit_value_value(ctx, item);
+            JS_FreeValue(ctx, item);
+            r = same_unit ? nv_slot_equal(ctx, this_slot, slot) : 0;
+        }
+        if (r == 0) {                              /* step 2's "return false", for this item */
+            JS_FreeValue(ctx, slot);
+            JS_FreeValue(ctx, held_slot);
+            JS_FreeValue(ctx, held);
+            JS_FreeValue(ctx, this_slot);
+            return JS_FALSE;
+        }
+        if (r > 0) { JS_FreeValue(ctx, slot); continue; }
+        if (JS_IsUndefined(held)) {
+            held = nv_slot_predicate(ctx, this_slot, slot);
+            held_slot = slot;
+            continue;
+        }
+        /* A SECOND UNDECIDED COMPARISON. Every comparison in this loop shares `this`'s slot, so two of them
+           ask ONE question exactly when the two items' slots are one value — which is the ordinary case
+           (`CSS.px(x).equals(CSS.px(1), CSS.px(1))`) and costs one predicate, not two. */
+        if (nv_slot_equal(ctx, held_slot, slot) > 0) { JS_FreeValue(ctx, slot); continue; }
+        JS_FreeValue(ctx, slot);
+        /* TWO DIFFERENT QUESTIONS, AND THE ANSWER IS THEIR CONJUNCTION, WHICH NO VALUE IN THIS ENGINE SPELLS.
+           `equals` must hand back ONE value for the page's `if` to fork on, and solver/concolic.h mints a
+           predicate over a PAIR of operands (`concolic_new_rel`) and nothing over a pair of PREDICATES. What
+           must exist is that second mint — a value whose truth is the conjunction of two others, composing its
+           identity from BOTH of them, so that `p ∧ q` and `p ∧ r` are two constraint entries rather than one
+           deciding the other. Deriving it from one operand through the builtin seam is exactly that defect,
+           which is why this crashes rather than reaching for it.
+           IN RELEASE THE HELD PREDICATE STANDS, and the direction that leaves is the sound one: the flow forks
+           over one of the two questions and keeps both of its arms, where dropping the fork would prune an arm
+           nothing contradicts. `CSS.px(1).equals(CSS.px(x), CSS.px(y))` is what reaches this. */
+        DFAIL("§4.3.1's equals reached a SECOND undecided comparison over a DIFFERENT pair of operands, and "
+              "its answer is the conjunction of two predicates — solver/concolic.h mints one over two VALUES "
+              "and has no mint over two PREDICATES, so there is no single value to hand back for the page's "
+              "own branch to fork on. Build that mint beside concolic_new_rel, composing the result's identity "
+              "from BOTH predicates' identities so two conjunctions sharing one operand are two constraint "
+              "entries");
+    }
+    JS_FreeValue(ctx, held_slot);
+    JS_FreeValue(ctx, this_slot);
+    /* "Return true" — reached when every item's comparison answered equal, which for an empty argument list is
+       vacuously every one of them. `held` is the undecided residue where there was one. */
+    return JS_IsUndefined(held) ? JS_TRUE : held;
+}
+
 /* ---- the per-agent declaration ------------------------------------------------------------------------------ */
 
 int css_numeric_value_member_id(CssNumericMember m)
@@ -366,23 +562,46 @@ int css_numeric_value_member_id(CssNumericMember m)
     return g_id[m];
 }
 
+/* THE NAME EVERY §3.2.15 TypeError FROM THIS UNION IS ABOUT. It is the IDL's own identifier, so a page that
+   passes the wrong thing is told which interface it failed, and it must outlive the declaration. */
+static const char NV_IFACE[] = "CSSNumericValue";
+
 void css_numeric_value_init(JSContext *ctx)
 {
     /* `CSSUnitValue to(USVString unit)` — one required position, so Web IDL §3.7.7 Operations' `length` is 1. */
     static const IdlArgType TO_ARGS[1] = { IDL_USVSTRING };
+    /* `boolean equals(CSSNumberish... value)` — ONE declared position carrying the tail's type, which is what
+       `T...` means to core/idl_args.h: the last declared type applies to every argument from there on. §3.7.7
+       Operations' `length` is 0, because a variadic tail is not a required position. */
+    static const IdlArgType EQUALS_ARGS[1] = { IDL_DOUBLE_UNLESS_IFACE };
+    unsigned m;
 
-    DCHECK(g_id[CSS_NUMERIC_MEMBER_TYPE] < 0 && g_id[CSS_NUMERIC_MEMBER_TO] < 0,
-           "css_numeric_value_init ran twice in one agent — a second declaration would leave the first pool "
-           "entry reachable by nothing and the install reading whichever ran last");
+    for (m = 0; m < CSS_NUMERIC_MEMBER_N; m++)
+        DCHECKF(g_id[m] < 0,
+                "css_numeric_value_init found member %u already declared. Either it ran twice in one agent — "
+                "a second declaration leaves the first pool entry reachable by nothing and the install reading "
+                "whichever ran last — or the id table's initialiser is shorter than CssNumericMember, which "
+                "zero-fills the tail and 0 is a VALID pool id", m);
     /* `CSSNumericType type()` takes no arguments. */
     g_id[CSS_NUMERIC_MEMBER_TYPE] = idl_method_id(ctx, NULL, 0, js_css_numeric_value_type, 0);
     g_id[CSS_NUMERIC_MEMBER_TO]   = idl_method_id(ctx, TO_ARGS, 1, js_css_numeric_value_to, 0);
-    DCHECK(g_id[CSS_NUMERIC_MEMBER_TYPE] >= 0 && g_id[CSS_NUMERIC_MEMBER_TO] >= 0,
-           "one of this component's two declarations did not enter the argument pool");
+    g_id[CSS_NUMERIC_MEMBER_EQUALS] =
+        idl_method_id(ctx, EQUALS_ARGS, 1, js_css_numeric_value_equals, 0);
+    idl_variadic();
+    /* §3.2.15's `I` FOR THE UNION'S ARM, AS A PREDICATE AND NOT A CLASS — core/idl_args.h's own split.
+       CSSNumericValue is an interface no single class id names: CSSUnitValue is one class today and §4.3.4's
+       six CSSMathValue subclasses will each be another, and "implements" is the question all of them answer
+       yes to. `idl_iface_brand` could name only the one that exists, which is a narrowing this file would then
+       have to widen from two places. */
+    idl_arg_iface(0, css_numeric_value_is, NV_IFACE);
+    for (m = 0; m < CSS_NUMERIC_MEMBER_N; m++)
+        DCHECKF(g_id[m] >= 0, "this component's declaration of member %u did not enter the argument pool", m);
     agent_state_id("css_numeric_value", &g_id[CSS_NUMERIC_MEMBER_TYPE],
                    "CSS Typed OM 1 §4.3.1's type() declaration");
     agent_state_id("css_numeric_value", &g_id[CSS_NUMERIC_MEMBER_TO],
                    "CSS Typed OM 1 §4.3.1's to() declaration");
+    agent_state_id("css_numeric_value", &g_id[CSS_NUMERIC_MEMBER_EQUALS],
+                   "CSS Typed OM 1 §4.3.1's equals() declaration");
 }
 
 /* THE INVERSE. Nothing here is a realm's — the interface prototype objects these members land on belong to
@@ -390,7 +609,11 @@ void css_numeric_value_init(JSContext *ctx)
    else. */
 void css_numeric_value_free(void)
 {
-    DCHECK(g_id[CSS_NUMERIC_MEMBER_TYPE] >= 0 && g_id[CSS_NUMERIC_MEMBER_TO] >= 0,
-           "CSS Typed OM 1 §4.3.1's members were released in an agent that never declared them");
-    g_id[CSS_NUMERIC_MEMBER_TYPE] = g_id[CSS_NUMERIC_MEMBER_TO] = -1;
+    unsigned m;
+
+    for (m = 0; m < CSS_NUMERIC_MEMBER_N; m++) {
+        DCHECKF(g_id[m] >= 0,
+                "CSS Typed OM 1 §4.3.1's member %u was released in an agent that never declared it", m);
+        g_id[m] = -1;
+    }
 }
