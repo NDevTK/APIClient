@@ -8,6 +8,7 @@
 
 #include "core/agent_state.h"
 #include "core/console/console.h"
+#include "core/console/console_label.h"
 #include "core/idl_args.h"
 #include "core/json_buf.h"
 #include "core/realm.h"
@@ -58,6 +59,37 @@ static int g_id[M_N];
 #define CON_STRING   "String"
 #define CON_PARSEINT "parseInt"
 #define CON_PARSEFLT "parseFloat"
+
+/* ---- §1.2/§1.4's `label`, WHICH IS FIVE MEMBERS AND TWO MAPS -------------------------------------------- */
+
+/* WHICH MAP EACH LABELLED MEMBER'S QUESTION IS ABOUT, AND NULL FOR A MEMBER THAT HAS NO LABEL. Stated as a
+ * table rather than as a condition at the seam for the reason core/idl_args.h gives about every hand-copied
+ * list: the fact "this member asks the label question, of THAT map" is one fact per member, and a `magic ==
+ * A || magic == B || …` at the call site is the same list with nowhere for the map to be written down. It is
+ * indexed by the enum above, so a member added without an entry is a NULL — which is the honest answer for
+ * every member that has no label, and which the DCHECK at each labelled case turns into an abort for one that
+ * does.
+ *
+ * §1.2 "Counting functions": "Each console namespace object has an associated count map, which is a map of
+ * strings to numbers, initially empty." §1.4 "Timing functions" says the same with "times" for "numbers" of
+ * the timer table. Two maps, one question, five askers. */
+static const char *const CONSOLE_LABEL_MAP[M_N] = {
+    NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+    CON_COUNTS, CON_COUNTS, NULL, NULL, NULL, CON_TIMERS, CON_TIMERS, CON_TIMERS
+};
+
+/* EACH LABELLED MEMBER'S OWN SPEC IDENTITY — the ADDRESS every assert the label question makes on its behalf
+ * reports. The machine's IdlStepDecl names the whole namespace, which is the right answer for "which
+ * algorithm is this flow parked in" and far too coarse for "which member reached this crash": a
+ * should-never-happen stamps the line it is WRITTEN at, so a check inside the shared chain would name
+ * console_label.c for all five (CLAUDE.md's §AN-ASSERT-THAT-NAMES-A-REMEDY). The site travels with the
+ * operation instead, and it is the member's own spec identity rather than a file and a line because that name
+ * is stable across an edition of this tree in a way a coordinate is not. */
+static const char *const CONSOLE_LABEL_ALGORITHM[M_N] = {
+    NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+    "Console §1.2.1 count(label)", "Console §1.2.2 countReset(label)", NULL, NULL, NULL,
+    "Console §1.4.1 time(label)", "Console §1.4.2 timeLog(label, ...data)", "Console §1.4.3 timeEnd(label)"
+};
 
 /* OWNED — the caller frees. */
 static JSValue console_rec(JSContext *ctx)
@@ -285,8 +317,8 @@ static void console_advance(JSContext *ctx, JSValueConst args, JSValue target)
 /* ---- the machine ------------------------------------------------------------------------------------------ */
 
 #define CON_STAGES(X) \
-    X(CON_RUN,    "Console §1.1-§1.4 this member's own steps, up to the Logger, Formatter or Printer it " \
-                  "performs") \
+    X(CON_RUN,    "Console §1.1-§1.4 this member's own steps — for §1.2/§1.4's five, the label question its " \
+                  "map is asked first — up to the Logger, Formatter or Printer it performs") \
     X(CON_FORMAT, "Console §2.2 Formatter step 5 — ONE format specifier: the %String%/%parseInt%/%parseFloat% " \
                   "call over `current`, the substitution into `target`, and step 6's shift")
 enum { IDL_STEP_STAGE_BASE(CON_STAGES) CON_STAGES(JS_STEP_STAGE_ENUM) };
@@ -299,6 +331,10 @@ typedef struct {
     JSValue args;
     JSValue cb[4];    /* step_call_run's [this, func, arg0, arg1] — %parseInt%(current, 10) is the widest */
     uint8_t phase;    /* step_call_run's cursor */
+    /* §1.2/§1.4's LABEL QUESTION, for the five members that have a `label` — core/console/console_label.h owns
+       it. It is EMBEDDED rather than allocated because the fork copies a machine's state, and its zeroed
+       arrival is the valid "no question asked yet" shape, which is why nothing initialises it below. */
+    ConsoleLabelChain label;
 } ConsoleState;
 
 static void console_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -309,6 +345,7 @@ static void console_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->args);
     for (i = 0; i < 4; i++)
         v->val(ctx, &s->cb[i]);
+    console_label_chain_visit(ctx, &s->label, v);
 }
 
 /* An Array of argv[from..argc). OWNED. */
@@ -359,6 +396,21 @@ static int console_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
     *presult = JS_UNDEFINED;
 
     if (hdr->stage == CON_RUN) {
+        /* §1.2/§1.4's LABEL, RESOLVED BELOW BEFORE ANY MEMBER'S OWN STEP RUNS. JS_ATOM_NULL for the fourteen
+           members that have no label; OWNED by this activation and freed by the case that reads it. */
+        JSAtom label_key = JS_ATOM_NULL;
+
+        /* WHY RE-ENTERING THIS STAGE IS SOUND, ASSERTED RATHER THAN ARGUED. A labelled member can PARK here —
+           its label question forks — and the resume lands back at CON_RUN, which re-runs the init below. That
+           is safe only while the member has performed none of its own steps yet, which is exactly what the
+           label question being FIRST buys: the init would otherwise drop a live §2.2 list on the floor. The
+           assert is the structural half of that sentence, so a later edit that moves a member's own work above
+           the label question aborts here instead of leaking one. */
+        DCHECK(!s->label.taken || (JS_IsUndefined(s->args) && s->phase == 0),
+               "a console member resumed into its first stage with §2.2's list or a call cursor already live — "
+               "the only park that lands back here is §1.2/§1.4's label question, which is the FIRST thing a "
+               "labelled member does, so a member that has begun its own steps and parked at this stage has "
+               "work the re-entry below is about to discard");
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         /* EVERY OWNED FIELD IN PLACE BEFORE THE FIRST THING THAT CAN THROW. A step state arrives ZEROED and a
@@ -367,6 +419,31 @@ static int console_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
         s->args = JS_UNDEFINED;
         for (i = 0; i < 4; i++) s->cb[i] = JS_UNDEFINED;
         s->phase = 0;
+
+        /* §1.2.1, §1.2.2, §1.4.1, §1.4.2 and §1.4.3 ALL BEGIN WITH ONE QUESTION ABOUT ONE MAP, AND IT IS ASKED
+           HERE RATHER THAN FIVE TIMES BELOW. "If map[label] exists", "If the associated timer table contains an
+           entry with key label" and the two `timerTable[label]` reads are four spellings of it. With a known
+           label it is a lookup; with unknown external input it is an elimination over the map's own keys, and
+           the answer to BOTH is the key the member then works through — which is why every case below takes
+           `label_key` where it used to convert `argv[0]` itself. core/console/console_label.h holds the
+           argument, including why the answer is one atom and not an atom plus a "was it there" flag. */
+        if (CONSOLE_LABEL_MAP[magic] != NULL) {
+            JSValue map = console_field(ctx, CONSOLE_LABEL_MAP[magic]);
+            int rc;
+
+            DCHECK(argc >= 1, "a §1.2/§1.4 member reached its body with no `label` position — every one of the "
+                              "five declares `optional DOMString label = \"default\"`, so Web IDL §3.6 places "
+                              "the default whether or not the page reached it");
+            DCHECK(CONSOLE_LABEL_ALGORITHM[magic] != NULL,
+                   "a console member names the map its label question is about and does not name ITSELF — the "
+                   "two tables are one fact per member and an entry in one without the other leaves every "
+                   "assert that question makes reporting no site");
+            rc = console_label_run(ctx, hdr, &s->label, argv[0], map, CONSOLE_LABEL_ALGORITHM[magic],
+                                   &label_key);
+            JS_FreeValue(ctx, map);
+            if (rc)
+                return rc;   /* parked at a link of the chain; the resume re-enters this stage and re-asks */
+        }
 
         switch (magic) {
 
@@ -398,21 +475,29 @@ static int console_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
             return 0;
         }
 
-        /* §1.2.1 count(label) and §1.2.2 countReset(label). The map is the realm's; the label arrived as a real
-           String (the declaration's DOMString conversion, which is where the page's `toString` ran). */
+        /* §1.2.1 count(label) and §1.2.2 countReset(label). The map is the realm's; `label_key` is the entry
+           the label names IN THIS WORLD, answered by the seam above — an existing key on an arm the chain
+           pinned, or the unknown's own stable slot when it named none. This comment used to say the label
+           "arrived as a real String (the declaration's DOMString conversion, which is where the page's
+           `toString` ran)", which is true of a KNOWN label and false of the one this member exists to explore:
+           Web IDL §3.2.10 DOMString's conversion is one unknown external input CROSSES as itself. */
         case M_COUNT:
         case M_COUNT_RESET: {
             JSValue map = console_field(ctx, CON_COUNTS);
-            JSAtom key;
+            JSAtom key = label_key;
             JSValue prev, concat;
             int32_t next = 1;
             int had;
 
-            DCHECK(argc >= 1 && JS_IsString(argv[0]),
-                   "§1.2's `label` reached the body as something other than a String — the IDL declares "
-                   "`optional DOMString label = \"default\"`, so the conversion and the default have both run");
-            key = JS_ValueToAtom(ctx, argv[0]);
-            CHECK(key != JS_ATOM_NULL, "console: §1.2's label could not be interned");
+            /* THE KEY IS THE ANSWER TO §1.2's OWN QUESTION AND WAS RESOLVED ABOVE, WHICH IS WHY THE CONVERSION
+               AND THE TYPE ASSERT THAT STOOD HERE ARE BOTH GONE. The assert said the label is a String, which
+               is FALSE of every call this member exists to explore: a DOMString argument position is a
+               boundary unknown external input crosses AS ITSELF. It is stated where it is true of both shapes
+               now, at console_label_run's entry, beside the algorithm it is about. */
+            DCHECK(key != JS_ATOM_NULL,
+                   "§1.2's count member reached its body with no resolved label key — the seam above answers "
+                   "for every member CONSOLE_LABEL_MAP names, so a null here is a member whose table entry is "
+                   "missing");
             had = JS_HasProperty(ctx, map, key);
             CHECK(had >= 0, "console: §1.2's count map could not be read");
             if (magic == M_COUNT_RESET) {
@@ -439,11 +524,16 @@ static int console_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
             }
             CHECK(JS_SetProperty(ctx, map, key, JS_NewInt32(ctx, next)) >= 0,
                   "console: §1.2.1's count could not be stored");
-            JS_FreeAtom(ctx, key);
             JS_FreeValue(ctx, map);
-            /* "Let concat be the concatenation of label, U+003A (:), U+0020 SPACE, and ToString(map[label])." */
+            /* "Let concat be the concatenation of label, U+003A (:), U+0020 SPACE, and ToString(map[label])."
+               THE LABEL IS READ OFF THE RESOLVED KEY AND NEVER OFF THE ARGUMENT, which is what makes this line
+               work for both worlds. On the arm that named an existing entry the key IS the label in this
+               world, so printing it states what the flow established; on the remainder arm it is the unknown's
+               own display shape, which is the same rendering console_render gives a concolic anywhere else. A
+               JS_ToCString on the argument was the second of §1.2/§1.4's two aborts — a byte consumer handed
+               unknown external input, dying in js_force_tostring with this file's line in the message. */
             {
-                const char *lab = JS_ToCString(ctx, argv[0]);
+                const char *lab = JS_AtomToCString(ctx, key);
                 char tail[32];
                 JsonBuf b = { 0 };
                 char *whole;
@@ -459,6 +549,7 @@ static int console_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
                 free(whole);
                 json_buf_free(&b);
             }
+            JS_FreeAtom(ctx, key);   /* held until here: the concatenation reads the LABEL out of it */
             /* "Perform Logger("count", « concat »)" — one element, so §2.1 step 4 reaches Printer directly. */
             console_print_one(ctx, level, concat);
             return 0;
@@ -468,10 +559,18 @@ static int console_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
            Otherwise, set the value of the entry with key label … to the current time." */
         case M_TIME: {
             JSValue table = console_field(ctx, CON_TIMERS);
-            JSAtom key = JS_ValueToAtom(ctx, argv[0]);
+            JSAtom key = label_key;
             int had;
 
-            CHECK(key != JS_ATOM_NULL, "console: §1.4.1's label could not be interned");
+            /* THE ENTIRE OBSERVABLE OF §1.4.1 IS THIS TEST, WHICH IS WHY THE CONVERSION THAT USED TO STAND
+               HERE WAS THE WORST OF THE FIVE. A JS_ValueToAtom over unknown external input does not abort — it
+               reaches ECMAScript §7.1.21 ToPropertyKey ( arg ), whose concolic arm answers with the
+               value's display shape as a real string — so this member RAN, filed a timer under a slot no page
+               key can equal, and answered NO to the test below for every label ever started, with no fork and
+               nothing to say a question had been asked. */
+            DCHECK(key != JS_ATOM_NULL,
+                   "§1.4.1 reached its body with no resolved label key — the seam above answers for every "
+                   "member CONSOLE_LABEL_MAP names, so a null here is a member whose table entry is missing");
             had = JS_HasProperty(ctx, table, key);
             CHECK(had >= 0, "console: §1.4.1's timer table could not be read");
             if (!had)
@@ -491,15 +590,17 @@ static int console_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
         case M_TIME_LOG:
         case M_TIME_END: {
             JSValue table = console_field(ctx, CON_TIMERS);
-            JSAtom key = JS_ValueToAtom(ctx, argv[0]);
+            JSAtom key = label_key;
             double start = 0;
             JSValue startv, nowv, concat, list;
             const char *lab, *shape = NULL;
-            char tail[192];
             JsonBuf b = { 0 };
             char *whole;
 
-            CHECK(key != JS_ATOM_NULL, "console: §1.4's label could not be interned");
+            DCHECK(key != JS_ATOM_NULL,
+                   "§1.4.2/§1.4.3 reached its body with no resolved label key — the seam above answers for "
+                   "every member CONSOLE_LABEL_MAP names, so a null here is a member whose table entry is "
+                   "missing");
             startv = JS_GetProperty(ctx, table, key);
             /* whatwg/console#134: the standard reads `timerTable[label]` with no test that it exists, and the
                issue it links is the open question of what to report when it does not. An absent entry is
@@ -545,25 +646,44 @@ static int console_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
             JS_FreeValue(ctx, startv);
             if (magic == M_TIME_END)
                 CHECK(JS_DeleteProperty(ctx, table, key, 0) >= 0, "console: §1.4.3's timer could not be removed");
-            JS_FreeAtom(ctx, key);
             JS_FreeValue(ctx, table);
 
-            lab = JS_ToCString(ctx, argv[0]);
+            /* THE LABEL IS READ OFF THE RESOLVED KEY, for the reason §1.2.1's concatenation states: the key IS
+               the label in this world on the arm that named an entry, and is the unknown's own display shape
+               on the remainder arm. The JS_ToCString on the argument that stood here is where
+               `console.timeEnd(location.hash)` died — in js_force_tostring, naming this line as the byte
+               consumer, one step AFTER the membership question had already been decided wrongly and silently. */
+            lab = JS_AtomToCString(ctx, key);
             CHECK(lab != NULL, "console: §1.4's label could not be read");
+            JS_FreeAtom(ctx, key);
             /* "a string representing the difference … in an implementation-defined format". Milliseconds, which
-               is the unit hr_time's DOMHighResTimeStamp already is, so no conversion invents precision. */
+               is the unit hr_time's DOMHighResTimeStamp already is, so no conversion invents precision.
+               IT IS APPENDED RATHER THAN FORMATTED INTO A FIXED ARRAY, because the unknown arm's `shape` is a
+               DERIVATION's display form and a derivation has no width — `{location.hash}` is short and the
+               expression a page's own timing composes is not. This was a silent truncation that no run could
+               reach while the label conversion above aborted first; routing the label is what makes it
+               reachable, so removing it is part of the same diff. The numeric arm still formats, into a buffer
+               sized for the widest `%.3f` a double can spell (309 integer digits, a point, three decimals and
+               a sign) with the count asserted rather than assumed. */
+            json_buf_raw(&b, lab);
+            json_buf_raw(&b, ": ");
             if (shape) {
-                snprintf(tail, sizeof tail, ": %s ms", shape);
+                json_buf_raw(&b, shape);
             } else {
                 double now = 0;
+                char num[400];
+                int w;
 
                 if (!JS_IsUndefined(nowv))
                     CHECK(JS_ToFloat64(ctx, &now, nowv) == 0, "console: §1.4's current time could not be read");
-                snprintf(tail, sizeof tail, ": %.3f ms", now - start);
+                w = snprintf(num, sizeof num, "%.3f", now - start);
+                DCHECK(w > 0 && (size_t)w < sizeof num,
+                       "§1.4's duration could not be spelled — the buffer is sized for the widest `%.3f` a "
+                       "double has, so a truncation here is a number that is not one");
+                json_buf_raw(&b, num);
             }
+            json_buf_raw(&b, " ms");
             JS_FreeValue(ctx, nowv);
-            json_buf_raw(&b, lab);
-            json_buf_raw(&b, tail);
             JS_FreeCString(ctx, lab);
             whole = json_buf_take(&b);
             CHECK(whole != NULL, "console: §1.4's concat could not be allocated");

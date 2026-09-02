@@ -44,15 +44,15 @@
  * THE CONSEQUENCE IS A REAL LIMIT AND IT IS STATED HERE RATHER THAN DISCOVERED: a member whose name is
  * UNBOUNDED cannot be spelled into this. A §8.7 identifier and a collection position are both a uint32, so
  * their widest spelling is arithmetic; a name the PAGE supplies — HTML §9.5's BroadcastChannel `name`, the
- * console standard's §1.2/§1.4 `label` — has no width at all, and an asker holding one needs a key whose
- * storage its own `visit` declares as a `buf`, not this. The compile-time check below is what makes that a
- * refusal at the call site instead of a truncation at run time.
+ * console standard's §1.2/§1.4 `label` — has no width at all, and an asker holding one uses
+ * IdlNameChainSuppliedKey below, whose storage its own `visit` declares as a `buf`. The compile-time check
+ * below is what makes that a refusal at the call site instead of a truncation at run time.
  *
  * THE NUMBER ITSELF IS NOT LOAD-BEARING AND MUST NOT BE READ AS A BUDGET. It is large enough for every
  * predicate this tree spells plus the widest uint32, and IDL_NAME_CHAIN_SPELLS is what actually enforces that
  * per caller — so a caller that does not fit gets a COMPILE ERROR naming its own predicate, which is the
- * signal to raise this or to build the declared-buffer key above, never to shorten a predicate until it
- * fits. */
+ * signal to raise this or to move that caller to IdlNameChainSuppliedKey, never to shorten a predicate until
+ * it fits. */
 #define IDL_NAME_CHAIN_OP_MAX 128
 
 /* WHAT ONE MEMBER'S CHAIN KEEPS OF THIS COMPONENT: the composed key, and nothing else. A member EMBEDS this
@@ -61,6 +61,41 @@
 typedef struct {
     char op[IDL_NAME_CHAIN_OP_MAX];
 } IdlNameChainKey;
+
+/* THE SAME KEY WHEN THE PAGE SUPPLIES THE MEMBER'S NAME — the other storage, and the reason it is a second
+ * TYPE rather than a second mode of the first.
+ *
+ * THE TWO ARE CHOSEN BY WHICH STRUCT A CALLER EMBEDS, AT COMPILE TIME, AND THERE IS NO PREDICATE ANYWHERE.
+ * CLAUDE.md's §C-stack bans a run-time question that selects between two implementations of one thing; this is
+ * not one. Neither of these is a fallback for the other: an asker whose member names are its own arithmetic
+ * has a width, so IDL_NAME_CHAIN_SPELLS can refuse a build in which the key would truncate, and that refusal
+ * is worth more than an allocation per link; an asker whose member names come from the PAGE has no width to
+ * declare, so there is nothing for a static assertion to check and the only honest guarantee is that the
+ * buffer is GROWN to whatever the composition needs. Two facts about a name, two storages, and the choice is
+ * made once at the call site by declaring a field.
+ *
+ * TRUNCATION IS IMPOSSIBLE HERE BY CONSTRUCTION RATHER THAN REFUSED BY A CAP. idl_name_chain_ask_supplied
+ * MEASURES the composition with snprintf's would-have-written count and grows `op` to it before writing, so
+ * there is no length at which a member name stops fitting — which is what §NO BOUNDS requires of a label a
+ * page may spell as long as it likes. The defect the inline key's compile-time check exists to prevent — a
+ * key one byte short filing two members' questions under one name, so one link's recorded answer decides
+ * another's — cannot arise, because the buffer is never shorter than the string.
+ *
+ * `op` IS OWNED AND `cap` IS ITS ALLOCATION, WHICH IS THE PAIR THE `visit` COPIES. A machine embedding this
+ * MUST name it in its own `visit` through idl_name_chain_supplied_visit — a `buf` the declaration does not
+ * name is not copied by a fork, and the sibling would then read the parent's freed buffer. `cap` only ever
+ * grows, so the two consumers of the visit (the fork's copy and the discharge's free) agree about the size
+ * without either of them having to be told twice. The zeroed state a machine arrives in — NULL and 0 — is the
+ * valid "no question asked yet" shape and needs no initialiser. */
+typedef struct {
+    char  *op;
+    size_t cap;
+} IdlNameChainSuppliedKey;
+
+/* NAME THE SUPPLIED KEY'S STORAGE IN THE EMBEDDING MACHINE'S OWN `visit`. One line at the machine, so the
+   allocation is a fork-copied, discharge-freed field like any other and the machine never writes the
+   `v->buf` call itself — the cap and the pointer are one fact and stating it twice is how they come apart. */
+void idl_name_chain_supplied_visit(JSContext *ctx, IdlNameChainSuppliedKey *key, JSStepVisit *v);
 
 /* THE WIDEST DECIMAL A uint32 MEMBER NAME CAN BE SPELLED AS — 4294967295, ten digits. Derived rather than
    typed, and named so the two callers that spell a uint32 identifier state the same fact once each instead of
@@ -90,8 +125,9 @@ typedef struct {
     _Static_assert(sizeof (predicate) + (max_name_bytes) + 2 <= IDL_NAME_CHAIN_OP_MAX,                        \
                    predicate " plus the widest member name this asker can be handed does not fit "            \
                    "IdlNameChainKey::op — a truncated key names a DIFFERENT member's question and the flow "  \
-                   "answers it with this one's record, so raise IDL_NAME_CHAIN_OP_MAX or declare the key's "  \
-                   "storage in this member's own visit")
+                   "answers it with this one's record, so raise IDL_NAME_CHAIN_OP_MAX, or move this asker to " \
+                   "IdlNameChainSuppliedKey if its member names have no width at all because the page "       \
+                   "supplies them")
 
 /* ASK ONE LINK: is the unknown `over` the member named `member`?
  *
@@ -131,5 +167,26 @@ typedef struct {
 int idl_name_chain_ask(JSContext *ctx, JSStepHdr *hdr, IdlNameChainKey *key, JSValueConst over,
                        const char *predicate, const char *member, int real, const char *algorithm,
                        bool *pyes);
+
+/* THE SAME LINK, ASKED WITH A MEMBER NAME THE PAGE SUPPLIED — see IdlNameChainSuppliedKey for why the storage
+ * is the only difference and why that difference is a type rather than a flag.
+ *
+ * IT COMPOSES THE SAME `"<predicate> <member>)"` AS idl_name_chain_ask, FROM THE SAME FORMAT STATED ONCE in
+ * idl_name_chain.c. That is not tidiness: a constraint key is what a parked flow's recorded answers are filed
+ * under, out of the IndexedDB cold tier and into the next session, so two entry points composing two spellings
+ * would file one question under two names and a flow that reached the same predicate through the other door
+ * would find nothing recorded and re-ask every member it had already eliminated. One format, one question.
+ *
+ * `member` IS BORROWED for the length of the call and nothing here retains it — the composition copies its
+ * bytes into `key->op`, which is what step_fork_run borrows, so a caller reading its member name out of an
+ * atom or a JSString may release it the moment this returns. It MAY be the EMPTY STRING, which the inline
+ * entry point refuses: a page-supplied name of zero length is an ordinary member (`console.count("")` stores
+ * under it) rather than a name buffer nothing wrote, and the composition tells it apart from every other
+ * member exactly as it tells any two apart.
+ *
+ * Every other parameter, the return protocol and the outcome numbering are idl_name_chain_ask's exactly. */
+int idl_name_chain_ask_supplied(JSContext *ctx, JSStepHdr *hdr, IdlNameChainSuppliedKey *key, JSValueConst over,
+                                const char *predicate, const char *member, int real, const char *algorithm,
+                                bool *pyes);
 
 #endif
