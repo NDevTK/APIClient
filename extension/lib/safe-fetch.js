@@ -658,10 +658,19 @@ function _isPrivateHost(host) {
 //   callers of opts.credentialed: bridge.js's `navigationLoad` and `frontierRederive`,
 //               and ONLY where the address is same-origin with the browser-stated
 //               principal of the document being loaded (`navigationCarriesSession`).
-//               The learned-GET replay path (`fetched`) passes no pageOrigin and is
-//               still uncredentialed — turning that on is a separate deliberate
-//               decision about the CORB class of a same-origin chunk, not a side
-//               effect of the provenance below.
+//               The learned-GET replay path (`fetched`) passes no pageOrigin and
+//               states `credentialed: false` — turning that on is a separate
+//               deliberate decision about the CORB class of a same-origin chunk, not
+//               a side effect of the provenance below.
+//               THAT LINE USED TO SAY IT WAS "still uncredentialed", ASSERTING A
+//               PROPERTY OF ANOTHER FILE THAT HAD STOPPED BEING TRUE. `fetched` read
+//               `!!(msg && msg.credentialed)`, and the seed's AST_ANALYZE writes that
+//               field from `navigationCarriesSession` — true for the ordinary
+//               same-origin seeded page. So cookies WERE attached, with no pageOrigin
+//               beside them, and every such reply was refused
+//               `blocked-cors-credentialed:` after the request had gone out. It is a
+//               literal now. A claim here about who calls this file and how is a claim
+//               to re-grep before it is repeated.
 //   opts.provenance:
 //               CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's OBSERVED / DERIVED /
 //               FORCED, verbatim from the engine (solver/engine.h's

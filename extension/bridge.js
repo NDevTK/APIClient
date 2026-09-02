@@ -2864,8 +2864,32 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          "whether to fire those is a per-origin CONFIGURATION in the trusted zone that does not exist yet";
          it exists, this call states the word, and `safe-fetch.js`'s `_firingRefusal` answers it — a FORCED
          park at an origin nobody widened never reaches the wire. What is unchanged is the CREDENTIAL half:
-         `msg.credentialed` is still unwritten, so every read here is still uncredentialed, and turning that
-         on is a decision about the CORB class of a same-origin chunk rather than a consequence of the grade.
+         this path is uncredentialed, and turning it on is a decision about the CORB class of a same-origin
+         chunk rather than a consequence of the grade.
+         AND THE SENTENCE THAT USED TO CARRY THAT — "`msg.credentialed` is still unwritten, so every read
+         here is still uncredentialed" — WAS FALSE, in the direction this file is most burnt by: a standing
+         claim about the tree, read as a description of the present, believed rather than checked. FOUR sites
+         made it (this paragraph, the one below, `safe-fetch.js`'s `@security-contract` header, and
+         SECURITY.md §Network), and `git grep -n 'credentialed:' extension/bridge.js` answers otherwise —
+         the seed's `AST_ANALYZE` states `credentialed: navigationCarriesSession(loaded.url,
+         seed.principalOrigin)`, the child-navigable, swap and cold-rehydration messages inherit it, and
+         `navigationCarriesSession` is TRUE for the ordinary case: a same-origin seeded navigation.
+         WHAT THAT MADE THIS LINE DO IS THE DEFECT, AND IT IS ONE FIELD ANSWERING TWO QUESTIONS. Written on
+         the analyze message, `credentialed` states whether the DOCUMENT LOAD carried the person's session —
+         which is what the frontier record remembers and what `frontierRederive` re-decides from. Read here,
+         it was answering a different question: whether a LEARNED-GET REPLAY should carry it. The two agreed
+         at the site that introduced the read and part company for every seeded page, and the cost landed
+         silently on the looser one: this call states NO `pageOrigin`, so `safe-fetch.js`'s credentialed SOP
+         has no real origin to be same-origin with and no `ACAO` can ever equal it — every one of those
+         replies was refused `blocked-cors-credentialed:` AFTER the request went out. The person's cookies
+         were spent on replies this zone then discarded, and the credentialed destructive-path deny list was
+         armed over a population whose bytes could not be read either way.
+         SO IT IS STATED `false` RATHER THAN READ, which restores what all four sites already claimed and
+         takes no new decision. It is not a loosening: nothing gains credentials, and the deny list stops
+         covering these replays for the reason `safe-fetch.js` gives for scoping it to the credentialed case
+         at all — "the harm needs the session: an uncredentialed GET to a logout path destroys nothing". What
+         it recovers is real: a reply that was refused unread now comes back as the logged-out view, which is
+         what an uncredentialed learned-GET replay was always documented to be.
          WHEN IT IS BUILT, THE VALUE TO PASS IS `msg.origin` (the browser's MessageSender.origin, plumbed by
          _dispatchDocument) and NEVER `originOf(msg.sourceUrl)` — that is the exact URL-derivation the
          credentialed principal exists to forbid, and it would hand a page's own sandboxed iframe (opaque
@@ -2879,8 +2903,10 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          may carry the session. The second was not even faithful — HTML §8.1.4.2's classic script fetch has
          credentials mode `same-origin`, so a same-origin script load in a browser DOES carry them — and it is
          a POLICY, which CLAUDE.md puts at the one chokepoint with the firing decision and the deny list. Both
-         facts are handed over and `safe-fetch.js` decides. Nothing changes today: `msg.credentialed` is still
-         never written (see the finding above), so every read here is still uncredentialed. */
+         facts are handed over and `safe-fetch.js` decides. This sentence used to end "`msg.credentialed` is
+         still never written (see the finding above), so every read here is still uncredentialed" — the second
+         copy of the false claim the finding above now records, and the reason the credential state is STATED
+         on the line below rather than read off a field that answers a different question. */
       /* AND THE THIRD FACT IS WHAT THE REQUEST IS EVIDENCE OF, RELAYED AND NEVER RE-DERIVED HERE. The engine
          composed it at the park from HTML §4.12.1.1 "Processing model"'s parser-inserted (a `script` whose
          parser document is non-null; there is no "parser-inserted flag" — that name belongs to §4.10.18.3
@@ -2888,8 +2914,11 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          `path_forced` (solver/engine.h); nothing in an address could tell this zone the same thing, which is
          the whole reason it rides the pending line. This zone neither tests it nor defaults it: the chokepoint
          holds the firing decision, and a value it does not know is fatal there rather than permissive here. */
-      const opts = { pageUrl: msg.sourceUrl, destination, provenance,
-                     credentialed: !!(msg && msg.credentialed) };
+      /* UNCREDENTIALED, STATED — see the finding above for why this is a literal and not a read. This call
+         supplies no `pageOrigin`, so asking for cookies here can only ever produce a reply the chokepoint's
+         own credentialed SOP refuses unread; the flag and the principal are two halves of one decision and
+         this path has not taken it. */
+      const opts = { pageUrl: msg.sourceUrl, destination, provenance, credentialed: false };
       const r = await self.safeFetch(abs, opts);
       /* THE CHOKEPOINT'S RECORD IS FIXED — safe-fetch.js returns {ok,status,statusText,headers,body,urlList}
          on every path it has, including every blocked one. `if (!r || typeof r.body !== "string") return null`

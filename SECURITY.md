@@ -268,13 +268,23 @@ guarantees, in one auditable place:
   the person's own browser navigated to seconds ago in this profile. What is unchanged is the DIRECTION:
   over-broad is this list's cheap direction — one unfired request, reported with its token — and loosening a
   gate as a side effect of turning cookies on is its expensive one.
-  **THE LEARNED-GET REPLAY IS STILL UNCREDENTIALED, AND THAT IS PROVENANCE AND NOT PLUMBING.** `bridge.js`'s
-  `fetched` passes no `pageOrigin` and nothing writes `msg.credentialed`. A navigation is OBSERVED — the
+  **THE LEARNED-GET REPLAY IS UNCREDENTIALED, AND THAT IS PROVENANCE AND NOT PLUMBING.** `bridge.js`'s
+  `fetched` passes no `pageOrigin` and states `credentialed: false`. A navigation is OBSERVED — the
   person went there — while an address the engine learned may be DERIVED or FORCED, and a credentialed reply
   to a FORCED request is evidence about what a server says to a request no client makes (CLAUDE.md §A
   REQUEST CARRIES THE PROVENANCE OF ITS VALUES). Turning that on is a per-origin configuration that does not
   exist yet; the standing `@security-finding` there names the value to pass (`msg.origin`) and the obvious
   wrong fix (`originOf(msg.sourceUrl)`), which is the exact URL-derivation this principal exists to forbid.
+  **THIS BULLET SAID "nothing writes `msg.credentialed`", AND `git grep -n 'credentialed:' extension/bridge.js`
+  REFUTED IT.** The seed's `AST_ANALYZE` writes that field from `navigationCarriesSession`, and the
+  child-navigable, swap and cold-rehydration messages inherit it — so for the ordinary same-origin seeded page
+  it is TRUE, and `fetched` read it. That is one field answering two questions: on the analyze message it
+  states whether the DOCUMENT LOAD carried the session (what the frontier record remembers); read at the
+  replay it was answering whether the REPLAY should. The looser question paid, silently — with no `pageOrigin`
+  beside the flag, safeFetch's credentialed SOP has no real origin to match and no `ACAO` can equal it, so the
+  person's cookies were spent and every reply was then refused `blocked-cors-credentialed:` unread. Four sites
+  carried the claim (this bullet, `safe-fetch.js`'s `@security-contract` header, and two paragraphs in
+  `bridge.js`); all four are corrected, and the flag is a literal so the two questions cannot re-converge.
   **AND EVERY POST-FETCH GATE NOW JUDGES THE POST-REDIRECT URL, WHICH IT DID NOT.** `safe-fetch.js` had two
   gates reading `resp.url` (the private-host re-check, the destructive-path re-check) and two reading the
   *requested* address (CORB's same-origin exemption, the credentialed SOP). Fetch §2.2.5 "Requests" makes a
