@@ -5195,25 +5195,28 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
        "Otherwise, immediately execute the script element el, even if other scripts are already executing" —
        so an IMMEDIATE row naming a task source is a caller that has confused running a program in place with
        queuing one, and the two are the whole of what DynPos distinguishes. */
-    DCHECK(!task_source_is_task(src) || pos == DYN_POS_APPEND,
-           "a queued program named a task source AND asked to run IMMEDIATELY — a task is queued and takes "
-           "the tail of its source's queue, and the only position that is not the tail belongs to a program "
-           "the causing algorithm runs in place, which by definition no task source queued");
+    DCHECKF(!task_source_is_task(src) || pos == DYN_POS_APPEND,
+            "a queued program named the %s task source AND asked to run IMMEDIATELY — a task is queued and "
+            "takes the tail of its source's queue, and the only position that is not the tail belongs to a "
+            "program the causing algorithm runs in place, which by definition no task source queued",
+            task_source_name(src));
     /* AND THE TWO KINDS THE SOLVER PUTS THERE ARE THE TWO THAT MAY NOT NAME A SOURCE, ASSERTED BOTH WAYS for
        the reason the token above is: an @S candidate is a program the solver fired and a cross-agent
        operation's row is a peer's SYNCHRONOUS read answered by running one, so neither was queued by any
        algorithm of the standard. A source on either would order a program the page never queued against
        programs it did; the candidate's kind naming any other source, or a page's own program naming the
        candidate's, is the same mistake pointing the other way. */
-    DCHECK((kind == DYN_CANDIDATE) == (src == TASK_SOURCE_SOLVER_CANDIDATE),
-           "a queued program's kind and its task source disagree about who queued it — only an @S candidate "
-           "is the solver re-firing a sink, and only it may say so, because a source is what orders a work "
-           "item against the page's own tasks and an invented one orders it against tasks nobody observed");
-    DCHECK(kind != DYN_CROSS_AGENT_OP || src == TASK_SOURCE_NOT_A_TASK,
-           "a cross-agent operation's program named a task source — the peer is suspended AT the operand of a "
-           "synchronous cross-instance read, so this program is that read's continuation and no task queue "
-           "holds it; giving it a source would order a peer's suspended expression against this document's "
-           "tasks");
+    DCHECKF((kind == DYN_CANDIDATE) == (src == TASK_SOURCE_SOLVER_CANDIDATE),
+            "a queued program of kind %d says %s about who queued it — only an @S candidate is the solver "
+            "re-firing a sink, and only it may say so, because a source is what orders a work item against "
+            "the page's own tasks and an invented one orders it against tasks nobody observed",
+            (int)kind, task_source_name(src));
+    DCHECKF(kind != DYN_CROSS_AGENT_OP || src == TASK_SOURCE_NOT_A_TASK,
+            "a cross-agent operation's program named the %s task source — the peer is suspended AT the "
+            "operand of a synchronous cross-instance read, so this program is that read's continuation and "
+            "no task queue holds it; giving it a source would order a peer's suspended expression against "
+            "this document's tasks",
+            task_source_name(src));
     if (f->dyn_n >= f->dyn_cap) {
         f->dyn_cap = f->dyn_cap ? f->dyn_cap * 2 : 8;
         f->dyn = realloc(f->dyn, (size_t)f->dyn_cap * sizeof(DynBody *));
