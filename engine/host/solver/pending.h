@@ -275,7 +275,12 @@ JSContext *pending_ctx(void);
 void pending_free_ctx(JSContext *ctx);
 
 /* HOW MANY ENTRIES. 0 for a register that has never held one, which is JS_UNDEFINED and answers with a tag
-   test — the shape the per-opcode preempt hook needs, since most flows never park on anything. */
+   test, since most flows never park on anything.
+   IT IS A LENGTH AND SAYS NOTHING ABOUT WHAT STATE THE ENTRIES ARE IN, so every question the scheduler asks
+   about a register is a WALK on top of it — and the register does not turn over: an entry stays until ITS flow
+   delivers, and an @S candidate re-fire re-issues the document's fetches, so the length climbs for as long as
+   the session runs. THE PER-OPCODE HOOK IS THEREFORE NOT AMONG ITS CALLERS. Its question is `pending_blocked`
+   below, which is answered off a count the register carries rather than off this. */
 int  pending_count(JSValueConst reg);
 
 /* HOW MANY OF ONE KIND, and it is a KIND question because a departing flow takes TWO different debts with it
@@ -310,9 +315,33 @@ JSValue pending_entry(JSValueConst reg, int i);
 JSValue pending_get(JSValueConst e, int field);
 int64_t pending_get_int(JSValueConst e, int field);
 
-/* IS THIS REGISTER HOLDING AN UNANSWERED SYNCHRONOUS REQUEST? The rendezvous scan, kept here rather than in
-   flow.c because it is a question about the register's own contents and because the empty case has to stay a
-   tag test — flow_blocked is asked at every suspend point the interpreter offers. */
+/* IS THIS REGISTER HOLDING AN UNANSWERED SYNCHRONOUS REQUEST — read in O(1) off a count the register itself
+ * carries, because this is asked at every suspend point the interpreter offers and the register it used to
+ * scan does not shrink.
+ *
+ * WHAT THE SCAN COST. It walked EVERY entry and paid an entry get plus two own-property gets on each, and what
+ * it walked is the flow's whole history of parks: see `pending_count` above for why that length only rises.
+ * Measured on a live document, `pend` per live flow reached ~165 and was still climbing, so the per-opcode hook
+ * was paying a 165-entry walk to answer a question whose answer is almost always "no" — and rising. That is the
+ * shape solver/pending_index.h records one level up, where two host doors walking these same registers were two
+ * thirds of the process's CPU; this is the same defect on the flow side and on a hotter path.
+ *
+ * WHY THIS ONE QUESTION MAY BE COUNTED WHEN THE FOUR BELOW MAY NOT, WHICH IS THE WHOLE OF THE DERIVATION AND
+ * IS NOT A PROPERTY OF THIS QUESTION BEING SIMPLER. A count is a second representation of what the entries
+ * already say, so it is sound only where EVERY transition that changes it can reach the register it belongs
+ * to. For the reply kinds it cannot: `pending_fork` SHARES a record, so the one `haveValue` write that settles
+ * a request settles it in every register that forked while it was in flight, and there is no way back from the
+ * record to those registers — pending_index counts NAMERS and never names them. For the SYNCHRONOUS kind there
+ * is nothing to reach: an unanswered synchronous request is the ONE record a fork does not share
+ * (engine_sibling_assemble unshares it and mints a fresh rendezvous id, because its answer is computed under
+ * the ASKING flow's world), so exactly one register can name it — the same sentence engine_host_answer's walk
+ * already stops on its first hit for. Every transition of this count therefore has exactly one register, and
+ * the one transition that happens outside this file is HANDED it (`pending_answer_sync` below).
+ *
+ * THE COUNT IS THE FACT AND THIS IS A PREDICATE OVER IT. A caller that comes to want HOW MANY reads the same
+ * number through a second predicate over the one fact, never a second bit that can disagree with this one
+ * (CLAUDE.md §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS). There is one caller today (flow_blocked) and therefore
+ * one predicate; the number is not exported until something asks for it. */
 int  pending_blocked(JSValueConst reg);
 
 /* IS ANY ENTRY DELIVERABLE — and DELIVERABLE ASKS THE KIND, exactly as pending_blocked one line above does.
@@ -325,7 +354,23 @@ int  pending_blocked(JSValueConst reg);
    THAT IS WHY THE SMOKE HOST PAYS ONLY AT A STALL. The shape is unreachable while the host is asked only when
    the whole frontier is blocked (the asking machine consumes its answer on the very next step), and it is
    reachable the moment the host pays per slice — which is the schedule §scheduler actually requires, and which
-   run_scheduler had to leave switched off because of this line. */
+   run_scheduler had to leave switched off because of this line.
+   WHAT IS NOT COVERED: this predicate and five others in this header — `pending_count_kind`,
+   `pending_owed_replies`, `pending_deliverable_count`, `pending_outstanding` and `pending_outstanding_kind` —
+   still WALK, over the same register that only grows. This one is the hottest of the six: flow_step asks it at
+   the top of its arm chain on EVERY step, and again on the external-script row (once as that arm's own assert
+   under -DAPICLIENT_DEV=1, once as the scheme-answered re-read). They are correct; they are not cheap, and the
+   paragraph at `pending_blocked` says exactly why the cure that reached that one does not reach these.
+   WHAT THE NEXT DIFF BUILDS: the record-to-registers inversion inside solver/pending_index.c. Its member
+   struct holds `namers` as an int and `pending_index_ref`/`_unref` take only the record, so a settled record
+   cannot reach the registers that name it; holding the NAMING (register, member) rather than counting it lets
+   the `haveValue` write decrement each naming register's own deliverable count, at O(namers) once per answer
+   instead of O(entries) per consultation. That is the same trade this diff makes for the synchronous kind,
+   paid at the one moment the classification changes.
+   HOW ITS ABSENCE SHOWS: the census already prints both halves. `pend` per live flow rises without bound while
+   `pendReady` — the deliverable population, which is what these predicates are actually looking for — stays
+   small, so the cost of a step tracks a number that has nothing to do with the work the step does. It shows as
+   steps-per-slice falling as `pend` climbs on a document whose `pendReady` is flat. */
 int  pending_ready(JSValueConst reg);
 
 /* HOW MANY OF THEM — the SAME predicate counted rather than short-circuited, and the one number the census had
@@ -388,9 +433,32 @@ int  pending_entry_declined(JSValueConst e);
    enforces at every park site instead of a rule each one is asked to remember. */
 JSValue pending_push(JSValue *reg, int kind, int path_forced);
 
-/* Set a field. `v` is consumed. `pending_set_int` is the same for the numeric ones. */
+/* Set a field. `v` is consumed. `pending_set_int` is the same for the numeric ones.
+   IT REFUSES ONE WRITE: `PEND_HAVE_VALUE` on a SYNCHRONOUS request. See `pending_answer_sync` below — this
+   door has the record and the transition needs the register, so the refusal is what stops the count from
+   becoming a second representation that drifts. */
 void pending_set(JSValueConst e, int field, JSValue v);
+
 void pending_set_int(JSValueConst e, int field, int64_t v);
+/* THE ANSWER TO A SYNCHRONOUS REQUEST, WRITTEN THROUGH THE REGISTER THAT HOLDS IT — the one transition of
+ * `pending_blocked`'s count that happens outside this file, so the register is a PARAMETER rather than a thing
+ * this file tries to find. It writes `haveValue` and nothing else; the value, the completion type and the
+ * answering timeline are ordinary `pending_set` writes and stay where they are.
+ *
+ * WHY A SEPARATE DOOR RATHER THAN AN EXTRA ARGUMENT ON `pending_set`. The generic door is right for every
+ * other field precisely because a record is all a field write needs; this transition needs a fact the record
+ * does not carry, and CLAUDE.md's rule for that is that the fact is a VALUE stated by the site that knows and
+ * ASSERTED where it is relied on — never inferred, and never left to a caller to remember. So the generic door
+ * CRASHES on this write naming this one, which is what makes forgetting impossible instead of silent: a
+ * synchronous answer written through `pending_set` would settle the entry while the count went on saying the
+ * flow is blocked, and the pick would skip that flow for the rest of the session with nothing to say so.
+ *
+ * WHAT IT ASSERTS, ALL OF IT DEV-ONLY AND NONE OF IT ON A HOT PATH (this runs once per synchronous answer):
+ * that the record IS a synchronous request, that it is not already answered, that this register counts at
+ * least one, and that this register actually HOLDS the record — because a fact carried as a parameter is a
+ * fact that has to be checked at the site relying on it, and the register is exactly the half the record
+ * cannot confirm on its own. */
+void pending_answer_sync(JSValueConst reg, JSValueConst e);
 /* A field whose value is BYTES — the request body. Held as an ArrayBuffer, which is the honest shape for
    bytes that may not be text and the one XMLHttpRequest already uses for the same data. */
 void pending_set_bytes(JSValueConst e, int field, const void *p, size_t n);

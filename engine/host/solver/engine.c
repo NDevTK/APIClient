@@ -1030,7 +1030,14 @@ int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, JSValueC
                    the same reason: a flow that has taken an answer without knowing whose it is cannot address
                    its NEXT operation to that same timeline, and cannot refuse the same one arriving again. */
                 pending_set(p, PEND_ANSWER_WORLD, world ? JS_NewString(ctx, world) : JS_NULL);
-                pending_set(p, PEND_HAVE_VALUE, JS_TRUE);
+                /* …AND `haveValue` LAST AND THROUGH THE REGISTER, because this write is the one that stops
+                   this flow being BLOCKED. The register carries the count `pending_blocked` answers from, and
+                   a record carries no way back to the registers naming it — so the register is stated here,
+                   by the walk that just found it, rather than looked for by a file that cannot look. The
+                   generic `pending_set` refuses this field on a synchronous record for that reason
+                   (solver/pending.h), so a future path that settles one without a register crashes here
+                   instead of leaving a flow reading as blocked with its answer already on it. */
+                pending_answer_sync(f->pending, p);
                 JS_FreeValue(ctx, p);
                 /* AND THE FLOW IS ASKABLE AGAIN. This is the event a flow parked on a synchronous request is
                    waiting for — the one thing that can change the answer it gave the scheduler — so the mark

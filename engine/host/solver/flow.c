@@ -1245,8 +1245,11 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
     f->fn = JS_DupValue(ctx, fn);
     /* THE PENDING REGISTER IS EMPTY, AND EMPTY IS NOT AN ARRAY. Most flows never park on anything, so
        allocating one per flow would put a JSObject on the heap for every member of a frontier that reached
-       29550 on this fixture — and the blocked scan the preempt hook runs at every suspend point would then
-       have to read a length instead of testing a tag. It is minted by the first push. */
+       29550 on this fixture — and the blockedness question the preempt hook asks at every suspend point would
+       then have to read a property off it instead of testing a tag. (It used to say "a length": the hook no
+       longer walks and no longer reads one, and what it would read on an empty Array now is the register's own
+       count of the synchronous requests it is owed — same cost, same argument, different slot.) It is minted
+       by the first push. */
     f->pending = JS_UNDEFINED;
     /* …AND THE OPERATION QUEUE, empty for the same reason and stated the same way: a peer asks this document
        nothing at all in most sessions, and JS_UNDEFINED is not what a calloc leaves behind. */
@@ -1488,9 +1491,23 @@ Flow *flow_add(JSContext *ctx, JSValueConst fn, WorldId parent) {
     return f;
 }
 
-/* BLOCKED = holding an unanswered synchronous host request. Scanned rather than counted because a counter is
-   a second representation of the same fact, and the two drift at exactly the sites (fork, drain, release) that
-   are already the hardest to keep in step. The register is short — it is one flow's outstanding requests. */
+/* BLOCKED = holding an unanswered synchronous host request. COUNTED, not scanned, and the argument this line
+   used to make for scanning is retired rather than deleted, because it was right about the hazard and wrong
+   about one premise and a reader who re-derives it will re-introduce it. It said: "a counter is a second
+   representation of the same fact, and the two drift at exactly the sites (fork, drain, release) that are
+   already the hardest to keep in step. The register is short — it is one flow's outstanding requests."
+   THE LAST SENTENCE IS FALSE AND IS WHAT THE REST STOOD ON. The register is not one flow's OUTSTANDING
+   requests, it is one flow's whole history of parks: an entry stays until that flow delivers it, so the length
+   only rises — measured at ~165 per live flow on a live document and still climbing. A per-opcode read paying
+   a walk of that is the shape solver/pending_index.h records one level up, where two host doors walking these
+   same registers were two thirds of the process's CPU.
+   THE HAZARD IT NAMED IS REAL AND IS ANSWERED AT ITS OWN LEVEL, not waved away: the count lives ON the
+   register array, so the fork and the release carry it by construction rather than by two sites remembering
+   to, and it is AUDITED against a full walk at exactly those two sites — both of which already walk every
+   entry, so the audit costs nothing anywhere. The third site it named, the answer, is the one that genuinely
+   comes from outside, and it is why solver/pending.h has a door that is HANDED the register and a generic
+   setter that crashes on that field rather than doing half the transition. See pending.h at `pending_blocked`
+   for why this classification can be counted at all when the reply-side ones cannot. */
 int flow_blocked(const Flow *f) { return pending_blocked(f->pending); }
 
 /* THE DELIVERY QUEUE'S LENGTH — see flow.h. Same context and same tag assert as the operation queue below it,
@@ -2044,9 +2061,13 @@ int flow_perform_pending(const Flow *f) {
     return n;
 }
 
-/* …AND WHETHER IT OWES AN ANSWER AT ALL — see flow.h. Scanned rather than counted, exactly as flow_blocked is
-   and for the same reason: a counter is a second representation that drifts at the fork, the start and the
-   answer, which are the three sites hardest to keep in step. */
+/* …AND WHETHER IT OWES AN ANSWER AT ALL — see flow.h. Scanned rather than counted, and it no longer borrows
+   flow_blocked's argument for that: that one was retired above, so a cross-reference to it would send the next
+   reader to a paragraph that now says the opposite. This stands on its own facts. The two halves of the
+   question live in two structures this file owns outright — the operation queue, whose length is an O(1) read,
+   and the flow's own token row, walked over `dyn_n` — so neither half is the register the HOST settles from
+   outside, which is the thing that made a counter there both necessary and delicate. Nothing has measured this
+   as hot; if something does, the answer is the same shape and the sites are all in this file. */
 int flow_owes_answer(const Flow *f) {
     if (flow_perform_pending(f) > 0) return 1;
     for (int i = 0; i < f->dyn_n; i++)
