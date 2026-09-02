@@ -50,16 +50,18 @@
  * leading border and padding — the same composition §10.1's second case makes for a block-level child.
  * THE LEVEL IS THE WHOLE TEST AND "REPLACED" IS NOT PART OF IT. §9.2.2 puts both kinds of inline-level box on
  * the line: a non-replaced `display: inline` element "generates an inline box" that §9.4.2 SPLITS across as
- * many line boxes as it spans, and a REPLACED one (HTML §15.4 "Replaced elements", whose computed `display`
- * stays `inline`) is an ATOMIC inline-level box — "a single opaque box" — which is exactly ONE fragment.
+ * many line boxes as it spans, and an ATOMIC inline-level box — "a single opaque box" — is exactly ONE
+ * fragment, whether it is a REPLACED element (HTML §15.4 "Replaced elements", whose computed `display` stays
+ * `inline`) or an `inline-block` of either kind, which §9.2.2 names in the same list.
  * line_box.h answers both and this file composes the coordinate out of `*out[0]` either way; asking whether a
  * box is replaced HERE was one component answering a question about the fragment's SHAPE that belongs to the
  * component that delimits it.
  *
  * WHAT STILL CRASHES, each naming ITS OWN missing piece rather than one shared "there is no layout": a float
- * is §9.5's own positioning, an out-of-flow box is §9.3.2's offsets over a static position, an ATOMIC
- * inline-level box whose own `display` is not `inline` (§9.2.2's `inline-block` and the rest) waits on §10.8's
- * inner BASELINE that splits its margin box and on the used inline size its own module owns, and a box whose
+ * is §9.5's own positioning, an out-of-flow box is §9.3.2's offsets over a static position, an `inline-table`,
+ * `inline-flex` or `inline-grid` waits on the USED INLINE SIZE its own module owns (CSS 2.1 §17.5.2,
+ * css-flexbox-1 §9.9.1 "Flex Container Intrinsic Main Sizes", css-grid-1 §5.2 "Sizing Grid Containers") and on
+ * the baseline that falls out of that module's layout, and a box whose
  * computed `writing-mode` is not `horizontal-tb` waits on
  * css-writing-modes-4 §7.4's flow-relative restatement of the two rules this file implements physically.
  *

@@ -325,18 +325,24 @@ static LbExtent lb_atomic_extent(lxb_dom_element_t *el)
     CssPx inner_baseline = css_px(0.0);
 
     /* THE TWO-SIDED HALF OF `lb_child`'s ROUTING, ASSERTED WHERE THE GEOMETRY IS CHOSEN. That walk emits an
-       ATOMIC run item for exactly two shapes — a replaced element, and a non-replaced `inline-block` — and
-       crashes for every other atomic inline-level box, so those are the only two `display`/replaced
-       combinations that can reach this measurement. A third arriving here is the walk and this function
+       ATOMIC run item for a REPLACED element and for an `inline-block` — either kind of `inline-block`, since
+       CSS 2.2 §10.3.10 "'Inline-block', replaced elements in normal flow" is one sentence long and delegates
+       the whole of that box ("Exactly as inline replaced elements") — and crashes for every atomic
+       inline-level box that is neither. A box outside that union arriving here is the walk and this function
        disagreeing about what was collected, which is a wrong PAIR OF NUMBERS on a real line rather than an
        absence, and it would be silent: every box below is measured by a maximum that a too-small extent simply
-       loses. */
-    DCHECK(replaced != inline_block,
+       loses.
+       IT IS A DISJUNCTION AND NOT AN EXCLUSIVE ONE, which is the whole of what admitting the replaced
+       `inline-block` changed here. The two facts are INDEPENDENT — `replaced` is HTML §15.4 "Replaced
+       elements"' question about the element and `inline_block` is the cascade's about its `display` — so a box
+       that is both is a real box and not a contradiction, and the arm order below is what decides it: §10.8.1
+       gives a REPLACED element no baseline whatever its `display`, so `replaced` is read first and the
+       `inline-block` sentence is never reached for it. */
+    DCHECK(replaced || inline_block,
            "CSS 2.2 §10.8's step 1 for an ATOMIC INLINE-LEVEL box was asked of a box that is neither a "
-           "REPLACED element nor a non-replaced `inline-block`, or is BOTH. `lb_child` collects a run item of "
-           "the atomic kind for exactly those two shapes — css-text-3 §5.5 \"Line Breaking Details\"' \"each "
-           "replaced element or other atomic inline\" — and crashes for an `inline-table`, an `inline-flex`, "
-           "an `inline-grid` and for the REPLACED `inline-block` whose route is still undecided, so any other "
+           "REPLACED element nor an `inline-block`. `lb_child` collects a run item of the atomic kind for "
+           "exactly those — css-text-3 §5.5 \"Line Breaking Details\"' \"each replaced element or other atomic "
+           "inline\" — and crashes for an `inline-table`, an `inline-flex` and an `inline-grid`, so any other "
            "box reaching here is that walk and this measurement disagreeing about what was collected");
     out.above = margin_box;
     out.below = css_px(0.0);
@@ -536,53 +542,75 @@ static void lb_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_
        geometry it chooses between is composed. So what is left here is the classification the CRASH below is
        about: whether §10.8's step 1 and the used inline size EXIST for this box type at all, which is a fact
        about the box's kind and not about its declarations.
-       THE SECOND CONJUNCT IS §10.3.9's AND §10.6.6's OWN WORD. Both of the used-value sections that answer a
-       non-replaced `inline-block`'s margin box say "non-replaced" in their own titles and lists — CSS 2.2
-       §10.3.9 "'Inline-block', non-replaced elements in normal flow" for the inline size and §10.6.6
-       "Complicated cases" for the block one ("'Inline-block', non-replaced elements. … If 'height' is 'auto',
-       the height depends on the element's descendants per 10.6.7") — and a REPLACED element with `display:
-       inline-block` is §10.3.10's and §10.6.2's box instead. Its baseline is the bottom margin edge, by the
-       REPLACED half of `baseline`'s definition rather than by §10.8.1's exception, so what is undecided for it
-       is a ROUTE and not a measurement; it keeps the crash below, which says so.
+       THE SECOND CONJUNCT SELECTS AN ARM AND NO LONGER GATES COLLECTION, and that is CSS 2.2 §10.3.10's own
+       length. Both of the used-value sections that answer a NON-REPLACED `inline-block`'s margin box say
+       "non-replaced" in their own titles and lists — §10.3.9 "'Inline-block', non-replaced elements in normal
+       flow" for the inline size and §10.6.6 "Complicated cases" for the block one ("'Inline-block',
+       non-replaced elements. … If 'height' is 'auto', the height depends on the element's descendants per
+       10.6.7") — and §10.3.10 "'Inline-block', replaced elements in normal flow" is the whole of the other
+       half in one sentence: "Exactly as inline replaced elements." §10.6.2's TITLE says the same on the block
+       axis, naming "'inline-block' replaced elements in normal flow" beside "Inline replaced elements" in one
+       heading. So the route the crash below used to leave undecided is DECIDED BY THE STANDARD, and it is
+       decided in the one place that already asks the question: core/layout/used_value.c reads
+       `replaced_element_of` on its `auto` arm BEFORE it reads `uv_box_kind`, so a replaced `inline-block`'s
+       width is §10.3.2's and its height is §10.6.2's without this file arranging anything.
+       WHICH LEAVES THE ITEM IDENTICAL FOR BOTH HALVES, which is why the two arms below are one collection and
+       not two. §9.4.2 puts the MARGIN BOX on the line for either — "Horizontal margins, borders, and padding
+       are respected between these boxes." — so both emit `used_value_margin_edge_px`; what differs is the
+       BASELINE, and §10.8.1 decides that at `lb_atomic_extent` — a replaced element has none, so its bottom
+       margin edge goes on the line, and a non-replaced `inline-block` has the one §10.8.1 puts inside it.
        THE CLASSIFICATION IS ASKED AT TWO SITES AND AT MOST ONCE ON ANY PATH, which is the ordering rather than
-       an oversight: a collected box returns at its own arm below and never reaches the replaced test, and a box
-       whose `display` is not `inline-block` short-circuits before asking here. Merging the two into one earlier
-       call would put replaced_element.c's OWN crashes (it names an `img`, an `embed`, a `video`, a `canvas`, an
-       `object`, an `audio` and an `input` whose rule it cannot decide) ahead of the two classification crashes
-       below, which report an entirely different defect and would then be reported a step late. */
+       an oversight: a non-replaced `inline-block` returns at its own arm below and never reaches the replaced
+       test, and a box whose `display` is not `inline-block` short-circuits before asking here. Merging the two
+       into one earlier call would put replaced_element.c's OWN crashes (it names an `img`, an `embed`, a
+       `video`, a `canvas`, an `object`, an `audio` and an `input` whose rule it cannot decide) ahead of the
+       classification crash below, which reports an entirely different defect and would then be reported a step
+       late. */
     on_the_line = inline_block && !replaced_element_of(el).replaced;
-    if (atomic && !on_the_line)
+    /* THE CRASH IS OVER THE `display` ALONE NOW, and dropping `on_the_line` from it is what routes the
+       REPLACED `inline-block` rather than a second arm for it: that box falls past both tests to the replaced
+       arm below, which is §10.3.10's "exactly as inline replaced elements" performed rather than restated. An
+       `inline-table`, an `inline-flex` and an `inline-grid` are what is left, and each of them crashes whether
+       or not it is replaced — HTML §15.4's replacedness does not tell this file what an `inline-flex` box's
+       used main size is, and answering one from the replaced arm would be that guess wearing a route. */
+    if (atomic && !inline_block)
         DFAIL("CSS 2.2 §9.2.2 makes this an ATOMIC INLINE-LEVEL box, which \"participate[s] in [its] inline "
               "formatting context as a single opaque box\". THE RUN ITEM IS BUILT AND IS NO LONGER PART OF WHAT "
               "THIS NAMES: core/layout/text_run.h carries css-text-3 §5.5's atomic inline as a kind of its own "
               "— a MARGIN BOX inline size at a position plus the U+FFFC whose [UAX14] class CB is \"a soft wrap "
               "opportunity before and after each replaced element or other atomic inline\" — and the REPLACED "
               "arm below already emits one, so the fill, the per-line sum and §10.8's step 1 over a margin box "
-              "(`lb_atomic_extent`) all run for this shape of box today. WHAT IS LEFT IS TWO THINGS AND BOTH "
-              "ARE FACTS ABOUT THIS BOX RATHER THAN ABOUT THE LINE. (1) THE BASELINE, AND NO PART OF THE "
-              "`inline-block` SENTENCE IS STILL IN IT. CSS 2.2 §10.8.1 \"Leading and half-leading\" — the "
-              "section the standard's own document writes the `vertical-align` definition under — states an "
-              "`inline-block`'s baseline as one sentence with an exception in it: \"The baseline of an "
-              "'inline-block' is the baseline of its last line box in the normal flow, unless it has either no "
-              "in-flow line boxes or if its 'overflow' property has a computed value other than 'visible', in "
-              "which case the baseline is the bottom margin edge.\" ALL THREE OF ITS ARMS ARE BUILT and a "
-              "non-replaced `inline-block` is collected above without asking any of them here: "
-              "`lb_atomic_extent` reads the `overflow` disjunct itself and sends the box to core/layout/"
-              "block_flow.h's `block_flow_last_line_box_baseline`, which walks §9.4.1's stack — so the main "
-              "arm's last line box is found whether it is on the box's own inline formatting context or "
-              "inside a block-level descendant, and \"no in-flow line boxes\" is that same walk's own answer. "
-              "TWO SHAPES STILL ARRIVE HERE AND THEY DO NOT WANT THE SAME WORK. An `inline-table` wants a "
-              "DIFFERENT sentence of the same definition, \"The baseline of an 'inline-table' is the baseline "
-              "of the first row of the table\", which is CSS 2.1 §17.2 \"The CSS table model\"'s box structure "
-              "before it is a baseline at all. AN `inline-block` THAT HTML §15.4 \"Replaced elements\" MAKES "
-              "REPLACED WANTS NO BASELINE BUILT AND IS HERE FOR A ROUTING DECISION INSTEAD: it is §10.3.10 "
-              "\"'Inline-block', replaced elements in normal flow\"'s and §10.6.2's box, core/layout/"
-              "used_value.c sizes it through those, and `baseline`'s own replaced arm (\"If the box does not "
-              "have a baseline, align the bottom margin edge with the parent's baseline\") puts its margin box "
-              "where `lb_atomic_extent`'s replaced arm puts one — so what is undecided is whether it is "
-              "collected as REPLACED or as an `inline-block`, and those are no longer the same geometry now "
-              "that the second one looks inside the box. DECIDE that route, do not build a baseline for it. "
-              "(2) THE USED INLINE SIZE for the box types CSS 2.1 §10 does not own: "
+              "(`lb_atomic_extent`) all run for this shape of box today. NEITHER IS THE `inline-block` ANY "
+              "LONGER, AND THAT IS THE WHOLE OF WHAT THIS CRASH STOPPED BEING ABOUT. CSS 2.2 §10.8.1 "
+              "\"Leading and half-leading\" — the section the standard's own document writes the "
+              "`vertical-align` definition under — states an `inline-block`'s baseline as one sentence with an "
+              "exception in it: \"The baseline of an 'inline-block' is the baseline of its last line box in "
+              "the normal flow, unless it has either no in-flow line boxes or if its 'overflow' property has a "
+              "computed value other than 'visible', in which case the baseline is the bottom margin edge.\" "
+              "ALL THREE OF ITS ARMS ARE BUILT and a non-replaced `inline-block` is collected above without "
+              "asking any of them here: `lb_atomic_extent` reads the `overflow` disjunct itself and sends the "
+              "box to core/layout/block_flow.h's `block_flow_last_line_box_baseline`, which walks §9.4.1's "
+              "stack — so the main arm's last line box is found whether it is on the box's own inline "
+              "formatting context or inside a block-level descendant, and \"no in-flow line boxes\" is that "
+              "same walk's own answer. THE REPLACED `inline-block` IS COLLECTED TOO AND ITS ROUTE IS NO LONGER "
+              "UNDECIDED: §10.3.10 \"'Inline-block', replaced elements in normal flow\" is one sentence — "
+              "\"Exactly as inline replaced elements.\" — and §10.6.2's title names \"'inline-block' replaced "
+              "elements in normal flow\" beside \"Inline replaced elements\" in one heading, so the standard "
+              "settles the route this line used to ask a reader to choose, and `baseline`'s own replaced arm "
+              "(\"If the box does not have a baseline, align the bottom margin edge with the parent's "
+              "baseline\") is the geometry `lb_atomic_extent`'s replaced arm already puts it at. "
+              "THREE SHAPES STILL ARRIVE HERE AND EACH NEEDS A MODULE THIS ENGINE DOES NOT HAVE. An "
+              "`inline-table` wants a DIFFERENT sentence of the same definition, \"The baseline of an "
+              "'inline-table' is the baseline of the first row of the table\", which is CSS 2.1 §17.2 \"The "
+              "CSS table model\"'s box structure before it is a baseline at all, and §17.5.2's used inline "
+              "size under that. AN `inline-flex` AND AN `inline-grid` NEED A BASELINE THEIR OWN MODULE "
+              "DEFINES AND §10.8.1 DOES NOT — it names an `inline-table` and an `inline-block` and neither of "
+              "these — so reading `baseline`'s \"if the box does not have a baseline\" arm for them would be "
+              "this file ANSWERING a question two other modules answer: css-flexbox-1 §8.5 \"Flex Container "
+              "Baselines\" derives one from the flex items on the container's startmost flex line, and "
+              "css-grid-1 §10.6 \"Grid Container Baselines\" does the same one module over. Both are a "
+              "consequence of the module's own layout rather than a rule that can be built beside it, which "
+              "is why the OTHER AXIS below is the first thing either box needs: "
               "§10.3.9 \"'Inline-block', non-replaced elements in normal flow\" answers "
               "an `inline-block` (core/layout/used_value.c's shrink-to-fit), and an `inline-flex` and an "
               "`inline-grid` are CLASSIFIED — `uv_box_kind`'s `UV_BOX_INLINE_FLEX_GRID` — so an `auto` width "
@@ -1533,45 +1561,46 @@ size_t line_box_inline_fragments(lxb_dom_element_t *el, lxb_dom_element_t **esta
     lxb_dom_element_t *style;
     CssPx top, lead, trail;
     CssPx before = css_px(0.0), after = css_px(0.0), drop = css_px(0.0), extent = css_px(0.0);
+    /* §10.8.1's split of this box's margin box at its OWN baseline, zero for every box the section gives no
+       baseline — which is what makes the atomic composition below one arithmetic over both shapes. */
+    CssPx below = css_px(0.0);
     size_t n, i, open = 0, close = 0, nf = 0;
     bool atomic;
 
     DCHECK(el != NULL && establishing != NULL && out != NULL,
            "CSSOM VIEW §6's box fragments were asked for with no element or nowhere to report them");
-    DCHECK(lb_computed_is(el, "display", "inline"),
-           "CSSOM VIEW §6's box fragments were asked for a box whose computed `display` is not `inline`, so it "
-           "is not on a line box of the formatting context this walk fills. CSS 2.2 §9.2.2 \"Inline-level "
-           "elements and inline boxes\" makes an `inline-block`, `inline-table`, `inline-flex` or "
-           "`inline-grid` an ATOMIC inline-level box, which \"participate[s] in [its] inline formatting context "
-           "as a SINGLE OPAQUE BOX\" — that IS the single-item shape below and it is not what is missing for "
-           "one. WHAT KEEPS SUCH A BOX OUT OF THIS ENTRY IS THE CALLER AND NO LONGER `lb_child`: a NON-REPLACED "
-           "`inline-block` is now COLLECTED onto a line, so a fill that holds its item does exist — and the only "
-           "caller, core/layout/flow_position.c, crashes for every atomic inline-level box before asking, naming "
-           "the SPLIT of that box's margin box at its baseline as the placement it still owes. TWO THINGS WOULD "
-           "HAVE TO CHANGE TOGETHER AND ADMITTING THE BOX IS ONLY ONE OF THEM, WHICH IS WHY THIS IS NOT A "
-           "WIDENING TO MAKE HERE. The block-axis arm below hangs an atomic's BOTTOM MARGIN EDGE on the line's "
-           "baseline, and that is CSS 2.2 §10.8's `baseline` for a box that HAS NO BASELINE — true of every "
-           "REPLACED element, which is what `atomic` selects for below, and NOT true of an `inline-block` whose "
-           "baseline §10.8.1 puts inside it. `lb_atomic_extent` computes that split (`above` down to the box's "
-           "own baseline, `below` the rest of the margin box) and this loop would have to take its `below` "
-           "instead of assuming a `margin-bottom`, which is a change to the DERIVATION and not to the "
-           "`display` test. Deciding the route is flow_position.c's crash; building the split here is this "
-           "entry's own work when that decision arrives. "
+    DCHECK(lb_computed_is(el, "display", "inline") || lb_computed_is(el, "display", "inline-block"),
+           "CSSOM VIEW §6's box fragments were asked for a box whose computed `display` is neither `inline` "
+           "nor `inline-block`, so it is not on a line box of the formatting context this walk fills. CSS 2.2 "
+           "§9.2.2 \"Inline-level elements and inline boxes\" makes an `inline-table`, `inline-flex` or "
+           "`inline-grid` an ATOMIC inline-level box too, which \"participate[s] in [its] inline formatting "
+           "context as a SINGLE OPAQUE BOX\" — that IS the single-item shape below, so the shape is not what "
+           "is missing for one. WHAT KEEPS THOSE THREE OUT IS `lb_child`, which crashes rather than collecting "
+           "an item for them: an `inline-table` has no box structure (CSS 2.1 §17.2) and an `inline-flex` or "
+           "`inline-grid` no used main size (css-flexbox-1 §9.9.1, css-grid-1 §5.2) for this walk to place. "
            "Everything else is block-level or generates no box at all, and the caller's own step "
            "(core/dom/element_view.h's fragment kind, core/layout/flow_position.c's placement) decides that "
            "before asking — so reaching here is those classifications having come apart");
-    /* WHICH DELIMITATION THIS BOX'S FRAGMENTS TAKE, AND IT IS NOT THE `display` THE TEST ABOVE READS. HTML
-       §15.4 "Replaced elements" makes an `img`, an `iframe`, a `video` or an `input` a replaced element while
-       its computed `display` stays `inline`, and CSS 2.2 §9.2.2's opaque-box sentence covers it for the same
-       reason it covers an `inline-block` — css-text-3 §5.5 "Line Breaking Details" names them together as
-       "each replaced element or other atomic inline". So `lb_child` collects it as ONE run item rather than as
-       a pair of boundaries, and its fragment is delimited by that item's own index: the edge walk would find
-       none and delimit a fragment out of another box's.
+    /* WHICH DELIMITATION THIS BOX'S FRAGMENTS TAKE, AND THE `display` THE TEST ABOVE READS DECIDES ONLY HALF
+       OF IT. CSS 2.2 §9.2.2 states the class over both facts at once — "Inline-level boxes that are not inline
+       boxes (such as replaced inline-level elements, inline-block elements, and inline-table elements) are
+       called atomic inline-level boxes because they participate in their inline formatting context as a single
+       opaque box" — so each disjunct below is one of its examples. HTML §15.4 "Replaced elements" makes an
+       `img`, an `iframe`, a `video` or an `input` a replaced element while its computed `display` stays
+       `inline`, which is why replacedness cannot be read off the cascade; an `inline-block` is atomic by its
+       `display` alone, replaced or not, since §10.3.10 gives the replaced half the same one-line delegation
+       ("Exactly as inline replaced elements.") rather than a different box. css-text-3 §5.5 "Line Breaking
+       Details" names the whole class in one sentence and treats its members alike: "For Web-compatibility
+       there is a soft wrap opportunity before and after each replaced element or other atomic inline, even
+       when adjacent to a character that would normally suppress them, including U+00A0 NO-BREAK SPACE." So
+       `lb_child` collects either as ONE run item rather than as a pair of boundaries, and its fragment is
+       delimited by that item's own index: the edge walk would find none and delimit a fragment out of another
+       box's.
        IT IS EXACTLY ONE FRAGMENT AND THAT IS §9.2.2's SENTENCE RATHER THAN A COUNT THIS FILE CHOOSES: a single
        opaque box is never the box §9.4.2 "SPLIT[s] into several boxes … distributed across several line boxes",
        so the one item is on one line and the loop's intersection selects it. The closing assert below is over
        both shapes and this one additionally asserts the count. */
-    atomic = replaced_element_of(el).replaced;
+    atomic = replaced_element_of(el).replaced || lb_computed_is(el, "display", "inline-block");
     /* HTML §15.3.4 "Phrasing content"'s `br { display-outside: newline; }` and `wbr { display-outside:
        break-opportunity; }` reach this component as plain `display: inline` boxes carrying a fact the cascade
        cannot answer for (core/layout/phrasing_break.h), and `lb_child` puts them on the line as a FORCED BREAK
@@ -1653,23 +1682,42 @@ size_t line_box_inline_fragments(lxb_dom_element_t *el, lxb_dom_element_t **esta
     lead = used_value_px(el, "margin-left");
     trail = used_value_px(el, "margin-right");
     if (atomic) {
-        /* CSS 2.2 §10.8's `vertical-align` definition, WHICH IS WHERE AN ATOMIC INLINE'S BLOCK AXIS IS DECIDED
-           AND NOT §10.6.1's. Two of its sentences compose and `lb_atomic_extent` above is the same pair read
-           for the line's own height: "for all other elements, the box used for alignment is the MARGIN BOX",
-           and `baseline`'s own definition — "align the baseline of the box with the baseline of the parent
-           box. IF THE BOX DOES NOT HAVE A BASELINE, ALIGN THE BOTTOM MARGIN EDGE with the parent's baseline."
-           A REPLACED ELEMENT HAS NO BASELINE: §10.8 gives one to an `inline-table` and to an `inline-block`
-           and to nothing else, and `lb_require_baseline_alignment` has already refused every other
-           css-inline-3 §4.2 alignment before this box reached the run. So its BOTTOM MARGIN EDGE sits ON the
-           line's baseline, which is the one coordinate the loop below has, and §8.1's nesting is the rest: the
-           border area's far edge is that baseline less this box's own `margin-bottom`, and its near edge is
-           one used BORDER EDGE EXTENT (§10.6.2 "Inline replaced elements, block-level replaced elements in
-           normal flow, 'inline-block' replaced elements in normal flow and floating replaced elements",
-           through core/layout/used_value.h) further out.
-           IT IS THE SAME TWO NUMBERS `lb_atomic_extent` PUT ABOVE THE BASELINE, read back through §8.1 rather
-           than restated: that function's `above` is `used_value_margin_edge_px(el, true)` and its `below` is
-           zero, so the margin box's bottom IS the baseline and this composition and that one cannot come to
-           describe different boxes. */
+        /* CSS 2.2 §10.8.1's `vertical-align` definition, WHICH IS WHERE AN ATOMIC INLINE'S BLOCK AXIS IS
+           DECIDED AND NOT §10.6.1's. Two of its sentences compose: "For all other elements, the box used for
+           alignment is the margin box", and `baseline`'s own definition — "Align the baseline of the box with
+           the baseline of the parent box. If the box does not have a baseline, align the bottom margin edge
+           with the parent's baseline."
+           THE SECOND SENTENCE HAS TWO ARMS AND THIS SITE USED TO IMPLEMENT ONLY ONE, which is exactly what
+           `lb_atomic_extent` decides between and what this loop now reads instead of assuming. That function
+           returns the margin box SPLIT at wherever the box's own baseline falls — `above` from the top margin
+           edge down to it, `below` from it to the bottom margin edge — and the two arms are: a box §10.8.1
+           gives NO baseline (every REPLACED element) has `below` zero, so its bottom margin edge is the line's
+           baseline and this composition is unchanged for it; a non-replaced `inline-block` HAS the baseline
+           §10.8.1 puts inside it ("The baseline of an 'inline-block' is the baseline of its last line box in
+           the normal flow, unless it has either no in-flow line boxes or if its 'overflow' property has a
+           computed value other than 'visible', in which case the baseline is the bottom margin edge"), so its
+           margin box hangs `below` FURTHER DOWN than the line's baseline and assuming otherwise would lift the
+           whole box by exactly the descent of its own last line.
+           §10.8.1 IS WHERE THE STANDARD'S OWN DOCUMENT PUTS ALL THREE SENTENCES, and the number is the
+           subsection rather than the §10.8 the neighbouring sites write for the same rule — CSS 2.2 writes the
+           `line-height` and `vertical-align` property definitions BENEATH the §10.8.1 heading. No citation
+           auditor can separate the two (a parent section's committed text contains its subsections'), so this
+           was settled by reading the document's heading byte offsets rather than by trusting either number:
+           §10.8.1 "Leading and half-leading" begins before all three, and NO HEADING FOLLOWS IT — it is the
+           last one in the chapter's document, so every sentence quoted above lies inside it and inside no
+           narrower section. There is no §10.9 to bound them from below, so a reader checking this by looking
+           for the NEXT heading will find none, and that absence is the confirmation rather than a gap in it.
+           THE READ IS OUTSIDE THE LOOP because the split is a fact about this BOX and not about a line — and
+           §9.2.2's "single opaque box" means there is exactly one line to apply it to anyway, which the
+           closing assert states. `lb_atomic_extent` is the same call `lb_line_extent` already makes for this
+           box while measuring the line's own height, so the line this fragment hangs from and the fragment
+           itself are derived from ONE reading of §10.8's step 1 rather than from two that could drift.
+           §8.1's NESTING IS THE REST: the border area's far edge is the bottom margin edge less this box's own
+           `margin-bottom`, and its near edge is one used BORDER EDGE EXTENT further out — §10.6.2 "Inline
+           replaced elements, block-level replaced elements in normal flow, 'inline-block' replaced elements in
+           normal flow and floating replaced elements" for a replaced box and §10.6.6 "Complicated cases"'
+           redirection to §10.6.7 for a non-replaced `inline-block`, both through core/layout/used_value.h. */
+        below = lb_atomic_extent(el).below;
         drop = used_value_px(el, "margin-bottom");
         extent = used_value_border_edge_px(el, true);
     } else {
@@ -1712,10 +1760,15 @@ size_t line_box_inline_fragments(lxb_dom_element_t *el, lxb_dom_element_t **esta
                    "non-negative advances and non-negative box edges, so a decreasing prefix is an advance "
                    "measure or an edge that lost its sign");
             if (atomic) {
-                /* §10.8's `vertical-align` `baseline` over a box with NO baseline, derived where the two terms
-                   were read: the bottom MARGIN edge is the line's baseline, so the border area ends one
-                   `margin-bottom` above it and begins one used border-edge extent further out. */
-                frags[nf].block_end = css_px_sub(baseline, drop);
+                /* §10.8.1's `vertical-align` `baseline` over this box's OWN baseline, derived where the three
+                   terms were read: the box's baseline is the line's, so its bottom MARGIN edge is `below`
+                   beneath that line — the whole of §10.8.1's exception for a box that has no baseline of its
+                   own, where `below` is zero and the two coordinates coincide — and CSS 2 §8.1 nests the
+                   border area inside it, ending one `margin-bottom` above that margin edge and beginning one
+                   used border-edge extent further out. */
+                CssPx margin_bottom_edge = css_px_add(baseline, below);
+
+                frags[nf].block_end = css_px_sub(margin_bottom_edge, drop);
                 frags[nf].block_start = css_px_sub(frags[nf].block_end, extent);
                 /* THE ONE PLACE THIS RECTANGLE AND core/layout/used_value.h CAN DISAGREE, ASSERTED. The block
                    axis above IS that component's extent by construction, but the INLINE axis is not: it is
@@ -1726,11 +1779,22 @@ size_t line_box_inline_fragments(lxb_dom_element_t *el, lxb_dom_element_t **esta
                    The defect it catches is the item having been sized off a different element, an index that
                    named the wrong item, or css-text-3 §4.1.2's trimming having reached between two bounds that
                    are adjacent; the neighbourhood is IEEE-754's around one real number reached by two orders
-                   of addition, exactly as `lb_strut_extent`'s identity is. */
+                   of addition, exactly as `lb_strut_extent`'s identity is.
+                   WHICH SECTION SUPPLIED THAT USED WIDTH IS NOT THIS ASSERT'S QUESTION, and naming only one of
+                   them is how the message went stale once already: §10.3.2 "Inline, replaced elements" answers
+                   a replaced box, §10.3.9 "'Inline-block', non-replaced elements in normal flow" sends a
+                   non-replaced `inline-block` to shrink-to-fit, and §10.3.10 delegates the replaced
+                   `inline-block` back to the first. The identity holds over all three because both sides read
+                   core/layout/used_value.h — what it tests is that the RUN ITEM and the MARGINS describe one
+                   element, which is a fact about this walk and not about which section sized the box. */
                 DCHECK(lb_close(css_px_sub(frags[nf].inline_end, frags[nf].inline_start).px,
                                 used_value_border_edge_px(el, false).px),
                        "an ATOMIC INLINE-LEVEL box's fragment is a different width along the line than CSS 2.1 "
-                       "§10.3.2 \"Inline, replaced elements\"' used BORDER EDGE. The run item carries "
+                       "§10.3's used BORDER EDGE for it — §10.3.2 \"Inline, replaced elements\" for a replaced "
+                       "box, §10.3.9 \"'Inline-block', non-replaced elements in normal flow\" for a "
+                       "non-replaced `inline-block`, and §10.3.10 \"'Inline-block', replaced elements in "
+                       "normal flow\" (\"Exactly as inline replaced elements.\") for the third. The run item "
+                       "carries "
                        "`used_value_margin_edge_px` — CSS 2.2 §9.4.2's \"horizontal margins, borders, and "
                        "padding are respected between these boxes\" — so its span at two ADJACENT item bounds "
                        "less the box's own two horizontal margins is that same nesting read back through CSS 2 "

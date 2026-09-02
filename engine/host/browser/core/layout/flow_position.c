@@ -207,19 +207,36 @@ static bool fp_is_on_a_line_box(lxb_dom_element_t *el)
        delimited by its two EDGE items and split across as many line boxes as it spans, a replaced element by
        the ONE run item css-text-3 §5.5 "Line Breaking Details" collects for "each replaced element or other
        atomic inline". One answer, one component, and this file composes the coordinate out of it either way.
-       THE OTHER ATOMIC INLINE-LEVEL BOXES DO NOT COME THROUGH HERE because their computed `display` is not
-       `inline` — an `inline-block`, `inline-table`, `inline-flex` or `inline-grid` leaves through
-       `fp_require_placeable` below, which names what each still needs. A REPLACED element whose `display` is
-       `block` is not inline-level at all: §9.2.1 makes it a block box and §9.4.1's two rules DO place it, so
-       it takes the induction at the end of this function, with §10.3.4's and §10.6.2's used extents under it. */
-    return fp_computed_is(el, "display", "inline");
+       THE `inline-block` COMES THROUGH HERE TOO, AND IT IS THE SAME SENTENCE THAT PUTS IT HERE. §9.2.2 names
+       it in the list that defines the class — "such as replaced inline-level elements, inline-block elements,
+       and inline-table elements" — so it is on a line box for exactly the reason a replaced `display: inline`
+       element is, and core/layout/line_box.h delimits its fragment by the same single item index. WHAT USED TO
+       KEEP IT OUT WAS NOT ITS LEVEL BUT A MISSING NUMBER, and the number now exists: §10.8.1 "Leading and
+       half-leading" puts a non-replaced `inline-block`'s baseline INSIDE the box ("The baseline of an
+       'inline-block' is the baseline of its last line box in the normal flow, unless it has either no in-flow
+       line boxes or if its 'overflow' property has a computed value other than 'visible', in which case the
+       baseline is the bottom margin edge"), so its margin box hangs BELOW the line's baseline rather than
+       resting on it, and `line_box_inline_fragments` reads that split (`lb_atomic_extent`) instead of assuming
+       the bottom margin edge. BOTH KINDS OF `inline-block` take this arm: CSS 2.2 §10.3.10 "'Inline-block',
+       replaced elements in normal flow" is one sentence long — "Exactly as inline replaced elements." — and
+       core/layout/used_value.c asks `replaced_element_of` on its `auto` arm BEFORE it asks `uv_box_kind`, so
+       the replaced half is sized by §10.3.2 and §10.6.2 with nothing here to arrange.
+       THE THREE REMAINING ATOMIC INLINE-LEVEL BOXES DO NOT COME THROUGH HERE, and it is no longer their
+       `display` that stops them but a MODULE this engine does not have: an `inline-table`, an `inline-flex`
+       and an `inline-grid` leave through `fp_require_placeable` below, which names what each still needs. A
+       REPLACED element whose `display` is `block` is not inline-level at all: §9.2.1 makes it a block box and
+       §9.4.1's two rules DO place it, so it takes the induction at the end of this function, with §10.3.4's
+       and §10.6.2's used extents under it. */
+    return fp_computed_is(el, "display", "inline") || fp_computed_is(el, "display", "inline-block");
 }
 
 /* CSS 2 §9.4.2 "Inline formatting contexts"' PLACEMENT of a box on a line — "boxes are laid out horizontally,
    one after the other, beginning at the top of a containing block", broken into line boxes whose width the
-   containing block decides. It answers a NON-REPLACED inline box's fragments and a REPLACED element's one
-   fragment through the same entry, because §9.4.2 places both and core/layout/line_box.h owns the one
-   difference between them (a range of two edge items, or one atomic item's own index).
+   containing block decides. It answers a NON-REPLACED inline box's fragments and an ATOMIC inline-level box's
+   one fragment through the same entry, because §9.4.2 places both and core/layout/line_box.h owns the one
+   difference between them (a range of two edge items, or one atomic item's own index). The atomic half is
+   every shape this engine can measure: a REPLACED element, and both halves of the `inline-block` CSS 2.2
+   §10.3.9 and §10.3.10 divide between.
    ITS ORIGIN IS ITS FIRST FRAGMENT'S, and that is §9.4.2's own consequence rather than a choice among several:
    "when an inline box exceeds the width of a line box, it is SPLIT into several boxes and these boxes are
    distributed across several line boxes", so the box has as many border areas as it has fragments and exactly
@@ -245,9 +262,10 @@ size_t flow_inline_fragment_rects(lxb_dom_element_t *el, FlowRect **out)
     n = line_box_inline_fragments(el, &style, &frags);
     DCHECKF(n >= 1 && frags != NULL && style != NULL,
            "%s, establishing box %s, %zu fragment(s) reported%s: "
-           "CSS 2 §9.4.2's fragments were reported as none for an inline box that generates one. That entry's "
-           "own asserts make a zero count impossible — an inline box's two edge items are content the fill "
-           "partitions — so this is that contract having been broken between the two files",
+           "CSS 2 §9.4.2's fragments were reported as none for an inline-level box that generates one. That "
+           "entry's own asserts make a zero count impossible — an inline box's two edge items and an atomic "
+           "inline-level box's one item are alike content the fill partitions — so this is that contract "
+           "having been broken between the two files",
            box_subject(el, ebuf, sizeof ebuf), box_subject(style, sbuf, sizeof sbuf), n,
            frags == NULL ? " and no fragment array" : "");
     /* §10.1's SECOND CASE, composed exactly as the block-level arm below composes it: the establishing box's
@@ -272,9 +290,9 @@ size_t flow_inline_fragment_rects(lxb_dom_element_t *el, FlowRect **out)
 }
 
 /* THE ORIGIN OF A BOX §9.4.2 PLACES, WHICH IS ITS FIRST FRAGMENT'S CORNER FOR BOTH SHAPES OF SUCH A BOX. An
-   inline box has one border area per fragment and exactly one begins first in content order; a REPLACED
-   element is CSS 2.1 §9.2.2's "single opaque box" and has exactly one, so the same index answers both and no
-   caller has to know which it is holding. */
+   inline box has one border area per fragment and exactly one begins first in content order; an ATOMIC
+   inline-level box is CSS 2.1 §9.2.2's "single opaque box" and has exactly one, so the same index answers both
+   and no caller has to know which it is holding. */
 static FlowPoint fp_line_box_origin(lxb_dom_element_t *el)
 {
     FlowRect *rects = NULL;
@@ -320,14 +338,14 @@ static void fp_require_placeable(lxb_dom_element_t *el)
            box_subject(el, nbuf, sizeof nbuf));
     for (i = 0; i < sizeof(TABLE_INTERNAL) / sizeof(TABLE_INTERNAL[0]); i++)
         if (strcmp(d, TABLE_INTERNAL[i]) == 0) table_internal = true;
-    /* `inline` IS NOT IN THIS LIST, and that is the one change that makes this function's name true: a box
-       whose computed `display` is `inline` is PLACED now, by §9.4.2 through core/layout/line_box.h, and it
-       leaves through `fp_line_box_origin` before this classification is asked — a non-replaced inline box out
-       of its two edge items, and a REPLACED element out of the one atomic item that carries it. What is left
-       here is the ATOMIC inline-level boxes CSS 2.1 §9.2.2 "Inline-level elements and inline boxes" separates
-       from an inline box AND whose own `display` is not `inline`. */
-    inline_level = strcmp(d, "inline-block") == 0 ||
-                   strcmp(d, "inline-table") == 0 || strcmp(d, "inline-flex") == 0 ||
+    /* NEITHER `inline` NOR `inline-block` IS IN THIS LIST, and that is what makes this function's name true: a
+       box whose computed `display` is either one is PLACED now, by §9.4.2 through core/layout/line_box.h, and
+       it leaves through `fp_line_box_origin` before this classification is asked — a non-replaced inline box
+       out of its two edge items, and every ATOMIC inline-level box this engine can measure out of the one
+       atomic item that carries it. What is left here is the atomic inline-level boxes CSS 2.1 §9.2.2
+       "Inline-level elements and inline boxes" separates from an inline box AND for which a MODULE outside CSS
+       2.1 §10 owns a number §9.4.2's line cannot be filled without. */
+    inline_level = strcmp(d, "inline-table") == 0 || strcmp(d, "inline-flex") == 0 ||
                    strcmp(d, "inline-grid") == 0;
     /* THE STRING IS RELEASED BEFORE EITHER CRASH AND NEITHER CRASH READS IT AGAIN. `DFAIL` is compiled out in
        release, so a `free` beside one is a `free` the release build FALLS THROUGH — freeing inside the loop and
@@ -353,51 +371,37 @@ static void fp_require_placeable(lxb_dom_element_t *el)
     if (inline_level)
         DFAILF("%s: "
               "CSS 2.1 §9.2.2 'Inline-level elements and inline boxes' makes this an ATOMIC INLINE-LEVEL box — "
-              "`inline-block`, `inline-table`, or css-display-3 §2's `inline flex` and `inline grid` — boxes "
-              "CSS 2.1 §9.2.2 calls atomic \"because they participate in their inline formatting context as a "
-              "single opaque box\". So §9.4.2 places it, "
-              "not §9.4.1, and its position is a position ON A LINE BOX exactly as a non-replaced inline box's "
-              "is. THAT PLACEMENT IS BUILT AND THIS LINE USED TO SAY IT WAS NOT: it named the per-item offset "
-              "along the line and `text-align` as the two missing numbers, and both now exist — "
-              "`text_run_measure_line_offset` (core/layout/text_run.h) is the offset, css-text-4 §7.3 "
-              "\"Default Text Alignment: the text-align-all property\" is the alignment (core/css/"
-              "css_computed_value.c derives it, and core/css/css_shorthand.c carries the §7.1 shorthand row "
-              "that makes a `text-align` declaration reach it), and `line_box_inline_fragments` composes them "
-              "into a fragment rectangle that `fp_line_box_origin` above turns into this very coordinate for "
-              "a `display: inline` box. Following this line as it stood would have built all of that a second "
-              "time. THE SINGLE-ITEM DELIMITATION IS BUILT TOO, AND IT IS THE SHAPE THIS BOX WILL TAKE: "
-              "`line_box_inline_fragments` delimits an ATOMIC inline's fragment by its own item index rather "
-              "than by a pair of edges, and hangs its MARGIN BOX from the line's baseline for a box CSS 2 "
-              "§10.8 gives no baseline — so what this box needs from that entry is not a new arm but the "
-              "SPLIT of its margin box at its OWN baseline, which core/layout/line_box.c already computes for "
-              "the line's height (`lb_atomic_extent` returns the two distances) and that entry's loop does not "
-              "yet read. THE RUN ITEM IS BUILT TOO AND IS NO "
-              "LONGER WHAT THIS WAITS FOR: core/layout/text_run.h "
-              "carries css-text-3 §5.5's atomic inline as a kind of its own — a margin-box inline size plus "
-              "the U+FFFC whose [UAX14] class CB is \"a soft wrap opportunity before and after each replaced "
-              "element or other atomic inline\" — and core/layout/line_box.c emits one for a REPLACED element "
-              "already, AND FOR EVERY NON-REPLACED `inline-block`. WHAT IS LEFT DEPENDS ON WHICH BOX THIS IS, "
-              "AND FOR THE `inline-block` IT IS NO LONGER A BASELINE. CSS 2.2 §10.8.1 \"Leading and "
-              "half-leading\" — the section the standard writes the `vertical-align` definition under — states "
-              "that baseline in ONE sentence WITH ITS EXCEPTION: \"The baseline of an 'inline-block' is the "
-              "baseline of its last line box in the normal flow, unless it has either no in-flow line boxes "
-              "or if its 'overflow' property has a computed value other than 'visible', in which case the "
-              "baseline is the bottom margin edge.\" ALL THREE ARMS ARE BUILT, so core/layout/line_box.c puts "
-              "such a box on the line with the two distances §10.8's step 1 wants — the whole margin box above "
-              "the baseline where the exception fires, and the margin box SPLIT at the box's own last line "
-              "box's baseline where it does not — and what this crash owes for it is the PLACEMENT below, "
-              "reading that split rather than assuming the bottom margin edge. THE OTHER ATOMIC INLINES STILL "
-              "NEED A BASELINE: an `inline-table` needs a different sentence of the same definition (\"The "
-              "baseline of an 'inline-table' is the baseline of the first row of the table\"), which is CSS 2.1 "
-              "§17.2 \"The CSS table model\"'s box structure first, and an `inline-block` HTML §15.4 makes "
-              "REPLACED is a ROUTING decision line_box.c's own atomic crash states. BUILD those, and "
-              "the used inline size for the box types CSS 2.1 §10 does not own — an `inline-flex` and an "
-              "`inline-grid` are CLASSIFIED (`uv_box_kind`'s `UV_BOX_INLINE_FLEX_GRID`) and their `auto` width "
-              "crashes naming css-flexbox-1 §9.9.1 \"Flex Container Intrinsic Main Sizes\" and css-grid-1 §5.2 "
-              "\"Sizing Grid Containers\", so what is left of that half is the module's own INTRINSIC MAIN "
-              "SIZES and no longer the classification — "
-              "which is what core/layout/line_box.c's own atomic arm names. Then this box reaches the line and "
-              "this arm deletes",
+              "an `inline-table`, or css-display-3 §2's `inline flex` and `inline grid` — boxes CSS 2.1 §9.2.2 "
+              "calls atomic \"because they participate in their inline formatting context as a single opaque "
+              "box\". So §9.4.2 places it, not §9.4.1, and its position is a position ON A LINE BOX exactly as "
+              "a non-replaced inline box's is. "
+              "THE PLACEMENT IS BUILT AND SO IS THE `inline-block`, WHICH IS WHY NEITHER IS STILL NAMED HERE: "
+              "`line_box_inline_fragments` (core/layout/line_box.h) delimits an atomic inline's fragment by its "
+              "own item index, hangs its margin box from the line's baseline SPLIT at the box's own baseline "
+              "(`lb_atomic_extent`), and `fp_line_box_origin` above turns that rectangle into this coordinate — "
+              "for a `display: inline` box, for a REPLACED element, and for both halves of the `inline-block` "
+              "CSS 2.2 §10.3.9 and §10.3.10 divide between. Following an earlier form of this line would have "
+              "built that a second time. "
+              "WHAT IS LEFT IS NOT A PLACEMENT AT ALL: each of the three boxes above needs a NUMBER from a "
+              "module outside CSS 2.1 §10, without which there is nothing for §9.4.2's fill to put on a line. "
+              "AN `inline-table` NEEDS CSS 2.1 §17.2 \"The CSS table model\"'s box structure first — the row "
+              "groups, rows and cells §17.2.1 'Anonymous table objects' generates — then §17.5.2's used inline "
+              "size over it, and only then the baseline CSS 2.2 §10.8.1 \"Leading and half-leading\" states "
+              "for it (\"The baseline of an 'inline-table' is the baseline of the first row of the table\"), "
+              "which is a position inside that structure and not a rule that can be built beside it. "
+              "AN `inline-flex` AND AN `inline-grid` ARE ALREADY CLASSIFIED — `uv_box_kind`'s "
+              "`UV_BOX_INLINE_FLEX_GRID` — so an `auto` width on one CRASHES by its own module's name rather "
+              "than answering with §10.3.3's constraint equation over a box no part of §10.3 describes. WHAT "
+              "THAT CLASSIFICATION LEFT IS THE MODULE'S OWN INTRINSIC MAIN SIZES, which §10.3.9's "
+              "shrink-to-fit reads as its two terms: css-flexbox-1 §9.9.1 \"Flex Container Intrinsic Main "
+              "Sizes\" and css-grid-1 §5.2 \"Sizing Grid Containers\", whose max-content size is \"the sum "
+              "of the grid container's track sizes (including gutters) in the appropriate axis\". Each module "
+              "owns that box's BASELINE too and §10.8.1 names neither of them — css-flexbox-1 §8.5 \"Flex "
+              "Container Baselines\" derives one from the items on the container's startmost flex line and "
+              "css-grid-1 §10.6 \"Grid Container Baselines\" does the same — so both numbers fall out of the "
+              "module's layout and neither is this file's to invent. BUILD the module this box's `display` "
+              "names as a second producer of `IntrinsicInlineSizes`; an `inline-table`'s is §17.5.2's and is "
+              "the same shape one module over. Then this box reaches the line and this arm deletes",
               box_subject(el, nbuf, sizeof nbuf));
     /* What is left is a box CSS 2.1 §9.2.1 'Block-level elements and block boxes' makes block-level, which is
        what the two rules below are written about. A `table` is one of them and stays on this path: §17.4

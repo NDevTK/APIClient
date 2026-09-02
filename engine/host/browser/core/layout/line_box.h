@@ -247,20 +247,26 @@ typedef struct {
  * least one line ("line boxes are created as needed to hold inline-level content", and this box's items ARE
  * content the fill partitions).
  *
- * `el` MUST BE A BOX ON A LINE — a computed `display` of `inline`, in flow, in a `horizontal-tb` writing mode.
+ * `el` MUST BE A BOX ON A LINE — a computed `display` of `inline` or `inline-block`, in flow, in a
+ * `horizontal-tb` writing mode.
  * That is TWO SHAPES and the count is where they differ: a NON-REPLACED inline box is delimited by its two
- * EDGE items and CSS 2.2 §9.4.2 splits it across as many line boxes as it spans, while a REPLACED one (HTML
- * §15.4 "Replaced elements", whose computed `display` stays `inline`) is delimited by the ONE run item
- * `lb_child` collects for it and is always exactly ONE fragment — CSS 2.2 §9.2.2 "Inline-level elements and
- * inline boxes" makes it an atomic inline-level box that "participate[s] in [its] inline formatting context as
+ * EDGE items and CSS 2.2 §9.4.2 splits it across as many line boxes as it spans, while an ATOMIC inline-level
+ * box is delimited by the ONE run item `lb_child` collects for it and is always exactly ONE fragment — CSS 2.2
+ * §9.2.2 "Inline-level elements and
+ * inline boxes" makes it a box that "participate[s] in [its] inline formatting context as
  * a SINGLE OPAQUE BOX", so it is never the box §9.4.2 "SPLIT[s] into several boxes". Both are asserted.
- * THE OTHER ATOMIC INLINE-LEVEL BOXES ARE NOT HERE YET, AND WHAT IS MISSING IS NO LONGER THE SAME FOR ALL OF
- * THEM. A non-replaced `inline-block` IS collected by this component's walk and IS measured against the line
- * through §10.8.1's whole sentence, so for that box neither the collection nor the baseline is absent — what
- * stops it here is this entry's own `display` test together with the block-axis derivation below, which hangs
- * an atomic's BOTTOM MARGIN EDGE on the line's baseline and is therefore right only for a box §10.8 gives no
- * baseline. An `inline-table`, `inline-flex` or `inline-grid` still crashes in the walk, which names the inner
- * baseline each of them HAS and the used inline size its own module owns.
+ * WHICH BOXES ARE ATOMIC HERE IS TWO INDEPENDENT FACTS AND NOT ONE `display`: a REPLACED element (HTML §15.4
+ * "Replaced elements", whose computed `display` stays `inline`) and an `inline-block` of either kind, since
+ * CSS 2.2 §10.3.10 "'Inline-block', replaced elements in normal flow" delegates the replaced half whole
+ * ("Exactly as inline replaced elements.") rather than making it a different box. The block axis then reads
+ * §10.8.1's SPLIT of the margin box at the box's own baseline (`lb_atomic_extent`) rather than assuming the
+ * bottom margin edge, which is what admitting the `inline-block` required and is one arithmetic over both:
+ * `below` is zero for every box the section gives no baseline.
+ * AN `inline-table`, `inline-flex` OR `inline-grid` STILL CRASHES IN THE WALK, and for none of them is the
+ * missing piece a placement: each needs the USED INLINE SIZE its own module owns (CSS 2.1 §17.5.2,
+ * css-flexbox-1 §9.9.1 "Flex Container Intrinsic Main Sizes", css-grid-1 §5.2 "Sizing Grid Containers")
+ * before §9.4.2 has anything to put on a line, and the baseline each of them has falls out of that same
+ * module's layout.
  *
  * IT FINDS THE FORMATTING CONTEXT ITSELF, and that is why it takes an element where the two entries above take
  * a run: the question "which inline formatting context is this box in" is answered by walking PAST every inline
