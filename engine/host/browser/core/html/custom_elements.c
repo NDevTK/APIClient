@@ -544,10 +544,17 @@ static bool ce_def_local_is(JSContext *ctx, JSValueConst def, const char *local,
 }
 
 /* §4.13.3's "LOOK UP A CUSTOM ELEMENT DEFINITION" FOR A NODE — all five steps, over the node's own registry,
-   its local name and its is value. Step 1 is "if registry is null, return null", which is why a node in a
-   document that has no registry — a `DOMParser` document, a template's contents — has no definitions at all
-   rather than the window's. Step 2's "if namespace is not the HTML namespace, return null" is the element's,
-   and every element this engine can define one for is in it.
+   its local name and its is value. Step 1 is "If registry is null, then return null.", which is why a node in
+   a document that has no registry — a `DOMParser` document, a template's contents — has no definitions at all
+   rather than the window's.
+   STEP 2 IS PERFORMED AND WAS ONCE ARGUED AWAY. The retired argument was that every element this engine could
+   define one for is in the HTML namespace, and it held only while the sole producer of an is value was HTML
+   §3.2.3 "HTML element constructors" step 9.9 — a constructor whose element §3.2.3 step 9.2 creates in the
+   HTML namespace and nowhere else. HTML §13.2.6.1 "Creating and inserting nodes"' create an element for the
+   token step 5 reads the `is` attribute off the TOKEN with no namespace condition on it at all, and passes it
+   to create an element with whatever namespace the insertion mode chose — so `<svg><rect is="my-rect">` now
+   reaches this with a real is value, and step 4 below would hand an SVG element a definition whose class
+   `super()` cannot construct it from. The premise is retired; the step is code.
    STEP 3 ASKS FOR TWO EQUALITIES AND THE NAME INDEX ANSWERS ONE: "an item with NAME AND LOCAL NAME BOTH equal
    to localName". While every definition was autonomous the second half was implied by the first, which is why
    it was never written. It stops being implied the moment `extends` registers: `define("my-btn", C,
@@ -558,8 +565,12 @@ static bool ce_def_local_is(JSContext *ctx, JSValueConst def, const char *local,
    and this is the only lookup that can run it, because an is value is a fact about an ELEMENT. OWNED. */
 static JSValue ce_find_for_node(JSContext *ctx, JSValueConst wrap, const char *name, size_t len)
 {
-    JSValue reg = ce_registry_of_node(ctx, wrap);
-    JSValue def = ce_find_by_name(ctx, reg, name, len);          /* steps 1-3, first equality */
+    const lxb_dom_node_t *n = node_of(wrap);
+    JSValue reg, def;
+
+    if (!n || n->ns != LXB_NS_HTML) return JS_UNDEFINED;         /* step 2 */
+    reg = ce_registry_of_node(ctx, wrap);
+    def = ce_find_by_name(ctx, reg, name, len);                  /* steps 1 and 3, first equality */
 
     if (JS_IsObject(def) && !ce_def_local_is(ctx, def, name, len)) {   /* step 3, second equality */
         JS_FreeValue(ctx, def);
@@ -676,14 +687,26 @@ bool custom_elements_name_is_valid(const char *name, size_t len)
    "undefined" and "uncustomized" alike and `attachInternals` step 6 rejects both; DOM §4.9 makes exactly one
    of them DEFINED, which is where it becomes observable.
 
-   NAMED RESIDUAL — the `is is non-null` DISJUNCT IS NOT ASKED, because this engine keeps no is value: an
-   element created by `createElement("abbr", {is: "my-abbr"})` or parsed from `<abbr is="my-abbr">` derives
-   "uncustomized" here and therefore reports as DEFINED, where DOM §4.9 makes it "undefined" and NOT defined.
-   The next diff carries the is value on the element as its own state, set once at creation by DOM §4.9's
-   create an element and never re-read from the content attribute — a later `setAttribute("is", …)` must not
-   change it, which is exactly why deriving it from the attribute here would be a different wrong answer
-   rather than a narrower one. Its absence shows as `custom-elements/pseudo-class-defined-customized-builtins`
-   reporting a customized built-in as `:defined`. */
+   THE `is is non-null` DISJUNCT IS NOT ASKED HERE AND MUST NOT BE, WHICH IS A DIFFERENT SENTENCE FROM THE
+   ONE THIS COMMENT USED TO CARRY. An is value is a per-flow slot on the element's WRAPPER, and this
+   derivation is the arm `custom_elements_is_defined` takes for a node that HAS NO WRAPPER — so a node
+   reaching this line cannot be carrying one, and the disjunct is vacuously false rather than skipped. What
+   makes that hold is that every producer of an is value WRITES THE STATE at the same moment
+   (custom_elements_created_with_is_value), so `ce_state_of` finds a slot and never asks this at all. Deriving
+   the value from the `is` CONTENT ATTRIBUTE instead would be a different wrong answer rather than a narrower
+   one: DOM §4.9 fixes the is value at creation and a later `setAttribute("is", …)` must not change it.
+
+   NAMED RESIDUAL — CORRECT for every is value this engine can produce, NARROWER than DOM §4.9.
+     NOT COVERED: `createElement("abbr", {is: "my-abbr"})`. DOM §4.5 "Interface Document"'s flatten element
+       creation options reads the `is` member only to refuse it beside `customElementRegistry`, and throws it
+       away, so that element carries no is value, gets no state slot, and derives "uncustomized" here.
+     WHAT THE NEXT DIFF BUILDS: DOM §4.9 create an element's `is` argument — flatten returning the member,
+       document.c writing it through the same one entry the parser uses, and §4.9 step 4's customized-built-in
+       arm. Nothing here changes: the write is what builds the slot this derivation is the absence of.
+     HOW ITS ABSENCE SHOWS: `document.createElement("abbr", {is:"my-abbr"}).matches(":defined")` is true where
+       a browser answers false, and the same element is not upgraded when `my-abbr` is later defined —
+       `custom-elements/pseudo-class-defined-customized-builtins` reports it as `:defined`. The MARKUP half of
+       that same test — `<abbr is="my-abbr">` — is answered correctly. */
 static int ce_state_derive(const lxb_dom_node_t *n)
 {
     size_t len = 0;
@@ -2288,17 +2311,23 @@ void custom_elements_node_adopted(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_doc
    an is value is written onto a WRAPPER, so an element that has none cannot have one, and node_wrap_peek
    answers that without building anything. The same reasoning is why `:defined` reads the wrapper it finds
    rather than minting one.
-   NAMED RESIDUAL — CORRECT for every is value this engine can currently produce, NARROWER than DOM §4.9.
-     NOT COVERED: an element whose is value came from the PARSER's `is=""` attribute or from DOM §4.9's
-       `createElement(local, {is})`, neither of which exists yet — so no element reaches this with an is value
-       that HTML §3.2.3 step 9.9 did not write onto a wrapper it had just built.
-     WHAT THE NEXT DIFF BUILDS: DOM §4.9 "create an element"'s `is` argument and HTML §13.2.6.1's
-       "create an element for the token" reading the `is` attribute, both of which write this same slot at
-       creation — after which every element carrying one already has the wrapper this peek looks for, because
-       the write is what builds it. Nothing here changes.
+   THE PEEK STAYED FREE WHEN THE PARSER BECAME A PRODUCER, and that is the property to preserve rather than
+   the count of producers: an is value is written onto a WRAPPER, and the write is what BUILDS the wrapper, so
+   an element that has none cannot have one and node_wrap_peek answers without allocating. HTML §13.2.6.1
+   "Creating and inserting nodes"' create an element for the token step 5 mints a wrapper for exactly those
+   elements a markup author wrote an `is` attribute on, which is the population this test exists to find.
+
+   NAMED RESIDUAL — CORRECT for every is value this engine can produce, NARROWER than DOM §4.9.
+     NOT COVERED: an is value from DOM §4.9 "create an element"'s `is` argument —
+       `createElement(local, {is})`, whose member DOM §4.5's flatten element creation options currently reads
+       only in order to refuse it beside `customElementRegistry`.
+     WHAT THE NEXT DIFF BUILDS: that flatten returning the member, document.c writing it through
+       custom_elements_created_with_is_value before its §4.9 step 3 lookup, and §4.9 step 4's
+       customized-built-in arm (which upgrades SYNCHRONOUSLY, so it needs a driver for §4.13.5 the way the
+       reaction drain has one). Nothing here changes.
      HOW ITS ABSENCE SHOWS: `document.createElement("button", {is:"my-btn"})` is a TypeError-free call that
-       returns a plain button — no upgrade, no connectedCallback — and `<button is="my-btn">` in markup stays
-       uncustomized after its definition lands. */
+       returns a plain button — no upgrade, no connectedCallback, and `:defined` — while the same element
+       written as `<button is="my-btn">` in markup is upgraded when its definition lands. */
 static bool ce_upgradable_name(JSContext *ctx, lxb_dom_element_t *el)
 {
     size_t len = 0;
@@ -3490,6 +3519,60 @@ void custom_elements_mark_failed(JSContext *ctx, JSValueConst wrap)
 {
     DCHECK(g_ready, "an element was marked failed before custom_elements_init declared the state slot");
     ce_set_state(ctx, wrap, CE_STATE_FAILED);
+}
+
+/* DOM §4.9 "Interface Element"'s CREATE AN ELEMENT INTERNAL step 2's "is value to is" AND create an element
+ * step 6.3's state, AS ONE WRITE — see custom_elements.h for why they are one entry and not two.
+ *
+ * STEP 6.3 REDUCES TO THE NAMESPACE TEST HERE and that is arithmetic, not a shortcut: its condition is
+ * verbatim "If namespace is the HTML namespace, and either localName is a valid custom element name or is is
+ * non-null, then set result's custom element state to "undefined"", and this entry is reached only with a
+ * non-null is, which satisfies the disjunction outright. The state is the same "undefined" on the two arms
+ * that do not run step 6.3 at all — step 4.2 creates a customized built-in with it explicitly, and step 5's
+ * is is null so it never arrives — so writing it whenever an is value is written is right for every arm
+ * rather than for the one this line's number belongs to.
+ *
+ * A DOCUMENT NO REALM WAS EVER BUILT FOR HAS NOWHERE TO PUT THIS, AND NEEDS NOWHERE. Every part of an
+ * element's custom element state — the state, the definition, the registry, the is value — is a per-flow slot
+ * on the element's WRAPPER, and a wrapper is minted in a realm. The population is solve_html.c's witness
+ * documents, whose elements are never looked up, never upgraded and never asked `:defined`; the same sentence
+ * is why custom_elements_is_defined answers such a node from ce_state_derive alone. */
+void custom_elements_created_with_is_value(lxb_dom_element_t *el, const char *is, size_t len)
+{
+    lxb_dom_node_t *n = lxb_dom_interface_node(el);
+    JSContext *ctx;
+    JSValue wrap;
+
+    DCHECK(el != NULL, "an is value was written onto no element");
+    /* THE NULL IS VALUE IS THE ABSENT SLOT, so there is nothing to write for it — and `len == 0` is NOT that
+       case: `<button is="">` has the EMPTY STRING as its is value, which DOM §4.9 step 6.3 counts as non-null
+       and which therefore makes the element "undefined" rather than "uncustomized". The pointer is the
+       discriminator and the length never is. */
+    if (is == NULL) return;
+    if (!g_ready) return;
+    ctx = document_realm_of(n);
+    if (ctx == NULL) return;
+    wrap = node_wrap(ctx, n);
+    DCHECK(JS_IsObject(wrap),
+           "an element in a document with a realm could not be wrapped — node_wrap answers JS_NULL only for a "
+           "node it cannot build an interface object for, and this one is an ELEMENT");
+    /* WRITTEN ONCE, AT CREATION. DOM §4.9 sets the is value in create an element internal step 2 and the only
+       other writer in the whole standard is step 5.1.4.10, which sets it to NULL for an autonomous element the
+       constructor returned — so a second non-null write onto one element is two creations claiming one node. */
+    {
+        JSValue prev;
+        int had = JS_GetOwnSlot(ctx, &prev, wrap, g_atom_is);
+
+        if (had > 0) JS_FreeValue(ctx, prev);
+        DCHECK(had <= 0,
+               "an element was given a second is value — DOM §4.9 writes it in create an element internal "
+               "step 2 and never again, so the element being created here already belonged to another "
+               "creation");
+    }
+    JS_DefinePropertyValue(ctx, wrap, g_atom_is, JS_NewStringLen(ctx, is, len), CE_SLOT_FLAGS);
+    if (n->ns == LXB_NS_HTML)                                    /* step 6.3 */
+        ce_set_state(ctx, wrap, CE_STATE_UNDEFINED);
+    JS_FreeValue(ctx, wrap);
 }
 
 void custom_elements_install(JSContext *ctx, JSValueConst global)

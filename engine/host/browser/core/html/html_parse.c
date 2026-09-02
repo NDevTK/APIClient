@@ -12,6 +12,10 @@
 /* HTML §13.2.6.4.8 'The "text" insertion mode' prepares the `script` element it just closed, and that is the
    component that owns §4.12.1 — this file supplies only the moment. */
 #include "core/html/html_script.h"
+/* HTML §13.2.6.1 "Creating and inserting nodes"' create an element for the token step 5 reads the `is`
+   attribute off the TOKEN, and the token exists only inside this component — so this file supplies the moment
+   and custom_elements.c owns the value, exactly as above. */
+#include "core/html/custom_elements.h"
 /* §13.2.6's DOM writes are the per-flow delta's — this component owns the one place a parser is made, so it is
    where that implementation is installed. */
 #include "solver/dom_cow.h"
@@ -86,6 +90,40 @@ static lxb_status_t html_parse_attr_appended(lxb_dom_element_t *element,
             ta->value_size = 0;
             break;
         }
+    }
+    /* HTML §13.2.6.1 "Creating and inserting nodes"' CREATE AN ELEMENT FOR THE TOKEN STEP 5, verbatim: "Let is
+       be the value of the "is" attribute in token, if such an attribute exists; otherwise null." The value
+       then rides step 10's create an element and is written by create an element internal — so this file
+       supplies only the MOMENT, exactly as it does for §13.2.6.4.8's `script`, and custom_elements.c owns what
+       an is value is and where it is kept.
+       THIS EDGE, BECAUSE IT IS THE ONE THE TOKEN'S ATTRIBUTES CROSS. `lxb_html_tree_create_element_for_token`
+       builds the element and then appends the token's attributes one at a time through
+       `lxb_dom_element_attr_append`, which is what this callback IS; lexbor exposes no hook on the creation
+       itself, and there is no token to read at any later point.
+       THE ATTRIBUTE LIST IS NOT AN ALTERNATIVE READ. §13.2.6.1 fixes the is value at CREATION and DOM §4.9
+       never lets it change again, so re-reading the `is` content attribute when a lookup wants it would answer
+       a later `setAttribute("is", …)` — a different wrong answer rather than a narrower one.
+       THREE CONDITIONS, AND THE THIRD IS NOT BELT-AND-BRACES. A token must be in construction, which is what
+       separates the parser's appends from a page's own `setAttribute` (no script runs inside tree construction
+       here — `html_parse_token_done` QUEUES a parser-inserted `script` after restoring the bracket, never
+       inside it). The name must be `is`. AND THE ELEMENT MUST BE PARENTLESS, because
+       `lxb_html_tree_append_attributes` has a SECOND caller that is not this algorithm at all: §13.2.6.4.7
+       'The "in body" insertion mode' merges a second `<html>` or `<body>` start tag's attributes ONTO THE
+       ELEMENT ALREADY IN THE TREE, creating nothing — so `<body is="x-y">` after a body exists must add an
+       attribute and no is value. An element being created for a token has not been inserted yet; the merge
+       target is the document element or its child, and both have parents. */
+    if (g_token_in_construction != NULL && local_name == LXB_DOM_ATTR_IS &&
+        lxb_dom_interface_node(element)->parent == NULL) {
+        /* AN ABSENT VALUE IS THE EMPTY STRING AND NOT A NULL IS VALUE, and the two spellings do not arrive the
+           same way. `<button is="">` sets the token attribute's `value_begin`, so lexbor allocates a
+           zero-length value and this callback sees `value` non-NULL with `value_len` 0; `<button is>` never
+           enters an attribute-value state at all, leaves `value_begin` NULL, so
+           `lxb_dom_attr_set_value_wo_copy` is never called and `value` arrives NULL. Both are "such an
+           attribute exists" under §13.2.6.1 step 5 and both are the empty string, which DOM §4.9 step 6.3
+           counts as non-null — so the two are folded HERE rather than at the component, whose `is == NULL`
+           means DOM's NULL IS VALUE and nothing else. */
+        custom_elements_created_with_is_value(element, value ? (const char *)value : "",
+                                              value ? value_len : 0);
     }
     /* AND THEN LEXBOR'S OWN STEPS RUN — the composition, on EVERY path out of the bookkeeping above. The match
        ends in a `break` rather than a return for exactly that reason: a claimed token attribute is the common

@@ -180,6 +180,20 @@ int custom_elements_created_check(JSContext *ctx, JSValueConst result,
    from here and not by the caller because the state is this component's own record — and it is what stops the
    element being tried for upgrade again the moment it enters a document. */
 void custom_elements_mark_failed(JSContext *ctx, JSValueConst wrap);
+/* DOM §4.9 "Interface Element"'s IS VALUE, WRITTEN AT THE ONE MOMENT THE STANDARD WRITES IT — "create an
+   element internal"'s step 2, which sets the is value, TOGETHER WITH "create an element" step 6.3, which is
+   the state that follows from it. They are ONE entry and not two because a caller that could perform one
+   without the other would be a second answer to what an is value means: an element carrying one and still
+   deriving "uncustomized" reports as `:defined` while being a custom element that has not been upgraded, and
+   an element marked "undefined" with no is value is a `<button>` no lookup can ever resolve. Both producers
+   of an is value go through here — HTML §13.2.6.1 "Creating and inserting nodes"' create an element for the
+   token step 5, and DOM §4.5 "Interface Document"'s ElementCreationOptions `is` — so there is one write site
+   and the invariant that it happens exactly once per element is assertable at it.
+   `is` NULL IS DOM'S NULL IS VALUE and writes nothing; a NON-NULL `is` of length 0 is `is=""`, which DOM §4.9
+   step 6.3 counts as non-null. IT TAKES THE ELEMENT AND NO REALM, for custom_elements_is_defined's reason —
+   the caller is a parse edge standing on a Lexbor node, and the realm this state belongs to is the ELEMENT'S
+   OWN DOCUMENT'S, never whichever one happens to be running. */
+void custom_elements_created_with_is_value(lxb_dom_element_t *el, const char *is, size_t len);
 /* `window.customElements` — this realm's Document's CustomElementRegistry, and the `CustomElementRegistry`
    interface object that makes `new CustomElementRegistry()` (a SCOPED one) constructible. */
 void custom_elements_install(JSContext *ctx, JSValueConst global);
