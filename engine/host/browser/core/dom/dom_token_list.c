@@ -27,7 +27,9 @@
 #include "solver/concolic.h"   /* an unknown NAME denotes its shape — see concolic_name_cstr */
 #include "quickjs.h"
 #include "solver/dom_cow.h"
+#include "quickjs-step.h"
 #include "core/idl_args.h"
+#include "core/idl_index_arg.h"   /* §7.1's `item` takes an index unknown external input crosses AS ITSELF */
 #include "core/realm.h"
 #include "core/idl_indexed.h"
 #include "core/dom/node.h"
@@ -209,6 +211,24 @@ static uint32_t set_size(const char *v, size_t vlen)
     return n;
 }
 
+/* THIS LIST'S TOKEN SET SIZE, ASKED OF THE LIST RATHER THAN OF A VALUE ALREADY WALKED OUT OF IT — the one door
+   every consumer of that number goes through. §7.1 asks it in THREE places that must never disagree: `length`
+   reports it, the supported property indices are one less than it, and `item`'s step 1 is the bound the
+   elimination chain over an unknown index is drawn against. A receiver that is not a DOMTokenList, or whose
+   owner element is gone, has no token set at all and answers 0 — which is a POSITIVE statement and not a
+   fallback: step 1 then returns null for every index there is, and that is what the member answered for such a
+   receiver before it was a machine. */
+static uint32_t tl_size(JSContext *ctx, JSValueConst this_val)
+{
+    const char *attr, *v;
+    size_t vlen = 0;
+    lxb_dom_element_t *el = list_owner(ctx, this_val, &attr);
+
+    if (!el) return 0;
+    v = list_value(el, attr, &vlen);
+    return set_size(v, vlen);
+}
+
 /* §7.1 "run the update steps": re-serialise the set and write it through the DOM chokepoint, so the write is
    per-flow and runs the attribute change steps exactly like a setAttribute the page wrote itself.
  *
@@ -282,14 +302,8 @@ static int token_check(JSContext *ctx, const char *tok, size_t tlen)
    `item` carried below, and it is worth nothing to leave one of the pair right and the other wrong. */
 static JSValue js_tl_length(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    const char *attr, *v;
-    size_t vlen = 0;
-    lxb_dom_element_t *el = list_owner(ctx, this_val, &attr);
-
     (void)magic;
-    if (!el) return JS_NewUint32(ctx, 0);
-    v = list_value(el, attr, &vlen);
-    return JS_NewUint32(ctx, set_size(v, vlen));
+    return JS_NewUint32(ctx, tl_size(ctx, this_val));
 }
 
 /* §7.1 `value` — the attribute itself, and its setter is the attribute's setter. It is the stringifier too. */
@@ -330,57 +344,111 @@ static JSValue js_tl_set_value(JSContext *ctx, JSValueConst this_val, JSValueCon
     return JS_UNDEFINED;
 }
 
-/* §7.1's `item(index)` method steps: "If index is equal to or greater than this's token set's size, then
-   return null", then "Return this's token set[index]". That null past the end is what makes the OPERATION
-   different from the indexed property getter this same body backs — §7.1's supported property indices "are the
-   numbers in the range zero to object's token set's size − 1", so `list[size]` is undefined where
-   `list.item(size)` is null.
-
-   THE INDEX IS `unsigned long`, AND THE BODY NO LONGER RE-STATES THAT. §7.1 writes `getter DOMString?
-   item(unsigned long index)` — the comment above tl_item already quoted that line while the declaration below
-   said `long`, which is how the disagreement was readable at all. This read used to be `JS_ToInt64` plus `if
-   (want < 0) return JS_NULL`: Web IDL §3.2.4.5 long converts with §3.2.4.9 Abstract operations' ConvertToInt(V,
-   32, "signed"), whose final step is "If signedness is 'signed' and x ≥ 2^(bitLength−1), then return x −
-   2^bitLength", so `item(2**31)` denoted −2147483648 where §3.2.4.6 unsigned long's ConvertToInt(V, 32,
-   "unsigned") denotes 2147483648 — and the body's negative branch is what turned that back into the null a
-   browser answers. THE COMPENSATION IS WHY THE WRONG TYPE SURVIVED: a token set cannot hold 2**31 tokens, so
-   every value at or past 2**31 is past the end under either sign and nothing a page can write observes the
-   difference. The declaration is the spec of the conversion; a body re-deriving the sign is the second copy of
-   §3.2.4.9 Abstract operations' arithmetic that idl_args.c exists to prevent. */
-static JSValue js_tl_item(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+/* §7.1's TOKEN SET AT A POSITION — "this's token set[index]", the §1.2 "Ordered sets" walk stopped at `i`, and
+   JS_UNDEFINED when the set is not that long. It is ONE implementation because §7.1 gives it two readings and
+   they must never disagree: the indexed property getter's supported property indices "are the numbers in the
+   range zero to object's token set's size − 1", so absence there IS "the property is not there", and the
+   OPERATION's step 1 turns that same absence into null. Two walks would be two chances for `list[3]` and
+   `list.item(3)` to name different tokens of one list.
+   IT ANSWERS THE GETTER'S SPELLING and the operation folds it, rather than the other way round, because
+   idl_indexed.c's contract is the one that cannot be restated: JS_NULL from a backing would be a token whose
+   value is null, not a missing one, and `3 in el.classList` would answer true. */
+static JSValue tl_token_at(JSContext *ctx, JSValueConst this_val, uint32_t i)
 {
     const char *attr, *v, *p, *end, *t;
     size_t vlen = 0, tlen;
     lxb_dom_element_t *el = list_owner(ctx, this_val, &attr);
-    uint32_t want = 0, n = 0;
+    uint32_t n = 0;
 
-    (void)magic;
-    if (!el) return JS_NULL;
-    DCHECK(argc >= 1, "§7.1's `item` reached its body with no argument — its IDL argument is required, so the "
-                      "declaration's own argument-count check is what should have refused the call");
+    if (!el) return JS_UNDEFINED;
     v = list_value(el, attr, &vlen);
-    if (concolic_is(argv[0])) {
-        /* AN UNKNOWN INDEX, and it reaches the body unconverted because §3.2's conversion is a boundary
-           unknown external input crosses AS ITSELF (idl_concolic_rule answers IDL_CONCOLIC_CROSSES for every
-           integer type). The EMPTY token set is the one size at which that has an answer rather than a fork:
-           step 1 returns null for every index at or past the size, and at size 0 that is every index there is.
-           READING IT WITH `JS_ToInt64` INSTEAD — which is what stood here — IS THE SHAPE idl_args.h BANS BY
-           NAME: a concolic is a real JSObject, so ToNumber reaches ToPrimitive and runs a getter from a plain
-           C frame, which this engine aborts on somewhere inside the coercion rather than here at the member. */
-        DCHECK(set_size(v, vlen) == 0,
-               "§7.1's `item` was given an UNKNOWN index into a NON-EMPTY DOMTokenList — every token in it is a "
-               "distinct answer, so the read must FORK one flow per supported index (plus the null arm for an "
-               "index past the end) instead of deciding it here");
-        return JS_NULL;
-    }
-    JS_ToUint32(ctx, &want, argv[0]);   /* the declaration ran §3.2.4.6 unsigned long: already [0, 2**32-1] */
     p = v; end = v + vlen;
     while (set_next(v, &p, end, &t, &tlen)) {
-        if (n == want) return JS_NewStringLen(ctx, t, tlen);
+        if (n == i) return JS_NewStringLen(ctx, t, tlen);
         n++;
     }
-    return JS_NULL;
+    return JS_UNDEFINED;
 }
+
+/* §7.1's `item(index)` method steps, quoted whole: "If index is equal to or greater than this's token set's
+ * size, then return null. Return this's token set[index]." That null past the end is what makes the OPERATION
+ * different from the indexed property getter over the same token set — §7.1's supported property indices "are
+ * the numbers in the range zero to object's token set's size − 1", so `list[size]` is undefined where
+ * `list.item(size)` is null.
+ *
+ * THE INDEX IS `unsigned long`, AND THE BODY NO LONGER RE-STATES THAT. §7.1 writes `getter DOMString?
+ * item(unsigned long index)` — the comment above tl_item already quoted that line while the declaration below
+ * said `long`, which is how the disagreement was readable at all. This read used to be `JS_ToInt64` plus `if
+ * (want < 0) return JS_NULL`: Web IDL §3.2.4.5 long converts with §3.2.4.9 Abstract operations' ConvertToInt(V,
+ * 32, "signed"), whose final step is "If signedness is 'signed' and x ≥ 2^(bitLength−1), then return x −
+ * 2^bitLength", so `item(2**31)` denoted −2147483648 where §3.2.4.6 unsigned long's ConvertToInt(V, 32,
+ * "unsigned") denotes 2147483648 — and the body's negative branch is what turned that back into the null a
+ * browser answers. THE COMPENSATION IS WHY THE WRONG TYPE SURVIVED: a token set cannot hold 2**31 tokens, so
+ * every value at or past 2**31 is past the end under either sign and nothing a page can write observes the
+ * difference. The declaration is the spec of the conversion; a body re-deriving the sign is the second copy of
+ * §3.2.4.9 Abstract operations' arithmetic that idl_args.c exists to prevent.
+ *
+ * IT IS A STEP MACHINE BECAUSE ITS ONE ARGUMENT CAN BE UNKNOWN, and the DCHECK that used to refuse an unknown
+ * index into a NON-EMPTY list is gone with the arm it guarded. That check was honest and was still this member
+ * answering nothing: `el.classList.item(location.hash.length)` on any element carrying a class took the
+ * document down, and a bundle's feature switch reading one token of `relList` is exactly the shape that does
+ * it. core/idl_index_arg.h's elimination chain is the answer, and asking it is what a plain C activation has
+ * nowhere to park for.
+ *
+ * ITS SECOND CALLER IS GONE RATHER THAN CONVERTED, WHICH IS WHY THE SIGNATURE COULD CHANGE AT ALL. The indexed
+ * property getter used to reach the token set by CALLING this member with a JS_NewUint32 it had just built —
+ * one algorithm wearing the other's argument list, and the reason this body could not become a machine while
+ * it stood. It now calls tl_token_at, which is what both of them were always asking for. */
+#define TL_ITEM_ALGORITHM "DOM §7.1 Interface DOMTokenList item(index)"
+#define TL_ITEM_STAGES(X)                                                                                     \
+    X(TL_ITEM_READ, TL_ITEM_ALGORITHM " (null when index is at or past the token set's size, otherwise the "  \
+                                      "token set's indexth token)")
+enum { IDL_STEP_STAGE_BASE(TL_ITEM_STAGES) TL_ITEM_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const TL_ITEM_STEPS[] = { TL_ITEM_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+static int js_tl_item(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSValueConst *argv,
+                      JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    IdlIndexChain *s = state;
+    uint32_t i = 0;
+    bool past_end = false;
+    JSValue r;
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);   /* this machine makes no request that delivers a value */
+    *presult = JS_UNDEFINED;
+    DCHECK(hdr->stage == TL_ITEM_READ,
+           "§7.1's item(index) resumed into a stage the algorithm does not have — it is two sentences with no "
+           "boundary between them, and the chain of questions it may ask is a cursor on this machine's own "
+           "state rather than a stage apiece");
+    DCHECK(argc == 1,
+           "§7.1's item(index) reached its body with an argument count its declaration does not produce — "
+           "`index` is REQUIRED, so §3.6's argument-count check refuses a bare item() before this body runs");
+    if (concolic_is(argv[0])) {
+        /* THE SIZE THIS CHAIN IS DRAWN AGAINST IS STEP 1'S OWN BOUND, read through the one door tl_size is —
+           so the positions this chain walks and the number `length` reports cannot come apart. */
+        int rc = idl_index_chain_run(ctx, hdr, s, argv[0], tl_size(ctx, hdr->this_val),
+                                     TL_ITEM_ALGORITHM, &i, &past_end);
+        if (rc)
+            return rc;   /* parked at the fork */
+        if (past_end) {
+            *presult = JS_NULL;   /* step 1's own answer */
+            return JS_STEP_DONE;
+        }
+    } else {
+        /* The declaration ran §3.2.4.6 unsigned long's ConvertToInt(V, 32, "unsigned"), which is §3.2.4.9
+           Abstract operations' modulo and not a clamp — `classList.item(2**32)` is token 0. */
+        i = idl_index_arg_known(ctx, argv[0], TL_ITEM_ALGORITHM);
+    }
+    r = tl_token_at(ctx, hdr->this_val, i);
+    *presult = JS_IsUndefined(r) ? JS_NULL : r;   /* step 1's null, reached from the backing's own spelling */
+    return JS_STEP_DONE;
+}
+
+static const IdlStepDecl TL_ITEM_DECL = {
+    js_tl_item, sizeof(IdlIndexChain), idl_index_chain_visit, NULL,
+    TL_ITEM_ALGORITHM, TL_ITEM_STEPS, 0, NULL
+};
 
 static JSValue js_tl_contains(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
@@ -638,30 +706,26 @@ out:
 
 /* §7.1 `getter DOMString? item(unsigned long index)` — the INDEXED PROPERTY GETTER, which is what `list[0]`
    is. Its backing is the same attribute every other member reads, so nothing here caches and nothing goes
-   stale: the index is resolved against the class attribute at the moment it is asked. */
+   stale: the index is resolved against the class attribute at the moment it is asked.
+   §7.1's supported property indices "are the numbers in the range zero to object's token set's size − 1", so
+   this is tl_size — the same door `length` and `item`'s bound read, rather than `length`'s JSValue minted and
+   converted straight back, which was a second spelling of one number with a coercion in the middle. */
 static uint32_t tl_length(JSContext *ctx, JSValueConst self)
 {
-    JSValue n = js_tl_length(ctx, self, 0);
-    uint32_t v = 0;
-    JS_ToUint32(ctx, &v, n);
-    JS_FreeValue(ctx, n);
-    return v;
+    return tl_size(ctx, self);
 }
 
-/* The index this hands js_tl_item is a `uint32_t` the INDEXED-PROPERTY machinery already resolved, so the
-   unknown-index arm in that body is unreachable FROM HERE and reachable only from the MEMBER — `list.item(x)`
-   with an x the conversion crossed. That is a statement about which caller needs the arm, not an invariant to
-   assert: a DCHECK here would be testing that JS_NewUint32 one line down returns a number, which is a fact
-   about quickjs's constructor rather than about this file, and an assert whose condition the line above it
-   establishes teaches a reader nothing when it never fires. */
+/* THE LOOKUP REACHES THE TOKEN SET DIRECTLY, AND USED TO REACH IT THROUGH THE MEMBER. It built a JS_NewUint32,
+   called js_tl_item with a one-argument argv, and folded that member's null back into JS_UNDEFINED — one
+   algorithm wearing the other's argument list, and the reason the member could not become a step machine while
+   it stood. tl_token_at is what both callers were asking for, and it already answers in the spelling
+   idl_indexed.c's contract requires, so there is no fold left here to get wrong.
+   THE UNKNOWN-INDEX QUESTION THE MEMBER ASKS STILL DOES NOT ARISE HERE, and that is a statement about the two
+   paths rather than an omission: the key reaching idl_indexed_own_property is a JSAtom, so whatever produced it
+   has already been through ToPropertyKey and what arrives is a real string. */
 static JSValue tl_item(JSContext *ctx, JSValueConst self, uint32_t i)
 {
-    JSValue idx = JS_NewUint32(ctx, i), r;
-    JSValueConst argv[1];
-    argv[0] = idx;
-    r = js_tl_item(ctx, self, 1, argv, 0);
-    JS_FreeValue(ctx, idx);
-    return JS_IsNull(r) ? (JS_FreeValue(ctx, r), JS_UNDEFINED) : r;   /* past the end is not a property */
+    return tl_token_at(ctx, self, i);   /* past the end is JS_UNDEFINED, which is "not a property" */
 }
 
 static const IdlIndexedDecl TOKEN_LIST_INDEXED = { "DOMTokenList", tl_length, tl_item, NULL };
@@ -759,7 +823,9 @@ void dom_token_list_init(JSContext *ctx)
        Abstract operations' ConvertToInt modulo IS the specified behaviour and there is nothing here to throw.
        The type states the SIGN, which is the whole of what it decides — see js_tl_item for the negative branch
        this replaced and for why nothing could observe that it was wrong. */
-    g_item_id = idl_method_id(ctx, (const IdlArgType[]){ IDL_UNSIGNED_LONG }, 1, js_tl_item, 0);
+    /* §7.1's `item` IS A MACHINE — a declaration and not a dispatch, since there is no second body for
+       anything to select against. `index` is REQUIRED, and it can be unknown external input. */
+    g_item_id = idl_method_id_step(ctx, (const IdlArgType[]){ IDL_UNSIGNED_LONG }, 1, NULL, 0, &TL_ITEM_DECL, 0);
     g_contains_id = idl_method_id(ctx, IDL_1STR, 1, js_tl_contains, 0);
     /* §7.1 `undefined add(DOMString... tokens)` and `undefined remove(DOMString... tokens)` — THE TAIL IS
        DECLARED, so the body takes as many tokens as the page passed. It declared ONE, and Web IDL §3.6

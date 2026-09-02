@@ -88,7 +88,9 @@
 #include "quickjs.h"
 #include "core/idl_slots.h"
 #include "core/idl_args.h"
+#include "core/idl_index_arg.h"   /* §6.6.1's `item` index, known and unknown — the ARGUMENT half */
 #include "core/idl_indexed.h"   /* §6.6.1's `getter CSSOMString item(unsigned long index)` — the getter half */
+#include "quickjs-step.h"
 #include "core/realm.h"
 #include "core/dom/node.h"
 #include "core/dom/document.h"
@@ -2934,38 +2936,105 @@ static JSValue js_cssd_length(JSContext *ctx, JSValueConst this_val, int magic)
    — the declaration's error had no discriminating input through this member. The declaration is the spec of
    the conversion; a body re-deriving the sign is the second copy of §3.2.4.9 Abstract operations' arithmetic
    that idl_args.c exists to prevent. */
-static JSValue js_cssd_item(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
-{
-    JSValue block = cssd_block(ctx, this_val), r;
-    CssDecls d = { 0 };
-    uint32_t i = 0;
 
-    (void)magic;
-    if (JS_IsException(block)) return block;
-    DCHECK(argc >= 1, "§6.6.1's `item` reached its body with no index — its IDL argument is required");
+/* THE PROPERTY NAME OF THE CSS DECLARATION AT A POSITION — §6.6.1's "the property name of the CSS declaration
+   at position index", and JS_UNDEFINED when the declarations are not that long. One implementation for the
+   same reason cssd_count is one: §6.6.1 gives this walk TWO readings that must never disagree — the indexed
+   property getter, where absence IS "not a supported property index", and the OPERATION, whose own sentence
+   turns that absence into the empty string. It answers in the GETTER's spelling and the operation folds it,
+   because idl_indexed.c's contract is the one that cannot be restated: an empty string from a backing is a
+   property whose value is "", so `3 in el.style` would answer true on a three-declaration block.
+   THE BLOCK IS OPENED HERE AND NOT PASSED IN, which is what keeps a CssDecls off the member's own frame. That
+   array is a C allocation the step state does not name and cannot park with, so a member that held one across
+   a fork would be holding it across a snapshot, an eviction and a cross-session resume. */
+static JSValue cssd_name_at(JSContext *ctx, JSValueConst self, uint32_t i)
+{
+    JSValue block = cssd_block(ctx, self), r;
+    CssDecls d = { 0 };
+
+    DCHECK(!JS_IsException(block),
+           "a CSS declaration at a position was asked for on an object with no declaration block — every "
+           "caller of this establishes the brand first, the getter by the decl that only cssd_new attaches and "
+           "the member by its own cssd_block, so a throw here is a caller that did neither");
     cssd_declared_decls(ctx, block, &d);
-    if (concolic_is(argv[0])) {
-        /* AN UNKNOWN INDEX, and it reaches the body unconverted because §3.2's conversion is a boundary
-           unknown external input crosses AS ITSELF (idl_concolic_rule answers IDL_CONCOLIC_CROSSES for every
-           integer type). The EMPTY block is the one length at which that has an answer rather than a fork:
-           §6.6.1 returns the empty string for every index at or past the number of declarations, and at zero
-           declarations that is every index there is.
-           READING IT WITH `JS_ToInt64` INSTEAD — which is what stood here — IS THE SHAPE idl_args.h BANS BY
-           NAME: a concolic is a real JSObject, so ToNumber reaches ToPrimitive and runs a getter from a plain
-           C frame, which this engine aborts on somewhere inside the coercion rather than here at the member. */
-        DCHECK(d.n == 0,
-               "§6.6.1's `item` was given an UNKNOWN index into a NON-EMPTY declaration block — every property "
-               "name in it is a distinct answer, so the read must FORK one flow per supported index (plus the "
-               "empty-string arm for an index past the end) instead of deciding it here");
-        r = JS_NewStringLen(ctx, "", 0);
-    } else {
-        JS_ToUint32(ctx, &i, argv[0]);   /* the declaration ran §3.2.4.6 unsigned long: already [0, 2**32-1] */
-        r = i < d.n ? JS_NewString(ctx, d.v[i].name) : JS_NewStringLen(ctx, "", 0);
-    }
+    r = i < d.n ? JS_NewString(ctx, d.v[i].name) : JS_UNDEFINED;
     cssd_decls_free(&d);
     JS_FreeValue(ctx, block);
     return r;
 }
+
+/* IT IS A STEP MACHINE BECAUSE ITS ONE ARGUMENT CAN BE UNKNOWN, and the DCHECK that used to refuse an unknown
+ * index into a NON-EMPTY block is gone with the arm it guarded. That check was honest and was still this
+ * member answering nothing: `el.style.item(location.hash.length)` on any element carrying a `style` attribute
+ * took the document down. core/idl_index_arg.h's elimination chain is the answer, and asking it is what a
+ * plain C activation has nowhere to park for.
+ *
+ * ITS PAST-THE-END ANSWER IS THE EMPTY STRING AND NOT NULL, WHICH CHANGES THE VALUE AND NOT THE QUESTION.
+ * §6.6.1: "If there is no indexth object in the collection, then the method must return the empty string" —
+ * where every `item(index)` beside it in that family answers null. The chain answers with a FLAG for exactly
+ * this reason: what the past-the-end world IS belongs to the algorithm and is stated at the caller, so one
+ * component does not decide every member's answer from one place.
+ *
+ * NOTHING IS HELD ACROSS THE FORK. `npositions` is read through cssd_count, whose CssDecls dies inside it, and
+ * the name is fetched through cssd_name_at only once the chain has answered — so the C array this member's
+ * body used to build around the index never spans a park. Re-reading the block on the far side is not a second
+ * source of truth: idl_index_chain_run runs none of the page's code, so the count a resumed entry takes is the
+ * count the link was drawn against, and a page that HAS mutated the block between two entries is answered by
+ * the chain's own soundness — a flow that eliminated 0..k-1 has established `index >= k` in any world. */
+#define CSSD_ITEM_ALGORITHM "CSSOM §6.6.1 The CSSStyleDeclaration Interface item(index)"
+#define CSSD_ITEM_STAGES(X)                                                                                   \
+    X(CSSD_ITEM_READ, CSSD_ITEM_ALGORITHM " (the property name of the CSS declaration at position index, or "  \
+                                          "the empty string when there is no indexth object)")
+enum { IDL_STEP_STAGE_BASE(CSSD_ITEM_STAGES) CSSD_ITEM_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const CSSD_ITEM_STEPS[] = { CSSD_ITEM_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+static int js_cssd_item(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSValueConst *argv,
+                        JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    IdlIndexChain *s = state;
+    JSValue block, r;
+    uint32_t i = 0, n;
+    bool past_end = false;
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);   /* this machine makes no request that delivers a value */
+    *presult = JS_UNDEFINED;
+    DCHECK(hdr->stage == CSSD_ITEM_READ,
+           "§6.6.1's item(index) resumed into a stage the algorithm does not have — it is ONE sentence, and "
+           "the chain of questions it may ask is a cursor on this machine's own state rather than a stage "
+           "apiece");
+    DCHECK(argc == 1,
+           "§6.6.1's item(index) reached its body with an argument count its declaration does not produce — "
+           "`index` is REQUIRED, so §3.6's argument-count check refuses a bare item() before this body runs");
+    /* Web IDL §3.7.5's BRAND CHECK, which is this member's and runs on every entry: `el.style.item` called on
+       a plain object throws, and a resumed entry re-establishes it rather than trusting the one before. */
+    block = cssd_block(ctx, hdr->this_val);
+    if (JS_IsException(block))
+        return JS_STEP_ABRUPT;
+    n = cssd_count(ctx, block);
+    JS_FreeValue(ctx, block);
+    if (concolic_is(argv[0])) {
+        int rc = idl_index_chain_run(ctx, hdr, s, argv[0], n, CSSD_ITEM_ALGORITHM, &i, &past_end);
+        if (rc)
+            return rc;   /* parked at the fork */
+        if (past_end) {
+            *presult = JS_NewStringLen(ctx, "", 0);   /* §6.6.1's own answer for no indexth object */
+            return JS_STEP_DONE;
+        }
+    } else {
+        /* The declaration ran §3.2.4.6 unsigned long's ConvertToInt(V, 32, "unsigned"), which is §3.2.4.9
+           Abstract operations' modulo and not a clamp — `el.style.item(2**32)` is declaration 0. */
+        i = idl_index_arg_known(ctx, argv[0], CSSD_ITEM_ALGORITHM);
+    }
+    r = cssd_name_at(ctx, hdr->this_val, i);
+    *presult = JS_IsUndefined(r) ? JS_NewStringLen(ctx, "", 0) : r;
+    return JS_STEP_DONE;
+}
+
+static const IdlStepDecl CSSD_ITEM_DECL = {
+    js_cssd_item, sizeof(IdlIndexChain), idl_index_chain_visit, NULL,
+    CSSD_ITEM_ALGORITHM, CSSD_ITEM_STEPS, 0, NULL
+};
 
 /* §6.6.1: "The parentRule attribute must return the parent CSS rule." It was a `null` DATA property on the
    prototype — the right answer for the two element-backed blocks and a wrong one for CSSOM §6.4.3's, which is the
@@ -3005,8 +3074,10 @@ static JSValue js_cssd_parent_rule(JSContext *ctx, JSValueConst this_val, int ma
  * unknown external input AS ITSELF (idl_args.h's IDL_CONCOLIC_CROSSES). A property LOOKUP cannot: the key
  * reaching idl_indexed_own_property is a JSAtom, so whatever produced it has already been through ToPropertyKey
  * and what arrives is a real string. The two therefore do not disagree about one question — they are asked
- * different ones, and the fork js_cssd_item's DCHECK names is owed by the member alone. The same split
- * dom_token_list.c records between its tl_item and js_tl_item. */
+ * different ones, and the elimination chain js_cssd_item runs is owed by the member alone. That clause used to
+ * name a fork that a DCHECK named instead, which was true while the member REFUSED an unknown index rather
+ * than forking it, and the refusal is gone. The same split dom_token_list.c records between its tl_item and
+ * js_tl_item. */
 static uint32_t cssd_indexed_length(JSContext *ctx, JSValueConst self)
 {
     JSValue block = cssd_block(ctx, self);
@@ -3027,23 +3098,13 @@ static uint32_t cssd_indexed_length(JSContext *ctx, JSValueConst self)
 
 /* §6.6.1's `item` steps, reached as a LOOKUP: the property NAME of the CSS declaration at position index.
    JS_UNDEFINED past the end is idl_indexed.c's "not a supported property index" and is NOT the operation's
-   empty string — see the banner. The bound is one unsigned comparison against `d.n` for the reason js_cssd_item
-   records: Web IDL §3.2.4.6 unsigned long converts to [0, 2**32−1] and `d.n` is an `unsigned`, so a negative
-   index is unreachable BY TYPE — and idl_indexed.c's own array-index-property-name parse has already refused
-   `"-1"`, `"01"` and `"1.0"` before this is reached, so there is nothing left for a second test to catch. */
+   empty string — see the banner. It is cssd_name_at's own answer, which is why this is one line: the bound is
+   one unsigned comparison there for the reason js_cssd_item records (Web IDL §3.2.4.6 unsigned long converts
+   to [0, 2**32−1] and `d.n` is an `unsigned`, so a negative index is unreachable BY TYPE), and idl_indexed.c's
+   own array-index-property-name parse has already refused `"-1"`, `"01"` and `"1.0"` before this is reached. */
 static JSValue cssd_indexed_item(JSContext *ctx, JSValueConst self, uint32_t i)
 {
-    JSValue block = cssd_block(ctx, self), r;
-    CssDecls d = { 0 };
-
-    DCHECK(!JS_IsException(block),
-           "§6.6.1's indexed getter was asked for an item of an object with no CSS declaration block — the "
-           "decl is installed only by cssd_new, which writes the record in the same call");
-    cssd_declared_decls(ctx, block, &d);
-    r = i < d.n ? JS_NewString(ctx, d.v[i].name) : JS_UNDEFINED;
-    cssd_decls_free(&d);
-    JS_FreeValue(ctx, block);
-    return r;
+    return cssd_name_at(ctx, self, i);
 }
 
 /* NO NAMED PROPERTY GETTER and NO INDEX CACHE, both stated rather than left blank. §6.6.1 declares one getter
@@ -3297,7 +3358,9 @@ void cssom_init(JSContext *ctx)
         g_set_prop_id = idl_method_id(ctx, THREE_STR, 3, js_cssd_set_property, 0);
         /* §6.6.1: `setProperty(CSSOMString property, CSSOMString value, optional CSSOMString priority = "")` */
         idl_optional_from(2);
-        g_item_id = idl_method_id(ctx, ONE_ULONG, 1, js_cssd_item, 0);
+        /* §6.6.1's `item` IS A MACHINE — a declaration and not a dispatch, since there is no second body for
+           anything to select against. `index` is REQUIRED, and it can be unknown external input. */
+        g_item_id = idl_method_id_step(ctx, ONE_ULONG, 1, NULL, 0, &CSSD_ITEM_DECL, 0);
         {
             /* CSSOM §7.2 Extensions to the Window Interface: `getComputedStyle(elt, optional pseudoElt)`.
                DECLARED HERE with the rest — the member lives on the WINDOW, which is per realm, and the

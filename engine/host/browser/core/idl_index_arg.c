@@ -1,20 +1,31 @@
 /* A WEB IDL `unsigned long index` ARGUMENT, KNOWN AND UNKNOWN.
  *
- * ONE FAMILY, ONE MECHANISM. Eleven members of this engine take an `unsigned long index` that names a position
- * in a collection, and every one of them asks the same two questions of it: which position is it, and is it
- * past the end. They are the `item(index)` members of CSSRuleList, StyleSheetList, MediaList, DOMRectList,
- * DOMStringList, FileList, NodeList and HTMLCollection, NamedNodeMap, CSSStyleDeclaration and DOMTokenList,
- * plus CSSOM §6.4 CSS Rules' remove a CSS rule and insert a CSS rule, which the two `deleteRule`s and the two
- * `insertRule`s are declared over.
+ * ONE FAMILY, ONE MECHANISM, AND MEMBERSHIP IS A TEST RATHER THAN A LIST. A member belongs here when it takes
+ * an `unsigned long index` that names a POSITION in a collection, answers an ordinary VALUE at exhaustion, and
+ * uses the index nowhere else — and every member that does asks the same two questions of it: which position
+ * is it, and is it past the end. The `item(index)` members of CSSRuleList, StyleSheetList, MediaList,
+ * DOMRectList, DOMStringList, FileList, NodeList and HTMLCollection (one body, two interfaces), NamedNodeMap,
+ * CSSStyleDeclaration and DOMTokenList all meet it, as do CSSOM §6.4 CSS Rules' remove a CSS rule and insert a
+ * CSS rule, which the two `deleteRule`s and the two `insertRule`s are declared over. A member that takes an
+ * `unsigned long` NOT naming a position is no member of this family however much it looks like one:
+ * `createNodeIterator`/`createTreeWalker`'s `whatToShow` is a BITMASK the traverser keeps, with no
+ * past-the-end world and no null.
+ *
+ * THE LIST IS AN ILLUSTRATION OF THE TEST, NOT A CENSUS, AND THE DIFFERENCE COST A FIXTURE. A reader who takes
+ * a name here as a statement that the member REACHES this file is reading a claim about the tree out of a
+ * sentence about the standards, and one who built a probe on `classList.item()` found it exercised no chain at
+ * all and had to write the fixture twice. The authority on who reaches the chain is the CALL SITES —
+ * `idl_index_chain_run` answers it, per body, in one grep — and a member named above that does not answer is
+ * not a member this file forgot, it is one that has been claimed and not converted.
  *
  * WHAT DIFFERS BETWEEN THEM IS NOT THE QUESTION, AND THE CONSTRAINT KEY IS WHERE THAT STOPS BEING A REMARK AND
- * BECOMES A REQUIREMENT — see core/idl_index_arg.h's IDL_INDEX_PREDICATE, which is the question these eleven
- * members share, spelled once, with none of their names in it.
+ * BECOMES A REQUIREMENT — see core/idl_index_arg.h's IDL_INDEX_PREDICATE, which is the question every member
+ * of the family shares, spelled once, with none of their names in it.
  * WHAT DIFFERS IS what the algorithm says about the past-the-end world —
  * `item` returns null, CSSStyleDeclaration's returns the empty string, remove-a-CSS-rule throws an
  * IndexSizeError — and that is the CALLER's, stated at the caller, which is why this file answers with a flag
  * and never with a value or a throw of its own. It is also the one thing that must not be shared: a component
- * that decided the past-the-end answer would be deciding eleven different specs from one place.
+ * that decided the past-the-end answer would be deciding every one of those algorithms from one place.
  *
  * IT IS core/timing/timer.c's clearTimeout CHAIN AND DELIBERATELY NOT A SECOND MECHANISM. An N-way ask whose
  * completions were positions would file one key per COLLECTION LENGTH and press the return protocol's ceiling

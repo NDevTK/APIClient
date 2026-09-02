@@ -2570,10 +2570,14 @@ static const char *HTML =
        and the world token would be satisfied by the wrong mechanism.
        TWO MEMBERS AND ONE VALUE, for the statement above's reasons exactly. DOM §4.2.10 Old-style collections:
        NodeList and HTMLCollection and CSSOM §6.4.1 The CSSRuleList Interface are two algorithms asking one
-       predicate, and both are CALLERS of core/idl_index_arg.c's chain — which is the property that matters
-       and is not what that file's header would tell you: it names DOMTokenList among the family and
-       DOMTokenList does not reach the chain, so the CALL SITES are the authority. ONE read of `screen.width & 3` is one operand — a second read would be a second identity and the
-       statement would assert nothing. */
+       predicate, and both are CALLERS of core/idl_index_arg.c's chain — which is the property that matters and
+       is the one to check at the call site rather than in that file's banner. This line used to add that the
+       banner names DOMTokenList among the family while DOMTokenList reaches no chain, and that had been true:
+       three of the members it names refused an unknown index by name instead of forking it, which is what cost
+       this fixture a rewrite. They are converted, so the banner's list and the call sites now agree — but the
+       reason to read the call sites is unchanged, because a name in a banner is a claim about the standards
+       and only a caller is a claim about this tree. ONE read of `screen.width & 3` is one operand — a second
+       read would be a second identity and the statement would assert nothing. */
     "var _pks = document.createElement('style');"
     "var _pkt = ''; for (var _pkj = 0; _pkj < 8; _pkj++) { _pkt += '.pk' + _pkj + ' { color: red }'; }"
     "_pks.textContent = _pkt;"
@@ -2587,6 +2591,52 @@ static const char *HTML =
     "var _pkb = _pkr.item(_pki);"
     "fetch('/api/pkkey?v=' + (!_pka && _pkb ? 'split' : 'agree')"
     " + '&n=' + _pkn.length + '&c=' + _pkr.length);"
+
+    /* THE TWO MEMBERS OF THAT FAMILY WHOSE COLLECTIONS HANG OFF ONE ELEMENT — DOM §7.1 Interface DOMTokenList
+       and DOM §4.9.1 Interface NamedNodeMap — over ONE unknown index. Both REFUSED an unknown index by name
+       until they became step machines, so before that this statement did not emit a wrong verdict: it took the
+       whole document down at whichever of the two DCHECKs the flow reached first, and every row after it read
+       NOT REACHED.
+       IT IS A FRESH UNKNOWN AND NOT `state.ix`, and that is load-bearing rather than tidy. The constraint key
+       these chains file under is the PREDICATE over the VALUE's own identity, so a chain drawn over an operand
+       another statement has already walked would find its questions ANSWERED and fork nothing — the statement
+       would pass by reading a record instead of by asking, which is the one way it could look right while
+       exercising none of this. One read into `_nmi`, for the `_ix` statement's reason exactly.
+       THE ASSERTION IS AN ARITHMETIC IMPOSSIBILITY AND THE PREMISE IS EMITTED. The token set is built TWO long
+       and the attribute list FIVE (`class` and four `data-*`), so `split` claims one index is INSIDE a
+       two-token set and PAST THE END of a five-attribute map at once — false for every index there is, so
+       reaching it is a flow contradicting itself and never a length this fixture guessed. Both lengths ride
+       the record so the row can refuse to read the verdict at all when they are not 2 and 5. */
+    "var _nmh = document.createElement('u');"
+    "_nmh.className = 'nm0 nm1';"
+    "_nmh.setAttribute('data-a', '1'); _nmh.setAttribute('data-b', '2');"
+    "_nmh.setAttribute('data-c', '3'); _nmh.setAttribute('data-d', '4');"
+    "document.body.appendChild(_nmh);"
+    "var _nmi = state.nmix;"
+    "var _nma = _nmh.classList.item(_nmi);"
+    "var _nmb = _nmh.attributes.item(_nmi);"
+    "fetch('/api/nnmkey?v=' + (_nma !== null && _nmb === null ? 'split' : 'agree')"
+    " + '&t=' + _nmh.classList.length + '&a=' + _nmh.attributes.length);"
+
+    /* CSSOM §6.6.1 The CSSStyleDeclaration Interface's `item(index)` OVER AN UNKNOWN INDEX — the one member of
+       that family whose past-the-end world is not null, and therefore the one whose TERMINAL is worth a row of
+       its own. §6.6.1: "If there is no indexth object in the collection, then the method must return the empty
+       string", where every `item(index)` beside it answers null.
+       THE STATEMENT MAKES NO VERDICT AND EMITS THE ANSWER ITSELF, which is why no length can make it lie. A
+       two-declaration block asked with an example-free index emits `color` from the world that answered
+       `index == 0`, `display` from the world that answered `index == 1`, and `past` from the parent that
+       eliminated both — three values from ONE line, which a single-world engine cannot produce whatever the
+       block's length turns out to be. A WRONG TERMINAL IS VISIBLE RATHER THAN SILENT: `_cdv === ''` is false
+       for null, so a member answering null past the end emits the four characters `null` instead of `past`,
+       and the row below refuses that spelling by name.
+       `&n=` CARRIES THE BLOCK'S OWN LENGTH so the emitted set can be read against the collection it came from
+       rather than against this comment. */
+    "var _cdh = document.createElement('q');"
+    "_cdh.setAttribute('style', 'color: red; display: block');"
+    "document.body.appendChild(_cdh);"
+    "var _cdi = state.cdix;"
+    "var _cdv = _cdh.style.item(_cdi);"
+    "fetch('/api/cssditem?v=' + (_cdv === '' ? 'past' : _cdv) + '&n=' + _cdh.style.length);"
 
     /* THE SAME READ FROM INSIDE A JOB. A `.then` handler is a queued reaction, and a cross-document read
        SUSPENDS — so this exercises a step machine that parks on the host while it is the root of a job rather
@@ -8172,6 +8222,65 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "n == 2 the completion asked about first IS `real`, so `is it completion 1` and `is it "
              "completion 0` are one binary fact under two keys, and the seam's own contradicted-example drop "
              "is what walks a single flow from one spelling to the other");
+    /* ONE UNKNOWN INDEX THROUGH THE TWO MEMBERS OF THAT FAMILY WHOSE COLLECTIONS HANG OFF ONE ELEMENT.
+       IT IS FIRST A ROW ABOUT THE MEMBERS EXISTING AT ALL. Both DOM §7.1's `item` and DOM §4.9.1's REFUSED an
+       unknown index by name until they became step machines, so a NOT REACHED here is the ordinary reading of
+       an unconverted member: the DCHECK fires, the document goes down, and nothing after it emits.
+       THE PREMISE IS MEASURED AND NOT ASSUMED, which is the second row. `split` is impossible only because the
+       token set is two long and the attribute list five; a run where they came out otherwise would emit a
+       `split` that means nothing, so the lengths are refused before the verdict is read.
+       THE NEGATIVE IS THE ROW AND THE POSITIVE IS ONLY ITS DENOMINATOR. `split` claims one index is INSIDE a
+       two-token set and PAST THE END of a five-attribute map — no index admits both, so a flow that emits it
+       answered `index == k` one way at §7.1's item(index) and another way at §4.9.1's, which is what a
+       constraint key naming the MEMBER instead of the PREDICATE permits (core/idl_index_arg.h's
+       IDL_INDEX_PREDICATE). */
+    const char *nnmkey_why = NULL; int nnmkey_tt = 1;
+    fold_row(&nnmkey_tt, &nnmkey_why, !!strstr(js, "\"/api/nnmkey\""),
+             "NOT REACHED: there is no /api/nnmkey record at all, so no world got through both `item(index)` "
+             "chains. That is the SCHEDULE, and it is also what an unconverted DOMTokenList or NamedNodeMap "
+             "looks like — each refused an unknown index with a DCHECK, which takes the document down");
+    fold_row(&nnmkey_tt, &nnmkey_why,
+             param_value_is(js, "/api/nnmkey", "t", "2") && param_value_is(js, "/api/nnmkey", "a", "5"),
+             "the two collections this statement compares did NOT come out two and five long, so the claim "
+             "below is not an arithmetic impossibility and this row is asserting nothing — fix the statement's "
+             "construction rather than reading its verdict");
+    fold_row(&nnmkey_tt, &nnmkey_why, param_value_is(js, "/api/nnmkey", "v", "agree"),
+             "/api/nnmkey was recorded and never with `agree` — every world that reached it contradicted "
+             "itself, so this is the row below with nothing left to compare against");
+    fold_row(&nnmkey_tt, &nnmkey_why, !param_value_is(js, "/api/nnmkey", "v", "split"),
+             "a flow read one unknown `index` as INSIDE a two-token DOMTokenList and PAST THE END of a "
+             "five-attribute NamedNodeMap — no index admits both, so this flow answered `index == k` one way "
+             "at DOM §7.1 Interface DOMTokenList's item(index) and another way at DOM §4.9.1 Interface "
+             "NamedNodeMap's. The elimination chain's constraint key is naming the MEMBER and not the "
+             "PREDICATE (core/idl_index_arg.h's IDL_INDEX_PREDICATE)");
+    /* CSSOM §6.6.1's item(index) OVER AN UNKNOWN INDEX, AND ITS TERMINAL — the one member of that family whose
+       past-the-end answer is the empty string rather than null.
+       THE ROW IS THE EMITTED SET AND NOT A VERDICT, so no length can make it pass while asserting nothing. One
+       value means the member DECIDED the index instead of forking it (or refused it, which is the NOT REACHED
+       above); several mean the chain walked, and `past` among them means the parent reached exhaustion and
+       answered §6.6.1's own empty string there. `null` among them is the wrong terminal spelled out — the
+       statement's `=== ''` is false for null, so a member answering the family's usual null lands in the
+       record as those four characters and cannot pass for the empty string. */
+    const char *cssditem_why = NULL; int cssditem_tt = 1;
+    fold_row(&cssditem_tt, &cssditem_why, !!strstr(js, "\"/api/cssditem\""),
+             "NOT REACHED: there is no /api/cssditem record at all. That is the SCHEDULE, and it is also what "
+             "an unconverted CSSStyleDeclaration looks like — its `item` refused an unknown index with a "
+             "DCHECK, which takes the document down");
+    fold_row(&cssditem_tt, &cssditem_why, param_value_is(js, "/api/cssditem", "n", "2"),
+             "the declaration block this statement asks about did not come out two long, so the emitted set "
+             "below cannot be read against it — fix the statement's construction rather than its verdict");
+    fold_row(&cssditem_tt, &cssditem_why, param_value_count(js, "/api/cssditem", "v") > 1,
+             "/api/cssditem's `v` carries ONE value, so §6.6.1's item(index) answered an unknown index from a "
+             "single world — the elimination chain either did not run or decided the index instead of asking "
+             "it (core/idl_index_arg.h's idl_index_chain_run)");
+    fold_row(&cssditem_tt, &cssditem_why, param_value_is(js, "/api/cssditem", "v", "past"),
+             "the chain forked and NO world reached the past-the-end answer, so the parent never walked its "
+             "two positions to exhaustion — §6.6.1's \"If there is no indexth object in the collection, then "
+             "the method must return the empty string\" is the terminal and nothing emitted it");
+    fold_row(&cssditem_tt, &cssditem_why, !param_value_is(js, "/api/cssditem", "v", "null"),
+             "a world past the end of the declaration block answered NULL where §6.6.1 says the empty string — "
+             "the chain's past-the-end flag was given this family's usual answer instead of this member's, "
+             "which is the one thing core/idl_index_arg.c does not decide and every caller states itself");
     /* §4.8.5: an inserted iframe got a child navigable, its proxy is STABLE across reads, and a read through it
        resolved to the peer's answer. */
     const char *ifnav_why = NULL; int ifnav_tt = 1;
@@ -9727,6 +9836,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "timer-unknown-delay-fork", unkdelay_tt, "/api/unkdelay", SESS_EXPLORE, unkdelay_why },
         { "idl-index-key-one-predicate", idxkey_tt, "/api/idxkey", SESS_EXPLORE, idxkey_why },
         { "outcome-key-one-predicate", pkkey_tt, "/api/pkkey", SESS_EXPLORE, pkkey_why },
+        { "idl-index-one-element-two-members", nnmkey_tt, "/api/nnmkey", SESS_EXPLORE, nnmkey_why },
+        { "idl-index-empty-string-terminal", cssditem_tt, "/api/cssditem", SESS_EXPLORE, cssditem_why },
         { "iframe-nav", ifnav_tt, "/api/iframenav", SESS_EXPLORE, ifnav_why },
         /* KEYED ON THE REMOVAL rather than on an endpoint, because this row is about a statement that emits
            nothing: §7.5.10's release is observable as a COUNT and not as a fetch. */
@@ -10799,7 +10910,13 @@ static void xml_markup_selftest(void)
 
         /* §2.5's compatibility restriction */
         { "<!--a--b-->", 11, XML_MARKUP_ERR_DOUBLE_HYPHEN, NULL, 0, 0,
-          "§2.5: `For compatibility, the string \"--\" (double-hyphen) MUST NOT occur within comments`" },
+          /* THE TITLE IS STATED BECAUSE THE CITATION IS RIGHT AND READ AS WRONG WITHOUT IT. citegen's term
+             channel sees `for compatibility` — a phrase XML §1.2 Terminology DEFINES — and accuses §2.5 of
+             not being about it, where this site cites §2.5 for the SENTENCE and not for the term. Naming the
+             section's own title is what takes the citation out of that channel and makes it checkable in the
+             direction it is actually claiming. */
+          "§2.5 Comments: `For compatibility, the string \"--\" (double-hyphen) MUST NOT occur within "
+          "comments`" },
         { "<!-- B+, B, or B--->", 20, XML_MARKUP_ERR_DOUBLE_HYPHEN, NULL, 0, 0,
           "§2.5's OWN not-well-formed example, printed under the note that `the grammar does not allow a "
           "comment ending in --->` — read left to right that document's `--` is followed by a third hyphen "

@@ -38,6 +38,7 @@
 #include "core/dom/node.h"
 #include "core/html/trusted_types.h"
 #include "core/idl_args.h"
+#include "core/idl_index_arg.h"   /* §4.9.1's `item` takes an index unknown external input crosses AS ITSELF */
 #include "core/realm.h"
 #include "core/idl_indexed.h"
 
@@ -264,48 +265,110 @@ static JSValue js_nnm_length(JSContext *ctx, JSValueConst this_val, int magic)
     return JS_NewUint32(ctx, nnm_length(ctx, this_val));
 }
 
-/* §4.9.1 Interface NamedNodeMap's item(index) / getNamedItem(name) — null past the end or for a name that is
-   not there, which is what makes them different from the two getters above. §4.9.1's item(index) method steps
-   begin "If index is equal to or greater than this's attribute list's size, then return null", and that step is
-   the whole of the bounds logic: the index is `unsigned long`, so "less than zero" is not a state it has.
-
-   THE DECLARATION USED TO SAY `long`, AND THIS BODY CARRIED THE DIFFERENCE. Web IDL §3.2.4.5 long is
-   ConvertToInt(V, 32, "signed"), whose last step subtracts 2^32 from anything at or above 2^31, so
-   `attributes.item(2**31)` denoted −2147483648 where §3.2.4.6 unsigned long denotes 2147483648 — and
-   `i < 0 ? JS_UNDEFINED : …` is what folded that back onto §4.9.1 step 1's answer. That compensation is
-   precisely why the wrong type was invisible: an element cannot carry 2^31 attributes, so both signs land past
-   the end and the member answered null either way. The sign belongs to the TYPE, so it is declared, and the
-   branch that re-derived it is gone. magic 0 = item, 1 = getNamedItem. */
-static JSValue js_nnm_get(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+/* "THERE IS NO SUCH ATTRIBUTE", TURNED FROM THE BACKINGS' SPELLING INTO §4.9.1'S. nnm_item and nnm_named are
+   the INDEXED and NAMED property getters' backings, and idl_indexed.c's contract makes JS_UNDEFINED there mean
+   the property is NOT THERE — which is why `2 in el.attributes` is false on a one-attribute element. Both
+   OPERATIONS answer null for that same absence, in two different sentences of §4.9.1 that agree: `item`'s step
+   1 returns null at or past the attribute list's size, and `getNamedItem` returns the result of getting an
+   attribute, which is null when the element has none by that name.
+   IT IS A FUNCTION BECAUSE THE TWO MEMBERS STOPPED BEING ONE BODY. They shared a magic until `item` became a
+   step machine, and a split is exactly where two spellings of one rule can start to disagree — so the one line
+   they actually shared is shared still, at a name, rather than surviving as two copies that nothing compares. */
+static JSValue nnm_absent_is_null(JSValue r)
 {
+    return JS_IsUndefined(r) ? JS_NULL : r;
+}
+
+/* §4.9.1's `item(index)`, quoted whole: "The item(index) method steps are: If index is equal to or greater
+ * than this's attribute list's size, then return null. Otherwise, return this's attribute list[index]." That
+ * is the whole of the bounds logic — the index is `unsigned long`, so "less than zero" is not a state it has.
+ *
+ * THE DECLARATION USED TO SAY `long`, AND THIS BODY CARRIED THE DIFFERENCE. Web IDL §3.2.4.5 long is
+ * ConvertToInt(V, 32, "signed"), whose last step subtracts 2^32 from anything at or above 2^31, so
+ * `attributes.item(2**31)` denoted −2147483648 where §3.2.4.6 unsigned long denotes 2147483648 — and
+ * `i < 0 ? JS_UNDEFINED : …` is what folded that back onto step 1's answer. That compensation is precisely why
+ * the wrong type was invisible: an element cannot carry 2^31 attributes, so both signs land past the end and
+ * the member answered null either way. The sign belongs to the TYPE, so it is declared, and the branch that
+ * re-derived it is gone.
+ *
+ * IT IS A STEP MACHINE BECAUSE ITS ONE ARGUMENT CAN BE UNKNOWN, and the DCHECK that used to stand where the
+ * chain now runs is gone with it. That check refused an unknown index into a NON-EMPTY map by name, which was
+ * honest and was still a member of this family answering nothing: `el.attributes.item(location.hash.length)`
+ * on any element carrying an attribute took the document down. core/idl_index_arg.h's elimination chain is the
+ * answer, and asking it is what a plain C activation has nowhere to park for.
+ *
+ * IT USED TO SHARE A BODY WITH `getNamedItem` UNDER A MAGIC, AND THAT IS WHY THE SPLIT IS NOT A RISK. The two
+ * are different algorithms in §4.9.1's own text — one indexes the attribute list, the other runs "get an
+ * attribute by name" — and what the one body actually shared was an argument-count check and the absence fold
+ * above. Neither is an algorithm, the fold is now a function both call, and there is no third thing left for
+ * the two spellings to disagree about. */
+#define NNM_ITEM_ALGORITHM "DOM §4.9.1 Interface NamedNodeMap item(index)"
+#define NNM_ITEM_STAGES(X)                                                                                    \
+    X(NNM_ITEM_READ, NNM_ITEM_ALGORITHM " (null when index is at or past the attribute list's size, "         \
+                                        "otherwise the attribute list's indexth Attr)")
+enum { IDL_STEP_STAGE_BASE(NNM_ITEM_STAGES) NNM_ITEM_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const NNM_ITEM_STEPS[] = { NNM_ITEM_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+static int js_nnm_item(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSValueConst *argv,
+                       JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    IdlIndexChain *s = state;
+    uint32_t i = 0;
+    bool past_end = false;
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);   /* this machine makes no request that delivers a value */
+    *presult = JS_UNDEFINED;
+    DCHECK(hdr->stage == NNM_ITEM_READ,
+           "§4.9.1's item(index) resumed into a stage the algorithm does not have — it is two sentences with "
+           "no boundary between them, and the chain of questions it may ask is a cursor on this machine's own "
+           "state rather than a stage apiece");
+    DCHECK(argc == 1,
+           "§4.9.1's item(index) reached its body with an argument count its declaration does not produce — "
+           "`index` is REQUIRED, so §3.6's argument-count check refuses a bare item() before this body runs");
+    if (concolic_is(argv[0])) {
+        /* THE SIZE THIS CHAIN IS DRAWN AGAINST IS THE ATTRIBUTE LIST'S, which is step 1's own bound, and a
+           `this` that is not a NamedNodeMap answers 0 here — so the chain asks nothing and step 1's null is
+           the whole answer, which is what this member returned for a stranger before it was a machine. */
+        int rc = idl_index_chain_run(ctx, hdr, s, argv[0], nnm_length(ctx, hdr->this_val),
+                                     NNM_ITEM_ALGORITHM, &i, &past_end);
+        if (rc)
+            return rc;   /* parked at the fork */
+        if (past_end) {
+            *presult = JS_NULL;   /* step 1's own answer */
+            return JS_STEP_DONE;
+        }
+    } else {
+        /* The declaration ran §3.2.4.6 unsigned long's ConvertToInt(V, 32, "unsigned"), which is §3.2.4.9
+           Abstract operations' modulo and not a clamp — `attributes.item(2**32)` is attribute 0. */
+        i = idl_index_arg_known(ctx, argv[0], NNM_ITEM_ALGORITHM);
+    }
+    *presult = nnm_absent_is_null(nnm_item(ctx, hdr->this_val, i));   /* step 2 */
+    return JS_STEP_DONE;
+}
+
+static const IdlStepDecl NNM_ITEM_DECL = {
+    js_nnm_item, sizeof(IdlIndexChain), idl_index_chain_visit, NULL,
+    NNM_ITEM_ALGORITHM, NNM_ITEM_STEPS, 0, NULL
+};
+
+/* §4.9.1: "The getNamedItem(qualifiedName) method steps are to return the result of getting an attribute given
+   qualifiedName and element." No index, no bound, and nothing this family's chain has to say about it — which
+   is the whole reason it is a plain C function beside a machine rather than half of one. */
+static JSValue js_nnm_get_named(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    const char *name;
     JSValue r;
 
-    DCHECK(argc >= 1, "§4.9.1's `item`/`getNamedItem` reached its body with no argument — the IDL argument is "
-                      "required, so the declaration's own argument-count check is what should have refused the "
-                      "call");
-    if (magic == 0) {
-        uint32_t i = 0;
-        if (concolic_is(argv[0])) {
-            /* AN UNKNOWN INDEX, unconverted because §3.2's conversion is a boundary unknown external input
-               crosses AS ITSELF. The empty map is the one size at which that has an answer rather than a fork:
-               §4.9.1 step 1 returns null for every index at or past the attribute list's size.
-               `JS_ToInt64` HERE — which is what stood in this line — IS THE READ idl_args.h BANS BY NAME: a
-               concolic is an object, so ToNumber reaches ToPrimitive and runs a getter from a plain C frame. */
-            DCHECK(nnm_length(ctx, this_val) == 0,
-                   "§4.9.1's `item` was given an UNKNOWN index into a NON-EMPTY NamedNodeMap — every Attr in it "
-                   "is a distinct answer, so the read must FORK one flow per supported index (plus the null arm "
-                   "for an index past the end) instead of deciding it here");
-            return JS_NULL;
-        }
-        JS_ToUint32(ctx, &i, argv[0]);   /* the declaration's §3.2.4.6 conversion already produced [0, 2**32-1] */
-        r = nnm_item(ctx, this_val, i);
-    } else {
-        const char *name = JS_ToCString(ctx, argv[0]);   /* a real string by now */
-        if (!name) return JS_EXCEPTION;
-        r = nnm_named(ctx, this_val, name);
-        JS_FreeCString(ctx, name);
-    }
-    return JS_IsUndefined(r) ? JS_NULL : r;
+    (void)magic;
+    DCHECK(argc == 1, "§4.9.1's `getNamedItem` reached its body with an argument count its declaration does "
+                      "not produce — `qualifiedName` is required, so §3.6's argument-count check refuses a "
+                      "bare getNamedItem() before this body runs");
+    name = JS_ToCString(ctx, argv[0]);   /* a real string by now */
+    if (!name) return JS_EXCEPTION;
+    r = nnm_named(ctx, this_val, name);
+    JS_FreeCString(ctx, name);
+    return nnm_absent_is_null(r);
 }
 
 /* §4.9.1's (NAMESPACE, LOCAL NAME) KEY SPACE — `getNamedItemNS` and `removeNamedItemNS`, which are §4.9's two
@@ -601,8 +664,10 @@ void attr_init(JSContext *ctx)
        hands an attribute THIS from now on instead of the bare Node it was giving. */
     node_claim_type(LXB_DOM_NODE_TYPE_ATTRIBUTE, g_attr_class);
     g_set_value_id = idl_setter_id(ctx, IDL_DOMSTRING, false, js_attr_set_value, 0);
-    g_item_id = idl_method_id(ctx, ONE_ULONG, 1, js_nnm_get, 0);
-    g_get_named_id = idl_method_id(ctx, ONE_STR, 1, js_nnm_get, 1);
+    /* §4.9.1's `item` IS A MACHINE — a declaration and not a dispatch, since there is no second body for
+       anything to select against. `index` is REQUIRED, and it can be unknown external input. */
+    g_item_id = idl_method_id_step(ctx, ONE_ULONG, 1, NULL, 0, &NNM_ITEM_DECL, 0);
+    g_get_named_id = idl_method_id(ctx, ONE_STR, 1, js_nnm_get_named, 0);
     g_remove_named_id = idl_method_id(ctx, ONE_STR, 1, js_nnm_remove, 0);
     g_get_named_ns_id = idl_method_id(ctx, NS_LOCAL, 2, js_nnm_ns, 0);
     g_remove_named_ns_id = idl_method_id(ctx, NS_LOCAL, 2, js_nnm_ns, 1);
