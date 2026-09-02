@@ -516,14 +516,28 @@ static void pp_parse_policy_directive(const char *value, size_t len, const Origi
  * container therefore gets step 1's empty directive with no branch here, and the assert below is what stops a
  * caller stating half of it.
  *
- * ITS STEP 3 NAMES A FEATURE THIS USER AGENT DOES NOT SUPPORT. "If element's `allowfullscreen` attribute is
- * specified, and container policy does not contain an entry for the `fullscreen` feature, set container
- * policy[fullscreen] = the special value *" — and §4.1's supported-feature set here is HTML §2.2's three names,
- * which does not include `fullscreen` (Fullscreen defines it, and §4.8 makes its default allowlist that
- * specification's to state). A feature no supported-feature row names cannot be an entry of this map, so the
- * step sets nothing and is written out rather than silently skipped: the day `fullscreen` joins the X-list,
- * this comment is what says the step is owed. */
-static void pp_process_policy_attributes(const char *allow, size_t allow_len, const Origin *container_origin,
+ * ITS STEP 3 IS THE LEGACY `allowfullscreen` DELIVERY OF ONE FEATURE. "If element's `allowfullscreen`
+ * attribute is specified, and container policy does not contain an entry for the `fullscreen` feature", then
+ * step 3.1 sets "container policy[fullscreen] = the special value *". It ran as nothing while §4.1's
+ * supported-feature set here was HTML §2.2's three names; FULLSCREEN API §7 "Permissions Policy Integration"
+ * defines the fourth, the X-list carries it, and the step is an assignment.
+ *
+ * ITS CONDITION IS ORDERED AFTER STEP 2 AND THAT ORDER IS OBSERVABLE. Step 2's parse of `allow` runs first, so
+ * `<iframe allowfullscreen allow="fullscreen 'none'">` keeps the author's `'none'`: the entry EXISTS, step 3's
+ * second conjunct is false, and the legacy attribute adds nothing. §6.3.1 "allowfullscreen" states the same
+ * rule from the other end, twice: "If the `iframe` element has an `allow` attribute whose value contains the
+ * token "fullscreen", then the `allowfullscreen` attribute must have no effect", and "If `allow="fullscreen"`
+ * and `allowfullscreen` are both present on an `iframe` element, then the more restrictive allowlist of
+ * `allow="fullscreen"` will be used". Reading the steps in the other order would let the legacy attribute
+ * overrule the modern one, which is a security answer in the permissive direction.
+ *
+ * `*` IS §4.7's SPECIAL VALUE AND NOT AN ALLOWLIST OF EVERY ORIGIN. §4.7's own matching begins "If the
+ * allowlist is the special value *, then return true", which is the `star` flag of PpAllowlist above; §9.7
+ * step 5 asks pp_allowlist_matches, so a CROSS-ORIGIN child of an `allowfullscreen` frame is `Enabled`. §6.3.1
+ * says that is deliberate and not a coincidence of the encoding: "This is different from the behaviour of
+ * `<iframe allow="fullscreen">`, and is for compatibility with existing uses of `allowfullscreen`." */
+static void pp_process_policy_attributes(const char *allow, size_t allow_len, bool allowfullscreen,
+                                         const Origin *container_origin,
                                          const Origin *declared_origin, PpPolicyDirective *out)
 {
     DCHECK(allow == NULL || declared_origin != NULL,
@@ -531,7 +545,25 @@ static void pp_process_policy_attributes(const char *allow, size_t allow_len, co
            "§9.3, and without the second the keyword `'src'` names nothing and a directive with an empty target "
            "list gets an allowlist that matches nothing, which is `<iframe allow=\"autoplay\">` read as the "
            "`'none'` its author did not write");
-    pp_parse_policy_directive(allow, allow_len, container_origin, declared_origin, out);
+    pp_parse_policy_directive(allow, allow_len, container_origin, declared_origin, out);   /* step 2 */
+    /* Step 3, and both conjuncts are read here: `allowfullscreen` specified, and no entry for the feature.
+       THE ALLOWLIST IS WRITTEN AND NOT MERGED INTO. §4.6's map has one entry per feature and step 3.1 SETS it,
+       so the slot must be the empty allowlist the caller's zeroed directive gives it — §9.3 fills a slot only
+       on the path that also sets `present`, which the conjunct above has just refused. Asserted rather than
+       re-zeroed: a non-empty allowlist under a false presence bit would mean §9.3 leaked one, and clearing it
+       here would free nothing and hide that. */
+    if (allowfullscreen && !out->present[PP_FEATURE_FULLSCREEN]) {
+        DCHECK(out->allowlist[PP_FEATURE_FULLSCREEN].expressions == NULL
+                   && out->allowlist[PP_FEATURE_FULLSCREEN].self_origin == NULL
+                   && out->allowlist[PP_FEATURE_FULLSCREEN].src_origin == NULL
+                   && !out->allowlist[PP_FEATURE_FULLSCREEN].star,
+               "§9.4 step 3.1 found a non-empty allowlist in the `fullscreen` slot of a container policy that "
+               "does not CONTAIN an entry for the feature — §4.6's presence bit and its allowlist are one "
+               "entry, so a filled allowlist under a false bit is §9.3 having written half of one, and step "
+               "3.1's assignment would then overwrite an owned pointer");
+        out->allowlist[PP_FEATURE_FULLSCREEN].star = true;                                 /* step 3.1 */
+        out->present[PP_FEATURE_FULLSCREEN] = true;
+    }
 }
 
 /* §9.7 "Define an inherited policy for feature in container at origin" — "given a feature (feature), null or a
@@ -571,9 +603,10 @@ static PermissionsPolicyValue pp_define_inherited(PermissionsPolicyFeature featu
        container. If feature exists in container policy: if the allowlist for feature in container policy
        matches origin, return `Enabled`; otherwise return `Disabled`."
        THE DIRECTIVE ARRIVES BUILT, and §9.5's caller is where step 4 runs — see permissions_policy_create.
-       §9.4's OTHER attribute needs no branch: its step 3 sets `allowfullscreen` into the container policy under
-       the `fullscreen` feature, which §4.1 leaves out of this user agent's supported-feature set, so it names
-       nothing this loop iterates over. */
+       §9.4's OTHER attribute needs no branch HERE either, and for a different reason than it used to: its step
+       3 sets `allowfullscreen` into the CONTAINER POLICY under the `fullscreen` feature, which pp_process_
+       policy_attributes performs, so by the time this step reads the map the entry is an ordinary one and the
+       `star` allowlist below answers it like any other. */
     DCHECK(container_policy != NULL,
            "§9.7 step 5 was asked whether a feature exists in a container policy that was never built — step 4 "
            "runs §9.4's process-permissions-policy-attributes on the container, and every container has one "
@@ -607,6 +640,7 @@ static PermissionsPolicyValue pp_define_inherited(PermissionsPolicyFeature featu
 PermissionsPolicy *permissions_policy_create(const PermissionsPolicy *container_document_policy,
                                              const Origin *container_document_origin,
                                              const char *container_allow, size_t container_allow_len,
+                                             bool container_allowfullscreen,
                                              const Origin *container_declared_origin,
                                              const Origin *origin)
 {
@@ -630,6 +664,11 @@ PermissionsPolicy *permissions_policy_create(const PermissionsPolicy *container_
            "§9.5 was given an `allow` attribute with NO container — §9.4's process-permissions-policy-"
            "attributes reads that attribute off the navigable container itself, so an attribute without one is "
            "a caller that lost the element it came from");
+    DCHECK(!container_allowfullscreen || container_document_origin != NULL,
+           "§9.5 was told a container's `allowfullscreen` attribute is SPECIFIED with NO container — §9.4 step "
+           "3 reads that attribute off the navigable container itself, so a specified attribute without one is "
+           "a caller that lost the element it came from, and taking it at its word would give a TOP-LEVEL "
+           "document a container policy §9.7 step 1 says it does not have");
     DCHECK(container_declared_origin == NULL || container_document_origin != NULL,
            "§9.5 was given a container's DECLARED ORIGIN with no container — §7.2's declared origin is computed "
            "from the element's own `sandbox`, `srcdoc` and `src` attributes and its node document, so one "
@@ -650,8 +689,8 @@ PermissionsPolicy *permissions_policy_create(const PermissionsPolicy *container_
        container document's origin, which `'self'` resolves to — would be the absent one its own assert names. */
     memset(&container_policy, 0, sizeof container_policy);
     if (container_document_origin != NULL)
-        pp_process_policy_attributes(container_allow, container_allow_len, container_document_origin,
-                                     container_declared_origin, &container_policy);
+        pp_process_policy_attributes(container_allow, container_allow_len, container_allowfullscreen,
+                                     container_document_origin, container_declared_origin, &container_policy);
     /* Steps 2-4: "let inherited policy be a new ordered map. For each feature supported, let isInherited be the
        result of running Define an inherited policy for feature in container at origin …; set inherited
        policy[feature] to isInherited." EVERY supported feature, which is what §4.3's "will contain a value for

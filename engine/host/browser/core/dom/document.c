@@ -29,6 +29,7 @@
 #include "core/events/event_target.h"
 #include "core/events/page_transition_event.h"
 #include "core/events/report_exception.h"
+#include "core/fullscreen/fullscreen.h"
 #include "core/html/html_element.h"
 #include "core/html/html_form.h"
 #include "core/html/custom_elements.h"
@@ -3692,6 +3693,7 @@ PermissionsPolicy *document_permissions_policy_for_container(JSValueConst contai
     const Origin *container_declared_origin = NULL;
     const lxb_char_t *allow = NULL;
     size_t allow_len = 0;
+    bool allowfullscreen = false;
 
     if (JS_IsObject(container)) {
         lxb_dom_node_t *el = node_of(container);
@@ -3720,11 +3722,23 @@ PermissionsPolicy *document_permissions_policy_for_container(JSValueConst contai
         if (lxb_html_tree_node_is(el, LXB_TAG_IFRAME)) {
             allow = lxb_dom_element_get_attribute((lxb_dom_element_t *)el, (const lxb_char_t *)"allow", 5,
                                                   &allow_len);
+            /* §9.4 step 3's first conjunct: "if element's `allowfullscreen` attribute is SPECIFIED". It is a
+               boolean content attribute (HTML §2.3.2 "Boolean attributes": "The presence of a boolean attribute
+               on an element represents the true value, and the absence of the attribute represents the false
+               value"), so what crosses is PRESENCE and never a value — `allowfullscreen="false"` specifies it.
+               ASKED WITH `has_attribute` AND NOT BY TESTING THE VALUE POINTER, because an attribute present
+               with an EMPTY value is the conforming spelling and `lxb_dom_element_get_attribute` answers NULL
+               for it, which would read the most common form of the attribute as absent.
+               INSIDE THE `iframe` GUARD because §9.4 step 1 returns an empty policy directive for anything
+               else, and because HTML declares `allowfullscreen` on `iframe` alone: an `<object allowfullscreen>`
+               carries a content attribute no algorithm reads. */
+            allowfullscreen = lxb_dom_element_has_attribute((lxb_dom_element_t *)el,
+                                                           (const lxb_char_t *)"allowfullscreen", 15);
             container_declared_origin = doc_declared_origin(el, cd->sandbox_flags, container_doc_origin);
         }
     }
     return permissions_policy_create(container_doc_policy, container_doc_origin, (const char *)allow,
-                                     allow_len, container_declared_origin, origin);
+                                     allow_len, allowfullscreen, container_declared_origin, origin);
 }
 
 /* §9.6 "Create a Permissions Policy for a navigable from response" FOR THE NAVIGABLE A DOCUMENT IS BEING
@@ -4043,6 +4057,11 @@ void document_install_proto(JSContext *ctx)
     /* SELECTION API §4.1's `Selection? getSelection()`. Installed by the component that owns the algorithm and
        the state, exactly as §6.6's two members above are. */
     selection_install_document_members(ctx, proto);
+    /* FULLSCREEN §3 API's `fullscreenEnabled`, whose answer is §7's `fullscreen` permissions-policy feature
+       conjoined with §2's "fullscreen is supported" — installed by the component that owns both, and there is
+       no init line paired with it above because a readonly accessor with no setter id declares nothing at the
+       agent (core/fullscreen/fullscreen.h). */
+    fullscreen_install_document_members(ctx, proto);
     /* HTML §3.1.7's `currentScript`, and this realm's BASELINE record holding §3.1.7's initial null — built
        with the realm for the reason the readiness record below is, and installed by the component that owns
        §4.12.1.1's bracket rather than reflected into a member beside it. */

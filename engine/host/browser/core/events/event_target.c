@@ -1411,11 +1411,16 @@ static const IdlStepDecl AEL_DECL = { ael_step, sizeof(AelState), ael_visit, NUL
        and this list's standing rule is that a handler attribute for an event no algorithm fires is the          \
        shape-only member the IDL audit exists to expose — the reason IDBDatabase's other three and CSS scroll    \
        snap's two are absent. The events come from FULLSCREEN §2 Model's "run the fullscreen steps", which HTML  \
-       §8.1.7.3 Processing model's update the rendering runs at its step 12, and this build has NO model at      \
-       all: no `requestFullscreen`, no `exitFullscreen`, no `fullscreenElement`, and nothing that puts an        \
-       element in the top layer the fullscreen way (`dialog.showModal()` is the only producer that exists).      \
-       What the tree carries under that name is a permissions-policy feature string, HTMLIFrameElement's         \
-       `allowFullscreen` content-attribute reflection, and rendering.c's two probes — no algorithm at all.       \
+       §8.1.7.3 Processing model's update the rendering runs at its step 12 — and no component here runs them.   \
+       WHAT THE TREE DOES CARRY UNDER THAT NAME is FULLSCREEN §7's `fullscreen` permissions-policy feature,      \
+       §2's "fullscreen is supported" and §3's `fullscreenEnabled` getter (core/fullscreen/fullscreen.h states   \
+       why those three are one diff), plus HTMLIFrameElement's `allowFullscreen` reflection and the §9.4 step 3  \
+       that attribute now performs. WHAT IT DOES NOT CARRY is what §2's FULLSCREEN ELEMENT is defined over: the  \
+       PER-ELEMENT FULLSCREEN FLAG, and an ordered read of the top layer to be the topmost set element of. The   \
+       LAYER itself is here — core/css/top_layer.h is css-position-4 §3, and update-the-rendering step 23 drains \
+       it — but it publishes membership and not a WALK, so the flag and the accessor arrive together. Without    \
+       them there is no list of pending fullscreen events, and so no `requestFullscreen`, no `exitFullscreen`    \
+       and no `fullscreenElement`.                                                                               \
        THE NEXT DIFF BUILDS THAT MODEL, and the tree already names the join: core/rendering/rendering.c's        \
        steps_11_to_13 carries `realm_awaits(docctx, "Document.prototype.exitFullscreen", …)`, a producer probe   \
        that ABORTS the moment that member is installed, naming update-the-rendering step 12 as the thing to      \

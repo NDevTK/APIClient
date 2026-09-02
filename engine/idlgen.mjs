@@ -534,9 +534,11 @@ const INTERFACES = {
      no longer changes the count — it changes what the CROSS-CHECK is over. Named here so that this row states
      what Document is really built out of: §3.1.4/§3.1.5's `cookie`, `referrer`, `lastModified` and
      `readyState` are document_metadata.c's, and §7.1.1.2's `domain` is document_domain.c's, each for the
-     reason its own header gives. */
+     reason its own header gives. FULLSCREEN's `fullscreenEnabled` is a FIFTH partial interface and a fifth
+     component — its answer is that standard's §7 permissions-policy feature, not anything document.c knows. */
   Document:            ["core/dom/document.c", "core/dom/document_metadata.c", "core/dom/document_domain.c",
-                        "core/dom/node.c", "core/events/event_target.c", "core/css/style_sheet_list.c"],
+                        "core/dom/node.c", "core/events/event_target.c", "core/css/style_sheet_list.c",
+                        "core/fullscreen/fullscreen.c"],
   /* DOM §4.5.1 and §4.6 — the interface that BUILDS a document and the interface a doctype IS. DocumentType's
      file list carries node.c for the reason Element's does: it inherits Node, and node.c is also where the
      ChildNode mixin it INCLUDES is installed. DOMImplementation inherits nothing, so it names only its own. */

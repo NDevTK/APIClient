@@ -1,0 +1,168 @@
+{
+ "spec": "CSS Positioned Layout Module Level 4",
+ "key": "cssposition4",
+ "base": "https://drafts.csswg.org/css-position-4/",
+ "specUpdated": "25 December 2025",
+ "fetched": "2026-09-01",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "intro"
+  },
+  "2": {
+   "title": "Scrollable Containing Block",
+   "page": "",
+   "id": "scrollable-cb"
+  },
+  "3": {
+   "title": "Top Layer",
+   "page": "",
+   "id": "top-layer"
+  },
+  "4": {
+   "title": "Painting Order and Stacking Contexts",
+   "page": "",
+   "id": "painting-order"
+  },
+  "5": {
+   "title": "Changes",
+   "page": "",
+   "id": "changes"
+  },
+  "3.1": {
+   "title": "Top Layer Styling",
+   "page": "",
+   "id": "top-styling"
+  },
+  "3.2": {
+   "title": "The ::backdrop Pseudo-Element",
+   "page": "",
+   "id": "backdrop"
+  },
+  "3.3": {
+   "title": "Top Layer Manipulation",
+   "page": "",
+   "id": "top-manip"
+  },
+  "3.4": {
+   "title": "Controlling the Top Layer: the overlay property",
+   "page": "",
+   "id": "overlay"
+  }
+ },
+ "dfns": {
+  "add an element to the top layer": [
+   "3.3"
+  ],
+  "add to the top layer": [
+   "3.3"
+  ],
+  "fixed containing block": [
+   "2"
+  ],
+  "in a higher top layer": [
+   "3"
+  ],
+  "in a lower top layer": [
+   "3"
+  ],
+  "in band": [
+   "4"
+  ],
+  "in band outline": [
+   "4"
+  ],
+  "in the same top layer": [
+   "3"
+  ],
+  "in the top layer": [
+   "3.3"
+  ],
+  "local containing block": [
+   "2"
+  ],
+  "out of band": [
+   "4"
+  ],
+  "out of band outline": [
+   "4"
+  ],
+  "paint a block decorations": [
+   "4"
+  ],
+  "paint a box in a line box": [
+   "4"
+  ],
+  "paint a document": [
+   "4"
+  ],
+  "paint a stacking container": [
+   "4"
+  ],
+  "paint a stacking context": [
+   "4"
+  ],
+  "pending top layer removals": [
+   "3"
+  ],
+  "process top layer removals": [
+   "3.3"
+  ],
+  "remove an element from the top layer immediately": [
+   "3.3"
+  ],
+  "remove from the top layer immediately": [
+   "3.3"
+  ],
+  "render in the top layer": [
+   "3.3"
+  ],
+  "rendered in the top layer": [
+   "3.3"
+  ],
+  "request an element to be removed from the top layer": [
+   "3.3"
+  ],
+  "request removal from the top layer": [
+   "3.3"
+  ],
+  "scrollable containing block": [
+   "2"
+  ],
+  "top layer": [
+   "3"
+  ],
+  "top layer root": [
+   "3"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "add an element to the top layer": {
+   "5": 2
+  },
+  "in a higher top layer": {
+   "5": 2
+  },
+  "in the top layer": {
+   "3.4": 2
+  },
+  "pending top layer removals": {
+   "3.3": 8
+  },
+  "remove an element from the top layer immediately": {
+   "5": 2
+  },
+  "rendered in the top layer": {
+   "3.4": 4
+  },
+  "request an element to be removed from the top layer": {
+   "5": 2
+  },
+  "top layer": {
+   "3.3": 7,
+   "3.4": 2
+  }
+ }
+}

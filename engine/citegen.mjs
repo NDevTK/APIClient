@@ -340,6 +340,18 @@ const SPECS = [
     base: "https://fs.spec.whatwg.org/", anchors: ["file system", "fs"] },
   { key: "permissions", label: "Permissions", kind: "respec",
     base: "https://w3c.github.io/permissions/", anchors: ["permissions"] },
+  /* FULLSCREEN, AND IT IS THE MANUFACTURED-FINDING SHAPE THIS TABLE'S hrtime ROW DESCRIBES RATHER THAN A SILENT
+     ZERO. Its section numbers are SMALL — §2 "Model", §3 "API", §7 "Permissions Policy Integration" — which is
+     exactly the range every indexed standard also numbers, so with no row here a `§3` of this standard is
+     placed by a file vote onto whichever standard the file otherwise cites and then JUDGED there: the
+     quotation check measured Fullscreen §3's `fullscreenEnabled` sentence against Web IDL §3 "JavaScript
+     binding" and reported a divergence, and `§3 "Top Layer"` was reported as a title Web IDL's §3 does not
+     carry. Both citations were correct. A one-line row is the whole cost of not doing that.
+     ITS ANCHORS ARE THE ONE-WORD NAME AND THE TWO-WORD ONE, and the one-word anchor is safe HERE where
+     `permissions` is not: anchorTokens matches WHOLE words separated by whitespace, so `allowfullscreen` and
+     `onfullscreenchange` cannot present a bare `fullscreen`, and no other row in this table is a tail of it. */
+  { key: "fullscreen", label: "Fullscreen API Standard", kind: "bikeshed",
+    base: "https://fullscreen.spec.whatwg.org/", anchors: ["fullscreen api", "fullscreen"] },
   /* PERMISSIONS POLICY IS A DIFFERENT STANDARD FROM PERMISSIONS AND THE ROW ABOVE DOES NOT COVER IT — which is
      the silent-zero shape this table's own comment describes, arriving through a NEAR MISS rather than an
      absence. `engine/specindex/permissions.json` indexes w3c.github.io/permissions, whose deepest heading is
@@ -420,6 +432,13 @@ const SPECS = [
     base: "https://drafts.csswg.org/css-grid-2/", anchors: ["css-grid-2"] },
   { key: "cssposition3", label: "CSS Positioned Layout Module Level 3", kind: "bikeshed",
     base: "https://drafts.csswg.org/css-position-3/", anchors: ["css-position-3"] },
+  /* LEVEL 4 IS A SEPARATE ROW FOR THE REASON THE css-images-3 ROW STATES: two levels of one module are two
+     documents with two numberings, and the TOP LAYER is Level 4's — §3 "Top Layer" and §3.3 "Top Layer
+     Manipulation" exist in css-position-4 and nowhere in css-position-3, whose §3 is a different heading
+     entirely. Anchored only by the hyphenated levelled shortname, which is the one spelling that names a
+     document; `CSS Positioned Layout §3` names neither and is normalized at the citation. */
+  { key: "cssposition4", label: "CSS Positioned Layout Module Level 4", kind: "bikeshed",
+    base: "https://drafts.csswg.org/css-position-4/", anchors: ["css-position-4"] },
   { key: "cssbackgrounds3", label: "CSS Backgrounds and Borders Module Level 3", kind: "bikeshed",
     base: "https://drafts.csswg.org/css-backgrounds-3/", anchors: ["css-backgrounds-3"] },
   { key: "csstransforms1", label: "CSS Transforms Module Level 1", kind: "bikeshed",

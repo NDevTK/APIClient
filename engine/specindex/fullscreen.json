@@ -1,0 +1,162 @@
+{
+ "spec": "Fullscreen API Standard",
+ "key": "fullscreen",
+ "base": "https://fullscreen.spec.whatwg.org/",
+ "specUpdated": "17 July 2026",
+ "fetched": "2026-09-01",
+ "sections": {
+  "1": {
+   "title": "Terminology",
+   "page": "",
+   "id": "terminology"
+  },
+  "2": {
+   "title": "Model",
+   "page": "",
+   "id": "model"
+  },
+  "3": {
+   "title": "API",
+   "page": "",
+   "id": "api"
+  },
+  "4": {
+   "title": "UI",
+   "page": "",
+   "id": "ui"
+  },
+  "5": {
+   "title": "Rendering",
+   "page": "",
+   "id": "rendering"
+  },
+  "6": {
+   "title": "Keyboard Locking",
+   "page": "",
+   "id": "keyboard-locking"
+  },
+  "7": {
+   "title": "Permissions Policy Integration",
+   "page": "",
+   "id": "permissions-policy-integration"
+  },
+  "8": {
+   "title": "Security and Privacy Considerations",
+   "page": "",
+   "id": "security-and-privacy-considerations"
+  },
+  "5.1": {
+   "title": ":fullscreen pseudo-class",
+   "page": "",
+   "id": ":fullscreen-pseudo-class"
+  },
+  "5.2": {
+   "title": "User-agent level style sheet defaults",
+   "page": "",
+   "id": "user-agent-level-style-sheet-defaults"
+  }
+ },
+ "dfns": {
+  "collect documents to unfullscreen": [
+   "3"
+  ],
+  "exit fullscreen": [
+   "3"
+  ],
+  "fullscreen an element": [
+   "2"
+  ],
+  "fullscreen element": [
+   "2"
+  ],
+  "fullscreen element ready check": [
+   "3"
+  ],
+  "fullscreen feature": [
+   "7"
+  ],
+  "fullscreen flag": [
+   "2"
+  ],
+  "fullscreen is supported": [
+   "2"
+  ],
+  "fully exit fullscreen": [
+   "2"
+  ],
+  "iframe fullscreen flag": [
+   "2"
+  ],
+  "keyboard lock": [
+   "2"
+  ],
+  "keyboard lock flag": [
+   "2"
+  ],
+  "list of pending fullscreen events": [
+   "2"
+  ],
+  "requestfullscreen( options )": [
+   "3"
+  ],
+  "run the fullscreen steps": [
+   "2"
+  ],
+  "simple fullscreen document": [
+   "3"
+  ],
+  "unfullscreen a document": [
+   "2"
+  ],
+  "unfullscreen an element": [
+   "2"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "exit fullscreen": {
+   "2": 2
+  },
+  "fullscreen an element": {
+   "3": 2
+  },
+  "fullscreen element": {
+   "3": 18,
+   "5.1": 2
+  },
+  "fullscreen feature": {
+   "3": 2
+  },
+  "fullscreen flag": {
+   "3": 2
+  },
+  "fullscreen is supported": {
+   "3": 3
+  },
+  "iframe fullscreen flag": {
+   "3": 2
+  },
+  "keyboard lock": {
+   "6": 3,
+   "8": 5
+  },
+  "keyboard lock flag": {
+   "3": 2
+  },
+  "list of pending fullscreen events": {
+   "3": 5
+  },
+  "requestfullscreen( options )": {
+   "8": 5
+  },
+  "run the fullscreen steps": {
+   "3": 2
+  },
+  "unfullscreen a document": {
+   "3": 3
+  },
+  "unfullscreen an element": {
+   "3": 3
+  }
+ }
+}

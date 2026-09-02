@@ -21,10 +21,12 @@
  *
  * §4.1: "A user agent has a set of supported features, which is the set of features which it allows to be
  * controlled through policies. User agents are not required to support every feature." THAT SET IS THE X-LIST
- * BELOW, and it is the whole of what HTML §2.2 "Policy-controlled features" defines: `autoplay`,
- * `cross-origin-isolated` and `focus-without-user-activation`, each "which has a default allowlist of 'self'".
- * A feature defined by some OTHER specification (Geolocation's `geolocation`, Fullscreen's `fullscreen`) is
- * not in this build's supported set, and §9.2 and §9.3 both say what that means for parsing — "if feature-name
+ * BELOW, and it is a UNION OVER SPECIFICATIONS rather than one document's list: HTML §2.2 "Policy-controlled
+ * features" defines `autoplay`, `cross-origin-isolated` and `focus-without-user-activation`, each "which has a
+ * default allowlist of 'self'", and FULLSCREEN API §7 "Permissions Policy Integration" defines `fullscreen`
+ * with the same default allowlist. A feature defined by a specification this build does not implement
+ * (Geolocation's `geolocation`) is not in the supported set, and §9.2 and §9.3 both say what that means for
+ * parsing — "if feature-name
  * does not identify any recognized policy-controlled feature, then continue" — so an unsupported token is
  * SKIPPED rather than guessed at. On the ASKING side there is no such softness and no runtime check either:
  * the question is an ENUM, so a component that needs to ask about a feature this build does not support does
@@ -69,15 +71,21 @@
 
 #include "core/url/origin.h"
 
-/* §4.1's SUPPORTED FEATURES, with §4.8's DEFAULT ALLOWLIST of each — HTML §2.2 "Policy-controlled features",
-   which defines exactly these three and gives all three a default allowlist of 'self'. The allowlist is a
-   column of the row rather than a fact the code assumes, because §4.8 admits two values and a `*` feature
-   inherits by a different rule: it is "allowed in Documents in top-level traversables by default, as well as
-   those in all child navigables", where 'self' stops at the first cross-origin link. */
+/* §4.1's SUPPORTED FEATURES, with §4.8's DEFAULT ALLOWLIST of each. The allowlist is a column of the row rather
+   than a fact the code assumes, because §4.8 admits two values and a `*` feature inherits by a different rule:
+   it is "allowed in Documents in top-level traversables by default, as well as those in all child navigables",
+   where 'self' stops at the first cross-origin link.
+   EACH ROW STATES THE STANDARD THAT DEFINES IT, because §4.1's set is a UNION over specifications and not a
+   list one document owns. The first three are HTML §2.2 "Policy-controlled features", each "which has a default
+   allowlist of 'self'". The fourth is FULLSCREEN API §7 "Permissions Policy Integration", whose whole first
+   sentence is the row: "This specification defines a policy-controlled feature identified by the string
+   "fullscreen". Its default allowlist is 'self'." A row's default allowlist is NORMATIVE in its own
+   specification and inventing one is a security answer nobody measured. */
 #define PERMISSIONS_POLICY_FEATURES(X)                                                        \
     X(AUTOPLAY,                      "autoplay",                      PP_ALLOWLIST_SELF)      \
     X(CROSS_ORIGIN_ISOLATED,         "cross-origin-isolated",         PP_ALLOWLIST_SELF)      \
-    X(FOCUS_WITHOUT_USER_ACTIVATION, "focus-without-user-activation", PP_ALLOWLIST_SELF)
+    X(FOCUS_WITHOUT_USER_ACTIVATION, "focus-without-user-activation", PP_ALLOWLIST_SELF)      \
+    X(FULLSCREEN,                    "fullscreen",                    PP_ALLOWLIST_SELF)
 
 typedef enum {
 #define PP_ENUM_ROW(name, token, allowlist) PP_FEATURE_##name,
@@ -113,11 +121,13 @@ PermissionsPolicyDefaultAllowlist permissions_policy_default_allowlist(Permissio
  * (origin) this algorithm returns a new Permissions Policy": one §9.7 inherited-policy value per supported
  * feature, and §9.5's own «[], []» declared policy.
  *
- * §9.7 IS THE WHOLE OF WHAT THE ARGUMENTS ARE FOR, and they are the four things it reads off the container:
+ * §9.7 IS THE WHOLE OF WHAT THE ARGUMENTS ARE FOR, and they are the five things it reads off the container:
  * `container_document_policy` is "container's node document's" permissions policy (its §9.7 steps 2 and 3),
  * `container_document_origin` is "container's node document's origin" (its step 7 — and §9.4 step 2's second
  * argument, which is what the keyword `'self'` resolves to inside an `allow` attribute), `container_allow`/
- * `container_allow_len` are the value of the `allow` attribute, and `container_declared_origin` is §7.2 "The
+ * `container_allow_len` are the value of the `allow` attribute, `container_allowfullscreen` is whether the
+ * element's `allowfullscreen` attribute is SPECIFIED (§9.4 step 3's condition — see below), and
+ * `container_declared_origin` is §7.2 "The
  * permissionsPolicy object"'s DECLARED ORIGIN of the element — §9.4 step 2's third argument, and what the
  * keyword `'src'` resolves to. A TOP-LEVEL DOCUMENT passes NULL for all of them, which is §9.7 step 1's "if
  * container is null, return `Enabled`" — the absence of a container is a POSITIVE statement about this
@@ -129,9 +139,26 @@ PermissionsPolicyDefaultAllowlist permissions_policy_default_allowlist(Permissio
  * §9.4 STEP 1 IS THE CALLER'S, AND IT IS SPELLED AS AN ABSENT ATTRIBUTE. "If element is not an `iframe`
  * element, then return an empty policy directive" is a question about what an element IS, and this component
  * does not know what an element is; the caller that does states the answer by passing NULL for `container_allow`
- * and for `container_declared_origin`. So an `<object>` or `<embed>` container reaches §9.7 steps 6-8 with no
+ * and for `container_declared_origin`, and false for `container_allowfullscreen`. So an `<object>` or `<embed>`
+ * container reaches §9.7 steps 6-8 with no
  * branch here, and the declared origin — which §7.2 computes for any Element — is not read for a container
  * whose attribute the standard does not honour.
+ *
+ * §9.4 STEP 3 IS A SECOND, NARROWER DELIVERY OF ONE FEATURE AND IT IS A BOOLEAN AND NOT AN ALLOWLIST. "If
+ * element's `allowfullscreen` attribute is specified, and container policy does not contain an entry for the
+ * `fullscreen` feature", then its step 3.1 sets "container policy[fullscreen] = the special value `*`". So the
+ * attribute carries no VALUE into the policy — the value is fixed by the step — and what the caller states is
+ * only whether the attribute is THERE, which is why this is a `bool` beside the `allow` attribute's bytes
+ * rather than a second string. It is a BOOLEAN CONTENT ATTRIBUTE and therefore SPECIFIED-or-not, never
+ * true-or-false — HTML §2.3.2 "Boolean attributes": "The presence of a boolean attribute on an element
+ * represents the true value, and the absence of the attribute represents the false value" — so
+ * `allowfullscreen="false"` is a conforming-invalid spelling of TRUE and never of false.
+ *   THE STEP IS ORDERED AFTER THE PARSE AND ITS CONDITION IS WHY. `allow` is processed first, so
+ * `<iframe allowfullscreen allow="fullscreen 'none'">` keeps the `'none'` the author wrote: the entry EXISTS,
+ * so step 3's second conjunct is false and the attribute adds nothing. FULLSCREEN §7 states the same rule from
+ * the other end — "Unless overridden by the `allow` attribute, setting `allowfullscreen` on an `iframe` is
+ * equivalent to `<iframe allow="fullscreen *">`" — and reading the two steps in the other order would make the
+ * legacy attribute silently overrule the modern one.
  *
  * THE DECLARED ORIGIN IS THE ELEMENT'S AND NOT THE CREATED DOCUMENT'S, and they legitimately differ: §7.2
  * computes it from the `src` attribute the embedder WROTE, so a frame that redirected elsewhere, or that
@@ -152,6 +179,7 @@ PermissionsPolicyDefaultAllowlist permissions_policy_default_allowlist(Permissio
 PermissionsPolicy *permissions_policy_create(const PermissionsPolicy *container_document_policy,
                                              const Origin *container_document_origin,
                                              const char *container_allow, size_t container_allow_len,
+                                             bool container_allowfullscreen,
                                              const Origin *container_declared_origin,
                                              const Origin *origin);
 void permissions_policy_free(PermissionsPolicy *policy);
