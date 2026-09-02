@@ -116,6 +116,20 @@ JSValue event_type(JSContext *ctx, JSValueConst ev)
     return t;
 }
 
+bool event_type_is(JSContext *ctx, JSValueConst ev, const char *want)
+{
+    JSValue type = event_type(ctx, ev);
+    const char *s = JS_IsString(type) ? JS_ToCString(ctx, type) : NULL;
+    bool is = s != NULL && strcmp(s, want) == 0;
+
+    DCHECK(want != NULL && *want,
+           "an event's type was compared against no name — every caller is a spec step naming one literal "
+           "type, so an empty want is a step that lost its string rather than a type that could match");
+    if (s) JS_FreeCString(ctx, s);
+    JS_FreeValue(ctx, type);
+    return is;
+}
+
 static bool event_read_flag(JSContext *ctx, JSValueConst ev, const char *name)
 {
     JSValue slots = event_slots(ctx, ev);

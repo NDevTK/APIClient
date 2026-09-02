@@ -30,6 +30,7 @@
 #include "core/events/event.h"
 #include "core/events/event_handler.h"
 #include "core/events/event_path.h"
+#include "core/events/mouse_event.h"   /* §2.9 step 6.4 asks a BRAND, and §6.5's click() fires a MouseEvent */
 #include "core/events/report_exception.h"
 #include "solver/result.h"   /* §3.2.15's refusal on a forked arm is this engine's own throw — see the AEL_SIGNAL stage */
 
@@ -2520,6 +2521,28 @@ static bool dispatch_target_root_contains(JSContext *ctx, JSValueConst target, J
     return contains;
 }
 
+/* HTML §6.5 Activation behavior of elements' `click()` step 4: "Fire a synthetic pointer event named click at
+   this element, with the not trusted flag set" — HTML §8.1.8.3 Event firing's steps 1-8, whose step 9 is the
+   dispatch this machine already is.
+   IT IS BUILT HERE AND NOT AT THE DISPATCH'S ENTRY BECAUSE STEP 7 NEEDS THE TARGET. `view` is "target's node
+   document's Window object, if any, and null otherwise", which is §8.1.8.1's OWN step 4 term — the same fact
+   about the same node, so it is asked through the same registered term rather than re-derived here, and a
+   second derivation could disagree with it about which document a node belongs to.
+   NULL IS THE STEP'S OWN ANSWER AND NOT A DEFAULT FILLING A HOLE — "if any, and null otherwise" — and a host
+   that registered no terms is exactly the "otherwise": the terms come from whichever component owns the tree,
+   so a host without them has no node documents at all and therefore no Window for one to have. That is the
+   same reading handler_determine_target makes of the same null at step 1, and it is why this is a positive
+   statement rather than an `if` past a broken invariant. What must not be guessed is the SHAPE of the answer,
+   and mouse_event_new_synthetic asserts that: a Window or null, never anything else. */
+static JSValue dispatch_synthetic_click(JSContext *ctx, JSValueConst target)
+{
+    /* BORROWED — the realm owns its global, exactly as §8.1.8.1 step 4's reader treats it. */
+    JSValueConst view = g_handler_terms == NULL ? JS_NULL
+                                                : g_handler_terms->node_document_global(ctx, target);
+
+    return mouse_event_new_synthetic(ctx, "click", view);
+}
+
 static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSDispatchState *s = st;
@@ -2545,8 +2568,12 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         s->eh_index = -1;
         /* THREE ENTRIES, ONE MACHINE, and `arg` is decided at REGISTRATION so no call site chooses:
              DISPATCH_ARG  — dispatchEvent: the receiver is the target, the page supplied the event.
-             CLICK_SYNTH   — §3.2.2 click(): the receiver is the target and the event is BUILT, because click
-                             is "fire a synthetic pointer event named click", which IS this dispatch.
+             CLICK_SYNTH   — HTML §6.5 Activation behavior of elements' click(): the receiver is the target and
+                             the event is BUILT, because that method's step 4 is "Fire a synthetic pointer
+                             event named click at this element, with the not trusted flag set", and HTML
+                             §8.1.8.3 Event firing's LAST step is "Return the result of dispatching event at
+                             target" — which IS this dispatch. (The number here used to be §3.2.2, which is
+                             "Elements in the DOM" and defines no method at all.)
              DISPATCH_PAIR — the ENGINE firing its own event, where there is no receiver to be the target
                              because the caller is C: both come in as arguments.
            The third is what let the second DELIVERY go. The engine used to enqueue each listener as its own
@@ -2555,8 +2582,14 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         target = (s->hdr.arg == DISPATCH_PAIR) ? step_arg(&s->hdr, 0)
                                               : event_target_receiver(ctx, s->hdr.this_val);
         s->ev = (s->hdr.arg == CLICK_SYNTH)
-                    ? event_new_untrusted(ctx, "click", /*bubbles*/ true, /*cancelable*/ true)
+                    ? dispatch_synthetic_click(ctx, target)
                     : JS_DupValue(ctx, step_arg(&s->hdr, s->hdr.arg == DISPATCH_PAIR ? 1 : 0));
+        /* ONLY CLICK_SYNTH CAN GET HERE WITH A LIVE THROW — the other two arms dup an argument. Its throw is
+           PROPAGATED rather than falling into the brand check below, which would answer "not an Event" for an
+           exception value and replace a real failure with a TypeError blaming the caller for an argument
+           §8.1.8.3 built itself. */
+        if (JS_IsException(s->ev))
+            return JS_STEP_ABRUPT;
         /* NOT A DOM STEP AT ALL, WHICH IS WHY IT IS FIRST: DOM §2.7 Interface EventTarget declares
            `boolean dispatchEvent(Event event)`, so the argument is converted by Web IDL §3.2.15 Interface
            types — step 1 "If V implements I, then return the IDL interface type value…", step 2 "Throw a
@@ -2635,15 +2668,25 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                    root. */
                 s->tn = event_path_length(ctx, s->path);
                 event_set_path(ctx, s->ev, s->path);
-                /* §2.9 step 6.4's isActivationEvent. The spec says "event is a MouseEvent object and event's
-                   type is `click`"; this engine has no MouseEvent interface yet, so the type is the whole of
-                   what it can ask — which is why `Event-dispatch-click` (a `new MouseEvent("click")`) is a
-                   MouseEvent gap and not a dispatch one. */
-                if (JS_IsString(s->type)) {
-                    const char *t = JS_ToCString(ctx, s->type);
-                    s->is_activation = t != NULL && !strcmp(t, "click");
-                    if (t) JS_FreeCString(ctx, t);
-                }
+                /* §2.9 step 6.4: "Let isActivationEvent be true, if event is a MouseEvent object and event's
+                   type attribute is `click`; otherwise false."
+                   BOTH CONJUNCTS, AND THE BRAND IS THE ONE THAT DOES THE WORK. The type half alone made every
+                   `new Event("click")` an activation event, and an activation event RUNS THE ACTIVATION
+                   BEHAVIOUR at step 12.1 — it submits the form, follows the hyperlink, toggles the checkbox.
+                   So a page that dispatched a plain Event named `click` navigated, which no browser does, and
+                   every flow forked past that navigation was exploring a world that cannot happen.
+                   THIS COMMENT USED TO SAY THE ENGINE HAD NO MouseEvent INTERFACE, and that was true when it
+                   was written and became false the day core/events/mouse_event.c landed — a sentence that
+                   stays right about the SPEC while going wrong about the TREE, which reads as authoritative
+                   and is why it survived the interface arriving. `mouse_event_is` is the slot record and not
+                   the class, so it stays true for PointerEvent, DragEvent and WheelEvent, which is what makes
+                   it the brand step 6.4 asks for rather than a class comparison that would answer false for
+                   the very interface a real click carries.
+                   IT MEETS NO UNKNOWN. The brand is an OWN SLOT under a private Symbol read with
+                   JS_GetOwnSlot, so it runs no page code and forks nothing: an object either carries the
+                   record this engine wrote or it does not, and unknown external input carries no slots. The
+                   type half is the string §2.2 stored at construction, likewise not a lookup. */
+                s->is_activation = mouse_event_is(ctx, s->ev) && event_type_is(ctx, s->ev, "click");
                 /* §2.9 step 6.5: the TARGET is the activation target if it has one — no `bubbles` condition
                    here, which is the difference from step 6.9.6.1's test on an ancestor. */
                 if (s->is_activation && g_has_activation && g_has_activation(ctx, target))
@@ -2740,7 +2783,9 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                 JS_FreeValue(ctx, touch);
                 if (!ended) {
                     s->tn = event_path_length(ctx, s->path);
-                    s->slot_in_closed_tree = 0;   /* step 6.9.9, and it is per ITERATION, not per tree */
+                    /* step 6.9.10 "Set slotInClosedTree to false", and it is per ITERATION, not per tree.
+                       6.9.9 is the get the parent directly above it, which the fall-through below names. */
+                    s->slot_in_closed_tree = 0;
                     return JS_STEP_YIELD;
                 }
                 /* step 6.9.7 set parent to null, so 6.9.9 does not ask again and the while ends: fall out of

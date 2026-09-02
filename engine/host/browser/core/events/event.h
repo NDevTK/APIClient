@@ -26,7 +26,10 @@ JSValue event_proto(JSContext *ctx);
 /* Mint an event the ENGINE fires (`load`, `abort`, `DOMContentLoaded`). isTrusted is true for these, which is
    exactly the difference from one the page constructs. Returns a new owned Event. */
 JSValue event_new(JSContext *ctx, const char *type, bool bubbles, bool cancelable);
-/* The same, isTrusted FALSE — a synthetic event the PAGE caused (§3.2.2's click()). */
+/* The same, isTrusted FALSE — a synthetic event the PAGE caused. It is NOT what HTML §6.5 Activation behavior
+   of elements' click() fires: that method's step 4 fires a synthetic POINTER event, so the object it builds
+   has to answer DOM §2.9 step 6.4's MouseEvent brand and comes from mouse_event_new_synthetic instead. (The
+   number this line used to give for click() was §3.2.2, which is "Elements in the DOM".) */
 JSValue event_new_untrusted(JSContext *ctx, const char *type, bool bubbles, bool cancelable);
 
 /* §2.2's INITIALISE, with a DERIVED interface's prototype in place of Event.prototype — the base half of a
@@ -56,6 +59,14 @@ bool event_reinit(JSContext *ctx, JSValueConst ev, JSValueConst type, bool bubbl
    check dispatchEvent performs — the slots live under a private Symbol, so a page cannot forge one. */
 bool    event_is(JSContext *ctx, JSValueConst v);
 JSValue event_type(JSContext *ctx, JSValueConst ev);            /* a new owned string, or JS_UNDEFINED */
+/* DOES THIS EVENT'S TYPE EQUAL `want` — one string compare, spelled ONCE for the whole tree because several
+   standards' steps make one and every extra spelling is another place for it to be case-folded, truncated or
+   applied to the wrong half of a conjunction. Three algorithms ask it and each pairs it with a BRAND:
+   DOM §2.9 dispatch step 6.4 ("event is a MouseEvent object and event's type attribute is `click`"), and
+   HTML §8.1.8.1 Event handlers' step 4 (ErrorEvent) and step 6's first arm (BeforeUnloadEvent). It answers
+   the TYPE half only: an interface question is `<interface>_is`, and the two are never substituted for each
+   other — an event's type is a page-supplied string, so it decides nothing about what the object IS. */
+bool    event_type_is(JSContext *ctx, JSValueConst ev, const char *want);
 bool    event_canceled(JSContext *ctx, JSValueConst ev);        /* the canceled flag */
 /* THE SAME FLAG, WRITTEN — and it is NOT §2.2's "set the canceled flag", which is an algorithm with two
    conditions on it (cancelable is true, and the in-passive-listener flag is unset).

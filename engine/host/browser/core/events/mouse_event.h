@@ -26,4 +26,29 @@ JSValue mouse_event_new(JSContext *ctx);
    so it stays true across an interface that inherits this one. */
 bool mouse_event_is(JSContext *ctx, JSValueConst v);
 
+/* HTML §8.1.8.3 Event firing's FIRE A SYNTHETIC POINTER EVENT, minus the dispatch — steps 1-8 build the event
+ * and step 9 dispatches it, and the caller is the dispatch. `view` is step 7's ("target's node document's
+ * Window object, if any, and null otherwise"), so JS_NULL is a POSITIVE answer and not an unknown. The not
+ * trusted flag is always set here because the only caller is HTML §6.5 Activation behavior of elements'
+ * `click()`, whose step 4 is "Fire a synthetic pointer event named click at this element, with the not
+ * trusted flag set".
+ *
+ * A NAMED RESIDUAL, AND THE CODE IS RIGHT RATHER THAN UNFINISHED. Step 1 is "Let event be the result of
+ * creating an event using PointerEvent" and this engine has no PointerEvent interface, so the object it
+ * creates is a MouseEvent — the interface PointerEvent INHERITS, which is why every step below it and DOM
+ * §2.9 step 6.4's brand test are answered exactly as a browser answers them.
+ *   NOT COVERED: PointerEvent's own identity and its own members — `pointerId`, `width`, `height`,
+ *     `pressure`, `tangentialPressure`, `tiltX`, `tiltY`, `twist`, `altitudeAngle`, `azimuthAngle`,
+ *     `pointerType`, `isPrimary`, `getCoalescedEvents()` and `getPredictedEvents()`.
+ *   THE NEXT DIFF BUILDS core/events/pointer_event.c — a PointerEvent interface deriving through
+ *     mouse_event_new_derived exactly as DragEvent and WheelEvent will, its global installed per realm beside
+ *     this one, and this function creating one instead. (idl_inheritance.h already carries the row
+ *     `{ "PointerEvent", "MouseEvent", IDL_PROTO_INHERITS }`; nothing installs it. GREP THAT ENTRY BEFORE
+ *     ACTING ON THIS SENTENCE — it is a claim about the tree and the tree moves.)
+ *   ITS ABSENCE SHOWS as a `click` listener reading `event.pointerType` and getting `undefined` where a
+ *     browser answers "mouse" for a synthetic click, and as `PointerEvent` being absent from the global so
+ *     `event instanceof PointerEvent` throws a ReferenceError rather than answering true.
+ * Returns a new owned MouseEvent, or JS_EXCEPTION with the throw live. */
+JSValue mouse_event_new_synthetic(JSContext *ctx, const char *type, JSValueConst view);
+
 #endif

@@ -285,6 +285,53 @@ JSValue mouse_event_new(JSContext *ctx)
     return ev;
 }
 
+JSValue mouse_event_new_synthetic(JSContext *ctx, const char *type, JSValueConst view)
+{
+    JSValue init, t, ev;
+
+    DCHECK(g_ready, "HTML §8.1.8.3 Event firing's fire a synthetic pointer event ran before mouse_event_init "
+                    "declared the interface — the event it builds is a MouseEvent and its slot key is made there");
+    DCHECK(type != NULL && *type,
+           "HTML §8.1.8.3 Event firing's fire a synthetic pointer event was given no event name — step 2 "
+           "initializes the type attribute to the name the caller fires, and there is no unnamed one");
+    /* STEP 7's `view`, asserted rather than trusted: it is "target's node document's Window object, if any",
+       so the two admissible values are a Window and null. Anything else is a caller that read the wrong
+       object, and UIEvent's `Window?` conversion would report it as the page's TypeError instead. */
+    DCHECK(JS_IsNull(view) || window_proxy_is_window(ctx, view),
+           "HTML §8.1.8.3 Event firing's fire a synthetic pointer event was given a `view` that is neither a "
+           "Window nor null — step 7 initializes it to the TARGET's node document's Window object, and null "
+           "is the spec's own answer when that document has none");
+    /* THE CONVERTED DICTIONARY, exactly as focus_event.c builds one for HTML §6.6.4's fire a focus event: a
+       null-prototyped record carrying the members that EXIST, each already an engine value of its IDL type.
+       Nothing of the page's is on it, so building it runs none of the page's code — and it is the same record
+       `new MouseEvent(type, init)` reaches mouse_event_new_derived with, so a synthetic click and a
+       constructed one are ONE construction path.
+       Steps 3, 4 and 7 are these three members. HTML §8.1.8.3 Event firing's step 6 — "according to the
+       current state of the key input device, if any (false for any keys that are not available)" — and its
+       step 8's getModifierState are the un-initialized key modifier state ui_event.c writes for an absent
+       dictionary member: false for every key, which is what a headless agent's key input device makes them
+       and not a value invented here. */
+    init = idl_slots_new(ctx);
+    if (JS_IsException(init))
+        return init;
+    JS_SetPropertyStr(ctx, init, "bubbles", JS_TRUE);              /* step 3 */
+    JS_SetPropertyStr(ctx, init, "cancelable", JS_TRUE);           /* step 3 */
+    JS_SetPropertyStr(ctx, init, "composed", JS_TRUE);             /* step 4: "Set event's composed flag" */
+    JS_SetPropertyStr(ctx, init, "view", JS_DupValue(ctx, view));  /* step 7 */
+    t = JS_NewString(ctx, type);                                   /* step 2 */
+    if (JS_IsException(t)) {
+        JS_FreeValue(ctx, init);
+        return t;
+    }
+    /* STEP 5: "If the not trusted flag is set, initialize event's isTrusted attribute to false." The one
+       caller sets it, so the flag is not an argument — see the header for why widening it would be a
+       parameter no step supplies. */
+    ev = mouse_event_new_derived(ctx, mouse_event_proto(ctx), t, init, /*trusted*/ false);
+    JS_FreeValue(ctx, t);
+    JS_FreeValue(ctx, init);
+    return ev;
+}
+
 /* ---- the attributes ----------------------------------------------------------------------------------------- */
 
 enum { MD_SCREEN_X = 0, MD_SCREEN_Y, MD_CLIENT_X, MD_CLIENT_Y, MD_LAYER_X, MD_LAYER_Y, MD_BUTTON, MD_BUTTONS,

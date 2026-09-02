@@ -65,19 +65,6 @@ void event_handler_work_visit(JSContext *ctx, EventHandlerWork *w, JSStepVisit *
     v->val(ctx, &w->rv);
 }
 
-/* Does this event's type equal `want` — one string compare, spelled once because step 4 and step 6 each make
-   one and a second spelling is a second place for the comparison to be case-folded or truncated. */
-static bool eh_type_is(JSContext *ctx, JSValueConst event, const char *want)
-{
-    JSValue type = event_type(ctx, event);
-    const char *s = JS_IsString(type) ? JS_ToCString(ctx, type) : NULL;
-    bool is = s != NULL && strcmp(s, want) == 0;
-
-    if (s) JS_FreeCString(ctx, s);
-    JS_FreeValue(ctx, type);
-    return is;
-}
-
 /* §8.1.8.1 step 4: "Let special error event handling be true if event is an ErrorEvent object, event's type is
    `error`, and event's currentTarget implements the WindowOrWorkerGlobalScope mixin."
    ALL THREE CONJUNCTS, and each rules out a real case the other two do not: an `error` Event fired at an
@@ -88,7 +75,7 @@ static bool eh_type_is(JSContext *ctx, JSValueConst event, const char *want)
 static bool eh_special_error(JSContext *ctx, JSValueConst event, JSValueConst current_target)
 {
     return error_event_is(ctx, event) && event_target_is_window(ctx, current_target) &&
-           eh_type_is(ctx, event, "error");
+           event_type_is(ctx, event, "error");
 }
 
 /* §8.1.8.2.1's IDL, which is what decides whether step 5's invoke COERCES the completion: every event handler
@@ -240,7 +227,7 @@ int event_handler_run(JSContext *ctx, EventHandlerWork *w, JSStepHdr *hdr, uint8
        conjuncts, because they come apart in each direction — `createEvent('BeforeUnloadEvent')` then
        `initEvent('x')` is the interface with another type, and `new Event('beforeunload')` is the type without
        the interface, and the standard's own note is about the second. */
-    if (before_unload_event_is(ctx, event) && eh_type_is(ctx, event, "beforeunload")) {
+    if (before_unload_event_is(ctx, event) && event_type_is(ctx, event, "beforeunload")) {
         /* THE ARM AND THE COERCION MUST HAVE AGREED. This arm reads `return value` as "null or a DOMString"
            and says so in as many words, and the only thing that makes it one is the attribute's own Web IDL
            return type — so an invocation arriving here uncoerced is a handler whose declared IDL type and
