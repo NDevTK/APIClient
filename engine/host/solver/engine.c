@@ -8751,7 +8751,7 @@ void engine_set_yield_floor(double w) { g_yield_floor = w; }
    AND -Infinity IS THE ANSWER RATHER THAN A NEW BRANCH: it is already what an empty frontier publishes, so a
    stalled engine sorts last through the ordering the host already has. */
 double engine_top_weight(void) {
-    Flow *b = flow_next_to_run(NULL);
+    Flow *b = flow_next_to_run(NULL, FLOW_SCAN_OTHER);
     /* WHY THE PICK CAME BACK EMPTY, ASSERTED AT THE ONE PLACE THE HOST IS TOLD. -inf from a NON-EMPTY frontier
        is a claim on the host — "I can convert no slice into work until you act" — so the thing that must be
        true is that there is something for the host TO act on: an unanswered entry on somebody's register, or a
@@ -8923,7 +8923,7 @@ static int engine_sched_slice(void) {
            amount and usually none — moved the thread to g_flows[0] on every iteration and paid a COW delta swap
            for a ranking that had not changed. The incumbent is displaced only by a STRICTLY better flow, which
            is the same comparison the preempt hook makes, so the two ends of the decision cannot disagree. */
-        Flow *best = flow_next_to_run(cur);
+        Flow *best = flow_next_to_run(cur, FLOW_SCAN_NEXT);
         /* NOTHING LEFT TO RUN: either the frontier is empty, or every member is waiting on the host — which is
            the STALL, decided by asking each member rather than by counting a run of unproductive picks. */
         if (!best) break;

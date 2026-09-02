@@ -783,7 +783,21 @@ const WFQ_FIELDS = ["members", "valMin", "valMax", "valTop", "valZero", "selfEmi
                        `canDeliver - delivReady` is exactly the population the ARM could serve and the PICK
                        will not offer the thread to. Two questions, two answers, and until both were read the
                        difference between them was a reading nobody could perform. */
-                    "delivReady", "delivFramed", "delivOwed", "delivWGap"];
+                    "delivReady", "delivFramed", "delivOwed", "delivWGap",
+                    /* AND WHAT ASKING THIS ORDER COSTS, which every row above is silent about because every
+                       row above is about what the order DECIDED. The census can already say the tail is not
+                       being reached and call that a THROUGHPUT statement; what it cannot say is where the
+                       throughput went, and there are two causes that take opposite work — not enough thread
+                       time exists for the members standing, or the thread is being spent ASKING the order
+                       rather than running it. solver/flow.c's flow_pick is a LINEAR scan of the frontier and
+                       the four entries above it run at different cadences, so its cost is a function of a
+                       frontier that grows because forking is the point.
+                       COUNTS AND NOT CLOCKS, which is why this reader may compare them across runs at all:
+                       this host's quantum is wall-denominated and §Testing's rule is that a measurement a
+                       loaded machine can falsify is not one. Scans and weight evaluations are things the
+                       engine DID. */
+                    "scanNextRuns", "scanNextWeights", "scanRivalRuns", "scanRivalWeights",
+                    "scanOtherRuns", "scanOtherWeights"];
 /* A CONSTANT OF THE ENGINE IS READ FROM THE ENGINE, NEVER RESTATED HERE — the rule `ageQuantum` was written
    for and which now has a second reader (`hungCause`'s census cadence), so it is one function rather than two
    copies of one regex. Throws on an absent or unparseable define, because the alternative is this reader
@@ -1099,6 +1113,61 @@ function wfqReading(out) {
               `spread (${rangeVal.toFixed(3)}), so the backlog is behind but not buried` +
               (delivNotches === null ? `` : ` (${delivNotches} quanta of silence for the aging term to ` +
                                             `close)`));
+  /* AND WHAT ASKING THIS ORDER COST, WHICH IS THE ONE QUESTION EVERY ROW ABOVE IS STRUCTURALLY SILENT ABOUT —
+     they are all about what the order DECIDED. The census can already say the tail is not being reached and
+     name that a THROUGHPUT statement rather than an ordering one; it could not say where the throughput went,
+     and the two causes take opposite work: too few steps for the members standing, or steps that are expensive
+     because each one asks a question whose cost is the frontier's SIZE.
+     EVERY READING HERE IS INSIDE ONE CENSUS, deliberately. `steps` and `forks` are @COLD rows and this is the
+     @WFQ reader, so quoting them would be comparing two lines taken at two instants — and it is not needed:
+     the DISPATCH entry is asked once per iteration of the loop that steps a flow, and it is the only caller
+     routed to it (the host's Level-1 read asks the same function and is routed to `other`, solver/flow.h), so
+     `scanNextRuns` is this instance's step count up to the iterations that ended a slice without stepping.
+     Every quotient below is two rows of this same census.
+     THE ONE CHECK IS THE ONLY ONE THAT IS THE PRODUCER'S CLAIM, and the check that is NOT here is worth stating
+     because it was written first and would have fired on a healthy run. "A scan of a non-empty frontier prices
+     at least one member" is FALSE: the runnable-only scans skip a host-owed member before pricing it, so a
+     frontier every member of which is waiting on the host evaluates ZERO weights — which is the STALL
+     solver/engine.c names at its own `if (!best) break`, a real state and not a broken counter. That is the
+     same shape as the `jobsReady`/`jobWGap` biconditional this file already had to correct: a guard that fires
+     on the healthiest reading its rows can produce. What is left is the one claim with no state behind it — a
+     lifetime count that only climbs cannot be negative. */
+  for (const k of ["scanNextRuns", "scanNextWeights", "scanRivalRuns", "scanRivalWeights",
+                   "scanOtherRuns", "scanOtherWeights"])
+    if (w[k] < 0)
+      throw new Error(`[build] the @WFQ census reports ${k} ${w[k]} — the order-scan counters are lifetime ` +
+                      `counts that only climb (solver/flow.c increments them at the scan and nothing resets ` +
+                      `them), so a negative is a counter that wrapped or a row that was never written, and ` +
+                      `the cost reading below would be about no run at all.`);
+  const scanWeights = w.scanNextWeights + w.scanRivalWeights + w.scanOtherWeights;
+  const perStep = w.scanNextRuns > 0 ? scanWeights / w.scanNextRuns : null;
+  const walked  = w.scanNextRuns > 0 ? w.scanNextWeights / w.scanNextRuns : null;
+  /* THE HOOK'S CADENCE AGAINST THE LOOP'S, WHICH IS THE HALF A TOTAL CANNOT SHOW. The dispatch loop asks once
+     per step; the preempt hook asks once per frontier GENERATION, and solver/flow.c's frontier_rank_changed
+     raises that on every fork, arrival, departure and emission. So a ratio near 1 says the two run together
+     and the cost is simply the frontier's size, while a ratio well above 1 says a forking page is paying for
+     the ORDER once per branch — which is a rate nothing about the dispatch loop would predict and which is
+     fixed at the hook rather than at the pick. */
+  const rivalPer = w.scanNextRuns > 0 ? w.scanRivalRuns / w.scanNextRuns : null;
+  const cost = w.scanNextRuns === 0
+    ? `the order was never asked by the dispatch loop in this run, so there is no cost to read — a census ` +
+      `taken before the scheduler's first pick`
+    : `asking the order cost ${scanWeights} member-weight evaluation(s) over ${w.scanNextRuns} dispatch ` +
+      `scan(s) — ${perStep.toFixed(1)} per step, walking ${walked.toFixed(1)} member(s) of a ${w.members}-` +
+      `member frontier each time` +
+      (walked >= w.members * 0.5
+        ? `, so the pick is LINEAR in the frontier and a step's cost grows with it: the run's total scan work ` +
+          `is quadratic in its own step count, which is a throughput finding and not an ordering one`
+        : `, so the filters are keeping the pick well below the frontier's size and its cost is not tracking ` +
+          `the frontier`) +
+      `; the preempt hook rescanned ${w.scanRivalRuns} time(s) (${rivalPer.toFixed(2)} per dispatch scan, ` +
+      `${w.scanRivalWeights} weight(s))` +
+      (rivalPer > 1.5
+        ? ` — MORE than one rescan per step, which is the frontier's generation moving faster than the loop ` +
+          `steps (solver/flow.c's frontier_rank_changed fires on every fork, arrival, departure and emission), ` +
+          `so this page is paying for the order per BRANCH and the cost is at the hook's rescan`
+        : ` — at or below one per step, so the hook is not the multiplier here`) +
+      `; ${w.scanOtherRuns} host/pager scan(s) beside them`;
   /* AND WHO CARRIES THE OPTIMISM TERM AT ITS MAXIMUM. `visMin`/`visMax` give the term's RANGE and cannot say
      how much of the frontier sits at the top of it; `visZero` is that population, and where it is the WHOLE
      frontier the bonus is one flat maximum and orders nothing — which is the same arithmetic as `rangeUcb: 0`
@@ -1303,7 +1372,7 @@ function wfqReading(out) {
           `${w.unrun} at zero own silence (never charged since their family last emitted); ` +
           `${w.cands} @S candidates of which ${w.candUnrun} never ran, deepest one ${w.candDecMax} of ` +
           `${w.decMax} gates in; weight ${w.wTop} at the front against ${w.candWMax} for the best candidate; ` +
-          `${cand}; ${jobs}; ${deliv}; ` + terms,
+          `${cand}; ${jobs}; ${deliv}; ${cost}; ` + terms,
   };
 }
 

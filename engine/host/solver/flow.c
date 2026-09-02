@@ -2715,8 +2715,42 @@ void flow_clear_host_owed_all(void) {
    often none) handed the thread to g_flows[0] on every single iteration and paid a full COW delta swap for a
    ranking that had not changed at all. It is not a hysteresis margin, a minimum service or a switch budget:
    there is no number in it, and a strictly better flow takes the thread at the very next opcode. */
-static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only, int worst) {
+/* WHAT ASKING THE ORDER COSTS — see solver/flow.h's FLOW_SCANS for why the entries are counted apart, why the
+   quantity is a COUNT and not a clock, and why nothing may read these. Lifetime, never reset, and `long`
+   because they are compared against `steps` and `forks`, which are. */
+static long g_scan_runs[FLOW_SCAN_N];
+static long g_scan_weights[FLOW_SCAN_N];
+long flow_scan_runs(FlowScan s) {
+    DCHECK((unsigned)s < (unsigned)FLOW_SCAN_N,
+           "an order-scan count was asked for an entry that is not in solver/flow.h's list — the index would "
+           "read past the array, and the caller is about to publish whatever it found as a cost of this run");
+    return g_scan_runs[s];
+}
+long flow_scan_weights(FlowScan s) {
+    DCHECK((unsigned)s < (unsigned)FLOW_SCAN_N,
+           "an order-scan weight count was asked for an entry that is not in solver/flow.h's list — the index "
+           "would read past the array, and the caller is about to publish whatever it found as a cost of this "
+           "run");
+    return g_scan_weights[s];
+}
+
+static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only, int worst, FlowScan why) {
     Flow *best = NULL; double bw = 0.0;
+    /* THE SCAN IS ABOUT TO HAPPEN, SO IT IS COUNTED HERE AND NOT AT ITS RETURN. Every exit of this function is
+       one scan performed, including the one that finds nothing, and a count taken at a return would miss
+       whichever exit somebody adds next. `why` is the CALLER's, threaded in rather than derived from the four
+       argument flags: two entries share a flag shape today (`flow_best` and the census read differ in nothing
+       but their question), so deriving it would be a second list that agrees with the call sites only by
+       luck — the same reason solver/step_unit.h's arm is assigned at each arm rather than inferred.
+       CHECKED IN RANGE BEFORE IT INDEXES, and as a CHECK rather than a DCHECK for solver/cold.c's reason at
+       its own histogram: the increment below is a WRITE in every build, so a dev-only guard vanishes in
+       exactly the build where the store happens, and a store past the end of this array lands in whatever the
+       link put after it. */
+    CHECK((unsigned)why < (unsigned)FLOW_SCAN_N,
+          "engine: the order was asked through a scan entry that is not in solver/flow.h's list — the value is "
+          "only ever written from that enum at a flow_pick call site, so this is a cast or an uninitialised "
+          "read, and the counters below would be written outside their array in every build");
+    g_scan_runs[why]++;
     /* A MEMBER CARRYING THE FULL BONUS AND NO AGING — its weight is its reward + 1.0 and hence at least 1.0,
        which is the only property the assertions below need, and the test is written as exactly that premise:
        EVERY non-reward term of flow_weight at zero, read through the same functions the weight reads.
@@ -2766,7 +2800,7 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        has told the scheduler it can make no progress. A flow that answered OWED is the one case where the
        incumbent must NOT keep the thread: keeping it is the spin the mark exists to end. */
     if (seed && flow_is_member(seed) && !(runnable_only && flow_host_owed(seed))) {
-        best = (Flow *)seed; bw = flow_weight(seed);
+        best = (Flow *)seed; bw = flow_weight(seed); g_scan_weights[why]++;
         if (seed->visits == 0 && flow_silence_notch(seed) == 0) { unrun = seed; unrun_w = bw; }
     }
     for (int i = 0; i < g_flows_n; i++) {
@@ -2775,7 +2809,11 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
         /* NOT A DROP AND NOT A DEPRIORITISATION: the flow keeps its weight, its place and every work item it
            holds, and it is picked again the moment anything could have answered it (flow_clear_host_owed). */
         if (runnable_only && flow_host_owed(g_flows[i])) continue;
-        w = flow_weight(g_flows[i]);
+        /* COUNTED WHERE THE WEIGHT IS TAKEN AND NOT AT THE TOP OF THE LOOP, which is the difference between
+           what the scan COSTS and how big the frontier is. The two `continue`s above skip the excluded member
+           and the host-owed ones without pricing them, so a trip count would charge this scan for members it
+           never weighed — and `members` on the same census already says how big the frontier was. */
+        w = flow_weight(g_flows[i]); g_scan_weights[why]++;
         if (g_flows[i]->visits == 0 && flow_silence_notch(g_flows[i]) == 0 && (!unrun || w > unrun_w)) {
             unrun = g_flows[i]; unrun_w = w;
         }
@@ -3262,15 +3300,15 @@ void flow_wfq_census(WfqCensus *out) {
 }
 
 /* The four questions, each a seed, a filter or a direction over the one scan above. */
-Flow *flow_best(void) { return flow_pick(NULL, NULL, 0, 0); }
+Flow *flow_best(void) { return flow_pick(NULL, NULL, 0, 0, FLOW_SCAN_OTHER); }
 
 /* WHICH FLOW SHOULD HOLD THE THREAD — the dispatch loop's pick, defending the incumbent on a tie. */
-Flow *flow_next_to_run(const Flow *incumbent) { return flow_pick(incumbent, NULL, 1, 0); }
+Flow *flow_next_to_run(const Flow *incumbent, FlowScan why) { return flow_pick(incumbent, NULL, 1, 0, why); }
 
 /* WHO THE INCUMBENT IS DEFENDING AGAINST — the same scan with the incumbent taken OUT rather than seeded in,
    because the hook applies the strict comparison itself. Asking it with the seed would answer `cur` and the
    value yield would compare a flow against itself. */
-Flow *flow_rival_of(const Flow *cur) { return flow_pick(NULL, cur, 1, 0); }
+Flow *flow_rival_of(const Flow *cur) { return flow_pick(NULL, cur, 1, 0, FLOW_SCAN_RIVAL); }
 
 /* IS `tail` THE LOWEST-WEIGHT CANDIDATE? — the assert's own scan below, deliberately NOT flow_pick's, and a
    FUNCTION rather than a loop at the call site for two reasons that are the same reason. A DCHECK condition
@@ -3291,7 +3329,7 @@ static int flow_is_min_weight(const Flow *tail, const Flow *exclude) {
 }
 
 Flow *flow_worst(const Flow *exclude) {
-    Flow *tail = flow_pick(NULL, exclude, 0, 1);
+    Flow *tail = flow_pick(NULL, exclude, 0, 1, FLOW_SCAN_OTHER);
     /* EVERY MEMBER, RUNNABLE OR NOT — and that is not an oversight in the filter, it is what eviction is about.
        A flow waiting on the host cannot use the thread, which is why the PICK skips it; it is still a snapshot
        occupying RAM, and it is the CHEAPEST thing in the frontier to page, because its recipe re-issues the

@@ -1546,6 +1546,68 @@ typedef struct {
 } WfqCensus;
 void flow_wfq_census(WfqCensus *out);
 
+/* WHAT THE ORDER COSTS TO ASK, WHICH IS A DIFFERENT QUESTION FROM WHAT IT DECIDES AND HAS NO ROW ANYWHERE.
+ *
+ * THE FOUR ENTRIES ABOVE ARE ONE SCAN, AND THE SCAN IS LINEAR IN THE FRONTIER. That is not a defect on its own
+ * — flow_weight is O(1) by construction (the preempt hook's own note says it "may not walk", because the hook
+ * reads it per opcode) — but it makes the ASK's cost a function of the frontier's SIZE, on an engine whose
+ * frontier grows because forking is the point. Nothing measured it, so "the tail is not being reached" had one
+ * reading available and two causes: not enough thread time exists for the members standing, or the thread is
+ * being spent asking the order rather than running it. Those take opposite work and no row separated them.
+ *
+ * WHY THE ENTRIES ARE COUNTED APART AND NOT SUMMED. They run at DIFFERENT CADENCES, which is the whole reading:
+ *   `next-to-run` is the dispatch loop's, ONE per step by construction, so its weight total over `steps` is the
+ *      average frontier a step pays for.
+ *   `rival-of-incumbent` is the PREEMPT HOOK's, and its cadence is the frontier's GENERATION — every fork,
+ *      arrival, departure and emission calls frontier_rank_changed, so the hook's cached rival goes stale and
+ *      the next opcode rescans. A forking page therefore pays this one per fork rather than per step, which is
+ *      a rate nothing about the dispatch loop would predict.
+ *   `best` and `eviction-tail` are the host's and the pager's, asked per report and at the RAM floor.
+ * Summed, a scan the hook made per fork and a scan the loop made per step are one number, and the two take
+ * opposite work — the same collapse `resume-program` carried until solver/step_unit.h split it.
+ *
+ * IT IS A COUNT AND NOT A CLOCK, deliberately and for §Testing's reason: a measurement a loaded machine can
+ * falsify is not a measurement, and this host's quantum is wall-denominated. Scans and weight evaluations are
+ * things the engine DID — being descheduled cannot inflate either — so these numbers are comparable between two
+ * runs on a machine under any load, which is exactly what a duration here would not be.
+ * WEIGHT EVALUATIONS AND NOT LOOP TRIPS: the scan skips the excluded member and the host-owed ones without
+ * pricing them, so trips would overstate what a filtered scan costs. What is counted is the flow_weight the
+ * scan itself performed — its seed's and its loop's — and never the ones a DCHECK below it makes, which do not
+ * exist in the build the product ships.
+ * IT DECIDES NOTHING. No weight term reads it, no pick branches on it, nothing is bounded by it; it is a report,
+ * and a scheduler that consulted its own cost would be ordering on a quantity that is not about any member. */
+#define FLOW_SCANS(X)                                                                     \
+    /* the dispatch loop's pick — one per step */                                         \
+    X(NEXT,  "next-to-run")                                                               \
+    /* the preempt hook's rival rescan — one per frontier-generation change */            \
+    X(RIVAL, "rival-of-incumbent")                                                        \
+    /* the host's best-weight read and the pager's tail, per report and at the RAM floor */\
+    X(OTHER, "best-and-eviction-tail")
+#define FLOW_SCAN_ENUM(id, name) FLOW_SCAN_##id,
+typedef enum { FLOW_SCANS(FLOW_SCAN_ENUM) FLOW_SCAN_N } FlowScan;
+#undef FLOW_SCAN_ENUM
+#define FLOW_SCAN_CASE(id, name) case FLOW_SCAN_##id: return name;
+static inline const char *flow_scan_name(FlowScan s)
+{
+    switch (s) { FLOW_SCANS(FLOW_SCAN_CASE) case FLOW_SCAN_N: break; }
+    DFAIL("an order scan reported an entry that is not in solver/flow.h's list — the enum and the name are two "
+          "expansions of ONE macro, so a value outside it did not come from an assignment at a flow_pick call "
+          "site; it is a cast or an uninitialised read");
+    return "(not a scan entry)";
+}
+#undef FLOW_SCAN_CASE
+
+/* HOW MANY SCANS EACH ENTRY MADE, AND HOW MANY MEMBER WEIGHTS THEY EVALUATED — lifetime, per instance. Read as
+   a PAIR: the count alone says how often the order was asked and the weights say what asking it cost, and the
+   quotient is the frontier the scan actually walked, which no other row carries. Both are `long` and neither
+   is reset.
+   THE WEIGHT COUNT CAN BE ZERO ON A NON-EMPTY FRONTIER, and a reader that treats that as a broken counter will
+   fire on a real state: the runnable-only scans skip a host-owed member BEFORE pricing it, so a frontier every
+   member of which is waiting on the host prices nobody — which is the STALL engine.c names at the pick's own
+   `if (!best) break`. So there is no floor to assert between these two rows and none is asserted. */
+long flow_scan_runs(FlowScan s);
+long flow_scan_weights(FlowScan s);
+
 /* The highest-priority flow in the frontier, or NULL if empty — EVERY member, whether or not it can currently
    make progress. It answers the host's Level-1 question (this document's best weight) and the census's; the
    scheduler's own pick is flow_next_to_run below. Does not remove it. */
@@ -1560,8 +1622,14 @@ Flow *flow_best(void);
  *     preempt hook's value clause makes, so the two ends of one decision cannot disagree. A tie is not a
  *     reason to swap two COW deltas.
  * NULL means nothing can run: either the frontier is empty, or every member is waiting on the host — which is
- * the STALL, decided by asking each member rather than by counting a run of unproductive picks. */
-Flow *flow_next_to_run(const Flow *incumbent);
+ * the STALL, decided by asking each member rather than by counting a run of unproductive picks.
+ * `why` NAMES THE ASKER AND IS NOT DERIVED FROM THE ARGUMENTS, because two callers ask this identical question
+ * for different reasons and at different cadences: the DISPATCH LOOP asks it once per iteration to decide who
+ * holds the thread, and the HOST asks it per poll for its Level-1 weight (engine_top_weight). Their costs are
+ * the same scan and their meanings are opposite — one is what a step pays, the other is what a report pays —
+ * so summing them would put a per-poll cost inside the per-step rate that FLOW_SCANS exists to make readable.
+ * The site travels with the operation; nothing here can infer it, because the arguments are identical. */
+Flow *flow_next_to_run(const Flow *incumbent, FlowScan why);
 
 /* WHO THE RUNNING FLOW IS DEFENDING AGAINST — the best flow that could USE the thread, other than `cur`. The
  * preempt hook compares it against the running flow itself, which is why this one excludes rather than seeds.

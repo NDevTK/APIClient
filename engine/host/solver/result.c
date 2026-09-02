@@ -572,7 +572,23 @@ char *result_wfq_json(void) {
                      "\"distMax\":%.3f,\"wTop\":%.3f,\"wMin\":%.3f,\"candWMax\":%.3f,"
                      "\"topSvc\":%lld,\"topSvcFam\":%lld,\"nonrewardMax\":%.3f,"
                      "\"jobsReady\":%ld,\"jobsFramed\":%ld,\"jobsOwed\":%ld,\"jobWGap\":%.3f,"
-                     "\"delivReady\":%ld,\"delivFramed\":%ld,\"delivOwed\":%ld,\"delivWGap\":%.3f}",
+                     "\"delivReady\":%ld,\"delivFramed\":%ld,\"delivOwed\":%ld,\"delivWGap\":%.3f,"
+                     /* AND WHAT ASKING THIS ORDER COST, which every row above is silent about because every
+                        row above is about what the order DECIDED. solver/flow.h's FLOW_SCANS states why the
+                        three entries are counted apart and why the quantity is a count rather than a clock;
+                        what they are FOR is that "the tail is not being reached" has two causes — not enough
+                        thread time for the members standing, or the thread spent asking the order rather than
+                        running it — and no row here separated them. Read `scanNextWeights / steps` against
+                        `members` for the first and `scanRivalRuns` against `forks` for the second: the
+                        dispatch loop asks once per STEP and the preempt hook asks once per frontier
+                        GENERATION, which a forking page moves per fork.
+                        SPELLED OUT RATHER THAN NESTED as the three histograms are, because these six are two
+                        quantities over three entries and not a partition of any total on this line — there is
+                        nothing for a histogram's sum check to be checked against, and a shape whose contract
+                        cannot be stated is one a reader has to hold a second rule about. */
+                     "\"scanNextRuns\":%ld,\"scanNextWeights\":%ld,"
+                     "\"scanRivalRuns\":%ld,\"scanRivalWeights\":%ld,"
+                     "\"scanOtherRuns\":%ld,\"scanOtherWeights\":%ld}",
                      w.members, w.val_min, w.val_max, w.val_top,
                      w.val_zero, w.self_emit, w.unrun,
                      w.never_picked, w.never_picked_gap,
@@ -583,7 +599,10 @@ char *result_wfq_json(void) {
                      w.dist_max, w.w_top, w.w_min, w.cand_w_max,
                      (long long)w.top_svc, (long long)w.top_svc_fam, w.nonreward_max,
                      w.jobs_ready, w.jobs_framed, w.jobs_owed, w.job_w_gap,
-                     w.deliv_ready, w.deliv_framed, w.deliv_owed, w.deliv_w_gap);
+                     w.deliv_ready, w.deliv_framed, w.deliv_owed, w.deliv_w_gap,
+                     flow_scan_runs(FLOW_SCAN_NEXT),  flow_scan_weights(FLOW_SCAN_NEXT),
+                     flow_scan_runs(FLOW_SCAN_RIVAL), flow_scan_weights(FLOW_SCAN_RIVAL),
+                     flow_scan_runs(FLOW_SCAN_OTHER), flow_scan_weights(FLOW_SCAN_OTHER));
 }
 
 /* WHAT A CONTEXT SWITCH COSTS, AND WHAT THE TWO CHAINS ARE STILL HOLDING — see result.h for why this composes
