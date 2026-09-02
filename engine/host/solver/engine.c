@@ -6681,7 +6681,55 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    runs before every program, so a microtask on the queue at this point is one it declined to
                    run, and the only reason it declines is the immediate row that the arm above this one would
                    have compiled. There is no such row here (the cursor is past the end of the sequence), which
-                   is why this is an assertion and not a second pick rule. */
+                   is why this is an assertion and not a second pick rule.
+                 *
+                 * AND THAT `else` IS THE ARM'S WHOLE REACHABILITY, WHICH IS A DEFECT AND NOT A DESIGN. It binds
+                 * to `if (f->script_i < f->dyn_n)` two hundred lines up, so a flow runs a queued TASK only with
+                 * its cursor PAST THE LAST ROW — the same shape the networking task source's arm above the
+                 * sequence was hoisted out of, one rung over. The sequence is a set the page's own programs
+                 * EXTEND (an injected `<script>`, a `javascript:` URL, a §8.7 Timers string handler, a lazy
+                 * chunk), so "the sequence is exhausted" is a condition page code can hold false, and a flow's
+                 * timer callbacks and delivered messages are then excluded for as long as it does.
+                 *
+                 * THE ARGUMENT THAT DECIDED THE REPLY CASE DOES NOT TRANSFER, AND SAYING SO IS THE POINT. There
+                 * the two sides were ASYMMETRIC: the answered set grows only when the flow issues requests, and
+                 * it issues them by running its programs, while every delivery strictly CONSUMES one entry — so
+                 * networking-first deferred the sequence by at most what the flow itself asked for, and exactly
+                 * one of the two strict orders was free of permanent exclusion. Here BOTH sides are extended by
+                 * the other. A task runs page code, and that code appends rows (engine_queue_javascript_url,
+                 * engine_queue_element_script for an injected element, engine_queue_timer_script); a program
+                 * enqueues tasks (§8.7's expiry through JS_EnqueueCallTask, a routed delivery through
+                 * flow_deliver). Neither strict order is free of permanent exclusion, so §scheduler's razor —
+                 * "drops, starves, skips, reorders, or forgets ANY flow — it is a CAP, banned" — rules BOTH out
+                 * rather than selecting one, and the reply case's procedure returns nothing at this rung.
+                 *
+                 * AND THE ARM'S POSITION IS THE SECOND QUESTION, BECAUSE THE TWO QUEUES DO NOT PARTITION BY
+                 * TASK SOURCE — THEY PARTITION BY CARRIER. `dyn` holds PROGRAMS and `jobs` holds C CALLBACKS,
+                 * while HTML §8.1.7.1 "Definitions" partitions by source and requires it: "For each event loop,
+                 * every task source must be associated with a specific task queue", and the same section states
+                 * what that buys — "Note that in this setup, the processing model still enforces that the user
+                 * agent would never process events from any one task source out of order." THE TIMER TASK
+                 * SOURCE IS IN BOTH OF THIS FLOW'S QUEUES: §8.7 Timers' step 9 task reaches `jobs` through
+                 * JS_EnqueueCallTask for a Function handler, and a STRING handler reaches `dyn` as a
+                 * DYN_POS_APPEND row through core/timing/timer.c's script sink. So
+                 *     setTimeout(f, 0); setTimeout("s()", 0);      must run f then s
+                 *     setTimeout("s()", 0); setTimeout(f, 0);      must run s then f
+                 * and no ordering of two arms can produce both: whichever arm is above decides BOTH programs
+                 * the same way. Hoisting this arm does not repair that, it only moves which of the two is
+                 * wrong. §Do-subproblems-IN-ORDER: the order between two queues is not decidable while one
+                 * source lives in both of them.
+                 *
+                 * WHAT THE NEXT DIFF BUILDS, and it is at the SPLIT rather than at this ladder: §8.7's string
+                 * arm takes an ordinary timer entry like its Function arm and its classic script is queued from
+                 * step 9's TASK at the expiry — §8.7 puts the creation at substep 9.8.7 and the run at 9.8.8,
+                 * inside the task step 12's completionStep queues only after step 13's `run steps after a
+                 * timeout` has waited — instead of from step 12 at the SET, which is where timer.c queues it
+                 * today. That retires the split, `timer_set_script_sink`/`engine_queue_timer_script` go with
+                 * it, and only then is there one question left here to answer.
+                 * HOW ITS ABSENCE SHOWS, AND IT IS ALREADY WIRED: the DCHECK below fires on the naive repair.
+                 * Hoisted above the sequence, this arm becomes reachable with a DYN_POS_IMMEDIATE row at the
+                 * cursor — the one row flow_stack_empty holds the checkpoint off for — so the flow arrives here
+                 * holding a microtask and the assert says so. The reorder cannot be made silently. */
                 DCHECK(!flow_job_microtask(f),
                        "a task was about to begin while this flow still held a microtask — the checkpoint runs "
                        "before every program in the sequence, so reaching the end of the sequence with one "

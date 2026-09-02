@@ -1549,7 +1549,30 @@ static int js_set_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
     /* THE STRING FORM IS A SCRIPT — compiled and run in global scope, which is the sink `setTimeout(str)` is
        known for. It is queued as a script flow (the path an injected <script> takes), never evaluated here:
        running the page's source inside this C activation is exactly what the flow machinery exists to avoid.
-       It has no cancellable entry because it is no longer a timer at that point; it is a script. */
+       IT IS QUEUED FROM STEP 12 AT THE SET, AND §8.7 QUEUES IT FROM STEP 9'S TASK AT THE EXPIRY. What stood
+       here used to be `it has no cancellable entry because it is no longer a timer at that point; it is a
+       script` — a claim about the standard, and the standard says the opposite: substep 9.8.7 is "Let script be the
+       result of creating a classic script given handler, settings object, base URL, and fetch options" and 9.8.8
+       is "Run the classic script script", both INSIDE the task step 9 defines — the task step 12's completionStep
+       queues only after step 13's `run steps after a timeout` has waited `timeout` milliseconds, and step 14
+       writes the entry `clearTimeout` removes. A string handler is a timer until its task runs, exactly as a
+       Function handler is. Four things follow from queueing it here instead, and each is observable:
+       `timeout` is ignored (`setTimeout("a()",100); setTimeout("b()",0)` runs a before b, where §8.7 orders the
+       timer task source by expiry); no map entry exists, so `clearTimeout` finds nothing; step 11's timer
+       nesting level has no task to be set on; and — the one that reaches beyond this file — the TIMER TASK
+       SOURCE ends up in TWO of the flow's queues, since a Function handler's task goes to the flow's job queue
+       through JS_EnqueueCallTask while this row goes to its program sequence. HTML §8.1.7.1 "Definitions" says
+       "For each event loop, every task source must be associated with a specific task queue", and no ordering
+       of those two queues can then keep one source in arrival order; solver/engine.c's run-a-task arm carries
+       that derivation and is blocked on this site.
+       THE SPEC'S OWN WORKED EXAMPLE DOES NOT DISCRIMINATE, WHICH IS WORTH KNOWING BEFORE REACHING FOR IT: §8.7's
+       `setTimeout({toString(){ setTimeout("logger('ONE')",100); return "logger('TWO')" }},100)` logs "ONE TWO"
+       because argument conversion runs the inner call first, and this arm also logs "ONE TWO" — for the wrong
+       reason, since both are queued at the set with equal timeouts. Unequal timeouts are the discriminator.
+       WHAT THE NEXT DIFF BUILDS: this arm makes an ordinary entry carrying the handler's source text, and
+       timer_run_due's step 9 task queues the classic script at the fire — at which point the TI_MAGIC_REARM
+       DCHECK below and timer_run_due's matching one state a rule that no longer holds and go with it, as do
+       `g_script_sink`, timer_set_script_sink and solver/engine.c's engine_queue_timer_script. */
     /* WHICH ARM UNKNOWN EXTERNAL INPUT TAKES IS THIS ALGORITHM'S QUESTION, AND IT IS ASKED BEFORE IsCallable —
        which is the whole of what was wrong here, and it was invisible because both arms are real. §8.7's task
        substeps split on "If handler is a Function … Otherwise: … Assert: handler is a string", and Web IDL
