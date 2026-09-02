@@ -103,6 +103,36 @@
     X(EVALUATE_MODULE,    "evaluate-a-module-program")                            \
     X(NO_COMPILE,         "program-did-not-compile")                              \
     X(RESUME_PROGRAM,     "resume-program")                                       \
+    /* AND THE RESUME HAS FOUR OUTCOMES AND HAD ONE NAME, which is the SAME   */ \
+    /* defect as the block above and one rung lower down. A resume ends in    */ \
+    /* exactly one of the four states flow_step already branches on: the      */ \
+    /* frame was PREEMPTED and is still live; it RAN TO ITS END and the slot  */ \
+    /* is now empty; it completed ABRUPTLY and §8.1.4.4 "Calling scripts"     */ \
+    /* step 8's report took the slot it vacated; or it DETACHED its base into */ \
+    /* an awaited promise. Two of those four leave the member FRAMED and two  */ \
+    /* do not, and that is not a shade of one fact: every job, delivery,      */ \
+    /* task, lifecycle and retirement arm of flow_step is under               */ \
+    /* `frame == NULL`, so whether a step left its member framed is exactly   */ \
+    /* whether it made that whole ladder reachable — and it was the one thing */ \
+    /* this row could not say. `resume-program` therefore means, and only     */ \
+    /* means, A RESUME THAT LEFT THE FRAME LIVE.                              */ \
+    /* MEASURED, AND IT IS WHY THIS EXISTS: a census reporting 2582 of 2630   */ \
+    /* lifetime steps in this row beside `finished: 0` is consistent with a   */ \
+    /* frontier ending a program on nearly every step and being refilled by   */ \
+    /* forks, AND with one that has ended nothing since its first — two       */ \
+    /* opposite diagnoses, and the row was the whole of the evidence for      */ \
+    /* both. `completed` cannot settle it: it is a MAX over cursors, so it    */ \
+    /* reads the same for one member at program 5 and for every member there. */ \
+    /* THE REPORT IS ITS OWN ROW AND NOT A FLAVOUR OF THE END, because it is  */ \
+    /* the one of the four that ENDS a program and leaves the member framed   */ \
+    /* anyway — filed under either neighbour it would put a framed member in  */ \
+    /* the unframed population or an ended program in the row of programs     */ \
+    /* that did not end. `report an exception` is HTML §8.1.4.6 "Runtime      */ \
+    /* script errors"' own algorithm name, which is why the row is spelled    */ \
+    /* that way rather than after the frame it installs.                      */ \
+    X(END_FRAME,          "resume-ended-its-frame")                               \
+    X(REPORT_EXCEPTION,   "report-an-exception")                                  \
+    X(DETACH_PROGRAM,     "program-detached-its-base")                            \
     /* …and the arms that perform NO work: three flavours of waiting, and done */ \
     X(AWAIT_FETCH_RECORD, "await-fetch-record")                                   \
     X(HOST_BLOCKED,       "host-blocked")                                         \

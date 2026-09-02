@@ -7758,6 +7758,20 @@ static int flow_step(JSContext *ctx, Flow *f) {
                        "so this flow is about to drop the completion value step 9's answer rides on");
                 f->close_req = 0;
                 f->reporting = 0;
+                /* …AND THIS EXIT IS ITS OWN ARM, NAMED HERE BECAUSE THE ASSIGNMENT BEFORE THE RESUME COULD NOT
+                   KNOW IT. `g_step_unit` was set to RESUME_PROGRAM one screen up, before JS_FlowResume ran and
+                   therefore before any of its four outcomes existed — so this exit, which CLEARS the frame,
+                   was reported under the row that now means a resume which did not. The difference is the
+                   whole of what the row is read for: every job, delivery, task, lifecycle and retirement arm
+                   of flow_step is under `frame == NULL`, so a step that leaves the frame gone is a step that
+                   made that ladder reachable and a step that leaves it live is not.
+                   `started_here` GUARDS IT for the reason the completion below carries the residual: a START
+                   is forward progress by construction on either outcome, so it keeps its own row. A module
+                   that starts returns at EVALUATE_MODULE above and never reaches this line, so the predicate
+                   is false here today and this reads as an unconditional assignment; it is written as the
+                   predicate anyway, because the day a started frame detaches, an unconditional one silently
+                   takes that step out of the row §4.12.1 position advances are counted in. */
+                if (!started_here) g_step_unit = STEP_UNIT_DETACH_PROGRAM;
                 f->frame = NULL;
                 return 0;
             }
@@ -7771,6 +7785,40 @@ static int flow_step(JSContext *ctx, Flow *f) {
                holds no row of the sequence, so its cursor is one PAST the last program and counting it would
                report this document as having run a program it does not have. */
             if (!is_call && f->script_i > g_completed) g_completed = f->script_i;
+            /* …AND THE STEP IS RE-NAMED HERE, AT THE ONLY LINE THAT KNOWS THE RESUME'S OUTCOME. The assignment
+               one screen up runs BEFORE JS_FlowResume, so it can say which of §8.1.4.4 "Calling scripts"'s two
+               entries this step took and cannot say what became of the frame — and the frame is the fact the
+               row is read for. `resume-program` was therefore one row over the two arms flow_step already
+               branches on: the mid-frame yield above, which returns with the frame LIVE, and this, which is
+               about to free it. Every job, delivery, task, lifecycle and retirement arm of this function is
+               under `frame == NULL`, so those two steps did OPPOSITE things to the one predicate that decides
+               whether the rest of the ladder is reachable, and the census summed them. It is the same
+               correction as `compile-program`'s two hundred lines up and for the same reason; see
+               solver/step_unit.h for the pair of readings the merged row destroyed.
+               AND THE REPORT IS THE OTHER ARM OF THIS LINE, WHICH IS THE CORRECTION THAT MAKES THE PREDICATE
+               THE FRAME AND NOT THE PROGRAM. §8.1.4.4 "Calling scripts"' run a classic script step 8's third
+               bullet is "Otherwise, rethrow errors is false. Perform the following steps:", whose step 1 is
+               "Report an exception given by evaluationStatus.[[Value]] for script's settings object's global
+               object" — that bullet holds exactly one list, which is what makes `8.3.1` a step and not a
+               guess. The report takes the slot this program just vacated — the tail below installs it as
+               `f->frame` and returns — so a completion that owes one
+               ENDS a program and leaves the member FRAMED anyway. Named as an end it would put a framed member
+               in the population that can reach the ladder, which is the single thing this split exists to
+               count; named as a resume it would put an ended program in the row of programs that did not end.
+               It is its own arm because it is its own answer.
+               NAMED RESIDUAL — WHAT IS NOT COVERED: a step that COMPILED a program and then reached this line
+               keeps `start-a-classic-program`, so that one row still spans all four outcomes while
+               `resume-program` no longer does. It is not the same defect: step_unit.h states a START
+               "advanced this flow's §4.12.1 position and is forward progress by construction", which is true
+               of it whichever way the frame went, and that is exactly the property the resume arm lacked.
+               WHAT THE NEXT DIFF BUILDS: rows splitting `start-a-classic-program` on this same predicate at
+               this same line, so the frame-cleared population is a sum of whole rows rather than a sum of
+               rows plus part of one. HOW ITS ABSENCE WOULD SHOW: a census whose mass is in
+               `start-a-classic-program` beside `finished: 0` cannot say whether those starts ENDED, and
+               `resume-ended-its-frame` is silent about them by construction — so the frame-cleared count
+               reads low by exactly the starts that finished, and nothing in the histogram says by how much. */
+            if (!started_here)
+                g_step_unit = report ? STEP_UNIT_REPORT_EXCEPTION : STEP_UNIT_END_FRAME;
             /* §4.12.1.1's CLASSIC arm, step 4: "Set document's currentScript attribute to oldCurrentScript."
                THIS is the other end of the bracket the compile opened, and it is placed at the ONE line a
                program's own completion is the fact in hand — the same line `g_completed` is written at, and for
