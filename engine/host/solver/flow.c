@@ -3411,6 +3411,30 @@ int flow_programs_for_document(uint32_t doc) {
     return n;
 }
 
+/* IS ROW `k` ONE HTML §7.5.10 "Destroying documents"' STEP 7 TAKES — the criterion, in ONE place, because the
+   count below and the removal below THAT are one question asked twice. A second copy of it is the shape where
+   the assert that FIRES and the mechanism that ANSWERS it disagree about which rows they are about, and that
+   disagreement is silent in the direction that matters: the count would report a document clean while the
+   removal had left a row behind, or the removal would take a row the count never promised. Every clause is
+   argued at flow.h's declaration of the count; nothing here decides anything that declaration does not.
+   IT READS THREE FIELDS AND WRITES NONE, which is what lets the removal call it DURING its own compaction: the
+   compaction writes slot `w <= k` while this is asked about `k`, so a row's answer cannot change under it. */
+static int prog_row_removed_by_destroy(const Flow *f, int k, uint32_t doc) {
+    return f->dyn_doc[k] == doc && k > f->last_compiled && k >= f->script_i;
+}
+
+/* HOW MANY OF THOSE ROWS LIE STRICTLY BELOW `slot` — what an index recorded BEFORE the compaction has to come
+   down by to name the same row after it. Asked of `imm_at`/`imm_next`, which may legitimately sit one past the
+   last row (engine.c's interposition computes a base of `script_i + 1` and CHECKs it against `dyn_n`), so the
+   walk is bounded by BOTH the slot and the column rather than by the slot alone. */
+static int prog_removed_below(const Flow *f, int slot, uint32_t doc) {
+    int n = 0;
+
+    for (int k = 0; k < slot && k < f->dyn_n; k++)
+        if (prog_row_removed_by_destroy(f, k, doc)) n++;
+    return n;
+}
+
 /* See flow.h. THE CURSOR AND `last_compiled` ARE BOTH READ, and they are not the same fact: `script_i` is the
    row the flow is AT and `last_compiled` is the highest row it has ever STARTED, so between two programs the
    cursor stands one past the last started row and during one it stands ON it. A row is unstarted exactly when
@@ -3427,6 +3451,164 @@ int flow_programs_unstarted_for_document(const Flow *f, uint32_t doc) {
            "to `script_i` and never past it, so the two have come apart and every index derived from them "
            "names a row other than the one it is about");
     for (int k = 0; k < f->dyn_n; k++)
-        if (f->dyn_doc[k] == doc && k > f->last_compiled && k >= f->script_i) n++;
+        if (prog_row_removed_by_destroy(f, k, doc)) n++;
     return n;
+}
+
+/* See flow.h. HTML §7.5.10 STEP 7 PERFORMED ON THE ONE TASK QUEUE `JS_DropJobsForContext` CANNOT REACH — this
+   flow's own program sequence. The rows go, the eight columns shrink together, and every index anything still
+   holds into the sequence is brought down with them.
+ *
+ * THE ORDER IS FORCED AND IT IS NOT THE OBVIOUS ONE: the register is walked BEFORE the columns move, because
+ * every question asked of it is which row a given entry names, and after the compaction the answer is a row
+ * that has already changed identity. A removal that compacted first and fixed indices afterwards would be
+ * deriving the old positions from the new ones, which is the information the compaction destroys.
+ *
+ * WHAT A REMOVED ROW OWNS IS GIVEN BACK EXACTLY AS flow_free GIVES IT BACK, and the two sites are written to be
+ * read together: the body column hands a REFERENCE back (a program's text is shared by every timeline holding
+ * it, solver/dyn_body.h), the address and token columns are this flow's own strings and are freed, and the
+ * element column frees nothing because a row's `script` element is a borrowed node of a tree that outlives it.
+ * A column added to the sequence is an obligation at BOTH.
+ *
+ * IT IS THIS FLOW'S SEQUENCE AND NOBODY ELSE'S, which is what makes the register half sound. §7.5.10 runs per
+ * timeline, so a sibling arm that has not destroyed this document keeps its rows and its own naming of every
+ * shared record — and the one thing this may therefore never do is WRITE a field of a record a sibling shares.
+ * Dropping this register's naming of a record is a per-flow act (pending_remove gives the naming back through
+ * pending_index_unref and the record survives for whoever else names it); editing the record is not. That
+ * asymmetry is the whole reason the surviving-entry case below is an abort and not an arithmetic fix. */
+int flow_programs_remove_for_document(Flow *f, uint32_t doc) {
+    int removed, lowest = -1, w = 0;
+
+    DCHECK(f != NULL, "§7.5.10 step 7's program removal was asked of no flow");
+    DCHECK(doc != 0, "§7.5.10 step 7's program removal was asked about the NONE document — a handle is this "
+                     "instance's index into its own name table and zero names nothing");
+    /* THROUGH THE COUNT, so the removal cannot run over a cursor pair the count would have refused: that
+       function asserts `script_i >= last_compiled`, which every index below is derived from. */
+    removed = flow_programs_unstarted_for_document(f, doc);
+    if (removed == 0) return 0;
+    for (int k = 0; k < f->dyn_n; k++)
+        if (prog_row_removed_by_destroy(f, k, doc)) { lowest = k; break; }
+    DCHECK(lowest >= 0,
+           "§7.5.10 step 7's removal counted rows to take and then could not find one — the count and this "
+           "walk ask prog_row_removed_by_destroy over the same column with the same document, so they cannot "
+           "disagree unless something wrote the sequence between them");
+    /* THE WHOLE OF WHY THE CURSOR PAIR SURVIVES THIS UNTOUCHED, ASSERTED RATHER THAN ARGUED — `lowest` is the
+       SMALLEST index going, so this one comparison establishes that NO removed row lies below `script_i` or at
+       or below `last_compiled`, and therefore that neither of them can name a different row afterwards. It is
+       an assert and not a comment because it is the claim a later reader is most likely to break: widen the
+       criterion by one clause — take a started row, take a row at the cursor — and every index in this file
+       silently renames its referent while staying perfectly in range, which is §AN-INDEX-NAMES-A-THING-ONLY-
+       WHILE-THE-SET-IS-FIXED with nothing to say it happened. The criterion is what holds this, so this fires
+       the moment the criterion stops holding it. */
+    DCHECK(lowest > f->last_compiled && lowest >= f->script_i,
+           "§7.5.10 step 7's removal is about to take a row at or below this flow's cursor — `script_i` and "
+           "`last_compiled` are ABSOLUTE positions this walk deliberately does not repair, and they are only "
+           "safe because every removed row sits above BOTH. A row taken below either one leaves the cursor "
+           "naming a different program than the one it stood at, with every index still in range and nothing "
+           "anywhere to say so. If the criterion is meant to reach these rows, the cursor pair has to be "
+           "brought down with them here, exactly as `imm_at`/`imm_next` are below");
+
+    /* THE ENTRIES THAT NAME A ROW, FIRST. engine_pending_docscript records the row's ABSOLUTE position on the
+       register (PEND_SCRIPT_I) and flow_deliver_one_reply writes the fetched source into `f->dyn[scriptI]`, so
+       the register is the one structure outside this column that holds an index into it.
+       AN ENTRY WHOSE ROW IS GOING LEAVES WITH IT, and that is what §7.5.10 step 2's "Abort document." reaches
+       — HTML §7.5.11 "Aborting a document load", whose own step 2 is "Cancel any instances of the fetch
+       algorithm in the context of document, discarding any tasks queued for them, and discarding any further
+       data received from the network for them". The reply has nowhere to land once the row is gone, and a
+       reply that DID land would be a program of a destroyed Document compiled into a realm whose browsing
+       context is null, which is the exact thing step 7 exists to prevent. Walked BACKWARDS because
+       pending_remove is a swap-remove: it moves the LAST entry into the hole, and descending means that entry
+       has already been visited.
+       AN ENTRY WHOSE ROW SURVIVES BUT SHIFTS CANNOT BE FIXED HERE, AND THE ABORT IS THE HONEST ANSWER RATHER
+       THAN A GAP. Bringing its slot down is a WRITE to a record a forked sibling shares (pending.h: a fork
+       shares records, and solver/pending_index.h states it outright: one record is one member however many
+       flows name it), and that sibling has not destroyed this document and has not moved a row: the same field
+       would have to hold two different positions at once. `pending_unshare` is not the way out either — its own
+       contract admits a copy only when no reply is coming for the original, and an outstanding document script
+       is precisely a record a reply IS coming for. The engine already refuses the OTHER shifting operation for
+       the same reason one screen into engine_queue_into's IMMEDIATE arm, and this is that assert's twin. */
+    for (int k = pending_count(f->pending) - 1; k >= 0; k--) {
+        JSValue e = pending_entry(f->pending, k);
+        int docscript = (int)pending_get_int(e, PEND_KIND) == FLOW_PENDING_DOCSCRIPT;
+        int slot = (int)pending_get_int(e, PEND_SCRIPT_I);
+
+        JS_FreeValue(pending_ctx(), e);
+        if (!docscript) continue;
+        DCHECK(slot >= 0 && slot < f->dyn_n,
+               "an external document script's park names a sequence position this flow does not have — the "
+               "entry is pushed with the slot it was queued at and nothing but this removal moves one, so the "
+               "park and the column have come apart");
+        if (prog_row_removed_by_destroy(f, slot, doc)) { pending_remove(&f->pending, k); continue; }
+        DCHECK(slot < lowest,
+               "§7.5.10 step 7 is removing a destroyed Document's programs from under an OUTSTANDING external "
+               "script of a DIFFERENT document — that park names its row by ABSOLUTE position, the row is "
+               "about to move down, and the position cannot be corrected because the record is SHARED with "
+               "every forked arm and only this arm destroyed the document. BUILD ROW IDENTITY: give each row "
+               "of the sequence a per-flow id that a fork copies and a removal does not reuse, have "
+               "engine_pending_docscript record THAT instead of the position, and have flow_deliver_one_reply "
+               "find the row by it — then no arm's removal can rename another arm's row, and this abort and "
+               "engine_queue_into's interposition twin both go");
+    }
+
+    /* THE INTERPOSITION WITNESS IS THIS FLOW'S OWN AND IS SHARED WITH NOBODY, so it is ARITHMETIC where the
+       register above is an abort. `imm_at` is the base slot a run of §4.12.1.1 "Processing model"'s immediate
+       programs was computed against and `imm_next` is the slot the next one takes; both are absolute, both sit
+       at or above the cursor, and every removed row is at or above the cursor too — so both can move.
+       A RUN WHOSE BASE SLOT IS ITSELF REMOVED HAS NO RUN LEFT: the witness is what tells a SECOND interposition
+       that it belongs behind the first, and with the program that opened the run gone there is no first. It
+       goes back to the "no run is open" pair rather than to a corrected number, because a corrected number
+       would claim a run that nothing is standing in. */
+    if (f->imm_at >= 0) {
+        if (f->imm_at < f->dyn_n && prog_row_removed_by_destroy(f, f->imm_at, doc)) {
+            f->imm_at = f->imm_next = -1;
+        } else {
+            f->imm_next -= prog_removed_below(f, f->imm_next, doc);
+            f->imm_at   -= prog_removed_below(f, f->imm_at, doc);
+        }
+    }
+
+    /* AND THE COLUMNS, COMPACTED IN PLACE. `w` never runs ahead of `k`, so the predicate above is always asked
+       about a slot no write has reached yet — which is why the criterion may be re-asked here instead of
+       recorded into a side table this would then have to allocate and could then fail to. */
+    for (int k = 0; k < f->dyn_n; k++) {
+        if (prog_row_removed_by_destroy(f, k, doc)) {
+            /* A ROW THAT OWES AN ANSWER MAY NOT SIMPLY VANISH. A non-NULL token is a peer instance suspended on
+               this row's completion (flow.h says what a CROSS_AGENT_OP row without one is: "a peer suspended
+               forever"), and dropping the row reaches that same state by the other door — the peer waits for
+               the rest of the session and nothing anywhere names what it is waiting for. The token is still
+               freed below, because in release there is nothing better to do with it than not leak it. */
+            DCHECK(f->dyn_token[k] == NULL,
+                   "§7.5.10 step 7 removed a destroyed Document's program that still OWED A CROSS-AGENT "
+                   "ANSWER — a peer instance is parked on this row's rendezvous token and the destruction "
+                   "would leave it suspended for the rest of the session. The destruction has to ANSWER it "
+                   "first, with the completion a destroyed document gives, before the row may go");
+            dyn_body_unref(f->dyn[k]);
+            free(f->dyn_token[k]);
+            free(f->dyn_url[k]);
+            continue;
+        }
+        if (w != k) {
+            f->dyn[w]       = f->dyn[k];
+            f->dyn_cand[w]  = f->dyn_cand[k];
+            f->dyn_type[w]  = f->dyn_type[k];
+            f->dyn_url[w]   = f->dyn_url[k];
+            f->dyn_el[w]    = f->dyn_el[k];
+            f->dyn_doc[w]   = f->dyn_doc[k];
+            f->dyn_token[w] = f->dyn_token[k];
+            f->dyn_pos[w]   = f->dyn_pos[k];
+        }
+        w++;
+    }
+    DCHECK(w == f->dyn_n - removed,
+           "§7.5.10 step 7's compaction kept a different number of rows than the count said it would take — "
+           "the count and the walk ask one predicate over one column, so a disagreement means the sequence "
+           "was written between them and the eight columns no longer describe one queue");
+    f->dyn_n = w;
+    /* `script_i` AND `last_compiled` ARE DELIBERATELY UNTOUCHED — the proof is the `lowest` assert above, which
+       is where it is checkable: there the columns still hold the positions the claim is about. */
+    DCHECK(flow_programs_unstarted_for_document(f, doc) == 0,
+           "§7.5.10 step 7 removed a destroyed Document's queued programs and the document still has some — "
+           "the compaction is over the same predicate the count is, so a survivor means a row moved ACROSS the "
+           "cursor and became unstarted, which nothing in this walk can do");
+    return removed;
 }

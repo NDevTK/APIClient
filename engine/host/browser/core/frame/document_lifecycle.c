@@ -166,32 +166,15 @@ static void destroy_a_document(JSContext *ctx, JSValueConst proxy)
            (solver/engine.h's engine_unload_document walks the members and runs it in each): a sibling arm that
            has not yet destroyed this document is running a document that is still there, and taking its rows
            would destroy something in a timeline that never asked.
-           HOW ITS ABSENCE SHOWS, and it does not show HERE: the flow reaches its next row, compiles it in the
-           destroyed document's realm and runs page script against a Document whose browsing context is null —
-           or, when nothing else held that realm, the realm is torn down first and the compile asks
-           solver/engine.c's doc_realm for a realm that is gone, whose assert diagnoses a document that was
-           never MATERIALIZED. That message is true of a different document and sends the reader to build the
-           node-navigable direction for one that was destroyed on purpose.
-           WHAT THE NEXT DIFF BUILDS is the removal itself, and the three things it owes are why it is not
-           this one. (1) The eight parallel columns shrink together, exactly as engine.c's interposition
-           memmoves them apart. (2) `imm_at`/`imm_next` are ABSOLUTE slots at or above the cursor, so each
-           removed index below them decrements them, and a run whose BASE slot is itself removed has no base
-           left — without that, two programs one script prepares run in the reverse of the order §4.12.1.1
-           "Processing model"'s prepare-the-script-element gives them ("Otherwise, immediately execute the
-           script element el, even if other scripts are already executing"). (3) A DYN_SCRIPT_SRC row is a
-           script whose reply is still outstanding and whose slot the register names by ABSOLUTE index, so the
-           row cannot go
-           without the pending entry that names it — which is also §7.5.10 step 2's abort-a-document cancelling
-           this document's fetches, arriving as the same removal. */
-        DCHECK(flow_programs_unstarted_for_document(flow_running(), document_doc(cctx)) == 0,
-               "§7.5.10 step 7 left a destroyed Document's PROGRAMS queued — the runtime's job queues are "
-               "drained above, and a document's scripts are not in them: they are unstarted rows of this "
-               "flow's own program sequence, and the flow will compile the next one into a Document whose "
-               "browsing context is null. BUILD the removal on solver/flow.c beside the count that found "
-               "this: drop this flow's rows for this document, shrinking all eight columns together, "
-               "decrementing `imm_at`/`imm_next` past every removed slot below them (and clearing the run "
-               "when its own base slot goes), and dropping the pending reply of any DYN_SCRIPT_SRC row with "
-               "it — that last one is step 2's abort-a-document cancelling this document's fetches");
+           THE REMOVAL TAKES EXACTLY THE ROWS THE COUNT THAT USED TO STAND HERE COUNTED — this flow's, for this
+           document, that it has not started. A ROW IT HAS ALREADY STARTED IS NOT STEP 7'S, which is why the
+           removal is narrower than the column: step 7 is about work that has not run, while a compiled row is a
+           program this flow may be SUSPENDED INSIDE, and the standard has no object at all for a continuation
+           suspended mid-program — that one is the flow's own state and §NO BOUNDS forbids touching it.
+           AND STEP 2's "Abort document." ARRIVES AS THE SAME REMOVAL: an outstanding external script whose row
+           goes has its pending entry dropped with it, which is §7.5.11 "Aborting a document load" cancelling
+           the one instance of the fetch algorithm this document still had in flight. */
+        flow_programs_remove_for_document(flow_running(), document_doc(cctx));
     }
     /* STEPS 8 AND 9 — the browsing context is null, and the navigable stops naming this Document. LAST, which
        is the standard's own order and is load-bearing here: every step above reads the active document through

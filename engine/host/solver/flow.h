@@ -1766,4 +1766,27 @@ int   flow_programs_for_document(uint32_t doc);
  * PURE: no allocation, no JS value touched, no reference taken, so a DCHECK may ask it. */
 int   flow_programs_unstarted_for_document(const Flow *f, uint32_t doc);
 
+/* TAKE THEM OUT — HTML §7.5.10 "Destroying documents"' step 7, "Remove any tasks whose document is document
+ * from any task queue (without running those tasks)", performed on the queue the runtime's own job walk cannot
+ * see. Returns how many rows went, which is exactly what the count above answered one instant earlier.
+ *
+ * WHY THIS QUEUE IS ONE STEP 7 IS ABOUT. `JS_DropJobsForContext` empties the runtime's job queues, and a
+ * document's SCRIPTS are not in them: they are rows of the running flow's one program sequence. A row is a task
+ * by the standard's own reckoning — §8.1.4.4 "Calling scripts" runs it and §4.12.1.1 "Processing model" queues
+ * it ("queue an element task on the DOM manipulation task source") — so a row of a destroyed Document left
+ * behind is page script that will be compiled into a realm whose browsing context is null.
+ *
+ * IT IS THE RUNNING FLOW'S ROWS AND NOT THE FRONTIER'S, for the reason the count above is per flow: the
+ * destruction is per timeline, and a sibling arm that has not destroyed this document is running a document
+ * that is still there. Taking its rows would destroy something in a timeline that never asked.
+ *
+ * IT ALSO REPAIRS EVERY INDEX INTO THE SEQUENCE, which is the half a caller must not try to help with: the
+ * pending register's `scriptI` and the flow's own `imm_at`/`imm_next` are absolute positions, and a compaction
+ * that moved rows without them would deliver one document's script text into another document's row. `script_i`
+ * and `last_compiled` are provably unaffected — see the note at the end of the body.
+ *
+ * NOT PURE: it frees rows and mutates the register, so unlike the two counts above it may NOT be asked from
+ * inside a collection and may not stand in a DCHECK. */
+int   flow_programs_remove_for_document(Flow *f, uint32_t doc);
+
 #endif
