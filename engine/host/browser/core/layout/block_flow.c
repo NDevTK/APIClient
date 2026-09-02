@@ -979,8 +979,15 @@ static BfBox bf_box(lxb_dom_element_t *el, bool baseline)
                    "a baseline at all, so either would put a real coordinate on a real line that no reader can "
                    "distinguish from a measured one. BUILD the module's own baseline and report it on `BfBox` "
                    "beside `last_baseline`, in the same frame — the distance from this box's own top content "
-                   "edge — and the placement above needs no arm added for it. It shows as this abort on an "
-                   "`inline-block` whose §9.4.1 stack holds a flex or grid container, and on nothing else",
+                   "edge — and the placement above needs no arm added for it. IT IS REACHED LATER THAN IT "
+                   "LOOKS, so a fixture aimed at it must clear one earlier gate: core/layout/line_box.c "
+                   "collects the enclosing `inline-block` as an atomic run item with its MARGIN-BOX INLINE "
+                   "SIZE, which for a `width: auto` box is CSS 2.2 §10.3.9 \"'Inline-block', non-replaced "
+                   "elements in normal flow\"'s shrink-to-fit over css-sizing-3 §5.2 \"Intrinsic "
+                   "Contributions\" — and core/layout/intrinsic_size.c crashes there for a BLOCK-LEVEL element "
+                   "child, before any baseline is asked for. So this abort shows on an `inline-block` with a "
+                   "DECLARED inline size whose §9.4.1 stack holds a flex or grid container; the same box with "
+                   "`width: auto` stops one component earlier, naming §5.2 instead",
                    box_subject(el, nbuf, sizeof nbuf));
         b.border_h = used_value_border_edge_px(el, true);
         return b;
