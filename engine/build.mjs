@@ -1132,42 +1132,17 @@ function wfqReading(out) {
      same shape as the `jobsReady`/`jobWGap` biconditional this file already had to correct: a guard that fires
      on the healthiest reading its rows can produce. What is left is the one claim with no state behind it — a
      lifetime count that only climbs cannot be negative. */
-  for (const k of ["scanNextRuns", "scanNextWeights", "scanRivalRuns", "scanRivalWeights",
-                   "scanOtherRuns", "scanOtherWeights"])
+  /* THE SIX NAMES, ONCE. They are the guard's subject and the series filter's, and a second spelling of
+     them is the second list this file already warns about at WFQ_FIELDS — one that agrees with the other
+     only until a row is renamed on one side. */
+  const scanRows = ["scanNextRuns", "scanNextWeights", "scanRivalRuns", "scanRivalWeights",
+                    "scanOtherRuns", "scanOtherWeights"];
+  for (const k of scanRows)
     if (w[k] < 0)
       throw new Error(`[build] the @WFQ census reports ${k} ${w[k]} — the order-scan counters are lifetime ` +
                       `counts that only climb (solver/flow.c increments them at the scan and nothing resets ` +
                       `them), so a negative is a counter that wrapped or a row that was never written, and ` +
                       `the cost reading below would be about no run at all.`);
-  const scanWeights = w.scanNextWeights + w.scanRivalWeights + w.scanOtherWeights;
-  const perStep = w.scanNextRuns > 0 ? scanWeights / w.scanNextRuns : null;
-  const walked  = w.scanNextRuns > 0 ? w.scanNextWeights / w.scanNextRuns : null;
-  /* THE HOOK'S CADENCE AGAINST THE LOOP'S, WHICH IS THE HALF A TOTAL CANNOT SHOW. The dispatch loop asks once
-     per step; the preempt hook asks once per frontier GENERATION, and solver/flow.c's frontier_rank_changed
-     raises that on every fork, arrival, departure and emission. So a ratio near 1 says the two run together
-     and the cost is simply the frontier's size, while a ratio well above 1 says a forking page is paying for
-     the ORDER once per branch — which is a rate nothing about the dispatch loop would predict and which is
-     fixed at the hook rather than at the pick. */
-  const rivalPer = w.scanNextRuns > 0 ? w.scanRivalRuns / w.scanNextRuns : null;
-  const cost = w.scanNextRuns === 0
-    ? `the order was never asked by the dispatch loop in this run, so there is no cost to read — a census ` +
-      `taken before the scheduler's first pick`
-    : `asking the order cost ${scanWeights} member-weight evaluation(s) over ${w.scanNextRuns} dispatch ` +
-      `scan(s) — ${perStep.toFixed(1)} per step, walking ${walked.toFixed(1)} member(s) of a ${w.members}-` +
-      `member frontier each time` +
-      (walked >= w.members * 0.5
-        ? `, so the pick is LINEAR in the frontier and a step's cost grows with it: the run's total scan work ` +
-          `is quadratic in its own step count, which is a throughput finding and not an ordering one`
-        : `, so the filters are keeping the pick well below the frontier's size and its cost is not tracking ` +
-          `the frontier`) +
-      `; the preempt hook rescanned ${w.scanRivalRuns} time(s) (${rivalPer.toFixed(2)} per dispatch scan, ` +
-      `${w.scanRivalWeights} weight(s))` +
-      (rivalPer > 1.5
-        ? ` — MORE than one rescan per step, which is the frontier's generation moving faster than the loop ` +
-          `steps (solver/flow.c's frontier_rank_changed fires on every fork, arrival, departure and emission), ` +
-          `so this page is paying for the order per BRANCH and the cost is at the hook's rescan`
-        : ` — at or below one per step, so the hook is not the multiplier here`) +
-      `; ${w.scanOtherRuns} host/pager scan(s) beside them`;
   /* AND WHO CARRIES THE OPTIMISM TERM AT ITS MAXIMUM. `visMin`/`visMax` give the term's RANGE and cannot say
      how much of the frontier sits at the top of it; `visZero` is that population, and where it is the WHOLE
      frontier the bonus is one flat maximum and orders nothing — which is the same arithmetic as `rangeUcb: 0`
@@ -1223,6 +1198,72 @@ function wfqReading(out) {
       throw new Error(`[build] a @WFQ census states ${r.members} members and omits neverPicked or topSvc — a ` +
                       `census reporting an order states every term row (solver/result.c's result_wfq_json), so ` +
                       `this is the composer having changed and not the empty-frontier shape.`);
+  /* WHAT ASKING THE ORDER COST — AND IT IS READ OFF THE SERIES RATHER THAN OFF THE LAST CENSUS, which is a
+     correction to this reader's first version and not a refinement of it.
+     THE DEFECT IT HAD: the scan counters are LIFETIME and `members` is an INSTANT, so dividing one by the other
+     compares a total accumulated over a frontier that GREW against the size that frontier finished at. Every
+     early scan walked a smaller frontier, so the lifetime average is dragged below the final member count even
+     where every scan was fully linear — the verdict "the filters are keeping the pick below the frontier's
+     size" would then be printed for an engine whose pick is linear in it, which is the opposite reading. Two
+     quantities over two populations, exactly the collapse the rows on this line exist to stop.
+     WHAT REPLACES IT IS A WITHIN-RUN DELTA, and that choice is what makes it survive a measured fact about this
+     harness: TWO passes of ONE revision, same frozen artifact, minutes apart, reported `scanNextRuns` 808 and
+     362 — a 2x spread with no code between them, on a wall-denominated quantum. So no COUNT here may be quoted
+     against another run, and this reader must not compose a verdict out of one. A DELTA between two adjacent
+     censuses of ONE run is a trajectory rather than a magnitude, and a RATIO of two counters that move together
+     divides the spread out of itself — which is why the verdicts below are ratios and the counts beside them are
+     labelled as within-run only. That is CLAUDE.md's caveat rule built into the instrument instead of left to
+     whoever reads its output. */
+  const scanSeries = ordSeries.filter((r) => scanRows.every((k) => typeof r[k] === "number"));
+  /* THE LAST INTERVAL, AND THE MEMBER COUNT THAT BELONGS TO IT. The delta is the work done BETWEEN two
+     censuses; the frontier it was done against is the one standing at the later of them, which is the closest
+     contemporaneous denominator this line has. It is still an approximation over an interval in which the
+     frontier moved — stated, not hidden — and it is the only one available without a per-scan row. */
+  const ivl = scanSeries.length >= 2
+    ? (() => {
+        const a = scanSeries[scanSeries.length - 2], b = scanSeries[scanSeries.length - 1];
+        const dRuns = b.scanNextRuns - a.scanNextRuns;
+        return dRuns > 0
+          ? { dRuns, walked: (b.scanNextWeights - a.scanNextWeights) / dRuns,
+              rival: (b.scanRivalRuns - a.scanRivalRuns) / dRuns, members: b.members }
+          : null;
+      })()
+    : null;
+  /* THE ONE VERDICT THAT SURVIVES THE SPREAD, and it is the falsifier stated when these rows were built: the
+     dispatch loop asks once per step, the preempt hook asks once per frontier GENERATION, and solver/flow.c's
+     frontier_rank_changed raises that on every fork, arrival, departure and emission. At or below one rescan
+     per dispatch scan the hook is not a multiplier and the linear-scan hypothesis is refuted; well above one,
+     a forking page is paying for the ORDER once per branch, which is a rate nothing about the dispatch loop
+     predicts and which is fixed at the hook rather than at the pick. Both terms move together with the run's
+     length, so their quotient is what a 2x spread cannot reach. */
+  const cost = !w.scanNextRuns
+    ? `the order was never asked by the dispatch loop in this run, so there is no cost to read — a census ` +
+      `taken before the scheduler's first pick`
+    : `asking the order: ` +
+      (ivl === null
+        ? `only one census carries the scan rows, so there is no interval to read and the lifetime totals ` +
+          `below are an instant's accumulation — no verdict is available from one sample`
+        : `over the last interval the dispatch scan walked ${ivl.walked.toFixed(1)} member(s) of the ` +
+          `${ivl.members} standing (${(100 * ivl.walked / ivl.members).toFixed(0)}%)` +
+          (ivl.walked >= ivl.members * 0.5
+            ? `, so the pick is LINEAR in the frontier and a step's cost grows with it — the run's total scan ` +
+              `work is then quadratic in its own step count, which is a throughput finding and not an ` +
+              `ordering one`
+            : `, so the filters keep the pick well below the frontier and its cost is not tracking it`) +
+          `; the preempt hook rescanned ${ivl.rival.toFixed(2)} time(s) per dispatch scan` +
+          (ivl.rival > 1.5
+            ? ` — MORE than one per step, so the frontier's generation is moving faster than the loop steps ` +
+              `and this page is paying for the order per BRANCH: the cost is at the hook's rescan`
+            : ` — at or below one per step, so the hook is NOT the multiplier and the per-branch rescan ` +
+              `hypothesis is refuted for this run`)) +
+      /* THE LIFETIME TOTALS ARE PRINTED AND LABELLED, never used to decide. They are what a reader needs to
+         see the interval in proportion, and they are exactly what the 2x spread makes unquotable between two
+         runs — so the sentence that carries them says so, rather than leaving a bare count for somebody to
+         compare against another revision's. */
+      ` (within this run only, not comparable across runs: ${w.scanNextWeights} weight(s) over ` +
+      `${w.scanNextRuns} dispatch scan(s), ${w.scanRivalWeights} over ${w.scanRivalRuns} hook rescan(s), ` +
+      `${w.scanOtherWeights} over ${w.scanOtherRuns} host/pager scan(s))`;
+
   const signedDelta = (n) => (n >= 0 ? `+${n}` : `${n}`);
   const svcUp = ordSeries.filter((r, i) => i > 0 && r.topSvc > ordSeries[i - 1].topSvc).length;
   const svcDown = ordSeries.filter((r, i) => i > 0 && r.topSvc < ordSeries[i - 1].topSvc).length;
