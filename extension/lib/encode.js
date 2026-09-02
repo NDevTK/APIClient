@@ -77,12 +77,17 @@ function encodeFormToJson(rootFields) {
               list.push(isObj ? v : coerceValue(v, f.type));
             }
           }
-        } else if (Array.isArray(f.children)) {
-          for (const item of f.children) {
-            if (Array.isArray(item.children)) {
+        } else {
+          /* THE ITEMS ARE OUR RECORD'S OWN LIST HERE, so the name is read through lib/field-def.js like every
+             other read of it — unlike the `v.children` test above, which discriminates a CAPTURED value that
+             may be any JSON the server sent and therefore may legitimately carry no `children` name at all. */
+          const items = fdChildren(f, "lib/encode.js encodeFormToJson repeated");
+          for (const item of items === null ? [] : items) {
+            const itemKids = fdChildren(item, "lib/encode.js encodeFormToJson repeated item");
+            if (itemKids !== null) {
               const sub = {};
               list.push(sub);
-              queue.push({ fields: item.children, target: sub });
+              queue.push({ fields: itemKids, target: sub });
             } else {
               list.push(coerceValue(item.value, f.type));
             }
@@ -92,18 +97,37 @@ function encodeFormToJson(rootFields) {
       }
 
       if (isObj) {
-        // Message/object: prefer children tree; fall back to raw value
-        // when the caller has a parsed object but no tree (e.g. replay
-        // auto-fill from captured JSON). Always surface the field even
-        // when empty so servers see `{variables: {}}` rather than
-        // dropping it.
-        if (Array.isArray(f.children) && f.children.length) {
+        /* THREE STATES, NOT TWO — and the `else` used to answer the third with the second's bytes.
+           lib/field-def.js's `children` is `[c…]` = a message whose fields the panel rendered, `[]` = A
+           MESSAGE WITH NO FIELDS, and `null` = NOT A MESSAGE TO DESCEND INTO, "which is a different
+           statement and must stay distinguishable from it". `Array.isArray(f.children) && f.children.length`
+           is a POSITIVE test rather than a `||`, so no default-detector can see it, and it folded `null` in
+           with `[]` all the same: both fell to `target[f.name] = {}` and an empty JSON object went out under
+           the field's own key.
+           WHY THAT IS A FABRICATION AND NOT A TIDY DEFAULT. `{}` is the TRUE encoding of `[]` — a message
+           the panel described as having no fields, which is the `{variables: {}}` the comment here has
+           always been about, and it stays. It is a FALSE encoding of `null`: lib/discovery.js's
+           `_circularRefSentinel` states `type: "message"` with `children` unstated deliberately, as a
+           TRUNCATION MARKER for a `$ref` that pointed back onto its own chain, and `{}` publishes that
+           marker as a submessage the server's own schema declares to be empty. A reviewer reading the
+           request body cannot tell a described-empty message from a place this tool gave up walking — the
+           §@H wrong report, composed one encoder over from the JSPB slot it was already fixed in.
+           WHAT `null` ENCODES TO IN JSON. A JSPB array is indexed by field number, so "no submessage here"
+           had a spelling already there: the slot's own `null`. A JSON object has no pre-allocated slot, so
+           the absence IS the absent key — and JSON `null` is not it, because `null` is a VALUE a server
+           reads as "set this field to null". Omitting is also the rule this very function already obeys one
+           branch down (`f.value == null && !fdHasChildren(f)` → `continue`): a field that states no value
+           and no message has nothing to encode. The message branch now obeys the rule the scalar branch did.
+           A CAPTURED OBJECT VALUE STILL WINS OVER BOTH, unchanged — that is a datum the run actually
+           observed (replay auto-fill from a captured body), not one composed out of an absence. */
+        const kids = fdChildren(f, "lib/encode.js encodeFormToJson message");
+        if (kids !== null && kids.length > 0) {
           const sub = {};
           target[f.name] = sub;
-          queue.push({ fields: f.children, target: sub });
+          queue.push({ fields: kids, target: sub });
         } else if (f.value && typeof f.value === "object" && !Array.isArray(f.value)) {
           target[f.name] = f.value;
-        } else {
+        } else if (kids !== null) {
           target[f.name] = {};
         }
         continue;
@@ -190,9 +214,11 @@ function encodeFormToJspb(rootFields) {
            a message to descend into", which lib/discovery.js's `_circularRefSentinel` states DELIBERATELY for
            a `$ref` that pointed back onto its own chain — and wrote the OTHER statement, `[]`, into the wire
            slot this field's number names. A truncation marker went out as an empty submessage the researcher
-           never composed, and the two encoders beside this one (`encodeFormToProtobuf` below, and
-           `encodeFormToJson` above) had always read that `null` as itself, so one record was answering three
-           ways in one file.
+           never composed. `encodeFormToProtobuf` below is the ONE encoder in this file that always read the
+           `null` as itself; `encodeFormToJson` above was described here as a second, and it was not — its
+           SCALAR guard read the record and its MESSAGE branch collapsed `null` onto `{}` through a positive
+           `Array.isArray(…) && …length` test, which is this same substitution spelled where no scan for a
+           default could see it. Both now ask lib/field-def.js.
            A JSPB ARRAY IS INDEXED BY FIELD NUMBER, so "no submessage here" already has a spelling in it: the
            slot keeps the `null` `buildOne` filled it with. That is the same absence the wire gives a field
            nobody set, which is the true statement about a message this panel could not describe. */

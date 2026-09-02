@@ -182,12 +182,17 @@ function gqlFieldTreeToJson(rootFields) {
                   list.push(v);
                 }
               }
-            } else if (Array.isArray(f.children)) {
-              for (const c of f.children) {
-                if (Array.isArray(c.children)) {
+            } else {
+              /* THE ITEMS ARE OUR RECORD'S OWN LIST, so the name is read through lib/field-def.js — unlike
+                 the `v.children` test above, which discriminates a CAPTURED value that may be any JSON the
+                 server sent and so may legitimately carry no `children` name at all. */
+              const items = fdChildren(f, "lib/popup-gql.js gqlFieldTreeToJson repeated");
+              for (const c of items === null ? [] : items) {
+                const cKids = fdChildren(c, "lib/popup-gql.js gqlFieldTreeToJson repeated item");
+                if (cKids !== null) {
                   const sub = {};
                   list.push(sub);
-                  queue.push({ fields: c.children, target: sub, mode: "object" });
+                  queue.push({ fields: cKids, target: sub, mode: "object" });
                 } else {
                   list.push(c.value);
                 }
@@ -195,13 +200,30 @@ function gqlFieldTreeToJson(rootFields) {
             }
             continue;
           }
-          if (Array.isArray(f.children) && f.children.length) {
+          /* THE SAME THREE STATES AS lib/encode.js `encodeFormToJson`, WHOSE COPY THIS IS — and the same
+             `else` answering the third with the second's bytes. lib/field-def.js: `[c…]` = a message whose
+             fields the panel rendered, `[]` = a message with no fields, `null` = NOT a message to descend
+             into. `Array.isArray(f.children) && f.children.length` is a POSITIVE test, invisible to any
+             default-detector, and it folded `null` in with `[]`: both wrote `{}` under the field's key.
+             HERE THAT IS A GRAPHQL VARIABLE, which sharpens it. `{}` for `[]` is right — the variables
+             object the panel described as empty is what the server is meant to receive. `{}` for `null` puts
+             an empty INPUT OBJECT where the run has nothing at all, and a GraphQL server validates an input
+             object against its required fields: the reviewer sees a variable this tool composed and the
+             server sees a claim about a type nobody described. lib/discovery.js's `_circularRefSentinel`
+             produces exactly that `null`, deliberately, for a `$ref` that pointed back onto its own chain.
+             OMITTING IS THE ANSWER FOR `null`, not JSON `null`: an absent GraphQL variable takes the
+             operation's own default or is reported missing, while `null` is a VALUE the server reads as an
+             explicit null. It is also the rule this function already obeys one branch down
+             (`f.value == null && !fdHasChildren(f)` → `continue`). A captured object value still wins over
+             both, unchanged — that is a datum the run observed rather than one composed out of an absence. */
+          const kids = fdChildren(f, "lib/popup-gql.js gqlFieldTreeToJson message");
+          if (kids !== null && kids.length > 0) {
             const sub = {};
             target[f.name] = sub;
-            queue.push({ fields: f.children, target: sub, mode: "object" });
+            queue.push({ fields: kids, target: sub, mode: "object" });
           } else if (f.value && typeof f.value === "object") {
             target[f.name] = f.value;
-          } else {
+          } else if (kids !== null) {
             target[f.name] = {};
           }
           continue;

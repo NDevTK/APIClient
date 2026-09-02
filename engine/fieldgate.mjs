@@ -28,6 +28,33 @@
  *                    because it is what will hide the writer's removal tomorrow. It is the FALLBACK half of
  *                    that concealment; the other half is COERCED, one entry down, and every test in this
  *                    category looks for an operand the other one does not have.
+ *                      AND THERE IS A THIRD HALF THIS GATE DOES NOT HAVE AND, ON THE EVIDENCE BELOW, SHOULD
+ *                    NOT: the same collapse written as a POSITIVE TEST. `Array.isArray(f.children) &&
+ *                    f.children.length` has no fallback operand and no conversion, so neither category above
+ *                    can see it — and it folds a TWO-STATE field onto one answer exactly as `f.children || []`
+ *                    does, because lib/field-def.js states `children: null` = NOT a message and `[]` = a
+ *                    message with no fields. Two encoders wrote an empty JSON object under the field's own key
+ *                    for both, which is the fabrication the DEFAULTED category exists to stop, spelled where
+ *                    nothing here looks. It was found by reading, not by this gate, and fixing it moved no
+ *                    count in any column.
+ *                      A RULE WAS DESIGNED FOR IT AND REFUSED ON A MEASUREMENT, at 7f18a00c plus that fix.
+ *                    The accusation would be "a positive-length test over a field whose producer distinguishes
+ *                    `null` from `[]`", and the two-state fact is stated ONLY IN PROSE, in FIELD_DEF_ABSENT's
+ *                    comments — so a rule needs either a list of two-state names typed in here, which is the
+ *                    restated second copy this auditor exists to catch, or dataflow this scan does not do.
+ *                    Taking the four fields whose comments DO say it (`children`, `_excludedValues`,
+ *                    `_predicates`, `_looselyEquals`) and accusing every such test over them yields SIX live
+ *                    sites, of which ONE is a defect: the other five are folds that are CORRECT — a badge and a
+ *                    placeholder that render nothing for either state, and three OpenAPI exports that omit the
+ *                    key for either. Five sixths noise, and a gate at that rate gets muted whole.
+ *                      WHAT SEPARATES THE ONE FROM THE FIVE IS NOT THE TEST — it is whether the `null` arm
+ *                    WRITES A VALUE or does nothing, which is semantic and is not a thing a scan of this shape
+ *                    can ask. It is not unanswerable, though; it is answered in the RECORD instead. A two-state
+ *                    field with a NAMED READER beside its record (lib/field-def.js's `fdChildren`, and
+ *                    `fdHasChildren` beside it for the fold that IS correct) forces every site to spell which
+ *                    of the three arms it means, and the arms are then visible to whoever reads it. So the
+ *                    absence of a rule here is a decision and not a gap, and the place to look when this
+ *                    defect next appears is a two-state field with no named reader.
  *   COERCED          the same concealment with nothing in the line to find. A read standing under an
  *                    ECMAScript conversion does not have its absence SUBSTITUTED, it has one MINTED:
  *                    §7.1.19 ToString ( arg ) answers the String `undefined` for undefined and `null` for

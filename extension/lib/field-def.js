@@ -318,15 +318,32 @@ function makeFieldDef(parts, where) {
    message" and `[]` MEANS "a message with no fields", "which is a different statement and must stay
    distinguishable from it". Two facts, and the encoders disagreed about whether they are two:
    lib/encode.js's protobuf encoder asked `f.children && f.children.length` and read the `null` as itself;
-   its JSON encoder asked `!f.children?.length`; lib/popup-gql.js's copy of that encoder asked the same;
-   and its JSPB encoder wrote `f.children || []`, which SUBSTITUTES the second statement for the first — the
-   one thing the record forbids, performed on the way to the wire.
-     THAT SUBSTITUTION HAS A REACHABLE PRODUCER AND IT IS NOT A HYPOTHETICAL. lib/discovery.js's
-   `_circularRefSentinel` states `type: "message"` with `children` unstated — deliberately, and its own
-   comment says why: "`children: null` says there is no message to descend into". It is a TRUNCATION MARKER
-   for a `$ref` that pointed back onto its own chain. Under `|| []` that marker encoded as an EMPTY
-   SUBMESSAGE in the JSPB slot its field number names — a message the panel never described, composed out of
-   the record's word for "nothing to describe", sent to a server as if it were a field the researcher filled.
+   its JSPB encoder wrote `f.children || []`, which SUBSTITUTES the second statement for the first — the one
+   thing the record forbids, performed on the way to the wire.
+     AND THE SUBSTITUTION WAS NOT THE `||`. It was ALSO written as a POSITIVE TEST, twice, and that is the
+   half a default-detector cannot reach: lib/encode.js's `encodeFormToJson` and lib/popup-gql.js's copy of it
+   each asked `Array.isArray(f.children) && f.children.length` and gave the `null` to an `else` that wrote
+   `{}` — the same collapse as `|| []`, spelled so that nothing scanning for a default could see it. An
+   earlier form of this paragraph credited both of those with reading the `null` as itself, on the strength of
+   the ONE branch of each that did (the scalar `!f.children?.length` guard); their MESSAGE branch did not, and
+   a census taken one branch at a time is what let the fourth encoder be miscounted as the only offender.
+     THAT SUBSTITUTION HAS A NAMED PRODUCER. lib/discovery.js's `_circularRefSentinel` states
+   `type: "message"` with `children` unstated — deliberately, and its own comment says why: "`children: null`
+   says there is no message to descend into". It is a TRUNCATION MARKER for a `$ref` that pointed back onto
+   its own chain, and under either spelling it encoded as an EMPTY SUBMESSAGE — the JSPB slot its field number
+   names, or `{}` under its literal `"..."` key in a JSON or GraphQL-variables body — a message the panel
+   never described, composed out of the record's word for "nothing to describe", sent to a server as if it
+   were a field the researcher filled.
+     WHAT THAT PRODUCER CANNOT YET DO IS REACH AN ENCODER, and saying so is part of stating the defect rather
+   than a reason not to have fixed it. Every record the encoders walk comes from `_collectShallow`, which
+   returns `children: null` only for a SCALAR or a REPEATED field — and every encoder branches on `repeated`
+   before it branches on `message`, so no non-repeated message field carrying `null` reaches the collapsing
+   branch today. The sentinel does not get that far for a different reason again: lib/popup-form.js's
+   `_buildFieldStep` renders a `children: null` message as a bare text input with no `.form-message-group`,
+   and `_collectShallow` then drops the wrapper entirely. So the panel RENDERS the truncation marker and
+   SILENTLY DISCARDS it — which is a separate defect in that file, and the moment it is fixed, or the moment
+   any producer states `null` on a message the panel does render, the collapse is live in three encoders at
+   once. The vocabulary is asserted here so that cannot be the day it is discovered.
      SO THE READ IS A NAMED OPERATION AND THE VOCABULARY IS ASSERTED HERE. `undefined` is not one of the two
    answers and never was: `makeFieldDef` writes every key, and lib/popup-form.js's `_collectShallow` — the
    producer of every record the four encoders actually walk — states `children` on all four of its returns.
