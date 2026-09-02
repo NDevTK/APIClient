@@ -872,11 +872,20 @@ static JSValue js_html_attach_internals(JSContext *ctx, JSValueConst this_val, i
     (void)argc; (void)argv; (void)magic;
     if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT)
         return JS_ThrowTypeError(ctx, "attachInternals called on something that is not an element");
-    /* Step 1: "if this's is value is not null, then throw a NotSupportedError". An `is` value is set only by
-       `createElement`'s `is` option and by the parser's `is` attribute for a CUSTOMIZED BUILT-IN, and
-       §4.13.4 refuses to register one at all (ce_define_checks throws NotSupportedError for `extends`) — so no
-       element in this engine can carry one, and this step has nothing to test rather than being skipped. It
-       becomes a real read in the diff that makes customized built-ins registrable. */
+    /* Step 1: "If this's is value is not null, then throw a "NotSupportedError" DOMException". A REAL READ,
+       and it had to become one: what stood here was an argument that no element in this engine could carry an
+       is value, because §4.13.4 refused to register a customized built-in at all — and that premise is retired
+       twice over. HTML §13.2.6.1's create an element for the token step 5 gives `<button is="my-btn">` an is
+       value from markup, and DOM §4.9's create an element does the same for `createElement("button",
+       {is:"my-btn"})`, so `this.attachInternals()` inside such a class reached step 2 and answered out of the
+       lookup where the standard refuses at step 1.
+       IT ASKS THE SLOT AND NOT THE ATTRIBUTE. DOM §4.9 fixes the is value at creation, so an ordinary
+       `<button>` given `setAttribute("is","my-btn")` afterwards is NOT a customized built-in and its
+       attachInternals must still work — reading the attribute list here would refuse it. */
+    if (custom_elements_element_has_is_value(ctx, this_val))
+        return JS_ThrowDOMException(ctx, "NotSupportedError",
+                                    "attachInternals() is not available on a customized built-in element — "
+                                    "its ElementInternals belongs to the autonomous element interface");
     /* Step 2: "let definition be the result of LOOKING UP A CUSTOM ELEMENT DEFINITION given this's CUSTOM
        ELEMENT REGISTRY, this's namespace, this's local name, and null." It is the lookup and not the element's
        own definition slot, and the difference is the whole reason the registry is a node's state: an element

@@ -3819,11 +3819,16 @@ regardless-list step 3 pops the entry either way.
   "GetFunctionRealm ( func )" already exists in the fork as a loop over the bound/Proxy chains, but
   `static`; the diff exports it and this becomes `html_element_proto(realm)`.
 - ~~form-associated custom elements~~ — **built; see §16.**
-- **customized built-ins** (`extends`) — §4.13.4 refuses them with a `NotSupportedError` rather than
-  registering them as autonomous. That refusal is load-bearing twice over: it is what lets
-  `ce_upgradable_name` answer the insertion-steps branch off the Lexbor local name alone (so
-  inserting a `<div>` mints no wrapper), and it is what lets §3.2.3's autonomous/customized split be
-  a `DCHECK` instead of a branch. Building customized built-ins widens all three together.
+- ~~**customized built-ins** (`extends`)~~ — **built.** §4.13.4 steps 7.1-7.4 register an `extends`,
+  §4.13.3's lookup step 4 finds the definition by IS VALUE, §3.2.3's `[HTMLConstructor]` is minted
+  for every element interface, HTML §13.2.6.1's create an element for the token step 5 gives markup
+  its is value, and DOM §4.9's create an element step 4 upgrades one synchronously for
+  `createElement(local, {is})`. The two things this entry called load-bearing were REPLACED rather
+  than lost: `ce_upgradable_name` still answers off the Lexbor local name for every element the page
+  has not touched, because an is value is written onto a WRAPPER and the write is what builds one —
+  so an element with no wrapper cannot have one and the peek allocates nothing; and §3.2.3's
+  autonomous/customized split is a real branch on the definition's name-vs-local-name, which is the
+  same question DOM §4.9 step 4 asks.
 - ~~**scoped registries**~~ — **built.** `CustomElementRegistry` is constructible, the active custom
   element constructor map is real state, and §4.13.5's save/restore of it (steps 8-9 and step 10's
   regardless-list) is what makes `super()` inside a scoped-registry class reach its own definition.
@@ -4280,9 +4285,11 @@ which is what §4.13.3's own trigger reads (see 16.4) and why the two are differ
 
 ### 16.3 §4.13.7 `attachInternals()`
 
-  1. If this's **is value** is not null, throw `NotSupportedError`. — *(an `is` value is set only for
-     a customized built-in, and §4.13.4 refuses to register one at all, so nothing in this engine can
-     carry one. It becomes a real read in the diff that makes `extends` registrable.)*
+  1. If this's **is value** is not null, throw `NotSupportedError`. — *(a REAL READ. What stood here
+     was that nothing in this engine could carry an is value because §4.13.4 refused to register a
+     customized built-in; both halves are retired, and markup and `createElement(local, {is})` each
+     produce one. It asks the SLOT, never the `is` content attribute: DOM §4.9 fixes the is value at
+     creation, so a later `setAttribute("is", …)` must not start making this throw.)*
   2. Let *definition* be the result of **looking up a custom element definition** given this's
      registry, namespace, local name and null. —
   3. If *definition* is null, throw `NotSupportedError`. —
