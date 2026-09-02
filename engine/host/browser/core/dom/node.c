@@ -55,6 +55,7 @@
 #include "core/dom/node_iterator.h"   /* §6.1's pre-remove steps, which §4.2.3's move runs at its step 10 */
 #include "quickjs-step.h"
 #include "core/idl_args.h"
+#include "core/idl_index_arg.h"   /* §4.10 / §4.11's `unsigned long` operands, known and unknown */
 #include "core/realm.h"
 #include "core/dom/document.h"
 #include "core/dom/element.h"   /* element_create_ns / element_free — §4.4 "clone a node"'s element half */
@@ -1608,92 +1609,139 @@ JSValue node_cd_replace_data(JSContext *ctx, lxb_dom_node_t *n, uint32_t offset,
     return JS_UNDEFINED;
 }
 
-/* AN `unsigned long` POSITION OF §4.10 / §4.11, READ — and NOT with a JS_ToUint32 of this file's own, which is
-   the shape core/idl_args.h bans by name: "A BODY MAY NOT CALL JS_ToFloat64 ON ITS OWN ARGUMENT". §3.2's
-   conversion is a BOUNDARY that unknown external input crosses AS ITSELF — idl_concolic_rule answers
-   IDL_CONCOLIC_CROSSES for every integer type, IDL_UNSIGNED_LONG among them — so `t.substringData(i, 2)` with
-   an unknown `i` reaches this body still holding the unknown, and a raw coercion of it owes C a real number it
-   cannot have. That coercion does not merely return a wrong number: ToNumber hands a concolic straight back,
-   so the engine aborts INSIDE the coercion, one frame below this file. CHECKING THE COERCION'S RETURN VALUE IS
-   NO DEFENCE AND NEVER WAS — the abort happens before there is a return to check, which is why the discarded
-   returns here and the checked one in js_text_split were one defect wearing two shapes.
-   THE KNOWN VALUE IS ANSWERED BY THE ONE COPY OF THE ARITHMETIC. idl_number_of IS §3.2's reader for a body
-   that needs a real number, and for a value the declaration already converted it is exactly the assert pair
-   this site would otherwise have to write itself — that the operand is a Number, and that reading it back
-   cannot throw. Routing through it does not make the discarded return provably dead; it removes it.
-   THE UNKNOWN IS A FORK THIS BODY CANNOT YET PERFORM, and it is the SPEC's own fork rather than one this file
-   chose. §4.10's "replace data" step 2 and "substring data" step 2 are both "If offset is greater than length,
-   then throw an "IndexSizeError" DOMException", and §4.11's "split a Text node" step 2 is the same sentence —
-   a comparison over exactly this value against a length the engine knows. §3.2.4.6 unsigned long's
-   ConvertToInt(V, 32, "unsigned") is TOTAL over [0, 2**32-1], so nothing has excluded either side of that
-   comparison for ANY unknown, with an example or without one: BOTH completions are feasible and neither arm
-   may be picked. Answering it from the unknown's own example instead is the collapse §Solver-half forbids —
-   what would replace the value is a REAL number this engine computed, and nothing downstream could tell it
-   from an offset the page wrote as a literal.
-   SO IT ABORTS, AND WHAT THE NEXT DIFF BUILDS IS NAMED: js_cd_op and js_text_split become IdlStepBody step
-   machines (core/idl_args.h's IDL_STEP_FIRST) so they can PARK, and step 2 is then asked through step_fork_run
-   over the unknown — with idl_number_of's example deciding which arm is the real one and
-   JS_OUTCOME_REAL_UNSTATED where there is no example, exactly as core/timing/timer.c asks HTML §8.7 Timers'
-   step 4 over an unknown `setTimeout` delay. A plain body cannot: step_fork_run snapshots a machine, and this
-   one is a C activation with nowhere to park.
-   A MACRO AND NOT A HELPER, because a should-never-happen stamps the line it is WRITTEN at: a function shared
-   by four members would report its own one line for every position of every one of them, which is the
-   assert-that-names-a-remedy-but-not-a-site defect. `which` and `member` are what let the abort say which
-   operand of which member died. */
-#define CD_UNSIGNED_LONG(ctx_, dst_, arg_, which_, member_)                                                   \
-    do {                                                                                                       \
-        JSValueConst cdul_v_ = (arg_);                                                                         \
-        double cdul_n_ = 0;                                                                                    \
-                                                                                                               \
-        if (concolic_is(cdul_v_)) {                                                                            \
-            DFAIL("DOM §4.10 Interface CharacterData / §4.11 Interface Text: `" member_ "` was given an "       \
-                  "UNKNOWN `" which_ "`. Its step 2 is: If offset is greater than length, then throw an "       \
-                  "\"IndexSizeError\" DOMException. That is a comparison over this value, and §3.2.4.6 "        \
-                  "unsigned long's ConvertToInt(V, 32, \"unsigned\") is total over [0, 2**32-1], so BOTH "      \
-                  "completions are feasible and neither arm may be chosen. Deciding it from the unknown's own " \
-                  "example would collapse a modelable value to bare-concrete and delete the other arm. BUILD "  \
-                  "THE FORK: make this body an IdlStepBody (core/idl_args.h, IDL_STEP_FIRST) so it can park, "  \
-                  "then ask step 2 through step_fork_run over the unknown, taking the real arm from "           \
-                  "idl_number_of's example and JS_OUTCOME_REAL_UNSTATED when it has none — the shape "          \
-                  "core/timing/timer.c already uses for HTML §8.7 Timers' step 4.");                            \
-            /* THE MACRO RETURNS, and both bodies that expand it return JSValue. It has to: DFAIL is           \
-               `((void)0)` in a release build, so without this the branch would fall through with `dst_` at    \
-               its initializer and answer offset 0 — a plausible datum for a call whose offset nobody knows,   \
-               which is the concealment check.h exists to prevent, arriving as the ABSENCE of a release arm.   \
-               Throwing is what the coercion this replaced already does in release at the same boundary, so    \
-               the two builds fail for the same reason rather than one of them inventing a number. */          \
-            return JS_ThrowTypeError((ctx_),                                                                   \
-                                     "`" member_ "` was given an unknown `" which_ "`, and DOM §4.10 / §4.11 "  \
-                                     "step 2's comparison over it is not modelled yet");                       \
-        } else {                                                                                               \
-            int cdul_have_ = idl_number_of((ctx_), IDL_UNSIGNED_LONG, cdul_v_, &cdul_n_);                       \
-                                                                                                               \
-            DCHECK(cdul_have_ == 1,                                                                            \
-                   "idl_number_of found no number for `" which_ "` of `" member_ "`, which is not unknown "     \
-                   "external input — it answers 0 only for an unknown carrying no example, and that arm "       \
-                   "returned above");                                                                          \
-            (dst_) = (uint32_t)cdul_n_;                                                                        \
-        }                                                                                                      \
-    } while (0)
+/* AN `unsigned long` OPERAND OF §4.10 / §4.11, KNOWN AND UNKNOWN — the elimination chain
+   core/idl_index_arg.h holds, reached by the five CharacterData members and by §4.11's `splitText`.
+
+   WHY THESE OPERANDS ARE UNKNOWN AT ALL, AND NOT WITH A JS_ToUint32 OF THIS FILE'S OWN, which is the shape
+   core/idl_args.h bans by name: "A BODY MAY NOT CALL JS_ToFloat64 ON ITS OWN ARGUMENT". §3.2's conversion is a
+   BOUNDARY that unknown external input crosses AS ITSELF — idl_concolic_rule answers IDL_CONCOLIC_CROSSES for
+   every integer type, IDL_UNSIGNED_LONG among them — so `t.substringData(i, 2)` with an unknown `i` reaches
+   this body still holding the unknown, and a raw coercion of it owes C a real number it cannot have. That
+   coercion does not merely return a wrong number: ToNumber hands a concolic straight back, so the engine
+   aborts INSIDE the coercion, one frame below this file. CHECKING THE COERCION'S RETURN VALUE IS NO DEFENCE
+   AND NEVER WAS — the abort happens before there is a return to check.
+
+   WHAT STOOD HERE, AND WHAT ITS "NEXT DIFF" CLAUSE PRESCRIBED — recorded at the site that made the claim,
+   because a hand-off's mechanism clause is READ ONCE, BY SOMEONE WHO HAS ALREADY DECIDED TO DO THE WORK.
+   A `CD_UNSIGNED_LONG` macro DFAILed on an unknown operand and said, in full: "BUILD THE FORK: make this body
+   an IdlStepBody (core/idl_args.h, IDL_STEP_FIRST) so it can park, then ask step 2 through step_fork_run over
+   the unknown, taking the real arm from idl_number_of's example". The FIRST half was right and is what this
+   diff did. THE SECOND HALF WAS WRONG, and following it would have produced a machine that parks and then
+   aborts one line later: `step_fork_run` over "is offset greater than length" answers the COMPARISON and
+   leaves the operand UNKNOWN on the arm that continues, and every step after step 2 needs the NUMBER —
+   substring data step 4's "code units from the offsetth code unit to the offset+countth code unit", replace
+   data step 5's "insert data into node's data after offset code units", split a Text node step 3's
+   "length − offset". The body would have reached `cd_byte_of` still holding a concolic, which is the very
+   defect the clause was written to end, moved two lines down. §3.2.4.6 unsigned long's
+   ConvertToInt(V, 32, "unsigned") is TOTAL over [0, 2**32-1], so "is it past the end" and "which position is
+   it" are ONE question — and the elimination chain is that question's decomposition, which is why it and not a
+   bare two-armed outcome fork is what these members ask.
+
+   WHAT EACH OPERAND'S CHAIN IS DRAWN OVER, per the standards' own bounds (verified against the fetched text):
+   `offset` — §4.10 substring data step 2 and replace data step 2 are both "If offset is greater than length,
+   then throw an "IndexSizeError" DOMException", and §4.11 split a Text node step 2 is the same sentence. It is
+   `>` and not `>=`, because a position at the very END is legal, so the chain runs over `length + 1` positions
+   and EXHAUSTION is step 2's throw. That is the same `npositions` parameterization CSSOM §6.4's insert a CSS
+   rule needs, which is why the count of positions is the component's parameter and the bound is not.
+   `count` — substring data step 3 is "If offset + count is greater than length, then return a string whose
+   value is the code units from the offsetth code unit to the end of node's data" and replace data step 3 is
+   "If offset + count is greater than length, then set count to length − offset". Every `count` above
+   `length − offset` reaches ONE answer, so the chain runs over `length − offset + 1` and exhaustion is that
+   answer. See core/idl_index_arg.c's banner for why an operand that names no position is still a member.
+
+   THE PAST-THE-END WORLD IS STATED HERE AND NEVER BY THE COMPONENT — a throw for `offset`, the clamp for
+   `count` — which is the one thing idl_index_chain_run refuses to decide for anybody. */
+#define CD_SUBSTRING_ALGORITHM "DOM §4.10 Interface CharacterData substringData(offset, count)"
+#define CD_APPEND_ALGORITHM    "DOM §4.10 Interface CharacterData appendData(data)"
+#define CD_INSERT_ALGORITHM    "DOM §4.10 Interface CharacterData insertData(offset, data)"
+#define CD_DELETE_ALGORITHM    "DOM §4.10 Interface CharacterData deleteData(offset, count)"
+#define CD_REPLACE_ALGORITHM   "DOM §4.10 Interface CharacterData replaceData(offset, count, data)"
+#define CD_SPLIT_ALGORITHM     "DOM §4.11 Interface Text splitText(offset)"
+
+/* ONE STAGE PER MEMBER, AND IT IS ONE BECAUSE THE ALGORITHM IS ONE ENGINE ACTION FROM END TO END. Steps 1-8
+   read a length, settle two operands, splice a Lexbor string and walk the live-range registry; none of them
+   runs the page's code, so there is no point inside the run at which the engine may have to park that is not
+   the chain's own ask — and step_fork_run is where THAT parks, with the machine's state cloned through the
+   visit below. The label names the range in those terms, which is what quickjs-step.h's JSTrampStepDef::steps
+   requires of a range at all.
+   SIX LISTS AND NOT ONE, because `algorithm` and `steps` are the ADDRESS a should-never-happen reports and the
+   label a parked flow SAYS: one declaration shared by five members would name substringData for a flow parked
+   inside replaceData, which is CLAUDE.md's assert-that-names-a-remedy-but-not-a-site defect arriving through a
+   shared declaration instead of a shared helper. The body is still one, because the algorithm is. */
+#define CD_OP_STAGES(X) X(CD_OP_RUN, "DOM §4.10 / §4.11 steps 1-8 over the operands this call settled on")
+enum { IDL_STEP_STAGE_BASE(CD_OP_STAGES) CD_OP_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const CD_SUBSTRING_STEPS[] = { CD_SUBSTRING_ALGORITHM " steps 1-4", NULL };
+static const char *const CD_APPEND_STEPS[]    = { CD_APPEND_ALGORITHM " (replace data with length, 0, data)", NULL };
+static const char *const CD_INSERT_STEPS[]    = { CD_INSERT_ALGORITHM " (replace data with offset, 0, data)", NULL };
+static const char *const CD_DELETE_STEPS[]    = { CD_DELETE_ALGORITHM " (replace data with offset, count, \"\")", NULL };
+static const char *const CD_REPLACE_STEPS[]   = { CD_REPLACE_ALGORITHM " steps 1-8", NULL };
+static const char *const CD_SPLIT_STEPS[]     = { CD_SPLIT_ALGORITHM " steps 1-9", NULL };
+
+/* THE TWO CHAINS ONE §4.10 CALL CAN RUN, IN THE ORDER THE ALGORITHM ASKS THEM. `off` is first because
+   core/idl_index_arg.h requires an IdlIndexChain to be the state's FIRST field when a member needs more than
+   one, and because `cnt`'s own bound is `length − offset + 1`: the second chain cannot be drawn until the
+   first has answered.
+   RE-ENTRY RE-ASKS AND THAT IS THE MECHANISM RATHER THAN A COST. step_fork_run's own contract is that "both a
+   park and a cross-session resume land back on the ask, which re-derives the same arm from the flow's decision
+   vector", so a body that parks inside `cnt` and is resumed re-runs `off` from its own cursor and is answered
+   by the record it already made. That is why neither chain needs a stage of its own and why the member has no
+   private "which chain am I in" byte — a resume point nothing can check is exactly what IDL_STEP_FIRST's
+   banner forbids. */
+typedef struct {
+    IdlIndexChain off;
+    IdlIndexChain cnt;
+} CdIndexState;
+
+static void cd_index_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    /* NOTHING IS OWNED. Both fields are IdlIndexChains, which core/idl_index_arg.h declares hold no JSValue —
+       a cursor and the buffer its constraint key is spelled into. This is written out rather than pointed at
+       idl_index_chain_visit because a member EMBEDDING that state must name the rest of its own, and the rest
+       of this one is a second chain that owns nothing either. */
+    (void)ctx; (void)st; (void)v;
+}
 
 /* §4.10's five members. magic: 0 substringData, 1 appendData, 2 insertData, 3 deleteData, 4 replaceData.
    THE `DOMString` ARGUMENT ARRIVES CONVERTED OR UNKNOWN and the splice below reads both; the `unsigned long`
-   positions are read through CD_UNSIGNED_LONG above for the same reason, which is the half this comment used
+   operands go through the elimination chain above for the same reason, which is the half this comment used
    to deny. It said, in full: "Every argument arrives CONVERTED — `unsigned long` and `DOMString` are the
    declaration's work — so nothing here runs the page's code and the body is ordinary C." Every clause of that
    is true of the conversion the DECLARATION performs, and the sentence was still read as a licence for a raw
-   JS_ToUint32 — on the very type it names first, and the one unknown external input crosses as itself. */
-static JSValue js_cd_op(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+   JS_ToUint32 — on the very type it names first, and the one unknown external input crosses as itself.
+   STEPS 2 AND 3 ARE STATED HERE, ONCE, FOR BOTH KINDS OF OPERAND. `node_cd_replace_data` states them too and
+   that is not a second copy of this member's: it is the shared §4.10 replace-data algorithm's own, reached by
+   `js_cd_set_data` and by `node_split_text`, which have no argument to fork. Read from here they are already
+   satisfied — the chain's exhaustion IS step 2's condition over an unknown and `offset > length` is it over a
+   converted one — so the two agree by construction rather than by being kept in step. */
+static int js_cd_op(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSValueConst *argv,
+                    JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
-    lxb_dom_node_t *n = node_of(this_val);
+    CdIndexState *st = state;
+    const int magic = idl_step_magic(hdr);
+    const char *algorithm = magic == 0 ? CD_SUBSTRING_ALGORITHM : magic == 1 ? CD_APPEND_ALGORITHM
+                          : magic == 2 ? CD_INSERT_ALGORITHM    : magic == 3 ? CD_DELETE_ALGORITHM
+                                                                : CD_REPLACE_ALGORITHM;
+    lxb_dom_node_t *n = node_of(hdr->this_val);
     lxb_dom_character_data_t *cd;
-    uint32_t offset = 0, count = 0;
+    uint32_t length, offset = 0, count = 0;
     const char *data = NULL;
     size_t data_len = 0;
+    bool past_end = false;
+    int rc;
     JSValue r;
 
-    if (!n || !node_is_chardata(n))
-        return JS_ThrowTypeError(ctx, "a CharacterData method ran on a node that holds no character data");
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);   /* this machine makes no request that delivers a value */
+    *presult = JS_UNDEFINED;
+    DCHECK(hdr->stage == CD_OP_RUN,
+           "a §4.10 CharacterData method resumed into a stage its algorithm does not have — every one of them "
+           "declares exactly one, and the chain of questions a call may ask is a cursor on this machine's own "
+           "state rather than a stage apiece");
+    DCHECK(magic >= 0 && magic <= 4, "a CharacterData method was declared with a magic §4.10 does not name");
+    if (!n || !node_is_chardata(n)) {
+        JS_ThrowTypeError(ctx, "a CharacterData method ran on a node that holds no character data");
+        return JS_STEP_ABRUPT;
+    }
     cd = lxb_dom_interface_character_data(n);
     /* EVERY ARGUMENT §4.10 DECLARES IS REQUIRED — not one of the five members writes `optional` — so a short
        call is the DECLARATION's to refuse and a body reading past `argc` would be reading a slot the boundary
@@ -1703,38 +1751,50 @@ static JSValue js_cd_op(JSContext *ctx, JSValueConst this_val, int argc, JSValue
            "a §4.10 CharacterData method reached its body with fewer arguments than its IDL declares, and "
            "every one of them is required — the declaration's own argument-count check is what should have "
            "refused the call");
-    switch (magic) {
-    case 0:
-        CD_UNSIGNED_LONG(ctx, offset, argv[0], "offset", "substringData");
-        CD_UNSIGNED_LONG(ctx, count,  argv[1], "count",  "substringData");
-        break;
-    case 3:
-        CD_UNSIGNED_LONG(ctx, offset, argv[0], "offset", "deleteData");
-        CD_UNSIGNED_LONG(ctx, count,  argv[1], "count",  "deleteData");
-        break;
-    case 4:
-        CD_UNSIGNED_LONG(ctx, offset, argv[0], "offset", "replaceData");
-        CD_UNSIGNED_LONG(ctx, count,  argv[1], "count",  "replaceData");
-        break;
-    case 2:
-        CD_UNSIGNED_LONG(ctx, offset, argv[0], "offset", "insertData");
-        break;
-    default:
-        DCHECK(magic == 1, "a CharacterData method was declared with a magic §4.10 does not name");
-        break;
+    length = cd_units(cd->data.data, cd->data.length);                  /* STEP 1 */
+    /* THE `offset` OPERAND. appendData declares none — §4.10 states it as "replace data with node, node's
+       length, 0, and data" — so its offset is a fact about the node and never a fork. */
+    if (magic == 1) {
+        offset = length;
+    } else if (concolic_is(argv[0])) {
+        /* `length + 1` POSITIONS, because step 2 is `>` and not `>=`: a position at the very end is legal and
+           is the one an insertData or a replaceData appends at. Exhausting them IS step 2's condition. */
+        rc = idl_index_chain_run(ctx, hdr, &st->off, argv[0], length + 1, algorithm, &offset, &past_end);
+        if (rc)
+            return rc;   /* parked at the fork */
+    } else {
+        offset = idl_index_arg_known(ctx, argv[0], algorithm);
+        past_end = offset > length;
     }
-    if (magic == 0) {                                               /* substringData */
-        uint32_t length = cd_units(cd->data.data, cd->data.length);
-        size_t a, b;
-
-        if (offset > length)                                        /* step 2 */
-            return JS_ThrowDOMException(ctx, "IndexSizeError",
-                                        "the offset is past the end of the character data");
-        if ((uint64_t)offset + count > length)                      /* step 3 */
+    if (past_end) {                                                     /* STEP 2 */
+        JS_ThrowDOMException(ctx, "IndexSizeError", "the offset is past the end of the character data");
+        return JS_STEP_ABRUPT;
+    }
+    /* THE `count` OPERAND — the three members that declare one. appendData and insertData delete nothing, so
+       §4.10 states their count as the literal 0 and there is nothing here to ask. */
+    if (magic == 0 || magic == 3 || magic == 4) {
+        past_end = false;
+        if (concolic_is(argv[1])) {
+            /* `length − offset + 1` POSITIONS: step 3's condition is `offset + count > length`, so every count
+               above `length − offset` reaches ONE answer and the remainder is a single world. `offset` is
+               already this world's own number — step 2 above answered it — so the bound is a real one. */
+            rc = idl_index_chain_run(ctx, hdr, &st->cnt, argv[1], length - offset + 1, algorithm,
+                                     &count, &past_end);
+            if (rc)
+                return rc;   /* parked at the fork */
+        } else {
+            count = idl_index_arg_known(ctx, argv[1], algorithm);
+            past_end = (uint64_t)offset + count > length;
+        }
+        if (past_end)                                                   /* STEP 3 */
             count = length - offset;
-        a = cd_byte_of(cd->data.data, cd->data.length, offset);
-        b = cd_byte_of(cd->data.data, cd->data.length, offset + count);
-        return JS_NewStringLen(ctx, (const char *)cd->data.data + a, b - a);
+    }
+    if (magic == 0) {                                                   /* substringData steps 3-4 */
+        size_t a = cd_byte_of(cd->data.data, cd->data.length, offset);
+        size_t b = cd_byte_of(cd->data.data, cd->data.length, offset + count);
+
+        *presult = JS_NewStringLen(ctx, (const char *)cd->data.data + a, b - a);
+        return JS_IsException(*presult) ? JS_STEP_ABRUPT : JS_STEP_DONE;
     }
     if (magic != 3) {                                               /* the three that take a DOMString */
         JSValueConst v = (magic == 1) ? argv[0] : (magic == 2 ? argv[1] : argv[2]);
@@ -1745,21 +1805,38 @@ static JSValue js_cd_op(JSContext *ctx, JSValueConst this_val, int argc, JSValue
         /* Unknown external input has no bytes: its SHAPE is what the node carries, the same answer `data`
            gives, so a source spliced into the tree still displays as the source it came from. */
         data = concolic_is(v) ? concolic_shape_c(v) : JS_ToCStringLen(ctx, &data_len, v);
-        if (!data) return JS_EXCEPTION;
+        if (!data) return JS_STEP_ABRUPT;
         if (concolic_is(v)) data_len = strlen(data);
     } else {
         data = "";
         data_len = 0;
     }
-    if (magic == 1)                                                 /* appendData: offset is the length */
-        offset = cd_units(cd->data.data, cd->data.length);
-    if (magic == 1 || magic == 2)                                   /* append/insert delete nothing */
-        count = 0;
     r = node_cd_replace_data(ctx, n, offset, count, data, data_len);
     if (magic != 3 && !concolic_is((magic == 1) ? argv[0] : (magic == 2 ? argv[1] : argv[2])))
         JS_FreeCString(ctx, data);
-    return r;
+    if (JS_IsException(r)) {
+        JS_FreeValue(ctx, r);
+        return JS_STEP_ABRUPT;
+    }
+    *presult = r;
+    return JS_STEP_DONE;
 }
+
+static const IdlStepDecl CD_SUBSTRING_STEP = {
+    js_cd_op, sizeof(CdIndexState), cd_index_visit, NULL, CD_SUBSTRING_ALGORITHM, CD_SUBSTRING_STEPS, 0, NULL
+};
+static const IdlStepDecl CD_APPEND_STEP = {
+    js_cd_op, sizeof(CdIndexState), cd_index_visit, NULL, CD_APPEND_ALGORITHM, CD_APPEND_STEPS, 0, NULL
+};
+static const IdlStepDecl CD_INSERT_STEP = {
+    js_cd_op, sizeof(CdIndexState), cd_index_visit, NULL, CD_INSERT_ALGORITHM, CD_INSERT_STEPS, 0, NULL
+};
+static const IdlStepDecl CD_DELETE_STEP = {
+    js_cd_op, sizeof(CdIndexState), cd_index_visit, NULL, CD_DELETE_ALGORITHM, CD_DELETE_STEPS, 0, NULL
+};
+static const IdlStepDecl CD_REPLACE_STEP = {
+    js_cd_op, sizeof(CdIndexState), cd_index_visit, NULL, CD_REPLACE_ALGORITHM, CD_REPLACE_STEPS, 0, NULL
+};
 
 /* §4.11 "SPLIT A TEXT NODE" — the concept, exported because §5.5's `insertNode` is stated over it: a range
    whose start node is a Text node splits that node at the start offset and inserts before the second half.
@@ -1809,15 +1886,31 @@ lxb_dom_node_t *node_split_text(JSContext *ctx, lxb_dom_node_t *node, uint32_t o
     return new_node;                                                    /* STEP 9 */
 }
 
-/* §4.11 `[NewObject] Text splitText(unsigned long offset)`. The offset arrives CONVERTED. */
-static JSValue js_text_split(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+/* §4.11 `[NewObject] Text splitText(unsigned long offset)`.
+   IT IS A STEP MACHINE FOR THE ONE REASON EVERY MEMBER OF THIS FAMILY IS: its offset can be unknown external
+   input, and split a Text node step 2 ("If offset is greater than length, then throw an "IndexSizeError"
+   DOMException") is a comparison over it whose two completions are both feasible. `node_split_text` above is
+   the CONCEPT and takes a number, because its other caller is DOM §5.5's `insertNode` over a range offset the
+   engine itself computed — a value that was never unknown and has no fork to ask. */
+static int js_text_split(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSValueConst *argv,
+                         JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
-    lxb_dom_node_t *n = node_of(this_val), *split;
-    uint32_t offset = 0;
+    CdIndexState *st = state;
+    lxb_dom_node_t *n = node_of(hdr->this_val), *split;
+    uint32_t offset = 0, length;
+    bool past_end = false;
+    int rc;
 
-    (void)magic;
-    if (!n || n->type != LXB_DOM_NODE_TYPE_TEXT)
-        return JS_ThrowTypeError(ctx, "splitText ran on a node that is not a Text node");
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);   /* this machine makes no request that delivers a value */
+    *presult = JS_UNDEFINED;
+    DCHECK(hdr->stage == CD_OP_RUN,
+           "§4.11's `splitText` resumed into a stage the algorithm does not have — it declares exactly one, "
+           "and the chain of questions its offset may ask is a cursor on this machine's own state");
+    if (!n || n->type != LXB_DOM_NODE_TYPE_TEXT) {
+        JS_ThrowTypeError(ctx, "splitText ran on a node that is not a Text node");
+        return JS_STEP_ABRUPT;
+    }
     /* THE ARGUMENT IS REQUIRED, so its absence is the DECLARATION's to refuse: §4.11 writes
        `[NewObject] Text splitText(unsigned long offset)` with no `optional`, and this member is declared with
        nargs 1, whose argument-count check runs before the body. `argc > 0 &&` stood here instead — a
@@ -1825,10 +1918,33 @@ static JSValue js_text_split(JSContext *ctx, JSValueConst this_val, int argc, JS
        call the boundary never lets through. */
     DCHECK(argc >= 1, "§4.11's `splitText` reached its body with no argument — its IDL argument is required, "
                       "so the declaration's own argument-count check is what should have refused the call");
-    CD_UNSIGNED_LONG(ctx, offset, argv[0], "offset", "splitText");
+    length = cd_units(lxb_dom_interface_character_data(n)->data.data,                     /* STEP 1 */
+                      lxb_dom_interface_character_data(n)->data.length);
+    if (concolic_is(argv[0])) {
+        /* `length + 1` POSITIONS — step 2 is `>` and not `>=`, so splitting at the very end is legal and
+           yields an empty second node. `node_split_text` states step 2 again for its own other caller; from
+           here it is already satisfied, which is why exhausting the chain is what throws. */
+        rc = idl_index_chain_run(ctx, hdr, &st->off, argv[0], length + 1, CD_SPLIT_ALGORITHM,
+                                 &offset, &past_end);
+        if (rc)
+            return rc;   /* parked at the fork */
+        if (past_end) {                                                                  /* STEP 2 */
+            JS_ThrowDOMException(ctx, "IndexSizeError", "the split offset is past the end of the Text node");
+            return JS_STEP_ABRUPT;
+        }
+    } else {
+        offset = idl_index_arg_known(ctx, argv[0], CD_SPLIT_ALGORITHM);
+    }
     split = node_split_text(ctx, n, offset);
-    return split ? node_wrap(ctx, split) : JS_EXCEPTION;
+    if (!split)
+        return JS_STEP_ABRUPT;
+    *presult = node_wrap(ctx, split);
+    return JS_IsException(*presult) ? JS_STEP_ABRUPT : JS_STEP_DONE;
 }
+
+static const IdlStepDecl CD_SPLIT_STEP = {
+    js_text_split, sizeof(CdIndexState), cd_index_visit, NULL, CD_SPLIT_ALGORITHM, CD_SPLIT_STEPS, 0, NULL
+};
 
 /* §4.11 `readonly attribute DOMString wholeText` — the concatenation of the data of THIS node's contiguous
    Text nodes in tree order, which is the run of Text siblings this node is inside. */
@@ -4158,14 +4274,16 @@ void node_init(JSContext *ctx)
         static const IdlArgType CD_STR[1]       = { IDL_DOMSTRING };
         static const IdlArgType CD_UL_STR[2]    = { IDL_UNSIGNED_LONG, IDL_DOMSTRING };
         static const IdlArgType CD_UL_UL_STR[3] = { IDL_UNSIGNED_LONG, IDL_UNSIGNED_LONG, IDL_DOMSTRING };
-        g_id_cd[0] = idl_method_id(ctx, CD_UL_UL,     2, js_cd_op, 0);   /* substringData */
-        g_id_cd[1] = idl_method_id(ctx, CD_STR,       1, js_cd_op, 1);   /* appendData    */
-        g_id_cd[2] = idl_method_id(ctx, CD_UL_STR,    2, js_cd_op, 2);   /* insertData    */
-        g_id_cd[3] = idl_method_id(ctx, CD_UL_UL,     2, js_cd_op, 3);   /* deleteData    */
-        g_id_cd[4] = idl_method_id(ctx, CD_UL_UL_STR, 3, js_cd_op, 4);   /* replaceData   */
+        /* EACH DECLARES ITS OWN ALGORITHM AND STEP LIST OVER THE ONE BODY, which is what the magic is for and
+           what keeps a parked flow able to say which of the five it is inside. */
+        g_id_cd[0] = idl_method_id_step(ctx, CD_UL_UL,     2, NULL, 0, &CD_SUBSTRING_STEP, 0);
+        g_id_cd[1] = idl_method_id_step(ctx, CD_STR,       1, NULL, 0, &CD_APPEND_STEP,    1);
+        g_id_cd[2] = idl_method_id_step(ctx, CD_UL_STR,    2, NULL, 0, &CD_INSERT_STEP,    2);
+        g_id_cd[3] = idl_method_id_step(ctx, CD_UL_UL,     2, NULL, 0, &CD_DELETE_STEP,    3);
+        g_id_cd[4] = idl_method_id_step(ctx, CD_UL_UL_STR, 3, NULL, 0, &CD_REPLACE_STEP,   4);
         /* §4.11 `[NewObject] Text splitText(unsigned long offset)` — one `unsigned long`, and the declaration
            is what converts it, so an object argument runs its `valueOf` on the machine like every other. */
-        g_id_split_text = idl_method_id(ctx, CD_UL_UL, 1, js_text_split, 0);
+        g_id_split_text = idl_method_id_step(ctx, CD_UL_UL, 1, NULL, 0, &CD_SPLIT_STEP, 0);
         /* §4.11's and §4.14's `constructor(optional DOMString data = "")` — see js_cd_ctor. One declared
            position, optional FROM position 0, so `new Text()` is a zero-argument call that reaches the body
            with argc 0 rather than one whose absent argument was stringified to "undefined". */

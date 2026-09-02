@@ -2638,6 +2638,51 @@ static const char *HTML =
     "var _cdv = _cdh.style.item(_cdi);"
     "fetch('/api/cssditem?v=' + (_cdv === '' ? 'past' : _cdv) + '&n=' + _cdh.style.length);"
 
+    /* DOM §4.11 Interface Text's `splitText` AND DOM §4.10 Interface CharacterData's `substringData` OVER ONE
+       UNKNOWN OFFSET, ON TWO Text NODES OF KNOWN DIFFERENT LENGTHS. Both members REFUSED an unknown
+       `unsigned long` by name until they became step machines, so before that this statement emitted no wrong
+       verdict at all: it took the whole document down at whichever DFAIL the flow reached first, and every row
+       after it read NOT REACHED.
+       IT IS A FRESH UNKNOWN, for the reason the `/api/nnmkey` statement above gives: a chain drawn over an
+       operand another statement has already walked would find its questions ANSWERED and fork nothing, so the
+       row would pass by reading a record instead of by asking. One read into `_cxo`.
+       THE ASSERTION IS AN ARITHMETIC IMPOSSIBILITY AND THE PREMISE IS EMITTED. §4.11's split a Text node step 2
+       and §4.10's substring data step 2 are the same sentence — "If offset is greater than length, then throw
+       an "IndexSizeError" DOMException" — so `split` claims one offset is WITHIN a two-unit node and PAST THE
+       END of a nine-unit one at once, false for every offset there is. The other direction is perfectly
+       ordinary (offset 5 throws on the short node and not on the long one) and is exactly why the verdict is
+       written this way round. Both lengths are captured BEFORE the calls and ride the record, because
+       `splitText` TRUNCATES the node it splits and a length read afterwards would describe a different node
+       than the one the question was asked of. */
+    "var _cxp = document.createElement('p'); _cxp.appendChild(document.createTextNode('ab'));"
+    "var _cxq = document.createElement('p'); _cxq.appendChild(document.createTextNode('abcdefghi'));"
+    "document.body.appendChild(_cxp); document.body.appendChild(_cxq);"
+    "var _cxa = _cxp.firstChild, _cxb = _cxq.firstChild;"
+    "var _cxal = _cxa.length, _cxbl = _cxb.length;"
+    "var _cxo = state.cxoff;"
+    "var _cxr = 'ok'; try { _cxa.splitText(_cxo); } catch (_cxe) { _cxr = 'throw'; }"
+    "var _cxs = 'ok'; try { _cxb.substringData(_cxo, 0); } catch (_cxe2) { _cxs = 'throw'; }"
+    "fetch('/api/cdsplit?v=' + (_cxr === 'ok' && _cxs === 'throw' ? 'split' : 'agree')"
+    " + '&a=' + _cxal + '&b=' + _cxbl);"
+
+    /* DOM §4.10's `substringData(offset, count)` WITH BOTH OPERANDS UNKNOWN — the row for the SECOND chain,
+       which is the operand that names no position in anything and is therefore the one a reader is most
+       likely to think the family does not cover.
+       THE STATEMENT MAKES NO VERDICT AND EMITS THE ANSWER ITSELF, so no length can make it lie: it sends the
+       LENGTH OF THE RETURNED STRING, which substring data steps 3-4 make exactly `min(count, length - offset)`.
+       Over a three-unit node that is `1` only from a world that answered `count == 1` (offset 0, 1 or 2), and
+       `2` only from `count == 2` (offset 0 or 1) — neither is reachable from the offset chain alone, whose
+       worlds with `count` unasked would all carry the clamp. So `2` among the emitted values is the count
+       chain having run, and `throw` among them is the offset chain having reached step 2's IndexSizeError at
+       exhaustion. `&n=` carries the node's own length so the set can be read against the node it came from
+       rather than against this comment. */
+    "var _cun = document.createElement('b'); _cun.appendChild(document.createTextNode('xyz'));"
+    "document.body.appendChild(_cun);"
+    "var _cut = _cun.firstChild, _cutl = _cut.length;"
+    "var _cuo = state.cuoff, _cuc = state.cucnt;"
+    "var _cuv; try { _cuv = '' + _cut.substringData(_cuo, _cuc).length; } catch (_cue) { _cuv = 'throw'; }"
+    "fetch('/api/cdsub?v=' + _cuv + '&n=' + _cutl);"
+
     /* THE SAME READ FROM INSIDE A JOB. A `.then` handler is a queued reaction, and a cross-document read
        SUSPENDS — so this exercises a step machine that parks on the host while it is the root of a job rather
        than reached from a bytecode frame. Without the scheduler reporting that flow host-owed, it resumes and
@@ -8281,6 +8326,64 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "a world past the end of the declaration block answered NULL where §6.6.1 says the empty string — "
              "the chain's past-the-end flag was given this family's usual answer instead of this member's, "
              "which is the one thing core/idl_index_arg.c does not decide and every caller states itself");
+    /* ONE UNKNOWN OFFSET THROUGH DOM §4.11's `splitText` AND DOM §4.10's `substringData`.
+       IT IS FIRST A ROW ABOUT THE MEMBERS EXISTING AT ALL. Both DFAILed on an unknown `unsigned long` until
+       they became step machines, so a NOT REACHED here is the ordinary reading of an unconverted member: the
+       abort fires, the document goes down, and nothing after it emits.
+       THE PREMISE IS MEASURED AND NOT ASSUMED. `split` is impossible only because the two Text nodes are two
+       and nine units long; a run where they came out otherwise would emit a `split` that means nothing, so the
+       lengths are refused before the verdict is read.
+       THE NEGATIVE IS THE ROW AND THE POSITIVE IS ONLY ITS DENOMINATOR. `split` claims one offset is WITHIN a
+       two-unit node and PAST THE END of a nine-unit one — no offset admits both, so a flow that emits it
+       answered `offset == k` one way at §4.11's step 2 and another way at §4.10's, which is what a constraint
+       key naming the MEMBER instead of the PREDICATE permits (core/idl_index_arg.h's IDL_INDEX_PREDICATE). */
+    const char *cdsplit_why = NULL; int cdsplit_tt = 1;
+    fold_row(&cdsplit_tt, &cdsplit_why, !!strstr(js, "\"/api/cdsplit\""),
+             "NOT REACHED: there is no /api/cdsplit record at all, so no world got through both step 2 chains. "
+             "That is the SCHEDULE, and it is also what an unconverted `splitText` or `substringData` looks "
+             "like — each refused an unknown offset with a DFAIL, which takes the document down");
+    fold_row(&cdsplit_tt, &cdsplit_why,
+             param_value_is(js, "/api/cdsplit", "a", "2") && param_value_is(js, "/api/cdsplit", "b", "9"),
+             "the two Text nodes this statement compares did NOT come out two and nine units long, so the "
+             "claim below is not an arithmetic impossibility and this row is asserting nothing — fix the "
+             "statement's construction rather than reading its verdict");
+    fold_row(&cdsplit_tt, &cdsplit_why, param_value_is(js, "/api/cdsplit", "v", "agree"),
+             "/api/cdsplit was recorded and never with `agree` — every world that reached it contradicted "
+             "itself, so this is the row below with nothing left to compare against");
+    fold_row(&cdsplit_tt, &cdsplit_why, !param_value_is(js, "/api/cdsplit", "v", "split"),
+             "a flow read one unknown `offset` as WITHIN a two-unit Text node and PAST THE END of a nine-unit "
+             "one — no offset admits both, so this flow answered `offset == k` one way at DOM §4.11 Interface "
+             "Text's split a Text node step 2 and another way at DOM §4.10 Interface CharacterData's substring "
+             "data step 2. The elimination chain's constraint key is naming the MEMBER and not the PREDICATE "
+             "(core/idl_index_arg.h's IDL_INDEX_PREDICATE)");
+    /* §4.10's `substringData(offset, count)` WITH BOTH OPERANDS UNKNOWN — the row for the SECOND chain.
+       THE ROW IS THE EMITTED SET AND NOT A VERDICT. Steps 3-4 make the returned string exactly
+       `min(count, length - offset)` code units long, so over a three-unit node the value `2` is reachable ONLY
+       from a world that answered `count == 2` — every world in which the count chain did not run carries step
+       3's clamp, which is `length - offset` and never 2 while offset is 0 or 1 and the count is unknown. So
+       `2` present is the count chain having run, and `throw` present is the OFFSET chain having reached step
+       2's IndexSizeError at exhaustion. One value alone means neither chain asked anything. */
+    const char *cdsub_why = NULL; int cdsub_tt = 1;
+    fold_row(&cdsub_tt, &cdsub_why, !!strstr(js, "\"/api/cdsub\""),
+             "NOT REACHED: there is no /api/cdsub record at all. That is the SCHEDULE, and it is also what an "
+             "unconverted `substringData` looks like — it refused an unknown operand with a DFAIL, which takes "
+             "the document down");
+    fold_row(&cdsub_tt, &cdsub_why, param_value_is(js, "/api/cdsub", "n", "3"),
+             "the Text node this statement asks about did not come out three units long, so the emitted set "
+             "below cannot be read against it — fix the statement's construction rather than its verdict");
+    fold_row(&cdsub_tt, &cdsub_why, param_value_count(js, "/api/cdsub", "v") > 1,
+             "/api/cdsub's `v` carries ONE value, so §4.10's substringData answered two unknown operands from "
+             "a single world — neither elimination chain ran, or one decided its operand instead of asking it "
+             "(core/idl_index_arg.h's idl_index_chain_run)");
+    fold_row(&cdsub_tt, &cdsub_why, param_value_is(js, "/api/cdsub", "v", "throw"),
+             "no world reached §4.10's substring data step 2 — the OFFSET chain never walked its four "
+             "positions to exhaustion, so \"If offset is greater than length, then throw an \"IndexSizeError\" "
+             "DOMException\" was never the answer and the past-the-end world is unexplored");
+    fold_row(&cdsub_tt, &cdsub_why, param_value_is(js, "/api/cdsub", "v", "2"),
+             "no world returned a TWO-unit substring of a three-unit node, which is reachable only from "
+             "`count == 2` — so the COUNT chain did not run and §4.10's second `unsigned long` was answered "
+             "from step 3's clamp alone. That operand names no position in any collection, which is exactly "
+             "the case core/idl_index_arg.c's banner had to state before it could be a member");
     /* §4.8.5: an inserted iframe got a child navigable, its proxy is STABLE across reads, and a read through it
        resolved to the peer's answer. */
     const char *ifnav_why = NULL; int ifnav_tt = 1;
@@ -9838,6 +9941,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "outcome-key-one-predicate", pkkey_tt, "/api/pkkey", SESS_EXPLORE, pkkey_why },
         { "idl-index-one-element-two-members", nnmkey_tt, "/api/nnmkey", SESS_EXPLORE, nnmkey_why },
         { "idl-index-empty-string-terminal", cssditem_tt, "/api/cssditem", SESS_EXPLORE, cssditem_why },
+        { "chardata-offset-two-members", cdsplit_tt, "/api/cdsplit", SESS_EXPLORE, cdsplit_why },
+        { "chardata-count-chain", cdsub_tt, "/api/cdsub", SESS_EXPLORE, cdsub_why },
         { "iframe-nav", ifnav_tt, "/api/iframenav", SESS_EXPLORE, ifnav_why },
         /* KEYED ON THE REMOVAL rather than on an endpoint, because this row is about a statement that emits
            nothing: §7.5.10's release is observable as a COUNT and not as a fetch. */

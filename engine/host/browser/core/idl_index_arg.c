@@ -11,6 +11,18 @@
  * `createNodeIterator`/`createTreeWalker`'s `whatToShow` is a BITMASK the traverser keeps, with no
  * past-the-end world and no null.
  *
+ * "A POSITION IN A COLLECTION" IS THE TEST'S SHORTHAND AND NOT ITS CONTENT, WHICH DOM §4.10 Interface
+ * CharacterData's `count` IS THE FIRST OPERAND TO SHOW. What the chain actually requires of an operand is that
+ * its §3.2.4.6-total domain decompose into `npositions` singleton worlds the algorithm tells apart, plus ONE
+ * remainder world with ONE answer — and `count` meets that without naming a position in anything.
+ * §4.10's substring data step 3 is "If offset + count is greater than length, then return a string whose value
+ * is the code units from the offsetth code unit to the end of node's data" and replace data step 3 is "If
+ * offset + count is greater than length, then set count to length − offset": every `count` above
+ * `length − offset` reaches the SAME answer, so the remainder is one world exactly as a past-the-end index is,
+ * and the `npositions` this file already takes as a parameter is `length − offset + 1` there. The two facts
+ * that make an operand a member are therefore the DECOMPOSITION and the SINGLE REMAINDER, and `whatToShow` is
+ * excluded by the second of them rather than by the word "position" — a bitmask's remainder is not one world.
+ *
  * THE LIST IS AN ILLUSTRATION OF THE TEST, NOT A CENSUS, AND THE DIFFERENCE COST A FIXTURE. A reader who takes
  * a name here as a statement that the member REACHES this file is reading a claim about the tree out of a
  * sentence about the standards, and one who built a probe on `classList.item()` found it exercised no chain at
