@@ -213,6 +213,49 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       materialize — 106, 92 and 680 blobs respectively — so each is a decision about running
                       that standard, not a helper that costs nothing, and each belongs to whoever takes it. */
                    "css/support",
+                   /* CSS TYPED OM LEVEL 1 — §4.3.1 "Common Numeric Operations, and the CSSNumericValue
+                      Superclass", §4.3.2 "Numeric Value Typing", §4.3.3 "Value + Unit: CSSUnitValue objects" and
+                      §4.3.4 "Complex Numeric Values: CSSMathValue objects". Both section numbers and titles were
+                      read out of the fetched draft, not recalled. Five built components — core/css/css_math.c,
+                      css_math_value.c, css_numeric_value.c, css_unit_value.c and css_property_numeric.c, 4528
+                      lines at the revision this entry lands on — install CSSNumericValue, CSSNumericArray,
+                      CSSStyleValue, CSSUnitValue, CSSMathValue and the five CSSMath* subclasses, and the
+                      standard's directory was on nobody's disk. `grep '"css/css-typed-om'` over this file
+                      answered zero, which is the excluded-test failure the three css rows above already name:
+                      the numeric-type algebra is a pure-function subject with an exact oracle, and nothing in
+                      this checkout asked it a single question.
+                      ITS FIXTURES WERE CHECKED BEFORE THE ENTRY WENT IN — now by the mechanism below rather than
+                      by hand, which is the point of building it. Of the 381 files at the pinned revision, 378
+                      are not `.yml` and total 518921 bytes; `testKind` answers document for 348 of them, script
+                      for 11 `.any.js` and null for 19. Their declared fixtures resolve to exactly seven paths:
+                      `/resources/testharness.js` (348 documents), `/resources/testharnessreport.js` (348),
+                      `/resources/idlharness.js` and `/resources/WebIDLParser.js` (idlharness.html, the second
+                      through SERVER_REWRITES), `css/css-typed-om/resources/testhelper.js` (334 documents and the
+                      one `// META: script=` line the eleven scripts share), and
+                      `css/css-typed-om/the-stylepropertymap/properties/resources/testsuite.js` (243) — the last
+                      two INSIDE this entry, which is what makes it one entry and not three.
+                      AND ONE THAT IS NOT THERE, WHICH IS SAID RATHER THAN DISCOVERED. Three files name
+                      `../resources/comparisons.js` — stylevalue-normalization/transformvalue-normalization.
+                      tentative.html, stylevalue-subclasses/cssMatrixComponent.tentative.html and
+                      stylevalue-subclasses/cssTransformValue.tentative.html — and `git ls-tree -r` at bf4714d
+                      finds no `comparisons.js` anywhere in the corpus except test262 staging. It is broken
+                      UPSTREAM at this revision, exactly like back-forward-cache/pagehide-event-handler-
+                      microtasks.window.js's `./resources/test-helper.js`, so no WPT_PATHS entry can supply it
+                      and those three abort naming it.
+                      THE `idlharness.html` FIXTURE SET WAS CHECKED TOO, and it is the largest in this corpus:
+                      `idl_test(['css-typed-om'], ['cssom', 'SVG', 'geometry', 'html', 'dom', 'mathml-core'])`,
+                      all SEVEN present under the listed `interfaces`. That file also carries `<meta
+                      name="timeout" content="long">`.
+                      IT MUST BE A WPT_PATHS ENTRY AND NOT A WPT_OWN_LEVEL ONE. Its two helper directories are
+                      inside the subtree, `css`'s own level is already materialized by the three rows above, and
+                      naming a deeper path — `stylevalue-subclasses/numeric-objects`, where the numeric-type
+                      tests live — would put two intermediate own levels on disk that neither list accounts for,
+                      which this gate hard-fails.
+                      NOTHING IS PREDICTED HERE ABOUT WHAT IT SCORES. Three of the standard's interfaces are
+                      absent by name — CSSKeywordValue, CSSUnparsedValue and StylePropertyMap — so the two
+                      thirds of this directory written about StylePropertyMap have no component to answer them
+                      and each abort NAMES that, which is the work queue read off the run. */
+                   "css/css-typed-om",
                    /* THE COMPONENTS' OWN SPEC DIRECTORIES, each named because the component exists in
                       engine/host/browser/core and its tests were not being collected: request.c and body.c
                       (fetch/api/headers and .../response were checked out and their two siblings were not),
@@ -1757,7 +1800,10 @@ function metaScripts(file) {
   });
 }
 
-/* THE `.idl` FILES A TEST DECLARES — THE OTHER HALF OF "WHAT THIS FILE NEEDS BEFORE IT CAN MEASURE ANYTHING".
+/* THE `.idl` FILES A TEST DECLARES — THE SECOND OF THE THREE KINDS OF "WHAT THIS FILE NEEDS BEFORE IT CAN
+ * MEASURE ANYTHING". This comment used to call it "the other half", and there is no half: the third kind is a
+ * document's own `<script src>`, resolved by `docScriptFixtures` below, and calling two of three a pair is how
+ * the third one goes on being nobody's.
  *
  * A META script is a fixture the DRIVER hands over, and the block in the run loop below has always checked that
  * one. An `.idl` is a fixture the TEST FETCHES, and nothing checked it — which is how the whole idlharness
@@ -1841,6 +1887,71 @@ function idlFixtures(file, kind) {
       }
   }
   return { specs: [...specs], dynamic };
+}
+
+/* THE THIRD KIND OF DECLARED FIXTURE — A DOCUMENT'S OWN `<script src>` — AND THE ONLY ONE STILL LEFT TO THE RUN
+ * TO DISCOVER. §Testing states the rule the two blocks above already obey: "when a test declares fixtures (a
+ * fetched IDL, a serviced resource, a substituted host), the reachability of those fixtures is part of
+ * COLLECTING it, not a separate question the test is left to discover at runtime." A META script is checked at
+ * collection; an `.idl` is checked at collection; a document's `<script src>` was checked NOWHERE — the file
+ * ran, the engine reported `@WPTERR … <script src> did not load`, and the driver turned that into an abort
+ * AFTER the fact. It is the same fixture question as the other two and it is answered here with them.
+ *
+ * WHAT MOVING IT EARLIER ACTUALLY BUYS, because "it already aborts" is the obvious objection and it is only
+ * half true. (a) THE DIAGNOSIS. The runtime line says a path did not load and stops; every other fixture in
+ * this file is split by `corpusHas` into "EXISTS at the pinned revision, so WPT_PATHS is short of <dir>" and
+ * "does not exist at all, so no entry can supply it" — one of which is this gate's to fix and one of which is
+ * not. Reporting them alike is what the META block's own comment records sending a reader to widen a list that
+ * cannot help. (b) IT DEPENDS ON THE FILE RUNNING AT ALL. The runtime branch is guarded by `!abortedHere`, so a
+ * document that aborts for any other reason never names the script it was missing, and a run truncated before
+ * the file is reached names nothing about it either. A collection-time answer is a fact about the CORPUS and
+ * does not need the engine's cooperation to be true. (c) IT IS THE CHECK A NEW AREA NEEDS BEFORE IT IS ADDED,
+ * not after: every WPT_PATHS entry landed so far had its `<script src>` set resolved BY HAND before the entry
+ * went in, which is a procedure that works exactly as long as everyone remembers it.
+ *
+ * THE RUNTIME BRANCH STAYS, AND IT IS NOT A FALLBACK. The two ask different questions about different axes —
+ * this one asks whether the byte-source is IN THIS CHECKOUT, and the runtime one asks whether wptserve SERVED
+ * it, which a file present on disk can still fail (a handler that 500s, a wrong content type). That is the
+ * identical split the META block above draws between `unserved` (asked of the server) and `missing` (asked of
+ * the disk), and neither there nor here does one subsume the other.
+ *
+ * RESOLUTION IS WPTSERVE'S, NOT A GUESS. A `/`-rooted src is corpus-root-relative and anything else resolves
+ * against the test's own directory — the server's own rule, already stated at `metaScripts` — and
+ * SERVER_REWRITES applies first, because `/resources/WebIDLParser.js` is on nobody's disk under that name and
+ * every idlharness DOCUMENT names it. A query or fragment is cut before the lookup: `?pipe=sub` selects a
+ * PIPELINE over a file that is still a file.
+ *
+ * WHAT IT CANNOT RESOLVE, IT SAYS, exactly as `idlFixtures` does for a non-literal spec argument. An absolute
+ * or scheme-relative URL names another ORIGIN and no path in this checkout; a `{{…}}` src is a template whose
+ * substituted value is the server's to compute. Those are returned separately and reported as an ABSENT
+ * measurement for that file — never counted as a fixture that was found, which would be this gate asserting a
+ * reachability it never checked.
+ *
+ * IT READS `markupOnly`, SO A `<script src>` WRITTEN AS TEXT IS NOT ONE. That is the same strip
+ * `isTestDocument` makes and for the same reason — `the-script-element/execution-timing/102.html`
+ * `document.write`s a whole harness document, so its bytes carry a literal script element no parser sees at
+ * parse time. Sharing the strip is what stops the collector and this check disagreeing about what an element
+ * is. */
+function docScriptFixtures(file) {
+  const raw = readCorpus(file);
+  if (raw === null) return null;   /* readCorpus recorded WHY; the run loop reports it */
+  const paths = new Set(), unresolved = [];
+  for (const tag of markupOnly(raw).matchAll(/<(?:[A-Za-z][\w.-]*:)?script\b[^>]*>/gi)) {
+    const a = /\ssrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/i.exec(tag[0]);
+    if (!a) continue;                                     /* an INLINE script declares no fixture */
+    const raw_ref = (a[1] ?? a[2] ?? a[3]).trim();
+    if (!raw_ref) continue;
+    const ref = SERVER_REWRITES[raw_ref] || raw_ref;
+    if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(ref) || ref.startsWith("//") || ref.includes("{{")) {
+      unresolved.push(raw_ref.length > 60 ? raw_ref.slice(0, 60) + "…" : raw_ref);
+      continue;
+    }
+    const bare = ref.split("?")[0].split("#")[0];
+    if (!bare) continue;                                  /* `src="?query"` names the document itself */
+    paths.add(bare.startsWith("/") ? bare.slice(1)
+                                   : relative(WPT, join(dirname(file), bare)).split(sep).join("/"));
+  }
+  return { paths: [...paths], unresolved };
 }
 /* A `.sub.js` META SCRIPT IS NOT ITS BYTES ON DISK. wptserve SUBSTITUTES `{{host}}`, `{{ports[http][0]}}`
    and friends when it serves one, and the whole point of common/get-host-info.sub.js is to hand a test the
@@ -2098,6 +2209,39 @@ for (const { file: f, kind, variant } of runs) {
       failures.push(`  IDLDYN  ${rel}\n         ${idl.dynamic.length} idl_test spec argument(s) are not string ` +
                     `literals (${idl.dynamic.join(", ")}), so their reachability was NOT checked — this is an ` +
                     "absent measurement for this file, not a fixture that was found");
+    /* AND THE `<script src>` A DOCUMENT DECLARES — the same disk question a third time, through the same
+       `corpusHas`, so all three fixture reports agree about which revision they ask at. See
+       `docScriptFixtures` for why this belongs here and not at the end of the run. A `.js` test declares its
+       fixtures as `// META: script=` lines, which the block above already resolved, so this is asked only of
+       documents. */
+    const docfix = kind === "document" ? docScriptFixtures(f) : null;
+    if (docfix && docfix.paths.length) {
+      const absent = docfix.paths.filter((p) => !existsSync(join(WPT, p)));
+      if (absent.length) {
+        const said = absent.map((p) => {
+          const has = corpusHas(p);
+          if (!has.known) return `/${p} — and ${has.why}`;
+          return has.present
+            ? `/${p} — it EXISTS at ${has.at} and this checkout does not have it, so WPT_PATHS is short of ` +
+              `${dirname(p)}: add that entry and this file runs as written`
+            : `/${p} — it does NOT EXIST at ${has.at} at all, so no WPT_PATHS entry can supply it. The document ` +
+              "names a helper the pinned corpus does not contain and cannot run as written at this revision";
+        });
+        abortRun(area, "corpus", rel, "a <script src> this document declares is not in the checkout:\n         " +
+                                      said.join("\n         ") +
+                                      "\n         the document would load without it and report whatever it " +
+                                      "then managed — numbers from a test that is not the test");
+        continue;
+      }
+    }
+    /* A src THIS DRIVER COULD NOT RESOLVE TO A CORPUS PATH IS AN ABSENT ANSWER, NOT A CLEAN ONE — the same
+       sentence as IDLDYN one line up, for the same reason. An absolute or scheme-relative URL names another
+       origin, and a `{{…}}` src is a template the server substitutes; either way this file's reachability was
+       not established and the report must not read as though it were. */
+    if (docfix && docfix.unresolved.length)
+      failures.push(`  SRCDYN  ${rel}\n         ${docfix.unresolved.length} <script src> value(s) do not name a ` +
+                    `path in this corpus (${docfix.unresolved.join(", ")}), so their reachability was NOT ` +
+                    "checked — this is an absent measurement for this file, not a fixture that was found");
     /* WHETHER THE TEST IS A DOCUMENT IS DECIDED HERE AND NOWHERE ELSE. The runner used to re-derive it from the
        file name — `.html`, and only `.html` — which is a second copy of the rule above and drifted from it the
        moment the first `.htm` was collected: the driver would have handed the runner a document and the runner
@@ -2375,12 +2519,17 @@ for (const { file: f, kind, variant } of runs) {
        imports those handlers and calls their `main`, so nothing has emitted that marker since. A branch whose
        emitter no longer exists is not a safety net, it is a reader's mistake waiting to happen: it says this gate
        cannot run handler tests, and this gate can. */
-    /* A `<script src>` THE CORPUS DOES NOT HAVE is the missing-META-script defect one layer in, and it was the
-       only one of the two that went uncounted: the document RAN, without a file it asked for, and whatever it
-       then reported was counted as an ordinary result unless the file happened to report nothing at all. It is
-       the same fact — this file ran against a corpus it was not written for — so it is the same ABORT, and it
-       names the path so WPT_PATHS can be widened. Its partial subtests are dropped for the reason the count
-       exists at all: they are numbers from a test that is not the test. */
+    /* A `<script src>` THE SERVER WOULD NOT SERVE. It is the same fact as the two blocks above — this file ran
+       against a corpus it was not written for — so it is the same ABORT, and its partial subtests are dropped
+       for the reason the count exists at all: they are numbers from a test that is not the test.
+       WHAT IT ASKS IS NOW THE NARROWER HALF, AND THE SENTENCE THAT USED TO STAND HERE IS RETIRED. This said a
+       `<script src>` the corpus does not HAVE was "the only one of the two that went uncounted", and that
+       argument died the moment `docScriptFixtures` began resolving every document's declared srcs against the
+       checkout BEFORE the file is run: a src that is absent on disk is now a named collection-time abort
+       carrying the `corpusHas` split, so it never reaches here. What is left for this branch is exactly what a
+       disk check cannot answer — a file that IS in the checkout and did not arrive: a handler that 500s, a
+       wrong content type, a server that stopped. That is the same axis split the META block draws between
+       `unserved` and `missing`, and neither half subsumes the other, which is why both stand. */
     /* `!abortedHere` — A FILE IS COUNTED ONCE. The block above does not `continue` (deliberately: an abort does
        not erase what the file already reported), so this fired IN ADDITION to it and a file that both aborted
        and asked for a script the corpus lacks was counted TWICE, in a column whose whole meaning is one per
