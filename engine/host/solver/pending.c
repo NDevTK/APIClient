@@ -115,12 +115,14 @@ static int pend_len(JSValueConst arr)
    over, read without touching an entry. 0 for a register that has never held anything, which is JS_UNDEFINED
    and answers with a tag test, exactly as `pend_len` does and for the same reason.
    `CHECK` AND NOT `DCHECK`, AND THIS DIFF IS WHAT MADE THAT SO. The value is load-bearing in RELEASE — the
-   per-opcode preempt hook decides on it there — so a guard compiled out in release would be compiled out in
-   precisely the build where the read happens, and what it guards is a JSValue that `JS_GetOwnSlot` leaves
-   UNINITIALISED when it answers 0. Every register is built in this file with the slot present from its first
-   instant, so its absence is not a state to default past (§Architecture: a consumer never defaults a
-   producer's field) — it is this file's own invariant broken, and reading it as 0 spins a blocked flow on a
-   question that is only answered between scheduler steps. */
+   per-opcode preempt hook decides on it there — so a DCHECK would be compiled out in precisely the build where
+   the read happens, and what it guards is not a crash but a PLAUSIBLE ANSWER: `JS_GetOwnSlot` writes
+   JS_UNDEFINED into `*pval` before it looks, so a missing slot reads back as 0 through JS_VALUE_GET_INT and
+   the register says "this flow is not blocked" for the rest of the session. That is §Architecture's
+   defaulted-field defect exactly, with the default supplied by the accessor rather than by an author, and its
+   consequence here is a flow spinning on an answer the host only gives between scheduler steps. Every register
+   is built in this file with the slot present from its first instant, so the absence is this file's own
+   invariant broken and must not be proceeded past in production either. */
 static int pend_sync_owed(JSValueConst reg)
 {
     JSValue v;
