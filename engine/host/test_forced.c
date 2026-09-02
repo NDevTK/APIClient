@@ -2541,6 +2541,53 @@ static const char *HTML =
     "var _ixb = _ixn.item(_ixi);"
     "fetch('/api/idxkey?v=' + (_ixa && !_ixb ? 'split' : 'agree'));"
 
+    /* THE SAME TWO MEMBERS OVER AN INDEX THAT CARRIES AN EXAMPLE, WHICH IS THE OTHER HALF OF THE FORK KEY AND
+       A DIFFERENT QUESTION FROM THE ONE ABOVE. `state.ix` carries none, so every link of both chains is asked
+       with the machine stating nothing and the key composes completion "0" throughout — the statement above
+       cannot reach the completion half of the key at all. An index with an example does: solver/decide.c's
+       walk asks about the machine's REAL completion FIRST, so at n == 2 the completion IN THE KEY *IS* the
+       example, and the one link whose position the example names files "is it completion 1" where every other
+       flow over the same operand and operation files "is it completion 0" — a predicate and its negation under
+       two keys.
+       THE SECOND FLOW IS NOT A COINCIDENCE, IT IS MINTED BY THE SEAM AT THAT VERY LINK. An outcome sibling is
+       by construction the flow standing on the arm its operand's example does not name, so decide.c's
+       decide_note_forced_arm contradicts that example as the sibling replays — the index then answers with NO
+       example on that path, and its NEXT member asks the same position under the other spelling, finds
+       nothing, and re-forks a fact the flow already holds. The arm minted there answers "the index IS e" while
+       the fact it inherited says it is not.
+       THE ASSERTION IS AGAIN THE ONE FACT NO CONSISTENT WORLD CAN CARRY AND AGAIN IT IS ARITHMETIC. Both
+       collections are built EXACTLY EIGHT long, so `!_pka && _pkb` claims one index is past the end of an
+       eight-element NodeList and at a position inside an eight-rule CSSRuleList — impossible for any index
+       whatever, so `split` cannot be a length this fixture guessed wrong. The ORDER matters and is the mirror
+       of the statement above: the contradicting flow is the one whose FIRST member exhausted, so the first
+       member must be the one the claim says was past the end.
+       `screen.width & 3` IS THIS FIXTURE'S EXISTING SPELLING FOR "UNKNOWN, WITH AN EXAMPLE, BOUNDED" —
+       ECMAScript §6.1.6.1.16 NumberBitwiseOp runs on the concolic's real example and the result stays unknown,
+       so the mask puts the example in [0, 3] without excluding anything from the domain the chain walks. It
+       must land strictly below eight or the link the example names is past the end of both collections and
+       there is no collision to have. `location.hash` is wrong here for the reason the ReadableStream statement
+       below already gives: it is an @S source, so a candidate session substitutes payload bytes at the read
+       and the world token would be satisfied by the wrong mechanism.
+       TWO MEMBERS AND ONE VALUE, for the statement above's reasons exactly. DOM §4.2.10 Old-style collections:
+       NodeList and HTMLCollection and CSSOM §6.4.1 The CSSRuleList Interface are two algorithms asking one
+       predicate, and both are CALLERS of core/idl_index_arg.c's chain — which is the property that matters
+       and is not what that file's header would tell you: it names DOMTokenList among the family and
+       DOMTokenList does not reach the chain, so the CALL SITES are the authority. ONE read of `screen.width & 3` is one operand — a second read would be a second identity and the
+       statement would assert nothing. */
+    "var _pks = document.createElement('style');"
+    "var _pkt = ''; for (var _pkj = 0; _pkj < 8; _pkj++) { _pkt += '.pk' + _pkj + ' { color: red }'; }"
+    "_pks.textContent = _pkt;"
+    "var _pkh = document.createElement('div');"
+    "for (var _pkq = 0; _pkq < 8; _pkq++) { _pkh.appendChild(document.createElement('b')); }"
+    "document.body.appendChild(_pks); document.body.appendChild(_pkh);"
+    "var _pkn = _pkh.querySelectorAll('b');"
+    "var _pkr = _pks.sheet.cssRules;"
+    "var _pki = screen.width & 3;"
+    "var _pka = _pkn.item(_pki);"
+    "var _pkb = _pkr.item(_pki);"
+    "fetch('/api/pkkey?v=' + (!_pka && _pkb ? 'split' : 'agree')"
+    " + '&n=' + _pkn.length + '&c=' + _pkr.length);"
+
     /* THE SAME READ FROM INSIDE A JOB. A `.then` handler is a queued reaction, and a cross-document read
        SUSPENDS — so this exercises a step machine that parks on the host while it is the root of a job rather
        than reached from a bytecode frame. Without the scheduler reporting that flow host-owed, it resumes and
@@ -8085,6 +8132,46 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "built two longer — no world admits both, so this flow answered `index == k` one way at CSSOM "
              "§6.2.2's item(index) and another way at DOM §4.2.10's. The elimination chain's constraint key is "
              "naming the MEMBER and not the PREDICATE (core/idl_index_arg.h's IDL_INDEX_PREDICATE)");
+    /* THE SAME TWO MEMBERS OVER AN INDEX THAT CARRIES AN EXAMPLE: the COMPLETION half of the fork key.
+       THE PREMISE IS MEASURED AND NOT ASSUMED, WHICH IS THE FIRST ROW. `split` is impossible only because both
+       collections are eight long, and a fixture whose two collections came out different lengths would emit a
+       `split` that means nothing — so the statement reports both lengths and this row refuses anything but
+       eight. That is the difference between an arithmetic impossibility and a length somebody guessed.
+       THE NEGATIVE IS THE ROW AND THE POSITIVE IS ONLY ITS DENOMINATOR, as above. `split` claims one index is
+       PAST THE END of an eight-element NodeList and INSIDE an eight-rule CSSRuleList at once. What
+       produces it is solver/decide.c's outcome walk asking about the machine's REAL completion first, so the
+       completion in the key is the operand's own EXAMPLE — and this seam's decide_note_forced_arm takes that
+       example away from the sibling it mints, after which the same flow composes the other spelling of a
+       question its own path has answered, re-forks it, and the arm minted there stands on both. */
+    const char *pkkey_why = NULL; int pkkey_tt = 1;
+    fold_row(&pkkey_tt, &pkkey_why, !!strstr(js, "\"/api/pkkey\""),
+             "NOT REACHED: there is no /api/pkkey record at all, so no world got through both `item(index)` "
+             "chains over an index carrying an example. That is the SCHEDULE, and it is also what an ABORT "
+             "inside either chain looks like — AND IT IS WHAT AN EXAMPLE-FREE `screen.width` LOOKS LIKE, "
+             "which is the one way the row below could pass while asserting nothing. That premise is not "
+             "checkable from the page (an unknown with an example and one without walk the same positions and "
+             "emit the same tokens; only the KEY differs, which is the thing under test), so it is carried by "
+             "the ReadableStream statement's own DFAIL further down: that arm aborts the instance if "
+             "`screen.width & 7` reaches it carrying no number, and a discarded instance records no /api/pkkey "
+             "at all, which is this row");
+    fold_row(&pkkey_tt, &pkkey_why,
+             param_value_is(js, "/api/pkkey", "n", "8") && param_value_is(js, "/api/pkkey", "c", "8"),
+             "the two collections this statement compares did NOT both come out eight long, so the claim below "
+             "is not an arithmetic impossibility and this row is asserting nothing — fix the statement's "
+             "construction rather than reading its verdict");
+    fold_row(&pkkey_tt, &pkkey_why, param_value_is(js, "/api/pkkey", "v", "agree"),
+             "/api/pkkey was recorded and never with `agree` — every world that reached it contradicted "
+             "itself, so this is the row below with nothing left to compare against");
+    fold_row(&pkkey_tt, &pkkey_why, !param_value_is(js, "/api/pkkey", "v", "split"),
+             "a flow read one unknown `index` as PAST THE END of an eight-element NodeList and INSIDE an "
+             "eight-rule CSSRuleList — no index admits both, so this flow answered `index == e` one way at "
+             "DOM §4.2.10 Old-style collections' item(index) and the other way at CSSOM §6.4.1 The CSSRuleList "
+             "Interface's. The "
+             "outcome walk's constraint key "
+             "is naming the machine's EXAMPLE and not the question (solver/decide.c's outcome_settle): at "
+             "n == 2 the completion asked about first IS `real`, so `is it completion 1` and `is it "
+             "completion 0` are one binary fact under two keys, and the seam's own contradicted-example drop "
+             "is what walks a single flow from one spelling to the other");
     /* §4.8.5: an inserted iframe got a child navigable, its proxy is STABLE across reads, and a read through it
        resolved to the peer's answer. */
     const char *ifnav_why = NULL; int ifnav_tt = 1;
@@ -9639,6 +9726,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "timer-handle-counter", timerhandle_tt, "/api/timerhandle", SESS_EXPLORE, timerhandle_why },
         { "timer-unknown-delay-fork", unkdelay_tt, "/api/unkdelay", SESS_EXPLORE, unkdelay_why },
         { "idl-index-key-one-predicate", idxkey_tt, "/api/idxkey", SESS_EXPLORE, idxkey_why },
+        { "outcome-key-one-predicate", pkkey_tt, "/api/pkkey", SESS_EXPLORE, pkkey_why },
         { "iframe-nav", ifnav_tt, "/api/iframenav", SESS_EXPLORE, ifnav_why },
         /* KEYED ON THE REMOVAL rather than on an endpoint, because this row is about a statement that emits
            nothing: §7.5.10's release is observable as a COUNT and not as a fetch. */

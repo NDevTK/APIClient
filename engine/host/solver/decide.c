@@ -1768,7 +1768,49 @@ int solver_decide_restartable(JSContext *ctx, JSValueConst cond, int nonforking)
  * completion 0 — the driver's own `harm = 0` arm, which is why every machine numbers its ordinary completion
  * there. So the exploring primary and the @S candidate re-fire walked DIFFERENT completions of the same
  * unstated outcome, and the re-fire that must reproduce the primary's path did not. Asking about completion 0
- * first makes the two agree. */
+ * first makes the two agree.
+ *
+ * AND THE WALK ANSWERS N QUESTIONS WHILE ASKING N-1 OF THEM, WHICH IS WHY IT MUST RECORD THE ONES IT DID NOT
+ * ASK. This is the second half of the sentence above and it was missing. The order is a function of `real`, so
+ * WHICH questions get slots is a function of the machine's EXAMPLE — and at n == 2 that is total:
+ * `outcome_nth(0, 2, real)` IS `real`, so a flow whose example names completion 1 files the one question it
+ * asks under "is it 1", and a flow whose example names 0, or which has none, files THE SAME BINARY FACT under
+ * "is it 0". A predicate and its negation, under two keys. decide_key's own note is the precedent and it
+ * settles the direction: `if (p)` and `if (!p)` are ONE constraint entry because "the polarity is applied to
+ * the ARM by the caller and never to this key", and keying them apart makes a flow that has already fixed the
+ * fact fork AGAIN and then stand on two arms that contradict each other.
+ *
+ * IT IS NOT A HAZARD BETWEEN TWO UNRELATED FLOWS — THIS SEAM MINTS THE FLOW THAT COLLIDES WITH ITS PARENT.
+ * decide_note_forced_arm runs on every ask below, and an outcome sibling is BY CONSTRUCTION the flow standing
+ * on the arm its operand's example does not name — so the seam contradicts that example (concolic.c's
+ * `ex_contra`) at the very question that produced the sibling. The operand then answers with NO example on
+ * that path, `real` is UNSTATED at the sibling's next ask over the SAME operand and operation, and the key it
+ * composes is the other spelling of the fact its own parent recorded. Measured against core/idl_index_arg.c's
+ * chain, which is the shape that asks one predicate at two entries: the parent answers `index == e` YES at the
+ * one link its example names and files "is it completion 1"; the sibling of that link replays NO, loses the
+ * example, walks to the past-the-end world, and at the NEXT member over the same index misses at `index == e`,
+ * re-forks, and the arm it mints there answers "the index IS e" while the fact it inherited says it is not.
+ * One value, two positions, one world — every arm in range and every assert on the path satisfied.
+ *
+ * THE CURE IS §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS' — N QUESTIONS OVER THE ONE FACT, NEVER N FACTS. The
+ * fact is the COMPLETION this walk ended on; "is it c" for each c is a question asked of it. So the walk
+ * SETTLES at its exit: for every completion the machine declared, it records the truth the decided completion
+ * gives that question, whether or not this walk had a slot for it. It is entailment and not observation —
+ * the header above states the questions partition [0, n), so a walk that ended on `c` has proved "not d" for
+ * every other `d`, and a walk that fell through to the last candidate has proved that candidate.
+ *
+ * WHY NOT CANONICALISE THE KEY, WHICH IS decide_key's OTHER HALF. A branch has a POLARITY and an outcome has
+ * an ORDER, and only the first collapses: `!p` is `p` with the arms swapped, while "is it 5" is not "is it 2"
+ * under any transformation. Canonicalising would therefore have to rewrite what the walk ASKS, which is what
+ * the decision vector records — every parked flow holding an outcome slot would diverge at it, at 28 ask sites.
+ * The settle changes NO key that is asked, NO slot, and NO order, so a cold-tier flow replays byte-identically
+ * and simply gains the entailed entries as it goes. What it costs is one constraint entry per completion the
+ * walk did not ask about — for the n == 2 family that is one per ask — and that entry is the fact under its
+ * other name, which is the whole point.
+ *
+ * AND IT IS ASSERTED BEFORE IT IS WRITTEN, so the settle cannot mask the thing it exists to prevent: a flow
+ * whose constraint already DENIES the completion this walk is about to return is standing in the fabricated
+ * timeline, and that is a should-never-happen rather than a state to overwrite. */
 /* THE ELIMINATION ORDER — the i-th completion asked about, as a permutation of [0, n).
  *
  * A FUNCTION AND NOT AN ARRAY because it is read on every ask of every replaying sibling and there is nothing
@@ -1791,6 +1833,76 @@ static int outcome_nth(int i, int n, int real) {
            "the elimination order named a completion outside the ones the machine declared — the walk would "
            "hand the step driver an arm no branch of that machine answers");
     return c;
+}
+
+/* THE ONE SPELLER OF AN OUTCOME QUESTION'S KEY — "is this operation's completion over this operand exactly c".
+ *
+ * A FUNCTION AND NOT TWO COPIES OF A snprintf, because the walk below asks these keys and the settle beneath it
+ * READS AND WRITES them, and two spellings of one key is precisely the defect both of them exist to close: the
+ * settle would then record the fact under a name the walk never looks up, which is a write with no reader
+ * standing next to a read with no writer — the pair §Architecture measures as concealing each other.
+ * Returns a heap key the caller frees, or NULL for an operand whose identity this engine cannot spell. */
+static char *outcome_key(JSValueConst over, const char *op, int c) {
+    /* SIZED FROM THE ONE BOUND ON `c` AND NOT FROM SLACK. solver_outcome asserts `n <= SOLVER_FORKED_BIT`
+       (0x100) and outcome_nth asserts `c < n`, so the widest decimal this can ever hold is `255` — three
+       digits and the terminator. A truncated completion would file two completions under one key and let one
+       question's record answer another's, which is the same merge a truncated operation string makes; the
+       DCHECKF below is the line that fails the day that bound and this size stop agreeing. */
+    char which[4];
+    const char *f[3];
+    int wrote = snprintf(which, sizeof which, "%d", c);
+
+    DCHECKF(wrote > 0 && (size_t)wrote < sizeof which,
+            "the outcome seam could not spell the completion its question is about (%d) — `which` is sized "
+            "from SOLVER_FORKED_BIT, which bounds every completion a machine may declare, so a completion that "
+            "does not fit means that bound and this buffer have stopped agreeing", c);
+    f[0] = concolic_ident_c(over); f[1] = op; f[2] = which;
+    return concolic_ident_compose("outcome", f, 3);
+}
+
+/* THE WALK'S ANSWER, WRITTEN DOWN FOR EVERY QUESTION IT ANSWERED — see the header above for why N-1 asks leave
+ * N facts and why the missing ones are the whole defect. `c` is the completion the walk ended on.
+ *
+ * ENTAILMENT, NOT OBSERVATION. The header states the questions partition [0, n) — exclusive and exhaustive is
+ * the machine's own declaration — so "the completion is c" settles "is it d" for every d at once. Nothing here
+ * asks anything, consumes a vector slot, or forks: this is the same kind of fact decide_arm's feasible-
+ * refinement arm reads, recorded where it becomes known instead of only where it was asked.
+ * IT RUNS AFTER THE FORK AND THAT ORDERING IS THE WHOLE OF ITS CORRECTNESS. dec_fork_here freezes the
+ * constraint for the sibling BEFORE decide_arm applies the parent's own arm, so everything written here lands
+ * in the parent's head alone — the sibling took the OTHER arm, will end on a different completion, and settles
+ * its own when it re-enters and re-walks.
+ * THE ASSERT IS THE POINT AND IT READS BEFORE IT WRITES. A recorded truth that disagrees with the completion
+ * being returned is a flow standing on a world its own path denies; overwriting it would repair the entry and
+ * leave the timeline, which is the concealment rather than the fix. */
+static void outcome_settle(JSValueConst over, const char *op, int n, int c) {
+    int d;
+
+    DCHECK(c >= 0 && c < n, "the outcome walk settled on a completion the machine never declared");
+    for (d = 0; d < n; d++) {
+        char *key = outcome_key(over, op, d);
+        int want = (d == c), had;
+
+        /* NO KEY MEANS NOTHING IS RECORDED, WHICH IS THE SOUND ANSWER AND NOT A FALLBACK — and it carries no
+           assert of its own because the walk above already made it. `n >= 2` means the loop ran at least once
+           and DCHECKed its key, over this same operand and this same tag, so a NULL here has already aborted
+           in dev one screen up; a second copy would be the same should-never-happen at a worse address. In
+           release the walk keeps both arms for such a value (decide_arm ignores a NULL key), and the settle's
+           analogue of keeping both arms is recording neither. It is a `return` and not a `continue` because
+           the operand and the tag are the same at every d and only the completion differs, so a compose that
+           failed once fails for all of them. */
+        if (!key) return;
+        had = concolic_branch_decided(key);
+        DCHECKF(had < 0 || had == want,
+                "an outcome walk ended on completion %d over an operand whose own path had already answered "
+                "\"is it %d\" the other way — the questions partition the completions, so one flow holding "
+                "both is standing in a world no completion satisfies, and the operation it is about is `%s`. "
+                "The cause is a question filed under two keys: the walk asks about `real` first, so the "
+                "completion in the key is the machine's EXAMPLE, and this seam's own decide_note_forced_arm "
+                "contradicts that example on the sibling it mints — after which the same fact composes the "
+                "other spelling", c, d, op);
+        concolic_constrain_branch(key, want);
+        free(key);
+    }
 }
 
 int solver_outcome(JSContext *ctx, JSValueConst over, const char *op, int n, int real) {
@@ -1833,8 +1945,6 @@ int solver_outcome(JSContext *ctx, JSValueConst over, const char *op, int n, int
            already recorded that it is not, and an example its own path contradicts states nothing about which
            of the rest it is. */
         int real_arm = (i == 0 && real != JS_OUTCOME_REAL_UNSTATED) ? 1 : REAL_ARM_UNOBSERVED;
-        char which[16];
-        const char *f[3];
         char *key;
         int arm;
 
@@ -1847,9 +1957,7 @@ int solver_outcome(JSContext *ctx, JSValueConst over, const char *op, int n, int
                "the elimination order asked about the machine's REAL completion a second time — the order must "
                "be a permutation of the completions, and a repeat leaves one of them with no question and one "
                "flow standing on a completion nothing eliminated");
-        snprintf(which, sizeof which, "%d", c);
-        f[0] = concolic_ident_c(over); f[1] = op; f[2] = which;
-        key = concolic_ident_compose("outcome", f, 3);
+        key = outcome_key(over, op, c);
         DCHECK(key != NULL, "an operand whose identity this engine cannot spell reached the outcome seam — "
                             "with no key its completions are re-forked at every ask rather than replayed, "
                             "which is sound and is not what a machine declaring a fork expects");
@@ -1869,8 +1977,14 @@ int solver_outcome(JSContext *ctx, JSValueConst over, const char *op, int n, int
            driver about snapshotting and is not part of the arm. It fires at most once per walk, at i == 0,
            which is the only question `real` says anything about. */
         decide_note_forced_arm(over, real_arm, arm);
-        if (arm == 1)
+        if (arm == 1) {
+            /* THE ANSWER, WRITTEN DOWN UNDER EVERY NAME IT HAS — see outcome_settle. It runs BELOW
+               decide_note_forced_arm because that call is what may have taken this operand's example away, and
+               it must run on the ARM that ended the walk rather than on the question that ended it: the walk
+               stops here having also proved "not d" for every completion it never reached. */
+            outcome_settle(over, op, n, c);
             return forked ? (c | SOLVER_FORKED_BIT) : c;
+        }
         /* THE ONE-FORK-PER-ASK INVARIANT, ASSERTED WHERE IT WOULD BREAK. dec_fork_here keeps `real_arm` when
            one is stated and arm 1 otherwise, and the two values this walk ever passes are 1 and UNOBSERVED —
            so a NEW question always answers 1 and always returns above. Reaching here with a sibling prepared
@@ -1887,6 +2001,16 @@ int solver_outcome(JSContext *ctx, JSValueConst over, const char *op, int n, int
        eliminate N-1 completions, so the remaining one is determined — asking about it would record a slot
        whose answer its own path already implies, and a replay could then diverge on a question it had settled.
        The loop runs at least once (n >= 2), and its last statement is the assert above, so `forked` is 0 here
-       by that assert rather than by a second copy of it. */
-    return outcome_nth(n - 1, n, real);
+       by that assert rather than by a second copy of it.
+       IT NEEDS NO QUESTION AND IT STILL NEEDS A RECORD, WHICH IS THE DISTINCTION THIS FALL-THROUGH USED TO
+       LOSE. "No slot" is about the decision VECTOR — a replay must not consume one here — and it was read as
+       "nothing is known", so the one completion this walk actually PROVED was the one completion it never
+       wrote down. A later ask over the same operand and operation that composes THIS completion's key (which
+       is what the same flow does the moment its example changes, and this seam is what changes it) then found
+       nothing recorded and re-forked a settled fact. */
+    {
+        int last = outcome_nth(n - 1, n, real);
+        outcome_settle(over, op, n, last);
+        return last;
+    }
 }
