@@ -33,7 +33,9 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "quickjs-step.h"
 #include "core/idl_args.h"
+#include "core/idl_index_arg.h"
 #include "core/realm.h"
 #include "core/idl_indexed.h"
 #include "core/dom/node.h"
@@ -505,32 +507,61 @@ static JSValue js_coll_length(JSContext *ctx, JSValueConst this_val, int magic)
    value ≥ 2^31 is past the end under either sign), so nothing ever fired. The declaration is the spec of the
    conversion; a body re-deriving the sign is the second copy of §3.2.4.9's arithmetic that idl_args.c exists to
    prevent. */
-static JSValue js_coll_item(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+/* IT IS A STEP MACHINE BECAUSE ITS ONE ARGUMENT CAN BE UNKNOWN. The index reaches this body unconverted
+ * because §3.2's conversion is a boundary unknown external input crosses AS ITSELF (idl_concolic_rule answers
+ * IDL_CONCOLIC_CROSSES for every integer type), and reading it with a raw numeric coercion — which is what
+ * stood here — is the shape core/idl_args.h bans by name: a concolic is an object, so ToNumber reaches
+ * ToPrimitive from a plain C frame and the engine aborts INSIDE the coercion rather than at this member. The
+ * fork is core/idl_index_arg.h's elimination chain, and asking it needs a state to snapshot.
+ *
+ * ONE MACHINE FOR BOTH INTERFACES, exactly as there was one plain body: §4.2.10.1's and §4.2.10.2's `item` are
+ * the same operation over the same conversion, and the declaration below is installed on both prototypes. The
+ * chain's key names the ALGORITHM and the NUMBER, so a flow that answers `index == 3` at a NodeList has stated
+ * a fact about the value and not about that collection's contents. */
+#define COLL_ITEM_ALGORITHM "DOM §4.2.10 Old-style collections: NodeList and HTMLCollection item(index)"
+#define COLL_ITEM_STAGES(X)                                                                                   \
+    X(COLL_ITEM_READ, COLL_ITEM_ALGORITHM " (return the indexth node or element in the collection, or null)")
+enum { IDL_STEP_STAGE_BASE(COLL_ITEM_STAGES) COLL_ITEM_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const COLL_ITEM_STEPS[] = { COLL_ITEM_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+static int js_coll_item(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSValueConst *argv,
+                        JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
+    IdlIndexChain *s = state;
     uint32_t i = 0;
+    bool past_end = false;
     JSValue r;
 
-    (void)magic;
-    DCHECK(argc >= 1, "§4.2.10's `item` reached its body with no argument — its IDL argument is required, so "
-                      "the declaration's own argument-count check is what should have refused the call");
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);   /* this machine makes no request that delivers a value */
+    *presult = JS_UNDEFINED;
+    DCHECK(hdr->stage == COLL_ITEM_READ,
+           "§4.2.10's `item` resumed into a stage the algorithm does not have — it is ONE sentence, and the "
+           "chain of questions it may ask is a cursor on this machine's own state rather than a stage apiece");
+    DCHECK(argc == 1,
+           "§4.2.10's `item` reached its body with an argument count its declaration does not produce — its "
+           "one `unsigned long index` is required, so §3.6's argument-count check refuses a shorter call");
     if (concolic_is(argv[0])) {
-        /* AN UNKNOWN INDEX, and it reaches the body unconverted because §3.2's conversion is a boundary unknown
-           external input crosses AS ITSELF (idl_concolic_rule answers IDL_CONCOLIC_CROSSES for every integer
-           type). The empty collection is the one length at which that has an answer rather than a fork:
-           §4.2.10.1 returns null for every index at or past the length.
-           READING IT WITH `JS_ToInt64` INSTEAD — which is what stood here — IS THE SHAPE idl_args.h BANS BY
-           NAME: a concolic is an object, so ToNumber reaches ToPrimitive and runs a getter from a plain C
-           frame, which this engine aborts on somewhere inside the coercion rather than here at the member. */
-        DCHECK(coll_length(ctx, this_val) == 0,
-               "§4.2.10's `item` was given an UNKNOWN index into a NON-EMPTY NodeList or HTMLCollection — every "
-               "node in it is a distinct answer, so the read must FORK one flow per supported index (plus the "
-               "null arm for an index past the end) instead of deciding it here");
-        return JS_NULL;
+        int rc = idl_index_chain_run(ctx, hdr, s, argv[0], coll_length(ctx, hdr->this_val),
+                                     COLL_ITEM_ALGORITHM, &i, &past_end);
+        if (rc)
+            return rc;   /* parked at the fork */
+        if (past_end) {
+            *presult = JS_NULL;   /* §4.2.10.1's and §4.2.10.2's own past-the-end answer */
+            return JS_STEP_DONE;
+        }
+    } else {
+        i = idl_index_arg_known(ctx, argv[0], COLL_ITEM_ALGORITHM);
     }
-    JS_ToUint32(ctx, &i, argv[0]);   /* the declaration's §3.2.4.6 conversion already produced [0, 2**32-1] */
-    r = coll_item(ctx, this_val, i);
-    return JS_IsUndefined(r) ? JS_NULL : r;
+    r = coll_item(ctx, hdr->this_val, i);
+    *presult = JS_IsUndefined(r) ? JS_NULL : r;
+    return JS_STEP_DONE;
 }
+
+static const IdlStepDecl COLL_ITEM_DECL = {
+    js_coll_item, sizeof(IdlIndexChain), idl_index_chain_visit, NULL,
+    COLL_ITEM_ALGORITHM, COLL_ITEM_STEPS, 0, NULL
+};
 
 static JSValue js_coll_named_item(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
@@ -686,7 +717,7 @@ void collections_init(JSContext *ctx)
     JS_NewClass(JS_GetRuntime(ctx), g_htmlcoll_class, &hc);
     /* ONE declaration for `item`, installed on BOTH prototypes — it is the same operation with the same
        conversion in both IDLs, and two pool entries would be two copies of one fact. */
-    g_item_id = idl_method_id(ctx, ONE_ULONG, 1, js_coll_item, 0);
+    g_item_id = idl_method_id_step(ctx, ONE_ULONG, 1, NULL, 0, &COLL_ITEM_DECL, 0);
     g_named_item_id = idl_method_id(ctx, ONE_STR, 1, js_coll_named_item, 0);
     g_ready = 1;
     realm_declare_intrinsic(collections_install_protos);

@@ -5,9 +5,11 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "quickjs-step.h"
 #include "core/agent_state.h"
 #include "core/html/dom_string_list.h"
 #include "core/idl_args.h"
+#include "core/idl_index_arg.h"
 #include "core/idl_indexed.h"
 #include "core/realm.h"
 #include "solver/concolic.h"
@@ -77,32 +79,60 @@ static bool dsl_is(JSContext *ctx, JSValueConst v)
 }
 
 /* "The item(index) method steps are to return the indexth item in this's associated list, or null if index plus
-   one is greater than this's associated list's size." */
-static JSValue js_dsl_item(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
-{
-    JSValue s;
-    uint32_t i = 0;
+ * one is greater than this's associated list's size."
+ *
+ * IT IS A STEP MACHINE BECAUSE ITS ONE ARGUMENT CAN BE UNKNOWN. A `JS_ToUint32` of `argv[0]` with its return
+ * discarded stood here — the shape core/idl_args.h bans by name — under a DCHECK that refused an unknown index
+ * into a NON-EMPTY list and named the fork to build. That fork is core/idl_index_arg.h's elimination chain. */
+#define DSL_ITEM_ALGORITHM "HTML §2.6.5 The DOMStringList interface item(index)"
+#define DSL_ITEM_STAGES(X)                                                                                    \
+    X(DSL_ITEM_READ, DSL_ITEM_ALGORITHM " (return the indexth item in this's associated list, or null)")
+enum { IDL_STEP_STAGE_BASE(DSL_ITEM_STAGES) DSL_ITEM_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const DSL_ITEM_STEPS[] = { DSL_ITEM_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-    (void)magic;
-    if (!dsl_is(ctx, this_val))
-        return JS_ThrowTypeError(ctx, "DOMStringList.prototype.item was reached on something that is not a "
-                                      "DOMStringList");
-    DCHECK(argc >= 1, "§2.6.5's `item` reached its body with no argument — its IDL argument is required, so the "
-                      "declaration's own argument-count check is what should have refused the call");
-    if (concolic_is(argv[0])) {
-        /* AN UNKNOWN INDEX, and the empty list is the one size at which that has an answer rather than a fork:
-           §2.6.5 returns null for every index at or past the size, so a list of size zero answers null over the
-           WHOLE domain and there is no arm to explore. */
-        DCHECK(dsl_length(ctx, this_val) == 0,
-               "§2.6.5's `item` was given an UNKNOWN index into a NON-EMPTY DOMStringList — every string in it "
-               "is a distinct answer, so the read must FORK one flow per supported index (plus the null arm for "
-               "an index past the end) instead of deciding it here");
-        return JS_NULL;
+static int js_dsl_item(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSValueConst *argv,
+                       JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    IdlIndexChain *st = state;
+    uint32_t i = 0;
+    bool past_end = false;
+    JSValue s;
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);   /* this machine makes no request that delivers a value */
+    *presult = JS_UNDEFINED;
+    DCHECK(hdr->stage == DSL_ITEM_READ,
+           "§2.6.5's `item` resumed into a stage the algorithm does not have — it is ONE sentence, and the "
+           "chain of questions it may ask is a cursor on this machine's own state rather than a stage apiece");
+    DCHECK(argc == 1,
+           "§2.6.5's `item` reached its body with an argument count its declaration does not produce — its one "
+           "`unsigned long index` is required, so §3.6's argument-count check refuses a shorter call first");
+    if (!dsl_is(ctx, hdr->this_val)) {
+        JS_ThrowTypeError(ctx, "DOMStringList.prototype.item was reached on something that is not a "
+                               "DOMStringList");
+        return JS_STEP_ABRUPT;
     }
-    JS_ToUint32(ctx, &i, argv[0]);
-    s = dsl_item(ctx, this_val, i);
-    return JS_IsUndefined(s) ? JS_NULL : s;
+    if (concolic_is(argv[0])) {
+        int rc = idl_index_chain_run(ctx, hdr, st, argv[0], dsl_length(ctx, hdr->this_val),
+                                     DSL_ITEM_ALGORITHM, &i, &past_end);
+        if (rc)
+            return rc;   /* parked at the fork */
+        if (past_end) {
+            *presult = JS_NULL;   /* §2.6.5's own past-the-end answer */
+            return JS_STEP_DONE;
+        }
+    } else {
+        i = idl_index_arg_known(ctx, argv[0], DSL_ITEM_ALGORITHM);
+    }
+    s = dsl_item(ctx, hdr->this_val, i);
+    *presult = JS_IsUndefined(s) ? JS_NULL : s;
+    return JS_STEP_DONE;
 }
+
+static const IdlStepDecl DSL_ITEM_DECL = {
+    js_dsl_item, sizeof(IdlIndexChain), idl_index_chain_visit, NULL,
+    DSL_ITEM_ALGORITHM, DSL_ITEM_STEPS, 0, NULL
+};
 
 /* "The contains(string) method steps are to return true if this's associated list CONTAINS string, and false
    otherwise" — Infra's list containment, which for strings is code-unit equality. The engine holds a string as
@@ -188,7 +218,9 @@ void dom_string_list_init(JSContext *ctx)
     CHECK(!JS_IsException(g_strings_key), "the DOMStringList slot key allocation failed");
     g_atom_strings = JS_ValueToAtom(ctx, g_strings_key);
     CHECK(g_atom_strings != JS_ATOM_NULL, "the DOMStringList slot key could not be interned");
-    g_id_item = idl_method_id(ctx, ONE_ULONG, 1, js_dsl_item, 0);
+    /* §2.6.5's `item` IS A MACHINE — a declaration and not a dispatch, since there is no second body for
+       anything to select against. Its one `unsigned long index` can be unknown external input. */
+    g_id_item = idl_method_id_step(ctx, ONE_ULONG, 1, NULL, 0, &DSL_ITEM_DECL, 0);
     g_id_contains = idl_method_id(ctx, ONE_STR, 1, js_dsl_contains, 0);
     agent_state_class("dom_string_list", &g_list_class, "the DOMStringList class, and the declaration latch");
     agent_state_value("dom_string_list", &g_strings_key, "the private Symbol the string Array hangs off");

@@ -11,9 +11,11 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "quickjs-step.h"
 #include "core/css/media_list.h"
 #include "core/css/media_query.h"
 #include "core/idl_args.h"
+#include "core/idl_index_arg.h"
 #include "core/idl_indexed.h"
 #include "core/realm.h"
 #include "solver/concolic.h"   /* CSSOM §4.4's `item` takes an index unknown input crosses AS ITSELF */
@@ -218,35 +220,63 @@ static JSValue js_ml_length(JSContext *ctx, JSValueConst this_val, int magic)
 /* "The item(index) method must return a serialization of the media query in the collection of media queries
    given by index, or null, if index is greater than or equal to the number of media queries in the collection
    of media queries." That null is the whole difference from the indexed getter, which is why both exist. */
-static JSValue js_ml_item(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+/* IT IS A STEP MACHINE BECAUSE ITS ONE ARGUMENT CAN BE UNKNOWN. A `JS_ToUint32` of `argv[0]` with its return
+ * discarded stood here under a comment saying the declaration had already converted it — the shape
+ * core/idl_args.h bans by name — and Web IDL §3.2's conversion is a BOUNDARY unknown external input crosses AS
+ * ITSELF (idl_concolic_rule answers IDL_CONCOLIC_CROSSES for every integer type, IDL_UNSIGNED_LONG among
+ * them), so `ml.item(location.hash.length)` reached that line still holding the unknown. The coercion does not
+ * return a wrong number: ToNumber hands a concolic straight back and the engine aborts INSIDE it, one frame
+ * below this file, which is why checking the return is no defence — there is no return to check.
+ * THE FORK IS core/idl_index_arg.h's elimination chain, and asking it is what a plain C activation has nowhere
+ * to park for. */
+#define ML_ITEM_ALGORITHM "CSSOM §4.4 The MediaList Interface item(index)"
+#define ML_ITEM_STAGES(X)                                                                                     \
+    X(ML_ITEM_READ, ML_ITEM_ALGORITHM " (return a serialization of the media query given by index, or null)")
+enum { IDL_STEP_STAGE_BASE(ML_ITEM_STAGES) ML_ITEM_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const ML_ITEM_STEPS[] = { ML_ITEM_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+static int js_ml_item(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSValueConst *argv,
+                      JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
+    IdlIndexChain *s = state;
     uint32_t i = 0;
+    bool past_end = false;
     JSValue q;
 
-    (void)magic;
-    if (!ml_here(ctx, this_val, "item")) return JS_EXCEPTION;
-    DCHECK(argc >= 1, "§4.4's `item` reached its body with no argument — its IDL argument is required, so the "
-                      "declaration's own argument-count check is what should have refused the call");
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);   /* this machine makes no request that delivers a value */
+    *presult = JS_UNDEFINED;
+    DCHECK(hdr->stage == ML_ITEM_READ,
+           "§4.4's `item` resumed into a stage the algorithm does not have — it is ONE sentence, and the chain "
+           "of questions it may ask is a cursor on this machine's own state rather than a stage apiece");
+    DCHECK(argc == 1,
+           "§4.4's `item` reached its body with an argument count its declaration does not produce — its one "
+           "`unsigned long index` is required, so §3.6's argument-count check refuses a shorter call first");
+    if (!ml_here(ctx, hdr->this_val, "item"))
+        return JS_STEP_ABRUPT;   /* §3.7.7 Operations' TypeError on a receiver that is not a MediaList */
     if (concolic_is(argv[0])) {
-        /* AN UNKNOWN INDEX, and it reaches the body unconverted because a Web IDL §3.2 conversion is a boundary
-           unknown external input crosses AS ITSELF (idl_args.h's idl_concolic_rule answers IDL_CONCOLIC_CROSSES
-           for every integer type, IDL_UNSIGNED_LONG among them). The EMPTY collection is the one length at
-           which that has an answer rather than a fork: CSSOM §4.4 The MediaList Interface returns null for
-           every index greater than or equal to the number of media queries, and at zero that is every index
-           there is.
-           RUNNING `JS_ToUint32` OVER IT INSTEAD — which is what stood here — IS THE SHAPE idl_args.h BANS BY
-           NAME: a concolic is a real JSObject, so ToNumber reaches ToPrimitive and runs a getter from a plain
-           C frame, which this engine aborts on somewhere inside the coercion rather than here at the member. */
-        DCHECK(ml_length(ctx, this_val) == 0,
-               "CSSOM §4.4 The MediaList Interface's `item` was given an UNKNOWN index into a NON-EMPTY "
-               "MediaList — every media query in it is a distinct answer, so the read must FORK one flow per "
-               "supported index (plus the null arm for an index past the end) instead of deciding it here");
-        return JS_NULL;
+        int rc = idl_index_chain_run(ctx, hdr, s, argv[0], ml_length(ctx, hdr->this_val),
+                                     ML_ITEM_ALGORITHM, &i, &past_end);
+        if (rc)
+            return rc;   /* parked at the fork */
+        if (past_end) {
+            /* §4.4's OWN past-the-end answer: null "if index is greater than or equal to the number of media
+               queries in the collection of media queries". */
+            *presult = JS_NULL;
+            return JS_STEP_DONE;
+        }
+    } else {
+        i = idl_index_arg_known(ctx, argv[0], ML_ITEM_ALGORITHM);
     }
-    JS_ToUint32(ctx, &i, argv[0]);   /* the declaration ran Web IDL §3.2.4.6 unsigned long: already [0, 2**32-1] */
-    q = ml_item(ctx, this_val, i);
-    return JS_IsUndefined(q) ? JS_NULL : q;
+    q = ml_item(ctx, hdr->this_val, i);
+    *presult = JS_IsUndefined(q) ? JS_NULL : q;
+    return JS_STEP_DONE;
 }
+
+static const IdlStepDecl ML_ITEM_DECL = {
+    js_ml_item, sizeof(IdlIndexChain), idl_index_chain_visit, NULL,
+    ML_ITEM_ALGORITHM, ML_ITEM_STEPS, 0, NULL
+};
 
 /* §4.4's "COMPARING" two media queries, which the spec names and does not define. It is the CANONICAL FORM that
    decides: both sides have been through the same parse and the same §4.2 serializer, so `(MIN-WIDTH:5PX)` and
@@ -405,7 +435,9 @@ void media_list_init(JSContext *ctx)
     g_atom_queries = JS_ValueToAtom(ctx, g_queries_key);
     CHECK(g_atom_queries != JS_ATOM_NULL, "the MediaList slot key could not be interned");
     g_id_set_media_text = idl_setter_id(ctx, IDL_DOMSTRING, /*null_to_empty*/ true, js_ml_set_media_text, 0);
-    g_id_item = idl_method_id(ctx, ONE_ULONG, 1, js_ml_item, 0);
+    /* §4.4's `item` IS A MACHINE — a declaration and not a dispatch, since there is no second body for
+       anything to select against. Its one `unsigned long index` can be unknown external input. */
+    g_id_item = idl_method_id_step(ctx, ONE_ULONG, 1, NULL, 0, &ML_ITEM_DECL, 0);
     g_id_append = idl_method_id(ctx, ONE_STR, 1, js_ml_append, 0);
     g_id_delete = idl_method_id(ctx, ONE_STR, 1, js_ml_delete, 0);
     g_id_to_string = idl_method_id(ctx, ONE_STR, 1, js_ml_to_string, 0);

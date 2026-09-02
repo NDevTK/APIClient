@@ -2134,97 +2134,36 @@ JSValue css_rule_list_delete(JSContext *ctx, JSValueConst list, uint32_t index)
 }
 
 /* §6.4's REMOVE A CSS RULE, STEPS 2 AND 3, OVER AN UNKNOWN `index` — see css_rule.h for why the two steps are
-   ONE question here and why each link's key names a NUMBER rather than a rank.
-   THE SHAPE IS core/timing/timer.c's clearTimeout CHAIN and deliberately not a second mechanism: an N-way ask
-   whose completions were positions would file one key per LIST LENGTH and press the return protocol's ceiling
-   for a sheet with many rules, where a chain of two-armed asks forks ONE sibling per link, is drawn lazily as
-   the scheduler picks the machine up again, and keeps `n == 2` at every ask.
-   THE ORDER IS ASCENDING AND THE PARENT SITS ON THE EXAMPLE'S ARM AT EVERY LINK. The sequence is a function of
-   the list length alone, so it is the same sequence in a sibling's snapshot, after a park, and in a session
-   that resumes this flow from the cold tier; the parent answers each question with what its own example says
-   (NO at every position the example is not, YES at the one it is), so the example marks the real arm primary
-   at every link, which is §Learning-from-replies' rule. With NO example the parent walks the whole chain
-   and throws, and one sibling per position carries the removal — neither arm marked forced, because nothing
-   was contradicted.
-   OUTCOME 0 IS "NO" AT EVERY LINK, which is step_fork_run's one numbering rule read against this predicate.
-   A run with no forking policy — the @S candidate re-fire — answers NO all the way down and removes nothing.
-   It must: `deleteRule` DELETES page state, so a numbering that put a removal on the arm a re-fire takes would
-   let a candidate tear out the very rule whose sink it is running to reach. */
-int css_rule_delete_index_run(JSContext *ctx, JSStepHdr *hdr, CssRuleIndexChain *c,
+   ONE question and why each link's key names a NUMBER rather than a rank.
+   THE CHAIN ITSELF IS core/idl_index_arg.h's AND NOT THIS FILE'S. It was written out here first, and then the
+   `item(index)` family turned out to ask the identical question of the identical Web IDL type — so the loop,
+   the operation string, the example reading and the arm numbering moved to the one component every member of
+   that family now shares, and this file keeps exactly what is §6.4's: how many positions the algorithm admits
+   (`>=` length, which is `array_len` positions — insert-a-CSS-rule's `>` length would be one more), and what
+   the past-the-end world IS. That last part is why this wrapper exists rather than the two `deleteRule`s
+   calling the chain themselves: step 2's answer is an EXCEPTION where every `item(index)` returns a value, and
+   the algorithm that says so is written once.
+   THE OPERATION STRING IS UNCHANGED, deliberately: a flow parked in the cold tier holds decisions keyed on it,
+   and a chain that renamed its own questions would answer a resumed flow's recorded key with nothing. */
+int css_rule_delete_index_run(JSContext *ctx, JSStepHdr *hdr, IdlIndexChain *c,
                               JSValueConst index_v, JSValueConst list, uint32_t *pindex)
 {
-    uint32_t n;
-    double num = 0;
-    int have;
+    bool past_end = false;
+    int rc;
 
     DCHECK(JS_IsArray(list), "§6.4's remove a CSS rule was given something that is not a CSS rule list");
-    DCHECK(concolic_is(index_v),
-           "§6.4's step 2 elimination chain was asked about an index that is NOT unknown external input — a "
-           "converted `unsigned long` is idl_number_of's to read and reaches its position directly, so a known "
-           "value here means the caller routed the wrong arm and would fork over a number it already has");
-    n = array_len(ctx, list);
-    /* THE EXAMPLE IS READ ONCE PER ENTRY AND ABOVE THE CHAIN, so every question this activation asks is decided
-       against ONE reading of it — taking it again inside the loop would be two reads of one example with
-       nothing forcing them to agree. `have` is 0 for an unknown carrying no example, which is a POSITIVE fact
-       the chain reads as JS_OUTCOME_REAL_UNSTATED and never as a position to fall back on. */
-    have = idl_number_of(ctx, IDL_UNSIGNED_LONG, index_v, &num);
-
-    for (;;) {
-        uint32_t k = c->next;
-        int arm = 0, real, rc, wrote;
-
-        /* EVERY POSITION ELIMINATED, WHICH IS STEP 2'S OWN TRUE ARM: "If index is greater than or equal to
-           length, then throw an "IndexSizeError" exception". §3.2.4.6 unsigned long admits no value below 0,
-           so "none of 0 … length-1" and "greater than or equal to length" are the same statement about this
-           value. It is also the WHOLE answer for an EMPTY list, which is why an empty one asks no question:
-           one feasible completion is not a fork, it is the answer. */
-        if (k >= n) {
-            JS_ThrowDOMException(ctx, "IndexSizeError", "the index is at or past the end of the rule list");
-            return JS_STEP_ABRUPT;
-        }
-        /* THE MACHINE'S SECOND DECLARATION — which completion this operation reaches on the operand's own
-           EXAMPLE, computed by RUNNING the comparison rather than by a rule predicting it. §3.2.4.6's
-           ConvertToInt(V, 32, "unsigned") has already been run on the example above, through the one copy of
-           that arithmetic, so its result is an integer in [0, 2**32-1] and the cast below is exact. */
-        real = have ? ((uint32_t)num == k) : JS_OUTCOME_REAL_UNSTATED;
-        wrote = snprintf(c->op, sizeof c->op,
-                         "CSSOM §6.4 CSS Rules remove a CSS rule steps 2-3 (index is %u)", (unsigned)k);
-        /* A TRUNCATED OPERATION STRING MERGES TWO PREDICATES. The position is the LAST thing in this string, so
-           a buffer one byte short would file two positions under one key and let one link's record decide
-           another's. snprintf reports what it WOULD have written, which is the only way to see it. */
-        DCHECK(wrote > 0 && (size_t)wrote < sizeof c->op,
-               "§6.4's step 2 elimination chain could not spell the position its question is about — the "
-               "operation string is half the constraint key and the position is its tail, so a truncated one "
-               "names a DIFFERENT position's question and the flow answers it with this one's record");
-        rc = step_fork_run(ctx, hdr, index_v, c->op, 2, real, &arm);
-        if (rc)
-            return rc;
-        DCHECK(arm == 0 || arm == 1, "a two-armed outcome fork answered with an arm that is neither of them");
-        /* NAMED RESIDUAL — the DECISION is recorded and the value's DOMAIN is not, which is narrower than
-           §Solver's concretize-on-pin and is not wrong: an unnarrowed value keeps arms, and keeping an arm is
-           the sound direction. WHAT IS NOT COVERED: each link is an equality over `index` — the YES arm proves
-           it IS this position and the NO arm proves it is NOT — and neither fact reaches the value; only the
-           decision vector holds them. WHAT THE NEXT DIFF BUILDS: the pin and the exclusion decide.c already
-           takes at a bytecode equality, taken over the OPERAND's own identity rather than off a comparison
-           RESULT this seam does not have — the same piece core/timing/timer.c's chain names, and one piece for
-           both. HOW ITS ABSENCE SHOWS: a flow that has answered YES at some position and then reaches a second
-           `deleteRule(index)` mints a sibling for every OTHER position the list holds — worlds its own path has
-           already contradicted — and an @H parameter carrying this value renders with no domain beside it
-           where the run observed one. */
-        if (arm == 1) {
-            /* THIS WORLD'S ANSWER: `index` IS this position, so step 3's "the indexth item in list" names it.
-               The length was read at the top of this same entry and nothing has run since — step_fork_run runs
-               none of the page's code and the driver only clones and re-enters — so the caller's own read of
-               the list cannot disagree with the one this chain was drawn against. */
-            *pindex = k;
-            return 0;
-        }
-        /* ELIMINATED: `index` is not this position, so the next question is about the next one. The cursor is
-           advanced AFTER the answer and never before the ask, which is what makes the two arms agree: the
-           sibling's snapshot was taken with the cursor still at `k`, so it re-asks about the same position and
-           answers the other way. */
-        c->next = k + 1;
+    rc = idl_index_chain_run(ctx, hdr, c, index_v, array_len(ctx, list),
+                             CSS_RULE_REMOVE_INDEX_ALGORITHM, pindex, &past_end);
+    if (rc)
+        return rc;   /* parked at the fork */
+    if (past_end) {
+        /* EVERY POSITION ELIMINATED IS STEP 2'S OWN TRUE ARM: "If index is greater than or equal to length,
+           then throw an "IndexSizeError" exception". §3.2.4.6 unsigned long admits no value below 0, so "none
+           of 0 ... length-1" and "greater than or equal to length" are the same statement about this value. */
+        JS_ThrowDOMException(ctx, "IndexSizeError", "the index is at or past the end of the rule list");
+        return JS_STEP_ABRUPT;
     }
+    return 0;   /* *pindex is the position step 3's "the indexth item in list" names in this world */
 }
 
 /* ---- §6.4's SERIALIZE A CSS RULE ---------------------------------------------------------------------------- */
@@ -3860,12 +3799,14 @@ static JSValue js_rule_insert_rule(JSContext *ctx, JSValueConst this_val, int ar
  * reached this line still holding the unknown and the coercion owed C a number it cannot have. That coercion
  * does not return a wrong number: ToNumber hands a concolic straight back and the engine aborts INSIDE it, one
  * frame below this file, which is why CHECKING THE RETURN IS NO DEFENCE — there is no return to check.
- * THE KNOWN VALUE IS ANSWERED BY THE ONE COPY OF THE ARITHMETIC (`idl_number_of`), which for an
- * already-converted argument is exactly the assert pair this site would otherwise write itself: the operand is
- * a Number, and reading it back cannot throw. So the discarded return is not asserted dead, it is REMOVED.
+ * THE KNOWN VALUE IS ANSWERED BY THE ONE COPY OF THE ARITHMETIC (core/idl_index_arg.h's
+ * `idl_index_arg_known`), which for an already-converted argument is exactly the assert pair this site would
+ * otherwise write itself: the operand is a Number, and reading it back cannot throw. So the discarded return
+ * is not asserted dead, it is REMOVED.
  * THE UNKNOWN IS §6.4's OWN FORK and asking it is what a plain body has nowhere to park for: step_fork_run
  * snapshots the MACHINE, and a C activation has no state to clone. css_rule_delete_index_run holds the
- * question; this body holds the receiver, the list and the completion. */
+ * question — §6.4's positions and §6.4's IndexSizeError over core/idl_index_arg.h's elimination chain — and
+ * this body holds the receiver, the list and the completion. */
 #define RD_STAGES(X)                                                                                          \
     X(RD_REMOVE,                                                                                              \
       "CSSOM §6.4.5 The CSSGroupingRule Interface deleteRule(index) (the deleteRule(index) method must "       \
@@ -3881,7 +3822,7 @@ static void rd_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (voi
 static int js_rule_delete_rule(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSValueConst *argv,
                                JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
-    CssRuleIndexChain *s = state;
+    IdlIndexChain *s = state;
     uint32_t index = 0;
     JSValue list, out;
     int rc;
@@ -3915,22 +3856,11 @@ static int js_rule_delete_rule(JSContext *ctx, JSStepHdr *hdr, void *state, int 
             return rc;   /* parked at the fork, or step 2's IndexSizeError already thrown */
         }
     } else {
-        double d = 0;
-        int have = idl_number_of(ctx, IDL_UNSIGNED_LONG, argv[0], &d);
-
-        DCHECK(have,
-               "§3.2.4.6's conversion produced no number for a position this arm has already established is "
-               "NOT unknown external input — idl_number_of answers 0 only for an unknown carrying no example, "
-               "so a 0 here is a value that is neither a Number nor a concolic reaching a body whose "
-               "declaration converts its one numeric argument");
-        /* §3.2.4.6 `unsigned long`'s own postcondition: §3.2.4.9 Abstract operations' ConvertToInt takes the
-           integer part modulo 2**32, so the result is always an integer in [0, 2**32-1] — NaN and both
-           infinities became +0 in the conversion. */
-        DCHECK(d >= 0 && d <= 4294967295.0 && d == (double)(uint32_t)d,
-               "§3.2.4.6's `unsigned long` conversion answered something that is not an unsigned long — its "
-               "result is the integer part taken modulo 2**32, so a value outside it, or one with a fraction, "
-               "means this position was never converted by anything");
-        index = (uint32_t)d;
+        /* THE KNOWN VALUE, THROUGH THE ONE COPY OF THE ARITHMETIC AND ITS ASSERTS. This arm used to spell out
+           `idl_number_of` and §3.2.4.6's two postconditions itself, in the same words as the other
+           `deleteRule` and as every `item(index)` — one fact written eleven times. It is
+           core/idl_index_arg.h's now, beside the chain that answers the unknown half. */
+        index = idl_index_arg_known(ctx, argv[0], CSS_RULE_REMOVE_INDEX_ALGORITHM);
     }
     out = css_rule_list_delete(ctx, list, index);
     JS_FreeValue(ctx, list);
@@ -3945,7 +3875,7 @@ static int js_rule_delete_rule(JSContext *ctx, JSStepHdr *hdr, void *state, int 
    that can deliver one, so the epilogue's handling is the right one — and `unforkable` NULL says this machine
    may ALWAYS be forked, which is the whole of what it exists for. */
 static const IdlStepDecl RD_DECL = {
-    js_rule_delete_rule, sizeof(CssRuleIndexChain), rd_visit, NULL,
+    js_rule_delete_rule, sizeof(IdlIndexChain), rd_visit, NULL,
     "CSSOM §6.4.5 The CSSGroupingRule Interface deleteRule(index)", RD_STEPS, 0, NULL
 };
 

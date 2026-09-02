@@ -20,11 +20,13 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "quickjs-step.h"
 #include "core/css/css_style_sheet.h"
 #include "core/css/style_sheet_list.h"
 #include "core/dom/node.h"
 #include "core/dom/shadow_root.h"
 #include "core/idl_args.h"
+#include "core/idl_index_arg.h"
 #include "core/idl_indexed.h"
 #include "core/realm.h"
 #include "solver/concolic.h"
@@ -313,33 +315,62 @@ static bool ssl_is(JSContext *ctx, JSValueConst v)
 }
 
 /* §6.2.2's `item(index)`: "must return the indexth CSS style sheet in the collection. If there is no indexth
-   object in the collection, then the method must return null." The difference from the indexed getter is
-   exactly that null, which is why both exist. */
-static JSValue js_ssl_item(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
-{
-    JSValue r;
-    uint32_t i = 0;
+ * object in the collection, then the method must return null." The difference from the indexed getter is
+ * exactly that null, which is why both exist.
+ *
+ * IT IS A STEP MACHINE FOR THE REASON EVERY `item(index)` IN THIS ENGINE IS — see core/idl_index_arg.h. A raw
+ * `JS_ToUint32` of `argv[0]` with its return discarded stood here, under a DCHECK that refused an unknown
+ * index into a non-empty list and named the fork to build; that fork is the elimination chain, and asking it
+ * needs a state to snapshot. */
+#define SSL_ITEM_ALGORITHM "CSSOM §6.2.2 The StyleSheetList Interface item(index)"
+#define SSL_ITEM_STAGES(X)                                                                                    \
+    X(SSL_ITEM_READ, SSL_ITEM_ALGORITHM " (return the indexth CSS style sheet in the collection, or null)")
+enum { IDL_STEP_STAGE_BASE(SSL_ITEM_STAGES) SSL_ITEM_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const SSL_ITEM_STEPS[] = { SSL_ITEM_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-    (void)magic;
-    if (!ssl_is(ctx, this_val))
-        return JS_ThrowTypeError(ctx, "StyleSheetList.prototype.item was reached on something that is not a "
-                                      "StyleSheetList");
-    DCHECK(argc >= 1, "§6.2.2's `item` reached its body with no argument — its IDL argument is required, so the "
-                      "declaration's own argument-count check is what should have refused the call");
-    if (concolic_is(argv[0])) {
-        /* AN UNKNOWN INDEX. The empty collection is the one length at which that has an answer rather than a
-           fork: §6.2.2 returns null for every index at or past the length, so a collection of length zero
-           answers null over the WHOLE domain and there is no arm to explore. */
-        DCHECK(ssl_length(ctx, this_val) == 0,
-               "§6.2.2's `item` was given an UNKNOWN index into a NON-EMPTY StyleSheetList — every sheet in it "
-               "is a distinct answer, so the read must FORK one flow per supported index (plus the null arm "
-               "for an index past the end) instead of deciding it here");
-        return JS_NULL;
+static int js_ssl_item(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSValueConst *argv,
+                       JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    IdlIndexChain *s = state;
+    uint32_t i = 0;
+    bool past_end = false;
+    JSValue r;
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);   /* this machine makes no request that delivers a value */
+    *presult = JS_UNDEFINED;
+    DCHECK(hdr->stage == SSL_ITEM_READ,
+           "§6.2.2's `item` resumed into a stage the algorithm does not have — it is ONE sentence, and the "
+           "chain of questions it may ask is a cursor on this machine's own state rather than a stage apiece");
+    DCHECK(argc == 1,
+           "§6.2.2's `item` reached its body with an argument count its declaration does not produce — its one "
+           "`unsigned long index` is required, so §3.6's argument-count check refuses a shorter call first");
+    if (!ssl_is(ctx, hdr->this_val)) {
+        JS_ThrowTypeError(ctx, "StyleSheetList.prototype.item was reached on something that is not a "
+                               "StyleSheetList");
+        return JS_STEP_ABRUPT;
     }
-    JS_ToUint32(ctx, &i, argv[0]);
-    r = ssl_item(ctx, this_val, i);
-    return JS_IsUndefined(r) ? JS_NULL : r;
+    if (concolic_is(argv[0])) {
+        int rc = idl_index_chain_run(ctx, hdr, s, argv[0], ssl_length(ctx, hdr->this_val),
+                                     SSL_ITEM_ALGORITHM, &i, &past_end);
+        if (rc)
+            return rc;   /* parked at the fork */
+        if (past_end) {
+            *presult = JS_NULL;   /* §6.2.2's own past-the-end answer */
+            return JS_STEP_DONE;
+        }
+    } else {
+        i = idl_index_arg_known(ctx, argv[0], SSL_ITEM_ALGORITHM);
+    }
+    r = ssl_item(ctx, hdr->this_val, i);
+    *presult = JS_IsUndefined(r) ? JS_NULL : r;
+    return JS_STEP_DONE;
 }
+
+static const IdlStepDecl SSL_ITEM_DECL = {
+    js_ssl_item, sizeof(IdlIndexChain), idl_index_chain_visit, NULL,
+    SSL_ITEM_ALGORITHM, SSL_ITEM_STEPS, 0, NULL
+};
 
 static JSValue js_ssl_length(JSContext *ctx, JSValueConst this_val, int magic)
 {
@@ -408,7 +439,9 @@ void style_sheet_list_init(JSContext *ctx)
     g_atom_backing = JS_ValueToAtom(ctx, g_backing_key);
     CHECK(g_atom_sheets != JS_ATOM_NULL && g_atom_view != JS_ATOM_NULL && g_atom_holder != JS_ATOM_NULL &&
           g_atom_backing != JS_ATOM_NULL, "the §6.2 slot keys could not be interned");
-    g_id_item = idl_method_id(ctx, ONE_ULONG, 1, js_ssl_item, 0);
+    /* §6.2.2's `item` IS A MACHINE — a declaration and not a dispatch, since there is no second body for
+       anything to select against. Its one `unsigned long index` can be unknown external input. */
+    g_id_item = idl_method_id_step(ctx, ONE_ULONG, 1, NULL, 0, &SSL_ITEM_DECL, 0);
     realm_declare_intrinsic(style_sheet_list_install_proto);
 }
 

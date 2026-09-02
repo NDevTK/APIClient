@@ -4,10 +4,12 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "quickjs-step.h"
 #include "core/agent_state.h"
 #include "core/geometry/dom_rect.h"
 #include "core/geometry/dom_rect_list.h"
 #include "core/idl_args.h"
+#include "core/idl_index_arg.h"
 #include "core/idl_indexed.h"
 #include "core/realm.h"
 #include "solver/concolic.h"
@@ -75,35 +77,64 @@ static bool drl_is(JSContext *ctx, JSValueConst v)
 }
 
 /* §4's `item(index)` — "return null when index is greater than or equal to the number of DOMRect objects
-   associated with the DOMRectList. Otherwise, the DOMRect object at index must be returned." The difference
-   from the indexed getter is exactly that null, which is why both exist. */
-static JSValue js_drl_item(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
-{
-    JSValue r;
-    uint32_t i = 0;
+ * associated with the DOMRectList. Otherwise, the DOMRect object at index must be returned." The difference
+ * from the indexed getter is exactly that null, which is why both exist.
+ *
+ * IT IS A STEP MACHINE BECAUSE ITS ONE ARGUMENT CAN BE UNKNOWN. A `JS_ToUint32` of `argv[0]` with its return
+ * discarded stood here — the shape core/idl_args.h bans by name — under a DCHECK that refused an unknown index
+ * into a NON-EMPTY list and named the fork to build. That fork is core/idl_index_arg.h's elimination chain,
+ * and the DCHECK's own sentence is what it now performs: one flow per supported index, plus the null arm for
+ * an index past the end. */
+#define DRL_ITEM_ALGORITHM "Geometry §4 The DOMRectList interface item(index)"
+#define DRL_ITEM_STAGES(X)                                                                                    \
+    X(DRL_ITEM_READ, DRL_ITEM_ALGORITHM " (return the DOMRect object at index, or null past the end)")
+enum { IDL_STEP_STAGE_BASE(DRL_ITEM_STAGES) DRL_ITEM_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const DRL_ITEM_STEPS[] = { DRL_ITEM_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-    (void)magic;
-    if (!drl_is(ctx, this_val))
-        return JS_ThrowTypeError(ctx, "DOMRectList.prototype.item was reached on something that is not a "
-                                      "DOMRectList");
-    DCHECK(argc >= 1, "§4's `item` reached its body with no argument — its IDL argument is required, so the "
-                      "declaration's own argument-count check is what should have refused the call");
-    if (concolic_is(argv[0])) {
-        /* AN UNKNOWN INDEX, and the empty list is the one length at which that has an answer rather than a
-           fork: §4 returns null for every index at or past the length, so a list of length zero answers null
-           over the WHOLE domain and there is no arm to explore. The assert is what says that rather than a
-           comment — the day a producer builds a non-empty list, this read has as many answers as the list has
-           rectangles and must fork, and this fires at the line that has to do it. */
-        DCHECK(drl_length(ctx, this_val) == 0,
-               "§4's `item` was given an UNKNOWN index into a NON-EMPTY DOMRectList — every rectangle in it is "
-               "a distinct answer, so the read must FORK one flow per supported index (plus the null arm for "
-               "an index past the end) instead of deciding it here");
-        return JS_NULL;
+static int js_drl_item(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSValueConst *argv,
+                       JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    IdlIndexChain *s = state;
+    uint32_t i = 0;
+    bool past_end = false;
+    JSValue r;
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);   /* this machine makes no request that delivers a value */
+    *presult = JS_UNDEFINED;
+    DCHECK(hdr->stage == DRL_ITEM_READ,
+           "§4's `item` resumed into a stage the algorithm does not have — it is ONE sentence, and the chain "
+           "of questions it may ask is a cursor on this machine's own state rather than a stage apiece");
+    DCHECK(argc == 1,
+           "§4's `item` reached its body with an argument count its declaration does not produce — its one "
+           "`unsigned long index` is required, so §3.6's argument-count check refuses a shorter call first");
+    if (!drl_is(ctx, hdr->this_val)) {
+        JS_ThrowTypeError(ctx, "DOMRectList.prototype.item was reached on something that is not a DOMRectList");
+        return JS_STEP_ABRUPT;
     }
-    JS_ToUint32(ctx, &i, argv[0]);
-    r = drl_item(ctx, this_val, i);
-    return JS_IsUndefined(r) ? JS_NULL : r;
+    if (concolic_is(argv[0])) {
+        int rc = idl_index_chain_run(ctx, hdr, s, argv[0], drl_length(ctx, hdr->this_val),
+                                     DRL_ITEM_ALGORITHM, &i, &past_end);
+        if (rc)
+            return rc;   /* parked at the fork */
+        if (past_end) {
+            /* §4's OWN past-the-end answer: null "when index is greater than or equal to the number of DOMRect
+               objects associated with the DOMRectList". */
+            *presult = JS_NULL;
+            return JS_STEP_DONE;
+        }
+    } else {
+        i = idl_index_arg_known(ctx, argv[0], DRL_ITEM_ALGORITHM);
+    }
+    r = drl_item(ctx, hdr->this_val, i);
+    *presult = JS_IsUndefined(r) ? JS_NULL : r;
+    return JS_STEP_DONE;
 }
+
+static const IdlStepDecl DRL_ITEM_DECL = {
+    js_drl_item, sizeof(IdlIndexChain), idl_index_chain_visit, NULL,
+    DRL_ITEM_ALGORITHM, DRL_ITEM_STEPS, 0, NULL
+};
 
 static JSValue js_drl_length(JSContext *ctx, JSValueConst this_val, int magic)
 {
@@ -145,7 +176,9 @@ void dom_rect_list_init(JSContext *ctx)
     CHECK(!JS_IsException(g_rects_key), "the DOMRectList slot key allocation failed");
     g_atom_rects = JS_ValueToAtom(ctx, g_rects_key);
     CHECK(g_atom_rects != JS_ATOM_NULL, "the DOMRectList slot key could not be interned");
-    g_id_item = idl_method_id(ctx, ONE_ULONG, 1, js_drl_item, 0);
+    /* §4's `item` IS A MACHINE — a declaration and not a dispatch, since there is no second body for
+       anything to select against. Its one `unsigned long index` can be unknown external input. */
+    g_id_item = idl_method_id_step(ctx, ONE_ULONG, 1, NULL, 0, &DRL_ITEM_DECL, 0);
     agent_state_class("dom_rect_list", &g_list_class, "the DOMRectList class, and the declaration latch");
     agent_state_value("dom_rect_list", &g_rects_key, "the private Symbol the rectangle Array hangs off");
     agent_state_atom("dom_rect_list", &g_atom_rects, "that Symbol, interned");

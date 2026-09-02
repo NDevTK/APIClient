@@ -31,9 +31,11 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "quickjs-step.h"
 #include "core/file/blob.h"
 #include "core/file/file_list.h"
 #include "core/idl_args.h"
+#include "core/idl_index_arg.h"
 #include "core/idl_indexed.h"
 #include "core/realm.h"
 #include "solver/concolic.h"   /* §5.2's `item` takes an index unknown external input crosses AS ITSELF */
@@ -140,40 +142,68 @@ static JSValue js_fl_length(JSContext *ctx, JSValueConst this_val, int magic)
 }
 
 /* §5.2's `item(index)`: "must return the indexth File object in the FileList. If there is no indexth File
-   object in the FileList, then this method must return null." NULL and not undefined — that is the whole
-   difference between the OPERATION and the indexed getter above, and `fl.item(0)` on an empty list is the way
-   §5's own sample code tests for a file. */
-static JSValue js_fl_item(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+ * object in the FileList, then this method must return null." NULL and not undefined — that is the whole
+ * difference between the OPERATION and the indexed getter above, and `fl.item(0)` on an empty list is the way
+ * §5's own sample code tests for a file.
+ *
+ * IT IS A STEP MACHINE BECAUSE ITS ONE ARGUMENT CAN BE UNKNOWN, AND IT IS NOT "a real number by now" — the
+ * sentence that once stood here said the declaration had converted it, and core/idl_args.h says the opposite
+ * BY NAME: idl_concolic_rule answers IDL_CONCOLIC_CROSSES for every integer type, IDL_UNSIGNED_LONG included,
+ * so a Web IDL §3.2 conversion is a BOUNDARY unknown external input crosses AS ITSELF and the body is handed
+ * the concolic. Running `JS_ToUint32` over it is the shape idl_args.h bans: a concolic is a real JSObject, so
+ * ToNumber reaches ToPrimitive from a plain C frame and the engine aborts INSIDE the coercion, one frame below
+ * this file, which is why checking the return is no defence. The fork is core/idl_index_arg.h's elimination
+ * chain, and asking it is what a plain C activation has nowhere to park for. */
+#define FL_ITEM_ALGORITHM "File API §5.2 Methods and Parameters item(index)"
+#define FL_ITEM_STAGES(X)                                                                                     \
+    X(FL_ITEM_READ, FL_ITEM_ALGORITHM " (return the indexth File object in the FileList, or null)")
+enum { IDL_STEP_STAGE_BASE(FL_ITEM_STAGES) FL_ITEM_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const FL_ITEM_STEPS[] = { FL_ITEM_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+static int js_fl_item(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSValueConst *argv,
+                      JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
+    IdlIndexChain *s = state;
     uint32_t i = 0;
+    bool past_end = false;
     JSValue r;
 
-    (void)magic;
-    if (!file_list_is(ctx, this_val)) return JS_ThrowTypeError(ctx, "not a FileList");
-    DCHECK(argc >= 1, "§5.2's item(index) reached its body with no argument — `index` is REQUIRED, so the "
-                      "argument-count check the declaration performs has already thrown for a bare item()");
-    if (concolic_is(argv[0])) {
-        /* AN UNKNOWN INDEX, and it is NOT "a real number by now" — the sentence that stood here said the
-           declaration had converted it, and idl_args.h says the opposite BY NAME: idl_concolic_rule answers
-           IDL_CONCOLIC_CROSSES for every integer type, IDL_UNSIGNED_LONG included, so a Web IDL §3.2 conversion is a
-           BOUNDARY unknown external input crosses AS ITSELF and the body is handed the concolic. The EMPTY
-           list is the one length at which that has an answer rather than a fork: §5.2 returns null when there
-           is no indexth File object, and at zero files that is every index there is.
-           RUNNING `JS_ToUint32` OVER IT INSTEAD IS THE SHAPE idl_args.h BANS: a concolic is a real JSObject,
-           so ToNumber reaches ToPrimitive and runs a getter from a plain C frame, which this engine aborts on
-           somewhere inside the coercion rather than here at the member. */
-        DCHECK(file_list_length(ctx, this_val) == 0,
-               "§5.2's item(index) was given an UNKNOWN index into a NON-EMPTY FileList — every File in it is a "
-               "distinct answer, so the read must FORK one flow per supported index (plus the null arm for an "
-               "index past the end) instead of deciding it here");
-        return JS_NULL;
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);   /* this machine makes no request that delivers a value */
+    *presult = JS_UNDEFINED;
+    DCHECK(hdr->stage == FL_ITEM_READ,
+           "§5.2's item(index) resumed into a stage the algorithm does not have — it is ONE sentence, and the "
+           "chain of questions it may ask is a cursor on this machine's own state rather than a stage apiece");
+    DCHECK(argc == 1,
+           "§5.2's item(index) reached its body with an argument count its declaration does not produce — "
+           "`index` is REQUIRED, so §3.6's argument-count check refuses a bare item() before this body runs");
+    if (!file_list_is(ctx, hdr->this_val)) {
+        JS_ThrowTypeError(ctx, "not a FileList");
+        return JS_STEP_ABRUPT;
     }
-    /* The declaration ran Web IDL §3.2.4.6 unsigned long's ConvertToInt(V, 32, "unsigned"), which is Web IDL
-       §3.2.4.9 Abstract operations' modulo and not a clamp — `fl.item(2**32)` is item 0. */
-    JS_ToUint32(ctx, &i, argv[0]);
-    r = file_list_item(ctx, this_val, i);
-    return JS_IsUndefined(r) ? JS_NULL : r;
+    if (concolic_is(argv[0])) {
+        int rc = idl_index_chain_run(ctx, hdr, s, argv[0], file_list_length(ctx, hdr->this_val),
+                                     FL_ITEM_ALGORITHM, &i, &past_end);
+        if (rc)
+            return rc;   /* parked at the fork */
+        if (past_end) {
+            *presult = JS_NULL;   /* §5.2's own answer when there is no indexth File object */
+            return JS_STEP_DONE;
+        }
+    } else {
+        /* The declaration ran Web IDL §3.2.4.6 unsigned long's ConvertToInt(V, 32, "unsigned"), which is
+           §3.2.4.9 Abstract operations' modulo and not a clamp — `fl.item(2**32)` is item 0. */
+        i = idl_index_arg_known(ctx, argv[0], FL_ITEM_ALGORITHM);
+    }
+    r = file_list_item(ctx, hdr->this_val, i);
+    *presult = JS_IsUndefined(r) ? JS_NULL : r;
+    return JS_STEP_DONE;
 }
+
+static const IdlStepDecl FL_ITEM_DECL = {
+    js_fl_item, sizeof(IdlIndexChain), idl_index_chain_visit, NULL,
+    FL_ITEM_ALGORITHM, FL_ITEM_STEPS, 0, NULL
+};
 
 /* ---- construction ----------------------------------------------------------------------------------------- */
 
@@ -233,7 +263,9 @@ void file_list_init(JSContext *ctx)
     CHECK(!JS_IsException(g_files_key), "the FileList slot key allocation failed");
     g_files_atom = JS_ValueToAtom(ctx, g_files_key);
     CHECK(g_files_atom != JS_ATOM_NULL, "the FileList slot key could not be interned");
-    g_item_id = idl_method_id(ctx, ITEM_ARGS, 1, js_fl_item, 0);   /* §5.2: `index` is REQUIRED */
+    /* §5.2's `item` IS A MACHINE — a declaration and not a dispatch, since there is no second body for
+       anything to select against. `index` is REQUIRED, and it can be unknown external input. */
+    g_item_id = idl_method_id_step(ctx, ITEM_ARGS, 1, NULL, 0, &FL_ITEM_DECL, 0);
     g_ready = 1;
     realm_declare_intrinsic(file_list_install_protos);
 }

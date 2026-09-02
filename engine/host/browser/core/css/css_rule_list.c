@@ -10,9 +10,11 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "quickjs-step.h"
 #include "core/css/css_rule.h"
 #include "core/css/css_rule_list.h"
 #include "core/idl_args.h"
+#include "core/idl_index_arg.h"
 #include "core/idl_indexed.h"
 #include "core/realm.h"
 #include "solver/concolic.h"
@@ -75,32 +77,73 @@ static bool crl_is(JSContext *ctx, JSValueConst v)
 }
 
 /* §6.4.1's `item(index)`: "must return the indexth CSSRule object in the collection. If there is no indexth
-   object in the collection, then the method must return null." That null is the whole difference from the
-   indexed getter, which is why both exist. */
-static JSValue js_crl_item(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
-{
-    JSValue r;
-    uint32_t i = 0;
+ * object in the collection, then the method must return null." That null is the whole difference from the
+ * indexed getter, which is why both exist.
+ *
+ * IT IS A STEP MACHINE BECAUSE ITS ONE ARGUMENT CAN BE UNKNOWN, AND A PLAIN BODY CANNOT ASK. A raw
+ * `JS_ToUint32` of `argv[0]` stood here with its return discarded — the shape core/idl_args.h bans by name —
+ * and above it a DCHECK that refused the unknown for a NON-EMPTY list, naming the fork to build. That fork is
+ * core/idl_index_arg.h's elimination chain, and asking it is what a plain C activation has nowhere to park
+ * for: step_fork_run snapshots the MACHINE.
+ *
+ * ITS FORK IS THE COMPLETE ONE, which is why this family is where the chain costs least. Exhaustion is an
+ * ordinary VALUE — §6.4.1's own null — rather than an exception, and the index is used nowhere else in the
+ * member, so the chain's two answers ARE the algorithm and there is nothing left over holding an unknown. */
+#define CRL_ITEM_ALGORITHM "CSSOM §6.4.1 The CSSRuleList Interface item(index)"
+#define CRL_ITEM_STAGES(X)                                                                                    \
+    X(CRL_ITEM_READ, CRL_ITEM_ALGORITHM " (return the indexth CSSRule object in the collection, or null)")
+enum { IDL_STEP_STAGE_BASE(CRL_ITEM_STAGES) CRL_ITEM_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const CRL_ITEM_STEPS[] = { CRL_ITEM_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-    (void)magic;
-    if (!crl_is(ctx, this_val))
-        return JS_ThrowTypeError(ctx, "CSSRuleList.prototype.item was reached on something that is not a "
-                                      "CSSRuleList");
-    DCHECK(argc >= 1, "§6.4.1's `item` reached its body with no argument — its IDL argument is required, so the "
-                      "declaration's own argument-count check is what should have refused the call");
-    if (concolic_is(argv[0])) {
-        /* AN UNKNOWN INDEX. The empty collection is the one length at which that has an answer rather than a
-           fork: §6.4.1 returns null for every index at or past the length. */
-        DCHECK(crl_length(ctx, this_val) == 0,
-               "§6.4.1's `item` was given an UNKNOWN index into a NON-EMPTY CSSRuleList — every rule in it is a "
-               "distinct answer, so the read must FORK one flow per supported index (plus the null arm for an "
-               "index past the end) instead of deciding it here");
-        return JS_NULL;
+static int js_crl_item(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSValueConst *argv,
+                       JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    IdlIndexChain *s = state;
+    uint32_t i = 0;
+    bool past_end = false;
+    JSValue r;
+
+    (void)out_cb; (void)out_argc;
+    /* This machine makes no request that delivers a value, so nothing below reads the answer to one. Freed on
+       every entry, above everything else, because it belongs to no link of the chain. */
+    JS_FreeValue(ctx, cb_result);
+    *presult = JS_UNDEFINED;
+    DCHECK(hdr->stage == CRL_ITEM_READ,
+           "§6.4.1's `item` resumed into a stage the algorithm does not have — it is ONE sentence, and the "
+           "chain of questions it may ask is a cursor on this machine's own state rather than a stage apiece");
+    DCHECK(argc == 1,
+           "§6.4.1's `item` reached its body with an argument count its declaration does not produce — its one "
+           "`unsigned long index` is required, so §3.6's argument-count check refuses a shorter call first");
+    /* Re-derived on every entry rather than held across the fork: no line between the entry and the ask runs
+       the page's code — step_fork_run only clones and re-enters — so re-deriving cannot answer differently. */
+    if (!crl_is(ctx, hdr->this_val)) {
+        JS_ThrowTypeError(ctx, "CSSRuleList.prototype.item was reached on something that is not a CSSRuleList");
+        return JS_STEP_ABRUPT;
     }
-    JS_ToUint32(ctx, &i, argv[0]);
-    r = crl_item(ctx, this_val, i);
-    return JS_IsUndefined(r) ? JS_NULL : r;
+    if (concolic_is(argv[0])) {
+        int rc = idl_index_chain_run(ctx, hdr, s, argv[0], crl_length(ctx, hdr->this_val),
+                                     CRL_ITEM_ALGORITHM, &i, &past_end);
+        if (rc)
+            return rc;   /* parked at the fork */
+        if (past_end) {
+            /* §6.4.1's OWN past-the-end answer, stated here because it is this member's and not the chain's. */
+            *presult = JS_NULL;
+            return JS_STEP_DONE;
+        }
+    } else {
+        i = idl_index_arg_known(ctx, argv[0], CRL_ITEM_ALGORITHM);
+    }
+    r = crl_item(ctx, hdr->this_val, i);
+    *presult = JS_IsUndefined(r) ? JS_NULL : r;
+    return JS_STEP_DONE;
 }
+
+/* `catches_abrupt` 0 says this algorithm does NOT handle an abrupt request result itself — it makes no request
+   that can deliver one — and `unforkable` NULL says the machine may ALWAYS be forked, which is what it is for. */
+static const IdlStepDecl CRL_ITEM_DECL = {
+    js_crl_item, sizeof(IdlIndexChain), idl_index_chain_visit, NULL,
+    CRL_ITEM_ALGORITHM, CRL_ITEM_STEPS, 0, NULL
+};
 
 static JSValue js_crl_length(JSContext *ctx, JSValueConst this_val, int magic)
 {
@@ -140,7 +183,11 @@ void css_rule_list_init(JSContext *ctx)
     CHECK(!JS_IsException(g_rules_key), "the CSSRuleList slot key allocation failed");
     g_atom_rules = JS_ValueToAtom(ctx, g_rules_key);
     CHECK(g_atom_rules != JS_ATOM_NULL, "the CSSRuleList slot key could not be interned");
-    g_id_item = idl_method_id(ctx, ONE_ULONG, 1, js_crl_item, 0);
+    /* §6.4.1's `item` IS A MACHINE, and it is a DECLARATION rather than a dispatch: nothing asks at a call
+       site which implementation to run, because there is no second body for anything to select against. Its
+       one `unsigned long index` can be unknown external input, and asking its position needs a state to
+       snapshot. */
+    g_id_item = idl_method_id_step(ctx, ONE_ULONG, 1, NULL, 0, &CRL_ITEM_DECL, 0);
     realm_declare_intrinsic(css_rule_list_install_proto);
 }
 

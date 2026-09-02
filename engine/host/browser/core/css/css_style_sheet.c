@@ -450,10 +450,12 @@ static JSValue js_sheet_insert_rule(JSContext *ctx, JSValueConst this_val, int a
  * `sheet.deleteRule(location.hash.length)` reached that line still holding the unknown and the coercion owed C
  * a number it cannot have. ToNumber hands a concolic straight back, so the engine aborts INSIDE the coercion,
  * one frame below this file: checking its return would have been no defence, because there is no return to
- * check. The known value now goes through `idl_number_of`, §3.2's one reader for a body that needs a real
- * number, and the discarded return is REMOVED rather than asserted dead.
+ * check. The known value goes through core/idl_index_arg.h's `idl_index_arg_known` — §3.2's one reader for a
+ * body that needs a real number, plus §3.2.4.6's own postconditions, written once for every member of this
+ * family instead of once per member — and the discarded return is REMOVED rather than asserted dead.
  * THE UNKNOWN IS §6.4's OWN FORK — css_rule_delete_index_run holds the question, and it lives beside the
- * algorithm in core/css/css_rule.c because §6.4.5's `deleteRule` is stated over the same one. */
+ * algorithm in core/css/css_rule.c because §6.4.5's `deleteRule` is stated over the same one; the elimination
+ * chain underneath it is core/idl_index_arg.h's, shared with the whole `item(index)` family. */
 #define SD_STAGES(X)                                                                                          \
     X(SD_REMOVE,                                                                                              \
       "CSSOM §6.1.2 The CSSStyleSheet Interface deleteRule(index) step 3 (remove a CSS rule in the CSS rules "  \
@@ -469,7 +471,7 @@ static void sd_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (voi
 static int js_sheet_delete_rule(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSValueConst *argv,
                                 JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
-    CssRuleIndexChain *c = state;
+    IdlIndexChain *c = state;
     CssStyleSheetData *s;
     uint32_t index = 0;
     JSValue out;
@@ -503,22 +505,11 @@ static int js_sheet_delete_rule(JSContext *ctx, JSStepHdr *hdr, void *state, int
         if (rc)
             return rc;   /* parked at the fork, or §6.4 step 2's IndexSizeError already thrown */
     } else {
-        double d = 0;
-        int have = idl_number_of(ctx, IDL_UNSIGNED_LONG, argv[0], &d);
-
-        DCHECK(have,
-               "§3.2.4.6's conversion produced no number for a position this arm has already established is "
-               "NOT unknown external input — idl_number_of answers 0 only for an unknown carrying no example, "
-               "so a 0 here is a value that is neither a Number nor a concolic reaching a body whose "
-               "declaration converts its one numeric argument");
-        /* §3.2.4.6 `unsigned long`'s own postcondition: §3.2.4.9 Abstract operations' ConvertToInt takes the
-           integer part modulo 2**32, so the result is always an integer in [0, 2**32-1] — NaN and both
-           infinities became +0 in the conversion. */
-        DCHECK(d >= 0 && d <= 4294967295.0 && d == (double)(uint32_t)d,
-               "§3.2.4.6's `unsigned long` conversion answered something that is not an unsigned long — its "
-               "result is the integer part taken modulo 2**32, so a value outside it, or one with a fraction, "
-               "means this position was never converted by anything");
-        index = (uint32_t)d;
+        /* THE KNOWN VALUE, THROUGH THE ONE COPY OF THE ARITHMETIC AND ITS ASSERTS. This arm used to spell out
+           `idl_number_of` and §3.2.4.6's two postconditions itself, in the same words as the other
+           `deleteRule` and as every `item(index)` — one fact written eleven times. It is
+           core/idl_index_arg.h's now, beside the chain that answers the unknown half. */
+        index = idl_index_arg_known(ctx, argv[0], CSS_RULE_REMOVE_INDEX_ALGORITHM);
     }
     out = css_rule_list_delete(ctx, s->rules, index);
     if (JS_IsException(out))
@@ -532,7 +523,7 @@ static int js_sheet_delete_rule(JSContext *ctx, JSStepHdr *hdr, void *state, int
    that can deliver one, so the epilogue's handling is the right one — and `unforkable` NULL says this machine
    may ALWAYS be forked, which is the whole of what it exists for. */
 static const IdlStepDecl SD_DECL = {
-    js_sheet_delete_rule, sizeof(CssRuleIndexChain), sd_visit, NULL,
+    js_sheet_delete_rule, sizeof(IdlIndexChain), sd_visit, NULL,
     "CSSOM §6.1.2 The CSSStyleSheet Interface deleteRule(index)", SD_STEPS, 0, NULL
 };
 
