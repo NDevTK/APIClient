@@ -959,6 +959,38 @@ static const char *HTML =
     /* headingOffset has a range and NO default, so its fallback is the range's minimum. */
     "var ihd = document.createElement('div'); ihd.setAttribute('headingoffset', 'x');"
     "fetch('/api/ulmin?v=' + (ihd.headingOffset === 0 && ihd.headingReset === false ? 'ismin' : 'wrong'));"
+    /* HTML §4.10.13 "The progress element" and §4.10.14 "The meter element" — the two numbers in each section
+       that ONLY its own order produces, over plain attributes so `===` is legal here.
+       §4.10.13: "the current value is the maximum value, if value is greater than the maximum value, and
+       value otherwise", so `<progress value=5 max=2>` reads `value` 2 and `position` 1. An implementation
+       answering the VALUE OF THE PROGRESS BAR instead reads 5 and 2.5, and one that clamped only `position`
+       reads 5 and 1 — three distinct answers, and only one of them is here.
+       §4.10.14: "If the candidate high boundary is less than the low boundary, then the high boundary is the
+       low boundary", which is the one place in the six where the lower bound is NOT the minimum value. With
+       low 8 and high 2 the high boundary is 8; clamping it into [minimum, maximum] like the other three gives
+       2, and neither number can be reached by luck from the other's rule. */
+    "var gp = document.createElement('progress');"
+    "gp.setAttribute('value', '5'); gp.setAttribute('max', '2');"
+    "var gm = document.createElement('meter');"
+    "gm.setAttribute('min', '0'); gm.setAttribute('max', '10');"
+    "gm.setAttribute('low', '8'); gm.setAttribute('high', '2'); gm.setAttribute('value', '5');"
+    "fetch('/api/gaugeorder?v=' + gp.value + '-' + gp.position + '-' + gm.high + '-' + gm.optimum);"
+    /* THE SAME TWO ELEMENTS OVER UNKNOWN EXTERNAL INPUT, which is what has no `===` to make: each read is a
+       DERIVATION and what this asserts is the SHAPE it carries. `position` is computed from the maximum value
+       AND the `value` attribute, and the optimum point's default is "the midpoint between the minimum value
+       and the maximum value" — so `/api/gaugemid`'s emitted shape must name {state} AND {num}, and
+       `/api/gaugepos`'s must name both of its own. A derivation naming ONE of them renders one hole and is
+       the defect these two rows exist to make visible: two gauges differing only in the operand it did not
+       name would share one constraint entry.
+       `'' + num` AND NOT `num`, because §2.3.4.3's rules for parsing floating-point number values consume
+       BYTES: `num`'s own example is the Number 1920, and an attribute whose example is not a string reaches
+       the parse-error arm, which is a true answer to a different question than the one these rows ask. */
+    "var gpu = document.createElement('progress');"
+    "gpu.setAttribute('max', '' + num); gpu.setAttribute('value', '' + state);"
+    "fetch('/api/gaugepos?v=' + gpu.position);"
+    "var gmu = document.createElement('meter');"
+    "gmu.setAttribute('min', '' + state); gmu.setAttribute('max', '' + num);"
+    "fetch('/api/gaugemid?v=' + gmu.optimum);"
     /* HTML §6.5's click() is "Fire a synthetic pointer event named click at this element, with the not
        trusted flag set." — the SAME dispatch, so a handler wired with onclick sees an untrusted, cancelable,
        bubbling event and preventDefault reaches the caller. */
@@ -8961,6 +8993,21 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "/api/ulset",      "isnoclamp"},
         { "/api/ulwindow",   "isdefaultwritten" },
         { "/api/ulmin",      "ismin"    },
+        /* §4.10.13's current value and §4.10.14's low-bounded high boundary, as ONE token whose four numbers
+           no other reading of either section produces: the value of the progress bar reads 5 here and the
+           current value reads 2, and a high boundary clamped into [minimum, maximum] reads 2 where the
+           section's own lower bound gives 8. */
+        { "/api/gaugeorder", "2-1-8-5" },
+        /* THE DERIVATIONS, ASSERTED AS TWO ROWS PER ENDPOINT BECAUSE THE CLAIM IS THAT BOTH OPERANDS ARE
+           NAMED. Each read is computed from unknown external input on two attributes at once, so its shape
+           must carry BOTH holes; a one-operand derivation renders exactly one of them and passes whichever
+           row happens to name the operand it picked. No single row can say that, which is why there are
+           four — and why the token is the HOLE and not a whole shape, which is composed by the sources'
+           own spellers and is not this fixture's claim to make. */
+        { "/api/gaugepos",   "{num}"   },   /* §4.10.13's maximum value, from the `max` attribute */
+        { "/api/gaugepos",   "{state}" },   /* …and the `value` attribute, which the same read divides */
+        { "/api/gaugemid",   "{state}" },   /* §4.10.14's minimum value, one half of the midpoint */
+        { "/api/gaugemid",   "{num}"   },   /* …and the maximum value, the half a one-operand mint dropped */
         { "/api/click",      "isclick" },   /* §3.2.2 click() through the one dispatch machine */
         { "/api/cascade",    "isspec"  },   /* specificity beats document order — the cascade, not a list */
         { "/api/cssinline",  "isinline"},   /* inline layers over the author cascade */

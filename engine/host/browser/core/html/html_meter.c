@@ -1,6 +1,5 @@
 /* HTML §4.10.14 "The meter element" — see html_meter.h for why the six numbers are one algorithm and why the
    two REFLECT_STRING rows they replace were a wrong member rather than a missing one. */
-#include <math.h>
 #include <string.h>
 
 #include <lexbor/dom/dom.h>
@@ -19,9 +18,11 @@
    value, the actual value, the low boundary, the high boundary, the optimum point) and the point is NOT the
    attribute of the same name — two of the six do not read that attribute at all when it is absent (the low
    boundary defaults to the minimum VALUE, the high boundary to the maximum). What lets one index serve both is
-   that §4.10.14 lists the attributes in the order it evaluates the points ("User agents must parse the min,
-   max, value, low, high, and optimum attributes…", then "The minimum value / The maximum value / The actual
-   value / The low boundary / The high boundary / The optimum point"), and that §2.6.2's reflected content
+   that §4.10.14 lists the attributes in the order it evaluates the points — "User agents must parse the min,
+   max, value, low, high, and optimum attributes using the rules for parsing floating-point number values"
+   — and then defines the points under headings in that same order, one per attribute; the six-heading run that
+   stood here as one quotation was six separate headings joined by this file, which is why citegen.mjs could
+   find no such sentence. And §2.6.2's reflected content
    attribute name is "the IDL attribute name converted to ASCII lowercase" — which for all six IS the name. A
    second table pairing them would be a hand-kept copy of that identity. */
 enum { M_MINIMUM = 0, M_MAXIMUM, M_ACTUAL, M_LOW, M_HIGH, M_OPTIMUM, M_N };
@@ -29,17 +30,33 @@ static const char *const METER_NAME[M_N] = { "min", "max", "value", "low", "high
 
 static int g_id_set[M_N] = { -1, -1, -1, -1, -1, -1 };
 
-/* A POINT ON THE GAUGE: the number, and the attribute VALUE that DECIDED it. `from` is BORROWED out of the
-   caller's array of the six raw attribute values, or JS_UNDEFINED when the number came from a constant §4.10.14
-   supplies (zero, 1.0) rather than from anything the page wrote.
-   NAMED RESIDUAL — WHAT IS NOT COVERED: the optimum point's default is "the midpoint between the minimum value
-   and the maximum value", which is computed from TWO operands, and one `from` names one of them. WHAT THE NEXT
-   DIFF BUILDS: a derivation that composes BOTH operands' identities the way solver/concolic.h's
-   `concolic_rel_hook` composes its operator and both operands, called by js_meter_get below in place of the
-   one-operand `concolic_builtin_hook`. HOW ITS ABSENCE WOULD SHOW: a `<meter>` whose `min` and `max` both hold unknown
-   external input files ONE constraint entry for `optimum`, so a flow that pins `max` decides the gate a flow
-   that pins `min` would have forked. */
-typedef struct { double v; JSValueConst from; } MeterPoint;
+/* A POINT ON THE GAUGE: the number, and WHICH OF THE SIX RAW ATTRIBUTES §4.10.14 READ TO PRODUCE IT, as a mask
+ * of M_* bits over the caller's array of the six.
+ *
+ * A MASK AND NOT ONE `from`, BECAUSE NO POINT PAST THE FIRST HAS A SINGLE OPERAND THAT DECIDED IT. That is
+ * what the residual which stood here asked for, and it asked too narrowly: it named only the optimum point's
+ * default, "the candidate optimum point is the midpoint between the minimum value and the maximum value",
+ * because that is the one number here spelled as arithmetic over two. But every clamp in this section is a
+ * COMPARISON over two points, and the comparison reads both whichever one it keeps — `<meter min=A value=B>`
+ * answers A when the clamp takes and B when it does not, so B is what decides whether the answer is A's number
+ * at all. Naming only the point the number came out of gave two gauges differing in an operand it did not name
+ * ONE derivation identity, so a flow's record of either decided the other's gate. solver/concolic.h's
+ * `concolic_new_derived` takes the whole list.
+ *
+ * THE MASK IS ACCUMULATED BY THE ALGORITHM AND NEVER TABULATED. A per-point table naming which attributes
+ * each point reads would be a second, hand-kept copy of the six paragraphs below — the same copy this file
+ * already refuses to keep for the attribute names. Instead each combining step unions the masks of what it
+ * combined, so the six answers fall out of the section's own evaluation order, and a step added or reordered
+ * carries its reads with it.
+ *
+ * ORDERED, AND M_* IS THE ORDER — which is §4.10.14's own, "User agents must parse the min, max, value, low,
+ * high, and optimum attributes using the rules for parsing floating-point number values". A sorted SET
+ * would be the wrong identity for the same reason concolic_new_derived states: these operands play fixed
+ * roles, and a `min` and a `max` that swapped places are a different gauge. */
+typedef struct { double v; unsigned reads; } MeterPoint;
+
+/* The M_* bit an attribute contributes to a point's read mask. */
+#define METER_RD(i) (1u << (i))
 
 /* THE NAMESPACE IS PART OF THE QUESTION — a `meter` in another namespace is a different element with a
    different interface, the same test core/html/html_base_element.c makes for `<base>`. */
@@ -53,7 +70,10 @@ static bool meter_element_is(const lxb_dom_node_t *n)
     return name && len == 5 && memcmp(name, "meter", 5) == 0;
 }
 
-/* WEB IDL §3.7.6's BRAND CHECK — "if `this` does not implement the interface, throw a TypeError". */
+/* WEB IDL §3.7.6 Attributes' BRAND CHECK — the attribute getter's own steps, "If jsValue does not implement
+   target, then:" … "Otherwise, throw a TypeError". What stood here was a paraphrase punctuated as a quotation
+   (`this`, `the interface`), which engine/citegen.mjs reported; see core/html/html_progress.c, which carried
+   the same sentence. */
 static bool meter_receiver(JSContext *ctx, JSValueConst this_val, const char *member)
 {
     if (meter_element_is(node_of(this_val))) return true;
@@ -80,61 +100,90 @@ static bool meter_parsed(JSContext *ctx, JSValueConst raw, double *out)
     return ok;
 }
 
+/* §4.10.14's CANDIDATE FOR ONE POINT — the attribute's own parsed number when "a value could be parsed out of
+   it", and otherwise whatever that paragraph's `dflt` is. The attribute is READ EITHER WAY, and its bit is set
+   either way: a `max` nobody could parse a value out of is what sent the candidate to 1.0, so it decided the
+   answer exactly as a parsable one would have. */
+static MeterPoint meter_cand(JSContext *ctx, JSValueConst *raw, int i, MeterPoint dflt)
+{
+    MeterPoint r = dflt;
+    double p = 0;
+
+    if (meter_parsed(ctx, raw[i], &p)) r.v = p;
+    r.reads = dflt.reads | METER_RD(i);
+    return r;
+}
+
+/* §4.10.14's ONE-SIDED PICK, which only the maximum value ends in: "If the candidate maximum value is greater
+   than or equal to the minimum value, then the maximum value is the candidate maximum value. Otherwise, the
+   maximum value is the same as the minimum value."
+   THE COMPARISON READ BOTH, WHICHEVER ONE IT KEPT, which is the whole reason the mask is unioned rather than
+   taken from the winner: the loser is what decided that the winner won. */
+static MeterPoint meter_pick(MeterPoint a, MeterPoint b, bool take_a)
+{
+    MeterPoint r = take_a ? a : b;
+
+    r.reads = a.reads | b.reads;
+    return r;
+}
+
+/* §4.10.14's TWO-SIDED CLAMP, which the other three points end in — the actual value, the low boundary and the
+   optimum point word for word ("If the candidate … is less than the minimum value, then the … is the minimum
+   value. Otherwise, if the candidate … is greater than the maximum value, then the … is the maximum value.
+   Otherwise, the … is the candidate …"), and the HIGH BOUNDARY with one substitution.
+   `lo` IS A PARAMETER AND NOT `out[M_MINIMUM]`, because the high boundary's lower bound is the LOW BOUNDARY:
+   "If the candidate high boundary is less than the low boundary, then the high boundary is the low boundary."
+   That is the one asymmetry in the six, and writing it as a fourth copy of the clamp is how it gets lost. */
+static MeterPoint meter_clamp(MeterPoint cand, MeterPoint lo, MeterPoint hi)
+{
+    MeterPoint r = cand.v < lo.v ? lo : cand.v > hi.v ? hi : cand;
+
+    r.reads = cand.reads | lo.reads | hi.reads;
+    return r;
+}
+
 /* §4.10.14's SIX POINTS, in the order the section evaluates them, "as some of the values refer to earlier
  * ones". `raw` holds the six attribute values and `out` receives the six points, both indexed by M_*.
  *
- * EACH POINT'S `from` IS THE OPERAND THAT DECIDED IT, which is what the derivation names: a maximum that was
- * clamped up to the minimum is a fact about the `min` attribute and not about the `max` one, and answering
- * otherwise would give two flows that differ in `min` one identity for `max`. */
+ * EACH POINT'S MASK IS UNIONED BY THE STEP THAT PRODUCED IT — see MeterPoint. A maximum that was clamped up to
+ * the minimum is a fact about BOTH attributes: about `min` because that is where its number came from, and
+ * about `max` because that is what made the clamp take. */
 static void meter_points(JSContext *ctx, JSValueConst *raw, MeterPoint *out)
 {
-    MeterPoint cand;
-    double p = 0;
+    MeterPoint cand, mid;
 
     /* THE MINIMUM VALUE — "If the min attribute is specified and a value could be parsed out of it, then the
-       minimum value is that value. Otherwise, the minimum value is zero." */
-    out[M_MINIMUM] = meter_parsed(ctx, raw[M_MINIMUM], &p)
-                    ? (MeterPoint){ p, raw[M_MINIMUM] } : (MeterPoint){ 0, JS_UNDEFINED };
+       minimum value is that value. Otherwise, the minimum value is zero." No earlier point to combine with,
+       so this is the one point whose derivation names a single operand. */
+    out[M_MINIMUM] = meter_cand(ctx, raw, M_MINIMUM, (MeterPoint){ 0, 0 });
 
-    /* THE MAXIMUM VALUE — candidate 1.0 when unparsable, then "if the candidate maximum value is greater than
-       or equal to the minimum value, then the maximum value is the candidate maximum value. Otherwise, the
-       maximum value is the same as the minimum value." */
-    cand = meter_parsed(ctx, raw[M_MAXIMUM], &p) ? (MeterPoint){ p, raw[M_MAXIMUM] }
-                                              : (MeterPoint){ 1.0, JS_UNDEFINED };
-    out[M_MAXIMUM] = cand.v >= out[M_MINIMUM].v ? cand : out[M_MINIMUM];
+    /* THE MAXIMUM VALUE — candidate 1.0 when unparsable, then the one-sided pick against the minimum. */
+    cand = meter_cand(ctx, raw, M_MAXIMUM, (MeterPoint){ 1.0, 0 });
+    out[M_MAXIMUM] = meter_pick(cand, out[M_MINIMUM], cand.v >= out[M_MINIMUM].v);
 
     /* THE ACTUAL VALUE — candidate zero when unparsable, then clamped into [minimum, maximum]. */
-    cand = meter_parsed(ctx, raw[M_ACTUAL], &p) ? (MeterPoint){ p, raw[M_ACTUAL] }
-                                                : (MeterPoint){ 0, JS_UNDEFINED };
-    out[M_ACTUAL] = cand.v < out[M_MINIMUM].v ? out[M_MINIMUM]
-                   : cand.v > out[M_MAXIMUM].v ? out[M_MAXIMUM] : cand;
+    cand = meter_cand(ctx, raw, M_ACTUAL, (MeterPoint){ 0, 0 });
+    out[M_ACTUAL] = meter_clamp(cand, out[M_MINIMUM], out[M_MAXIMUM]);
 
     /* THE LOW BOUNDARY — candidate is "the same as the minimum value" when unparsable, then clamped into
-       [minimum, maximum]. */
-    cand = meter_parsed(ctx, raw[M_LOW], &p) ? (MeterPoint){ p, raw[M_LOW] } : out[M_MINIMUM];
-    out[M_LOW] = cand.v < out[M_MINIMUM].v ? out[M_MINIMUM]
-                : cand.v > out[M_MAXIMUM].v ? out[M_MAXIMUM] : cand;
+       [minimum, maximum]. The default carries the minimum's OWN mask, so a low boundary that fell back to it
+       names what the minimum was computed from and not merely the absent `low`. */
+    cand = meter_cand(ctx, raw, M_LOW, out[M_MINIMUM]);
+    out[M_LOW] = meter_clamp(cand, out[M_MINIMUM], out[M_MAXIMUM]);
 
     /* THE HIGH BOUNDARY — candidate is "the same as the maximum value" when unparsable, and its lower clamp is
-       the LOW BOUNDARY rather than the minimum: "If the candidate high boundary is less than the low boundary,
-       then the high boundary is the low boundary." That is the one asymmetry in the six and it is why the
-       evaluation order is load-bearing. */
-    cand = meter_parsed(ctx, raw[M_HIGH], &p) ? (MeterPoint){ p, raw[M_HIGH] } : out[M_MAXIMUM];
-    out[M_HIGH] = cand.v < out[M_LOW].v ? out[M_LOW]
-                 : cand.v > out[M_MAXIMUM].v ? out[M_MAXIMUM] : cand;
+       the LOW BOUNDARY rather than the minimum. */
+    cand = meter_cand(ctx, raw, M_HIGH, out[M_MAXIMUM]);
+    out[M_HIGH] = meter_clamp(cand, out[M_LOW], out[M_MAXIMUM]);
 
     /* THE OPTIMUM POINT — candidate is "the midpoint between the minimum value and the maximum value" when
-       unparsable, then clamped into [minimum, maximum]. The midpoint is the one number here computed from two
-       operands; see MeterPoint's residual for what naming one of them costs. */
-    if (meter_parsed(ctx, raw[M_OPTIMUM], &p)) {
-        cand.v = p;
-        cand.from = raw[M_OPTIMUM];
-    } else {
-        cand.v = out[M_MINIMUM].v + (out[M_MAXIMUM].v - out[M_MINIMUM].v) / 2;
-        cand.from = concolic_is(out[M_MINIMUM].from) ? out[M_MINIMUM].from : out[M_MAXIMUM].from;
-    }
-    out[M_OPTIMUM] = cand.v < out[M_MINIMUM].v ? out[M_MINIMUM]
-                    : cand.v > out[M_MAXIMUM].v ? out[M_MAXIMUM] : cand;
+       unparsable, then clamped into [minimum, maximum]. The midpoint is arithmetic over two points, so it is
+       the case the residual on MeterPoint named, and it needs no special handling now: the default's mask is
+       the union of the two it averages, and meter_cand and meter_clamp carry it the rest of the way. */
+    mid.v = out[M_MINIMUM].v + (out[M_MAXIMUM].v - out[M_MINIMUM].v) / 2;
+    mid.reads = out[M_MINIMUM].reads | out[M_MAXIMUM].reads;
+    cand = meter_cand(ctx, raw, M_OPTIMUM, mid);
+    out[M_OPTIMUM] = meter_clamp(cand, out[M_MINIMUM], out[M_MAXIMUM]);
 
     /* §4.10.14: "All of which will result in the following inequalities all being true". They are the section's
        own statement about its own algorithm, so a violation is this file's arithmetic and not the page's. */
@@ -151,12 +200,17 @@ static void meter_points(JSContext *ctx, JSValueConst *raw, MeterPoint *out)
 }
 
 /* §4.10.14's six getters, each one sentence: "The value getter steps are to return this's actual value", "The
- * min getter steps are to return this's minimum value", and so on through the optimum point. */
+ * min getter steps are to return this's minimum value", and so on through the optimum point.
+ *
+ * THE DERIVATION NAMES EVERY ATTRIBUTE THE POINT WAS COMPUTED FROM, in M_* order, which is §4.10.14's own
+ * parse order — see MeterPoint. `min` is the only one of the six that names a single operand, and it composes
+ * exactly the bytes concolic_builtin_hook always composed for it, because that entry IS this one at n == 1. */
 static JSValue js_meter_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
+    JSValueConst operands[M_N];
     JSValue raw[M_N], out;
     MeterPoint pt[M_N];
-    int i;
+    int i, n = 0;
 
     DCHECK(magic >= 0 && magic < M_N, "a §4.10.14 getter was installed with a magic that names no gauge point");
     if (!meter_receiver(ctx, this_val, METER_NAME[magic])) return JS_EXCEPTION;
@@ -168,9 +222,21 @@ static JSValue js_meter_get(JSContext *ctx, JSValueConst this_val, int magic)
         }
     }
     meter_points(ctx, raw, pt);
-    out = JS_NewFloat64(ctx, pt[magic].v);
-    if (concolic_is(pt[magic].from))
-        out = concolic_builtin_hook(ctx, pt[magic].from, METER_NAME[magic], out);
+    for (i = 0; i < M_N; i++)
+        if (pt[magic].reads & METER_RD(i)) operands[n++] = raw[i];
+    /* EVERY POINT READS AT LEAST ITS OWN ATTRIBUTE, parsable or not — meter_cand sets that bit on both arms,
+       because an attribute nobody could parse a value out of is what sent the candidate to the paragraph's
+       default. A point with an empty mask would be one this walk produced without reading anything. */
+    DCHECK(n >= 1 && (pt[magic].reads & METER_RD(magic)) != 0,
+           "a §4.10.14 gauge point was computed without reading the attribute of its own name — meter_cand "
+           "sets that bit on the parsed and the unparsable arm alike, so an empty or foreign mask is a step "
+           "in meter_points that assembled a point without going through it");
+    /* An absent attribute is JS_NULL and a plain one is a String, both of which have an identity of their own,
+       so a concrete operand narrows the key rather than erasing it: `<meter min=x max=2>` and `<meter min=x
+       max=9>` are two derivations. JS_UNINITIALIZED means NO operand holds unknown external input, and then
+       the number below is the whole answer. */
+    out = concolic_new_derived(ctx, METER_NAME[magic], operands, n, JS_NewFloat64(ctx, pt[magic].v));
+    if (JS_IsUninitialized(out)) out = JS_NewFloat64(ctx, pt[magic].v);
     for (i = 0; i < M_N; i++) JS_FreeValue(ctx, raw[i]);
     return out;
 }

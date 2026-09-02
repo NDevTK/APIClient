@@ -1,6 +1,5 @@
 /* HTML §4.10.13 "The progress element" — see html_progress.h for why the four members are a component rather
    than rows of core/dom/element.c's reflection registry. */
-#include <math.h>
 #include <string.h>
 
 #include <lexbor/dom/dom.h>
@@ -33,9 +32,13 @@ static bool progress_element_is(const lxb_dom_node_t *n)
     return name && len == 8 && memcmp(name, "progress", 8) == 0;
 }
 
-/* WEB IDL §3.7.6's BRAND CHECK — "if `this` does not implement the interface, throw a TypeError". A member is on
-   a prototype and a page can call it on anything, so the receiver is a real question with a real spec answer
-   rather than an invariant to assert. */
+/* WEB IDL §3.7.6 Attributes' BRAND CHECK — the attribute getter's own steps, "If jsValue does not implement
+   target, then:" … "Otherwise, throw a TypeError". A member is on a prototype and a page can call it on
+   anything, so the receiver is a real question with a real spec answer rather than an invariant to assert.
+   THE WORDS ARE THE SECTION'S NOW AND WERE THIS FILE'S BEFORE. What stood here was a true paraphrase
+   punctuated as a quotation — it named the receiver and the interface in this engine's vocabulary rather than
+   in §3.7.6's, whose steps say jsValue and target — and a quotation is the one thing a reader trusts most and
+   verifies least. engine/citegen.mjs reported it. */
 static lxb_dom_element_t *progress_receiver(JSContext *ctx, JSValueConst this_val, const char *member)
 {
     lxb_dom_node_t *n = node_of(this_val);
@@ -57,36 +60,23 @@ static bool progress_determinate(lxb_dom_element_t *el)
     return lxb_dom_element_has_attribute(el, (const lxb_char_t *)"value", 5);
 }
 
-/* THE NUMBER A §2.6.1 DOUBLE ANSWER DENOTES — the value itself, or the concrete example an unknown carries. A
-   derived answer is a number this engine computed, so its example is always a number when it has one. */
-static double progress_number_of(JSContext *ctx, JSValueConst v)
-{
-    JSValue concrete = concolic_is(v) ? concolic_example(ctx, v) : JS_DupValue(ctx, v);
-    double n = 0;
-
-    if (JS_ToFloat64(ctx, &n, concrete) < 0 || !isfinite(n)) n = 0;
-    JS_FreeValue(ctx, concrete);
-    return n;
-}
-
-/* THE ANSWER, DERIVED FROM THE OPERAND THAT DECIDED IT. `deciding` is the value the number came out of;
-   `other` is the one that took part and did not decide.
-   NAMED RESIDUAL — WHAT IS NOT COVERED: an answer computed from TWO unknown operands (a `<progress>` whose
-   `value` AND `max` both hold unknown external input) is derived from ONE of them, so two flows differing only
-   in `other` share a derivation identity. WHAT THE NEXT DIFF BUILDS: a derivation that composes BOTH operands'
-   identities the way solver/concolic.h's `concolic_rel_hook` composes its operator and both operands, reached
-   from here in place of concolic_builtin_hook. HOW ITS ABSENCE WOULD SHOW: a flow that pins `max` and a flow
-   that pins `value` file one constraint entry for `position`, so the second one's gate is decided by the
-   first's. */
-static JSValue progress_derived(JSContext *ctx, JSValueConst deciding, JSValueConst other, const char *member,
-                                double answer)
-{
-    JSValue out = JS_NewFloat64(ctx, answer);
-
-    if (concolic_is(deciding)) return concolic_builtin_hook(ctx, deciding, member, out);
-    if (concolic_is(other)) return concolic_builtin_hook(ctx, other, member, out);
-    return out;
-}
+/* BOTH OF §4.10.13'S TWO COMPUTED READS NAME BOTH OPERANDS, IN THE ORDER THE SECTION NAMES THEM.
+ *
+ * Each of `value` and `position` is a function of the maximum value AND of the `value` attribute — "the
+ * current value is the maximum value, if value is greater than the maximum value, and value otherwise" —
+ * so neither has ONE operand that decided it: WHICH of the two the number came out of is itself decided by
+ * the other. Naming only the one it came out of gave two `<progress>`es that differ in the operand it did not
+ * name ONE derivation identity, and a flow's record of either then decided the other's gate. That is what the
+ * residual which stood here asked for, and solver/concolic.h's `concolic_new_derived` is it: an ORDERED
+ * operand list, which is the right identity here because these two answers are not symmetric in their
+ * operands (`position` DIVIDES by the maximum) and because the operands play fixed roles that a sorted set
+ * would let swap. `concolic_builtin_hook` is that entry's `n == 1` case, so §2.6.1's own one-operand `max`
+ * getter still composes exactly the bytes it always did.
+ *
+ * THE ORDER IS THE SECTION'S: the sentence above names the maximum value first and the `value` attribute
+ * second, and it is the one sentence both members are built on. It is a fact about the OPERAND LIST and not
+ * about the arithmetic — `position` renders as `position({max}, {value})` while it divides the other way
+ * round, exactly as `min({x}, {y})` renders a list rather than an expression. */
 
 /* §4.10.13's "maximum value of the progress bar", which is also what its `max` member answers:
    `[CEReactions, ReflectPositive, ReflectDefault=1.0] attribute double max` is §2.6.1's double model in both
@@ -105,7 +95,12 @@ static JSValue progress_maximum(JSContext *ctx, JSValueConst this_val)
    Otherwise, if parsing the value attribute's value resulted in an error or a number less than or equal to
    zero, then the value of the progress bar is zero."
    `*praw` receives the attribute VALUE it was parsed from (OWNED), because that is the operand a derivation
-   names. */
+   names.
+   AN UNKNOWN WITH NO EXAMPLE HAS NO BYTES FOR THOSE RULES TO CONSUME, which is the section's own parse-error
+   arm and not a hole this line defaults past — the same answer core/dom/element.c's §2.6.1 double getter
+   gives, stated there, and the reason the zero it produces is a real example the derivation may carry. It is
+   NOT the answer for the MAXIMUM, whose absence js_progress_get treats as an absence, because that one is a
+   number rather than an attribute value and the section states no fallback arm for it. */
 static double progress_value_of(JSContext *ctx, JSValueConst this_val, JSValue *praw)
 {
     JSValue raw = element_attr_get_value(ctx, this_val, "value");
@@ -137,10 +132,15 @@ static JSValue js_progress_get(JSContext *ctx, JSValueConst this_val, int magic)
     lxb_dom_element_t *el = progress_receiver(ctx, this_val,
                                               magic == PG_VALUE ? "value"
                                               : magic == PG_MAX ? "max" : "position");
+    JSValueConst operands[2];
     JSValue maxv, valraw, out;
-    double maximum, value, current;
+    double maximum = 0, value, current = 0, answer = 0;
+    bool have;
 
     if (!el) return JS_EXCEPTION;
+    DCHECK(magic == PG_VALUE || magic == PG_MAX || magic == PG_POSITION,
+           "a §4.10.13 getter was installed with a magic that names none of its three reads — the ternary "
+           "above answers `position` for every value that is neither of the other two");
     if (magic == PG_MAX) return progress_maximum(ctx, this_val);
     /* An INDETERMINATE bar has no `value` attribute at all, so there is no operand to derive from and both
        answers are the section's own constants. */
@@ -148,22 +148,46 @@ static JSValue js_progress_get(JSContext *ctx, JSValueConst this_val, int magic)
 
     maxv = progress_maximum(ctx, this_val);
     if (JS_IsException(maxv)) return maxv;
-    maximum = progress_number_of(ctx, maxv);
-    DCHECK(maximum > 0,
-           "§4.10.13's maximum value of a progress bar came out non-positive — §2.6.1's `limited to only "
-           "positive numbers` getter returns the parsed attribute only when it is greater than zero and the "
-           "[ReflectDefault] 1.0 otherwise, so this is progress_maximum having been asked without them");
+    /* `idl_number_of` AND NOT A LOCAL COERCION, for its own reason: a body may not JS_ToFloat64 its way past
+       unknown external input, and its answer for an unknown is the real conversion run on THAT VALUE'S OWN
+       EXAMPLE. It returns 0 when there is no example, which is a positive statement this member has to
+       answer for itself — see below. */
+    have = idl_number_of(ctx, IDL_DOUBLE, maxv, &maximum) != 0;
+    /* §4.10.13 makes the maximum value 1.0 wherever the `max` attribute is absent, unparsable, or parses to a
+       number not greater than zero, so a maximum this engine HAS a number for is positive — which is what
+       `position` divides by.
+       AN ABSENT NUMBER IS NOT A VIOLATION OF THAT, AND THIS ASSERT USED TO SAY IT WAS. It read the example off
+       the value and treated its absence as a zero maximum, and named as its cause `progress_maximum` having been
+       asked without §2.6.1's [ReflectPositive]/[ReflectDefault] flags — which cannot happen, since this file
+       is that call's only caller and passes them. What actually empties the example is the FLOW: `concolic_example` is per-flow, and a flow
+       that has contradicted this value's example is handed nothing (solver/concolic.h), so an ordinary forced
+       arm aborted the document with an assert blaming a line that was correct. There is no number, so there
+       is no example, and the derivation below carries none rather than a fabricated 0. */
+    DCHECK(!have || maximum > 0,
+           "§4.10.13's maximum value of a progress bar came out non-positive WITH a number in hand — the "
+           "section makes it 1.0 for an absent, unparsable or non-positive `max`, so a zero or negative here "
+           "is element_reflect_double_get having answered against its own [ReflectPositive]/[ReflectDefault]");
     value = progress_value_of(ctx, this_val, &valraw);
-    current = value > maximum ? maximum : value;
+    if (have) {
+        current = value > maximum ? maximum : value;
+        answer = magic == PG_VALUE ? current : current / maximum;
+    }
 
-    /* WHICH OPERAND DECIDED: the clamp took exactly one of them, and `position` divides the number that clamp
-       produced by the maximum. */
-    if (magic == PG_VALUE)
-        out = (value > maximum) ? progress_derived(ctx, maxv, valraw, "value", current)
-                                : progress_derived(ctx, valraw, maxv, "value", current);
-    else
-        out = (value > maximum) ? progress_derived(ctx, maxv, valraw, "position", current / maximum)
-                                : progress_derived(ctx, valraw, maxv, "position", current / maximum);
+    /* THE OPERANDS, IN §4.10.13'S OWN ORDER — see the note above `progress_maximum`. Both are named on every
+       path, including the paths where one of them is a plain number: a concrete operand has an identity too
+       (its value and its type), so naming it is what keeps `<progress value=x max=2>` and `<progress value=x
+       max=9>` two derivations instead of one. */
+    operands[0] = maxv;
+    operands[1] = valraw;
+    out = concolic_new_derived(ctx, magic == PG_VALUE ? "value" : "position", operands, 2,
+                               have ? JS_NewFloat64(ctx, answer) : JS_UNDEFINED);
+    if (JS_IsUninitialized(out)) {
+        DCHECK(have,
+               "§4.10.13's maximum value had no number although NEITHER operand holds unknown external input "
+               "— a `max` attribute that is a plain string or absent reaches §2.6.1's parse-error arm and its "
+               "1.0 default, so the two tests have come apart");
+        out = JS_NewFloat64(ctx, answer);
+    }
     JS_FreeValue(ctx, maxv);
     JS_FreeValue(ctx, valraw);
     return out;
