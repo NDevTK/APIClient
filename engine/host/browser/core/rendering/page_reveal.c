@@ -76,13 +76,59 @@ static JSValue pr_new(JSContext *ctx, JSValue ev, JSValueConst transition)
 }
 
 static const IdlArgType PR_CTOR_ARGS[2] = { IDL_DOMSTRING, IDL_DICT };
+
+/* WEB IDL §3.2.15 Interface types' `I` FOR `ViewTransition`, STATED AS A PREDICATE — the same spelling
+ * core/events/focus_event.c's `relatedTarget` uses, and for a reason that is stronger here than there rather
+ * than weaker: `EventTarget` has no class id because MANY classes implement it, and `ViewTransition` has none
+ * because NONE do. §3.2.15's two steps are "If V implements I, then return the IDL interface type value that
+ * represents a reference to that platform object." and "Throw a TypeError." — so in a build with no
+ * ViewTransition interface, no value implements it and `false` is the answer the standard COMPUTES, not one
+ * this file assumes.
+ *
+ * THE ASSERT IS WHAT MAKES THAT A MEASUREMENT, and it is the identical instrument page_reveal_begin already
+ * uses one screen down for the same absence: §7.4.6.3 Revealing the document step 3 reads doc's active view
+ * transition and hands the event a null, guarded by a `realm_awaits` on the same name. Two sites, one
+ * question, one probe — and the day the interface lands BOTH crash, each naming the work its own step then
+ * owes. Without it this predicate is a `return false` nobody would re-read.
+ *
+ * IT IS NOT A STUB IN §NO-STUBS' SENSE, which is worth stating because it looks like one. A stub is a
+ * shape-only answer standing where the spec computes a real value; this IS the real value, derived from a
+ * capability the realm genuinely does not have, and the crash is what stops it outliving that fact. */
+static bool pr_view_transition_is(JSContext *ctx, JSValueConst v)
+{
+    (void)v;
+    realm_awaits(ctx, "ViewTransition",
+                 "Web IDL §3.2.15 Interface types' brand for `PageRevealEventInit`'s "
+                 "`ViewTransition? viewTransition` — this build now has the interface, so this predicate must "
+                 "become that component's own brand test instead of answering `false` for every value. It is "
+                 "the SAME landing HTML §7.4.6.3 Revealing the document step 3's `realm_awaits` names: that "
+                 "step must then read doc's real active view transition where it now hands over a null");
+    return false;
+}
+
 /* `dictionary PageRevealEventInit : EventInit { ViewTransition? viewTransition = null; }`, in §3.2.17's READ
    order — level first, then spelling within a level. `viewTransition` is declared on PageRevealEventInit and
    the three above are EventInit's, so the level is what says so; it sorts after `composed` anyway, which is
-   why leaving both at zero passed idl_dict_order_check while stating something untrue about the table. */
+   why leaving both at zero passed idl_dict_order_check while stating something untrue about the table.
+
+   IDL_INTERFACE_NULLABLE AND NOT IDL_ANY, AND THE `= null` IS THE IDL'S AND NOT THE BODY'S. This member stood
+   at IDL_ANY with NO BRAND ANYWHERE — not at the declaration and not in the constructor either, which is what
+   separates it from the two members commit 8e4c59de fixed: those branded in a body and therefore threw in the
+   wrong ORDER, while this one never threw at all. `new PageRevealEvent("x", {viewTransition: 42})` stored the
+   number 42 in the event's internal slot and `ev.viewTransition` handed it straight back, where §3.2.15 step 2
+   is "Throw a TypeError." — an `any` where the IDL names an interface, which is the shape a declared type
+   exists to replace.
+   AND THE DEFAULT IS THE OTHER HALF OF THE SAME SENTENCE. The IDL writes `= null`, so §3.2.17 (ES-to-IDL list)
+   step 4.1.5 places it and NO BODY DECIDES WHAT AN ABSENT MEMBER MEANS — the constructor's
+   `if (JS_IsUndefined(transition)) transition = JS_NULL;` is deleted rather than kept beside the declaration,
+   because two statements of one default are free to disagree and only one of them is the IDL's. */
 static const IdlDictMember PR_INIT[] = {
     { "bubbles", IDL_BOOLEAN }, { "cancelable", IDL_BOOLEAN }, { "composed", IDL_BOOLEAN },
-    { "viewTransition", IDL_ANY, false, NULL, 1 },
+    /* THE §3.2.15 TAIL IS NAMED — this struct has gained fields more than once, so a positional initializer
+       running to its end re-aims every value after the next one added, and `iface_narrow` and `iface_is` are
+       both pointers with no diagnostic between them. */
+    { "viewTransition", IDL_INTERFACE_NULLABLE, false, NULL, 1, NULL, IDL_DEFAULT_NULL,
+      .iface_is = pr_view_transition_is, .iface_name = "ViewTransition" },
 };
 
 static JSValue js_pr_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
@@ -103,8 +149,15 @@ static JSValue js_pr_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     if (!type) return JS_EXCEPTION;
     ev = event_new_untrusted(ctx, type, bubbles, cancelable);   /* §2.2: what the PAGE constructs is untrusted */
     JS_FreeCString(ctx, type);
+    /* THE MEMBER ARRIVES CONVERTED, so this read decides nothing and asserts what the declaration promised.
+       §3.2.17 (ES-to-IDL list) step 4.1.5 placed the IDL's own `= null` for an absent member and step 4.1.4.1
+       ran §3.2.15's brand over a present one, so the two shapes that can be here are the IDL null and a
+       ViewTransition — and today there are no ViewTransitions, which is exactly what pr_view_transition_is
+       says and asserts. The undefined-becomes-null line that stood here is gone with the default it
+       duplicated. */
     transition = idl_dict_get(ctx, init, "viewTransition");
-    if (JS_IsUndefined(transition)) { JS_FreeValue(ctx, transition); transition = JS_NULL; }
+    IDL_DCHECK_MEMBER(JS_IsNull(transition) || pr_view_transition_is(ctx, transition), transition,
+                      "viewTransition", "`ViewTransition? viewTransition = null`");
     ev = pr_new(ctx, ev, transition);
     JS_FreeValue(ctx, transition);
     return ev;

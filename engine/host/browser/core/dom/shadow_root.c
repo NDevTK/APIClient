@@ -594,18 +594,27 @@ static const IdlDictMember SHADOW_ROOT_INIT[] = {
        call there has ever been, the override at step 2 was unreachable, and `attachShadow({mode: "open",
        customElementRegistry: r})` silently attached with the DOCUMENT's registry — the read-with-no-writer
        defect, one layer below a JS field, where the missing producer is the declaration itself.
-       IDL_ANY AND NOT IDL_INTERFACE_NULLABLE, the same choice core/events/event_target.c makes for
-       `AddEventListenerOptions.signal` and for the same shape of reason: a declared interface type is branded
-       by the ONE class the declaration states (idl_iface_brand), which has to be reached from another
-       component's init, and this member's brand is answered by custom_elements_is_registry — so the check is
-       performed below, at the step that owns it, and says so.
-       NAMED RESIDUAL: a declared type would throw §3.2.15's TypeError DURING the member walk, before the
-       getters of `delegatesFocus`, `mode`, `serializable` and `slotAssignment` — every one of which sorts
-       after this member — while the check below throws after all five have run. The next diff exports
-       CustomElementRegistry's class id and states the brand at the declaration, which needs custom_elements'
-       class to exist before this component's init and is a fact about core/platform.c's order rather than
-       about this file. ITS ABSENCE SHOWS as `attachShadow({customElementRegistry: 1, get mode(){ log(); }})`
-       running the `mode` getter before it throws, where a browser does not. */
+       IDL_ANY AND NOT IDL_INTERFACE_NULLABLE, and the reason this comment gave for that is RETIRED — twice
+       over, which is why it is rewritten here rather than left standing. It called the choice the same one
+       core/events/event_target.c makes for `AddEventListenerOptions.signal`, and that member is
+       IDL_INTERFACE now; and it said a declared interface type is branded only by the ONE class the
+       declaration states (idl_iface_brand), which stopped being true when IdlDictMember gained `iface_is`
+       plus `iface_name` — Web IDL §3.2.15 Interface types' `I` stated as a PREDICATE, for the interfaces no
+       class id names. So nothing about the class system keeps this member at IDL_ANY any more; what keeps it
+       here is that the diff has not been written.
+       NAMED RESIDUAL, WITH ITS NEXT-DIFF CLAUSE CORRECTED AGAINST THE TREE. What is not covered: a declared
+       type would throw §3.2.15's TypeError DURING the member walk, before the getters of `delegatesFocus`,
+       `mode`, `serializable` and `slotAssignment` — every one of which sorts after this member — while the
+       check below throws after all five have run. What the next diff builds: this row becomes
+       IDL_INTERFACE_NULLABLE carrying `.iface_is` and `.iface_name = "CustomElementRegistry"`, where the
+       predicate is a one-line adapter over `custom_elements_is_registry`, which this file already calls at
+       step 3 below — it is declared `bool custom_elements_is_registry(JSValueConst v)` and takes no
+       JSContext, so the adapter's whole body is to ignore one, exactly as
+       core/rendering/page_reveal.c's `pr_view_transition_is` does. It needs NO class id and NO change to
+       core/platform.c's init order; the sentence that said otherwise was describing the mechanism that
+       existed before `iface_is` did. How its absence shows:
+       `attachShadow({customElementRegistry: 1, get mode(){ log(); }})` running the `mode` getter before it
+       throws, where a browser does not. */
     { "customElementRegistry", IDL_ANY, false, NULL,        0 },
     { "delegatesFocus", IDL_BOOLEAN, false, NULL,           0 },
     { "mode",           IDL_ENUM,    true,  SR_MODE_VALUES, 0 },

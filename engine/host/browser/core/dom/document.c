@@ -928,9 +928,15 @@ static JSValue flatten_creation_options(JSContext *ctx, JSValueConst doc_wrap, J
     reg_v = idl_dict_get(ctx, options, "customElementRegistry");
     /* WEB IDL §3.2.15 ON THE MEMBER'S DECLARED TYPE, which is `CustomElementRegistry?`. It runs BEFORE any of
        the algorithm's own steps because a conversion does, so `{is:"x-y", customElementRegistry:5}` is a
-       TypeError and not step 3.2.1's NotSupportedError. It is here rather than in the declaration because the
-       class is custom_elements.c's own and this component may not name it — the shape §4.9's attachShadow uses
-       for the identical member. */
+       TypeError and not step 3.2.1's NotSupportedError. It is here rather than in the declaration BECAUSE THE
+       DIFF HAS NOT BEEN WRITTEN, and no longer because it cannot be — the reason that stood here was that
+       the class is custom_elements.c's own and this component may not name it — a true statement about a
+       brand spelled ONLY as a JSClassID and is retired: IdlDictMember carries `iface_is` plus `iface_name`,
+       Web IDL §3.2.15 Interface types' `I` stated as a PREDICATE for the interfaces no class id names, and
+       `custom_elements_is_registry` is exactly such a predicate. §4.9's attachShadow states the identical
+       member the identical way and carries the residual that names the shared diff. Until it lands, the
+       ORDER is what differs from a browser's: a declared type throws inside §3.2.17's member walk, before
+       `is` — which sorts after this member — is read at all. */
     if (!JS_IsUndefined(reg_v) && !JS_IsNull(reg_v) && !custom_elements_is_registry(reg_v)) {
         JS_FreeValue(ctx, is_v);
         JS_FreeValue(ctx, reg_v);
@@ -3061,8 +3067,12 @@ static void document_declare_members(JSContext *ctx)
         static const IdlArgType CREATE_EL[2] = { IDL_DOMSTRING, IDL_STRING_OR_DICT };
         /* §4.5's `dictionary ElementCreationOptions { CustomElementRegistry? customElementRegistry;
            DOMString is; }`, in the IDL's own order because that is the order Web IDL reads them in. The
-           registry crosses UNCONVERTED and is brand-tested by flatten_creation_options, because the class is
-           custom_elements.c's own and this component may not name it. */
+           registry crosses UNCONVERTED and is brand-tested by flatten_creation_options — and the reason
+           recorded here for that — the class being custom_elements.c's own, and this component not being
+           able to name it — is RETIRED: a §3.2.15 brand is no longer only a JSClassID, since IdlDictMember carries `iface_is`
+           plus `iface_name` for the interfaces no class id names, and `custom_elements_is_registry` is one.
+           What holds the member at IDL_ANY is an unwritten diff, and core/dom/shadow_root.c's identical
+           member carries the residual that states it once for both. */
         static const IdlDictMember ELEMENT_CREATION_OPTIONS[] = {
             { "customElementRegistry", IDL_ANY,       false, NULL, 0 },
             { "is",                    IDL_DOMSTRING, false, NULL, 0 },
