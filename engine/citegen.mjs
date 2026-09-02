@@ -1799,25 +1799,50 @@ function spanIdxAt(spans, at) {
   return -1;
 }
 
+/* THE PROSE UNIT A CITATION STANDS IN, AND THE ONE PLACE THIS FILE STATES WHERE A MESSAGE BEGINS AND ENDS.
+ * The unit is the span the citation sits in, WIDENED in both directions to the maximal run of adjacent string
+ * literals whenever it sits in one — the paragraph above says why a run and not a span, and this is that
+ * sentence made executable. Three readers need it and they must not disagree: `governedProse` walks the
+ * adjacency forward, `precedingProse` walks it backward, and the OK-NEARBY channels ask which citations SHARE
+ * a unit. The third reader is the one that got it wrong. It keyed "shares a prose unit with this one" on the
+ * SPAN INDEX while the other two walked the run, so a citation in a DIFFERENT LITERAL OF THE SAME `DFAIL` was
+ * invisible to it and the quotation that citation explains was accused of belonging to a standard the very
+ * same message cites correctly, three lines up. That is this auditor committing its own subject in the DENY
+ * direction it has no licence to err in: a wrong finding stands at a site nobody can repair and teaches the
+ * reader to skim the category it sits in. The rule now has ONE owner rather than two copies and a paraphrase,
+ * which is the only arrangement in which a fourth reader cannot re-introduce the same gap. */
+function proseUnit(src, spans, at) {
+  const i = spanIdxAt(spans, at);
+  if (i < 0) return null;
+  let lo = i, hi = i;
+  if (spans[i][2] === "s") {
+    /* adjacent literals of ONE message are separated by nothing but whitespace and their own two quotes */
+    while (hi + 1 < spans.length && spans[hi + 1][2] === "s" &&
+           /^["\s]*$/.test(src.slice(spans[hi][1], spans[hi + 1][0]))) hi++;
+    while (lo > 0 && spans[lo - 1][2] === "s" &&
+           /^["\s]*$/.test(src.slice(spans[lo - 1][1], spans[lo][0]))) lo--;
+  }
+  return { i, lo, hi, kind: spans[i][2] };
+}
+
+/* THE UNIT'S IDENTITY IS ITS FIRST SPAN, and every reader that groups citations by unit keys on this — never
+ * on `spanIdxAt`, which names a LITERAL and not a message. */
+function proseUnitKey(src, spans, at) {
+  const u = proseUnit(src, spans, at);
+  return u ? u.lo : -1;
+}
+
 /* The prose a citation governs, flattened into ONE line the way a reader reads it. A comment's line wrap and
  * its `*` gutter are not part of any sentence; a literal run's joints are not either, and the escape a C
  * literal spells `\"` is the quotation mark the author wrote. Unescaping is what makes a quotation inside a
  * crash message the same text as the same quotation inside a comment. */
 function governedProse(src, spans, at, len, stopAt) {
-  const i = spanIdxAt(spans, at);
-  if (i < 0) return "";
-  const kind = spans[i][2];
-  let end = spans[i][1];
-  if (kind === "s") {
-    for (let k = i; k + 1 < spans.length && spans[k + 1][2] === "s"; k++) {
-      /* adjacent literals of ONE message are separated by nothing but whitespace and their own two quotes */
-      if (!/^["\s]*$/.test(src.slice(spans[k][1], spans[k + 1][0]))) break;
-      end = spans[k + 1][1];
-    }
-  }
+  const u = proseUnit(src, spans, at);
+  if (!u) return "";
+  let end = spans[u.hi][1];
   if (stopAt !== null && stopAt < end) end = stopAt;
   const raw = src.slice(at + len, Math.max(at + len, end));
-  return kind === "s"
+  return u.kind === "s"
     /* the joint between two literals is an unescaped `"` pair; a `\"` is content and must survive it */
     ? unescapeC(raw.replace(/(?<!\\)"\s*"/g, ""))
     : raw.replace(/\n\s*\*?\s*/g, " ");
@@ -1827,18 +1852,10 @@ function governedProse(src, spans, at, len, stopAt) {
  * `governedProse` reads forward because a claim is normally made AFTER a number; a DISCLAIMER is made BEFORE
  * one, and nothing until now could see it. */
 function precedingProse(src, spans, at) {
-  const i = spanIdxAt(spans, at);
-  if (i < 0) return "";
-  const kind = spans[i][2];
-  let start = spans[i][0];
-  if (kind === "s") {
-    for (let k = i; k > 0 && spans[k - 1][2] === "s"; k--) {
-      if (!/^["\s]*$/.test(src.slice(spans[k - 1][1], spans[k][0]))) break;
-      start = spans[k - 1][0];
-    }
-  }
-  const raw = src.slice(start, at);
-  return kind === "s" ? unescapeC(raw.replace(/(?<!\\)"\s*"/g, "")) : raw.replace(/\n\s*\*?\s*/g, " ");
+  const u = proseUnit(src, spans, at);
+  if (!u) return "";
+  const raw = src.slice(spans[u.lo][0], at);
+  return u.kind === "s" ? unescapeC(raw.replace(/(?<!\\)"\s*"/g, "")) : raw.replace(/\n\s*\*?\s*/g, " ");
 }
 
 /* ---- the STEP axis: a number no section index can see ---------------------------------------------------- */
@@ -2558,7 +2575,7 @@ function audit(argv, opts = {}) {
   const undecided = [];
   const mentions = [];
   const quotes = [];
-  const qstat = { seen: 0, checked: 0, verified: 0, okNearby: 0, wrongSection: 0, wrongSectionAncestor: 0, wrongStandard: 0, notFound: 0, notFoundNothing: 0,
+  const qstat = { okNearbyCrossLiteral: 0, seen: 0, checked: 0, verified: 0, okNearby: 0, wrongSection: 0, wrongSectionAncestor: 0, wrongStandard: 0, notFound: 0, notFoundNothing: 0,
                   noCorpus: 0, noSection: 0, tooShort: 0, voted: 0 };
   const noCorpusBy = new Map();
   const gapHist = [];
@@ -3590,13 +3607,14 @@ function audit(argv, opts = {}) {
      * copy of the most argued-over rule in this file, and the copy that drifts is the one nobody runs. */
     {
       const admitted = cites.filter((c) => c.admitted);
-      /* WHICH CITATIONS SHARE A PROSE UNIT WITH THIS ONE — see the OK-NEARBY channel below. */
-      const bySpan = new Map();
+      /* WHICH CITATIONS SHARE A PROSE UNIT WITH THIS ONE — see the OK-NEARBY channel below. A UNIT AND NOT A
+       * SPAN: see `proseUnit`, which owns that distinction for every reader in this file. */
+      const byUnit = new Map();
       for (const c of admitted) {
-        const k = spanIdxAt(spans, c.at);
+        const k = proseUnitKey(src, spans, c.at);
         if (k < 0) continue;
-        if (!bySpan.has(k)) bySpan.set(k, []);
-        bySpan.get(k).push(c);
+        if (!byUnit.has(k)) byUnit.set(k, []);
+        byUnit.get(k).push(c);
       }
       for (let i = 0; i < admitted.length; i++) {
         const c = admitted[i];
@@ -3642,12 +3660,17 @@ function audit(argv, opts = {}) {
            * citation in its own prose unit is CONFIRMED — counted apart from a direct verification, because a
            * confirmation may quantify over everything the comment says while a finding may only assert what
            * it can prove. */
-          const near = (bySpan.get(spanIdxAt(spans, c.at)) || []).find((o) => {
+          const near = (byUnit.get(proseUnitKey(src, spans, c.at)) || []).find((o) => {
             if (o === c || !o.spec || o.how === "file" || !txt.has(o.spec)) return false;
             const ox = txt.get(o.spec).sections;
             const ext = Object.keys(ox).filter((n) => n === o.no || contains(o.no, n)).sort(cmpNo);
             return ext.length && containsAnyForm(ext.map((n) => ox[n]).join(" "), f);
           });
+          /* HOW MUCH OF THIS CHANNEL THE WIDENING IS CARRYING, reported rather than known, because a
+           * confirmation channel that silently absorbs findings is the silent zero this file refuses
+           * everywhere else — and because the widening is the one thing here that can only ever REMOVE a
+           * finding, so its size is the size of the trust a reader is being asked to extend. */
+          if (near && spanIdxAt(spans, near.at) !== spanIdxAt(spans, c.at)) qstat.okNearbyCrossLiteral++;
           if (near) { qstat.okNearby++; continue; }
           const elsewhere = Object.keys(tx).filter((n) => containsAnyForm(tx[n], f)).sort(cmpNo);
           if (elsewhere.length) {
@@ -3726,12 +3749,14 @@ function audit(argv, opts = {}) {
      * remedy and no site. */
     {
       const admitted = cites.filter((c) => c.admitted);
-      const bySpan = new Map();
+      /* A UNIT AND NOT A SPAN — `proseUnit` owns the rule; this channel says "the same prose unit" in its own
+       * words below and must therefore ask the same reader the other three ask. */
+      const byUnit = new Map();
       for (const c of admitted) {
-        const k = spanIdxAt(spans, c.at);
+        const k = proseUnitKey(src, spans, c.at);
         if (k < 0) continue;
-        if (!bySpan.has(k)) bySpan.set(k, []);
-        bySpan.get(k).push(c);
+        if (!byUnit.has(k)) byUnit.set(k, []);
+        byUnit.get(k).push(c);
       }
       /* WHAT THE FILE ITSELF SAYS A STEP PATH BELONGS TO. A citation with a step number in its OWN noun phrase
        * (see ADJ_STEP) has declared an owner for that path, and this tree writes the same path in both
@@ -3875,7 +3900,7 @@ function audit(argv, opts = {}) {
           const admitsPath = (key, no) =>
             stp.has(key) && idx.get(key).sections[no] &&
             (() => { const ol = listsFor(key, no); return ol.length && !stepFail(ol, s.path); })();
-          const near = (bySpan.get(spanIdxAt(spans, c.at)) || []).find((o) => {
+          const near = (byUnit.get(proseUnitKey(src, spans, c.at)) || []).find((o) => {
             if (o === c) return false;
             if (o.spec && idx.has(o.spec) && idx.get(o.spec).sections[o.no]) return admitsPath(o.spec, o.no);
             return [...idx.keys()].some((k) => admitsPath(k, o.no));
@@ -4161,7 +4186,7 @@ function audit(argv, opts = {}) {
     console.log(`  (this asks about TEXT. It says nothing about whether the number exists, whether the algorithm lives there,`);
     console.log(`   or whether the claim the sentence makes is true — those are the checks above, and they are different axes.)`);
     console.log(`  ${qstat.seen} quotation(s) of ${MIN_COMPARED_WORDS}+ words stand in prose a citation governs; ${qstat.checked} were compared against a section's own words`);
-    console.log(`    VERIFIED ${qstat.verified}  CONFIRMED-BY-A-NUMBER-THE-SAME-COMMENT-CITES ${qstat.okNearby}  WRONG-SECTION ${qstat.wrongSection} (${qstat.wrongSectionAncestor} of them at a section that CONTAINS the cited one)  WRONG-STANDARD ${qstat.wrongStandard}  NOT-FOUND ${qstat.notFound}` +
+    console.log(`    VERIFIED ${qstat.verified}  CONFIRMED-BY-A-NUMBER-THE-SAME-COMMENT-CITES ${qstat.okNearby} (${qstat.okNearbyCrossLiteral} of them by a number in a DIFFERENT LITERAL of the same crash message — the population a span-keyed lookup cannot see, so this figure is what the prose-unit rule is carrying)  WRONG-SECTION ${qstat.wrongSection} (${qstat.wrongSectionAncestor} of them at a section that CONTAINS the cited one)  WRONG-STANDARD ${qstat.wrongStandard}  NOT-FOUND ${qstat.notFound}` +
       ` (of which ${qstat.notFoundNothing} leave the standard within their first ${MIN_FRAGMENT_WORDS} words — a fabricated sentence and a piece of this tree's own prose in quotation marks both land there, and nothing mechanical separates them)`);
     console.log(`  NOT CHECKED, and why: ${qstat.noCorpus} cite a standard with no committed text corpus` +
       (noCorpusBy.size ? ` (${[...noCorpusBy].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}=${v}`).join(" ")})` : "") +
