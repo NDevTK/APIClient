@@ -581,6 +581,24 @@ static JSValue js_body_get_body(JSContext *ctx, JSValueConst this_val, int magic
     return JS_DupValue(ctx, b->stream);
 }
 
+/* NAMED RESIDUAL — §5.3's `[NewObject] ReadableStream textStream()` is not installed, on Request or on Response.
+ * WHAT IS NOT COVERED: its steps are "If this is unusable, then throw a TypeError"; then, for a null body, a new
+ * ReadableStream set up and closed; otherwise a new TextDecoderStream in this's relevant realm, "Set up decoder
+ * with UTF-8", and "Return the result of stream, piped through decoder". The first two arms are reachable from
+ * here already — §5.3 defines unusable as "if its body is non-null and its body's stream is disturbed or
+ * locked", which is what js_body_get_used reads, and readable_stream_create answers the empty-stream arm. The
+ * third is not: minting a TextDecoderStream and running Streams §4.2.4 "Constructor, methods, and properties"'
+ * `pipeThrough` are both page-reachable step machines whose step ids are file-static to
+ * core/encoding/text_stream.c and core/streams/pipe.c, so no host component can drive them.
+ * WHAT THE NEXT DIFF BUILDS: the two exported entries those components owe — a UTF-8 TextDecoderStream minted in
+ * the calling realm, and a pipe-through that answers a transform's readable half — and then this member as a
+ * step machine over them, shared by both including interfaces the way every other member of this mixin is.
+ * File API §3.3.6 "The textStream() method" on Blob is the same four steps without the unusable check, so the
+ * two entries close four audit rows and not two; core/file/blob.c carries the matching residual.
+ * HOW ITS ABSENCE SHOWS: `response.textStream()` is a TypeError where `response.body` answers a stream, so a
+ * page streaming text must pipe through its own `new TextDecoderStream()`. The day the member exists, the
+ * difference is observable in the ERROR arm rather than the happy one — `textStream()` on a used body must throw
+ * a TypeError SYNCHRONOUSLY, where every other reader on this mixin answers a rejected promise. */
 void body_install(JSContext *ctx, JSValueConst proto, int handle)
 {
     DCHECK(handle >= 0 && handle < g_body_iface_n, "Body was installed with a handle nothing declared");

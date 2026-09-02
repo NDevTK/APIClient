@@ -10,9 +10,26 @@
  * FormData's `append` overload and the value a multipart part with a filename must carry, and it is what
  * `URL.createObjectURL` takes. Every one of those was a DFAIL naming this interface.
  *
- * `stream()` and `textStream()` are ABSENT, honestly, until there is a ReadableStream — a shape-only object with
- * a noop `getReader` would be a stub of exactly the kind the IDL audit exists to expose, and the audit names
- * both. */
+ * §3.3.2 "The stream() method" IS BUILT and this paragraph used to deny it. It said `stream()` and
+ * `textStream()` were both "ABSENT, honestly, until there is a ReadableStream", and the reason it gave stopped
+ * being true when core/streams/readable_stream.c landed — which this file already knows, since it includes that
+ * header and installs `stream` from it. A stale absence claim is the kind a reader does not check, so it is
+ * corrected here rather than carried: `stream()` is installed, and what is absent is §3.3.6 "The textStream()
+ * method" alone.
+ *
+ * NAMED RESIDUAL: §3.3.6's `textStream()` is not installed. WHAT IS NOT COVERED: its four steps are "Let stream
+ * be the result of calling get stream on this. Let decoder be a new TextDecoderStream in this's relevant realm.
+ * Set up decoder with UTF-8. Return the result of calling stream, piped through decoder." — and this engine can
+ * perform the first and not the middle two from C. Both pieces EXIST as page-reachable step machines and neither
+ * is reachable by a host component: core/encoding/text_stream.c mints TextDecoderStream through a file-static
+ * ctor step id, and core/streams/pipe.c drives Streams §4.2.4's `pipeThrough` through a file-static step id of
+ * its own. WHAT THE NEXT DIFF BUILDS: an exported entry on each of those two components — one that answers a
+ * TextDecoderStream already set up with UTF-8 in the calling realm, one that pipes a ReadableStream through a
+ * TransformStream and answers the transform's readable half — after which this member and Fetch §5.3 "Body
+ * mixin"'s identically-shaped `textStream()` are both a short step machine over them, which is why the entries
+ * are the unit of work rather than either member. HOW ITS ABSENCE SHOWS: `blob.textStream()` is a TypeError
+ * where `blob.stream()` answers a stream, so a page decoding a Blob incrementally must pipe through its own
+ * `new TextDecoderStream()` — which works, and is the difference the missing member would remove. */
 #include <stdlib.h>
 #include <string.h>
 

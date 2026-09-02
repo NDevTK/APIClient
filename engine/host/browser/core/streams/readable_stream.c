@@ -18,8 +18,20 @@
  * they are attached with PerformPromiseThen rather than a `.then` read because that is what the spec performs.
  * Both of those primitives are quickjs's (JS_NewStepClosure, JS_PerformPromiseThen), added for this.
  *
- * WHAT IS NOT. The page's `cancel` algorithm is not yet invoked, and `tee`/`pipeTo`/`pipeThrough`/`from` and the
- * BYTE stream are absent. Each is its own piece of work over the same two primitives.
+ * WHAT IS ELSEWHERE, AND THE SENTENCE THAT USED TO SAY IT WAS UNBUILT. A paragraph here announced that "the
+ * page's `cancel` algorithm is not yet invoked, and `tee`/`pipeTo`/`pipeThrough`/`from` and the BYTE stream are
+ * absent". Every one of those five had since been built, and the sentence went on telling readers not to look:
+ * the page's `cancel` is CALLED by the cancel machine below (step_call_run on the source's `cancel`, with
+ * §4.9.4's PromiseCall semantics and ClearAlgorithms after it), `tee` and `from` are installed by this file,
+ * `pipeTo` and `pipeThrough` are Streams §4.2.4 "Constructor, methods, and properties"' members over §4.9.1
+ * "Working with readable streams"' ReadableStreamPipeTo and live in core/streams/pipe.c, and the byte stream is
+ * core/streams/readable_byte_stream.c. THE DEFECT SHAPE IS WHY THIS IS WRITTEN DOWN RATHER THAN JUST DELETED: a
+ * comment describing a mechanism as ABSENT is the one kind a reader does not verify, because every other kind
+ * sends them to look and this one tells them it is not there. It cost a reading — a lane went to build
+ * `textStream()` on Fetch §5.3 "Body mixin", read this line, and concluded the pipe machinery it needs was
+ * unbuilt, when pipe.c is a complete step machine and the IDL gap audit reports ReadableStream, both readers and
+ * both controllers as installing every member their IDL declares. So an absence claim in this component is
+ * written only where the grep answers empty, and it names the grep that would refute it.
  *
  * THE QUEUE IS A JS ARRAY. Its chunks are the page's values and the collector must see them; an array is what
  * this component already has that the collector traces, and `gc_mark` on the class opaque is what makes the

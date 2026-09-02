@@ -438,10 +438,21 @@ static const IdlDictMember REQUEST_INIT[] = {
        NAMED RESIDUAL: the step LOCAL NETWORK ACCESS §3.1.2 Fetch API appends to §5.4 — it opens "If
        init["targetAddressSpace"] exists, then switch on init["targetAddressSpace"]" and its two arms are
        `public`, "Do nothing", and `local`, "Set request's targetAddressSpace to local" (the enumeration's
-       third value, `loopback`, has no arm at all in that draft) — stores nothing here. That standard's
-       `partial interface Request { readonly attribute IPAddressSpace targetAddressSpace; }` states no getter
-       steps and no default for a request that never set one, so there is no computed value to answer with
-       and inventing one would be the stub §NO STUBS forbids. The next diff carries the member on the request
+       third value, `loopback`, has no arm at all in that draft) — stores nothing here.
+       AND THE ATTRIBUTE THE SAME PARTIAL DECLARES IS A DIFFERENT ROW, WHICH THE IDL GAP AUDIT REPORTS AND
+       WHICH IS ABSENT ON PURPOSE. `partial interface Request { readonly attribute IPAddressSpace
+       targetAddressSpace; }` states no getter steps, and the slot it would reflect cannot be spelled in its
+       own declared type: LOCAL NETWORK ACCESS §3.1.1 Fetching says, in full, "Request objects are given a new
+       target IP address space property, initially null", while `IPAddressSpace` is NOT NULLABLE and its three
+       values are "public", "local" and "loopback". So a freshly-built `new Request(u)` holds null in the slot
+       and the attribute has no value it is permitted to answer with — the member is unimplementable AS
+       WRITTEN, not merely unbuilt, and every candidate answer is invented rather than computed. "public" is
+       the tempting one and it is the worst, because the constructor's `public` arm is "Do nothing" and would
+       round-trip, making the invention look like a reading; that draft's own check then asserts "request's
+       target IP address space is not public", so the one value a getter could plausibly return is the one
+       value the algorithm guarantees is never stored. That is §NO STUBS' getter returning a value where the
+       spec computes none, so absence is the correct answer here and stays correct until the draft states
+       getter steps or makes the attribute nullable. The next diff carries the member on the request
        record the chokepoint receives, so `safe-fetch.js` decides the local-network question with the page's
        own declaration in hand instead of from the host alone.
        ITS ABSENCE SHOWS as `fetch("http://router.local/ping", {targetAddressSpace: "local"})` being graded by
