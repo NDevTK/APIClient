@@ -204,12 +204,12 @@ FormFieldKind html_form_field_kind(JSContext *ctx, JSValueConst wrap);
    with `*plen` 0 when it is absent. */
 const char *html_form_control_name(JSValueConst wrap, size_t *plen);
 
-/* Step 5.7's value: "if the field element has a `value` attribute specified, then let value be the value of
+/* §4.10.22.4 step 5.7's value: "if the field element has a `value` attribute specified, then let value be the value of
    that attribute; otherwise, let value be the string `on`" — which IS §4.10.5.4's DEFAULT/ON mode word for
    word, so this asks input_value.c for that mode rather than spelling the same two lines again. OWNED. */
 JSValue html_form_checkbox_value(JSContext *ctx, JSValueConst wrap);
 
-/* §4.10.7's LIST OF OPTIONS for a `select`, narrowed to step 5.6's condition — selectedness true and not
+/* §4.10.7's LIST OF OPTIONS for a `select`, narrowed to §4.10.22.4 step 5.6's condition — selectedness true and not
    disabled — with §4.10.7's SELECTEDNESS SETTING ALGORITHM already applied. A JS Array of option wrappers in
    tree order. OWNED. */
 JSValue html_form_selected_options(JSContext *ctx, JSValueConst select);

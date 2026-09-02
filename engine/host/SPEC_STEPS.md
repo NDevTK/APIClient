@@ -4946,13 +4946,12 @@ document), boolean *subtree* (default false), node-or-null *parent* (default nul
         itself instead of through the document's effective global. What the next diff builds is the
         export plus this one call; its absence shows as a clone whose shadow root resolves definitions
         in the source document's registry after the copy has moved to another document.
-     4. —
-     5. **Attach a shadow root** with *copy*, *node*'s shadow root's **mode**, **true**, *node*'s
+     4. **Attach a shadow root** with *copy*, *node*'s shadow root's **mode**, **true**, *node*'s
         shadow root's **serializable**, **delegates focus**, **slot assignment**, and
         *shadowRootRegistry*. —
-     6. Set *copy*'s shadow root's **declarative** to *node*'s shadow root's declarative. —
-     7. Set *copy*'s shadow root's **keep custom element registry null** to *node*'s shadow root's. —
-     8. For each *child* of *node*'s shadow root's children, in tree order: clone a node given *child*
+     5. Set *copy*'s shadow root's **declarative** to *node*'s shadow root's declarative. —
+     6. Set *copy*'s shadow root's **keep custom element registry null** to *node*'s shadow root's. —
+     7. For each *child* of *node*'s shadow root's children, in tree order: clone a node given *child*
         with *document*, **subtree set to true**, and *parent* set to *copy*'s shadow root. "This
         intentionally does not pass the *fallbackRegistry* argument." —
   7. Return *copy* — `CLONE_LEAVE`. —
@@ -4962,7 +4961,7 @@ the result of cloning a node given **this** with *subtree* set to *subtree*. —
 
 **Three things the live text says that a reasonable person would remember differently.**
 
-1. **Step 6 is NOT conditioned on `subtree`, and step 6.8 passes `true`.** So `host.cloneNode()` — the
+1. **Step 6 is NOT conditioned on `subtree`, and step 6.7 passes `true`.** So `host.cloneNode()` — the
    shallow clone — copies no light children and the ENTIRE shadow tree. Reading step 6 as "the deep
    half of the algorithm" gets both halves of that backwards.
 2. **`cloneNode` step 1 throws for a SHADOW ROOT.** It says nothing about documents: `clone a node`

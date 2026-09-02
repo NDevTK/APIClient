@@ -9,7 +9,8 @@
 #include "core/dom/document.h"
 #include "core/dom/document_current_script.h"   /* §8.4.3 step 9.1's ignore-destructive-writes condition */
 #include "core/dom/node.h"
-#include "core/html/document_open.h"            /* §8.4.1's document open steps — step 9.2, and close()'s 3-6 */
+#include "core/html/document_open.h"            /* §8.4.1's document open steps — which §8.4.3 step 9.2 runs
+                                                   — and §8.4.2's close(), steps 3-6 */
 #include "core/html/document_write.h"
 #include "core/html/html_parse.h"
 #include "core/html/trusted_types.h"

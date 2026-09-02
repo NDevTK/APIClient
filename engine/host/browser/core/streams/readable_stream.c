@@ -2873,15 +2873,20 @@ enum { FROM_PULL = 0, FROM_CANCEL, FROM_NEXT_OK, FROM_RET_OK, FROM_N };
 #define FS_STAGES(X) \
     X(FS_START, "Streams §4.9.1 ReadableStreamFromIterable's pullAlgorithm step 1 / cancelAlgorithm steps " \
                 "1-4 (which algorithm this entry is, and the `return` method it must look for)") \
-    X(FS_CALL, "Streams §4.9.1 pullAlgorithm step 2 / cancelAlgorithm step 5 (calling the iterator's `next` " \
-               "or its `return`)") \
-    X(FS_RESOLVE, "Streams §4.9.1 pullAlgorithm step 3 (PromiseResolve over what `next` answered)") \
-    X(FS_REJECT, "Streams §4.9.1 pullAlgorithm step 3's abrupt completion (a rejected promise for what the " \
-                 "call threw)") \
-    X(FS_REACT, "Streams §4.9.1 pullAlgorithm step 4 / cancelAlgorithm step 7 (reacting to that promise)") \
-    X(FS_READ_DONE, "Streams §4.9.1 pullAlgorithm step 4.2 (Get(iterResult, \"done\"))") \
-    X(FS_READ_VALUE, "Streams §4.9.1 pullAlgorithm step 4.4 (Get(iterResult, \"value\"))") \
-    X(FS_FEED, "Streams §4.9.1 pullAlgorithm steps 4.3-4.5 (close the controller, or enqueue the value)")
+    X(FS_CALL, "Web IDL §3.2.22.1 get the next value of an async iterator step 1 (IteratorNext — calling the " \
+               "iterator's `next`) / close an async iterator step 6 (calling its `return`)") \
+    X(FS_RESOLVE, "Web IDL §3.2.22.1 get the next value of an async iterator step 3 (a promise resolved with " \
+                  "what `next` answered)") \
+    X(FS_REJECT, "Web IDL §3.2.22.1 get the next value of an async iterator step 2 (a rejected promise for " \
+                 "what the call threw)") \
+    X(FS_REACT, "Web IDL §3.2.22.1 get the next value of an async iterator step 4 / close an async iterator " \
+                "step 9 (reacting to that promise)") \
+    X(FS_READ_DONE, "Web IDL §3.2.22.1 get the next value of an async iterator step 4.2 (IteratorComplete — " \
+                    "Get(iterResult, \"done\"))") \
+    X(FS_READ_VALUE, "Web IDL §3.2.22.1 get the next value of an async iterator step 4.4.1 (IteratorValue — " \
+                     "Get(iterResult, \"value\"))") \
+    X(FS_FEED, "Streams §4.9.1 ReadableStreamFromIterable steps 4.2.1.1-4.2.1.2 (close the controller on end " \
+               "of iteration, or enqueue the value)")
 enum { FS_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const FS_STEPS[] = { FS_STAGES(JS_STEP_STAGE_LABEL) NULL };
 

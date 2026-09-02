@@ -4214,7 +4214,7 @@ static void csp_element_matching_selftest(void)
         static const char S512[] = "style-src 'sha512-ADKwpJY0f2osTsQ2rmUDaXZKZ3/ULiwyJYXVFAAUxw8Oh4Bq"
                                                     "MFlllZdCVwhLKbNk4+NFO7HzMJ3X7I4K69XhLQ=='";
         /* THE SAME SHA-512 HASH SPELLED IN BASE64URL — `/` written `_` and `+` written `-`, which is what
-           §2.3.1's base64-value grammar admits and what step 5.2.2's replacement normalises. The two policies
+           §2.3.1's base64-value grammar admits and what §6.7.3.3 step 5.2.2's replacement normalises. The two policies
            must give the SAME verdict, and the vector was picked because its base64 contains both characters:
            a hash with neither would pass this line with no replacement implemented at all. */
         static const char S512URL[] = "style-src 'sha512-ADKwpJY0f2osTsQ2rmUDaXZKZ3_ULiwyJYXVFAAUxw8Oh4Bq"

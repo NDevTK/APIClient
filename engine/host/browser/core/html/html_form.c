@@ -2249,7 +2249,7 @@ bool html_form_has_datalist_ancestor(JSValueConst wrap)
 
 /* §3.2.6's AUTO-DIRECTIONALITY FORM-ASSOCIATED ELEMENTS, as a predicate over a NODE — the list two callers
    need and neither of them owns. §3.2.6's auto directionality reads such an element's VALUE instead of its
-   text, and §4.10.22.4 step 5.12 submits such an element's directionality as a second entry; those are two
+   text, and §4.10.22.4 step 5.11 submits such an element's directionality as a second entry; those are two
    uses of one list, and a second copy of it is the second answer that is always subtly wrong. */
 bool html_form_is_auto_directionality_face(const lxb_dom_node_t *n)
 {

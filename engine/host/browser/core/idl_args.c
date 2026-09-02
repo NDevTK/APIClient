@@ -445,7 +445,7 @@ static const char *const IDL_EPILOGUE_STEPS[] = {
     "HTML §4.13.6 custom element reactions steps 3-4, invoke step 1.3.1 callback reaction (invoke the "
     "reaction's callback function with \"report\"), one reaction per step",
     "HTML §4.13.6 custom element reactions steps 3-4, invoke step 1.3.1 upgrade reaction — HTML §4.13.5 step "
-    "8.3 (constructing the definition's constructor with no arguments)",
+    "10's catching list step 3 (constructing the definition's constructor with no arguments)",
     "HTML §4.13.6 custom element reactions steps 3-4, invoke step 1.3.1 (reporting the exception a reaction "
     "threw), which is HTML §8.1.4.6 report an exception",
 };

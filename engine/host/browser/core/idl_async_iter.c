@@ -593,7 +593,7 @@ typedef char aim_stages_match_init_step_first[
 /* The member's state, with the initialization steps' own storage in its TAIL — one allocation carries both, for
    the reason AitState carries the other two algorithms' the same way. */
 typedef struct {
-    JSValue  iter;      /* §3.7.10.1's object, owned until step 3.1.7 hands it back */
+    JSValue  iter;      /* §3.7.10.1's object, owned until §3.7.10 step 3.1.7 hands it back */
     uint8_t  handle;    /* which declared interface, so the ownership declaration can reach its work_visit */
     uint8_t  minted;    /* whether the tail below is the component's storage yet, or still zeroed bytes */
     AitAlign work[1];   /* the initialization steps' own storage begins here */
@@ -902,7 +902,7 @@ static IdlAsyncIface *async_iter_proto(JSContext *ctx, int handle)
     return f;
 }
 
-/* §3.7.10 step 3.11 / step 5.7: DefineMethodProperty(target, %Symbol.asyncIterator%, F, false) — the SAME
+/* §3.7.10 step 3.3 / step 5.4: DefineMethodProperty(target, %Symbol.asyncIterator%, F, false) — the SAME
    function object as the member just installed, so `dir[Symbol.asyncIterator] === dir.entries` for a pair
    declaration and `=== rs.values` for a value one, and `false` is the [[Enumerable]] it is defined with. */
 static void async_iter_symbol(JSContext *ctx, JSValueConst proto, const char *member)

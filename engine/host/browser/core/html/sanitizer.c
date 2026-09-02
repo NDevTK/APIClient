@@ -514,7 +514,7 @@ static bool san_config_remove_element(JSContext *ctx, JSValueConst cfg, const ch
     return true;
 }
 
-/* §8.6.2's "REMOVE AN ATTRIBUTE FROM A CONFIGURATION". */
+/* §8.6.4 "Sanitization algorithms"'s "remove an attribute ATTRIBUTE from a SanitizerConfig CONFIGURATION". */
 static bool san_config_remove_attribute(JSContext *ctx, JSValueConst cfg, const char *name, const char *ns)
 {
     JSValue elements = san_get(ctx, cfg, "elements");
@@ -535,7 +535,7 @@ static bool san_config_remove_attribute(JSContext *ctx, JSValueConst cfg, const 
             JS_FreeValue(ctx, local);
             local = JS_GetPropertyStr(ctx, el, "removeAttributes");
             if (san_list_remove(ctx, local, name, ns))
-                DCHECK(modified, "§8.6.2 step 3.2.2.2: an attribute in an element's local removeAttributes was "
+                DCHECK(modified, "§8.6.4 step 3.2.1.2.1: an attribute in an element's local removeAttributes was "
                                  "not in the global attributes allow-list — §8.6.3's validity requires the "
                                  "local remove list to be a subset of it");
             JS_FreeValue(ctx, local);

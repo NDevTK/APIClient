@@ -729,10 +729,10 @@ static const IdlPairIterOps FD_PAIR_OPS = { form_data_pair_count, form_data_pair
  * form — the page's own code, mid-construction, with a live handle on the list being built. So this
  * constructor is a machine that SUSPENDS, and `new FormData(form)` is one of the few constructors in the
  * platform that does. `new FormData()` with no argument is an empty entry list and never reaches step 1. */
-/* WHERE THIS MACHINE RESTS. §4's step 1 has two halves and the page's code sits between them, so they are two
-   STAGES: the submitter's two refusals (both of which throw before anything is built), and the construction
+/* WHERE THIS MACHINE RESTS. XHR §4's step 1 has two halves and the page's code sits between them, so they are
+   two STAGES: the submitter's two refusals (both of which throw before anything is built), and the construction
    itself. The construction's own cursor rides the entry-list sub-sequence, which is why the second stage names
-   the whole of steps 1.2-1.4 rather than one step of it. */
+   the whole of XHR §4's steps 1.2-1.4 rather than one step of it. */
 #define FD_CTOR_STAGES(X) \
     X(FD_CTOR_SUBMITTER, "XHR §4 Interface FormData, new FormData(form, submitter) step 1.1 (a submitter " \
                          "must be a submit button whose form owner is form)") \

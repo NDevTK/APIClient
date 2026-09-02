@@ -377,7 +377,7 @@ static void pp_append_url_origin(PpAllowlist *a, const char *s, size_t n)
         return;
     }
     /* origin_tuple_url INITIALISES `scratch` on every path and answers NULL exactly where URL §4.7 gives the
-       URL an OPAQUE origin, which is step 2.9.2.4's condition with no record minted to ask it. */
+       URL an OPAQUE origin, which is §9.3 step 2.9.2.4's condition with no record minted to ask it. */
     opaque = origin_tuple_url(&url, &scratch) == NULL;
     url_record_free(&scratch);
     if (!opaque) {
@@ -559,8 +559,8 @@ static void pp_process_policy_attributes(const char *allow, size_t allow_len, bo
                    && !out->allowlist[PP_FEATURE_FULLSCREEN].star,
                "§9.4 step 3.1 found a non-empty allowlist in the `fullscreen` slot of a container policy that "
                "does not CONTAIN an entry for the feature — §4.6's presence bit and its allowlist are one "
-               "entry, so a filled allowlist under a false bit is §9.3 having written half of one, and step "
-               "3.1's assignment would then overwrite an owned pointer");
+               "entry, so a filled allowlist under a false bit is §9.3 having written half of one, and §9.4 "
+               "step 3.1's assignment would then overwrite an owned pointer");
         out->allowlist[PP_FEATURE_FULLSCREEN].star = true;                                 /* step 3.1 */
         out->present[PP_FEATURE_FULLSCREEN] = true;
     }

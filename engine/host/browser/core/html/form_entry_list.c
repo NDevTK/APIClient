@@ -123,7 +123,8 @@ static void fel_append(JSContext *ctx, JSValueConst entries, const char *name, s
     form_data_append_entry(ctx, entries, name, nlen, fel_entry_value(ctx, value));
 }
 
-/* §4.13.7.3's ENTRY CONSTRUCTION ALGORITHM, which step 5.3 performs for a form-associated custom element. It
+/* §4.13.7.3's ENTRY CONSTRUCTION ALGORITHM, which §4.10.22.4 step 5.3 performs for a form-associated
+   custom element. It
    is the whole submission half of `setFormValue`, and the reason a FACE can carry entries the `name` attribute
    never names: a submission value that is an entry LIST is appended wholesale and the element's own name is
    not consulted at all. */

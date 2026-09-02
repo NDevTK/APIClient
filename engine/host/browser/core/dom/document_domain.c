@@ -117,7 +117,8 @@ static bool registrable_domain_suffix_or_equal(const char *s, size_t n, const Ur
                        "domain — step 1 of §3.2 is the only null it has");
     if (strcmp(sd, ps) == 0) return false;
     ps = public_suffix_of(original);
-    DCHECK(ps != NULL, "URL §3.2 answered null for the original host after step 4.1 established it is a domain");
+    DCHECK(ps != NULL, "URL §3.2 answered null for the original host after §7.1.1.2 step 4.1 established it is "
+                       "a domain");
     if (dot_suffix_of(sd, ps)) return false;
     /* STEP 4.4's ASSERT, which the standard states and which is a real invariant of the three tests above: the
        value is a strict dotted suffix of the original (4.2), it is not itself a public suffix (4.3a), and it

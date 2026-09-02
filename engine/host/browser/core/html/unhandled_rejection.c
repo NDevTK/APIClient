@@ -96,7 +96,8 @@ static JSValue g_list;
 static int     g_ready;
 /* §8.1.3.3's OTHER container — "a global object has an outstanding rejected promises WEAK SET" — and the word
    weak is the whole of why this one is not a second `g_list`. Its members are exactly the promises this global
-   already REPORTED (step 4.1.4 appends only what survived the `unhandledrejection` fire still unhandled), and a
+   already REPORTED (§8.1.4.7 step 4.1.4 appends only what survived the `unhandledrejection` fire still
+   unhandled), and a
    page that rejects in a loop produces one member per iteration; a strong list of them would keep every
    rejected promise of every origin ever visited alive for the life of the agent, against a frontier §NO BOUNDS
    says is never reset.

@@ -1129,14 +1129,14 @@ enum { BC_ENQUEUE = 0, BC_CLOSE, BC_ERROR };
                 "performs, up to its first run of the page's code") \
     X(BS_DRAIN, "Streams §4.9.5 ReadableByteStreamControllerProcessReadRequestsUsingQueue (each queued entry " \
                 "answers one parked read request, and the HandleQueueDrain between them may pull)") \
-    X(BS_FEED, "Streams §4.9.5 ReadableByteStreamControllerEnqueue step 8.3.4 (the transferred chunk answers " \
+    X(BS_FEED, "Streams §4.9.5 ReadableByteStreamControllerEnqueue step 9.3.4 (the transferred chunk answers " \
                "the waiting reader directly rather than being queued)") \
     X(BS_COMMIT, "Streams §4.9.5 ReadableByteStreamControllerCommitPullIntoDescriptor (each filled pull-into " \
                  "answers one parked read-into request)") \
     X(BS_SETTLE, "Streams §4.9.2 ReadableStreamClose / ReadableStreamError (the reader's `closed` promise and " \
                  "every parked request)") \
-    X(BS_RETHROW, "Streams §4.9.5 ReadableByteStreamControllerClose step 4.1.3 (a close at a misaligned fill " \
-                  "errors the stream and then throws the same TypeError at its caller)") \
+    X(BS_RETHROW, "Streams §4.9.5 ReadableByteStreamControllerClose steps 4.2.2-4.2.3 (a close at a " \
+                  "misaligned fill errors the stream and then throws the same TypeError at its caller)") \
     X(BS_PULL, "Streams §4.9.5 ReadableByteStreamControllerCallPullIfNeeded")
 enum { BS_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const BS_STEPS[] = { BS_STAGES(JS_STEP_STAGE_LABEL) NULL };
