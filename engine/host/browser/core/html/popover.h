@@ -1,8 +1,10 @@
 /* THE POPOVER API — HTML §6.12 "The popover attribute". See popover.c.
  *
  * WHAT IS HERE. §6.12's per-element and per-Document state, its CHECK POPOVER VALIDITY, SHOW POPOVER, HIDE A
- * POPOVER, QUEUE A POPOVER TOGGLE EVENT TASK and POPOVER FOCUSING STEPS, and the three IDL members
- * `showPopover(options)`, `hidePopover()` and `togglePopover(options)` those algorithms are the whole of.
+ * POPOVER, HIDE POPOVER STACK UNTIL, TOPMOST POPOVER ANCESTOR, TOPMOST AUTO OR HINT POPOVER, QUEUE A POPOVER
+ * TOGGLE EVENT TASK and POPOVER FOCUSING STEPS, and the three IDL members `showPopover(options)`,
+ * `hidePopover()` and `togglePopover(options)` those algorithms are the whole of. Only hide a popover is
+ * exported, and the reason is stated at it: it is the one §6.12 algorithm another SECTION reaches.
  *
  * THE `popover` CONTENT ATTRIBUTE'S §2.3.3 DEFINITION LIVES HERE and is exported, for the reason
  * core/html/directionality.h exports `dir`'s: core/html/html_element.c owns the TABLE of which interface a tag
@@ -51,8 +53,9 @@ int popover_attribute_state(const lxb_dom_element_t *el);
  * contain itself, and those three algorithms may be one record precisely because their nesting is fixed and
  * acyclic. A registered step machine reached through step_call_run is a HEAP FRAME, which is where CLAUDE.md's
  * §C-stack puts every call, and that is what makes the recursion unbounded, preemptible and parkable at any
- * depth. It is also why hide popover stack until may still be a `_run` when it lands: the recursion passes
- * through the CALL, so each frame holds at most one stack-until cursor.
+ * depth. It is also what lets hide popover stack until be a `_run` cursor rather than a second machine: the
+ * recursion passes through the CALL, so each frame holds at most one stack-until cursor and the two shapes
+ * compose instead of colliding.
  *
  * IT IS A FUNCTION OBJECT AND NOT AN EXPORTED C FUNCTION, for core/dom/observable.c's reason, which that file
  * states for §2.2.1's subscribe-to: an algorithm the standard's prose reaches WITHOUT going through the Web IDL

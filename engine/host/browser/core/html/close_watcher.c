@@ -513,8 +513,14 @@ static int cw_close_action_run(JSContext *wctx, CloseWatcherRun *r, JSValueConst
            destroying the close.
            THE SUBJECT IS THE ELEMENT, which is what establish was given — §6.12 passes the popover element as
            the watcher's subject precisely so this dispatch has it.
-           STILL UNREACHABLE, AND NOW WRITTEN: show popover step 15 is the only establisher of this kind and it
-           DFAILs at step 15.3, so nothing has ever run this line. See close_watcher.h's residual (b). */
+           THE WATCHER NOW EXISTS AND THIS LINE IS STILL UNRUN, AND THE REASON HAS MOVED. It used to be that
+           show popover step 15 DFAILed before establishing anything, so no watcher of this kind could exist;
+           step 15 now establishes one on every `<div popover>` and `<div popover=hint>` that completes a show.
+           What is missing is a DISPATCH: the three action-running algorithms are reached from §6.10.3's
+           `requestClose()`/`close()`, which act on a CloseWatcher instance's OWN watcher, and from process
+           close watchers, which §6.10.1's step 7 calls and which nothing produces a close request to reach —
+           core/html/close_request.h's own named residual, THE PRODUCER. So residual (b) has collapsed into
+           residual (a). See close_watcher.h. */
         JSValueConst hide_argv[POPOVER_HIDE_ARGC];
         JSValue hide = popover_hide_algorithm(wctx);
         JSValue ignored = JS_UNDEFINED;

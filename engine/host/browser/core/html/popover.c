@@ -34,28 +34,34 @@
  * property write is captured by the COW delta, so a forked arm that showed a popover and one that did not each
  * read back their own state, and a parked flow resumes with the one it had.
  *
- * WHAT IS HONESTLY ABSENT, AND WHERE IT CRASHES. The AUTO and HINT states are split down the middle, and the
- * line is whether the step runs the PAGE'S code. The READ half is here: the showing auto and hint popover
- * lists, which are DERIVED each time from CSS Positioned Layout Level 4 §3's top layer rather than stored, and
- * TOPMOST POPOVER ANCESTOR over them, which is a flat-tree question with none of the page's own code in it. The
- * WRITE half is ONE algorithm — §6.12's HIDE POPOVER STACK UNTIL — whose steps 5 and 8 "run the hide popover
- * algorithm given popover" over each popover they hide, firing `beforetoggle` at the page's own listeners. That
- * is why it cannot be a C question, and hide a popover is now the CALL it makes: see popover.h for why that
- * algorithm is a step machine reached through step_call_run rather than a cursor the caller embeds, and why the
- * recursion between the two (a hide contains a stack-until contains a hide) is what settles it. Show popover
- * step 15.3 is where the remaining absence crashes. The split is the SPEC'S OWN and not a convenience, because
- * a Manual popover enters none of it — step 15's block, hide a popover step 11's block, and every read of the
- * showing lists are reachable only from it. `<div popover=manual>` is therefore complete here and `<div
- * popover>` (whose empty value default is Auto) is a named crash rather than a wrong answer.
- *   IT WAS THREE, AND THE OTHER TWO ARE CLOSED. §6.10 Close requests and close watchers' close watcher, which
- * step 15's block establishes as its last sub-step, is a call this file makes: core/html/close_watcher.c holds
- * ALL of §6.10.2 — the manager, establish and destroy, and the three algorithms that RUN a watcher's actions.
- * What was owed in the OTHER direction is discharged here: §6.10.2's close-action dispatch runs a POPOVER
- * watcher's close action, which step 15 states is "to hide a popover given element, true, true, false, and
- * null", and popover.h exports hide a popover with exactly those five arguments for that dispatch to call. That
- * arm is still unreachable — step 15's block is the only establisher of that kind and it DFAILs first — but it
- * is now unreachable-and-WRITTEN rather than unreachable-and-absent, so the day step 15 lands, nothing in
- * §6.10.2 has to change with it. */
+ * THE AUTO AND HINT STATES ARE WHOLE HERE, AND THE STACK IS WHAT MAKES THEM SO. They used to be split down the
+ * middle — the READ half present and the WRITE half named at the two sites that needed it — and the line was
+ * whether a step runs the PAGE'S code. The READ half is the showing auto and hint popover lists, DERIVED each
+ * time from CSS Positioned Layout Level 4 §3's top layer rather than stored, plus TOPMOST POPOVER ANCESTOR and
+ * TOPMOST AUTO OR HINT POPOVER over them, all of them flat-tree or list questions with none of the page's own
+ * code in them. The WRITE half is §6.12's HIDE POPOVER STACK UNTIL, whose steps 5 and 8 "run the hide popover
+ * algorithm given popover" over each popover they hide, firing `beforetoggle` at the page's own listeners — so
+ * it suspends at every member, and it is built here as a `_run` cursor two algorithms hold: hide a popover step
+ * 11 runs it up to three times and show popover step 15 up to twice. See popover.h for why the hide it calls is
+ * a step machine reached through step_call_run rather than a cursor the caller embeds, and why the recursion
+ * between the two (a hide contains a stack-until contains a hide) is what settles that; the recursion passes
+ * through the CALL, so each frame holds at most one cursor.
+ *   WHAT THAT UNBLOCKED IS NOT ONE STEP BUT THE WHOLE CHAIN BEHIND IT. Show popover step 15.9 is the ONLY
+ * writer of an element's OPENED IN POPOVER MODE, and both showing-popover lists filter on it, so until step
+ * 15.3 could run, every read of those lists in this file was correct and VACUOUS and hide a popover step 11's
+ * three conditions could never be true. With the stack built, steps 15.5 through 15.10 follow it: the
+ * originalType re-read, the second check popover validity, step 15.8's shouldRestoreFocus, step 15.9's mode
+ * write, and step 15.10's close watcher — which is what puts a POPOVER-kind watcher in §6.10.2's manager for
+ * the first time. Step 17's originallyFocusedElement and step 24's restore become live with it, over HTML
+ * §6.6.2 Data model's focused area, which core/html/focus.h exports as its DOM ANCHOR; hide a popover step
+ * 20.2 asks the same reader and runs §6.6.4's focusing steps through the same door.
+ *   WHAT REMAINS OWED TO §6.12, AND IT IS OWED FROM ELSEWHERE. §6.12.2 Popover light dismiss and §6.12's HIDE
+ * POPOVERS UNTIL — which Fullscreen §2 Model's fullscreen an element step 2 runs — are the two other consumers
+ * of the stack, and each belongs with the caller that needs it; core/fullscreen/fullscreen.h names the second
+ * as part of what its next diff builds. And §6.10.2's close-action dispatch for a POPOVER watcher is written
+ * and its watcher is now established and the action is still UNRUN — not because §6.10.1 Close requests has no
+ * home (core/html/close_request.c is those nine steps) but because nothing DELIVERS a potential close request,
+ * which is close_request.h's own named residual and what close_watcher.h's residuals (a) and (b) now say. */
 #include <string.h>
 
 #include <lexbor/dom/dom.h>
@@ -69,6 +75,7 @@
 #include "core/dom/node.h"
 #include "core/dom/shadow_root.h"
 #include "core/events/event_target.h"
+#include "core/html/close_watcher.h"
 #include "core/html/enumerated_attribute.h"
 #include "core/html/focus.h"
 #include "core/html/html_dialog.h"
@@ -121,15 +128,21 @@ enum {
     PS_TRACKER,          /* "popover toggle task tracker … initially null" — the slot holds its OLD STATE */
     PS_TRACKER_TASK,     /* …and its TASK, as the JSTaskHandle JS_EnqueueCallTask answered, in a BigInt */
     PS_OPENED_MODE,      /* "opened in popover mode … 'auto', 'hint', or null, initially null" */
-    PS_PREV_FOCUSED,     /* §6.6's previously focused element, which §6.12 steps 16 and 24 write */
+    PS_CLOSE_WATCHER,    /* "popover close watcher, a close watcher or null, initially null" */
+    /* "Each HTML element has a previously focused element which is null or an element, and it is initially
+       null" — defined by HTML §4.11.4 The dialog element, NOT by §6.6 Focus, which is what this line used to
+       say and what citegen's term check reports. §6.12 steps 16 and 24 write it and its step 19 reads it. */
+    PS_PREV_FOCUSED,
     PS_DOC_SHOWING,      /* Document: "showing popover, a boolean, initially false" */
     PS_DOC_NESTING,      /* Document: "hiding popover nesting count, a number, initially 0" */
+    PS_DOC_HINT_PARENT,  /* Document: "hint stack parent, an HTML element or null, initially null" */
     PS_SLOT_N
 };
 static const char *const PS_SLOT_NAME[PS_SLOT_N] = {
     "popoverVisibilityState", "popoverTrigger", "popoverHiding", "popoverToggleTaskTracker",
-    "popoverToggleTaskTrackerTask", "openedInPopoverMode", "popoverPreviouslyFocusedElement",
-    "documentShowingPopover", "documentHidingPopoverNestingCount"
+    "popoverToggleTaskTrackerTask", "openedInPopoverMode", "popoverCloseWatcher",
+    "popoverPreviouslyFocusedElement", "documentShowingPopover", "documentHidingPopoverNestingCount",
+    "documentHintStackParent"
 };
 static JSValue g_slot_key[PS_SLOT_N];
 static JSAtom  g_slot_atom[PS_SLOT_N];
@@ -305,10 +318,11 @@ static int popover_check_validity(JSContext *ctx, JSValueConst el, bool expected
  * layer would be the second copy of one fact that CLAUDE.md's §A-FIELD-A-CONSUMER-DEFAULTS is about, and it
  * would drift on exactly the operation §3.3 exists for: a removal from the MIDDLE.
  *
- * WHAT THIS SECTION IS AND IS NOT. It is the READ side — the two lists and TOPMOST POPOVER ANCESTOR, all of them
- * questions with no page code in them. The WRITE side is HIDE POPOVER STACK UNTIL, whose step 5 runs the hide a
- * popover algorithm over each popover it hides, which fires `beforetoggle` at the page's own listeners: that one
- * cannot be a C question and is named at the two sites that need it. */
+ * WHAT THIS SECTION IS AND IS NOT. It is the READ side — the two lists, TOPMOST POPOVER ANCESTOR and TOPMOST
+ * AUTO OR HINT POPOVER, all of them questions with no page code in them, which is why every one of them is a
+ * plain C function its callers ask without a stage. The WRITE side is HIDE POPOVER STACK UNTIL, whose steps 5
+ * and 8 run the hide a popover algorithm over each popover they hide and so run the page's own `beforetoggle`
+ * listeners: it is a `_run` cursor, and it has its own section below. */
 
 /* §6.12's "opened in popover mode … 'auto', 'hint', or null, initially null", as one of POPOVER_STATE_AUTO,
    POPOVER_STATE_HINT, or POPOVER_STATE_NONE for the standard's null. The two spellings the standard writes as
@@ -366,6 +380,72 @@ static uint32_t popover_list_len(JSContext *ctx, JSValueConst list)
     JS_ToUint32(ctx, &n, lv);
     JS_FreeValue(ctx, lv);
     return n;
+}
+
+/* Infra's list CONTAINS, answering the POSITION rather than the boolean — because §6.12 asks for both over the
+ * same lists and from the same place: hide popover stack until step 2 is "let lastHideIndex be 0 if popoverList
+ * does not contain endpoint; otherwise the index of endpoint in popoverList plus 1", while its step 8's first
+ * sub-step, hide a popover steps 9 and 10, and show popover step 15.9's two asserts each want only the
+ * membership. One scan answers both, and a caller wanting the boolean writes `>= 0`.
+ *
+ * A POSITION IS PERMITTED HERE FOR EXACTLY ONE REASON: the list is a FRESH Array this file built out of the top
+ * layer, so an index into it is an index into a VALUE and not into a view. That is the distinction
+ * core/css/top_layer.h draws between its collect and its topmost walk — the walk refuses to hand out a rank
+ * precisely because the top layer is mutated by algorithms a page reaches, and CLAUDE.md's
+ * §AN-INDEX-NAMES-A-THING-ONLY-WHILE-THE-SET-IS-FIXED permits an ordinal only over a set nothing can renumber
+ * under a suspension. Nothing renumbers this one: it is the running flow's own snapshot, and hide popover stack
+ * until's steps 6 and 7 exist precisely because the LIVE set may have moved and must be re-read rather than
+ * re-indexed.
+ *
+ * IDENTITY IS THE WRAPPER'S, which is the same comparison check popover validity step 3 makes over documents: a
+ * node has exactly one wrapper per realm, and every member of these lists came out of one collect. A null or
+ * absent `item` is contained in nothing, which is what makes step 2's "does not contain" the answer for hide
+ * popover stack until's null-endpoint callers rather than a case they have to test for themselves. */
+static int64_t popover_list_index_of(JSContext *ctx, JSValueConst list, uint32_t n, JSValueConst item)
+{
+    uint32_t i;
+
+    DCHECK(JS_IsArray(list), "a §6.12 popover list was searched before it was built");
+    if (JS_IsNull(item) || JS_IsUndefined(item)) return -1;
+    for (i = 0; i < n; i++) {
+        JSValue m = JS_GetPropertyUint32(ctx, list, i);
+        bool same = JS_VALUE_GET_PTR(m) == JS_VALUE_GET_PTR(item);
+
+        JS_FreeValue(ctx, m);
+        if (same) return (int64_t)i;
+    }
+    return -1;
+}
+
+/* §6.12's "To find the topmost auto or hint popover given a Document document", 3 steps: "If document's showing
+ * hint popover list is not empty, then return document's showing hint popover list's last element. If
+ * document's showing auto popover list is not empty, then return document's showing auto popover list's last
+ * element. Return null."
+ *
+ * THE HINT LIST IS ASKED FIRST AND THAT IS NOT AN OPTIMISATION — it is the same priority order step 15.2's note
+ * states ("Hint popovers are lower priority than Auto popovers, so an Auto popover cannot have a Hint popover as
+ * a 'parent'"), read from the other end: a showing hint popover is always above every auto popover, so it is
+ * always the topmost of the two stacks. Its ONE caller is show popover step 15.8, whose only question is whether
+ * the answer is NULL — "this ensures that focus is returned to the previously-focused element only for the first
+ * popover in a stack" — but it is written as the standard writes it, returning the element, because §6.12.2
+ * Popover light dismiss asks the same algorithm for the element itself.
+ *
+ * IT RUNS NO PAGE CODE: both lists are derived reads over the top layer with a C predicate, which is the
+ * contract top_layer.h states for a collect. OWNED, and JS_NULL for the standard's null. */
+static JSValue popover_topmost_auto_or_hint(JSContext *ctx, JSValueConst doc)
+{
+    JSValue hints = popover_showing_list(ctx, doc, POPOVER_STATE_HINT);
+    JSValue autos, found = JS_NULL;
+    uint32_t n = popover_list_len(ctx, hints);
+
+    if (n > 0) found = JS_GetPropertyUint32(ctx, hints, n - 1);                                  /* step 1 */
+    JS_FreeValue(ctx, hints);
+    if (!JS_IsNull(found)) return found;
+    autos = popover_showing_list(ctx, doc, POPOVER_STATE_AUTO);
+    n = popover_list_len(ctx, autos);
+    if (n > 0) found = JS_GetPropertyUint32(ctx, autos, n - 1);                                  /* step 2 */
+    JS_FreeValue(ctx, autos);
+    return found;                                                                                /* step 3 */
 }
 
 /* "`node` is a FLAT TREE DESCENDANT of `ancestor`" — CSS Scoping §4.1 "Flattening the DOM into an Element
@@ -679,6 +759,241 @@ static void popover_queue_toggle_task(JSContext *ctx, JSValueConst element, cons
     JS_FreeValue(ctx, fn);
 }
 
+/* ---- §6.12's HIDE POPOVER STACK UNTIL ------------------------------------------------------------------------
+ *
+ * "To hide popover stack until, given a Document document, an HTML element or null endpoint, an Auto or Hint
+ * stackType, a boolean focusPreviousElement, and a boolean fireEvents", 8 steps. This is the WRITE half of
+ * §6.12's Auto/Hint stack — the half the read side above could not be, because its steps 5 and 8 "run the hide
+ * popover algorithm given popover", and every one of those hides fires `beforetoggle` at the page's own
+ * listeners.
+ *
+ * IT IS A `_run` CURSOR AND NOT A REGISTERED MACHINE, WHICH IS THE OTHER HALF OF popover.h's ARGUMENT. That file
+ * says hide a popover must be a CALL because §6.12 is mutually recursive — a hide contains a stack-until
+ * contains a hide, to a depth the page's markup decides — and a struct embedded in its caller cannot contain
+ * itself. The recursion passes through that CALL, which is a heap frame, so each frame holds AT MOST ONE
+ * stack-until cursor and a cursor is the right shape for this one: core/html/close_watcher.h's CloseWatcherRun
+ * and core/html/focus.h's focus_element_run are the same shape for the same reason. Its two holders are the two
+ * algorithms of §6.12 that run it — hide a popover step 11 and show popover step 15 — and neither can be inside
+ * the other without a call in between.
+ *
+ * IT WALKS COPIES, AND THE STANDARD IS WHAT MAKES THEM COPIES. Steps 3 and 4 are SLICES of a popoverList that is
+ * itself a fresh Array derived from the top layer, so the walk's order is fixed at step 3 whatever step 5's
+ * hides do to the live set — and a member some `beforetoggle` handler hid meanwhile is not SKIPPED but ASKED,
+ * because hide a popover step 1's check popover validity answers false for a popover that is no longer showing
+ * and step 2 returns. That is the identical argument close_watcher.c records for copying a group before
+ * walking it, and it is why steps 6 and 7 RE-READ rather than re-index: the standard's own note says what they
+ * are for — "This happens if popovers are shown whilst hiding popovers. For example, in beforetoggle events."
+ *
+ * IT YIELDS BETWEEN MEMBERS. A showing-popover list is of the PAGE's size, so walking it inside one C activation
+ * is the drive-to-completion this engine has no other bound against; JS_STEP_YIELD after each hide is what makes
+ * a stack of ten thousand fair BFS work. It is not a bound — nothing is dropped, skipped or counted.
+ *
+ * EVERY ONE OF ITS EIGHT STEPS HOLDS NO SUB-LIST EXCEPT STEP 8, WHICH HOLDS EXACTLY ONE, so the bare `step 8.1`
+ * and `step 8.2` below are unambiguous under CLAUDE.md's rule and steps 1-7 have no sub-numbers to be ambiguous
+ * about. */
+enum { HPSU_START = 0, HPSU_HIDE, HPSU_CHECK, HPSU_DONE };
+
+typedef struct {
+    uint8_t  stage;      /* HPSU_* — this algorithm's own cursor */
+    uint8_t  hphase;     /* the hide a popover CALL's own phase, in whichever of steps 5 and 8 is walking */
+    uint32_t i;          /* the index, into THIS RUN'S OWN copy, of the member step 5 or step 8 is standing on */
+    JSValue  to_hide;    /* step 3's toHide, already in REVERSE order (owned) */
+    JSValue  to_remain;  /* step 4's toRemain (owned) */
+    JSValue  to_check;   /* step 7's toCheck, already in REVERSE order (owned) */
+    /* step_call_run's [this, hide, popover, focusPreviousElement, fireEvents, throwExceptions, source] — named
+       by popover.h's TYPE rather than by a width, so a caller cannot be an argument behind the algorithm. */
+    PopoverHideCb cb;
+} PopoverStackUntilRun;
+
+/* Place the run's owned fields before anything can fail, and RESET its cursor — a holder calls this before each
+   run, because §6.12 runs this algorithm up to three times in one hide a popover and twice in one show popover
+   and each of those is the algorithm from its own step 1. */
+static void popover_stack_until_init(PopoverStackUntilRun *r)
+{
+    int k;
+
+    r->stage = HPSU_START;
+    r->hphase = 0;
+    r->i = 0;
+    r->to_hide = r->to_remain = r->to_check = JS_UNDEFINED;
+    STEP_CB_FOREACH(r->cb, k) r->cb[k] = JS_UNDEFINED;
+}
+
+/* WHAT THIS RUN OWNS — the holding machine's `visit` forwards to it, so a fork mid-walk gives each arm its own
+   slices rather than two flows one, and a teardown releases them. */
+static void popover_stack_until_visit(JSContext *ctx, PopoverStackUntilRun *r, JSStepVisit *v)
+{
+    int k;
+
+    v->val(ctx, &r->to_hide);
+    v->val(ctx, &r->to_remain);
+    v->val(ctx, &r->to_check);
+    STEP_CB_FOREACH(r->cb, k)
+        v->val(ctx, &r->cb[k]);
+}
+
+/* Steps 5 and 8's shared body: "run the hide popover algorithm given popover, focusPreviousElement, <fireEvents
+   or false>, false, and null." The FOURTH argument is false at both sites — this algorithm's callers have
+   nobody to throw to — and the FIFTH is null, which is the argument popover.c's own member entry used to get
+   wrong. Returns step_call_run's own contract: >0 for the caller to return, -1 with a throw live, 0 once the
+   hide has finished. */
+static int popover_stack_until_hide(JSContext *ctx, PopoverStackUntilRun *r, JSValueConst popover,
+                                    bool focus_previous_element, bool fire_events, JSValue in,
+                                    JSValue **out_cb, int *out_argc)
+{
+    JSValueConst argv[POPOVER_HIDE_ARGC];
+    JSValue hide = popover_hide_algorithm(ctx);
+    JSValue out = JS_UNDEFINED;
+    int rc;
+
+    argv[0] = popover;
+    argv[1] = focus_previous_element ? JS_TRUE : JS_FALSE;
+    argv[2] = fire_events ? JS_TRUE : JS_FALSE;
+    argv[3] = JS_FALSE;   /* throwExceptions */
+    argv[4] = JS_NULL;    /* source */
+    rc = step_call_run(ctx, &r->hphase, STEP_CB(r->cb), hide, JS_UNDEFINED,
+                       POPOVER_HIDE_ARGC, argv, in, &out, out_cb, out_argc);
+    JS_FreeValue(ctx, hide);
+    if (rc) return rc;
+    if (JS_IsException(out)) return -1;
+    DCHECK(JS_IsUndefined(out),
+           "§6.12's hide a popover answered hide popover stack until with a value — it returns nothing, and "
+           "throwExceptions is false at both of steps 5 and 8, so the only completions this call has are "
+           "undefined and a throw the engine itself raised");
+    JS_FreeValue(ctx, out);
+    return 0;
+}
+
+/* `endpoint` is an HTML element or JS_NULL; `stack_type` is POPOVER_STATE_AUTO or POPOVER_STATE_HINT.
+   Returns JS_STEP_CALL / JS_STEP_YIELD (the caller returns it), -1 with a throw live in the context, or 0 when
+   the eight steps have finished — the same contract close_watcher.h's three run algorithms carry. */
+static int popover_stack_until_run(JSContext *ctx, PopoverStackUntilRun *r, JSValueConst document,
+                                   JSValueConst endpoint, int stack_type, bool focus_previous_element,
+                                   bool fire_events, JSValue in, JSValue **out_cb, int *out_argc)
+{
+    int rc;
+
+    DCHECK(stack_type == POPOVER_STATE_AUTO || stack_type == POPOVER_STATE_HINT,
+           "§6.12's hide popover stack until was given a stackType that is neither of the two the standard "
+           "declares — it takes \"an Auto or Hint stackType\", and every one of its five callers names one of "
+           "those two words");
+    DCHECK(JS_IsNull(endpoint) || html_element_is(endpoint),
+           "§6.12's hide popover stack until was given an endpoint that is neither an HTML element nor null — "
+           "it takes \"an HTML element or null endpoint\", and hide a popover step 11.2 is the caller that "
+           "passes the null");
+
+    if (r->stage == HPSU_START) {
+        JSValue list;
+        uint32_t n, last, i;
+        int64_t at;
+
+        JS_FreeValue(ctx, in);
+        in = JS_UNDEFINED;
+        list = popover_showing_list(ctx, document, stack_type);                                  /* step 1 */
+        n = popover_list_len(ctx, list);
+        at = popover_list_index_of(ctx, list, n, endpoint);                                      /* step 2 */
+        last = at < 0 ? 0 : (uint32_t)at + 1;
+        DCHECK(last <= n, "§6.12's hide popover stack until cut its popoverList past its own end");
+        /* Step 3 — "a slice of popoverList from lastHideIndex, IN REVERSE ORDER". The reversal is done HERE,
+           into the run's own value, rather than left to a backwards cursor, because step 7 needs the same
+           operation over a DIFFERENT list and one shape serves both; a cursor that counted down would also be
+           an index whose direction the resume has to re-derive. */
+        r->to_hide = JS_NewArray(ctx);
+        CHECK(!JS_IsException(r->to_hide), "§6.12's hide popover stack until could not allocate toHide");
+        for (i = 0; i < n - last; i++)
+            JS_SetPropertyUint32(ctx, r->to_hide, i, JS_GetPropertyUint32(ctx, list, n - 1 - i));
+        r->to_remain = JS_NewArray(ctx);                                                         /* step 4 */
+        CHECK(!JS_IsException(r->to_remain), "§6.12's hide popover stack until could not allocate toRemain");
+        for (i = 0; i < last; i++)
+            JS_SetPropertyUint32(ctx, r->to_remain, i, JS_GetPropertyUint32(ctx, list, i));
+        JS_FreeValue(ctx, list);
+        r->i = 0;
+        r->stage = HPSU_HIDE;
+    }
+
+    if (r->stage == HPSU_HIDE) {
+        /* Step 5 — "For each popover of toHide: run the hide popover algorithm given popover,
+           focusPreviousElement, fireEvents, false, and null." */
+        if (r->i < popover_list_len(ctx, r->to_hide)) {
+            JSValue popover = JS_GetPropertyUint32(ctx, r->to_hide, r->i);
+
+            rc = popover_stack_until_hide(ctx, r, popover, focus_previous_element, fire_events, in,
+                                          out_cb, out_argc);
+            JS_FreeValue(ctx, popover);
+            if (rc) return rc;
+            r->i++;
+            /* ONE MEMBER PER TURN — see the section header. */
+            return JS_STEP_YIELD;
+        }
+        JS_FreeValue(ctx, in);
+        in = JS_UNDEFINED;
+        JS_FreeValue(ctx, r->to_hide);
+        r->to_hide = JS_UNDEFINED;
+        {
+            /* Steps 6 and 7 — the list is RE-READ, because step 5's hides ran the page's own `beforetoggle`
+               listeners and one of them may have SHOWN a popover; re-indexing the step-1 snapshot would name
+               whichever member has shifted into a position, which is the defect this file's own index rule is
+               about. */
+            JSValue fresh = popover_showing_list(ctx, document, stack_type);                     /* step 6 */
+            uint32_t n = popover_list_len(ctx, fresh), i;
+
+            r->to_check = JS_NewArray(ctx);                                                      /* step 7 */
+            CHECK(!JS_IsException(r->to_check), "§6.12's hide popover stack until could not allocate toCheck");
+            for (i = 0; i < n; i++)
+                JS_SetPropertyUint32(ctx, r->to_check, i, JS_GetPropertyUint32(ctx, fresh, n - 1 - i));
+            JS_FreeValue(ctx, fresh);
+        }
+        r->i = 0;
+        r->stage = HPSU_CHECK;
+    }
+
+    if (r->stage == HPSU_CHECK) {
+        uint32_t n = popover_list_len(ctx, r->to_check);
+        uint32_t nr = popover_list_len(ctx, r->to_remain);
+
+        /* Step 8 — "For each popover of toCheck". ONE MEMBER PER TURN HERE TOO, INCLUDING THE SKIPS: `toCheck`
+           is the whole showing list and `toRemain` is a slice of it, so a walk that resolved every skip inside
+           one C activation would be an O(|toCheck| × |toRemain|) scan of a structure of the PAGE'S size, which
+           is the drive-to-completion the yield exists for. A yield nobody is waiting on is re-entered
+           immediately and costs one predicted call. */
+        if (r->i < n) {
+            JSValue popover = JS_GetPropertyUint32(ctx, r->to_check, r->i);
+
+            /* Step 8.1's "If toRemain contains popover, then continue." RE-EVALUATED ON EVERY RE-ENTRY, and
+               that is safe here for the reason STEP_GOTO's own note makes it dangerous elsewhere: both operands
+               are this run's FROZEN values, so the test cannot decide differently on the way back in and walk
+               away from a call it already issued. */
+            if (popover_list_index_of(ctx, r->to_remain, nr, popover) >= 0) {
+                JS_FreeValue(ctx, popover);
+                JS_FreeValue(ctx, in);
+                r->i++;
+                return JS_STEP_YIELD;
+            }
+            /* Step 8.2 — "run the hide popover algorithm given popover, focusPreviousElement, false, false,
+               and null". `fireEvents` is IGNORED here and false is used instead, which the standard says in as
+               many words: "In this additional hiding phase, fireEvents is ignored, and false is used instead." */
+            rc = popover_stack_until_hide(ctx, r, popover, focus_previous_element, /*fireEvents*/ false, in,
+                                          out_cb, out_argc);
+            JS_FreeValue(ctx, popover);
+            if (rc) return rc;
+            r->i++;
+            return JS_STEP_YIELD;
+        }
+        JS_FreeValue(ctx, in);
+        JS_FreeValue(ctx, r->to_check);
+        JS_FreeValue(ctx, r->to_remain);
+        r->to_check = r->to_remain = JS_UNDEFINED;
+        r->stage = HPSU_DONE;
+        return 0;
+    }
+
+    JS_FreeValue(ctx, in);
+    DFAIL("§6.12's hide popover stack until was re-entered after it had finished — its cursor is reset by "
+          "whoever starts a new run of it, which is what popover_stack_until_init is for, and §6.12 starts a "
+          "new one at each of hide a popover steps 11.1, 11.2 and 11.3 and show popover steps 15.3 and 15.4");
+    return 0;
+}
+
 /* ---- §6.12's HIDE A POPOVER, as its own step machine ---------------------------------------------------------
  *
  * "To hide a popover given an HTML element element, a boolean focusPreviousElement, a boolean fireEvents, a
@@ -698,8 +1013,11 @@ static void popover_queue_toggle_task(JSContext *ctx, JSValueConst element, cons
  * 12 and 20 each contain a single `<ol>` and no sibling list, which is the condition CLAUDE.md puts on writing
  * a sub-number without naming its list.
  *
- * WHAT IT DOES NOT DO YET is step 11's block (hide popover stack until, and the hint stack parent it reads) and
- * step 20.2's focusing steps; each crashes AT its own step, naming the one component that is missing. */
+ * IT IS WHOLE — all 21 steps, step 11's block over the document's hint stack parent and its two showing-popover
+ * lists included, and step 20.2's §6.6.4 focusing steps over core/html/focus.h's DOM anchor. The one thing it
+ * refuses is a previously focused element that is not an ELEMENT, which §6.6.2's viewport anchor legitimately
+ * is; that crash names §6.6.4 step 1's getting-the-focusable-area as the door to build, and it fires only for a
+ * popover whose focus was moved inside it before the hide. */
 
 typedef struct {
     JSStepHdr hdr;
@@ -708,22 +1026,36 @@ typedef struct {
     uint8_t   fire_events;    /* the `fireEvents` ARGUMENT, which step 6 may lower */
     uint8_t   nested_hide;    /* step 4's nestedHide */
     uint8_t   nesting_taken;  /* whether step 7's increment is still owed step 8's decrement */
+    uint8_t   auto_contains;  /* step 9's autoPopoverListContainsElement */
+    uint8_t   hint_contains;  /* step 10's hintPopoverListContainsElement */
+    /* WHICH OF STEP 11'S THREE HIDE POPOVER STACK UNTIL RUNS IS NEXT — 0 = step 11.1, 1 = step 11.2, 2 = step
+       11.3, 3 = they are done. An ordinal over a set THE STANDARD FIXES at three named sub-steps, which is
+       CLAUDE.md's §AN-INDEX-NAMES-A-THING permitted case in its clearest form: nothing the page does can
+       renumber the sub-steps of §6.12's step 11. */
+    uint8_t   stack_call;
     JSValue   doc;            /* step 3's `document`, bound ONCE (owned) — see popover_hide_cleanup */
     JSValue   ev;             /* step 12.1's ToggleEvent, minted once and held across the dispatch (owned) */
+    JSValue   prev_focused;   /* step 19's previouslyFocusedElement, held across step 20.2's request (owned) */
+    PopoverStackUntilRun su;  /* step 11's HIDE POPOVER STACK UNTIL cursor, one run at a time */
     EventFireCb cb;           /* the fire request buffer: [this, dispatch, target, event, targetOverride] */
 } PopoverHideState;
 
 #define POPOVER_HIDE_STAGES(X) \
-    X(PH_ENTER, "HTML §6.12 The popover attribute's hide a popover steps 1-11 — a range because every step in " \
-                "it is ONE O(1) engine action: a check popover validity whose four steps are an " \
-                "attribute-state lookup and a connectedness walk, a slot read, a slot write, or an integer " \
-                "increment") \
+    X(PH_ENTER, "HTML §6.12 The popover attribute's hide a popover steps 1-10 and step 11's condition — a " \
+                "range because every step in it is ONE O(1) engine action: a check popover validity whose four " \
+                "steps are an attribute-state lookup and a connectedness walk, a slot read, a slot write, an " \
+                "integer increment, or a derived read of a showing-popover list") \
+    X(PH_STACK, "HTML §6.12 The popover attribute's hide a popover step 11 (its three HIDE POPOVER STACK UNTIL " \
+                "runs, over the hint list, the hint stack parent and the auto list, then step 11.4's third " \
+                "check popover validity)") \
     X(PH_FIRE,  "HTML §6.12 The popover attribute's hide a popover step 12 (fire an event named beforetoggle, " \
                 "using ToggleEvent, with oldState \"open\", newState \"closed\" and source, at element, then " \
                 "its second check popover validity and its top-layer removal request)") \
-    X(PH_END,   "HTML §6.12 The popover attribute's hide a popover steps 13-21 (the immediate top-layer " \
-                "removal, the three state clears, the hint stack parent, the queued toggle task, the previously " \
-                "focused element and cleanupSteps) — one O(1) engine action each")
+    X(PH_END,   "HTML §6.12 The popover attribute's hide a popover steps 13-20.1 (the immediate top-layer " \
+                "removal, the three state clears, the hint stack parent, the queued toggle task and the " \
+                "previously focused element) — one O(1) engine action each") \
+    X(PH_FOCUS, "HTML §6.12 The popover attribute's hide a popover step 20.2 (run the §6.6.4 focusing steps " \
+                "for the previously focused element) and step 21's cleanupSteps")
 enum { POPOVER_HIDE_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const POPOVER_HIDE_STEPS[] = { POPOVER_HIDE_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -737,23 +1069,30 @@ static const char *const POPOVER_HIDE_STEPS[] = { POPOVER_HIDE_STAGES(JS_STEP_ST
 static void popover_hide_cleanup(JSContext *ctx, PopoverHideState *s)
 {
     JSValueConst element;
+    JSValue watcher;
 
     if (!s->nesting_taken) return;
     s->nesting_taken = 0;
     element = step_arg(&s->hdr, 0);
     if (!s->nested_hide) ps_clear(ctx, element, PS_HIDING);                                    /* step 8.1 */
-    /* Step 8.2 is "if element's popover close watcher is not null: destroy element's popover close watcher;
-       set element's popover close watcher to null". Only show popover step 15's Auto/Hint arm establishes one
-       and that arm DFAILs below, so the slot is null here by construction — asserted at the step rather than
-       assumed, through the slot that would hold one. The DESTROY this step owes exists
-       (core/html/close_watcher.h's close_watcher_destroy, given the element's relevant global object, which is
-       the realm step 15 establishes it in); what is missing is the step-15 block that would put one there. */
-    DCHECK(ps_is_null(ctx, element, PS_OPENED_MODE),
-           "HTML §6.12 The popover attribute's hide a popover step 8's cleanupSteps found an element with an "
-           "OPENED IN POPOVER MODE, which only show popover step 15's Auto/Hint arm sets — that arm DFAILs in "
-           "this build, so reaching here means it was built and this step must now call close_watcher_destroy "
-           "(HTML §6.10.2 Close watcher infrastructure) on the element's popover close watcher, and set that "
-           "slot to null, before decrementing");
+    /* Step 8.2 — "If element's popover close watcher is not null: destroy element's popover close watcher; set
+       element's popover close watcher to null." Show popover step 15.10 is the only thing that puts one there,
+       and this is the only thing that takes it away, which is why the two are read together. */
+    watcher = ps_get(ctx, element, PS_CLOSE_WATCHER);
+    if (!JS_IsUndefined(watcher)) {
+        JSContext *wctx = popover_document_realm(element);
+
+        DCHECK(wctx != NULL,
+               "HTML §6.12 The popover attribute's hide a popover step 8.2 must DESTROY the element's popover "
+               "close watcher, and the element's node document is no realm's active document — HTML §6.10.2 "
+               "Close watcher infrastructure's destroy reaches the manager of the WINDOW the watcher was "
+               "established in, which show popover step 15.10 states is \"element's relevant global object\". "
+               "Reaching here means a document stopped being active between the establish and this hide, so "
+               "the watcher's own window must be carried on the watcher rather than re-derived here");
+        close_watcher_destroy(wctx, watcher);                                              /* step 8.2's destroy */
+        ps_clear(ctx, element, PS_CLOSE_WATCHER);                                          /* step 8.2's null */
+    }
+    JS_FreeValue(ctx, watcher);
     ps_set(ctx, s->doc, PS_DOC_NESTING, JS_NewInt32(ctx, popover_nesting(ctx, s->doc) - 1));    /* step 8.3 */
 }
 
@@ -774,6 +1113,24 @@ static int popover_hide_return(JSContext *ctx, int validity, bool throw_exceptio
     return JS_STEP_DONE;
 }
 
+/* STEP 12'S CONDITION AND THE STAGE THAT FOLLOWS IT — the one place step 11's two arms converge, written once
+   because the decision is step 12's and not either arm's, and a copy at each arm is one condition two sites
+   must stay abreast of. Returns the stage, or -1 when step 12.1's event could not be minted. */
+static int popover_hide_stage_after_11(JSContext *ctx, PopoverHideState *s, JSValueConst source)
+{
+    if (!s->fire_events) return PH_END;
+    /* Step 12.1's event, minted here so a failure to allocate it is answered before the fire's own phase is
+       entered. NOT cancelable: §6.12 names three initialisers for this fire and no others, which is why a hide
+       cannot be prevented and why step 12.2 re-reads validity instead of reading a canceled flag. */
+    s->ev = toggle_event_new(ctx, "beforetoggle", POPOVER_OPEN, POPOVER_CLOSED, source,
+                             /*bubbles*/ false, /*cancelable*/ false);
+    if (JS_IsException(s->ev)) {
+        s->ev = JS_UNDEFINED;
+        return -1;   /* `fini` runs cleanupSteps for this exit, as it does for every other */
+    }
+    return PH_FIRE;
+}
+
 static int js_popover_hide_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     PopoverHideState *s = st;
@@ -792,10 +1149,13 @@ static int js_popover_hide_step(JSContext *ctx, void *st, JSValue cb_result, JSV
            through js_popover_hide_visit, which frees exactly what the state holds, and a zeroed block is not a
            block of JS_UNDEFINEDs. `nesting_taken` is zero in that block, which is what makes `fini` safe on a
            state whose first step never ran. */
-        s->doc = s->ev = JS_UNDEFINED;
+        s->doc = s->ev = s->prev_focused = JS_UNDEFINED;
         STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
+        popover_stack_until_init(&s->su);
         s->fphase = s->focus_phase = 0;
         s->nested_hide = s->nesting_taken = 0;
+        s->auto_contains = s->hint_contains = 0;
+        s->stack_call = 0;
         /* THE ARITY IS ASSERTED BEFORE ANY ARGUMENT'S VALUE IS TAKEN, because step_arg answers JS_UNDEFINED
            out of range and JS_ToBool of that is FALSE — so a caller that supplied four arguments would be
            handed a silent `source = null` and a silent `throwExceptions = false` rather than a crash. §6.12
@@ -823,38 +1183,93 @@ static int js_popover_hide_step(JSContext *ctx, void *st, JSValue cb_result, JSV
         if (s->nested_hide) s->fire_events = 0;                                                  /* step 6 */
         ps_set(ctx, s->doc, PS_DOC_NESTING, JS_NewInt32(ctx, popover_nesting(ctx, s->doc) + 1)); /* step 7 */
         s->nesting_taken = 1;                                                                    /* step 8 */
-        /* Steps 9 and 10 read the SHOWING AUTO POPOVER LIST and the SHOWING HINT POPOVER LIST, and step 11 is
-           the block those two booleans gate. Both lists exist (they are derived from the top layer above), but
-           nothing in this build writes an element's opened in popover mode — show popover step 15.9 is its only
-           writer and step 15.3 DFAILs before it. So both lists are empty by construction, step 11's condition
-           is false, and step 13's "otherwise" is the arm every hide in this build takes. The condition is
-           EVALUATED at the step that asks it, and it is the standard's own — "If element's opened in popover
-           mode is 'auto' or 'hint'": */
-        if (!ps_is_null(ctx, element, PS_OPENED_MODE))
-            DFAIL("HTML §6.12 The popover attribute's hide a popover step 11 runs HIDE POPOVER STACK UNTIL over "
-                  "the document's showing auto and hint popover lists, up to three times, and step 11.4 then "
-                  "re-runs check popover validity because those hides run the page's own `beforetoggle` "
-                  "listeners. The lists, TOPMOST POPOVER ANCESTOR and the re-entrant hide a popover its steps 5 "
-                  "and 8 call are all built; what is missing is hide popover stack until ITSELF — 8 steps over "
-                  "two slices of one list, whose step 5 calls popover_hide_algorithm through step_call_run and "
-                  "so needs its own phase and buffer on a `_run` cursor this state would hold — and the "
-                  "document's HINT STACK PARENT, whose only writer is show popover step 19 inside show popover "
-                  "step 15's block. Reaching here means step 15.9 was built and set this element's OPENED IN "
-                  "POPOVER MODE, so both must now be written");
-        if (s->fire_events) {
-            /* Step 12.1's event, minted here so a failure to allocate it is answered before the fire's own
-               phase is entered. NOT cancelable: §6.12 names three initialisers for this fire and no others,
-               which is why a hide cannot be prevented and why step 12.2 re-reads validity instead of reading a
-               canceled flag. */
-            s->ev = toggle_event_new(ctx, "beforetoggle", POPOVER_OPEN, POPOVER_CLOSED, source,
-                                     /*bubbles*/ false, /*cancelable*/ false);
-            if (JS_IsException(s->ev)) {
-                s->ev = JS_UNDEFINED;
-                return JS_STEP_ABRUPT;   /* `fini` runs cleanupSteps for this exit, as it does for every other */
-            }
-            STEP_GOTO(s->hdr.stage, PH_FIRE, &s->fphase, &s->focus_phase, NULL);
+        /* Steps 9 and 10 — "let autoPopoverListContainsElement be true if document's showing auto popover list
+           contains element; otherwise false", and its hint twin. BOTH ARE READ HERE, BEFORE step 11 hides
+           anything, which is the whole reason the standard binds them to locals: step 11.3's condition is asked
+           AFTER step 11.1 and 11.2 have run the page's `beforetoggle` listeners, and by then the live list no
+           longer contains this element if one of them hid it. */
+        {
+            JSValue autos = popover_showing_list(ctx, s->doc, POPOVER_STATE_AUTO);
+            JSValue hints = popover_showing_list(ctx, s->doc, POPOVER_STATE_HINT);
+
+            s->auto_contains =
+                popover_list_index_of(ctx, autos, popover_list_len(ctx, autos), element) >= 0;    /* step 9 */
+            s->hint_contains =
+                popover_list_index_of(ctx, hints, popover_list_len(ctx, hints), element) >= 0;   /* step 10 */
+            JS_FreeValue(ctx, hints);
+            JS_FreeValue(ctx, autos);
+        }
+        /* Step 11's condition, the standard's own — "If element's opened in popover mode is 'auto' or 'hint'".
+           A Manual popover has none, so it takes step 12 directly and enters none of step 11's block. */
+        if (!ps_is_null(ctx, element, PS_OPENED_MODE)) {
+            s->stack_call = 0;
+            STEP_GOTO(s->hdr.stage, PH_STACK, &s->fphase, &s->focus_phase, &s->su.hphase, NULL);
         } else {
-            STEP_GOTO(s->hdr.stage, PH_END, &s->fphase, &s->focus_phase, NULL);
+            int next = popover_hide_stage_after_11(ctx, s, source);
+
+            if (next < 0) return JS_STEP_ABRUPT;
+            STEP_GOTO(s->hdr.stage, next, &s->fphase, &s->focus_phase, &s->su.hphase, NULL);
+        }
+    }
+
+    if (s->hdr.stage == PH_STACK) {
+        /* Steps 11.1, 11.2 and 11.3 — three HIDE POPOVER STACK UNTIL runs, each from its own step 1, each
+           suspending at every popover it hides. The sub-index is over the standard's own three sub-steps and
+           the CONDITION of each is re-read on every re-entry, which is safe because all three read state no
+           step of this algorithm between them writes: steps 9 and 10's booleans are bound above, and the hint
+           stack parent is written only by show popover step 19. */
+        while (s->stack_call < 3) {
+            JSValueConst endpoint = JS_NULL;
+            bool run = false;
+            int type = POPOVER_STATE_HINT;
+            int rc;
+
+            if (s->stack_call == 0) {
+                /* Step 11.1 — "If hintPopoverListContainsElement is true, then run hide popover stack until
+                   given document, element, Hint, focusPreviousElement, and fireEvents." */
+                run = s->hint_contains != 0;
+                endpoint = element;
+            } else if (s->stack_call == 1) {
+                /* Step 11.2 — "If element is document's hint stack parent, then run hide popover stack until
+                   given document, null, Hint, focusPreviousElement, and fireEvents." Its note: "If the
+                   document's hint stack parent is being hidden, then all hint popovers are hidden." */
+                JSValue parent = ps_get(ctx, s->doc, PS_DOC_HINT_PARENT);
+
+                run = !JS_IsUndefined(parent) && JS_VALUE_GET_PTR(parent) == JS_VALUE_GET_PTR(element);
+                JS_FreeValue(ctx, parent);
+                endpoint = JS_NULL;
+            } else {
+                /* Step 11.3 — "If autoPopoverListContainsElement is true, then run hide popover stack until
+                   given document, element, Auto, focusPreviousElement, and fireEvents." */
+                run = s->auto_contains != 0;
+                endpoint = element;
+                type = POPOVER_STATE_AUTO;
+            }
+            if (!run) {
+                s->stack_call++;
+                continue;
+            }
+            rc = popover_stack_until_run(ctx, &s->su, s->doc, endpoint, type, focus_previous_element,
+                                         s->fire_events != 0, cb_result, out_cb, out_argc);
+            if (rc > 0) return rc;
+            if (rc < 0) return JS_STEP_ABRUPT;
+            cb_result = JS_UNDEFINED;
+            popover_stack_until_init(&s->su);   /* the next of the three is that algorithm from its own step 1 */
+            s->stack_call++;
+        }
+        JS_FreeValue(ctx, cb_result);
+        /* Step 11.4 — "check popover validity is called again because running hide popover stack until could
+           have disconnected element or changed its popover attribute". */
+        validity = popover_check_validity(ctx, element, /*expectedToBeShowing*/ true, JS_NULL);
+        if (validity != 1) {                                                                  /* step 11.5 */
+            popover_hide_cleanup(ctx, s);
+            return popover_hide_return(ctx, validity, throw_exceptions);
+        }
+        {
+            int next = popover_hide_stage_after_11(ctx, s, source);
+
+            if (next < 0) return JS_STEP_ABRUPT;
+            STEP_GOTO(s->hdr.stage, next, &s->fphase, &s->focus_phase, &s->su.hphase, NULL);
         }
     }
 
@@ -879,39 +1294,102 @@ static int js_popover_hide_step(JSContext *ctx, void *st, JSValue cb_result, JSV
            Step 12.5 sets the IMPLICIT ANCHOR ELEMENT to null, which is the residual named at show popover step
            22 and carries the same three clauses. */
         top_layer_request_removal(ctx, element);
-        STEP_GOTO(s->hdr.stage, PH_END, &s->fphase, &s->focus_phase, NULL);
+        STEP_GOTO(s->hdr.stage, PH_END, &s->fphase, &s->focus_phase, &s->su.hphase, NULL);
     }
 
-    DCHECK(s->hdr.stage == PH_END, "§6.12's hide a popover resumed at a stage this algorithm does not have");
-    JS_FreeValue(ctx, cb_result);
-    /* Step 13 — the "otherwise" of step 12's `fireEvents` condition, and the arm a NESTED hide takes. */
-    if (!s->fire_events) top_layer_remove_immediately(ctx, element);
-    ps_clear(ctx, element, PS_TRIGGER);                                                          /* step 14 */
-    ps_clear(ctx, element, PS_OPENED_MODE);                                                      /* step 15 */
-    ps_clear(ctx, element, PS_VISIBILITY);                                                       /* step 16 */
-    /* Step 17 clears the document's HINT STACK PARENT under either of two conditions, and its only writer is
-       show popover step 19 inside the Auto/Hint block that DFAILs below — so it is null here and the clear is
-       the identity under both. */
-    if (s->fire_events)                                                                          /* step 18 */
-        popover_queue_toggle_task(ctx, element, POPOVER_OPEN, POPOVER_CLOSED, source);
-    /* Steps 19 and 20. The slot is written only by show popover step 24, which is guarded by
-       shouldRestoreFocus, which only show popover step 15's Auto/Hint block sets — so it is absent here by
-       construction and this whole block is unreachable in this build. It is written as the standard writes it,
-       WITH ITS TWO HALVES APART: step 20.1's clear is unconditional inside the block, and only step 20.2's
-       focusing steps are gated on `focusPreviousElement`. That distinction is invisible from the member entry,
-       which passes true, and it is exactly what hide popover stack until's callers vary. */
-    if (!ps_is_null(ctx, element, PS_PREV_FOCUSED)) {                                     /* steps 19, 20 */
-        ps_clear(ctx, element, PS_PREV_FOCUSED);                                              /* step 20.1 */
-        if (focus_previous_element)
-            DFAIL("HTML §6.12 The popover attribute's hide a popover step 20.2 restores focus to the element's "
-                  "PREVIOUSLY FOCUSED ELEMENT, and its second conjunct is that the document's FOCUSED AREA OF "
-                  "THE DOCUMENT'S DOM ANCHOR is a shadow-including inclusive descendant of the element — "
-                  "core/html/focus.c owns HTML §6.6.2 Data model's focused area and exports no getter for it "
-                  "(only the two predicates §6.6.7's flush needs). Reaching here means show popover step 24 was "
-                  "built, so export the focused area from focus.c, ask it here, and run §6.6.4's focusing steps "
-                  "for the remembered element through focus_element_run — which SUSPENDS, so step 20 then needs "
-                  "a stage of its own between PH_END's two halves rather than staying inside this range");
+    if (s->hdr.stage == PH_END) {
+        bool restore = false;   /* step 20.2's two conjuncts, as the ONE verdict this stage transitions on */
+
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        /* Step 13 — the "otherwise" of step 12's `fireEvents` condition, and the arm a NESTED hide takes. */
+        if (!s->fire_events) top_layer_remove_immediately(ctx, element);
+        ps_clear(ctx, element, PS_TRIGGER);                                                      /* step 14 */
+        ps_clear(ctx, element, PS_OPENED_MODE);                                                  /* step 15 */
+        ps_clear(ctx, element, PS_VISIBILITY);                                                   /* step 16 */
+        /* Step 17 — "If element is document's hint stack parent, or document's showing hint popover list is
+           empty, then set document's hint stack parent to null." BOTH disjuncts are asked, and the second is
+           asked over the list as it stands NOW: step 15 above has just made this element not-showing, so an
+           element that WAS the last showing hint popover empties the list here. */
+        {
+            JSValue parent = ps_get(ctx, s->doc, PS_DOC_HINT_PARENT);
+            bool is_parent =
+                !JS_IsUndefined(parent) && JS_VALUE_GET_PTR(parent) == JS_VALUE_GET_PTR(element);
+            JSValue hints;
+
+            JS_FreeValue(ctx, parent);
+            hints = popover_showing_list(ctx, s->doc, POPOVER_STATE_HINT);
+            if (is_parent || popover_list_len(ctx, hints) == 0)
+                ps_clear(ctx, s->doc, PS_DOC_HINT_PARENT);
+            JS_FreeValue(ctx, hints);
+        }
+        if (s->fire_events)                                                                      /* step 18 */
+            popover_queue_toggle_task(ctx, element, POPOVER_OPEN, POPOVER_CLOSED, source);
+        s->prev_focused = ps_get(ctx, element, PS_PREV_FOCUSED);                                 /* step 19 */
+        /* Step 20, WITH ITS TWO HALVES APART: step 20.1's clear is unconditional inside the block, and only
+           step 20.2's focusing steps are gated on `focusPreviousElement`. That distinction is invisible from a
+           member entry, which passes true, and it is exactly what hide popover stack until's callers vary.
+           THE VERDICT IS A LOCAL AND THE TRANSITION IS THE STAGE'S LAST STATEMENT, which is not style: a
+           STEP_GOTO buried inside a conditional assigns the stage and then FALLS THROUGH to whatever the stage
+           does next, so the machine would run step 21 and answer DONE with its own next stage never entered —
+           the focus silently not restored, every value well-formed. */
+        if (!JS_IsUndefined(s->prev_focused)) {                                                  /* step 20 */
+            JSContext *docctx = popover_document_realm(element);
+            JSValue anchor;
+            bool inside;
+
+            ps_clear(ctx, element, PS_PREV_FOCUSED);                                          /* step 20.1 */
+            DCHECK(docctx != NULL,
+                   "HTML §6.12 The popover attribute's hide a popover step 20.2 reads the document's FOCUSED "
+                   "AREA OF THE DOCUMENT, and this element's node document is no realm's active document — "
+                   "step 1's check popover validity refuses a document that is not fully active and step 12.2 "
+                   "re-runs it after the `beforetoggle` listeners, so reaching here means a third way exists "
+                   "for a document to stop being active mid-hide and the realm must be bound at step 3 beside "
+                   "`document`");
+            /* Step 20.2's second conjunct — "document's focused area of the document's DOM anchor is a
+               shadow-including inclusive descendant of element". §6.6.2's anchor is a NODE and is this
+               engine's Document whenever the focused area is the viewport (core/html/focus.h says so at the
+               door), which is not a descendant of any element — so a popover the page never focused into does
+               not restore focus, which is the browser-visible answer. */
+            anchor = focus_focused_area_dom_anchor(docctx);
+            inside = shadow_root_is_shadow_including_inclusive_ancestor(node_of(element), node_of(anchor));
+            JS_FreeValue(ctx, anchor);
+            restore = focus_previous_element && inside;
+            if (restore) {
+                if (!html_element_is(s->prev_focused))
+                    DFAIL("HTML §6.12 The popover attribute's hide a popover step 20.2 runs HTML §6.6.4 "
+                          "Processing model's FOCUSING STEPS for the element's PREVIOUSLY FOCUSED ELEMENT, and "
+                          "this one is not an element. Show popover step 17 binds that value to \"document's "
+                          "focused area of the document's DOM anchor\", and §6.6.2 Data model makes the "
+                          "viewport's anchor the DOCUMENT — while §6.6.4 declares the focusing steps over \"an "
+                          "object new focus target that is either a focusable area, or an element that is not "
+                          "a focusable area, or a navigable\", which a Document is none of. BUILD §6.6.4 step "
+                          "1's \"if new focus target is not a focusable area, then set new focus target to the "
+                          "result of getting the focusable area for new focus target\" as a door on "
+                          "core/html/focus.c beside focus_element_run, and route this call through it");
+            }
+        }
+        if (!restore) {
+            JS_FreeValue(ctx, s->prev_focused);
+            s->prev_focused = JS_UNDEFINED;
+            popover_hide_cleanup(ctx, s);                                                        /* step 21 */
+            return JS_STEP_DONE;
+        }
+        STEP_GOTO(s->hdr.stage, PH_FOCUS, &s->fphase, &s->focus_phase, &s->su.hphase, NULL);
     }
+
+    DCHECK(s->hdr.stage == PH_FOCUS, "§6.12's hide a popover resumed at a stage this algorithm does not have");
+    {
+        JSContext *docctx = popover_document_realm(element);
+
+        DCHECK(docctx != NULL, "§6.12's hide a popover resumed into step 20.2 for an element whose node "
+                               "document stopped being any realm's active document across the request");
+        r = focus_element_run(docctx, s->prev_focused, &s->focus_phase, STEP_CB(s->cb), cb_result,
+                              out_cb, out_argc);                                              /* step 20.2 */
+        if (r) return r;
+    }
+    JS_FreeValue(ctx, s->prev_focused);
+    s->prev_focused = JS_UNDEFINED;
     popover_hide_cleanup(ctx, s);                                                                /* step 21 */
     return JS_STEP_DONE;
 }
@@ -923,6 +1401,8 @@ static void js_popover_hide_visit(JSContext *ctx, void *st, JSStepVisit *v)
 
     v->val(ctx, &s->doc);
     v->val(ctx, &s->ev);
+    v->val(ctx, &s->prev_focused);
+    popover_stack_until_visit(ctx, &s->su, v);
     STEP_CB_FOREACH(s->cb, k)
         v->val(ctx, &s->cb[k]);
 }
@@ -975,6 +1455,9 @@ enum { PA_NONE = 0, PA_SHOW, PA_HIDE };
                      "\"open\" and source, at element)") \
     X(PO_SHOW_FOCUS, "HTML §6.12 The popover attribute's show popover step 23 (run the popover focusing " \
                      "steps given element)") \
+    X(PO_SHOW_STACK, "HTML §6.12 The popover attribute's show popover steps 15.3 and 15.4 (run HIDE POPOVER " \
+                     "STACK UNTIL for the Hint stack and, when effectiveType is Auto, for the Auto stack) and " \
+                     "then steps 15.5 through 15.10") \
     X(PO_HIDE_CALL,  "HTML §6.12 The popover attribute's hidePopover() step 1 and togglePopover() step 5 (run " \
                      "the hide popover algorithm given this, true, true, true, and null)")
 enum { IDL_STEP_STAGE_BASE(POPOVER_STAGES) POPOVER_STAGES(JS_STEP_STAGE_ENUM) };
@@ -986,11 +1469,20 @@ typedef struct {
     uint8_t ua_phase;         /* §6.6.6's allow focus steps' fork phase */
     uint8_t focus_phase;      /* §6.6.4's focusing steps request's own phase */
     uint8_t showing_taken;    /* whether show popover step 7's latch is still owed cleanupShowingSteps */
+    uint8_t original_type;    /* show popover step 13's originalType */
+    uint8_t effective_type;   /* step 14's effectiveType, which step 15.2 may downgrade to Hint */
+    uint8_t should_restore;   /* step 12's shouldRestoreFocus, which step 15.8 may raise */
+    /* WHICH OF STEP 15'S TWO HIDE POPOVER STACK UNTIL RUNS IS NEXT — 0 = step 15.3, 1 = step 15.4, 2 = done.
+       An ordinal over the standard's own two sub-steps, which nothing the page does can renumber. */
+    uint8_t stack_call;
     JSValue el;               /* the receiver, held across the suspension (owned) */
     JSValue doc;              /* "element's node document", resolved once at entry (owned) */
     JSValue source;           /* the `source` the member read, or null (owned) */
     JSValue ev;               /* the `beforetoggle` event, minted once (owned) */
     JSValue control;          /* the popover focusing steps' `control` (owned) */
+    JSValue ancestor;         /* step 15.1's ancestor, bound there and read again at step 19 (owned) */
+    JSValue originally_focused;  /* step 17's originallyFocusedElement, read again at step 24 (owned) */
+    PopoverStackUntilRun su;  /* step 15's HIDE POPOVER STACK UNTIL cursor, one run at a time */
     /* THE WIDEST OF THE THREE REQUESTS THIS BODY MAKES — show popover step 9's fire (EVENT_FIRE_CB_SLOTS = 5),
        the popover focusing steps' step 6 (FOCUS_ELEMENT_CB_SLOTS = 3), and the hide a popover CALL at
        PO_HIDE_CALL (POPOVER_HIDE_CB_SLOTS = 7), which is the widest. Named by that TYPE rather than by a
@@ -1008,6 +1500,9 @@ static void popover_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->source);
     v->val(ctx, &s->ev);
     v->val(ctx, &s->control);
+    v->val(ctx, &s->ancestor);
+    v->val(ctx, &s->originally_focused);
+    popover_stack_until_visit(ctx, &s->su, v);
     STEP_CB_FOREACH(s->cb, k)
         v->val(ctx, &s->cb[k]);
 }
@@ -1019,6 +1514,49 @@ static void popover_cleanup_showing(JSContext *ctx, PopoverState *s)
     if (!s->showing_taken) return;
     s->showing_taken = 0;
     ps_clear(ctx, s->doc, PS_DOC_SHOWING);
+}
+
+/* SHOW POPOVER STEPS 16 THROUGH 22 — the tail step 15's two arms converge on, written once because these seven
+   steps are the SAME steps whether or not step 15's Auto/Hint block ran, and a copy at each arm is seven steps
+   two sites must stay abreast of. Every one of them is an O(1) engine action and none runs the page's code, so
+   it is a plain function rather than a stage. */
+static void popover_show_tail(JSContext *ctx, PopoverState *s)
+{
+    JSContext *docctx = popover_document_realm(s->el);
+
+    ps_clear(ctx, s->el, PS_PREV_FOCUSED);                                                        /* step 16 */
+    /* Step 17 — "Let originallyFocusedElement be document's focused area of the document's DOM anchor." READ
+       HERE AND NOT AT STEP 24, because that is where the standard reads it and because step 23's popover
+       focusing steps move the focus: a read deferred to step 24 would answer with whatever this show just
+       focused, which is the opposite of what step 24's restore is for. §6.6.2 Data model's anchor is a NODE,
+       and it is the DOCUMENT whenever the focused area is the viewport — see core/html/focus.h. */
+    DCHECK(docctx != NULL,
+           "HTML §6.12 The popover attribute's show popover step 17 reads the document's FOCUSED AREA OF THE "
+           "DOCUMENT and this element's node document is no realm's active document — step 3's check popover "
+           "validity refuses a document that is not fully active and step 10 re-runs it after the "
+           "`beforetoggle` listeners, so reaching here means a third way exists for a document to stop being "
+           "active mid-show and the realm must be bound at step 1 beside `document`");
+    s->originally_focused = focus_focused_area_dom_anchor(docctx);                                /* step 17 */
+    top_layer_add(ctx, s->el);                                                                    /* step 18 */
+    /* Step 19 — "If effectiveType is Hint and ancestor's opened in popover mode is 'auto', then set document's
+       hint stack parent to ancestor." Reachable only through step 15's block, which is the only thing that
+       binds `ancestor` and the only way effectiveType becomes Hint; a Manual show leaves both alone. §6.12's
+       own note on the field says why the second conjunct is there: "when the hint stack parent is not null, it
+       will have an opened in popover mode of 'auto'". */
+    if (s->effective_type == POPOVER_STATE_HINT && !JS_IsNull(s->ancestor) &&
+        !JS_IsUndefined(s->ancestor) && popover_opened_mode(ctx, s->ancestor) == POPOVER_STATE_AUTO)
+        ps_set(ctx, s->doc, PS_DOC_HINT_PARENT, JS_DupValue(ctx, s->ancestor));
+    ps_set(ctx, s->el, PS_VISIBILITY, JS_TRUE);                                                   /* step 20 */
+    if (!JS_IsNull(s->source)) ps_set(ctx, s->el, PS_TRIGGER, JS_DupValue(ctx, s->source));
+    else                       ps_clear(ctx, s->el, PS_TRIGGER);                                  /* step 21 */
+    /* Step 22 sets the element's IMPLICIT ANCHOR ELEMENT to source. NOT COVERED: that is CSS Anchor
+       Positioning's per-element state, and this engine has no consumer for it — `grep -rn "implicit anchor"
+       engine/host` is empty, there is no `anchor-name`, no `position-anchor` and no `anchor()` in the cascade.
+       THE NEXT DIFF that builds any of those builds this write with them, in the component that owns the anchor
+       state. ITS ABSENCE WOULD SHOW as a popover positioned with `position-anchor: implicit` resolving against
+       nothing: `getComputedStyle(p).top` answers as if the popover had no invoker, where a browser answers
+       relative to the button that showed it. It is named here and not crashed on because the write is CORRECT
+       to omit while nothing can read it — a crash would fire on every `showPopover()` this file gets right. */
 }
 
 /* §6.12's POPOVER FOCUSING STEPS, ten steps, run at show popover step 23.
@@ -1126,10 +1664,15 @@ static int popover_body(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
         /* EVERY owned field before the first thing that can throw: the failure path tears this state down
            through popover_visit, which frees exactly what the state holds and nothing else. */
         s->el = s->doc = s->source = s->ev = s->control = JS_UNDEFINED;
+        s->ancestor = s->originally_focused = JS_UNDEFINED;
         STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
+        popover_stack_until_init(&s->su);
         s->which = PA_NONE;
         s->fphase = s->ua_phase = s->focus_phase = 0;
         s->showing_taken = 0;
+        s->original_type = s->effective_type = POPOVER_STATE_NONE;
+        s->should_restore = 0;
+        s->stack_call = 0;
         /* Web IDL §3.7.5's BRAND CHECK. All three members are HTMLElement's, and one invoked on anything else
            is a TypeError rather than a silent return — a page that wrote `f.call(x)` must find out. */
         if (!html_element_is(hdr->this_val)) {
@@ -1227,7 +1770,8 @@ static int popover_body(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
                 popover_cleanup_showing(ctx, s);
                 return JS_STEP_ABRUPT;
             }
-            STEP_GOTO(hdr->stage, PO_SHOW_FIRE, &s->fphase, &s->ua_phase, &s->focus_phase, NULL);
+            STEP_GOTO(hdr->stage, PO_SHOW_FIRE, &s->fphase, &s->ua_phase, &s->focus_phase,
+                      &s->su.hphase, NULL);
         } else {
             /* HIDE A POPOVER. `hidePopover()`'s one step and togglePopover step 5 state the SAME five
                arguments, word for word — "Run the hide popover algorithm given this, true, true, true, and
@@ -1236,7 +1780,8 @@ static int popover_body(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
                `options["source"]` for step 6's SHOW, and its step 5 passes null to the hide, so the `source`
                attribute of the `beforetoggle` and `toggle` events a hide fires is null however the member was
                invoked. */
-            STEP_GOTO(hdr->stage, PO_HIDE_CALL, &s->fphase, &s->ua_phase, &s->focus_phase, NULL);
+            STEP_GOTO(hdr->stage, PO_HIDE_CALL, &s->fphase, &s->ua_phase, &s->focus_phase,
+                      &s->su.hphase, NULL);
         }
     }
 
@@ -1292,90 +1837,149 @@ static int popover_body(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
             *presult = JS_UNDEFINED;
             return JS_STEP_DONE;
         }
-        /* Steps 12-14: shouldRestoreFocus is false, and originalType and effectiveType are both the current
-           state of the element's `popover` attribute. */
-        {
-            lxb_dom_element_t *e = lxb_dom_interface_element(node_of(s->el));
-            int type = popover_attribute_state(e);
-
-            /* Step 15 — the Auto/Hint block. It holds exactly ONE list, of ten items, so every `step 15.N`
-               below names an item of that one list and there is no second list under this step for a bare
-               sub-number to be ambiguous between. Its READ side runs here: step 15.1's TOPMOST POPOVER
-               ANCESTOR over the two showing-popover lists this file derives from the top layer, and step
-               15.2's effectiveType downgrade. What it stops at is step 15.3, the first HIDE POPOVER STACK
-               UNTIL — the WRITE side, which hides other popovers and so runs the page's own listeners. A
-               Manual popover enters none of this, which is the SPEC's own split and the reason this file is
-               complete for one state and a named crash for the other two. */
-            if (type == POPOVER_STATE_AUTO || type == POPOVER_STATE_HINT) {
-                JSValue ancestor = popover_topmost_ancestor(ctx, s->el, s->source, true);      /* step 15.1 */
-                int effective_type = type;                                       /* step 14's effectiveType */
-
-                /* Step 15.2's three conjuncts — "ancestor is not null", "ancestor's opened in popover mode is
-                   'hint'", and "effectiveType is the Auto state" — whose note says why: "Hint popovers are
-                   lower priority than Auto popovers, so an Auto popover cannot have a Hint popover as a
-                   'parent'. To resolve this case, the effectiveType is 'downgraded' to Hint." */
-                if (!JS_IsNull(ancestor) && popover_opened_mode(ctx, ancestor) == POPOVER_STATE_HINT &&
-                    effective_type == POPOVER_STATE_AUTO)
-                    effective_type = POPOVER_STATE_HINT;
-                JS_FreeValue(ctx, ancestor);
-                DFAILF("HTML §6.12 The popover attribute's show popover step 15.3 runs HIDE POPOVER STACK "
-                       "UNTIL given document, ancestor, Hint, shouldRestoreFocus and true, and step 15.4 runs "
-                       "it again for Auto when effectiveType is Auto — this show's effectiveType is %s. THAT "
-                       "IS THE ONE MECHANISM §6.12'S AUTO/HINT STACK IS STILL MISSING, and it is now the ONLY "
-                       "one: its steps 1-4 and 6-7 are slices of the two showing-popover lists this file "
-                       "derives, and its steps 5 and 8 \"run the hide popover algorithm given popover\", which "
-                       "popover.h exports as a step machine any caller may CALL with its own five arguments. "
-                       "BUILD IT HERE, in this file, as 8 steps: step 1 picks the auto or hint list by "
-                       "stackType, steps 2-4 cut it at the endpoint's index plus one, step 5 walks `toHide` in "
-                       "REVERSE calling popover_hide_algorithm through step_call_run with (popover, "
-                       "focusPreviousElement, fireEvents, false, null), and steps 6-8 RE-READ the list — the "
-                       "standard's own note says why: \"This happens if popovers are shown whilst hiding "
-                       "popovers\" — and hide anything new with fireEvents replaced by false. It suspends at "
-                       "each of those calls, so it is a `_run` cursor this state holds (a phase, a "
-                       "PopoverHideCb, the two slices and a reverse index), like focus_element_run and "
-                       "core/html/close_watcher.h's three; the recursion back into hide a popover step 11 "
-                       "passes through the CALL and so needs no second cursor. With it, this block finishes: "
-                       "step 15.5's originalType re-read, steps 15.6 and 15.7's second check popover validity, "
-                       "step 15.8's TOPMOST AUTO OR HINT POPOVER setting shouldRestoreFocus (which then makes "
-                       "step 17's originallyFocusedElement live, and step 24 needs the FOCUSED AREA OF THE "
-                       "DOCUMENT exported from core/html/focus.c, which today exports only its two "
-                       "predicates), step 15.9's opened in popover mode write, and step 15.10's "
-                       "close_watcher_establish — which is also what makes §6.10.2's POPOVER close-action arm "
-                       "REACHABLE, since this is the only establisher of that kind and that arm already calls "
-                       "hide a popover with the five arguments step 15 states. Its other consumers are hide a "
-                       "popover step 11, HIDE POPOVERS UNTIL — which Fullscreen §2 Model's fullscreen an "
-                       "element step 2 runs, its step 1 being the topmost popover ancestor this file now has — "
-                       "and §6.12.2 Popover light dismiss. `<div popover>` reaches here because the EMPTY "
-                       "VALUE DEFAULT that HTML §2.3.3 Keywords and enumerated attributes gives this attribute "
-                       "is the Auto state",
-                       effective_type == POPOVER_STATE_HINT ? "Hint" : "Auto");
-            }
-            DCHECK(type == POPOVER_STATE_MANUAL,
+        /* Steps 12, 13 and 14: shouldRestoreFocus is false, and originalType and effectiveType are both the
+           current state of the element's `popover` attribute. All three are held on the state, because step
+           15's stack-until runs suspend between here and every one of their readers. */
+        s->should_restore = 0;                                                                    /* step 12 */
+        s->original_type =
+            (uint8_t)popover_attribute_state(lxb_dom_interface_element(node_of(s->el)));          /* step 13 */
+        s->effective_type = s->original_type;                                                     /* step 14 */
+        /* Step 15 — the Auto/Hint block. It holds exactly ONE list, of ten items, so every `step 15.N` below
+           names an item of that one list; its step 15.9 is the one item that holds TWO sibling lists, so that
+           step's sub-items are named by their list rather than by a bare number. A Manual popover enters none
+           of this, which is the SPEC's own split. */
+        if (s->original_type == POPOVER_STATE_AUTO || s->original_type == POPOVER_STATE_HINT) {
+            s->ancestor = popover_topmost_ancestor(ctx, s->el, s->source, true);               /* step 15.1 */
+            /* Step 15.2's three conjuncts — "ancestor is not null", "ancestor's opened in popover mode is
+               'hint'", and "effectiveType is the Auto state" — whose note says why: "Hint popovers are lower
+               priority than Auto popovers, so an Auto popover cannot have a Hint popover as a 'parent'. To
+               resolve this case, the effectiveType is 'downgraded' to Hint." */
+            if (!JS_IsNull(s->ancestor) && popover_opened_mode(ctx, s->ancestor) == POPOVER_STATE_HINT &&
+                s->effective_type == POPOVER_STATE_AUTO)
+                s->effective_type = POPOVER_STATE_HINT;
+            s->stack_call = 0;
+            STEP_GOTO(hdr->stage, PO_SHOW_STACK, &s->fphase, &s->ua_phase, &s->focus_phase,
+                      &s->su.hphase, NULL);
+        } else {
+            DCHECK(s->original_type == POPOVER_STATE_MANUAL,
                    "HTML §6.12 The popover attribute's show popover reached step 16 with a `popover` attribute "
                    "that is in neither the Auto, the Hint nor the Manual state — step 3's check popover "
                    "validity has already refused the No Popover state, and §6.12's table names no fourth");
-            ps_clear(ctx, s->el, PS_PREV_FOCUSED);                                                /* step 16 */
-            /* Step 17 lets originallyFocusedElement be the document's FOCUSED AREA of its DOM anchor, and its
-               ONE consumer is step 24, which is guarded by shouldRestoreFocus — a local only step 15's block
-               sets true. That block DFAILs above, so step 24 cannot run and the read has no consumer; the
-               crash for it therefore sits at step 24, where the value would be needed, rather than here. */
-            top_layer_add(ctx, s->el);                                                            /* step 18 */
-            /* Step 19 sets the hint stack parent, and its condition is "effectiveType is Hint", which step 15's
-               DFAIL above makes unreachable. */
-            ps_set(ctx, s->el, PS_VISIBILITY, JS_TRUE);                                           /* step 20 */
-            if (!JS_IsNull(s->source)) ps_set(ctx, s->el, PS_TRIGGER, JS_DupValue(ctx, s->source));
-            else                       ps_clear(ctx, s->el, PS_TRIGGER);                          /* step 21 */
-            /* Step 22 sets the element's IMPLICIT ANCHOR ELEMENT to source. NOT COVERED: that is CSS Anchor
-               Positioning's per-element state, and this engine has no consumer for it — `grep -rn "implicit
-               anchor" engine/host` is empty, there is no `anchor-name`, no `position-anchor` and no `anchor()`
-               in the cascade. THE NEXT DIFF that builds any of those builds this write with them, in the
-               component that owns the anchor state. ITS ABSENCE WOULD SHOW as a popover positioned with
-               `position-anchor: implicit` resolving against nothing: `getComputedStyle(p).top` answers as if
-               the popover had no invoker, where a browser answers relative to the button that showed it. It is
-               named here and not crashed on because the write is CORRECT to omit while nothing can read it —
-               a crash would fire on every `showPopover()` this file gets right. */
+            popover_show_tail(ctx, s);                                                       /* steps 16-22 */
+            STEP_GOTO(hdr->stage, PO_SHOW_FOCUS, &s->fphase, &s->ua_phase, &s->focus_phase,
+                      &s->su.hphase, NULL);
         }
-        STEP_GOTO(hdr->stage, PO_SHOW_FOCUS, &s->fphase, &s->ua_phase, &s->focus_phase, NULL);
+    }
+
+    if (hdr->stage == PO_SHOW_STACK) {
+        /* Steps 15.3 and 15.4 — "Run hide popover stack until given document, ancestor, Hint,
+           shouldRestoreFocus, and true", then "If effectiveType is the Auto state, then run hide popover stack
+           until given document, ancestor, Auto, shouldRestoreFocus, and true." Each is that algorithm from its
+           own step 1 and each suspends at every popover it hides, so the sub-index says which of the two is
+           next; both conditions are re-read on every re-entry and neither can move, because nothing between
+           here and step 15.8 writes effectiveType or shouldRestoreFocus.
+           THE FOURTH ARGUMENT IS shouldRestoreFocus AND NOT `true`, which is exactly what a member entry could
+           never express: at this point step 12's false is still standing (step 15.8 is what may raise it), so
+           these two runs hide the stack WITHOUT restoring focus and the popover being shown is the one that
+           will own the restore. */
+        while (s->stack_call < 2) {
+            int type = s->stack_call == 0 ? POPOVER_STATE_HINT : POPOVER_STATE_AUTO;
+            int rc;
+
+            if (s->stack_call == 1 && s->effective_type != POPOVER_STATE_AUTO) {          /* step 15.4's if */
+                s->stack_call++;
+                continue;
+            }
+            rc = popover_stack_until_run(ctx, &s->su, s->doc, s->ancestor, type,
+                                         /*focusPreviousElement*/ s->should_restore != 0,
+                                         /*fireEvents*/ true, cb_result, out_cb, out_argc);
+            if (rc > 0) return rc;
+            if (rc < 0) return JS_STEP_ABRUPT;
+            cb_result = JS_UNDEFINED;
+            popover_stack_until_init(&s->su);
+            s->stack_call++;
+        }
+        JS_FreeValue(ctx, cb_result);
+        /* Step 15.5 — "If originalType is not equal to the value of element's popover attribute", which the
+           hides above may have changed through a `beforetoggle` listener. */
+        if (popover_attribute_state(lxb_dom_interface_element(node_of(s->el))) != s->original_type) {
+            popover_cleanup_showing(ctx, s);                                               /* step 15.5.1 */
+            /* Step 15.5.2 — "if throwExceptions is true, then throw an InvalidStateError DOMException". Every
+               caller of show popover in this build passes true. */
+            JS_ThrowDOMException(ctx, "InvalidStateError",
+                                 "a beforetoggle handler changed the element's popover attribute while "
+                                 "showPopover() was hiding the popover stack");
+            return JS_STEP_ABRUPT;
+        }
+        /* Step 15.6 — "check popover validity is called again because running hide popover stack until above
+           could have fired the beforetoggle event, and an event handler could have disconnected this element
+           or changed its popover attribute". */
+        validity = popover_check_validity(ctx, s->el, /*expectedToBeShowing*/ false, s->doc);
+        if (validity != 1) {                                                                 /* step 15.7 */
+            popover_cleanup_showing(ctx, s);                                               /* step 15.7.1 */
+            if (validity < 0) return JS_STEP_ABRUPT;                                       /* step 15.7.2 */
+            *presult = JS_UNDEFINED;
+            return JS_STEP_DONE;                                                           /* step 15.7.3 */
+        }
+        /* Step 15.8 — "If the result of running topmost auto or hint popover on document is null, then set
+           shouldRestoreFocus to true", whose note says why: "This ensures that focus is returned to the
+           previously-focused element only for the first popover in a stack." */
+        {
+            JSValue topmost = popover_topmost_auto_or_hint(ctx, s->doc);
+
+            if (JS_IsNull(topmost)) s->should_restore = 1;
+            JS_FreeValue(ctx, topmost);
+        }
+        /* Step 15.9's two lists — the Auto one and its otherwise-list. They are named by their list and not by
+           a bare sub-number, because this is the one item of step 15 that holds TWO sibling `<ol>`s and a bare
+           `15.9.2` would name a different step in each. THIS WRITE IS WHAT MAKES THE SHOWING AUTO AND SHOWING
+           HINT POPOVER LISTS NON-EMPTY: it is their only writer, so every read of them above and every one of
+           hide a popover step 11's three conditions is decided by it. */
+        if (s->effective_type == POPOVER_STATE_AUTO) {
+            JSValue autos = popover_showing_list(ctx, s->doc, POPOVER_STATE_AUTO);
+
+            DCHECK(popover_list_index_of(ctx, autos, popover_list_len(ctx, autos), s->el) < 0,
+                   "HTML §6.12 The popover attribute's show popover step 15.9's Auto list asserts that the "
+                   "document's SHOWING AUTO POPOVER LIST does not contain the element — that list filters on "
+                   "an OPENED IN POPOVER MODE this very step is the only writer of, so an element already in "
+                   "it means a show completed without its matching hide clearing the mode at hide a popover "
+                   "step 15");
+            JS_FreeValue(ctx, autos);
+            ps_set(ctx, s->el, PS_OPENED_MODE, JS_NewInt32(ctx, POPOVER_STATE_AUTO));
+        } else {
+            JSValue hints;
+
+            DCHECK(s->effective_type == POPOVER_STATE_HINT,
+                   "HTML §6.12 The popover attribute's show popover step 15.9's otherwise-list asserts that "
+                   "effectiveType is Hint — step 14 binds it to originalType, which step 15's own condition "
+                   "has already narrowed to Auto or Hint, and step 15.2 only ever moves it toward Hint");
+            hints = popover_showing_list(ctx, s->doc, POPOVER_STATE_HINT);
+            DCHECK(popover_list_index_of(ctx, hints, popover_list_len(ctx, hints), s->el) < 0,
+                   "HTML §6.12 The popover attribute's show popover step 15.9's otherwise-list asserts that "
+                   "the document's SHOWING HINT POPOVER LIST does not contain the element — see the Auto "
+                   "list's twin above for why that can only mean a mode outlived its hide");
+            JS_FreeValue(ctx, hints);
+            ps_set(ctx, s->el, PS_OPENED_MODE, JS_NewInt32(ctx, POPOVER_STATE_HINT));
+        }
+        /* Step 15.10 — "Set element's popover close watcher to the result of establishing a close watcher
+           given element's relevant global object, with: cancelAction being to return true. closeAction being
+           to hide a popover given element, true, true, false, and null. getEnabledState being to return true."
+           The three actions are named by core/html/close_watcher.h's POPOVER kind, which is where that file
+           states them; this supplies the WINDOW and the SUBJECT, which are the only two things §6.10.2's
+           establish takes that vary. THIS IS THE ONLY ESTABLISHER OF THAT KIND, so it is what makes §6.10.2's
+           POPOVER close-action arm reachable at all. */
+        {
+            JSContext *wctx = popover_document_realm(s->el);
+
+            DCHECK(wctx != NULL,
+                   "HTML §6.12 The popover attribute's show popover step 15.10 establishes a close watcher "
+                   "given \"element's relevant global object\", and this element's node document is no realm's "
+                   "active document — step 15.6's check popover validity has just certified it fully active");
+            ps_set(ctx, s->el, PS_CLOSE_WATCHER,
+                   close_watcher_establish(wctx, CLOSE_WATCHER_KIND_POPOVER, s->el));
+        }
+        popover_show_tail(ctx, s);                                                           /* steps 16-22 */
+        STEP_GOTO(hdr->stage, PO_SHOW_FOCUS, &s->fphase, &s->ua_phase, &s->focus_phase, &s->su.hphase, NULL);
     }
 
     DCHECK(hdr->stage == PO_SHOW_FOCUS, "a §6.12 member resumed into a stage this algorithm does not have — "
@@ -1383,9 +1987,18 @@ static int popover_body(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
                                         "two requests");
     r = popover_focusing_steps(ctx, s, hdr, cb_result, out_cb, out_argc);                         /* step 23 */
     if (r) return r;
-    /* Step 24 — "if shouldRestoreFocus is true …". shouldRestoreFocus is step 12's false and is set true
-       only inside step 15's Auto/Hint block, which DFAILs above, so this arm is unreachable in this build.
-       It is written as the standard writes it, and the read step 17 owes it crashes here. */
+    /* Step 24 — "If shouldRestoreFocus is true and element's popover attribute is not in the No Popover state,
+       then set element's previously focused element to originallyFocusedElement." The SECOND conjunct is a
+       fresh read of the attribute and not step 13's originalType: step 23's focusing steps fire `blur`,
+       `focusout`, `focus` and `focusin` at the page, and a handler may have removed the attribute since. */
+    if (s->should_restore &&
+        popover_attribute_state(lxb_dom_interface_element(node_of(s->el))) != POPOVER_STATE_NONE) {
+        DCHECK(!JS_IsUndefined(s->originally_focused),
+               "HTML §6.12 The popover attribute's show popover step 24 stores originallyFocusedElement, and "
+               "step 17 never bound one — shouldRestoreFocus is raised only at step 15.8, which every path "
+               "reaches before step 17's read, so an unbound value here means the two steps came apart");
+        ps_set(ctx, s->el, PS_PREV_FOCUSED, JS_DupValue(ctx, s->originally_focused));
+    }
     popover_cleanup_showing(ctx, s);                                                              /* step 25 */
     popover_queue_toggle_task(ctx, s->el, POPOVER_CLOSED, POPOVER_OPEN, s->source);               /* step 26 */
     *presult = magic == M_TOGGLE ? JS_NewBool(ctx, popover_is_showing(ctx, s->el)) : JS_UNDEFINED;

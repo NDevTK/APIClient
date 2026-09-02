@@ -116,15 +116,16 @@
  *   — WHAT THE NEXT DIFF BUILDS: §2's FULLSCREEN AN ELEMENT and UNFULLSCREEN AN ELEMENT, which are what put the
  *     flag's writer in the tree. Fullscreen an element's step 1 is "Let hideUntil be the result of running
  *     topmost popover ancestor given element, null, and false" and its step 2 runs hide popovers until.
- *     core/html/popover.c HAS THE FIRST NOW — topmost popover ancestor is built there over the two showing
- *     popover lists it derives from css-position-4 §3's top layer, and it is static because this caller is not
- *     in the tree yet, so building fullscreen an element is also what EXPORTS it. What popover.c still lacks is
- *     HIDE POPOVER STACK UNTIL, which §6.12's hide popovers until is two calls to; its show popover step 15.3
- *     DFAILs there and now names only that one algorithm, because the thing it used to name as needed FIRST —
- *     a hide a popover invocable over an element that is not the receiver, with the standard's four other
- *     arguments passed rather than hardcoded — is built: core/html/popover.h exports it as a per-realm function
- *     object a caller reaches through step_call_run. So the popover half is still a real prerequisite and not a
- *     citation, and it is now ONE algorithm rather than two. Over those: §2's list
+ *     core/html/popover.c HAS BOTH HALVES NOW — topmost popover ancestor is built there over the two showing
+ *     popover lists it derives from css-position-4 §3's top layer, and so is HIDE POPOVER STACK UNTIL, which
+ *     §6.12's hide popovers until is two calls to. Both are STATIC there because this caller is not in the tree
+ *     yet, so building fullscreen an element is also what EXPORTS them, and what it must build over them is
+ *     §6.12's HIDE POPOVERS UNTIL itself: five steps whose step 1 asks whether the showing hint popover list
+ *     contains the endpoint, whose steps 3 and 4 bind autoEndpoint — substituting the document's hint stack
+ *     parent when the endpoint is a hint popover — and whose steps 2 and 5 are the two stack-until calls, over
+ *     the Hint stack and the Auto stack in that order. The popover half is therefore no longer a
+ *     prerequisite that is missing — it is a wrapper to write beside the two algorithms it wraps. Over those:
+ *     §2's list
  *     of pending fullscreen events, RUN THE FULLSCREEN STEPS as a step machine (it fires events, so it runs the
  *     page's listeners and must park), and update-the-rendering STEP 12, which is where those steps are invoked
  *     and which core/rendering/rendering.c still asserts is unwritten — its `realm_awaits` there is keyed on

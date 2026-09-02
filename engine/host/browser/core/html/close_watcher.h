@@ -51,20 +51,28 @@
  * aborts on.
  *
  * WHAT IS HONESTLY ABSENT NOW, AND WHY EACH IS A RESIDUAL RATHER THAN A CRASH.
- *   (a) §6.10.1's CLOSE REQUEST STEPS have no caller and no home. Nothing in this build dispatches a close
- * request at all — no trusted `keydown`, no Esc, no back gesture — so process close watchers below is
- * REACHABLE ONLY from the component that will own those 9 steps. It shows as a page whose `CloseWatcher` fires
- * `cancel`/`close` for `requestClose()`/`close()` and NEVER for a user's close request, and as an
- * `allowedNumberOfGroups` that only ever rises, since step 3's decrement is the only fall it has.
- *   (b) THE CLOSE ACTION §6.12 SUPPLIES — hide a popover — is WRITTEN and still UNREACHABLE, and those are now
- * two different facts rather than one. It is written: core/html/popover.h exports hide a popover as a function
- * object of the realm taking the standard's own five arguments, and the dispatch below CALLS it with the five
- * §6.12's show popover step 15 states, "to hide a popover given element, true, true, false, and null". It is
- * unreachable because that same step 15 is the ONLY establisher of a POPOVER-kind watcher and it DFAILs at its
- * step 15.3 before establishing anything, so no watcher of that kind exists yet. The distinction is what a
- * reader has to be told: nothing in §6.10.2 has to change on the day step 15 lands, and the first POPOVER
- * watcher ever established will run code that has never executed — which is the honest limit on what this arm
- * can be said to be tested by. It shows as an Esc on an `<div popover=auto>` closing it.
+ *   (a) §6.10.1's CLOSE REQUEST STEPS HAVE A HOME AND NO PRODUCER — which is a narrower absence than the one
+ * this paragraph used to describe, and the correction matters because the sentence sent readers to build a
+ * component that exists. The nine steps are core/html/close_request.c, and their step 7 calls process close
+ * watchers below. What nothing in this build does is DELIVER a potential close request — no trusted `keydown`,
+ * no Esc, no back gesture — which is close_request.h's own named residual, stated there as THE PRODUCER. So
+ * process close watchers is reachable only from a component that will hand §6.10.1 an event, and it shows as a
+ * page whose `CloseWatcher` fires `cancel`/`close` for `requestClose()`/`close()` and NEVER for a user's close
+ * request, and as an `allowedNumberOfGroups` that only ever rises, since step 3's decrement is the only fall
+ * it has.
+ *   (b) THE CLOSE ACTION §6.12 SUPPLIES — hide a popover — is WRITTEN, its watcher is now ESTABLISHED, and the
+ * action itself is still UNRUN. Those were three facts and they are down to two, which is worth writing because
+ * the reason changed rather than the code. It is written: core/html/popover.h exports hide a popover as a
+ * function object of the realm taking the standard's own five arguments, and the dispatch below CALLS it with
+ * the five §6.12's show popover step 15 states, "to hide a popover given element, true, true, false, and null".
+ * It is established: §6.12's show popover step 15.10 runs on every Auto or Hint popover that completes a show,
+ * so this manager's groups hold POPOVER watchers on any page with a `<div popover>` in it. What is missing is
+ * the DISPATCH — the three action-running algorithms are reached from §6.10.3's `requestClose()` and `close()`,
+ * which act on a CloseWatcher instance's own watcher, and from process close watchers, which §6.10.1's step 7
+ * calls and which residual (a) says nothing produces a close request to reach. So (b) is now a consequence of
+ * (a) rather than an absence of its own: the day a potential close request has a producer, this arm runs code
+ * nothing has executed, and nothing in §6.10.2 or §6.12 has to change with it. It shows as an Esc on a
+ * `<div popover=auto>` closing it.
  *
  * WHERE FULLSCREEN MEETS THIS, AND WHERE IT DOES NOT. §6.10.1's close request steps are 9 steps whose step 1
  * is "If document's fullscreen element is not null", whose two sub-steps are "Fully exit fullscreen given

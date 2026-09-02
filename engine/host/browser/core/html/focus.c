@@ -1545,6 +1545,31 @@ bool focus_focused_area_is_viewport(JSContext *ctx)
     return kind == FA_VIEWPORT;
 }
 
+/* §6.6.2 Data model's FOCUSED AREA OF THE DOCUMENT, AS ITS DOM ANCHOR — the read HTML §6.12 The popover
+   attribute's show popover step 17 and its hide a popover step 20.2 both make, and the only §6.6 read either of
+   them makes. §6.6.2 defines the anchor once for every kind of focusable area — "Each focusable area has a DOM
+   anchor, which is a Node object that represents the position of the focusable area in the DOM. (When the
+   focusable area is itself a Node, it is its own DOM anchor.)" — so an ELEMENT area answers with itself and the
+   VIEWPORT with its Document, which is what focused_area_of already returns and what §6.6.6's `activeElement`
+   already reads it for. That is why this is a door onto the ONE record and not a second derivation of the
+   anchor: a caller that asked `focus_focused_area_is_viewport` and then reached for the element itself would be
+   holding the second copy of a rule this file owns.
+   THE ANSWER IS A NODE AND NOT AN ELEMENT, which its callers must handle rather than assume away: the viewport
+   is the initial designation in this engine (see the file header), so a document nobody has focused in answers
+   with the DOCUMENT. OWNED. */
+JSValue focus_focused_area_dom_anchor(JSContext *ctx)
+{
+    JSValue area;
+    int kind;
+
+    DCHECK(g_ready, "a §6.6.2 focused area was asked for before focus_init declared §6.6's members");
+    area = focused_area_of(ctx, &kind);
+    DCHECK(kind == FA_ELEMENT || kind == FA_VIEWPORT,
+           "a §6.6.2 focused area was read as something that is neither an element nor a viewport — those are "
+           "the two designations this engine models, and the record holds nothing else");
+    return area;
+}
+
 /* §6.6.7 flush steps 5.9-5.10, as the verdict they exist to reach: "let target be element; if target is not a
    focusable area, then set target to the result of getting the focusable area for target" — and step 5.11 then
    branches on whether that target is null. Both halves are §6.6.4's, so both are answered here.

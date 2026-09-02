@@ -105,6 +105,19 @@ int focus_allow_focus_steps_run(JSContext *docctx, JSStepHdr *h, uint8_t *phase,
    viewport where the standard's prose leaves the initial designation to the user agent). */
 bool focus_focused_area_is_viewport(JSContext *docctx);
 
+/* §6.6.2 Data model's FOCUSED AREA OF THE DOCUMENT, AS ITS DOM ANCHOR — "Each focusable area has a DOM anchor,
+   which is a Node object that represents the position of the focusable area in the DOM. (When the focusable
+   area is itself a Node, it is its own DOM anchor.)"
+   IT IS HERE RATHER THAN AT ITS CALLER for the reason the predicate above is: §6.6.2's designation is this
+   component's fact, and a caller that asked the predicate and then reached for the element would hold the
+   second copy of it. HTML §6.12 The popover attribute is the caller it arrives with — its show popover step 17
+   is "let originallyFocusedElement be document's focused area of the document's DOM anchor" and its hide a
+   popover step 20.2 asks whether that same anchor is a shadow-including inclusive descendant of the popover.
+   A NODE, NOT AN ELEMENT: this engine's initial designation is the VIEWPORT, whose anchor is the Document, so a
+   document nobody has focused in answers with a Document and a caller that assumed an element would be wrong on
+   the ordinary page. `docctx` is the realm whose ACTIVE DOCUMENT the area belongs to. OWNED. */
+JSValue focus_focused_area_dom_anchor(JSContext *docctx);
+
 /* §6.6.7 flush steps 5.9-5.10's verdict: target is the candidate, and if that is not a focusable area then the
    result of GETTING THE FOCUSABLE AREA for it — is that target non-null? A question rather than a request,
    because §6.6.4's delegate search walks content attributes and shadow roots and runs no page code. */
