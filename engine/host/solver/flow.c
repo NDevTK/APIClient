@@ -2902,6 +2902,11 @@ void flow_wfq_census(WfqCensus *out) {
        holder" must not be spelled the same way as "a ready holder at weight zero". */
     double job_w_max = 0.0;
     int have_job_holder = 0;
+    /* …AND THE SAME PAIR FOR THE REPLY BACKLOG, held separately for the identical reason: `deliv_w_gap` is a
+       DIFFERENCE against a top this scan does not know until flow_best runs below, and "no ready holder" must
+       not be spelled the same way as "a ready holder at weight zero". */
+    double deliv_w_max = 0.0;
+    int have_deliv_holder = 0;
     /* THE BEST WEIGHT ANY NEVER-DISPATCHED MEMBER OFFERS, held the same way and for the same reason as the job
        holder's: `never_picked_gap` is a DIFFERENCE against a top this scan does not know until flow_best runs
        below, and "no such member" must not be spelled the same way as "one standing at weight zero". */
@@ -2933,6 +2938,8 @@ void flow_wfq_census(WfqCensus *out) {
     out->nonreward_max = FLOW_NONREWARD_MAX;
     out->jobs_ready = out->jobs_framed = out->jobs_owed = out->vis_zero = 0;
     out->job_w_gap = 0.0;
+    out->deliv_ready = out->deliv_framed = out->deliv_owed = 0;
+    out->deliv_w_gap = 0.0;
     for (i = 0; i < g_flows_n; i++) {
         const Flow *f = g_flows[i];
         int64_t s = flow_service_notch(f);
@@ -3022,6 +3029,24 @@ void flow_wfq_census(WfqCensus *out) {
                        queue, and any other holder is further still. */
                     if (!have_job_holder || w > job_w_max) { job_w_max = w; have_job_holder = 1; }
                 }
+            }
+        }
+        /* AND THE SAME THREE QUESTIONS OF THE REPLY BACKLOG — see flow.h. Asked through the delivery arm's
+           OWN guard (flow_stack_empty) rather than through `frame` alone, because that is the predicate
+           engine.c's arm is written against and this row exists to say whether that arm can run; the job rows
+           above read `frame` because that is what THEIR arms read. Same if/else-if/else shape, so the three
+           classes are disjoint and exhaustive by construction and a fourth reason has nowhere to hide.
+           `pending_ready` and not `pending_deliverable_count`: the register is walked once per report by
+           cold_census for the DEBT, and what this needs is only whether this member holds one. */
+        if (pending_ready(f->pending)) {
+            if (flow_host_owed(f))        out->deliv_owed++;
+            else if (!flow_stack_empty(f)) out->deliv_framed++;
+            else {
+                out->deliv_ready++;
+                /* THE BEST OF THEM, against which `deliv_w_gap` is taken below — a maximum and not a first
+                   hit, for the reason the job holder's is: the question is how far the backlog's BEST claim
+                   stands from the front of the queue, and every other holder is further still. */
+                if (!have_deliv_holder || w > deliv_w_max) { deliv_w_max = w; have_deliv_holder = 1; }
             }
         }
         if (s > out->svc_max) out->svc_max = s;
@@ -3136,6 +3161,11 @@ void flow_wfq_census(WfqCensus *out) {
        apart, which is exactly why neither row is worth emitting without the other. */
     if (have_job_holder && top) out->job_w_gap = out->w_top - job_w_max;
 
+    /* …AND THE SAME DIFFERENCE FOR THE REPLY BACKLOG, taken here for the identical reason and left at 0.0 when
+       nothing is waiting on rank, so `deliv_ready` beside it is what tells "no member is waiting on the order"
+       from "the front of the queue is itself holding an undelivered reply". See flow.h for the pair. */
+    if (have_deliv_holder && top) out->deliv_w_gap = out->w_top - deliv_w_max;
+
     /* …AND THE SAME DIFFERENCE FOR THE MEMBERS THE SCHEDULER HAS NEVER CHOSEN — taken here for the identical
        reason and left at 0.0 when there are none, so `never_picked` beside it is what tells "nobody is
        starved" from "the most-starved member is standing at the front". See flow.h for the pair's reading. */
@@ -3165,6 +3195,15 @@ void flow_wfq_census(WfqCensus *out) {
            "maximum is taken over the same members this scan walks, so a negative deficit means the pick and "
            "the census are no longer reading one comparator, and every conclusion drawn from this row about "
            "whether queued jobs are outranked or unreachable is a statement about the instrument");
+    /* AND THE REPLY BACKLOG'S IS NON-NEGATIVE BY THE SAME CONSTRUCTION AND ASSERTED FOR THE SAME REASON — a
+       ready delivery holder is one of the members flow_best's maximum is taken over, read through the same
+       flow_weight in the same scan. The row exists to answer whether a delivery backlog is an ORDERING problem,
+       which is precisely the reading a wrong sign inverts. */
+    DCHECK(out->deliv_w_gap >= 0.0,
+           "the WFQ census reports a reply backlog standing ABOVE the front of its own queue — flow_best's "
+           "maximum is taken over the same members this scan walks, so a negative deficit means the pick and "
+           "the census are no longer reading one comparator, and every conclusion drawn from this row about "
+           "whether undelivered replies are outranked or unreachable is a statement about the instrument");
 
     /* THE FAMILY COUNT IS BRACKETED BY THE POPULATION IT PARTITIONS, asserted because both ends name a real
        break rather than a rounding. Zero families with members standing is the mark not being taken at all —

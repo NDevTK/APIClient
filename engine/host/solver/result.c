@@ -571,7 +571,8 @@ char *result_wfq_json(void) {
                      "\"cands\":%ld,\"candUnrun\":%ld,\"candSvcMax\":%lld,\"candDecMax\":%ld,\"decMax\":%ld,"
                      "\"distMax\":%.3f,\"wTop\":%.3f,\"wMin\":%.3f,\"candWMax\":%.3f,"
                      "\"topSvc\":%lld,\"topSvcFam\":%lld,\"nonrewardMax\":%.3f,"
-                     "\"jobsReady\":%ld,\"jobsFramed\":%ld,\"jobsOwed\":%ld,\"jobWGap\":%.3f}",
+                     "\"jobsReady\":%ld,\"jobsFramed\":%ld,\"jobsOwed\":%ld,\"jobWGap\":%.3f,"
+                     "\"delivReady\":%ld,\"delivFramed\":%ld,\"delivOwed\":%ld,\"delivWGap\":%.3f}",
                      w.members, w.val_min, w.val_max, w.val_top,
                      w.val_zero, w.self_emit, w.unrun,
                      w.never_picked, w.never_picked_gap,
@@ -581,7 +582,8 @@ char *result_wfq_json(void) {
                      w.cand_members, w.cand_unrun, (long long)w.cand_svc_max, w.cand_dec_max, w.dec_max,
                      w.dist_max, w.w_top, w.w_min, w.cand_w_max,
                      (long long)w.top_svc, (long long)w.top_svc_fam, w.nonreward_max,
-                     w.jobs_ready, w.jobs_framed, w.jobs_owed, w.job_w_gap);
+                     w.jobs_ready, w.jobs_framed, w.jobs_owed, w.job_w_gap,
+                     w.deliv_ready, w.deliv_framed, w.deliv_owed, w.deliv_w_gap);
 }
 
 /* WHAT A CONTEXT SWITCH COSTS, AND WHAT THE TWO CHAINS ARE STILL HOLDING — see result.h for why this composes

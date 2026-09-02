@@ -1494,6 +1494,55 @@ typedef struct {
     long jobs_owed;
     double job_w_gap;
     long vis_zero;
+
+    /* THE DELIVERY BACKLOG, SPLIT THE SAME WAY AND FOR THE SAME REASON — the missing twin of the four rows
+     * above. The cold census says how many register entries are ANSWERED AND UNTAKEN (`pendReady`) and how
+     * many members could take one right now (`canDeliver`); neither says WHERE THOSE MEMBERS STAND IN THE
+     * ORDER, and that is the one question a debt of hundreds of thousands of answered replies against a
+     * handful of deliveries reduces to. `jobs_ready`/`job_w_gap` already ask it of the job backlog. Nothing
+     * asked it of the reply backlog, which is the larger of the two by orders of magnitude.
+     *
+     * THE THREE ARE OVER MEMBERS, WHERE THE JOB ROWS ABOVE ARE OVER JOBS, and the difference is deliberate
+     * rather than an inconsistency. `flow_job_pending` is a field read; `pending_deliverable_count` is a WALK
+     * of a register that holds hundreds of entries, and this scan already runs over every member of a frontier
+     * in the thousands — cold_census pays that walk once per report and a second copy of it here would double
+     * it to say something the first already says. `pending_ready` short-circuits at the first deliverable
+     * entry, so what this asks is the cheap half: not how big the debt is, but WHO is holding it.
+     *
+     * Disjoint and exhaustive over the members that hold one, in the order the engine asks them:
+     *
+     *   `deliv_owed`   — the member carries the host-owed mark, so flow_pick REFUSES it (`runnable_only`) and
+     *                    no ranking can move it. On a frontier whose registers hold nothing OUTSTANDING this
+     *                    should be zero, because flow_set_host_owed's own DCHECK admits a mark only for an
+     *                    outstanding entry or a referenced document — so a non-zero row here beside
+     *                    `pendReady == pend` is those two statements disagreeing.
+     *   `deliv_framed` — the member fails flow_stack_empty, so the reply-delivery arm cannot run for it. This
+     *                    is HTML §8.1.4.4 "Calling scripts"'s clean up after running script step 3 measured,
+     *                    not a defect on its own — exactly as `jobs_framed` is not.
+     *   `deliv_ready`  — neither: the arm's whole guard holds and the pick will consider it, so this member's
+     *                    reply waits on RANK ALONE. It is the population §scheduler's WFQ sentence is about.
+     *
+     * `deliv_ready` IS NOT THE COLD CENSUS'S `canDeliver` AND THE DIFFERENCE IS ITSELF A READING. That row is
+     * `flow_stack_empty && pending_ready` and this one subtracts the host-owed marked members, so
+     * `canDeliver - delivReady` is exactly the population the ARM could serve and the PICK will not offer the
+     * thread to. Two questions, two answers, and neither is a second spelling of the other — which is why they
+     * are not unified.
+     *
+     * `deliv_w_gap` IS THE READING THE COUNTS CANNOT MAKE, denominated in the order's own unit, exactly as
+     * `job_w_gap` is: `w_top` minus the best weight any READY holder offers. 0 means the front of the queue
+     * ITSELF is holding an undelivered reply and the backlog is not an ordering problem at all. A positive
+     * figure is readable against the terms that produce it, which is the whole value of stating it in this
+     * unit rather than in members: one completed unit of work costs a member its optimism bonus from
+     * 1/(1+v) to 1/(2+v) — HALF A POINT at v=0 — while the aging term moves at FLOW_AGE_QUANTUM per quantum
+     * of silence, which is ENGINE_QUANTUM_MS/1000 of a point. So a gap near 0.5 says the ready holders are one
+     * completed unit behind the front, and a gap of many multiples of FLOW_AGE_QUANTUM with `vis_zero` large
+     * says they are behind a population whose optimism bonus none of its members can spend. READ IT BESIDE
+     * `deliv_ready` AND NEVER ALONE: with no ready holder there is no gap to state and this is 0 for that too.
+     * `>= 0` by construction, for `job_w_gap`'s reason exactly, and asserted beside it. */
+    long deliv_ready;
+    long deliv_framed;
+    long deliv_owed;
+    double deliv_w_gap;
 } WfqCensus;
 void flow_wfq_census(WfqCensus *out);
 
