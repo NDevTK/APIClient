@@ -2114,6 +2114,61 @@ function quotedRuns(prose) {
   return out;
 }
 
+/* THE SAME RUNS, ADDRESSED IN SOURCE OFFSETS — asked by the CITATION SCAN, which reads `src`, where the
+ * quotation check reads the flattened prose. It is ONE reader asked twice and not two readers: `quotedRuns`
+ * above is called verbatim, on a MASK of the file that has the SAME LENGTH as `src` and every quotation mark
+ * at the SAME OFFSET, so a run it finds is already a source range. Restating what a quotation is here would be
+ * a second copy of the most load-bearing rule in this file, and the copy that drifts is the one nobody runs.
+ * EVERY PART OF THE MASK IS INDEX-PRESERVING, which is the whole of its correctness. Outside a prose span each
+ * character becomes a space: that deletes the program's own text and — the part that matters — the C literal's
+ * OWN delimiting quotes and the `" "` joints between the adjacent literals of one message, none of which any
+ * author wrote as a quotation mark. Inside a literal a C escape's backslash becomes a space and its payload
+ * becomes one too, EXCEPT `\"`, whose `"` is kept exactly where it stands, because that escape IS how this tree
+ * writes a quotation mark inside a crash message and it is the only one that must survive. Nothing is inserted
+ * and nothing is removed, so an offset in the mask is that offset in `src`. */
+function quotedSrcRuns(src, spans) {
+  const mask = new Array(src.length).fill(" ");
+  for (const [s, e, kind] of spans) {
+    for (let i = s; i < e; i++) mask[i] = src[i];
+    if (kind !== "s") continue;
+    for (let i = s; i < e; i++) {
+      if (src[i] !== "\\" || i + 1 >= e) continue;
+      mask[i] = " ";
+      if (src[i + 1] !== '"') mask[i + 1] = " ";
+      i++;
+    }
+  }
+  const m = mask.join("");
+  /* A MESSAGE IS SEVERAL ADJACENT LITERALS AND A QUOTATION CROSSES THEM — the same adjacency `governedProse`
+   * and `precedingProse` walk, read here as MAXIMAL runs because a quotation that opens before a number and
+   * closes after it must be ONE unit or the number stands inside neither half of it. */
+  const runs = [];
+  for (let i = 0; i < spans.length; i++) {
+    const start = spans[i][0];
+    let end = spans[i][1], j = i;
+    if (spans[i][2] === "s")
+      while (j + 1 < spans.length && spans[j + 1][2] === "s" &&
+             /^["\s]*$/.test(src.slice(spans[j][1], spans[j + 1][0]))) { j++; end = spans[j][1]; }
+    for (const q of quotedRuns(m.slice(start, end)))
+      runs.push([start + q.at, start + q.at + q.text.length + 1]);
+    i = j;
+  }
+  return runs;
+}
+
+/* STRICTLY INSIDE a quoted run — the marks themselves are the author's punctuation and not quoted text, so a
+ * number standing ON one is outside every run and is read like any other. */
+function inQuotedRun(runs, at) {
+  let lo = 0, hi = runs.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (runs[mid][1] <= at) lo = mid + 1;
+    else if (runs[mid][0] >= at) hi = mid - 1;
+    else return true;
+  }
+  return false;
+}
+
 /* AN ELLIPSIS IS A CLAIM ABOUT BOTH HALVES, WHICH IS WHAT MAKES IT CHECKABLE RATHER THAN AN ESCAPE HATCH.
  * `"the disabled attribute … whether the style sheet is applied"` asserts that the first phrase appears, that
  * the second appears, and that the second appears AFTER the first — three facts a section's own words either
@@ -2528,7 +2583,7 @@ function audit(argv, opts = {}) {
     }
     return wholes.get(key);
   };
-  const stat = { total: 0, bare: 0, anchored: 0, byTerm: 0, byFile: 0, other: 0, skipped: 0,
+  const stat = { total: 0, bare: 0, anchored: 0, byTerm: 0, byFile: 0, other: 0, skipped: 0, quotedNumber: 0,
                  confirmed: 0, confirmedByUse: 0, confirmedByContainment: 0, confirmedByRun: 0,
                  confirmedByText: 0, confirmedByIdent: 0, textRefused: 0,
                  unverified: 0, multiSpec: 0,
@@ -2744,8 +2799,36 @@ function audit(argv, opts = {}) {
     const cites = [];
     const votes = new Map();
     const seen = new Set();
+    /* A NUMBER INSIDE A QUOTATION IS THE QUOTED DOCUMENT'S OWN WORDS AND NOT A CITATION ANYBODY HERE WROTE,
+     * and the reason this is an EXCLUSION rather than a nuance is that admitting one does not merely add a
+     * number to a count — IT DESTROYS THE QUOTATION IT STANDS IN. A citation ends the region the one before it
+     * governs, so a number the author never wrote cuts that region at a point INSIDE a quoted run; the
+     * quotation check then reads a fragment with an opening mark and no close, `quotedRuns` declines it, and
+     * the quotation is not verified, not accused, and NOT COUNTED ANYWHERE. Both halves of a real sentence
+     * vanish that way — the half before the cut has no closing mark and the half after it opens on the real
+     * closing one — so the site reads exactly like a file with fewer quotations in it. That is the silent zero
+     * this file refuses everywhere else, arriving through the one check CLAUDE.md calls the one a reader
+     * trusts most and verifies least. MEASURED at the revision this landed, by corrupting one word inside four
+     * quotations of one §17.5.3 crash message: the two whose text contains `CSS 2.1` did not move
+     * MIS-TRANSCRIBED at all (4 -> 4) while the two without a number in them moved it per-quote (4 -> 5). The
+     * standard's NAME has nothing to do with it: injecting a bare `§10.3` into one of the two that DID move
+     * silenced it in the same way, which is what says the cause is the citation scan reading a number out of
+     * quoted text rather than anything about which document is quoted.
+     * IT IS THE SAME DEFECT RANGE_OPERAND AND STEP_LEAD BELOW ALREADY EXCLUDE — the tool inventing the citation
+     * it then judges — and it is excluded at the same place for the same reason: a `§`-written number is not
+     * exempt, because a standard's own prose cross-references its own sections and a comment quoting that
+     * sentence is displaying the reference, not making it. `mentionNotClaim` states this for a specimen inside
+     * a BACKTICK run and cannot help here: it withholds a VERDICT, long after the number has already ended a
+     * region and taken a quotation with it.
+     * WHICH DIRECTION ITS OWN ERROR RUNS: `quotedRuns` is a scanner with no minimum, so an unmatched opening
+     * mark ends its scan rather than swallowing the rest of the unit — the failure it can still have is an
+     * EARLY stray mark re-pairing the real quotations after it, which would hide a citation instead of
+     * inventing one. That is the direction CLAUDE.md permits a deny to be wrong in, and it is measured rather
+     * than assumed: the citation total this exclusion removes is reported beside the findings it changes. */
+    const qruns = quotedSrcRuns(src, spans);
     CITE.lastIndex = 0;
     for (let m; (m = CITE.exec(src)); ) {
+      if (inQuotedRun(qruns, m.index)) { stat.quotedNumber++; continue; }
       const toks = anchorTokens(src.slice(Math.max(0, m.index - 40), m.index));
       const a = classifyAnchor(toks);
       const tok = toks.length ? toks[toks.length - 1] : null;   /* the one word, for the gap report below */
@@ -2757,6 +2840,7 @@ function audit(argv, opts = {}) {
     BARE.lastIndex = 0;
     for (let m; (m = BARE.exec(src)); ) {
       if (seen.has(m.index) || !inSpans(spans, m.index)) continue;
+      if (inQuotedRun(qruns, m.index)) { stat.quotedNumber++; continue; }
       if (RANGE_OPERAND.test(src.slice(Math.max(0, m.index - 24), m.index))) continue;
       if (STEP_LEAD.test(src.slice(Math.max(0, m.index - 24), m.index))) continue;
       cites.push({ at: m.index, len: m[0].length, no: m[1], anchor: null, bare: true });
@@ -3908,6 +3992,10 @@ function audit(argv, opts = {}) {
       `${Object.keys(ix.uses).length} with a prominent use site — index fetched ${ix.fetched}, standard updated ${ix.specUpdated}`);
   }
   console.log(`  ${stat.total} citations in ${files.length} files (${stat.bare} written without a §, admitted by group evidence)`);
+  /* THE EXCLUSION IS REPORTED WITH A NUMBER BECAUSE ITS OWN ERROR RUNS IN THE DENY DIRECTION — see the
+   * quoted-number paragraph in PASS 1. A number this reader declines is a number no channel below judges, so
+   * a silent exclusion would be the same invisibility it exists to end, one door over. */
+  console.log(`  ${stat.quotedNumber} further number(s) stand INSIDE a quotation and are not citations this tree wrote — the quoted document's own cross-references. Admitting one ends the region the real citation governs at a point inside a quoted run, and the quotation then reaches the quotation check as a fragment with no closing mark and is judged by nothing`);
   /* AND WHAT THE DEFAULT DOES NOT COLLECT IS PRINTED BESIDE WHAT IT DID, because a scope a reader cannot see
    * is the same silent zero as a list a reader cannot see, one level out: a file nobody points the audit at
    * produces no finding, and a total over the files it DID read looks complete. `extension/` was outside every
