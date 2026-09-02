@@ -350,15 +350,21 @@ static bool idb_key_path_evaluate_list(JSContext *ctx, JSValueConst value, JSVal
            Array.prototype would otherwise swallow the entry, and the assembled key would be missing a part
            nothing reported. THE STATUS IS THE THING THAT REPORTS IT, so it is read and not discarded — a
            discarded status leaves that whole sentence unenforced, which is the shape of the defect it names.
-           It is a CHECK and not a DCHECK because both of its causes are fatal in RELEASE: the define answers
-           -1 only on an allocation failure and 0 only if this engine handed it something other than the fresh
-           extensible Array step 1.1 made, and either way the record goes to §2.2's sorted list under a key
-           SHORTER than its key path — a truncated compound key no later read can tell from a key the value
-           genuinely had, which is the data-integrity class CHECK exists for. */
+           IT IS TWO FACTS AND NOT ONE, so it is two predicates over the one bit rather than a single
+           `status == 1` that would be decided by the stricter of them and silently charge the other. The
+           define answers -1 when it THREW, which is an allocation failure and is fatal in release: the key is
+           truncated AND a pending exception rides out past this function's `return true` into a caller that
+           was told the walk succeeded. It answers 0 when it was REFUSED, which cannot happen to a fresh
+           extensible Array step 1.1 made three lines up and so is this engine disagreeing with itself. Either
+           way the record reaches §2.2's sorted list under a key SHORTER than its key path — a truncated
+           compound key no later read can tell from a key the value genuinely had. */
         status = JS_DefinePropertyValueUint32(ctx, result, i, key, JS_PROP_C_W_E);
-        CHECK(status == 1, "IndexedDB: §7.1 step 1.3.6's `Assert: status is true` does not hold — "
-                           "CreateDataProperty did not write a part of a compound key into the Array step 1.1 "
-                           "created, so the record would be filed under a key shorter than its key path");
+        CHECK(status >= 0, "IndexedDB: §7.1 step 1.3.5's CreateDataProperty THREW while writing a part of a "
+                           "compound key into the Array step 1.1 created — an allocation failure, which leaves "
+                           "the key short and an exception pending on a walk that reports success");
+        DCHECK(status == 1, "IndexedDB: §7.1 step 1.3.6's `Assert: status is true` does not hold — the define "
+                            "was REFUSED on the Array step 1.1 created three lines up, which this engine made "
+                            "and no page has reached, so nothing can have made it non-extensible");
     }
     *pout = result;
     return true;
