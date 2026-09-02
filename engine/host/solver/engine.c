@@ -11,6 +11,8 @@
                                                 with the event loop from other specifications".) */
 #include "core/events/report_exception.h"   /* HTML §8.1.4.4 step 8: what a classic script's abrupt completion
                                                owes the page, as the frame the scheduler runs it as */
+#include "core/html/close_request.h"   /* HTML §6.10.1 Close requests: the global task its preamble queues,
+                                          as the frame a MODELLED potential close request runs as */
 #include "core/idl_args.h"   /* the one point every Web API member passes through — see idl_slowest_step */
 #include "solver/result.h"
 #include "solver/solve.h"
@@ -3880,6 +3882,14 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
        its own report frame as the row's PROGRAM — advancing the cursor a second time and skipping the next
        script, and restoring `document.currentScript` at a step §4.12.1.1 does not restore it at. */
     sib->reporting = parent->reporting;
+    /* …AND THE SAME SENTENCE FOR THE OTHER TWO FRAME FACTS THIS FLOW CAN CARRY. An arm branching inside a
+       watcher's `cancel` handler is standing in its parent's HTML §6.10.1 "Close requests" task and has to take
+       that task's completion value out of it, exactly as the parent would; and an arm forked after a modelled
+       close request reached §6.10.1's step 9 is standing in a timeline where nothing is watching, so it must
+       not model the arrival its parent has already found nothing for. Left at the constructor's zeros the first
+       would read a task frame as the row's PROGRAM and the second would model close requests for ever. */
+    sib->close_req = parent->close_req;
+    sib->close_req_none = parent->close_req_none;
     /* AND HOW FAR THE SEQUENCE HAS ALREADY BEEN RUN, which is what makes the no-replay assert at the compile
        site mean anything for an arm. Every sibling inherited -1, so a sibling that reached the compile with a
        cursor its parent had already compiled passed a check that only ever compared against "nothing yet" —
@@ -4931,6 +4941,92 @@ static StepUnit engine_orphan_unit(int r) {
     DFAIL("the orphan step reported an outcome it does not have — the caller returns PROGRESS on anything "
           "non-zero, so a fourth outcome is a step whose work nothing in the run can name");
     return STEP_UNIT_NONE;
+}
+
+/* A MODELLED POTENTIAL CLOSE REQUEST — HTML §6.10.1 "Close requests"' preamble, performed by an agent that has
+ * no user to perform it.
+ *
+ * WHY IT EXISTS AT ALL. §6.10.1's own four examples of a potential close request are the Esc key, an Android
+ * back button or gesture, an assistive technology's dismiss gesture and a game controller's back button. Every
+ * one of them is a USER ACT, so a run that waits for one explores none of the code behind it — and what is
+ * behind it is the page's own `cancel` and `close` handlers, a dialog's dismissal, a popover's light-dismiss:
+ * exactly the "what the bundle CAN do but didn't" §What-the-tool-produces is about. Modelling the arrival is
+ * the same kind of act as force-invoking a function nothing called, and it is done for the same reason.
+ *
+ * IT IS NOT A DRIVER AND NOT A SECOND SCHEDULER. The arrival becomes ONE frame on THIS flow — the task
+ * §6.10.1's preamble queues — so it is preemptible per opcode, parkable at any depth, forkable at step 7's
+ * history-action activation, ranked and starved and paged by the one WFQ. Nothing loops over close requests.
+ *
+ * WHY THIS FLOW AND NOT A SIBLING, which is the one place this differs from the orphan seed above. An orphan
+ * take hands over one of MANY bodies and the discovering flow must go on to take the next, so each drive is a
+ * sibling. A close request is not a set: there is one arrival to model, in this timeline, and this flow has
+ * nothing left to run — that is what reaching this arm MEANS. Seeding a sibling here would leave this flow
+ * standing with nothing to do and hand its work to a member with no path behind it, which is the sentence the
+ * resumed-drive branch above already makes for its own case.
+ *
+ * WHEN IT STOPS, WITH NO COUNTER, NO CAP AND NO SEEN-SET. §6.10.2's process close watchers takes the LAST
+ * group of the manager, so a document with three groups is modelled three times — three tasks, one flow, each
+ * running the handlers of one group. What ends it is the standard's own sentence: step 9's "Alternative
+ * processing: Otherwise, there was nothing watching for a close request." A task that fell through to it has
+ * ESTABLISHED that this timeline's manager has nothing for a close request to do, and that fact is the task's
+ * completion value (core/html/close_request.h) — read at the frame's completion and latched on the flow. It is
+ * not a bound: membership of the frontier is untouched, a flow that closed something is asked again on its
+ * very next step, and a page that establishes a watcher inside its own `close` handler is modelled for as long
+ * as it keeps doing so. What is refused is a re-ask that the algorithm itself has already answered.
+ *
+ * AND EVERYTHING PAST IT IS FORCED. §A-REQUEST-CARRIES-THE-PROVENANCE grades a request by what it RESTS ON,
+ * and everything below this line rests on an arrival nobody performed: a `fetch()` a `close` handler makes is
+ * evidence about what a server answers to a request no client sent. So the mark is taken HERE, in the same
+ * operation as the frame and before the flow can run one opcode of it — the wrong grade is impossible rather
+ * than discouraged, exactly as it is at the decline fork. From this instant pending_prov_compose stamps every
+ * park PROV_FORCED and endpoint.c's identity keeps every sighting out of the derived pool; the @S reproduction
+ * envelope's "requires a user gesture" is the same fact spoken on the other surface.
+ * IT IS MONOTONE, so a flow that models a second close request is already marked and the second call says
+ * nothing the first did not.
+ *
+ * Returns 1 if it installed the task as this flow's frame; 0 means there is nothing left to model, which is
+ * what lets the caller finish. */
+static int engine_close_request_fork(JSContext *ctx, Flow *f) {
+    lxb_dom_node_t *document;
+
+    /* THE SAME GATE THE ORPHAN SEED HAS, FOR THE SAME REASON — and here it is about the FORK rather than about
+       a new member: step 7 asks §6.4.1 "Data model"'s history-action activation, which is answered by a fork,
+       so a session declared non-forking cannot run these steps to their end. An @S candidate re-fire is ONE
+       concrete path and a conformance run is measuring a browser, and neither of those sends a gesture. */
+    if (!g_sess_forking) return 0;
+    /* §6.10.1's STEP 9, AS THIS TIMELINE ALREADY ANSWERED IT. See the header note above: a task that reached
+       alternative processing established that nothing here is watching, and this is where that answer is
+       spent. */
+    if (f->close_req_none) return 0;
+    DCHECK(flow_running() == f,
+           "a modelled close request was built while another flow was switched in — the task reads the close "
+           "watcher manager out of the running flow's COW delta, so it would answer for a stranger's timeline "
+           "and close a watcher this flow never established");
+    DCHECK(f->frame == NULL,
+           "a flow modelled a close request with a suspended frame still live — the arrival is modelled where "
+           "the flow has nothing left to run, which is the only point at which 'this document is quiet' is a "
+           "fact about this timeline, and a live frame means it was still going to run something");
+    DCHECK(!f->close_req,
+           "a flow is already inside a modelled close request's task and has no frame — the pair is written "
+           "together here and cleared together at the task's completion, so one without the other is a "
+           "completion path that took one of the two");
+    /* WHICH DOCUMENT THE ARRIVAL IS TARGETED AT. §6.10.1 targets a potential close request AT a Document, and a
+       real one reaches the top-level traversable's active document — which is this realm's, the same document
+       every other arm of this ladder is about (the lifecycle stage, the rendering opportunity, the due timer).
+       The Document NODE and not the realm, because the steps derive their own realm from the node. */
+    document = node_of(document_object(ctx));
+    DCHECK(document != NULL && document->type == LXB_DOM_NODE_TYPE_DOCUMENT,
+           "the realm a flow ran its programs in does not answer with a Document node — every arm of this "
+           "ladder is about that realm's document, so a flow that reached the end of its work without one is "
+           "standing somewhere this arm cannot name a target in");
+    f->frame = close_request_flow(ctx, document);
+    f->close_req = 1;
+    flow_mark_forced_arm();
+    DCHECK(flow_path_forced(f),
+           "a flow standing inside a modelled close request does not declare its path FORCED — every request "
+           "it goes on to build would say DERIVED, which publishes a value reached only because this engine "
+           "sent a gesture no user sent");
+    return 1;
 }
 
 
@@ -6678,6 +6774,16 @@ static int flow_step(JSContext *ctx, Flow *f) {
                reads as an orphan DRIVER: there has never been one, and this is a seed. */
             else if ((orphan_step = engine_orphan_fork(ctx, f)) != 0) {
                 g_step_unit = engine_orphan_unit(orphan_step); return 0; }
+            /* AND THE ARRIVAL NOTHING PERFORMED — HTML §6.10.1 "Close requests"' potential close request,
+               MODELLED. It is BELOW the orphan arm and that order is the standard's rather than a preference:
+               the arm above is work the PAGE shipped (a function it never called), and a close request is work
+               NOBODY did, so it is the weakest act of the ladder and the last thing tried before this flow
+               declares itself finished. It is also the order that finds the most: a driven orphan can
+               `new CloseWatcher()`, and the drive above is taken before this is asked. See
+               engine_close_request_fork for why this flow takes it rather than a sibling, for what ends it
+               without a counter, and for why everything past it is graded FORCED. */
+            else if (engine_close_request_fork(ctx, f)) {
+                g_step_unit = STEP_UNIT_CLOSE_REQUEST; return 0; }
             else {
                 /* A FLOW MAY NOT FINISH HOLDING WORK. Every branch above claims to have offered its queue a
                    turn, so reaching here with a job still on it means one of them returned first and the job
@@ -7031,11 +7137,41 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    "that exclude calls would each exclude the row this step just started");
             g_step_unit = started_here ? STEP_UNIT_START_PROGRAM : STEP_UNIT_RESUME_PROGRAM;
             int r = JS_FlowResume(ctx, (JSValue *)f->frame, &cv);
-            /* A CROSS-AGENT OPERATION'S COMPLETION IS AN ANSWER, AND IT IS ASKED FIRST because the two readings
-               of a throw are mutually exclusive: this program is another agent's operation, so its throw
-               belongs to the flow that ASKED — reported here as this document's page error it would be lost and
-               the peer would resume with `undefined` where the spec propagates a throw. */
-            if (r == 0 && flow_dyn_kind(f) == DYN_CROSS_AGENT_OP)
+            /* HTML §6.10.1 "Close requests"' STEP 9, TAKEN OUT OF THE ONE PLACE A TASK'S COMPLETION VALUE IS
+               IN HAND. "Alternative processing: Otherwise, there was nothing watching for a close request. The
+               user agent may instead interpret this interaction as some other action, instead of interpreting
+               it as a close request." The "may" is this engine's and it declines — there is nothing here to
+               reinterpret the gesture AS — but the FACT is what stops the arrival being modelled again in this
+               timeline, and it is the algorithm's own answer rather than a second question asked of the
+               manager behind its back. Latched and never cleared: a path cannot un-observe it.
+               IT IS THE FIRST ARM OF THIS CHAIN AND THAT ORDER IS LOAD-BEARING, for `is_call`'s reason exactly:
+               `close_req` is a fact about the LIVE FRAME and `flow_dyn_kind` is a fact about the ROW AT THE
+               CURSOR, and the frame completing here is not that row. Past the end of the sequence the kind
+               answers DYN_PAGE_SCRIPT, so the arm below could not claim a task — but a `close` handler that
+               loads a chunk or is handed a cross-agent operation moves `dyn_n` PAST the cursor while the task
+               is still running, and then it could: the operation's answer machinery would be handed step 9's
+               boolean, a peer would resume on it, and this flow would never latch and would model close
+               requests for ever. Both readings are wrong and neither would say so.
+               THE TWO ARMS ARE SPLIT ON `JS_IsException` because a completion is either abrupt or a value. */
+            if (r == 0 && f->close_req && !JS_IsException(cv)) {
+                DCHECK(is_call,
+                       "a modelled close request's frame does not report itself as a call root — it is built "
+                       "by JS_FlowNewCall, so a program base here is a frame this flag was set over that is "
+                       "not the task");
+                DCHECK(JS_IsBool(cv),
+                       "HTML §6.10.1 Close requests' task completed with something that is not a boolean — "
+                       "its machine's fini yields step 9's one fact and nothing else, so a value of another "
+                       "type is a completion that came from somewhere that is not the task");
+                if (JS_ToBool(ctx, cv)) f->close_req_none = 1;
+            }
+            /* A CROSS-AGENT OPERATION'S COMPLETION IS AN ANSWER, AND IT IS ASKED AHEAD OF EVERY THROW ARM
+               BELOW because the two readings of a throw are mutually exclusive: this program is another
+               agent's operation, so its throw belongs to the flow that ASKED — reported here as this
+               document's page error it would be lost and the peer would resume with `undefined` where the spec
+               propagates a throw. It now stands SECOND rather than first, behind the one arm that is about the
+               live FRAME rather than about the row at the cursor; see that arm for why the order between them
+               is not a preference. */
+            else if (r == 0 && flow_dyn_kind(f) == DYN_CROSS_AGENT_OP)
                 flow_answer_perform(ctx, f, cv);
             /* THE REPORT ITSELF COMPLETING ABRUPTLY IS THIS ENGINE'S DEFECT, and it is asked FIRST because a
                report frame is a call root and so is a driven orphan's — the arm below would read it as the
@@ -7063,6 +7199,30 @@ static int flow_step(JSContext *ctx, Flow *f) {
                       "so this is a step of §8.1.4.6 throwing rather than the page — the value's own text is "
                       "the last entry of the result document's `pageErrors`, and what it names is built in "
                       "core/events/report_exception.c");
+            }
+            /* A MODELLED CLOSE REQUEST THAT THREW IS THIS ENGINE'S DEFECT, and it is asked BEFORE the orphan
+               arm below because the two can be true of one flow: a flow that drove an uncalled function
+               earlier carries `orphan` for the rest of its life, and the frame completing here is the close
+               request's task rather than that drive's call. Left to the orphan arm the throw would be
+               SWALLOWED as the exploration surface, which is the one reading that hides an engine bug inside
+               the category of throw this engine deliberately ignores.
+               NOTHING THE PAGE WRITES REACHES HERE, which is what makes the abort right rather than harsh.
+               HTML §6.10.2 "Close watcher infrastructure" says of a watcher's cancel action and of its close
+               action that each "can never throw an exception", and DOM §2.9's inner invoke step 2.11 catches a
+               listener's throw and reports it. So what completed abruptly is a step of §6.10.1 or §6.10.2
+               itself. */
+            else if (JS_IsException(cv) && f->close_req) {
+                JSValue e = JS_GetException(ctx);
+                /* THE THROWN VALUE'S OWN TEXT, RECORDED BEFORE THE ABORT DISCARDS IT — check.h says the
+                   assertion line is unescaped, so the message cannot carry it. */
+                result_page_error_value(ctx, e);
+                JS_FreeValue(ctx, e);
+                DFAIL("HTML §6.10.1 \"Close requests\"' close request steps completed ABRUPTLY. §6.10.2 states "
+                      "that a close watcher's cancel action and its close action can never throw, and DOM "
+                      "§2.9's inner invoke step 2.11 catches a listener's throw, so this is a step of the "
+                      "close-request or close-watcher algorithms throwing rather than the page — the value's "
+                      "own text is the last entry of the result document's `pageErrors`, and what it names is "
+                      "built in core/html/close_request.c and core/html/close_watcher.c");
             }
             /* A DRIVEN ORPHAN THAT THREW IS THE EXPLORATION SURFACE AND NOT A PAGE ERROR — the one completion
                here that is nobody's defect. The page never called this function; this engine did, with unknown
@@ -7165,6 +7325,16 @@ static int flow_step(JSContext *ctx, Flow *f) {
                            "never run and never counted as unstarted. The completion that moved it was not a "
                            "row of the sequence");
                 }
+                /* AND A MODELLED CLOSE REQUEST CANNOT REACH THIS EXIT AT ALL. A detaching base is a
+                   MODULE body handing its continuation to an awaited promise, and §6.10.1's task is a
+                   CALL of a step machine with no module in it — so a set flag here is a frame that
+                   registered itself as a continuation elsewhere while this flow still expects to read
+                   its completion value, and step 9's answer would be lost with nothing to say so. */
+                DCHECK(!f->close_req,
+                       "a modelled close request's task DETACHED its base — HTML §6.10.1 Close requests' task "
+                       "is a call of a step machine, which has no continuation to hand to an awaited promise, "
+                       "so this flow is about to drop the completion value step 9's answer rides on");
+                f->close_req = 0;
                 f->reporting = 0;
                 f->frame = NULL;
                 return 0;
@@ -7203,6 +7373,13 @@ static int flow_step(JSContext *ctx, Flow *f) {
                 document_current_script_restore(doc_realm(flow_dyn_doc(f)), flow_dyn_el(f), JS_NULL);
         }
         JS_FlowFree(ctx, (JSValue *)f->frame);
+        /* …AND THE MODELLED CLOSE REQUEST'S FLAG DIES WITH THE FRAME IT NAMES, at the free rather than at the
+           tail: the report install two lines down RETURNS, so a flag cleared only at the bottom would still be
+           standing over the report's frame and that frame's completion would be read as §6.10.1's step 9
+           answer. In dev an abruptly-completing task aborts above and never gets here; in release that DFAIL is
+           compiled out, which is exactly the build in which a flag left standing has nothing to say so. Its
+           value has already been READ — the completion arm above runs before any of this. */
+        f->close_req = 0;
         /* §8.1.4.4 STEP 8.3.1 TAKES THE SLOT STEP 8'S PROGRAM JUST VACATED, and the cursor does NOT move: the
            report is the rest of this row's run-a-classic-script, so the row is finished by the report's
            completion and advanced exactly once, there. Everything the `if (!f->frame)` block above would do —

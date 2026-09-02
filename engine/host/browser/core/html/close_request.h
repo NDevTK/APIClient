@@ -18,27 +18,31 @@
  * join-the-last-group branch would decide it, and one close request would then be able to close a popover and
  * leave the document fullscreen.
  *
- * ── WHO CALLS THIS, WHICH IS THE QUESTION THIS FILE ANSWERS "NOBODY" TO, AND MEANS IT ────────────────────────
+ * ── WHO CALLS THIS, AND WHY THE ANSWER IS A MODELLED GESTURE RATHER THAN A USER ──────────────────────────────
  *
  * §6.10.1's preamble is the producer: "Whenever the user agent receives a potential close request targeted at
  * a Document document, it must queue a global task on the user interaction task source given document's
  * relevant global object to perform the following close request steps:". A potential close request is a USER
  * GESTURE — §6.10.1's own four examples are the Esc key, an Android back button or gesture, an assistive
- * technology's dismiss gesture, and a game controller's back button — and this agent receives none of them:
- * it dispatches no trusted input events at all, which core/html/user_activation.h states from its own side.
- *   WHAT THAT HEADER DOES NOT SAY, AND WHAT THIS ONE SAID IT DID, is that §6.4.1's sticky and transient
- * activation timestamps therefore have no source "either". They have one: §6.4.2's activation notification
- * steps are performed by algorithms that fire no input event at all, and core/file/file_picker.c performs
- * them for File System Access §3.3 "The showOpenFilePicker() method". So user activation has a live producer
- * in this build and a close request has none — two absences of different sizes, which is why the residual at
- * the end of this header now names a next diff that is smaller than the one it used to name.
- *   SO THIS ALGORITHM HAS NO LIVE CALLER IN THIS BUILD, and that is stated here rather than implied by an
- * absence, because the alternative — leaving a reader to infer reachability from the fact that the code
- * compiles — is how an unreachable path gets counted as a measured one. It is not a stub: every step below is
- * the standard's own step over the standard's own values, and the day a gesture source exists this file is
- * what it queues. What is missing is upstream of step 1, so there is no site inside these nine steps at which
- * a crash could name it; the named residual at the end of this header is that statement in its falsifiable
- * form.
+ * technology's dismiss gesture, and a game controller's back button — and this agent has no user, so none of
+ * them arrives on its own.
+ *   IT IS MODELLED INSTEAD, WHICH IS A DIFFERENT THING FROM BEING ABSENT AND FROM BEING FABRICATED. HTML
+ * §6.10.1 "Close requests" spells out two conforming platforms and one of them needs nothing this agent
+ * lacks, in HTML §6.10.1's own words: "On platforms where a back button is a potential close request, no
+ * event is involved, so when the back button is pressed, the user agent proceeds directly to process close
+ * watchers." So the whole producer for that platform is an ARRIVAL
+ * plus the queue, which is `close_request_flow` below and one arm of the solver's scheduler. Firing it is a
+ * FORCED EXPLORATION ACT — the same kind of act as driving a function the page never called — so everything a
+ * flow computes past one is graded FORCED, and that grading is the solver's (see close_request_flow).
+ *   AND IT IS NOT AN ACTIVATION. HTML §6.4.2 "Processing model" defines an activation triggering input event
+ * as "any event whose isTrusted attribute is true and whose type is one of" five types, the first being
+ * "keydown", provided the key is neither the Esc key nor a shortcut key reserved by the user agent. The Esc
+ * press §6.10.1's OTHER platform fires is therefore exactly the event §6.4.2 excludes, and a back button fires
+ * no event at all — so a modelled close request performs NO activation notification, and a build that made it
+ * do so would report an interaction the standard says did not happen. §6.4.1's timestamps have their own live
+ * producer and never needed this one: §6.4.2's notification steps are performed by algorithms that fire no
+ * input event at all, and core/file/file_picker.c performs them for File System Access §3.3 "The
+ * showOpenFilePicker() method".
  *
  * ── THE SHAPE: A REQUEST A CALLING MACHINE DRIVES, BECAUSE STEP 7 IS ONE ─────────────────────────────────────
  *
@@ -99,40 +103,29 @@
  * reinterpret, and one boolean separates those two sets exactly. `closedSomething` itself is step 7's local
  * and stays here: a caller given it would have to re-derive step 8 to learn what it meant.
  *
- * ── NAMED RESIDUAL: THE PRODUCER — A POTENTIAL CLOSE REQUEST ─────────────────────────────────────────────────
- *   — WHAT IS NOT COVERED: nothing in this agent receives a potential close request, so nothing queues this
- *     task. There is no trusted `keydown` (so no Esc), no back gesture, no dismiss gesture and no game
- *     controller, and no global task queued on the user interaction task source for any of them. With that:
- *     step 3's keyboard-platform arm, which fires the single `keydown` §6.10.1 names and therefore parks on
- *     the page's own listeners, and step 5's cancelled-event return, which is unsatisfiable while step 4's
- *     `event` is null on every path.
- *   — WHAT THE NEXT DIFF BUILDS: §6.10.1's OTHER conforming platform, which needs no event at all — "On
- *     platforms where a back button is a potential close request, no event is involved, so when the back
- *     button is pressed, the user agent proceeds directly to process close watchers." What must EXIST
- *     AFTERWARD is therefore two things and not four: a modelled gesture that arrives at a Document, and the
- *     queue-a-global-task-on-the-user-interaction-task-source call that turns one into this task. No
- *     KeyboardEvent, no dispatch, no §6.4.2 notification — the nine steps below are already COMPLETE for that
- *     platform, which is what the paragraph on steps 3 and 4 above says in the standard's own words. The
- *     KEYBOARD platform is the diff after it and is strictly larger: a trusted `keydown` this engine mints,
- *     dispatched at a target, whose listeners park the flow before step 5 can read its canceled flag.
- *   — AND THE TWO SECTIONS ARE ONE DISPATCH MECHANISM, NEVER ONE EVENT. What stood here was this header's own
- *     sentence, not the standard's: core/html/user_activation.h named the same absent source "so the two are
- *     one producer and not two, and whichever diff builds it discharges both". That is SPEC-WRONG. §6.4.2
- *     defines its trigger as "any event whose isTrusted attribute is true and whose type is one of" five
- *     types, of which the first is `keydown` "provided the key is neither the Esc key nor a shortcut key
- *     reserved by the user agent" — so the single `keydown` §6.10.1's keyboard platform fires is exactly the
- *     one §6.4.2 excludes. A trusted-keydown dispatch is a mechanism both sections use; a trusted Esc keydown
- *     discharges these nine steps and must leave every timestamp in §6.4.1 UNTOUCHED, and a diff that
- *     notified activation from it would report an interaction the standard says did not happen.
- *   — HOW ITS ABSENCE WOULD SHOW: a page that constructs a `CloseWatcher` and registers `oncancel`/`onclose`
- *     sees both fire for its own `requestClose()` and `close()` and NEVER for a user's close request; and
- *     §6.10.2's `allowedNumberOfGroups` rises without ever falling — the RISE has a live producer (§6.4.2's
- *     step 5.2 notification, reached from the file picker), while process close watchers' step 3 decrement is
- *     the one fall it has and nothing reaches it, so the two halves of that arithmetic are not equally
- *     unreachable and only one of them is this residual's. In the corpus: WPT `close-watcher/esc-key/` is the
- *     subtree that measures the keyboard platform, and `close-watcher/` is in engine/wpt.mjs's collection
- *     list while its files are not on disk in this checkout — so what the subtree scores here has never been
- *     measured, and "every file in it fails" is a prediction this residual is not entitled to make.
+ * ── NAMED RESIDUAL: THE KEYBOARD PLATFORM — A TRUSTED `keydown` ──────────────────────────────────────────────
+ *   The producer this residual used to name is BUILT (close_request_flow below, queued by the solver), so what
+ *   is left of it is the ONE of §6.10.1's two platforms that needs an event.
+ *   — WHAT IS NOT COVERED: step 3's keyboard-platform arm — HTML §6.10.1 "Close requests" says of it that
+ *     "the "relevant events" that are fired must be the single keydown event" — and therefore step 4's
+ *     non-null `event` and step 5's cancelled-event return, which is unsatisfiable while step 4's `event` is
+ *     JS_NULL on every path this build takes. This agent
+ *     dispatches no trusted input event, which core/html/user_activation.h states from its own side. The
+ *     back-button platform is complete and is not part of this: it fires no event, by §6.10.1's own text.
+ *   — WHAT THE NEXT DIFF BUILDS: a trusted `keydown` this engine MINTS and DISPATCHES at a target — an
+ *     `isTrusted` KeyboardEvent whose listeners run as page code and therefore park the flow — so that step 4
+ *     holds it and step 5 can read its canceled flag. It is strictly larger than the arrival built here: an
+ *     arrival is a work item, a dispatch is UI Events' whole event path plus a key, and the two share no code.
+ *     It must NOT notify user activation: §6.4.2 "Processing model" excludes the Esc key from its activation
+ *     triggering input events BY NAME, so one trusted-keydown MECHANISM serves both sections while a trusted
+ *     Esc keydown discharges these nine steps and leaves every timestamp in §6.4.1 UNTOUCHED.
+ *   — HOW ITS ABSENCE WOULD SHOW: a page that calls `preventDefault()` on a `keydown` to suppress a close
+ *     request cannot suppress one here — its `cancel`/`close` handlers fire for a modelled back gesture that a
+ *     real Esc press would never have reached them with, so the suppression a browser honours is missing and
+ *     nothing in the run says which platform it was modelling. In the corpus: WPT `close-watcher/esc-key/` is
+ *     the subtree that measures it, and `close-watcher/` is in engine/wpt.mjs's collection list while its
+ *     files are not on disk in this checkout — so what that subtree scores here has never been measured, and
+ *     "every file in it fails" is a prediction this residual is not entitled to make.
  */
 #ifndef ENGINE_HOST_BROWSER_CORE_HTML_CLOSE_REQUEST_H
 #define ENGINE_HOST_BROWSER_CORE_HTML_CLOSE_REQUEST_H
@@ -182,5 +175,22 @@ void close_request_run_unlock(JSContext *ctx, CloseRequestRun *r);
    it has answered. */
 int close_request_run(JSContext *ctx, JSStepHdr *hdr, CloseRequestRun *r, lxb_dom_node_t *document,
                       JSValue in, bool *palternative, JSValue **out_cb, int *out_argc);
+
+/* §6.10.1's PREAMBLE — "it must queue a global task on the user interaction task source given document's
+   relevant global object to perform the following close request steps". This is that queue: it returns the
+   FLOW BASE of a call of the machine that runs the nine steps, for the caller to install as a member's work.
+   It is a task and therefore a FLOW, which §scheduler requires of every enqueued job and which step 7 makes
+   unavoidable — the page's own `cancel` and `close` actions run inside it, and a C activation hosting one is
+   the drive-to-completion this engine aborts on.
+   THE COMPLETION VALUE IS STEP 9's ONE FACT as a boolean: true when the algorithm fell through to alternative
+   processing, which is the standard's own statement that nothing in this timeline was watching. See the
+   comment above the machine in close_request.c for why it is a value and not a comment.
+   `ctx` is the CALLER's realm and decides nothing: the task's realm is the DOCUMENT's, derived from the node,
+   and the callee is minted there so `js_call_c_function` runs these steps in the Window §6.10.1 names.
+   WHO DECIDES THAT A POTENTIAL CLOSE REQUEST ARRIVED IS NOT THIS FILE. There is no user here, so the arrival
+   is a MODELLED gesture — a forced exploration act — and both halves of that belong to the solver: WHEN to
+   model one, and the fact that everything a flow computes past one is graded FORCED. A browser component that
+   decided either would be a network/exploration policy inside the browser half. */
+JSValue *close_request_flow(JSContext *ctx, lxb_dom_node_t *document);
 
 #endif

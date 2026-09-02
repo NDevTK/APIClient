@@ -533,11 +533,17 @@ void flow_observe_rung(Flow *f, int rung) {
  * IDEMPOTENT BY THE ASSIGNMENT and not by a guard: a path cannot un-take an arm, so the second contradiction
  * says nothing the first did not, and there is no reading to discard. */
 void flow_mark_forced_arm(void) {
-    /* NO `if (g_running)` GUARD, for flow_age_running's reason exactly. Every caller is a DECISION seam — a
-       bytecode branch, and a native operation's outcome fork over a machine's stated real completion — and
-       decide.c reaches both only with a flow switched in (each returns -1 before asking anything otherwise),
-       so a mark with nothing running is a contradiction observed on a path belonging to no flow — and the arm
-       that took it would then go on to build requests that declare themselves DERIVED. */
+    /* NO `if (g_running)` GUARD, for flow_age_running's reason exactly. Every caller marks a flow it is
+       STANDING IN: decide.c's two decision seams — a bytecode branch, and a native operation's outcome fork
+       over a machine's stated real completion — reach this only with a flow switched in (each returns -1
+       before asking anything otherwise), and engine.c's two exploration seams (a declined request's failure
+       arm, a modelled close request's arrival) each assert `flow_running() == f` at their own site before
+       calling. So a mark with nothing running is a fact recorded on a path belonging to no flow — and whatever
+       took it would then go on to build requests that declare themselves DERIVED.
+       THIS LIST IS A CLAIM ABOUT THE TREE AND IS KEPT WHERE THE FIELD IS DESCRIBED. The sentence that stood
+       here named decide.c as the whole of the callers and had been false since the decline fork landed; the
+       standing list is flow.h's, beside `path_forced`, and this is the local restatement of why the guard is
+       absent rather than a second copy of it. */
     DCHECK(g_running != NULL,
            "an arm contradicting its own example was recorded with no flow running — the contradiction is a "
            "fact about ONE path, so there is no flow here to be standing on it and the requests built past "

@@ -475,6 +475,29 @@ typedef struct Flow {
      * standing in the same report its parent is. It is NOT cold-tier state — a resumed flow replays the
      * document, the script throws again and the report is owed again. */
     int   reporting;
+    /* IS THIS FLOW'S LIVE FRAME A MODELLED CLOSE REQUEST'S TASK — `reporting`'s question about a different
+     * kind of frame, and asked for the same reason: the frame is a CALL ROOT, so `JS_FlowIsCall` cannot tell it
+     * from a driven orphan's call or from a report, and the three completions mean opposite things. An orphan's
+     * throw is this engine's invocation on unknown input and is nobody's defect; a report's is a defect in this
+     * engine; and this one is a step of HTML §6.10.1 "Close requests" throwing, which the standard's own text
+     * makes impossible for the page to cause (a close action "can never throw an exception", and DOM §2.9's
+     * inner invoke step 2.11 catches a listener's). Its NORMAL completion is a value that has to be read, which
+     * is the third thing the other two do not have.
+     * NOT COLD-TIER STATE, for `reporting`'s reason: a resumed flow replays its document and re-reaches its own
+     * exhaustion, where the arrival is modelled again. Carried by a fork, because an arm branching inside a
+     * watcher's `cancel` handler is standing in the same task its parent is. */
+    int   close_req;
+    /* …AND WHETHER A MODELLED CLOSE REQUEST IN THIS TIMELINE ALREADY REACHED §6.10.1's STEP 9. "Alternative
+     * processing: Otherwise, there was nothing watching for a close request." — the standard's own statement
+     * that this document, in THIS flow's delta, has nothing for a close request to do, and therefore the one
+     * fact that lets the arrival stop being modelled without a counter, a cap or a seen-set. It is not a bound:
+     * membership of the frontier is untouched, the page may establish a watcher at any later instant, and a
+     * flow that closed something is asked again immediately (§6.10.2's process close watchers takes ONE group,
+     * so a document with three of them is modelled three times, in one flow, as three tasks).
+     * WRITTEN FROM THE TASK'S COMPLETION VALUE and nowhere else, which is why `close_req` above exists at all.
+     * Carried by a fork like every other field of the path, and NOT cold-tier state: the manager it is a fact
+     * about is per-flow COW state that a resumed flow rebuilds by replaying its document. */
+    int   close_req_none;
     /* HAS THIS FLOW'S PATH EVER TAKEN AN ARM THE CONCRETE EXAMPLE CONTRADICTED — the DERIVED/FORCED
      * discriminator, and the one fact a request this flow builds cannot state without it.
      *
@@ -491,8 +514,21 @@ typedef struct Flow {
      * unknown, so "this flow forked" is true of nearly every flow and separates nothing. What separates is
      * whether the flow's own arm disagrees with the concrete example the value carries — §Solver-half's "at a
      * branch the example marks the real arm" — and a branch over a value with NO example contradicts no
-     * observation and marks nothing. decide.c is the single writer (there is exactly one place an arm is
-     * taken) and flow_mark_forced_arm is how it says so.
+     * observation and marks nothing.
+     * IT IS NOT ONE WRITER AND THIS SENTENCE SAID IT WAS. What stood here was "decide.c is the single writer
+     * (there is exactly one place an arm is taken)", and that was a claim about THIS TREE rather than about the
+     * concept — the kind that goes stale the moment a second producer lands, and it had. What the field
+     * actually records is broader than a branch and always was: EVERYTHING THIS PATH COMPUTES FROM HERE ON
+     * RESTS ON SOMETHING NOTHING OBSERVED. Three acts put a flow in that position, and each states so at its
+     * own site through the one entry point:
+     *   - a BRANCH whose arm the concrete example contradicts (solver/decide.c) — the original, and the only
+     *     one that is an "arm" in the field's own name;
+     *   - a REQUEST THE TRUSTED ZONE DECLINED, whose failure arm runs the page's `catch` over an outcome this
+     *     engine supplied and nobody sent (solver/engine.c's flow_decline_fork);
+     *   - a MODELLED POTENTIAL CLOSE REQUEST, an arrival no user performed (solver/engine.c's close-request
+     *     arm; core/html/close_request.h says why it is forced rather than fabricated).
+     * The list is here because the ONE writer is `flow_mark_forced_arm` and a reader of this field has to be
+     * able to find every act that reaches it; a fourth producer is a line in this list, not a second bit.
      *
      * MONOTONE, because a path cannot un-take an arm: once a flow stands past a contradicted branch,
      * everything it computes afterwards stands on it. That is also why it can be a bit rather than a count —
@@ -512,22 +548,8 @@ typedef struct Flow {
        its own readiness and its own DOMContentLoaded. The stage lives on each Document (document.c's readiness
        slot), which is a heap write the COW delta already isolates per flow — so it is still per-flow, and it is
        now also per-document, which is what it always had to be. */
-    int   script_i;        /* position in this flow's ONE program sequence: a row of `dyn`, on [0, dyn_n] */
-    /* THE RANGE IS CLOSED AT BOTH ENDS AND THIS LINE SAID IT WAS HALF-OPEN, which is one character and is the
-       sentence that makes the frontier's own cursor histogram unreadable. `dyn_n` is a LEGAL value and is what
-       the cursor holds between two programs at the tail: flow.c's flow_programs_unstarted_for_document states
-       the contract ("between two programs the cursor stands one past the last started row") and engine.c
-       asserts `script_i <= dyn_n` at the one line that advances it. So the cursor's domain is ONE WIDER than
-       the PROGRAM-INDEX domain [0, dyn_n) that solver/engine.h's `deepest` and `completed` live in, and the
-       two are not comparable without saying which is which.
-       WHAT THE HALF-OPEN SPELLING COST IS NOT PEDANTIC AND WAS MEASURED. solver/cold.h's `program_cursors` is a
-       histogram over THIS field, so on a document of eleven programs it renders a bucket 11 beside a `deepest`
-       of 10 — a bucket whose index, read as a program, names a program the document does not have. A lane read
-       that pair as two instruments contradicting each other and stopped there, which is the correct instinct
-       (CLAUDE.md: a gauge that contradicts the maximum beside it is reporting about nothing) applied to a
-       disagreement that does not exist. The census asserts the real identity now, at the composer where both
-       numbers are in one hand.
-       ONE SEQUENCE AND ONE ADDRESS SPACE. The cursor used to walk the SESSION document's own scripts out of a
+    int   script_i;        /* position in this flow's ONE program sequence: a row of `dyn`, on [0, dyn_n) */
+    /* ONE SEQUENCE AND ONE ADDRESS SPACE. The cursor used to walk the SESSION document's own scripts out of a
        separate table on [0, n) and only then this flow's rows on [n, n+dyn_n), through an offset every reader
        restated. The document's scripts are seeded as rows of `dyn` at creation now (flow_set_seed_hook), so
        there is no half to be in — which is also what makes §4.12.1.1's "immediately execute the script element"

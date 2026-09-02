@@ -81,6 +81,15 @@
     X(ORPHAN_SEED,        "seed-one-orphan-flow")                                 \
     X(ORPHAN_ROUTE,       "hand-a-parked-drive-its-function")                     \
     X(ORPHAN_RESUME,      "resume-a-parked-orphan-drive")                         \
+    /* AND THE ARRIVAL NOTHING PERFORMED. HTML §6.10.1 Close requests' preamble  */ \
+    /* queues a global task for a potential close request, and this agent has no */ \
+    /* user to send one — so the arrival is MODELLED, which is a forced          */ \
+    /* exploration act of the kind the two orphan rows above already are, and    */ \
+    /* everything the flow computes past it is graded FORCED. Its own row        */ \
+    /* because the questions differ: a frontier seeding drives is reading the    */ \
+    /* page's uncalled code, and one modelling close requests is running the     */ \
+    /* page's own `cancel` and `close` handlers.                                 */ \
+    X(CLOSE_REQUEST,      "model-a-potential-close-request")                      \
     /* THE BLOCK THAT STARTS A PROGRAM HAS THREE EXITS AND USED TO HAVE ONE NAME */ \
     /* — §8.1.4.4 "Calling scripts" has TWO entries (run a classic script, run a */ \
     /* module script) and a compile has two outcomes, and `compile-program` was  */ \
