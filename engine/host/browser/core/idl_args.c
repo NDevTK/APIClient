@@ -3219,10 +3219,20 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
          * asks the pool for it, so there is no entry to route an `IdlGetter` through and one has to be minted
          * for it, at idl_mint_plain_getter, which is the one place a plain getter is created. THAT CLAUSE USED
          * TO NAME idl_define_accessor AND IT WAS WRONG ABOUT THIS TREE: there were TWO such mints, and the
-         * other one — idl_install_replaceable's readonly form — is what installs CSSOM VIEW §4's thirteen
-         * Window members and HTML §7.2.2.4's `parent` and `length`, so a diff obeying the clause as written
-         * would have left fifteen global attributes unrouted and believed itself finished. The two mints have
-         * since been made one; the clause names that one.
+         * other one — idl_install_replaceable's readonly form — is what installs CSSOM VIEW §4 Extensions to
+         * the Window Interface's thirteen Window members, HTML §7.2.2.4 Accessing related windows' `parent`
+         * and HTML §7.2.2.2 Indexed access on the Window object's `length`, so a diff obeying the clause as
+         * written would have left fifteen global attributes unrouted and believed itself finished. The two
+         * mints have since been made one; the clause names that one.
+         * THE `length` NUMBER IS A CORRECTION RECORDED AT THE SITE THAT MADE THE CLAIM. This sentence read
+         * "HTML §7.2.2.4's `parent` and `length`", pairing two members under one section, and §7.2.2.4 holds
+         * `top`, `opener`, `parent` and `frameElement` — `length`'s getter steps are stated in §7.2.2.2, whose
+         * own summary box introduces it beside `window[index]`. It is written down HERE rather than only fixed
+         * because the pairing had already been COPIED once, into core/indexeddb/idb_index_handle.c's twin of
+         * this residual, by a reader repairing that twin's mechanism clause against this one: a wrong number
+         * in a paragraph a second site is told to agree with propagates by exactly the route the agreement
+         * was meant to close. Both sites now carry the section TITLE beside the number, which is what makes
+         * the next mispairing visible to engine/citegen.mjs instead of only to whoever opens the standard.
          * HOW ITS ABSENCE SHOWS: `Object.getOwnPropertyDescriptor(IDBObjectStore.prototype, "name").get
          * .call({})` throws from the body's own test rather than from this one, and an unconverted prototype
          * attribute answers `desc.get.call(crossOriginWindowProxy)` out of the reading realm instead of

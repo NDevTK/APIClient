@@ -109,10 +109,12 @@ bool idb_index_handle_is(JSValueConst v)
    it looks like the mint. It is not, and it was never the only one. It is a SHARED HELPER one level ABOVE the
    mint with THREE callers — idl_install_accessor, idl_install_accessor_no_user_code and
    idl_install_accessor_unforgeable — and the mint below it has a SECOND caller it does not reach:
-   idl_install_replaceable's readonly form, which installs HTML §7.2.2.4's `parent` and `length` and CSSOM VIEW
-   §4's thirteen Window members. A diff obeying the retired clause would have added the entry at the helper,
-   left those fifteen global attributes unrouted, and believed itself finished — which is why the two mints were
-   made one, and why this clause names that one. core/idl_args.c states the same residual from the other end, at
+   idl_install_replaceable's readonly form, which installs HTML §7.2.2.4 Accessing related windows' `parent`,
+   HTML §7.2.2.2 Indexed access on the Window object's `length`, and CSSOM VIEW §4 Extensions to the Window
+   Interface's thirteen Window members (core/frame/viewport.c's VIEWPORT_WINDOW_MEMBERS is that thirteen). A
+   diff obeying the retired clause would have added the entry at the helper, left those fifteen global
+   attributes unrouted, and believed itself finished — which is why the two mints were made one, and why this
+   clause names that one. core/idl_args.c states the same residual from the other end, at
    js_idl_args_step_inner's idl_implementation_check call, and it is the PROTOTYPE half that is left: a plain
    getter installed as an own property of the realm's [Global] object already has both of §3.7's steps, because
    there the TARGET settles the interface and the member has nothing to declare.
