@@ -10,6 +10,7 @@
 #include "check.h"
 #include "core/css/css_length.h"
 #include "core/dom/document.h"
+#include "core/html/html_form.h"
 #include "core/html/html_image.h"
 #include "core/html/media_element.h"
 #include "core/layout/replaced_element.h"
@@ -126,9 +127,17 @@ static ImgRepresents rep_img_represents(lxb_dom_element_t *el, HtmlImageState st
     return alt_text ? IMG_REPRESENTS_TEXT : IMG_REPRESENTS_NOTHING;
 }
 
-/* ---- HTML §15.4.2 "Images" ---------------------------------------------------------------------------------
-   "User agents are expected to render img elements … according to the FIRST APPLICABLE RULES from the
-   following list" — so the order below is the standard's and the arms are not independent tests. */
+/* ---- HTML §15.4.2 "Images", THE `img` HALF -----------------------------------------------------------------
+   "User agents are expected to render img elements and input elements whose type attributes are in the Image
+   Button state, according to the first applicable rules from the following list" — so the order below is the
+   standard's and the arms are not independent tests.
+   THE LIST HAS FIVE RULES AND GOVERNS TWO ELEMENTS, which is why this function is the `img` half and named for
+   it rather than for the section. Rules 1 and 2 are written over "the element" and reach both; rules 3 and 4
+   open "If the element is an img element" and reach only this one; rule 5 opens "If the element is an input
+   element" and cannot reach it at all. So the four arms below ARE §15.4.2 for an `img`, and the missing fifth
+   is not a skipped step — it is a rule whose antecedent this element fails by its tag. `replaced_element_of`'s
+   `input` arm is where the other three-arm walk over the same list belongs, and it crashes there for the image
+   request both of its first two rules turn on. */
 static ReplacedElement rep_img(JSContext *ctx, lxb_dom_element_t *el)
 {
     bool complete = false;
@@ -341,25 +350,90 @@ ReplacedElement replaced_element_of(lxb_dom_element_t *el)
               "generate no box at all. BUILD the forced `display: none` first — it is the case every `audio` "
               "without a `controls` attribute takes — and then §15.5 \"Widgets\"' native appearance for the "
               "other");
-    if (lxb_html_tree_node_is(n, LXB_TAG_INPUT))
-        DFAIL("HTML §15.4 lists `input` among the elements that CAN be replaced, and which rule applies "
-              "depends on its TYPE. §15.4.2 \"Images\"' list is written for \"img elements and input elements "
-              "WHOSE TYPE ATTRIBUTES ARE IN THE IMAGE BUTTON STATE\", whose last rule makes a non-image one a "
-              "replaced BUTTON \"about one line in height and whatever width is necessary to render the text "
-              "on one line\"; every other type is §15.5 \"Widgets\", a different mechanism with a different "
-              "size. WHICH OF THE TWO THIS IS IS ALREADY ANSWERABLE, AND THIS LINE SAID IT WAS NOT: it "
-              "reported §4.10.5.1 \"States of the type attribute\"'s states as unmodelled and instructed the "
-              "reader to build them, and `html_form_input_state` (core/html/html_form.h) resolves that "
-              "section's whole keyword table — ASCII case-insensitively, with both of its missing- and "
-              "invalid-value defaults — where `INPUT_STATE_IMAGE` IS the Image Button state this arm turns "
-              "on. Building the enumerated states would have built them a second time. WHAT IS LEFT IS THE "
-              "TWO RENDERING RULES OVER THAT ANSWER: §15.4.2's list for the Image Button state, and §15.5 for "
-              "every other state — where the element is NOT a replaced element at all, so that arm belongs "
-              "beside the UA rules in core/css/css_computed_value.c and not in this component. The text-sized "
-              "arms additionally need \"whatever width is necessary "
-              "to render the text on one line\", which is css-sizing-3 §2.1's MAX-CONTENT INLINE SIZE of that "
-              "text — the same quantity §10.3.5's shrink-to-fit takes as its preferred width, and it is BUILT "
-              "(core/layout/intrinsic_size.h), so that half is a read rather than a subproblem");
+    /* AN `input` IS GOVERNED BY EXACTLY ONE OF §15's TWO RENDERING MECHANISMS AND ITS `type` DECIDES WHICH.
+       §15.4 lists `input` among the elements that CAN be replaced; §15.4.2 "Images"' list is what makes one
+       actually replaced, and its subject is not every `input` — the section opens "User agents are expected to
+       render img elements and input elements whose type attributes are in the Image Button state, according to
+       the first applicable rules from the following list". That is ONE of §4.10.5.1 "States of the type
+       attribute"'s states, and `html_form_input_state` (core/html/html_form.h) resolves that section's whole
+       keyword table — ASCII case-insensitively, with both of its missing- and invalid-value defaults — where
+       `INPUT_STATE_IMAGE` IS the Image Button state.
+       EVERY OTHER STATE IS §15.5 "Widgets" AND IS THEREFORE NOT A REPLACED ELEMENT, which is a COMPUTED answer
+       and not a shrug: §15.5.1 "Native appearance" names the whole class — "The following elements can have a
+       native appearance for the purpose of the CSS 'appearance' property", over `button`, `input`, `meter`,
+       `progress`, `select` and `textarea` — and this component already answers `rep_not` for the other five,
+       through §15.4's list not naming them. An `input` is the ONE member of §15.5.1's list that §15.4's list
+       also names, so it is the one that has to be split here rather than at the guard. §15.5's own per-state
+       sections are what a widget's box IS: §15.5.10 "The input element as a checkbox and radio button widgets"
+       gives the Checkbox state "a non-devolvable widget expected to render as an 'inline-block' box containing
+       a single checkbox control, with no label", and §15.5.12 "The input element as a button" sends the Submit
+       Button, Reset Button and Button states to §15.5.3 "Button layout". NONE of those is a replaced element,
+       and answering one as replaced is the defect the `select` note above records — it sends the widget's
+       `width` through CSS 2.1 §10.3.2, an algorithm that does not apply to it.
+       NAMED RESIDUAL — §15.5.3 "Button layout"'s TWO as-if clauses are not covered by this `false`, and they
+       are as-if rather than a classification, which is why this arm is right and narrower rather than wrong.
+       §15.5.3 says "If the element is absolutely-positioned, then for the purpose of the CSS visual formatting
+       model, act as if the element is a replaced element." and "For the purpose of the 'normal' keyword of the
+       'align-self' property, act as if the element is a replaced element." — each scoped to one purpose, so
+       neither makes `replaced_element_of` answer true, whose subject is css-images-3 §4.1's natural
+       dimensions. THE NEXT DIFF BUILDS a per-purpose replaced question in core/layout/used_value.c: §15.5.3's
+       first clause is an operand of CSS 2.1 §10.3.7 versus §10.3.8 (absolutely positioned, non-replaced versus
+       replaced), so it belongs where that choice is made and not here. ITS ABSENCE SHOWS as an absolutely
+       positioned `<input type=submit>` with `auto` on `left`, `width` and `right` taking §10.3.7's shrink-to-
+       fit instead of §10.3.8's step 1, which is a different used `width` that `getBoundingClientRect` reports.
+       §15.5.3's third clause, "If the computed value of 'inline-size' is 'auto', then the used value is the
+       fit-content inline size", is the same file's question and not this one's either. */
+    if (lxb_html_tree_node_is(n, LXB_TAG_INPUT)) {
+        HtmlInputState state = html_form_input_state(n);
+
+        /* `INPUT_STATE_NONE` is that function's answer to "is this an `input` at all", which the tag dispatch
+           above has already answered yes to — so the two asking it differently is the two having come apart,
+           and it is asserted rather than folded into the state test below, where it would silently take the
+           §15.5 arm and report a widget for an element that is not one. */
+        DCHECK(state != INPUT_STATE_NONE,
+               "§4.10.5.1 \"States of the type attribute\"'s state was read as NONE for an element HTML §15.4's "
+               "own list matched as an `input` — NONE is not one of that section's states but the answer to "
+               "whether the element is an `input`, so this is the tag dispatch here and the tag test in "
+               "core/html/html_form.c disagreeing about one element");
+        if (state != INPUT_STATE_IMAGE) return rep_not();
+        DFAIL("HTML §15.4.2 \"Images\"' rules were reached for an `input` in §4.10.5.1.19 \"Image Button state "
+              "(type=image)\"'s state, and every one of them turns on what the element REPRESENTS — which for "
+              "this element is §4.10.5.1.19's own two-case sentence and NOT §4.8.3's five-case one that "
+              "`rep_img_represents` above implements: \"If the src attribute is set, and the image is "
+              "available and the user agent is configured to display that image, then the element represents a "
+              "control for selecting a coordinate from the image specified by the src attribute\", and "
+              "\"Otherwise, the element represents a submit button whose label is given by the value of the "
+              "alt attribute.\" BOTH CASES TURN ON THE IMAGE REQUEST AND THIS ELEMENT HAS NONE. §4.10.5.1.19 "
+              "is what would create it — \"Let request be a new request whose URL is url, client is the "
+              "element's node document's relevant settings object, destination is \\\"image\\\", initiator "
+              "type is \\\"input\\\", credentials mode is \\\"include\\\", and whose use-URL-credentials flag "
+              "is set.\" — and nothing in this engine queues those steps for an `input`: "
+              "core/html/html_image.c runs §4.8.4.3's processing model for `img` ALONE and asserts it, so "
+              "`html_image_current_request_state` would abort on this element rather than answer for it. BUILD "
+              "§4.10.5.1.19's fetch, its `load`/`error` element tasks on the user interaction task source, and "
+              "the delay it puts on the document's load event; the request is also an ENDPOINT this tool "
+              "exists to find, so what the absence costs is more than a box size. THEN HTML §15.4.2 \"Images\"' "
+              "list runs here with THREE arms reachable for an `input` and not five. Its FIRST rule (the "
+              "element represents an image) needs the same DECODER `rep_img`'s first rule does. Its SECOND "
+              "gives a replaced element with no natural dimensions — HTML §15.4.2: \"For input elements, the "
+              "element is expected to appear button-like to indicate that the element is a button.\" — which "
+              "CSS 2.1 §10.3.2's last arm then sizes 300 by 150. Its THIRD and FOURTH open HTML §15.4.2's "
+              "\"If the element is an img element\" and cannot apply here at all. ITS FIFTH IS THE INPUT'S OWN "
+              "and is the one this file previously mislabelled as a four-rule list — HTML §15.4.2: \"The user "
+              "agent is expected to treat the element as a replaced element consisting of a button whose "
+              "content is the element's alternative text.\" THE CLAIM THAT ITS WIDTH IS A READ WAS WRONG AND "
+              "IS DELETED. HTML §15.4.2 states that rule's natural dimensions as \"about one line in height "
+              "and whatever width is necessary to render the text on one line\", and this line used to send the "
+              "reader to core/layout/intrinsic_size.h for the second as though it were already answered. IT IS "
+              "NOT, for two reasons that are each on their own decisive: `intrinsic_inline_sizes` CRASHES BY "
+              "NAME on its first step for a REPLACED element, which is what §15.4.2's fifth rule has just made "
+              "this one, and its walk measures a box's CHILDREN while an `input` has none — the label is the "
+              "`alt` attribute's value, a string that is nowhere in the tree. What is genuinely needed is an "
+              "advance measure over a STRING, and core/layout/text_run.h's collection takes DOM TEXT NODES "
+              "(`text_run_measure_add_text` asserts its node's type and its parent), so BUILD that entry "
+              "there — one run over supplied characters carrying a style element — which §15.5.12's button "
+              "label needs too and is the reason it belongs in that component rather than here");
+    }
 
     DCHECK(lxb_html_tree_node_is(n, LXB_TAG_IMG),
            "the element dispatch above admitted an element §15.4's list does not name — the guard and this "
