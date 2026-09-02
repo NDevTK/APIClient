@@ -135,7 +135,12 @@ function buildFormFields(schema, initialData = null) {
             _defaultConfidence: param._defaultConfidence,
             _requiredConfidence: param._requiredConfidence,
             _exampleValue: param._exampleValue === undefined ? null : param._exampleValue,
-            _exampleValueSource: param._exampleValueSource,
+            /* READ AGAINST THE VALUE IT ATTRIBUTES, at the crossing, for the reason the request-body branch
+               below re-constructs its whole record here: this pair left the offscreen zone through
+               chrome.runtime.sendMessage, and a serialization that DROPS an `undefined` property is exactly
+               how one half of a two-line write arrives without the other. A source with no value is what the
+               prefill badge below reads as "this tool computed the value in that box". */
+            _exampleValueSource: fdDocExampleSource(param._exampleValue, param._exampleValueSource),
             _range: param._range,
             /* THE DOMAIN THE CODE'S OWN GATES STATED, beside the range the observations spanned. The two are
                different measurements of the same kind of fact and both are constraints, never values: an
@@ -804,6 +809,41 @@ document.addEventListener("click", (e) => {
   }
 });
 
+/* IS THE VALUE IN THIS BOX THE ANALYZER'S OWN COMPUTED EXAMPLE — the one question the prefill badge answers,
+   and the only comparison entitled to answer it.
+
+   THE ONE FORM THE TWO CAN LEGITIMATELY DIFFER IN IS THE PRODUCER'S OWN TRANSFORM, READ BACKWARDS. A query
+   string carries TEXT and nothing else, and lib/stats.js's `_coerceToFieldType` types that text into the
+   number or boolean the field declares — so a run that observed `?page=5` on an `int32` field states the
+   example `5`, and the same captured request arrives at this panel as the string `"5"`. One value, two
+   forms, and the badge must survive it. That is a NARROW, DIRECTIONAL fact — captured TEXT against an
+   example the coercion typed — and it is the whole of what is known about the pair here.
+
+   IT IS NOT A ToString OF BOTH SIDES, WHICH IS WHAT STOOD HERE, AND THAT SPELLING MANUFACTURED A MATCH OUT
+   OF TWO SEPARATE INPUTS. ECMAScript §7.1.19 ToString ( arg ) is TOTAL: its own steps say "If arg is null,
+   return "null"" and "If arg is undefined, return "undefined"", so it does not pass an absence through, it
+   MINTS a token out of it — and `_exampleValue: null` is precisely this record's statement that NOTHING was
+   computed, so a page putting its own `null` on the wire compared equal to the analyzer's silence. And for
+   an object §7.1.19 ends at ECMAScript §20.1.3.6 Object.prototype.toString ( ), whose steps return the
+   string-concatenation of "[object ", tag, and "]" — `"[object Object]"` for EVERY plain object — so a
+   captured JSON body's `{"tier":"enterprise"}` compared equal to a declared example of `{"tier":"free"}`.
+   THE TWO ARE NOT EQUALLY REACHABLE AND BOTH ARE CLOSED HERE: the object collapse needed nothing but an
+   ordinary record, while the minted `"null"` needed the SOURCE half to have survived its value — the split
+   pair `fdCanStateExample` and makeFieldDef's own assert now make impossible. Either way what got badged was
+   a value that came off the wire in front of the reviewer, labelled as one this tool derived, which is the
+   one claim §@H forbids a report from making.
+
+   SO THE OPERAND IS NARROWED BEFORE IT IS CONVERTED, WHICH IS WHAT MAKES THE CONVERSION TOTAL RATHER THAN
+   CREATIVE: a Number and a Boolean have a wire form and neither of this record's absences does. Everything
+   else answers NO, and no is a TRUE answer — an example this panel cannot prove is the value in the box is
+   an example it must not attribute. */
+function isTheAnalyzersExample(exampleValue, wireValue) {
+  if (exampleValue === wireValue) return true;
+  return typeof wireValue === "string" &&
+         (typeof exampleValue === "number" || typeof exampleValue === "boolean") &&
+         String(exampleValue) === wireValue;
+}
+
 // ONE ANSWER to "what value will this input carry, and where did that value come from" — read by the label
 // badge and by the input itself. Two places used to decide it independently: the label attributed
 // `_exampleValue` and the input separately typed in a lone `_astValidValues[0]`, so the one prefill the
@@ -816,11 +856,15 @@ document.addEventListener("click", (e) => {
 // CLAUDE.md §@H — a range never picks a member.
 function resolvePrefill(fieldDef, initialValue) {
   if (initialValue !== null && initialValue !== undefined) {
-    // A captured request's value is the value itself; it is attributed only when it IS the analyzer's example
-    // (otherwise it came off the wire in front of the user and needs no badge).
-    const matches = fieldDef._exampleValue === initialValue
-      || String(fieldDef._exampleValue) === String(initialValue);
-    return { value: initialValue, source: (fieldDef._exampleValueSource && matches) ? fieldDef._exampleValueSource : null };
+    /* A captured request's value is the value itself; it is attributed only when it IS the analyzer's example
+       (otherwise it came off the wire in front of the user and needs no badge). The source is read AS ITSELF
+       and not guarded: lib/field-def.js asserts that `_exampleValueSource` cannot stand over an absent
+       `_exampleValue`, so `null` here MEANS this field carries no attribution, and a `&&` in front of it
+       would be re-answering a question the record has already answered. */
+    return {
+      value: initialValue,
+      source: isTheAnalyzersExample(fieldDef._exampleValue, initialValue) ? fieldDef._exampleValueSource : null,
+    };
   }
   const vv = fieldDef._astValidValues;
   // ONE observed value in the bundle = the bundle only ever set this param one way. >= 2 is a set to choose

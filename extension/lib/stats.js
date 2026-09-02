@@ -273,11 +273,23 @@ function pickExampleValue(field, stats) {
      NAME rather than a grade each reader must remember to consult — this reader is the reason: nothing here
      could have asserted that it remembered, so the pool it reads is what makes the wrong answer impossible.
      If a later change gives this tier a grade to consult, the split has failed and the grade is the symptom. */
-  if (field && Array.isArray(field._astValidValues) && field._astValidValues.length) {
+  /* AND A MEMBER THIS RECORD CANNOT STATE AS AN EXAMPLE IS NOT A CANDIDATE, which is `fdCanStateExample`'s
+     whole subject: a `null` member returned here would be written onto the field as `_exampleValue: null`
+     BESIDE the source below, and that pair says "nothing was computed" and "here is where it came from" at
+     once. The tier does not fire, so the priority order continues to the declared schema — which is what an
+     unstatable AST observation leaves: no AST example, and the next SOURCE down still gets its turn. */
+  if (field && Array.isArray(field._astValidValues) && field._astValidValues.length &&
+      fdCanStateExample(field._astValidValues[0])) {
     return { value: field._astValidValues[0], source: "ast-constraint" };
   }
-  // 4. enum — declared enum OR detected enum
-  if (field && Array.isArray(field.enum) && field.enum.length) {
+  /* 4. enum — declared enum OR detected enum. THE COERCION IS NOT WHAT MAKES THIS SAFE, AND EXPECTING IT TO
+     BE IS HOW THE NULL GOT THROUGH. `_coerceToFieldType` opens with `if (value == null) return value` — it
+     declines to type an absence and hands it straight back — so a `null` member of a declared enum arrives at
+     the caller UNCHANGED, as the record's own spelling of "nothing was computed", with `source: "enum"`
+     beside it. The member is therefore asked about HERE, where the candidate is, and not downstream of a
+     conversion that was never going to object to it. */
+  if (field && Array.isArray(field.enum) && field.enum.length &&
+      fdCanStateExample(field.enum[0])) {
     return { value: _coerceToFieldType(field.enum[0], type), source: "enum" };
   }
   // No real value could be derived from observed traffic, AST analysis,

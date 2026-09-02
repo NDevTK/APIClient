@@ -104,6 +104,39 @@ function fdDocLocation(v) {
   return (typeof v === "string" && PARAM_LOCATIONS.indexOf(v) >= 0) ? v : null;
 }
 
+/* CAN THIS RECORD STATE `v` AS THE FIELD'S EXAMPLE — asked by every mint of the example pair, because
+   `_exampleValue: null` is this record's spelling of "NOTHING was computed" and a producer that writes `null`
+   as a VALUE has therefore written the absence, together with a `_exampleValueSource` naming where that
+   absence came from. That pair is not merely odd: the Send panel's prefill badge is keyed on the SOURCE, so
+   the record renders "prefill: enum" beside whatever the captured request happened to put in the box — a
+   value this tool observed, published under the claim that this tool computed it, which is the one thing §@H
+   forbids a report from saying.
+   A DECLARED LIST MAY LEGITIMATELY HOLD `null`, WHICH IS WHY THIS IS A REFUSAL AND NOT A DCHECK — the same
+   line `fdDocString` and `fdDocList` stand on. JSON Schema Validation 2020-12 §6.1.2 enum says of the array's
+   members: "Elements in the array might be of any type, including null", so an imported spec's
+   `enum: [null, "weekly"]` is a document making a claim this record has no way to carry, not a producer of
+   ours gone silent. The true answer for it is the one every refusal here gives: this record states no example.
+   `undefined` is refused beside it for the reason the header gives — it is not a value here at all, because
+   chrome.runtime.sendMessage DROPS an `undefined` property and the pair would arrive split across the zones. */
+function fdCanStateExample(v) {
+  return v !== null && v !== undefined;
+}
+
+/* THE EXAMPLE PAIR READ AS THE ONE FACT IT IS — the attribution a document made for a value THAT DOCUMENT
+   ALSO STATED, or nothing. Every projection below reads `_exampleValue` and `_exampleValueSource` off the
+   same third-party record, and a source is not a fact of its own: it says where a value came from, so a
+   source over an absent value describes the origin of nothing. `fdDocString` alone cannot see that, because
+   it is handed one half and asked about its TYPE — and the halves are read one line apart, which is exactly
+   the shape a producer's silence hides in.
+   IT IS A REFUSAL RATHER THAN AN ASSERT FOR THE REASON THE HEADER GIVES: these bytes are a Google discovery
+   document a target's server served or an OpenAPI file a researcher was handed, and such a document can name
+   `_exampleValueSource` — every name in this record is a name a JSON object can carry — while naming no
+   value. Crashing the trusted zone on that is the one thing an assert must never do. What it yields instead
+   is the record's declared absence, which is the true statement about a document that attributed nothing. */
+function fdDocExampleSource(value, source) {
+  return fdCanStateExample(value) ? fdDocString(source) : null;
+}
+
 /* THE RECORD. Every name the Send panel reads is here, with the value that MEANS "the producer observed
    nothing of this kind". `name`, `type`, `label` and `required` have no absent value: a field with no wire
    key, no type, no cardinality or no requiredness is not a field, and a producer that cannot state one has
@@ -258,5 +291,22 @@ function makeFieldDef(parts, where) {
          "a FieldDef's `_range`/`_bounds` is neither a record nor null (" + where + ") — both are DOMAINS " +
          "the panel renders as constraints beside the input, and a scalar there would render as a value the " +
          "code computed, which is the one thing §@H forbids a domain from becoming");
+  /* THE EXAMPLE PAIR IS ONE FACT AND ONE HALF OF IT CANNOT ARRIVE ALONE. `_exampleValueSource` says WHERE
+     the example came from, so a source standing over `_exampleValue: null` states the origin of a value the
+     record has, on the line above it, said does not exist. It is not a harmless inconsistency: the Send
+     panel's prefill badge reads the SOURCE and the box's contents come from the CAPTURED request, so the two
+     halves render together as "this tool computed the value you are looking at" over a value that came off
+     the wire. Every mint of the pair — lib/stats.js's `pickExampleValue`, lib/send.js's learned-path-segment
+     attach — asks `fdCanStateExample` before it writes either half, so a split pair HERE is one of those
+     mints having been written in two statements rather than one, which is ours and crashes.
+     THE REVERSE IS LEGAL AND IS DELIBERATELY NOT ASSERTED: `fdDocString` refuses an attribution a document
+     spelled as something other than text, which leaves a real example with no source — a value the panel
+     prefills and does not badge, which is the true statement about it. */
+  DCHECK(fd._exampleValueSource === null || fdCanStateExample(fd._exampleValue),
+         "a FieldDef carries `_exampleValueSource: " + JSON.stringify(fd._exampleValueSource) + "` over an " +
+         "`_exampleValue` of " + JSON.stringify(fd._exampleValue) + " (" + where + ") — `null` is this " +
+         "record's one spelling of \"nothing was computed for this field\", so a source beside it attributes " +
+         "an example that does not exist, and the Send panel's prefill badge is keyed on the source alone: " +
+         "it would label the CAPTURED request's own value as one this tool derived");
   return fd;
 }

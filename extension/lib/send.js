@@ -169,7 +169,10 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
             // captured one. The source tag lets the UI label the
             // prefill (observed / ast / synthesized / type-default).
             _exampleValue: pd._exampleValue === undefined ? null : pd._exampleValue,
-            _exampleValueSource: fdDocString(pd._exampleValueSource),
+            /* READ AGAINST THE VALUE IT ATTRIBUTES — `fdDocString` asks only what TYPE this half is, and a
+               discovery document is free to name this half and no `_exampleValue` at all, which would put a
+               prefill badge over a value that came off the wire. */
+            _exampleValueSource: fdDocExampleSource(pd._exampleValue, pd._exampleValueSource),
             // AST-discovered valid values
             _astValidValues: fdDocList(pd._astValidValues),
             /* …AND THE POOL BESIDE IT, WHICH IS THE SAME OBSERVATION AT THE ONE GRADE THAT MUST NOT BE
@@ -390,7 +393,17 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
          is exactly right: §@H permits a domain-annotated shape with no example and forbids inventing one. */
       cur._astValidValues = _f.valid.length ? _f.valid : null;
       cur._astForcedValues = _f.forced.length ? _f.forced : null;
-      if ((cur._exampleValue === undefined || cur._exampleValue === null) && _f.valid.length) { cur._exampleValue = _f.valid[0]; cur._exampleValueSource = "ast"; }
+      /* THE PREFILL IS THE PAIR, AND IT IS WRITTEN ONLY WHERE BOTH HALVES ARE TRUE. `fdCanStateExample`
+         (lib/field-def.js) is the same question `pickExampleValue` asks of its own two list tiers: a pool
+         member of `null` written here would land as `_exampleValue: null` — the record's own spelling of
+         "nothing was computed" — beside `_exampleValueSource: "ast"`, and makeFieldDef refuses that pair by
+         name because the Send panel badges off the SOURCE and would attribute the captured request's value
+         to this run. An unstatable head leaves the field with no example, which is what it has. */
+      if ((cur._exampleValue === undefined || cur._exampleValue === null) &&
+          _f.valid.length && fdCanStateExample(_f.valid[0])) {
+        cur._exampleValue = _f.valid[0];
+        cur._exampleValueSource = "ast";
+      }
       parameters[_hn] = cur;
     }
     if (source === "none") source = "ast";

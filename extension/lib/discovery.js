@@ -295,7 +295,12 @@ function _buildDiscoveryFieldShell(name, prop, requiredList) {
     _range: fdDocRecord(prop._range),
     _detectedEnum: prop._detectedEnum === true,
     _exampleValue: prop._exampleValue === undefined ? null : prop._exampleValue,
-    _exampleValueSource: fdDocString(prop._exampleValueSource),
+    /* THE ATTRIBUTION IS READ AGAINST THE VALUE IT ATTRIBUTES, not on its own. `fdDocString` asks only what
+       TYPE this half is, and a document is free to name `_exampleValueSource` and no `_exampleValue` at all —
+       at which point the record says "nothing was computed for this field" and "here is where it came from"
+       in two lines, and the Send panel's prefill badge, which is keyed on the SOURCE, labels the captured
+       request's own value as one this tool derived. */
+    _exampleValueSource: fdDocExampleSource(prop._exampleValue, prop._exampleValueSource),
     _astValidValues: fdDocList(prop._astValidValues),
     /* …AND THE POOL BESIDE IT. lib/learn.js merges a request-body field's learned values by the same
        two-pool split a query parameter's take, so a body field whose every sighting stood on a FORCED arm
