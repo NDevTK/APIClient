@@ -4,23 +4,33 @@
  * "location", "parent CSS style sheet", "owner node", "owner CSS rule", "title", "disabled flag", ...) and the
  * two interfaces that read them. WHO CREATES ONE is a different standard every time — HTML §4.2.6's update a
  * style block for a `<style>`, §4.2.4's for a `<link>`, CSSOM's own `new CSSStyleSheet()` — so each of those
- * calls `css_style_sheet_create` with the properties its own algorithm specifies rather than this file knowing
- * about any of them.
+ * calls a creator with the properties its own algorithm specifies rather than this file knowing about any of
+ * them. There are TWO creators and the difference between them is not a parameter: §6.2's create-a-CSS-style-
+ * sheet MINTS AND THEN ADDS the sheet to a document's collection, and §6.1's create-a-constructed-CSSStyleSheet
+ * mints and adds it to NOTHING — a constructed sheet has no owner node, is in no tree, and reaches a document
+ * only through `adoptedStyleSheets`. core/css/style_sheet_list.c's add asserts exactly that from its own side.
  *
- * THE STATE ITEMS THIS MODELS ARE THE ONES SOMETHING READS. §6.1 lists thirteen; the origin-clean flag, the
- * constructed flag, the disallow modification flag, the constructor document and the stylesheet base URL are
- * every one of them read by `cssRules` / `insertRule` / `deleteRule` / `replace` / the constructor, and none of
- * those exist yet — a field written by a creator and read by nobody is dead weight that reads as modelled. They
- * arrive with the member that asks them.
+ * THE STATE ITEMS THIS MODELS ARE THE ONES SOMETHING READS, and that is a rule about READERS rather than about
+ * spec sections — a field written by a creator and read by nobody is dead weight that reads as modelled. §6.1
+ * lists thirteen. The CONSTRUCTED FLAG is modelled because it has a reader: §6.1.2's `insertRule` step 5 is "If
+ * parsed rule is an @import rule, and the constructed flag is set, throw a SyntaxError DOMException", and that
+ * member is built. The origin-clean flag, the disallow modification flag, the constructor document and the
+ * stylesheet base URL are not, and each is waiting on a DIFFERENT reader: the first two on `replace` /
+ * `replaceSync`, the constructor document on DOM's `adoptedStyleSheets`, and the stylesheet base URL on any
+ * resolution of a relative `url()` — of which this build has none at all, so storing it would model nothing a
+ * page can observe.
  *
- * `media` IS ABSENT, not stubbed, and the reason moved. §6.1.1 declares `[SameObject, PutForwards=mediaText]
- * readonly attribute MediaList media`; §4.4's MediaList IS built now (core/css/media_list.h), so what is
- * missing is no longer the object but §6.1's MEDIA state item itself and the specification of it — HTML
- * §4.2.6 says a `<style>`-created sheet's media is "the media attribute of element", tracked the way the
- * title is, and §6.1.2's `replace` and the constructor specify their own. A `[SameObject]` getter minting an
- * empty MediaList per read would answer that every sheet applies to every medium AND hand back a different
- * object each time, which is two wrong answers where the spec computes one. It arrives with the state item,
- * exactly as the other eight §6.1 items do — see the paragraph above. */
+ * `media` IS ABSENT, not stubbed, and BOTH of its halves are one absence. §6.1.1 declares `[SameObject,
+ * PutForwards=mediaText] readonly attribute MediaList media`; §4.4's MediaList IS built now
+ * (core/css/media_list.h), so what is missing is §6.1's MEDIA state item and the specification of it — HTML
+ * §4.2.6 The style element says a `<style>`-created sheet's media is "The media attribute of element", and says
+ * in the same table cell that this "is a reference to the (possibly absent at this time) attribute, rather than
+ * a copy of the attribute's current value", so it is tracked the way the title is. §6.1's constructor specifies
+ * its own from `CSSStyleSheetInit`'s `(MediaList or DOMString) media` — see the residual in css_style_sheet.c,
+ * which is where the two meet: that member cannot be DECLARED today, so the constructor has nothing to set the
+ * state item from and a state item with one creator and no specification is the dead weight above. A
+ * `[SameObject]` getter minting an empty MediaList per read would answer that every sheet applies to every
+ * medium AND hand back a different object each time, which is two wrong answers where the spec computes one. */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_STYLE_SHEET_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_STYLE_SHEET_H
 
@@ -43,10 +53,12 @@ void css_style_sheet_free(JSRuntime *rt);
    rather than gathered into a struct on purpose: a state item this engine starts modelling must become a
    compile error at every creator, and a zero-initialised struct field is the opposite of that. `location` is a
    USVString or JS_NULL (null for an embedded sheet); the other three are the wrapper or rule object, or
-   JS_NULL. The disabled flag is not a parameter because §6.1 gives it no creator-specified value — it is
-   "either set or unset. Unset by default", and every creator leaves it there.
-   Step 2's "run the add a CSS style sheet steps" (also §6.2's) is NOT here: that adds the sheet to the
-   document's list, which belongs to the component that owns the list. OWNED: the caller frees. */
+   JS_NULL. The disabled flag is not a parameter because §6.2 gives it no creator-specified value — §6.1 says it
+   is "either set or unset. Unset by default", and the ONE algorithm that specifies it at creation is §6.1's
+   constructor, which is this component's own and does not come through here.
+   Step 2's "run the add a CSS style sheet steps" (also §6.2's) IS here, because it is step 2 of this very
+   algorithm — what is not here is any way to skip it. §6.1's constructor mints without adding, and it does that
+   by not being this function rather than by passing a flag to it. OWNED: the caller frees. */
 JSValue css_style_sheet_create(JSContext *ctx, JSValueConst owner_node, JSValueConst parent_style_sheet,
                                JSValueConst owner_rule, JSValueConst location);
 
@@ -83,6 +95,14 @@ JSValue css_style_sheet_title(JSContext *ctx, JSValueConst sheet);
    accessor, so the flag time-travels whichever member wrote it. */
 bool css_style_sheet_disabled(JSValueConst sheet);
 void css_style_sheet_set_disabled(JSValueConst sheet, bool disabled);
+
+/* §6.1's CONSTRUCTED FLAG — set by §6.1's create a constructed CSSStyleSheet and by nothing else. It is reached
+   by name for ONE reader, core/css/css_rule.c's insert, because §6.1.2's `insertRule` step 5 is the only step
+   in this build that branches on it: "If parsed rule is an @import rule, and the constructed flag is set, throw
+   a SyntaxError DOMException". The PARSED RULE is what that step is about and it exists only inside §6.4's
+   insert-a-CSS-rule, which is why the question travels there rather than the rule travelling back here.
+   The receiver is a CSSStyleSheet or this asserts — every caller has already brand-checked it. */
+bool css_style_sheet_constructed(JSValueConst sheet);
 
 /* §6.1's CSS RULES, as the very Array §6.1.2's [SameObject] `cssRules` shares — for the CASCADE, which resolves
    the author layer from the RULE OBJECTS. That sharing is the whole point: it is what makes `insertRule`,

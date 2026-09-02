@@ -33,9 +33,11 @@
  *     CLAUDE.md names as one fact answered from one place for many agents. A property write is captured.
  *
  * WHAT IS HONESTLY ABSENT, BY NAME — see SPEC_STEPS.md §17.6. The `DocumentOrShadowRoot` addition
- * `adoptedStyleSheets`, which is an `ObservableArray<CSSStyleSheet>` of CONSTRUCTED sheets and is absent with
- * CSSOM §6.1.2's constructor. Its sibling `styleSheets` is NOT among them any more — core/css/style_sheet_list.c
- * installs it on this prototype, over this shadow root's own list.
+ * `adoptedStyleSheets`, which is an `ObservableArray<CSSStyleSheet>` of CONSTRUCTED sheets. It used to be
+ * absent WITH CSSOM §6.1's constructor and is not any more: that constructor is BUILT
+ * (core/css/css_style_sheet.c), so this member's own absence is Web IDL's observable array type and the steps
+ * that refuse a sheet whose Constructor document is not this one. Its sibling `styleSheets` is NOT among them
+ * any more — core/css/style_sheet_list.c installs it on this prototype, over this shadow root's own list.
  * `delegatesFocus` HAS ITS EFFECT as of HTML §6.6.4: it is what makes a host NOT a focusable area (§6.6.2's
  * row 1) and what sends `get the focusable area` to the FOCUS DELEGATE, and core/html/focus.c reads it through
  * shadow_root_flag below. The mixin's other addition, `activeElement`, is installed on this prototype by the

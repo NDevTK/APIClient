@@ -166,17 +166,20 @@ void style_sheet_list_add(JSContext *ctx, JSValueConst sheet, JSValueConst owner
     JSValue root_wrap, list;
 
     DCHECK(css_style_sheet_is(sheet), "§6.2's add was given something that is not a CSS style sheet");
-    /* §6.1's create is the only caller, and every sheet it can build today has an owner node. An @import'd
-       sheet has a parent CSS style sheet and an owner CSS rule and NO owner node, and it is also not in the
-       document's collection at all — `document.styleSheets` lists the top-level sheets only. So the day
-       CSSImportRule creates one, this is the line that has to decide, rather than silently rooting an
-       @import'd sheet at whatever tree its parent's owner happens to be in. */
+    /* §6.2's create is the only caller, and every sheet IT builds has an owner node. Two other kinds of sheet
+       have none, and neither belongs in a document's collection: an @import'd sheet (a parent CSS style sheet
+       and an owner CSS rule, no owner node) and a CONSTRUCTED one. The constructed one exists in this build —
+       CSSOM §6.1's create a constructed CSSStyleSheet, core/css/css_style_sheet.c — and it does not reach this
+       function, because it is a different creator rather than this one with the add skipped; that is what the
+       assert below now guards rather than predicts. The @import'd one is still to come, and it is the same
+       decision: it must not silently root itself at whatever tree its parent's owner happens to be in. */
     DCHECK(owner != NULL,
-           "§6.2's add a CSS style sheet was given a sheet with NO OWNER NODE. The only such sheet is one an "
-           "@import at-rule pulled in (CSSOM §6.4.4's CSSImportRule) or one `new CSSStyleSheet()` constructed, "
-           "and NEITHER belongs in the list of document CSS style sheets — `document.styleSheets` holds the "
-           "top-level sheets, and a constructed sheet reaches a document only through adoptedStyleSheets. "
-           "Whichever of the two lands first must not route through this add");
+           "§6.2's add a CSS style sheet was given a sheet with NO OWNER NODE. The only such sheets are one an "
+           "@import at-rule pulled in (CSSOM §6.4.4's CSSImportRule) and one §6.1's constructor made, and "
+           "NEITHER belongs in the list of document CSS style sheets — `document.styleSheets` holds the "
+           "top-level sheets, and a constructed sheet reaches a document only through adoptedStyleSheets. The "
+           "constructed one is built and mints WITHOUT this add; an @import'd one reaching here is a creator "
+           "that routed through the wrong algorithm");
     root_wrap = root_wrap_of(ctx, owner);
     list = root_sheets(ctx, root_wrap);
     DCHECK(list_index_of(ctx, list, sheet) < 0,

@@ -38,6 +38,7 @@
 #include "core/css/css_rule_list.h"
 #include "core/css/css_style_sheet.h"
 #include "core/css/style_sheet_list.h"
+#include "core/dom/document.h"   /* §6.1's constructor step 2 reads the realm's document base URL */
 #include "core/dom/node.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
@@ -63,11 +64,17 @@ typedef struct CssStyleSheetData {
        liveness IS. */
     JSValue rule_list;           /* (OWNED) */
     bool    disabled;            /* §6.1 "disabled flag" */
+    /* §6.1 "constructed flag". A POD latch and NOT a JSValue, so it is not in SHEET_VALS — the layout names the
+       record's owned JSValues, and this is the same kind of field `disabled` is. It is written once, by §6.1's
+       create a constructed CSSStyleSheet, and never again: no member of either interface sets or clears it, so
+       it does not have to time-travel independently of the record the accessor already captures. */
+    bool    constructed;
 } CssStyleSheetData;
 
 static JSClassID g_sheet_class;
 static int       g_stylesheet_proto_slot = -1;   /* StyleSheet.prototype, per realm */
 static int       g_id_set_disabled = -1, g_id_insert_rule = -1, g_id_delete_rule = -1;
+static int       g_id_ctor = -1;                 /* §6.1's `constructor(optional CSSStyleSheetInit options)` */
 
 /* WHAT THE RECORD OWNS. One list, three readers: the COW layout below, the finalizer, and the gc_mark. */
 static const uint16_t SHEET_VALS[] = {
@@ -264,6 +271,19 @@ void css_style_sheet_set_disabled(JSValueConst sheet, bool disabled)
     s->disabled = disabled;
 }
 
+/* §6.1's CONSTRUCTED FLAG, BY NAME, for §6.1.2's insertRule step 5 — see the header. There is no null arm past
+   the assertion for the same reason the disabled flag has none: the one caller reaches this with the value
+   §6.1.2's own `sheet_here` already brand-checked, so a NULL here is a caller that skipped the brand, and
+   answering `false` for it would let an @import into a constructed sheet for ever. */
+bool css_style_sheet_constructed(JSValueConst sheet)
+{
+    CssStyleSheetData *s = sheet_of(sheet);
+
+    DCHECK(s != NULL, "the constructed flag was read off something that is not a CSS style sheet — §6.1.2's "
+                      "insertRule is its one reader and it holds the receiver its own brand check passed");
+    return s->constructed;
+}
+
 /* §6.2's two questions about a sheet it is placing. Both go through the capturing accessor like every other
    read, and both assert the brand rather than answering for a stranger. */
 lxb_dom_node_t *css_style_sheet_owner_node(JSValueConst sheet)
@@ -298,8 +318,15 @@ JSValue css_style_sheet_title(JSContext *ctx, JSValueConst sheet)
 
 /* ---- §6.2's "create a CSS style sheet" and "remove a CSS style sheet" ------------------------------------ */
 
-JSValue css_style_sheet_create(JSContext *ctx, JSValueConst owner_node, JSValueConst parent_style_sheet,
-                               JSValueConst owner_rule, JSValueConst location)
+/* THE OBJECT AND ITS STATE ITEMS, WITHOUT ANY DECISION ABOUT WHERE THE SHEET THEN GOES. §6.2's create-a-CSS-
+   style-sheet is this plus its own step 2 (the add); §6.1's create-a-constructed-CSSStyleSheet is this and
+   NOTHING ELSE, because a constructed sheet is in no collection at all. Factoring it this way rather than
+   giving the create a `bool add` is the difference between two algorithms sharing a mint and one algorithm
+   with a switch in it: the add is step 2 of §6.2 and of no other standard, so it belongs to §6.2's function.
+   `disabled` and `constructed` are parameters and not post-mint writes: the record is unreachable by the
+   collector until JS_SetOpaque, so every state item this sheet is born with is written in one place. */
+static JSValue sheet_mint(JSContext *ctx, JSValueConst owner_node, JSValueConst parent_style_sheet,
+                          JSValueConst owner_rule, JSValueConst location, bool constructed, bool disabled)
 {
     JSValue proto, obj;
     CssStyleSheetData *s;
@@ -328,12 +355,29 @@ JSValue css_style_sheet_create(JSContext *ctx, JSValueConst owner_node, JSValueC
     s->rules = JS_NewArray(ctx);
     CHECK(!JS_IsException(s->rules), "a CSS style sheet's rule list could not be allocated");
     s->rule_list = JS_UNDEFINED;
-    /* §6.1: the disabled flag is "unset by default" and no creator specifies it — the calloc IS that sentence,
-       and this asserts it rather than leaving the reader to work out that a zeroed bool means unset. */
-    DCHECK(!s->disabled, "a newly created CSS style sheet came out with its disabled flag already set");
+    /* §6.1: the disabled flag is "either set or unset. Unset by default". §6.2's create specifies no value for
+       it, so every creator but one leaves it at the calloc's zero; the one that does specify it is §6.1's
+       constructor, whose step 13 is "If the disabled attribute of options is true, set sheet's disabled flag".
+       The assert is what keeps the parameter from becoming a second way for an ordinary create to set it. */
+    DCHECK(constructed || !disabled,
+           "§6.2's create a CSS style sheet asked for a sheet whose disabled flag is already set — §6.1 gives "
+           "that flag no creator-specified value, and the only algorithm in CSSOM that sets it at creation is "
+           "§6.1's create a constructed CSSStyleSheet");
+    s->disabled = disabled;
+    s->constructed = constructed;
     JS_SetOpaque(obj, s);
-    /* §6.2's create-a-CSS-style-sheet step 2 — "Then run the add a CSS style sheet steps for the newly
-       created CSS style sheet."
+    return obj;
+}
+
+JSValue css_style_sheet_create(JSContext *ctx, JSValueConst owner_node, JSValueConst parent_style_sheet,
+                               JSValueConst owner_rule, JSValueConst location)
+{
+    /* STEP 1 — "Create a new CSS style sheet object and set its properties as specified." */
+    JSValue obj = sheet_mint(ctx, owner_node, parent_style_sheet, owner_rule, location,
+                             /*constructed*/ false, /*disabled*/ false);
+
+    if (JS_IsException(obj)) return obj;
+    /* STEP 2 — "Then run the add a CSS style sheet steps for the newly created CSS style sheet."
        The sheet is COMPLETE before this line: the add reads the owner node to decide where in tree order the
        sheet belongs, and reads the title to decide what the style-sheet-set steps have to say about it. */
     style_sheet_list_add(ctx, obj, owner_node);
@@ -409,9 +453,13 @@ static JSValue js_sheet_css_rules(JSContext *ctx, JSValueConst this_val, int mag
     return JS_DupValue(ctx, s->rule_list);
 }
 
-/* §6.1.2's `insertRule(rule, index)`: "return the result of invoking insert a CSS rule rule in the CSS rules at
-   index" — WITHOUT the nested flag, which is the whole difference from §6.4.5's, and which is why the algorithm
-   itself lives in core/css/css_rule.c and this member only names its arguments. */
+/* §6.1.2's `insertRule(rule, index)`: its step 6 is "return the result of invoking insert a CSS rule rule in the
+   CSS rules at index" — WITHOUT the nested flag, which is the whole difference from §6.4.5's, and which is why
+   the algorithm itself lives in core/css/css_rule.c and this member only names its arguments.
+   ITS STEP 5 IS THERE TOO AND NOT HERE. "If parsed rule is an @import rule, and the constructed flag is set,
+   throw a SyntaxError DOMException" is a question about the PARSED RULE, which exists only inside that
+   algorithm; §6.1.2 parses at step 3 to ask it and then passes the TEXT to step 6 to be parsed again, so asking
+   it once, where the rule is, is the same answer. `css_style_sheet_constructed` is how the fact reaches it. */
 static JSValue js_sheet_insert_rule(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                     int magic)
 {
@@ -443,7 +491,11 @@ static JSValue js_sheet_insert_rule(JSContext *ctx, JSValueConst this_val, int a
  * first two is modelled: every sheet this build creates is one HTML §4.2.6 sets the origin-clean flag for (see
  * `js_sheet_css_rules` above, which says the same of its own step 1), and §6.1.2's `replace` — the ONE
  * algorithm in CSSOM whose steps say "Set the disallow modification flag" — is not a member of this engine at
- * all, for the reason `css_style_sheet_install` states about the constructor it hangs off.
+ * all, so no sheet in this build has ever had that flag set for anything to read. That sentence used to defer
+ * instead to whatever `css_style_sheet_install` said about the constructor `replace` hangs off, and what it
+ * said there was that the constructor did not exist. It does now, so the deferral is retired and `replace` is
+ * absent for its OWN reason: its steps settle a promise from work done in parallel, which is a scheduler flow
+ * and not a member body.
  *
  * IT IS A STEP MACHINE BECAUSE ITS ONE ARGUMENT CAN BE UNKNOWN, AND A PLAIN BODY CANNOT ASK. `JS_ToUint32` on
  * `argv[0]` stood here — the shape core/idl_args.h bans by name ("A BODY MAY NOT CALL JS_ToFloat64 ON ITS OWN
@@ -528,6 +580,92 @@ static const IdlStepDecl SD_DECL = {
     "CSSOM §6.1.2 The CSSStyleSheet Interface deleteRule(index)", SD_STEPS, 0, NULL
 };
 
+/* ---- CSSOM §6.1's CONSTRUCTOR ---------------------------------------------------------------------------- */
+
+/* §6.1.2 The CSSStyleSheet Interface declares the dictionary:
+ *
+ *     dictionary CSSStyleSheetInit {
+ *       DOMString? baseURL = null;
+ *       (MediaList or DOMString) media = "";
+ *       boolean disabled = false;
+ *     };
+ *
+ * ONE of the three is declared here, in Web IDL §3.2.17 Dictionary types' lexicographic read order (which is
+ * trivially satisfied by a one-member list, and stated because the order is part of the declaration). The other
+ * two are ABSENT, not accepted-and-dropped: an undeclared member is one §3.2.17's conversion never reads, so a
+ * page that passes it is in exactly the position of a page talking to a user agent that does not ship the
+ * feature, and `node engine/idlgen.mjs` reports both by name every run. Declaring a member this constructor
+ * would then ignore is the one thing that would make either of them invisible.
+ *
+ * A NAMED RESIDUAL — `media`. WHAT IS NOT COVERED: `(MediaList or DOMString) media`, and with it §6.1's MEDIA
+ * state item, which this constructor's step 12 is the only algorithm in this build that could specify (HTML
+ * §4.2.6's create hands over a live REFERENCE to the `<style>` element's `media` content attribute instead —
+ * see css_style_sheet.h). WHAT THE NEXT DIFF BUILDS: a §3.2.25 `(T or DOMString)` ARM IN THE DICTIONARY-MEMBER
+ * CONVERSION — core/idl_args.c has one for an ARGUMENT position (`IDL_STRING_UNLESS_IFACE`) and the dictionary
+ * member loop has no branch for that type at all — plus a brand this dictionary can state for MediaList, which
+ * `IdlDictMember::iface` cannot be: every indexed interface in this platform shares core/idl_indexed.c's ONE
+ * class, so `JS_GetClassID(v)` cannot tell a MediaList from a CSSRuleList and the only correct test is
+ * `media_list_is`, which takes a JSContext where `IdlDictMember::iface_narrow` takes none. HOW ITS ABSENCE
+ * SHOWS: `new CSSStyleSheet({media: "print"})` builds a sheet that applies to every medium, and idlgen's
+ * dictionary category names `CSSStyleSheetInit: media` for as long as it is true.
+ *
+ * A NAMED RESIDUAL — `baseURL`. WHAT IS NOT COVERED: `DOMString? baseURL = null` and §6.1's STYLESHEET BASE
+ * URL, which step 4 would set from it. WHAT THE NEXT DIFF BUILDS: resolution of a relative `url()` against a
+ * sheet's base URL — this build performs none anywhere, for any sheet, so the state item has no reader and a
+ * stored one would model nothing a page can observe. HOW ITS ABSENCE SHOWS: the day a `url()` in a constructed
+ * sheet's rule is resolved, it resolves against the document rather than against `options.baseURL`. */
+static const IdlDictMember CSS_STYLE_SHEET_INIT[] = {
+    { "disabled", IDL_BOOLEAN, false, NULL, 0, NULL, IDL_DEFAULT_FALSE },
+};
+
+/* §6.1: "CSSStyleSheet(options) — When called, execute the steps to create a constructed CSSStyleSheet given
+ * options and return the result." The steps are §6.1's own, and they are numbered here as that list runs.
+ *
+ * IT IS A PLAIN BODY AND NOT A STEP MACHINE, which is a claim about what runs after the conversion rather than
+ * about the algorithm's size: every line below is this engine's own C — a document's base URL, a calloc, an
+ * Array — and none of it can reach the page's code, so there is nothing for a machine to suspend at. The one
+ * value that could have run a page getter is `options`, and §3.2.17's conversion has already finished with it
+ * before this body is entered. */
+static JSValue js_css_style_sheet_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                       int magic)
+{
+    /* `optional CSSStyleSheetInit options = {}` — an argument the page did not pass is ABSENT and not an empty
+       object, which is what idl_dict_bool is stated over: every member of an absent dictionary is absent, and
+       an absent member with a declared default is the default. */
+    JSValueConst options = argc > 0 ? argv[0] : JS_UNDEFINED;
+    const char *base;
+    JSValue location, obj;
+
+    (void)this_val; (void)magic;
+    /* STEP 2 — "Set sheet's location to the base URL of the associated Document for the current global
+       object." THE REALM'S document and not some remembered one: a C member runs in the realm that DEFINED it
+       (core/realm.h), so this is the realm whose `CSSStyleSheet` the `new` went through. */
+    base = document_base_url(ctx);
+    DCHECK(base != NULL,
+           "§6.1's create a constructed CSSStyleSheet asked for the base URL of the associated Document for the "
+           "current global object and this realm has no document base URL — §2.4.3 Document base URLs gives "
+           "every Document one, an `about:blank` included");
+    location = JS_NewString(ctx, base);
+    if (JS_IsException(location)) return location;
+    /* STEPS 1 and 4-10, which are the mint: a new object (1); parent CSS style sheet, owner node and owner CSS
+       rule all null (4, 5, 6); the title the empty string (7); the alternate flag unset (8) and the
+       origin-clean flag set (9), neither of them modelled and both of them what this build already assumes of
+       every sheet; the constructed flag set (10). And STEP 13 — "If the disabled attribute of options is true,
+       set sheet's disabled flag" — which is the one declared member, read through the declaration's own
+       accessor rather than as a post-mint write.
+       STEP 3 ("stylesheet base URL") AND STEP 12 ("media") ARE THE TWO RESIDUALS ABOVE.
+       STEP 11's `Constructor document` IS NOT STORED, for the reason css_style_sheet.h gives about every state
+       item this component does not model: its reader is DOM's `adoptedStyleSheets`, which is absent. */
+    obj = sheet_mint(ctx, JS_NULL, JS_NULL, JS_NULL, location,
+                     /*constructed*/ true, idl_dict_bool(ctx, options, "disabled"));
+    JS_FreeValue(ctx, location);
+    /* NO `style_sheet_list_add`, AND THAT IS THE WHOLE DIFFERENCE FROM §6.2's CREATE. A constructed sheet has no
+       owner node, so it is in no document's or shadow root's collection; `document.styleSheets` lists the
+       top-level sheets of a tree and a constructed one reaches a document only through `adoptedStyleSheets`.
+       core/css/style_sheet_list.c's add asserts the same thing from its own side. */
+    return obj;   /* STEP 14 — "Return sheet." */
+}
+
 /* ---- the interfaces ------------------------------------------------------------------------------------- */
 
 void css_style_sheet_init(JSContext *ctx)
@@ -556,6 +694,17 @@ void css_style_sheet_init(JSContext *ctx)
            against. Its one `unsigned long index` can be unknown external input, and asking §6.4's step 2 over
            one needs a state to snapshot. */
         g_id_delete_rule = idl_method_id_step(ctx, ONE_ULONG, 1, NULL, 0, &SD_DECL, 0);
+    }
+    {
+        /* §6.1.2's `constructor(optional CSSStyleSheetInit options = {})`. The dictionary's members are declared
+           beside the type, which is what makes §3.2.17's conversion the DECLARATION's work and leaves the body
+           with a value to read rather than a getter to run. */
+        static const IdlArgType CTOR[1] = { IDL_DICT };
+
+        g_id_ctor = idl_method_id_dict(ctx, CTOR, 1, CSS_STYLE_SHEET_INIT,
+                                       (int)(sizeof(CSS_STYLE_SHEET_INIT) / sizeof(CSS_STYLE_SHEET_INIT[0])),
+                                       js_css_style_sheet_ctor, 0);
+        idl_optional_from(0);   /* `optional CSSStyleSheetInit options = {}` */
     }
     realm_declare_intrinsic(css_style_sheet_install_proto);
 }
@@ -597,16 +746,21 @@ void css_style_sheet_install(JSContext *ctx, JSValueConst global)
 {
     JSValue base = realm_value_get(ctx, g_stylesheet_proto_slot);
     JSValue proto = JS_GetClassProto(ctx, g_sheet_class);
+    JSValue ctor;
 
     DCHECK(!JS_IsNull(proto) && JS_IsObject(base),
            "the style-sheet interfaces were installed in a realm that never ran their prototype install");
+    /* §6.1.1 declares NO constructor — StyleSheet is "an abstract, base style sheet" and nothing instantiates
+       one — so its interface object exists to be what `instanceof` names and nothing else. */
     JS_SetPropertyStr(ctx, (JSValue)global, "StyleSheet", idl_interface_object(ctx, "StyleSheet", base));
-    /* §6.1.2 DECLARES A CONSTRUCTOR — `constructor(optional CSSStyleSheetInit options = {})` — and this engine
-       has none, so what a page gets from `new CSSStyleSheet()` is the interface object's TypeError. That is the
-       honest absence rather than a sheet with no rules: a constructed sheet is a real state machine (the
-       constructed flag, the constructor document, the base URL, `replace`/`replaceSync` and the disallow
-       modification flag they set), and every one of those is read by members that do not exist either. */
-    JS_SetPropertyStr(ctx, (JSValue)global, "CSSStyleSheet", idl_interface_object(ctx, "CSSStyleSheet", proto));
+    /* §6.1.2's `constructor(optional CSSStyleSheetInit options = {})`, whose steps are §6.1's create a
+       constructed CSSStyleSheet. Web IDL §3.7.1 Interface object's [[Construct]] is the DECLARATION's, minted
+       here, so `new CSSStyleSheet()` no longer takes the shared "Illegal constructor" TypeError. */
+    DCHECK(g_id_ctor >= 0, "CSSStyleSheet was installed before its constructor was declared");
+    ctor = idl_step_constructor(ctx, "CSSStyleSheet", g_id_ctor);
+    CHECK(!JS_IsException(ctor), "the CSSStyleSheet interface object could not be allocated");
+    JS_SetConstructor(ctx, ctor, proto);
+    JS_SetPropertyStr(ctx, (JSValue)global, "CSSStyleSheet", ctor);
     JS_FreeValue(ctx, base);
     JS_FreeValue(ctx, proto);
 }

@@ -463,21 +463,29 @@ static const IdlDictMember REQUEST_INIT[] = {
        refusal is the CONSTRUCTOR's, at the step that states it. Undeclared, `{window: 5}` was accepted. */
     { "window",         IDL_ANY,                false },
 };
-/* NAMED RESIDUAL — `PrivateToken privateToken`, which the PRIVATE STATE TOKEN API §6.1 Definitions attaches
-   to RequestInit by a partial dictionary, is NOT DECLARED ABOVE, and declaring it as IDL_ANY would be worse
-   than leaving it out: `any` accepts every value silently, where the member's real type refuses most of them.
-   WHAT IS NOT COVERED: `{privateToken: {}}` must be a Web IDL §3.2.17 Dictionary types TypeError — that
-   dictionary's `version` and `operation` are `required` — and `{privateToken: {version: "2", …}}` must be a
-   §3.2.18 Enumeration types TypeError. Neither throws here.
-   WHAT THE NEXT DIFF BUILDS: a dictionary-valued MEMBER in `core/idl_args.c`'s §3.2.17 walk. That walk today
-   aborts on one ("a dictionary member was declared as a dictionary — the conversion cursor is per-argument,
-   so a nested one would read the outer's names"), and its nested-conversion frames exist only for
-   IDL_SEQUENCE_STRING_OR_DICT and convert only DOMString, DOMString? and another such sequence. So the diff
-   is a push of that frame from the member loop plus the element conversions PrivateToken's own members need —
-   three §3.2.18 enumerations, one of them carrying a `= "none"` default, and a `sequence<USVString>`. It is a
-   capability of the argument machine and not of this file, which is why it is not landed beside the four
-   members above. ITS ABSENCE SHOWS as the Web IDL gap audit continuing to name RequestInit, with
-   `privateToken` as the one member left. */
+/* `PrivateToken privateToken`, which the PRIVATE STATE TOKEN API §6.1 Definitions attaches to RequestInit by a
+   partial dictionary, is NOT DECLARED ABOVE, AND THAT IS A DECISION RATHER THAN A RESIDUAL.
+   THE RESIDUAL THAT STOOD HERE NAMED A CAPABILITY THAT IS BUILT, and it named it by quoting an abort — "a
+   dictionary member was declared as a dictionary — the conversion cursor is per-argument, so a nested one would
+   read the outer's names". That abort is gone from `core/idl_args.c`: `idl_type_pushes_level` is asked by the
+   §3.2.17 member loop itself, and a dictionary-valued member PUSHES its own level and converts against its own
+   `IdlDictMember` list, exactly as an IDL_DICT argument does. A reader who obeyed the retired clause would have
+   set out to build the walk this engine already runs, which is the failure mode CLAUDE.md names: a claim about
+   THIS TREE, true when written, read afterwards as an instruction.
+   WHAT IS ACTUALLY ABSENT AND WHY IT STAYS ABSENT. Declaring the member would convert it and nothing more: the
+   issuance and redemption protocol, the `Sec-Private-State-Token` request header §12.1 defines, and the
+   permissions-policy features §6.2 names are none of them here, and none of them is a conversion. That makes
+   declaring it WRONG IN BOTH DIRECTIONS at once — `fetch(u, {privateToken: {}})` would throw a §3.2.17 TypeError
+   where a user agent WITHOUT the feature does not throw at all (the member is not in its RequestInit), while
+   still not issuing or redeeming a token where a user agent WITH the feature does. Undeclared, this engine is
+   exactly a user agent that does not ship the API, which is a state real browsers are in and a page can handle.
+   So the honest answer is the absence, and it is not silent: `node engine/idlgen.mjs` names `RequestInit:
+   privateToken` on every run, which is the row that keeps this decision visible instead of forgotten.
+   WHAT WOULD CHANGE IT is the FEATURE, not the type. If it is ever built, the one declared type still missing
+   is `sequence<USVString>` for `issuers` — there is no such row in the IdlArgType enum, and the DOMString
+   spelling is a different type: §3.2.12 USVString replaces every unpaired surrogate with U+FFFD, and an issuer
+   is an origin that goes on the wire. The other three members are declarable today (two `required` §3.2.18
+   enumerations and one carrying a `= "none"` default, all three shapes already in use above). */
 #define REQUEST_INIT_N ((int)(sizeof(REQUEST_INIT) / sizeof(REQUEST_INIT[0])))
 
 /* Web IDL §3.2.17 Dictionary types: a member the page did not supply is NOT ON the converted dictionary, and

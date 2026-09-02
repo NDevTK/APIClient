@@ -3214,7 +3214,11 @@ static void document_install_members(JSContext *ctx, JSValueConst proto)
     /* CSSOM §6.2.3's `styleSheets`, one of the two members its `partial interface mixin DocumentOrShadowRoot`
        adds. ShadowRoot gets the same call from its own component, because a `<style>` in a shadow tree is in
        THAT tree's collection and not in this one. `adoptedStyleSheets`, the mixin's other member, is an
-       `ObservableArray<CSSStyleSheet>` of CONSTRUCTED sheets and is absent with the constructor. */
+       `ObservableArray<CSSStyleSheet>` of CONSTRUCTED sheets and is ABSENT FOR ITS OWN REASON, which used to be
+       the constructor's: CSSOM §6.1 CSS Style Sheets' create a constructed CSSStyleSheet is BUILT
+       (core/css/css_style_sheet.c), so what is missing is Web IDL's observable array type — a backing list with
+       set-an-indexed-value and delete-an-indexed-value algorithms, not a plain Array — together with the steps
+       that refuse a sheet whose Constructor document is not this one. */
     style_sheet_list_install_mixin(ctx, proto);
     /* DOM §4.2.5 "Mixin DocumentOrShadowRoot"'s OWN member — `readonly attribute CustomElementRegistry?
        customElementRegistry;` — of which `Document includes DocumentOrShadowRoot` makes this one of the two

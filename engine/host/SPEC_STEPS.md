@@ -5126,8 +5126,12 @@ which is what the standard says happens and is not a should-never-happen.
   `activeElement` by `focus.c` — its getter RETARGETS the focused area against the receiver, which is
   why a `ShadowRoot` answers with its own tree's node — and `styleSheets` by `style_sheet_list.c`,
   over CSSOM §6.2's collection for "the document OR shadow root". `adoptedStyleSheets` is an
-  `ObservableArray<CSSStyleSheet>` of CONSTRUCTED sheets and is absent with CSSOM §6.1.2's
-  constructor, which is what it lands with.
+  `ObservableArray<CSSStyleSheet>` of CONSTRUCTED sheets. This entry used to say it was absent with
+  CSSOM §6.1.2's constructor and would land with it; the constructor LANDED — CSSOM §6.1 CSS Style
+  Sheets' create a constructed CSSStyleSheet, in `core/css/css_style_sheet.c` — and this member did
+  not, because what it needs beyond a sheet to hold is Web IDL's observable array type (a backing
+  list with set-an-indexed-value and delete-an-indexed-value algorithms, which a plain Array is not)
+  and the steps that refuse a sheet whose Constructor document is not this one.
 - **`ElementInternals`' `shadowRoot` getter** (§4.13.7.2), which §16 named as absent for want of a
   shadow root to answer with. It answers "this's target element's shadow root, if its **available to
   element internals** is true" — the field step 9 above now sets — and lands with the next diff on

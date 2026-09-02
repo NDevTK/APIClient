@@ -28,6 +28,7 @@
 #include "core/css/css_rule_list.h"
 #include "core/css/css_serialize.h"
 #include "core/css/css_style_declaration.h"
+#include "core/css/css_style_sheet.h"
 #include "core/css/css_supports.h"
 #include "core/css/media_list.h"
 #include "core/css/media_query.h"
@@ -2088,6 +2089,24 @@ JSValue css_rule_list_insert(JSContext *ctx, JSValueConst list, JSValueConst par
         CssRuleData *nr = rule_of(built);
 
         DCHECK(nr != NULL, "§6.4's insert a CSS rule lost the rule it just parsed");
+        /* CSSOM §6.1.2 The CSSStyleSheet Interface's `insertRule(rule, index)` STEP 5 — "If parsed rule is an
+           @import rule, and the constructed flag is set, throw a SyntaxError DOMException."
+           IT IS §6.1.2's STEP AND IT IS ASKED HERE, because this is the only place the PARSED RULE exists.
+           §6.1.2 parses the text itself at its step 3 to ask this, and then hands the TEXT to §6.4's insert at
+           its step 6, which parses again; one parse gives the identical answer, and the member has nothing to
+           ask the question with. THE SHEET IS ALREADY A PARAMETER, so the fact travels as a read of the
+           receiver rather than as a flag threaded down — §6.1.2's condition is about `this`, and `parent_sheet`
+           IS `this` for the call this branch is reachable from.
+           `!nested` IS WHAT KEEPS IT §6.1.2's AND NOT §6.4.5's. A grouping rule's insertRule is the nested
+           call and CSSGroupingRule states no such step: an @import inside an `@media` is refused by step 6's
+           prologue rank instead (CSS Cascade §2 makes an @import valid only in a style sheet's prologue), and
+           its `parent_sheet` is the CONTAINING sheet rather than the receiver, so reading the flag off it
+           would be answering a question about a different object. */
+        if (!nested && nr->type == RULE_TYPE_IMPORT && css_style_sheet_constructed(parent_sheet)) {
+            JS_FreeValue(ctx, built);
+            return JS_ThrowDOMException(ctx, "SyntaxError",
+                                        "an @import rule cannot be inserted into a constructed CSSStyleSheet");
+        }
         if (!insert_position_ok(ctx, list, index, nr->type, nested)) {          /* STEP 6 */
             JS_FreeValue(ctx, built);
             return JS_ThrowDOMException(ctx, "HierarchyRequestError",
