@@ -36,13 +36,22 @@
    a minted name says so in its own words — `isNameMarker` MEANS "addresses NOTHING" and is asserted
    incompatible with a `number` precisely because "a `number` would fill an encoder's slot under it" — so
    routing this case through it would mean weakening that assert to admit the case it names.
-   AND REFUSING LOSES NOTHING, WHICH IS WHAT SETTLES IT. The SAME `probeResult.fields` also reaches the panel
-   through lib/discovery-probe.js's `convertProbeFieldsToSchema`, which already answers this exact question in
-   the vocabulary that can state it: it reads `Object.values`, never the key; it skips a field with neither a
-   name nor a number; and it files a numbered-but-unnamed one under `field_<n>` with `name: null` and the
-   number beside it, because a discovery `properties` map has a key AND an address where this record has one
-   name for both. A numbered-but-unnamed field therefore still reaches the Send panel — through the door built
-   for it, as a document property — and what is refused here is only the second, unnamable copy of it.
+   WHAT REFUSING COSTS, STATED AT THE STRENGTH IT WAS CHECKED, because the tempting sentence here is an
+   absolute and it is FALSE. An earlier form of this paragraph said refusing loses nothing, on the strength of
+   lib/discovery-probe.js's `convertProbeFieldsToSchema` — which does answer this exact question in the
+   vocabulary that can state it (it reads `Object.values`, never the key; it skips a field with neither a name
+   nor a number; and it files a numbered-but-unnamed one under `field_<n>` with `name: null` and the number
+   beside it, a document having a key AND an address where this record has one name for both). But that
+   walker runs only in `performProbeAndPatch`, which files its answer under `auto:<service>::<url>`, and the
+   lookup below asks `probeResults.get(endpointKey)` — the BARE key, which only `probeEndpoint`'s on-demand
+   button writes, and that path builds no virtual document at all. So the one probe answer this function ever
+   sees is the one with no second door, and the sentence was a claim about the call graph made where nothing
+   could check it. WHAT IS ACTUALLY LOST IS THE SEND-PANEL ROW, and it is a row that could only ever have
+   produced a wrong request: it was rendered, collected and SENT under `#<n>`, a key no document declares.
+   The OBSERVATION is not lost — the whole probe answer stays in `probeResults`, and lib/popup-discovery.js's
+   `_discProbeFieldLabel` already renders exactly this field as `#<n>`, deliberately, as a read-only inventory
+   LABEL, which is where a token that addresses nothing belongs and is the distinction this function was
+   collapsing.
    `""` is refused with `null` for the reason lib/popup-response.js's `_pbAddressText` and
    lib/discovery-probe.js's schema-name test both give: it is text, and it is an entry no rename can address.
 
