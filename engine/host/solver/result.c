@@ -721,6 +721,17 @@ char *result_swap_json(void) {
    is where a reader MEETS the numbers and a lifetime per-arm total is exactly the shape someone reaches for
    when they want a no-progress detector.
 
+   `programCursors` IS THE SAME SERVICE PERFORMED FOR `deepest` AND `completed`, AND IT IS THE ROW THIS CENSUS
+   WAS MISSING. Those two are GLOBAL MAXIMA (solver/engine.h), so each is set by whichever ONE member got
+   furthest through the document and neither states anything about where the rest of the frontier is: `deepest
+   11` is exactly as true of one member at 11 with two thousand at 3 as it is of two thousand at 11. The first
+   is a frontier whose mass never advances while a few members run deep; the second is BFS working as designed
+   on a page that forks. They take OPPOSITE work and no maximum separates them at any value — which is why the
+   same stall has been diagnosed three different ways off these rows, each reading refuting the last. The
+   histogram is the per-member companion that decides it: read against `deepest` on the same line, mass sitting
+   LOW is the first and mass sitting AT it is the second. solver/cold.h carries the derivation, why its extent
+   is the frontier's own rather than a list's, and why it is a report that decides nothing.
+
    `hostAnswersExtra` IS BESIDE `hostAnswered` AND IS NOT PART OF IT. One rendezvous has one answer per peer
    TIMELINE and every one of them is true, but only the FIRST settles the ask; the rest each fork an arm and
    unblock nothing. They were being added into `hostAnswered`, which made a peer holding four timelines read as
@@ -774,6 +785,50 @@ static long cold_hist_json(char *buf, size_t cap, const long *counts, const char
     return seen;
 }
 
+/* THE CURSOR HISTOGRAM'S COMPOSER, AND IT IS NOT `cold_hist_json` FOR THE ONE REASON THAT DECIDES A BUFFER.
+   That one renders solver/step_unit.h's list, whose width is an expansion of the list itself, into a STACK
+   buffer sized before the bytes exist. This one renders a row set whose extent is the FRONTIER's (solver/
+   cold.h), so there is no list to derive a width from and no honest fixed number to pick — and picking one
+   anyway is precisely the hand-counted buffer solver/compose.h exists to have ended.
+   SO IT IS compose.h's OWN MECHANISM APPLIED TO A ROW LIST INSTEAD OF TO A FORMAT STRING: measure, allocate
+   exactly, write. C99 §7.19.6.5 "The snprintf function" — "If n is zero, nothing is written, and s may be a
+   null pointer" — is what makes the measuring pass legal with no buffer in existence; compose.h states the
+   citation and the argument in full and this does not restate them.
+   THE TWO PASSES READ ONE ARRAY, so they can disagree only if a count changed between them, and the assert
+   under the write is composef's for composef's reason: a truncation here does not lose a digit, it loses the
+   CLOSING BRACE, and the host is handed a document that will not parse and reports nothing for the page. */
+static char *cursor_hist_json(const long *counts, int n)
+{
+    int k, need = 2, hi;   /* the two braces, then each row as it measures */
+    char *out;
+
+    DCHECK(counts != NULL && n > 0,
+           "the program-cursor histogram was composed from nothing, or over an empty row set — solver/cold.c "
+           "gives it program 0 even on an empty frontier precisely so that `{}` never reaches a reader that "
+           "refuses one, so an extent of zero here is that walk having been skipped rather than a frontier "
+           "with nobody standing in it");
+    for (k = 0; k < n; k++) {
+        int w = snprintf(NULL, 0, "%s\"%d\":%ld", k ? "," : "", k, counts[k]);
+        CHECK(w > 0, "a program-cursor row could not be MEASURED — snprintf reported an encoding error, so "
+                     "there is no length to allocate against, and any size chosen instead would be the "
+                     "hand-counted guess solver/compose.h replaced");
+        need += w;
+    }
+    out = malloc((size_t)need + 1);
+    if (!out) return NULL;
+    out[0] = '{';
+    hi = 1;
+    for (k = 0; k < n; k++)
+        hi += snprintf(out + hi, (size_t)(need + 1 - hi), "%s\"%d\":%ld", k ? "," : "", k, counts[k]);
+    out[hi++] = '}';
+    out[hi] = 0;
+    DCHECK(hi == need,
+           "the program-cursor histogram was WRITTEN to a different length than it was MEASURED for — the two "
+           "passes read one array of counts, so they can only disagree if a count changed between them, and "
+           "the row about to be spliced into the census is truncated at its closing brace");
+    return out;
+}
+
 char *result_cold_json(void) {
     ColdCensus c;
     /* THE TWO PER-ARM HISTOGRAMS, EACH COMPOSED INTO ITS OWN BUFFER AND SPLICED AS ONE `%s`. Their width is
@@ -793,9 +848,17 @@ char *result_cold_json(void) {
        row and a ZERO row are different facts (this composer changed, against this frontier had nobody in that
        arm), and a reader that cannot tell them apart is the defect that made `@RESUMED` read 0 for every
        session there has ever been. The consumer asserts the row's presence and reads its value; neither side
-       may default the other's hole. */
+       may default the other's hole.
+       THE THIRD HISTOGRAM ON THIS DOCUMENT IS NOT ONE OF THESE TWO AND IS NOT SIZED HERE. `programCursors` is
+       keyed on PROGRAM INDEX rather than on solver/step_unit.h's arms, so its extent is the frontier's own and
+       there is nothing to expand a width from — cursor_hist_json measures what it is about to write, which is
+       the same discipline STEP_UNITS_JSON_MAX gives these two by derivation. */
     char hist[STEP_UNITS_JSON_MAX];
     char runs[STEP_UNITS_JSON_MAX];
+    /* AND THE THIRD HISTOGRAM, ON THE HEAP FOR THE ONE REASON THE TWO ABOVE ARE ON THE STACK: its extent is
+       the FRONTIER's and not a list's, so there is no width to derive. See cursor_hist_json. */
+    char *cursors;
+    char *out;
     ColdResumed resumed;
     EngineFrontierCensus e;
     EngineStepUnitRuns r;
@@ -803,6 +866,7 @@ char *result_cold_json(void) {
 
     cold_census(&c);
     engine_step_unit_runs(&r);
+    cursors = cursor_hist_json(c.program_cursors, c.program_cursor_n);
     {
         /* THE SUMS ARE TAKEN OUTSIDE THE ASSERTS AND NOT INSIDE THEM, because the composition is the WORK and a
            DCHECK's condition is compiled out in release: a `DCHECK(cold_hist_json(...) == x)` would leave both
@@ -811,6 +875,9 @@ char *result_cold_json(void) {
            comparison is asserted. */
         long standing = cold_hist_json(hist, sizeof hist, c.step_units, "stepUnits");
         long stepped  = cold_hist_json(runs, sizeof runs, r.arms, "stepUnitRuns");
+        long atcursor = 0;
+        int k;
+        for (k = 0; k < c.program_cursor_n; k++) atcursor += c.program_cursors[k];
         /* THE PARTITION IS THE POINT, SO IT IS ASSERTED. Every live member carries exactly one arm, so these
            counts SUM to the frontier — an inequality is the walk having missed a member or a member having
            been counted twice, and either makes every reading composed from this row a statement about a
@@ -830,6 +897,16 @@ char *result_cold_json(void) {
                "at the convergence point and the steps at flow_step's entry, so a total that is not `steps` "
                "means one of the two stopped being written, and every reading of which rung the ladder stops "
                "at is then about a ladder this document did not climb");
+        /* AND THE CURSOR HISTOGRAM'S PARTITION, WHICH IS `standing`'s IDENTITY OVER A DIFFERENT QUESTION. Every
+           live member stands at exactly one program cursor, so these counts sum to the frontier too — and the
+           consequence of an inequality here is sharper than for the arm histogram, because this row exists
+           precisely to say whether the frontier's MASS has advanced. A walk that missed members reports their
+           absence as mass that is not there, which is the reading inverted rather than degraded. */
+        DCHECK(atcursor == c.flows,
+               "the program-cursor histogram does not account for every member of the frontier — each live "
+               "flow stands at exactly one cursor, so a total that is not `flows` means the census walk and "
+               "the histogram disagree about who is standing, and this is the one row a reader consults to "
+               "decide whether the mass advanced or a few members ran deep ahead of it");
     }
     cold_resumed(&resumed);
     engine_frontier_census(&e);
@@ -857,7 +934,16 @@ char *result_cold_json(void) {
            "an inherited-drive claim was met or lost in a session whose rebuild carried no orphan locator — the "
            "three orphanClaims rows are about to describe a round trip that this document also says did not "
            "happen");
-    return composef(
+    /* A HISTOGRAM THAT COULD NOT BE ALLOCATED MAKES THE CENSUS ABSENT, never a census with a row missing.
+       composef's own contract on this seam is that a NULL is "this census is absent" and every caller already
+       treats it as one; splicing a hole into the document instead would publish a @COLD line whose readers —
+       which assert the shape rather than defaulting it — would report a broken relay for what is an
+       allocation failure, and §Testing's absent-is-not-zero rule is the same sentence one layer up. */
+    if (!cursors) {
+        cold_census_release(&c);
+        return NULL;
+    }
+    out = composef(
                  "{\"live\":%ld,\"framed\":%ld,\"blocked\":%ld,\"owed\":%d,"
                  "\"finished\":%ld,\"finishedFlows\":%ld,\"finishedCands\":%ld,"
                  "\"deepest\":%d,\"completed\":%d,"
@@ -875,7 +961,7 @@ char *result_cold_json(void) {
                  "\"pinSegKiB\":%ld,\"decSegs\":%ld,\"decSegEntries\":%ld,\"decSegKiB\":%ld,"
                  "\"dynBodies\":%ld,\"dynKiB\":%ld,\"sharedKiB\":%ld,"
                  "\"steps\":%ld,\"stepUnitRuns\":%s,"
-                 "\"stepUnits\":%s}",
+                 "\"stepUnits\":%s,\"programCursors\":%s}",
                  c.flows, c.framed, c.blocked, flow_host_owed_count(),
                  e.finished, e.finished_flows, e.finished_cands,
                  e.deepest, e.completed,
@@ -895,7 +981,10 @@ char *result_cold_json(void) {
                  c.dyn_count, c.dyn_bytes / 1024,
                  (c.seg_bytes + c.dom_seg_bytes + c.pin_seg_bytes + c.dec_seg_bytes + c.dyn_bytes) / 1024,
                  r.steps, runs,
-                 hist);
+                 hist, cursors);
+    free(cursors);
+    cold_census_release(&c);
+    return out;
 }
 
 /* WHAT THE RUNTIME AND THE C ALLOCATOR UNDER IT HOLD — quickjs's own JS_ComputeMemoryUsage walk, the child

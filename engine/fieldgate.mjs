@@ -1837,11 +1837,14 @@ function scanJS(file, src) {
    * caller", which is true of the parameter and FALSE of the callers when every one of them is in this file and
    * passes a literal. §localParamSlot already reads exactly that construct one arm away, to type a receiver from
    * the arguments its own file hands it; the same reading answers a KEY, and refusing it here made the gate
-   * blind to a reader in the one shape a census reader takes. Measured: `stepUnitRows(b, name, totalName)` reads
-   * `b[name]` and is called twice with `"stepUnits"` and `"stepUnitRuns"`, so both histograms the C engine emits
-   * read as fields NOBODY CONSUMES while their reader stood in the corpus, asserted their partition and threw on
-   * a short sum. The gate's own subject is a contract with two sides, and it was reporting a disagreement
-   * between one side and its own blind spot.
+   * blind to a reader in the one shape a census reader takes. Measured: engine/build.mjs's shared census-histogram
+   * checker reads `b[name]` and is called once per histogram the C engine emits, each with a literal row name, so
+   * every one of those histograms read as a field NOBODY CONSUMES while their reader stood in the corpus, asserted
+   * their partition and threw on a short sum. (The checker has since gained a third caller, which is why the count
+   * is not written down here: what the incident is ABOUT is the shape — one reader, a parameter for the field name,
+   * every call site passing a literal — and a number beside it would go stale on the next histogram.) The gate's
+   * own subject is a contract with two sides, and it was reporting a disagreement between one side and its own
+   * blind spot.
    *
    * AND SEVERAL CALL SITES ARE NOT DOUBT HERE, WHICH IS THE ONE PLACE THIS DIVERGES FROM THE TYPE RULE BESIDE
    * IT — because a TYPE is one fact about one parameter, so two answers contradict, while a KEY is a VALUE and a

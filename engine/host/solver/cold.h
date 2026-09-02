@@ -50,6 +50,47 @@ typedef struct {
        its own (solver/flow.h) and this counts them. */
     long step_units[STEP_UNIT_N];
 
+    /* WHERE IN ITS DOCUMENT EACH MEMBER IS STANDING — one count per program index, over the whole frontier.
+       Emitted as `programCursors`.
+
+       IT IS THE ROW `deepest` AND `completed` STRUCTURALLY CANNOT CARRY, and those two are otherwise the whole
+       of what this engine says about a frontier's progress THROUGH its programs. Both are GLOBAL MAXIMA over
+       the document (solver/engine.h), so each is set by whichever single member got furthest and neither says
+       anything whatever about where the others are: `deepest 11` is exactly as true of a frontier holding ONE
+       member at 11 and two thousand at 3 as it is of one whose EVERY member is at 11. Those are OPPOSITE
+       DIAGNOSES — the first is a frontier whose mass never advances while a few members run deep, which is a
+       claim about what the pick prefers; the second is BFS behaving precisely as designed on a page that
+       forks, where the work is simply unbounded and there is nothing to fix. A maximum cannot separate them at
+       ANY value, so no reading composed from those two rows has ever been able to state which of the two a run
+       was in — and the stall question has accordingly been answered three different ways.
+
+       IT IS THE MEMBERS' OWN CURSOR (solver/flow.h's `script_i`), which is the position each flow stands at in
+       its ONE program sequence. `framed` above is what says how many of them are INSIDE the program at that
+       position rather than between two, so the pair is a POSITION and a PHASE and neither is derivable from
+       the other.
+
+       ITS EXTENT IS DERIVED FROM THE POPULATION AND NOT FROM A LIST, which is the one way its shape differs
+       from `step_units` beside it and is why it carries its own length instead of being a fixed array. The row
+       set is [0, the highest cursor any LIVE member stands at], DENSE — every index in it emitted, zeroes
+       included — because THE ZEROES ARE THE SIGNAL: "two thousand at 3, nothing between 4 and 10, one at 11"
+       is the entire reading, and a sparse table renders that as the same bytes as a frontier that never
+       reached 4. The width is therefore a function of the DOCUMENT's program depth and never of the frontier's
+       size, however many members are standing.
+
+       A PARTITION, exactly as `step_units` is: every live member stands at exactly one cursor, so these counts
+       SUM to `flows`, and that identity is what says the walk saw everybody. The row set is never EMPTY
+       either — cold.c gives it program 0 on an empty frontier, which is a position every document's sequence
+       has and every flow starts at, so `{"0":0}` is the true count of the members standing there rather than a
+       fabricated row, and `{}` (which every reader of this census refuses by name) never reaches one.
+
+       AND IT IS A REPORT AND NEVER A BOUND (§NO BOUNDS). Nothing in the engine reads it to decide anything: no
+       fixpoint over a bucket that stopped moving, no cap on how deep a member may stand, no seen-set over
+       cursors, no refusal of a run whose mass sits low. A per-index distribution over the frontier is exactly
+       the shape someone reaches for when they want a no-progress detector, which is why that is said here as
+       well as at the walk — this is an instrument, and the verdict it informs is a person's. */
+    long *program_cursors;
+    int   program_cursor_n;
+
     /* PER-FLOW rows — these multiply by the number of parked flows, so they are what a pager pays for. */
     long dec_entries;        /* decision-vector slots the flows STAND ON — a chain total, so this counts the
                                 same shared prefix once per flow that references it and is deliberately NOT a
@@ -88,9 +129,18 @@ typedef struct {
     long dec_seg_count, dec_seg_entries, dec_seg_bytes;  /* decide.c's frozen decision vector */
 } ColdCensus;
 
-/* Walk the frontier and fill `out`. Pure measurement: it takes no reference, mutates nothing, and is safe to
-   call between scheduler steps (which is where the progress stream calls it). */
+/* Walk the frontier and fill `out`. Pure measurement of the components it reads: it takes no reference on
+   anything it measures, mutates none of them, and is safe to call between scheduler steps (which is where the
+   progress stream calls it).
+   IT IS NOT ALLOCATION-FREE, AND THAT IS THE ONE THING A CALLER OWES IT. `program_cursors`' extent is the
+   frontier's own rather than a list's, so it cannot be a fixed array on the record and the record therefore
+   OWNS a buffer. `cold_census_release` is the other half of that and every census owes it exactly one call. */
 void cold_census(ColdCensus *out);
+
+/* Release what a census OWNS, leaving the record readable as one whose walk found nothing. IDEMPOTENT, so a
+   composer with several exits does not have to prove it takes exactly one of them — which is the shape the
+   caller on the result seam actually has, since a histogram that could not be composed returns early. */
+void cold_census_release(ColdCensus *out);
 
 /* ─────────────────────────────────────────────────────────────────────────────────────────────────────────
    THE SECOND CONTRACT — THE RECIPE, which is what actually crosses the tier.

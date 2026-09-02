@@ -42,6 +42,32 @@ void cold_census(ColdCensus *out)
                "ever written from that enum at the scheduler's convergence point, so this is a corrupted Flow "
                "and the index below would write outside the census");
         out->step_units[f->step_unit]++;
+        /* …AND WHERE IN ITS DOCUMENT THIS MEMBER IS STANDING — see cold.h for why `deepest` and `completed`
+           structurally cannot answer this and why the zeroes between the mass and the deepest member are the
+           whole of the reading. Asserted in range for the same reason the arm above is: the histogram indexes
+           on it, so a cursor outside the sequence would write past the census that exists to explain the
+           frontier.
+           THE ROW SET GROWS TO THE CURSOR IN HAND rather than being sized before the walk, because there is no
+           list to size it from: the extent is the population's own. A member standing past a fixed end is the
+           one thing that would silently truncate this back into the maximum `deepest` already is. */
+        DCHECK(f->script_i >= 0,
+               "a member of the frontier stands at a NEGATIVE program cursor — `script_i` is a position in the "
+               "flow's own program sequence and is only ever advanced upward from 0, so a value below it is a "
+               "corrupted Flow and the histogram below would write outside its own allocation");
+        if (f->script_i >= out->program_cursor_n) {
+            int want = f->script_i + 1;
+            long *grown = realloc(out->program_cursors, (size_t)want * sizeof *grown);
+            CHECK(grown != NULL,
+                  "the frontier's program-cursor histogram could not be grown to the cursor a member stands "
+                  "at — this census is the only thing that can say whether the frontier's MASS is advancing "
+                  "or whether a few members are running deep ahead of it, and a histogram that stopped short "
+                  "would report every member past its end as standing nowhere");
+            memset(grown + out->program_cursor_n, 0,
+                   (size_t)(want - out->program_cursor_n) * sizeof *grown);
+            out->program_cursors = grown;
+            out->program_cursor_n = want;
+        }
+        out->program_cursors[f->script_i]++;
 
         /* THE DECISION VECTOR, in BOTH of the two places one flow's can be. A parked flow's lives in its
            suspend blob — which is where a COLD-RESUMED flow's rebuilt chain lives too, so a resumed flow is
@@ -111,6 +137,42 @@ void cold_census(ColdCensus *out)
     out->dom_seg_bytes = dom_cow_chain_bytes();
     concolic_chain_stats(&out->pin_seg_count, &out->pin_seg_entries, &out->pin_seg_bytes);
     decide_chain_stats(&out->dec_seg_count, &out->dec_seg_entries, &out->dec_seg_bytes);
+
+    /* THE CURSOR HISTOGRAM'S ROW SET IS NEVER EMPTY, AND THAT IS A STATEMENT RATHER THAN A COURTESY. An empty
+       frontier stands at no cursor at all, so the walk above grew nothing — and an EMPTY OBJECT is what every
+       reader of this census refuses BY NAME, because for the fixed-list histogram beside it `{}` can only be
+       the composer having stopped listing its rows. Program 0 is a position every document's sequence has and
+       every flow starts at, so `{"0":0}` is not a fabricated row: it is the true count of the members standing
+       there, and it states "nobody is anywhere" in the same shape a populated frontier states where its
+       members are. The alternative — teaching three readers that one histogram's `{}` is legitimate and
+       another's is a break — is a second rule they would each have to hold about a shape they cannot tell
+       apart from the outside. */
+    if (out->program_cursor_n == 0) {
+        out->program_cursors = calloc(1, sizeof *out->program_cursors);
+        CHECK(out->program_cursors != NULL,
+              "the frontier's program-cursor histogram could not be given its one row for an EMPTY frontier — "
+              "the row exists so that `{}` never reaches a reader that refuses one, so failing to allocate it "
+              "publishes a census whose consumers cannot tell a frontier with nobody in it from a composer "
+              "that stopped emitting");
+        out->program_cursor_n = 1;
+    }
+    DCHECK(out->program_cursors != NULL && out->program_cursor_n > 0,
+           "the frontier's program-cursor histogram left this walk with no rows — the block above gives an "
+           "empty frontier program 0 precisely so that this cannot happen, so reaching here means the walk "
+           "was entered on a record it did not clear");
+}
+
+/* See cold.h. THE ONLY THING A CENSUS OWNS is the cursor histogram, whose extent is the frontier's and so
+   cannot be a fixed array on the record; everything else here is a scalar the walk fills in place. Written to
+   leave a READABLE record rather than a poisoned one — a released census reads as a walk that found nothing,
+   which is what a caller that releases early and then reads has actually got. */
+void cold_census_release(ColdCensus *out)
+{
+    DCHECK(out != NULL, "a snapshot census was released through no record at all — there is nothing to free "
+                        "and nothing to leave readable, so the caller is holding a census this did not touch");
+    free(out->program_cursors);
+    out->program_cursors = NULL;
+    out->program_cursor_n = 0;
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────────────────────────────────

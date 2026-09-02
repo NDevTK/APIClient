@@ -210,8 +210,12 @@ const COLD_FIELDS = ["live", "framed", "blocked", "owed",
                         partition of, and therefore the ONLY thing that can tell a MISSING arm from an arm
                         that read 0. It is listed here rather than left to the histogram reader for the same
                         reason `resumed` is: without it beside them, a lifetime histogram that lost a row
-                        renders as a plausible one. The two histograms themselves are NOT in this list — they
-                        are objects and this list's contract is that every name in it is a number. */
+                        renders as a plausible one. The three histograms themselves are NOT in this list —
+                        they are objects and this list's contract is that every name in it is a number, so
+                        their own shape and partition are checked by `censusHistRows` instead. `live` above
+                        is the total TWO of them are checked against (`stepUnits` and `programCursors`) and
+                        `deepest`/`completed` are what the third is READ against, which is why all four are
+                        listed here rather than left to those readers. */
                      "steps"];
 /* THE POPULATION SPLITS ARE PARTITIONS AND THE PARTITION IS THE CONTRACT, checked here for the reason
    `stepUnitReading` checks its histogram against `live`: two rows that are supposed to be the whole of a third
@@ -1194,26 +1198,34 @@ function wfqReading(out) {
    plausible rendering: the sum falls short and this throws, naming the composer. A row that reads 0 is a
    MEASUREMENT — that frontier had nobody in that arm — and is reported as one. Neither is ever defaulted into
    the other, which is the defect this whole instrument exists to end. */
-/* THE VALIDATION BOTH HISTOGRAMS NEED, WRITTEN ONCE — the same split `censusFields` makes one screen up, and
-   for the same reason: the two rows differ ONLY in the total they must sum to, and a second copy of the shape
-   check is the third place a renamed field has to be renamed. `name` and `totalName` are parameters because
-   they are the whole of the difference AND because a reader who hits one of these throws has to know WHICH
-   histogram broke — a shared checker whose message names neither is a throw nobody can act on. */
-function stepUnitRows(b, name, totalName) {
+/* THE VALIDATION ALL THREE HISTOGRAMS NEED, WRITTEN ONCE — the same split `censusFields` makes one screen up,
+   and for the same reason: the rows differ ONLY in the total they must sum to and in where their row SET comes
+   from, and a second copy of the shape check is the fourth place a renamed field has to be renamed. `name`,
+   `totalName` and `extent` are parameters because they are the whole of the difference AND because a reader
+   who hits one of these throws has to know WHICH histogram broke and what its rows are derived FROM — a shared
+   checker whose message names neither is a throw nobody can act on.
+   `extent` IS NOT DECORATION: two of these histograms are expansions of solver/step_unit.h's list, so an
+   absent or empty one can only be a composer that stopped emitting; the third's row set is the FRONTIER's own
+   (solver/cold.h), so its extent legitimately changes census to census and the sentence a reader is handed on
+   a break has to say which kind it was looking at. It is emptiness that both kinds agree on and that is not an
+   accident either — solver/cold.c gives an empty frontier program 0 precisely so that no reader has to hold a
+   second rule about a shape it cannot tell apart from the outside. */
+function censusHistRows(b, name, totalName, extent) {
   const u = b[name];
   if (u === null || typeof u !== "object" || Array.isArray(u))
     throw new Error(`[build] the @COLD census carries no \`${name}\` object — solver/result.c composes it ` +
-                    "from solver/step_unit.h's list on every census, so its absence is that composer having " +
-                    "changed rather than a frontier with nothing in any arm. An absent histogram and an " +
+                    `from ${extent} on every census, so its absence is that composer having ` +
+                    "changed rather than a frontier with nothing in any row. An absent histogram and an " +
                     "all-zero one are different facts and this reader will not average them.");
   const rows = Object.entries(u);
   if (!rows.length)
     throw new Error(`[build] the @COLD census's \`${name}\` is empty — the histogram is emitted with EVERY ` +
-                    "row including the zeroes, so an empty object is a composer that stopped listing them.");
+                    `row including the zeroes (its rows are ${extent}), so an empty object is a composer ` +
+                    "that stopped listing them and never a population with nobody in it.");
   for (const [k, v] of rows)
     if (typeof v !== "number")
       throw new Error(`[build] the @COLD census's \`${name}.${k}\` is not a number — the histogram is a ` +
-                      `count per arm and a non-numeric row cannot be summed against \`${totalName}\`.`);
+                      `count per row and a non-numeric row cannot be summed against \`${totalName}\`.`);
   if (typeof b[totalName] !== "number")
     throw new Error(`[build] the @COLD census carries no numeric \`${totalName}\` for \`${name}\` to be ` +
                     `checked against — the sum is the only thing that makes a MISSING arm different from an ` +
@@ -1221,18 +1233,21 @@ function stepUnitRows(b, name, totalName) {
                     `establish is whole.`);
   const total = rows.reduce((t, r) => t + r[1], 0);
   if (total !== b[totalName])
-    throw new Error(`[build] the @COLD census's \`${name}\` sums to ${total} over ${rows.length} arms ` +
-                    `against \`${totalName}\` ${b[totalName]} — the arms are a PARTITION of that total, so ` +
+    throw new Error(`[build] the @COLD census's \`${name}\` sums to ${total} over ${rows.length} rows ` +
+                    `against \`${totalName}\` ${b[totalName]} — the rows are a PARTITION of that total, so ` +
                     `the two sides disagree and no reading composed from this row is about the run that ` +
                     `happened. The engine asserts the same identity where both halves are in one hand ` +
-                    `(solver/cold.c's walk for \`stepUnits\`, solver/engine.c's convergence point for ` +
-                    `\`stepUnitRuns\`); a difference visible HERE and not there is a row lost between the ` +
+                    `(solver/cold.c's walk for \`stepUnits\` and \`programCursors\`, solver/engine.c's ` +
+                    `convergence point for \`stepUnitRuns\`, all three re-checked at solver/result.c's ` +
+                    `composer); a difference visible HERE and not there is a row lost between the ` +
                     `census and this document.`);
   return rows;
 }
 
+const STEP_UNIT_EXTENT = "solver/step_unit.h's list";
+
 function stepUnitReading(b) {
-  const rows = stepUnitRows(b, "stepUnits", "live");
+  const rows = censusHistRows(b, "stepUnits", "live", STEP_UNIT_EXTENT);
   const live = rows.filter((r) => r[1] > 0).sort((x, y) => y[1] - x[1]);
   const zero = rows.length - live.length;
   /* AN EMPTY FRONTIER IS A SENTENCE AND NOT AN EMPTY LIST, for the same reason wfqReading has an arm for
@@ -1257,7 +1272,7 @@ function stepUnitReading(b) {
    branches on it, and it is not a no-progress detector: it is rendered beside the gauge because a reader
    needs both to name a rung, and that is the whole of its job here. */
 function stepUnitRunReading(b) {
-  const rows = stepUnitRows(b, "stepUnitRuns", "steps");
+  const rows = censusHistRows(b, "stepUnitRuns", "steps", STEP_UNIT_EXTENT);
   const ran = rows.filter((r) => r[1] > 0).sort((x, y) => y[1] - x[1]);
   const never = rows.filter((r) => r[1] === 0).map((r) => r[0]);
   /* A RUN THAT TOOK NO STEP AT ALL IS A SENTENCE, for stepUnitReading's reason exactly: an all-zero histogram
@@ -1274,6 +1289,59 @@ function stepUnitRunReading(b) {
              `same list as the arms, and the scheduler asserts a RECORDED step is never it ` +
              `(solver/step_unit.h), so its zero here is that assert restated`
            : ` — every arm has run at least once`);
+}
+
+/* AND WHERE IN ITS DOCUMENT THE FRONTIER'S MASS IS STANDING — the row `deepest` and `completed` structurally
+   cannot give, and the reason one stall in this scheduler has now been diagnosed three ways, each reading
+   refuting the last.
+   THOSE TWO ARE GLOBAL MAXIMA (solver/engine.h). Each is set by whichever ONE member got furthest through the
+   document, so `deepest 11` is exactly as true of a frontier holding one member at 11 and two thousand at 3
+   as it is of one whose every member is at 11 — and the sentence a reader wants ("the frontier is not
+   advancing") is true of the first and FALSE of the second. They take opposite work: the first is a claim
+   about what the pick prefers, and the second is BFS behaving precisely as designed on a page that forks,
+   where the work is unbounded and there is nothing to fix. No maximum separates them at any value.
+   WHAT EACH LOOKS LIKE HERE, SO THE NEXT READER CAN TELL WHICH THEY ARE HOLDING WITHOUT ASKING ANYBODY.
+   Measured on the histogram's own code over both populations: a frontier of 2155 members with `deepest 11`
+   renders as `2154 at 3, 1 at 11` under the first and as `2155 at 11` under the second — same `live`, same
+   `deepest`, same extent, and the buckets are the only thing that differs. So the reading is the comparison
+   between where the MASS is and what `deepest` says, and both numbers are on this one line.
+   THE DENOMINATOR IS ON THE LINE WITH THE NUMBERS, which is why `live` and the extent are printed beside
+   them rather than left in the census: a bucket count with nothing to be a fraction OF is not a coverage
+   figure, and this project has produced several that were true of half of what they appeared to describe.
+   IT DECIDES NOTHING (§NO BOUNDS). No arm of any verdict in this file reads it, nothing branches on it, and it
+   never refuses a run: a frontier whose mass sits low is a READING, and a reader that failed a build for one
+   would be the no-progress count this project forbids. What it throws on is the census being internally
+   untrue — a row set that does not partition `live` — which is a statement about the document and not about
+   the run. */
+function programCursorReading(b) {
+  const rows = censusHistRows(b, "programCursors", "live",
+                              "the live members' own cursors (solver/cold.h), whose extent is therefore the " +
+                              "deepest program any standing member is at rather than a fixed list — and which " +
+                              "is still never empty, because solver/cold.c gives an empty frontier program 0");
+  /* `deepest` AND `completed` ARE THE THING THIS ROW IS READ AGAINST, so their absence is not a missing
+     decoration — it leaves the histogram with nothing to be low or high RELATIVE TO, which is the whole
+     reading. They are in COLD_FIELDS and `censusFields` has already refused a non-numeric one by the time this
+     runs; this says so rather than re-checking, because a second check here would be the second place a
+     renamed row has to be renamed. */
+  const at = rows.filter((r) => r[1] > 0);
+  /* AN EMPTY FRONTIER IS A SENTENCE AND NOT AN EMPTY LIST, for `stepUnitReading`'s reason exactly: rendering
+     nothing there reads as a histogram that failed rather than as a census taken with nobody standing, and
+     those take opposite work. The row set is `{"0":0}` in that state by construction, so this arm is reached
+     through a real measurement and not through a hole. */
+  if (at.length === 0)
+    return `program cursors at the last census: no member was standing (live ${b.live}), so all ` +
+           `${rows.length} of the histogram's rows read 0 — a census taken on an empty frontier, which is a ` +
+           `measurement and not an absent row`;
+  const top = at.reduce((x, r) => (r[1] > x[1] ? r : x), at[0]);
+  const standingDeepest = at.reduce((x, r) => (Number(r[0]) > x ? Number(r[0]) : x), Number(at[0][0]));
+  return `program cursors at the last census (${b.live} live member${b.live === 1 ? "" : "s"} over ` +
+         `${rows.length} program slot${rows.length === 1 ? "" : "s"}, ` +
+         `document deepest ${b.deepest} / completed ${b.completed}): ` +
+         at.map((r) => `${r[1]} at ${r[0]}`).join(", ") +
+         ` — largest bucket ${top[1]} of ${b.live} at program ${top[0]}, deepest member standing at ` +
+         `${standingDeepest}. A mass LOW against \`deepest\` and a mass AT it are opposite diagnoses ` +
+         `(solver/cold.h): the first is a frontier whose mass never advances while a few members run deep, ` +
+         `the second is BFS on a forking page with unbounded work. This row states which and decides nothing`;
 }
 
 /* THE COLD ROUND TRIP, PER RECORD KIND — @COLDPARK from session ONE against @COLDRESUME from session TWO, and
@@ -1964,8 +2032,14 @@ function hungCauseCensus(out) {
                   BOTH HISTOGRAMS, because one of them is a gauge and one is a lifetime count and a rung is
                   named by the PAIR. `stepUnitReading` says where the frontier is standing at the last census;
                   `stepUnitRunReading` says which rungs the ladder has ever run at all. An arm reading 0 in the
-                  first is either of two opposite things and the second is what says which. */
-               stepUnitReading(b) + "; " + stepUnitRunReading(b);
+                  first is either of two opposite things and the second is what says which.
+                  AND THE THIRD IS A DIFFERENT AXIS ENTIRELY, which is why it is spliced here and not folded
+                  into either. Those two say WHICH ARM the members that are not retiring are in; this one says
+                  WHERE IN THE DOCUMENT they are standing, and the pair `deepest`/`completed` above — being
+                  maxima — cannot answer it at any value. A frontier every member of which is in
+                  `resume-program` reads identically whether its mass is at program 3 with one member at 11 or
+                  every member is at 11, and only this row separates them. */
+               stepUnitReading(b) + "; " + stepUnitRunReading(b) + "; " + programCursorReading(b);
   /* AND WHICH OF THE STILL-0 ROWS WERE EVER ANYTHING ELSE, which is the distinction `flipped.length === 0`
      cannot draw and which decides what "still advancing" is worth. Measured across six builds: the rows that
      reached 1 in the last window were, every time, the ten members of ONE family (the @S search rows), while
