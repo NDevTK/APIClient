@@ -1432,8 +1432,9 @@ static CssPx uv_margin(lxb_dom_element_t *el, const char *name, const char *oppo
               "and not §10.3.3's slack — the two differ because the container has already flexed every item. "
               "BUILD the flex layout algorithm over the container's own used content size");
     DFAIL("a HORIZONTAL margin computes to `auto` on an ABSOLUTELY POSITIONED box, whose used value CSS 2.1 "
-          "§10.3.7 solves from its own constraint equation — 'left + margin-left + border + padding + width + "
-          "border + padding + margin-right + right = width of containing block' — under the section's own "
+          "§10.3.7 solves from its own constraint equation — 'left + margin-left + border-left-width + "
+          "padding-left + width + padding-right + border-right-width + margin-right + right = width of "
+          "containing block' — under the section's own "
           "ordered rules: an `auto` `left` or `right` replaces an `auto` margin with 0 first, both `auto` "
           "margins then get EQUAL values 'unless this would make them negative', and an over-constrained set "
           "ignores one offset depending on the containing block's `direction`. Three things are missing and "

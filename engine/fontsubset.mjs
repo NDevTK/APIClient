@@ -18,7 +18,7 @@
  * claim they have to take:
  *
  *   curl -sSLo dejavu-fonts-ttf-2.37.zip \
- *     'https://sourceforge.net/projects/dejavu/files/dejavu/2.37/dejavu-fonts-ttf-2.37.zip/download'
+ *     https://sourceforge.net/projects/dejavu/files/dejavu/2.37/dejavu-fonts-ttf-2.37.zip/download
  *   # sha256 7576310b219e04159d35ff61dd4a4ec4cdba4f35c00e002a136f00e96a908b0a
  *   unzip -j dejavu-fonts-ttf-2.37.zip dejavu-fonts-ttf-2.37/ttf/DejaVuSans.ttf
  *

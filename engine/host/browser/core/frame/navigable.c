@@ -2737,7 +2737,7 @@ static bool target_name_is(const char *name, const char *keyword)
  * second. This function started at the traversable and never looked at the requestor's subtree at all, so a
  * name held by BOTH a child of the requestor and a sibling of it answered the SIBLING — the requestor's own
  * frame lost to a stranger's. `duplicate-name-order.html` asserts exactly that, in exactly those words:
- * 'subtree first', then 'then the rest of the tree', then 'then other pages'.
+ * `subtree first`, then `then the rest of the tree`, then `then other pages`.
  * The first match wins in each tree rather than the best — §7.3.1.7 and §7.3.1.5 define no ranking. */
 static JSValue navigable_choose_name(JSContext *ctx, const char *name)
 {

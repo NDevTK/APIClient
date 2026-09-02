@@ -253,9 +253,9 @@ void html_base_element_parsed(JSContext *ctx, lxb_dom_node_t *root)
 {
     (void)ctx;
     DCHECK(root != NULL && root->type == LXB_DOM_NODE_TYPE_DOCUMENT,
-           "§4.2.3's parsed-tree freeze was handed something other than a Document node — the walk is stated "
-           "over the document ('the first base element in document … in tree order'), and a subtree root would "
-           "answer for a different tree");
+           "§4.2.3's parsed-tree freeze was handed something other than a Document node — the walk it runs is "
+           "stated over the document by §2.4.3 \"Document base URLs\" ('the first base element in document "
+           "that has an href attribute, in tree order'), and a subtree root would answer for a different tree");
     base_element_process(lxb_dom_interface_document(root), NULL);
 }
 

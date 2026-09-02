@@ -147,10 +147,15 @@ static void hev_require_readable_chain(JSContext *ctx, lxb_dom_node_t *n)
                   "SLOT. Walking the node tree instead would answer a slotted element's offsetParent with an "
                   "ancestor the flat tree does not have it under — a WRONG element, not an absent one. §7's "
                   "second clause needs the other half as well: DOM §4.8 'Interface ShadowRoot' defines "
-                  "closed-shadow-hidden ('A's root is a shadow root; A's root is not a shadow-including "
-                  "inclusive ancestor of B; and A's root's mode is closed'), which decides whether an ancestor "
-                  "is visible to this element at all. BUILD the flat-tree parent over DOM §4.2.2's assigned "
-                  "slot and slottable, then closed-shadow-hidden over shadow_root.h's mode");
+                  "closed-shadow-hidden over three conditions — 'A's root is a shadow root', 'A's root is not "
+                  "a shadow-including inclusive ancestor of B', and 'A's root is a shadow root whose mode is "
+                  "`closed` or A's root's host is closed-shadow-hidden from B' — which decide whether an "
+                  "ancestor is visible to this element at all. THE THIRD CONDITION IS RECURSIVE, and reading a "
+                  "mode alone is a WRONG answer rather than a narrower one: an element under an OPEN shadow "
+                  "root whose HOST sits under a CLOSED one IS closed-shadow-hidden, and the mode says `open` "
+                  "at every step of that walk. BUILD the flat-tree parent over DOM §4.2.2's assigned slot and "
+                  "slottable, then closed-shadow-hidden as the disjunction the section states — "
+                  "shadow_root_is_open's mode test OR the same predicate re-asked at shadow_root_host's host");
         for (i = 0; i < sizeof HEV_UNREADABLE / sizeof HEV_UNREADABLE[0]; i++) {
             char *decl = cssom_cascaded_value(el, HEV_UNREADABLE[i]);
             bool declared = decl != NULL;
