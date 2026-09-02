@@ -65,6 +65,7 @@
 #include "core/dom/node.h"
 #include "core/dom/shadow_root.h"
 #include "core/events/event_target.h"
+#include "core/fullscreen/fullscreen.h"
 #include "core/html/custom_elements.h"
 #include "core/html/focus.h"
 #include "core/html/fragment_serializer.h"
@@ -808,6 +809,11 @@ void shadow_root_install_proto(JSContext *ctx)
        focused area, and it is the RECEIVER that decides the answer: §4.8's retargeting against `this` is what
        turns a focused node inside this tree into the node an observer of this tree may see. */
     focus_install_shadow_root_members(ctx, proto);
+    /* FULLSCREEN §3 "API"'s `partial interface mixin DocumentOrShadowRoot` — the same one member Document
+       carries, over the same fullscreen element, and it is the RECEIVER that decides the answer: §4.8's
+       retargeting against `this` is what turns an element fullscreened inside this tree into the node an
+       observer of this tree may see, and its step 1 asks whether this root's HOST is connected at all. */
+    fullscreen_install_shadow_root_members(ctx, proto);
     /* CSSOM §6.2.3's `styleSheets` — the SAME mixin member Document carries, over a DIFFERENT list: §6.2's
        collection belongs to "the document OR SHADOW ROOT", and a `<style>` whose root is this shadow root is
        in this one. That is why the member is installed here rather than inherited: DocumentFragment does not

@@ -4019,6 +4019,12 @@ void document_init(JSContext *ctx)
        insertion steps and drained by §8.1.7.3's step 7 — declared here with the focused area they end up
        designating, and for the same reason. */
     autofocus_init(ctx);
+    /* FULLSCREEN §2 "Model"'s per-element FULLSCREEN FLAG is a slot key, and both of the members stated over it
+       — `fullscreen` on this prototype and `fullscreenElement` on this one AND on ShadowRoot's, which
+       shadow_root_init above builds — are installed from an install that runs off this component's list. So the
+       declaration is paired with them HERE for the reason page_visibility_init's and focus_init's are, rather
+       than copied into each host's own init list. */
+    fullscreen_init(ctx);
     realm_declare_intrinsic(document_install_proto);
     /* §13.2.7 "THE END" IS AN AGENT FACT AND WAS BEING STATED PER DOCUMENT. This line was the last statement of
        document_install — the per-DOCUMENT half — so a page with one <iframe> claimed the ONE frontier's single
@@ -4915,6 +4921,7 @@ void document_agent_free(JSRuntime *rt)
        work — the shape platform_check_table forbids one row above. Nothing declares document_fragment,
        shadow_root or slot but document_init, so nothing may release them but this. They come back to their
        declarer here, and element_free names the move at the lines they left. */
+    fullscreen_free(rt);
     autofocus_free();
     focus_free();
     page_visibility_free();

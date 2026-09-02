@@ -80,10 +80,16 @@ static JSValue tl_document_of(JSContext *ctx, JSValueConst el)
     return node_wrap(ctx, lxb_dom_interface_node(n->owner_document));
 }
 
-/* One of the two ordered sets on `doc`, MINTED if this document has never had one. OWNED.
-   An absent slot IS the empty set, which is what "initially empty" means and what costs nothing for the
-   documents a run never puts anything in the top layer of. */
-static JSValue tl_set(JSContext *ctx, JSValueConst doc, JSAtom key)
+/* One of the two ordered sets on `doc`, MINTED only where the caller is about to APPEND to it. OWNED, and
+   JS_UNDEFINED for the document that has never had one — which every read below treats as the empty set,
+   because an absent slot IS "initially empty" and tl_len answers 0 for anything that is not an Array.
+   `mint` IS NOT AN OPTIMISATION AND THE DEFAULT IS `false`. A mint is a PROPERTY WRITE on the Document, so the
+   heap COW delta captures it: a flow that merely ASKS a question about the top layer would otherwise leave a
+   delta entry on shared baseline state it never changed, and `document.fullscreenElement` — a getter a page
+   reads freely, on every document, with nothing in any top layer — is the reader that makes that a real cost
+   rather than a tidiness. So the three §3.3 Top Layer Manipulation algorithms mint the ONE set each of them
+   appends to, and every other reach here is a read. */
+static JSValue tl_set(JSContext *ctx, JSValueConst doc, JSAtom key, bool mint)
 {
     JSValue set;
 
@@ -94,6 +100,7 @@ static JSValue tl_set(JSContext *ctx, JSValueConst doc, JSAtom key)
                                 "mint below, and nothing else can name the Symbol it hangs off");
         return set;
     }
+    if (!mint) return JS_UNDEFINED;
     set = JS_NewArray(ctx);
     CHECK(!JS_IsException(set), "a top-layer ordered set could not be allocated");
     /* CONFIGURABLE AND WRITABLE for the reason html_dialog.c's return-value slot is: a slot defined with no
@@ -157,8 +164,8 @@ static void tl_append(JSContext *ctx, JSValueConst set, JSValueConst el)
 void top_layer_add(JSContext *ctx, JSValueConst el)
 {
     JSValue doc = tl_document_of(ctx, el);                                     /* step 1 */
-    JSValue layer = tl_set(ctx, doc, g_atom_layer);
-    JSValue pending = tl_set(ctx, doc, g_atom_pending);
+    JSValue layer = tl_set(ctx, doc, g_atom_layer, true);
+    JSValue pending = tl_set(ctx, doc, g_atom_pending, false);
 
     /* Step 2: "if el is already contained in doc's top layer" — with its own assert, which the standard writes
        as an assert and says why: "(Otherwise, this is a spec error.)" */
@@ -185,8 +192,8 @@ void top_layer_add(JSContext *ctx, JSValueConst el)
 void top_layer_request_removal(JSContext *ctx, JSValueConst el)
 {
     JSValue doc = tl_document_of(ctx, el);                                     /* step 1 */
-    JSValue layer = tl_set(ctx, doc, g_atom_layer);
-    JSValue pending = tl_set(ctx, doc, g_atom_pending);
+    JSValue layer = tl_set(ctx, doc, g_atom_layer, false);
+    JSValue pending = tl_set(ctx, doc, g_atom_pending, true);
 
     /* Step 2 — the two ways this is a no-op, both stated over the sets. */
     if (tl_index_of(ctx, layer, el) >= 0 && tl_index_of(ctx, pending, el) < 0) {
@@ -204,8 +211,8 @@ void top_layer_request_removal(JSContext *ctx, JSValueConst el)
 void top_layer_remove_immediately(JSContext *ctx, JSValueConst el)
 {
     JSValue doc = tl_document_of(ctx, el);                                     /* step 1 */
-    JSValue layer = tl_set(ctx, doc, g_atom_layer);
-    JSValue pending = tl_set(ctx, doc, g_atom_pending);
+    JSValue layer = tl_set(ctx, doc, g_atom_layer, false);
+    JSValue pending = tl_set(ctx, doc, g_atom_pending, false);
 
     tl_remove(ctx, layer, el);                                                 /* step 2 */
     tl_remove(ctx, pending, el);
@@ -218,12 +225,47 @@ void top_layer_remove_immediately(JSContext *ctx, JSValueConst el)
 bool top_layer_contains(JSContext *ctx, JSValueConst el)
 {
     JSValue doc = tl_document_of(ctx, el);
-    JSValue layer = tl_set(ctx, doc, g_atom_layer);
+    JSValue layer = tl_set(ctx, doc, g_atom_layer, false);
     bool in = tl_index_of(ctx, layer, el) >= 0;
 
     JS_FreeValue(ctx, layer);
     JS_FreeValue(ctx, doc);
     return in;
+}
+
+/* §3's ORDER, READ — see top_layer.h for why the walk lives here, why "topmost" is the LAST member, why it
+   reads the `top layer` rather than §3.3's "is in the top layer", and why it answers with the member and never
+   with its rank. */
+JSValue top_layer_topmost(JSContext *ctx, JSValueConst document, TopLayerPredicate pred, void *opaque)
+{
+    JSValue layer = tl_set(ctx, document, g_atom_layer, false);
+    uint32_t n = tl_len(ctx, layer);
+    JSValue found = JS_NULL;
+    uint32_t i;
+
+    DCHECK(pred != NULL,
+           "CSS Positioned Layout Level 4 §3 Top Layer's ordered read was given no predicate — every caller is "
+           "asking for the topmost element FOR WHICH SOMETHING HOLDS (Fullscreen §2 Model's fullscreen element "
+           "asks whose fullscreen flag is set), and a null predicate would answer the last member of the layer "
+           "to a caller that asked a different question");
+    /* BACKWARDS, because §3's last member is the topmost one — so the first hit is the answer and the walk
+       stops, rather than running the whole set to keep the highest index that matched. */
+    for (i = n; i > 0; i--) {
+        JSValue el = JS_GetPropertyUint32(ctx, layer, i - 1);
+
+        if (pred(ctx, el, opaque)) {
+            found = el;
+            break;
+        }
+        JS_FreeValue(ctx, el);
+    }
+    DCHECK(tl_len(ctx, layer) == n,
+           "a §3 Top Layer ordered-read predicate CHANGED THE SET IT WAS BEING WALKED OVER — the contract "
+           "top_layer.h states is that a predicate is a C question about one element that runs no page code and "
+           "reaches no §3.3 Top Layer Manipulation algorithm, and a walk whose set moves under it answers with "
+           "an element at a position that no longer means what the walk read it for");
+    JS_FreeValue(ctx, layer);
+    return found;
 }
 
 /* §3.3: "To PROCESS TOP LAYER REMOVALS, given a Document doc." One step, and it is a filtered drain:
@@ -234,7 +276,7 @@ bool top_layer_contains(JSContext *ctx, JSValueConst el)
    removal cannot move an element the walk has not reached yet. */
 void top_layer_process_removals(JSContext *ctx, JSValueConst document)
 {
-    JSValue pending = tl_set(ctx, document, g_atom_pending);
+    JSValue pending = tl_set(ctx, document, g_atom_pending, false);
     uint32_t n = tl_len(ctx, pending);
     uint32_t i;
 

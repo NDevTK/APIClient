@@ -1186,7 +1186,11 @@ static const IdlStepDecl AEL_DECL = { ael_step, sizeof(AelState), ael_visit, NUL
        onblur, onerror, onfocus, onload, onresize and onscroll; onscrollend and onbeforetoggle are NOT among     \
        them, and a prefix or family guess would have taken both. */                                              \
     X("onblur", "blur", EH_GLOBAL | EH_WINDOW_REFLECTING)                                                        \
-    X("oncancel", "cancel", EH_GLOBAL)                                                                           \
+    /* `oncancel` is a GlobalEventHandlers name AND HTML §6.10.3 The CloseWatcher interface's own event handler \
+       IDL attribute, over the SAME event type — one row with two memberships, exactly as `onclose` below is   \
+       GlobalEventHandlers' and two other interfaces'. §6.10.3's `cancel` is also the event this build actually \
+       FIRES under that name: close_watcher.c's cancel-action dispatch is its one producer. */                  \
+    X("oncancel", "cancel", EH_GLOBAL | EH_CLOSE_WATCHER)                                                        \
     X("oncanplay", "canplay", EH_GLOBAL)                                                                         \
     X("oncanplaythrough", "canplaythrough", EH_GLOBAL)                                                           \
     /* `onchange` has THREE owners — GlobalEventHandlers, CSSOM VIEW §4.2's MediaQueryList and Permissions       \
@@ -1196,10 +1200,11 @@ static const IdlStepDecl AEL_DECL = { ael_step, sizeof(AelState), ael_visit, NUL
     X("onchange", "change", EH_GLOBAL | EH_MEDIA_QUERY_LIST | EH_PERMISSION_STATUS)                              \
     X("onclick", "click", EH_GLOBAL)                                                                             \
     /* `onclose` is a GlobalEventHandlers name AND HTML §9.4.4 Message ports' own event handler IDL       \
-       attribute, over the SAME event type — one row with two memberships, exactly as `onmessage` is    \
-       WindowEventHandlers' and the MessageEventTarget mixin's. A second row would be a second name.    \
+       attribute AND HTML §6.10.3 The CloseWatcher interface's own, over the SAME event type — one row   \
+       with three memberships, exactly as `onmessage` is WindowEventHandlers' and the MessageEventTarget \
+       mixin's. A second row would be a second name.                                                     \
     */                                                                                                  \
-    X("onclose", "close", EH_GLOBAL | EH_MESSAGE_PORT)                                                   \
+    X("onclose", "close", EH_GLOBAL | EH_MESSAGE_PORT | EH_CLOSE_WATCHER)                                \
     X("oncommand", "command", EH_GLOBAL)                                                                         \
     X("oncontextlost", "contextlost", EH_GLOBAL)                                                                 \
     X("oncontextmenu", "contextmenu", EH_GLOBAL)                                                                 \
@@ -1413,15 +1418,15 @@ static const IdlStepDecl AEL_DECL = { ael_step, sizeof(AelState), ael_visit, NUL
        snap's two are absent. The events come from FULLSCREEN §2 Model's "run the fullscreen steps", which HTML  \
        §8.1.7.3 Processing model's update the rendering runs at its step 12 — and no component here runs them.   \
        WHAT THE TREE DOES CARRY UNDER THAT NAME is FULLSCREEN §7's `fullscreen` permissions-policy feature,      \
-       §2's "fullscreen is supported" and §3's `fullscreenEnabled` getter (core/fullscreen/fullscreen.h states   \
-       why those three are one diff), plus HTMLIFrameElement's `allowFullscreen` reflection and the §9.4 step 3  \
-       that attribute now performs. WHAT IT DOES NOT CARRY is what §2's FULLSCREEN ELEMENT is defined over: the  \
-       PER-ELEMENT FULLSCREEN FLAG, and an ordered read of the top layer to be the topmost set element of. The   \
-       LAYER itself is here — core/css/top_layer.h is css-position-4 §3, and update-the-rendering step 23 drains \
-       it — but it publishes membership and not a WALK, so the flag and the accessor arrive together. Without    \
-       them there is no list of pending fullscreen events, and so no `requestFullscreen`, no `exitFullscreen`    \
-       and no `fullscreenElement`.                                                                               \
-       THE NEXT DIFF BUILDS THAT MODEL, and the tree already names the join: core/rendering/rendering.c's        \
+       §2's "fullscreen is supported", its per-element FULLSCREEN FLAG and its FULLSCREEN ELEMENT — read through \
+       css-position-4 §3's own ordered accessor, which core/css/top_layer.h exports because that element is the  \
+       caller it arrived with — and §3's `fullscreenEnabled`, `fullscreen` and `fullscreenElement` getters, plus \
+       HTMLIFrameElement's `allowFullscreen` reflection and the §9.4 step 3 that attribute now performs.         \
+       WHAT IT DOES NOT CARRY is anything that SETS the flag. §2's fullscreen an element is its one setter, and  \
+       its steps 1 and 2 run HTML §6.12's topmost popover ancestor and hide popovers until, which               \
+       core/html/popover.c DFAILs on by name — so every document's fullscreen element is null, there is no list  \
+       of pending fullscreen events, and so no `requestFullscreen` and no `exitFullscreen`.                      \
+       THE NEXT DIFF BUILDS THE FLAG'S WRITER, and the tree already names the join: core/rendering/rendering.c's \
        steps_11_to_13 carries `realm_awaits(docctx, "Document.prototype.exitFullscreen", …)`, a producer probe   \
        that ABORTS the moment that member is installed, naming update-the-rendering step 12 as the thing to      \
        write. So the ordered subproblem is the model and step 12; these two rows are the LAST line of it, not    \

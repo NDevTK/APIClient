@@ -49,6 +49,45 @@ void top_layer_remove_immediately(JSContext *ctx, JSValueConst el);
    predicate nothing asks is a reader with no writer wearing the other costume. */
 bool top_layer_contains(JSContext *ctx, JSValueConst el);
 
+/* ── §3's ORDER, READ ────────────────────────────────────────────────────────────────────────────────────────
+ *
+ * THE FIRST DERIVED CONCEPT TO ARRIVE, AND IT ARRIVES WITH ITS CALLER. That is the policy above obeyed rather
+ * than an exception to it: Fullscreen §2 "Model"'s FULLSCREEN ELEMENT is "the topmost element in the document's
+ * top layer whose fullscreen flag is set, if any, and null otherwise", so a walk exists to be exported.
+ *
+ * IT IS HERE AND NOT AT THE CALLER BECAUSE §3 SAYS SO IN ITS OWN WORDS: "The top layer (and the pending top
+ * layer removals) should not be interacted with directly by specification algorithms." The ORDER is this
+ * component's fact; a caller that indexed the Array itself would hold a second copy of it, and the copy that
+ * drifts is the one whose owner never learns it moved.
+ *
+ * "TOPMOST" IS THE LAST MEMBER, WHICH §3 STATES AND NOTHING ELSE DECIDES: "Top layer elements are rendered in
+ * the order they appear in the top layer; the last element in the top layer is rendered on top of everything
+ * else." So the walk runs BACKWARDS and the first `pred` hit is the answer — the same direction
+ * top_layer_process_removals runs, for a different reason.
+ *
+ * IT READS THE `top layer` AND NOT §3.3's "IS IN THE TOP LAYER", and the difference is observable rather than
+ * pedantic: an element whose removal is pending is still CONTAINED in the set, so it is still eligible to be the
+ * topmost match, and a walk that filtered `pending` would make a fullscreen element vanish one rendering update
+ * early. Fullscreen §2's own reference is to §3's set. A caller that wants the filtered term asks for it when it
+ * has one, which is the policy above again.
+ *
+ * IT ANSWERS WITH THE MEMBER AND NEVER WITH ITS RANK, which is the whole of why this is a walk and not an
+ * indexed accessor. The set is mutated by algorithms a page reaches — `showPopover()`, `hidePopover()`,
+ * `showModal()`, and Fullscreen's own fullscreen-an-element — so a POSITION recorded by a caller and replayed
+ * after a suspension names whichever element has shifted into it, with every arm still in range and nothing to
+ * say so (CLAUDE.md §AN-INDEX-NAMES-A-THING-ONLY-WHILE-THE-SET-IS-FIXED). Returning the element itself is what
+ * makes that impossible to write.
+ *
+ * `pred` DECIDES ONE MEMBER AND RUNS NO PAGE CODE. It is a C question about the element (Fullscreen's is one
+ * own-slot read), asked inside a plain C activation with no flow base under it, so it may not run a page's
+ * getter, fire an event or suspend. The walk asserts the half of that contract it can see — the set's length is
+ * unchanged across the whole walk — which is what a predicate that reached a §3.3 algorithm would break.
+ *
+ * `document` is the Document WRAPPER, as top_layer_process_removals takes it. The answer is OWNED, and JS_NULL
+ * when no member matches or when the document has never had a top layer at all. */
+typedef bool (*TopLayerPredicate)(JSContext *ctx, JSValueConst el, void *opaque);
+JSValue top_layer_topmost(JSContext *ctx, JSValueConst document, TopLayerPredicate pred, void *opaque);
+
 /* §3.3's PROCESS TOP LAYER REMOVALS, given a Document. HTML §8.1.7's update the rendering step 23 is its one
    caller, and its note says so: "this is intended to be called during the 'Update the Rendering' step of HTML's
    rendering algorithm. It is not intended to be called by other algorithms." */
