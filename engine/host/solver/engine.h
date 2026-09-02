@@ -14,6 +14,7 @@
 
 #include "core/fetch/fetch.h"
 #include "core/loader/script_type.h"   /* which of §8.1.4.4's two algorithms runs entry i — see `types` below */
+#include "core/timing/task_source.h"   /* HTML §8.1.7.1's `source` field — which task source, if any, queued a row */
 #include "solver/step_unit.h"          /* the arms of flow_step — EngineStepUnitRuns is one count per arm */
 #include "quickjs.h"
 
@@ -23,11 +24,16 @@
 /* WHERE IN THE FLOW'S OWN PROGRAM SEQUENCE A QUEUED PROGRAM LANDS. It is a SPEC fact about the operation that
  * caused the program, not a scheduling preference, which is why the CALLER states it and the queue never
  * guesses — the same sentence engine_queue_into already makes about which flow and which document.
- *   DYN_POS_APPEND is what a TASK is. An `error`/`load` event fired at an element, a `javascript:` navigation
- * (HTML §7.4.2.2 "Beginning navigation" queues a global task on the navigation and traversal task source to
- * reach §7.4.2.3.2), a §8.7 Timers string timer, a lazy chunk's reply, a document's own sequence being filled one
- * entry at a time: each of those is queued and runs when the sequence reaches it, and a task queue is FIFO,
- * so the TAIL is its position.
+ *   DYN_POS_APPEND IS THE TAIL, AND EVERY TASK TAKES IT — but not everything that takes it is a task, which
+ * is the half this said the other way round. A `javascript:` navigation (HTML §7.4.2.2 "Beginning navigation"
+ * queues a global task on the navigation and traversal task source to reach §7.4.2.3.2) and a lazy chunk's
+ * reply ARE tasks and a task queue is FIFO, so the tail is where they go; a document's own sequence being
+ * filled one entry at a time is not a task at all and takes the tail because §4.12.1 fixes its order. Which of
+ * the two a row is, is the row's TaskSource and is stated at each entry below.
+ *   §8.7 Timers's STRING HANDLER USED TO BE IN THIS LIST AND IS NOT A ROW ANY MORE. §8.7 creates and runs it
+ * inside step 9's task, so core/timing/timer.c runs the program on the firing flow's own trampoline and queues
+ * nothing here; the entry that took it is gone with it, and the paragraph standing where that entry did says
+ * why.
  *   DYN_POS_IMMEDIATE is where a program the RUNNING program caused runs. HTML §4.12.1.1 "Processing model"
  * ends "prepare the script element" with "Otherwise, immediately execute the script element el, even if other
  * scripts are already executing"; ECMAScript §19.2.1.1 PerformEval pushes evalContext, evaluates the body,
@@ -85,7 +91,11 @@ typedef enum { DYN_POS_APPEND, DYN_POS_IMMEDIATE } DynPos;
    reached with none is a caller that has the bytes and threw away where they came from, which is unrecoverable
    here (the document's address is a different script's answer, not a weaker form of this one).
    `body_n` IS THE PROGRAM'S LENGTH for ECMAScript §11.1's reason above — a decoded response body may hold a
-   U+0000 and a browser runs the whole of it. */
+   U+0000 and a browser runs the whole of it.
+   ITS SOURCE IS §8.1.7.4 "Generic task sources"' NETWORKING TASK SOURCE — "This task source is used for
+   features that trigger in response to network activity", and this row exists because a response arrived.
+   Stated at the definition rather than taken as a parameter, for the reason the type below is: this entry is
+   one spec step, and a caller that reached it has a response in hand. */
 void engine_queue_fetched_script(uint32_t doc, const char *body, size_t body_n, const char *url);
 /* …AND THE ROW A `<script>` ELEMENT PUT THERE, at the same position and carrying one more fact. HTML §4.12.1.1
    "Processing model"'s "execute the script element" ends in a switch on the ELEMENT's type — "classic" runs the
@@ -98,7 +108,11 @@ void engine_queue_fetched_script(uint32_t doc, const char *body, size_t body_n, 
    script reaches: the when-parsed list and the in-order-as-soon-as-possible list hold their elements in order,
    and the as-soon-as-possible SET has no position at all (§13.2.7 waits for it only before the load event). The
    one destination that is not the tail is `immediately execute the script element`, which §4.12.1.1 reaches
-   only for an inline CLASSIC script — the entry below. */
+   only for an inline CLASSIC script — the entry below.
+   AND ITS SOURCE IS NONE, WHICH IS A STATEMENT AND NOT A GAP. Nothing queues a task to run an element's
+   inline program: the parse that reached the element runs it, and §8.1.7.1 "Definitions" describes a parse as
+   work a task DOES rather than as a task apiece. The tail is where it goes because §4.12.1 fixed its order
+   against the scripts written around it, not because a task queue is FIFO. */
 /* `el` IS THAT ELEMENT, and the row carries it for the same reason it carries the type: "execute the script
    element" is a switch on EL, and its "classic" arm sets that document's §3.1.7 `currentScript` to it for the
    whole of the run. The run is a WORK ITEM here — it starts in one scheduler step and completes in another —
@@ -126,6 +140,10 @@ void engine_queue_element_script(uint32_t doc, const char *body, size_t body_n, 
 /* `el` IS THE ELEMENT THE PAGE INSERTED, and `body_n` ITS PROGRAM'S LENGTH — both for the reasons
    engine_queue_element_script states, and the length for that entry's exactly: this element's text is a page's
    own string, not a tokenizer's output. */
+/* ITS SOURCE IS NONE AND THIS IS THE ENTRY THE WORD WAS COINED FOR: "immediately execute the script element"
+   runs inside the algorithm that prepared it, so there is no task and nothing to give a source to. A row
+   here that named one would be a task asked to interpose ahead of tasks already queued, which is why the
+   queueing point asserts the pair rather than either half. */
 void engine_queue_script_immediate(uint32_t doc, const char *body, size_t body_n, lxb_dom_element_t *el);
 /* THE SAME POSITION IN THE SAME SEQUENCE, FOR A SCRIPT WHOSE SOURCE IS AN ADDRESS. §4.12.1 fixes an external
    script's position against the scripts written around it — a `pending parsing-blocking script` blocks the
@@ -144,6 +162,12 @@ void engine_queue_script_immediate(uint32_t doc, const char *body, size_t body_n
    `import('./chunk.js')` resolves against and, for a module, the module map KEY. */
 /* `el` IS THE ELEMENT WHOSE `src` THIS IS — see engine_queue_element_script. It survives the reply exactly as
    the type and the address do: the row is the element's program whether its bytes have arrived or not. */
+/* ITS SOURCE IS NONE, AND THE REASON IS THAT THIS ROW IS A POSITION RATHER THAN A TASK. §4.12.1 fixes where an
+   external script runs among the scripts written around it, and this entry is that place being held; the
+   NETWORKING task the response eventually queues is a different work item, and the register it lands on is
+   what serves it (engine_pending_docscript, and flow_deliver_one_reply's arm above the sequence). Calling the
+   held slot a networking task would put one source on two carriers by naming, which is the thing this value
+   exists to make visible. */
 void engine_queue_docscript_url(uint32_t doc, const char *url, ScriptType stype, lxb_dom_element_t *el);
 /* An @S CANDIDATE, queued as the program it would be if it fired. Same queue, one difference: it is ALLOWED not
    to compile, because most breakouts do not fit most sink contexts and a candidate that does not parse simply
@@ -157,6 +181,11 @@ void engine_queue_docscript_url(uint32_t doc, const char *url, ScriptType stype,
    fidelity: a candidate is constructed out of attacker-shaped bytes (a `%00` percent-decoded from a hash, a
    U+0000 a JSON reply carried), so reading it to its first NUL fires a program the search did not choose and the
    "no hit" that follows is a verdict about a payload nobody built. */
+/* AND ITS SOURCE IS THE SOLVER'S OWN, WHICH IS NOT ONE OF §8.1.7.1's AND MUST NOT BE MADE TO LOOK LIKE ONE.
+   No algorithm of the standard queued this program: the solver did, to see whether a constructed input reaches
+   a sink. Giving it a task source would order it against the page's real tasks by a fact nobody observed —
+   §@H's own line between a value the code determined and a value invented to satisfy a gate, one layer up. The
+   position is what the sink genuinely decides and it is already `pos`. */
 void engine_queue_candidate(const char *body, size_t body_n, DynPos pos);
 /* A `javascript:` URL's SCRIPT SOURCE, queued as the program HTML §7.4.2.3.2's evaluate-a-javascript:-URL runs.
    Same queue, and it is the same thing — code the page caused to run — but it differs from a page <script> at
@@ -175,6 +204,28 @@ void engine_queue_candidate(const char *body, size_t body_n, DynPos pos);
 /*   `body_n` is what STEP 3 produced. "Let scriptSource be the UTF-8 decoding of the percent-decoding of
    encodedScriptSource" — URL §1.3 "Percent-encoded bytes"'s percent-decode reaches all 256 byte values, so
    `javascript:a=%00` is a source text with a U+0000 in it and ECMAScript §11.1 "Source Text" permits one. */
+/* ITS SOURCE IS §8.1.7.4's NAVIGATION AND TRAVERSAL TASK SOURCE, WHICH §7.4.2.2 "Beginning navigation" STATES
+   OUTRIGHT. Its step 21 is "Queue a global task on the navigation and traversal task source given navigable's
+   active window to navigate to a javascript: URL"; this row is that task's program, so the task source is the
+   row's and the tail is where a task goes.
+   AND THAT SOURCE IS ON TWO OF A FLOW'S CARRIERS, WHICH IS THE ONE THING THE DECLARATION IS HERE TO SHOW. The
+   document-load job of the same section reaches `jobs` through JS_EnqueueCallTask (core/frame/navigable.c),
+   this row reaches `dyn`, and §8.1.7.1 "Definitions" requires one queue per source precisely so that "the user
+   agent would never process events from any one task source out of order". This is the shape §8.7 Timers's
+   string handler had before its create and its run moved to the expiry, arriving a second time through a
+   different section — so the enumeration is what had to exist first, and it now does: a source reaches a
+   carrier iff a producer on that carrier names it, and a grep for this enumerator is the whole answer for
+   `dyn`.
+   WHAT THE NEXT DIFF BUILDS is the same declaration on the OTHER carrier: a TaskSource carried by
+   JS_EnqueueCallTask to the host's job-enqueue hook and recorded on the job, exactly as that hook's `is_task`
+   already travels (quickjs.h declares both), so the split is an ASSERT at the two queueing points rather than
+   this paragraph, and so the repair — whichever carrier the source ends up on alone — has something that
+   fails while it is half done.
+   HOW ITS ABSENCE SHOWS, and it needs no assert to be seen: a flow that has queued a document load and a
+   `javascript:` navigation in one turn runs them in an order fixed by which arm of flow_step stands above the
+   other, so writing the two statements the other way round does not put the two effects the other way round.
+   That is the pair of orderings no arrangement of two arms can both serve, and it is observable from page
+   code with nothing but an `<iframe>` and a `location` write. */
 void engine_queue_javascript_url(uint32_t doc, const char *body, size_t body_n);
 /* Park the running flow on a <script src> WITH NO POSITION TO HOLD: the host fetches it, and the reply becomes
    this flow's next program rather than a promise's value. Two kinds of element are that — one a page INJECTED,

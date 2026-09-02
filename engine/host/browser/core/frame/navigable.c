@@ -1234,14 +1234,14 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        the request target is the script source — spaces, quotes and all — and the authority falls back to a
        default. The reply cannot be a document, and the popup that was supposed to run the program instead
        reports a load that failed, which is a symptom with no `javascript:` anywhere in it.
-       WHERE THE ROUTE IS: navigable_navigate serves §7.4.2.2 step 16's arm and every navigation converges
+       WHERE THE ROUTE IS: navigable_navigate serves §7.4.2.2 step 21's arm and every navigation converges
        there, so a `javascript:` URL reaching THIS job is one that got here without passing through it — which
        today means §7.4's create, whose fold of §7.3.1.7 step 8 and §7.2.2.1 step 15 crashes at child_address
        with its own message rather than enqueuing a load. This assert is what keeps a THIRD route from being
        added without the branch. */
     DCHECK(strncmp(addr, "javascript:", sizeof "javascript:" - 1) != 0,
            "§7.4 step 14's document-load job reached its FETCH with a `javascript:` URL — §7.4.2.2 "
-           "\"Beginning navigation\" step 16 routes that scheme to §7.4.2.3.2 \"The javascript: URL special "
+           "\"Beginning navigation\" step 21 routes that scheme to §7.4.2.3.2 \"The javascript: URL special "
            "case\" and returns, and that section's own request never hits the network. This job would send the "
            "script source as the request target. The branch is in navigable_navigate, which every navigation "
            "converges on, so whatever enqueued this load bypassed it");
@@ -2047,7 +2047,7 @@ JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url)
 {
     char *addr = NULL;
     const Origin *origin = NULL;
-    /* §7.4.2.2 step 16's scheme test, answered by the one component that parses this destination — see
+    /* §7.4.2.2 step 21's scheme test, answered by the one component that parses this destination — see
        child_address, and the branch below for why it is served HERE and asserted unreachable at the create. */
     bool is_javascript = false;
 
@@ -2081,8 +2081,15 @@ JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url)
         free(addr);
         return JS_UNDEFINED;   /* §7.4 step 4: the caller turns this into a SyntaxError */
     }
-    /* §7.4.2.2 STEP 16 — "If url's scheme is `javascript`: QUEUE A GLOBAL TASK on the navigation and traversal
+    /* §7.4.2.2 STEP 21 — "If url's scheme is `javascript`: QUEUE A GLOBAL TASK on the navigation and traversal
      * task source given navigable's active window to NAVIGATE TO A javascript: URL … and RETURN."
+     *
+     * THIS SCHEME TEST WAS WRITTEN AS STEP 16 EVERYWHERE IN THIS FILE, AND 16 NAMES A DIFFERENT STEP OF THE
+     * SAME ALGORITHM: "If navigable's parent is non-null, then set navigable's is delaying load events to
+     * true". That is not this reading's own count against the tree's — core/dom/document.c corrected its own
+     * citation of this algorithm and named 16 the is-delaying-load-events step and 17 the target-snapshot one,
+     * which is the same numbering the scheme test is 21 under. Counted over the TOP-LEVEL items of
+     * `navigate`'s one step list, with the sub-lists under its earlier steps kept at their own depth.
      *
      * IT IS THE WHOLE OF WHAT THIS SCHEME GETS, and the return is the load-bearing half: nothing is fetched,
      * no session history entry is built for the URL (HTML §7.4.2.3.2's own note — "javascript: URLs are never
@@ -2099,7 +2106,7 @@ JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url)
      * not carry (core/frame/location.c's loc_resolve_history_handling resolves `javascript:` to "replace"
      * before it gets here, which is §7.4.2.1's "the navigation must be a replace"'s first disjunct), and steps
      * 2-3 read and clear §7.4.2.5's ONGOING NAVIGATION, which this build does not hold — its only two writers
-     * in the standard are §7.4.2.2 step 16 and §7.4.6.1's cross-document apply-the-history-step, and the second
+     * in the standard are §7.4.2.2 step 21 and §7.4.6.1's cross-document apply-the-history-step, and the second
      * does not exist here, so a field written by one of two writers would answer §8.4.1 step 8 with a fact
      * about half a mechanism.
      * STEP 4 IS BUILT AND IS A SECURITY RETURN, not a formality: "if initiatorOrigin is not same

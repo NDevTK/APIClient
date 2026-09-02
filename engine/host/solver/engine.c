@@ -3291,14 +3291,14 @@ static char *reply_source_text(JSContext *ctx, JSValueConst reply, ScriptType st
    defined past it. Declared rather than moved: the queue belongs beside the other queue entry points and
    the delivery belongs beside the register it scans. */
 static void engine_queue(uint32_t doc, const char *body, size_t body_n, DynKind kind, ScriptType stype,
-                         const char *url, DynPos pos);
+                         const char *url, TaskSource src, DynPos pos);
 /* …and the same entry for a row an ELEMENT put there — see engine_queue_el below. */
 static void engine_queue_el(uint32_t doc, const char *body, size_t body_n, DynKind kind, ScriptType stype,
-                            const char *url, DynPos pos, lxb_dom_element_t *el);
+                            const char *url, TaskSource src, DynPos pos, lxb_dom_element_t *el);
 /* …and the one a caller reaches when it ALREADY holds the decoded text as a shared body, which is every reply
    that arrives as a program: the delivery below adopts the decode and hands it over without a second copy. */
 static void engine_queue_el_body(uint32_t doc, DynBody *body, DynKind kind, ScriptType stype, const char *url,
-                                 DynPos pos, lxb_dom_element_t *el);
+                                 TaskSource src, DynPos pos, lxb_dom_element_t *el);
 
 /* ONE ANSWERED ENTRY, THEN RETURN — and the loop below is the SEARCH for it, not a drain.
  *
@@ -3542,7 +3542,12 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                        "something that is not that park pushed");
                 b = dyn_body_adopt(src, src_n);
                 CHECK(b, "engine: OOM adopting an injected script's source text");
-                engine_queue_el_body(doc, b, DYN_PAGE_SCRIPT, st, u, DYN_POS_APPEND,
+                /* THE NETWORKING TASK SOURCE (§8.1.7.4 "Generic task sources"), because that is what this arm
+                   IS: a response arrived and its program is what the response is for. §8.1.7.1 "Definitions"
+                   lists the case in its own words — "When an algorithm fetches a resource, if the fetching
+                   occurs in a non-blocking fashion then the processing of the resource once some or all of the
+                   resource is available is performed by a task." */
+                engine_queue_el_body(doc, b, DYN_PAGE_SCRIPT, st, u, TASK_SOURCE_NETWORKING, DYN_POS_APPEND,
                                      lxb_dom_interface_element(en));
                 dyn_body_unref(b);
                 JS_FreeValue(ctx, ev);
@@ -5112,7 +5117,8 @@ static int engine_close_request_fork(JSContext *ctx, Flow *f) {
    releases it. That is what makes the row's cost O(1) at every seed and every fork: the bytes belong to the
    program, not to the timeline holding it (solver/dyn_body.h). */
 static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind, ScriptType stype,
-                              const char *url, char *token, DynPos pos, lxb_dom_element_t *el) {
+                              const char *url, char *token, TaskSource src, DynPos pos,
+                              lxb_dom_element_t *el) {
     int at;
     /* A PROGRAM QUEUED WITH NO FLOW IS A DROPPED PROGRAM, and it used to leave silently. There is no global
        queue to fall back to — the frontier IS the queue — so the caller is the one that has to name the flow
@@ -5158,6 +5164,56 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
            "an entry holding a script's ADDRESS was queued with a second address beside it — the row IS the "
            "URL until flow_deliver_one_reply replaces it with the source text, and that delivery is what moves "
            "it into the address column, so a caller writing both is naming one script two ways");
+    /* WHICH TASK SOURCE, IF ANY, QUEUED THIS ROW — HTML §8.1.7.1 "Definitions"'s `source` field, asserted at
+     * the ONE site that creates a row so that an entry added later cannot answer it by omission. The sentinel
+     * is what makes that possible: TASK_SOURCE_UNSTATED is written by no producer, so a caller that never
+     * thought about the question is distinguishable from one whose answer is "this is not a task".
+     *
+     * WHY THE ROW HAS TO CARRY IT AT ALL. §8.1.7.1 requires that "For each event loop, every task source must
+     * be associated with a specific task queue", and a flow's work is split across arrays that partition by
+     * what a work item IS rather than by where it came from — its program sequence here, its queued callbacks
+     * in `jobs`, its answered host requests in the pending register. Nothing about those three could answer
+     * "is any one source in two of us", because the only statement of a source was PROSE beside each call.
+     * Now the answer for THIS carrier is a grep for the enumerator, and it is: NOT_A_TASK for a document's own
+     * seeded scripts, an element's inline program, a held external-script slot and a cross-agent operation's
+     * answer; SOLVER_CANDIDATE for an @S re-fire; NETWORKING for a program a response produced; and
+     * NAVIGATION_AND_TRAVERSAL for §7.4.2.3.2's `javascript:` URL — which core/frame/navigable.c ALSO queues
+     * on `jobs` for the document load of the same section, and solver/engine.h states at that entry what the
+     * next diff builds and how the split shows without one.
+     * THE NETWORKING ANSWER RAISES A SECOND QUESTION AND IS NOT A VERDICT ON IT. The pending register's
+     * delivery arm calls itself the networking task source's arm, and it is also what queues one of the rows
+     * that names NETWORKING here — so §8.1.4.2's ONE fetch-then-run task is performed as an arm-run plus a
+     * row, on two carriers. Whether that is observable is a different question from the one above (two halves
+     * of one task, not two tasks of one source), and it is not answered here. */
+    DCHECK(src != TASK_SOURCE_UNSTATED,
+           "a program was queued without saying which task source, if any, put it there — HTML §8.1.7.1 gives "
+           "a task a source so that one source is in one queue, and a row that states none cannot be ordered "
+           "against the same source's work on another carrier or shown not to have any");
+    /* A TASK TAKES THE TAIL, AND THAT IS §8.1.7.1's QUEUE RATHER THAN THIS ENGINE'S PREFERENCE. A task is
+       queued; it cannot interpose ahead of tasks already queued on its own source. The one position that is
+       not the tail is what the standard reaches by NOT queuing anything — §4.12.1.1 "Processing model"'s
+       "Otherwise, immediately execute the script element el, even if other scripts are already executing" —
+       so an IMMEDIATE row naming a task source is a caller that has confused running a program in place with
+       queuing one, and the two are the whole of what DynPos distinguishes. */
+    DCHECK(!task_source_is_task(src) || pos == DYN_POS_APPEND,
+           "a queued program named a task source AND asked to run IMMEDIATELY — a task is queued and takes "
+           "the tail of its source's queue, and the only position that is not the tail belongs to a program "
+           "the causing algorithm runs in place, which by definition no task source queued");
+    /* AND THE TWO KINDS THE SOLVER PUTS THERE ARE THE TWO THAT MAY NOT NAME A SOURCE, ASSERTED BOTH WAYS for
+       the reason the token above is: an @S candidate is a program the solver fired and a cross-agent
+       operation's row is a peer's SYNCHRONOUS read answered by running one, so neither was queued by any
+       algorithm of the standard. A source on either would order a program the page never queued against
+       programs it did; the candidate's kind naming any other source, or a page's own program naming the
+       candidate's, is the same mistake pointing the other way. */
+    DCHECK((kind == DYN_CANDIDATE) == (src == TASK_SOURCE_SOLVER_CANDIDATE),
+           "a queued program's kind and its task source disagree about who queued it — only an @S candidate "
+           "is the solver re-firing a sink, and only it may say so, because a source is what orders a work "
+           "item against the page's own tasks and an invented one orders it against tasks nobody observed");
+    DCHECK(kind != DYN_CROSS_AGENT_OP || src == TASK_SOURCE_NOT_A_TASK,
+           "a cross-agent operation's program named a task source — the peer is suspended AT the operand of a "
+           "synchronous cross-instance read, so this program is that read's continuation and no task queue "
+           "holds it; giving it a source would order a peer's suspended expression against this document's "
+           "tasks");
     if (f->dyn_n >= f->dyn_cap) {
         f->dyn_cap = f->dyn_cap ? f->dyn_cap * 2 : 8;
         f->dyn = realloc(f->dyn, (size_t)f->dyn_cap * sizeof(DynBody *));
@@ -5265,15 +5321,15 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
    over: the caller keeps its reference and releases it, exactly as engine_queue_into's does, so a caller that
    queues one program into several places pays for the bytes once. */
 static void engine_queue_el_body(uint32_t doc, DynBody *body, DynKind kind, ScriptType stype, const char *url,
-                                 DynPos pos, lxb_dom_element_t *el) {
+                                 TaskSource src, DynPos pos, lxb_dom_element_t *el) {
     Flow *f = flow_running();   /* the running flow owns the lazy chunk it loads */
     DCHECK(f != NULL, "a program was queued with no flow running — a program is a work item of the ONE "
                       "frontier and there is no member to give it to, so it would be dropped without a trace");
-    engine_queue_into(f, doc, body, kind, stype, url, NULL, pos, el);
+    engine_queue_into(f, doc, body, kind, stype, url, NULL, src, pos, el);
 }
 
-/* …AND THE ROW A CALLER HOLDS AS BYTES IT HAS NOT SHARED — a `setTimeout` body, a `javascript:` URL, an @S
-   candidate, a cross-agent operation's program. The one copy those need is made HERE and released HERE, so the
+/* …AND THE ROW A CALLER HOLDS AS BYTES IT HAS NOT SHARED — a `javascript:` URL, an @S candidate, a cross-agent
+   operation's program. The one copy those need is made HERE and released HERE, so the
    sharing is the only thing the rest of the engine has to know about.
    IT IS `(body, body_n)` AND NOT A C STRING, and the callers are why rather than symmetry: a `javascript:` URL
    percent-decodes to a byte sequence in which `%00` is an ordinary byte, an @S candidate is a payload built
@@ -5282,26 +5338,26 @@ static void engine_queue_el_body(uint32_t doc, DynBody *body, DynKind kind, Scri
    impossible (it emits a U+FFFD instead), so each of them can hold one and each of them was being read to the
    first. */
 static void engine_queue_el(uint32_t doc, const char *body, size_t body_n, DynKind kind, ScriptType stype,
-                            const char *url, DynPos pos, lxb_dom_element_t *el) {
+                            const char *url, TaskSource src, DynPos pos, lxb_dom_element_t *el) {
     DynBody *b;
 
     DCHECK(body != NULL, "a program was queued with no body — the caller has nothing to run and the queue "
                          "entry would be a slot the compile below dereferences");
     b = dyn_body_new(body, body_n);
     CHECK(b, "engine: OOM dynamic-script body");
-    engine_queue_el_body(doc, b, kind, stype, url, pos, el);
+    engine_queue_el_body(doc, b, kind, stype, url, src, pos, el);
     dyn_body_unref(b);
 }
 
-/* …AND THE ROWS NO ELEMENT CAUSED. §4.12.1.1's "execute the script element" never runs for these — a §8.7
-   string handler, a lazy chunk's reply, §7.4.2.3.2's `javascript:` URL, an @S candidate and a cross-agent
+/* …AND THE ROWS NO ELEMENT CAUSED. §4.12.1.1's "execute the script element" never runs for these — a lazy
+   chunk's reply, §7.4.2.3.2's `javascript:` URL, an @S candidate and a cross-agent
    operation's program are classic scripts §8.1.4.4 evaluates with no element behind them — so the document's
    §3.1.7 `currentScript` stays null while they run, which is that section's own answer and not a default this
    entry picks. It is a separate entry rather than a NULL at each call site so that a caller that DOES hold an
    element cannot pass nothing by omission. */
 static void engine_queue(uint32_t doc, const char *body, size_t body_n, DynKind kind, ScriptType stype,
-                         const char *url, DynPos pos) {
-    engine_queue_el(doc, body, body_n, kind, stype, url, pos, NULL);
+                         const char *url, TaskSource src, DynPos pos) {
+    engine_queue_el(doc, body, body_n, kind, stype, url, src, pos, NULL);
 }
 
 /* A DOCUMENT'S SCRIPT INVENTORY, SEEDED AS THE ROWS OF ONE FLOW'S SEQUENCE — the ONE thing that turns a
@@ -5365,9 +5421,16 @@ static void engine_seed_scripts(Flow *f, uint32_t doc, const RootScript *rows, i
            whole bundle into every flow it created. The ADDRESS row still makes a body, because its body IS the
            address until the reply replaces it and that string is the table's, not this row's; it is tens of
            bytes and it is released here, the row keeping the reference engine_queue_into took. */
+        /* NO TASK SOURCE, AT EITHER POSITION, AND THAT IS §4.12.1's ORDER RATHER THAN AN OMISSION. A
+           document's own scripts are run by the parse that reached them — §8.1.7.1 "Definitions" describes
+           that as work a task DOES ("The HTML parser tokenizing one or more bytes, and then processing any
+           resulting tokens, is typically a task") and not as one task per element — and the order they hold is
+           the one §4.12.1 fixed against each other, which the sequence IS. Naming a source here would claim
+           the tail is FIFO among tasks of that source, which is a different reason for the same position and
+           the wrong one. */
         if (rows[i].body) {
             engine_queue_into(f, doc, rows[i].body, DYN_PAGE_SCRIPT, rows[i].type, rows[i].url,
-                              NULL, DYN_POS_APPEND, rows[i].el);
+                              NULL, TASK_SOURCE_NOT_A_TASK, DYN_POS_APPEND, rows[i].el);
         } else {
             /* AN ADDRESS IS THE ONE BODY WHOSE LENGTH IS ITS `strlen`, and this is where that is stated. It
                came out of script_src_absolute, which serializes a parsed URL record (URL §4.5 "URL
@@ -5379,8 +5442,8 @@ static void engine_seed_scripts(Flow *f, uint32_t doc, const RootScript *rows, i
                that depends on it. */
             DynBody *addr = dyn_body_new(rows[i].url, strlen(rows[i].url));
             CHECK(addr, "engine: OOM seeding an external script's address as its row's body");
-            engine_queue_into(f, doc, addr, DYN_SCRIPT_SRC, rows[i].type, NULL, NULL, DYN_POS_APPEND,
-                              rows[i].el);
+            engine_queue_into(f, doc, addr, DYN_SCRIPT_SRC, rows[i].type, NULL, NULL,
+                              TASK_SOURCE_NOT_A_TASK, DYN_POS_APPEND, rows[i].el);
             dyn_body_unref(addr);
         }
     }
@@ -5472,7 +5535,8 @@ void engine_queue_fetched_script(uint32_t doc, const char *body, size_t body_n, 
            "script with the response's URL and §8.1.4.1 keeps it as the script's base URL, so a caller here "
            "with none has the bytes and has thrown away where they came from; nothing downstream can "
            "re-derive it, and the document's address is another script's answer rather than a weaker one");
-    engine_queue(doc, body, body_n, DYN_PAGE_SCRIPT, SCRIPT_TYPE_CLASSIC, url, DYN_POS_APPEND);
+    engine_queue(doc, body, body_n, DYN_PAGE_SCRIPT, SCRIPT_TYPE_CLASSIC, url, TASK_SOURCE_NETWORKING,
+                 DYN_POS_APPEND);
 }
 
 /* …AND THE ROW A `<script>` ELEMENT PUT THERE, which is the same position and one more fact: HTML §4.12.1.1
@@ -5497,7 +5561,8 @@ void engine_queue_element_script(uint32_t doc, const char *body, size_t body_n, 
     DCHECK(el != NULL, "a `<script>` element's program was queued with no element — this entry is the one an "
                        "ELEMENT reaches; the element-less entry is engine_queue_fetched_script, so a caller "
                        "here with nothing to pass is a caller at the wrong entry");
-    engine_queue_el(doc, body, body_n, DYN_PAGE_SCRIPT, stype, NULL, DYN_POS_APPEND, el);
+    engine_queue_el(doc, body, body_n, DYN_PAGE_SCRIPT, stype, NULL, TASK_SOURCE_NOT_A_TASK,
+                    DYN_POS_APPEND, el);
 }
 
 /* …AND THE ONE SCRIPT SOURCE THAT IS NOT A TASK. HTML §4.12.1.1 "Processing model" ends "prepare the script
@@ -5515,7 +5580,8 @@ void engine_queue_script_immediate(uint32_t doc, const char *body, size_t body_n
     DCHECK(el != NULL, "an inline classic script was queued to run IMMEDIATELY with no element — §4.12.1.1 "
                        "reaches `immediately execute the script element` from `prepare the script element`, "
                        "whose whole subject is EL");
-    engine_queue_el(doc, body, body_n, DYN_PAGE_SCRIPT, SCRIPT_TYPE_CLASSIC, NULL, DYN_POS_IMMEDIATE, el);
+    engine_queue_el(doc, body, body_n, DYN_PAGE_SCRIPT, SCRIPT_TYPE_CLASSIC, NULL, TASK_SOURCE_NOT_A_TASK,
+                    DYN_POS_IMMEDIATE, el);
 }
 
 /* …AND ITS EXTERNAL SIBLING, which takes the same position with only an ADDRESS — see DYN_SCRIPT_SRC. The
@@ -5536,7 +5602,8 @@ void engine_queue_docscript_url(uint32_t doc, const char *url, ScriptType stype,
        its components went through a percent-encode set built on URL §1.3's C0 control percent-encode set —
        "C0 controls and all code points greater than U+007E" — which contains U+0000. flow_deliver_one_reply
        asserts the pair again at the read that turns this body back into a C string. */
-    engine_queue_el(doc, url, strlen(url), DYN_SCRIPT_SRC, stype, NULL, DYN_POS_APPEND, el);
+    engine_queue_el(doc, url, strlen(url), DYN_SCRIPT_SRC, stype, NULL, TASK_SOURCE_NOT_A_TASK,
+                    DYN_POS_APPEND, el);
 }
 
 /* AN @S CANDIDATE, queued as the program it would be if it fired. It is the same queue because it IS the same
@@ -5556,7 +5623,8 @@ void engine_queue_docscript_url(uint32_t doc, const char *url, ScriptType stype,
    candidate carrying one fires a DIFFERENT program from the one the search decided on, and the verdict
    ("no hit") would be about a payload nobody chose. */
 void engine_queue_candidate(const char *body, size_t body_n, DynPos pos) {
-    engine_queue(g_sess_doc, body, body_n, DYN_CANDIDATE, SCRIPT_TYPE_CLASSIC, NULL, pos);
+    engine_queue(g_sess_doc, body, body_n, DYN_CANDIDATE, SCRIPT_TYPE_CLASSIC, NULL,
+                 TASK_SOURCE_SOLVER_CANDIDATE, pos);
 }
 
 /* HTML §7.4.2.3.2's EVALUATE A JAVASCRIPT: URL, steps 6-7 — "let script be the result of creating a classic
@@ -5579,7 +5647,8 @@ void engine_queue_candidate(const char *body, size_t body_n, DynPos pos) {
 void engine_queue_javascript_url(uint32_t doc, const char *body, size_t body_n) {
     /* CLASSIC, and §7.4.2.3.2 step 6 says so in as many words — "let script be the result of creating a CLASSIC
        script given scriptSource" — so there is nothing here to parameterise. */
-    engine_queue(doc, body, body_n, DYN_JAVASCRIPT_URL, SCRIPT_TYPE_CLASSIC, NULL, DYN_POS_APPEND);
+    engine_queue(doc, body, body_n, DYN_JAVASCRIPT_URL, SCRIPT_TYPE_CLASSIC, NULL,
+                 TASK_SOURCE_NAVIGATION_AND_TRAVERSAL, DYN_POS_APPEND);
 }
 
 /* THE OPERATION BECOMES THIS FLOW'S NEXT PROGRAM. Not a call: a peer answers by RUNNING a program, and every one
@@ -5654,7 +5723,7 @@ static void flow_perform(JSContext *ctx, Flow *f)
            script element" is not the algorithm that runs it and the peer document's §3.1.7 `currentScript`
            stays null while it does — which is the truth about a document answering a cross-agent read. */
         engine_queue_into(f, doc, prog, DYN_CROSS_AGENT_OP, SCRIPT_TYPE_CLASSIC,
-                          NULL, own, DYN_POS_APPEND, NULL);
+                          NULL, own, TASK_SOURCE_NOT_A_TASK, DYN_POS_APPEND, NULL);
         dyn_body_unref(prog);
     }
     remote_op_free(op);
@@ -6702,8 +6771,12 @@ static int flow_step(JSContext *ctx, Flow *f) {
                        "program, which the branch above holds the flow at until its reply arrives");
             }
             else if (flow_job_pending(f) > 0) {
-                /* WHAT IS LEFT ON THE QUEUE HERE IS A TASK — HTML §8.1.7.3 "Processing model" step 1, run the
-                   oldest runnable task. The checkpoint above is the only thing that consumes a microtask and it
+                /* WHAT IS LEFT ON THE QUEUE HERE IS A TASK — HTML §8.1.7.3 "Processing model" step 2, whose
+                   2.3 takes "the first runnable task in taskQueue" and whose 2.6 performs its steps. (Step 1
+                   stood here and is the one that initialises oldestTask to null; the same section's step 2.1
+                   is the choice of queue this file cites correctly one rung up, which is how the two numbers
+                   came to disagree inside one algorithm.)
+                   The checkpoint above is the only thing that consumes a microtask and it
                    runs before every program, so a microtask on the queue at this point is one it declined to
                    run, and the only reason it declines is the immediate row that the arm above this one would
                    have compiled. There is no such row here (the cursor is past the end of the sequence), which
@@ -6746,17 +6819,27 @@ static int flow_step(JSContext *ctx, Flow *f) {
                  * 9.8.7-9.8.8), and core/timing/timer.c does that now — every entry of a global's map queues
                  * exactly one step-9 task through JS_EnqueueCallTask, and that file queues no row at all, which
                  * is what a grep of it for `engine_queue` answers.
-                 * WHAT IS STILL OPEN HERE IS THIS ARM'S OWN REACHABILITY, and it is unchanged: the `else` above
-                 * still binds to `f->script_i < f->dyn_n`, so a flow runs a queued TASK only with its cursor
-                 * past the last row, and a page that keeps appending rows still excludes its own timer
-                 * callbacks and delivered messages for as long as it does. Deciding the order between the two
-                 * CARRIERS is what that needs, and the question that gates it is whether any OTHER task source
-                 * still reaches `dyn`: the entries that put a row there are engine_queue_javascript_url,
-                 * engine_queue_element_script, engine_queue_script_immediate (which §4.12.1.1's "immediately
-                 * execute the script element" says is not a task at all) and engine_queue_fetched_script.
-                 * Establish that per entry against §8.1.7.4 "Generic task sources" and §4.12.1.1 before
-                 * reordering anything here; naming a repair before that is naming a mechanism nobody has
-                 * checked.
+                 * AND THE QUESTION THAT GATED THE REPAIR — WHICH OTHER TASK SOURCE STILL REACHES `dyn` — IS
+                 * ANSWERED, AND IT IS ANSWERED AS A VALUE RATHER THAN AS THIS PARAGRAPH. Every producer of a
+                 * row states its §8.1.7.1 source at its own entry and engine_queue_into asserts it, so the
+                 * answer is a grep for the enumerator and cannot go stale behind a producer added later: this
+                 * carrier serves NOT_A_TASK (a document's seeded scripts, an element's inline program, a held
+                 * external-script slot, a cross-agent operation's answer), SOLVER_CANDIDATE (an @S re-fire,
+                 * which no algorithm of the standard queued), NETWORKING (a program a response produced) and
+                 * NAVIGATION_AND_TRAVERSAL (§7.4.2.3.2's `javascript:` URL).
+                 * THE LAST OF THOSE IS THE TIMER DEFECT ARRIVING THROUGH A SECOND SECTION. §7.4.2.2 step 21
+                 * queues the `javascript:` navigation on the navigation and traversal task source and its row
+                 * is here, while the document load of the same section queues on that source through
+                 * JS_EnqueueCallTask and lands in `jobs` — one source, two carriers, exactly the pair of
+                 * orderings above with `iframe.src =` and `location.href = "javascript:…"` in place of the two
+                 * timers. So this arm's order is STILL not the thing to decide first, and the reason has
+                 * changed from "nobody has established the enumeration" to a named, greppable second split.
+                 * WHAT REMAINS OPEN IS THIS ARM'S OWN REACHABILITY, unchanged: the `else` above still binds to
+                 * `f->script_i < f->dyn_n`, so a flow runs a queued TASK only with its cursor past the last
+                 * row, and a page that keeps appending rows still excludes its own timer callbacks and
+                 * delivered messages for as long as it does. What it needs is one queue per source, which
+                 * needs the source on a `jobs` entry as it is now on a row — solver/engine.h's
+                 * engine_queue_javascript_url states what that is and how its absence shows.
                  * AND THE NAIVE REPAIR IS ALREADY WIRED TO FIRE: the DCHECK below is what catches it. Hoisted
                  * above the sequence, this arm becomes reachable with a DYN_POS_IMMEDIATE row at the cursor —
                  * the one row flow_stack_empty holds the checkpoint off for — so the flow arrives here holding
