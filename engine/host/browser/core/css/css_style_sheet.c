@@ -37,11 +37,13 @@
 #include "core/css/css_rule.h"
 #include "core/css/css_rule_list.h"
 #include "core/css/css_style_sheet.h"
+#include "core/css/media_list.h"   /* §6.1's media state item IS a §4.4 MediaList object */
 #include "core/css/style_sheet_list.h"
 #include "core/dom/document.h"   /* §6.1's constructor step 2 reads the realm's document base URL */
 #include "core/dom/node.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
+#include "solver/concolic.h"   /* §6.1 step 12 asserts what it cannot parse */
 #include "solver/cow.h"
 
 /* §6.1's state items, as far as anything reads them — see the header for why the other eight are not here. */
@@ -63,6 +65,13 @@ typedef struct CssStyleSheetData {
        once because a page holds it and compares it. It shares the very Array above, which is what its
        liveness IS. */
     JSValue rule_list;           /* (OWNED) */
+    /* §6.1 "media" — "Specified when created. The MediaList object associated with the CSS style sheet." A
+       §4.4 MediaList OBJECT and not a string, because §6.1.1 declares the attribute `[SameObject]`: a page
+       holds `sheet.media` and compares it, and `[PutForwards=mediaText]` writes THROUGH it, so re-minting one
+       per read would hand back a different object each time AND lose every write. Both specifications §6.1
+       gives reduce to §4.4's create a MediaList object with a string — the creator hands over that string and
+       the mint below is where the object is made. */
+    JSValue media;               /* (OWNED) */
     bool    disabled;            /* §6.1 "disabled flag" */
     /* §6.1 "constructed flag". A POD latch and NOT a JSValue, so it is not in SHEET_VALS — the layout names the
        record's owned JSValues, and this is the same kind of field `disabled` is. It is written once, by §6.1's
@@ -85,8 +94,9 @@ static const uint16_t SHEET_VALS[] = {
     (uint16_t)offsetof(CssStyleSheetData, title),
     (uint16_t)offsetof(CssStyleSheetData, rules),
     (uint16_t)offsetof(CssStyleSheetData, rule_list),
+    (uint16_t)offsetof(CssStyleSheetData, media),
 };
-static const CowRecord SHEET_REC = { sizeof(CssStyleSheetData), SHEET_VALS, 7 };
+static const CowRecord SHEET_REC = { sizeof(CssStyleSheetData), SHEET_VALS, 8 };
 
 /* THE ACCESSOR, AND THEREFORE THE CAPTURE POINT. Every member of both interfaces reaches the record through
    here, so every flow that can write the disabled flag has already had its delta take a copy of the record. */
@@ -153,6 +163,7 @@ static void sheet_finalizer(JSRuntime *rt, JSValue val)
     JS_FreeValueRT(rt, s->title);
     JS_FreeValueRT(rt, s->rules);
     JS_FreeValueRT(rt, s->rule_list);
+    JS_FreeValueRT(rt, s->media);
     free(s);
 }
 
@@ -168,6 +179,7 @@ static void sheet_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_fun
     JS_MarkValue(rt, s->title, mark_func);
     JS_MarkValue(rt, s->rules, mark_func);
     JS_MarkValue(rt, s->rule_list, mark_func);
+    JS_MarkValue(rt, s->media, mark_func);
 }
 
 /* ---- §6.1's TITLE ---------------------------------------------------------------------------------------- */
@@ -196,7 +208,8 @@ static JSValue sheet_title_concept(JSContext *ctx, const CssStyleSheetData *s)
 
 /* ---- §6.1.1's StyleSheet ---------------------------------------------------------------------------------- */
 
-enum { SS_TYPE = 0, SS_HREF, SS_OWNER_NODE, SS_PARENT_STYLE_SHEET, SS_TITLE, SS_DISABLED, SS_OWNER_RULE };
+enum { SS_TYPE = 0, SS_HREF, SS_OWNER_NODE, SS_PARENT_STYLE_SHEET, SS_TITLE, SS_DISABLED, SS_OWNER_RULE,
+       SS_MEDIA };
 
 static JSValue js_sheet_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
@@ -228,6 +241,16 @@ static JSValue js_sheet_get(JSContext *ctx, JSValueConst this_val, int magic)
     }
     /* "on getting, must return true if the disabled flag is set, or false otherwise" */
     case SS_DISABLED: return JS_NewBool(ctx, s->disabled);
+    /* §6.1.1: "The media attribute must return the media." The state item ITSELF and never a copy — that is
+       what `[SameObject]` means, and it is also what makes `[PutForwards=mediaText]` reach the sheet: the
+       forwarding does a real [[Get]] of `media` and then sets `mediaText` on what it got, so a fresh object
+       here would take the write and be dropped on the next line. */
+    case SS_MEDIA:
+        DCHECK(media_list_is(ctx, s->media),
+               "a CSS style sheet's media is not a MediaList — §6.1 says the state item is \"specified when "
+               "created\" and every creator mints one through §4.4's create a MediaList object, so this sheet "
+               "was built by a path that skipped it");
+        return JS_DupValue(ctx, s->media);
     default:
         DCHECK(magic == SS_OWNER_RULE,
                "a style sheet attribute ran with a magic neither §6.1.1 nor §6.1.2 declares");
@@ -326,7 +349,8 @@ JSValue css_style_sheet_title(JSContext *ctx, JSValueConst sheet)
    `disabled` and `constructed` are parameters and not post-mint writes: the record is unreachable by the
    collector until JS_SetOpaque, so every state item this sheet is born with is written in one place. */
 static JSValue sheet_mint(JSContext *ctx, JSValueConst owner_node, JSValueConst parent_style_sheet,
-                          JSValueConst owner_rule, JSValueConst location, bool constructed, bool disabled)
+                          JSValueConst owner_rule, JSValueConst location, const char *media_text,
+                          bool constructed, bool disabled)
 {
     JSValue proto, obj;
     CssStyleSheetData *s;
@@ -355,6 +379,14 @@ static JSValue sheet_mint(JSContext *ctx, JSValueConst owner_node, JSValueConst 
     s->rules = JS_NewArray(ctx);
     CHECK(!JS_IsException(s->rules), "a CSS style sheet's rule list could not be allocated");
     s->rule_list = JS_UNDEFINED;
+    /* §6.1's MEDIA, "specified when created" — §4.4's CREATE A MEDIALIST OBJECT with the string the creator
+       specified. NULL is the empty string, which is the empty collection and therefore a sheet that applies to
+       every medium: that is what an absent `media` content attribute specifies and what §6.1.2's
+       `(MediaList or DOMString) media = ""` default specifies, so the two creators agree without either of
+       them saying so. It is minted BEFORE JS_SetOpaque like every other slot — the record is unreachable by
+       the collector until then, so this allocation cannot reach sheet_gc_mark through a half-built record. */
+    s->media = media_list_new(ctx, media_text);
+    CHECK(!JS_IsException(s->media), "a CSS style sheet's media list could not be allocated");
     /* §6.1: the disabled flag is "either set or unset. Unset by default". §6.2's create specifies no value for
        it, so every creator but one leaves it at the calloc's zero; the one that does specify it is §6.1's
        constructor, whose step 13 is "If the disabled attribute of options is true, set sheet's disabled flag".
@@ -370,10 +402,10 @@ static JSValue sheet_mint(JSContext *ctx, JSValueConst owner_node, JSValueConst 
 }
 
 JSValue css_style_sheet_create(JSContext *ctx, JSValueConst owner_node, JSValueConst parent_style_sheet,
-                               JSValueConst owner_rule, JSValueConst location)
+                               JSValueConst owner_rule, JSValueConst location, const char *media)
 {
     /* STEP 1 — "Create a new CSS style sheet object and set its properties as specified." */
-    JSValue obj = sheet_mint(ctx, owner_node, parent_style_sheet, owner_rule, location,
+    JSValue obj = sheet_mint(ctx, owner_node, parent_style_sheet, owner_rule, location, media,
                              /*constructed*/ false, /*disabled*/ false);
 
     if (JS_IsException(obj)) return obj;
@@ -590,32 +622,35 @@ static const IdlStepDecl SD_DECL = {
  *       boolean disabled = false;
  *     };
  *
- * ONE of the three is declared here, in Web IDL §3.2.17 Dictionary types' lexicographic read order (which is
- * trivially satisfied by a one-member list, and stated because the order is part of the declaration). The other
- * two are ABSENT, not accepted-and-dropped: an undeclared member is one §3.2.17's conversion never reads, so a
- * page that passes it is in exactly the position of a page talking to a user agent that does not ship the
- * feature, and `node engine/idlgen.mjs` reports both by name every run. Declaring a member this constructor
- * would then ignore is the one thing that would make either of them invisible.
+ * TWO of the three are declared here, in Web IDL §3.2.17 Dictionary types' lexicographic read order — which is
+ * `disabled` then `media`, and is stated because the order is part of the declaration and is OBSERVABLE: each
+ * member's conversion can run the page's own `toString`, so a dictionary whose rows were sorted any other way
+ * would run them out of the order §3.2.17 step 4 specifies. The third is ABSENT, not accepted-and-dropped: an
+ * undeclared member is one §3.2.17's conversion never reads, so a page that passes it is in exactly the
+ * position of a page talking to a user agent that does not ship the feature, and `node engine/idlgen.mjs`
+ * reports it by name every run. Declaring a member this constructor would then ignore is the one thing that
+ * would make it invisible.
  *
- * A NAMED RESIDUAL — `media`. WHAT IS NOT COVERED: `(MediaList or DOMString) media`, and with it §6.1's MEDIA
- * state item, which this constructor's step 12 is the only algorithm in this build that could specify (HTML
- * §4.2.6's create hands over a live REFERENCE to the `<style>` element's `media` content attribute instead —
- * see css_style_sheet.h). WHAT THE NEXT DIFF BUILDS: a §3.2.25 `(T or DOMString)` ARM IN THE DICTIONARY-MEMBER
- * CONVERSION — core/idl_args.c has one for an ARGUMENT position (`IDL_STRING_UNLESS_IFACE`) and the dictionary
- * member loop has no branch for that type at all — plus a brand this dictionary can state for MediaList, which
- * `IdlDictMember::iface` cannot be: every indexed interface in this platform shares core/idl_indexed.c's ONE
- * class, so `JS_GetClassID(v)` cannot tell a MediaList from a CSSRuleList and the only correct test is
- * `media_list_is`, which takes a JSContext where `IdlDictMember::iface_narrow` takes none. HOW ITS ABSENCE
- * SHOWS: `new CSSStyleSheet({media: "print"})` builds a sheet that applies to every medium, and idlgen's
- * dictionary category names `CSSStyleSheetInit: media` for as long as it is true.
+ * `media` STATES §3.2.15's `I` AS A PREDICATE AND NOT AS A CLASS, which is the whole of what this row needed
+ * that no earlier dictionary did. Every indexed interface in this platform is one core/idl_indexed.c object, so
+ * `JS_GetClassID` cannot tell a MediaList from a CSSRuleList and `IdlDictMember::iface` — a JSClassID — could
+ * not name this interface at all; §4.4 brands on the private-Symbol own slot that HOLDS its collection, and
+ * reading an own slot takes a realm. `IdlDictMember::iface_is` is that spelling (core/idl_args.h), and
+ * `media_list_is` is already exactly its signature.
  *
  * A NAMED RESIDUAL — `baseURL`. WHAT IS NOT COVERED: `DOMString? baseURL = null` and §6.1's STYLESHEET BASE
- * URL, which step 4 would set from it. WHAT THE NEXT DIFF BUILDS: resolution of a relative `url()` against a
+ * URL, which step 3 would set from it. WHAT THE NEXT DIFF BUILDS: resolution of a relative `url()` against a
  * sheet's base URL — this build performs none anywhere, for any sheet, so the state item has no reader and a
  * stored one would model nothing a page can observe. HOW ITS ABSENCE SHOWS: the day a `url()` in a constructed
  * sheet's rule is resolved, it resolves against the document rather than against `options.baseURL`. */
 static const IdlDictMember CSS_STYLE_SHEET_INIT[] = {
     { "disabled", IDL_BOOLEAN, false, NULL, 0, NULL, IDL_DEFAULT_FALSE },
+    /* `(MediaList or DOMString) media = ""` — §3.2.25 Union types over an interface and a string, whose arm IS
+       §3.2.15's brand test. The default is the empty string, which §4.4's create a MediaList object turns into
+       the empty collection: a sheet that applies to every medium, which is what a page that passed no `media`
+       asked for. */
+    { "media", IDL_STRING_UNLESS_IFACE, false, NULL, 0, NULL, IDL_DEFAULT_STRING, "",
+      .iface_is = media_list_is, .iface_name = "MediaList" },
 };
 
 /* §6.1: "CSSStyleSheet(options) — When called, execute the steps to create a constructed CSSStyleSheet given
@@ -629,14 +664,25 @@ static const IdlDictMember CSS_STYLE_SHEET_INIT[] = {
 static JSValue js_css_style_sheet_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                        int magic)
 {
-    /* `optional CSSStyleSheetInit options = {}` — an argument the page did not pass is ABSENT and not an empty
-       object, which is what idl_dict_bool is stated over: every member of an absent dictionary is absent, and
-       an absent member with a declared default is the default. */
-    JSValueConst options = argc > 0 ? argv[0] : JS_UNDEFINED;
+    /* `optional CSSStyleSheetInit options = {}` — and the position is CONVERTED even when the page passed no
+       argument, because its value is the IDL's `= {}` rather than the page's (core/idl_args.c's §3.6 step 16
+       clause, which extends the converted count to cover a declared dictionary position). So `new
+       CSSStyleSheet()` reaches this body with a defaults-only dictionary at argv[0], carrying a real `false`
+       for `disabled` and a real `""` for `media`, and there is no absent-argument world for a `?:` to fill.
+       IT IS ASSERTED RATHER THAN DEFAULTED, which is the difference between reading the IDL's value and
+       inventing one: with a `?: JS_UNDEFINED` here the day that clause stopped covering this position would be
+       the day every default silently became whatever `undefined` coerces to, and nothing would say so. */
+    JSValueConst options;
     const char *base;
-    JSValue location, obj;
+    JSValue media, location, obj;
+    char *media_text;
 
     (void)this_val; (void)magic;
+    DCHECK(argc > 0, "§6.1.2's `constructor(optional CSSStyleSheetInit options = {})` reached its body with no "
+                     "converted argument — a declared dictionary position is converted whether or not the page "
+                     "passed one, so this means the conversion stopped short of position 0 and every member's "
+                     "IDL default is missing rather than placed");
+    options = argv[0];
     /* STEP 2 — "Set sheet's location to the base URL of the associated Document for the current global
        object." THE REALM'S document and not some remembered one: a C member runs in the realm that DEFINED it
        (core/realm.h), so this is the realm whose `CSSStyleSheet` the `new` went through. */
@@ -654,17 +700,59 @@ static JSValue js_css_style_sheet_ctor(JSContext *ctx, JSValueConst this_val, in
           "would be wrong");
     location = JS_NewString(ctx, base);
     if (JS_IsException(location)) return location;
+    /* STEP 12 — "If the media attribute of options is a string, create a MediaList object from the string and
+       assign it as sheet's media. Otherwise, serialize a media query list from the attribute and then create a
+       MediaList object from the resulting string and set it as sheet's media."
+       BOTH ARMS END IN A STRING AND THEREFORE IN §4.4's CREATE, which is why the mint below takes the text and
+       not the object: the difference between the two arms is only WHERE the string comes from — the member
+       itself, or serialize a media query list (CSSOM §4.2 Serializing Media Queries) over the MediaList the
+       page handed over. A page's own MediaList is therefore NOT adopted; the sheet gets a new one carrying the
+       same queries, which is what this step (§6.1) says — "create a MediaList object from the resulting
+       string" — and what stops two sheets sharing one collection.
+       WHICH ARM IS ALREADY DECIDED. `(MediaList or DOMString)` is the declaration's type, so §3.2.25 Union
+       types' arm was chosen by the member loop at this member's own position — this body reads the result and
+       performs no test of its own. */
+    media = idl_dict_get(ctx, options, "media");
+    DCHECK(!concolic_is(media),
+           "`(MediaList or DOMString) media` reached §6.1's constructor holding UNKNOWN EXTERNAL INPUT. It "
+           "crossed as itself (idl_concolic_rule answers CROSSES for the union), and §4.4's create a MediaList "
+           "object PARSES its text into a collection of media queries — so there is no way to build the state "
+           "item without either inventing bytes the flow never determined or de-tainting the value into a "
+           "collection whose serialization a page can read back out of `mediaText`. What is missing is a "
+           "MediaList whose collection is unknown: §4.4's members answered over a domain rather than over a "
+           "JS Array of serialized queries");
+    if (media_list_is(ctx, media)) {
+        media_text = media_list_text(ctx, media);   /* §4.2's serialize a media query list */
+        CHECK(media_text != NULL, "§6.1 step 12 could not serialize the media query list it was handed");
+    } else {
+        size_t mlen = 0;
+        const char *c = JS_ToCStringLen(ctx, &mlen, media);
+
+        /* The string arm. The value is a real JS string — the union placed it or the member's `= ""` default
+           did — so this conversion runs none of the page's code and cannot throw for a reason this body would
+           have to model; a NULL is OOM, which is the one thing left. */
+        CHECK(c != NULL, "§6.1 step 12 could not read the string arm of `(MediaList or DOMString) media`");
+        media_text = malloc(mlen + 1);
+        CHECK(media_text != NULL, "cssom: OOM copying a constructed sheet's media text");
+        memcpy(media_text, c, mlen);
+        media_text[mlen] = '\0';
+        JS_FreeCString(ctx, c);
+    }
+    JS_FreeValue(ctx, media);
     /* STEPS 1 and 4-10, which are the mint: a new object (1); parent CSS style sheet, owner node and owner CSS
        rule all null (4, 5, 6); the title the empty string (7); the alternate flag unset (8) and the
        origin-clean flag set (9), neither of them modelled and both of them what this build already assumes of
        every sheet; the constructed flag set (10). And STEP 13 — "If the disabled attribute of options is true,
        set sheet's disabled flag" — which is the one declared member, read through the declaration's own
        accessor rather than as a post-mint write.
-       STEP 3 ("stylesheet base URL") AND STEP 12 ("media") ARE THE TWO RESIDUALS ABOVE.
+       AND STEP 12's media, whose text was computed above — the mint is where §4.4's create a MediaList object
+       runs, because every creator specifies this state item and only this one specifies it from a member.
+       STEP 3 ("stylesheet base URL") IS THE ONE RESIDUAL ABOVE.
        STEP 11's `Constructor document` IS NOT STORED, for the reason css_style_sheet.h gives about every state
        item this component does not model: its reader is DOM's `adoptedStyleSheets`, which is absent. */
-    obj = sheet_mint(ctx, JS_NULL, JS_NULL, JS_NULL, location,
+    obj = sheet_mint(ctx, JS_NULL, JS_NULL, JS_NULL, location, media_text,
                      /*constructed*/ true, idl_dict_bool(ctx, options, "disabled"));
+    free(media_text);
     JS_FreeValue(ctx, location);
     /* NO `style_sheet_list_add`, AND THAT IS THE WHOLE DIFFERENCE FROM §6.2's CREATE. A constructed sheet has no
        owner node, so it is in no document's or shadow root's collection; `document.styleSheets` lists the
@@ -736,6 +824,13 @@ void css_style_sheet_install_proto(JSContext *ctx)
     idl_install_accessor(ctx, base, "ownerNode", js_sheet_get, SS_OWNER_NODE, -1);
     idl_install_accessor(ctx, base, "parentStyleSheet", js_sheet_get, SS_PARENT_STYLE_SHEET, -1);
     idl_install_accessor(ctx, base, "title", js_sheet_get, SS_TITLE, -1);
+    /* `[SameObject, PutForwards=mediaText] readonly attribute MediaList media`. The setter is NOT this
+       component's: Web IDL §3.3.10 [PutForwards] is a BINDING rule, and its five steps are the same five for
+       every `media`/`mediaText` pair in the platform — CSSMediaRule's and CSSImportRule's carriers install the
+       very same declaration (core/css/media_list.c owns it, because the PAIR is what §4.4 owns). So
+       `sheet.media = "print"` is a real [[Get]] of `media` followed by a [[Set]] of `mediaText` on what it got,
+       which is why the getter above must answer the state item itself and never a copy. */
+    idl_install_accessor(ctx, base, "media", js_sheet_get, SS_MEDIA, media_list_put_forwards_setter());
     idl_install_accessor(ctx, base, "disabled", js_sheet_get, SS_DISABLED, g_id_set_disabled);
 
     proto = JS_NewObjectProto(ctx, base);

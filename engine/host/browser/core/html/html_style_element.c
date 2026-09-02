@@ -176,10 +176,30 @@ void html_style_element_update(lxb_dom_element_t *el)
         /* STEP 6 — "create a CSS style sheet with the following properties". Every one of them is §4.2.6's own
            table: the owner node is the element, the location, parent CSS style sheet and owner CSS rule are
            null (an embedded sheet has no first request, no parent and no @import that pulled it in), and the
-           disabled flag is left at its default. The media and the title are references to the element's
-           ATTRIBUTES rather than copies of them, which is why neither is passed: the sheet reads them off the
-           owner node. */
-        sheet = css_style_sheet_create(realm, wrap, JS_NULL, JS_NULL, JS_NULL);
+           disabled flag is left at its default.
+           THE TITLE IS NOT PASSED AND THE MEDIA IS, AND THE TABLE SAYS BOTH ARE REFERENCES TO AN ATTRIBUTE —
+           so the difference is not in this table, it is in WHAT the two state items are. A title is a STRING
+           and the sheet re-reads the attribute at every ask, which computes what the sync would have written.
+           §6.1's media is a MediaList OBJECT that CSSOM §6.1.1 declares `[SameObject, PutForwards=mediaText]`,
+           so it cannot be re-minted per read without dropping the page's writes; the creator specifies the
+           STRING it is created from, which this cell says is "The media attribute of element". An ABSENT
+           attribute is a NULL here and is the empty collection — a sheet that applies to every medium, which
+           is what a `<style>` with no `media` means. See css_style_sheet.h for the residual: the "reference"
+           half of this cell is the attribute-change sync, and this is its creation half. */
+        {
+            size_t mlen = 0;
+            const lxb_char_t *mv = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"media", 5, &mlen);
+            char *media = NULL;
+
+            if (mv) {
+                media = malloc(mlen + 1);
+                CHECK(media != NULL, "html: OOM reading a <style> element's media attribute");
+                memcpy(media, mv, mlen);
+                media[mlen] = '\0';
+            }
+            sheet = css_style_sheet_create(realm, wrap, JS_NULL, JS_NULL, JS_NULL, media);
+            free(media);
+        }
         if (JS_IsException(sheet)) {
             if (content) lxb_dom_document_destroy_text(n->owner_document, content);
             JS_FreeValue(realm, sheet);

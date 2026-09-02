@@ -844,7 +844,41 @@ typedef struct {
        is true of `FormData? formData` on that same dictionary and of every member whose interface is one
        class. It is read by the two arms that read `iface` and by nothing else. */
     bool      (*iface_narrow)(JSValueConst v);
+    /* §3.2.15's `I` STATED AS A PREDICATE INSTEAD OF AS A CLASS — the DICTIONARY counterpart of idl_arg_iface,
+       which states the same thing at an argument POSITION and has the same two halves (the test, and the
+       identifier the TypeError names). The pair above and this one are TWO SPELLINGS OF ONE FACT and never two
+       facts: a member states §3.2.15's `I` exactly once, which idl_seal_check_dict_members asserts over every
+       declared member list at once, and idl_member_implements is the ONE resolution both spellings are read
+       through — so there is no site at which they could answer differently.
+       WHY THE SECOND SPELLING HAS TO EXIST, in the three shapes that reach it, because ONE of them looks like
+       an accident of this engine and the other two are properties of the standards:
+         - AN INTERFACE NO CLASS ID NAMES BECAUSE MANY CLASSES IMPLEMENT IT. `EventTarget` is implemented by
+           every node wrapper, by a Window and by an XMLHttpRequest, so no class comparison and no narrowing of
+           one class can be its brand — the test is a prototype-chain walk against the REALM's
+           EventTarget.prototype, and a realm is a JSContext.
+         - AN INTERFACE WHOSE INSTANCE IS THE REALM'S OWN GLOBAL. `Window` is what `window` hands a page, and
+           asking whether a value IS this realm's global is a question about the realm.
+         - AN INTERFACE WHOSE CLASS IS SHARED BY CONSTRUCTION. Every indexed interface in this platform is one
+           core/idl_indexed.c object, so `JS_GetClassID` cannot tell a MediaList from a CSSRuleList; each such
+           component brands on the private-Symbol own slot that HOLDS its collection (core/css/media_list.c),
+           and reading an own slot takes a JSContext.
+       A NARROWING CANNOT SERVE ANY OF THE THREE, which is why this is a field and not a wider `iface_narrow`:
+       §3.2.15's test would still begin with a class comparison, and the first two shapes have no one class to
+       compare against while the third's class is shared with every interface it must be told apart from.
+       `iface_name` is the interface's IDL IDENTIFIER and is the SUBJECT of the TypeError §3.2.15 throws — the
+       same half idl_arg_iface's second argument is, for the same reason: a page told only that "the declared
+       interface" was not implemented learns nothing it did not already know. It must outlive the declaration,
+       so every member passes a static. NULL for a member that states its class instead, where the phrase the
+       message falls back to is idl_member_iface_subject's. */
+    bool      (*iface_is)(JSContext *ctx, JSValueConst v);
+    const char *iface_name;
 } IdlDictMember;
+
+/* A DECLARATION OF THIS STRUCT NAMES ITS §3.2.15 TAIL, and that is a rule rather than a style: the struct has
+   gained fields more than once, so a POSITIONAL initializer that runs to the end silently re-aims every value
+   after the next field added — and where the two neighbours are both pointers (as `iface_narrow` and
+   `iface_is` are), it re-aims them with no diagnostic at all. A list that STOPS short of the tail is fine, and
+   is what most declarations do; what must not happen is a list that reaches the tail positionally. */
 
 /* A DICTIONARY, DECLARED — its member list in §3.2.17's read order, and the identifier its IDL gives it. A
    member's OWN dictionary argument is declared as the bare list (idl_method_id_dict); a NESTED one needs that

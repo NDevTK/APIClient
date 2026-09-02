@@ -1169,6 +1169,46 @@ static void idl_seal_check_dict_members(const IdlDictMember *ms, int n,
                 "member `%s` of %s`%s` declares a type that pushes a §3.2.17 level and names no dictionary for "
                 "it — the pushed level has no member list to read and nothing to size its depth from",
                 ms[k].name, whose_kind, whose_name);
+        /* AND THE THIRD PAIR: Web IDL §3.2.15 Interface types' `I`, which a member may spell as a CLASS (plus
+           the narrowing that class cannot express) or as its own realm-taking PREDICATE (plus the identifier
+           the TypeError names). THE TWO SPELLINGS ARE TWO STATEMENTS OF ONE FACT, so a member makes exactly
+           one of them: stating both is two answers to §3.2.15's one `I`, and idl_member_implements would
+           silently let the predicate win for ever. It is asked HERE, over every declared member list at once
+           and before any page can reach one, for idl_seal_check_ifaces' reason — a member whose declaration
+           contradicts itself is broken from the moment it is written, and the conversion only finds out on
+           whichever call first reaches that member.
+           THE FORWARD HALF IS NOT HERE and cannot be: `I` may also be stated ONCE FOR THE DECLARATION
+           (idl_iface_brand), which is a fact about the MEMBER LIST'S OWNER and not about the list, so a named
+           dictionary swept here has no way to see it. idl_member_implements' own DCHECKF is what asks it, at
+           the one moment both are in hand. */
+        DCHECKF(ms[k].iface_is == NULL || ms[k].iface == 0,
+                "member `%s` of %s`%s` states Web IDL §3.2.15's `I` twice — once as a class "
+                "(IdlDictMember::iface) and once as a predicate (IdlDictMember::iface_is). They are two "
+                "spellings of ONE interface, so a member that writes both has said two things about it and "
+                "only the predicate would ever decide a conversion; drop whichever is not this member's",
+                ms[k].name, whose_kind, whose_name);
+        DCHECKF(ms[k].iface_is == NULL || ms[k].iface_name != NULL,
+                "member `%s` of %s`%s` states §3.2.15's `I` as a predicate and names no interface for it — the "
+                "identifier is the SUBJECT of the TypeError §3.2.15 throws, so a page told only that `the "
+                "declared interface` was not implemented learns nothing it did not already know",
+                ms[k].name, whose_kind, whose_name);
+        DCHECKF(ms[k].iface_name == NULL || ms[k].iface_is != NULL,
+                "member `%s` of %s`%s` names an interface for §3.2.15's TypeError and states no predicate to "
+                "test it with — the identifier is half of what that spelling states, and nothing reads it "
+                "without the other half",
+                ms[k].name, whose_kind, whose_name);
+        DCHECKF(ms[k].iface_narrow == NULL || ms[k].iface != 0,
+                "member `%s` of %s`%s` states a §3.2.15 narrowing with no class of its own to narrow — "
+                "idl_member_iface takes the class and its narrowing from the MEMBER together or from the "
+                "DECLARATION together, so a narrowing written beside no class is read by nothing and the "
+                "member brands against the declaration's interface unnarrowed",
+                ms[k].name, whose_kind, whose_name);
+        DCHECKF(idl_type_brands_interface(ms[k].type) ||
+                (ms[k].iface == 0 && ms[k].iface_is == NULL && ms[k].iface_narrow == NULL),
+                "member `%s` of %s`%s` states Web IDL §3.2.15's `I` and its declared type asks for no brand — "
+                "no conversion reads it, so the declaration describes a member that is not this one, and the "
+                "day this member's type changes the silently-unread statement becomes a silently-read one",
+                ms[k].name, whose_kind, whose_name);
     }
 }
 
@@ -1872,6 +1912,50 @@ static void idl_member_iface(const IdlDictMember *dm, const IdlDictLevel *w,
     *narrow = dm->iface ? dm->iface_narrow : w->narrow;
 }
 
+/* §3.2.15's "If V implements I", ON A DICTIONARY MEMBER — the ONE resolution, which is what makes the two
+ * spellings of `I` (a class plus its narrowing, or the member's own realm-taking predicate) two spellings and
+ * not two facts. It is idl_arg_implements one boundary over, in the same shape and for the same reason: the
+ * spelling the member chose is asked first and the class pair answers otherwise, so no arm below decides for
+ * itself which half of the declaration to read.
+ *
+ * THE PREDICATE IS THE WHOLE TEST WHERE ONE IS STATED, never a class comparison narrowed by it — the three
+ * shapes idl_args.h names have no one class to compare against, and a member reaching for both would be asking
+ * a question whose first half is already known to be the wrong one.
+ *
+ * THE ADDRESS IS IN THE MESSAGE, which is what lets this be a shared helper: a DCHECK stamps the line it is
+ * WRITTEN at, so the assert below would name THIS function for every branding member in the engine. What a
+ * reader has to be sent to is the DECLARATION, and a declaration is named by its dictionary and its member —
+ * so both are printed, exactly as idl_seal_check_dict_members prints them, and the three arms that used to
+ * carry their own copy of this check carry none. */
+static bool idl_member_implements(JSContext *ctx, const IdlDictMember *dm, const IdlDictLevel *w,
+                                  JSValueConst v)
+{
+    JSClassID want;
+    bool (*narrow)(JSValueConst v);
+
+    if (dm->iface_is)
+        return dm->iface_is(ctx, v);
+    idl_member_iface(dm, w, &want, &narrow);
+    DCHECKF(want != 0,
+            "member `%s` of %s declares a Web IDL §3.2.15 interface type and names no interface for it — "
+            "§3.2.15 step 1 is \"If V implements I\", and with no I there is nothing to test, so every value "
+            "would cross into the algorithm. State it on the member (IdlDictMember::iface plus its narrowing, "
+            "for an interface a class id names; IdlDictMember::iface_is plus iface_name, for one it does not) "
+            "or once for the whole declaration with idl_iface_brand",
+            dm->name, idl_dict_where(w));
+    return idl_is_iface(v, want) && (narrow == NULL || narrow(v));
+}
+
+/* WHAT THE TypeError §3.2.15 THROWS IS ABOUT — idl_arg_iface_subject's answer for a dictionary member, and the
+   same statement from the other side: a member that spelled `I` as a predicate named the IDL identifier with
+   it, and one that spelled it as a class has no identifier to give. That absence is the positive statement
+   "this member says which class, not which interface" rather than a field nobody wrote, so the phrase falls
+   back to the one the message carried before any member could name itself. */
+static const char *idl_member_iface_subject(const IdlDictMember *dm)
+{
+    return dm->iface_name ? dm->iface_name : "the declared interface";
+}
+
 /* IS "THE MEMBER IS ABSENT" A WORLD OF ITS OWN — the one predicate behind the presence fork below, and it is
  * READ OFF WEB IDL §2.7 Dictionaries rather than decided here.
  *
@@ -2136,6 +2220,28 @@ static int idl_level_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *walk, IdlC
             if (r > 0) return r;
             if (r < 0) return -1;
         }
+        /* §3.2.25 over `(T or DOMString)` where T is an INTERFACE, ON A DICTIONARY MEMBER — CSSOM §6.1.2 The
+           CSSStyleSheet Interface's `(MediaList or DOMString) media` is the first, and the argument path
+           resolves the identical union one boundary over.
+           IT IS NOT A REST POINT AND THEREFORE NOT A `r > 0` ARM. §3.2.25's interface clause is "If V is a
+           platform object, then: If types includes an interface type that V implements, then return the IDL
+           value that is a reference to the object V", which reads no property and calls nothing; the sequence
+           unions above park because THEIR arm is step 11.2's `? GetMethod(V, %Symbol.iterator%)`, and this one
+           has no such step. So the arm is decided here and the arms below convert what it chose.
+           THE ARM IS §3.2.15's OWN TEST, through the ONE resolution — the same sentence the argument path
+           states at IDL_STRING_UNLESS_IFACE: a bare class comparison would take the object arm for every value
+           of a class the member NARROWED past, and the narrowing would be a statement two boundaries of one
+           file disagreed about.
+           EVERYTHING THE UNION DOES NOT NAME IS WHAT MAKES THE REST OF §3.2.25 SKIPPABLE. It names no nullable
+           type, no dictionary, no sequence, no record and no callback, so every value that is not a platform
+           object implementing T falls past every Object clause to the string arm — `{media: null}` is the four
+           characters "null" and not the IDL null, which is what a browser answers and what reading the union
+           as "an object is the interface" would get wrong in the other direction.
+           IDL_ANY IS THE OBJECT ARM because that is what "a reference to the object V" is here: no conversion
+           at all, the value placed as itself. Unknown external input never reaches this line — idl_concolic_rule
+           answers CROSSES for this type, so the pass-through above already rewrote the member to IDL_ANY. */
+        if (mt == IDL_STRING_UNLESS_IFACE)
+            mt = idl_member_implements(ctx, dm, w, w->mv) ? IDL_ANY : IDL_DOMSTRING;
         if (idl_type_pushes_level(mt)) {
             /* §3.2.17 step 4.1.4.1 CONVERTS A MEMBER BY ITS OWN DECLARED TYPE — "Let idlMemberValue be the
                result of converting jsMemberValue to an IDL value whose type is the type member is declared to
@@ -2404,18 +2510,13 @@ static int idl_level_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *walk, IdlC
                AND THE DECLARATION'S NARROWING COMES WITH THE CLASS, which this arm did not read and the
                nullable arm below did — see idl_member_iface. A class says "a Node"; Intersection Observer
                §2.3's `required Element target` says Element, and without the narrowing a Text node crossed
-               as an entry's target with nothing to say so. */
-            JSClassID want;
-            bool (*narrow)(JSValueConst v);
-
-            idl_member_iface(dm, w, &want, &narrow);
-            DCHECK(want != 0, "a dictionary declared an interface-typed member with no class to brand "
-                              "against — IdlDictMember::iface states it per member, and "
-                              "idl_iface_brand states it once for a dictionary whose interface-typed "
-                              "members are all one interface");
-            if (!idl_is_iface(w->mv, want) || (narrow && !narrow(w->mv))) {
-                JS_ThrowTypeError(ctx, "member `%s` of %s does not implement the "
-                                  "declared interface", dm->name, idl_dict_where(w));
+               as an entry's target with nothing to say so.
+               AND THE CLASS IS ONLY ONE OF THE TWO SPELLINGS `I` HAS — see idl_member_implements, which is
+               where both are read and where the "no interface stated" abort now lives, so this arm names no
+               half of the declaration at all. */
+            if (!idl_member_implements(ctx, dm, w, w->mv)) {
+                JS_ThrowTypeError(ctx, "member `%s` of %s does not implement %s", dm->name,
+                                  idl_dict_where(w), idl_member_iface_subject(dm));
                 return -1;
             }
         }
@@ -2429,18 +2530,11 @@ static int idl_level_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *walk, IdlC
                IDL_ANY before any conversion runs — so the null this branch sees is the page's own.)
                IT HAD NO BRANCH AT ALL and therefore crossed unconverted, which is the silent kind of
                gap: `{root: 5}` would have reached a body that then asked node_of for a node. */
-            JSClassID want;
-            bool (*narrow)(JSValueConst v);
-
-            idl_member_iface(dm, w, &want, &narrow);
-            DCHECK(want != 0, "a dictionary declared a nullable interface-typed member with no class "
-                              "to brand against — IdlDictMember::iface states it per member, and "
-                              "idl_iface_brand states it once per declaration");
             if (JS_IsNull(w->mv)) {
                 /* the IDL null; nothing to brand */
-            } else if (!idl_is_iface(w->mv, want) || (narrow && !narrow(w->mv))) {
-                JS_ThrowTypeError(ctx, "member `%s` of %s does not implement the "
-                                  "declared interface", dm->name, idl_dict_where(w));
+            } else if (!idl_member_implements(ctx, dm, w, w->mv)) {
+                JS_ThrowTypeError(ctx, "member `%s` of %s does not implement %s", dm->name,
+                                  idl_dict_where(w), idl_member_iface_subject(dm));
                 return -1;
             }
         }

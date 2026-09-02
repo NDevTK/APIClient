@@ -2054,16 +2054,19 @@ static bool popover_source_is_html_element(JSValueConst v) { return html_element
    and a static initializer cannot ask for one, so the member's own §3.2.15 class is filled in at declare. The
    NARROWING beside it is what a class alone cannot say — every DOM node wrapper is one class, so the class says
    "a Node" and `HTMLElement source` says more. */
+/* THE §3.2.15 TAIL IS NAMED — see the same note in core/html/close_watcher_interface.c: this struct has gained
+   fields twice, and a positional initializer running to its end re-aims every value after the next one added. */
 static IdlDictMember SHOW_POPOVER_OPTIONS[] = {
-    { "source", IDL_INTERFACE, false, NULL, 0, NULL, IDL_DEFAULT_NONE, NULL, 0,
-      popover_source_is_html_element }
+    { "source", IDL_INTERFACE, false, NULL, 0, NULL, IDL_DEFAULT_NONE, NULL, .iface = 0,
+      .iface_narrow = popover_source_is_html_element }
 };
 static IdlDictMember TOGGLE_POPOVER_OPTIONS[] = {
-    { "source", IDL_INTERFACE, false, NULL, 0, NULL, IDL_DEFAULT_NONE, NULL, 0,
-      popover_source_is_html_element },
+    { "source", IDL_INTERFACE, false, NULL, 0, NULL, IDL_DEFAULT_NONE, NULL, .iface = 0,
+      .iface_narrow = popover_source_is_html_element },
     /* LEVEL 1: `force` is declared on TogglePopoverOptions itself, and `source` above is inherited from
        ShowPopoverOptions — §3.2.17 step 3's "least to most derived". */
-    { "force", IDL_BOOLEAN, false, NULL, 1, NULL, IDL_DEFAULT_NONE, NULL, 0, NULL }
+    { "force", IDL_BOOLEAN, false, NULL, 1, NULL, IDL_DEFAULT_NONE, NULL, .iface = 0,
+      .iface_narrow = NULL }
 };
 
 void popover_declare(JSContext *ctx)

@@ -20,17 +20,29 @@
  * resolution of a relative `url()` — of which this build has none at all, so storing it would model nothing a
  * page can observe.
  *
- * `media` IS ABSENT, not stubbed, and BOTH of its halves are one absence. §6.1.1 declares `[SameObject,
- * PutForwards=mediaText] readonly attribute MediaList media`; §4.4's MediaList IS built now
- * (core/css/media_list.h), so what is missing is §6.1's MEDIA state item and the specification of it — HTML
- * §4.2.6 The style element says a `<style>`-created sheet's media is "The media attribute of element", and says
- * in the same table cell that this "is a reference to the (possibly absent at this time) attribute, rather than
- * a copy of the attribute's current value", so it is tracked the way the title is. §6.1's constructor specifies
- * its own from `CSSStyleSheetInit`'s `(MediaList or DOMString) media` — see the residual in css_style_sheet.c,
- * which is where the two meet: that member cannot be DECLARED today, so the constructor has nothing to set the
- * state item from and a state item with one creator and no specification is the dead weight above. A
- * `[SameObject]` getter minting an empty MediaList per read would answer that every sheet applies to every
- * medium AND hand back a different object each time, which is two wrong answers where the spec computes one. */
+ * `media` IS A STATE ITEM AND NOT A LIVE READ, AND THAT IS THE ONE PLACE THIS COMPONENT PARTS COMPANY WITH THE
+ * TITLE. §6.1 says both are "specified when created" and says of both that a value specified to an ATTRIBUTE of
+ * the owner node tracks that attribute; the difference is WHAT the two are. A title is a STRING, so re-reading
+ * the attribute at every ask computes the same answer the sync would have written. The media is an OBJECT, and
+ * §6.1.1 declares it `[SameObject, PutForwards=mediaText]` — a page holds it, compares it, and WRITES THROUGH
+ * it — so re-minting one per read would hand back a different object each time AND drop every write, which is
+ * two wrong answers where the spec computes one. §6.1 says so in its own words: "Whenever the attribute is set,
+ * changed or removed, the media's mediaText attribute must be set to the new value of the attribute" — the
+ * OBJECT survives and its text is what changes. So the object is minted once, by the creator, from the string
+ * that creator specifies: §6.1's constructor from `CSSStyleSheetInit`'s `(MediaList or DOMString) media`
+ * (step 12), and §6.2's create from the owner node's `media` content attribute, which is what HTML §4.2.6 The
+ * style element's table cell specifies.
+ *
+ * A NAMED RESIDUAL — THE SYNC. WHAT IS NOT COVERED: §6.1's "Whenever the attribute is set, changed or removed"
+ * clause, which HTML §4.2.6 defers to by name ("CSSOM defines what happens when the attribute is dynamically
+ * set, changed, or removed"). The mint reads the attribute ONCE, at creation, which is correct for every sheet
+ * whose `media` attribute is never touched afterwards and narrower than the reference §4.2.6 specifies — and
+ * the narrowing cannot be closed by re-reading at the ask, because that would clobber a `[PutForwards]` write.
+ * WHAT THE NEXT DIFF BUILDS: an attribute-change step on `<style>`'s `media` that sets the SHEET'S media's
+ * `mediaText` (never re-mints it), beside HTML §4.2.6's update-a-style-block trigger list — which does NOT
+ * include a `media` change, so re-running the create is not the shape of it. HOW ITS ABSENCE SHOWS:
+ * `styleEl.media = "print"` after the sheet exists leaves `styleEl.sheet.media.mediaText` at its creation
+ * value, where a browser reports "print". */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_STYLE_SHEET_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_STYLE_SHEET_H
 
@@ -56,11 +68,17 @@ void css_style_sheet_free(JSRuntime *rt);
    JS_NULL. The disabled flag is not a parameter because §6.2 gives it no creator-specified value — §6.1 says it
    is "either set or unset. Unset by default", and the ONE algorithm that specifies it at creation is §6.1's
    constructor, which is this component's own and does not come through here.
+   `media` IS A PARAMETER, and it is a `const char *` rather than a MediaList because both of §6.1's
+   specifications of that state item end in §4.4's create a MediaList object WITH A STRING — the mint is where
+   the object is made, so no creator can hand over one somebody else already holds, and two sheets can never
+   share one collection. NULL is the empty string, which is the empty collection and therefore a sheet that
+   applies to every medium: exactly what an ABSENT `media` content attribute specifies, so a caller reading one
+   off its element need not turn that absence into anything.
    Step 2's "run the add a CSS style sheet steps" (also §6.2's) IS here, because it is step 2 of this very
    algorithm — what is not here is any way to skip it. §6.1's constructor mints without adding, and it does that
    by not being this function rather than by passing a flag to it. OWNED: the caller frees. */
 JSValue css_style_sheet_create(JSContext *ctx, JSValueConst owner_node, JSValueConst parent_style_sheet,
-                               JSValueConst owner_rule, JSValueConst location);
+                               JSValueConst owner_rule, JSValueConst location, const char *media);
 
 /* §6.2's "REMOVE A CSS STYLE SHEET". Step 2 — "set the CSS style sheet's parent CSS style sheet, owner node and
    owner CSS rule to null" — is the whole of what this engine can do today; step 1 removes it from the list of

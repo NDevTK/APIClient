@@ -75,8 +75,12 @@ static JSValue cwi_internal(JSContext *ctx, JSValueConst self)
    makes step 3's "If options["signal"] exists" a real question rather than a constant.
    NOT `const`, for core/html/popover.c's reason: a JSClassID is minted at agent start and a static
    initialiser cannot ask for one, so §3.2.15 Interface types' class is filled in at declare. */
+/* THE §3.2.15 TAIL IS NAMED, and every declaration of this shape must name it: IdlDictMember has gained fields
+   twice, so a POSITIONAL initializer that runs to the end of the struct silently re-aims every value after the
+   next field added — and where two adjacent fields are both pointers, it re-aims them without a diagnostic.
+   `iface` is written at the install below rather than here, because a class id is a RUNTIME registration. */
 static IdlDictMember CW_OPTIONS[] = {
-    { "signal", IDL_INTERFACE, false, NULL, 0, NULL, IDL_DEFAULT_NONE, NULL, 0, NULL }
+    { "signal", IDL_INTERFACE, false, NULL, 0, NULL, IDL_DEFAULT_NONE, NULL, .iface = 0, .iface_narrow = NULL }
 };
 
 /* §6.10.3's constructor step 3.2, "Add the following steps to options["signal"]: Destroy closeWatcher." — an
