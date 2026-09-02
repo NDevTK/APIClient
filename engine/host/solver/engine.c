@@ -6061,6 +6061,46 @@ static int preempt_hook(int kind) {
     return quantum_expired();
 }
 
+/* MAY THE RUNNING FLOW GO ON TO THE NEXT SUB-STEP OF THE EVENT-LOOP TURN IT IS ALREADY IN — the scheduler's
+ * GRANULARITY input, and it is ONE call of the policy directly above rather than a second policy or a constant.
+ *
+ * THE UNIT IS THE SPEC'S AND IT IS NOT A CHOICE THIS FILE MAKES. HTML §8.1.7.3 "Processing model" step 2 holds
+ * exactly one nested list, whose sub-steps run 2.1 through 2.8; 2.6 is "Perform oldestTask's steps" and 2.8 is
+ * "Perform a microtask checkpoint", and §8.1.7.1 "Definitions"' perform a microtask checkpoint is a loop —
+ * "While the event loop's microtask queue is not empty". So ONE ITERATION OF STEP 2 IS ONE TASK PLUS THE
+ * CHECKPOINT THAT DRAINS AFTER IT, and that is the unit an event loop rests at.
+ *
+ * WHAT THE LADDER RESTED AT INSTEAD WAS ONE RUNG, WHICH IS FINER THAN ANY SENTENCE OF THE STANDARD. Every arm
+ * of flow_step returns, so a reply delivery cost one scheduler visit and each microtask its own — one iteration
+ * of step 2 spread over 1 + N picks of a frontier that shares its picks among every member. That is what makes
+ * the delivery debt unpayable rather than merely large: the debt is Θ(records × registers naming them) because
+ * a fork copies a flow's undelivered backlog and §8.1.4.4 "Calling scripts"' empty-execution-context-stack
+ * guard (flow_stack_empty) rightly forbids delivering while a program runs, so the backlog is multiplied before
+ * it is drained once — and the drain then ran at a fraction of one entry per pick.
+ *
+ * IT IS A GRANULARITY AND NOT A BOUND, WHICH IS A TEST AND NOT A CLAIM. A bound decides work will not happen;
+ * this decides only how often a flow OFFERS to rest, and every offer it declines costs exactly one predicate —
+ * this one. Nothing is dropped, starved, skipped, reordered or forgotten: every rung of the ladder is
+ * re-derived from the flow's own state at each entry, so a step that ends here and a step that ends at a return
+ * leave IDENTICAL state and the next entry takes the identical arm. Set the policy to refuse every continuation
+ * and the engine is byte-for-byte the one that stood here before.
+ *
+ * AND IT IS THE SAME QUESTION THE PER-OPCODE HOOK ASKS, ASKED FROM THE OTHER LEVEL — one policy with two
+ * consumers, never two policies that have to be kept in step. That is the whole reason it is a call of
+ * preempt_hook rather than a re-spelling of its three clauses: the flow yields the instant a parked flow
+ * outranks it (clause 1), the instant its cooperative quantum is spent (clause 2), and the instant it is
+ * blocked on the host (clause 0), because those ARE the clauses. A second copy of them here is the drift
+ * solver/pending.h refuses for the word "owed".
+ *
+ * JS_PREEMPT_HOST IS THE HONEST KIND. quickjs.h defines it as the source with "no bytecode shape behind it at
+ * all", which is exactly what this is: the scheduler asking between two sub-steps of an algorithm, not a
+ * back-edge, a call or a fork. The hook ignores the kind today and the DEV seam census counts the ask, which is
+ * correct rather than incidental — `points asked` is how many suspend points the path OFFERED, and this is one.
+ */
+static int turn_continues(void) {
+    return !preempt_hook(JS_PREEMPT_HOST);
+}
+
 /* Advance flow `f` by up to one quantum. Returns 1 when the flow has FINISHED all its scripts + lazy chunks,
    0 when it yielded mid-execution (resume it later). Each <script>/chunk is its OWN program (JS_FlowNew) run
    in document order in the shared context, under f's COW delta (set by the caller). */
@@ -6510,6 +6550,16 @@ static int flow_step(JSContext *ctx, Flow *f) {
        and can therefore fail; counted together they could not. It is a report and never a bound — nothing
        reads it to decide anything (see g_step_unit_runs). */
     g_steps++;
+    /* HAS THIS STEP ALREADY PERFORMED ITS TASK — HTML §8.1.7.3 "Processing model" step 2.6, the one act an
+       iteration of step 2 contains. It is declared OUTSIDE the loop and reset per ENTRY, which is the whole of
+       its contract: the loop body below now iterates (the turn continuation at the reply delivery), and a
+       reading declared inside it — as `last_compiled0` deliberately is — would be re-zeroed on the pass that
+       exists precisely to remember. A step therefore runs at most one task and then only step 2.8's checkpoint,
+       whatever the policy answers; the policy decides how much of ONE turn a step completes and never how many
+       turns it takes, which is the difference between a granularity and a cap (§NO BOUNDS, and turn_continues'
+       own note). Nothing else in this function may set it: the flag is what the ONE task arm that continues
+       declares about itself. */
+    int turn_task_done = 0;
     for (;;) {
         /* ONE ARM PER DISTINCT ANSWER, BEFORE ANYTHING ELSE THIS FLOW COULD DO — because everything else it
            could do consumes the very thing the arm is made of. A peer document's state IS its flows, so a
@@ -6564,8 +6614,11 @@ static int flow_step(JSContext *ctx, Flow *f) {
            that a later edit can forget to make, and `last_compiled` is the statement the compile already makes
            (it is written at exactly one line, and the no-replay DCHECK at that line makes it strictly
            increasing, so "it moved" and "this step compiled" are the same fact rather than two that agree).
-           A step that does not enter the block cannot move it, which is why no reset is needed: every path out
-           of flow_step returns, so this is re-read per entry. */
+           A step that does not enter the block cannot move it, which is why no reset is needed: it is declared
+           INSIDE the loop body, so it is re-read at every iteration and not merely at every entry. That
+           distinction used to be empty — the sentence here said "every path out of flow_step returns" — and the
+           turn continuation below is what made the loop iterate, so the reading is now per PASS and the
+           justification has to be the declaration's scope rather than the absence of a `continue`. */
         int last_compiled0 = f->last_compiled;
         if (!f->frame) {
             const char *body;
@@ -6606,18 +6659,26 @@ static int flow_step(JSContext *ctx, Flow *f) {
                cursor, per flow, over an inventory that holds only documents still owing a request), which is
                what lets a document installed LATER — a child navigable's — be served by the timeline that
                created it without this arm having to be told that one appeared. */
-            if (g_link_connected_hook && g_link_connected_hook(ctx)) {
+            /* AND NOT A SECOND TASK IN ONE ITERATION OF §8.1.7.3 "Processing model" STEP 2. This arm and the
+               two below it each produce a TASK, and the turn continuation at the reply delivery may bring the
+               flow back around to them with its task already performed — at which point step 2.8's checkpoint
+               is the only thing left that may run. `turn_task_done` is 0 on every ENTRY to flow_step, so on a
+               pass that has not continued these three conjuncts are constant-true and the ladder is the one
+               that stood here; they can only ever refuse on a pass this file's own `continue` created. */
+            if (!turn_task_done && g_link_connected_hook && g_link_connected_hook(ctx)) {
                 g_step_unit = STEP_UNIT_LINK_CONNECTED; return 0; }
             /* THE ROUTED DELIVERIES THIS FLOW HAS BEEN HANDED, and they are first because the task each one
                enqueues is what every branch below then finds on the queue. ONE PER STEP, oldest first: each
                becomes a §9.3.3 task at the receiving Window and the step returns, so the tasks are enqueued in
                the order the messages were posted and the scheduler re-ranks between them. The queue empties as
                they are taken, so a flow with none left falls through to its jobs. */
-            if (flow_deliver_pending(f)) { g_step_unit = STEP_UNIT_ROUTED_DELIVERY; flow_deliver(ctx, f); return 0; }
+            if (!turn_task_done && flow_deliver_pending(f)) {
+                g_step_unit = STEP_UNIT_ROUTED_DELIVERY; flow_deliver(ctx, f); return 0; }
             /* AND THE OPERATION A PEER IS PARKED ON, before this flow's own programs for the reason the
                delivery is: it is a work item another agent's flow is suspended at, and it becomes one of THIS
                flow's programs — after which the loop below runs it like any other. */
-            if (flow_perform_pending(f)) { g_step_unit = STEP_UNIT_CROSS_AGENT_OP; flow_perform(ctx, f); return 0; }
+            if (!turn_task_done && flow_perform_pending(f)) {
+                g_step_unit = STEP_UNIT_CROSS_AGENT_OP; flow_perform(ctx, f); return 0; }
             /* THE MICROTASK CHECKPOINT, BEFORE THE NEXT PROGRAM AND NOT AFTER THE LAST ONE — HTML §8.1.4.4
                "Calling scripts" step 3 of clean up after running script, decided by flow_checkpoint_due above.
                It is the FIRST thing the flow does with an empty stack because that is what the sentence says:
@@ -6632,10 +6693,36 @@ static int flow_step(JSContext *ctx, Flow *f) {
                has no work, whatever it just did. OWED is the register the scheduler already has for
                waiting-not-finished. */
             if (flow_checkpoint_due(f)) {
-                g_step_unit = STEP_UNIT_MICROTASK;
+                /* THE STEP IS NAMED AFTER ITS TASK, AND THE CHECKPOINT IS NOT ONE. A step that delivered a
+                   reply and then drained the reactions that delivery enqueued did ONE unit of work — §8.1.7.3
+                   step 2's iteration — and `g_step_unit` is what the census reports it as, so assigning
+                   unconditionally here would rename every such step `microtask-checkpoint` and leave
+                   `deliver-one-reply` counting only the deliveries whose turn happened to be cut short by the
+                   policy. That is exactly the `compile-program` mislabelling one block below: two arms that
+                   take opposite work summed into the row of whichever ran last, and the pair of readings the
+                   histogram exists to separate destroyed. A step that runs microtasks and NO task is still
+                   named for them, which is the case this arm is the unit of. */
+                if (!turn_task_done) g_step_unit = STEP_UNIT_MICROTASK;
                 flow_run_one_job(ctx, f);
-                return flow_blocked(f) ? FLOW_STEP_OWED : 0;
+                if (flow_blocked(f)) return FLOW_STEP_OWED;
+                /* …AND THE CHECKPOINT IS A LOOP, WHICH IS THE STANDARD'S OWN WORD. §8.1.7.1 "Definitions"'
+                   perform a microtask checkpoint runs "While the event loop's microtask queue is not empty",
+                   so one job is a sub-step of the checkpoint and not a unit the event loop rests at. Offering
+                   here and continuing is that `While`; the offer is the scheduler's (turn_continues), so the
+                   flow still yields the instant a parked flow outranks it, its quantum is spent, or it becomes
+                   blocked — and a refusal returns to exactly the state a return here always left, with the
+                   checkpoint arm taking the next job on the flow's next pick because it stands above every
+                   task arm. This is where 1 + N picks per event-loop turn became 1. */
+                if (turn_continues()) continue;
+                return 0;
             }
+            /* AND ONE ITERATION OF §8.1.7.3 "Processing model" STEP 2 ENDS HERE. The flow performed its task
+               (2.6) and the checkpoint above has drained (2.8, whose `While` the arm above is), so the next
+               thing this flow could do is a SECOND task — which is the next iteration of step 2 and therefore
+               the next step. Returning is what makes the scheduler's unit the standard's unit rather than one
+               rung of a ladder, and it is the line that stops the continuation below from becoming a drain:
+               there is exactly one task per call of flow_step, before this line as after it. */
+            if (turn_task_done) return 0;
             /* THE NETWORKING TASK SOURCE, AND IT IS A RUNG OF THIS LADDER RATHER THAN THE FLOOR OF IT.
              *
              * A COMPLETED FETCH IS DELIVERED BY A TASK ON ONE NAMED SOURCE. Fetch §2 Infrastructure's queue a
@@ -6682,12 +6769,26 @@ static int flow_step(JSContext *ctx, Flow *f) {
              * while the JavaScript execution context stack is non-empty, and a DYN_POS_IMMEDIATE row at the
              * cursor is exactly that — flow_stack_empty is the one statement of it, read here and by the
              * checkpoint directly above, so the two arms cannot come to disagree about when a turn may start.
-             * ONE PER STEP, like every other unit of work in this function: the delivery ends the step, the
-             * checkpoint above runs the reaction it enqueued on the next pass, and this arm takes the next
-             * reply after that — §8.1.7.3's task-then-checkpoint, never one pass that settles them all. */
+             * ONE PER STEP, like every other unit of work in this function — and the STEP is now the standard's
+             * unit rather than this ladder's rung. §8.1.7.3 step 2.6 performs the task's steps and step 2.8
+             * performs a microtask checkpoint, in ONE iteration of step 2, so the delivery and the reactions it
+             * triggers are one turn and the step ends when the checkpoint has drained. It used to end HERE, at
+             * 2.6, with 2.8 spread one job per subsequent pick: one iteration of step 2 cost 1 + N picks of a
+             * frontier that shares its picks among every member, which is the arithmetic that made the delivery
+             * debt unpayable rather than merely large. What is NOT changed is which entry is taken or how many:
+             * still exactly one reply per call, still never two settles without a checkpoint between them —
+             * that ordering is flow_deliver_one_reply's own invariant and this continuation is what carries the
+             * flow to the checkpoint that discharges it, in front of any second delivery. */
             if (flow_stack_empty(f) && flow_pending_ready(f)) {
                 g_step_unit = STEP_UNIT_DELIVER_REPLY;
-                flow_deliver_one_reply(ctx, f);
+                flow_deliver_one_reply(ctx, f);   /* §8.1.7.3 step 2.6 */
+                /* …AND ITS CHECKPOINT, IN THE SAME TURN. The settle enqueued this reply's reaction jobs, which
+                   are step 2.8's, and the checkpoint arm stands above every task arm — so continuing runs them
+                   and nothing else, and the `turn_task_done` return above ends the step when they are gone.
+                   A settle that PARKED is not carried across: the resume arm at the top of the loop takes it
+                   and returns, which is the same suspension it has always been. */
+                turn_task_done = 1;
+                if (turn_continues()) continue;
                 return 0;
             }
             /* THE FLOW'S SEQUENCE, AND THERE IS ONLY ONE OF THEM. Two arms stood here: the SESSION document's
