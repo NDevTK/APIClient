@@ -18,10 +18,12 @@
  * THE VALUE IT WALKS IS THE PAGE'S, WHICH IS WHERE THE SOLVER MEETS IT. A bundle stores what it received —
  * `store.put(await res.json())`, `store.put(JSON.parse(location.hash.slice(1)))` — so the value, or a field of
  * it, is routinely a CONCOLIC: unknown external input carrying a source identity. §7.1's ordinary arm asks two
- * questions of it, "does it have this own property" and "what is at it", and the honest answer to both for an
- * unknown is another unknown. Answering `failure` instead would be FORCING A BRANCH on unknown input — and
- * forcing it toward the arm that takes the record out of the store entirely, which loses the code path and the
- * taint together. So a concolic answers with the DERIVED concolic its own exotic [[Get]] mints ("{reply}.id"),
+ * questions of it — HasOwnProperty and Get, which are its own two steps and are NAMED here rather than
+ * paraphrased inside quotation marks, because a paraphrase in quotation marks under a § reads as the standard's
+ * own sentence and cannot be checked against it — and the honest answer to both for an unknown is another
+ * unknown. Answering `failure` instead would be FORCING A BRANCH on unknown input — and forcing it toward the
+ * arm that takes the record out of the store entirely, which loses the code path and the taint together. So a
+ * concolic answers with the DERIVED concolic its own exotic [[Get]] mints ("{reply}.id"),
  * the record is filed under a key that carries the fact an attacker chose it, and every later comparison on
  * that key forks as it should. Nothing here is de-tainted and nothing here concretizes. */
 #include <stdbool.h>
@@ -41,7 +43,8 @@
 /* ---- §2.5's VALID KEY PATH ----------------------------------------------------------------------------------
  *
  * "An empty string. An identifier, which is a string matching the IdentifierName production from the ECMAScript
- * Language Specification. A string consisting of two or more identifiers separated by periods."
+ * Language Specification [ECMA-262]. A string consisting of two or more identifiers separated by periods (U+002E
+ * FULL STOP)."
  *
  * THE IDENTIFIER IS ECMASCRIPT'S OWN AND SO IS THE TEST. IdentifierName is IdentifierStart IdentifierPart*, and
  * both are UNICODE properties (ID_Start / ID_Continue, plus `$`, `_`, and ZWNJ/ZWJ in the continue set) — so the
@@ -305,12 +308,19 @@ static bool idb_key_path_evaluate_string(JSContext *ctx, JSValueConst value, JSV
     return true;
 }
 
-/* §7.1's LIST ARM: "let result be a new Array object created as if by the expression []; let i be 0; for each
-   item of keyPath: let key be the result of RECURSIVELY evaluating a key path on a value with item and value;
-   if key is failure, ABORT THE OVERALL ALGORITHM and return failure; let p be ! ToString(i); let status be
-   CreateDataProperty(result, p, key); assert: status is true; increase i by 1."
+/* §7.1's LIST ARM, its steps 1.1 to 1.3.7 unelided: "Let result be a new Array object created as if by the
+   expression []. Let i be 0. For each item of keyPath: Let key be the result of recursively evaluating a key
+   path on a value with item and value. Assert: key is not an abrupt completion. If key is failure, abort the
+   overall algorithm and return failure. Let p be ! ToString(i). Let status be CreateDataProperty(result, p,
+   key). Assert: status is true. Increase i by 1."
    The whole point of the arm is the abort: a compound key is the tuple of ALL its parts, so a value missing one
-   of them has no key at all — not a shorter one, and not one with a hole. */
+   of them has no key at all — not a shorter one, and not one with a hole.
+   BOTH OF THE STANDARD'S ASSERTIONS ARE MADE, AND ONE OF THEM IS NOT MADE HERE. Step 1.3.2's `key is not an
+   abrupt completion` is discharged at the READS rather than at this loop: `idb_key_path_evaluate` answers in a
+   bool, so there is no third channel an abrupt completion could arrive in, and every operation under it that
+   could throw is a CHECK at the throwing call itself. Step 1.3.6's `status is true` has nowhere lower to go and
+   is made below. The unelided quotation above is why that gap was visible at all: the sentence this comment
+   used to carry dropped 1.3.2 without a mark and read as the standard's whole loop. */
 static bool idb_key_path_evaluate_list(JSContext *ctx, JSValueConst value, JSValueConst key_path, JSValue *pout)
 {
     JSValue result = JS_NewArray(ctx);
@@ -322,6 +332,7 @@ static bool idb_key_path_evaluate_list(JSContext *ctx, JSValueConst value, JSVal
     for (i = 0; i < n; i++) {
         JSValue item = JS_GetPropertyUint32(ctx, key_path, i), key;
         bool ok;
+        int status;
 
         /* "This will only ever 'recurse' one level since key path sequences can't ever be nested" — the
            standard's own note, asserted rather than repeated: §3.2.20's sequence conversion has already
@@ -335,9 +346,19 @@ static bool idb_key_path_evaluate_list(JSContext *ctx, JSValueConst value, JSVal
             JS_FreeValue(ctx, result);
             return false;
         }
-        /* CreateDataProperty and not [[Set]]: an index accessor a page put on Array.prototype would otherwise
-           swallow the entry, and the assembled key would be missing a part nothing reported. */
-        JS_DefinePropertyValueUint32(ctx, result, i, key, JS_PROP_C_W_E);
+        /* STEPS 1.3.4-1.3.6. CreateDataProperty and not [[Set]]: an index accessor a page put on
+           Array.prototype would otherwise swallow the entry, and the assembled key would be missing a part
+           nothing reported. THE STATUS IS THE THING THAT REPORTS IT, so it is read and not discarded — a
+           discarded status leaves that whole sentence unenforced, which is the shape of the defect it names.
+           It is a CHECK and not a DCHECK because both of its causes are fatal in RELEASE: the define answers
+           -1 only on an allocation failure and 0 only if this engine handed it something other than the fresh
+           extensible Array step 1.1 made, and either way the record goes to §2.2's sorted list under a key
+           SHORTER than its key path — a truncated compound key no later read can tell from a key the value
+           genuinely had, which is the data-integrity class CHECK exists for. */
+        status = JS_DefinePropertyValueUint32(ctx, result, i, key, JS_PROP_C_W_E);
+        CHECK(status == 1, "IndexedDB: §7.1 step 1.3.6's `Assert: status is true` does not hold — "
+                           "CreateDataProperty did not write a part of a compound key into the Array step 1.1 "
+                           "created, so the record would be filed under a key shorter than its key path");
     }
     *pout = result;
     return true;
