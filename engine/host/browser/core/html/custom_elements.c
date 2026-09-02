@@ -45,8 +45,14 @@
  * `try to upgrade`, `define`'s three set questions, `whenDefined`, `upgrade`, and §3.2.3 "HTML element
  * constructors" step 3, through the agent's active custom element constructor map.
  *
- * WHAT IS HONESTLY ABSENT: customized built-ins (`extends`), which §4.13.4 rejects here rather than
- * registering as autonomous — a silently-wrong registration is worse than a named refusal. ALL THREE DOM sites
+ * CUSTOMIZED BUILT-INS ARE NO LONGER ABSENT, and this paragraph said they were long after they stopped being
+ * so — the stale-claim failure mode, in the one place a reader looks first. What stood here was "customized
+ * built-ins (`extends`), which §4.13.4 rejects here rather than registering as autonomous", and every clause
+ * of it is now false: §4.13.4 steps 7.1-7.4 register an `extends`, §4.13.3's lookup step 4 finds the
+ * definition by is value, HTML §3.2.3's `[HTMLConstructor]` constructs one, HTML §13.2.6.1's create an
+ * element for the token step 5 gives markup its is value, and DOM §4.9's create an element step 4 upgrades
+ * one for `createElement(local, {is})`. A refusal that is kept after the thing it refused was built is not a
+ * conservative note, it is an instruction to build what is already here. ALL THREE DOM sites
  * that WRITE a node's registry are now built: `create an element`'s flattened creation options
  * (core/dom/document.c), `attach a shadow root`'s ShadowRootInit member (core/dom/shadow_root.c), and DOM §4.5
  * `adopt`'s re-derivation — custom_elements_node_adopted is its steps 3.2/3.3.2/3.3.3, driven by
@@ -695,18 +701,11 @@ bool custom_elements_name_is_valid(const char *name, size_t len)
    (custom_elements_created_with_is_value), so `ce_state_of` finds a slot and never asks this at all. Deriving
    the value from the `is` CONTENT ATTRIBUTE instead would be a different wrong answer rather than a narrower
    one: DOM §4.9 fixes the is value at creation and a later `setAttribute("is", …)` must not change it.
-
-   NAMED RESIDUAL — CORRECT for every is value this engine can produce, NARROWER than DOM §4.9.
-     NOT COVERED: `createElement("abbr", {is: "my-abbr"})`. DOM §4.5 "Interface Document"'s flatten element
-       creation options reads the `is` member only to refuse it beside `customElementRegistry`, and throws it
-       away, so that element carries no is value, gets no state slot, and derives "uncustomized" here.
-     WHAT THE NEXT DIFF BUILDS: DOM §4.9 create an element's `is` argument — flatten returning the member,
-       document.c writing it through the same one entry the parser uses, and §4.9 step 4's customized-built-in
-       arm. Nothing here changes: the write is what builds the slot this derivation is the absence of.
-     HOW ITS ABSENCE SHOWS: `document.createElement("abbr", {is:"my-abbr"}).matches(":defined")` is true where
-       a browser answers false, and the same element is not upgraded when `my-abbr` is later defined —
-       `custom-elements/pseudo-class-defined-customized-builtins` reports it as `:defined`. The MARKUP half of
-       that same test — `<abbr is="my-abbr">` — is answered correctly. */
+   THE VACUITY IS A CLAIM ABOUT THE PRODUCERS, so it is re-checked whenever one is added rather than taken as
+   settled. It has held across two of them: HTML §13.2.6.1's create an element for the token step 5 for
+   markup, and DOM §4.5's flatten element creation options for `createElement(local, {is})` — and it holds
+   because both go through that one entry, not because either of them remembered to. A producer that wrote an
+   is value WITHOUT the state would be the one that breaks it, which is why there is nowhere to write one. */
 static int ce_state_derive(const lxb_dom_node_t *n)
 {
     size_t len = 0;
@@ -1046,7 +1045,7 @@ void custom_elements_queue_init(CustomElementQueue *q)
     q->queue = JS_UNDEFINED;
     q->i = 0;
     q->phase = 0;
-    q->up_stage = 0;
+    custom_elements_upgrade_init(&q->up);
     q->reporting = 0;
     q->exc = JS_UNDEFINED;
     q->cur = q->cur_el = JS_UNDEFINED;
@@ -1062,6 +1061,7 @@ void custom_elements_queue_visit(JSContext *ctx, CustomElementQueue *q, JSStepVi
     v->val(ctx, &q->cur);
     v->val(ctx, &q->cur_el);
     report_exception_work_visit(ctx, &q->rep, v);
+    custom_elements_upgrade_visit(ctx, &q->up, v);
     for (k = 0; k < 2 + CE_MAX_REACTION_ARGS; k++) v->val(ctx, &q->cb[k]);
 }
 
@@ -1073,7 +1073,7 @@ void custom_elements_queue_visit(JSContext *ctx, CustomElementQueue *q, JSStepVi
 int custom_elements_queue_arm(const CustomElementQueue *q)
 {
     if (q->reporting) return CE_ARM_REPORT;
-    return q->up_stage ? CE_ARM_UPGRADE : CE_ARM_CALLBACK;
+    return q->up.stage ? CE_ARM_UPGRADE : CE_ARM_CALLBACK;
 }
 
 /* The two enqueues §4.13.5 performs on the element it is upgrading, declared here because the upgrade runs
@@ -1099,14 +1099,21 @@ static bool ce_observes(JSContext *ctx, JSValueConst def, const char *local);
  * built, and `super()` hands back that same node because step 6 put it on the construction stack for
  * §3.2.3's steps 12-16 to find.
  *
- * IT IS A SUB-ALGORITHM OF THE DRAIN, NOT A MACHINE OF ITS OWN. §4.13.6 invokes it from inside the reaction
- * loop and CATCHES what it throws, so a separate step machine would need its own definition, its own stage
- * list and its own park protocol only to be driven by one caller that must inspect its completion — which is
- * what a two-stage cursor on the drain's own state already is. `up_stage` is that cursor; it is zero exactly
- * when no upgrade is in flight, which is what custom_elements_queue_arm reads.
+ * IT IS A SUB-ALGORITHM OF ITS CALLERS, NOT A MACHINE OF ITS OWN. Each caller invokes it from inside its own
+ * steps and CATCHES what it throws, so a separate step machine would need its own definition, its own stage
+ * list and its own park protocol only to be driven by callers that must inspect its completion — which is what
+ * a small cursor they embed already is. `u->stage` is that cursor; it is zero exactly when no upgrade is in
+ * flight, which is what custom_elements_queue_arm reads and what the teardowns decide on.
+ *
+ * THERE ARE TWO CALLERS AND ONE OF THEM HAS NO QUEUE, which is why the cursor is a CeUpgrade and no longer a
+ * field of CustomElementQueue. §4.13.6 step 1.3.1's upgrade arm drives it from the reaction drain; DOM §4.9
+ * "Interface Element"'s create an element step 4.3 drives it directly, for a customized built-in that
+ * `document.createElement(local, {is})` must upgrade SYNCHRONOUSLY — no reaction, no element queue, nothing to
+ * dequeue. See custom_elements.h for why that made this a struct rather than a second implementation.
  *
  * Returns JS_STEP_CONSTRUCT parked on the page's constructor, or 0 when the upgrade has finished — either
- * having set the element's state to "custom", or having set `q->reporting` for the throw the drain reports. */
+ * having set the element's state to "custom" (`*pexc` is JS_UNDEFINED), or with step 10's finally-list step
+ * 3's RETHROW handed back on `*pexc` for the caller to report. */
 #define CE_UP_IDLE      0
 #define CE_UP_CONSTRUCT 1   /* §4.13.5 step 10.3, and step 10.4's SameValue on the way back */
 /* §4.13.5 step 10.1 REFUSED before the Construct. It is a stage of its own and not a `failed` local, because
@@ -1115,14 +1122,55 @@ static bool ce_observes(JSContext *ctx, JSValueConst def, const char *local);
    map entry for the same element. */
 #define CE_UP_SHADOW_REFUSED 2
 
-static int ce_upgrade_run(JSContext *ctx, CustomElementQueue *q, JSValueConst el, JSValueConst def,
-                          JSValue cb_result, JSValue **out_cb, int *out_argc)
+void custom_elements_upgrade_init(CeUpgrade *u)
+{
+    int k;
+    u->stage = CE_UP_IDLE;
+    u->phase = 0;
+    u->el = u->def = JS_UNDEFINED;
+    STEP_CB_FOREACH(u->cb, k) u->cb[k] = JS_UNDEFINED;
+}
+
+void custom_elements_upgrade_visit(JSContext *ctx, CeUpgrade *u, JSStepVisit *v)
+{
+    int k;
+    v->val(ctx, &u->el);
+    v->val(ctx, &u->def);
+    STEP_CB_FOREACH(u->cb, k) v->val(ctx, &u->cb[k]);
+}
+
+/* THE END OF ONE UPGRADE, ON EITHER OF ITS TWO COMPLETIONS. The inputs were adopted at the first entry
+   precisely so the teardown below can name them, so they are released exactly where the cursor goes idle —
+   and the two facts are written together because a stage that said IDLE while the operands were still held
+   is a record that reports no upgrade in flight and still owns its element. */
+static void ce_upgrade_done(JSContext *ctx, CeUpgrade *u)
+{
+    JS_FreeValue(ctx, u->el);
+    JS_FreeValue(ctx, u->def);
+    u->el = u->def = JS_UNDEFINED;
+    u->stage = CE_UP_IDLE;
+}
+
+int custom_elements_upgrade_run(JSContext *ctx, CeUpgrade *u, JSValueConst el, JSValueConst def,
+                                JSValue cb_result, JSValue **out_cb, int *out_argc, JSValue *pexc)
 {
     lxb_dom_node_t *node = node_of(el);
     JSValue stack, made = JS_UNDEFINED;
     int r, failed;
 
-    if (q->up_stage == CE_UP_IDLE) {
+    *pexc = JS_UNDEFINED;
+    /* A RESUME NAMES THE UPGRADE IT IS RESUMING, and this is what says so. Every caller re-derives `el` and
+       `def` on its own way back in — the drain from the reaction it held, createElement from its state — and
+       a cursor that took whatever it was handed would run the second half of one upgrade over another one's
+       element with every field of the record still self-consistent. */
+    DCHECK(u->stage == CE_UP_IDLE ||
+           (JS_VALUE_GET_PTR(u->el) == JS_VALUE_GET_PTR(el) &&
+            JS_VALUE_GET_PTR(u->def) == JS_VALUE_GET_PTR(def)),
+           "HTML §4.13.5 \"Upgrades\" was resumed with an element or a definition other than the pair it "
+           "adopted at its first entry — the operands are held on the cursor so that step 10's regardless-list "
+           "can be owed by a torn-down flow, and a resume that renames them is running one upgrade's second "
+           "half over another upgrade's element");
+    if (u->stage == CE_UP_IDLE) {
         lxb_dom_attr_t *a;
 
         JS_FreeValue(ctx, cb_result);
@@ -1136,6 +1184,11 @@ static int ce_upgrade_run(JSContext *ctx, CustomElementQueue *q, JSValueConst el
         }
         DCHECK(node && node->type == LXB_DOM_NODE_TYPE_ELEMENT,
                "an upgrade reaction was enqueued for something that is not an element");
+        /* THE INPUTS ARE ADOPTED HERE, past step 1's early return so a bail-out owns nothing. From this line
+           on the algorithm has taken step 6's construction stack entry and steps 8-9's map entry, which is
+           exactly the window in which a torn-down flow still owes step 10's regardless-list. */
+        u->el = JS_DupValue(ctx, el);
+        u->def = JS_DupValue(ctx, def);
         JS_DefinePropertyValue(ctx, (JSValue)el, g_atom_def, JS_DupValue(ctx, def), CE_SLOT_FLAGS);  /* step 2 */
         ce_set_state(ctx, el, CE_STATE_FAILED);                                           /* step 3 */
         /* step 4: EVERY attribute, in order, as an attributeChangedCallback whose old value is null. The
@@ -1197,19 +1250,19 @@ static int ce_upgrade_run(JSContext *ctx, CustomElementQueue *q, JSValueConst el
                 JS_ThrowDOMException(ctx, "NotSupportedError",
                                      "this custom element's disabledFeatures contains \"shadow\" and the "
                                      "element being upgraded already has a shadow root");
-                q->up_stage = CE_UP_SHADOW_REFUSED;
+                u->stage = CE_UP_SHADOW_REFUSED;
             } else {
                 ce_set_state(ctx, el, CE_STATE_PRECUSTOMIZED);                            /* step 10.2 */
-                q->up_stage = CE_UP_CONSTRUCT;
+                u->stage = CE_UP_CONSTRUCT;
             }
         }
     }
-    if (q->up_stage == CE_UP_CONSTRUCT) {
+    if (u->stage == CE_UP_CONSTRUCT) {
         JSValue ctor = JS_GetProperty(ctx, def, g_atom_ctor);
         /* step 10.3: constructing C with no arguments. The page's code, so it PARKS — and a throw comes back
            here as JS_EXCEPTION because every machine that drives this drain declares catches_abrupt, which is
            what §4.13.6's "catch it, and report it" requires of them. */
-        r = step_construct_run(ctx, &q->phase, q->cb, 2 + CE_MAX_REACTION_ARGS, ctor, 0, NULL,
+        r = step_construct_run(ctx, &u->phase, STEP_CB(u->cb), ctor, 0, NULL,
                                cb_result, &made, out_cb, out_argc);
         JS_FreeValue(ctx, ctor);
         if (r > 0) return r;
@@ -1225,7 +1278,7 @@ static int ce_upgrade_run(JSContext *ctx, CustomElementQueue *q, JSValueConst el
         }
         if (failed) { JS_FreeValue(ctx, made); made = JS_UNDEFINED; }
     } else {
-        DCHECK(q->up_stage == CE_UP_SHADOW_REFUSED,
+        DCHECK(u->stage == CE_UP_SHADOW_REFUSED,
                "HTML §4.13.5 resumed into a stage it does not have");
         JS_FreeValue(ctx, cb_result);
         failed = 1;                    /* step 10.1 threw; the catching list is over before 10.2 */
@@ -1249,10 +1302,12 @@ static int ce_upgrade_run(JSContext *ctx, CustomElementQueue *q, JSValueConst el
         ce_array_set_len(ctx, stack, n - 1);
     }
     JS_FreeValue(ctx, stack);
-    q->up_stage = CE_UP_IDLE;
     if (failed) {
-        /* Step 10's FINALLY-LIST, and §4.13.6's catch. The state stays "failed" or "precustomized" — the spec
-           says so explicitly — so a later insertion never retries this element. */
+        /* Step 10's FINALLY-LIST. The state stays "failed" or "precustomized" — the spec says so explicitly —
+           so a later insertion never retries this element. Step 3's RETHROW is handed to the CALLER rather
+           than reported here, because the two callers report it at two different spec steps: §4.13.6 step
+           1.3.1's "catch it, and report it" for the drain, and DOM §4.9 step 4.3's threw-list for
+           createElement, whose second entry then sets the element's state to "failed". */
         JSValue rq;
 
         JS_DeleteProperty(ctx, (JSValue)el, g_atom_def, 0);            /* finally-list step 1 */
@@ -1262,8 +1317,8 @@ static int ce_upgrade_run(JSContext *ctx, CustomElementQueue *q, JSValueConst el
             JS_SetProperty(ctx, rq, g_atom_rq_head, JS_NewUint32(ctx, 0));
         }
         JS_FreeValue(ctx, rq);
-        q->exc = JS_GetException(ctx);                                 /* finally-list step 3's rethrow */
-        q->reporting = 1;
+        *pexc = JS_GetException(ctx);                                  /* finally-list step 3's rethrow */
+        ce_upgrade_done(ctx, u);
         return 0;
     }
     JS_FreeValue(ctx, made);
@@ -1274,10 +1329,11 @@ static int ce_upgrade_run(JSContext *ctx, CustomElementQueue *q, JSValueConst el
        them. */
     element_internals_upgrade_form_steps(ctx, el);
     ce_set_state(ctx, el, CE_STATE_CUSTOM);   /* step 12 */
+    ce_upgrade_done(ctx, u);
     return 0;
 }
 
-/* THE DRAIN'S TEARDOWN, AND IT IS §4.13.5 STEP 10'S REGARDLESS-LIST FOR THE UPGRADE THAT NEVER COMES BACK.
+/* §4.13.5 STEP 10'S REGARDLESS-LIST FOR THE UPGRADE THAT NEVER COMES BACK.
  * "Regardless of whether the above steps threw an exception or not" is a claim about EVERY exit from step 10,
  * and a flow torn down while parked on step 10.3's Construct is one of them — the resume that would have run
  * the list is exactly what teardown means. What step 10 took by then is agent-wide and outlives the flow: the
@@ -1288,32 +1344,38 @@ static int ce_upgrade_run(JSContext *ctx, CustomElementQueue *q, JSValueConst el
  * that no longer exists, and §3.2.3 step 13's already-constructed-marker question is asked about it.
  * NEITHER IS VISIBLE TO ANY DETECTOR HERE — both are live values on live objects, so the leak walk has nothing
  * to say, and the wrong answer arrives later in another algorithm.
- * `up_stage` is zero exactly when no upgrade is in flight, which is what makes this decidable at the teardown;
- * the definition is the reaction's own (`q->cur`'s second element), never the name's current entry, for the
- * same reason the drain reads it there. */
+ * `u->stage` is zero exactly when no upgrade is in flight, which is what makes this decidable at a teardown;
+ * the definition is the one the RUN ADOPTED and never the name's current entry, because a `define` running
+ * inside the constructor this flow died in may have replaced that entry and the pair to unwind is the pair
+ * step 10 pushed. That is also why it is held on the cursor: the drain could read it back off the reaction it
+ * was holding, and DOM §4.9's create an element has no reaction to read anything off. */
+void custom_elements_upgrade_unlock(JSContext *ctx, CeUpgrade *u)
+{
+    if (u->stage == CE_UP_IDLE) return;
+    DCHECK(JS_IsObject(u->def),
+           "HTML §4.13.5 \"Upgrades\" was in flight at a teardown with no definition to name what step 10 "
+           "took — the definition is adopted at the first entry precisely so this exit can undo it");
+    {
+        JSValue ctor = JS_GetProperty(ctx, u->def, g_atom_ctor);
+        JSValue stack = JS_GetProperty(ctx, u->def, g_atom_stack);
+        uint32_t n = ce_array_len(ctx, stack);
+
+        custom_elements_active_ctor_leave(ctx, ctor);        /* regardless-list steps 1-2 */
+        DCHECK(n > 0, "HTML §4.13.5 step 10's regardless-list step 3 found an empty construction stack at a "
+                      "teardown — step 6 pushed onto it before the Construct this flow is parked on");
+        ce_array_set_len(ctx, stack, n - 1);                 /* regardless-list step 3 */
+        JS_FreeValue(ctx, stack);
+        JS_FreeValue(ctx, ctor);
+    }
+    ce_upgrade_done(ctx, u);
+}
+
+/* THE DRAIN'S OWN TEARDOWN, which is the reporting flag it may be holding on the global plus the upgrade's. */
 void custom_elements_queue_unlock(JSContext *ctx, CustomElementQueue *q)
 {
     q->reporting = 0;
     report_exception_work_unlock(ctx, &q->rep);
-    if (q->up_stage == CE_UP_IDLE) return;
-    DCHECK(JS_IsObject(q->cur),
-           "HTML §4.13.5 was in flight at the drain's teardown with no reaction to name its definition — the "
-           "reaction is held across the park precisely so this exit can undo what step 10 took");
-    {
-        JSValue def = JS_GetPropertyUint32(ctx, q->cur, 1);
-        JSValue ctor = JS_GetProperty(ctx, def, g_atom_ctor);
-        JSValue stack = JS_GetProperty(ctx, def, g_atom_stack);
-        uint32_t n = ce_array_len(ctx, stack);
-
-        custom_elements_active_ctor_leave(ctx, ctor);        /* regardless-list steps 1-2 */
-        DCHECK(n > 0, "HTML §4.13.5 step 10's regardless-list step 3 found an empty construction stack at the "
-                      "drain's teardown — step 6 pushed onto it before the Construct this flow is parked on");
-        ce_array_set_len(ctx, stack, n - 1);                 /* regardless-list step 3 */
-        JS_FreeValue(ctx, stack);
-        JS_FreeValue(ctx, ctor);
-        JS_FreeValue(ctx, def);
-    }
-    q->up_stage = CE_UP_IDLE;
+    custom_elements_upgrade_unlock(ctx, &q->up);
 }
 
 /* §4.13.6 "invoke custom element reactions in an element queue", one reaction per entry.
@@ -1366,7 +1428,7 @@ int custom_elements_reactions_invoke(JSContext *ctx, CustomElementQueue *q, JSVa
                 /* EMPTIED, not merely walked past. A member's queue is flow-private and dies with the machine,
                    but the BACKUP queue is the agent's one array forever — an element left on it after its
                    reactions are consumed is a reference nothing ever drops. */
-                DCHECK(q->up_stage == CE_UP_IDLE,
+                DCHECK(q->up.stage == CE_UP_IDLE,
                        "the drain finished its element queue while an upgrade was still in flight — §4.13.5 "
                        "completes or reports before the reaction that started it is released");
                 ce_array_set_len(ctx, q->queue, 0);
@@ -1408,12 +1470,23 @@ int custom_elements_reactions_invoke(JSContext *ctx, CustomElementQueue *q, JSVa
         if (type == CE_REACTION_UPGRADE) {
             /* step 1.3.1's upgrade arm. The definition is the reaction's, not the name's current entry — a
                `define` that replaced nothing still has the definition this reaction was made from. */
-            r = ce_upgrade_run(ctx, q, q->cur_el, target, cb_result, out_cb, out_argc);
+            JSValue thrown = JS_UNDEFINED;
+
+            r = custom_elements_upgrade_run(ctx, &q->up, q->cur_el, target, cb_result, out_cb, out_argc,
+                                            &thrown);
             JS_FreeValue(ctx, target);
             cb_result = JS_UNDEFINED;
             if (r > 0) return r;
             DCHECK(r == 0, "HTML §4.13.5 answered the drain with something that is neither a park nor a "
                            "completion — its throw is reported, so it has no abrupt answer to give");
+            /* "If this throws an exception, catch it, and report it" — §4.13.6 step 1.3.1's own words, and the
+               report is HTML §8.1.4.6's, which fires an `error` event and therefore parks like everything
+               else here. The upgrade hands the exception back rather than reporting it, because DOM §4.9 step
+               4.3's threw-list reports the same throw and then does something this arm does not. */
+            if (!JS_IsUndefined(thrown)) {
+                q->exc = thrown;
+                q->reporting = 1;
+            }
         } else {
             DCHECK(type == CE_REACTION_CALLBACK,
                    "an element's reaction queue holds a reaction of a type §4.13.6 does not switch on");
@@ -1606,6 +1679,39 @@ JSValue custom_elements_definition_constructor(JSContext *ctx, JSValueConst def)
     DCHECK(JS_IsObject(def), "a custom element definition's constructor was asked for on something that is not "
                              "a definition");
     return JS_GetProperty(ctx, def, g_atom_ctor);
+}
+
+/* DOM §4.9 "Interface Element"'s create an element STEP 4'S CONDITION — see custom_elements.h. The two names
+   are §4.13.4 step 15's own record, so this is a question about the definition and nothing else. */
+bool custom_elements_definition_is_customized_builtin(JSContext *ctx, JSValueConst def)
+{
+    JSValue nm;
+    size_t len = 0;
+    const char *s;
+    bool builtin;
+
+    DCHECK(JS_IsObject(def), "DOM §4.9 step 4's customized-built-in question was asked of something that is "
+                             "not a custom element definition");
+    nm = JS_GetProperty(ctx, def, g_atom_name);
+    s = JS_ToCStringLen(ctx, &len, nm);
+    DCHECK(s != NULL, "a custom element definition's name is not a string — every definition this component "
+                      "commits carries the DOMString §4.13.4 step 15 gives it");
+    builtin = s != NULL && !ce_def_local_is(ctx, def, s, len);
+    if (s) JS_FreeCString(ctx, s);
+    JS_FreeValue(ctx, nm);
+    return builtin;
+}
+
+/* DOM §4.9's IS VALUE AS A PREDICATE — see custom_elements.h. The slot holds a STRING for every is value this
+   engine produces and is absent otherwise, so "is not null" is exactly "the slot holds a string". */
+bool custom_elements_element_has_is_value(JSContext *ctx, JSValueConst wrap)
+{
+    JSValue is = ce_is_value_of(ctx, wrap);
+    bool has = JS_IsString(is);
+
+    DCHECK(g_ready, "an element's is value was asked for before custom_elements_init declared the slot");
+    JS_FreeValue(ctx, is);
+    return has;
 }
 
 /* DOM §4.9 STEPS 5.1.4.2-11 — what the page's constructor gave back, checked against what the operation asked
@@ -2316,18 +2422,11 @@ void custom_elements_node_adopted(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_doc
    an element that has none cannot have one and node_wrap_peek answers without allocating. HTML §13.2.6.1
    "Creating and inserting nodes"' create an element for the token step 5 mints a wrapper for exactly those
    elements a markup author wrote an `is` attribute on, which is the population this test exists to find.
-
-   NAMED RESIDUAL — CORRECT for every is value this engine can produce, NARROWER than DOM §4.9.
-     NOT COVERED: an is value from DOM §4.9 "create an element"'s `is` argument —
-       `createElement(local, {is})`, whose member DOM §4.5's flatten element creation options currently reads
-       only in order to refuse it beside `customElementRegistry`.
-     WHAT THE NEXT DIFF BUILDS: that flatten returning the member, document.c writing it through
-       custom_elements_created_with_is_value before its §4.9 step 3 lookup, and §4.9 step 4's
-       customized-built-in arm (which upgrades SYNCHRONOUSLY, so it needs a driver for §4.13.5 the way the
-       reaction drain has one). Nothing here changes.
-     HOW ITS ABSENCE SHOWS: `document.createElement("button", {is:"my-btn"})` is a TypeError-free call that
-       returns a plain button — no upgrade, no connectedCallback, and `:defined` — while the same element
-       written as `<button is="my-btn">` in markup is upgraded when its definition lands. */
+   IT STAYED FREE ACROSS THE SECOND PRODUCER TOO, and that is the property to re-check rather than the count:
+   DOM §4.5's flatten element creation options now returns the `is` member and `createElement(local, {is})`
+   writes it through the same one entry, which again BUILDS the wrapper it writes onto. An element with no
+   wrapper still cannot have an is value, so the peek below still allocates nothing for a tree the page has
+   never touched. */
 static bool ce_upgradable_name(JSContext *ctx, lxb_dom_element_t *el)
 {
     size_t len = 0;

@@ -869,6 +869,10 @@ static JSValue js_doc_create_element(JSContext *ctx, JSValueConst this_val, int 
     X(DCE_LOOKUP,    "DOM §4.5 steps 1-5 into §4.9 steps 1-3 (the local name, and looking up a custom element " \
                      "definition for it), §4.9 step 6 when there is none, and §4.9 steps 5.1.1-5.1.3 (the " \
                      "active custom element constructor map entry the Construct runs under) when there is") \
+    X(DCE_UPGRADE,   "DOM §4.9 step 4.3's catching list (upgrade result using definition — HTML §4.13.5, " \
+                     "which parks on the page's constructor at its own step 10.3)") \
+    X(DCE_UP_REPORT, "DOM §4.9 step 4.3's threw-list (report the exception the upgrade threw), which is HTML " \
+                     "§8.1.4.6 report an exception") \
     X(DCE_CONSTRUCT, "DOM §4.9 step 5.1.4.1 (constructing C with no arguments — the page's constructor)") \
     X(DCE_CHECKS,    "DOM §4.9 steps 5.1.4.2-11 (what the constructor returned, checked against what this " \
                      "operation asked for)") \
@@ -879,24 +883,36 @@ static const char *const DCE_STEPS[] = { DCE_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 /* DOM §4.5's "FLATTEN ELEMENT CREATION OPTIONS", given `options` and the DOCUMENT the creation is for.
  *
- * It answers two things and step 3.2.1 is why they are one algorithm: naming BOTH an `is` and a
- * `customElementRegistry` is a NotSupportedError, because a customized built-in's definition can only come from
- * the registry its document already resolves in. `is` has no other reader in this engine — §4.13.4 rejects
- * `extends`, so no definition a lookup could find by one can be committed — and it is read here because the
- * throw is what the member does with it.
+ * IT ANSWERS TWO THINGS — its step 4 is verbatim "Return registry and is" — and step 3.2.1 is why they are one
+ * algorithm: naming BOTH an `is` and a `customElementRegistry` is a NotSupportedError, because a customized
+ * built-in's definition can only come from the registry its document already resolves in.
+ * `*pis` IS THE SECOND HALF and it is a POSITIVE statement rather than a hole: JS_NULL is step 2's "let is be
+ * null", which is what an absent member means, and a string is the member step 3.1 found. It is set on every
+ * exit including the throwing ones, so a caller can read it without asking whether the algorithm got that far.
  *
- * STEP 1 IS PER DOCUMENT, NOT PER REALM. "Look up a custom element registry given document" answers NULL for a
+ * STEP 1 IS PER DOCUMENT, NOT PER REALM. Its own words are "Let registry be the result of looking up a custom
+ * element registry given document", and that algorithm answers NULL for a
  * document that is not a Window's — a createHTMLDocument, DOMParser or `new Document()` one — which is exactly
  * why an element parsed into one is never upgraded. The receiver is what names WHICH document, so the by-node
  * entry is what can say that; this realm's own registry would answer for the wrong document the moment
  * `otherDoc.createElement("x-y")` is written.
  *
+ * THE `is` MEMBER WAS ONCE READ ONLY IN ORDER TO REFUSE IT beside `customElementRegistry`, and this comment
+ * used to say `is` had no other reader in this engine because HTML §4.13.4 rejected `extends` — so no
+ * definition a lookup could find by one could be committed. That reason is retired: `extends` registers,
+ * HTML §4.13.3's lookup step 4 answers by is value, and DOM §4.9's create an element step 4 — the
+ * customized-built-in arm, in the machine below — runs on what this returns.
+ *
  * Returns the registry — a CustomElementRegistry or JS_NULL, OWNED — or JS_EXCEPTION with the exception the
- * step names pending. */
-static JSValue flatten_creation_options(JSContext *ctx, JSValueConst doc_wrap, JSValueConst options)
+ * step names pending; on that exit `*pis` is JS_NULL and owns nothing, so a caller that returns on the
+ * exception has nothing to release. `*pis` is otherwise the is value — a string or JS_NULL, OWNED. */
+static JSValue flatten_creation_options(JSContext *ctx, JSValueConst doc_wrap, JSValueConst options,
+                                        JSValue *pis)
 {
     JSValue registry = custom_elements_node_registry(ctx, doc_wrap);   /* STEP 1 */
-    JSValue is_v, reg_v;                                               /* STEP 2: `is` is null */
+    JSValue is_v, reg_v;
+
+    *pis = JS_NULL;                                                    /* STEP 2: "Let is be null" */
 
     /* STEP 3, "if options is a dictionary". §3.2.25's union was resolved by the DECLARATION — null, undefined
        and every Object took the dictionary arm and everything else took the DOMString — so what arrived being
@@ -934,7 +950,11 @@ static JSValue flatten_creation_options(JSContext *ctx, JSValueConst doc_wrap, J
     } else {
         JS_FreeValue(ctx, reg_v);
     }
-    JS_FreeValue(ctx, is_v);
+    /* STEP 3.1'S ANSWER, HANDED OVER — "If options["is"] exists, then set is to it". The member is declared
+       DOMString, so what the declaration converted is already the string DOM §4.9 takes as its `is` argument;
+       an absent member is JS_UNDEFINED, which is step 2's null and never a string this creation invented. */
+    if (JS_IsUndefined(is_v)) JS_FreeValue(ctx, is_v);
+    else *pis = is_v;
     /* STEP 3.3. The two registries a creation may name are a SCOPED one and the document's own; anything else
        is a registry this document resolves nothing in, and handing it over would make every later lookup on
        the element answer out of a set the document has nothing to do with. */
@@ -945,6 +965,8 @@ static JSValue flatten_creation_options(JSContext *ctx, JSValueConst doc_wrap, J
         JS_FreeValue(ctx, doc_reg);
         if (!same) {
             JS_FreeValue(ctx, registry);
+            JS_FreeValue(ctx, *pis);
+            *pis = JS_NULL;
             return JS_ThrowDOMException(ctx, "NotSupportedError",
                                         "an element creation was given a custom element registry that is "
                                         "neither scoped nor this document's");
@@ -979,6 +1001,10 @@ typedef struct {
        is made conditional on something other than having a constructor. */
     uint8_t entered;
     ReportExceptionWork rw;
+    /* HTML §4.13.5's CURSOR, for DOM §4.9 step 4.3 — the customized-built-in arm, which upgrades rather than
+       constructing. It is the same record the reaction drain embeds and drives the same one implementation;
+       see custom_elements.h for why §4.13.5 is a struct its callers own rather than a machine of its own. */
+    CeUpgrade up;
 } DocCreateElState;
 
 static void doc_create_el_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -992,6 +1018,7 @@ static void doc_create_el_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->exc);
     v->val(ctx, &s->ctor);
     report_exception_work_visit(ctx, &s->rw, v);
+    custom_elements_upgrade_visit(ctx, &s->up, v);
 }
 
 /* WHAT THIS ALGORITHM TOOK FROM OUTSIDE ITSELF AND OWES BACK ON EVERY EXIT — §8.1.4.6 step 5's error-reporting
@@ -1013,6 +1040,17 @@ static void doc_create_el_release(JSContext *ctx, void *st)
     DocCreateElState *s = st;
 
     report_exception_work_unlock(ctx, &s->rw);
+    /* AND THE SAME OBLIGATION ONE ALGORITHM DOWN, for step 4.3's arm. HTML §4.13.5 step 10's regardless-list
+       is owed by every exit from its step 10, and a flow discarded while parked on the upgrade's Construct is
+       one of them — the map entry its steps 8-9 pushed is AGENT-WIDE and the construction-stack entry its
+       step 6 pushed is read by the next `super()` for that definition. A no-op when no upgrade is in flight,
+       which is every other arm of this member. It is placed with the report unlock rather than declared to
+       the machine because this half takes no reference to a DECLARED value: §4.13.5 holds its own `C` on the
+       cursor and gives it back here, where DOM §4.9 steps 5.1.2-5.1.3's entry — whose key IS this member's
+       declared `s->ctor` — has to go through idl_active_ctor_owed instead. The two entries are also never
+       nested: steps 4 and 5 are the two arms of one `if`, so exactly one of them ever ran and there is no
+       unwind ORDER between them for this placement to get wrong. */
+    custom_elements_upgrade_unlock(ctx, &s->up);
 }
 
 static int js_doc_create_element_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
@@ -1022,7 +1060,7 @@ static int js_doc_create_element_step(JSContext *ctx, JSStepHdr *hdr, void *st, 
     int r;
 
     if (hdr->stage == DCE_LOOKUP) {
-        JSValue registry;
+        JSValue registry, is;
 
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
@@ -1031,16 +1069,46 @@ static int js_doc_create_element_step(JSContext *ctx, JSStepHdr *hdr, void *st, 
         s->cb[0] = s->def = s->el = s->local = s->result = s->exc = s->ctor = JS_UNDEFINED;
         s->entered = 0;
         report_exception_work_start(&s->rw);
+        custom_elements_upgrade_init(&s->up);
         /* §4.5 createElement STEP 3, and it runs whatever the local name is: `{is, customElementRegistry}`
            refuses itself before any element is created. */
-        registry = flatten_creation_options(ctx, hdr->this_val, argc > 1 ? argv[1] : JS_UNDEFINED);
-        if (JS_IsException(registry)) return -1;
+        registry = flatten_creation_options(ctx, hdr->this_val, argc > 1 ? argv[1] : JS_UNDEFINED, &is);
+        if (JS_IsException(registry)) return -1;      /* `is` is JS_NULL on that exit and owns nothing */
         /* §4.9 step 3 needs a NAME to look a definition up by, and a concolic tag has none — the creation is
            the one below, over whatever example the source carries. */
         if (argc < 1 || concolic_is(argv[0])) {
             JS_FreeValue(ctx, registry);
+            JS_FreeValue(ctx, is);
             *presult = js_doc_create_element(ctx, hdr->this_val, argc, argv, 0);
             return JS_IsException(*presult) ? -1 : 0;
+        }
+        /* AN `is` THAT IS UNKNOWN EXTERNAL INPUT IS RESOLVED THE WAY THE LOCAL NAME ABOVE IS, and for the
+           same reason: the engine RUNS the real operation on the concrete example rather than predicting what
+           running it would have produced, so `createElement("button", {is: location.hash.slice(1)})` looks up
+           the definition the run's own example names. The member's declared type is DOMString, and §3.2.17's
+           member loop hands a CONCOLIC member across as itself rather than coercing it, which is why this
+           arrives here still wearing its Object and not as a coerced string. */
+        if (concolic_is(is)) {
+            JSValue ex = concolic_example(ctx, is);
+
+            JS_FreeValue(ctx, is);
+            if (JS_IsString(ex)) {
+                is = ex;
+            } else {
+                /* NAMED RESIDUAL — CORRECT for every is value that has one, NARROWER than DOM §4.9.
+                     NOT COVERED: an `is` whose source carries NO example, which DOM §4.9 still passes to
+                       create an element internal step 2 as a real is value.
+                     WHAT THE NEXT DIFF BUILDS: an is-value slot that can HOLD a concolic, which is a change
+                       to the slot and to all four of its readers at once (§4.13.3's lookup step 4,
+                       §4.13.4 step 17's "additionally" filter, ce_upgradable_name and `:defined`) — every one
+                       of them tests JS_IsString today, so a concolic written into the slot would be read as
+                       an ABSENT is value by all four and the element would answer as if it had none.
+                     HOW ITS ABSENCE SHOWS: `createElement("button", {is: <opaque>})` produces an element
+                       whose `:defined` is true and which no later `define("my-btn", C, {extends:"button"})`
+                       upgrades, where a browser given any concrete `is` upgrades it. */
+                JS_FreeValue(ctx, ex);
+                is = JS_NULL;
+            }
         }
         /* §4.9's "CREATE AN ELEMENT INTERNAL", PERFORMED BEFORE STEP 3'S LOOKUP. The lookup is over
            (registry, namespace, local name, is), and the only form of it that can answer out of a SCOPED
@@ -1049,16 +1117,63 @@ static int js_doc_create_element_step(JSContext *ctx, JSStepHdr *hdr, void *st, 
            arm, whose element the standard also builds by creating an element internal. Only a constructor that
            RETURNS an element of its own leaves this one unused. */
         s->el = js_doc_create_element(ctx, hdr->this_val, argc, argv, 0);
-        if (JS_IsException(s->el)) { s->el = JS_UNDEFINED; JS_FreeValue(ctx, registry); return -1; }
+        if (JS_IsException(s->el)) {
+            s->el = JS_UNDEFINED;
+            JS_FreeValue(ctx, registry);
+            JS_FreeValue(ctx, is);
+            return -1;
+        }
         /* "…custom element registry to registry", written through the component that owns the association —
            the once-only rule and the scoped-registry latch belong with the slot and not with each writer. */
         custom_elements_node_associate_registry(ctx, s->el, registry);
+        /* "…AND IS VALUE TO IS" — create an element internal step 2, performed BEFORE step 3's lookup because
+           the lookup's own step 4 reads it: `<button is="my-btn">`'s definition is found by NAME `my-btn` and
+           LOCAL NAME `button`, and an element with no is value can only ever match step 3. The same one entry
+           HTML §13.2.6.1's create an element for the token step 5 writes through, because an is value means
+           one thing and a second writer of it would be a second answer.
+           THE NAMESPACE IS NOT ASKED HERE AND THAT IS NOT AN OMISSION. Create an element internal sets the is
+           value unconditionally, and the HTML-namespace condition belongs to a different step of a different
+           algorithm — DOM §4.9's create an element step 6.3 — which is the condition that same entry performs
+           on its own, so `new Document()`'s null-namespace element carries the is value and stays
+           "uncustomized", exactly as the standard says. Nothing downstream is thereby handed a foreign element
+           with a definition: HTML §4.13.3's lookup step 2 refuses a non-HTML namespace outright. */
+        if (JS_IsString(is)) {
+            lxb_dom_node_t *made = node_of(s->el);
+            size_t ilen = 0;
+            const char *iv;
+
+            DCHECK(made != NULL && made->type == LXB_DOM_NODE_TYPE_ELEMENT,
+                   "DOM §4.9 create an element internal answered with something that is not an element, and "
+                   "the is value about to be written is a fact about an ELEMENT — the cast below would "
+                   "otherwise read another node kind's struct as one");
+            iv = JS_ToCStringLen(ctx, &ilen, is);
+            if (!iv) { JS_FreeValue(ctx, registry); JS_FreeValue(ctx, is); return -1; }
+            custom_elements_created_with_is_value(lxb_dom_interface_element(made), iv, ilen);
+            JS_FreeCString(ctx, iv);
+        }
+        JS_FreeValue(ctx, is);
         s->def = custom_elements_definition_lookup_for_element(ctx, s->el);   /* §4.9 STEP 3 */
         if (!JS_IsObject(s->def)) {                  /* §4.9 step 6: not a custom element */
             JS_FreeValue(ctx, registry);
             *presult = s->el;
             s->el = JS_UNDEFINED;
             return 0;
+        }
+        /* §4.9 STEP 4 — "If definition is non-null, and definition's name is not equal to its local name
+           (i.e., definition represents a customized built-in element)". Its steps 4.1-4.2 are the element
+           this stage already made: the interface is "the element interface for localName and the HTML
+           namespace", which is what js_doc_create_element picked from the local name, and the state is
+           "undefined", which the is-value write above set for exactly the elements that can reach here.
+           WHAT MAKES THIS ARM DIFFERENT IS THAT IT UPGRADES RATHER THAN CONSTRUCTS, and step 4.3 is
+           "If synchronousCustomElements is true, then run this step while catching any exceptions" over
+           "Upgrade result using definition" — so §4.9 steps 5.1.1-5.1.3's active-custom-element-constructor-map
+           bracket is NOT this arm's: HTML §4.13.5 steps 8-9 push their own entry, keyed on the ELEMENT's
+           registry, and give it back in its own step 10 regardless-list. Entering here too would push a second
+           entry for one Construct and restore the wrong `previousRegistry` on the way out. */
+        if (custom_elements_definition_is_customized_builtin(ctx, s->def)) {
+            JS_FreeValue(ctx, registry);
+            STEP_GOTO(hdr->stage, DCE_UPGRADE, &s->phase, NULL);
+            goto upgrade;
         }
         /* §4.9 STEP 5.1.1 — `C` is the definition's constructor, and it is held on the state because step
            5.1.6 names it from an exit this stage cannot see. */
@@ -1085,6 +1200,52 @@ static int js_doc_create_element_step(JSContext *ctx, JSStepHdr *hdr, void *st, 
            declaration has already converted to a string. */
         s->local = JS_DupValue(ctx, argv[0]);
         STEP_GOTO(hdr->stage, DCE_CONSTRUCT, &s->phase, NULL);
+    }
+upgrade:
+    /* DOM §4.9 STEP 4.3'S CATCHING LIST — "Upgrade result using definition", which is HTML §4.13.5 "Upgrades"
+       and therefore parks on the page's constructor at its own step 10.3. It is the SAME implementation the
+       §4.13.6 reaction drain runs; what differs is only that this caller runs it NOW rather than enqueuing an
+       upgrade reaction, which is the whole content of `synchronousCustomElements` being true for this member
+       and the reason step 4.4's "Otherwise" arm is unreachable from here.
+       IT IS NOT A SECOND DRIVER. The cursor is a CeUpgrade this state embeds, the algorithm is
+       custom_elements.c's one function, and the park is the ordinary JS_STEP_CONSTRUCT every other request in
+       this machine makes — no queue, no drain and no second loop. */
+    if (hdr->stage == DCE_UPGRADE) {
+        JSValue thrown = JS_UNDEFINED;
+
+        r = custom_elements_upgrade_run(ctx, &s->up, s->el, s->def, cb_result, out_cb, out_argc, &thrown);
+        cb_result = JS_UNDEFINED;
+        if (r > 0) return r;                          /* parked inside §4.13.5 step 10.3's Construct */
+        if (!JS_IsUndefined(thrown)) {
+            s->exc = thrown;
+            STEP_GOTO(hdr->stage, DCE_UP_REPORT, &s->phase, NULL);
+        } else {
+            /* §4.9 step 7: "Return result" — the element this stage created and the upgrade ran the page's
+               class over. It is the SAME node the page would have got from the markup form, which is what
+               makes `el === document.querySelector(...)` hold across an upgrade. */
+            *presult = s->el;
+            s->el = JS_UNDEFINED;
+            return 0;
+        }
+    }
+    if (hdr->stage == DCE_UP_REPORT) {
+        /* DOM §4.9 STEP 4.3'S THREW-LIST, both entries. The report is HTML §8.1.4.6, which fires an `error`
+           event at the global — the page's code again, so it parks like everything else — and the SECOND
+           entry is what distinguishes this arm from step 5.1.4's: the element the page gets back is the one
+           that was being upgraded, with its state set to "failed", NOT a fresh HTMLUnknownElement. A customized
+           built-in whose class threw is still a `button`. */
+        r = report_exception_run(ctx, &s->rw, s->exc, cb_result, out_cb, out_argc);
+        if (r > 0) return r;                          /* parked inside the `error` event's own dispatch */
+        JS_FreeValue(ctx, s->exc);
+        s->exc = JS_UNDEFINED;
+        DCHECK(JS_IsObject(s->el),
+               "DOM §4.9 step 4.3's threw-list has no element to set a custom element state on — step 4.2's "
+               "element is created before step 3's lookup and held for exactly these two exits, so a report "
+               "reached without one came from a stage that never made it");
+        custom_elements_mark_failed(ctx, s->el);
+        *presult = s->el;
+        s->el = JS_UNDEFINED;
+        return 0;
     }
     if (hdr->stage == DCE_CONSTRUCT) {
         /* §4.9 STEP 5.1.4.1 — constructing C, the value step 5.1.1 named and steps 5.1.2-5.1.3 entered into

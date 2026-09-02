@@ -36,6 +36,49 @@ typedef enum {
    the two arms one bug apart. */
 enum { CE_REACTION_CALLBACK = 0, CE_REACTION_UPGRADE = 1 };
 
+/* HTML §4.13.5 "Upgrades"' UPGRADE AN ELEMENT, AS A CURSOR ITS CALLERS EMBED — the same shape as the drain
+   below and for the same reason: its step 10.3 CONSTRUCTS the page's class, so the algorithm PARKS, and a
+   parked algorithm's state has to ride the calling machine's `visit` for a fork and its teardown for the
+   throw path.
+   TWO CALLERS AND ONE IMPLEMENTATION, WHICH IS WHAT MAKES THIS A STRUCT RATHER THAN A SECOND DRIVER. §4.13.6
+   step 1.3.1's upgrade arm runs it from the reaction drain, and DOM §4.9 "Interface Element"'s create an
+   element step 4.3 runs it with no drain in sight — verbatim "If synchronousCustomElements is true, then run
+   this step while catching any exceptions", whose catching list is "Upgrade result using definition". That is
+   `document.createElement("button", {is:"my-btn"})`, where there is no reaction, no element queue and nothing
+   to dequeue from; welding the cursor to the drain's record is what would have forced a second copy of
+   §4.13.5 for the caller that has no drain, which is the dual-system rot this file's own architecture rules
+   name. The cursor moved OUT of CustomElementQueue rather than being duplicated into DocCreateElState.
+   THE ELEMENT AND THE DEFINITION ARE HELD HERE and not re-read from the caller at each re-entry, because step
+   10's regardless-list is owed by a flow that is TORN DOWN mid-Construct and therefore never re-enters at
+   all: custom_elements_upgrade_unlock is that exit, and it can name only what this record itself holds. */
+typedef struct {
+    /* 0 exactly when no upgrade is in flight, which is what every caller's teardown reads to decide whether
+       step 10's regardless-list is still owed. */
+    uint8_t stage;
+    uint8_t phase;      /* step 10.3's Construct request phase */
+    JSValue cb[1];      /* [C] — step 10.3 constructs "with no arguments", so one slot is the whole buffer */
+    JSValue el;         /* the element being upgraded (owned) */
+    JSValue def;        /* the definition it is being upgraded with (owned) */
+} CeUpgrade;
+
+void custom_elements_upgrade_init(CeUpgrade *u);
+void custom_elements_upgrade_visit(JSContext *ctx, CeUpgrade *u, JSStepVisit *v);
+/* HTML §4.13.5 step 10's REGARDLESS-LIST, for the flow that never comes back to run it — "regardless of
+   whether the above steps threw an exception or not" is a claim about every exit from step 10, and a flow torn
+   down while parked on step 10.3's Construct is one of them. What step 10 took by then outlives the flow: the
+   active custom element constructor map entry steps 8-9 pushed, and step 6's construction stack entry. A
+   no-op when no upgrade is in flight, so every caller calls it unconditionally from its own release. */
+void custom_elements_upgrade_unlock(JSContext *ctx, CeUpgrade *u);
+/* HTML §4.13.5 "Upgrades", ONE STEP AT A TIME. `el` and `def` are the algorithm's two inputs and are ADOPTED
+   at the first entry; a re-entry passes the same pair and is asserted against what was adopted, because a
+   resume that names a different upgrade is the one way this cursor can be driven wrong.
+   Returns JS_STEP_CONSTRUCT parked on the page's constructor (the caller returns it), or 0 when the upgrade
+   has finished. On 0, `*pexc` is step 10's finally-list step 3's RETHROW — the exception, OWNED, which the
+   caller reports (§4.13.6 step 1.3.1 for the drain, DOM §4.9 step 4.3's threw-list for createElement) — or
+   JS_UNDEFINED when the upgrade set the element's state to "custom". `cb_result` is CONSUMED. */
+int  custom_elements_upgrade_run(JSContext *ctx, CeUpgrade *u, JSValueConst el, JSValueConst def,
+                                 JSValue cb_result, JSValue **out_cb, int *out_argc, JSValue *pexc);
+
 /* §4.13.6 STEP 4'S DRAIN, AS A STRUCT THE CALLING MACHINE EMBEDS. Invoking a reaction runs the page's code, so
    the drain parks — and it parks inside whichever machine is performing the `[CEReactions]` wrapper, which is
    the IDL member machine. So the state belongs to that machine (it must ride its `visit` for a fork and its
@@ -46,8 +89,9 @@ typedef struct {
     uint32_t i;        /* the element cursor into it */
     uint8_t  phase;    /* the call or construct request's own phase — one reaction is in flight at a time */
     /* §4.13.5's OWN CURSOR while the reaction being run is an UPGRADE. The upgrade parks on the page's class
-       (step 10.3's Construct), so it needs a resume point of its own inside the one reaction the drain is on. */
-    uint8_t  up_stage;
+       (step 10.3's Construct), so it needs a resume point of its own inside the one reaction the drain is on —
+       and it is the SAME record DOM §4.9's create an element embeds, because there is one §4.13.5. */
+    CeUpgrade up;
     /* §4.13.6 step 1.3.1's upgrade arm: "If this throws an exception, catch it, and report it". The throw is
        the algorithm's VALUE here, so the exception is held and HTML §8.1.4.6's report runs as a request — it
        fires an `error` event, which is the page's code and therefore another park. */
@@ -138,6 +182,24 @@ JSValue custom_elements_document_registry(JSContext *ctx);
 JSValue custom_elements_node_registry(JSContext *ctx, JSValueConst wrap);
 /* The definition's constructor — DOM §4.9 step 5.1.1's `C`, the value `create an element` Constructs. OWNED. */
 JSValue custom_elements_definition_constructor(JSContext *ctx, JSValueConst def);
+/* DOM §4.9 "Interface Element"'s create an element STEP 4'S OWN CONDITION, whose second half is verbatim
+   "definition's name is not equal to its local name (i.e., definition represents a customized built-in
+   element)" — the question that decides whether a definition the lookup already found is UPGRADED onto an
+   existing built-in (step 4) or CONSTRUCTED into a new autonomous element (step 5).
+   IT ASKS THE DEFINITION AND NOT THE CALLER, and that is the difference between this and re-deriving the
+   answer from the local name the operation was given. §4.13.3's lookup has already decided WHICH definition
+   this element gets, by either of its two arms; step 4 asks only what KIND of definition that is, and a caller
+   comparing its own `localName` against the definition's name would be asking a third question that agrees
+   with this one only for the arm it happens to be thinking of. */
+bool custom_elements_definition_is_customized_builtin(JSContext *ctx, JSValueConst def);
+/* DOM §4.9 "Interface Element"'s IS VALUE, AS THE QUESTION THE STEPS THAT REFUSE A CUSTOMIZED BUILT-IN ASK.
+   HTML §4.13.7 "Element internals"' attachInternals step 1 is verbatim "If this's is value is not null, then
+   throw a "NotSupportedError" DOMException", and it is a test on the SLOT rather than on the `is` CONTENT
+   ATTRIBUTE — DOM §4.9 fixes the is value at creation and never lets it move, so a `setAttribute("is", …)` on
+   an ordinary element must not start making this throw and a `removeAttribute("is")` on a customized built-in
+   must not stop it. The slot is this component's record, which is why the predicate is here and why no caller
+   may re-derive the answer from the attribute list. */
+bool custom_elements_element_has_is_value(JSContext *ctx, JSValueConst wrap);
 
 /* §4.13.4'S ACTIVE CUSTOM ELEMENT CONSTRUCTOR MAP, AS THE ONE PAIR THAT BRACKETS A CONSTRUCT. "Each
    similar-origin window agent has an associated active custom element constructor map, which is a map of
