@@ -489,6 +489,18 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
              "PM_SEND_MSG was asked to reply to `" + msg.targetOrigin + "` — a postMessage the operator typed " +
              "is addressed to ONE origin, and the wildcard delivers it to whichever document the target " +
              "window holds by the time it lands");
+      /* THE PAYLOAD IS ASSERTED HERE BECAUSE IT IS RELAYED *AND* LOGGED, AND THOSE TWO READS DISAGREED.
+         content.js already DCHECKs `typeof msg.data === "string"` at the far end of this very relay, so the
+         contract exists and is enforced one hop away; this hop forwarded `msg.data` verbatim into it and then
+         wrote `msg.data || ""` into the operator's sent-message log. That default cannot help a conforming
+         message — the empty string substitutes for itself — and on a BROKEN one it does the one thing a log
+         must never do: the far side aborts naming the absent payload while this side records a message body
+         of `""` as though the operator had sent one. Asserting here moves the abort to the hop that composed
+         the relay, and the log then carries the bytes that were actually sent. */
+      DCHECK(typeof msg.data === "string",
+             "a PM_SEND_MSG reached this relay with no `data` string — lib/popup-console.js states the " +
+             "operator's typed payload on every one, so an absent one is a message this zone would both " +
+             "post as `undefined` and record in the channel log as text the operator never wrote");
       var _pmOpts = { documentId: msg.documentId };
       swRpc("tabs.sendMessage", tabId, {
         type: "PM_SEND_MSG",
@@ -498,7 +510,7 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
         // Record sent message in the log entry (intercept.js can't capture outgoing postMessage)
         const entry = _findLogEntry(tabId, msg.channelId, "postmessage");
         if (entry) {
-          entry.messages.push({ dir: "sent", time: Date.now(), body: msg.data || "", base64: false });
+          entry.messages.push({ dir: "sent", time: Date.now(), body: msg.data, base64: false });
           if (entry.messages.length > 200) entry.messages.splice(0, entry.messages.length - 200);
               notifyPopup(tabId);
         }
@@ -521,6 +533,14 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       if (tabId == null) return;
       // documentId-ONLY routing (no frameId fallback — reused across navs / origins).
       if (!msg.documentId) { sendResponse({ error: "blocked: no documentId" }); return true; }
+      /* Same assertion as PM_SEND_MSG one case up, for the same reason and against the same far-side DCHECK
+         in content.js: this hop both forwards the payload and writes it into the channel log, and only the
+         log carried a `|| ""` — so a port message the trusted zone composed without one was posted as
+         `undefined` and recorded as the empty string. */
+      DCHECK(typeof msg.data === "string",
+             "an MC_SEND_MSG reached this relay with no `data` string — lib/popup-console.js states the " +
+             "operator's typed payload on every one, so an absent one is a port message this zone would both " +
+             "post as `undefined` and record in the channel log as text the operator never wrote");
       var _mcOpts = { documentId: msg.documentId };
       swRpc("tabs.sendMessage", tabId, {
         type: "MC_SEND_MSG",
@@ -529,7 +549,7 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       }, _mcOpts).then(() => {
         const entry = _findLogEntry(tabId, msg.channelId, "msgchannel");
         if (entry) {
-          entry.messages.push({ dir: "sent", time: Date.now(), body: msg.data || "", base64: false });
+          entry.messages.push({ dir: "sent", time: Date.now(), body: msg.data, base64: false });
           if (entry.messages.length > 200) entry.messages.splice(0, entry.messages.length - 200);
               notifyPopup(tabId);
         }
@@ -655,14 +675,33 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
         }
 
         if (!m) {
-          // Fallback: Calculate from URL (less reliable)
-          const { methodName } = calculateMethodMetadata(
-            new URL(msg.url || ""),
-            service,
-          );
-          m =
-            doc.resources.learned?.methods[methodName] ||
-            doc.resources.probed?.methods[methodName];
+          /* THE ADDRESS IS A STATED FACT AND `""` IS ITS DECLARED ABSENCE, so this reads it as one instead
+             of handing it to a parser. `|| ""` stood here and could not fire: popup.js states `url` on every
+             RENAME_FIELD it sends, so the name is never missing — what the default DID was guarantee the
+             throw it looks like it prevents, because URL Standard §6.1 URL class's `new URL(url, base)`
+             steps are "Let parsedURL be the result of running the API URL parser on url with base, if given.
+             If parsedURL is failure, then throw a TypeError", and the empty string with no base IS a
+             failure. This case sits in no try/catch, so that TypeError left `handlePopupMessage` with
+             `sendResponse` never called and the popup's awaited rename neither applied nor refused.
+             `currentRequestUrl` is `""` whenever no request is selected (popup.js initializes and resets it
+             to exactly that), which is not a broken producer — it is the panel stating there is no address
+             to calculate a method from, and the `else` below already answers that.
+             THE VALUE IS THIRD-PARTY EVEN WHEN NON-EMPTY, so an unparseable one is refused rather than
+             asserted: popup.js composes it as `rootUrl + servicePath + pathTemplate` out of a published
+             discovery document, and its own comment there records that those address fields are the
+             document's and their absence is "not a broken producer of ours to DCHECK". The SHAPE is ours
+             and is asserted; the bytes are a service's and are refused, which is lib/field-def.js's split. */
+          DCHECK(typeof msg.url === "string",
+                 "a RENAME_FIELD reached this handler with no `url` string — popup.js states " +
+                 "`currentRequestUrl` on every one of them (as `\"\"` when no request is selected), so an " +
+                 "absent one is that producer having stopped stating the address this fallback resolves");
+          const _renameUrl = URL.canParse(msg.url) ? new URL(msg.url) : null;
+          if (_renameUrl !== null) {
+            const { methodName } = calculateMethodMetadata(_renameUrl, service);
+            m =
+              doc.resources.learned?.methods[methodName] ||
+              doc.resources.probed?.methods[methodName];
+          }
         }
 
         if (m && m.parameters?.[fieldKey]) {
