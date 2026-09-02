@@ -491,7 +491,139 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       anything listed and stays absent, which is every unlisted path's standing statement:
                       untested rather than passing. Expect bad first numbers — every one of those seventeen
                       opens with `caches`, and there is no CacheStorage component. */
-                   "service-workers/cache-storage/resources"];
+                   "service-workers/cache-storage/resources",
+                   /* THE NAVIGATION API — HTML §7.2.6 "The navigation API". Seven built components and not one
+                      collected test that names any of them: core/frame/navigation.c (§7.2.6.2 "The Navigation
+                      interface", §7.2.6.3 "Core infrastructure", §7.2.6.4 "Initializing and updating the entry
+                      list", §7.2.6.6 "The history entry list"), core/frame/navigation_history_entry.c
+                      (§7.2.6.5 "The NavigationHistoryEntry interface"), core/frame/navigate_event_fire.c
+                      (§7.2.6.10.4 "Firing the event"), core/events/navigate_event.c (§7.2.6.10.1 "The
+                      NavigateEvent interface"), core/frame/navigation_destination.c (§7.2.6.10.3 "The
+                      NavigationDestination interface"), core/events/navigation_current_entry_change_event.c
+                      (§7.2.7.1 "The NavigationCurrentEntryChangeEvent interface") and
+                      core/frame/navigation_abort.c.
+                      WHAT IS ASKED ABOUT THEM TODAY, COUNTED AT THE PINNED REVISION RATHER THAN ESTIMATED.
+                      `navigation.currentEntry` is named by 228 corpus files, 209 of them under this directory,
+                      and by ZERO collected tests. `navigation.back` is 95 / 89 / zero, `navigation.traverseTo`
+                      37 / 36 / zero, `navigateEvent` 30 / 26 / zero, `navigation.updateCurrentEntry` 14 / 14 /
+                      zero. The four INTERFACE names each show one hit outside this directory and it is the same
+                      file every time — `interfaces/html.idl`, for which `testKind` answers null because an
+                      `.idl` is neither a document nor a `.js`. It is a FIXTURE, and no collected test passes
+                      `html` to `idl_test` as a src, so even the interface surface is unasserted. This is the
+                      popover shape without the accidental coverage: not a component that looks measured, a
+                      component nothing in the checkout mentions.
+                      ITS FIXTURES WERE CHECKED BEFORE IT WAS ADDED. Its 445 collected tests name 20 distinct
+                      scripts between them and every one resolves: `resources/` (testharness, testharnessreport,
+                      testdriver and its two siblings), `common/` (get-host-info.sub.js at 24 files, utils.js,
+                      dispatcher, gc.js), seven helper paths inside this directory itself, and two that cross
+                      into listed entries — `html/browsers/browsing-the-web/back-forward-cache/resources/
+                      helper.sub.js` at nine files and `service-workers/service-worker/resources/
+                      test-helpers.sub.js` at one, both of which this list already carries and wptserve already
+                      substitutes. It declares no `idl_test`, so there is no `.idl` to be short of.
+                      IT COSTS 492 BLOBS AND 591 KiB. All 445 collected tests are DOCUMENTS — this directory
+                      holds no `.any`/`.window`/`.worker.js` at all. 452 of its documents load
+                      `/resources/testharness.js` and the gate drops seven of those: six sit under a
+                      `resources/` path segment and one carries the `-manual` type flag, both of which are
+                      `nameIsNonTest`/`testKind` doing exactly what they are for.
+                      NOTHING IS PREDICTED HERE ABOUT WHAT IT SCORES. */
+                   "navigation-api",
+                   /* INTERSECTION OBSERVER §2.2 "The IntersectionObserver interface", §2.3 "The
+                      IntersectionObserverEntry interface" and §3.2's processing model — core/
+                      intersection_observer/intersection_observer.c and intersection_observer_entry.c, which
+                      are 1692 and 357 lines and have no collected oracle between them.
+                      COUNTED AT THE PINNED REVISION. `IntersectionObserver` is named by 155 corpus files, 141
+                      under this directory, and by ZERO collected tests; `isIntersecting` 62 / 55 / zero,
+                      `intersectionRatio` 29 / 27 / zero, `IntersectionObserverEntry` 19 / 18 / zero,
+                      `rootMargin` 13 / 10 / zero. Every name shows exactly one hit outside this directory and
+                      it is `interfaces/intersection-observer.idl` in all five cases — the fixture, not a test,
+                      and one no collected file fetches, so it has sat in the checkout unread.
+                      ITS FIXTURES WERE CHECKED. Eight distinct scripts across 143 collected tests, all
+                      resolving: `resources/` (testharness, testharnessreport, idlharness, webidl2 under the
+                      `/resources/WebIDLParser.js` rewrite this file's SERVER_REWRITES already carries),
+                      `common/rendering-utils.js` and `common/get-host-info.sub.js`, its own
+                      `resources/intersection-observer-test-utils.js` at 98 files, and one crossing into a
+                      listed entry — `css/cssom-view/support/scroll-behavior.js`, under the listed
+                      `css/cssom-view`. Its `idlharness.window.js` declares `idl_test(['intersection-observer'],
+                      ['dom'])` and BOTH `interfaces/*.idl` are present, so this is not another family that
+                      collects, runs and reports its floor of two subtests.
+                      IT COSTS 171 BLOBS AND 268 KiB: 142 documents and one `.js`. 143 of its documents load
+                      the harness and one is dropped for sitting under `resources/`.
+                      NOTHING IS PREDICTED HERE ABOUT WHAT IT SCORES. */
+                   "intersection-observer",
+                   /* THE CONSOLE STANDARD — §1.1 "Logging functions", §1.2 "Counting functions", §1.3
+                      "Grouping functions", §1.4 "Timing functions" and §2.2 "Formatter(args)" — core/console/
+                      console.c, 1004 lines, zero collected tests.
+                      COUNTED AT THE PINNED REVISION, and the numbers are small because this standard is small:
+                      `console.timeEnd` is named by 4 corpus files, 2 here, ZERO collected; `console.countReset`
+                      2 / 1 / zero; `console.dir` 1 / 1 / zero; `console.table` occurs in NO corpus file at all,
+                      which is a fact about the corpus and not about this list. The count map, the group stack
+                      and the timer table that console.c holds per realm are written by exactly the members
+                      nothing here asks about.
+                      ITS FIXTURES WERE CHECKED. Seven distinct scripts across 12 collected tests: five under
+                      `resources/` (testharness, testharnessreport, testdriver and its vendor shim, idlharness,
+                      webidl2 via the WebIDLParser rewrite) and its own `console/helper.js` at four files.
+                      `idlharness.any.js` declares `idl_test(['console'], [])` and `interfaces/console.idl` is
+                      present, so its IDL assertions run.
+                      IT COSTS 16 BLOBS AND 18 KiB: 5 documents and 7 `.any.js`. Six of its files are markup;
+                      the sixth carries the `-manual` type flag AND loads no harness at all — a page that asks a
+                      human to read the devtools console — so `testKind` drops it at the name, before the
+                      content is ever read, which is both rules agreeing rather than one covering for the other.
+                      This is the cheapest entry in this list after the one below it, and its component is the
+                      largest per byte of corpus.
+                      NOTHING IS PREDICTED HERE ABOUT WHAT IT SCORES. */
+                   "console",
+                   /* INPUT DEVICE CAPABILITIES — §"The InputDeviceCapabilities interface" and §"Extensions to
+                      the UIEvent interface and UIEventInit dictionary". THAT STANDARD NUMBERS NO SECTION: its
+                      document is unnumbered `<h2>`s throughout, so a §number written beside these titles would
+                      be an invention, and the title is the whole of the citation this one can carry.
+                      core/events/input_device_capabilities.c is the interface and it is the TYPE of the
+                      `sourceCapabilities` member core/events/ui_event.c installs, which UIEvent, FocusEvent,
+                      MouseEvent and KeyboardEvent all inherit — so one uncollected directory is the oracle for
+                      a member on four interfaces.
+                      COUNTED AT THE PINNED REVISION. `InputDeviceCapabilities` is named by exactly 2 corpus
+                      files: this directory's `idlharness.window.js` and `interfaces/input-device-capabilities.
+                      idl`. `sourceCapabilities` and `firesTouchEvents` are named by ONE file each and it is the
+                      `.idl` both times — the fixture, which `testKind` answers null for. So the whole corpus
+                      says this interface exists in exactly one test, and this list did not have it.
+                      ITS FIXTURES WERE CHECKED. Two scripts, both under `resources/`: idlharness.js and
+                      webidl2 via the WebIDLParser rewrite. Its `idl_test(['input-device-capabilities'],
+                      ['uievents', 'dom'])` names three specs and all three `.idl` files are present, so the
+                      file asserts rather than reporting its floor of two subtests.
+                      IT COSTS 2 BLOBS AND 413 BYTES — one META.yml and one `.window.js` — for ONE collected
+                      test. It is the cheapest entry this list has ever taken.
+                      NOTHING IS PREDICTED HERE ABOUT WHAT IT SCORES. */
+                   "input-device-capabilities",
+                   /* FULLSCREEN API §2 "Model", §3 "API" and §5.1 ":fullscreen pseudo-class" — core/fullscreen/
+                      fullscreen.c and the ordered set it moves elements through, core/css/top_layer.c, which is
+                      the same set `html/semantics/popovers` above was taken for. Those are its two live
+                      consumers, with core/html/close_watcher.c a third; core/html/html_dialog.c is NOT one,
+                      because `showModal()` is honestly absent there and it is the only producer of the
+                      modal flag — so the top layer's second measured consumer is this directory and no other.
+                      COUNTED AT THE PINNED REVISION, and this one DOES have accidental coverage, which is the
+                      shape that makes a component look measured. `requestFullscreen` is named by 105 corpus
+                      files, 57 under this directory, and by THREE collected tests — `dom/nodes/moveBefore/
+                      fullscreen-preserve.html` and the two `html/semantics/popovers/popover-top-layer-*.html`
+                      — each written about a DIFFERENT standard and reaching fullscreen on its way past. The
+                      four other cross-directory hits are not tests at all: two sit under `resources/`, one is
+                      `interfaces/fullscreen.idl`, and one is corpus data under `tools/`. `exitFullscreen` is
+                      73 / 48 / the same three; `fullscreenElement` 71 / 57 / one (the moveBefore file);
+                      `fullscreenchange` 55 / 45 / ZERO, so §3's event is asked about by nothing in this
+                      checkout.
+                      ITS FIXTURES WERE CHECKED. Nine distinct scripts across 83 collected tests, all
+                      resolving: `resources/` (testharness, testharnessreport, testdriver, testdriver-vendor,
+                      testdriver-actions, idlharness, webidl2 via the rewrite), its own `trusted-click.js` at 51
+                      files, and `common/top-layer.js` — which is under the listed `common` and is the shared
+                      helper the popover entry above also leans on. `idl_test(['fullscreen'], ['dom', 'html'])`
+                      names three specs and all three `.idl` files are present.
+                      IT COSTS 110 BLOBS AND 147 KiB: 78 documents and 5 `.js`. All 78 markup files that load
+                      the harness are collected — nothing here is dropped by name, so `markupOnly` and
+                      `testKind` agree with each other on every one of them.
+                      NOTHING IS PREDICTED HERE ABOUT WHAT IT SCORES. 68 of its 83 collected tests pull
+                      `testdriver.js` — 64 documents by `<script src>` and four `.window.js` by `// META:
+                      script=`, counted apart because a total of 68 read as documents would have been wrong
+                      about both halves — so expect what a corpus that wants a driver does in an engine that
+                      has none, and what each abort NAMES is the work queue, read off the run. */
+                   "fullscreen"];
 
 /* AND THE DIRECTORIES WHOSE OWN LEVEL CONE MODE HAS ALREADY PUT ON DISK. A cone-mode checkout materializes every
    file of every directory ON THE PATH to a listed one, so naming one helper's `resources` lands its standard's
