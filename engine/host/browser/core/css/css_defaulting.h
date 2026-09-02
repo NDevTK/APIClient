@@ -1,4 +1,4 @@
-/* CSS Cascade §7 — DEFAULTING: what becomes a property's SPECIFIED value when the cascade did not decide it,
+/* CSS Cascade 5 §7 — DEFAULTING: what becomes a property's SPECIFIED value when the cascade did not decide it,
  * or when the declaration that won says explicitly that the cascade should not.
  *
  * IT IS ITS OWN COMPONENT BECAUSE IT IS ITS OWN STEP. §6's cascade takes the declarations and answers which one
@@ -38,7 +38,7 @@ typedef enum {
     CSS_DEFAULTING_INITIAL         /* §7.1's initial value */
 } CssDefaulting;
 
-/* CSS Cascade §7 over the CASCADED value of `name` — which is NULL when no declaration won, the state §7.1 and
+/* CSS Cascade 5 §7 over the CASCADED value of `name` — which is NULL when no declaration won, the state §7.1 and
    §7.2 are written for ("unless the cascade results in a value"), and one of §7.3's CSS-wide keywords when the
    declaration that won says which defaulting it wants. Every other cascaded value is DECLARED and stands.
    `cascaded` is BORROWED and not freed: which of the three answers this is decides who owns it, and the caller
@@ -49,7 +49,7 @@ CssDefaulting css_defaulting_of(const char *name, const char *cascaded);
    element when the cascade does not decide it? */
 bool css_property_inherited(const char *name);
 
-/* Is `value` one of CSS Cascade §7.3's CSS-WIDE KEYWORDS — `inherit`, `initial`, `unset`, `revert`,
+/* Is `value` one of CSS Cascade 5 §7.3's CSS-WIDE KEYWORDS — `inherit`, `initial`, `unset`, `revert`,
    `revert-layer`, `revert-rule`? Each is the ENTIRE value of a declaration when present, so this is an
    equality and not a search, and each makes the value a product of §7's DEFAULTING step rather than of the
    declaration.
@@ -57,7 +57,7 @@ bool css_property_inherited(const char *name);
    §Shorthand Properties), which core/css/css_shorthand.h has to know BEFORE it tries the shorthand's own
    grammar: `border: initial` is not a `<line-width> || <line-style> || <color>`, and a keyword that reached
    that grammar would be classified as one of its terms. AND because the set is not only about declarations:
-   CSS Cascade §6.4.2 reserves exactly these keywords inside a `<layer-name>` ("the CSS-wide keywords are
+   CSS Cascade 5 §6.4.2 reserves exactly these keywords inside a `<layer-name>` ("the CSS-wide keywords are
    reserved for future use, and cause the rule to be invalid at parse time if used as an <ident> in the
    <layer-name>"), which core/css/css_at_rule_prelude.h asks here rather than restating — two copies could
    disagree about `revert-rule`, and one of them did. */
@@ -75,8 +75,8 @@ bool css_wide_keyword(const char *value);
    `revert-rule` — which has already happened once to the set above. */
 bool css_custom_ident_excluded(const char *name);
 
-/* WHICH OF §7.3's THREE CASCADE-DEPENDENT KEYWORDS a value is, if it is one. §7.3's own opening sentence names
- * them as a set and says what makes them different from the other three: "The keywords revert, revert-layer,
+/* WHICH OF CSS Cascade 5 §7.3's THREE CASCADE-DEPENDENT KEYWORDS a value is, if it is one. §7.3's own opening
+ * sentence names them as a set and says what makes them different from the other three: "The keywords revert, revert-layer,
  * and revert-rule are CASCADE-DEPENDENT keywords; some contexts may restrict their use while allowing the other
  * CSS-wide keywords."
  *

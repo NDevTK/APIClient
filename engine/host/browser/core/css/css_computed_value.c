@@ -105,15 +105,19 @@ static char *css_cv_specified(lxb_dom_element_t *el, const char *name)
     return cssom_initial_value(name);
 }
 
-/* ---- css-overflow §3.1's computed value ------------------------------------------------------------------ */
+/* ---- css-overflow-3 §3.1 "Managing Overflow: the overflow-x, overflow-y, and overflow properties" ------- */
+/* EVERY BARE § BELOW IS css-overflow-3's AND EACH ONE SAYS SO. An unlevelled `css-overflow` names no document
+   — the levelled shortname is what identifies one — so a number written without it is placed by whatever this
+   file cites most, which here is the cascade, whose §3.1 is "Property Aliasing" and decides nothing about
+   overflow. */
 
-/* §3.1: "The scroll, auto, and hidden values are known as the scrollable values of overflow." */
+/* css-overflow-3 §3.1: "The scroll, auto, and hidden values are known as the scrollable values of overflow." */
 static bool overflow_scrollable(const char *v)
 {
     return css_cv_is(v, "scroll") || css_cv_is(v, "auto") || css_cv_is(v, "hidden");
 }
 
-/* §3.1's legacy alias — `overlay` IS `auto`, so it aliases before every question is asked of it. */
+/* css-overflow-3 §3.1's legacy alias — `overlay` IS `auto`, so it aliases before every question is asked of it. */
 static const char *overflow_alias(const char *v)
 {
     return css_cv_is(v, "overlay") ? "auto" : v;
@@ -124,7 +128,8 @@ static bool overflow_value(const char *v)
     return overflow_scrollable(v) || css_cv_is(v, "visible") || css_cv_is(v, "clip");
 }
 
-/* §3.1's one computed-value rule, which is why "usually specified value, but see text" is not "as specified":
+/* css-overflow-3 §3.1's one computed-value rule, which is why "usually specified value, but see text" is not
+   "as specified":
    "if the other axis specifies a scrollable value, a specified value of visible computes to auto, enabling
    scrolling in its axis". It reads the other axis's SPECIFIED value, so there is no recursion between the two
    and no order in which they must be asked. */
@@ -142,7 +147,7 @@ static char *computed_overflow(lxb_dom_element_t *el, const char *name, char *sp
     self_v = overflow_alias(spec);
     other_v = overflow_alias(other);
     DCHECK(overflow_value(self_v) && overflow_value(other_v),
-           "an overflow axis cascaded to a value outside css-overflow §3.1's grammar — lexbor validates the "
+           "an overflow axis cascaded to a value outside css-overflow-3 §3.1's grammar — lexbor validates the "
            "longhand and css_shorthand.c validates the `overflow` shorthand, so a third writer has reached the "
            "cascade without a grammar");
     out = (css_cv_is(self_v, "visible") && overflow_scrollable(other_v)) ? css_cv_strdup("auto")

@@ -243,8 +243,8 @@ static const char *const ALIGNMENT_BASELINE_KEYWORDS[] = {
 static const char *const BASELINE_SHIFT_KEYWORDS[] = { "sub", "super", "top", "center", "bottom" };
 /* Each longhand's own `Initial:` line — §4.2.1's `auto`, §4.2.2's `baseline`, §4.2.3's `0` — which is what an
    OMITTED term of the `||` is set to. §4.2 states the first of them outright ("if first or last is specified,
-   it sets baseline-source, WHICH IS OTHERWISE RESET TO AUTO"), and CSS Cascade §Shorthand Properties states
-   the rule the other two follow ("each missing sub-property is assigned its initial value").
+   it sets baseline-source, WHICH IS OTHERWISE RESET TO AUTO"), and CSS Cascade 5 §3 "Shorthand Properties"
+   states the rule the other two follow: "each “missing” sub-property is assigned its initial value".
    THE SHIFT'S ZERO CARRIES ITS UNIT, AND THAT IS THE SAME LENGTH §4.2.3 WRITES WITHOUT ONE. css-values-4 §6
    "Distance Units: the <length> type": "for zero lengths the unit identifier is optional (i.e. can be
    syntactically represented as the <number> 0)" — so `0` and `0px` are two spellings of one value, and this

@@ -353,8 +353,9 @@ static void fp_require_placeable(lxb_dom_element_t *el)
     if (inline_level)
         DFAILF("%s: "
               "CSS 2.1 §9.2.2 'Inline-level elements and inline boxes' makes this an ATOMIC INLINE-LEVEL box — "
-              "`inline-block`, `inline-table`, or css-display §2's `inline flex` and `inline grid` — which "
-              "\"participate in their inline formatting context as a single opaque box\". So §9.4.2 places it, "
+              "`inline-block`, `inline-table`, or css-display-3 §2's `inline flex` and `inline grid` — boxes "
+              "CSS 2.1 §9.2.2 calls atomic \"because they participate in their inline formatting context as a "
+              "single opaque box\". So §9.4.2 places it, "
               "not §9.4.1, and its position is a position ON A LINE BOX exactly as a non-replaced inline box's "
               "is. THAT PLACEMENT IS BUILT AND THIS LINE USED TO SAY IT WAS NOT: it named the per-item offset "
               "along the line and `text-align` as the two missing numbers, and both now exist — "

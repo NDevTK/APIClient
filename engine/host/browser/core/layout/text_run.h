@@ -98,8 +98,8 @@
  * than recording it, at the same place it asserts the other three properties that would change this sum.
  *
  * WHAT IT DOES NOT MEASURE, AND WHY THAT IS AN ASSERT RATHER THAN A CAVEAT. css-text-3 §7.1 "Word Spacing: the
- * word-spacing property" and §7.2 "Tracking: the letter-spacing property" ADD to the advance of exactly what
- * this component sums, and §2.1 "Case Transforms: the text-transform property" changes WHICH characters it
+ * word-spacing property" and css-text-3 §7.2 "Tracking: the letter-spacing property" ADD to the advance of
+ * exactly what this component sums, and css-text-3 §2.1 "Case Transforms: the text-transform property" changes WHICH characters it
  * sums. None of the three is a property core/css/css_computed_value.c derives a computed value for — so this
  * engine's cascade produces no answer for them anywhere, a declaration of one reaches no consumer, and there is
  * nothing here to read. That is a fact about the engine and not a decision this component made, which is why it

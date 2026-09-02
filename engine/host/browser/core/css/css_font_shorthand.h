@@ -40,14 +40,16 @@
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_FONT_SHORTHAND_H
 #include <stdbool.h>
 
-/* §2.7's LONGHANDS, and the split inside them.
+/* css-fonts-4 §2.7 "Shorthand font property: the font property"'s LONGHANDS, and the split inside them.
    THE FIRST SEVEN ARE THE `Set Explicitly` GROUP, IN THE CANONICAL ORDER OF §2.7's OWN GRAMMAR —
    `[ <'font-style'> || <font-variant-css2> || <'font-weight'> || <font-width-css3> ]? <'font-size'>
    [ / <'line-height'> ]? <'font-family'>#`. The order is LOAD-BEARING: css_shorthand.c's §6.7.2 serialization
    hands this file a parallel value array and it is read by index.
-   THE REMAINING TWELVE ARE THE `Reset Implicitly` GROUP — "these properties are a reset-only sub-property of
-   the font property and thus may not be set, but are reset to their initial values". Their order is the
-   spec's own listing, which is alphabetical; nothing reads them positionally, only as a set. */
+   THE REMAINING TWELVE ARE THE `Reset Implicitly` GROUP, and css-fonts-4 §2.7 is named again here rather than
+   carried down from the banner because the citation between the two is CSSOM's: "These properties are a
+   reset-only sub-property of the font property and thus may not be set, but are reset to their initial
+   values". Their order is the spec's own listing, which is alphabetical; nothing reads them positionally,
+   only as a set. */
 #define CSS_FONT_SHORTHAND_N     19
 #define CSS_FONT_SHORTHAND_SET_N 7
 extern const char *const CSS_FONT_SHORTHAND_LONGHANDS[CSS_FONT_SHORTHAND_N];

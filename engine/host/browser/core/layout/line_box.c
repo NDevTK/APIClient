@@ -862,16 +862,19 @@ void line_box_content_span(lxb_dom_element_t *style, lxb_dom_node_t *first, lxb_
 /* ---- css-text-4 §7.1's ALIGNMENT OF ONE LINE BOX'S CONTENT --------------------------------------------------
    CSS 2.2 §9.4.2 hands the question over by name — "when the total width of the inline-level boxes on a line is
    LESS than the width of the line box containing them, their horizontal distribution within the line box is
-   determined by the 'text-align' property" — and §7.1 is where that property now lives. It is a SHORTHAND whose
+   determined by the 'text-align' property" — and css-text-4 §7.1 is where that property now lives. It is a SHORTHAND whose
    `Computed value:` line reads "see individual properties", so there is no computed `text-align` to ask for and
-   the two properties this reads are its longhands: §7.3 "Default Text Alignment: the text-align-all property"
-   and §7.4 "Last Line Alignment: the text-align-last property".
-   §7.4's `auto` IS A REDIRECTION AND NOT A VALUE: "if auto is specified, content on the affected line is
+   the two properties this reads are its longhands: css-text-4 §7.3 "Default Text Alignment: the text-align-all
+   property" and css-text-4 §7.4 "Last Line Alignment: the text-align-last property". EVERY BARE § IN THIS
+   COMPONENT'S ALIGNMENT PROSE IS css-text-4's, and each one states that standard rather than inheriting it from
+   this banner: an unanchored number is placed by whatever the file cites most, and this file's own dominant
+   anchor is neither of the two documents that own alignment.
+   css-text-4 §7.4's `auto` IS A REDIRECTION AND NOT A VALUE: "if auto is specified, content on the affected line is
    aligned per text-align-all unless text-align-all is set to justify, in which case it is START-aligned." Both
    halves are here, and the second is the reason `auto` cannot simply fall through to the other longhand. */
 
-/* WHICH LONGHAND'S VALUE ALIGNS THIS LINE. §7.4's property "describes how the LAST LINE of a block OR A LINE
-   RIGHT BEFORE A FORCED LINE BREAK is aligned", which is two cases and one answer: the fill's last line, and
+/* WHICH LONGHAND'S VALUE ALIGNS THIS LINE. css-text-4 §7.4's property "describes how the LAST LINE of a block
+   OR A LINE RIGHT BEFORE A FORCED LINE BREAK is aligned", which is two cases and one answer: the fill's last line, and
    any line the fill closed at a forced break — which is a line holding one, since [UAX14] LB5's `LF !` makes
    the boundary after a forced break mandatory and `lb_line_extent` asserts a line holds at most one. */
 static bool lb_line_is_last(const TextRunMeasure *m, TextRunLine line, size_t index, size_t n)
@@ -884,7 +887,7 @@ static bool lb_line_is_last(const TextRunMeasure *m, TextRunLine line, size_t in
     return false;
 }
 
-/* THE ALIGNMENT KEYWORD FOR ONE LINE, resolved through §7.4's redirection. OWNED: the caller frees. */
+/* THE ALIGNMENT KEYWORD FOR ONE LINE, resolved through css-text-4 §7.4's redirection. OWNED: the caller frees. */
 static char *lb_line_alignment(lxb_dom_element_t *style, bool last)
 {
     char *all = lb_computed(style, "text-align-all");
@@ -895,7 +898,7 @@ static char *lb_line_alignment(lxb_dom_element_t *style, bool last)
 
         if (strcmp(lastv, "auto") != 0) { free(all); return lastv; }
         free(lastv);
-        /* §7.4's `auto`, second half: "unless text-align-all is set to justify, in which case it is
+        /* css-text-4 §7.4's `auto`, second half: "unless text-align-all is set to justify, in which case it is
            start-aligned". A justified block therefore does NOT justify its last line, which is what makes
            `justify-all` a separate value of the shorthand at all. */
         if (strcmp(all, "justify") == 0) { free(all); return lb_strdup("start"); }

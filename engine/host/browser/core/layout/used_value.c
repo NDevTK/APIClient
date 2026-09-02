@@ -393,9 +393,9 @@ static CssLength uv_len_px(CssPx px)
     return len;
 }
 
-/* THE FOUR TERMS OF css-sizing §5's CONVERSION BETWEEN THE TWO BOXES, on one axis, and the ONE place that
-   computes them. §5 converts a border box into a content box by "subtracting the border and padding widths of
-   the respective sides", and every arm below needs that sum or half of it — the `border-box` size ADDS it, the
+/* THE FOUR TERMS OF css-sizing-3 §3.3's CONVERSION BETWEEN THE TWO BOXES, on one axis, and the ONE place that
+   computes them. css-sizing-3 §3.3 converts a border box into a content box by subtracting "the border and
+   padding in the corresponding axis", and every arm below needs that sum or half of it — the `border-box` size ADDS it, the
    padding edge subtracts it and adds the paddings back. Two copies of a four-term sum are two places for the
    terms to come to disagree, which is the only way the padding edge and the size it is derived from can stop
    describing the same box. */
@@ -428,7 +428,7 @@ static UvSurround uv_surround(lxb_dom_element_t *el, bool vertical)
         s.padding = css_px_add(s.padding, used_value_px(el, PADDINGS[axis][i]));
     }
     DCHECK(s.padding.px >= 0.0 && s.border.px >= 0.0,
-           "css-sizing §5's conversion between the content box and the border box was handed a NEGATIVE "
+           "css-sizing-3 §3.3's conversion between the content box and the border box was handed a NEGATIVE "
            "surround. CSS 2.1 §8.4 states outright that 'negative values for padding properties are not "
            "allowed' and css-backgrounds-3 §3.3's <line-width> is a non-negative <length>, so lexbor drops "
            "either declaration — a negative here is a used value this component derived rather than one an "
@@ -447,7 +447,7 @@ static CssPx uv_surround_total(UvSurround s)
     return css_px_add(s.padding, s.border);
 }
 
-/* css-sizing §5's `box-sizing`, asked as the ONE question both directions of its conversion turn on. The
+/* css-sizing-3 §3.3's `box-sizing`, asked as the ONE question both directions of its conversion turn on. The
    grammar is `content-box | border-box` and lexbor validates the declaration against it, so a third value is a
    cascade layer that answered without one — asserted HERE, at the classification, rather than by whichever arm
    a not-content-box value happened to fall into. */
@@ -457,26 +457,32 @@ static bool uv_is_border_box(lxb_dom_element_t *el)
     bool border = strcmp(v, "border-box") == 0;
 
     DCHECK(border || strcmp(v, "content-box") == 0,
-           "a `box-sizing` computed to something that is neither of the two keywords css-sizing §5's "
+           "a `box-sizing` computed to something that is neither of the two keywords css-sizing-3 §3.3's "
            "`content-box | border-box` grammar admits, and its `Computed value:` line is `specified keyword` — "
            "so nothing between the declaration and here had a rule that could produce a third one");
     free(v);
     return border;
 }
 
-/* css-sizing §5's `box-sizing: border-box`, and the one sentence in it that decides what this function
-   returns: "Used values, AS EXPOSED FOR INSTANCE THROUGH getComputedStyle(), also refer to the border box."
+/* css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property", and the one sentence in it that decides
+   what this function returns: "Used values of the sizing properties, as exposed for instance through
+   getComputedStyle(), also refer to the border box."
+ * THE SECTION IS §3.3 AND NOT §5, AND THE STANDARD IS WRITTEN LEVELLED, because both halves of the old spelling
+ * were unresolvable: css-sizing-3 §5 is "Intrinsic Size Determination", which decides nothing about box-sizing,
+ * and an unlevelled `css-sizing` names no document, so every bare § in this comment fell to whatever this file
+ * cites most and was read against CSS 2.1's numbering instead.
  * SO THE ANSWER IS THE BORDER BOX'S SIZE, NOT THE CONTENT BOX'S. What stood here said the opposite — that
  * "CSS 2.1 §10.2 and CSSOM §9 both mean the CONTENT width", so the used value was the declared one minus the
  * paddings and the border widths — and it crashed rather than computing that. Both halves were wrong. The
- * subtraction §5 describes ("The content width and height are calculated by subtracting the border and padding
- * widths of the respective sides from the specified <length-percentage>") produces the CONTENT box, which is
+ * subtraction css-sizing-3 §3.3 describes ("the content box width and height are calculated by subtracting the
+ * border and padding in the corresponding axis from the specified <length-percentage>, and flooring the result
+ * at zero") produces the CONTENT box, which is
  * the number CSS 2.1 §10.3.3's equation and CSSOM VIEW's padding edge want; the number CSSOM §9 exposes is the
  * border box, which is why `getComputedStyle(el).width` is `100px` and not `80px` for a `box-sizing:
  * border-box; width: 100px; padding: 10px` box in every user agent. A crash there took out most of the modern
  * web, which sets `box-sizing: border-box` on `*`.
- * IT IS STILL NOT THE DECLARED LENGTH VERBATIM, and the exception is the one §5 spells out with its own
- * example: the content box floors at zero, so when the paddings and borders alone exceed the declared
+ * IT IS STILL NOT THE DECLARED LENGTH VERBATIM, and the exception is the one css-sizing-3 §3.3 spells out with
+ * its own example: the content box floors at zero, so when the paddings and borders alone exceed the declared
  * border-box size the border box GROWS to hold them — "the border-box size ends up at 120px, even though
  * width: 100px is specified for the border box". The used border-box size is therefore the LARGER of the two,
  * and computing it needs exactly the four terms §10.3.3 was waiting on, two of which are the border widths. */
@@ -485,12 +491,12 @@ static CssPx uv_border_box_size(lxb_dom_element_t *el, CssPx declared, bool vert
     UvSurround s = uv_surround(el, vertical);
 
     DCHECK(uv_is_border_box(el),
-           "css-sizing §5's border-box arm was reached for a box whose `box-sizing` is `content-box` — the "
+           "css-sizing-3 §3.3's border-box arm was reached for a box whose `box-sizing` is `content-box` — the "
            "declared length is then the CONTENT box's and this function would report it as the border box's");
     return css_px_max(declared, uv_surround_total(s));
 }
 
-/* THE CONTENT BOX'S EXTENT on one axis, which is css-sizing §5's conversion run in the one direction two
+/* THE CONTENT BOX'S EXTENT on one axis, which is css-sizing-3 §3.3's conversion run in the one direction two
    callers need it in: CSSOM VIEW §6's padding edge, and §10.1's containing block (the content EDGE of the
    nearest block container ancestor). Under `content-box` the used size already IS the content box; under
    `border-box` it is the border box, and §5 converts by "subtracting the border and padding widths of the
@@ -1480,9 +1486,9 @@ static CssPx uv_shrink_to_fit_width(lxb_dom_element_t *el, CssLength size_len, U
    ratio") can be true at the same time as arm 4's condition, and it comes first: a replaced element with an
    intrinsic width of 50, an intrinsic ratio of 2 and a declared `height: 100px` is 200 wide and not 50.
    THE ANSWER IS THE CONTENT WIDTH. Every term §10.3.2 names is CSS 2.1's, and CSS 2.1 knows only the content
-   box; css-sizing §5's `box-sizing` conversion is applied to the RESULT by the caller, exactly as it is to
+   box; css-sizing-3 §3.3's `box-sizing` conversion is applied to the RESULT by the caller, exactly as it is to
    §10.3.3's equation. Which is also why arm 2's "(used height)" is read through `uv_content_size` and not
-   through `used_value_px` — under `border-box` the latter is the BORDER box (§5's exposed used value), and
+   through `used_value_px` — under `border-box` the latter is the BORDER box (css-sizing-3 §3.3's exposed used value), and
    multiplying that by an aspect ratio would be a ratio of two different boxes. */
 static CssPx uv_replaced_width(lxb_dom_element_t *el, const ReplacedElement *rep)
 {
@@ -1598,9 +1604,9 @@ static CssPx uv_replaced_size(lxb_dom_element_t *el, const ReplacedElement *rep,
            "is either a natural dimension (core/layout/replaced_element.c asserts those non-negative at their "
            "origin), a product of a non-negative extent with a positive ratio, or the 300 x 150 default — so a "
            "negative here is a derivation that lost an operand");
-    /* css-sizing §5's conversion, applied to the RESULT — the arms above solve for the CONTENT box, which is
-       the only box CSS 2.1 knows, and §5 makes the used value "as exposed for instance through
-       getComputedStyle()" the border box's. Identical to `uv_block_auto_width`'s last two lines and stated
+    /* css-sizing-3 §3.3's conversion, applied to the RESULT — the arms above solve for the CONTENT box, which
+       is the only box CSS 2.1 knows, and css-sizing-3 §3.3 makes the used value "as exposed for instance
+       through getComputedStyle()" the border box's. Identical to `uv_block_auto_width`'s last two lines and stated
        here rather than shared with them because the two solve different equations for the same box. */
     if (!uv_is_border_box(el)) return content;
     return css_px_add(content, uv_surround_total(uv_surround(el, vertical)));
@@ -1717,9 +1723,9 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
            height to §10.6.7. Which of the two sections runs is the SAME walk under §8.3.1's escape flags, so
            the three box types below share this arm; every other one has its height from a different spec and
            says so.
-           §5's CONVERSION IS APPLIED TO THE RESULT, exactly as it is to §10.3.3's equation two functions down:
-           the walk answers the CONTENT box, which is what CSS 2.1 knows, and css-sizing §5 makes the used
-           value "as exposed for instance through getComputedStyle()" the border box's. */
+           css-sizing-3 §3.3's CONVERSION IS APPLIED TO THE RESULT, exactly as it is to §10.3.3's equation two
+           functions down: the walk answers the CONTENT box, which is what CSS 2.1 knows, and css-sizing-3 §3.3
+           makes the used value "as exposed for instance through getComputedStyle()" the border box's. */
         if (box == UV_BOX_ABS)
             DFAIL("CSS 2.1 §10.6.4 solves an ABSOLUTELY POSITIONED box's `height: auto` from its own constraint "
                   "equation — 'top + margin-top + border-top-width + padding-top + height + padding-bottom + "
@@ -1983,7 +1989,7 @@ CssPx used_value_px(lxb_dom_element_t *el, const char *name)
 }
 
 /* CSS 2.1 §8's BOX MODEL — "the padding edge surrounds the box padding", and the padding box is the content box
-   plus the padding on each side — over css-sizing §5, which is the only thing that varies: WHICH BOX the used
+   plus the padding on each side — over css-sizing-3 §3.3, which is the only thing that varies: WHICH BOX the used
    size is the size of. That is why the paddings are added ONCE below, to the content box `uv_content_size`
    derives, rather than in two arms that would each have to remember the other's convention.
    THE ASSERT IS THE WHOLE MECHANISM AND IT IS TWO-SIDED. §5 floors the content box at zero — "as the content
@@ -2010,7 +2016,7 @@ static CssPx uv_edge_px(lxb_dom_element_t *el, bool vertical, bool with_border)
     s = uv_surround(el, vertical);
     content = uv_content_size(el, vertical, s);
     DCHECK(content.px >= 0.0,
-           "the CONTENT box derived from a used size is NEGATIVE. Under `box-sizing: border-box` css-sizing §5 "
+           "the CONTENT box derived from a used size is NEGATIVE. Under `box-sizing: border-box` css-sizing-3 §3.3 "
            "floors it at zero and this component's border-box arm implements that floor by taking the larger of "
            "the declared length and the four-term surround, so subtracting that same sum back out cannot reach "
            "a negative — a negative one means the used size and this surround were computed from "

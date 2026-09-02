@@ -2383,7 +2383,8 @@ static bool page_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueConst rul
 }
 
 /* §6.4's CSSKeyframesRule arm, WHICH THE SPEC STATES — unlike §6.4.7's and §6.4.8's, which had to be derived.
- * Its five pieces: "@keyframes" and a SPACE; "the serialization of the name attribute. If the attribute is a
+ * Its five pieces, and EVERY QUOTATION BELOW IS §6.4's rather than the two sub-numbers just named: "@keyframes"
+ * and a SPACE; "the serialization of the name attribute. If the attribute is a
  * CSS wide keyword, or the value default, or the value none, then it is serialized as a string. Otherwise, it
  * is serialized as an identifier."; the string " { "; "the result of performing serialize a CSS rule on each
  * rule in the rule's cssRules list, separated by a newline and indented by two spaces"; "a newline, followed
@@ -2921,8 +2922,8 @@ static bool namespace_rule_serialize(JSContext *ctx, CssRuleData *r, RBuf *out)
 }
 
 /* §6.4's CSSFontFaceRule arm, and §6.4.8's, which is the same arm. The spec's own font-face steps name each
-   descriptor in a fixed order and then admit "need to define how the CSSFontFaceRule descriptors' values are
-   serialized"; every step has the SAME shape — a SPACE, `name:`, a SPACE, the value, `;` — which is exactly
+   descriptor in a fixed order and then admit, in §6.4's own words, "need to define how the CSSFontFaceRule
+   descriptors' values are serialized"; every step has the SAME shape — a SPACE, `name:`, a SPACE, the value, `;` — which is exactly
    what §6.6's serialize-a-CSS-declaration-block produces for the block once the leading space and the closing
    " }" are added. So the descriptors go through the ONE declaration-block serializer rather than through a
    second hand-listed loop that could disagree with it about `rule.style.cssText`, and the order is the rule's
@@ -4170,9 +4171,10 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
         return true;
     }
     /* AN `@font-face` DECLARES A FONT FACE AND NOT A STYLE: nothing it contains can match an element, so it is
-       not a rule the selector matcher has anything to do with, and it declares no layer of its own — §6.4's own
-       note that at-rules "defined inside cascade layers also use the layer order" is about the layer they are
-       IN, which `cur` already is. */
+       not a rule the selector matcher has anything to do with, and it declares no layer of its own — CSS
+       Cascade 5 §6.4 "Cascade Layers"'s own note that at-rules "defined inside cascade layers also use the
+       layer order" is about the layer they are IN, which `cur` already is. THE STANDARD IS NAMED because this
+       file's §6.4 is otherwise CSSOM's, which is "CSS Rules" and says nothing about layers. */
     if (r->type == RULE_TYPE_FONT_FACE) return true;
     /* AND NEITHER DOES AN `@page`, for a third reason of its own: its declarations style the PAGE BOX, which
        CSS Paged Media §3 makes a box outside the document tree. Its page selector list selects pages and not
