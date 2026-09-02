@@ -2509,6 +2509,38 @@ static const char *HTML =
     "clearTimeout(_t4);"
     "fetch('/api/unkdelay?v=' + (typeof _t4 === 'number' ? 'forked' : 'nohandle'));"
 
+    /* ONE UNKNOWN `unsigned long index` THROUGH TWO MEMBERS OF core/idl_index_arg.c's FAMILY, WHICH IS THE ONE
+       SHAPE THAT ASKS WHETHER A FORK KEY NAMES THE PREDICATE OR THE SITE.
+       Each `item(index)` decomposes into the elimination chain `index == 0`, `index == 1`, … over the value's
+       own identity, so a flow that has answered those questions at ONE member must answer them the SAME way at
+       the next: the fact established is about the NUMBER and carries no collection in it. While the member's
+       own name was the prefix of the operation string, the second member's keys were new, it re-asked every
+       position, and each sibling it minted stood on a decision vector saying `index == 0` AND `index == 3` at
+       once — one value, two positions, one world.
+       THE ASSERTION IS THE ONE FACT NO CONSISTENT WORLD CAN CARRY, and it is built out of the past-the-end
+       boundary rather than out of markers, so it needs nothing from either collection but its length. The
+       NodeList is constructed two longer than `document.styleSheets`, so `index` past the end of the SHORT one
+       is past the end of the long one in every world that exists — `split` is unreachable by arithmetic, for
+       any `index` whatever, and reaching it at all is a flow contradicting itself rather than a length this
+       fixture guessed wrong. `state.ix` carries no example, so every link is asked with the machine stating
+       nothing and the parent walks the short chain to exhaustion while one sibling per position carries a
+       pinned index — which is exactly the population the second member has to agree with.
+       IT IS THE KEY AND NOT THE COLLECTIONS THAT IS PROBED: two members with DIFFERENT algorithm names are
+       required (CSSOM §6.2.2's StyleSheetList and DOM §4.2.10's NodeList), because two reads of one interface
+       already shared a key and would have passed while the defect stood. */
+    "var _ixL = document.styleSheets.length;"
+    "var _ixh = document.createElement('div');"
+    "for (var _ixj = 0; _ixj < _ixL + 2; _ixj++) { _ixh.appendChild(document.createElement('p')); }"
+    "document.body.appendChild(_ixh);"
+    "var _ixn = _ixh.querySelectorAll('p');"
+    /* ONE READ AND ONE VALUE. Two `state.ix` reads would be two operands of whatever identity the exotic get
+       composes, and the assertion is about ONE unknown answered twice — a second read is the one way this
+       statement could pass while saying nothing. */
+    "var _ixi = state.ix;"
+    "var _ixa = document.styleSheets.item(_ixi);"
+    "var _ixb = _ixn.item(_ixi);"
+    "fetch('/api/idxkey?v=' + (_ixa && !_ixb ? 'split' : 'agree'));"
+
     /* THE SAME READ FROM INSIDE A JOB. A `.then` handler is a queued reaction, and a cross-document read
        SUSPENDS — so this exercises a step machine that parks on the host while it is the root of a job rather
        than reached from a bytecode frame. Without the scheduler reporting that flow host-owed, it resumes and
@@ -8034,6 +8066,25 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     fold_row(&unkdelay_tt, &unkdelay_why, param_value_is(js, "/api/unkdelay", "v", "forked"),
              "the statement RAN and /api/unkdelay's `v` is not `forked` — §8.7 step 4's unknown `timeout` "
              "handed back something that is not a number, so the fork had no consumer");
+    /* ONE UNKNOWN INDEX THROUGH TWO MEMBERS OF THE `unsigned long index` FAMILY: every flow's two answers agree.
+       THE NEGATIVE IS THE ROW AND THE POSITIVE IS ONLY ITS DENOMINATOR. `agree` says the statement ran and some
+       world reached the fetch; `split` is the claim, and it is one no consistent world can make — the NodeList
+       is built two longer than `document.styleSheets`, so an index inside the short one is inside the long one
+       whatever it is. A single `split` record is a flow that answered `index == k` at StyleSheetList and then
+       answered the SAME question differently at NodeList, which is what a constraint key naming the MEMBER
+       instead of the PREDICATE permits (core/idl_index_arg.h's IDL_INDEX_PREDICATE). */
+    const char *idxkey_why = NULL; int idxkey_tt = 1;
+    fold_row(&idxkey_tt, &idxkey_why, !!strstr(js, "\"/api/idxkey\""),
+             "NOT REACHED: there is no /api/idxkey record at all, so no world got through both `item(index)` "
+             "chains. That is the SCHEDULE, and it is also what an ABORT inside either chain looks like");
+    fold_row(&idxkey_tt, &idxkey_why, param_value_is(js, "/api/idxkey", "v", "agree"),
+             "/api/idxkey was recorded and never with `agree` — every world that reached it contradicted "
+             "itself, so this is the row below with nothing left to compare against");
+    fold_row(&idxkey_tt, &idxkey_why, !param_value_is(js, "/api/idxkey", "v", "split"),
+             "a flow read one unknown `index` as INSIDE document.styleSheets and PAST THE END of a NodeList "
+             "built two longer — no world admits both, so this flow answered `index == k` one way at CSSOM "
+             "§6.2.2's item(index) and another way at DOM §4.2.10's. The elimination chain's constraint key is "
+             "naming the MEMBER and not the PREDICATE (core/idl_index_arg.h's IDL_INDEX_PREDICATE)");
     /* §4.8.5: an inserted iframe got a child navigable, its proxy is STABLE across reads, and a read through it
        resolved to the peer's answer. */
     const char *ifnav_why = NULL; int ifnav_tt = 1;
@@ -9587,6 +9638,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "timer-string-handler", timerstr_tt, "/api/timerstr", SESS_EXPLORE, timerstr_why },
         { "timer-handle-counter", timerhandle_tt, "/api/timerhandle", SESS_EXPLORE, timerhandle_why },
         { "timer-unknown-delay-fork", unkdelay_tt, "/api/unkdelay", SESS_EXPLORE, unkdelay_why },
+        { "idl-index-key-one-predicate", idxkey_tt, "/api/idxkey", SESS_EXPLORE, idxkey_why },
         { "iframe-nav", ifnav_tt, "/api/iframenav", SESS_EXPLORE, ifnav_why },
         /* KEYED ON THE REMOVAL rather than on an endpoint, because this row is about a statement that emits
            nothing: §7.5.10's release is observable as a COUNT and not as a fetch. */

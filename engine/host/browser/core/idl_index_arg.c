@@ -7,7 +7,10 @@
  * plus CSSOM §6.4 CSS Rules' remove a CSS rule and insert a CSS rule, which the two `deleteRule`s and the two
  * `insertRule`s are declared over.
  *
- * WHAT DIFFERS BETWEEN THEM IS NOT THE QUESTION. It is what the algorithm says about the past-the-end world —
+ * WHAT DIFFERS BETWEEN THEM IS NOT THE QUESTION, AND THE CONSTRAINT KEY IS WHERE THAT STOPS BEING A REMARK AND
+ * BECOMES A REQUIREMENT — see core/idl_index_arg.h's IDL_INDEX_PREDICATE, which is the question these eleven
+ * members share, spelled once, with none of their names in it.
+ * WHAT DIFFERS IS what the algorithm says about the past-the-end world —
  * `item` returns null, CSSStyleDeclaration's returns the empty string, remove-a-CSS-rule throws an
  * IndexSizeError — and that is the CALLER's, stated at the caller, which is why this file answers with a flag
  * and never with a value or a throw of its own. It is also the one thing that must not be shared: a component
@@ -97,17 +100,21 @@ int idl_index_chain_run(JSContext *ctx, JSStepHdr *hdr, IdlIndexChain *c, JSValu
            ConvertToInt(V, 32, "unsigned") has already been run on the example above, through the one copy of
            that arithmetic, so its result is an integer in [0, 2**32-1] and the cast below is exact. */
         real = have ? ((uint32_t)num == k) : JS_OUTCOME_REAL_UNSTATED;
-        wrote = snprintf(c->op, sizeof c->op, "%s (index is %u)", algorithm, (unsigned)k);
+        /* THE QUESTION AND ONLY THE QUESTION — `algorithm` is deliberately absent, and IDL_INDEX_PREDICATE
+           carries the argument for why. This link asks `index == k` of the value's own identity, so a member
+           name in the key would make one predicate two facts and let a flow answer it two ways. */
+        wrote = snprintf(c->op, sizeof c->op, IDL_INDEX_PREDICATE " %u)", (unsigned)k);
         /* A TRUNCATED OPERATION STRING MERGES TWO PREDICATES. The position is the LAST thing in this string,
            so a buffer one byte short would file two positions under one key and let one link's record decide
-           another's — and because the prefix is the CALLER's, the length that overflows is a fact about the
-           member rather than about this file. snprintf reports what it WOULD have written, which is the only
-           way to see it. */
+           another's. The buffer is now sized from the format itself, so this is arithmetic rather than a fact
+           about any caller — which is exactly why it stays: it is the line that fails the day the format and
+           the size stop agreeing. snprintf reports what it WOULD have written, which is the only way to see
+           it. */
         DCHECKF(wrote > 0 && (size_t)wrote < sizeof c->op,
                 "%s could not spell the position its question is about — the operation string is half the "
                 "constraint key and the position is its tail, so a truncated one names a DIFFERENT position's "
-                "question and the flow answers it with this one's record; the member's own name is what "
-                "overflowed the buffer, so shorten the name or widen IdlIndexChain::op",
+                "question and the flow answers it with this one's record; IdlIndexChain::op is sized from "
+                "IDL_INDEX_PREDICATE plus the widest uint32, so the two have stopped agreeing",
                 algorithm);
         rc = step_fork_run(ctx, hdr, index_v, c->op, 2, real, &arm);
         if (rc)
@@ -123,10 +130,16 @@ int idl_index_chain_run(JSContext *ctx, JSStepHdr *hdr, IdlIndexChain *c, JSValu
            WHAT THE NEXT DIFF BUILDS: the pin and the exclusion solver/decide.c already takes at a bytecode
            equality, taken over the OPERAND's own identity rather than off a comparison RESULT this seam does
            not have — the same piece core/timing/timer.c's own chain names, and one piece for both.
-           HOW ITS ABSENCE SHOWS: a flow that has answered YES at some position and then reaches a SECOND
-           member of this family mints a sibling for every OTHER position that member's collection holds —
-           worlds its own path has already contradicted — and an @H parameter carrying this value renders with
-           no domain beside it where the run observed one. */
+           HOW ITS ABSENCE SHOWS: a BYTECODE test on the same value after the chain has answered — `if (i === 3)`
+           following the `item(i)` that established `index == 3` — forks BOTH arms, because decide.c keys a
+           comparison off the comparison RESULT's identity and nothing joins that to what this chain recorded;
+           and an @H parameter carrying this value renders with no domain beside it where the run observed one.
+           THE SYMPTOM THIS CLAUSE USED TO NAME WAS THE KEY'S AND IS GONE. It said a flow that has answered YES
+           at some position and then reaches a SECOND member of this family mints a sibling for every OTHER
+           position that member's collection holds, and that was true while the member's own name was the
+           prefix of the operation string — two keys for one predicate, so the second member found nothing
+           recorded. It is not evidence about the pin, and leaving it here would have sent the next reader to
+           build the pin and measure a symptom the key fix had already taken away. */
         if (arm == 1) {
             /* THIS WORLD'S ANSWER: the index IS this position. `npositions` was read by the caller at the top
                of this same entry and nothing has run since — step_fork_run runs none of the page's code and

@@ -14,6 +14,42 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 
+/* THE PREDICATE ONE LINK OF THE CHAIN ASKS, WHICH IS THE OPERATION HALF OF ITS CONSTRAINT KEY — and it names
+ * the QUESTION and not the MEMBER, which is the whole of what makes one flow's answers agree with each other.
+ *
+ * A LINK ASKS `index == k` AND NOTHING ELSE. The operand half of the key is the value's own identity, so the
+ * fact a link establishes is "the number this unknown denotes is exactly k" — a fact about the VALUE, with no
+ * collection, no interface and no algorithm in it. Two members of this family reached over ONE unknown are
+ * therefore asking ONE question twice, and CLAUDE.md's §Solver-half says what that has to mean: the constraint
+ * is "keyed by the PREDICATE's own identity — operator and both operands — so the flow's record of one
+ * predicate decides that predicate and never its neighbour."
+ *
+ * THE MEMBER'S NAME USED TO BE THE PREFIX OF THIS STRING, AND IT GAVE ONE PREDICATE AS MANY IDENTITIES AS
+ * THERE ARE DISTINCT `algorithm` STRINGS AMONG THE CALLERS — not one per interface, since NodeList and
+ * HTMLCollection already share theirs and the two `deleteRule`s share CSSOM §6.4's; the count is a fact about
+ * the call sites and is worth reading there rather than trusting here.
+ * `nl.item(i)` and `document.styleSheets.item(i)` over one `i` composed
+ * `"DOM §4.2.10 … item(index) (index is 3)"` and `"CSSOM §6.2.2 … item(index) (index is 3)"`, which are two
+ * keys for one fact — so the second member found NOTHING recorded, re-asked every position the first had
+ * already answered, and minted a sibling for each. Those siblings are not extra exploration: each stands on a
+ * decision vector that says `index == 0` AND `index == 3`, and the member hands it an element on the strength
+ * of the second while the first is what the flow's own earlier link recorded. One value, two positions, one
+ * world — a fabricated timeline, with every arm in range and every assert on the path satisfied. It is
+ * core/timing/timer.c's own correction read from the other end: §8.7 states clearTimeout and clearInterval as
+ * ONE algorithm and that file spells ONE operation for both, because "two names for the one question would be
+ * two constraint keys for one fact".
+ *
+ * WHAT `solver_outcome`'S REFUSAL ACTUALLY PROTECTS is the OTHER direction and is untouched by this. It
+ * rejects an operation that names NOTHING, because an unnamed one merges with every other operation over the
+ * same operand — the collapse decide.c's own `decide_key` note measures (`x < 700` deciding `x < 300`). The
+ * string below names its question exactly and in full; what it does not name is the SITE, which is a different
+ * requirement with its own field (`algorithm`, the assert address) rather than a second use of this one.
+ *
+ * `%u` IS THE ONLY VARIABLE PART, so the buffer under it is sized from this text plus the widest decimal a
+ * uint32 can be — truncation, which would file two positions under one key, is arithmetic here rather than a
+ * fact about whichever member happened to be longest. */
+#define IDL_INDEX_PREDICATE "Web IDL §3.2.4.6 unsigned long (index is"
+
 /* THE ELIMINATION CHAIN A MEMBER PARKS ON, AND THE WHOLE OF WHAT SUCH A MEMBER HAS TO KEEP.
  *
  * `next` is the position the chain will ask about when the flow is next entered — the cursor a park resumes
@@ -21,12 +57,15 @@
  * and the DRIVER reads it after idl_index_chain_run has returned, so it lives on the machine's state and
  * never in a C local, which would dangle exactly where the key is built.
  *
+ * ITS SIZE IS DERIVED AND NEVER TYPED: the prefix above, then ` 4294967295)` — a space, the widest decimal a
+ * uint32 can take, and the closing paren — over `sizeof`, which already counts the terminator.
+ *
  * IT HOLDS NO JSValue, WHICH IS WHY ONE `visit` SERVES EVERY MEMBER (idl_index_chain_visit below). A member
  * whose state is this and nothing else declares that function and is done; a member that needs more of its
  * own EMBEDS this as its first field and names the rest in its own visit. */
 typedef struct {
     uint32_t next;
-    char     op[224];
+    char     op[sizeof IDL_INDEX_PREDICATE + 12];
 } IdlIndexChain;
 
 /* THE OWNERSHIP DECLARATION FOR THE STATE ABOVE, WHICH IS THAT IT OWNS NOTHING. It is a real function rather
@@ -61,7 +100,9 @@ void idl_index_chain_visit(JSContext *ctx, void *state, JSStepVisit *v);
  * `npositions == 0` ASKS NOTHING and answers past-the-end at once. One feasible completion is not a fork, it
  * is the answer, and a seam handed it would be given a decision this chain had already made.
  *
- * EACH LINK'S KEY NAMES A NUMBER AND NEVER A RANK, which is what makes it survive a park and a mutation.
+ * EACH LINK'S KEY NAMES A NUMBER AND NEVER A RANK, AND NAMES NOTHING ELSE — see IDL_INDEX_PREDICATE above for
+ * the second half of that, which is why the member is not in it. The first half is what makes the key survive
+ * a park and a mutation.
  * CLAUDE.md's §AN-INDEX-NAMES-A-THING-ONLY-WHILE-THE-SET-IS-FIXED is about a completion whose name is a
  * POSITION IN A SET THE PAGE MUTATES — answer "the entry at rank 0", shorten the set, and the recorded answer
  * names something else. Here the operand IS the number: `index == 3` is a fact about the value the page
@@ -70,14 +111,19 @@ void idl_index_chain_visit(JSContext *ctx, void *state, JSStepVisit *v);
  * established `index >= 3`, so a later shorter collection exhausts at once and answers past-the-end, which is
  * what the algorithm's own bound says about that world.
  *
- * `algorithm` NAMES THE MEMBER, and it is load-bearing twice over: it is the operation half of the constraint
- * key (see solver/decide.c's `solver_outcome`, which refuses an operation that does not name itself: the
- * operation is half the predicate, and two operations over one operand would otherwise be one fact), and it
- * is the ADDRESS in every assert below. A should-never-happen stamps the line it
- * is WRITTEN at, so a check inside a shared chain would report THIS file for every member that reaches it —
- * CLAUDE.md's §AN-ASSERT-THAT-NAMES-A-REMEDY, whose cure is that the site travels with the operation. Here the
- * site is better than a file and a line: it is the member's own spec identity, which is stable across an
- * edition of this tree in a way a coordinate is not.
+ * `algorithm` NAMES THE MEMBER, AND IT IS THE ADDRESS AND NOTHING ELSE — it does not reach the constraint key,
+ * for the reason IDL_INDEX_PREDICATE gives. A should-never-happen stamps the line it is WRITTEN at, so a check
+ * inside a shared chain would report THIS file for every member that reaches it — CLAUDE.md's
+ * §AN-ASSERT-THAT-NAMES-A-REMEDY, whose cure is that the site travels with the operation. Here the site is
+ * better than a file and a line: it is the member's own spec identity, which is stable across an edition of
+ * this tree in a way a coordinate is not.
+ *
+ * IT USED TO BE BOTH, AND THAT IS THE §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS SHAPE EXACTLY. "Where did this
+ * abort happen" and "which predicate is this" are two questions, they agree at every site until two members
+ * ask one predicate, and at that point the stricter one — the address, which must differ per member — decided
+ * the key and the looser one lost with nothing anywhere to say it had been asked. The cure is the one that
+ * section names: two questions over the ONE fact, never two facts. The member's name is still stated once, in
+ * one place, and each question now reads it for what it is.
  *
  * RETURNS 0 once the chain has ANSWERED, and the answer is in the two out-parameters: `*ppast_end` true means
  * the index is past the last position the algorithm admits and `*pindex` was not written, false means
