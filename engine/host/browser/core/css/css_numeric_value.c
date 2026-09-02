@@ -1167,7 +1167,22 @@ static void nv_sort_by_unit(NvList *l)
  * both units, step 2's sum value is «(1, «["px" → 1]»)», step 3 yields one CSSUnitValue, step 5's first unit
  * consumes it and its second appends a `0s` temp, and step 6's "If values is not empty, throw a TypeError" is
  * therefore NOT reached — values is empty. The only step left that could throw is the return, which by (1) and
- * (2) does not. The file is `.tentative`, which WPT's own docs/writing-tests/file-names.md defines as
+ * (2) does not.
+ * AND THE FILE ITSELF CARRIES THE CONTROL THAT PROVES NO EARLIER STEP REJECTS IT, which is the reading to
+ * reach for before concluding that its four TypeErrors make toSum a type-checking member across the board.
+ * Every one of its other throws maps onto a step this member really has — `toSum('px','lemon')` is step 1's
+ * SyntaxError, `new CSSMathMax(1, CSS.px(1)).toSum('number')` never reaches toSum at all (adding «[ ]» to
+ * «["length" → 1]» is failure, so §4.3.4's CSSMathMax CONSTRUCTOR throws first, in any conforming engine),
+ * and `toSum('number')` and `new CSSMathSum(CSS.px(1), CSS.em(1)).toSum('px')` are both step 6's "If values is
+ * not empty, throw a TypeError". Only `('px','s')` maps onto no step. The control is its own neighbour:
+ * `CSS.px(1).toSum('em','px','vw')` is asserted to RETURN `CSSMathSum(0em, 1px, 0vw)` — structurally identical
+ * (one requested unit consumes the value, the others append zero-valued temps, `values` ends empty), differing
+ * ONLY in that em/px/vw are all <length> so their types add. So the corpus itself demonstrates that steps 1-6
+ * let an unmatched requested unit through, and the `('px','s')` throw can only be the type addition — which
+ * lives in exactly one place, §4.3.4's constructor step 3. The corpus is therefore COHERENT under the
+ * constructor reading rather than sloppy, and that is the honest state of this disagreement: two self-
+ * consistent readings, of which the draft's text supports one and an implementation the other.
+ * The file is `.tentative`, which WPT's own docs/writing-tests/file-names.md defines as
  * "Indicates that a test makes assertions not yet required by any specification, or in contradiction to some
  * specification. This is useful when implementation experience is needed to inform the specification." So it
  * records an implementation, not a conformance requirement, and CLAUDE.md's ordering — the spec is the source
@@ -1175,10 +1190,22 @@ static void nv_sort_by_unit(NvList *l)
  * WHAT WOULD OVERTURN THIS, precisely: §4.3.1's toSum gaining a "Let type be … If type is failure, throw a
  * TypeError" step of its own, or that corpus file losing `.tentative`. THEN, AND ONLY THEN, this entry runs
  * `css_math_value_type_fold` and throws like `nv_arith` does — and the cost of that day is worth knowing in
- * advance: toSum is the ONLY public producer of a failure-typed object (§4.3.4's four list constructors refuse
- * one, and its CSSMathNegate and CSSMathInvert constructors have no type step but can only WRAP a value that
- * already carries the type), so making it throw would leave core/css/css_math.h's absorbing arms in add and
- * multiply, and §4.3.1's type() failure arm, unreachable — and unreachable code goes rather than waits. */
+ * advance. toSum is the ONLY public producer of a failure-typed object, established by exhausting the routes
+ * rather than by assuming: §4.3.3's constructor refuses a unit with no type and §4.3.5's factories fix theirs,
+ * so no CSSUnitValue carries one; §4.3.4's four list constructors and CSSMathClamp all run step 3 and refuse;
+ * §4.3.1's add, sub, mul, div, min and max each state their own type step and refuse; §4.3.1's negate and
+ * invert algorithms and §4.3.4's CSSMathNegate and CSSMathInvert constructors have NO type step but can only
+ * WRAP a value that already carries the type; and `parse()` cannot reify one, because css-values-4 §10.9 Type
+ * Checking ends "For each of the above, if the type is failure, the math function is invalid", so such a
+ * function is not CSS to begin with. EVERY ROUTE EITHER REFUSES OR NEEDS AN ALREADY-FAILING OPERAND, so this
+ * member is the unique ORIGIN — which also corrects the argument this component was landed with, that
+ * CSSMathInvert's missing type step FORCES a failure type to exist. It does not: invert can only PROPAGATE
+ * one. What forces the representation is this member alone.
+ * SO IF THE READING FLIPS, THE ANSWER IS DELETION AND NOT A KEPT ARM. With toSum throwing, nothing would carry
+ * a failure type, `css_numeric_value_type_of` could never return one, and core/css/css_math.h's absorbing arms
+ * in add and multiply and §4.3.1's type() failure arm would all be unreachable. No internal producer justifies
+ * them either — `css_math_value_type_fold`'s own failure answer is consumed by its two step-3 callers and
+ * never stored — so they would go, and the representation would survive only as that fold's return value. */
 static JSValue nv_to_sum_result(JSContext *ctx, NvList *values)
 {
     DCHECK(values->n >= 1,
