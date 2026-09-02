@@ -47,13 +47,15 @@ static CssPx tcw_coherent(CssPx min, CssPx max)
  * collapsing border model, in which a cell's used border is not its own computed `border-*-width` — the
  * section resolves the borders of adjacent cells into one and divides it between them, so the sum taken here
  * double-counts the shared halves. The border read below is right under `border-collapse: separate`, which is
- * that property's initial value and the only value this engine can currently be in, because
- * `border-collapse` is not in core/css/css_computed_value.c's `css_computed_models` set and asking for it
- * would abort in that component's own modelled-set assertion rather than answer. WHAT THE NEXT DIFF BUILDS:
- * `border-collapse` and `border-spacing` as rows of that as-specified arm — core/css/css_defaulting.c already
- * carries both among CSS 2.1 §17.6's inherited properties, as their `Inherited: yes` lines require — which is
- * what lets this component ask WHICH of §17.6's two models is in force, and which the table-width step after
- * this one needs anyway for §17.5.2.2's "plus cell spacing or borders". HOW ITS ABSENCE WOULD SHOW: a table
+ * that property's initial value — so it is what an undeclared document is in, and this component does not yet
+ * ASK which model is in force. WHAT THE NEXT DIFF BUILDS: the ask itself — read `border-collapse` here and
+ * take §17.6.2's arm when it answers `collapse`. Both properties are now modelled, so nothing is missing
+ * underneath: they are in core/css/css_computed_value.c's `css_computed_models` set, and they landed in
+ * DIFFERENT arms rather than the one arm an earlier draft of this residual named. `border-collapse` is
+ * as-specified; `border-spacing` is NOT, and could not have been — CSS 2.1 §17.6.1 The separated borders
+ * model states its `Computed value: two absolute lengths`, a pair, which no as-specified row can hold. That
+ * clause was spec-wrong when it was written and a reader who acted on it would have built the wrong shape,
+ * which is why it is corrected here rather than deleted. HOW ITS ABSENCE WOULD SHOW: a table
  * declaring `border-collapse: collapse` with a non-zero cell border reports every column WIDER than a browser
  * does, by one border width per shared edge, and the table that grows out of those columns is wider than the
  * one Chrome lays out for the same document. */
