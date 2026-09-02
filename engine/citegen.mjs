@@ -1835,6 +1835,47 @@ const STEP_REF = new RegExp(
   `(?:^|[^\\w])steps?\\s+(${STEP_NO})((?:\\s*(?:,|&|and|or|to|through|[-‐‑‒–—―])\\s*${STEP_NO})*)`, "gi");
 const STEP_MORE = new RegExp(STEP_NO, "g");
 
+/* THE OWNER OF A STEP NUMBER IS A FACT A SITE CAN STATE, AND NEAREST-PRECEDING IS WHAT YOU FALL BACK ON WHEN
+ * IT DOES NOT. The fallback is wrong in exactly one shape and it produced BOTH of this channel's accusations at
+ * once: a comment credits a section for a TERM it is borrowing — "get the parent says so", "the template
+ * cloning steps return early" — and a step number written later in the same sentence lands on that credit
+ * instead of on the algorithm the comment is actually walking. Two wrong answers were cancelling at one of
+ * them, so a false accusation was suppressing a false step claim; the two were separated by the lane that
+ * measured this, and the count went up rather than being kept flat.
+ *
+ * WHAT THIS MATCHES IS A CITATION MAKING A STEP CLAIM OF ITS OWN — the number inside the citation's own noun
+ * phrase, across the spellings this tree writes: `§N step K`, `§N's step K`, `§N "Title" step K`, `§N (note)
+ * step K`, `§N — step K`. That is a DECLARATION: the author has said, in one breath, which list K indexes. A
+ * step number three clauses later has said no such thing, and the difference between those two is the whole of
+ * what this can read off a site.
+ *
+ * MEASURED, AND EVERY CHEAPER RULE WAS REFUSED ON THE NUMBERS rather than on taste — see the header of the
+ * declaration map in PASS 5 for what each one cost. */
+const ADJ_STEP = new RegExp(
+  `^(?:['’]s|s['’])?\\s*(?:"[^"]{0,80}"\\s*)?(?:\\([^)]{0,80}\\)\\s*)?[-,:–—]?\\s*(?:the\\s+)?steps?\\s+(${STEP_NO})`, "i");
+
+/* A DECLARATION IS ONLY WORTH JOINING ON WHEN THE PATH IDENTIFIES A LIST POSITION, AND A BARE ONE-COMPONENT
+ * PATH DOES NOT. Measured on 6581 checked step references: joining on any declared path silences 18 of the 69
+ * NOT-IN-THIS-SECTION entries, and almost every one of those goes through a bare `step 5`/`step 6`/`step 8`
+ * that some unrelated algorithm in the same file happens to declare — a file-header citation confirming a step
+ * eight hundred lines away, which is the container-agrees-with-anything shape this tool has already refused
+ * once in its term channel. Requiring two components drops that to ONE, and reading it confirms it: a comment
+ * about enqueueing a custom element reaction says "the one step 14.4 COLLECTED into this element's
+ * definition", and the same file writes that exact path beside the section that defines it, eight times.
+ * A HEADING IS EXEMPT because a heading is not a passing remark — see headingDecl. */
+const DECLARED_DEPTH = 2;
+
+/* WHAT A MARKDOWN HEADING DECLARES, AND WHY IT IS NOT THE SAME KIND OF EVIDENCE AS A SENTENCE. A paragraph
+ * cites in order to borrow; a heading names what everything under it is about, so a heading that writes a
+ * section, a title and a step in one line has stated the owner of every step number in its block. This tree's
+ * design notes are written that way and the numbers come from them. The scope is the BLOCK — from the heading
+ * to the next heading at the same or a shallower level — because one document holds many algorithms and a
+ * file-wide reading of one heading would claim every step in it. */
+function mdHeadingLevel(text) {
+  const m = /^(#{1,6})\s/.exec(text.replace(/^\s+/, ""));
+  return m ? m[1].length : 0;
+}
+
 function stepRefs(prose) {
   const out = [];
   STEP_REF.lastIndex = 0;
@@ -2323,7 +2364,7 @@ function audit(argv, opts = {}) {
    * `depth` counts the sub-numbered references apart from the plain ones because they are the population
    * CLAUDE.md says the drift lives in — a promoted nested list renumbers sub-steps and leaves top-level ones
    * untouched. */
-  const sstat = { seen: 0, sub: 0, checked: 0, exists: 0, okNearby: 0, out: 0, away: 0,
+  const sstat = { seen: 0, sub: 0, checked: 0, exists: 0, okNearby: 0, okDeclared: 0, reworded: 0, out: 0, away: 0,
                   noCorpus: 0, staleCorpus: 0, noSection: 0, noList: 0, voted: 0, foreign: 0, unresolved: 0, citeFlagged: 0 };
   const stepNoCorpusBy = new Map(), stepForeignBy = new Map();
   /* One standard's whole text, joined once. The divergence probe asks it repeatedly and rebuilding a
@@ -3428,7 +3469,13 @@ function audit(argv, opts = {}) {
     /* PASS 5 — THE STEP NUMBERS EACH CITATION GOVERNS. It reuses PASS 4's attribution rule rather than
      * restating it: a step reference belongs to the nearest citation BEFORE it, and the region a citation
      * governs ends at the next citation or at the end of its prose unit. Deriving a second rule for which
-     * citation owns which number would be the copy this file's own header says drifts. */
+     * citation owns which number would be the copy this file's own header says drifts.
+     *
+     * NEAREST-PRECEDING IS A FALLBACK, NOT THE RULE, AND THE TWO DECLARATION MAPS BELOW ARE THE RULE. Where a
+     * site STATES which list a step path indexes, that statement decides; proximity is what answers when
+     * nothing states it. The distinction is not cosmetic — it is the difference between a finding a reader can
+     * act on and one that sends them to the wrong section, which is the same defect as an assert naming a
+     * remedy and no site. */
     {
       const admitted = cites.filter((c) => c.admitted);
       const bySpan = new Map();
@@ -3438,6 +3485,68 @@ function audit(argv, opts = {}) {
         if (!bySpan.has(k)) bySpan.set(k, []);
         bySpan.get(k).push(c);
       }
+      /* WHAT THE FILE ITSELF SAYS A STEP PATH BELONGS TO. A citation with a step number in its OWN noun phrase
+       * (see ADJ_STEP) has declared an owner for that path, and this tree writes the same path in both
+       * spellings all the time — a comment opens with the bare label `step 6.9.1:` and the crash message it
+       * introduces, five lines down, writes that same label QUALIFIED beside the dispatch section. One of those
+       * two spellings carries the section; joining on the PATH is how the unqualified one gets it. This is a
+       * join on an identifier, not a distance: nothing here reads how far apart the two spellings are, so it
+       * cannot degrade into the proximity guess it replaces.
+       *
+       * IT CONFIRMS AND NEVER ACCUSES, so widening it can only remove a finding — the discipline the whole
+       * channel is built on. What it must not do is confirm VACUOUSLY, and that is what DECLARED_DEPTH is
+       * measured against.
+       *
+       * FOUR OTHER RULES WERE BUILT AND REFUSED ON MEASUREMENT, recorded here because the next person to look
+       * at this will reach for them in this order. (1) Confirming against every citation in the enclosing
+       * top-level definition silences 50 of 69 NOT-IN-THIS-SECTION entries and confirms a step off a
+       * file-header citation hundreds of lines away. (2) Confirming against the adjacent prose units silences
+       * 23, and nothing picks one unit over two. (3) Refusing the citation whenever the prose unit numbered a
+       * step before it fires on 444 EXISTS rows, and reading them shows it wrong: a comment writing a
+       * standard's operation name, its step count, and then that operation's steps one by one is a CORRECT
+       * attribution the rule would throw away. (4) Refusing a citation that makes no step claim in its own
+       * noun phrase fires on 276 EXISTS rows, and those read as correct too — an owning algorithm is routinely
+       * named in English and nowhere in a number, which is exactly the population that escapes confirmation.
+       * Every one of the four buys the two true corrections at a cost of hundreds of wrong ones. */
+      const declared = new Map();
+      for (let i = 0; i < admitted.length; i++) {
+        const o = admitted[i];
+        if (!o.spec || o.how === "file" || o.foreign) continue;
+        const m = ADJ_STEP.exec(governedProse(src, spans, o.at, o.len,
+                                              i + 1 < admitted.length ? admitted[i + 1].at : null));
+        if (!m || m[1].split(".").length < DECLARED_DEPTH) continue;
+        if (!declared.has(m[1])) declared.set(m[1], []);
+        declared.get(m[1]).push(o);
+      }
+      /* THE HEADING A STEP REFERENCE STANDS UNDER, for a design note — see mdHeadingLevel. Built once per file
+       * as [blockStart, blockEnd, citation, declaredPath], so the lookup below is a scan of the few headings
+       * that declare a step rather than a re-parse per reference. */
+      const headingDecl = [];
+      if (/\.md$/.test(file)) {
+        const heads = [];
+        for (const sp of spans) {
+          const lvl = mdHeadingLevel(src.slice(sp[0], sp[1]));
+          if (lvl) heads.push({ at: sp[0], end: sp[1], lvl });
+        }
+        for (let i = 0; i < heads.length; i++) {
+          const h = heads[i];
+          let stop = src.length;
+          for (let j = i + 1; j < heads.length; j++) if (heads[j].lvl <= h.lvl) { stop = heads[j].at; break; }
+          for (let k = 0; k < admitted.length; k++) {
+            const o = admitted[k];
+            if (o.at < h.at || o.at >= h.end) continue;
+            if (!o.spec || o.how === "file" || o.foreign) continue;
+            const m = ADJ_STEP.exec(governedProse(src, spans, o.at, o.len,
+                                                  k + 1 < admitted.length ? admitted[k + 1].at : null));
+            if (!m) continue;
+            headingDecl.push({ from: h.at, to: stop, cite: o, path: m[1].split(".").map(Number) });
+            break;
+          }
+        }
+      }
+      const headingOwnerOf = (at, path) => headingDecl.find((h) =>
+        at >= h.from && at < h.to && h.path.length <= path.length &&
+        h.path.every((v, i) => v === path[i]))?.cite || null;
       /* The lists a citation's own section and its subsections hold, joined — the same containment JOIN the
        * quotation check performs on text, for the same reason: the corpus stores each section's OWN slice. */
       /* EVERY LIST IN THE REGION IS A CANDIDATE ROOT, WHICH IS THE CONVENTION HALF OF THIS CHECK AND THE HALF
@@ -3524,6 +3633,38 @@ function audit(argv, opts = {}) {
             return [...idx.keys()].some((k) => admitsPath(k, o.no));
           });
           if (near) { sstat.okNearby++; continue; }
+          /* AND THE SAME PATH WRITTEN QUALIFIED ELSEWHERE IN THIS FILE IS THE OWNER THE SITE STATED, which is
+           * a stronger fact than any neighbourhood: OK-NEARBY quantifies over what happens to be standing
+           * nearby, and this quantifies over what the author WROTE about this exact list position. It is what
+           * separates the two accusations this channel used to make. Measured, it moves two rows and no
+           * others: a dispatch walk whose comment credits the get-the-parent section for a term while the
+           * number it writes belongs to the algorithm named two lines up, and a custom-element reaction
+           * comment naming a sub-step the same file declares eight times beside the section that defines it. */
+          const declOwner = [s.path.join("."), s.path.slice(0, -1).join(".")]
+            .filter((k) => k && k.split(".").length >= DECLARED_DEPTH)
+            .flatMap((k) => declared.get(k) || [])
+            .find((o) => !(o.spec === c.spec && o.no === c.no) && admitsPath(o.spec, o.no));
+          if (declOwner) { sstat.okDeclared++; continue; }
+          /* A HEADING DECIDES BOTH WAYS, AND THE SECOND WAY IS WHY THIS IS AN ATTRIBUTION FIX RATHER THAN
+           * ANOTHER CONFIRMATION CHANNEL. Where a design note's heading declares the owner of this path, that
+           * owner is what the finding is asked about — confirmed if it admits the path, and NAMED if it does
+           * not. The finding that made this necessary read "html §4.12.3 has a step 6 and no list under it",
+           * which is true and useless: the paragraph borrows that section for the template cloning steps while
+           * the number belongs to the clone algorithm its own heading names, section, title and step. The step
+           * is out of range under BOTH, so nothing about the verdict changes and everything about where the
+           * reader is sent does. Measured over every step reference in every design note: one row is reworded,
+           * none change band, and no row that existed becomes a finding. */
+          const hOwner = headingOwnerOf(c.at, s.path);
+          let owner = c, ofail = fail;
+          if (hOwner && !(hOwner.spec === c.spec && hOwner.no === c.no) && stp.has(hOwner.spec) &&
+              idx.get(hOwner.spec) && idx.get(hOwner.spec).sections[hOwner.no]) {
+            const hl = listsFor(hOwner.spec, hOwner.no);
+            if (hl.length) {
+              const hf = stepFail(hl, s.path);
+              if (!hf) { sstat.okDeclared++; continue; }
+              owner = hOwner; ofail = hf; sstat.reworded++;
+            }
+          }
           /* TWO FAILURES, AND ONLY ONE OF THEM IS A CLAIM ABOUT THE CITATION. This is the same asymmetry
            * check (1) draws when it refuses to ask whether a term-resolved standard HAS the cited number: a
            * finding may assert only what it can demonstrate, and "no list under §N reaches step K" does not
@@ -3546,12 +3687,15 @@ function audit(argv, opts = {}) {
            * algorithm at all while the `invalid` event is fired by §4.10.21.2's.
            * SO THE UNCORROBORATED BAND IS COUNTED AND LISTED AND NEVER ACCUSED — visible where it used to be
            * silent, which is what this file does with every population it cannot judge. */
-          const rec = { file: relative(ROOT, file), line: lineOf(c.at), no: c.no, spec: c.spec, how: c.how,
+          /* THE RECORD IS ABOUT THE OWNER, NOT ABOUT WHATEVER STOOD NEAREST — `owner` is the citation when
+           * nothing declared otherwise, so the unreworded case is byte-identical to what this printed before. */
+          const rec = { file: relative(ROOT, file), line: lineOf(c.at), no: owner.no, spec: owner.spec, how: owner.how,
                         step: s.raw, depth: s.path.length, gap: s.at,
                         crash: inCrashMessage(src, spans, c.at),
-                        msg: stepMsg(fail, s.path, c.no, c.spec),
+                        msg: stepMsg(ofail, s.path, owner.no, owner.spec) +
+                             (owner === c ? "" : ` (the paragraph's own citation is ${c.spec} §${c.no}; the block's heading declares the owner)`),
                         text: prose.slice(Math.max(0, s.at - 60), s.at + 60).trim() };
-          if (fail.depth > 0 || fail.sub) { sstat.out++; stepsOut.push(rec); }
+          if (ofail.depth > 0 || ofail.sub) { sstat.out++; stepsOut.push(rec); }
           else { sstat.away++; stepsAway.push(rec); }
         }
       }
@@ -3834,8 +3978,14 @@ function audit(argv, opts = {}) {
     console.log(`   them. What it can falsify is a number no reading of the section admits — which is what the drift`);
     console.log(`   CLAUDE.md describes produces once it runs past the end of a list.)`);
     console.log(`  ${sstat.seen} step reference(s) stand in prose a citation governs (${sstat.sub} of them sub-numbered); ${sstat.checked} were compared against a section's own lists`);
-    console.log(`    EXISTS ${sstat.exists}  CONFIRMED-BY-A-NUMBER-THE-SAME-COMMENT-CITES ${sstat.okNearby}  OUT-OF-RANGE ${sstat.out}` +
+    console.log(`    EXISTS ${sstat.exists}  CONFIRMED-BY-A-NUMBER-THE-SAME-COMMENT-CITES ${sstat.okNearby}` +
+      `  CONFIRMED-BY-THE-OWNER-THE-FILE-DECLARES ${sstat.okDeclared}  OUT-OF-RANGE ${sstat.out}` +
       `  NOT-IN-THIS-SECTION ${sstat.away} (listed, never accused — see --steps)`);
+    /* WHAT THE LAST NUMBER IS A FRACTION OF, said in the same line as the number: a reworded finding is one
+     * the nearest-preceding citation would have charged to the wrong section. It is not an extra finding and
+     * not a suppressed one — the verdict is the same and the address is different. */
+    console.log(`    ${sstat.reworded} of those finding(s) name the section a design note's own HEADING declares` +
+      ` rather than the citation standing nearest, and say so in the message`);
     console.log(`  NOT CHECKED, and why: ${sstat.noCorpus} cite a standard with no committed step corpus` +
       (stepNoCorpusBy.size ? ` (${[...stepNoCorpusBy].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}=${v}`).join(" ")})` : "") +
       `; ${sstat.staleCorpus} cite one whose corpus is a different edition from its section index` +
