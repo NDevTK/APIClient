@@ -344,6 +344,13 @@ function _circularRefSentinel(schemaName) {
     name: "...",
     type: "message",
     required: false,
+    /* THE SCHEMA THE CYCLE CLOSES ONTO, IN THE RECORD'S OWN VOCABULARY AND NOT ONLY IN PROSE. `messageType`
+       is "the message schema this field's children came from", and for a truncation it is the schema whose
+       children were NOT taken because the chain already holds it — which is the DOMAIN half of what this
+       marker states, and §@S calls a shape that carries only the other half (the provenance sentence below)
+       a WRONG report rather than a partial one. It was stated only inside `description`, where the panel can
+       print it and no reader can act on it, so the Send panel had no way to say what this position takes. */
+    messageType: schemaName,
     description: "(circular ref: " + schemaName + ")",
     label: "optional",
   }, "lib/discovery.js _circularRefSentinel for `" + schemaName + "`");
@@ -367,7 +374,22 @@ function _drainDiscoveryQueue(queue) {
 // sentinel and skip processing.
 function _stepResolveSchema(item, queue) {
   var doc = item.doc, schemaName = item.schemaName, visited = item.visited, into = item.into;
-  if (!doc || !doc.schemas || !doc.schemas[schemaName]) return;
+  if (!doc || !doc.schemas || !doc.schemas[schemaName]) {
+    /* A `$ref` THE DOCUMENT NEVER DEFINES IS A MESSAGE NOBODY DESCRIBED, AND THAT IS `null` — the OTHER of
+       lib/field-def.js's two absences from the one this frame's field is already holding. `_stepMapProperty`
+       pre-sets `children: []` before queueing this frame because it is about to be filled; when the schema
+       turns out not to exist the field keeps that `[]`, which STATES "a message with no fields of its own" —
+       a claim the document never made. The two were indistinguishable while the panel rendered both as a
+       bare text box; they are not any more (the Send panel says "no fields" for one and "fields not
+       described" for the other), and the encoders read them apart too: `[]` goes out as `{}` under this
+       field's key, `null` omits the key. So a dangling `$ref` used to put an empty submessage on the wire
+       under a name no schema in the document defines.
+       `messageType` IS LEFT STATING THE NAME THE DOCUMENT REFERRED TO, because that is a fact the document
+       DID state and it is what the panel renders as what this position takes. A missing schema is refused
+       rather than asserted for the reason every read in this file is: these are a target server's bytes. */
+    if (item.field) item.field.children = null;
+    return;
+  }
   if (visited.has(schemaName)) {
     into.push(_circularRefSentinel(schemaName));
     return;
@@ -416,7 +438,10 @@ function _stepMapProperty(item, queue) {
     f.type = "message";
     f.messageType = ref;
     f.children = [];
-    queue.push({ kind: "SCHEMA", doc: doc, schemaName: ref,
+    /* THE FRAME CARRIES THE FIELD IT FILLS, not only the array — so a `$ref` naming a schema this document
+       never defines can state that absence back onto `children` instead of leaving the `[]` this line sets
+       in anticipation of filling it. See `_stepResolveSchema`'s unresolvable branch. */
+    queue.push({ kind: "SCHEMA", doc: doc, schemaName: ref, field: f,
                   visited: v, into: f.children });
     return;
   }
@@ -431,7 +456,9 @@ function _stepMapProperty(item, queue) {
       f.type = "message";
       f.messageType = itemRef;
       f.children = [];
-      queue.push({ kind: "SCHEMA", doc: doc, schemaName: itemRef,
+      // …and the same for an array whose ITEMS are a `$ref`: an unresolvable item schema describes no
+      // message either, and this field's `children` must be able to say so.
+      queue.push({ kind: "SCHEMA", doc: doc, schemaName: itemRef, field: f,
                     visited: v, into: f.children });
     } else if (items.type === "object" && items.properties) {
       f.type = "message";

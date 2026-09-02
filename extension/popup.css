@@ -1354,6 +1354,21 @@ details summary:hover {
 .badge-predicates { color: #ffa198; background: rgba(255,161,152,0.1); }
 .badge-prefill { color: #7ee787; background: rgba(126,231,135,0.1); }
 .badge-format { color: #f0883e; background: rgba(240,136,62,0.1); }
+/* A ROW THAT HOLDS NO INPUT — the muted colour of `.badge-optional` and NOT the constraint colour above,
+   because this is not something the code proved about a value. It is this panel saying it has no fields for
+   this message and is therefore not offering to compose one; the row it sits on carries no control at all,
+   so a reviewer must read it as an absence of offer rather than as a narrowed domain. */
+.badge-untraversed { color: #8b949e; background: rgba(139,148,158,0.1); }
+/* …AND THE SENTENCE UNDER IT, in the description's own muted voice and NOT clipped the way
+   `.field-description` is: this text is the whole content of the row, so a `max-height` that hid its second
+   line would hide the only statement the row makes. */
+.field-untraversed {
+  color: #6e7681;
+  font-size: 10px;
+  font-style: italic;
+  margin: 2px 0 2px 0;
+  line-height: 1.5;
+}
 
 /* Chain info */
 .chain-info-box {

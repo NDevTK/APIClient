@@ -436,6 +436,33 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
   wrapper.dataset.label = fieldDef.label;
   if (fieldDef.location !== null) wrapper.dataset.location = fieldDef.location;
 
+  /* THE THREE STATES, READ ONCE, THROUGH THEIR NAMED READER — and read HERE because the label below and the
+     dispatch at the foot of this function must agree about which of them this field is in. lib/field-def.js:
+     `[c…]` = a message whose fields this panel can render, `[]` = A MESSAGE WITH NO FIELDS, `null` = NOT a
+     message to descend into. The dispatch used to ask `fieldDef.children !== null && …length > 0` and give
+     BOTH of the other two to one `else`, which rendered them as a bare text box — see `_untraversed`. */
+  const _kids = fdChildren(fieldDef, "lib/popup-form.js _buildFieldStep `" + fieldDef.name + "`");
+  const _isMessage = fieldDef.type === "message" || fieldDef.type === "object";
+  /* A CAPTURED OBJECT IS A DATUM THIS RUN OBSERVED, and it out-ranks both absences: a body the page actually
+     sent has keys to render whatever the schema did or did not describe. */
+  const _capturedObject = !!(initialValue && typeof initialValue === "object" && !Array.isArray(initialValue));
+
+  /* A MESSAGE THIS PANEL HAS NO FIELDS FOR AND NO CAPTURED VALUE FOR — the exact condition the dispatch's
+     final `else` used to answer with `createSingleInput`, i.e. WITH A TEXT BOX. That box stated three false
+     things at once: that this position holds a scalar (it holds a message), that `...` is a wire key a
+     document declared (lib/discovery.js's `_circularRefSentinel` names its marker that), and that typing in
+     it would send something — which it never did, because `_collectShallow` looks for a `.form-message-group`
+     under a `message` wrapper, finds none, and drops the wrapper whole. So the panel offered an input and
+     silently discarded it, which is CLAUDE.md §@H's wrong report with a control on it rather than a value.
+     WHAT IS RENDERED INSTEAD IS BELOW, and the reason it is NOT a disabled input is that a disabled box still
+     draws the affordance "a value goes here" and answers "why can't I type" instead of stating the fact. The
+     fact has two halves and both are rendered: the DOMAIN (`messageType` — what this position takes) and the
+     PROVENANCE (the producer's own `description`, already rendered above; the sentinel writes
+     "(circular ref: <schema>)"), which is §@S's rule that a shape carrying one of the two is a WRONG report
+     rather than a partial one. */
+  const _untraversed = _isMessage && fieldDef.label !== "repeated" &&
+                       (_kids === null || _kids.length === 0) && !_capturedObject;
+
   const labelEl = el("label", "form-field-label");
   /* `displayName: null` MEANS "render the wire name" — the GraphQL variables tree is the one producer that
      writes an alias, and every other one states its absence. The caller's positional `name` is a genuine
@@ -538,6 +565,17 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
   if (fieldDef.format && fieldDef.format !== fieldDef.type) {
     labelHtml += ` <span class="field-stat badge-format">${esc(fieldDef.format)}</span>`;
   }
+  /* …AND THE BADGE THAT SAYS THIS ROW HOLDS NO INPUT, IN THE PANEL'S OWN CONSTRAINT VOCABULARY. The two
+     absences get two words, because lib/field-def.js keeps them apart and a rendering that folded them would
+     re-create at the panel exactly the collapse the encoders were fixed for: "fields not described" is
+     `children: null` — a message whose fields this run never walked — and "no fields" is `children: []`, a
+     message a document described and that has none. Read them in the same voice as `≠ admin` and `> 5`:
+     something the run STATED about this position, never something it computed for it. */
+  if (_untraversed) {
+    labelHtml += _kids === null
+      ? ` <span class="field-stat badge-untraversed" title="a message whose OWN fields nothing described — this panel is not offering to compose one, and nothing is sent from this row">fields not described</span>`
+      : ` <span class="field-stat badge-untraversed" title="a message a document described as having no fields of its own — there is nothing to fill in, and nothing is sent from this row">no fields</span>`;
+  }
 
   labelEl.innerHTML = labelHtml;
   wrapper.appendChild(labelEl);
@@ -618,24 +656,35 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
     addBtn.dataset.formAddRepeated = "1";
     _addItemTargets.set(addBtn, { kind: "repeatedMessage", listContainer, fieldDef, category, depth });
     wrapper.appendChild(addBtn);
-  } else if ((fieldDef.type === "message" || fieldDef.type === "object") &&
-             fieldDef.children !== null && fieldDef.children.length > 0) {
+  } else if (_isMessage && _kids !== null && _kids.length > 0) {
     queue.push({ kind: "MESSAGE_GROUP", parent: wrapper, fieldDef, category, depth, initialValue, hasSchema: true });
-  } else if (fieldDef.type === "message" || fieldDef.type === "object") {
-    if (initialValue && typeof initialValue === "object" && !Array.isArray(initialValue)) {
-      queue.push({ kind: "MESSAGE_GROUP", parent: wrapper, fieldDef, category, depth, initialValue, hasSchema: false });
-    } else {
-      /* A MESSAGE WITH NEITHER A SCHEMA NOR A CAPTURED VALUE STILL NEEDS A BOX TO TYPE INTO, and the box
-         is a FIELD like any other — a bare `{ type: "string" }` was a fifth vocabulary reaching the one
-         consumer, so every domain and example createSingleInput reads was answered by the `||` this record
-         exists to delete. It states what it is: the same field, rendered as raw text because nothing
-         described its shape. */
-      wrapper.appendChild(createSingleInput(
-        makeFieldDef({ name: fieldDef.name, type: "string", label: fieldDef.label,
-                       required: fieldDef.required },
-                     "lib/popup-form.js schemaless message `" + fieldDef.name + "`"),
-        "", category));
-    }
+  } else if (_isMessage && _capturedObject) {
+    queue.push({ kind: "MESSAGE_GROUP", parent: wrapper, fieldDef, category, depth, initialValue, hasSchema: false });
+  } else if (_untraversed) {
+    /* THE ROW STATES THE FACT AND OFFERS NO CONTROL. What stood here was `createSingleInput` over a
+       synthesized `{ type: "string" }` — a TEXT BOX for a position that holds a MESSAGE, whose contents
+       `_collectShallow` then dropped on the floor. Removing it takes away no capability: read that collector
+       and the `message`/`object` branch returns before the scalar branch is ever reached, so no keystroke
+       typed into that box has ever left this panel.
+       WHAT IS SENT FROM HERE IS NOTHING, AND THAT IS NOW SAID OUT LOUD RATHER THAN FALLING OUT OF A MISSING
+       DOM NODE. The collector's `!childContainer` answered two different questions with one `return null` —
+       "this field has nothing to collect" and "the builder produced a message group and forgot to fill it" —
+       so `data-message-fields` is the first of those STATED, and the collector asserts on the second.
+       AND `{}` IS NOT WHAT THE WIRE SHOULD CARRY EITHER. lib/encode.js `encodeFormToJson`, its JSPB and
+       protobuf siblings and lib/popup-gql.js `gqlFieldTreeToJson` each read `children: null` as itself now —
+       they OMIT the key rather than composing an empty submessage out of the record's word for "nothing to
+       describe". Dropping the wrapper here reaches the same wire, one layer earlier, for a field the
+       researcher was never given a way to fill. */
+    wrapper.dataset.messageFields = _kids === null ? "undescribed" : "none";
+    const note = el("div", "field-untraversed");
+    const takes = fieldDef.messageType !== null ? fieldDef.messageType : null;
+    note.textContent = _kids === null
+      ? (takes !== null
+         ? "This position takes another " + takes + " — its fields are not described here, so nothing is sent from this row."
+         : "A message whose own fields are not described here, so nothing is sent from this row.")
+      : ((takes !== null ? takes : "This message") +
+         " is described as having no fields of its own, so nothing is sent from this row.");
+    wrapper.appendChild(note);
   } else if (fieldDef.label === "repeated" && fieldDef.type !== "message") {
     const listContainer = el("div", "form-repeated-list");
     listContainer.dataset.fieldType = fieldDef.type;
@@ -691,7 +740,8 @@ function _buildRepeatedItemStep(fieldDef, category, depth, itemValue, queue) {
   /* `children: null` MEANS this field is not a message, so it declares NO fields for an item to render —
      which is a statement about the schema and not a gap: the item's own captured keys are rendered by the
      loop below either way, and that is the whole content of an item whose shape nothing described. */
-  const schemaChildren = fieldDef.children === null ? [] : fieldDef.children;
+  const _itemKids = fdChildren(fieldDef, "lib/popup-form.js _buildRepeatedItemStep `" + fieldDef.name + "`");
+  const schemaChildren = _itemKids === null ? [] : _itemKids;
   const rendered = new Set();
   for (const child of schemaChildren) {
     rendered.add(child.name);
@@ -747,7 +797,10 @@ function _buildMessageStep(fieldDef, category, depth, initialValue, hasSchema, q
   const inheritedSchema = fieldDef.messageType !== null ? fieldDef.messageType : fieldDef.parentSchema;
   const rendered = new Set();
   if (hasSchema) {
-    for (const child of fieldDef.children) {
+    /* `hasSchema` IS THE CALLER SAYING IT READ A NON-EMPTY `children`, so this walk asks the record itself
+       rather than trusting the flag: the one queue-er of a `hasSchema: true` group tests `_kids !== null &&
+       _kids.length > 0`, and a caller that ever stopped agreeing would iterate a `null` here. */
+    for (const child of fdChildren(fieldDef, "lib/popup-form.js _buildMessageStep `" + fieldDef.name + "`")) {
       rendered.add(child.name);
       if (child.number != null) rendered.add(String(child.number));
       const childVal = initialValue
@@ -1051,10 +1104,18 @@ function formFieldsToMap(rootFields) {
              "_collectShallow reads `data-number` and states its absence as `null`, so anything else here is " +
              "that collector broken and this line would key the outgoing request's field map on it");
       if (f.number === null) continue;
-      if (f.type === "message" && f.children) {
+      /* THE SAME THREE STATES AS THE ENCODERS READ, THROUGH THE SAME READER. `f.children` as a bare
+         truthiness test answered `[]` and `[c…]` alike with "descend" — which is right, since a walk over no
+         fields and a walk over some do not disagree here — and answered `null` and a producer that had
+         STOPPED STATING the name alike with "take the value", which is the one fold lib/field-def.js exists
+         to forbid. `fdChildren` keeps the first fold (it is the same question, asked out loud) and crashes on
+         the second. This map's values become `initialData` for the next render, so a message re-rendered as
+         its own value is a form that quietly changes shape between two views of one request. */
+      const kids = fdChildren(f, "lib/popup-form.js formFieldsToMap `" + f.name + "`");
+      if (f.type === "message" && kids !== null) {
         const sub = {};
         target[f.number] = sub;
-        queue.push({ fields: f.children, target: sub });
+        queue.push({ fields: kids, target: sub });
       } else {
         target[f.number] = f.value;
       }
@@ -1228,7 +1289,26 @@ function _collectShallow(wrapper, queue) {
     const childContainer = wrapper.querySelector(
       ":scope > .form-message-group > .form-message-children",
     );
-    if (!childContainer) return null;
+    if (!childContainer) {
+      /* TWO QUESTIONS SHARED THIS `return null`, AND ONE OF THEM WAS A BUG THIS FILE COULD NOT REPORT.
+         `_buildFieldStep` renders a message either as a `.form-message-group` or — where it has no fields to
+         render and no captured value — as a stated row with no control on it, and it writes
+         `data-message-fields` on that row saying WHICH of lib/field-def.js's two absences it is
+         ("undescribed" = `children: null`, "none" = `children: []`). A group that is MISSING with no such
+         statement beside it is this builder broken, and answering that with the same `null` as the deliberate
+         case is how a message whose children silently failed to render would collect as a field with no
+         value and go out as an absence nobody chose.
+         THE DELIBERATE CASE COLLECTS NOTHING, AND THAT IS THE WIRE ANSWER RATHER THAN AN ACCIDENT OF THIS
+         QUERY. A truncation marker encoded as `{}` is a submessage the researcher never composed — CLAUDE.md
+         §@H's fabrication — which is why lib/encode.js and lib/popup-gql.js omit the key for `children: null`
+         and why nothing is collected for it here. */
+      DCHECK(typeof wrapper.dataset.messageFields === "string",
+             "a `" + type + "` form-field wrapper carries no `.form-message-group` and no " +
+             "`data-message-fields` — _buildFieldStep renders one or the other for every message it builds, " +
+             "so this is that builder having produced a message whose children never rendered, and this " +
+             "collection would report it as a field the operator left empty");
+      return null;
+    }
     const children = [];
     for (const childEl of childContainer.querySelectorAll(":scope > .form-field")) {
       queue.push({ wrapper: childEl, attach: (r) => { children.push(r); } });

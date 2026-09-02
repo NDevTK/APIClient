@@ -636,6 +636,14 @@ function _renderPbNode(item, out, stack) {
      server sent a field this schema does not describe — so it is read as one here rather than through a
      `?.` at each of the five sites below, where the same absence would be indistinguishable from a matched
      field whose producer had stopped stating `children`, `label` or `type`. */
+  /* AND THIS `children` READ DOES NOT GO THROUGH lib/field-def.js's `fdChildren`, DELIBERATELY. `fieldDef`
+     here has TWO producers: `_pbFindStated` returns one of OUR FieldDef records, and the branch beside it
+     assigns `found.prop` — a property of a DISCOVERY DOCUMENT the target's server served, whose `children`
+     may be an object map, a string, or anything else a JSON file can hold. `fdChildren` asserts
+     list-or-null, so routing this read would put a DCHECK over third-party bytes and abort the trusted zone
+     on a document a researcher was handed, which is the one thing an assert must never do (CLAUDE.md
+     §Offensive programming, and lib/field-def.js's own trust paragraph). `_pbChildMap` is the REFUSAL that
+     belongs here instead: an array or a record is read, and everything else yields `null`. */
   const childMap = fieldDef === null ? null : _pbChildMap(fieldDef.children);
   const isRepeated = fieldDef !== null && fieldDef.label === "repeated";
   const isMessage = fieldDef !== null && fieldDef.type === "message";

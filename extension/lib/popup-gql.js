@@ -139,8 +139,14 @@ function gqlRenderVariablesContent(panelDiv, op) {
         fd.displayName = alias;
         fd.customName = true;
       }
-      if (fd.children !== null) {
-        for (const c of fd.children) queue.push(c);
+      /* THE RECORD'S OWN NAME, THROUGH THE RECORD'S OWN READER. This walk is over
+         `synthesizeFieldDefFromValue`'s results, so `children` here is lib/field-def.js's three-state name and
+         not a document's — the alias walk must descend into `[]` and `[c…]` alike and stop at `null`, and the
+         reader is what makes a producer that stopped stating the name crash instead of silently ending the
+         walk one level early with every nested alias unapplied. */
+      const kids = fdChildren(fd, "lib/popup-gql.js applyAliasesIterative `" + fd.name + "`");
+      if (kids !== null) {
+        for (const c of kids) queue.push(c);
       }
     }
   }

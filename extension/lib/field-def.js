@@ -327,23 +327,36 @@ function makeFieldDef(parts, where) {
    earlier form of this paragraph credited both of those with reading the `null` as itself, on the strength of
    the ONE branch of each that did (the scalar `!f.children?.length` guard); their MESSAGE branch did not, and
    a census taken one branch at a time is what let the fourth encoder be miscounted as the only offender.
-     THAT SUBSTITUTION HAS A NAMED PRODUCER. lib/discovery.js's `_circularRefSentinel` states
-   `type: "message"` with `children` unstated — deliberately, and its own comment says why: "`children: null`
-   says there is no message to descend into". It is a TRUNCATION MARKER for a `$ref` that pointed back onto
-   its own chain, and under either spelling it encoded as an EMPTY SUBMESSAGE — the JSPB slot its field number
-   names, or `{}` under its literal `"..."` key in a JSON or GraphQL-variables body — a message the panel
-   never described, composed out of the record's word for "nothing to describe", sent to a server as if it
-   were a field the researcher filled.
-     WHAT THAT PRODUCER CANNOT YET DO IS REACH AN ENCODER, and saying so is part of stating the defect rather
-   than a reason not to have fixed it. Every record the encoders walk comes from `_collectShallow`, which
-   returns `children: null` only for a SCALAR or a REPEATED field — and every encoder branches on `repeated`
-   before it branches on `message`, so no non-repeated message field carrying `null` reaches the collapsing
-   branch today. The sentinel does not get that far for a different reason again: lib/popup-form.js's
-   `_buildFieldStep` renders a `children: null` message as a bare text input with no `.form-message-group`,
-   and `_collectShallow` then drops the wrapper entirely. So the panel RENDERS the truncation marker and
-   SILENTLY DISCARDS it — which is a separate defect in that file, and the moment it is fixed, or the moment
-   any producer states `null` on a message the panel does render, the collapse is live in three encoders at
-   once. The vocabulary is asserted here so that cannot be the day it is discovered.
+     THAT SUBSTITUTION HAS TWO NAMED PRODUCERS, AND AN EARLIER FORM OF THIS PARAGRAPH KNEW ONE. The first is
+   lib/discovery.js's `_circularRefSentinel`, which states `type: "message"` with `children` unstated —
+   deliberately, and its own comment says why: "`children: null` says there is no message to descend into". It
+   is a TRUNCATION MARKER for a `$ref` that pointed back onto its own chain, and under either spelling it
+   encoded as an EMPTY SUBMESSAGE — the JSPB slot its field number names, or `{}` under its literal `"..."`
+   key in a JSON or GraphQL-variables body — a message the panel never described, composed out of the
+   record's word for "nothing to describe", sent to a server as if it were a field the researcher filled.
+     THE SECOND IS THIRD-PARTY AND IS THE ONE THAT CAN CARRY A WIRE TAG. lib/send.js's `_probeFieldsToDefs`
+   takes a probe's field list — bytes a target's own error reply chose — and writes `type` verbatim beside
+   `children: kids === null ? null : []`, so a probe that names a message field and lists no `children` states
+   this very pair. It differs from the sentinel in exactly the property that decides reach: the sentinel is
+   pushed with no `number` (its `_stepResolveSchema` branch returns before the positional-number loop), and
+   BOTH protobuf encoders skip a field with no wire tag before they ever look at `children` — a probe field
+   carries `fdDocKey(pf.number)`, so it is the one that would reach the JSPB slot and the protobuf sub-frame.
+     WHAT NEITHER OF THEM REACHES IS AN ENCODER, AND THAT IS NOW A DECISION RATHER THAN AN ACCIDENT. Every
+   record the encoders walk comes from `_collectShallow`, which returns `children: null` only for a SCALAR or
+   a REPEATED field — and every encoder branches on `repeated` before it branches on `message`, so no
+   non-repeated message field carrying `null` reaches the collapsing branch. lib/popup-form.js used to close
+   the second half of that by accident: `_buildFieldStep` rendered a `children: null` message as a BARE TEXT
+   INPUT with no `.form-message-group`, and `_collectShallow`'s `!childContainer` then dropped the wrapper
+   whole — so the panel offered the researcher a box, discarded every keystroke typed into it, and the marker
+   never left the popup because a DOM query happened to miss. That is now stated at both ends: the builder
+   renders the row with NO control on it and writes `data-message-fields` saying which of the two absences it
+   is, and the collector reads that statement, collects nothing, and DCHECKs the OTHER question its one
+   `return null` used to answer as well (a message group that failed to render). Nothing is sent for a
+   position the panel could not describe, which is the same wire the four encoders now reach on their own.
+     SO THE ENCODERS' READING OF `null` IS NOT DEAD CODE KEPT WARM — it is what a probe-produced numbered
+   message field would hit the moment one arrives, and it is the reason fixing the panel could be done
+   without activating a fabrication. The vocabulary is asserted here so that cannot be the day it is
+   discovered.
      SO THE READ IS A NAMED OPERATION AND THE VOCABULARY IS ASSERTED HERE. `undefined` is not one of the two
    answers and never was: `makeFieldDef` writes every key, and lib/popup-form.js's `_collectShallow` — the
    producer of every record the four encoders actually walk — states `children` on all four of its returns.
