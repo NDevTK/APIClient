@@ -186,17 +186,23 @@ static JSValue js_cancel_animation_frame(JSContext *ctx, JSValueConst this_val, 
        so running that chain with `npositions` set to the animation frame callback identifier would ask about
        handles naming NOTHING while claiming, in the component's own words, to separate worlds §8.12 does not
        separate.
-       WHAT THE NEXT DIFF BUILDS, AND THE FIRST DRAFT OF THIS PARAGRAPH HAD IT WRONG IN THE WAY CLAUDE.md SAYS
-       A NEXT-DIFF CLAUSE GOES WRONG — it said the handle-keyed chain had to be invented, and the grep that rule
-       demands found it already written: core/timing/timer.c's js_clear_timer/ClearTimerState is exactly this
-       question for §8.7 Timers, asked one identifier at a time, ascending, keyed by "is `id` the timer with
-       identifier H" so the completion carries its NAME and never its rank in a map the page mutates. §8.12's
-       handles obey the same two facts that make that sound: they are strictly monotone per global, and they
-       start at 1 (see af_reset), so a zeroed cursor is unambiguously before the first and
-       `cancelAnimationFrame(0)` is the remainder world both members answer with nothing. So what must exist
-       afterward is ONE component both reach — the name-keyed sibling of core/idl_index_arg.h, taking the
-       caller's entry enumeration, since a second inline copy of that chain is the copy CLAUDE.md says drifts —
-       and this member becomes an IdlStepBody, because a chain parks and a plain C activation has nowhere to.
+       WHAT THE NEXT DIFF BUILDS, AND THE CLAUSE HAS NOW BEEN WRONG TWICE IN THE TWO DIRECTIONS CLAUDE.md NAMES.
+       Its first draft said the handle-keyed chain had to be INVENTED, and the mandated grep found it already
+       written — core/timing/timer.c's js_clear_timer asks exactly this question for §8.7 Timers, one identifier
+       at a time, ascending, keyed by "is `id` the timer with identifier H" so the completion carries its NAME
+       and never its rank in a map the page mutates. Its second said the next diff must LIFT that chain into one
+       component both members reach, and that half has now LANDED: core/idl_name_chain.h holds the link — the
+       composed key, the naming rule it implements, the truncation refusal and the two-armed ask — and
+       core/timing/timer.c and core/idl_index_arg.c both build their chains out of it. So this clause is now
+       about what is left, which is this member's own half and nothing shared. §8.12's handles obey the two
+       facts that make timer.c's enumeration sound: they are strictly monotone per global and they start at 1
+       (see af_reset), so a zeroed cursor is unambiguously before the first and `cancelAnimationFrame(0)` is
+       the remainder world both members answer with nothing. WHAT MUST EXIST AFTERWARD is (a) this member as an
+       IdlStepBody — declared with idl_method_id_step rather than idl_method_id, because a chain parks and a
+       plain C activation has nowhere to — holding an IdlNameChainKey and a cursor on its state, and (b) an
+       enumeration over THIS map's keys, which is the part core/idl_name_chain.h deliberately does not own
+       (core/idl_index_arg.c counts positions, timer.c walks a live map, and this walks the animation frame
+       callback map — three sets, one link).
        HOW ITS ABSENCE WOULD SHOW: exactly this abort — a bundle that cancels a frame at a handle it computed
        from a URL ends the document and every sibling flow parked behind it. Once built, the world that
        answered `handle == h` and the world that exhausted the chain must differ observably at the next frame,
@@ -209,11 +215,14 @@ static JSValue js_cancel_animation_frame(JSContext *ctx, JSValueConst this_val, 
               "than a range of positions. core/idl_index_arg.h's elimination chain asks `index == k` ascending "
               "from 0 and does NOT serve this member: the map is sparse and the identifier only grows, so that "
               "chain would ask about handles naming nothing while claiming to separate worlds §8.12 does not "
-              "separate. The chain that DOES answer this is written — core/timing/timer.c's js_clear_timer asks "
-              "\"is `id` the timer with identifier H\" one monotone identifier at a time, and §8.12's handles "
-              "are monotone and start at 1 exactly as §8.7's do. Lift it into one name-keyed component both "
-              "members reach, taking the caller's entry enumeration, and make this member an IdlStepBody so it "
-              "can park at a link");
+              "separate. The LINK such a chain is built out of is written and shared — core/idl_name_chain.h, "
+              "which composes the constraint key from the member's own NAME and refuses a truncated one, and "
+              "which core/timing/timer.c's js_clear_timer already builds §8.7's chain out of, keyed \"is `id` "
+              "the timer with identifier H\" one monotone identifier at a time; §8.12's handles are monotone "
+              "and start at 1 exactly as §8.7's do. What is missing is this member's own half: make it an "
+              "IdlStepBody (idl_method_id_step, so it can park at a link) holding an IdlNameChainKey and a "
+              "cursor, and walk THIS map's keys — the enumeration is deliberately the caller's, because the "
+              "three askers of that link enumerate three different sets");
     DCHECK(JS_VALUE_GET_TAG(argv[0]) == JS_TAG_INT || JS_TAG_IS_FLOAT64(JS_VALUE_GET_TAG(argv[0])),
            "cancelAnimationFrame's `handle` reached the body neither converted nor unknown — the IDL "
            "declaration is what converts an `unsigned long`, and that conversion is the page's code; the one "

@@ -13,6 +13,7 @@
 
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/idl_name_chain.h"
 
 /* THE PREDICATE ONE LINK OF THE CHAIN ASKS, WHICH IS THE OPERATION HALF OF ITS CONSTRAINT KEY — and it names
  * the QUESTION and not the MEMBER, which is the whole of what makes one flow's answers agree with each other.
@@ -45,27 +46,35 @@
  * string below names its question exactly and in full; what it does not name is the SITE, which is a different
  * requirement with its own field (`algorithm`, the assert address) rather than a second use of this one.
  *
- * `%u` IS THE ONLY VARIABLE PART, so the buffer under it is sized from this text plus the widest decimal a
- * uint32 can be — truncation, which would file two positions under one key, is arithmetic here rather than a
- * fact about whichever member happened to be longest. */
+ * `%u` IS THE ONLY VARIABLE PART, WHICH IS WHAT LETS TRUNCATION BE REFUSED BY THE COMPILER RATHER THAN CAUGHT
+ * BY A RUN. A position is a uint32, so its widest spelling is arithmetic (IDL_NAME_CHAIN_U32_BYTES) and this
+ * text is a literal — so core/idl_name_chain.h's IDL_NAME_CHAIN_SPELLS settles the whole question below,
+ * beside the predicate it is about, and no build in which it does not fit exists to be measured. The run-time
+ * assert core/idl_name_chain.c still makes is for the caller that was WRONG about its widest name, which this
+ * one cannot be. */
 #define IDL_INDEX_PREDICATE "Web IDL §3.2.4.6 unsigned long (index is"
+IDL_NAME_CHAIN_SPELLS(IDL_INDEX_PREDICATE, IDL_NAME_CHAIN_U32_BYTES);
 
 /* THE ELIMINATION CHAIN A MEMBER PARKS ON, AND THE WHOLE OF WHAT SUCH A MEMBER HAS TO KEEP.
  *
  * `next` is the position the chain will ask about when the flow is next entered — the cursor a park resumes
- * on. `op` is the operation half of the fork's constraint key; step_fork_run keeps a BORROWED pointer to it
- * and the DRIVER reads it after idl_index_chain_run has returned, so it lives on the machine's state and
- * never in a C local, which would dangle exactly where the key is built.
+ * on, and the one part of this state that is THIS algorithm's. `key` is the composed constraint key and
+ * belongs to core/idl_name_chain.h, which owns the composition, the naming rule it implements and the storage
+ * argument for why it is an inline array rather than a pointer.
  *
- * ITS SIZE IS DERIVED AND NEVER TYPED: the prefix above, then ` 4294967295)` — a space, the widest decimal a
- * uint32 can take, and the closing paren — over `sizeof`, which already counts the terminator.
+ * THE CURSOR IS THE HALF THAT DOES NOT LIFT, and reading the two fields together is the shortest statement of
+ * where the boundary is. A position is a rank, and this family is the ONE place a rank is a sound name for a
+ * completion — Web IDL §3.2.4.6's domain is the numbers themselves, so `index == 3` is a fact about the value
+ * the page computed and stays true in the same words after the collection grows or shrinks. Every other asker
+ * of a name-keyed chain has a set the page mutates under it and must carry its member's own identifier
+ * instead, which is why the ENUMERATION stayed with the caller when the LINK was lifted.
  *
  * IT HOLDS NO JSValue, WHICH IS WHY ONE `visit` SERVES EVERY MEMBER (idl_index_chain_visit below). A member
  * whose state is this and nothing else declares that function and is done; a member that needs more of its
  * own EMBEDS this as its first field and names the rest in its own visit. */
 typedef struct {
-    uint32_t next;
-    char     op[sizeof IDL_INDEX_PREDICATE + 12];
+    uint32_t        next;
+    IdlNameChainKey key;
 } IdlIndexChain;
 
 /* THE OWNERSHIP DECLARATION FOR THE STATE ABOVE, WHICH IS THAT IT OWNS NOTHING. It is a real function rather

@@ -39,11 +39,14 @@
  * and never with a value or a throw of its own. It is also the one thing that must not be shared: a component
  * that decided the past-the-end answer would be deciding every one of those algorithms from one place.
  *
- * IT IS core/timing/timer.c's clearTimeout CHAIN AND DELIBERATELY NOT A SECOND MECHANISM. An N-way ask whose
- * completions were positions would file one key per COLLECTION LENGTH and press the return protocol's ceiling
- * (solver/decide.h's SOLVER_FORKED_BIT) for a document with many nodes, where a chain of two-armed asks forks
- * ONE sibling per link, is drawn lazily as the scheduler picks the machine up again, and keeps `n == 2` at
- * every ask.
+ * IT IS core/timing/timer.c's clearTimeout CHAIN AND NOT A SECOND MECHANISM, AND THAT IS NOW LITERAL RATHER
+ * THAN A RESEMBLANCE. An N-way ask whose completions were positions would file one key per COLLECTION LENGTH
+ * and press the return protocol's ceiling (solver/decide.h's SOLVER_FORKED_BIT) for a document with many
+ * nodes, where a chain of two-armed asks forks ONE sibling per link, is drawn lazily as the scheduler picks
+ * the machine up again, and keeps `n == 2` at every ask. The LINK both files build that chain out of is one
+ * function in core/idl_name_chain.c, which is where the naming rule it implements lives; this sentence used
+ * to assert a likeness between two copies, and a likeness is exactly what stops being true when only one copy
+ * is maintained.
  *
  * THE ORDER IS ASCENDING AND THE PARENT SITS ON THE EXAMPLE'S ARM AT EVERY LINK. The sequence is a function of
  * `npositions` alone, so it is the same sequence in a sibling's snapshot, after a park, and in a session that
@@ -72,6 +75,7 @@
 #include "quickjs-step.h"
 #include "solver/concolic.h"
 #include "core/idl_args.h"
+#include "core/idl_name_chain.h"
 #include "core/idl_index_arg.h"
 
 void idl_index_chain_visit(JSContext *ctx, void *state, JSStepVisit *v)
@@ -108,7 +112,13 @@ int idl_index_chain_run(JSContext *ctx, JSStepHdr *hdr, IdlIndexChain *c, JSValu
 
     for (;;) {
         uint32_t k = c->next;
-        int arm = 0, real, rc, wrote;
+        /* THE MEMBER'S NAME, SPELLED HERE BECAUSE THE OPERAND'S TYPE IS WHAT DECIDES IT. Its width is the
+           widest decimal a uint32 can take plus the terminator, which is the same fact IDL_NAME_CHAIN_SPELLS
+           checks the composed key against in the header — one derivation, stated once and read twice, rather
+           than a literal in each place. */
+        char name[IDL_NAME_CHAIN_U32_BYTES + 1];
+        int real, rc;
+        bool yes = false;
 
         /* EVERY POSITION ELIMINATED, WHICH IS THE ALGORITHM'S OWN PAST-THE-END WORLD. §3.2.4.6 unsigned long
            admits no value below 0, so "none of 0 ... npositions-1" and "at or past npositions" are the same
@@ -123,28 +133,20 @@ int idl_index_chain_run(JSContext *ctx, JSStepHdr *hdr, IdlIndexChain *c, JSValu
            ConvertToInt(V, 32, "unsigned") has already been run on the example above, through the one copy of
            that arithmetic, so its result is an integer in [0, 2**32-1] and the cast below is exact. */
         real = have ? ((uint32_t)num == k) : JS_OUTCOME_REAL_UNSTATED;
-        /* THE QUESTION AND ONLY THE QUESTION — `algorithm` is deliberately absent, and IDL_INDEX_PREDICATE
-           carries the argument for why. This link asks `index == k` of the value's own identity, so a member
-           name in the key would make one predicate two facts and let a flow answer it two ways. */
-        wrote = snprintf(c->op, sizeof c->op, IDL_INDEX_PREDICATE " %u)", (unsigned)k);
-        /* A TRUNCATED OPERATION STRING MERGES TWO PREDICATES. The position is the LAST thing in this string,
-           so a buffer one byte short would file two positions under one key and let one link's record decide
-           another's. The buffer is now sized from the format itself, so this is arithmetic rather than a fact
-           about any caller — which is exactly why it stays: it is the line that fails the day the format and
-           the size stop agreeing. snprintf reports what it WOULD have written, which is the only way to see
-           it. */
-        DCHECKF(wrote > 0 && (size_t)wrote < sizeof c->op,
-                "%s could not spell the position its question is about — the operation string is half the "
-                "constraint key and the position is its tail, so a truncated one names a DIFFERENT position's "
-                "question and the flow answers it with this one's record; IdlIndexChain::op is sized from "
-                "IDL_INDEX_PREDICATE plus the widest uint32, so the two have stopped agreeing",
-                algorithm);
-        rc = step_fork_run(ctx, hdr, index_v, c->op, 2, real, &arm);
+        /* THE QUESTION AND ONLY THE QUESTION — `algorithm` reaches the ask as the ASSERT ADDRESS and never as
+           part of the key, and IDL_INDEX_PREDICATE carries the argument for why. This link asks `index == k`
+           of the value's own identity, so a member name in the key would make one predicate two facts and let
+           a flow answer it two ways.
+           THE COMPOSITION, THE TRUNCATION CHECK, THE FORK AND THE ARM CHECK ARE core/idl_name_chain.c's, which
+           is where the naming rule they implement now lives; the spelling it produces is byte-identical to the
+           one this file wrote by hand, which is load-bearing rather than tidy — a key is what a parked flow's
+           recorded answers are filed under, so a changed one orphans every answer in the cold tier. The
+           POSITION is spelled here because the operand's type is what decides how a member is named, and
+           §3.2.4.6's is a uint32. */
+        snprintf(name, sizeof name, "%u", (unsigned)k);
+        rc = idl_name_chain_ask(ctx, hdr, &c->key, index_v, IDL_INDEX_PREDICATE, name, real, algorithm, &yes);
         if (rc)
             return rc;
-        DCHECKF(arm == 0 || arm == 1,
-                "%s asked a two-armed outcome fork and was answered with an arm that is neither of them",
-                algorithm);
         /* NAMED RESIDUAL — the DECISION is recorded and the value's DOMAIN is not, which is narrower than
            §Solver's concretize-on-pin and is not wrong: an unnarrowed value keeps arms, and keeping an arm is
            the sound direction. WHAT IS NOT COVERED: each link is an equality over the index — the YES arm
@@ -163,7 +165,7 @@ int idl_index_chain_run(JSContext *ctx, JSStepHdr *hdr, IdlIndexChain *c, JSValu
            prefix of the operation string — two keys for one predicate, so the second member found nothing
            recorded. It is not evidence about the pin, and leaving it here would have sent the next reader to
            build the pin and measure a symptom the key fix had already taken away. */
-        if (arm == 1) {
+        if (yes) {
             /* THIS WORLD'S ANSWER: the index IS this position. `npositions` was read by the caller at the top
                of this same entry and nothing has run since — step_fork_run runs none of the page's code and
                the driver only clones and re-enters — so the caller's own read of its collection cannot

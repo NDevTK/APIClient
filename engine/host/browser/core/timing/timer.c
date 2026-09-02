@@ -91,6 +91,9 @@
 #include "core/frame/navigable.h"
 #include "core/frame/window_proxy.h"
 #include "core/idl_args.h"
+#include "core/idl_name_chain.h"   /* §8.7's clearTimeout/clearInterval is a name-keyed elimination chain, and
+                                      the LINK it is built out of — the composed key, its naming rule and its
+                                      asserts — is that component's */
 #include "core/realm.h"
 #include "core/dom/document.h"   /* §8.7 Timers compiles a STRING handler in the entry global's document */
 #include "solver/engine.h"
@@ -1797,7 +1800,13 @@ static uint32_t timer_id_from(JSContext *ctx, uint32_t from)
  * So the completion carries its NAME instead of its position: the timer's own §8.7 identifier, written into the
  * operation string, which is half of what step_fork_run keys on. Each link is then an ordinary two-armed
  * question — "is `id` the timer with identifier H" — over the same unknown, recorded in one boolean slot,
- * forking ONE sibling, with the chain drawn lazily, one link per time the scheduler picks this machine up. That
+ * forking ONE sibling, with the chain drawn lazily, one link per time the scheduler picks this machine up.
+ * THAT LINK IS core/idl_name_chain.c's AND NOT THIS FILE'S, which is the correction of a rule this paragraph
+ * was the first statement of: the naming rule is the whole of what a chain's askers share, and it had been
+ * written out twice — here and in core/idl_index_arg.c — which is two places for it to stop being obeyed.
+ * What stayed here is what is genuinely §8.7's: the ENUMERATION (timer_id_from over this global's map), the
+ * EXAMPLE COMPARISON (a `long` cast through `(uint32_t)(int32_t)`, which the index chain must not do), and the
+ * REMAINDER's ANSWER (removing nothing). That
  * is the SAME elimination sequence solver_outcome walks and not a second mechanism beside it; what changes is
  * only what names each question. It costs nothing and buys two things: every key is a fact about `id` alone and
  * stays true for ever, and `n` is 2 at every ask, so the return protocol's ceiling (solver/decide.h's
@@ -1832,17 +1841,43 @@ static const char *const CT_STEPS[] = { CT_STAGES(JS_STEP_STAGE_LABEL) NULL };
    `next` is the smallest §8.7 identifier this flow has not yet asked about. It needs no `placed` byte beside
    it, unlike the setter's `timeout`: §8.7's identifiers are "greater than zero" and timer_next_handle asserts
    it, so 0 is not an identifier any entry carries and a zeroed cursor is unambiguously "before the first".
-   `op` IS THE FORK'S OPERATION STRING AND IT LIVES HERE rather than in a C local, because step_fork_run keeps a
-   BORROWED pointer to it on the header and the driver reads it AFTER this machine has returned — a stack buffer
-   would dangle exactly where the constraint key is built (core/permissions/permission_status.c says the same of
-   its own). It is rewritten at each link, which is safe for the same reason: the previous link's string was
-   read by the driver before this body was re-entered.
+   `key` IS THE FORK'S COMPOSED CONSTRAINT KEY and belongs to core/idl_name_chain.h, which owns the
+   composition, the naming rule it implements and the argument for why its storage is an inline array on this
+   state rather than a pointer — step_fork_run keeps a BORROWED pointer to the string on the header and the
+   driver reads it AFTER this machine has returned, and a fork COPIES this state. It is rewritten at each
+   link, which is safe for the same reason: the previous link's string was read by the driver before this body
+   was re-entered.
    NOTHING IS OWNED, so the visit names nothing. It is declared rather than omitted because a machine with no
    `visit` cannot be forked and is refused at registration, and forking is the whole of what this one is for. */
 typedef struct {
-    uint32_t next;
-    char     op[128];
+    uint32_t        next;
+    IdlNameChainKey key;
 } ClearTimerState;
+
+/* THE PREDICATE THIS CHAIN'S LINKS ASK, AND IT NAMES §8.7 ON PURPOSE — which is the opposite call
+   core/idl_index_arg.h's IDL_INDEX_PREDICATE makes, and the two disagree for a reason rather than by
+   accident. That file's question is `index == k`, a fact about the NUMBER with no collection in it, so eleven
+   `item(index)` members asking it over one unknown must share one key. This file's asks whether `id` is the
+   timer carrying identifier H, and H is drawn from ONE global's map of setTimeout and setInterval IDs — the
+   phrasing is this engine's own and not a quotation of §8.7, which states the removal and names no predicate.
+   timer_global is the
+   whole reason `clearTimeout.call(frames[0], 1)` is a different question from `clearTimeout(1)`, so the map
+   the identifier came from is part of what is being asked. What must NOT be in it is which of the two
+   spellings was called, and it is not: §8.7 states clearTimeout and clearInterval as ONE algorithm and this
+   is ONE string for both.
+   ITS WIDTH IS SETTLED AT COMPILE TIME. An identifier is a uint32, so its widest spelling is arithmetic and
+   this text is a literal — IDL_NAME_CHAIN_SPELLS refuses the build in which the composed key would truncate,
+   which is the defect the whole naming scheme exists to avoid arriving through the back door. */
+#define CT_PREDICATE "HTML §8.7 Timers clearTimeout/clearInterval (id is the timer with identifier"
+IDL_NAME_CHAIN_SPELLS(CT_PREDICATE, IDL_NAME_CHAIN_U32_BYTES);
+
+/* THIS MEMBER'S OWN SPEC IDENTITY, STATED ONCE. It is the IdlStepDecl's `algorithm` — which of §8.7's members
+   a parked flow says it is parked in — and it is also the ADDRESS every assert core/idl_name_chain.c makes on
+   this chain's behalf reports, because a should-never-happen inside a shared link would otherwise name that
+   file for every member that reaches it (CLAUDE.md's §AN-ASSERT-THAT-NAMES-A-REMEDY). Two questions, one
+   fact: a second literal at the ask would be a copy that can disagree with the declaration about which
+   algorithm this is. */
+#define CT_DECL_ALGORITHM "HTML §8.7 Timers the clearTimeout / clearInterval method steps"
 
 static void ct_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
 
@@ -1923,7 +1958,12 @@ static int js_clear_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc,
 
     for (;;) {
         uint32_t h = timer_id_from(gctx, s->next);
-        int arm = 0, real, rc, wrote;
+        /* THE MEMBER'S NAME, SPELLED HERE BECAUSE THE OPERAND'S TYPE IS WHAT DECIDES IT — a §8.7 identifier is
+           a uint32, and its width is the same derivation IDL_NAME_CHAIN_SPELLS checks the composed key
+           against above. */
+        char name[IDL_NAME_CHAIN_U32_BYTES + 1];
+        int real, rc;
+        bool yes = false;
 
         /* EVERY IDENTIFIER ELIMINATED. §8.7's removal of a key the map does not have is a no-op, so this world
            is the one in which `id` names no entry of this global's map of setTimeout and setInterval IDs and
@@ -1939,22 +1979,16 @@ static int js_clear_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc,
            the cast is the same one the known arm performs: a negative `long` denotes the identifier its two's
            complement names, which is how identifiers at or above 2**31 stay reachable at all. */
         real = have ? ((uint32_t)(int32_t)id == h) : JS_OUTCOME_REAL_UNSTATED;
-        wrote = snprintf(s->op, sizeof s->op,
-                         "HTML §8.7 Timers clearTimeout/clearInterval (id is the timer with identifier %u)",
-                         (unsigned)h);
-        /* A TRUNCATED OPERATION STRING MERGES TWO PREDICATES, which is the defect the whole naming scheme above
-           exists to avoid arriving through the back door: the identifier is the LAST thing in this string, so a
-           buffer one byte short would file two identifiers under one key and let one link's record decide
-           another's. snprintf reports what it WOULD have written, which is the only way to see it. */
-        DCHECK(wrote > 0 && (size_t)wrote < sizeof s->op,
-               "§8.7's elimination chain could not spell the identifier its question is about — the operation "
-               "string is half the constraint key and the identifier is its tail, so a truncated one names a "
-               "DIFFERENT timer's question and the flow answers it with this one's record");
-        rc = step_fork_run(ctx, hdr, argv[0], s->op, 2, real, &arm);
+        /* THE COMPOSITION, THE TRUNCATION CHECK, THE FORK AND THE ARM CHECK ARE core/idl_name_chain.c's, which
+           is where the naming rule they implement now lives; the spelling it produces is byte-identical to the
+           one this body wrote by hand, which is load-bearing rather than tidy — a constraint key is what a
+           parked flow's recorded answers are filed under, in this session and out of the cold tier in the
+           next, so a changed key orphans every answer already recorded against it and the resumed flow re-asks
+           every identifier it had already eliminated. */
+        snprintf(name, sizeof name, "%u", (unsigned)h);
+        rc = idl_name_chain_ask(ctx, hdr, &s->key, argv[0], CT_PREDICATE, name, real, CT_DECL_ALGORITHM, &yes);
         if (rc)
             return rc;
-        DCHECK(arm == 0 || arm == 1,
-               "a two-armed outcome fork answered with an arm that is neither of them");
         /* NAMED RESIDUAL — the DECISION is recorded and the value's DOMAIN is not, which is narrower than
            §Solver's concretize-on-pin and is not wrong: an unnarrowed value keeps arms, and keeping an arm is
            the sound direction. WHAT IS NOT COVERED: each link is an equality over `id` — the YES arm proves it
@@ -1969,7 +2003,7 @@ static int js_clear_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc,
            `clearTimeout(id)` mints a sibling for every OTHER identifier this global still holds — worlds its own
            path has already contradicted — and an @H parameter carrying this value renders with no domain beside
            it where the run observed one. */
-        if (arm == 1) {
+        if (yes) {
             /* THIS WORLD'S ANSWER: `id` IS this identifier, so §8.7's removal names this entry. The entry was
                found in the map by the walk at the top of this same iteration and nothing has run in between —
                step_fork_run runs none of the page's code and the driver only clones and re-enters — so a miss
@@ -1996,7 +2030,7 @@ static int js_clear_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc,
 
 static const IdlStepDecl CT_DECL = {
     js_clear_timer, sizeof(ClearTimerState), ct_visit, NULL,
-    "HTML §8.7 Timers the clearTimeout / clearInterval method steps", CT_STEPS
+    CT_DECL_ALGORITHM, CT_STEPS
 };
 
 /* HTML §8.8 "Microtask queuing"'s queueMicrotask: a MICROTASK, which is the whole of what it is for — it runs inside the current

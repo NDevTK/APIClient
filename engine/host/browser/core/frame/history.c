@@ -564,13 +564,58 @@ static JSValue js_hist_delta_traverse(JSContext *ctx, JSValueConst this_val, int
     case HIST_TRAVERSE_GO:
         /* `optional long delta = 0`. An argument the page did not pass, and one it passed as `undefined` —
            §3.6 makes those the same thing for an optional position — is the IDL's declared default, which is
-           why `history.go()` and `history.go(undefined)` both reload. Anything it did pass has already been
-           through the `long` conversion (ToNumber, then modulo 2^32 signed), so the page's `valueOf` ran on the
-           machine and this reads a number. */
+           why `history.go()` and `history.go(undefined)` both reload. Anything it did pass has been through
+           the `long` conversion (ToNumber, then modulo 2^32 signed), so the page's `valueOf` ran on the
+           machine — and that conversion is a BOUNDARY rather than a totalising coercion, so it produced a
+           number for every value EXCEPT unknown external input, which crosses as itself. This sentence used to
+           end "and this reads a number", which is the claim the ask below corrects. */
         if (argc >= 1 && !JS_IsUndefined(argv[0])) {
-            DCHECK(JS_IsNumber(argv[0]),
-                   "§7.2.5's `go` was handed something that is not a number — its argument is declared IDL_LONG, "
-                   "so Web IDL's `long` conversion produced one before this body was entered");
+            /* WHAT THE DECLARATION ACTUALLY GUARANTEES, WHICH IS NARROWER THAN "A NUMBER ARRIVES". IDL_LONG is
+               one of the types core/idl_args.h's idl_concolic_rule answers IDL_CONCOLIC_CROSSES for, so
+               unknown external input crosses §3.2.4.5's conversion AS ITSELF and reaches this body still
+               unknown — `history.go(location.hash.length)` is the whole of what a page has to write. The
+               assert that stood here read `JS_IsNumber(argv[0])` alone and was therefore FALSE for exactly the
+               input this engine exists to explore; its reason said the `long` conversion had produced a number
+               before this body was entered, which sent its reader to core/idl_args.c to look for a declaration
+               that had not been invoked. The declaration WAS invoked; it is this argument that does not
+               convert. The paragraph directly above this one made the same claim in the same words, and is
+               corrected with it. */
+            DCHECK(JS_IsNumber(argv[0]) || concolic_is(argv[0]),
+                   "§7.2.5's `go` was handed something that is neither a number nor unknown external input — "
+                   "its one position is declared IDL_LONG, and §3.2.4.5's conversion answers a real `long` for "
+                   "every value that is not unknown, so a third kind here means this member's declaration is "
+                   "not the one that was invoked");
+            if (concolic_is(argv[0]))
+                DFAIL("HTML §7.2.5 The History interface's `go(delta)` was given an unknown `delta`, and this "
+                      "build cannot decompose it. THE WORLDS §7.2.5 AND §7.4.3 Reloading and traversing TELL "
+                      "APART are step 4's delta "
+                      "of 0 — RELOAD the document's node navigable and return — and, for every other delta, "
+                      "the session history entry §7.4.3's traverse the history by a delta resolves at "
+                      "`currentStepIndex` plus delta, plus ONE remainder: step 4.4's \"If "
+                      "allSteps[targetStepIndex] "
+                      "does not exist, then abort these steps.\", which is what `back()` at the first entry and "
+                      "`forward()` at the last already do and which removes nothing. THREE THINGS ARE MISSING "
+                      "AND THEY ARE ORDERED. (1) THIS MEMBER IS A PLAIN C BODY: it is declared with "
+                      "idl_method_id, so it has no JSStepHdr, and step_fork_run cannot be reached from a C "
+                      "activation — a chain parks and this has nowhere to park. Redeclare the three spellings "
+                      "with idl_method_id_step over one IdlStepBody, which is the same conversion "
+                      "core/timing/timer.c's clearTimeout already carries. (2) THE DECOMPOSITION IS TWO-SIDED, "
+                      "which no chain in this tree is: §3.2.4.5's `long` is SIGNED, so the entries this "
+                      "traversable holds sit at signed offsets either side of the current one and the "
+                      "remainder is reached by running off EITHER end — an ascending cursor from 0 exhausts "
+                      "upward and eliminates none of the negatives, so core/idl_index_arg.h's chain does not "
+                      "serve this and must not be bent to. What core/idl_name_chain.h DOES serve is the LINK: "
+                      "the key names the number (`delta == d` is a fact about the value the page computed, "
+                      "true in the same words after the entry list is mutated), so what this member owes is "
+                      "the two-sided ENUMERATION and its own remainder, not a new naming scheme. (3) EVERY "
+                      "WORLD IT WOULD FORK INTO ALREADY ABORTS, which is why this is a refusal and not a "
+                      "deferral: a delta of 0 reaches the RELOAD crash forty lines below, and every non-zero "
+                      "delta reaches core/frame/session_history.c's realm_awaits on "
+                      "`Navigation.prototype.onnavigate` — HTML §7.4.6.1 Updating the traversable step 5's "
+                      "check if unloading is "
+                      "canceled — which FIRES today, because core/frame/navigation.c installs that handler. "
+                      "Build those two first: until one of them exists there is no world for a fork to reach "
+                      "that a known delta does not already reach and abort in");
             JS_ToInt32(ctx, &delta, argv[0]);
         }
         break;
