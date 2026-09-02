@@ -1270,10 +1270,13 @@ static CssPx uv_margin(lxb_dom_element_t *el, const char *name, const char *oppo
               "names — uv_box_kind above says which it is");
         return css_px(0.0);
     }
-    /* THREE SECTIONS SAY THE SAME SENTENCE and the rest solve an equation instead, which is why the box type
-       is what this arm branches on. §10.3.1 (inline), §10.3.5 (floating) and §10.3.9 (inline-block) each state
-       outright that "a computed value of 'auto' for 'margin-left' or 'margin-right' becomes a used value of
-       '0'"; §10.3.3 says it too, but only in its rule 5, "if 'width' is set to 'auto', any other 'auto' values
+    /* THREE SECTIONS STATE THE MARGIN OUTRIGHT and the rest solve an equation instead, which is why the box
+       type is what this arm branches on. §10.3.1 "Inline, non-replaced elements" and §10.3.9 "'Inline-block',
+       non-replaced elements in normal flow" each say "A computed value of 'auto' for 'margin-left' or
+       'margin-right' becomes a used value of '0'", and §10.3.5 "Floating, non-replaced elements" says the same
+       thing in its own words — "If 'margin-left', or 'margin-right' are computed as 'auto', their used value
+       is '0'" — which is why it is three sections and not one sentence quoted three times;
+       §10.3.3 says it too, but only in its rule 5, "if 'width' is set to 'auto', any other 'auto' values
        become '0'" — with a non-auto `width` its `auto` margins take the slack instead. A FOURTH BOX TYPE
        REACHES THE SAME 0 THROUGH §10.3.9 rather than through a fourth sentence: css-grid-1 §5.2 sizes an
        inline-level grid container "as an atomic inline-level box (such as an inline-block)" and css-flexbox-1
@@ -1457,12 +1460,22 @@ static CssPx uv_shrink_to_fit_width(lxb_dom_element_t *el, CssLength size_len, U
            "and this formula having come apart");
     /* §10.3.5's first sentence, resolved in THIS pass for the reason `uv_block_auto_width` gives: reading the
        margins through `used_value_px` would re-enter §10.4's whole algorithm for a value this pass has already
-       fixed. For these two box types `uv_margin` answers 0 for an `auto` margin outright — §10.3.5's and
-       §10.3.9's own sentence — so it cannot recurse back into this width. */
+       fixed. For these two box types `uv_margin` answers 0 for an `auto` margin outright — §10.3.5's "If
+       'margin-left', or 'margin-right' are computed as 'auto', their used value is '0'" and §10.3.9's "A
+       computed value of 'auto' for 'margin-left' or 'margin-right' becomes a used value of '0'" — so it cannot
+       recurse back into this width.
+       AND THAT IS WHY NO WIDTH IS HANDED OVER. Those two sentences are the WHOLE of what either section says
+       about a margin: neither states a constraint equation, so neither has a `width` term for a margin rule to
+       read, which is exactly what `uv_margin_reads_width` answers `false` for these two box types. Passing the
+       pass's length anyway is the state `uv_margin`'s own two-sided DCHECK names — "a value where none does is
+       §10.3.3's equation run to produce a number nothing looks at" — and it was this call site, not the check,
+       that was wrong: the parameter's contract was narrowed to the sections that READ a width, `used_value_px`'s
+       margin arm was moved onto `uv_margin_reads_width` with it, and this caller kept handing one over. The
+       width still reaches `uv_margin` from `uv_block_auto_width`, whose §10.3.3 box does read it. */
     margins = css_px_add(uv_margin(el, "margin-left", "margin-right",
-                                   css_computed_length(el, "margin-left"), box, &size_len),
+                                   css_computed_length(el, "margin-left"), box, NULL),
                          uv_margin(el, "margin-right", "margin-left",
-                                   css_computed_length(el, "margin-right"), box, &size_len));
+                                   css_computed_length(el, "margin-right"), box, NULL));
     available = css_px_sub(css_px_sub(used_value_containing_block_width(el), uv_surround_total(s)), margins);
     content = css_px_min(css_px_max(in.min_content, available), in.max_content);
     /* THE RESULT NEEDS NO FLOOR, and that is the formula's own arithmetic rather than a clamp left out:
