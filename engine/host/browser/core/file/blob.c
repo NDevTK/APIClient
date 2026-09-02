@@ -982,8 +982,15 @@ void blob_install_protos(JSContext *ctx)
     idl_install_accessor(ctx, blob_p, "type", js_blob_get, BLOB_TYPE, -1);
     idl_install_method(ctx, blob_p, "stream", g_blob_id_stream);
     /* §4: File.prototype CHAINS to this one, so installing here is what gives a File the member too —
-       the same inheritance that gives it `slice` and `text`. */
-    idl_install_step_method(ctx, blob_p, "textStream", 0, g_blob_textstream_stepid);
+       the same inheritance that gives it `slice` and `text`.
+       THROUGH idl_install_method AND NOT THE STEP INSTALLER, because this member has a POOL ENTRY. The two
+       installers are not interchangeable and the pool is what tells them apart: a member declared with
+       idl_method_id_step has a declared argument list, so Web IDL §3.7.7 Operations' `length` is DERIVED from
+       it and there is no number to pass; idl_install_step_method exists for the components that register a
+       raw JS_RegisterStepDef with no pool entry, where the number at the call site is the only statement of
+       the arity. Installing a declared member through the raw path asserts at the origin, which is exactly
+       what it did here. */
+    idl_install_method(ctx, blob_p, "textStream", g_blob_textstream_stepid);
     idl_install_method(ctx, blob_p, "slice", g_blob_id_slice);
     byte_reader_install(ctx, blob_p, g_blob_reader_handle);
     JS_SetClassProto(ctx, g_blob_class, blob_p);

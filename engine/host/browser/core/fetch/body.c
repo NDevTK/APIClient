@@ -736,7 +736,10 @@ void body_install(JSContext *ctx, JSValueConst proto, int handle)
            "the Body mixin was installed into a realm before body_declare declared its textStream machine — "
            "the declaration is made on the FIRST include and every realm's install reads it");
     byte_reader_install(ctx, proto, g_body_iface[handle].reader_handle);
-    idl_install_step_method(ctx, proto, "textStream", 0, g_body_text_stepid);
+    /* THROUGH idl_install_method, because this member has a POOL ENTRY — see the same note in
+       core/file/blob.c. `textStream()` is declared with idl_method_id_step, so its §3.7.7 `length` is derived
+       from the declaration and the raw step installer (whose caller must state a number) asserts on it. */
+    idl_install_method(ctx, proto, "textStream", g_body_text_stepid);
     {
         JSCFunctionListEntry e[2] = {
             JS_CGETSET_MAGIC_DEF("bodyUsed", js_body_get_used, NULL, 0),
