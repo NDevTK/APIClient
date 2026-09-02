@@ -1658,46 +1658,77 @@ JSValue node_cd_replace_data(JSContext *ctx, lxb_dom_node_t *n, uint32_t offset,
 #define CD_REPLACE_ALGORITHM   "DOM §4.10 Interface CharacterData replaceData(offset, count, data)"
 #define CD_SPLIT_ALGORITHM     "DOM §4.11 Interface Text splitText(offset)"
 
-/* ONE STAGE PER MEMBER, AND IT IS ONE BECAUSE THE ALGORITHM IS ONE ENGINE ACTION FROM END TO END. Steps 1-8
-   read a length, settle two operands, splice a Lexbor string and walk the live-range registry; none of them
-   runs the page's code, so there is no point inside the run at which the engine may have to park that is not
-   the chain's own ask — and step_fork_run is where THAT parks, with the machine's state cloned through the
-   visit below. The label names the range in those terms, which is what quickjs-step.h's JSTrampStepDef::steps
-   requires of a range at all.
+/* ONE STAGE PER FORKABLE OPERAND, AND THE COUNT OF THEM IS WHAT THE IDL DECLARES. Each stage is one O(1)
+   engine action over operands already settled — read a length, splice a Lexbor string, walk the live-range
+   registry — so the only point inside a stage at which the engine may have to park is that operand's own
+   elimination chain, and step_fork_run is where THAT parks, with the machine's state cloned through the visit
+   below.
+   IT WAS ONE STAGE AND THAT WAS THE DEFECT, AND THE PARAGRAPH THAT STOOD HERE IS WHY IT SURVIVED. It said, in
+   full: "RE-ENTRY RE-ASKS AND THAT IS THE MECHANISM RATHER THAN A COST … so a body that parks inside `cnt` and
+   is resumed re-runs `off` from its own cursor and is answered by the record it already made. That is why
+   neither chain needs a stage of its own." Every clause of that is true of the SEAM and false of the HEADER: a
+   re-ask does reach the flow's own record, but only by going out to the driver, and the header holds exactly
+   ONE outstanding fork. So the re-entry that follows `cnt`'s park re-asked the ANSWERED `off` chain and that
+   re-ask CONSUMED `cnt`'s arm — an arm that is real, in range, and recorded under the other chain's key. At
+   every position where the two chains stand on different numbers the ask key caught it (a `@WHY` in
+   step_fork_ask); at the position where they stand on the SAME number it did not, because an elimination
+   link's key is composed from the predicate and the member's own name and carries neither the algorithm nor
+   the operand — deliberately, so two members reached over one unknown agree — so `offset == 0` and
+   `count == 0` spell the same bytes. That silent arm is the one this split makes unreachable.
+   `substringData(offset, count)` with BOTH operands unknown is the shape, and it is the FIRST thing the five
+   members do that a single-chain member cannot: nothing else in this engine draws Web IDL §3.2.4.6's chain
+   twice in one algorithm.
+   THE COUNT STAGE IS DECLARED BY THE THREE MEMBERS THAT HAVE A SECOND OPERAND AND BY NO OTHER. appendData's
+   count is the literal 0 and insertData's is the literal 0, so neither has a second question and neither may
+   rest at a stage its algorithm does not reach — a stage past the end of a declared list is what
+   step_stage_check names. splitText declares one operand and keeps its one stage for the same reason.
    SIX LISTS AND NOT ONE, because `algorithm` and `steps` are the ADDRESS a should-never-happen reports and the
    label a parked flow SAYS: one declaration shared by five members would name substringData for a flow parked
    inside replaceData, which is CLAUDE.md's assert-that-names-a-remedy-but-not-a-site defect arriving through a
-   shared declaration instead of a shared helper. The body is still one, because the algorithm is. */
-#define CD_OP_STAGES(X) X(CD_OP_RUN, "DOM §4.10 / §4.11 steps 1-8 over the operands this call settled on")
+   shared declaration instead of a shared helper. The body is still one, because the algorithm is.
+   THE STEP RANGES ARE THE STANDARD'S OWN AND WERE COUNTED WITH LIST DEPTH TRACKED. §4.10's "substring data" has
+   four top-level steps and its "replace data" has THIRTEEN — the label that stood here said "steps 1-8" of
+   `replaceData`, which has no numbered steps of its own at all (its method steps are one sentence, "replace
+   data of this with offset, count, and data"), so the range named neither the member's algorithm nor the one
+   it delegates into. */
+#define CD_OP_STAGES(X) \
+    X(CD_OP_OFFSET, "DOM §4.10 / §4.11: settling the `offset` operand") \
+    X(CD_OP_COUNT,  "DOM §4.10: settling the `count` operand over the offset this call settled on")
 enum { IDL_STEP_STAGE_BASE(CD_OP_STAGES) CD_OP_STAGES(JS_STEP_STAGE_ENUM) };
-static const char *const CD_SUBSTRING_STEPS[] = { CD_SUBSTRING_ALGORITHM " steps 1-4", NULL };
+static const char *const CD_SUBSTRING_STEPS[] = {
+    CD_SUBSTRING_ALGORITHM " substring data steps 1-2 (settling `offset`)",
+    CD_SUBSTRING_ALGORITHM " substring data steps 3-4 (settling `count`, then the result)", NULL };
 static const char *const CD_APPEND_STEPS[]    = { CD_APPEND_ALGORITHM " (replace data with length, 0, data)", NULL };
 static const char *const CD_INSERT_STEPS[]    = { CD_INSERT_ALGORITHM " (replace data with offset, 0, data)", NULL };
-static const char *const CD_DELETE_STEPS[]    = { CD_DELETE_ALGORITHM " (replace data with offset, count, \"\")", NULL };
-static const char *const CD_REPLACE_STEPS[]   = { CD_REPLACE_ALGORITHM " steps 1-8", NULL };
+static const char *const CD_DELETE_STEPS[]    = {
+    CD_DELETE_ALGORITHM " replace data steps 1-2 (settling `offset`)",
+    CD_DELETE_ALGORITHM " replace data steps 3-13 (settling `count`, then the splice)", NULL };
+static const char *const CD_REPLACE_STEPS[]   = {
+    CD_REPLACE_ALGORITHM " replace data steps 1-2 (settling `offset`)",
+    CD_REPLACE_ALGORITHM " replace data steps 3-13 (settling `count`, then the splice)", NULL };
 static const char *const CD_SPLIT_STEPS[]     = { CD_SPLIT_ALGORITHM " steps 1-9", NULL };
 
 /* THE TWO CHAINS ONE §4.10 CALL CAN RUN, IN THE ORDER THE ALGORITHM ASKS THEM. `off` is first because
    core/idl_index_arg.h requires an IdlIndexChain to be the state's FIRST field when a member needs more than
    one, and because `cnt`'s own bound is `length − offset + 1`: the second chain cannot be drawn until the
    first has answered.
-   RE-ENTRY RE-ASKS AND THAT IS THE MECHANISM RATHER THAN A COST. step_fork_run's own contract is that "both a
-   park and a cross-session resume land back on the ask, which re-derives the same arm from the flow's decision
-   vector", so a body that parks inside `cnt` and is resumed re-runs `off` from its own cursor and is answered
-   by the record it already made. That is why neither chain needs a stage of its own and why the member has no
-   private "which chain am I in" byte — a resume point nothing can check is exactly what IDL_STEP_FIRST's
-   banner forbids. */
+   `offset` IS ON THE STATE BECAUSE THE STAGE THAT SETTLED IT IS OVER. It is the one thing the `count` stage
+   needs that a re-entry cannot recompute: recomputing it means re-running the chain that produced it, which is
+   the ask that must not happen twice. Everything else the second stage reads is a fact about the node
+   (`length`, its data) that this flow's own COW delta answers identically on every entry. */
 typedef struct {
     IdlIndexChain off;
     IdlIndexChain cnt;
+    uint32_t      offset;
 } CdIndexState;
 
 static void cd_index_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
-    /* NOTHING IS OWNED. Both fields are IdlIndexChains, which core/idl_index_arg.h declares hold no JSValue —
-       a cursor and the buffer its constraint key is spelled into. This is written out rather than pointed at
+    /* NOTHING IS OWNED. Both chains are IdlIndexChains, which core/idl_index_arg.h declares hold no JSValue —
+       a cursor and the buffer its constraint key is spelled into — and the settled `offset` beside them is a
+       uint32 the clone's byte copy carries as it carries a cursor. This is written out rather than pointed at
        idl_index_chain_visit because a member EMBEDDING that state must name the rest of its own, and the rest
-       of this one is a second chain that owns nothing either. */
+       of this one is a second chain and a number, neither of which owns anything. */
     (void)ctx; (void)st; (void)v;
 }
 
@@ -1723,7 +1754,8 @@ static int js_cd_op(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSVal
                                                                 : CD_REPLACE_ALGORITHM;
     lxb_dom_node_t *n = node_of(hdr->this_val);
     lxb_dom_character_data_t *cd;
-    uint32_t length, offset = 0, count = 0;
+    const bool has_count = (magic == 0 || magic == 3 || magic == 4);
+    uint32_t length, offset, count = 0;
     const char *data = NULL;
     size_t data_len = 0;
     bool past_end = false;
@@ -1733,10 +1765,10 @@ static int js_cd_op(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSVal
     (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);   /* this machine makes no request that delivers a value */
     *presult = JS_UNDEFINED;
-    DCHECK(hdr->stage == CD_OP_RUN,
-           "a §4.10 CharacterData method resumed into a stage its algorithm does not have — every one of them "
-           "declares exactly one, and the chain of questions a call may ask is a cursor on this machine's own "
-           "state rather than a stage apiece");
+    DCHECK(hdr->stage == CD_OP_OFFSET || (hdr->stage == CD_OP_COUNT && has_count),
+           "a §4.10 CharacterData method resumed into a stage its algorithm does not have — a member declares "
+           "one stage per operand its IDL gives it that can be unknown external input, so the count stage "
+           "belongs to the three that take a `count` and to no other");
     DCHECK(magic >= 0 && magic <= 4, "a CharacterData method was declared with a magic §4.10 does not name");
     if (!n || !node_is_chardata(n)) {
         JS_ThrowTypeError(ctx, "a CharacterData method ran on a node that holds no character data");
@@ -1752,27 +1784,51 @@ static int js_cd_op(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSVal
            "every one of them is required — the declaration's own argument-count check is what should have "
            "refused the call");
     length = cd_units(cd->data.data, cd->data.length);                  /* STEP 1 */
-    /* THE `offset` OPERAND. appendData declares none — §4.10 states it as "replace data of this with this's
-       length, 0, and data" — so its offset is a fact about the node and never a fork. */
-    if (magic == 1) {
-        offset = length;
-    } else if (concolic_is(argv[0])) {
-        /* `length + 1` POSITIONS, because step 2 is `>` and not `>=`: a position at the very end is legal and
-           is the one an insertData or a replaceData appends at. Exhausting them IS step 2's condition. */
-        rc = idl_index_chain_run(ctx, hdr, &st->off, argv[0], length + 1, algorithm, &offset, &past_end);
-        if (rc)
-            return rc;   /* parked at the fork */
-    } else {
-        offset = idl_index_arg_known(ctx, argv[0], algorithm);
-        past_end = offset > length;
+    /* THE `offset` OPERAND, AND THE STAGE IT IS THE WHOLE OF. A re-entry that carries the count stage does not
+       run one line of this: the chain below has ANSWERED and re-asking it would consume the count chain's
+       outstanding arm, which is the defect the split exists to make unreachable. */
+    if (hdr->stage == CD_OP_OFFSET) {
+        /* appendData declares no offset — §4.10 states it as "replace data of this with this's length, 0, and
+           data" — so its offset is a fact about the node and never a fork. */
+        if (magic == 1) {
+            offset = length;
+        } else if (concolic_is(argv[0])) {
+            /* `length + 1` POSITIONS, because step 2 is `>` and not `>=`: a position at the very end is legal
+               and is the one an insertData or a replaceData appends at. Exhausting them IS step 2's condition. */
+            rc = idl_index_chain_run(ctx, hdr, &st->off, argv[0], length + 1, algorithm, &offset, &past_end);
+            if (rc)
+                return rc;   /* parked at the fork; the resume lands back on THIS stage and re-asks this chain */
+        } else {
+            offset = idl_index_arg_known(ctx, argv[0], algorithm);
+            past_end = offset > length;
+        }
+        if (past_end) {                                                 /* STEP 2 */
+            JS_ThrowDOMException(ctx, "IndexSizeError", "the offset is past the end of the character data");
+            return JS_STEP_ABRUPT;
+        }
+        st->offset = offset;
+        /* THE STAGE ADVANCES ONLY WHERE THERE IS A SECOND QUESTION. A member with no `count` has nothing left
+           that can park, so moving it here would rest it at a stage its own declaration does not list — which
+           is what quickjs.c's step_stage_check names, and it would name it for every appendData there is. */
+        if (has_count)
+            hdr->stage = CD_OP_COUNT;
     }
-    if (past_end) {                                                     /* STEP 2 */
-        JS_ThrowDOMException(ctx, "IndexSizeError", "the offset is past the end of the character data");
-        return JS_STEP_ABRUPT;
-    }
+    offset = st->offset;
+    /* THE SECOND STAGE'S ONE PRECONDITION, ASSERTED WHERE IT IS RELIED ON. Step 2 above established
+       `offset <= length` against the length THIS entry read; a resume re-reads it, and the two can only differ
+       if the node's data changed under a flow that ran none of its own code in between. The bound below is
+       arithmetic over both, so a disagreement is an underflow rather than a wrong answer. */
+    DCHECK(offset <= length,
+           "a §4.10 CharacterData method resumed with a settled offset past the end of the node it settled it "
+           "against — the offset was fixed by step 2 over this flow's own view of the data, so a longer offset "
+           "than length means the node changed under a flow that ran nothing of its own between the two reads");
     /* THE `count` OPERAND — the three members that declare one. appendData and insertData delete nothing, so
        §4.10 states their count as the literal 0 and there is nothing here to ask. */
-    if (magic == 0 || magic == 3 || magic == 4) {
+    if (has_count) {
+        DCHECK(hdr->stage == CD_OP_COUNT,
+               "a §4.10 CharacterData method reached its `count` question at the stage that settles `offset` — "
+               "the two are separate stages precisely so a fork outstanding in one cannot be answered at the "
+               "other's call site");
         past_end = false;
         if (concolic_is(argv[1])) {
             /* `length − offset + 1` POSITIONS: step 3's condition is `offset + count > length`, so every count
@@ -1789,7 +1845,7 @@ static int js_cd_op(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSVal
         if (past_end)                                                   /* STEP 3 */
             count = length - offset;
     }
-    if (magic == 0) {                                                   /* substringData steps 3-4 */
+    if (magic == 0) {                                                   /* substring data STEP 4 */
         size_t a = cd_byte_of(cd->data.data, cd->data.length, offset);
         size_t b = cd_byte_of(cd->data.data, cd->data.length, offset + count);
 
@@ -1904,9 +1960,11 @@ static int js_text_split(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, 
     (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);   /* this machine makes no request that delivers a value */
     *presult = JS_UNDEFINED;
-    DCHECK(hdr->stage == CD_OP_RUN,
-           "§4.11's `splitText` resumed into a stage the algorithm does not have — it declares exactly one, "
-           "and the chain of questions its offset may ask is a cursor on this machine's own state");
+    DCHECK(hdr->stage == CD_OP_OFFSET,
+           "§4.11's `splitText` resumed into a stage the algorithm does not have — it declares ONE operand that "
+           "can be unknown external input and therefore one stage, and the chain of questions that operand may "
+           "ask is a cursor on this machine's own state; the count stage beside it belongs to the §4.10 members "
+           "whose IDL gives them a second forkable operand");
     if (!n || n->type != LXB_DOM_NODE_TYPE_TEXT) {
         JS_ThrowTypeError(ctx, "splitText ran on a node that is not a Text node");
         return JS_STEP_ABRUPT;
