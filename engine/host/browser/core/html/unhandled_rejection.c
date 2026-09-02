@@ -341,9 +341,15 @@ static JSValue pre_new(JSContext *ctx, JSValue ev, JSValueConst promise, JSValue
    a dictionary whose `promise` member the IDL marks `required` — so by the time this runs there is no page
    code left to reach and it reads the engine-built dictionary with an ordinary get. */
 static const IdlArgType PRE_CTOR_ARGS[2] = { IDL_DOMSTRING, IDL_DICT };
-static const IdlDictMember PRE_INIT[] = {   /* PromiseRejectionEventInit, in IDL declaration order */
+/* `dictionary PromiseRejectionEventInit : EventInit { required object promise; any reason; }`, in §3.2.17's
+   READ order and not in IDL declaration order — the two coincide here, which is exactly why the LEVEL is
+   stated rather than left to the coincidence. `promise` and `reason` are declared on PromiseRejectionEventInit
+   itself and the three above are EventInit's, so they are one level apart; with both at zero this table
+   asserted that all five belong to ONE dictionary, an untrue statement idl_dict_order_check cannot see while
+   `promise` happens to sort after `composed`. */
+static const IdlDictMember PRE_INIT[] = {
     { "bubbles", IDL_BOOLEAN }, { "cancelable", IDL_BOOLEAN }, { "composed", IDL_BOOLEAN },
-    { "promise", IDL_ANY, true }, { "reason", IDL_ANY },
+    { "promise", IDL_ANY, true, NULL, 1 }, { "reason", IDL_ANY, false, NULL, 1 },
 };
 
 static JSValue js_pre_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)

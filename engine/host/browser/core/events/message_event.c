@@ -282,14 +282,21 @@ static JSValue js_me_init(JSContext *ctx, JSValueConst this_val, int argc, JSVal
 /* ---- the constructor -------------------------------------------------------------------------------------- */
 
 /* `constructor(DOMString type, optional MessageEventInit eventInitDict = {})`. MessageEventInit INHERITS
-   EventInit, and Web IDL converts a dictionary's members in lexicographic order with the INHERITED ones first
-   — which is the order this list is in, and the order a page pins by throwing from one getter and counting
-   which others ran. */
+   EventInit, and Web IDL §3.2.17 Dictionary types converts a dictionary's members with the INHERITED ones
+   first (step 3's "in order from least to most derived") and each dictionary's own lexicographically among
+   themselves (step 4) — which is the order this list is in, and the order a page pins by throwing from one
+   getter and counting which others ran. It is NOT the IDL's declaration order, which writes
+   `data, origin, lastEventId, source, ports`.
+   THE FIVE OWN MEMBERS CARRY LEVEL 1 and EventInit's three carry 0, because the level is the only place the
+   inheritance is written down. Both orders agree over these eight, so a table stating one level for all of
+   them passed idl_dict_order_check — and would have gone on passing until a member sorting before `data` was
+   added, at which point the abort would have named a row order that was never wrong. */
 static const IdlArgType ME_CTOR_ARGS[2] = { IDL_DOMSTRING, IDL_DICT };
 static const IdlDictMember ME_INIT[] = {
     { "bubbles", IDL_BOOLEAN }, { "cancelable", IDL_BOOLEAN }, { "composed", IDL_BOOLEAN },
-    { "data", IDL_ANY }, { "lastEventId", IDL_DOMSTRING }, { "origin", IDL_USVSTRING },
-    { "ports", IDL_ANY }, { "source", IDL_ANY },
+    { "data", IDL_ANY, false, NULL, 1 }, { "lastEventId", IDL_DOMSTRING, false, NULL, 1 },
+    { "origin", IDL_USVSTRING, false, NULL, 1 },
+    { "ports", IDL_ANY, false, NULL, 1 }, { "source", IDL_ANY, false, NULL, 1 },
 };
 
 static JSValue js_me_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)

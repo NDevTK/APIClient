@@ -76,9 +76,13 @@ static JSValue pr_new(JSContext *ctx, JSValue ev, JSValueConst transition)
 }
 
 static const IdlArgType PR_CTOR_ARGS[2] = { IDL_DOMSTRING, IDL_DICT };
-static const IdlDictMember PR_INIT[] = {   /* PageRevealEventInit, in IDL declaration order */
+/* `dictionary PageRevealEventInit : EventInit { ViewTransition? viewTransition = null; }`, in §3.2.17's READ
+   order — level first, then spelling within a level. `viewTransition` is declared on PageRevealEventInit and
+   the three above are EventInit's, so the level is what says so; it sorts after `composed` anyway, which is
+   why leaving both at zero passed idl_dict_order_check while stating something untrue about the table. */
+static const IdlDictMember PR_INIT[] = {
     { "bubbles", IDL_BOOLEAN }, { "cancelable", IDL_BOOLEAN }, { "composed", IDL_BOOLEAN },
-    { "viewTransition", IDL_ANY },
+    { "viewTransition", IDL_ANY, false, NULL, 1 },
 };
 
 static JSValue js_pr_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)

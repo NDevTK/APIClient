@@ -657,8 +657,14 @@ static int construct(Hole h, const SolveDelivered *d, SolveJsEmit emit, void *us
               "which goal symbol is in force there is decided by the SYNTACTIC grammar — this component has "
               "only the lexical one, so it cannot tell a §12.9.5 RegularExpressionLiteral from §12.8's "
               "DivPunctuator and every state after that `/` would be a guess. Route the question to the real "
-              "parser, which already answers it (quickjs calls js_parse_regexp from js_parse_primary_expr, not "
-              "from next_token)");
+              "parser, which already answers it: `js_parse_regexp` has exactly TWO callers in engine/qjs's "
+              "quickjs.c — `js_parse_drive`, at the `parse_regexp` label its expression entry reaches from a "
+              "`/` or a `TOK_DIV_ASSIGN` token, and `js_parse_skip_parens_token` — and `next_token` is not one "
+              "of them, which is the whole reason a lexer cannot answer this. GREP BOTH NAMES BEFORE BUILDING "
+              "AGAINST THEM: they are this fork's own trampolined parser and nothing here is notified when "
+              "the submodule moves. The name this crash carried until now, `js_parse_primary_expr`, occurs "
+              "nowhere in that file and never has in its whole history, so a reader who grepped it found an "
+              "absence and would have concluded the seam had to be built from nothing");
         return 0;
     case JS_NOT_A_SCRIPT:
         DFAIL("the string an eval sink was handed is not a parseable Script prefix before the hole — an "

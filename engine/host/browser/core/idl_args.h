@@ -728,11 +728,23 @@ static inline bool idl_type_pushes_level(IdlArgType t)
    the seal asserts both directions of the pair over every declared member list at once — so a list stated at a
    type that reads none, or a type that reads one and states none, is a crash at the seal rather than on
    whichever call first reaches the member.
-   `level` is WHICH DICTIONARY IN THE INHERITANCE CHAIN declares the member — 0 for the most-derived one's
-   BASE, counting up to the dictionary itself. §3.2.17 reads the INHERITED members first and each dictionary's
-   own members lexicographically among themselves, so `FilePropertyBag : BlobPropertyBag` reads endings, type,
+   `level` is WHICH DICTIONARY IN THE INHERITANCE CHAIN declares the member — 0 for the LEAST DERIVED
+   dictionary in the chain, counting UP to D itself, which therefore holds the HIGHEST level. §3.2.17 step 3
+   is "in order from least to most derived", so ascending level IS that order; step 4 sorts each dictionary's
+   own members lexicographically among themselves. `FilePropertyBag : BlobPropertyBag` reads endings, type,
    then lastModified — an order no single sorted list produces, because `lastModified` sorts before `type`.
-   Stating the level is what lets the declaration express that AND still be checkable. */
+   Stating the level is what lets the declaration express that AND still be checkable.
+   THE COUNT IS FROM THE ROOT AND NOT FROM D, and the difference is not pedantic in this tree: this line used
+   to say "0 for the most-derived one's BASE", which names D's IMMEDIATE base and is the same number only for
+   a two-deep chain. `KeyboardEventInit : EventModifierInit : UIEventInit : EventInit` is four deep and is
+   declared here (core/events/ui_event.h splices levels 0-2 and each derived dictionary appends its own at 3),
+   so read the retired sentence literally and EventModifierInit's members take level 0 — which would place
+   them before EventInit's and read the chain inside out.
+   A LEVEL IS NEVER LEFT AT ZERO FOR "the members this dictionary happens to list": a table whose members come
+   from two dictionaries and states one level for all of them PASSES idl_dict_order_check whenever the two
+   orders coincide, which they do for most *EventInit — so the fact is encoded here or it is not encoded at
+   all, and the day a member is added that sorts before an inherited one, the abort names a row order that was
+   never the problem. */
 /* §3.2.17 step 4.1.5's DEFAULT VALUE, which is a THIRD state beside "the page wrote it" and "it is absent": a
    member whose IDL writes `= …` EXISTS on the converted dictionary even when the page wrote nothing, carrying
    that value. HTML §8.6.3 is where the difference bites — `SanitizerElementNamespace`'s namespace defaults to

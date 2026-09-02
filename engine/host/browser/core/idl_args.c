@@ -649,14 +649,20 @@ static void idl_dict_order_check(const IdlDictMember *members, int n, int k)
            and for a table made of those the pair is a search again. There is no NAME to print: a member's own
            dictionary argument is an ANONYMOUS array, and giving every one of them a name would be a change at
            every declaration in the engine. Its MEMBER LIST identifies it exactly and costs only this buffer.
-           THE PAIR STAYS FIRST so that a message this truncates loses the list and never the diagnosis. */
+           THE PAIR STAYS FIRST so that a message this truncates loses the list and never the diagnosis.
+           AND EACH NAME CARRIES ITS LEVEL, because the level column is what the message tells the reader to
+           check and a list of bare names cannot be checked against it. A table whose members belong to two
+           dictionaries and states ONE level for all of them is the defect this whole check exists to make
+           visible, and it is visible AT A GLANCE in `a(0), b(0), c(0)` beside an IDL that inherits — where a
+           list of names alone shows nothing at all. */
         char list[320];
         size_t used = 0;
         int i;
 
         list[0] = '\0';
         for (i = 0; i < n; i++) {
-            int w = snprintf(list + used, sizeof list - used, "%s%s", i ? ", " : "", members[i].name);
+            int w = snprintf(list + used, sizeof list - used, "%s%s(%d)", i ? ", " : "", members[i].name,
+                             members[i].level);
 
             if (w < 0 || (size_t)w >= sizeof list - used) break;
             used += (size_t)w;
@@ -670,9 +676,27 @@ static void idl_dict_order_check(const IdlDictMember *members, int n, int k)
 
             memcpy(list + at, more, sizeof more);
         }
-        DFAILF("a dictionary's members were declared out of Web IDL 3.2.17's read order: `%s` (level %d) is "
-               "declared after `%s` (level %d). Inherited levels come first, and each level's own members "
-               "sort lexicographically among themselves. The table declares [%s]",
+        /* THE MESSAGE PRESCRIBES, SO ITS PRESCRIPTION IS PART OF WHAT MUST BE RIGHT. This used to state the
+           rule as "inherited levels come first, and each level sorts lexicographically" and then print the
+           pair — every word of which is true, and which INVITES the one repair that passes this check and
+           breaks the conversion: swap the two rows. `TogglePopoverOptions : ShowPopoverOptions` fired it with
+           `source(0), force(0)`, and `[force, source]` satisfies the check while reading the DERIVED member
+           before the INHERITED one, which HTML §6.12's own dictionaries make observable from a getter. The
+           table order was right and the LEVEL was wrong. So the message names the field the answer is usually
+           in, and says what to look at before touching the row order at all. */
+        DFAILF("a dictionary's members were declared out of Web IDL §3.2.17 Dictionary types' read order: "
+               "`%s` (level %d) is declared after `%s` (level %d). THE ORDER IS A FUNCTION OF BOTH COLUMNS, "
+               "AND THE LEVEL IS THE OUTER ONE: §3.2.17 step 3 is \"Let dictionaries be a list consisting of "
+               "D and all of D's inherited dictionaries, in order from least to most derived\" — that is "
+               "`level` ascending — and only step 4's inner loop is \"For each dictionary member member "
+               "declared on dictionary, in lexicographical order\", which orders the members of ONE level "
+               "among themselves and no further. SO READ THE IDL BEFORE MOVING A ROW: ask which dictionary of "
+               "the chain each of these two members is declared on. If they are declared on DIFFERENT "
+               "dictionaries the ROW ORDER IS ALREADY RIGHT and the LEVEL is what is wrong — swapping the rows "
+               "would satisfy this check and encode the inheritance BACKWARDS, reading a derived member before "
+               "an inherited one, which a page pins by throwing from one member's getter and counting which "
+               "others ran. Only two members declared on the SAME dictionary are repaired by swapping them. "
+               "The table declares [%s] as name(level)",
                members[k].name, members[k].level, members[k - 1].name, members[k - 1].level, list);
     }
 #endif

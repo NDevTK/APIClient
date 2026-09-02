@@ -222,9 +222,13 @@ static JSValue ev_new(JSContext *ctx, JSValue ev, JSValue media, JSValue matches
 }
 
 static const IdlArgType EV_CTOR_ARGS[2] = { IDL_DOMSTRING, IDL_DICT };
-static const IdlDictMember EV_INIT[] = {   /* MediaQueryListEventInit, in IDL declaration order */
+/* `dictionary MediaQueryListEventInit : EventInit { CSSOMString media = ""; boolean matches = false; }`, in
+   §3.2.17's READ order — which is NOT the IDL's declaration order, since step 4 sorts a dictionary's own
+   members lexicographically and `matches` is written second. `media` and `matches` are declared on
+   MediaQueryListEventInit and the three above are EventInit's, so they carry the level that says so. */
+static const IdlDictMember EV_INIT[] = {
     { "bubbles", IDL_BOOLEAN }, { "cancelable", IDL_BOOLEAN }, { "composed", IDL_BOOLEAN },
-    { "matches", IDL_BOOLEAN }, { "media", IDL_DOMSTRING },
+    { "matches", IDL_BOOLEAN, false, NULL, 1 }, { "media", IDL_DOMSTRING, false, NULL, 1 },
 };
 
 static JSValue js_ev_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
