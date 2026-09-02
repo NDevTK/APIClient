@@ -276,9 +276,11 @@ IntrinsicInlineSizes intrinsic_inline_sizes(lxb_dom_element_t *el)
                   "own `display`: css-flexbox-1 §9.9 \"Intrinsic Sizes\" derives a flex container's from its "
                   "flex lines, css-grid-2 §11.5 sizes the TRACKS and the container's intrinsic size follows "
                   "from them, and CSS 2.2 §17.5.2's automatic table layout derives a table's from its COLUMNS' "
-                  "cell minima and maxima over the box structure §17.2's anonymous table-object generation "
-                  "builds. BUILD the one this `display` names; each needs its own box tree first and none of "
-                  "them is this walk with a different accumulator");
+                  "cell minima and maxima over the box structure §17.2.1 Anonymous table objects generates — "
+                  "which core/layout/table_box.h answers, so a table's remaining input is §17.5 Visual layout "
+                  "of table contents' grid: which column each cell occupies and how many it spans. BUILD the "
+                  "one this `display` names; the flex and grid arms each need their own box tree first and "
+                  "none of the three is this walk with a different accumulator");
     }
     text_run_measure_init(&m);
     n = lxb_dom_interface_node(el);

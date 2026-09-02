@@ -363,10 +363,13 @@ static void fp_require_placeable(lxb_dom_element_t *el)
               "rather than §9.4.1: a row group, a row, a cell, a column, a column group and a caption are laid "
               "out inside the TABLE's own grid of rows and columns, so a cell's position is the accumulated "
               "widths of the columns before it and the accumulated heights of the rows above it, and neither "
-              "is a distance §9.4.1's two rules can produce. It needs the box structure §17.2.1 'Anonymous "
-              "table objects' generates — the row groups, rows and cells a UA inserts around whatever the "
-              "author wrote — and then §17.5.2's and §17.5.3's algorithms over it, which core/layout/"
-              "used_value.c already crashes for when a table's EXTENT is asked. BUILD §17.2.1, then §17.5",
+              "is a distance §9.4.1's two rules can produce. THE BOX STRUCTURE IS NO LONGER WHAT IT NEEDS: "
+              "core/layout/table_box.h answers §17.2.1 Anonymous table objects' first two stages — this "
+              "table's rows in §17.2's display order, each with its cells — so what is left is §17.5 Visual "
+              "layout of table contents' grid over those rows (which column each cell occupies, its rule 5 "
+              "deferring the span count to the document language) and then §17.5.2's and §17.5.3's algorithms, "
+              "which core/layout/used_value.c already crashes for when a table's EXTENT is asked. BUILD "
+              "§17.5's grid, then §17.5.2, then §17.5.3",
               box_subject(el, nbuf, sizeof nbuf));
     if (inline_level)
         DFAILF("%s: "
@@ -384,8 +387,9 @@ static void fp_require_placeable(lxb_dom_element_t *el)
               "built that a second time. "
               "WHAT IS LEFT IS NOT A PLACEMENT AT ALL: each of the three boxes above needs a NUMBER from a "
               "module outside CSS 2.1 §10, without which there is nothing for §9.4.2's fill to put on a line. "
-              "AN `inline-table` NEEDS CSS 2.1 §17.2 \"The CSS table model\"'s box structure first — the row "
-              "groups, rows and cells §17.2.1 'Anonymous table objects' generates — then §17.5.2's used inline "
+              "AN `inline-table` HAS CSS 2.1 §17.2 The CSS table model's box structure — the row groups, rows "
+              "and cells §17.2.1 Anonymous table objects generates, which core/layout/table_box.h answers — so "
+              "what it still needs is §17.5.2's used inline "
               "size over it, and only then the baseline CSS 2.2 §10.8.1 \"Leading and half-leading\" states "
               "for it (\"The baseline of an 'inline-table' is the baseline of the first row of the table\"), "
               "which is a position inside that structure and not a rule that can be built beside it. "

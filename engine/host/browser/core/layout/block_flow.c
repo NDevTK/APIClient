@@ -14,6 +14,7 @@
 #include "core/layout/block_flow.h"
 #include "core/layout/box_subject.h"
 #include "core/layout/line_box.h"
+#include "core/layout/table_box.h"
 #include "core/layout/used_value.h"
 
 static char *bf_computed(lxb_dom_element_t *el, const char *name)
@@ -301,7 +302,9 @@ bool block_flow_text_child_generates_box(lxb_dom_element_t *parent, const lxb_do
 static BfChildKind bf_element_child(lxb_dom_element_t *el)
 {
     char *d;
-    bool block, inline_level, table;
+    bool block, inline_level;
+    TableBoxKind table;
+    char nbuf[160];
 
     /* §10.6.3: "Only children in the normal flow are taken into account (i.e., floating boxes and absolutely
        positioned boxes are ignored…)". The absolutely positioned half is the rule RUNNING and not a gap: the
@@ -344,21 +347,77 @@ static BfChildKind bf_element_child(lxb_dom_element_t *el)
     inline_level = strcmp(d, "inline") == 0 || strcmp(d, "inline-block") == 0 ||
                    strcmp(d, "inline-flex") == 0 || strcmp(d, "inline-grid") == 0 ||
                    strcmp(d, "inline-table") == 0;
-    table = strcmp(d, "table") == 0 || strncmp(d, "table-", 6) == 0;
+    /* CSS 2.1 §17.2 The CSS table model's box types, classified ONCE through the component that owns the
+       vocabulary §17.2.1 Anonymous table objects' rules are written in (core/layout/table_box.h). A prefix
+       test on "table-" answered this question for a long time and it answered it as ONE question; the two arms
+       below are two DIFFERENT missing things, and a single predicate over both is what let one crash report
+       them as one. */
+    table = table_box_kind(d);
     free(d);
     if (block) return BF_CHILD_BLOCK;
     /* CSS 2.2 §9.2.2 "Inline-level elements and inline boxes": this child is inline-level, so it is not on
        §9.4.1's stack at all — §9.4.2's line boxes hold it, and which of the two formatting contexts this block
        container establishes is decided over the WHOLE child list rather than here (bf_content_kind). */
     if (inline_level) return BF_CHILD_INLINE;
-    if (table)
-        DFAIL("this child generates a TABLE box, whose height is CSS 2.1 §17.5.3's and not §10.6.3's: the "
-              "table's height is distributed over its ROWS and each row's height comes from its cells' content, "
-              "so a table in this list has a height this walk cannot ask for. It also has a box STRUCTURE this "
-              "engine does not build — §17.2's anonymous table-object generation inserts the missing row "
-              "groups, rows and cells around whatever the author wrote — and a `table-row` or `table-cell` "
-              "reaching this list directly is that generation not having run. BUILD §17.2, then §17.5.2 and "
-              "§17.5.3's algorithms");
+    if (table_box_kind_generates_table_box(table))
+        DFAILF("%s: "
+              "this child generates a TABLE box, and the box §9.4.1's stack has to place is NOT that box. CSS "
+              "2.1 §17.4 Tables in the visual formatting model puts another one between them: \"the table "
+              "generates a principal block box called the table wrapper box that contains the table box itself "
+              "and any caption boxes (in document order)\", and \"The table wrapper box is a 'block' box if the "
+              "table is block-level, and an 'inline-block' box if the table is inline-level.\" So the box on "
+              "this stack is that WRAPPER — a block box no element in the tree names — its height is §10.6.3's "
+              "over its own in-flow children, and those children are the caption boxes and the table box. "
+              "READING THE TABLE ELEMENT AS THE BOX IS A DIFFERENT RECTANGLE AND NOT AN APPROXIMATION OF THIS "
+              "ONE: §17.4 states which declarations land where — \"The computed values of properties "
+              "'position', 'float', 'margin-*', 'top', 'right', 'bottom', and 'left' on the table element are "
+              "used on the table wrapper box and not the table box; all other values of non-inheritable "
+              "properties are used on the table box and not the table wrapper box\" — so this walk's margin "
+              "run (§8.3.1) belongs to the wrapper and every border, padding and height belongs to the box "
+              "inside it. "
+              "THE TABLE BOX'S OWN HEIGHT IS §17.5.3 Table height algorithms' AND NOT §10.6.3's: \"A value of "
+              "'auto' means that the height is the sum of the row heights plus any cell spacing or borders. "
+              "Any other value is treated as a minimum height.\" A row's height is \"the maximum of the row's "
+              "computed 'height', the computed 'height' of each cell in the row, and the minimum height (MIN) "
+              "required by the cells\", and \"In CSS 2.1, the height of a cell box is the minimum height "
+              "required by the content\" — which is a block container's content height, so it is THIS WALK, "
+              "run over each cell. "
+              "THE BOX STRUCTURE IS NOT WHAT IS MISSING ANY MORE, and an earlier form of this crash said it "
+              "was: core/layout/table_box.h answers §17.2.1's first two stages — this table's rows in §17.2's "
+              "display order, each carrying the cells that section's second stage leaves it with, and §17.4's "
+              "caption boxes beside them. WHAT IS MISSING IS THE CELL'S USED WIDTH, without which its content "
+              "height is a height of nothing: a cell is as wide as the column it occupies, which column that "
+              "is comes from §17.5 Visual layout of table contents' grid (its rule 5 defers the span count to "
+              "the document language, so HTML's `rowspan` and `colspan` are the input), and the column's width "
+              "is §17.5.2 Table width algorithms: the 'table-layout' property's two algorithms. BUILD §17.5's "
+              "grid over table_box.h's rows, then §17.5.2, then §17.5.3 — and §17.4's wrapper box, which "
+              "core/layout/used_value.c's containing-block walk is stopped on for the same reason",
+              box_subject(el, nbuf, sizeof nbuf));
+    if (table != TABLE_BOX_NOT_A_TABLE_BOX)
+        DFAILF("%s: "
+              "this child is a TABLE-INTERNAL box — a row, a cell, a row group, a column, a column group or a "
+              "caption — sitting directly in a BLOCK CONTAINER's child list, which is not where CSS 2.1 §17.2 "
+              "The CSS table model puts any of them. That is not a box type to classify here, it is §17.2.1 "
+              "Anonymous table objects' THIRD stage not having run, and that stage changes THIS LIST rather "
+              "than anything inside a table: \"For each proper table child C in a sequence of consecutive "
+              "proper table children, if C is misparented then generate an anonymous 'table' or 'inline-table' "
+              "box T around C and all consecutive siblings of C that are proper table children. (If C's parent "
+              "is an 'inline' box, then T must be an 'inline-table' box; otherwise it must be a 'table' box.)\" "
+              "— with \"A 'table-row' is misparented if its parent is neither a row group box nor a 'table' or "
+              "'inline-table' box\", and the same sentence for a column, a row group, a column group and a "
+              "caption. A CELL reaches its row through that stage's FIRST rule: \"For each 'table-cell' box C "
+              "in a sequence of consecutive internal table and 'table-caption' siblings, if C's parent is not "
+              "a 'table-row' then generate an anonymous 'table-row' box around C and all consecutive siblings "
+              "of C that are 'table-cell' boxes.\" "
+              "SO THE THING TO BUILD IS THE CHILD LIST, NOT A CASE IN THIS SWITCH. Once the third stage runs, "
+              "the anonymous table box it generates is what this walk sees here — one block-level box — and "
+              "the misparented children are inside it where core/layout/table_box.h's first two stages already "
+              "classify them. It is the same list css-display-3 §2.5 Box Generation: the none and contents "
+              "keywords' `contents` splice is spliced into, and the arm above says so for that value too, so "
+              "both belong at the top of this walk and neither belongs at a call site. `table_box.h` "
+              "deliberately does not hold this stage: its subject is a list that is NOT a table's, and a table "
+              "component generating the table it is asked about would be that rule answering itself",
+              box_subject(el, nbuf, sizeof nbuf));
     DFAIL("this child's computed `display` is one CSS 2 §9.2's box types do not cover, so this walk cannot "
           "classify it: it is neither block-level, nor inline-level, nor a table box, nor `none`, nor "
           "`contents`. css-display §2's `<display-outside> <display-inside>` grammar admits pairs this engine "
@@ -973,8 +1032,10 @@ static BfBox bf_box(lxb_dom_element_t *el, bool baseline)
                    "css-grid-1 §10.6 \"Grid Container Baselines\" for a "
                    "grid container. Those two are the whole of what can arrive: `bf_element_child` above puts "
                    "exactly `block`, `flow-root`, `list-item`, `flex` and `grid` on this stack, the first three "
-                   "are block containers, and a TABLE box crashes there instead — §17.2's anonymous table-object "
-                   "generation is missing before its §17.5.3 baseline is. NEITHER SKIPPING NOR SUBSTITUTING "
+                   "are block containers, and a TABLE box crashes there instead — CSS 2.1 §17.4 Tables in the "
+                   "visual formatting model's table wrapper box is what §9.4.1 would stack, and §17.5.2 Table "
+                   "width algorithms: the 'table-layout' property is missing before its §17.5.3 Table height "
+                   "algorithms baseline is. NEITHER SKIPPING NOR SUBSTITUTING "
                    "THE BOTTOM MARGIN EDGE IS AVAILABLE HERE: this box may be the LAST one on the stack that has "
                    "a baseline at all, so either would put a real coordinate on a real line that no reader can "
                    "distinguish from a measured one. BUILD the module's own baseline and report it on `BfBox` "
