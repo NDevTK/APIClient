@@ -1608,6 +1608,30 @@ static inline const char *flow_scan_name(FlowScan s)
 long flow_scan_runs(FlowScan s);
 long flow_scan_weights(FlowScan s);
 
+/* HOW MANY TIMES THE ORDER CHANGED — the denominator the hook's rescan count has and `scanNextRuns` is NOT,
+ * and without which the two readings of that count disagree with each other.
+ *
+ * MEASURED, ON TWO ADJACENT CENSUSES OF ONE RUN: `scanRivalRuns / scanNextRuns` read 3.22 over the run's whole
+ * life and 0.86 over its last interval — one says the hook rescans three times per step and the other says it
+ * rescans less than once, and NEITHER is wrong. They are answers to a question whose denominator is not the
+ * step: the hook rescans when `flow_frontier_gen() != g_seen_gen || cur != g_seen_cur` (engine.c), so its
+ * cadence is set by RANK CHANGES and incumbent switches, not by steps. A step during which a flow forks three
+ * times moves the generation three times and costs three rescans; a step during which nothing forks costs at
+ * most one. So a rate per step is a COST (how much scan work a step pays for) and a rate per rank change is
+ * the CACHE's own hit rate, and the two were being read as one number.
+ * WHICH IS ALSO WHY THE DISAGREEMENT IS INFORMATIVE RATHER THAN NOISE: in that run the frontier grew by ONE
+ * member across the interval where the ratio fell to 0.86, so the forking had all but stopped and the rescans
+ * fell with it. That is the mechanism behaving exactly as described and NOT the hypothesis failing — but it is
+ * indistinguishable from the hypothesis failing while the only denominator available is the step count, which
+ * is precisely what this row is for. It settles nothing on its own; it makes the question answerable.
+ *
+ * IT IS THE RAISE COUNT AND NOT `flow_frontier_gen`, and the difference is a lifetime rather than a spelling:
+ * flow_registry_init resets the generation and resets none of the scan counters, so a ratio built on the
+ * generation number would be two quantities over two lifetimes the first time a host initialised a second
+ * registry. Counted at the raise, it is commensurable with the scan rows by construction.
+ * IT DECIDES NOTHING, for the scan counters' reason exactly. */
+long flow_rank_changes(void);
+
 /* The highest-priority flow in the frontier, or NULL if empty — EVERY member, whether or not it can currently
    make progress. It answers the host's Level-1 question (this document's best weight) and the census's; the
    scheduler's own pick is flow_next_to_run below. Does not remove it. */

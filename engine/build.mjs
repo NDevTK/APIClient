@@ -797,7 +797,10 @@ const WFQ_FIELDS = ["members", "valMin", "valMax", "valTop", "valZero", "selfEmi
                        loaded machine can falsify is not one. Scans and weight evaluations are things the
                        engine DID. */
                     "scanNextRuns", "scanNextWeights", "scanRivalRuns", "scanRivalWeights",
-                    "scanOtherRuns", "scanOtherWeights"];
+                    "scanOtherRuns", "scanOtherWeights",
+                    /* AND THE DENOMINATOR THE HOOK'S RESCAN COUNT HAS — see solver/flow.h for the two
+                       readings of `scanRivalRuns` that disagreed with each other without it. */
+                    "rankChanges"];
 /* A CONSTANT OF THE ENGINE IS READ FROM THE ENGINE, NEVER RESTATED HERE — the rule `ageQuantum` was written
    for and which now has a second reader (`hungCause`'s census cadence), so it is one function rather than two
    copies of one regex. Throws on an absent or unparseable define, because the alternative is this reader
@@ -1136,7 +1139,7 @@ function wfqReading(out) {
      them is the second list this file already warns about at WFQ_FIELDS — one that agrees with the other
      only until a row is renamed on one side. */
   const scanRows = ["scanNextRuns", "scanNextWeights", "scanRivalRuns", "scanRivalWeights",
-                    "scanOtherRuns", "scanOtherWeights"];
+                    "scanOtherRuns", "scanOtherWeights", "rankChanges"];
   for (const k of scanRows)
     if (w[k] < 0)
       throw new Error(`[build] the @WFQ census reports ${k} ${w[k]} — the order-scan counters are lifetime ` +
@@ -1223,9 +1226,16 @@ function wfqReading(out) {
     ? (() => {
         const a = scanSeries[scanSeries.length - 2], b = scanSeries[scanSeries.length - 1];
         const dRuns = b.scanNextRuns - a.scanNextRuns;
+        const dGen = b.rankChanges - a.rankChanges;
         return dRuns > 0
           ? { dRuns, walked: (b.scanNextWeights - a.scanNextWeights) / dRuns,
-              rival: (b.scanRivalRuns - a.scanRivalRuns) / dRuns, members: b.members }
+              rival: (b.scanRivalRuns - a.scanRivalRuns) / dRuns, members: b.members,
+              /* THE CACHE'S OWN QUESTION, WHICH IS NOT THE COST QUESTION BESIDE IT. `rival` is scan
+                 work per STEP; this is rescans per RANK CHANGE, and the hook rescans on a rank change
+                 OR an incumbent switch, so above 1 is switching and at or below 1 is the cache doing
+                 its job. Null when the order did not change across the interval — there is nothing to
+                 be a rate of, and a rate over zero events is the empty denominator §Testing names. */
+              gen: dGen, perGen: dGen > 0 ? (b.scanRivalRuns - a.scanRivalRuns) / dGen : null }
           : null;
       })()
     : null;
@@ -1250,12 +1260,30 @@ function wfqReading(out) {
               `work is then quadratic in its own step count, which is a throughput finding and not an ` +
               `ordering one`
             : `, so the filters keep the pick well below the frontier and its cost is not tracking it`) +
-          `; the preempt hook rescanned ${ivl.rival.toFixed(2)} time(s) per dispatch scan` +
+          `; the preempt hook rescanned ${ivl.rival.toFixed(2)} time(s) per dispatch scan over ` +
+          `${ivl.gen} rank change(s)` +
+          /* THE COST AND THE CADENCE ARE TWO QUESTIONS AND THE SAME COUNT ANSWERS BOTH ONLY WITH TWO
+             DENOMINATORS. Read per STEP it says what a step pays; read per RANK CHANGE it says whether
+             the cache is working. A run whose forking has stopped shows a low per-step rate with the
+             mechanism entirely intact, which is exactly how one run's lifetime ratio (3.22) and its last
+             interval (0.86) came to say opposite things about one engine. Both are printed; neither is
+             called the verdict on its own. */
+          (ivl.gen === 0
+            ? ` — the order did not change across this interval, so the hook had nothing to rescan for ` +
+              `and this interval says nothing about its cadence`
+            : ` (${ivl.perGen.toFixed(2)} per rank change` +
+              (ivl.perGen > 1.2
+                ? `, ABOVE one, so the rescans are being driven by incumbent switches as well as by rank ` +
+                  `changes — the cache is being invalidated by the scheduler switching, not only by the ` +
+                  `page branching`
+                : `, at or below one, so the cache is absorbing what it can and the rescan count is the ` +
+                  `rank-change count`) + `)`) +
           (ivl.rival > 1.5
-            ? ` — MORE than one per step, so the frontier's generation is moving faster than the loop steps ` +
-              `and this page is paying for the order per BRANCH: the cost is at the hook's rescan`
-            : ` — at or below one per step, so the hook is NOT the multiplier and the per-branch rescan ` +
-              `hypothesis is refuted for this run`)) +
+            ? ` — MORE than one rescan per step: this page is paying for the ORDER per branch, and with a ` +
+              `linear pick that is the frontier's size again on every one of them`
+            : ` — at or below one per step, which REFUTES the per-branch multiplier for this interval ` +
+              `and does NOT refute it for the run: read it beside the rank-change count, because an ` +
+              `interval in which nothing forked cannot show a per-fork cost`)) +
       /* THE LIFETIME TOTALS ARE PRINTED AND LABELLED, never used to decide. They are what a reader needs to
          see the interval in proportion, and they are exactly what the 2x spread makes unquotable between two
          runs — so the sentence that carries them says so, rather than leaving a bare count for somebody to

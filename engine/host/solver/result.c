@@ -588,7 +588,14 @@ char *result_wfq_json(void) {
                         cannot be stated is one a reader has to hold a second rule about. */
                      "\"scanNextRuns\":%ld,\"scanNextWeights\":%ld,"
                      "\"scanRivalRuns\":%ld,\"scanRivalWeights\":%ld,"
-                     "\"scanOtherRuns\":%ld,\"scanOtherWeights\":%ld}",
+                     "\"scanOtherRuns\":%ld,\"scanOtherWeights\":%ld,"
+                     /* AND THE DENOMINATOR THE HOOK'S RESCAN COUNT HAS. `scanRivalRuns / scanNextRuns` is
+                        a COST — scan work per step — and it was being read as the hook's cadence, which it
+                        is not: the rescan fires on a rank change or an incumbent switch, so a step that
+                        forks three times costs three and a step that forks none costs at most one. Read
+                        against this row instead, the same count answers the cache's own question. See
+                        solver/flow.h for the two readings that disagreed without it. */
+                     "\"rankChanges\":%ld}",
                      w.members, w.val_min, w.val_max, w.val_top,
                      w.val_zero, w.self_emit, w.unrun,
                      w.never_picked, w.never_picked_gap,
@@ -602,7 +609,8 @@ char *result_wfq_json(void) {
                      w.deliv_ready, w.deliv_framed, w.deliv_owed, w.deliv_w_gap,
                      flow_scan_runs(FLOW_SCAN_NEXT),  flow_scan_weights(FLOW_SCAN_NEXT),
                      flow_scan_runs(FLOW_SCAN_RIVAL), flow_scan_weights(FLOW_SCAN_RIVAL),
-                     flow_scan_runs(FLOW_SCAN_OTHER), flow_scan_weights(FLOW_SCAN_OTHER));
+                     flow_scan_runs(FLOW_SCAN_OTHER), flow_scan_weights(FLOW_SCAN_OTHER),
+                     flow_rank_changes());
 }
 
 /* WHAT A CONTEXT SWITCH COSTS, AND WHAT THE TWO CHAINS ARE STILL HOLDING — see result.h for why this composes

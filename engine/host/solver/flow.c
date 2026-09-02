@@ -17,6 +17,9 @@
 
 static Flow **g_flows = NULL;
 static int g_flows_n = 0, g_flows_cap = 0;
+static long g_rank_changes = 0;   /* …and the same event counted for the LIFE of the instance, so it is
+                                     commensurable with the scan counters, which nothing resets either.
+                                     See frontier_rank_changed for why the generation NUMBER is not. */
 static unsigned g_gen = 0;   /* bumped whenever the frontier's membership changes (add/remove) — lets the
                                 value-yield recompute the rival only on a change, never per-opcode */
 static Flow *g_running = NULL;   /* the flow currently holding the worker (the scheduler sets it) */
@@ -312,6 +315,14 @@ void flow_restore_reward(Flow *f, double val) {
    the thread and pays one declined hook call for the question. */
 static void frontier_rank_changed(void) {
     g_gen++;
+    /* …AND THE SAME EVENT COUNTED FOR THE LIFE OF THE INSTANCE, which `g_gen` cannot answer however much it
+       looks like it could. flow_registry_init RESETS `g_gen` and does not reset the scan counters, so the
+       generation NUMBER and `scanRivalRuns` would be two quantities over two lifetimes the moment a host
+       initialised a second registry — the reader would divide one by the other and get a ratio about no run at
+       all. That is the lifetime-over-instant collapse this file already corrected once in build.mjs, and the
+       cure is the same: make the two commensurable AT THE SOURCE rather than assume the call site that would
+       break them is never reached. Counted here because this is the one place a rank change happens. */
+    g_rank_changes++;
     JS_RequestFlowYield();
 }
 
@@ -328,6 +339,10 @@ void flow_registry_init(const char *doc_name) {
 }
 
 unsigned flow_frontier_gen(void) { return g_gen; }
+
+/* HOW MANY TIMES THE ORDER CHANGED, for the life of this instance — the denominator the preempt hook's
+   rescan count has and `scanNextRuns` is not. See solver/flow.h. */
+long flow_rank_changes(void) { return g_rank_changes; }
 
 void  flow_set_running(Flow *f) { g_running = f; }
 Flow *flow_running(void) { return g_running; }
