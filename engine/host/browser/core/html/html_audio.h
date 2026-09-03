@@ -30,13 +30,13 @@
  * provenance into HTML §4.8.11.5 "Loading the media resource"'s resource selection algorithm and out to the
  * @H endpoint surface.
  *
- * WHAT IS ABSENT AND IS NOT THIS FILE'S TO ANSWER: the two OTHER legacy factory functions HTML declares are
- * `Image` (core/html/html_image.h, built) and `Option` (HTML §4.10.10 "The option element", not built). The
- * `Option` steps need two things this build does not have — an internal create-a-Text-node-and-append that is
- * not the `createTextNode` member's step machine, and §4.10.10's SELECTEDNESS as a slot separate from the
- * `selected` content attribute, which core/html/html_form.c records is the same boolean here only because
- * nothing in this build can make an option's dirtiness true. A page writing `new Option(...)` gets its own
- * TypeError, which is the forcing function; there is nothing here that pretends otherwise. */
+ * WHERE ITS TWO SIBLINGS LIVE, AND IT IS THE WHOLE POPULATION: HTML declares exactly three names with
+ * `[LegacyFactoryFunction]` — this one, `Image` (core/html/html_image.h) and `Option` (core/html/html_option.h,
+ * over HTML §4.10.10 "The option element"). Each is minted by the component that owns its interface and hung on
+ * the global by core/html/html_element.c's per-tag loop, which is the file that owns which names the global
+ * carries. `Option` is the one whose steps do real work — its step 6 sets §4.10.10's SELECTEDNESS explicitly,
+ * after its step 5 has added the very `selected` attribute the attribute change steps read as setting it, which
+ * is why that component owns two boolean states rather than reflecting one attribute. */
 #ifndef APICLIENT_CORE_HTML_HTML_AUDIO_H
 #define APICLIENT_CORE_HTML_HTML_AUDIO_H
 

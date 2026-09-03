@@ -215,6 +215,19 @@ JSValue html_form_checkbox_value(JSContext *ctx, JSValueConst wrap);
    tree order. OWNED. */
 JSValue html_form_selected_options(JSContext *ctx, JSValueConst select);
 
+/* §4.10.7's SELECTEDNESS SETTING ALGORITHM as the WRITE it is — its two steps set the SELECTEDNESS of the
+   options in a select's list of options, which is §4.10.10's state and lives in core/html/html_option.c. It is
+   here because its subject is the SELECT: the list of options is this file's walk and the `multiple` attribute
+   and the display size are this file's reads. Idempotent, and a write that changes nothing records nothing, so
+   §4.10.10's readers may run it at every read rather than each carrying a copy of its outcome. */
+void html_form_selectedness_setting_algorithm(JSContext *ctx, lxb_dom_node_t *select);
+
+/* THE SELECT WHOSE LIST OF OPTIONS HOLDS THIS OPTION, or NULL — what §4.10.10's "cause the element to ask for a
+   reset" resolves. NOT the nearest `select` ancestor: §4.10.7's walk stops descending at a nested `optgroup`, a
+   `datalist`, an `hr` and an `option`, so an option under one of those has a select ancestor and is in no list
+   of options, and the candidate's own list is what decides. */
+lxb_dom_node_t *html_form_select_of_option(JSContext *ctx, lxb_dom_node_t *opt);
+
 /* Step 5.1's first condition: "field has a `datalist` element ancestor". */
 bool html_form_has_datalist_ancestor(JSValueConst wrap);
 

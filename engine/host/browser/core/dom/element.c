@@ -56,6 +56,7 @@
 #include "core/html/media_element.h"
 #include "core/html/html_image.h"
 #include "core/html/html_link.h"
+#include "core/html/html_option.h"
 #include "core/html/fragment_parser.h"
 #include "core/html/fragment_serializer.h"
 #include "core/html/sanitizer.h"
@@ -2833,6 +2834,13 @@ static void element_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const ch
        for exactly one of them — and this member has three (`b.href =`, `setAttribute`, `attributes.href.value
        =`), all of which move where every relative URL in the document resolves. */
     html_base_element_attr_changed(rctx, el, ns, local);
+    /* HTML §4.10.10 The option element's OWN attribute change steps for `selected`: "Whenever an option
+       element's selected attribute is added, if its dirtiness is false, its selectedness must be set to true",
+       and the mirror for removed. Here for the reason `src` and `async` above are — a content attribute has
+       more than one spelling (`opt.defaultSelected = true`, `setAttribute`, `removeAttribute`, an `innerHTML`
+       reparse) and an IDL setter answers for exactly one of them — and it needs BOTH values because the steps
+       turn on ADDED and REMOVED: a `selected=""` overwritten with `selected="x"` is neither of those. */
+    html_option_attr_changed(rctx, el, ns, local, old_val, val);
     /* HTML §2.5.6 Nonce attributes' OWN attribute change steps — the family's members are DOM §4.9's and this
        standard states this one for every element that includes HTMLOrSVGOrMathMLElement. It is here for a
        SHARPER version of the reason its neighbours are: they moved out of an IDL setter that answered for one

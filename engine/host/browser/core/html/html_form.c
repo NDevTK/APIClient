@@ -47,6 +47,7 @@
 #include "core/html/html_base_element.h"   /* §4.2.3's get an element's target, which step 18 runs */
 #include "core/html/html_dialog.h"
 #include "core/html/html_form.h"
+#include "core/html/html_option.h"   /* §4.10.10's SELECTEDNESS, which §4.10.7's algorithm below is the writer of */
 #include "core/html/input_picker.h"
 #include "core/html/input_value.h"
 #include "core/html/submit_event.h"
@@ -2289,16 +2290,17 @@ bool html_form_needs_dirname_entry(JSValueConst wrap)
     return html_form_is_auto_directionality_face(n);
 }
 
-/* ---- §4.10.7's LIST OF OPTIONS, and §4.10.10's SELECTEDNESS -------------------------------------------------
+/* ---- §4.10.7's LIST OF OPTIONS, and §4.10.7's SELECTEDNESS SETTING ALGORITHM ---------------------------------
  *
- * SELECTEDNESS IS THE `selected` CONTENT ATTRIBUTE HERE, and that is not an approximation of the stored state —
- * it IS the stored state given the members that exist. §4.10.10 decouples the two through an option's DIRTINESS,
- * which is set by exactly four things: `option.selected =`, `select.value =`, `select.selectedIndex =`, and the
- * user's "pick an option". This engine has none of them (§4.10.10's `defaultSelected` reflects the attribute and
- * changes no state), so dirtiness can never be true and §4.10.10's own rule — "whenever an option element's
- * selected attribute is added, IF ITS DIRTINESS IS FALSE, its selectedness must be set to true" — makes the two
- * the same boolean. The day `option.selected` lands it becomes a per-element slot beside the value state, and
- * this reads that instead. */
+ * SELECTEDNESS IS §4.10.10's OWN STATE and lives in core/html/html_option.c, which owns the two booleans and the
+ * `selected` member that writes them. What is HERE is the half that is a fact about a SELECT and not about an
+ * option: the list of options, and the algorithm §4.10.7 states over it.
+ *
+ * THE ALGORITHM IS A WRITE, AND IT USED TO BE A READ-TIME NORMALIZATION INSIDE html_form_selected_options. That
+ * was correct for every reader that went through this file and silently wrong for one that did not: a sibling
+ * `option.selected` read answered the state before the collapse, so a single-select could report TWO options
+ * selected through §4.10.10's member while reporting one through §4.10.22.4's entry list. The algorithm sets
+ * SELECTEDNESS, so it is written as the thing that sets it, once, and every reader reads the state afterwards. */
 
 /* An option's DISABLEDNESS, §4.10.10's own steps — its `disabled` attribute, or the first ancestor optgroup's,
    stopping at a select/hr/datalist/option. NOT the form-control rule: an option is not a form control. */
@@ -2389,49 +2391,121 @@ JSValue html_form_placeholder_label_option(JSContext *ctx, JSValueConst select)
     return r;
 }
 
-JSValue html_form_selected_options(JSContext *ctx, JSValueConst select)
+/* §4.10.7's SELECTEDNESS SETTING ALGORITHM, both of its steps, as the WRITE the standard states:
+ *   1. "If element's multiple attribute is absent, and element's display size is 1, and no option elements in
+ *      the element's list of options have their selectedness set to true, then set the selectedness of the
+ *      first option element in the list of options in tree order that is not disabled, if any, to true, and
+ *      return."
+ *   2. "If element's multiple attribute is absent, and two or more option elements in element's list of options
+ *      have their selectedness set to true, then set the selectedness of all but the last option element with
+ *      its selectedness set to true in the list of options in tree order to false."
+ * Step 1 is why `<select name=x><option>a<option>b</select>` submits `x=a` with no `selected` attribute
+ * anywhere. Every write goes through html_option_set_selectedness, which records nothing when the answer would
+ * not change — so this being IDEMPOTENT is a property of the delta and not only of the arithmetic, which is
+ * what lets §4.10.10's readers run it rather than each carrying a copy of its outcome. */
+void html_form_selectedness_setting_algorithm(JSContext *ctx, lxb_dom_node_t *select)
 {
-    lxb_dom_node_t *n = node_of(select);
-    lxb_dom_element_t *sel = n ? lxb_dom_interface_element(n) : NULL;
-    JSValue list, out = JS_NewArray(ctx);
-    uint32_t len, i, k = 0;
+    lxb_dom_element_t *sel;
+    JSValue list;
+    uint32_t len, i;
     bool multiple;
     int selected_n = 0, last_selected = -1, first_enabled = -1;
 
-    CHECK(!JS_IsException(out), "forms: OOM building a select's selected options");
-    if (!sel) return out;
+    DCHECK(select != NULL && tag_is(select, "select"),
+           "§4.10.7's selectedness setting algorithm was run on something that is not a select element — it is "
+           "stated over a select's LIST OF OPTIONS, so a caller that reached here with anything else has "
+           "resolved an option's select wrongly");
+    sel = lxb_dom_interface_element(select);
     multiple = has_attr(sel, "multiple");
-    list = select_option_list(ctx, n);
+    if (multiple) return;   /* both steps are conditioned on the attribute being ABSENT */
+    list = select_option_list(ctx, select);
     len = js_array_len(ctx, list);
     for (i = 0; i < len; i++) {
         JSValue opt = JS_GetPropertyUint32(ctx, list, i);
         lxb_dom_node_t *on = node_of(opt);
 
-        if (on && has_attr(lxb_dom_interface_element(on), "selected")) {
+        if (on && html_option_selectedness(lxb_dom_interface_element(on))) {
             selected_n++;
             last_selected = (int)i;
         }
         if (first_enabled < 0 && on && !option_is_disabled(on)) first_enabled = (int)i;
         JS_FreeValue(ctx, opt);
     }
-    /* §4.10.7's SELECTEDNESS SETTING ALGORITHM step 1: a single-select showing one row with nothing selected
-       selects its first non-disabled option. This is why `<select name=x><option>a<option>b</select>` submits
-       `x=a` with no `selected` attribute anywhere. */
-    if (!multiple && select_display_size(sel) == 1 && selected_n == 0 && first_enabled >= 0) {
-        selected_n = 1;
-        last_selected = first_enabled;
+    if (select_display_size(sel) == 1 && selected_n == 0) {                     /* step 1 */
+        if (first_enabled >= 0) {
+            JSValue opt = JS_GetPropertyUint32(ctx, list, (uint32_t)first_enabled);
+
+            html_option_set_selectedness(ctx, element_of_value(opt), true);
+            JS_FreeValue(ctx, opt);
+        }
+        JS_FreeValue(ctx, list);
+        return;   /* "and return" — the step's own last clause, and step 2 has nothing to clear anyway */
     }
+    if (selected_n >= 2) {                                                      /* step 2 */
+        for (i = 0; i < len; i++) {
+            JSValue opt;
+
+            if ((int)i == last_selected) continue;   /* "all but the LAST" */
+            opt = JS_GetPropertyUint32(ctx, list, i);
+            if (node_of(opt)) html_option_set_selectedness(ctx, element_of_value(opt), false);
+            JS_FreeValue(ctx, opt);
+        }
+    }
+    JS_FreeValue(ctx, list);
+}
+
+/* THE SELECT WHOSE LIST OF OPTIONS HOLDS THIS OPTION, or NULL — what §4.10.10's "cause the element to ask for a
+   reset" needs, since §4.10.7 states the reset over "an option element in the list of options". MEMBERSHIP IS
+   NOT AN ANCESTOR TEST and is not re-derived here: the nearest `select` ancestor is only a CANDIDATE, because
+   §4.10.7's walk stops descending at a nested `optgroup`, a `datalist`, an `hr` and an `option`, so an option
+   inside one of those has a select ancestor and is in no list of options. The candidate's own list is what
+   decides, which keeps ONE statement of what that list is. */
+lxb_dom_node_t *html_form_select_of_option(JSContext *ctx, lxb_dom_node_t *opt)
+{
+    lxb_dom_node_t *a, *select = NULL;
+    JSValue list;
+    uint32_t len, i;
+    bool found = false;
+
+    if (!opt) return NULL;
+    for (a = opt->parent; a; a = a->parent)
+        if (tag_is(a, "select")) { select = a; break; }
+    if (!select) return NULL;
+    list = select_option_list(ctx, select);
+    len = js_array_len(ctx, list);
+    for (i = 0; i < len && !found; i++) {
+        JSValue o = JS_GetPropertyUint32(ctx, list, i);
+
+        found = node_of(o) == opt;
+        JS_FreeValue(ctx, o);
+    }
+    JS_FreeValue(ctx, list);
+    return found ? select : NULL;
+}
+
+JSValue html_form_selected_options(JSContext *ctx, JSValueConst select)
+{
+    lxb_dom_node_t *n = node_of(select);
+    JSValue list, out = JS_NewArray(ctx);
+    uint32_t len, i, k = 0;
+
+    CHECK(!JS_IsException(out), "forms: OOM building a select's selected options");
+    if (!n || !tag_is(n, "select")) return out;
+    /* THE ALGORITHM RUNS, AND THEN THE STATE IS READ. It used to be inlined below as a normalization this
+       function applied to its own answer and stored nowhere, which made `select.selectedOptions` right and left
+       every other reader of selectedness — §4.10.10's `selected` member above all — looking at the state before
+       the collapse. See core/html/html_option.h for why running it at the read is this engine's spelling of
+       §4.10.7's own invocation points rather than a narrowing of them. */
+    html_form_selectedness_setting_algorithm(ctx, n);
+    list = select_option_list(ctx, n);
+    len = js_array_len(ctx, list);
     for (i = 0; i < len; i++) {
         JSValue opt = JS_GetPropertyUint32(ctx, list, i);
         lxb_dom_node_t *on = node_of(opt);
-        bool sel_i = on && has_attr(lxb_dom_interface_element(on), "selected");
 
-        if (!multiple) {
-            /* Step 2: with two or more selected, all but the LAST are cleared — and step 1's pick is the only
-               one there is when the attribute named none. */
-            sel_i = (int)i == last_selected;
-        }
-        if (sel_i && on && !option_is_disabled(on)) JS_SetPropertyUint32(ctx, out, k++, JS_DupValue(ctx, opt));
+        /* §4.10.22.4 step 5.6's own condition: selectedness true AND not disabled. */
+        if (on && html_option_selectedness(lxb_dom_interface_element(on)) && !option_is_disabled(on))
+            JS_SetPropertyUint32(ctx, out, k++, JS_DupValue(ctx, opt));
         JS_FreeValue(ctx, opt);
     }
     JS_FreeValue(ctx, list);

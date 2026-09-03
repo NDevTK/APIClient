@@ -57,6 +57,7 @@
 #include "core/html/html_script.h"
 #include "core/html/html_image.h"
 #include "core/html/html_audio.h"
+#include "core/html/html_option.h"
 #include "core/html/html_link.h"
 #include "core/html/html_base_element.h"
 #include "core/html/autofill.h"   /* §4.10.19.7.2's IDL-exposed autofill value */
@@ -910,6 +911,10 @@ void html_element_init(JSContext *ctx)
        `[LegacyFactoryFunction]`, declared beside `Image` because HTMLAudioElement is a row of the table above
        and because a legacy factory function is a global NAME, and this file owns the list of those. */
     html_audio_declare(ctx);
+    /* §4.10.10's SELECTEDNESS and DIRTINESS, the `selected` member they decide, and `Option` — the THIRD of
+       Web IDL §3.7.2's names, declared beside `Image` and `Audio` for the same two reasons: HTMLOptionElement
+       is a row of the table above, and a legacy factory function is a global NAME this file owns the list of. */
+    html_option_declare(ctx);
     /* §4.2.4's link processing model — its per-element state key and the task that fires a preload's
        `load`/`error` — declared here because HTMLLinkElement is a row of the table above, exactly as §4.8.3's
        image requests are. */
@@ -1176,6 +1181,10 @@ void html_element_install_protos(JSContext *ctx)
         JSValue ta = html_iface_proto(ctx, "HTMLTextAreaElement"), op = html_iface_proto(ctx, "HTMLOptionElement");
         JSValue bt = html_iface_proto(ctx, "HTMLButtonElement");
         html_form_install(ctx, f, in, ta, op, bt);
+        /* §4.10.10's `selected`, on the same prototype and handed it for the same reason — this file owns the
+           table, core/html/html_option.c owns the SELECTEDNESS the member reads and writes. It is not part of
+           html_form_install because it is not a fact about a form: an `option` in a `datalist` has one too. */
+        html_option_install_members(ctx, op);
         JS_FreeValue(ctx, f); JS_FreeValue(ctx, in); JS_FreeValue(ctx, ta); JS_FreeValue(ctx, op);
         JS_FreeValue(ctx, bt);
     }
@@ -1262,14 +1271,13 @@ void html_element_install(JSContext *ctx, JSValueConst global)
            node_install_interface_ctor above.
            HTML DECLARES EXACTLY THREE — `Image` (§4.8.3), `Audio` (§4.8.9) and `Option` (§4.10.10) — and that
            is a fact about the IDL rather than about this list, so it is checkable: the extended attribute is
-           `[LegacyFactoryFunction=...]` and a fourth would appear there first. `Option` is not built; its
-           steps need a create-a-Text-node-and-append that is not the `createTextNode` member's step machine,
-           and §4.10.10's SELECTEDNESS as a slot separate from the `selected` content attribute — see
-           core/html/html_audio.h. A page writing `new Option(...)` gets its own TypeError. */
+           `[LegacyFactoryFunction=...]` and a fourth would appear there first. All three are here. */
         if (!strcmp(HTML_IFACE[i].iface, "HTMLImageElement"))
             html_image_install_global(ctx, global, p);
         if (!strcmp(HTML_IFACE[i].iface, "HTMLAudioElement"))
             html_audio_install_global(ctx, global, p);
+        if (!strcmp(HTML_IFACE[i].iface, "HTMLOptionElement"))
+            html_option_install_global(ctx, global, p);
         JS_FreeValue(ctx, p);
     }
     /* WHAT THE LOOP ABOVE LEAVES ON THE GLOBAL, said as a claim about the global rather than about the loop.
@@ -1322,6 +1330,7 @@ void html_element_free(JSRuntime *rt)
     media_element_free(rt);
     html_image_free(rt);
     html_audio_free(rt);
+    html_option_free(rt);
     html_link_free(rt);
     element_internals_free(rt);
     if (g_dataset_key != JS_ATOM_NULL) { JS_FreeAtomRT(rt, g_dataset_key); g_dataset_key = JS_ATOM_NULL; }
