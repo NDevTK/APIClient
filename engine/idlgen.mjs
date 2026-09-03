@@ -671,8 +671,22 @@ const chainOf = (iface) => {
    rather than a line inside memberOps because the constructor census below asks the identical question, and a
    second copy of the not-inherited rule is the copy that goes on reporting BeforeUnloadEvent with Event's
    `constructor(DOMString, optional EventInit)` after the first is fixed. */
-const ownConstructors = (iface) =>
-  ((byName.get(iface) || { members: [] }).members).filter((x) => x.type === "constructor");
+/* NOT-DECLARED IS NOT ZERO-CONSTRUCTORS, AND A `|| { members: [] }` MADE THEM ONE ANSWER. This is
+   §A-FIELD-A-CONSUMER-DEFAULTS standing inside an absence counter, which is the worst place for it: a name the
+   corpus does not carry came back as an interface with an empty member list, so "this index has never heard of
+   it" and "the platform declares it with no constructor" were the same value, and every caller below reads that
+   value as the second. It answers `null` for the miss instead, and each caller states which of the two it
+   means — the two questions §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS says must not share one bit.
+   WHERE THE MISS ACTUALLY REACHES, so the split is not decoration: the row loop's call is unreachable (its
+   `noIdl` guard `continue`s whenever `byName` lacks the name, because members() flattens out of byName and so a
+   non-empty `spec` already implies the entry exists), and the dictionary arm's second call is guarded by an
+   explicit `byName.has`. The one live path is the stray-construct filter over `world.constructs` — a name this
+   ENGINE mints an interface object for, which is exactly where a typo'd identifier arrives — and its printed
+   line now says which of the two readings it found rather than asserting the constructor one. */
+const ownConstructors = (iface) => {
+  const node = byName.get(iface);
+  return node ? node.members.filter((x) => x.type === "constructor") : null;
+};
 /* HTML §3.2.3 "HTML element constructors" — "To support the custom elements feature, all HTML elements have
    special constructor behavior. This is indicated via the [HTMLConstructor] IDL extended attribute." */
 const isHtmlConstructor = (op) => (op.extAttrs || []).some((a) => a.name === "HTMLConstructor");
@@ -775,6 +789,136 @@ const noIdl = [];
    the only set either gap number means anything against. */
 const ctorBuilt = [], htmlCtorAbsent = [], ordinaryCtorAbsent = [];
 
+/* -----------------------------------------------------------------------------------------------------------
+ * WEB IDL §3.3.7 [Exposed] — A MEMBER NO REALM THIS ENGINE BUILDS MAY CARRY IS NOT A GAP, AND CHARGING IT AS
+ * ONE NAMES AN ACTION THE SPEC FORBIDS.
+ *
+ * §3.7.7 Operations: "For each unique identifier of an exposed operation defined on the interface, there exist
+ * a corresponding property." A member that is NOT exposed in a realm has no property there — so a component
+ * that installed one would be wrong, and the verdict's standing instruction to "implement the member in its
+ * real component" is not merely unhelpful for it, it is SPEC-WRONG. That is §AN-ASSERT-THAT-NAMES-A-REMEDY
+ * living inside an instrument: the finding is right about the FACT (the member really is not installed) and
+ * wrong about the ACTION, and a reader who obeys it builds a conformance violation.
+ *
+ * IT IS DERIVED AND NOT DECLARED, WHICH IS THE WHOLE POINT. `idl_members_excluded` is the engine-side
+ * declaration for a member the IDL says exists and a spec's PROSE excludes — its own comment in
+ * core/idl_args.c says so: "neither the IDL corpus nor a reader of this prototype can tell that state apart
+ * from a member nobody has written yet." [Exposed] is the opposite case: the corpus carries it, in the member's
+ * own extended attributes, so a C declaration restating it would be the second copy of a fact whose first copy
+ * is the artifact this tool exists to read — the hand-kept table §Browser half bans. Both halves come from
+ * artifacts: WHICH GLOBAL NAMES EXIST from the corpus's [Global] annotations, and WHICH OF THEM THIS ENGINE
+ * BUILDS from this audit's own interface census, so the day a worker global gets a component the answer moves
+ * with it and nothing here is edited.
+ *
+ * THE SOUND DIRECTION IS TO STAY SILENT. A member whose exposure this index cannot decide — an iteration
+ * member minted by an `iterable<>` declaration, which has no named declaration node at all — keeps its place
+ * in ABSENT. Absence of evidence must never remove a member from the gap list, because that is the false
+ * COMPLETE this whole file refuses. */
+const EXPOSED_STAR = Symbol("[Exposed=*]");
+const rhsNames = (ext) => {
+  if (!ext) return null;
+  if (!ext.rhs) return [];                                       // a bare [Global] names the interface itself
+  if (ext.rhs.type === "*") return EXPOSED_STAR;
+  if (ext.rhs.type === "identifier") return [ext.rhs.value];
+  if (ext.rhs.type === "identifier-list") return ext.rhs.value.map((v) => (v && v.value !== undefined ? v.value : v));
+  return null;
+};
+const extOf = (node, name) => (node && node.extAttrs || []).find((a) => a.name === name);
+/* §3.3.7's "own exposure set", as a Set of global names or EXPOSED_STAR; null when the construct carries no
+   [Exposed] at all, which is the case the algorithm answers by walking outward rather than by defaulting. */
+const ownExposure = (node) => {
+  const v = rhsNames(extOf(node, "Exposed"));
+  return v === null ? null : v === EXPOSED_STAR ? EXPOSED_STAR : new Set(v);
+};
+/* THE GLOBAL NAMES THE CORPUS DEFINES, per §3.3.8 [Global]: "Each of the identifiers mentioned must be a
+   global name of some interface". A bare [Global] takes the interface's own identifier. */
+const globalNamesOf = new Map();
+for (const n of idl.declarations) {
+  if (n.type !== "interface" || !n.name) continue;
+  const v = rhsNames(extOf(n, "Global"));
+  if (v === null || v === EXPOSED_STAR) continue;
+  const names = v.length ? v : [n.name];
+  globalNamesOf.set(n.name, new Set([...(globalNamesOf.get(n.name) || []), ...names]));
+}
+/* WHICH OF THEM THIS ENGINE BUILDS — the [Global] interfaces this audit is auditing. An interface with a row
+   is one this engine has a component for, which is exactly the question, and it is the same census every other
+   number in this file is drawn from rather than a second opinion beside it. */
+const BUILT_GLOBALS = new Set();
+for (const [g, names] of globalNamesOf) if (AUDITED.has(g)) for (const n of names) BUILT_GLOBALS.add(n);
+/* AN EMPTY SET WOULD SILENTLY EMPTY THE GAP LIST — every member's exposure set would fail to meet it and the
+   audit would report a clean bill for a program that installs nothing. That is the largest false COMPLETE this
+   file could mint, so it CRASHES here instead of degrading: a run with no global is a run that cannot ask the
+   question, never a run whose answer is "nothing is owed". */
+if (!BUILT_GLOBALS.size)
+  throw new Error("[idl-audit] no [Global] interface is in this audit's census, so Web IDL §3.3.7's exposure " +
+                  "question has no realm to be asked about — the engine builds no global, or the census lost " +
+                  "the interface that is one");
+/* §3.3.7's "exposure set intersection of a construct C and interface-or-null H". */
+const exposureIntersect = (c, h) => {
+  if (h === null) return c;
+  if (c === EXPOSED_STAR) return h;
+  if (h === EXPOSED_STAR) return c;
+  return new Set([...c].filter((x) => h.has(x)));
+};
+const ifaceExposure = (name) => {
+  const node = byName.get(name);
+  const own = node ? ownExposure(node) : null;
+  return own === null ? EXPOSED_STAR : own;   // no [Exposed] anywhere: this index has nothing to narrow with
+};
+/* §3.3.7's "get the exposure set of a construct C", for a member declaration `m` written on container `cont`,
+   with `host` the including interface when `cont` is an interface mixin and null otherwise. The three walks
+   the algorithm makes — member to container, partial to original, mixin to host — are the three arms here. */
+const memberExposure = (m, cont, host) => {
+  const h = host ? ifaceExposure(host) : null;
+  let own = ownExposure(m);
+  if (own !== null) return exposureIntersect(own, h);
+  own = ownExposure(cont);
+  if (cont.partial || cont.type === "interface mixin") {
+    if (own !== null) return exposureIntersect(own, h);
+    if (cont.type === "interface mixin") return h === null ? EXPOSED_STAR : h;
+    return ifaceExposure(cont.name);          // a partial with no [Exposed]: the original definition's
+  }
+  return own === null ? EXPOSED_STAR : own;
+};
+/* EVERY DECLARATION OF EVERY MEMBER, filed under the interface it lands on. A name can be declared more than
+   once — a base, a partial, a mixin — so the exposure sets are kept as a LIST and a member is exposed here if
+   ANY of its declarations is. §3.3.7 requires the overloads of one operation to agree, and says nothing about
+   a name two separate declarations both define; taking the union is the direction that cannot manufacture an
+   exclusion out of a declaration that does not narrow. */
+const memberExposures = new Map();
+const fileExposure = (iface, name, set) => {
+  if (!memberExposures.has(iface)) memberExposures.set(iface, new Map());
+  const per = memberExposures.get(iface);
+  if (!per.has(name)) per.set(name, []);
+  per.get(name).push(set);
+};
+const includedBy = new Map();
+for (const n of idl.declarations)
+  if (n.type === "includes") includedBy.set(n.includes, [...(includedBy.get(n.includes) || []), n.target]);
+const namedMember = (m) => (m.type === "attribute" || m.type === "operation" || m.type === "const") && m.name;
+for (const n of idl.declarations) {
+  if (!n.name) continue;
+  if (n.type === "interface" || n.type === "callback interface" || n.type === "namespace") {
+    for (const m of n.members || []) if (namedMember(m)) fileExposure(n.name, m.name, memberExposure(m, n, null));
+  } else if (n.type === "interface mixin") {
+    for (const host of includedBy.get(n.name) || [])
+      for (const m of n.members || []) if (namedMember(m)) fileExposure(host, m.name, memberExposure(m, n, host));
+  }
+}
+/* The one question a row asks: is this member exposed in some realm this engine builds. `null` means the index
+   has no declaration for the name — see the sound-direction paragraph above; the caller keeps such a member. */
+const exposureHere = (chain, name) => {
+  const sets = [];
+  for (const c of chain) {
+    const per = memberExposures.get(c);
+    if (per && per.has(name)) sets.push(...per.get(name));
+  }
+  if (!sets.length) return null;
+  const reach = sets.some((s) => s === EXPOSED_STAR || [...s].some((g) => BUILT_GLOBALS.has(g)));
+  return { reach, sets };
+};
+const showExposure = (s) => (s === EXPOSED_STAR ? "*" : `(${[...s].join(",")})`);
+
 for (const [iface, paths] of AUDITED) {
   const file = paths.join(" + ");
   let src = "", missing = [], present = [];
@@ -857,6 +1001,12 @@ for (const [iface, paths] of AUDITED) {
      bit per interface (the overloads are one question, "does `new` run anything"), it is NOT inherited
      (ownConstructors), and it enters neither `distinctAbsent`, `pairsAbsent` nor `totalMissing`. */
   const ctors = ownConstructors(iface);
+  /* The `noIdl` guard above already `continue`d for every name this index does not carry, so `null` here would
+     mean that guard stopped holding — asserted rather than defaulted past, because the default it replaces is
+     what made an unknown interface read as one with no constructor. */
+  if (ctors === null)
+    throw new Error(`[idl-audit] ${iface} reached the constructor census and the IDL index does not carry it — ` +
+                    `the noIdl guard above is meant to make that unreachable`);
   const ctorAbsent = ctors.length && !world.constructs.has(iface);
   /* HTML §3.2.3's population is counted apart, because it is ONE piece of work and not sixty-nine. §3.2.3 says
      interfaces annotated with [HTMLConstructor] "have the following overridden constructor steps" — one
@@ -916,7 +1066,26 @@ for (const [iface, paths] of AUDITED) {
      asserted about, because the categories being disjoint is what the labels below promise — subtract the
      stubs here and the promise is true by construction rather than by a check somebody keeps passing. */
   const stubSet = new Set(noop);
-  const open = spec.filter((n) => !installed.has(n) && !stubSet.has(n) && !condNames.has(n));
+  /* WEB IDL §3.3.7 — see the derivation above. A member whose exposure set meets no global this engine builds
+     leaves the gap list: there is nothing to implement, because §3.7.7 Operations gives a property only to an
+     EXPOSED member and installing this one would be the violation. It is NAMED rather than dropped, with its
+     exposure set printed, so nobody works it off a shorter list and nobody re-derives the same question.
+     THE OTHER SIDE IS CHECKED, which is what makes this a derivation and not a filter: a member the engine
+     INSTALLS that this computation says is not exposed here is a contradiction between the corpus and the
+     program, and it is loud. Without it the exposure rule could only ever remove work, and a rule that can
+     only subtract is one no evidence can refute. */
+  const notExposed = [], installedNotExposed = [];
+  for (const n of spec) {
+    const e = exposureHere(chain, n);
+    if (!e || e.reach) continue;
+    if (installed.has(n) || stubSet.has(n)) installedNotExposed.push([n, e.sets]);
+    else if (!condNames.has(n)) notExposed.push([n, e.sets]);
+  }
+  const notExposedSet = new Set(notExposed.map(([n]) => n));
+  defect("members installed that Web IDL §3.3.7 [Exposed] does not expose in any global this engine builds",
+         installedNotExposed.length);
+  const open = spec.filter((n) => !installed.has(n) && !stubSet.has(n) && !condNames.has(n) &&
+                                  !notExposedSet.has(n));
   const absent = open.filter((n) => !maybeHere.has(n));
   const unproven = open.filter((n) => maybeHere.has(n));
   totalMissing += absent.length + noop.length;
@@ -983,6 +1152,16 @@ for (const [iface, paths] of AUDITED) {
                                `JS_SetPropertyStr onto an object no interface declaration reaches: either a ` +
                                `member installed as a plain own property, or a record field of the same name)`);
   if (cond.length) parts.push(`CONDITIONAL ${condNames.size} — ${[...condNames].join(", ")} (${cond[0].why})`);
+  if (notExposed.length) parts.push(`NOT-EXPOSED ${notExposed.length} — ${notExposed.map(([n, sets]) =>
+    `${n} [Exposed=${sets.map(showExposure).join(" | ")}]`).join(", ")} (Web IDL §3.3.7 [Exposed]: the ` +
+    `member's exposure set meets no global this engine builds — ${[...BUILT_GLOBALS].join(", ")} — and ` +
+    `§3.7.7 Operations gives a property only "for each unique identifier of an exposed operation defined on ` +
+    `the interface", so this is a member to NOT install and there is nothing here to write. Derived from the ` +
+    `corpus's own extended attributes, so it needs no declaration and must not be given one)`);
+  if (installedNotExposed.length) parts.push(`INSTALLED BUT NOT EXPOSED ${installedNotExposed.length} — ` +
+    `${installedNotExposed.map(([n, sets]) => `${n} [Exposed=${sets.map(showExposure).join(" | ")}]`).join(", ")}` +
+    ` is on this prototype and Web IDL §3.3.7 exposes it in no global this engine builds — remove the install ` +
+    `or build the global its exposure set names`);
   if (condStale.length) parts.push(`STALE EXCLUSION ${condStale.length} — ${condStale.map((e) => e.name).join(", ")}` +
                                    ` declared excluded at ${condStale[0].file}:${condStale[0].line} but the IDL ` +
                                    `no longer carries the member — delete the exclusion`);
@@ -1001,8 +1180,23 @@ for (const [iface, paths] of AUDITED) {
   if (parts.length) console.log(`[idl-audit] ${iface} (${file}): ${parts.join(" | ")}`);
   else console.log(`[idl-audit] ${iface}: complete`);
 }
-defect(`ABSENT members (distinct; ${pairsAbsent} interface-member pairs a page cannot reach)`,
-       distinctAbsent.size);
+/* WHAT THIS CATEGORY HAS RULED OUT, AND THE ONE THING IT CANNOT — because the verdict's closing sentence used
+   to name ONE action for it ("implement the member in its real component") and that action is WRONG for part
+   of the population, which is §AN-ASSERT-THAT-NAMES-A-REMEDY inside an instrument: right about the FACT, wrong
+   about the ACTION, and a reader who obeys it builds the wrong thing. Measured: of three findings examined in
+   one session, TWO were correct absences whose declared remedy was wrong, one of them because the spec states
+   the member has no getter steps at all — so the count was honest and the instruction beside it was not.
+   FOUR of the five states a not-installed member can be in are decided mechanically and are subtracted before
+   this count: installed elsewhere on the chain, js_noop-stubbed, declared CONDITIONAL by idl_members_excluded,
+   and §3.3.7-unexposed. The fifth is a spec's PROSE — steps that are stated to do nothing, or a condition the
+   IDL cannot carry — and no reading of the corpus can see it, so this label states BOTH actions rather than
+   picking the commoner one. Naming the declaration as an equal outcome is what stops a reader working the list
+   off by writing members the spec forbids. */
+defect(`ABSENT members (distinct; ${pairsAbsent} interface-member pairs a page cannot reach) — each is ` +
+       `EITHER a member to implement in its real component OR, where the spec's prose states the member has ` +
+       `no steps or excludes it under a condition this user agent does not meet, an idl_members_excluded ` +
+       `declaration to make at the component's prototype build; this audit cannot tell those two apart and ` +
+       `does not claim to`, distinctAbsent.size);
 defect(`js_noop-STUB members (distinct; ${pairsNoop} interface-member pairs)`, distinctNoop.size);
 /* THE TWO CONSTRUCTOR CATEGORIES, EACH WITH THE SET IT IS A FRACTION OF IN ITS OWN LABEL. They are separate
    because the WORK is separate, not because the count looks better split: HTML §3.2.3's are one shared
@@ -1033,19 +1227,26 @@ const legacyFactories = new Set();
 for (const n of idl.declarations)
   for (const a of n.extAttrs || [])
     if (a.name === "LegacyFactoryFunction" && a.rhs && typeof a.rhs.value === "string") legacyFactories.add(a.rhs.value);
+/* THE LIVE PATH FOR `ownConstructors`'s MISS — see its own comment. A name here is one the ENGINE mints, so it
+   need not be an interface at all, and the two readings are told apart rather than merged: the corpus carries
+   the interface and it declares no constructor, or the corpus carries no such name. Both belong in this one
+   category (the engine gives [[Construct]] to something the platform does not construct either way) and each
+   row says WHICH, because the fix differs — write the mint's justification against the IDL, or fix a typo. */
 const strayConstructs = [...world.constructs]
-  .filter((n) => !legacyFactories.has(n) && !ownConstructors(n).length).sort();
+  .filter((n) => { const c = ownConstructors(n); return !legacyFactories.has(n) && !(c && c.length); }).sort();
 defect("interface objects this engine gives [[Construct]] that the platform declares no constructor for",
        strayConstructs.length);
 for (const n of strayConstructs)
-  console.log(`[idl-audit] ${n}: this engine mints a CONSTRUCTING interface object for it and no IDL in the ` +
-              `corpus declares \`${n}\` with a constructor operation — either the identifier beside the mint ` +
+  console.log(`[idl-audit] ${n}: this engine mints a CONSTRUCTING interface object for it and ` +
+              `${byName.has(n) ? `the corpus declares \`${n}\` with no constructor operation`
+                               : `NO IDL in the corpus declares \`${n}\` at all`} — either the identifier beside the mint ` +
               `misspells an interface, or the mint is a Web IDL §3.7.2 "Legacy factory functions" name this index does ` +
               `not carry. Web IDL §3.7.1's construct steps throw a TypeError for an interface not declared ` +
               `with one, so a page reaching this gets behaviour no browser has`);
 if (totalMissing)
-  console.log(`[idl-audit] ${distinct.size} distinct spec members not yet implemented (${totalMissing} across ` +
-              `all interfaces, since an inherited gap is absent on each) — implement each at the root, never a stub.`);
+  console.log(`[idl-audit] ${distinct.size} distinct spec members this engine does not install (${totalMissing} ` +
+              `across all interfaces, since an inherited gap is absent on each) — see the ABSENT category in ` +
+              `the verdict for the two outcomes that population holds; never a stub either way.`);
 /* THE INTERFACES THAT NEVER REACHED THE AUDIT, reported in the same breath as the members that did, because a
    surface the run silently declined to look at is indistinguishable in the total from one it looked at and
    found complete. The three lists are the three answers, and only the first is an acceptable steady state. */
@@ -1289,6 +1490,15 @@ const creditSubsets = (name) => {
 const opsOf = new Map();
 const memberOps = (iface) => {
   if (opsOf.has(iface)) return opsOf.get(iface);
+  /* AN INTERFACE THIS INDEX DOES NOT CARRY HAS NO OPERATION SURFACE TO READ, and answering an EMPTY one is the
+     silent half of the default `ownConstructors` used to hold: `flatten` returns [] for an unknown name too, so
+     the whole map would come back empty and every dictionary that name's members accept would go uncounted
+     with nothing said. Both call sites below establish the name is declared before asking, and this is the
+     assertion that keeps them doing so. */
+  if (!byName.has(iface))
+    throw new Error(`[idl-audit] memberOps was asked for ${iface}, which no spec in @webref/idl declares — its ` +
+                    `callers must establish that first, because an empty answer here is indistinguishable ` +
+                    `from an interface with no operations`);
   const m = new Map();
   /* AN OPERATION IS INHERITED AND A CONSTRUCTOR IS NOT, so the two are read from different member lists.
      Web IDL §3.7.1 Interface object's construct steps open "If I was not declared with a constructor
@@ -1300,7 +1510,7 @@ const memberOps = (iface) => {
      neither of which any browser lets a page call. It was invisible while the only thing read off a ctor was
      which dictionaries it takes AND those dictionaries were declared anyway — a wrong reachability that
      happened to reach a true row. */
-  const own = new Set(ownConstructors(iface));
+  const own = new Set(ownConstructors(iface));   /* non-null: the assertion above established the name */
   for (const x of flatten(iface)) {
     if ((x.type !== "operation" && x.type !== "constructor") || (x.type === "operation" && !x.name)) continue;
     if (x.type === "constructor" && !own.has(x)) continue;        /* a base's constructor is not this one's */
@@ -1349,6 +1559,11 @@ for (const r of world.records) {
      keyData` position is declared IDL_BUFFERSOURCE, a narrowing that file names at the declaration and whose
      jwk arm throws a TypeError by name — so the members could not be read however they were declared. */
   for (const iface of r.ifaces || []) {
+    /* An interface tag naming something the corpus does not declare is ALREADY its own category above
+       ("interface tags naming something the IDL corpus does not declare"), so this arm skips it rather than
+       asking memberOps for a surface that does not exist — which is what makes that assertion satisfiable and
+       keeps one wrong tag from being reported here a second time as a missing dictionary declaration. */
+    if (!byName.has(iface)) continue;
     const ops = memberOps(iface).get(r.name);
     if (ops) asks.push([`${iface}.${r.name}`, ops]);
   }
@@ -1606,7 +1821,8 @@ console.log(`[idl-audit] ── per interface, ranked by OWN work ── ${gapRo
             `— out of every member it declares; ABSENT is everything a page cannot reach on it at all, out of ` +
             `its whole flattened surface, own plus inherited, so one member built on a base clears an ` +
             `inherited gap on every row below it. Neither numerator counts a member this run reported ` +
-            `CONDITIONAL, UNPROVEN or js_noop-STUB above: those are not installed and are not gaps either.`);
+            `CONDITIONAL, NOT-EXPOSED, UNPROVEN or js_noop-STUB above: those are not installed and are not ` +
+            `gaps either.`);
 if (withGaps.length) {
   /* A DERIVED ROW IS MARKED, because a table that does not say so reads as if every row had been audited all
      along. These are the interfaces no row named — they were in no total until the set became derived, so
@@ -1639,7 +1855,16 @@ if (!defects.size) {
 }
 for (const [kind, n] of [...defects].sort((a, b) => b[1] - a[1]))
   console.log(`[idl-audit]   ${String(n).padStart(5)}  ${kind}`);
-console.error(`[idl-audit] FAILED — ${defects.size} category(ies) above. Each is a gap to close at the ROOT: ` +
-              `implement the member in its real component (never a js_noop stub, never a g_opaque prototype), ` +
-              `make the install construct resolvable, or delete the declaration that has gone stale.`);
+/* THE ACTION IS ON THE CATEGORY'S OWN LINE, AND THIS SENTENCE NO LONGER GUESSES ONE FOR ALL OF THEM. It used
+   to offer three actions for however many categories printed above it, with nothing saying which belonged to
+   which — and its first action, "implement the member in its real component", is affirmatively WRONG for a
+   member whose spec states no steps and for one §3.3.7 exposes in no global this engine builds. A remedy that
+   names an action with no object is a crash nobody can act on; one that names the wrong object is worse,
+   because a reader who obeys it lands a conformance violation and the instrument that told them to goes on
+   printing. Each category above states its own outcome; what is common to all of them is only that a category
+   is non-empty, and that is all this line is entitled to say. */
+console.error(`[idl-audit] FAILED — ${defects.size} category(ies) above. Each names ONE disagreement between ` +
+              `the platform's IDL and this engine, and each states its own outcome on its own line: they are ` +
+              `not all members to write, and a category is closed at the ROOT by the action ITS line names — ` +
+              `never a js_noop stub and never a g_opaque prototype, whichever line sent you.`);
 process.exit(1);
