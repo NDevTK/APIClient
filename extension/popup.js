@@ -1234,16 +1234,25 @@ function renderDeepStatus() {
   el.style.display = "block";
 }
 
-// WHAT EACH ENGINE RUN COST AND WHAT IT LEARNED — the eight counters solver/result.c emits in one snprintf,
+// WHAT EACH ENGINE RUN COST AND WHAT IT LEARNED — the counters solver/result.c emits in one snprintf,
 // which bridge.js asserts field-for-field and writes onto `self._engineLog`, and which until recently reached
 // no human at all: the array's only reader was `self.rendererPoolProbe`, a function nothing in this extension
 // or in testing/ calls. They are the ONLY observable that the single BFS context-switches, forks and pumps jobs
-// rather than running its flows FIFO, and beside them ride what the run LEARNED (endpoints, sinks) and what
+// rather than running its flows FIFO, and beside them ride what the run LEARNED (endpoints, sinks), whether it
+// ever reached the code the page never called (the orphan census), and what
 // it PARKED for the next session — the cross-session frontier, otherwise invisible.
 //
+// THIS HEADER USED TO SAY "the eight counters" AND "all thirteen fields", AND BOTH WERE WRONG BEFORE ANYTHING
+// WAS ADDED TO THEM. A count of what a list holds is a census, and CLAUDE.md says where a census belongs: in
+// the command that answers it, never in prose beside the thing it counts, because the prose is read as the
+// contract and the next field lands without it. That is not hypothetical here — the two fields this view was
+// missing (`orphansDriven`/`orphansAsked`) had been on the record, asserted, for as long as these numbers had,
+// and a header claiming to describe a fixed-size set is exactly what makes an omission from that set invisible.
+// So this paragraph names WHAT the fields are and no longer how many.
+//
 // A CRASH RECORD IS RENDERED AS AN ABSENCE, NEVER AS ZEROES. bridge.js builds two shapes on purpose: a run
-// with an @RESULT document carries all thirteen fields, and a run without one carries `run`, `resumed` and
-// `url` and nothing else, because "seven zeroes read as 'the engine ran and did nothing' —
+// with an @RESULT document carries the whole set, and a run without one carries `run`, `resumed`, `url` and
+// `err` and nothing else, because "seven zeroes read as 'the engine ran and did nothing' —
 // indistinguishable in the log from a real run that explored nothing, which is a finding". A `|| 0` here would
 // undo exactly that distinction, one field at a time, which is why every field below is asserted instead.
 //
@@ -1335,12 +1344,80 @@ function renderEngineRuns() {
     }
     const live = m.run === "partial";
     const parts = FULL.map(([k, label]) => {
+      /* THE MESSAGE NAMED A COUNT AND THE COUNT WAS WRONG IN BOTH DIRECTIONS, which is the stale-`DFAIL`
+         shape with no crash to retire it: it said "the eight cost counters", and `FULL` holds more rows than
+         that AND holds rows that are not cost counters at all — `endpoints`, `sinks` and `park` are LENGTHS
+         bridge.js takes off `fetchCallSites`, `securitySinks` and `_park`. So a reader who hit this assert was
+         sent to count something in one snprintf that was never in it. A census of what a list holds belongs
+         in the list, so the message names the two PRODUCERS a missing row can be broken at and no number. */
       DCHECK(typeof m[k] === "number",
-             "an engine run record reached the popup with no numeric " + k + " — solver/result.c emits the " +
-             "eight cost counters in one snprintf and bridge.js asserts each of them, so a record that has " +
-             "an @RESULT document and is missing one is that seam having changed underneath both");
+             "an engine run record reached the popup with no numeric " + k + " — every row of this list is " +
+             "either a counter solver/result.c emits in its one cost snprintf or a length bridge.js takes " +
+             "off an array that same document carries, and bridge.js asserts each of them before writing " +
+             "this record, so a record that has an @RESULT document and is missing one is that seam having " +
+             "changed underneath both");
       return esc(label) + " " + esc(String(m[k]));
     });
+    /* AND WHETHER THIS RUN EVER DROVE CODE THE PAGE NEVER CALLED — solver/engine.h's orphan census. It is
+       emitted by result.c in the same snprintf as every counter above, asserted by bridge.js in the same loop
+       as every counter above, written onto this record beside them — and rendered by NOBODY. The panel showed
+       every cost number this engine emits and neither of the two that answer §What-the-tool-produces' own
+       headline question, "what the bundle CAN do but didn't". solver/engine.h says exactly this about the
+       half that came before it — "the
+       number that says whether the headline surface of this tool did anything at all could not be read off a
+       run" — and the fix it describes stopped one hop short of a human: it crossed the ABI and then sat on a
+       record whose only reader is this function. A computed value with a writer and no reader is not a
+       mechanism, which is the sentence three comments up, about four other fields, in this same list.
+       IT IS ONE SENTENCE AND NOT TWO ENTRIES IN `FULL`, BECAUSE THE PAIR IS READ TOGETHER OR MIS-READ. A flat
+       "orphan drives 0" in a row of counters is THREE different facts under one rendering — the bundle ships
+       no uncalled code, the walk ran and the heap held none, or no flow ever reached the end of its own work
+       — and `asked` is the only thing that separates them (solver/engine.h states the table). Two independent
+       cells invite exactly the reading engine.h names as wrong: taking "there was nothing to drive" for
+       "something was starved".
+       AND `driven` COUNTS SEEDS AND NOT RUNS, WHICH IS WHERE ITS FIRST READER WENT WRONG — engine.h's own
+       words. The count is raised the instant a take succeeds, before the drive is on the frontier, so it says
+       a flow was CREATED for that body and never that the body executed; what says THAT is the endpoint the
+       drive recorded, which is the `endpoints learned` number in the row above. This sentence says SEEDED for
+       that reason and never "driven", because the field name is the thing that misleads.
+       AND THE THREE-STATE READING HOLDS ONLY ON A FRESH SESSION, WHICH THIS RECORD CAN ANSWER FOR ITSELF. On a
+       resumed one a take can ROUTE to a flow already waiting for that body without raising `driven`, so
+       engine.h says the middle row "is ambiguous there and the pair must be read on a fresh one". `resumed` is
+       on this same record and was already asserted above, so this view STATES the ambiguity rather than
+       printing a reading that does not hold — which is the same discipline `members: 0` gets one block down.
+       THE FOURTH STATE IS NOT REACHABLE AND IS NOT IMPLIED. engine.h records that a seeded drive never given
+       the thread and one picked and cut short take opposite fixes, that no field on the flow can separate
+       them (every candidate is inherited by forks), and that until a non-inherited picked-marker exists
+       `driven > 0` with the finding absent "says DISPLACEMENT and does not say which kind". So the last arm
+       below points at the endpoint surface and stops; it does not name a cause. */
+    DCHECK(typeof m.orphansDriven === "number" && typeof m.orphansAsked === "number",
+           "an engine run record reached the popup without its orphan census — solver/result.c emits " +
+           "`_orphansDriven`/`_orphansAsked` in the same cost snprintf as every counter above and bridge.js " +
+           "asserts both before writing them onto this record, so a record that has an @RESULT document and " +
+           "is missing one is that relay broken, and whether this tool drove any code the page never called " +
+           "goes back to being readable only off a stdout the renderer does not tee");
+    /* THE DISCRIMINATOR IS THE ONE ALREADY ON THIS RECORD, AND IT IS A COUNT OR A STATED ABSENCE. `m.resumed
+       === null` is "this run never seeded a frontier", which is not a resumed session — the routing arm that
+       consumes a take without seeding cannot have fired — so it takes the fresh reading. Only a POSITIVE
+       residue count makes the middle state ambiguous. */
+    const fromResidue = m.resumed !== null && m.resumed > 0;
+    const orphan = m.orphansAsked === 0
+      ? `uncalled code: the question was never reached — no flow of this document ever ran out of its own `
+        + `work, so nothing walked the heap for a function the bundle ships and never calls. That is a result `
+        + `about this RUN, not a fact about the page.`
+      : m.orphansDriven === 0
+        ? `uncalled code: the walk ran ${esc(String(m.orphansAsked))} time(s) and seeded no drive`
+          + (fromResidue
+              ? ` — but this session was seeded from a parked residue of ${esc(String(m.resumed))} flow(s), `
+                + `where a take can route to a flow already waiting for that body without counting here. So `
+                + `this does NOT establish that the bundle ships no uncalled code; the pair reads cleanly `
+                + `only on a fresh session.`
+              : `: the heap held no function the page had not already called. That is a fact about the PAGE, `
+                + `and it is NOT evidence that anything was starved.`)
+        : `uncalled code: ${esc(String(m.orphansDriven))} drive(s) SEEDED over `
+          + `${esc(String(m.orphansAsked))} walk(s) — seeded, not run. The count is raised when the take `
+          + `succeeds, before the drive reaches the frontier, so whether the uncalled body EXECUTED is `
+          + `answered by the endpoints learned above and never by this number; a seeded drive with no `
+          + `endpoint of its own is displacement, and this pair cannot say of which kind.`;
     /* AND WHAT THE ONE BFS WAS ORDERING ITS FLOWS BY — solver/result.c's `_wfq`, relayed whole by bridge.js.
        Until it rode the result document the scheduler's ordering was written ONLY by the smoke driver's own
        loop, which the extension's ABI never enters, so every ordering number this project had ever quoted was
@@ -1457,8 +1534,13 @@ function renderEngineRuns() {
     const head = live
       ? `<strong>still running</strong> — snapshot, not a total; ${resumedTxt} · so far: `
       : `run complete · ${resumedTxt} · `;
+    /* THE ORPHAN SENTENCE SITS DIRECTLY UNDER THE LEARNED/COST ROW AND ABOVE THE SCHEDULER'S OWN READINGS,
+       because that is what it is about: the row above says what this run LEARNED, this says whether it ever
+       reached the one surface no live traffic can produce, and everything below it is the frontier's internal
+       accounting. Its last arm points AT the endpoint number in the row above, so the two must be adjacent. */
     return `<div class="deep-row"><span class="deep-label">${where} — ${head}` + parts.join(" · ")
-         + `</span><span class="deep-label">${order}</span>` + denom + censusRows.join("") + `</div>`;
+         + `</span><span class="deep-label">${orphan}</span>`
+         + `<span class="deep-label">${order}</span>` + denom + censusRows.join("") + `</div>`;
   }).join("");
   const live = engineRuns.filter((m) => m.run === "partial").length;
   return `<details class="deep-cross-tab"><summary>Engine runs — cost, what was learned, what was parked `
