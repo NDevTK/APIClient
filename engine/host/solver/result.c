@@ -596,7 +596,20 @@ char *result_wfq_json(void) {
                      "\"visMin\":%lld,\"visMax\":%lld,\"visZero\":%ld,"
                      "\"cands\":%ld,\"candUnrun\":%ld,\"candSvcMax\":%lld,\"candDecMax\":%ld,\"decMax\":%ld,"
                      "\"distMax\":%.3f,\"wTop\":%.3f,\"wMin\":%.3f,\"candWMax\":%.3f,"
-                     "\"topSvc\":%lld,\"topSvcFam\":%lld,\"nonrewardMax\":%.3f,"
+                     /* …AND THE EVENT THE TWO NOTCHES BESIDE IT ARE A READING BETWEEN. `topSvc`/`topSvcFam`
+                        say how much silence the front's account has accumulated SINCE its window was last
+                        forgiven; `topForgiven` is how many forgivenesses there have been, which is what turns
+                        "the leader's aging is being reset" from an inference into a count. Read it against
+                        `picksMax`: an emission zeroes both aging halves for EVERY arm of the account at once,
+                        so the frontier collapses into visit tiers that are exactly tied and flow_pick sweeps a
+                        tier from its oldest member forward, one member per quantum, restarting at the head of
+                        the registry on the next emission. If that is what is happening, `picksMax` tracks this
+                        number and `picksLive / picksMax` is the sweep depth between two emissions.
+                        ITS SERIES IS NOT A COUNTER EVEN THOUGH IT IS ONE. The count belongs to whichever
+                        account is at the FRONT, and that can change, so this row may fall between samples — a
+                        fall is a change of leader, which `valTop` falling beside it confirms. solver/flow.h
+                        states the pair. `valTop / topForgiven` is points per finding on the leading account. */
+                     "\"topSvc\":%lld,\"topSvcFam\":%lld,\"topForgiven\":%lld,\"nonrewardMax\":%.3f,"
                      "\"jobsReady\":%ld,\"jobsFramed\":%ld,\"jobsOwed\":%ld,\"jobWGap\":%.3f,"
                      "\"delivReady\":%ld,\"delivFramed\":%ld,\"delivOwed\":%ld,\"delivWGap\":%.3f,"
                      /* AND WHAT ASKING THIS ORDER COST, which every row above is silent about because every
@@ -631,7 +644,8 @@ char *result_wfq_json(void) {
                      (long long)w.vis_min, (long long)w.vis_max, w.vis_zero,
                      w.cand_members, w.cand_unrun, (long long)w.cand_svc_max, w.cand_dec_max, w.dec_max,
                      w.dist_max, w.w_top, w.w_min, w.cand_w_max,
-                     (long long)w.top_svc, (long long)w.top_svc_fam, w.nonreward_max,
+                     (long long)w.top_svc, (long long)w.top_svc_fam, (long long)w.top_forgiven,
+                     w.nonreward_max,
                      w.jobs_ready, w.jobs_framed, w.jobs_owed, w.job_w_gap,
                      w.deliv_ready, w.deliv_framed, w.deliv_owed, w.deliv_w_gap,
                      flow_scan_runs(FLOW_SCAN_NEXT),  flow_scan_weights(FLOW_SCAN_NEXT),

@@ -1467,6 +1467,35 @@ typedef struct {
        having stopped walking one population. */
     int64_t top_svc;
     int64_t top_svc_fam;
+    /* HOW MANY TIMES THE LEADING ACCOUNT'S WITHIN-FAMILY ORDER HAS BEEN ERASED — its `emit_gen`, which is
+       raised once per credited finding by flow_credit_emit and written by nothing else, so it IS that count
+       exactly rather than an estimate of it. `val_top` cannot stand in for it: a credit is any positive amount
+       (flow_credit_emit asserts only `v > 0.0`, and the @S survival ratchet credits the increment between two
+       fractions), so a ledger in points is not a count of events and this file already forbids deriving an
+       exactness argument from "`val` is integral".
+       WHAT IT IS FOR, AND IT IS THE ONE ROW THAT CAN DECIDE THE SWEEP QUESTION `picks_max` RAISES. An emission
+       forgives the whole account's silence window in one statement — `fam_us` to zero and the generation bumped,
+       which makes flow_own_silence answer ZERO for every arm of that family at once. Both halves of the aging
+       therefore read zero for every member simultaneously, and the weight collapses to the reward (common,
+       through one pointer), the fitness (zero for a non-candidate) and 1/(1+visits). Every arm inside one visit
+       tier is then EXACTLY tied, and flow_pick walks the registry — birth order — returning the first maximum,
+       so the tier is swept from its OLDEST member forward, one member per quantum of own silence, and the next
+       emission restarts that walk at the head of the registry. The own-silence charge is the only thing that
+       advances the sweep, and this is the count of the events that erase it.
+       SO THE READING IS AN ARITHMETIC ONE, which is what makes it falsifiable rather than a story: if the sweep
+       restarts, `picks_max` tracks THIS number within a small factor (the oldest member of the top tier is
+       re-picked about once per restart) and `picks_live / picks_max` is the mean sweep DEPTH between two
+       emissions. `picks_max` far below this says members are sinking for good and something else drains the
+       cohort; this at or near zero while `picks_max` is not says the erasure is not happening at all and the
+       restart reading is dead. `val_top / top_forgiven` is a second reading nobody had: whether the leading
+       account is earning findings or ratcheting fractions.
+       ITS KIND IS A COUNTER AND ITS SERIES IS NOT, WHICH IS THE TRAP THIS ROW WOULD OTHERWISE WALK INTO. The
+       quantity is a lifetime count OF ONE ACCOUNT, and which account is at the front can change between two
+       censuses — so the SERIES may fall, and a fall is a LEADER CHANGE rather than a counter running backwards.
+       `val_top` moves with it and is what tells the two apart: both falling is a new account at the front; this
+       falling while `val_top` rises is one account's generation having gone backwards, which nothing may do.
+       Read it per sample against `picks_max`, never differenced on its own. */
+    int64_t top_forgiven;
     /* THE MOST EVERY TERM OF THE ORDER EXCEPT THE REWARD CAN LIFT ONE MEMBER — flow.c's FLOW_NONREWARD_MAX,
        carried out of the engine rather than restated by whoever reads the gaps. It is the bound `flow_nonreward`
        asserts on every weight it computes, so it is the number that decides whether a member standing behind the

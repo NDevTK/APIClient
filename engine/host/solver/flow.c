@@ -3009,6 +3009,7 @@ void flow_wfq_census(WfqCensus *out) {
     out->dist_max = 0.0;
     out->w_top = out->w_min = out->cand_w_max = 0.0;
     out->top_svc = out->top_svc_fam = 0;
+    out->top_forgiven = 0;
     /* THE BOUND THE GAP ROWS ARE READ AGAINST, TAKEN FROM THE MACRO flow_nonreward ITSELF ASSERTS — not a
        constant this scan chose, and not one a reader re-derives. It is unconditional because it is a property of
        the FORMULA and not of the frontier: it is the same number on an empty scan as on a full one, which is
@@ -3255,6 +3256,46 @@ void flow_wfq_census(WfqCensus *out) {
            the census and the weight cannot disagree about the unit. */
         out->top_svc = flow_service_notch(top);
         out->top_svc_fam = flow_family_notch(top);
+        /* …AND HOW MANY TIMES THE FRONT'S ACCOUNT HAS HAD ITS SILENCE WINDOW FORGIVEN, which is the EVENT the
+           two notches above are a reading BETWEEN. They say how much silence has accumulated since the last
+           forgiveness; this says how many forgivenesses there have been, and the pair is what turns "the
+           leader's aging is being reset" from an inference into a count. It is read straight off the account
+           because flow_credit_emit is the only writer of that field and raises it exactly once per credit, so
+           there is nothing here to derive and nothing to keep in step. See flow.h for the sweep reading it
+           makes possible with `picks_max`.
+           THE CAST IS NARROWING AND CANNOT LOSE ANYTHING A SESSION CAN PRODUCE: the field is uint64 for the
+           reason its own comment gives (a wrap would alias a stale window mark onto a live generation), and one
+           increment per emitted finding cannot reach 2^63 in any run — asserted rather than assumed, because a
+           row that silently went negative would read as a leader change, which is exactly the state the series
+           is meant to detect. */
+        DCHECK(top->family != NULL && top->family->emit_gen <= (uint64_t)INT64_MAX,
+               "the leading account's forgiveness count does not fit the row that reports it — the census would "
+               "publish a NEGATIVE count, which its own reading takes for a change of leader, so a wrapped "
+               "generation would be reported as a healthy front");
+        /* GUARDED THE WAY ITS NEIGHBOURS ARE, BECAUSE THIS LINE WOULD OTHERWISE BE THE FIRST RELEASE-MODE
+           DEREFERENCE OF `top->family` ON THIS PATH — which is a DCHECK silently promoted by an edit rather
+           than by a decision. Every other row derived from the front reaches the account through an accessor
+           that answers 0 for a departed node (acct_family_val, acct_family_us, flow_own_silence, each of which
+           says "departed: its node is gone and so is its rank"), so the assert above is the only thing standing
+           between this read and a NULL — and it is compiled out in exactly the build where the dereference
+           would happen. Trading a dev abort for a release segfault is the trade that rule forbids. This is not
+           an `if` past a broken invariant: the invariant is asserted one line up, where it names the site, and
+           the guard states the same fact about rank the three accessors already state, so a departed front
+           reports the 0 its every other row reports instead of taking the process down. */
+        out->top_forgiven = top->family ? (int64_t)top->family->emit_gen : 0;
+        /* AND THE ONE IDENTITY THAT DEFINES IT, WHICH IS AN EQUIVALENCE AND NOT AN INEQUALITY. flow_credit_emit
+           raises `val` and bumps `emit_gen` in one function with no return between them, so an account has been
+           credited exactly when its generation has advanced — in BOTH directions. A generation past zero on a
+           ledger at zero is a bump from somewhere that is not an emission, and a ledger above zero at
+           generation zero is a credit that never forgave the window it was supposed to; the first would erase
+           the within-family order for nothing, and the second would leave a family carrying silence its own
+           finding had paid for. Neither is reachable through the one writer, which is what makes this a check on
+           a SECOND one. */
+        DCHECK((out->top_forgiven > 0) == (out->val_top > 0.0),
+               "the leading account's ledger and its forgiveness count disagree about whether it has ever "
+               "emitted — flow_credit_emit raises both in one statement and is the only writer of either, so "
+               "one of them has a second writer and every reading of the front's aging is about an account "
+               "whose window was opened or closed by something that emitted nothing");
     }
 
     /* THE FRONT IS ONE OF THE MEMBERS THIS SCAN ALREADY WALKED, SO ITS SILENCE LIES INSIDE THE EXTREMA IT
