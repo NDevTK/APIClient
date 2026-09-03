@@ -106,6 +106,24 @@ bool csp_element_is_nonceable(const lxb_dom_element_t *element);
 CspMatch csp_element_match_source_list(const CspDirective *directive, const lxb_dom_element_t *element,
                                        CspInlineType type, const char *source, size_t source_len);
 
+/* §6.7.2.3 "Does nonce match source list?" AND §6.7.2.4 "Does integrity metadata match source list?", ASKED OF
+ * THE LIST ALONE — the half of each algorithm that is settled before the request is looked at.
+ *
+ * NEITHER IS THE WHOLE ALGORITHM AND NEITHER STANDS IN FOR ONE. §6.7.2.3's step 3 iterates the list looking
+ * for an expression that "matches the nonce-source grammar", and its step 4 is "Return Does Not Match" —
+ * so a list carrying no nonce-source answers "Does Not Match" for EVERY nonce, and the request's cryptographic
+ * nonce metadata cannot change it. §6.7.2.4 says the same thing one step earlier and out loud: its step 2 is
+ * "Let integrity expressions be the set of source expressions in source list that match the hash-source
+ * grammar" and its step 3 is "If integrity expressions is empty, return Does Not Match".
+ *
+ * THEY ARE FACTS ABOUT THE LIST, AND THE CALLER ASKS ITS OWN QUESTION OF THEM. What a pre-request check asks
+ * here is "is this step's answer settled without a request field I do not carry"; where the answer is `true`
+ * the field is REQUIRED and the caller must have it. That is why the bit is exposed rather than a ready-made
+ * verdict: a `csp_nonce_matches(list, "")` would take an empty string nobody computed and hand back a
+ * plausible "Does Not Match" for exactly the policy whose answer depends on bytes the request never carried. */
+bool csp_source_list_has_nonce_source(const CspDirective *directive);
+bool csp_source_list_has_hash_source(const CspDirective *directive);
+
 /* §6.7.2.7 "does url match source list in origin with redirect count?" — the whole of what decides whether a
  * REQUEST may be made, and the algorithm every fetch directive's pre-request check ends in.
  *

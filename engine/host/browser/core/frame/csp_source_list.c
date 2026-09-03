@@ -169,6 +169,35 @@ bool csp_source_list_contains(const CspDirective *directive, const char *keyword
     return false;
 }
 
+bool csp_source_list_has_nonce_source(const CspDirective *directive)
+{
+    size_t i;
+
+    DCHECK(directive != NULL, "§6.7.2.3's source list was searched for its nonce-source expressions through a "
+                              "directive that does not exist — its step 1 asserts the list is not null, and a "
+                              "policy carrying no governing directive says NOTHING about the check, which is "
+                              "the CALLER's answer to give");
+    /* §6.7.2.3 step 3's loop, asked only whether it has a candidate at all: the comparison inside it is
+       against the request's nonce, which is not this function's to hold. */
+    for (i = 0; i < directive->n_value; i++)
+        if (csp_source_is_nonce(directive->value[i])) return true;
+    return false;
+}
+
+bool csp_source_list_has_hash_source(const CspDirective *directive)
+{
+    size_t i;
+
+    DCHECK(directive != NULL, "§6.7.2.4's source list was searched for its hash-source expressions through a "
+                              "directive that does not exist — its step 1 asserts the list is not null, and a "
+                              "policy carrying no governing directive says NOTHING about the check, which is "
+                              "the CALLER's answer to give");
+    /* §6.7.2.4 step 2's `integrity expressions`, reduced to step 3's question about it. */
+    for (i = 0; i < directive->n_value; i++)
+        if (csp_source_is_hash(directive->value[i])) return true;
+    return false;
+}
+
 bool csp_source_list_allows_all_inline(const CspDirective *directive, CspInlineType type)
 {
     bool allow_all_inline = false;

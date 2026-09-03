@@ -65,6 +65,21 @@ typedef struct {
  * added to one copy and not the other is a request one half of the engine refuses and the other half fetches. */
 bool fetch_is_destination_type(const char *destination);
 
+/* IS THAT DESTINATION SCRIPT-LIKE — Fetch §2.2.5 "Requests": "A request's destination is script-like if it is
+ * `audioworklet`, `paintworklet`, `script`, `serviceworker`, `sharedworker`, or `worker`."
+ * IT IS AN EXPORT FOR THE REASON THE PREDICATE ABOVE IS, and the paragraph above already made the argument:
+ * this is a MOVING ENUMERATION and a second copy of it is a question one half of the program answers `yes` to
+ * and the other `no`. The consumers do not ask it for one purpose either, which is what makes a shared reading
+ * matter rather than merely tidy — `extension/lib/safe-fetch.js` asks it to decide whether a reply may be
+ * ingested as CODE, and CSP §6.7.1.1 "Script directives pre-request check" asks it as the GATE on its whole
+ * step 1, so a destination one of them calls script-like and the other does not is a body compiled under a
+ * check that was never run over it.
+ * `xslt` IS NOT IN THE SET AND THAT IS DELIBERATE, in the standard rather than here: Fetch's own note says
+ * "Algorithms that use script-like should also consider `xslt` as that too can cause script execution. It is
+ * not included in the list as it is not always relevant and might require different behavior." A caller that
+ * wants it says so at its own site; this predicate answers §2.2.5's question and no other. */
+bool fetch_is_script_like(const char *destination);
+
 typedef struct {
     void (*owe)(JSContext *ctx, JSValueConst deliver, JSValueConst value, const FetchRequest *req);
 } FetchProvider;

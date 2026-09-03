@@ -96,6 +96,30 @@ bool fetch_is_destination_type(const char *destination)
     return false;
 }
 
+/* FETCH §2.2.5 "Requests"' SCRIPT-LIKE, ENUMERATED — see fetch.h for why it is an export. The list is the
+   standard's own sentence: "A request's destination is script-like if it is `audioworklet`, `paintworklet`,
+   `script`, `serviceworker`, `sharedworker`, or `worker`."
+   IT IS A STRICT SUBSET OF THE TABLE ABOVE AND IS NOT DERIVED FROM IT, because the two answer different
+   questions: `document` and `style` are destination types and are not script-like, and `xslt` is a
+   destination type that CAUSES script execution and is still not script-like (§2.2.5's note). A predicate
+   written as "a destination type that is not data" would be a third reading of a rule neither list states. */
+bool fetch_is_script_like(const char *destination)
+{
+    static const char *const SCRIPT_LIKE[] = {
+        "audioworklet", "paintworklet", "script", "serviceworker", "sharedworker", "worker"
+    };
+    size_t i;
+
+    /* THE SAME REFUSAL THE PREDICATE ABOVE MAKES: a request with no destination is a caller that has not read
+       §2.2.5 — every request has one and the EMPTY STRING is a destination, never the absence of one. It is a
+       `false` rather than an assert for the same reason: this answers a question ABOUT a string, and the
+       callers that must not be handed a null one assert that where the field is read. */
+    if (!destination) return false;
+    for (i = 0; i < sizeof SCRIPT_LIKE / sizeof *SCRIPT_LIKE; i++)
+        if (!strcmp(destination, SCRIPT_LIKE[i])) return true;
+    return false;
+}
+
 /* THE SAME SEAM, FOR A COMPONENT WHOSE OWN STANDARD SAYS "FETCH REQUEST" — see fetch.h. `value` is the second
    parameter the provider takes and is JS_UNDEFINED here for the reason it is at `fetch()`'s own call: the
    URL form of the park owes its answer to the host, and a value supplied up front is a reply nobody asked

@@ -46,9 +46,11 @@
  * append grows the container IN PLACE — there is one pointer, held by the Document, and a replacement would
  * leave that Document naming one container while the appending flow named another — so a sibling flow that
  * never ran the inserting script reads the grown list. That is the SAFE half of the two ways to be wrong:
- * §2.2's "a second policy can only narrow" makes the sibling's verdict STRICTER than its own path earned, so
- * it suppresses a finding rather than fabricating one, which is why the append lands ahead of the record
- * instead of behind it. The residual is stated at the function, with what would show if it fired.
+ * §2.2 says "multiple policies can be applied to a single resource" and §4.1.2 blocks if ANY of them is
+ * violated, so a policy the sibling did not earn can only make its verdict STRICTER — it suppresses a finding
+ * rather than fabricating one, which is why the append lands ahead of the record instead of behind it. (The
+ * narrowing is that QUANTIFIER's and is nowhere stated as a sentence of §2.2, which is what this line used to
+ * put in quotation marks.) The residual is stated at the function, with what would show if it fired.
  *
  * THERE IS NO CSP PARSER IN THIS FILE ANY MORE, AND THAT IS THE POINT. It used to carry one: a `Directive`
  * struct of six booleans, a source-list scan that set them, and a `DCHECK` that ABORTED on any source
@@ -60,11 +62,14 @@
  * what is left here is HTML's container and the questions asked OF a container: §4.2.3's about inline content
  * of a type, §4.4.1's about string compilation, and CSP §4.1.2's about a URL — Fetch's main fetch step 7. All
  * three are here rather than in files of their own because they are the SAME walk over the same list with a
- * different question per policy, and because §2.2's "a second policy can only narrow" is then stated once. */
+ * different question per policy, and because the quantifier that makes a second policy narrow — every policy
+ * asked, content permitted only if EVERY one permits it — is then stated once. */
 #include <stdlib.h>
 #include <string.h>
 
 #include "check.h"
+/* §6.7.1.1 step 1's gate is Fetch §2.2.5's SCRIPT-LIKE, and it is asked of Fetch — see fetch.h. */
+#include "core/fetch/fetch.h"
 #include "core/frame/csp_directive_list.h"
 #include "core/frame/csp_source_list.h"
 #include "core/frame/policy_container.h"
@@ -494,14 +499,34 @@ bool policy_allows_string_compilation(const PolicyContainer *p)
  * frame-ancestors, sandbox, webrtc, report-to, and the two *-attr forms — defines no pre-request check at all,
  * so §6.7.2.1 leaves `violates` untouched for them.
  *
- * WHAT IS NOT COLLAPSED, and crashes instead of being approximated: §6.7.1.1's SCRIPT-DIRECTIVE pre-request
- * check. script-src, script-src-elem, style-src and style-src-elem do not end in §6.7.2.5 directly — for a
- * SCRIPT-LIKE destination they first honour the request's nonce, its integrity metadata and 'strict-dynamic',
- * any of which allows a URL the source list refuses. Reaching one of them here would mean a request whose
- * destination is script-like, and this engine makes none: `fetch()` and XMLHttpRequest both carry §6.8.1's
- * empty destination. The assert names the three arms rather than the file. */
+ * WHICH CHECK RUNS IS DECIDED BY §6.8.1's EFFECTIVE DIRECTIVE NAME AND NEVER BY THE GOVERNING DIRECTIVE'S
+ * OWN NAME. That is the one thing about this collapse which is not obvious, and it is the thing it was got
+ * wrong on. §6.1.3.1 "default-src Pre-request check" ends "Return the result of executing the pre-request
+ * check for the directive whose name is name on request, policy, and self-origin, using this directive's value
+ * for the comparison", and §6.1.1.1 "child-src Pre-request check" says the same — so a policy whose only
+ * script directive is `default-src` runs SCRIPT-SRC-ELEM's check over default-src's VALUE. A dispatch on the
+ * governing directive's own spelling gets this wrong in both directions at once: it says nothing about
+ * `default-src 'nonce-x'`, which is a whole check silently skipped, while firing for spellings whose check it
+ * has misnamed. The name §6.8.1 returned is what the standard dispatches on, and it is already in hand.
+ *
+ * AND ONLY TWO OF §6.8.1's NAMES RUN ANYTHING BEFORE §6.7.2.5. §6.1.11.1 "script-src-elem Pre-request check"
+ * hands its whole answer to §6.7.1.1 "Script directives pre-request check". §6.1.14.1 "style-src-elem
+ * Pre-request Check" honours the request's NONCE and then goes to §6.7.2.5 — it has no integrity arm and no
+ * 'strict-dynamic' arm, and neither does §6.1.13.1 "style-src Pre-request Check", which is why a crash naming
+ * §6.7.1.1 for a style directive names an algorithm that does not govern it and asks for two mechanisms it
+ * would never use. Every other name §6.8.1 can return — connect-src, manifest-src, object-src, frame-src,
+ * media-src, font-src, img-src, and §6.2.2.1's worker-src — is §6.7.2.5 alone.
+ *
+ * WHAT OF THOSE TWO IS ANSWERED HERE, AND WHAT CRASHES. Each preliminary step is settled by the SOURCE LIST
+ * before the request is looked at: §6.7.2.3 step 3 loops over the list's nonce-source expressions, §6.7.2.4
+ * steps 2-3 say a list with no hash-source is "Does Not Match" outright, and step 1.3's 'strict-dynamic' arm
+ * does not exist unless the keyword is in the list. A policy carrying none of the three therefore reaches
+ * §6.7.2.5 BY THE ALGORITHM and not by an approximation of it — which is the shape most real policies are
+ * written in, and is why `script-src 'self' 'unsafe-inline' <hosts>` is answered here rather than refused. A
+ * policy that DOES carry one needs a field of Fetch §2.2.5's request record that this engine does not carry to
+ * the check, and each arm crashes naming its own field. */
 static bool policy_blocks_request(const CspPolicy *policy, const UrlRecord *url, const char *effective,
-                                  const Origin *self_origin, int redirect_count)
+                                  const char *destination, const Origin *self_origin, int redirect_count)
 {
     const CspDirective *d = csp_policy_governing_directive(policy, effective);
 
@@ -510,13 +535,53 @@ static bool policy_blocks_request(const CspPolicy *policy, const UrlRecord *url,
        "Allowed". `img-src 'none'` blocks no `fetch()`. */
     if (!d)
         return false;
-    DCHECK(!csp_token_is(d->name, "script-src") && !csp_token_is(d->name, "script-src-elem") &&
-           !csp_token_is(d->name, "style-src") && !csp_token_is(d->name, "style-src-elem"),
-           "§6.7.1.1's SCRIPT-DIRECTIVE pre-request check governs this request and it is not implemented — "
-           "before the source list is consulted it must return Allowed when §6.7.2.3 matches the request's "
-           "cryptographic nonce metadata, when §6.7.2.4 matches its integrity metadata, and (unless the "
-           "request is parser-inserted) when the list carries 'strict-dynamic'. Build those three against "
-           "Fetch's request record; matching the source list alone reports a script a browser LOADS as blocked");
+    if (!strcmp(effective, "script-src-elem")) {
+        /* §6.7.1.1 step 1's GATE, and its step 2 for everything the gate refuses: a request whose destination
+           is not script-like never reaches the source list at all through a script directive — step 1.4 is
+           INSIDE step 1, so "Return Allowed" is the whole of the algorithm for it. Fetch §2.2.5's script-like
+           set holds three of the four destinations §6.8.1 routes to `script-src-elem`; the fourth is `xslt`,
+           which Fetch excludes deliberately and says so in a note. The predicate is Fetch's own and is ASKED of
+           Fetch rather than restated here — core/fetch/fetch.h says why a second copy of a moving enumeration
+           is a question the two halves of one program answer differently. */
+        if (!fetch_is_script_like(destination))
+            return false;
+        DCHECK(!csp_source_list_has_nonce_source(d),
+               "§6.7.1.1 step 1.1 asks §6.7.2.3 whether the REQUEST's cryptographic nonce metadata matches this "
+               "source list, and the list carries a nonce-source, so §6.7.2.3's own step 3 does not settle it — "
+               "the answer is the request's to give and this engine does not carry it to the check. Fetch "
+               "§2.2.5 gives every request a cryptographic nonce metadata and HTML §4.2.4.3's create a link "
+               "request sets it (\"set request's cryptographic nonce metadata to options's cryptographic nonce "
+               "metadata\"); carry that field into policy_should_block_request and run §6.7.2.3 here. Matching "
+               "the source list alone reports a `<script nonce=x>` under `script-src 'nonce-x'` — one of the "
+               "two shapes modern CSP is written in — as blocked, which is a script every browser LOADS");
+        DCHECK(!csp_source_list_has_hash_source(d),
+               "§6.7.1.1 step 1.2 asks §6.7.2.4 whether the REQUEST's integrity metadata matches this source "
+               "list, and the list carries a hash-source, so §6.7.2.4's step 3 does not settle it — the answer "
+               "needs the request's integrity metadata and SRI's parse metadata over it. HTML §4.2.4.3's create "
+               "a link request sets that field from the element's `integrity`; carry it into "
+               "policy_should_block_request and run §6.7.2.4 here. Matching the source list alone reports a "
+               "subresource a browser LOADS as blocked");
+        DCHECK(!csp_source_list_contains(d, "'strict-dynamic'"),
+               "§6.7.1.1 step 1.3 decides this request by the REQUEST's parser metadata ALONE once the list "
+               "carries 'strict-dynamic' — Blocked when it is \"parser-inserted\", Allowed otherwise, with the "
+               "source list never consulted either way. This engine does not carry Fetch §2.2.5's parser "
+               "metadata to the check; HTML sets it \"parser-inserted\" for an element the tokenizer created and "
+               "\"not-parser-inserted\" for one a script inserted. Carry it and answer step 1.3 here. Falling "
+               "through to the source list INVERTS the directive: 'strict-dynamic' exists precisely to allow "
+               "the script-inserted loads a host list refuses, and to block the parser-inserted ones it "
+               "permits");
+        /* Step 1.4 is the §6.7.2.5 below, which is §6.7.2.7 over the request's current URL. */
+    } else if (!strcmp(effective, "style-src-elem")) {
+        DCHECK(!csp_source_list_has_nonce_source(d),
+               "§6.1.14.1 \"style-src-elem Pre-request Check\" step 3 asks §6.7.2.3 whether the REQUEST's "
+               "cryptographic nonce metadata matches this source list, and the list carries a nonce-source, so "
+               "the answer is the request's to give and this engine does not carry it to the check. It is the "
+               "SAME field §6.7.1.1 step 1.1 needs, and it is the ONLY preliminary step a style directive has: "
+               "§6.1.13.1 and §6.1.14.1 have no integrity arm and no 'strict-dynamic' arm, so carrying the nonce "
+               "finishes this directive's check outright. Matching the source list alone reports a `<link "
+               "rel=stylesheet nonce=x>` under `style-src 'nonce-x'` as blocked");
+        /* Step 4 is the §6.7.2.5 below. */
+    }
     if (csp_source_list_match_url(d, url, self_origin, redirect_count) == CSP_MATCHES)
         return false;
     /* §4.1.2 STEP 3.3.1 — "execute §5.5 Report a violation on the result of executing §2.4.2 Create a
@@ -553,7 +618,8 @@ CspRequestVerdict policy_should_block_request(const PolicyContainer *p, const Ur
        THE QUANTIFIER IS THE SAME ONE `policy_allows_inline` RUNS, from the other end: §4.1.2 sets result to Blocked
        if ANY policy is violated, which is "allowed only if EVERY policy permits it". */
     for (i = 0; i < p->csp.n_policies; i++)
-        if (policy_blocks_request(&p->csp.policies[i], url, effective, p->csp.self_origin, redirect_count))
+        if (policy_blocks_request(&p->csp.policies[i], url, effective, destination, p->csp.self_origin,
+                                  redirect_count))
             return CSP_REQUEST_BLOCKED;
     return CSP_REQUEST_ALLOWED;
 }
