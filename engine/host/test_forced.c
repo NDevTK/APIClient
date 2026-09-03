@@ -7646,6 +7646,90 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        and the other could — and the two together read as "the admin arm ran, the public one did not" on
        evidence for neither. That is the plausible-datum defect with a probe's name on it, and the fix is the
        one the helpers above already exist for: scope the claim to the RECORD and the PARAM it is about. */
+    /* ─── DID THE BRANCH FORK AT ALL — THE ONE BIT NO ROW IN THIS DOCUMENT MEASURED ────────────────────────
+       Every row about `if (cfg.admin)` — the seven above, and every `*fork` row in this file — asks whether an
+       ARM EMITTED, and an arm emits only if its flow was created AND scheduled AND ran to its own sink. So all
+       of them go 0 together for a branch that never forked, for a sibling never handed the thread, and for a
+       delta that was lost, and none of them can name the first. That first state is the one §Solver-half
+       forbids by name: server-injected absent state stays SYMBOLIC and "a loaded `features.admin:false` must
+       NOT concretize the gate, or the admin endpoint is lost". A concretized gate is not a slow arm — it is
+       the headline claim of this tool, "learn the LOGGED-IN API surface WHILE LOGGED OUT", not happening.
+       AND IT IS A BIT THE SCHEDULE CANNOT MOVE, which is the whole reason it is worth a row of its own. The
+       fork census is keyed by the PREDICATE (solver/decide.h: "two forks at one source and operation are one
+       row however many call sites spell it"), so a row appears the instant the branch forks and stands there
+       whether the sibling ever runs, emits, parks or is outranked. A 1 here beside a 0 on `role-public`
+       separates (fork happened, arm did not arrive) from (no fork) with nothing left folded between them.
+       THE NEEDLES ARE COMPOSED BY THE ENGINE'S OWN SPELLER, never typed as bytes: `concolic_ident_compose` is
+       the ONE encoding every constraint key is written in, so a probe that restated `<len>:<bytes>` here would
+       be the second copy of a fact concolic.c owns and would silently read a name nothing writes the day the
+       encoding moves. What is typed is `state` and `admin`, which are this fixture's own program text one
+       screen up (`var cfg = { admin: state.admin };`) — absent.c spells an injected member's `src` UNBRACED
+       (`{state}` is the display SHAPE and `state` is the identity), which is why the first field is not the
+       braced form the emitted records carry.
+       CLAUSE 1 IS THE CONTROL AND IT IS WHAT MAKES CLAUSE 2 READABLE. If no key in the table names this source
+       at all, then either no gate over the whole injected-state surface forked — which is a bigger finding
+       than this row's own and is stated as such — or the source tag is not what this probe composed, and
+       either way clause 2's silence is not evidence about the branch. Only with clause 1 green does clause 2's
+       absence mean the predicate is missing from a table that holds its siblings.
+       RESIDUAL. WHAT IS NOT COVERED: the ENCODING is derived and the three TAGS are restated — `"s"`
+       (concolic.c's concolic_new, a source read), `"."` (its concolic_exotic_get, a member read) and
+       `"branch"` (decide.c's decide_key, which wraps the branch identity before the census files it). Clause 1
+       covers the first, because a wrong `"s"` makes it red; a change to either of the other two would redden
+       clause 2 exactly as a branch that did not fork does. WHAT THE NEXT DIFF BUILDS: an accessor on
+       solver/decide.h that hands a probe the CONSTRAINT KEY of a named source member — `decide_key_of_member(
+       "state", "admin")`, composed by the same three calls the engine makes — so all three tags are asked of
+       the files that own them exactly as the encoding already is. HOW ITS ABSENCE WOULD SHOW: clause 1 green
+       and clause 2 red on a run whose `role-public` is 1 — a branch that demonstrably forked while this row
+       says it did not, which is impossible if the composed key is right. That combination is the falsifier to
+       check FIRST if this row ever reads 0 on a run where any arm of this gate emitted. */
+    const char *bootfork_why = NULL; int bootfork_tt = 1;
+    {
+        char *fa = decide_fork_json();
+        const char *sfield[1], *mfield[2], *bfield[1];
+        char *sid, *mid, *key;
+        char q[256];
+        int qn;
+
+        CHECK(fa, "the fork census could not render — this row's whole claim is a function of that table, and "
+                  "the question it answers (did §Boot's own gate fork) has no other statement anywhere in "
+                  "this document");
+        sfield[0] = "state";
+        sid = concolic_ident_compose("s", sfield, 1);          /* concolic.c's concolic_new: a source read */
+        mfield[0] = sid; mfield[1] = "admin";
+        mid = sid ? concolic_ident_compose(".", mfield, 2) : NULL;  /* its concolic_exotic_get member read */
+        /* …AND THE THIRD WRAP, WHICH IS THE ONE A TWO-LEVEL COMPOSITION WOULD HAVE MISSED SILENTLY. The census
+           is filed under decide.c's `decide_key`, which is `compose("branch", {branch identity}, 1)` and NOT
+           the identity itself — so a needle built to the value's own key is a SUBSTRING of the real one, the
+           quoted match fails, and this row would have accused the branch of never forking on every run there
+           has ever been. It is in the diff because it was caught by reading decide_key rather than by the
+           row going red, which is the direction that does not announce itself. */
+        bfield[0] = mid;
+        key = mid ? concolic_ident_compose("branch", bfield, 1) : NULL;
+        DCHECK(sid != NULL && mid != NULL && key != NULL,
+               "the engine's own identity speller refused one of the three compositions that build the "
+               "constraint key of `state.admin`, every field of which is a present literal — "
+               "concolic_ident_compose returns NULL only for an ABSENT member, so this is the speller's "
+               "contract having changed under a probe that reads it");
+        qn = snprintf(q, sizeof q, "\"%s\"", key);
+        DCHECK(qn > 0 && (size_t)qn < sizeof q,
+               "the quoted constraint key did not fit its needle buffer — a truncated key is a PREFIX match "
+               "against a table whose keys are length-prefixed, so this row would answer about some other "
+               "predicate; raise q[] here");
+        fold_row(&bootfork_tt, &bootfork_why, !!strstr(fa, sid),
+                 "NO PREDICATE OVER THE `state` SOURCE FORKED IN THIS RUN: the fork census names that source "
+                 "in no key at all. Either the whole injected-state surface is being DECIDED rather than "
+                 "forked — which §Solver-half forbids and which would cost this document every gated arm it "
+                 "has, not just the boot one — or this probe composed a source identity the engine does not "
+                 "use, and the clause below is then silent about the branch rather than negative about it");
+        fold_row(&bootfork_tt, &bootfork_why, !!strstr(fa, q),
+                 "the `state` source forks elsewhere and `state.admin` is NOT among the predicates this run "
+                 "forked over: §Boot's own `if(cfg.admin)` was DECIDED by a concrete operand rather than "
+                 "forked into two arms. That is the concretized gate §Solver-half forbids for server-injected "
+                 "absent state, and it is upstream of every `*fork` row in this file — a sibling that was "
+                 "never created cannot be starved, lost or short of its sink");
+        free(key); free(mid); free(sid); free(fa);
+    }
+
     int role_admin  = param_value_is(js, "/api/data", "role", "admin");
     int role_public = param_value_is(js, "/api/data", "role", "public");
     /* …AND THE RUNG THE OLDEST FAMILY IN THIS DOCUMENT NEVER HAD, WHICH IS THE SAME ONE EVERY `*fork` ROW GOT
@@ -7675,6 +7759,15 @@ static int probes_eval(const char *js, Probe *out, int cap) {
                               "statement was reached and its `role` came out as something else, so this is "
                               "the concolic having been lost between `cfg.admin` and the param, not a "
                               "sibling that did not run";
+        /* …AND THE RUNG THAT NOW STANDS ABOVE THE SCHEDULE ONES, because it names a state they cannot: a
+           sibling that was never CREATED is not one that is unserved, and every sentence below this line is
+           about serving. `boot-fork` carries the diagnosis; this clause only routes to it, so the two cannot
+           drift into two paraphrases of one finding. */
+        else if (!bootfork_tt)
+            role_public_why = "the public arm is missing and the branch it would have come from is not in the "
+                              "fork census: read `boot-fork` on this same line, which names which of the two "
+                              "states that is. Nothing below here is about the schedule, because there is no "
+                              "sibling for the schedule to have failed to run";
         else if (state == 1) {
             int k = snprintf(role_public_buf, sizeof role_public_buf,
                      "the admin arm emitted and the public arm has not — AND THIS RUN CANNOT SAY WHY: %ld of "
@@ -10423,6 +10516,11 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        the same document and one is about what a park WROTE while the other is about what a resume REBUILT. */
     Probe probes[] = {
         { "uid-param", has_uid_param, "/api/u?uid=", SESS_EXPLORE, uid_why },
+        /* KEYED ON THE STATEMENT AND NOT ON AN ENDPOINT, because this row is about a branch and a branch
+           emits nothing: `cfg.admin` is what a reader greps for to find the gate it is about. It stands
+           FIRST of this family for `td-reach`'s reason — it is the row that says whether the six below it
+           are about the schedule, the delta, or a fork that never happened. */
+        { "boot-fork", bootfork_tt, "cfg.admin", SESS_EXPLORE, bootfork_why },
         { "role-admin", role_admin, "/api/data?role=", SESS_EXPLORE },
         { "path-param", path_param, "/v1/users/", SESS_EXPLORE, path_param_why },
         { "body-param", body_param, "firstPost", SESS_EXPLORE, body_param_why },
