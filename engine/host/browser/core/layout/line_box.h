@@ -263,10 +263,16 @@ typedef struct {
  * bottom margin edge, which is what admitting the `inline-block` required and is one arithmetic over both:
  * `below` is zero for every box the section gives no baseline.
  * AN `inline-table`, `inline-flex` OR `inline-grid` STILL CRASHES IN THE WALK, and for none of them is the
- * missing piece a placement: each needs the USED INLINE SIZE its own module owns (CSS 2.1 §17.5.2,
- * css-flexbox-1 §9.9.1 "Flex Container Intrinsic Main Sizes", css-grid-1 §5.2 "Sizing Grid Containers")
- * before §9.4.2 has anything to put on a line, and the baseline each of them has falls out of that same
- * module's layout.
+ * missing piece a placement — BUT THEY NO LONGER CRASH FOR ONE REASON, AND THIS PARAGRAPH USED TO SAY THEY
+ * DID. An `inline-flex` or `inline-grid` still needs the USED MAIN SIZE its own module owns (css-flexbox-1
+ * §9.9.1 "Flex Container Intrinsic Main Sizes", css-grid-1 §5.2 "Sizing Grid Containers") before §9.4.2 has
+ * anything to put on a line, and the baseline each of them has falls out of that same module's layout.
+ * AN `inline-table` HAS ITS INLINE SIZE: CSS 2.1 §17.5.2 Table width algorithms: the 'table-layout' property
+ * is built (core/layout/table_width.h) and core/layout/used_value.c routes a table box's width to it, so what
+ * keeps this one out is the OTHER axis — CSS 2.2 §10.8.1 "Leading and half-leading" makes its baseline "the
+ * baseline of the first row of the table", and a row's baseline is CSS 2.1 §17.5.3 Table height algorithms',
+ * which has no component. The two absences are not one, and a reader taking them for one would build §17.5.2
+ * a second time.
  *
  * IT FINDS THE FORMATTING CONTEXT ITSELF, and that is why it takes an element where the two entries above take
  * a run: the question "which inline formatting context is this box in" is answered by walking PAST every inline

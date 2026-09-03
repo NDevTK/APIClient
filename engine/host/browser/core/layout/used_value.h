@@ -35,8 +35,14 @@
  *     computed length, and saying so is a derivation rather than a shrug.
  *   - A `width` or `height` whose computed value is an absolute length, for every box type but a table box and
  *     a flex or grid item. §10.3.3's equation solves for `width` only when `width` is `auto`; §10.3.5,
- *     §10.3.7 and §10.3.9 each say the same for their own box type. A TABLE may be widened past it (§17.5.2)
- *     and a FLEX ITEM's size is its container's algorithm and not §10's at all, so both crash.
+ *     §10.3.7 and §10.3.9 each say the same for their own box type. A TABLE may be widened past it (§17.5.2.2
+ *     Automatic table layout makes a declared width a FLOOR that CAPMIN and the columns' MIN may exceed) and a
+ *     FLEX ITEM's size is its container's algorithm and not §10's at all, so this bullet answers for neither.
+ *     WHAT HAPPENS INSTEAD NOW DIFFERS BY AXIS AND NOT BY BOX TYPE, and this line used to say both simply
+ *     crash: a table box's WIDTH is ROUTED to core/layout/table_width.h, which answers §17.5.2 on the declared
+ *     arm and the `auto` arm alike; its HEIGHT still crashes, naming CSS 2.1 §17.5.3 Table height algorithms,
+ *     which has no component; a TABLE-INTERNAL box crashes on both axes, since §17.5.2's rules are stated over
+ *     the table element and no entry yet indexes a cell's own column; and a flex or grid item crashes.
  *   - AND §10.4 "Minimum and maximum widths: 'min-width' and 'max-width'" and §10.7 "Minimum and maximum
  *     heights: 'min-height' and 'max-height'", WHICH ARE A SECOND PASS AND NOT A CLAMP ON THE NUMBER. Both
  *     sections say the same three sentences about their own axis: the tentative used value is §10.3's answer

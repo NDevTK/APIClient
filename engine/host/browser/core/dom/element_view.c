@@ -1140,11 +1140,15 @@ static void ev_require_enumerable_fragments(const EvTarget *t)
               "core/layout/table_box.h answers §17.2.1's first two stages, and `table_box_captions` answers "
               "exactly the CAPTION BOX half of the sentence above — the anonymous container this step excludes "
               "is CSS 2.1 §17.4 Tables in the visual formatting model's table wrapper box, which nothing here "
-              "has to produce. Its extents are not §10's either: "
-              "§17.5.2's two table layout algorithms own the table's width and §17.5.3 owns its height, which "
-              "is why core/layout/used_value.c crashes for a table box before this member could place one. "
-              "BUILD §17.5's algorithms over table_box.h's rows; the two fragments this step wants then have "
-              "edges");
+              "has to produce. Its extents are not §10's either, AND ONLY ONE OF THE TWO IS STILL MISSING — "
+              "this line used to name both. CSS 2.1 §17.5.2 Table width algorithms: the 'table-layout' "
+              "property owns the table's WIDTH and is BUILT (core/layout/table_width.h), so "
+              "core/layout/used_value.c ANSWERS a table box's used width on its declared arm and its `auto` "
+              "arm alike rather than crashing there. CSS 2.1 §17.5.3 Table height algorithms owns its HEIGHT "
+              "and has no component, and that is what core/layout/used_value.c still crashes for — its "
+              "`height: auto` arm and its declared-`height` arm each name §17.5.3 by itself. BUILD §17.5.3 "
+              "over table_box.h's rows and the used column widths §17.5.2 now reports; the two fragments this "
+              "step wants then have edges");
 }
 
 /* §6's getClientRects() STEPS, AS THE INTERNAL ALGORITHM. §2 is explicit that a member "said to call another

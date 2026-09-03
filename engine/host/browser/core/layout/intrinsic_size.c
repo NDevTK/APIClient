@@ -582,12 +582,19 @@ IntrinsicInlineSizes intrinsic_inline_sizes(lxb_dom_element_t *el)
                   "own `display`: css-flexbox-1 §9.9 \"Intrinsic Sizes\" derives a flex container's from its "
                   "flex lines, css-grid-2 §11.5 sizes the TRACKS and the container's intrinsic size follows "
                   "from them, and CSS 2.2 §17.5.2's automatic table layout derives a table's from its COLUMNS' "
-                  "cell minima and maxima over the box structure §17.2.1 Anonymous table objects generates — "
-                  "which core/layout/table_box.h answers, so a table's remaining input is §17.5 Visual layout "
-                  "of table contents' grid — which column each cell occupies and how many it spans — and "
-                  "core/layout/table_grid.h answers that, so §17.5.2 is the whole of what is left. BUILD the "
-                  "one this `display` names; the flex and grid arms each need their own box tree first and "
-                  "none of the three is this walk with a different accumulator");
+                  "cell minima and maxima over the box structure §17.2.1 Anonymous table objects generates. "
+                  "THE TABLE ARM IS NO LONGER AN ALGORITHM TO WRITE AND THIS LINE USED TO SAY IT WAS: "
+                  "§17.2.1's structure is core/layout/table_box.h's, §17.5 Visual layout of table contents' "
+                  "grid is core/layout/table_grid.h's, and §17.5.2 itself is core/layout/table_width.h's — a "
+                  "reader following the old sentence would have built the whole of it a second time. WHAT IS "
+                  "LEFT FOR THIS ENTRY IS AN EXPORT, NOT A LAYOUT: §17.5.2.2 Automatic table layout names the "
+                  "pair this function returns in its own final rules — \"the minimum width required by all the "
+                  "columns plus cell spacing or borders (MIN)\" and \"the maximum width required by the "
+                  "columns plus cell spacing or borders (MAX)\" — and core/layout/table_width.c computes both "
+                  "to reach a USED width without publishing either, over per-column minima and maxima "
+                  "core/layout/table_column_width.h already exports. So MAKE §17.5.2.2's MIN and MAX a second "
+                  "producer of `IntrinsicInlineSizes` for a table box; the flex and grid arms each need their "
+                  "own box tree first and none of the three is this walk with a different accumulator");
     }
     /* CSS 2.2 §9.2.1 "Block-level elements and block boxes"' ALTERNATIVE, ASKED ONCE OVER THE WHOLE CHILD LIST
        AND BEFORE EITHER ALGORITHM RUNS: "A block container box either contains only block-level boxes or

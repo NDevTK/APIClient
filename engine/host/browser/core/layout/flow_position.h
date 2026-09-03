@@ -58,10 +58,14 @@
  * component that delimits it.
  *
  * WHAT STILL CRASHES, each naming ITS OWN missing piece rather than one shared "there is no layout": a float
- * is §9.5's own positioning, an out-of-flow box is §9.3.2's offsets over a static position, an `inline-table`,
- * `inline-flex` or `inline-grid` waits on the USED INLINE SIZE its own module owns (CSS 2.1 §17.5.2,
- * css-flexbox-1 §9.9.1 "Flex Container Intrinsic Main Sizes", css-grid-1 §5.2 "Sizing Grid Containers") and on
- * the baseline that falls out of that module's layout, and a box whose
+ * is §9.5's own positioning, an out-of-flow box is §9.3.2's offsets over a static position, an `inline-flex`
+ * or `inline-grid` waits on the USED MAIN SIZE its own module owns (css-flexbox-1 §9.9.1 "Flex Container
+ * Intrinsic Main Sizes", css-grid-1 §5.2 "Sizing Grid Containers") and on the baseline that falls out of that
+ * module's layout, an `inline-table` waits on NEITHER OF THOSE AND THIS LIST USED TO GROUP IT WITH THEM — its
+ * inline size is CSS 2.1 §17.5.2 Table width algorithms: the 'table-layout' property's and is built
+ * (core/layout/table_width.h, routed by core/layout/used_value.c), so what it waits on is the baseline CSS 2.2
+ * §10.8.1 "Leading and half-leading" makes its first row's, which is CSS 2.1 §17.5.3 Table height algorithms'
+ * and has no component, and a box whose
  * computed `writing-mode` is not `horizontal-tb` waits on
  * css-writing-modes-4 §7.4's flow-relative restatement of the two rules this file implements physically.
  *

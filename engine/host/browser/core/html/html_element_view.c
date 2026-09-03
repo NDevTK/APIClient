@@ -373,10 +373,16 @@ static JSValue hev_offset_extent(JSContext *ctx, const HevTarget *t, bool vertic
               "§17.4 Tables in the visual formatting model puts beside the table box. The container is that "
               "section's TABLE WRAPPER BOX — \"the table generates a principal block box called the table "
               "wrapper box that contains the table box itself and any caption boxes\" — and no element in the "
-              "tree names it. Its EXTENTS are not §10's "
-              "either: §17.5.2's two table layout algorithms own the table's width and §17.5.3 owns its height, "
-              "which is why core/layout/used_value.c crashes for a table box before this member could measure "
-              "one. BUILD §17.4's wrapper box, then §17.5's algorithms over table_box.h's rows");
+              "tree names it — THOUGH §17.4's SPLIT IS ANSWERED AND THIS LINE USED TO ASK FOR IT: "
+              "core/layout/table_wrapper.h says which declarations land on the wrapper and which on the table "
+              "box, and whether the wrapper is block-level. Its EXTENTS are not §10's "
+              "either, AND ONLY ONE HALF OF THAT IS STILL MISSING: CSS 2.1 §17.5.2 Table width algorithms: the "
+              "'table-layout' property owns the table's WIDTH and is BUILT (core/layout/table_width.h), so "
+              "core/layout/used_value.c ANSWERS a table box's used width rather than crashing there, and "
+              "§17.4 states the wrapper's own width over that number. CSS 2.1 §17.5.3 Table height algorithms "
+              "owns the HEIGHT and has no component, and that is what core/layout/used_value.c still crashes "
+              "for — its `height: auto` arm and its declared-`height` arm each name §17.5.3 by itself. BUILD "
+              "§17.5.3 over table_box.h's rows and the used column widths §17.5.2 now reports");
     /* step 2, for a principal box of one fragment */
     return element_view_length_long(ctx, used_value_border_edge_px(el, vertical));
 }
