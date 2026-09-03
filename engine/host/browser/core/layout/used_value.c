@@ -655,9 +655,130 @@ static CssPx uv_table_cell_used_width(lxb_dom_element_t *el)
     return content;
 }
 
-/* THE TABLE BOXES WHOSE USED WIDTH IS STILL UNANSWERED, which after the cell's route is two different
-   questions and not one leftover — so the crash NAMES the box and says which section owns it. It is ONE
-   function called from the declared arm and the `auto` arm because for every kind below the DECLARATION IS
+/* CSS 2.1 §17.5 Visual layout of table contents' USED WIDTH OF A ROW BOX AND OF A ROW GROUP BOX, WHICH IS ONE
+   ANSWER AND NOT TWO. Rules 1 and 2 give the two boxes the same extent on THIS axis — "Each row box occupies
+   one row of grid cells" and "A row group occupies the same grid cells as the rows it contains" — because every
+   row occupies the WHOLE grid row, so the union rule 2 takes over a group's rows is that same whole row. They
+   are two answers on the BLOCK axis, where a group covers a RUN of grid rows and a row covers one, and that is
+   §17.5.3 Table height algorithms' question. The section's last normative paragraph does mention gaps between
+   ROW GROUPS as well as between rows, and that is not a second horizontal question: rows are stacked on the
+   block axis and so are row groups, so those gaps are the VERTICAL `border-spacing`, and only the column and
+   column-group ones are horizontal. That is the whole reason this function reads no row at all and needs no run
+   of grid rows to answer a group.
+   THE EDGES ARE THE CELLS' AND THAT IS WHAT MAKES THIS NOT THE TABLE'S CONTENT WIDTH — the reading an earlier
+   form of the crash this replaces got wrong, kept here rather than deleted so that nobody re-derives it. §17.5's
+   last normative paragraph places the edges in the two border models separately, and this is the separated one:
+   "In the separated borders model, the edges coincide with the border edges of cells." So a row's left
+   edge is the left BORDER EDGE of the leftmost cell and its right edge the right border edge of the rightmost,
+   while §17.6.1 The separated borders model counts a spacing OUTSIDE each of those — "The distance between the
+   table border and the borders of the cells on the edge of the table is the table's padding for that side, plus
+   the relevant border spacing distance" — into the number it calls the table's own width, "the distance from the
+   left inner padding edge to the right inner padding edge (including the border spacing but excluding padding
+   and border)". The row therefore stands INSIDE both outer spacings and is narrower than the table's content
+   width by exactly two of them.
+   THE COLLAPSING MODEL IS THE SAME ARITHMETIC AND NOT A SECOND ARM, WHICH IS A PROPERTY OF THE OPERAND RATHER
+   THAN A COINCIDENCE. §17.5's last paragraph gives that model its own placement — the edges of the rows and row
+   groups "coincide with the hypothetical grid lines on which the borders of the cells are centered", and "the
+   rows together exactly cover the table, leaving no gaps" — so under §17.6.2 The collapsing border model a row
+   IS the table's content width, which is what the sentence above denies for §17.6.1. The sum below answers both
+   because `TableUsedWidths.spacing` is the algorithm's own cell-spacing TERM and never the `border-spacing`
+   property: §17.6.2 gives that property no meaning ("Borders are centered on the grid lines between the cells"
+   — adjoining cell borders have no distance between them to specify), so the term is ZERO there, the N-1
+   spacings vanish, and the sum collapses to the used column widths, which core/layout/table_width.c's own
+   boundary assert states IS the table's content width under that model. AN EARLIER FORM OF THIS PARAGRAPH SAID
+   THE COLLAPSING MODEL WAS REFUSED AT §17.5.2's ENTRY AND COULD NOT REACH HERE; that refusal is gone and the
+   model lays out, so the reason is recorded as retired rather than deleted — a reader who re-derives "the two
+   models need two arms" from a bare sum would add the branch this operand exists to make unnecessary.
+   IT IS BUILT UP FROM THE COLUMNS RATHER THAN SUBTRACTED FROM THE TABLE, and the zero-column table is why: a
+   table with no columns takes NO spacing at all (core/layout/table_width.h says so of its own `content`), so
+   `content` there is the table's declared width or CAPMIN with no spacing in it and subtracting two spacings
+   would report a NEGATIVE row. The sum is the same reading `table_cell_used_border_box` takes for a cell
+   spanning N columns — N used widths and N-1 spacings, because the columns inside one rectangle have no
+   adjoining cell borders between them — taken over the whole grid row instead of over one cell's rectangle.
+   AN EMPTY ROW GROUP TAKES THE WHOLE GRID ROW TOO, AND THAT IS A RECORDED CHOICE RATHER THAN A DERIVATION.
+   Rule 2's union over a `<tbody>` holding no rows is EMPTY, and §17.5's last paragraph names no edges for a box
+   occupying no grid cells, so CSS 2.1 does not answer this and a crash here would refuse a document the standard
+   declines to decide. The alternative reading is zero, and it is declined for one reason: it would make the
+   INLINE extent of a row group a function of HOW MANY ROWS IT HOLDS, which is the fact rule 2 uses to place it
+   on the BLOCK axis and the one this axis never consults — an empty `<tbody>` and a `<tbody>` holding a single
+   `<tr></tr>` would then differ in width by the whole table. Reading no row is what makes that choice one line
+   of reasoning rather than a branch.
+   IT IS THE BOX'S EXTENT AND NOT A RESOLVED `width`, and for these two kinds those are different questions where
+   for every other box they are one. CSS 2.1 §10.2 Content width: the 'width' property's own line is "all
+   elements but non-replaced inline elements, table rows, and row groups", so CSSOM §9's first conjunct is FALSE
+   for both kinds and core/css/css_computed_value.c breaks out to the COMPUTED value before `used_value_px` is
+   asked at all — which is what stops this number ever being reported as `getComputedStyle(tr).width`. What does
+   reach it is this file's own edge derivation: `uv_content_size` asks `used_value_px` for a width whatever the
+   Applies-to line says, because CSSOM VIEW's `getBoundingClientRect` and core/layout/flow_position.c are asking
+   for a RECTANGLE, which §17.5 does define for both boxes. */
+static CssPx uv_table_row_used_width(lxb_dom_element_t *el)
+{
+    lxb_dom_element_t *table = table_box_table_of(el);
+    TableGrid grid;
+    TableUsedWidths widths;
+    CssPx w;
+    size_t i;
+
+    table_grid_build(table, &grid);
+    table_widths(table, &grid, &widths);
+    /* The N-1 spacings BETWEEN the columns, and none of the two §17.6.1 puts outside the end cells' border
+       edges. `ncols - 1` is guarded rather than clamped because `ncols` is a `size_t`: the zero case is a real
+       table (`<table></table>`, or one whose only child is a caption) and the subtraction would wrap. */
+    w = widths.ncols == 0 ? css_px(0.0) : css_px_scale(widths.spacing, (double) (widths.ncols - 1));
+    for (i = 0; i < widths.ncols; i++) w = css_px_add(w, widths.columns[i]);
+    table_widths_release(&widths);
+    table_grid_release(&grid);
+    DCHECK(w.px >= 0.0,
+           "CSS 2.1 §17.5's rules 1 and 2 produced a NEGATIVE extent for a row box or row group box. Every term "
+           "is a used column width or a `border-spacing`, and core/layout/table_width.c asserts both "
+           "non-negative where it answers them — §17.6.1 The separated borders model states the second outright "
+           "(\"Lengths may not be negative\") — so a negative here is arithmetic that lost a sign, and the "
+           "rectangle it would put through CSSOM VIEW is one no reader can tell from a measured one");
+    /* THE SURROUND IS ASSERTED WHERE THE EXTENT IS PRODUCED RATHER THAN AT EVERY CONSUMER OF IT, AND IT IS TWO
+       ASSERTS BECAUSE IT IS TWO QUESTIONS. The padding term and the border term are refused by different
+       sections, and the border one is refused DIFFERENTLY IN THE TWO BORDER MODELS, so one conjoined check
+       would have to cite a sentence that is false in one of them — which is how a crash comes to name a rule
+       the document does not have. Both are checked on BOTH `box-sizing` values, unlike the block-axis twin in
+       `uv_table_row_used_height`, because the two mistakes are not the same size: under `border-box`
+       `uv_content_size` SUBTRACTS the surround from this number and under `content-box` `uv_edge_px` ADDS it,
+       so a phantom term corrupts the derived rectangle either way and only one of those cases was covered. */
+    DCHECK(uv_surround(el, false).padding.px == 0.0,
+           "CSS 2.1 §17.5 Visual layout of table contents' own first paragraph says which internal table boxes "
+           "have padding and this is not one of them — \"Internal table elements generate rectangular boxes "
+           "with content and borders. Cells have padding as well. Internal table elements do not have "
+           "margins.\" — and CSS 2.1 §8.4 Padding properties: 'padding-top' , 'padding-right' , "
+           "'padding-bottom' , 'padding-left' , and 'padding' says the same in its own Applies-to line, \"all "
+           "elements except table-row-group, table-header-group, table-footer-group, table-row, "
+           "table-column-group and table-column\". Neither sentence is about the border model, so a row box's "
+           "and a row group box's padding term is zero under §17.6.1 The separated borders model and under "
+           "§17.6.2 The collapsing border model alike — and this box reports a non-zero horizontal one. "
+           "`uv_surround` is reading the DECLARED `padding-left`/`padding-right` of a box §8.4 does not let "
+           "have them, so `uv_edge_px` adds them to the extent above and `uv_content_size` subtracts them, and "
+           "every rectangle derived from either is wrong by that sum. BUILD §8.4's Applies-to line into "
+           "`uv_surround`, which its own comment already calls the ONE place the four terms are computed and "
+           "which is where both axes meet. `tr { padding: 4px }` is how this arrives");
+    DCHECK(uv_surround(el, false).border.px == 0.0,
+           "a ROW box or ROW GROUP box carries a horizontal BORDER width into CSS 2.1 §17.5's extent, and "
+           "neither border model puts one there. Under CSS 2.1 §17.6.1 The separated borders model the box "
+           "cannot have one at all — \"Rows, columns, row groups, and column groups cannot have borders (i.e., "
+           "user agents must ignore the border properties for those elements)\". Under CSS 2.1 §17.6.2 The "
+           "collapsing border model it MAY declare one — that section's first sentence says borders may "
+           "surround \"all or part of a cell, row, row group, column, and column group\" — but the declaration "
+           "is an INPUT to §17.6.2.1 Border conflict resolution, which resolves it at the grid line it is "
+           "specified on together with every other element meeting there (\"cells, rows, row groups, columns, "
+           "column groups, and the table itself\"), and §17.5's last paragraph then puts the row's own edges ON "
+           "those grid lines. So the resolved border is already inside the column widths summed above and the "
+           "row box has no border AREA outside them in either model. Adding this term DOUBLE-COUNTS it under "
+           "§17.6.2 and invents it under §17.6.1. BUILD the two models' readings into `uv_surround` beside "
+           "§8.4's — the collapsing half is the same question core/layout/table_border_collapse.h already "
+           "answers for the TABLE box, one box type over. `tr { border: 1px solid }` is how this arrives on "
+           "THIS axis; a `border-bottom` alone reaches the block-axis twin instead");
+    return w;
+}
+
+/* THE TABLE BOXES WHOSE USED WIDTH IS STILL UNANSWERED, which after the cell's route and the row's is ONE
+   question and no longer two — the COLUMN axis's, so the crash names the box and says which section owns it. It
+   is ONE function called from the declared arm and the `auto` arm because for the kind below the DECLARATION IS
    NOT THE ANSWER either way, so two copies would be two places for that to stop being true silently.
    A CAPTION IS NOT ONE OF THEM AND ITS ARM IS DELETED RATHER THAN LEFT STANDING. `uv_box_kind` no longer
    classifies a `table-caption` as `UV_BOX_TABLE` at all — §17.4 Tables in the visual formatting model renders
@@ -677,21 +798,14 @@ static void uv_table_non_cell_width_fail(lxb_dom_element_t *el, TableBoxKind kin
            "`uv_box_kind` classifies it as block-level in normal flow for exactly that reason, so it can no "
            "longer be a `UV_BOX_TABLE` and no arm of §17.5 can be asked for its width. A caption here is that "
            "classification and core/layout/table_box.h's ten box types having come apart");
-    if (kind == TABLE_BOX_ROW || table_box_kind_is_row_group(kind))
-        DFAILF("%s: a ROW box's or ROW GROUP box's used width. CSS 2.1 §17.5 Visual layout of table contents' "
-               "rules 1 and 2 give each of them a whole grid row — \"Each row box occupies one row of grid "
-               "cells\" and \"A row group occupies the same grid cells as the rows it contains\" — and that "
-               "section's own last paragraph is what turns that into a WIDTH, in the two border models "
-               "separately: \"in the separated borders model the edges coincide with the border edges of "
-               "cells, and thus in this model there may be gaps between the rows, columns, row groups or "
-               "column groups corresponding to the 'border-spacing' property\", while in the collapsing model "
-               "\"the rows together exactly cover the table leaving no gaps\". SO IT IS NOT THE TABLE'S "
-               "CONTENT WIDTH, which an earlier form of this crash claimed: §17.6.1 The separated borders "
-               "model counts a spacing at each END of the row into the table's width and the row's own edges "
-               "stand inside both of them. BUILD it as the sum of `TableUsedWidths.columns` plus the spacings "
-               "BETWEEN them — the same reading `table_cell_used_border_box` takes for a spanning cell, over "
-               "the whole grid row — and the collapsing model stays refused at §17.5.2's entry either way",
-               box_subject(el, nbuf, sizeof nbuf));
+    DCHECK(kind != TABLE_BOX_ROW && !table_box_kind_is_row_group(kind),
+           "a ROW box or a ROW GROUP box reached CSS 2.1 §17.5's width refusals. `uv_pass_size` answers both "
+           "of them before `len` is looked at, exactly as it answers a cell — §17.5 Visual layout of table "
+           "contents' rules 1 and 2 give each the whole grid row and that section's last paragraph puts its "
+           "edges at the end cells' border edges — so a box here is that route having stopped answering, and "
+           "the extent this function would refuse is one core/layout/table_width.h already holds every term "
+           "of. The crash that stood here told its reader to build that sum; `uv_table_row_used_width` above "
+           "is it, so the instruction is retired with the code it guarded");
     DFAILF("%s: a COLUMN box's or COLUMN GROUP box's used width, which CSS 2.1 §17.5 Visual layout of table "
            "contents' rules 3 and 4 state as a PLACEMENT and not as a size — \"A column box occupies one or "
            "more columns of grid cells\" and \"A column group box occupies the same grid cells as the columns "
@@ -2384,9 +2498,27 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
        number no rule consults — and `width: 50%` and `width: 50px` on one `<td>` would then answer through
        two different mechanisms, one of them an abort. The DECLARED and `auto` arms further down are where the
        TABLE BOX's own two routes live, because a table's declared `width` IS an operand of §17.5.2's final
-       comparison and its percentage does resolve. */
-    if (!vertical && box == UV_BOX_TABLE && uv_table_box_kind(el) == TABLE_BOX_CELL)
-        return uv_table_cell_used_width(el);
+       comparison and its percentage does resolve.
+       A ROW AND A ROW GROUP ARE ANSWERED HERE TOO, AND ON A STRONGER GROUND THAN THE CELL'S. For a cell the
+       declaration is READ and used as a floor; for these two the property DOES NOT APPLY AT ALL — CSS 2.1
+       §10.2 Content width: the 'width' property's own line is "all elements but non-replaced inline elements,
+       table rows, and row groups" — so there is no arm anywhere below that could have anything to do with
+       `len`, and the declared and `auto` cases are ONE route rather than two that happen to agree. That also
+       settles the percentage without a second rule: a percentage on a property that does not apply resolves to
+       a number no rule reads, so the basis below must not be run for it — and running it would send §10.1's
+       walk up into the row/column machinery `uv_cb` decides per `display` rather than by an `else`, to answer a
+       question §10.2 has already declined. WHAT IS ANSWERED IS THE BOX'S EXTENT — see
+       `uv_table_row_used_width` for why that is a different
+       question from a resolved `width` here and for the one caller that can reach it.
+       THE KIND IS READ ONCE FOR ALL THREE, which is also what makes this arm the shape of its vertical twin
+       below rather than a chain of `&&`s each re-reading `display` through `uv_table_box_kind`. */
+    if (!vertical && box == UV_BOX_TABLE) {
+        TableBoxKind kind = uv_table_box_kind(el);
+
+        if (kind == TABLE_BOX_CELL) return uv_table_cell_used_width(el);
+        if (kind == TABLE_BOX_ROW || table_box_kind_is_row_group(kind))
+            return uv_table_row_used_width(el);
+    }
     /* AND THE WHOLE BLOCK AXIS OF A TABLE BOX IS ANSWERED HERE, WHICH IS ONE ROUTE WHERE THE INLINE AXIS NEEDS
        THREE. CSS 2.1 §17.5.3 Table height algorithms admits the declaration and the `auto` value into the SAME
        comparison — "A value of 'auto' means that the height is the sum of the row heights plus any cell spacing
@@ -2465,13 +2597,16 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
            different sections and only one of them is built, which is why they split here rather than sharing an
            arm — §17.5.2 Table width algorithms: the 'table-layout' property takes the declared width as a
            minimum ("the used width is the greater of W, CAPMIN, and … MIN") and core/layout/table_width.h runs
-           it, while §17.5.3 Table height algorithms says the same of a declared height in its own words and has
-           no component yet. A TABLE-INTERNAL box is a third case: §17.5.2 is stated over "the 'table' or
-           'inline-table' element", and a cell's or a row's width is a different number. THE CELL DOES NOT
-           REACH THIS LINE AT ALL — `uv_pass_size` answered it before the declaration was resolved, because
-           §17.5.2.2 Automatic table layout's step 1 makes a cell's declared `width` a FLOOR under its column
-           ("If the specified 'width' (W) of the cell is greater than MCW, W is the minimum cell width") and
-           never the used value, so there is nothing for this arm to do with it. */
+           it, while §17.5.3 Table height algorithms says the same of a declared height in its own words and
+           core/layout/table_height.h runs that. A TABLE-INTERNAL box is a third case: §17.5.2 is stated over
+           "the 'table' or 'inline-table' element", and a cell's, a row's and a row group's widths are each a
+           different number. NONE OF THE THREE REACHES THIS LINE — `uv_pass_size` answered all of them before
+           the declaration was resolved, and for two different reasons. For a CELL the declaration IS read, as
+           §17.5.2.2 Automatic table layout's step 1's floor under its column ("If the specified 'width' (W) of
+           the cell is greater than MCW, W is the minimum cell width") rather than as the used value. For a ROW
+           and a ROW GROUP it is not read at all: §10.2 Content width: the 'width' property does not apply to
+           either ("all elements but non-replaced inline elements, table rows, and row groups"), so there is
+           nothing for this arm to do with a declaration those boxes cannot have. */
         if (box == UV_BOX_TABLE) {
             TableBoxKind kind = uv_table_box_kind(el);
 
@@ -2621,8 +2756,10 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
        and never did. */
     /* A CELL never reaches here either — `uv_pass_size` answers it before this function is called, because
        §17.5's grid decides a cell's width whether the declaration is `auto` or a length and the two arms are
-       therefore ONE route. What is left is the caption and the row/column machinery, which is the same three
-       questions the declared arm has and is refused by the same function. */
+       therefore ONE route. A ROW and a ROW GROUP are ONE route for a stronger reason and are answered in the
+       same place: §10.2 Content width: the 'width' property does not apply to either, so there is no declared
+       arm for their `auto` arm to differ from. What is left is the COLUMN machinery, which is the one question
+       the declared arm also has and is refused by the same function. */
     if (box == UV_BOX_TABLE) {
         TableBoxKind kind = uv_table_box_kind(el);
 

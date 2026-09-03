@@ -205,9 +205,18 @@ static CssPx fp_edge_before(lxb_dom_element_t *el, bool vertical)
  * core/layout/table_width.h and core/layout/table_height.h each state about their own `spacing` field: a second
  * read of `border-spacing` would be a second place for CSS 2.1 §17.6.1 The separated borders model's
  * "Computed value: two absolute lengths" to be resolved, free to disagree with the one the columns and rows
- * were laid out under. It is also why §17.6.2 The collapsing border model needs no refusal here — both
- * entries refuse it by name before answering, so this function cannot run the separated model's arithmetic
- * over a collapsing table.
+ * were laid out under. IT IS ALSO WHY §17.6.2 The collapsing border model NEEDS NO REFUSAL HERE, AND THE
+ * REASON IS NO LONGER THE ONE THAT STOOD IN THIS SENTENCE — it said the two entries refused the model by name
+ * before answering, and they no longer refuse it at all. What keeps this arithmetic right is the field itself:
+ * each `spacing` is the algorithm's own cell-spacing TERM and not the `border-spacing` property, and §17.6.2
+ * gives that property no meaning ("Borders are centered on the grid lines between the cells" — there is no
+ * distance between adjoining cell borders to separate), so the term the two algorithms answer with is ZERO
+ * under the collapsing model. The sums below then place the first cell's border edge AT the table box's
+ * content edge, which is exactly where §17.5 Visual layout of table contents' last paragraph puts it in that
+ * model — the row edges "coincide with the hypothetical grid lines on which the borders of the cells are
+ * centered" and "the rows together exactly cover the table, leaving no gaps". So ONE arithmetic is correct in
+ * both models precisely because it reads the ANSWERS; a second read of the property would have needed a branch
+ * here and would have been the place the two models came apart.
  *
  * THE TABLE BOX'S OWN ORIGIN IS THE WRAPPER'S, AND THAT IS ASSERTED RATHER THAN ASSUMED. §17.4 Tables in the
  * visual formatting model gives the table element's `margin-*` to the WRAPPER and everything else to the table
