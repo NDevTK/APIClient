@@ -201,9 +201,14 @@ static bool tw_declared_content_width(lxb_dom_element_t *table, CssPx edges, Css
    `display` is `table-caption`, and core/layout/block_flow.h classifies `table-caption` and `block` alike as
    BLOCK CONTAINERS — so the same one of CSS 2.2 §9.4 "Normal flow"'s two formatting contexts lays the caption's
    content out either way, and core/layout/intrinsic_size.h answers the same pair for both. The hypothetical
-   CELL contributes nothing of its own: §17.4 gives a box no element names the initial value of every
-   non-inherited property, so it has no padding, no border and a `width` of `auto`, and §17.5.2.2's step 1 rule
-   about a cell's own declared `width` compares against nothing.
+   CELL contributes nothing of its own, and the rule for that is CSS 2 §9.2.1.1 Anonymous block boxes rather
+   than §17.4, which is a different sentence about a different box: §9.2.1.1 states it of a box no element
+   names — "The properties of anonymous boxes are inherited from the enclosing non-anonymous box." and
+   "Non-inherited properties have their initial value." — while §17.4's parenthesis is about the SPLIT between
+   a table element's two boxes ("Where the table element's values are not used on the table and table wrapper
+   boxes, the initial values are used instead."), and §17.4's wrapper is not anonymous at all. So the
+   hypothetical cell has no padding, no border and a `width` of `auto`, and §17.5.2.2's step 1 rule about a
+   cell's own declared `width` compares against nothing.
    OUTER MEANS css-sizing-3 §2.2 "Intrinsic Size Contributions"' OUTER SIZE — "Intrinsic size contributions are
    based on the outer size of the box; for this purpose, auto margins are treated as zero" — and a caption's
    margins DO apply (CSS 2.1 §8.3 "Margin properties" excludes only table display types other than

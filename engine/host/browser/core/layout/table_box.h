@@ -51,10 +51,12 @@
  *     reads HTML §4.9.11's `rowspan` and `colspan` while this component reads only `display`. §17.5.3 needs
  *     the grid only for its own row-spanning sentence; §17.5.2's column widths need all of it.
  *   - §17.4's TABLE WRAPPER BOX is the box §9.4.1 actually stacks ("the table generates a principal block box
- *     called the table wrapper box that contains the table box itself and any caption boxes"), and it is a
- *     block container that no element names. `table_box_captions` below answers the half of it this component
- *     owns — which boxes are in it besides the table box — and the wrapper itself is core/layout's next box to
- *     build, because §10.1's containing-block walk and §9.4.1's stack both stop at a table for want of it.
+ *     called the table wrapper box that contains the table box itself and any caption boxes"). It is a
+ *     PRINCIPAL block box of the table ELEMENT and never an anonymous one, which is §17.4's own word for it and
+ *     is what distinguishes it from every box §17.2.1's stages generate: both §10.1's containing-block walk and
+ *     §9.4.1's stack answer it today. What this component owns is the half `table_box_captions` below answers —
+ *     which boxes are in the wrapper besides the table box — and not the wrapper's own geometry, which is
+ *     core/layout/used_value.h's and core/layout/block_flow.h's.
  *   - §17.5.2's and §17.5.3's ALGORITHMS are what this operand is for. They are not here because they are
  *     sizes, and this component decides no size at all.
  *
