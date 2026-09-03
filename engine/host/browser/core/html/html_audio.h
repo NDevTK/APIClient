@@ -45,7 +45,12 @@
 /* §4.8.9's AGENT-WIDE DECLARATION — the argument list of the legacy factory function, which is one optional
    `DOMString` whose ToString may run the page's own `toString` before the body is entered. Called once per
    agent from core/html/html_element.c's declare, which is the file that owns the element-interface table
-   HTMLAudioElement is a row of and the list of global names this build carries. */
+   HTMLAudioElement is a row of and the list of global names this build carries.
+   THE ARGUMENT IS OPTIONAL WITH NO DEFAULT, WHICH IS AN OBSERVABLE FACT AND NOT A DETAIL OF THE DECLARATION.
+   Web IDL §3.6 "Overload resolution algorithm" step 15.4.2 appends "the special value 'missing'" for such a
+   position given `undefined`, so `new Audio(undefined)` and `new Audio()` are the same call and neither sets
+   a `src` attribute — which is what step 4's "If src is given" means and what core/idl_args.h's
+   idl_arg_given asks. The argument COUNT does not answer it; this header used to imply it did. */
 void html_audio_declare(JSContext *ctx);
 
 /* Web IDL §3.7.2's legacy factory function object for `Audio`, on THIS REALM's global. `proto` is this realm's

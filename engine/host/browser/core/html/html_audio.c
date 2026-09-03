@@ -32,12 +32,23 @@ static bool g_ready;
  * same `src` are two different requests, and collapsing the factory into the createElement path would
  * silently make them one.
  *
- * STEP 4 IS "IF GIVEN" AND NOT "IF NOT UNDEFINED". `Audio(src)` declares its argument OPTIONAL WITH NO
- * DEFAULT, so `new Audio()` and `new Audio(undefined)` are different calls: the first sets no `src` attribute
- * at all and the second sets it to the string "undefined". `argc` is what distinguishes them — a defaulted
- * read of `argv[0]` would answer the same for both and would put `src="undefined"` in the serialized markup
- * of an element the page asked for empty. It is the same distinction HTML §4.8.3 "The img element"'s
- * `Image(width, height)` makes.
+ * STEP 4 IS "IF GIVEN", AND `argc` DOES NOT ANSWER THAT. `Audio(src)` declares its argument OPTIONAL WITH NO
+ * DEFAULT, so Web IDL §3.6 "Overload resolution algorithm" step 15.4.2 appends "the special value 'missing'"
+ * for a page that passes `undefined` there, exactly as step 16.2 does for a page that passes nothing:
+ * `new Audio()` and `new Audio(undefined)` are THE SAME CALL, and neither sets a `src` attribute.
+ *
+ * THE PARAGRAPH HERE BEFORE SAID THE OPPOSITE — that the two are different calls and that the second "sets it
+ * to the string 'undefined'" — and it named `argc` as what tells them apart. That is what the code did, and
+ * §3.6 says it is wrong: an `argc` test is a count of how far the page REACHED, while the standard is asking
+ * which of the two kinds of entry §3.6 step 9 puts in `values` sits at that position. The count says "given"
+ * for the one call the standard says is not, so `new Audio(undefined)` serialized as
+ * `<audio preload="auto" src="undefined">` and HTML §4.8.11.5 "Loading the media resource"'s resource
+ * selection algorithm went on to request a URL the page never named. A wrong stated contract outlives the
+ * line it describes, which is why the argument is corrected here rather than deleted.
+ *
+ * WHAT ASKS IT NOW is core/idl_args.h's idl_arg_given, which is that rule as one named question. The same
+ * distinction is HTML §4.8.3 "The img element"'s `Image(optional unsigned long width, optional unsigned long
+ * height)` — two more positions declared optional with no default, and that component still reads its count.
  *
  * DOM §4.9 "Interface Element"'s CREATE AN ELEMENT is what step 2 names, not DOM §4.5 "Interface Document"'s
  * `createElement`, and the difference is that create-an-element runs no page code: there is no custom element
@@ -71,7 +82,8 @@ static JSValue js_audio_factory(JSContext *ctx, JSValueConst this_val, int argc,
        with whatever string a coercion invented. element_attr_set_value is the accessor that carries the whole
        triple into the (element, name) shadow, which is what keeps the address solvable once HTML §4.8.11.5
        "Loading the media resource"'s resource selection algorithm turns it into a request. */
-    if (argc >= 1) element_attr_set_value(ctx, audio, "src", argv[0]);
+    if (idl_arg_given(argc, argv, 0))
+        element_attr_set_value(ctx, audio, "src", argv[0]);
     return audio;                                                      /* step 5 */
 }
 
@@ -85,8 +97,11 @@ void html_audio_declare(JSContext *ctx)
     g_id_factory = idl_method_id(ctx, FACTORY_ARGS, 1, js_audio_factory, 0);
     /* `Audio(optional DOMString src)` — the one argument is OPTIONAL, which is what makes the function
        object's `length` 0 (Web IDL §3.7.2: "Let length be the length of the shortest argument list of the
-       entries in S"). Declared here rather than defaulted, so the body's `argc` test above is the spec's own
-       "if src is given" and not a test against a value the declaration invented. */
+       entries in S"). NO idl_arg_default FOLLOWS, and that is the declaration matching the IDL rather than an
+       omission: §4.8.9 writes `optional DOMString src` with no `= …`, so Web IDL §3.6 step 15.4.2's "missing"
+       is the arm an omitted argument takes here, and idl_arg_given above is what reads it. Declaring a default
+       would make every call give a `src` — the value the declaration invented — and step 4 would never be
+       skipped. */
     idl_optional_from(0);
     g_ready = true;
 }

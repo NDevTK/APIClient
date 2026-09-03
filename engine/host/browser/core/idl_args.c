@@ -820,6 +820,20 @@ typedef struct {
     JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
     int       i;        /* THE RESUME POINT: the argument being coerced */
     int       n;        /* how many of them there are */
+    /* §3.6's `values` IS A LIST OF IDL VALUES *OR* "MISSING", AND THIS IS THE SECOND HALF OF THAT SENTENCE.
+       The algorithm's own words are "Initialize values to be an empty list, where each entry will be either an
+       IDL value or the special value 'missing'" — two kinds of entry, and the converted-argument vector in
+       this state's tail can hold only the first. `undefined` is what stands in for the second there, so the
+       vector alone cannot say whether a position holds an IDL undefined or holds nothing at all, and the count
+       cannot either: `n` is what the page PASSED (extended over the defaulted and dictionary positions behind
+       it), not what §3.6 appended. One bit per declared position, set at the single site that takes step
+       15.4.2's arm, is the missing half — and it is a plain scalar precisely so the deep fork's byte-copy
+       carries it with no ownership contract of its own.
+       IT IS RECORDED WHERE IT IS DECIDED AND NOWHERE ELSE. Every fact this member states per position is
+       derived once and indexed by the position, because a second derivation is a second answer — and this one
+       has a live second answer available (re-testing `step_arg` at the body boundary) that would agree today
+       and would drift the first time a conversion places a value the raw argument did not. */
+    uint32_t  missing;
     JSValue   result;   /* the body's answer (owned) */
     /* THE OTHER RESUME POINT: §3.2.17's conversion, which is idl_args.h's own walk and NOT a cursor of this
        machine's. The argument path is ONE OF ITS TWO ENTRIES and holds no dictionary logic of its own — an
@@ -3414,6 +3428,15 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         s->vstage = JS_UNDEFINED;
         for (r = 0; r < m->nargs; r++)
             idl_args_vec(s)[r] = JS_UNDEFINED;
+        /* ONE BIT PER DECLARED POSITION, so a declaration wider than the word would silently drop the
+           positions past it — and dropping one reports a MISSING argument as a given `undefined`, which is
+           the exact confusion this field exists to end. Asserted rather than widened because the widening is
+           a one-character edit the day a member needs it, and a silent wrong answer is not. */
+        DCHECK(m->nargs <= (int)(sizeof(s->missing) * 8),
+               "a member declares more argument positions than the §3.6 `missing` set has bits — every "
+               "position past the last bit would read as GIVEN, so a call that omitted one would set the "
+               "attribute or run the step that position guards; widen the field to a uint64_t");
+        s->missing = 0;
         s->i = 0;
         s->tree = NULL;
         s->tree_after_body = 0;
@@ -3487,13 +3510,30 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             /* §3.6 STEP 15.4, BOTH ARMS — the guard reached here is that one, "If optionality is 'optional'
                and V is undefined". Its 15.4.1 gives an argument whose IDL writes `= …` THAT value, which is
                already an IDL value and is therefore placed rather than coerced; its 15.4.2 appends "the
-               special value 'missing'" for a position with no declared default, which is the undefined the
-               body reads as "not given". Step 16.1 is the same placement for a position the page never
-               reached — see idl_args.h's idl_arg_default. */
-            *slot = (m->arg_dflts != NULL && m->arg_dflts[s->i].kind != IDL_DEFAULT_NONE)
-                  ? idl_default_of(ctx, m->arg_dflts[s->i].kind, m->arg_dflts[s->i].str)
-                  : JS_UNDEFINED;
-            if (JS_IsException(*slot)) { *slot = JS_UNDEFINED; return JS_STEP_ABRUPT; }
+               special value 'missing'" for a position with no declared default. Step 16.1 is the same
+               placement for a position the page never reached — see idl_args.h's idl_arg_default.
+               THIS IS THE ONE SITE THAT DECIDES "MISSING", so it is the one site that records it. The bit and
+               the placed `undefined` are written together because they are the same statement made twice: the
+               vector says what the body READS and the bit says which of §3.6's two kinds of entry that
+               reading IS. A body asks the bit through idl_arg_given, never the argument count — see
+               idl_args.h, and see the assertion at the body boundary that keeps the two agreeing. */
+            {
+                /* WHICH OF THE TWO ARMS THIS IS, asked ONCE. The placement and the bit are both answers to it,
+                   and deriving the bit a second way — from the placed value being `undefined` — would agree
+                   today only because no IdlDictDefault produces one, which is a property of that enum and not
+                   of this rule. */
+                bool has_default = m->arg_dflts != NULL && m->arg_dflts[s->i].kind != IDL_DEFAULT_NONE;
+
+                *slot = has_default ? idl_default_of(ctx, m->arg_dflts[s->i].kind, m->arg_dflts[s->i].str)
+                                    : JS_UNDEFINED;                        /* 15.4.1 / 15.4.2 */
+                if (JS_IsException(*slot)) { *slot = JS_UNDEFINED; return JS_STEP_ABRUPT; }
+                if (!has_default) s->missing |= (uint32_t)1 << s->i;        /* 15.4.2's "missing" */
+                DCHECK(has_default || JS_IsUndefined(*slot),
+                       "§3.6 step 15.4.2 appended the special value \"missing\" and this machine placed "
+                       "something other than the `undefined` that stands in for it — idl_arg_given reads the "
+                       "recorded bit and every body reads the vector, so the two would disagree about whether "
+                       "the page gave this argument");
+            }
             goto placed;
         }
 
@@ -4290,7 +4330,11 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             /* §3.6 step 15.4.2's "missing" is placed rather than coerced, and it is placed BEFORE the coercion
                because it is not a value: a required position handed `undefined` is what §3.2.3 converts (to
                false, which is what every body's own `JS_ToBool` of the placed undefined already answers), and
-               an ABSENT one is what a body tells apart with its `argc` test. */
+               an ABSENT one is what a body tells apart with idl_arg_given.
+               THE `argc` TEST THAT STOOD HERE WAS THE WRONG INSTRUMENT AND IS RETIRED. `argc` is how many
+               values the page passed, extended over the defaulted and dictionary positions behind them; §3.6
+               step 15.4.2 appends "missing" for a position the page reached and passed `undefined` at, so the
+               count answers "given" for exactly the call the standard says is not. */
             if (JS_IsUndefined(a)) { *slot = JS_UNDEFINED; goto placed; }
             r = step_tobool_run(ctx, &s->hdr, a, "Web IDL §3.2.3 boolean", &res);
             if (r) return r;
@@ -4404,6 +4448,27 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         argv_vec = s->n ? js_malloc(ctx, sizeof(JSValue) * (size_t)s->n) : NULL;
         if (s->n && !argv_vec) { JS_FreeValue(ctx, cb_result); return JS_STEP_ABRUPT; }
         for (k = 0; k < s->n; k++) argv_vec[k] = JS_GetPropertyUint32(ctx, s->conv, (uint32_t)k);
+    }
+    /* WHAT MAKES idl_arg_given SOUND, ASSERTED WHERE THE BODY IS ABOUT TO READ IT. That accessor answers
+       §3.6's "if X is given" off the VECTOR, because a plain body is handed nothing else — so it is right
+       exactly while `undefined` at an OPTIONAL position means the special value "missing" and nothing else.
+       The other direction is already assured at the placement site; this is the one that a new conversion can
+       break, by producing an IDL value that IS `undefined` for an argument the page actually gave. It is
+       scoped to the optional positions because those are the only ones §3.6 can append "missing" for: a
+       REQUIRED position is always given, and an `any` at one legitimately holds the `undefined` the page
+       passed, which is why idl_arg_given is a question about optional positions and says so.
+       IF THIS FIRES, THE FIX IS NOT TO WIDEN THE SCOPE — it is that the type at that position now needs a
+       representation for "missing" that is not `undefined`, and every body reading it needs to learn it. */
+    {
+        const JSValueConst *vec = (JSValueConst *)(argv_vec ? argv_vec : idl_args_vec(s));
+        int fo = idl_first_optional(m, s->hdr.argc), k;
+
+        for (k = fo; k < s->n && k < idl_declared_positions(m); k++)
+            DCHECK(((s->missing >> k) & 1u) || !JS_IsUndefined(vec[k]),
+                   "an optional argument the page GAVE reached the body as `undefined` without §3.6 step "
+                   "15.4.2 having appended \"missing\" for it — the vector is the only thing a plain body "
+                   "reads, so idl_arg_given would report an argument that was passed as one that was not, and "
+                   "the member would skip the step that position guards");
     }
     if (!m->step) JS_FreeValue(ctx, cb_result);
     if (m->step) {
@@ -4885,6 +4950,19 @@ int idl_method_id_step(JSContext *ctx, const IdlArgType *types, int nargs,
     "not the member being installed. State it where the member is declared"
 
 /* See idl_args.h. It names the member the LAST declaration made. */
+/* §3.6's "if X is given", as ONE question a body asks instead of counting. See idl_args.h for the contract and
+   for why the argument count cannot answer it. Both halves are the standard's: a position the page never
+   reached is step 16.2's "missing", and a position it reached and passed `undefined` at is step 15.4.2's —
+   the two arms of one rule, which is why one test covers both and a count covers neither. */
+bool idl_arg_given(int argc, JSValueConst *argv, int index)
+{
+    DCHECK(index >= 0, "a member asked whether a NEGATIVE argument position was given");
+    /* `argv` is only ever indexed inside the count the machine handed the body, which is what makes this safe
+       for a variadic member's vector too — that one is exactly `argc` long, while a non-variadic member's is
+       the declaration's full width. */
+    return index < argc && !JS_IsUndefined(argv[index]);
+}
+
 void idl_optional_from(int first_optional)
 {
     DCHECK(g_n > 0, "an optional-argument index was declared before any member was");

@@ -1318,6 +1318,46 @@ typedef struct {
    did. The declaration asserts the bound, so the state cannot be reached. */
 void idl_optional_from(int first_optional);
 
+/* §3.6's "IF X IS GIVEN", WHICH IS THE QUESTION A SPEC STEP ASKS AND `argc` IS NOT AN ANSWER TO.
+ *
+ * Web IDL §3.6 "Overload resolution algorithm" outputs `values`, and its step 9 says what that list holds:
+ * "Initialize values to be an empty list, where each entry will be either an IDL value or the special value
+ * 'missing'". Two kinds of entry — and a spec step written "If src is given" is asking WHICH KIND is at that
+ * position, never how many entries there are. Both of the algorithm's arms produce the second kind:
+ *
+ *   - step 15.4, for a position the page REACHED — "If optionality is 'optional' and V is undefined, then: If
+ *     the argument at index i is declared with a default value, then append to values that default value.
+ *     Otherwise, append to values the special value 'missing'."
+ *   - step 16.2, for a position it never reached — "Otherwise, if callable's argument at index i is not
+ *     variadic, then append to values the special value 'missing'."
+ *
+ * (For a member with ONE entry in its effective overload set — every member of this platform that is not a
+ * length-differing split — step 8 never runs, so `d` stays −1, step 11's loop never executes and step 15's
+ * does. The same sentence appears at 11.4 and 15.4; the one this platform reaches is 15.4.)
+ *
+ * WHY THE COUNT IS THE WRONG INSTRUMENT, IN BOTH DIRECTIONS. It over-reports, because a page that PASSES
+ * `undefined` at an optional position with no default has raised the count for an argument §3.6 calls
+ * missing — `new Audio(undefined)` is a one-argument call whose `src` is not given. And it over-reports
+ * again from the other side, because the count this machine hands a body is EXTENDED over every defaulted or
+ * dictionary position behind the ones the page passed (step 16.1's placement), so a member with a default
+ * anywhere after the position in question reaches its body at full arity for every call: `Option`'s count is
+ * 4 whether or not `value` was given. A count answers "how far did the page reach", and the spec is asking
+ * "is there a value here".
+ *
+ * THE CONTRACT. Ask this of an OPTIONAL position — one at or past the member's `idl_optional_from` index.
+ * A required position is always given (§3.6 step 5 threw otherwise), so the question is not one the standard
+ * poses there, and an `any` at a required position legitimately holds the `undefined` the page passed. A
+ * position with a DECLARED DEFAULT is always given too, and answers so: the default was placed, and no
+ * IdlDictDefault produces `undefined`.
+ *
+ * WHAT KEEPS IT TRUE. `undefined` in the vector IS the representation of "missing", and the machine asserts
+ * both directions of that — at the placement, that step 15.4.2's arm placed nothing else; and at the body
+ * boundary, that no conversion handed an optional position an IDL value that is `undefined`. A body may read
+ * the vector directly for the same answer (`!JS_IsUndefined(argv[i])` is what this computes); it exists so
+ * the site states the SPEC'S question rather than restating its encoding, and so the day "missing" needs a
+ * representation that is not `undefined` there is one place to change. */
+bool idl_arg_given(int argc, JSValueConst *argv, int index);
+
 /* DECLARE WHERE THE **LONGER OVERLOAD ENTRY'S** OPTIONAL ARGUMENTS START — the other half of a §3.6 split whose
  * two entries differ in LENGTH (IDL_USVSTRING_OR_DICT, IDL_UNRESTRICTED_DOUBLE_OR_DICT), and the half this file
  * stated as a rule and then applied to exactly one position.
