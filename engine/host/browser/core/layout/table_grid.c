@@ -69,34 +69,50 @@ static size_t tg_span_attr(lxb_dom_element_t *cell, const char *name, size_t fal
     return (size_t) n.value;
 }
 
-/* §17.5's rule 6 — "A cell box cannot extend beyond the last row box of a table or row group; the user agents
-   must shorten it until it fits" — needs each row's GROUP RUN. A run is a maximal stretch of consecutive rows
-   reporting the same row group box, and a stretch reporting NONE is one run of its own: those are the rows
-   whose parent is the table box itself, which HTML §4.9.12.1 Forming a table gathers into a row group as well.
-   Answers, for each row, ONE PAST the last row index of its run — so `end[y] - y` is what a cell anchored in
-   row `y` may still cover, and is at least 1. */
-static size_t *tg_group_ends(const TableBoxRow *rows, size_t nrows)
+/* §17.5's RULE 2 AND RULE 6's BOUND ARE ONE QUANTITY AND THIS IS THE ONE PLACE IT IS COMPUTED. Rule 2 — "A row
+   group occupies the same grid cells as the rows it contains" — and rule 6 — "A cell box cannot extend beyond
+   the last row box of a table or row group; the user agents must shorten it until it fits" — are both stated
+   over the RUN of grid rows a group holds, so the clamp below and the extent core/layout/table_height.h takes
+   read the same array. A run is a maximal stretch of consecutive rows reporting the same row group box, and a
+   stretch reporting NONE is one run of its own: those are the rows whose parent is the table box itself, which
+   HTML §4.9.12.1 Forming a table gathers into a row group as well.
+   THE RUNS ARE MAXIMAL AND CONSECUTIVE, WHICH MAKES ONE ROW GROUP APPEAR IN EXACTLY ONE OF THEM, and that is
+   §17.2's display order rather than an assumption this walk is entitled to make — core/layout/table_box.h
+   reports a header group's rows before every other row and a footer group's after every other row, so each
+   group's rows stay together. It is ASSERTED at the end of `table_grid_build` rather than trusted, because a
+   group split across two runs is silently wrong in both readings at once: rule 6 would shorten a `rowspan` at
+   a boundary the document does not have, and rule 2's extent would name only one of the two pieces.
+   Answers the run count and stores a newly allocated array of that many at `*out`; zero stores NULL. */
+static size_t tg_group_runs(const TableBoxRow *rows, size_t nrows, TableGridRowGroup **out)
 {
-    size_t *end;
-    size_t i = 0;
+    TableGridRowGroup *runs;
+    size_t n = 0, i = 0;
 
-    if (nrows == 0) return NULL;
-    end = (size_t *) calloc(nrows, sizeof *end);
-    CHECK(end != NULL, "CSS 2.1 §17.5's rule 6 could not allocate one row-group extent per row of a table");
+    *out = NULL;
+    if (nrows == 0) return 0;
+    /* At most one run per row, which is the `<tbody><tr></tbody>` repeated case. */
+    runs = (TableGridRowGroup *) calloc(nrows, sizeof *runs);
+    CHECK(runs != NULL, "CSS 2.1 §17.5's rules 2 and 6 could not allocate one row-group run per row of a table");
     while (i < nrows) {
         size_t j = i + 1;
 
         while (j < nrows && rows[j].group == rows[i].group) j++;
-        for (; i < j; i++) end[i] = j;
+        runs[n].element = rows[i].group;
+        runs[n].first = i;
+        runs[n].nrows = j - i;
+        n++;
+        i = j;
     }
-    return end;
+    *out = runs;
+    return n;
 }
 
 void table_grid_build(lxb_dom_element_t *table, TableGrid *out)
 {
     TableBoxRow *rows = NULL;
     size_t nrows, y, anchor;
-    size_t *group_end;
+    TableGridRowGroup *groups = NULL;
+    size_t ngroups, g = 0;
     /* PER COLUMN, THE FIRST GRID ROW THAT COLUMN IS FREE AGAIN AT — the whole of §17.5's occupancy state, and
        it is a row index rather than a bitmap for a reason the section supplies: every cell covers a CONTIGUOUS
        run of rows starting at its own anchor row, and the rows are walked top-down, so one number per column
@@ -113,16 +129,19 @@ void table_grid_build(lxb_dom_element_t *table, TableGrid *out)
            "CSS 2.1 §17.5's grid was asked for with nowhere to put it. A table's column count alone names no "
            "cell, so §17.5.2's column widths — which are taken across the cells that occupy each column — "
            "could not be computed from it, and that is the whole of what this entry is asked for");
+    out->table = table;
     out->cells = NULL;
     out->ncells = 0;
     out->rows = NULL;
     out->nrows = 0;
+    out->groups = NULL;
+    out->ngroups = 0;
     out->ncols = 0;
     out->any_overlap = false;
     /* §17.5's rule 1 states the row count and this entry does not re-derive it: "Each row box occupies one row
        of grid cells… the table occupies exactly as many grid rows as there are row elements." */
     nrows = table_box_rows(table, &rows);
-    group_end = tg_group_ends(rows, nrows);
+    ngroups = tg_group_runs(rows, nrows, &groups);
     /* RULE 1's OTHER HALF, WHICH IS THE PLACEMENT AND NOT THE COUNT: "Together, the row boxes fill the table
        from top to bottom in the order they occur in the source document." `table_box_rows` answers them in
        §17.2's display order, so the index of a row in that answer IS its grid row and this loop copies rather
@@ -138,6 +157,16 @@ void table_grid_build(lxb_dom_element_t *table, TableGrid *out)
     for (y = 0; y < nrows; y++) {
         size_t x = 0, k;
 
+        /* §17.5's RULE 6 IS BOUNDED BY THE RUN, AND THE RUN IS READ RATHER THAN RE-DERIVED — one array for the
+           clamp here and for rule 2's extent core/layout/table_height.h takes. The runs partition the rows in
+           grid order and this loop walks the rows in that same order, so the current run advances at most once
+           per row and finding it IS the walk rather than a second search. */
+        while (g + 1 < ngroups && y >= groups[g].first + groups[g].nrows) g++;
+        DCHECK(g < ngroups && y >= groups[g].first && y < groups[g].first + groups[g].nrows,
+               "CSS 2.1 §17.5's rule 6 was applied to a grid row that no row-group run contains. The runs are "
+               "maximal stretches over the SAME row array this loop walks, so they partition its indices by "
+               "construction — a row outside every run is that array having been rebuilt between the two "
+               "passes, and the `rowspan` clamp below would then shorten a cell against another table's rows");
         for (k = 0; k < rows[y].ncells; k++) {
             lxb_dom_element_t *el = rows[y].cells[k].element;
             size_t colspan, rowspan, remaining, c;
@@ -166,7 +195,7 @@ void table_grid_build(lxb_dom_element_t *table, TableGrid *out)
                group", which §17.5's rule 6 then bounds — so the two sentences meet in the same clamp below and
                a zero needs no arm of its own beyond asking for everything. */
             grows_downward = (rowspan == 0);
-            remaining = group_end[y] - y;
+            remaining = groups[g].first + groups[g].nrows - y;
             if (grows_downward || rowspan > remaining) rowspan = remaining;
             /* Grow the occupancy to cover this cell, marking the new columns free (never occupied). */
             if (x + colspan > ncols) {
@@ -202,12 +231,13 @@ void table_grid_build(lxb_dom_element_t *table, TableGrid *out)
         }
     }
     free(free_at);
-    free(group_end);
     table_box_rows_free(rows, nrows);
     out->cells = cells;
     out->ncells = ncells;
     out->rows = row_els;
     out->nrows = nrows;
+    out->groups = groups;
+    out->ngroups = ngroups;
     out->ncols = ncols;
     out->any_overlap = any_overlap;
     for (anchor = 0; anchor < ncells; anchor++)
@@ -216,6 +246,44 @@ void table_grid_build(lxb_dom_element_t *table, TableGrid *out)
                "row of this rectangle is in the row specified by the cell's parent\", and every cell here was "
                "reached by descending a row of this same walk, so a row index past the row array is the two "
                "halves of one loop having been carried apart");
+    /* THE PARTITION, ASSERTED — the property `table_grid_group_of_row` is an entry rather than a scan for, and
+       the property every consumer of a run relies on without being able to see it. */
+    for (g = 0; g < ngroups; g++) {
+        DCHECK(groups[g].nrows >= 1,
+               "CSS 2.1 §17.5's rule 2 produced a row-group run covering NO grid row. The runs are maximal "
+               "stretches of the row array and a stretch starts at a row that is in it, so an empty run is the "
+               "loop that built them having advanced without consuming a row. An EMPTY row group is not this: "
+               "it holds no row at all, so `table_box_rows` reports none for it and no run is built for it");
+        DCHECK(groups[g].first == (g == 0 ? (size_t) 0 : groups[g - 1].first + groups[g - 1].nrows),
+               "CSS 2.1 §17.5's rule 2's runs do not partition the grid rows — one run does not begin where "
+               "the previous one ends. They are built as maximal stretches over one array in one pass, so a "
+               "gap or an overlap here is that pass having been carried apart, and rule 6's clamp would then "
+               "shorten a `rowspan` at a boundary the document does not have");
+    }
+    DCHECK(ngroups == 0 ? nrows == 0
+                        : groups[ngroups - 1].first + groups[ngroups - 1].nrows == nrows,
+           "CSS 2.1 §17.5's rule 2's runs do not cover every grid row rule 1 placed. The last run must end at "
+           "the row count, and a table with no rows must have no runs — otherwise a row belongs to no row "
+           "group box and rule 6 has nothing to shorten a cell anchored in it against");
+    /* §17.2's DISPLAY ORDER PUTS EACH GROUP'S ROWS TOGETHER, AND THAT IS CHECKED RATHER THAN TRUSTED. A group
+       appearing in two runs is wrong in both readings at once and silently in each: rule 6 would shorten a
+       `rowspan` at a boundary that is not there, and rule 2's extent would name one piece of the group and
+       report it as the whole. The NULL-element runs are exempt because they name no box — two separated
+       stretches of table-box-parented rows are two implicit groups, which is what HTML §4.9.12.1 Forming a
+       table gathers them into. */
+    for (g = 0; g < ngroups; g++) {
+        size_t h;
+
+        if (groups[g].element == NULL) continue;
+        for (h = g + 1; h < ngroups; h++)
+            DCHECK(groups[h].element != groups[g].element,
+                   "CSS 2.1 §17.5's rule 2 placed ONE row group box at TWO separated runs of grid rows. Rule 2 "
+                   "gives it \"the same grid cells as the rows it contains\", and CSS 2.1 §17.2 The CSS table "
+                   "model's display order keeps those rows together — a header group's before every other row "
+                   "and a footer group's after every other row — so this is core/layout/table_box.h's row "
+                   "order having interleaved two groups, and neither the clamp above nor the extent "
+                   "core/layout/table_height.h takes is answering about the whole group any more");
+    }
 }
 
 /* THE ONE-MATCH INVARIANT IS THE POINT OF THE SCAN AND NOT A SIDE EFFECT OF IT. CSS 2.1 §17.5 Visual layout of
@@ -288,6 +356,67 @@ bool table_grid_row_of(const TableGrid *grid, const lxb_dom_element_t *row, size
     return found;
 }
 
+/* See table_grid.h for why NULL has exactly ONE cause here and why `group` is not `const`. The one-match loop
+   is rule 2's own sentence read the same way rule 1's is read one entry up: a group occupies ONE run, so a
+   second hit is the runs having been built over an interleaved row order, and a consumer taking the first hit
+   would size a group box out of one piece of itself. */
+const TableGridRowGroup *table_grid_row_group_of(const TableGrid *grid, lxb_dom_element_t *group)
+{
+    const TableGridRowGroup *found = NULL;
+    size_t i;
+
+    DCHECK(grid != NULL, "CSS 2.1 §17.5's grid was asked which grid rows a row group occupies through no grid");
+    DCHECK(grid->groups != NULL || grid->ngroups == 0,
+           "CSS 2.1 §17.5's grid was asked for a row group while holding no run array and a non-zero run count "
+           "— `table_grid_build` stores NULL only for a table with no rows at all, so the two have been carried "
+           "apart since it answered");
+    DCHECK(group != NULL,
+           "CSS 2.1 §17.5's rule 2 was asked which grid rows a NULL row group occupies. The NULL-element run is "
+           "the stretch whose rows' parent is the TABLE BOX itself and it names no box — CSS 2.1 §17.2.1 "
+           "Anonymous table objects generates no anonymous row group — so a NULL would match the first such "
+           "stretch and answer a question about a box that does not exist");
+    DCHECK(table_box_table_of(group) == grid->table,
+           "CSS 2.1 §17.5's rule 2 was asked about a ROW GROUP box that is not in this grid's table. This entry "
+           "is the one place that distinction has to be made rather than handed to the consumer: an EMPTY "
+           "`<tbody>` is a real row group box of this table holding no row, so the NULL this entry answers with "
+           "is rule 2's union over zero rows and MUST NOT also mean a caller that walked to the wrong table box "
+           "— a consumer cannot tell those apart and would report a real extent for another table's group. "
+           "core/layout/table_box.h's `table_box_table_of` climbs §17.2's own box nesting, so a mismatch here "
+           "is that walk and this grid having been built from two different table boxes");
+    for (i = 0; i < grid->ngroups; i++) {
+        if (grid->groups[i].element != group) continue;
+        DCHECK(found == NULL,
+               "CSS 2.1 §17.5 Visual layout of table contents placed ONE row group box at TWO runs of grid "
+               "rows. Rule 2 gives it \"the same grid cells as the rows it contains\" — one run — so this is "
+               "core/layout/table_box.h's row order having interleaved two groups, and either answer names "
+               "only part of the box");
+        found = &grid->groups[i];
+    }
+    return found;
+}
+
+/* See table_grid.h. The partition is asserted where it is built, so this is a walk to the run that contains
+   `row` and never a search that can fail — the abort below is a caller asking about a row this table does not
+   have, which is a different mistake and not this component's to absorb. */
+const TableGridRowGroup *table_grid_group_of_row(const TableGrid *grid, size_t row)
+{
+    size_t i;
+
+    DCHECK(grid != NULL, "CSS 2.1 §17.5's grid was asked which row group a grid row is in through no grid");
+    DCHECK(row < grid->nrows,
+           "CSS 2.1 §17.5's rule 2 was asked which row group a grid row is in for a row past the last one rule "
+           "1 placed — \"the table occupies exactly as many grid rows as there are row elements\" — so a row "
+           "at or past that count names no row box and there is no run to answer with");
+    for (i = 0; i < grid->ngroups; i++)
+        if (row >= grid->groups[i].first && row < grid->groups[i].first + grid->groups[i].nrows)
+            return &grid->groups[i];
+    DFAIL("CSS 2.1 §17.5's rule 2's runs do not cover a grid row rule 1 placed. `table_grid_build` asserts the "
+          "partition where it builds the runs — every run begins where the previous one ends and the last ends "
+          "at the row count — so a row inside the count and outside every run is that array having been "
+          "replaced since it answered");
+    return NULL;
+}
+
 void table_grid_release(TableGrid *grid)
 {
     DCHECK(grid != NULL, "CSS 2.1 §17.5's grid was released through no grid");
@@ -299,12 +428,20 @@ void table_grid_release(TableGrid *grid)
            "a table grid was released holding no row array with a non-zero row count — `table_grid_build` "
            "stores NULL only for a table with no rows at all, so the two have been carried apart since it "
            "answered");
+    DCHECK(grid->groups != NULL || grid->ngroups == 0,
+           "a table grid was released holding no row-group run array with a non-zero run count — "
+           "`table_grid_build` stores NULL only for a table with no rows at all, so the two have been carried "
+           "apart since it answered");
     free(grid->cells);
     free(grid->rows);
+    free(grid->groups);
+    grid->table = NULL;
     grid->cells = NULL;
     grid->ncells = 0;
     grid->rows = NULL;
     grid->nrows = 0;
+    grid->groups = NULL;
+    grid->ngroups = 0;
     grid->ncols = 0;
     grid->any_overlap = false;
 }

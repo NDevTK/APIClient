@@ -57,13 +57,21 @@
  * not with the assignment; the indices here are in the spec's own LOGICAL order, so a caller reading them
  * right-to-left needs no second grid.
  *
- * §17.5's RULE 2 IS NOT ANSWERED HERE EITHER, AND ITS ABSENCE IS THE ROW AXIS'S OWN GAP RATHER THAN THE COLUMN
- * AXIS'S. "A row group occupies the same grid cells as the rows it contains" is a run of the grid rows below,
- * derivable from nothing but which row group each row is inside — a fact core/layout/table_box.h's
- * `TableBoxRow.group` already carries and this component currently drops. It is not stored because storing it
- * with no consumer would be a field written and read nowhere; the diff that places a ROW GROUP box adds the
- * field and the run entry beside it. Its absence is not silent and is not this file's to report: a row group
- * box has no origin without it, so core/layout/flow_position.c aborts for one by name. */
+ * §17.5's RULE 2 IS ANSWERED HERE AND IT IS THE SAME FACT RULE 6 ALREADY NEEDED, which is why it is one array
+ * and not two. "A row group occupies the same grid cells as the rows it contains" is a RUN of the grid rows
+ * below, derivable from nothing but which row group each row is inside — core/layout/table_box.h's
+ * `TableBoxRow.group`. Rule 6 is stated over that same run — "A cell box cannot extend beyond the last row box
+ * of a table or row group" names the GROUP as a bound and not only the table — so the clamp this walk applies
+ * to a `rowspan` and the extent rule 2 gives a group box are ONE quantity read twice, and computing them
+ * separately would be two producers of one fact, free to disagree about where a group ends while each looked
+ * locally right.
+ * THE TWO AXES DIVERGE HERE AND THE SECTION SAYS WHY. On the INLINE axis a group needs no run at all: rule 1
+ * gives every row the WHOLE grid row, so rule 2's union over a group's rows is that same whole row and a group
+ * and a row have identical inline extent. On the BLOCK axis they do not, because that is the axis rows are
+ * STACKED on — which is also how §17.5's last normative paragraph reads, since the gaps it names "between the
+ * rows, columns, row groups or column groups" are gaps on the axis each of those boxes is stacked on. So the
+ * run is the block axis's operand and CSS 2.1 §17.5.3 Table height algorithms' question, and
+ * core/layout/table_height.h turns it into an extent. */
 #ifndef ENGINE_HOST_BROWSER_CORE_LAYOUT_TABLE_GRID_H
 #define ENGINE_HOST_BROWSER_CORE_LAYOUT_TABLE_GRID_H
 
@@ -89,9 +97,34 @@ typedef struct {
     bool overlaps;
 } TableGridCell;
 
+/* ONE MAXIMAL RUN OF CONSECUTIVE GRID ROWS REPORTING THE SAME ROW GROUP — §17.5's rule 2 ("A row group occupies
+   the same grid cells as the rows it contains") and rule 6's bound ("A cell box cannot extend beyond the last
+   row box of a table or row group") as ONE quantity, because they are the same one.
+   `element` IS NULL FOR THE STRETCH WHOSE ROWS' PARENT IS THE TABLE BOX ITSELF, and that entry is NOT a box.
+   §17.2.1 Anonymous table objects generates no anonymous row group — core/layout/table_box.h says so of its own
+   `TableBoxRow.group` — so a NULL here is the tree's own shape and never a missing box. Such a stretch still
+   BOUNDS a `rowspan`, which is HTML §4.9.12.1 Forming a table's doing rather than an invention: that algorithm
+   gathers a run of `tr` children of a `table` into a row group, and §17.5's rule 6 then shortens a cell to it.
+   It has an extent and no box to hang it on, which is exactly why `table_grid_row_group_of` refuses to be asked
+   for one — see there.
+   THE RUNS PARTITION THE GRID ROWS: they are in grid order, `groups[0].first` is 0 when there is any row, each
+   entry's `first` is the previous entry's `first + nrows`, and every `nrows` is at least 1. That partition is
+   what makes `table_grid_group_of_row` an entry rather than a scan, and it is asserted where it is built. */
+typedef struct {
+    lxb_dom_element_t *element;
+    size_t first;    /* the first grid row of the run */
+    size_t nrows;    /* grid rows covered, at least 1 */
+} TableGridRowGroup;
+
 /* THE WHOLE GRID of one table box. Cells are in the order §17.5's rules walk them: by grid row, and within a
    row in the order core/layout/table_box.h reports the row's cells, which is their tree order. */
 typedef struct {
+    /* THE TABLE BOX THIS GRID IS OF, stored rather than left to the caller to remember, because it is what
+       makes "this element is not in this grid" and "this element is in this grid and occupies nothing"
+       DIFFERENT ANSWERS. `table_grid_row_group_of` is where that distinction is load-bearing: an EMPTY
+       `<tbody>` is a real row group box of this table that rule 2 places at no grid cell, and without this
+       field it would be indistinguishable from a caller that walked to the wrong table box. */
+    lxb_dom_element_t *table;
     TableGridCell *cells;
     size_t ncells;
     /* §17.5's RULE 1, WHICH IS A PLACEMENT AND NOT A COUNT: "Each row box occupies one row of grid cells."
@@ -106,6 +139,11 @@ typedef struct {
        tell. NULL when `nrows` is zero. */
     lxb_dom_element_t **rows;
     size_t nrows;
+    /* §17.5's RULE 2 AND RULE 6's BOUND, as the runs above. In grid order, partitioning rows `0..nrows-1`;
+       NULL and zero for a table with no rows. `ngroups` is this array's length for `nrows`'s own reason — the
+       runs ARE the partition, so a second count could disagree with it and nothing downstream could tell. */
+    TableGridRowGroup *groups;
+    size_t ngroups;
     size_t ncols;       /* the widest any row reached, which is the table's column count */
     bool any_overlap;   /* whether rule 5's undefined case arose at all, so a consumer can ask once */
 } TableGrid;
@@ -148,6 +186,35 @@ const TableGridCell *table_grid_cell_of(const TableGrid *grid, const lxb_dom_ele
    element to name it, so `row` must not be NULL and this entry asserts that instead of matching the first
    anonymous row in the grid. */
 bool table_grid_row_of(const TableGrid *grid, const lxb_dom_element_t *row, size_t *out);
+
+/* WHICH RUN OF GRID ROWS one ROW GROUP BOX occupies — §17.5's rule 2 read back the way a consumer holding an
+   element has to read it, and NULL when rule 2's union over that group's rows is EMPTY.
+   NULL HAS EXACTLY ONE CAUSE HERE, WHICH IS THE WHOLE REASON `TableGrid.table` EXISTS. `table_grid_cell_of`'s
+   NULL and `table_grid_row_of`'s FALSE both fold in "the caller walked to the wrong table box", and their
+   consumers crash on that. This entry cannot: an EMPTY `<tbody>` is a real row group box of this table holding
+   no row, so a NULL that also meant "wrong table" would be a walk error wearing the shape of a legitimate
+   answer, and the consumer that ATE it would report a real extent for a group of some other table. So the
+   wrong-table case is asserted away here, where the walk fact lives, and the NULL that survives is rule 2's
+   union over zero rows and nothing else. WHAT THAT EXTENT IS is not this file's answer — it is
+   core/layout/table_height.h's `table_row_group_used_extent`, which records the choice CSS 2.1 declines.
+   `group` IS NOT `const` WHERE THE TWO ENTRIES ABOVE ARE, and the difference is not an oversight: those two
+   SCAN stored pointers and need nothing of the element, while this one asserts core/layout/table_box.h's own
+   upward walk (`table_box_table_of`) against `TableGrid.table`, and that walk takes the element as the tree
+   holds it. A cast at this boundary would hide which of the two shapes this entry is.
+   §17.2.1's TABLE-BOX-PARENTED STRETCH CANNOT BE ASKED FOR, exactly as the anonymous cell and the anonymous row
+   cannot: §17.2.1 Anonymous table objects generates no anonymous row group, so the NULL-element run above names
+   no BOX, and `group` must not be NULL — a NULL would match the first such stretch and answer a question about
+   a box that does not exist. */
+const TableGridRowGroup *table_grid_row_group_of(const TableGrid *grid, lxb_dom_element_t *group);
+
+/* WHICH RUN a given GRID ROW is in — the same partition read from the other side, which is the side §17.5's
+   RULE 6 is stated from: "A cell box cannot extend beyond the last row box of a table or row group", asked of
+   a cell that knows its anchor row and not its group. NEVER NULL for `row < grid->nrows`, because the runs
+   partition the rows; a `row` at or past `nrows` is a caller's crash and aborts here rather than answering.
+   IT IS AN ENTRY AND NOT A SCAN AT THE CALLER because the PARTITION is this component's invariant: a scan
+   written at a consumer would be free to fall off the end, or to take the first run whose `first` is not
+   greater than `row`, and both look right on every table whose runs happen to be one row long. */
+const TableGridRowGroup *table_grid_group_of_row(const TableGrid *grid, size_t row);
 
 /* Releases what `table_grid_build` stored. A zero-cell grid holds NULL and is accepted. */
 void table_grid_release(TableGrid *grid);

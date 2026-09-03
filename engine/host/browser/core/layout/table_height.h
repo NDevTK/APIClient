@@ -166,6 +166,47 @@ void table_heights(lxb_dom_element_t *table, const TableGrid *grid, TableUsedHei
    initial `content-box` that is the content box — this number less `table_cell_vertical_edges` below. */
 CssPx table_cell_used_border_box_height(const TableUsedHeights *heights, const TableGridCell *cell);
 
+/* ONE ROW GROUP BOX'S BLOCK-AXIS EXTENT — CSS 2.1 §17.5 Visual layout of table contents' rule 2 turned into a
+   distance, and the axis on which a row group and a row are DIFFERENT boxes.
+   THE OTHER AXIS IS ONE ANSWER AND THIS ONE IS TWO, WHICH IS THE SECTION'S DOING AND NOT A CONVENIENCE. Rule 1
+   gives a row box a WHOLE grid row, so rule 2's union over a group's rows is that same whole row and a group
+   and a row have IDENTICAL inline extent — core/layout/used_value.c answers both from one function that reads
+   no row at all. Here they diverge, because the block axis is the axis rows are STACKED on: a group covers a
+   RUN of grid rows (core/layout/table_grid.h's `TableGridRowGroup`) and a row covers one.
+   THE EDGES ARE THE SECTION'S OWN AND THEY ARE STATED SEPARATELY PER BORDER MODEL. §17.5's last normative
+   paragraph: "The edges of the rows, columns, row groups and column groups in the collapsing borders model
+   coincide with the hypothetical grid lines on which the borders of the cells are centered. (And thus, in this
+   model, the rows together exactly cover the table, leaving no gaps; ditto for the columns.) In the separated
+   borders model, the edges coincide with the border edges of cells. (And thus, in this model, there may be gaps
+   between the rows, columns, row groups or column groups, corresponding to the 'border-spacing' property.)" So
+   under §17.6.1 The separated borders model a group runs from the TOP BORDER EDGE of the cells in its first
+   grid row to the BOTTOM BORDER EDGE of the cells in its last, and the `border-spacing` gaps between its OWN
+   rows are inside it while the gaps to the groups above and below it are not.
+   ONE ARITHMETIC SERVES BOTH MODELS, AND IT IS THE OPERAND THAT MAKES IT TRUE RATHER THAN A COINCIDENCE — the
+   same property the inline axis has, checked here rather than assumed from there. The sum is the N used row
+   heights plus N-1 of `TableUsedHeights.spacing`, which is the ALGORITHM's cell-spacing term and never the
+   `border-spacing` property: §17.6.2 The collapsing border model gives that property no meaning ("Borders are
+   centered on the grid lines between the cells" — adjoining cell borders have no distance between them), so
+   the term is ZERO there, the N-1 spacings vanish, and the sum collapses to the run's row heights — which is
+   exactly what "the rows together exactly cover the table, leaving no gaps" says a group is under that model.
+   A BRANCH ON `border-collapse` HERE WOULD BE THE PLACE THE TWO MODELS CAME APART.
+   THERE IS NO EXTRA SPACING BETWEEN TWO ROW GROUPS, and that is why §17.5.3's table sum has no term for one:
+   the gap between the last row of one group and the first row of the next is ONE vertical `border-spacing`,
+   described twice by the paragraph above — once as a gap between rows and once as a gap between row groups.
+   `table_heights` asserts exactly that, by checking every run's extent plus the gaps between and around them
+   against the sum it answers the table with.
+   IT IS AN EXTENT AND NOT A USED `height`, AND THE DIFFERENCE IS WHY §17.5.3 CAN DECLINE ONE AND THIS CAN
+   ANSWER THE OTHER. §17.5.3 Table height algorithms says "CSS 2.1 does not define the meaning of 'height' on
+   row groups", so a CSSOM reader asking `getComputedStyle(tbody).height` must NOT be answered with this
+   number; what §17.5's rule 2 does define is WHERE THE BOX IS, which is the rectangle
+   `getBoundingClientRect` asks for.
+   `group` IS core/layout/table_grid.h's RUN AND MAY BE NULL. NULL is that entry's answer for a row group box
+   holding NO ROW — an empty `<tbody>` — and it is the one case CSS 2.1 does not decide; the answer taken here
+   is ZERO and the reasoning is at the site.
+   THE RUN MUST BE ONE `table_heights` ANSWERED OVER, exactly as `table_cell_used_border_box_height`'s cell
+   must be: the grid rows are indices into `rows` and an index from another grid names another table's row. */
+CssPx table_row_group_used_extent(const TableUsedHeights *heights, const TableGridRowGroup *group);
+
 /* ONE CELL'S VERTICAL PADDING AND BORDER, in CSS pixels — the exact mirror of core/layout/table_column_width.h's
    `table_cell_border_edges`, on the other axis, and exported for the same reason: it is the difference between
    the CONTENT box §10.6.3's walk answers in and the BORDER box every row height here is measured in, and two
