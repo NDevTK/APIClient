@@ -1313,6 +1313,46 @@ async function cmdNetDiff(args) {
           return (method || "GET") + " " + path;
         };
         const _fcsParams = new Map();   // paramKey -> Map(name -> {loc, vals:Set})
+        /* THE SECOND FACT A SHAPE STATES, WHICH THIS DIAGNOSTIC USED TO DROP ENTIRELY. §@H: "A SHAPE STATES
+           TWO FACTS AND CARRYING ONLY ONE OF THEM IS A WRONG REPORT, NOT A PARTIAL ONE" — PROVENANCE says
+           who must supply the parameter, DOMAIN says what the value must look like, "and the failure is
+           asymmetric: a shape carrying provenance alone renders an UNCONSTRAINED parameter and a range-gated
+           one with identical bytes, so its silence about the gate is read as the positive statement
+           'anything goes'". That is exactly what stood here: the only names this whole evaluate block read
+           were `validValues` / `_astValidValues` / `_exampleValue`, so a param the page gated with `> 5` or
+           `startsWith("/api")` — which produces `bounds`/`predicates` and NO `validValues` — printed
+           `={opaque}`, byte-identical to a param nothing ever tested.
+           endpoint.c emits four domain keys beside `validValues` (`excludes`, `bounds`, `predicates`,
+           `looselyEquals`) and lib/learn.js INTERSECTS each across sightings onto the VDD parameter under a
+           merged spelling (`_excludedValues`, `_bounds`, `_predicates`, `_looselyEquals`); `_bounds` shares
+           endpoint.c's own key names, so one renderer serves both. Each absence is a POSITIVE statement, so
+           each is read with a presence test and never with a `||`: `_bounds` ABSENT is "never observed",
+           `_bounds` NULL is "a claim another path disproved", and neither is a constraint to print.
+           IT INVENTS NO MERGE. Both producers already intersected; this is a RENDERER, so when the two
+           sources state a domain it collects the distinct rendered tokens rather than reconciling them —
+           a renderer that computed its own intersection would be a third copy of a rule two files own. */
+        const _mkPe = (loc) => ({ loc: loc, vals: new Set(), dom: new Set() });
+        const _domInto = (set, excl, bounds, preds, leq) => {
+          const cut = (v) => String(v).slice(0, 24);
+          if (Array.isArray(excl) && excl.length) set.add("!" + excl.slice(0, 3).map(cut).join("|"));
+          /* NULL AND ABSENT BOTH FALL OUT HERE, and they are different facts that happen to render the
+             same: neither is an interval this run observed. */
+          if (bounds && typeof bounds === "object") {
+            if ("minimum" in bounds) set.add(">=" + cut(bounds.minimum));
+            if ("exclusiveMinimum" in bounds) set.add(">" + cut(bounds.exclusiveMinimum));
+            if ("maximum" in bounds) set.add("<=" + cut(bounds.maximum));
+            if ("exclusiveMaximum" in bounds) set.add("<" + cut(bounds.exclusiveMaximum));
+          }
+          if (Array.isArray(preds)) for (const pr of preds.slice(0, 3)) {
+            if (!pr || typeof pr.method !== "string") continue;
+            const as = Array.isArray(pr.arguments) ? pr.arguments.map(cut).join(",") : "";
+            set.add((pr.holds ? "" : "!") + pr.method + "(" + as + ")");
+          }
+          if (Array.isArray(leq)) for (const q of leq.slice(0, 3)) {
+            if (!q) continue;
+            set.add("==" + cut(q.value) + (typeof q.type === "string" && q.type ? ":" + q.type : ""));
+          }
+        };
         if (typeof state !== "undefined" && state.docs) {
           for (const t of state.docs.values()) {
             for (const an of (t && t._astResults) || []) {
@@ -1340,8 +1380,10 @@ async function cmdNetDiff(args) {
                          "spelling is that seam broken and every param below would print as a query param, " +
                          "which is exactly what the `|| \"query\"` here did to the body keys this " +
                          "diagnostic exists to show (param=" + p.name + ")");
-                  let pe = pm.get(p.name); if (!pe) { pe = { loc: p.location, vals: new Set() }; pm.set(p.name, pe); }
+                  let pe = pm.get(p.name); if (!pe) { pe = _mkPe(p.location); pm.set(p.name, pe); }
                   if (Array.isArray(p.validValues)) for (const v of p.validValues) if (v != null && v !== "") pe.vals.add(v);
+                  // endpoint.c's own spelling on an @H call-site param.
+                  _domInto(pe.dom, p.excludes, p.bounds, p.predicates, p.looselyEquals);
                 }
               }
             }
@@ -1372,7 +1414,9 @@ async function cmdNetDiff(args) {
                  while what it measures gets worse. This reader needs no grade check to get that right because
                  lib/learn.js keeps the two in separate fields; a grade appearing here later is the symptom of
                  that split having failed. */
-              const addVals = (pe, o) => { const vv = o && (o._astValidValues || (o._exampleValue != null ? [o._exampleValue] : null)); if (Array.isArray(vv)) for (const v of vv) if (v != null && v !== "") pe.vals.add(v); };
+              // lib/learn.js's merged spelling, written onto the VDD parameter by the intersections above it.
+              const addVals = (pe, o) => { const vv = o && (o._astValidValues || (o._exampleValue != null ? [o._exampleValue] : null)); if (Array.isArray(vv)) for (const v of vv) if (v != null && v !== "") pe.vals.add(v);
+                if (o) _domInto(pe.dom, o._excludedValues, o._bounds, o._predicates, o._looselyEquals); };
               const params = m.parameters || {};
               /* THE SAME FIELD ONE PRODUCER LATER, AND THE SAME GUARANTEE. A VDD parameter under
                  `resources.learned` is written by lib/learn.js alone, on four lines, and every one of them
@@ -1386,13 +1430,13 @@ async function cmdNetDiff(args) {
                        "states one on every parameter it writes into `resources.learned`, so its absence is " +
                        "that producer broken and the parameter would print here as a query param regardless " +
                        "of where the code actually put it (param=" + pn + ")");
-                let pe = pm.get(pn); if (!pe) { pe = { loc: p.location, vals: new Set() }; pm.set(pn, pe); }
+                let pe = pm.get(pn); if (!pe) { pe = _mkPe(p.location); pm.set(pn, pe); }
                 addVals(pe, p);
               }
               let bodyProps = null; const req = m.request;
               if (req && req.$ref && doc.schemas && doc.schemas[req.$ref]) bodyProps = doc.schemas[req.$ref].properties;
               else if (req && req.properties) bodyProps = req.properties;
-              if (bodyProps) for (const bk in bodyProps) { let pe = pm.get(bk); if (!pe) { pe = { loc: "body", vals: new Set() }; pm.set(bk, pe); } addVals(pe, bodyProps[bk]); }
+              if (bodyProps) for (const bk in bodyProps) { let pe = pm.get(bk); if (!pe) { pe = _mkPe("body"); pm.set(bk, pe); } addVals(pe, bodyProps[bk]); }
             }
           }
         };
@@ -1410,9 +1454,15 @@ async function cmdNetDiff(args) {
           const parts = Array.from(pm.entries())
             .sort((a, b) => (ord[a[1].loc] ?? 3) - (ord[b[1].loc] ?? 3))
             .slice(0, 8)
-            .map(([name, info]) => String(name).slice(0, 40) + "@" + info.loc + (info.vals.size
-              ? "=" + Array.from(info.vals).slice(0, 3).map((x) => String(x).slice(0, 24)).join("|")
-              : "={opaque}"));
+            /* VALUES AND DOMAIN ARE PRINTED TOGETHER BECAUSE THEY ANSWER DIFFERENT QUESTIONS, and
+               `{opaque}` is now the POSITIVE statement it always read as: no value was computed AND no gate
+               of any kind narrowed this parameter. Before, it was also what a range-gated parameter got. */
+            .map(([name, info]) => {
+              const vals = info.vals.size
+                ? "=" + Array.from(info.vals).slice(0, 3).map((x) => String(x).slice(0, 24)).join("|") : "";
+              const dom = info.dom.size ? "{" + Array.from(info.dom).slice(0, 4).join(",") + "}" : "";
+              return String(name).slice(0, 40) + "@" + info.loc + (vals || dom ? vals + dom : "={opaque}");
+            });
           return "  [" + parts.join(", ") + "]";
         };
         const unusedList = [];
