@@ -1026,9 +1026,41 @@ const DROP = new Map([
      live. What makes them schedule-chosen is not preemption — a preempted flow RESUMES and delivers nothing
      twice — it is the RESTART: concolic_clear_pins clears the component's delivered flag when a flow is
      entered fresh, and cold.c drops the candidate's ladder on a park deliberately so a resumed candidate
-     re-proves itself (solver/flow.h says so at `cand_surv`/`cand_rung`). The `park` schedule therefore replays
-     a candidate that has already delivered, and it delivers again — so the same document reports a different
-     count under a schedule that parks than under one that does not, on healthy code.
+     re-proves itself (solver/flow.h says so at `cand_surv`/`cand_rung`). A park that catches a candidate
+     mid-search therefore replays one that has already delivered, and it delivers again — so a document
+     reports a different count under such a schedule than under one that does not, on healthy code.
+     AND THIS GATE'S `park` DOES NOT CATCH ONE, WHICH IS MEASURED AND WHICH THE SENTENCE THIS REPLACES GOT
+     WRONG. It said "the `park` schedule therefore replays a candidate that has already delivered", and that is
+     a claim about THIS driver rather than about the engine: the schedule parks BEFORE THE FIRST PICK — the
+     pre-check in `child` REQUIRES the parking session to have emitted nothing on any accumulating surface —
+     so at the instant of the park no @S candidate exists to be parked. Measured on the build stamped
+     f6cbdd9b, one run each of `direct` and `park`: hash_sink.html and eval_encoded.html are the corpus's two
+     PARKED-search documents, and both report `resumed:0` under `park` with all five of this row's names
+     BYTE-IDENTICAL to `direct` (hash_sink tried:3 resumed:0 turns:4 substituted:3 sinkStrings:3 under both;
+     eval_encoded the same with turns:5). `resumed` is raised only in solve_resume_candidate, so a zero there
+     is the positive statement that no candidate came back from the cold tier — the mechanism above has no
+     subject in this corpus. THE ROW STAYS: it is an argument about the ENGINE, and a production park or a
+     schedule that parked later would reach it. What nobody may now read it as is a divergence this gate's
+     `park` has ever produced, which is what the old sentence invited.
+     WHICH IS ALSO WHAT DECIDES `deliveryProbed`, AND IT IS RECORDED HERE BECAUSE THIS IS THE ROW IT WOULD BE
+     ARGUED FROM. That field is emitted by the same composer and is NOT dropped, and it is raised at the SAME
+     site as `sinkStrings` — solve.c raises `e->sink_strings++` and then, sixteen lines down in the same
+     function on the same replay, calls observe_delivery (`e->deliv_runs++`) gated only on the payload carrying
+     SOLVE_BYTES_LOCATOR. So the mechanism argued above applies to it identically, and so does the measurement:
+     with `resumed:0` there is no replay, and this gate's `park` cannot make it differ. It is therefore NOT a
+     latent false red on this corpus — the precondition its mechanism needs is one this schedule does not
+     create. TWO THINGS WOULD CHANGE THAT, and neither is here today: a park taken after the first pick, or a
+     document whose search outlives a session boundary. STATED AS WHAT WAS READ AND MEASURED, not as an
+     absolute: the build the `resumed:0` measurement was taken on does not emit the field at all —
+     `deliveryProbed` appears in no element of any of the four @S documents on f6cbdd9b, and `grep -ac
+     deliveryProbed` over that build's wasm is 0 against 1 over the build stamped 7a7cd512. So what is
+     established is the MECHANISM'S PRECONDITION, which is this driver's own structure and does not move with
+     the engine, and not the FIELD'S behaviour, which no run has yet been able to observe.
+     THE EXPERIMENT THAT WOULD DECIDE IT, NAMED SO THE NEXT READER RUNS IT RATHER THAN RE-ARGUES IT: one @S
+     document — hash_sink.html or eval_encoded.html, the two whose element is a PARKED search — under `park`
+     against `direct`, on any artifact that emits the field and whose corpus completes. If `deliveryProbed`
+     agrees across the two, this row is right and the field is correctly left compared; if it differs, the
+     row above it has acquired a sixth name and the paragraph is the one to extend.
      THEIR NEIGHBOURS STAY COMPARED AND THE LINE IS THE ONE THE ROW ABOVE DRAWS: `reached`, `survived`/
      `survivedOf`, `escaped` and `fires` are what a re-execution GOT THROUGH the page, and on a frontier that
      drains each converges to a fact about the document; a count of how many times the work was performed
@@ -1051,6 +1083,51 @@ const DROP = new Map([
      stated for the reason the rows above state it. */
   [".securitySinks[]", new Set(["tried", "resumed", "turns", "substituted", "sinkStrings"])],
 ]);
+/* ─── THE EXCLUSIONS AT EVERY OTHER PATH ─────────────────────────────────────────────────────────────────────
+   `reportStaleExclusions` (below) asks the top-level document whether it still carries every name DROP[""]
+   drops, and that was the WHOLE of the both-directions check: DROP's other paths — the ones naming a key INSIDE
+   an element — were never asked against the document at all. So a name deleted from solve.c's sink composer
+   would go on being dropped from every cross-schedule comparison with nothing to say so, and the paragraph
+   arguing why it legitimately differs would stay in the list a reader consults to classify the next field.
+   IT IS COUNTED WHERE THE EXCLUSION IS APPLIED AND NOWHERE ELSE. The path vocabulary is canonStr's own — that
+   is the one place composing a path — and a second walk reconstructing those strings would be a third copy of
+   one fact, of which the copy nobody runs against reality is the one that drifts (§Architecture: an auditor
+   derives the rule it checks from the code that owns it). So the recorder sits on the line that FETCHES the
+   drop set, and the census cannot disagree with what was dropped because it is a count of the dropping.
+   ACCUMULATED ACROSS THE WHOLE RUN AND NEVER LATCHED PER DOCUMENT, which is MEASURED and not a preference.
+   solve.c composes a `securitySinks` element two ways: a FIRED finding carries `searched` and none of this
+   path's five names, and a PARKED search carries all five. On the build stamped f6cbdd9b, url_sink.html and
+   eval_escape.html each emit exactly ONE element and both are FIRED, while hash_sink.html and
+   eval_encoded.html each emit one PARKED element carrying every one of the five — so a per-document verdict
+   would report all five as stale on the first two documents. Five false reds, from a check whose whole purpose
+   is to end a silence.
+   AND THE JUDGING POPULATION IS STATED RATHER THAN ASSUMED, for the same reason and from the same measurement.
+   An element carrying NONE of a path's names is a different KIND of record and is evidence about none of them;
+   an element carrying SOME of them is a producer emitting part of a group it states together, which is exactly
+   the disagreement worth seeing. So a name is judged stale only against the subjects that carried at least one
+   name of its OWN path (`withAny`), and a path whose elements all carried none says NOT ASKED rather than
+   passing — §Offensive-programming's reading of a zero with no producer behind it: silent about that boundary,
+   not clean about it.
+   WHAT IT CANNOT SEE, NAMED BECAUSE A CHECK TRUSTED PAST ITS EVIDENCE IS WORSE THAN NONE: a producer that
+   dropped EVERY name of one path at once leaves `withAny` at zero and this reports NOT ASKED, not stale. That
+   is the honest answer rather than a hole to plug — with no subject the run cannot tell a producer that
+   stopped from a corpus holding no record of that kind, and collapsing the two is the three-states-behind-one-
+   answer shape this file argues against everywhere else.
+   `subjects` COUNTS APPLICATIONS AND NOT FINDINGS: one element is canonicalised once per (document, schedule)
+   and again for the repeat, so the number is how many times the exclusion was performed, which is the quantity
+   this check is a fraction of. */
+const DROP_CENSUS = new Map([...DROP.keys()].filter((p) => p !== "")
+  .map((p) => [p, { subjects: 0, withAny: 0, seen: new Map([...DROP.get(p)].map((k) => [k, 0])) }]));
+function noteDropSubject(path, obj) {
+  const c = DROP_CENSUS.get(path);
+  /* DROP[""] IS NOT A HOLE HERE, IT IS A DIFFERENT QUESTION: canonStr is never called at path "" (surfaceSet
+     enters at "." + surface), and reportStaleExclusions asks the result document about that row directly. */
+  if (!c) return;
+  c.subjects++;
+  let any = 0;
+  for (const k of c.seen.keys()) if (k in obj) { c.seen.set(k, c.seen.get(k) + 1); any = 1; }
+  c.withAny += any;
+}
 function canonStr(v, path) {
   if (Array.isArray(v)) {
     const parts = v.map((e) => canonStr(e, path + "[]"));
@@ -1059,6 +1136,7 @@ function canonStr(v, path) {
   }
   if (v && typeof v === "object") {
     const drop = DROP.get(path);
+    if (drop) noteDropSubject(path, v);
     const keys = Object.keys(v).filter((k) => !(drop && drop.has(k))).sort();
     return "{" + keys.map((k) => JSON.stringify(k) + ":" + canonStr(v[k], path + "." + k)).join(",") + "}";
   }
@@ -1248,6 +1326,58 @@ const ARTIFACT_IS_THIS_REVISION =
    origin/main. The artifact was a build stamped f6cbdd9b, 338 commits behind, that predates the field. The
    check was right that the two disagree and its remedy was the wrong one of the two, which is exactly the
    false attribution the `@ENGINEFAIL` token above exists to stop. */
+/* AND THE CENSUS IS PRINTED ON THE CLEAN DAY TOO. §Testing: a line that appears ONLY on the bad day is one
+   nobody learns to look for, and the count a finding is a fraction OF is what makes the finding readable — a
+   channel that quietly stops judging reports FEWER findings, which reads as the fix working. So the subject
+   count and the per-name presence counts go out on every run, beside the verdict, and a run that judged
+   nothing says so in the same line rather than by omitting one.
+   ASKED ONCE PER RUN AND NOT PER (DOCUMENT, SCHEDULE), on reportStaleExclusions' own ground: the disagreement
+   is between this file's list and the program, so it is the same fact on every schedule of every document, and
+   it does not suppress any comparison — a name absent from every subject was dropped from those comparisons
+   anyway, so the invariance result is unaffected either way.
+   THE THREE STATES ARE KEPT THREE, exactly as the row above keeps them: `solve.c stopped emitting this` and
+   `the artifact predates the field` ask for OPPOSITE work — delete a row, or rebuild — and are
+   indistinguishable from the document alone, so an artifact that is not a build of this revision answers
+   UNDECIDED naming both remedies rather than a confident red. That is not caution: the first run of the
+   top-level check reported `pageErrorsExplored` as stale and told the reader to delete a row that is in
+   result.c's own composef literal at origin/main. */
+function reportDropCensus() {
+  let bad = 0;
+  for (const [path, c] of DROP_CENSUS) {
+    const names = [...c.seen.keys()];
+    console.log(`  ---- DROP["${path}"] was applied to ${c.subjects} element(s), ${c.withAny} of which carried ` +
+                `a name of that path — ${[...c.seen].map(([k, n]) => `${k}:${n}`).join(" ")}`);
+    if (!c.withAny) {
+      console.log(`         NOT ASKED  no element at ${path} in this run carried any of ${names.join(", ")}, so ` +
+                  "every one of those exclusions was applied to nothing and this run is SILENT about them " +
+                  "rather than clean about them. In this corpus that population is a PARKED search — a fired " +
+                  "finding carries `searched` and none of these — so run a document that has one, or read " +
+                  "this row as unmeasured. It is not counted as a failure: a run with no subject is evidence " +
+                  "in neither direction.");
+      continue;
+    }
+    const stale = names.filter((k) => c.seen.get(k) === 0);
+    if (!stale.length) continue;
+    if (!ARTIFACT_IS_THIS_REVISION) {
+      console.log(`         UNDECIDED  ${stale.join(", ")} is dropped at ${path} and NO element that carried a ` +
+                  "name of that path carried it — and the artifact that answered is NOT a build of this " +
+                  "revision (see the [rev] block), so the two things that disagree were not made from one " +
+                  "tree. Either solve.c stopped emitting the field and the row is a licence standing over " +
+                  "nothing, or the artifact predates it. Those ask for opposite work — delete the row, or " +
+                  "`node engine/build.mjs` — and this run cannot tell them apart. NOT counted as a failure: " +
+                  "the name was dropped from every comparison anyway.");
+      continue;
+    }
+    bad++;
+    console.log(`         FAILED  ${stale.join(", ")} is dropped at ${path} and NO element that carried a name ` +
+                "of that path carried it, and the artifact IS a build of this revision. The exclusion stands " +
+                "over nothing, so the day that name comes back — whatever it then means — it is silently " +
+                "excluded from every cross-schedule comparison this gate makes. Delete the row from DROP in " +
+                "engine/solvergate.mjs together with the paragraph arguing about a field nobody emits, or say " +
+                "what now carries the number.");
+  }
+  return bad;
+}
 let staleAsked = false;
 function reportStaleExclusions(result) {
   if (staleAsked) return 0;
@@ -1723,6 +1853,9 @@ for (const doc of docs) {
   for (const e of ref.pageErrors) console.log(`         page error: ${e.slice(0, 160)}`);
 }
 console.log(`  ---- ${docs.length} document(s) x ${SCHEDULES.length} schedules`);
+/* AFTER THE DOCUMENT LOOP, because the population is the whole run: a per-document verdict here is a false red
+   by measurement, not by argument — see DROP_CENSUS. */
+bad += reportDropCensus();
 /* THE RUN-TO-RUN LINE IS THE TALLY AND NOT THE INTENTION — see detTally. A `held` here is the invariant not
    falsified by a second sample; it is never the invariant established, because no number of samples does that.
    The switch counts on each row are what say whether a sample discriminated at all. */
