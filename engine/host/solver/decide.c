@@ -142,6 +142,49 @@ static struct { char *key; long n; } *g_fork_mech;   /* grows: bounded by this t
 static int  g_fork_mech_n, g_fork_mech_cap;
 static long g_fork_total;
 
+/* THE REPLAY LEDGER — WHAT A REPLAY DID WITH THE PATH IT WAS HANDED, which is the one half of
+   §Time-travel-resume this engine asserted at the branch and could not state at the outcome. The ASSERTION
+   half is real and it is above: dec_replay consumes a recorded arm ONLY when the branch's constraint key
+   equals the key recorded beside that arm, so the POSITIONAL replay — whose own deleted comment records that
+   it emitted "byte-identical findings" to a clean resume — is structurally impossible now.
+   THE OUTCOME HALF HAD NO INSTRUMENT AT ALL. dec_leave_path has exactly one call site and nothing counted it,
+   so a session that rebuilt N flows and left its recorded path at the FIRST branch of every one of them —
+   replaying zero arms, re-exploring from the baseline — published numbers IDENTICAL to a session that
+   replayed every arm: solver/result.c's `resumed`, `resumedSegs`, `resumedFlows` and `resumedCands` all say
+   what the DOCUMENT HELD, never what the REPLAY DID WITH IT. The ORPHAN half of the same round trip has had
+   this instrument all along — `orphanClaims`/`Met`/`Unmet`, which that file calls THE VERDICT, "ZERO on a
+   document whose bytes did not change" — while the PATH half, every 'f' and 'c' record and the whole of what
+   a recipe IS, had none. THE `_wfq` CENSUS'S DEPTH ROWS CANNOT STAND IN FOR IT, and the reason is their KIND
+   rather than their subject: `decMax`/`candDecMax` are GAUGES — the deepest vector among the members standing
+   at the instant the census is taken — while this is a question about what HAPPENED. A flow that abandons its
+   recorded path forks at that very branch and appends its own slots from there, so its vector regrows and the
+   gauge reads the same on both outcomes. solver/flow.h says the nearest thing the depth rows can say, and its
+   scope is the limit: "a candidate stuck at rung 0 with a growing `cand_dec_max` is one whose replay is
+   diverging before its own source read" — an INFERENCE from two rows, about CANDIDATES, at a rung.
+
+   THEY ARE A REPORT AND NEVER A VERDICT, and that is forced rather than chosen. §Time-travel-resume has a
+   replay run against TODAY's code and TODAY's replies — "a resumed flow re-derives example VALUES from
+   CURRENT sources" — so a divergence is PERMITTED, and an assert on one would fire on the engine working.
+   What was missing was never permission to diverge; it was the ability to SAY that one happened, which is
+   also why this is three numbers rather than a pass/fail row.
+
+   ALL THREE ARE LIFETIME COUNTS OVER THE SESSION — released in decide_free exactly as `g_fork_total` is, and
+   deliberately the SAME LIFETIME as the `resumed` row they are read beside, because that row is what tells
+   this ledger's two populations apart and a process-lifetime ledger under a per-session discriminator is two
+   moments compared as one. Monotone within a session (the only writes are the `++` below and that release),
+   so two samples of ONE session may legitimately be differenced. That is what makes them LIFETIME COUNTS and
+   not the per-member GAUGE this same census also carries: `stepUnits` says who is STANDING in an arm at the
+   instant of the census and cannot be differenced, these say what has HAPPENED and can.
+
+   THE UNIT IS NOT THE SAME FOR ALL THREE, AND THE MIDDLE ONE IS THE TRAP. `g_replay_hits` and
+   `g_replay_left_arms` are counted in ARMS — decision-vector slots. `g_replay_left` is counted in EVENTS, one
+   per divergence however many arms that divergence abandoned. Reading it as arms is the `svcMax` defect
+   exactly (a quantity quoted in the unit its NAME suggests instead of the one its ACCESSOR computes), so the
+   accessor states the pair and decide.h states it again where a reader will be standing. */
+static long g_replay_hits;        /* ARMS consumed on a matching question (dec_replay)                  */
+static long g_replay_left;        /* EVENTS: divergences (dec_leave_path)                               */
+static long g_replay_left_arms;   /* ARMS abandoned by those divergences, summed                        */
+
 static void dec_ensure(int n) {
     if (n <= g_dec_cap) return;
     int nc = g_dec_cap ? g_dec_cap * 2 : 64;
@@ -372,6 +415,14 @@ static void dec_leave_path(void) {
            "a flow diverged from its recorded path at a cursor inside its OWN head — the head holds only "
            "decisions this run took and appended, each of which it asked for itself, so a slot there cannot "
            "answer a different question than the branch consuming it");
+    /* COUNTED BEFORE ANYTHING MOVES, and above the `g_c == 0` arm rather than inside the common tail, because
+       that arm RETURNS: a flow whose very first branch disagreed is the loudest divergence there is — it
+       stands on nothing and abandons its whole vector — and counting in the tail would be the one case this
+       ledger silently missed. `dec_total() - g_c` is >= 1 by the assert above it, which is what makes
+       `replayLeftArms >= replayLeft` an identity a reader can check off the printed numbers rather than a
+       property of the documents seen so far. */
+    g_replay_left++;
+    g_replay_left_arms += dec_total() - g_c;
     if (g_c == 0) {                      /* the very first branch disagreed: this flow stands on nothing */
         g_dec_base = NULL; g_dec_below = 0;
         dec_seg_unref(old);
@@ -478,6 +529,10 @@ void decide_free(void) {
     for (i = 0; i < g_fork_mech_n; i++) free(g_fork_mech[i].key);
     free(g_fork_mech); g_fork_mech = NULL; g_fork_mech_n = g_fork_mech_cap = 0;
     g_fork_total = 0;
+    /* THE LEDGER GOES WITH THE SESSION, for the reason its banner gives: it is read beside `resumed`, which
+       describes THIS session's rebuild, and a ledger that outlived the session would be a lifetime count
+       under a per-session discriminator — two moments published on one line. */
+    g_replay_hits = g_replay_left = g_replay_left_arms = 0;
     /* THE CHAIN HAS TWO KINDS OF HOLDER AND THIS USED TO NAME ONE. A frozen segment is referenced by the flows
        forked below it — released by flow_registry_free's loop above — AND by every open @S SEARCH, which takes
        one at the moment its sink is detected (solve.c's add_pending freezes the path a candidate is re-injected
@@ -863,6 +918,18 @@ char *decide_fork_json(void)
 
 long decide_fork_total(void) { return g_fork_total; }
 
+/* See decide.h. THE THREE ARE HANDED BACK IN ONE CALL BECAUSE THE IDENTITY OVER THEM IS AN ASSERTION ABOUT ONE
+   MOMENT, and this session has already paid for the other shape: two rows read at two ends of a run were
+   differenced into a contradiction that held of no quantity, and three mechanisms were written down for it
+   before the file's own owner read the constant that explained it. Three separate getters would let a caller
+   sample `left` before a divergence and `leftArms` after it and publish `leftArms == 0 && left == 1` — an
+   identity violation manufactured by the reading rather than by the engine. One call, one moment. */
+void decide_replay_stats(long *hits, long *left, long *left_arms) {
+    if (hits) *hits = g_replay_hits;
+    if (left) *left = g_replay_left;
+    if (left_arms) *left_arms = g_replay_left_arms;
+}
+
 /* Swap the running decision state when the scheduler interleaves flows. A flow paused mid-execution keeps the
    whole vector it has accumulated (every arm it appended while it ran) + its cursor, so on resume it consumes
    the SAME decisions from where it left off. decide_suspend snapshots; decide_resume restores + re-binds
@@ -1172,6 +1239,10 @@ static int dec_replay(uint32_t asked) {
     arm = dec_at(g_c, &recorded) ? 1 : 0;
     if (recorded != asked) return -1;
     g_c++;
+    /* COUNTED HERE AND NOWHERE ELSE, on the far side of the key comparison, because an arm consumed is exactly
+       an arm whose recorded question the branch re-asked — which is the whole of what this ledger claims. A
+       count taken above the comparison would count ATTEMPTS, and an attempt is what a divergence also is. */
+    g_replay_hits++;
     return arm;
 }
 

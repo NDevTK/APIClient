@@ -1028,6 +1028,11 @@ char *result_cold_json(void) {
     EngineFrontierCensus e;
     EngineStepUnitRuns r;
     int ran;
+    /* THE REPLAY LEDGER, TAKEN IN ONE CALL — see decide.h. Three locals and not three getter calls in the
+       argument list, because the identity below is an assertion about ONE MOMENT and an argument list is not
+       one: a composer that read `left` and `left_arms` in two calls could publish a pair no instant of this
+       session ever held. */
+    long rp_hits, rp_left, rp_left_arms;
 
     cold_census(&c);
     engine_step_unit_runs(&r);
@@ -1075,6 +1080,7 @@ char *result_cold_json(void) {
     }
     cold_resumed(&resumed);
     engine_frontier_census(&e);
+    decide_replay_stats(&rp_hits, &rp_left, &rp_left_arms);
     /* THE CURSOR HISTOGRAM AGAINST THE MAXIMUM IT IS READ BESIDE — the one identity that says the two rows are
        about the same run, asserted here because this is the only place both are in one hand. It is not a
        restatement of the partition above: that one asks whether the walk saw every member, and this asks
@@ -1154,6 +1160,24 @@ char *result_cold_json(void) {
            "an inherited-drive claim was met or lost in a session whose rebuild carried no orphan locator — the "
            "three orphanClaims rows are about to describe a round trip that this document also says did not "
            "happen");
+    /* THE REPLAY LEDGER'S IDENTITY, ASSERTED AT THE ONE MOMENT ALL THREE ARE IN ONE HAND — which is the whole
+       reason decide.h hands them back in one call. §Testing: an identity holds WITHIN one sample and nowhere
+       else, and this session has already paid for the other reading — two rows taken at two ends of a run were
+       differenced into a contradiction that held of no quantity, and three mechanisms were written down for it
+       before the file's owner read the constant that explained it. These three are read one line apart from
+       one accessor and are asserted here, so a break is the ledger and never the sampling.
+       BOTH CLAUSES ARE NEEDED AND THAT IS NOT PEDANTRY: `left_arms >= left` alone permits `left == 0` beside a
+       non-zero sum, which is exactly the state a counter incremented on the wrong side of dec_leave_path's
+       early return would produce. Both come from that function's own precondition — `g_c < dec_total()`, so
+       every divergence abandons at least one arm — and a break here is a divergence counted without its arms
+       or arms counted without their divergence, either of which publishes `replayLeftArms` as a loss no
+       `replayLeft` accounts for. */
+    DCHECK(rp_left_arms >= rp_left && (rp_left == 0) == (rp_left_arms == 0),
+           "the replay ledger's two divergence rows contradict each other — every call of dec_leave_path "
+           "abandons AT LEAST ONE arm (its own precondition is that the cursor is short of the end), so the "
+           "arm total can be neither smaller than the event count nor zero beside a non-zero one. "
+           "`replayLeft` and `replayLeftArms` are about to be published as the statement of what a resume did "
+           "with its recorded path, and they are counted at one site two lines apart");
     /* A HISTOGRAM THAT COULD NOT BE ALLOCATED MAKES THE CENSUS ABSENT, never a census with a row missing.
        composef's own contract on this seam is that a NULL is "this census is absent" and every caller already
        treats it as one; splicing a hole into the document instead would publish a @COLD line whose readers —
@@ -1170,6 +1194,24 @@ char *result_cold_json(void) {
                  "\"sold\":%ld,\"soldFlows\":%ld,\"soldCands\":%ld,\"forks\":%ld,"
                  "\"resumed\":%d,\"resumedSegs\":%ld,\"resumedFlows\":%ld,\"resumedCands\":%ld,"
                  "\"resumedWorlds\":%ld,"
+                 /* THE PATH HALF'S VERDICT ROWS — LIFETIME COUNTS over the session, and the pair of units is
+                    the thing a reader must carry: `replayHits` and `replayLeftArms` are ARMS (decision-vector
+                    slots) and `replayLeft` is EVENTS (one per divergence, whatever it abandoned). They are
+                    emitted together and on ONE line because the identity over them
+                    (`replayLeftArms >= replayLeft` and `replayLeft == 0` exactly when `replayLeftArms == 0`)
+                    is an assertion about one moment, asserted above where all three were in one hand.
+                    WHAT THEY SAY THAT THE FOUR ROWS ABOVE CANNOT. `resumed`/`resumedSegs`/`resumedFlows`/
+                    `resumedCands` state what the DOCUMENT HELD; a session that rebuilt every one of those and
+                    then left its recorded path at the FIRST branch of every flow — replaying nothing and
+                    re-exploring from the baseline — wrote the identical four numbers. Under `resumed: 1`,
+                    `replayLeftArms: 0` says no flow abandoned a single recorded arm and `replayHits` says how
+                    many were honoured; a large `replayLeftArms` is the loss, quantified in arms.
+                    THEY ARE A REPORT AND NOT A PASS. §Time-travel-resume has a replay run against TODAY's code
+                    and TODAY's replies, so a divergence is PERMITTED — decide.h names the residual that keeps
+                    these three from attributing one to a moved peer rather than to a lost path, and `resumed:
+                    0` beside a non-zero `replayLeft` is the one attribution they make on their own: siblings,
+                    because that row states this session was handed no residue at all. */
+                 "\"replayHits\":%ld,\"replayLeft\":%ld,\"replayLeftArms\":%ld,"
                  "\"orphanClaims\":%ld,\"orphanClaimsMet\":%ld,\"orphanClaimsUnmet\":%ld,"
                  "\"hostAsked\":%ld,\"hostAnswered\":%ld,\"hostAnswersExtra\":%ld,"
                  "\"hostAnswersLate\":%ld,\"hostTerminated\":%ld,"
@@ -1197,6 +1239,7 @@ char *result_cold_json(void) {
                  e.deepest, e.completed,
                  e.sold, e.sold_flows, e.sold_cands, e.forks,
                  ran, resumed.segs, resumed.flows, resumed.cands, resumed.worlds,
+                 rp_hits, rp_left, rp_left_arms,
                  resumed.orphans, e.claims_met, e.claims_unmet,
                  e.host_asked, e.host_answered, e.host_answers_extra, e.host_answers_late, e.host_terminated,
                  pending_index_asked_total(), pending_index_answered_total(),

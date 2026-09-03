@@ -221,6 +221,47 @@ int  decide_cursor(void);
 char *decide_fork_json(void);
 long  decide_fork_total(void);
 
+/* THE REPLAY LEDGER — WHAT A REPLAY DID WITH THE PATH IT WAS HANDED. §Time-travel-resume's claim is that a
+ * parked flow resumes as "the same execution continued, byte-identical", and its razor is that a resume which
+ * "drops, starves, skips, reorders, or forgets ANY flow" is a CAP. This engine ASSERTS that at the branch —
+ * decide.c's dec_replay consumes a recorded arm only when the branch's constraint key equals the key recorded
+ * beside it — and until these three rows it could state NOTHING about the OUTCOME. dec_leave_path had one call
+ * site and no counter, so a session that rebuilt N flows and abandoned its recorded path at the first branch of
+ * every one of them published `resumed`/`resumedSegs`/`resumedFlows`/`resumedCands` IDENTICAL to a session that
+ * replayed every arm. Those four say what the DOCUMENT HELD; these three say what the REPLAY DID WITH IT.
+ *
+ * KIND: all three are LIFETIME COUNTS over the SESSION, released with it (decide_free), monotone within one,
+ * and therefore differenceable between two samples of ONE session — unlike the `stepUnits` GAUGE beside them
+ * in the same census, which states who is standing in an arm at the instant it is taken.
+ * UNIT: `hits` and `left_arms` are ARMS (decision-vector slots). `left` is EVENTS — one per divergence,
+ * whatever it abandoned. THE MIDDLE ONE IS THE TRAP and it is the `svcMax` shape: a name built from a verb
+ * reads as a count of arms, and the accessor increments once per CALL of dec_leave_path. Read the accessor.
+ * ACCESSOR: plain reads of three statics; no division, no derivation, nothing behind the names.
+ * IDENTITY, checkable off the emitted numbers and asserted where all three are in one hand
+ * (solver/result.c's composer): `left_arms >= left` AND `(left == 0) == (left_arms == 0)`. Both come from
+ * dec_leave_path's own precondition `g_c < dec_total()`, which makes every divergence abandon at least one arm;
+ * they are two clauses and not one because `left_arms >= left` alone permits `left == 0` beside a non-zero sum.
+ *
+ * NAMED RESIDUAL — THE POPULATION IS EVERY REPLAY THIS SESSION PERFORMED, AND THESE ROWS DO NOT SAY WHICH.
+ * WHAT IS NOT COVERED: three mechanisms replay recorded arms and all three land in one number here — a
+ * COLD-RESUMED flow replaying its whole path from cursor 0 (decide_blob_new); a BRANCH-FORK sibling replaying
+ * the single arm dec_seg_arm appended above its cursor (decide_fork_blob asserts `cursor == dec_total()`, so
+ * there is exactly one arm above it); and a VALUE-FORK sibling of a MID-REPLAY parent, which
+ * decide_fork_same_path hands the parent's whole remaining tail and which this header's own contract says may
+ * legitimately diverge when a peer answers differently today. The first and the third can abandon tails of the
+ * SAME MAGNITUDE, so reading the numbers harder does not separate them and this residual is not closable by a
+ * consumer. What the rows CAN say on their own is one thing and it is exact: `resumed: 0` beside `left > 0`
+ * is siblings, because that row states this session was handed no residue at all.
+ * WHAT THE NEXT DIFF BUILDS: an ORIGIN field on decide.c's DecideBlob, written at the one site that mints a
+ * cold rebuild (decide_blob_new), carried across decide_suspend so a flow that parks mid-replay does not
+ * launder it, and inherited by decide_fork_same_path (whose sibling really is replaying the cold flow's tail)
+ * but NOT by decide_fork_blob (whose sibling stands at the end of the vector) — with these three rows split
+ * per origin. It is plumbing across four blob sites, which is why it is named here rather than guessed at.
+ * HOW ITS ABSENCE WOULD SHOW: a session reporting `resumed: 1` with a large `replayLeftArms` that is in fact a
+ * peer's answer having moved — a correct and expected divergence — read as the cold tier having lost a path,
+ * or the same numbers read the other way and a real loss excused as a moved peer. */
+void decide_replay_stats(long *hits, long *left, long *left_arms);
+
 /* THE SIBLING'S DECISION STATE AT A FORK THAT TOOK NO ARM — and the arm-taking fork above is the special case,
  * not this one. A flow forks over a VALUE as well as over a predicate: a peer document's state IS its flows, so
  * one cross-instance read has N true answers and the asking flow explores one arm per DISTINCT ANSWER
