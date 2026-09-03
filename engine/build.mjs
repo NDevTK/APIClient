@@ -564,6 +564,62 @@ function probeFlips(out) {
    the MONOTONE one: how many distinct rows were 1 at ANY sample. It is carried beside the instant reading and
    printed only where the two DIFFER, because a difference is the whole of the information: equal, it is noise
    in the one line everybody reads; unequal, it is a document that stopped saying something it had said. */
+/* HOW FAR THE RUN HAD GOT WHEN EACH TABLE ABOVE WAS COMPOSED — test_forced.c's `@HWORK`, and it is the
+   number the sentence under `standingText` used to INFER one bit of. `fixture_have_answers` gates the table on
+   `engine_work_done()`, so the quantity that decides WHEN every measurement of a run is taken was itself on no
+   line of the stream; the producer put it on one, and until this reader existed the only consumer of that line
+   was a person.
+   PAIRED BY INDEX AND NEVER BY LAST-LINE, which is the same rule the @FORKAT reader states for the @COLD block
+   it is printed beside. `probes_report` writes this line IMMEDIATELY BEFORE the table it belongs to, in one
+   function with no other emitter between them, so the i-th record belongs to the i-th table — and a run killed
+   between the two leaves exactly ONE more record than tables, which is a real state and the only imbalance a
+   truncation can produce. Any other disagreement is the producer having changed and throws, for the reason the
+   @COLD and @WFQ field loops throw: a stream this reader can no longer pair is one whose numbers it would be
+   attributing to the wrong table.
+   THE FIELDS ARE THE PRODUCER'S OWN AND ARE NOT LISTED HERE. A hand list is what let SEVEN rows reach a
+   census and no reader — see `censusComposerFields`.
+   EVERY ROW IS A LIFETIME COUNTER and the producer says so where it emits them, so two samples MAY be
+   differenced and the series is its own check: a lifetime counter cannot fall. test_forced.c DCHECKs exactly
+   that at the emission and the DCHECK is compiled out of a release build, where this reader still runs — the
+   same division of labour the `jobWGap` check below is written for. */
+function probeWork(out) {
+  const w = [];
+  for (const m of out.matchAll(/^@HWORK (\{.*\})$/gm)) { try { w.push(JSON.parse(m[1])); } catch { /* truncated tail */ } }
+  if (!w.length) return w;
+  const fields = censusComposerFields("test_forced.c", 'printf("@HWORK {', '}\\n"',
+    "`standingText` states how far a run had got when its probe table was composed, and that is the one " +
+    "number deciding which of a 0 row's two readings the WHOLE table has");
+  for (const r of w) for (const f of fields)
+    if (typeof r[f] !== "number")
+      throw new Error(`[build] an @HWORK record has no numeric \`${f}\` — this reader takes its field list ` +
+                      `from test_forced.c's own printf (${fields.join(", ")}), so a row that is absent from ` +
+                      `the line is one the producer stopped writing rather than one this file forgot.`);
+  /* THE ONE IDENTITY THAT IS INTERNAL TO THIS LINE, and the fork total that falls out of it. `engine_work_done`
+     is forks + flows + jobs + switches (solver/engine.c), and the producer deliberately does NOT restate the
+     forks term because @COLD already spells it — so the identity a reader checks spans two lines and two
+     CADENCES, which are taken at different instants and cannot be paired. What CAN be checked is the half that
+     is one printf at one instant: the three named counters are non-negative, so the sum of them can never
+     exceed the total. Its RESIDUE is then this instant's fork count, which is the @COLD row contemporaneous
+     with the probe table and which no other line of this stream carries. */
+  for (const r of w) {
+    const named = r._switches + r._flows + r._jobsRun;
+    if (!(r.workDone >= named))
+      throw new Error(`[build] an @HWORK record states workDone ${r.workDone} against ${named} in its three ` +
+                      `named counters — solver/engine.c's engine_work_done is those three plus the fork ` +
+                      `total, every term of which only climbs, so a total below its own parts is one of the ` +
+                      `four having acquired a second writer and every standing derived from this line is ` +
+                      `about work nobody did.`);
+    r.forks = r.workDone - named;
+  }
+  for (let i = 1; i < w.length; i++)
+    if (w[i].workDone < w[i - 1].workDone)
+      throw new Error(`[build] the @HWORK stream fell from ${w[i - 1].workDone} to ${w[i].workDone} — every ` +
+                      `row of that line is a LIFETIME counter (engine.c refuses to reset the four at a ` +
+                      `session boundary), so a fall means one of them is a gauge and every difference taken ` +
+                      `across two samples of this stream is arithmetic about nothing. test_forced.c asserts ` +
+                      `this at the emission; that DCHECK is compiled out of a release build and this is not.`);
+  return w;
+}
 function probeStanding(out) {
   const rows = probeFlips(out);
   if (!rows.length) return null;
@@ -571,8 +627,23 @@ function probeStanding(out) {
   const names = Object.keys(last);
   const ever = new Set();
   for (const r of rows) for (const k of Object.keys(r)) if (r[k]) ever.add(k);
+  const work = probeWork(out);
+  if (work.length && work.length !== rows.length && work.length !== rows.length + 1)
+    throw new Error(`[build] this run printed ${work.length} @HWORK record(s) against ${rows.length} @H ` +
+                    `table(s) — test_forced.c's probes_report writes the record on the line immediately ` +
+                    `before the table, so the two streams are paired by index and a truncated tail can leave ` +
+                    `at most ONE more record than tables. Any other count is an emitter between them that ` +
+                    `this reader has not been told about, and pairing them anyway would attribute one ` +
+                    `table's standing to another.`);
   return { answered: names.filter((k) => last[k]).length, asked: names.length,
-           unanswered: names.filter((k) => !last[k]), ever: ever.size, samples: rows.length };
+           unanswered: names.filter((k) => !last[k]), ever: ever.size, samples: rows.length,
+           /* THE RECORD CONTEMPORANEOUS WITH THE TABLE THE FRACTION ABOVE IS READ OFF, which is `rows.length - 1`
+              and NOT the last record: a run killed while composing its final table leaves a record whose table
+              does not exist, and quoting it would state a standing for a table nobody has. `null` where the
+              artifact predates the producer, which is a positive statement — this stream said nothing about
+              its own progress — and never a 0 for one that said 0. */
+           work: work.length >= rows.length ? work[rows.length - 1] : null,
+           first: work.length ? work[0] : null };
 }
 /* AND HOW MANY TIMES THE QUESTION WAS ASKED, WHICH `probeStanding` HAS ALWAYS COMPUTED AND THIS LINE HAS
    ALWAYS DROPPED. That is the defect the paragraph above this function describes — a computed observation
@@ -585,16 +656,57 @@ function probeStanding(out) {
    reached rather than one it answered wrongly — which is the opposite reading from the one an all-zero table
    invites, and the one nothing in this file said. Measured: a smoke that aborted on its second scheduler step
    printed a single table reading 193 of 196 still 0, and the frontier under it (`@WFQ members: 1`,
-   `@FORKAT {}`, `_sourceReads: 0`) was read as a scheduler that starves. */
+   `@FORKAT {}`, `_sourceReads: 0`) was read as a scheduler that starves.
+   AND IT IS MEASURED NOW RATHER THAN INFERRED — BUT NOT BY THE NUMBER THE PRODUCER OFFERED, and the
+   difference is the whole of what this paragraph is worth. The sentence above is a claim about
+   `run_scheduler`'s LOOP ORDER, held in a file that cannot check it and decided off the SAMPLE COUNT, which is
+   a proxy for it. test_forced.c now prints `engine_work_done` beside every table (`probeWork`) and its own
+   note names `workDone` 0 as the pre-first-step marker — SO THAT MARKER WAS DERIVED HERE BEFORE IT WAS BUILT
+   ON, and it does not hold. `engine_work_done` is forks + FLOWS CREATED + jobs + switches, and
+   `engine_sched_begin` seeds the frontier (flow_add, or cold_resume) BEFORE the loop the hook sits at the top
+   of — so the pre-first-step table is composed at a work total of at least one flow and `workDone === 0` is
+   reachable at no table of any run. An arm keyed on it would have been a reading with no state behind it,
+   which is the mirror of the defect this whole comment is about.
+   THE ROW THAT DOES ANSWER IT IS `_switches`, AND IT ANSWERS WITHOUT A CLAIM ABOUT THE LOOP AT ALL.
+   `engine_sched_step` raises that counter beside its `flow_credit_pick`, which is the only site, so
+   `_switches: 0` IS "no flow has ever been handed the thread" — a fact about DISPATCH, checkable at the
+   counter, true whatever order the hook and the step stand in. That is what the loop-order sentence was
+   reaching for, and it is the one form of it this file is entitled to state.
+   THE SPAN IS THE OTHER HALF AND IT IS THE ONE A BISECT NEEDS. A row at 0 because a mechanism failed and a row
+   at 0 because the run stopped earlier are the two readings this whole paragraph is about, and the fraction
+   alone separates neither — what separates them is how far the two runs got, which is `first→last` in the
+   engine's own units. It is a difference of LIFETIME counters and is therefore arithmetic a reader is entitled
+   to; `probeWork` is where that kind is established. */
 const standingText = (s) =>
   s === null ? "no @H probe stream in this run — this stage makes no statement of that kind"
              : `${s.answered}/${s.asked} of the fixture's statements answered` +
                (s.ever > s.answered ? ` (${s.ever} ever — ${s.ever - s.answered} went back to 0)` : "") +
-               (s.samples === 1
-                  ? ", AT THE ONE TABLE COMPOSED BEFORE THE FIRST SCHEDULER STEP — this run printed no " +
-                    "second @H sample, so every 0 above is a statement it never REACHED and not one it " +
-                    "answered wrongly, and nothing here is a verdict on the mechanism any row names"
-                  : `, over ${s.samples} @H tables`);
+               (s.work === null
+                  /* NOT A ZERO, AND NOT THE OLD INFERENCE EITHER. An artifact older than the producer of that
+                     line says nothing about its own progress, and this reports the absence as one rather than
+                     re-deriving the sample-count proxy the paragraph above retires — a fallback to a reading
+                     this file has just called a claim it cannot check would be that claim surviving its own
+                     correction. */
+                  ? `, over ${s.samples} @H table(s), NO @HWORK LINE — this artifact predates the progress ` +
+                    `line, so how far the run had got when that table was composed is not in its output and ` +
+                    `neither reading of a 0 row is established here`
+                  : s.work._switches === 0
+                    ? `, AT A TABLE COMPOSED BEFORE ANY FLOW WAS EVER DISPATCHED — MEASURED, not inferred ` +
+                      `from the sample count: ${s.work.workDone} unit(s) of engine work stand at ${s.work._flows} ` +
+                      `flow(s) created, ${s.work.forks} fork(s), ${s.work._jobsRun} job(s) run and ZERO ` +
+                      `context switches, and engine_sched_step raises that last counter beside its only ` +
+                      `flow_credit_pick. So every 0 above is a statement this run never REACHED and not one ` +
+                      `it answered wrongly, and nothing here is a verdict on the mechanism any row names`
+                    : `, over ${s.samples} @H table(s), the last composed at ${s.work.workDone} units of ` +
+                      `engine work (${s.work.forks} forks, ${s.work._flows} flows, ${s.work._jobsRun} jobs ` +
+                      `run, ${s.work._switches} switches)` +
+                      (s.first.workDone === s.work.workDone
+                         ? ` — the whole stream stands at that one point, so this run answered what it ` +
+                           `answered without the work clock moving between its tables`
+                         : ` from ${s.first.workDone} at the first, a span of ` +
+                           `${s.work.workDone - s.first.workDone} units: a row still 0 across it is a ` +
+                           `statement this run had the work to reach and did not, which is the OTHER reading ` +
+                           `of a 0 and takes the mechanism rather than the budget`));
 
 /* AN ABORT IS AN ABORT EVEN WHERE NO SIGNAL CAN CARRY IT, AND UNDER EMSCRIPTEN NONE CAN.
    `runOutcome`'s `.signal` arm exists precisely so that a DCHECK doing its job is never misfiled as a timing
@@ -830,6 +942,53 @@ function hostDefine(file, name, why) {
   if (!m) throw new Error(`[build] cannot read \`${name}\` from engine/host/${file} — ${why}, and it will not ` +
                           `substitute a remembered value for one it cannot find.`);
   return Number(m[1]);
+}
+/* AND THE SAME RULE FOR A CENSUS'S FIELD LIST, WHICH IS THE ONE FACT THIS FILE KEPT A SECOND COPY OF.
+   `hostDefine` and `forkCensusName` exist because a constant and a spelling belong to the engine; a census's
+   ROW SET belongs to the engine in exactly the same way and was being retyped here, and the cost of that is
+   not hypothetical and is not small. A required-PRESENCE loop cannot notice a row that was never in its list,
+   so every row added over there and not here joins the unchecked half BY DEFAULT and is computed on every
+   sample of every run and read by nothing. This file's own note records THREE such rows found months later;
+   at the revision this function was written the count was SEVEN — `picksLive`, `picksMax`, `picksLifetime`,
+   `topForgiven`, `scanCensusRuns`, `scanCensusWeights` and the four of test_forced.c's progress line — and two
+   of those landed WHILE it was being written. A list that has been wrong seven times is not a list anybody is
+   going to remember to update; it is a derivation somebody typed out.
+   THE ARTIFACT IT DERIVES FROM IS THE COMPOSER'S OWN FORMAT STRING, which is the thing that decides what the
+   line carries, so the rule and its check cannot drift. This is `idlgen`'s argument applied one layer down: an
+   auditor reads the declaration the producer already obeys and never a table of names beside it.
+   IT FAILS LOUD IN THE DIRECTION THAT MATTERS, which is the half a derivation has to answer for. §Testing's
+   record is a scan that read a peer's half-written file and INVERTED its own signal, and a truncated read here
+   would yield a SHORT list — a check that quietly got weaker, which is worse than a stale one. So the region
+   is bounded by the composer's own closing bytes and a region that does not close throws, and a region that
+   closes and names nothing throws: a composer emits rows or it is not this composer. What it cannot catch is a
+   file mid-edit that happens to close, and that is why the region is the smallest one that contains the format
+   string rather than the whole file.
+   NO C STRING DECODING, on `forkCensusName`'s rule and for its reason: a name is matched as the bytes between
+   `\"` and `\":%`, so a key that needed an escape would simply not be found, and not-found is this function's
+   loud arm rather than its quiet one. */
+function censusComposerFields(file, from, to, why) {
+  const src = readFileSync(join(HOST, file), "utf8");
+  const open = src.indexOf(from);
+  if (open < 0)
+    throw new Error(`[build] cannot find ${JSON.stringify(from)} in engine/host/${file} — ${why}, and this ` +
+                    `reader takes the census's row set from that composer rather than from a list here. A ` +
+                    `renamed or moved composer is a change this file must be told about, not one it guesses ` +
+                    `a remembered list past.`);
+  const close = src.indexOf(to, open);
+  if (close < 0)
+    throw new Error(`[build] the composer at ${JSON.stringify(from)} in engine/host/${file} does not reach ` +
+                    `${JSON.stringify(to)} — ${why}. An unterminated region yields a SHORT row set, which is ` +
+                    `a contract that silently got weaker rather than one that broke, so it stops here.`);
+  const body = src.slice(open, close).replace(/\/\*[\s\S]*?\*\//g, " ").replace(/^[ \t]*\/\/.*$/gm, " ");
+  const names = [];
+  for (const m of body.matchAll(/\\"([A-Za-z_][A-Za-z0-9_]*)\\":%/g))
+    if (!names.includes(m[1])) names.push(m[1]);
+  if (!names.length)
+    throw new Error(`[build] the composer at ${JSON.stringify(from)} in engine/host/${file} names no field ` +
+                    `at all — ${why}. Every row it publishes is written \`\\"name\\":%…\` in its own format ` +
+                    `string, so a composer with none is one whose shape this reader no longer recognises and ` +
+                    `an empty required-field list would pass every census ever printed.`);
+  return names;
 }
 /* THE SAME RULE FOR A STRING — the two members of decide.c's fork census that this file has to recognise BY
    NAME rather than by shape, because neither is a row and both are spelled in prose that only decide.c owns.
@@ -3108,9 +3267,18 @@ function runOutcome(label, t, hint) {
       `this child was starved of the thread, near zero means it was waiting on something that never came.\n` +
       `[build]   the census says it was ${cause}`);
   }
+  /* AND THE TWO ARMS THAT NEVER CARRIED THE STANDING AT ALL. The paragraph above put `unanswered` in front of
+     every verdict and the FRACTION was still dropped by exactly these two, which are the arms where an abort
+     is the result — so a smoke that died at an assertion printed its cause and said nothing about whether the
+     probe table under it had been composed at 0 units of work or at tens of thousands. Those are the two
+     readings of every 0 in that table and an abort is precisely where the question is live: the run stopped,
+     and how far it had got is what decides whether a row names a broken mechanism or a stretch of the document
+     nothing reached. `standingText` carries the measured number now (`probeWork`), so this is one call and not
+     a sentence anybody has to compose. */
+  const standWith = (v) => v + (stand ? " — " + standingText(stand) : "");
   const aborted = abortRecord(t.captured);
   if (t.signal) {
-    return bad("CRASHED on " + t.signal + (aborted ? " — " + causeName(aborted) : ""), 3,
+    return bad(standWith("CRASHED on " + t.signal + (aborted ? " — " + causeName(aborted) : "")), 3,
       `DIED ON ${t.signal} — an abort is a DCHECK naming either an invariant to fix at its root or a ` +
       `capability to build, and it is the RESULT of this run rather than an interruption of it.\n` +
       `[build]   ` + (aborted ? aborted
@@ -3120,7 +3288,7 @@ function runOutcome(label, t, hint) {
   /* THE ABORT THAT ARRIVES AS AN ORDINARY EXIT STATUS — the wasm smoke's only shape. Same class and same code
      as the signal above, because it IS that event; only the transport differs. */
   if (t.status !== 0 && aborted)
-    return bad("ABORTED — " + causeName(aborted), 3,
+    return bad(standWith("ABORTED — " + causeName(aborted)), 3,
       `ABORTED at an assertion and exited rc=${t.status} — under emscripten an abort() is a thrown ` +
       `RuntimeError rather than a signal, so this is the same event the native targets report as SIGABRT. ` +
       `The line below names what to fix or build; it is the RESULT of this run.\n` +
