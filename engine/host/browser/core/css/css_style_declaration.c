@@ -1506,13 +1506,25 @@ unsigned cssom_parse_rules(const char *text, size_t len, CssomRuleFn cb, void *u
 }
 
 /* LAYER 4 — the UA DEFAULT. A headless run still has a user-agent stylesheet, and `display` is the property a
- * bundle actually branches on. Modelling it is the difference between answering the spec's value and shrugging;
- * what is NOT here — the rest of html.css — is honestly absent and reads as the property's initial value.
+ * bundle actually branches on. Modelling it is the difference between answering the spec's value and shrugging.
+ *
+ * WHETHER A DECLARATION THIS TABLE DOES NOT CARRY IS AN HONEST ABSENCE IS A QUESTION ABOUT THE PROPERTY AND IS
+ * ASKED PER PROPERTY. This lead-in used to answer it for the whole table at once — what is not here "is
+ * honestly absent and reads as the property's initial value" — and that sentence is TRUE and is not the same
+ * sentence as "harmless". An initial value is a REAL value a consumer acts on, so the absence is honest only
+ * where nothing can tell it apart from the declaration; the paragraph directly below is that test FAILING for
+ * `display`, and it fails the same way one property along. HTML §15.3.8 Tables gives every table part
+ * `vertical-align: middle` where the initial value is `baseline`, and core/layout/table_height.c reads a
+ * cell's alignment to decide which arm of CSS 2.1 §17.5.3 Table height algorithms measures the row it is in —
+ * so an ordinary multi-cell row was measured through a procedure no browser applies to it. The question to ask
+ * of a rendering-section declaration is therefore not whether it is missing but whether anything READS the
+ * property, and where something does, the row is owed rather than excused.
  *
  * A TAG THIS TABLE DOES NOT NAME IS `inline`, WHICH IS WHY A MISSING ROW IS NOT A MISSING ANSWER BUT A WRONG
  * ONE, AND WHY IT IS SILENT. `cssd_ua_value`'s last line is the UA sheet's own default, so an element the
  * table forgets does not reach a crash and does not read as unset — it reads as a real value that three
- * components then act on. core/dom/element_view.c's `clientWidth`/`clientHeight` step 1 is "if the element has
+ * components then act on. core/dom/element_view.c's `clientWidth`/`clientHeight` step 1, which is
+ * CSSOM View §6 Extensions to the Element Interface's, is "if the element has
  * no associated box OR IF THE BOX IS INLINE, return zero", so a forgotten row makes those members answer 0 for
  * an element whose padding edge this engine can compute; `element_view_fragment_kind` reads `inline` as ONE
  * FRAGMENT PER LINE BOX, so `offsetWidth`, `offsetHeight` and `getClientRects` abort naming CSS 2 §9.4.2's
@@ -1520,17 +1532,22 @@ unsigned cssom_parse_rules(const char *text, size_t len, CssomRuleFn cb, void *u
  * core/layout/block_flow.c's child classification refuses to lay out any block container holding one. A zero
  * that a page compares against is CLAUDE.md §Architecture's plausible datum, and this is where it is born.
  *
- * EVERY ROW IS TRANSCRIBED FROM HTML'S RENDERING SECTION, BY NUMBER AND TITLE, AND `display` ONLY — the rest of
- * each rule's declarations are the honest absence above. The STANDARD IS WRITTEN ON EVERY ROW rather than in
- * this lead-in, because a citation is checkable only where its standard is inside the forty characters before
- * the `§` — see the convention at the head of this file — and a list is exactly the shape where one name at
+ * EVERY ROW IS TRANSCRIBED FROM HTML'S RENDERING SECTION, BY NUMBER AND TITLE, AND A ROW IS ALWAYS A LONGHAND.
+ * `cssom_cascaded_value` asserts that the cascade is over longhands only, and `cssd_ua_value` finds a row by
+ * `strcmp` on the property NAME — so a row spelling a shorthand is a declaration no read can ever reach, which
+ * is the write-with-no-reader shape and not a smaller transcription. A shorthand the rendering section writes
+ * is transcribed as the longhands css-cascade-5 §3 "Shorthand Properties" makes it set, that section's own
+ * sentence deciding the ones the shorthand omits: "each “missing” sub-property is assigned its initial value".
+ * The STANDARD IS WRITTEN ON EVERY ROW rather than in this lead-in, because a citation is checkable only where
+ * its standard is inside the forty characters before the `§` — see the convention at the head of this file —
+ * and a list is exactly the shape where one name at
  * the top covers none of the numbers under it. The sections are:
  *   HTML §15.3.1  Hidden elements                  — the fourteen-element `display: none` rule
  *   HTML §15.3.2  The page                         — `html, body { display: block }`
  *   HTML §15.3.3  Flow content                     — the block-level flow rule, and `slot { display: contents }`
  *   HTML §15.3.6  Sections and headings            — `article, aside, :heading, hgroup, nav, section`
  *   HTML §15.3.7  Lists                            — `dir, dd, dl, dt, menu, ol, ul`, and `li { display: list-item }`
- *   HTML §15.3.8  Tables                           — the nine table box types
+ *   HTML §15.3.8  Tables                           — the nine table box types, and its two `vertical-align` rules
  *   HTML §15.3.10 Form controls                    — `input, button { display: inline-block }`
  *   HTML §15.3.12 The fieldset and legend elements — `fieldset { display: block }`
  *   HTML §15.5.5  The details and summary elements — `details, summary { display: block }`
@@ -1615,6 +1632,53 @@ static const struct { const char *tag; const char *prop; const char *value; } UA
     { "thead", "display", "table-header-group" }, { "tbody", "display", "table-row-group" },
     { "tfoot", "display", "table-footer-group" }, { "tr", "display", "table-row" },
     { "td", "display", "table-cell" }, { "th", "display", "table-cell" },
+    /* HTML §15.3.8 Tables' TWO `vertical-align` RULES, which that section states verbatim as:
+         thead, tbody, tfoot, table > tr { vertical-align: middle; }
+         tr, td, th { vertical-align: inherit; }
+       Every `<td>` in a parsed document is therefore `middle`, and it read `baseline` here — the initial value,
+       which is a real value and not an absent one. core/layout/table_height.c's `th_cell_align` reads the
+       alignment of every cell in a row, and CSS 2.1 §17.5.3 Table height algorithms measures a row holding two
+       or more BASELINE cells through its own four-step alignment procedure, which exceeds the maximum cell box
+       height whenever those cells' baselines sit at different distances from their tops. So an ordinary
+       multi-cell row was measured through a procedure a browser applies to no cell in it.
+       EACH RULE IS THREE ROWS BECAUSE `vertical-align` IS A SHORTHAND IN THIS CASCADE. css-inline-3 §4.2
+       "Transverse Box Alignment: the vertical-align property" defines it as
+       `[ first | last] || <'alignment-baseline'> || <'baseline-shift'>`, so `middle` is §4.2.2's
+       `alignment-baseline` with §4.2.1's `auto` source and §4.2.3's `0` shift beside it — the two terms the
+       rule omits, which css-cascade-5 §3 "Shorthand Properties" assigns their initial values. The shift's zero
+       carries its unit for the reason core/css/css_shorthand.c's `VERTICAL_ALIGN_INITIAL` states at length:
+       css-values-4 §6 "Distance Units: the <length> type" makes `0` and `0px` two spellings of one value ("for
+       zero lengths the unit identifier is optional"), and every reader of this table produces the second.
+       THE `inherit` RULE'S THREE ROWS ARE LOAD-BEARING IN A WAY THE OTHER RULE'S TWO RESET ROWS ARE NOT, because
+       css-cascade-5 §3 gives a CSS-wide keyword on a shorthand the same reach — "it sets all of its
+       sub-properties to that keyword, including any that are reset-only sub-properties" — and the SHIFT is the
+       longhand that carries a row's own alignment down to its cells. HTML §15.3.8's `tr[valign=top i]`
+       presentational hint is `vertical-align: top`, which §4.2.3 puts in `baseline-shift`, and `th_cell_align`
+       reads the shift BEFORE the alignment baseline; a cell whose shift did not inherit would answer
+       `baseline` for a row the markup aligned to its top.
+       WHAT THESE ROWS DO NOT COVER IS `table > tr`, WHICH IS A COMBINATOR AND NOT A TAG. A `<tr>` whose parent
+       is the `<table>` element takes the `tr` row here and inherits the table's own initial `baseline` where
+       the first rule states `middle`; every `<tr>` inside a row group is `middle` already, so the divergence is
+       confined to a tree the HTML parser does not build — HTML §13.2.6.4.9 The "in table" insertion mode
+       answers a `"tr"` start tag by "Insert an HTML element for a "tbody" start tag token with no attributes,
+       then switch the insertion mode to "in table body". Reprocess the current token." The next diff gives this
+       layer core/dom/selector_match.h's matcher, which `cssd_author_collect` above already runs once per
+       element per rule, so a UA rule becomes a SELECTOR and this table's `{tag, prop}` key becomes the
+       degenerate shape of one — which is also what `cssd_ua_display_conditional` below stops being. Its absence
+       shows as a script-built `table.appendChild(tr)` row of two or more cells whose §17.5.3 height is measured
+       through the baseline procedure while a browser measures it as the tallest cell box. */
+    { "thead", "baseline-source", "auto" }, { "thead", "alignment-baseline", "middle" },
+    { "thead", "baseline-shift", "0px" },
+    { "tbody", "baseline-source", "auto" }, { "tbody", "alignment-baseline", "middle" },
+    { "tbody", "baseline-shift", "0px" },
+    { "tfoot", "baseline-source", "auto" }, { "tfoot", "alignment-baseline", "middle" },
+    { "tfoot", "baseline-shift", "0px" },
+    { "tr", "baseline-source", "inherit" }, { "tr", "alignment-baseline", "inherit" },
+    { "tr", "baseline-shift", "inherit" },
+    { "td", "baseline-source", "inherit" }, { "td", "alignment-baseline", "inherit" },
+    { "td", "baseline-shift", "inherit" },
+    { "th", "baseline-source", "inherit" }, { "th", "alignment-baseline", "inherit" },
+    { "th", "baseline-shift", "inherit" },
     /* HTML §15.3.10 Form controls, HTML §15.3.12 The fieldset and legend elements, and HTML §15.5's widget sections. An
        `<input>` is the single most measured element on the web and `input.clientWidth` was zero for every one
        of them. */
