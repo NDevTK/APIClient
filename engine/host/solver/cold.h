@@ -115,13 +115,17 @@ typedef struct {
        so nothing a reader holds can tell the two apart. Two members in one bucket, and no way to say which is
        which.
        WHAT TURNS ON IT IS THE ORPHAN QUESTION, which is why this is the fact worth carrying rather than a
-       per-bucket phase table. engine.c reaches engine_orphan_seed only where a flow has no program, job,
-       lifecycle event, timer, rendering opportunity, outstanding reply or unmodelled close request left, so
-       `0` orphan asks has two
-       readings — no member has run out of PROGRAMS, or members have and are held by one of the other five —
-       and the census reported them identically. Measured on the native smoke fixture: 129 members standing at
+       per-bucket phase table. engine.c reaches engine_orphan_seed where a flow has no program, job, delivery,
+       checkpoint or lifecycle stage DUE at the current moment — the last rung before the clock may move — so
+       `0` orphan asks has two readings — no member has run out of PROGRAMS, or members have and are held by
+       one of the other four — and the census reported them identically. (That list used to end "timer,
+       rendering opportunity, outstanding reply or unmodelled close request", which was the seat the seed had
+       at the ladder's EXIT. Those three sit BELOW the two clock-driven sources and a rendering opportunity is
+       generated for ever, so that seat was reached by nobody at all and the reading it named was the wrong one
+       to hold — which is why the numbers below were measured against a row that could not have moved.)
+       Measured on the native smoke fixture: 129 members standing at
        the top bucket with `deepest 10`, i.e. every program the document has, against a run reporting zero
-       orphan asks. Those two together are the second reading and say which of the five to open; either one
+       orphan asks. Those two together are the second reading and say which of the four to open; either one
        alone is the first.
        A REPORT AND NEVER A BOUND (§NO BOUNDS), for `program_cursors`' reason exactly: nothing in the engine
        reads it, no arm of any verdict branches on it, and "how many members have run out of programs" is

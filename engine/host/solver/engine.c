@@ -4810,7 +4810,11 @@ static JSValue *engine_orphan_call(JSContext *ctx, JSValueConst fn, int argc, ui
  * §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS exactly: the stricter question (has the heap been exhausted) decided,
  * and the cost landed silently on the looser one (has THIS flow run out of work), with nothing anywhere to say a
  * member had been ready to retire. The observable was a frontier that only ever grew.
- * Split, the ladder asks the flow's own question at its own rung and the frontier's at the exit — see flow_step. */
+ * Split, the ladder asks the flow's own question and then the frontier's, at ONE boundary — the last moment
+ * before the clock is allowed to move. Which is NOT where the split first put them: the seed went to the exit
+ * that declares a timeline OVER, and that exit sits BELOW the two clock-driven sources, so on any agent that
+ * has a fully-active document it is not reached at all. See the rung in flow_step for the reachability
+ * argument; the split itself was right and only its landing was somewhere nothing arrives. */
 static int engine_orphan_resume(JSContext *ctx, Flow *f) {
     JSValue *base;
 
@@ -4921,9 +4925,12 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
            "head and decision state, so they would be assembled out of a stranger's timeline and called the "
            "discovering flow's");
     DCHECK(f->frame == NULL,
-           "a flow took an orphan with a suspended frame still live — the take happens where the flow has "
-           "nothing left to run, which is the only point at which 'nothing called this function' is a fact, and "
-           "a live frame means the flow was still going to call something");
+           "a flow took an orphan with a suspended frame still live — the take happens where the flow has run "
+           "out of the work the page ARRANGED for it, and the arms below fork THIS flow, so a live frame means "
+           "the flow was suspended mid-call and the sibling would be assembled out of a half-finished "
+           "expression. (It is NOT asserted because that is the only point at which 'nothing called this "
+           "function' is a FACT — that argument is retired: it is a fact only when the run is over, a run that "
+           "renders is never over, and waiting for it served the surface never.)");
 
     /* WHAT THIS BODY IS CALLED ACROSS SESSIONS, computed once per body because a body is taken once. It is
        needed unconditionally — every drive this session creates has to be parkable, and the locator IS its
@@ -7077,6 +7084,50 @@ static int flow_step(JSContext *ctx, Flow *f) {
                      !pending_outstanding_kind(f->pending, FLOW_PENDING_DOCSCRIPT) &&
                      g_docdone_hook && g_docdone_hook(ctx)) {
                 g_step_unit = STEP_UNIT_LIFECYCLE; return 0; }
+            /* THE ORPHAN SURFACE, AT THE LAST MOMENT BEFORE THE CLOCK IS ALLOWED TO MOVE — and that boundary
+               is the whole of the fix, because the two questions either side of it are not one question.
+               EVERYTHING ABOVE THIS LINE IS DUE NOW: a program to run, a job to pump, an answered reply to
+               deliver, a checkpoint, a lifecycle stage the parse made due. EVERYTHING BELOW IT BECOMES due by
+               MOVING THE CLOCK — HTML §8.1.7.3 Processing model reaches a frame by WAITING, in the whole of its
+               in-parallel step 1: "Wait until at least one navigable whose active document's relevant agent's
+               event loop is eventLoop might have a rendering opportunity." §8.7 Timers' expiry is the other
+               moment, and this engine JUMPS to both because it has no real time. So a flow standing HERE has run
+               out of the work the page ARRANGED for it, which is the condition the take is about; a flow
+               standing at the exit at the bottom has additionally established that its timeline is OVER, which
+               on a document that renders is never.
+               IT WAS ASKED AT THAT EXIT AND WAS THEREFORE ASKED BY NOBODY, and the reachability is decidable by
+               reading rather than by quoting a run: core/rendering's opportunity answers 0 only where its
+               declaration latch is down, where no navigable holds a fully-active document, where a timer is due
+               first (and then the arm directly below it runs that timer), or where event_loop_may_advance is
+               false — which IS `pending_outstanding(f->pending)`, the same predicate the OWED arm below returns
+               on. Every one of those either cannot hold for a page or routes to a DIFFERENT arm above the exit,
+               so on any agent that has a document the exit was structurally unreachable and both halves of the
+               orphan mechanism below it were code that compiled and could not run. That is §scheduler's own
+               sentence — a justification RESTING ON A DRAIN is not a guarantee, and "on a frontier that grows it
+               is the same starvation with a reason attached" — and it is the SECOND time this one ladder has
+               had it: §8.1.4.7's notify arm was DELETED from below for exactly this reason and moved to a seam
+               that is reached. This is that correction for the surface §What-the-tool-produces calls the
+               headline.
+               DRIVING EARLY IS NOT DRIVING WRONGLY, WHICH IS WHAT THE OLD PLACEMENT WAS BUYING. Its objection
+               was that "nothing called this function" is a guess until the run is finished — and a run that
+               renders is never finished, so the guarantee bought nothing and cost the whole surface. What being
+               early costs is a drive of a body the page was about to call anyway: a SIBLING flow with concolic
+               arguments standing on the discovering flow's world and account, which the parent's own later real
+               call is unaffected by, and which §Solver settles outright — "Err toward MORE exploration (the WFQ
+               starves the unproductive arm)". A drive that learns nothing is outranked and paged; a surface
+               never served is lost for the session.
+               THE FLOW'S OWN DRIVE FIRST, THE FRONTIER'S WORK SECOND — see engine_orphan_resume for why the two
+               are separate functions. A resumed drive whose body a take handed back is work this flow IS and is
+               not periodic, so it belongs on this side of the boundary for the same reason the seed does; below
+               it, it could never build its call at all, and the cold tier's whole round trip was writing `fn`
+               for a reader nothing could reach.
+               AND THE REFERENCED DOCUMENT IS SERVED TOO, which the exit could not do: engine_set_referenced
+               stops a last timeline FINISHING and says nothing about whether it may drive uncalled code, so a
+               peer-held instance used to be excluded from this surface by a gate that was never about it. */
+            else if ((orphan_step = engine_orphan_resume(ctx, f)) != 0) {
+                g_step_unit = engine_orphan_unit(orphan_step); return 0; }
+            else if ((orphan_step = engine_orphan_seed(ctx, f)) != 0) {
+                g_step_unit = engine_orphan_unit(orphan_step); return 0; }
             /* §8.1.7.3's IN-PARALLEL HALF, asked first of the two clock-driven sources because it is the one
                that can defer: it compares the next rendering opportunity with the earliest timer expiry and
                yields when the timer is earlier. Without a rendering opportunity there is no
@@ -7150,34 +7201,15 @@ static int flow_step(JSContext *ctx, Flow *f) {
                continuation, no microtask) for the consumer registered one step LATER in the same algorithm, so
                the notify is called there, in front of it. It is not a scheduler step any more, so it costs no
                pick and no arm — which is why STEP_UNIT_REJECTION is gone from solver/step_unit.h with it. */
-            /* AND THE DRIVE THIS FLOW ITSELF IS, whose body a take handed back to it — its OWN work, and the
-               only half of the orphan mechanism that is. Everything above this line is work the page ARRANGED
-               — a program, a job, a lifecycle event, a timer, a frame — and it is all done, which is where a
-               recorded drive belonged in the session that recorded it: the recorded arms the replay has been
-               consuming run out exactly here, and the arms the CALL then takes are the next ones in the chain.
-               THE SEED IS NOT HERE ANY MORE, AND THAT IS THE FIX RATHER THAN A MOVE. It stood at this rung, as
-               the same call, directly above the exit that declares a timeline OVER — so a flow could not finish
-               while the heap held ONE un-entered body anywhere. That set is quickjs's `JSFunctionBytecode.
-               entered`, one bit per body for the WHOLE RUNTIME, and running page code is what creates the
-               closures that make a body an orphan: every other member of the frontier refills the very set this
-               member was waiting to see empty. So "this flow asks again next time and finishes when there is
-               nothing left to take" — the sentence that stood here — was a claim about the AGENT'S HEAP gating a
-               claim about THIS FLOW'S TIMELINE, and on any bundle that ships uncalled code the second was
-               unreachable: not slowly, never. The seed is the frontier's work and is taken at the exit below,
-               where a member that has run out of its own work performs it as its LAST act. */
-            else if ((orphan_step = engine_orphan_resume(ctx, f)) != 0) {
-                g_step_unit = engine_orphan_unit(orphan_step); return 0; }
             /* AND THE ARRIVAL NOTHING PERFORMED — HTML §6.10.1 "Close requests"' potential close request,
                MODELLED. It is the weakest act of the ladder — work NOBODY did — and the last thing this flow
-               tries before it declares itself finished. It is now the last of the flow's OWN acts as well as
-               the last rung, which is what the seed leaving this ladder changed about it: while the seed stood
-               above, this arm was reachable only by a flow that had found the heap empty of orphans, so on a
-               bundle shipping uncalled code it was reachable by nobody. The order the note here used to give
-               (`a driven orphan can new CloseWatcher()`, so take the drive first) is kept where it is now true:
-               a SEEDED drive is a SIBLING and its watcher lands in the sibling's own delta, never in this
-               flow's, so that ordering only ever held for the RESUMED drive directly above — which still runs
-               first. See engine_close_request_fork for why this flow takes it rather than a sibling, for what
-               ends it without a counter, and for why everything past it is graded FORCED. */
+               tries before it declares itself finished. The drive ordering the note here used to give (`a
+               driven orphan can new CloseWatcher()`, so take the drive first) still holds and is now held by
+               POSITION rather than by adjacency: both orphan arms stand above the two clock-driven sources, so
+               a RESUMED drive has built its call several rungs before this one is asked, and a SEEDED drive is
+               a SIBLING whose watcher lands in the sibling's own delta and never in this flow's.
+               See engine_close_request_fork for why this flow takes it rather than a sibling, for what ends it
+               without a counter, and for why everything past it is graded FORCED. */
             else if (engine_close_request_fork(ctx, f)) {
                 g_step_unit = STEP_UNIT_CLOSE_REQUEST; return 0; }
             else {
@@ -7193,58 +7225,26 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    means. The flow keeps its snapshot, its delta and its rank and is out of the pick until the
                    host has something for it. */
                 if (g_referenced) { g_step_unit = STEP_UNIT_AWAIT_PEER; return FLOW_STEP_OWED; }
-                /* THE FRONTIER'S ORPHAN SURFACE, SERVED HERE AND AS THIS FLOW'S LAST ACT — the seed that used
-                 * to be a rung of this ladder. §What-the-tool-produces wants the code the bundle shipped and
-                 * never called driven, and §THERE-IS-NO-GRIND makes each such drive "just another BFS flow";
-                 * what neither of them asks for is that the member which HAPPENS to reach this line first stay
-                 * alive until the whole heap has been served. It did, and the cost was total: `entered` is one
-                 * bit per BODY for the whole runtime, every member's page code mints the closures that make
-                 * bodies orphans, so the set a drained member was waiting to see empty is one every other
-                 * member refills. Retirement was not slow, it was unreachable.
-                 * ONE PER RETIREMENT, WHICH IS NOT A COUNTER AND NOT A CAP. Nothing decides that work will not
-                 * happen: the take's whole state is the heap's own bit (quickjs's JS_OrphanTakeOne needs no
-                 * queue anywhere), an untaken body stays untaken until some member takes it, and the member
-                 * that takes one hands its ENTIRE world to the sibling — same delta, same DOM head, same path,
-                 * same account (decide_fork_same_path) — so the timeline that would have taken the next one
-                 * goes on existing and takes it when its own drive runs out. What changes is only that the
-                 * second copy of that world stops being held open for ever by a question about the agent.
-                 * AND THE FRONTIER CANNOT EMPTY WITH THE SURFACE UNSERVED, which is the one thing this ordering
-                 * has to guarantee and the reason the assert below is here rather than in a comment: a member
-                 * that retires having SEEDED left the sibling behind, and one that retires having ROUTED left
-                 * the claimants it fed behind, so in both cases the frontier still holds a member that will
-                 * reach this line. Only the `0` arm — nothing left to take — retires into an empty frontier,
-                 * and that is the state that should. */
-                orphan_step = engine_orphan_seed(ctx, f);
-                /* …AND A ROUTE MAY HAVE HANDED THIS VERY FLOW THE BODY ITS OWN RECIPE NAMED. engine_orphan_route
-                   walks every member and this one is a member, so a claimant can be fed by its own take — at
-                   which point it is not finishing at all, it has its drive back and the rung far above builds
-                   the call on its next turn. */
-                if (f->orphan_want && !JS_IsUndefined(f->fn)) {
-                    DCHECK(orphan_step == ORPHAN_STEP_ROUTED,
-                           "a flow standing at the exit that declares a timeline OVER acquired the body its "
-                           "recipe named without a ROUTE having just happened — `fn` is written by the route "
-                           "and by the cold tier's rebuild, so a third writer has put a drive back on a flow "
-                           "that was about to leave and the call would be built by nobody");
-                    g_step_unit = engine_orphan_unit(orphan_step);
-                    return 0;
-                }
-                /* …AND A RESUMED DRIVE THAT NEVER GOT ITS BODY BACK SAYS SO ON ITS WAY OUT, WHICH IS WHY A
-                   CLAIMANT DOES NOT LEAVE ON A SEED. The line above has established that this heap holds no
-                   untaken orphan ONLY on the `0` arm; on the other two the body this flow's recipe named may
-                   still be sitting in the heap waiting for a later take, and a claimant that retired there
-                   would be a recorded drive dropped — §scheduler's razor calls forgetting a flow a CAP. So a
-                   flow with an OPEN CLAIM keeps the old behaviour exactly: it goes on asking until the heap is
-                   empty, and only then is its claim genuinely unmet (the bundle moved under the residue, or
-                   the locator does not name what it was written for). That is a legitimate outcome and NOT a
-                   should-never-happen — §Time-travel has a resumed flow re-deriving from CURRENT sources, and
-                   the code itself is one — so it is COUNTED rather than asserted, at the one place it can be
-                   distinguished from a drive that ran. Without the count a residue whose every drive missed
-                   looks exactly like one whose every drive landed. */
+                /* …AND A RESUMED DRIVE THAT NEVER GOT ITS BODY BACK SAYS SO ON ITS WAY OUT. The seed is not
+                   called from this exit any more — it is a rung above the two clock-driven sources, where a
+                   flow has run out of the work the page ARRANGED rather than out of its timeline — and THAT is
+                   what makes this count mean what it says at THIS line: reaching the exit means the seed's rung
+                   answered 0 on this same pass, so the heap holds no untaken orphan and the body this recipe
+                   named is not coming. A claimant therefore does not leave while a take could still feed it,
+                   which is the invariant the old placement bought with a special case. Its absence is a
+                   legitimate outcome and NOT a should-never-happen — §Time-travel has a resumed flow
+                   re-deriving from CURRENT sources, and the code itself is one — so it is COUNTED rather than
+                   asserted, at the one place it can be distinguished from a drive that ran. Without the count a
+                   residue whose every drive missed looks exactly like one whose every drive landed.
+                   AND A CLAIMANT HOLDING A BODY CANNOT STAND HERE AT ALL: engine_orphan_resume is the rung that
+                   builds the call, it returns on exactly that pair, and it is now above every clock-driven
+                   source — so the two reads disagreeing is the only route to this assert. */
                 if (f->orphan_want) {
                     DCHECK(JS_IsUndefined(f->fn),
-                           "a flow holds an open orphan claim and a body at the same time — the branch directly "
-                           "above returns on exactly that pair, so reaching here means the two reads disagree");
-                    if (orphan_step != 0) { g_step_unit = engine_orphan_unit(orphan_step); return 0; }
+                           "a flow holds an open orphan claim and a body at the same time — "
+                           "engine_orphan_resume's rung returns on exactly that pair and stands above every "
+                           "clock-driven source, so reaching the exit in that state means the two reads "
+                           "disagree and the drive's call would be built by nobody");
                     g_orphan_claims_unmet++;
                 }
                 /* …AND IT MAY NOT FINISH HOLDING AN UN-NOTIFIED REJECTION, which is the OTHER half of the job
@@ -7273,27 +7273,12 @@ static int flow_step(JSContext *ctx, Flow *f) {
                            "seam and this exit have stopped agreeing about when a flow's turn ends");
                 }
 #endif
-                /* THE STEP NAMES THE WORK IT DID, AND RETIRING IS NOT WORK. A step that served the frontier's
-                   orphan surface on its way out did one unit — the seed, or the route — and the flow LEAVING
-                   is a membership change the census counts on its own line (`finished`), so naming this step
-                   `finished` would hide the seed inside the one row that means "a step that did nothing else".
-                   That is the `compile-program` mislabelling one block down, which cost the census the one
-                   comparison it exists to make; it is not repeated here. */
-                if (orphan_step != 0) {
-                    /* THE SURFACE IS NOT STRANDED — see the seed's own note above. A SEED left a sibling and a
-                       ROUTE left the claimants it fed, so this flow is not the last member, which is what
-                       `flow_count` asks: one registry read, no walk, and side-effect-free as a DCHECK requires.
-                       Asserted at the exit rather than argued in the comment, because the whole safety of
-                       taking one orphan per retirement is that the taker always leaves a successor able to
-                       take the next. */
-                    DCHECK(flow_count() > 1,
-                           "a flow retired having just served the frontier's orphan surface and is the ONLY "
-                           "member left — the take hands the body to a sibling it assembles or to claimants it "
-                           "feeds, so an empty frontier here means the surface has been consumed with nobody "
-                           "left to drive it and every remaining uncalled function is lost for the session");
-                    g_step_unit = engine_orphan_unit(orphan_step);
-                    return 1;
-                }
+                /* NO ORPHAN ARM IS NAMED HERE, AND THE `flow_count() > 1` ASSERT THAT STOOD BESIDE ONE IS GONE
+                   WITH IT RATHER THAN BEING WEAKENED. It guarded a retirement that had just SEEDED — the one
+                   ordering in which the last member could consume the surface and leave nobody to drive it —
+                   and a seed that returns 0 from its own rung does not retire at all, so the state it forbade
+                   is now unreachable by construction instead of by assertion. §Fix-the-ROOT: the impossible
+                   state is made impossible and the workaround is deleted, not kept as a net. */
                 g_step_unit = STEP_UNIT_FINISHED;
                 return 1;   /* all scripts + chunks + microtask jobs + live fetches + load listeners done */
             }

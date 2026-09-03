@@ -1305,7 +1305,14 @@ void engine_routed_census(long *delivered, long *refused);
  * third needs the finding beside it, and saying so here is the whole of what stops the pair being over-read.
  * On a FRESH session (no residue, so the routing arm that consumes a take without seeding cannot fire):
  *     asked == 0                      no flow ever ran out of its own work, so the question was never
- *                                     reached — a scheduling result, and the one worth acting on.
+ *                                     reached — a scheduling result, and the one worth acting on. WHAT THAT
+ *                                     CONDITION IS, NAMED so the row is checkable: flow_step asks the seed at
+ *                                     the last moment BEFORE the clock may move, so "ran out of its own work"
+ *                                     is "has no program, job, delivery, checkpoint or lifecycle stage due at
+ *                                     the current moment" and NOT "has no frame, timer or reply left" — the
+ *                                     second is the exit that declares a timeline OVER, it sits below two
+ *                                     unbounded periodic sources, and asking there is what made this row read
+ *                                     0 for every session there had been.
  *     asked > 0, driven == 0          the walk ran and the heap held no uncalled function — a fact about the
  *                                     PAGE. It is NOT evidence about pick order, and reading it as such is
  *                                     reading "there was nothing to drive" as "something was starved".
