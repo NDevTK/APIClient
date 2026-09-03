@@ -164,133 +164,47 @@ const loadNow = () => {
    The probe table is the second stream and the fixture's OWN measure of progress — @COLD says work is moving,
    @H says whether any of it arrived — so the discriminator reads both or it is guessing from half the evidence.
    The window is the same absolute window, for the same reason: one WFQ re-ranking pause is not a freeze. */
-/* THE LIST IS THE CONTRACT AND THE READING IS A SUBSET OF IT. Its job is not that every name below is
-   compared — `hungCause` uses five of them — it is that a row solver/result.c STOPS EMITTING, or renames,
-   fails the build at this line instead of being compared as `undefined` (which is FALSE for every input, so
-   the arm reading it can never fire again). A census whose consumer names a subset is a census whose next row
-   joins the unchecked half by default.
-   RESIDUAL — THIS LIST, `HEAP_FIELDS` AND `SWAP_FIELDS` ARE THE LAST HAND-KEPT COPIES OF A ROW SET HERE, AND
-   THEY ARE RIGHT TODAY, WHICH IS THE WHOLE OF WHY THIS IS A RESIDUAL AND NOT A DEFECT. The sentence that used
-   to stand here — "adding a row there is a change in two places on purpose" — is the argument the @WFQ half of
-   this file has now abandoned on evidence: EIGHT rows were added to that census and to no reader, three of
-   them in the hour `wfqFields()` was being written. So the same question was asked of these three, by running
-   `censusComposerFields` over their composers, and the answer was that all three AGREE EXACTLY with
-   `result_cold_json`, `result_heap_json` and `result_swap_json` at this revision — 60, 26 and 8 numeric rows,
-   name for name, none missing and none extra. They have not rotted; they are the same mechanism that did.
-   WHAT THE NEXT DIFF BUILDS is these three arrays replaced by `censusComposerFields(…).numeric`, which needs
-   nothing built first: that function already returns the `%s` object rows APART from the numeric ones, which
-   is the only thing this census needs and @WFQ did not, since `stepUnits`, `stepUnitRuns` and
-   `programCursors` are validated as PARTITIONS by `censusHistRows` and a numeric-presence loop would refuse
-   them outright. Because the three lists agree today the change is byte-identical in behaviour at this
-   revision — that is a reason it is safe, and no evidence at all that it works, so it is landed with the
-   derivation's answer quoted beside each list rather than on the argument that nothing moved.
-   HOW ITS ABSENCE WOULD SHOW is exactly how the @WFQ half's did: a row added to one of those three composers,
-   computed on every census of every run, compared by nothing, and found by somebody grepping months later for
-   a name they expected to see in a verdict. */
-/* AND `finished`/`sold` EACH ARRIVE WITH THE TWO POPULATIONS THEY ARE THE SUM OF, which is the row every
-   reading in this file that turns on retirement was missing. The frontier holds exploration flows and @S
-   candidate sessions, and on a real document the second are the great majority of it — so `retiring` was true,
-   and "flows retired steadily" meant "the search discarded candidates" with nothing in the census able to say
-   which. The two take opposite work: coverage gained versus a derived payload that ran and did not fire.
-   BOTH ARMS ARE NAMED HERE AND THE SUM IS CHECKED, never one arm and a subtraction. `finished - finishedCands`
-   is a number for every pair of inputs including the pair where one of them stopped being written, so a
-   derived half is a half that cannot fail; `coldPartition` below is what makes it fail. */
-const COLD_FIELDS = ["live", "framed", "blocked", "owed",
-                     "finished", "finishedFlows", "finishedCands",
-                     "deepest", "completed", "sold", "soldFlows", "soldCands", "forks",
-                     /* `resumed` IS THE POSITIVE STATEMENT the three orphanClaims rows below need, and it is
-                        listed for the reason this list exists rather than as decoration: those three read 0
-                        both when no residue was handed to the session and when a rebuild carried no drives,
-                        and solver/result.c calls the last of them THE VERDICT. Without `resumed` beside them a
-                        reader takes a pass out of a session that never resumed. The four decomposition rows
-                        are cold.h's "which ARMS of the grammar ran" — a residue of only `'f'` records
-                        exercised neither the hex walk nor a candidate resume nor the foreign-world rebuild. */
-                     "resumed", "resumedSegs", "resumedFlows", "resumedCands", "resumedWorlds",
-                     "orphanClaims", "orphanClaimsMet", "orphanClaimsUnmet",
-                     "hostAsked", "hostAnswered", "hostAnswersExtra", "hostAnswersLate", "hostTerminated",
-                     /* AND THE OTHER DOOR'S PAIR. The five above count SYNCHRONOUS cross-instance rendezvous
-                        and only those (engine.c's `mint_req` has two callers and both push
-                        FLOW_PENDING_HOSTREQ), so a document that makes no cross-document read reads `0/0`
-                        for ever and is correct to. The REPLY door — fetch, injected `<script src>`, the
-                        document's own script slots, `import()` — had no rate at all, only levels, and the
-                        zero belonging to the first pair was read as the answer for the second: `hostAsked: 0`
-                        was relayed as "nothing is ever asked of the host" for a run whose registers held
-                        hundreds of thousands of records. Two pairs, each rendered naming its door. */
-                     "replyAsked", "replyAnswered",
-                     /* `pagedAsks` IS TO `sold` WHAT `resumed` IS TO THE THREE orphanClaims ROWS, and it is
-                        listed here for the same reason they are: `sold: 0` reads identically for a run whose
-                        frontier FITTED (the allocator never refused), one whose refusal arrived where the
-                        reclaim safepoint is not armed, and one asked at the floor holding nothing but the
-                        running flow — three states, opposite work, one number. The three rows partition the
-                        asks against `sold` (`unarmed + floor + sold == asks`), checked below. */
-                     "pagedReqs", "pagedAsks", "pagedUnarmed", "pagedFloor",
-                     "decEntries", "decKiB", "headEntries", "headKiB",
-                     /* `pendReady` IS TO `pend` WHAT `pagedUnarmed`/`pagedFloor` ARE TO `pagedAsks` — the
-                        partition that stops one length answering for four populations. `pend` sums entries the
-                        host is still owed, entries it has ANSWERED and the naming flow has not delivered,
-                        answered synchronous rendezvous, and declined parks; those take opposite work and the
-                        level cannot say which it is made of. `pendReady` is the second of the four, and it is
-                        also the ONLY row in this census in the unit `deliver-one-reply` consumes — the reply
-                        door's `replyAsked`/`replyAnswered` count RECORDS while a delivery consumes a NAMING,
-                        so those two are a predicate on the arm being zero and never a denominator for it. */
-                     "domHeadEntries", "domHeadKiB", "jobs", "pend", "pendReady", "pendKiB",
-                     /* AND THE SAME DEBT COUNTED IN MEMBERS, WHICH IS THE HALF `pendReady` STRUCTURALLY CANNOT
-                        SUPPLY AND WHICH THIS LIST DID NOT READ. `pendReady` is over ENTRIES, so it says how
-                        large the undelivered debt is and nothing whatever about whether anybody may take it:
-                        solver/engine.c guards the reply-delivery arm on `flow_stack_empty(f) &&
-                        flow_pending_ready(f)`, and `stackEmpty` is that left conjunct counted over members
-                        while `canDeliver` is the whole guard. So a run whose reply door is paid in full with
-                        `deliver-one-reply` at 0 has TWO opposite readings — the members that could take a
-                        reply are not being CHOSEN, or there are none because the frontier is inside its
-                        programs — and the reply-door paragraph below could state the arm's zero without being
-                        able to name which. `framed` is not the answer: solver/flow.c's flow_stack_empty has a
-                        second half (a DYN_POS_IMMEDIATE row at the cursor is a non-empty stack with no live
-                        frame), so `live - framed` is an upper bound and never the count, which is the reason
-                        that function exists rather than a field read.
-                        THE PAIR IS ALSO A SUBSET CHAIN AND THE ENGINE ASSERTS IT — solver/result.c's
-                        `can_deliver <= stack_empty <= flows` — in a DCHECK that is compiled out of a release
-                        build this reader still runs on. It is checked below for that reason and for the one
-                        every row here is listed for: the two are summed in ONE walk of ONE frontier, so an
-                        excess is two counters over different populations rather than a large number. */
-                     "stackEmpty", "canDeliver",
-                     "miscKiB", "perFlowKiB",
-                     "segKiB", "domSegKiB", "pinSegs", "pinSegEntries", "pinSegKiB",
-                     "decSegs", "decSegEntries", "decSegKiB", "dynBodies", "dynKiB", "sharedKiB",
-                     /* `steps` IS TO `stepUnitRuns` WHAT `live` IS TO `stepUnits` — the total its arms are a
-                        partition of, and therefore the ONLY thing that can tell a MISSING arm from an arm
-                        that read 0. It is listed here rather than left to the histogram reader for the same
-                        reason `resumed` is: without it beside them, a lifetime histogram that lost a row
-                        renders as a plausible one. The three histograms themselves are NOT in this list —
-                        they are objects and this list's contract is that every name in it is a number, so
-                        their own shape and partition are checked by `censusHistRows` instead. `live` above
-                        is the total TWO of them are checked against (`stepUnits` and `programCursors`) and
-                        `deepest`/`completed` are what the third is READ against, which is why all four are
-                        listed here rather than left to those readers. */
-                     "steps",
-                     /* `stepUs` IS `steps`' DENOMINATOR AND IS LISTED BESIDE IT SO IT CANNOT ARRIVE ALONE.
-                        `steps` says how many choices the dispatch loop made and is structurally silent about
-                        why so few, and the two answers take opposite work: a turn that costs a whole slice
-                        makes about one choice per slice BY CONSTRUCTION — a granularity floor and no ordering
-                        finding at all — while cheap turns mean the loop was given little thread time and the
-                        question is not the scheduler's. The @WFQ census's scan rows price one TERM of a turn
-                        (members walked per scan) and cannot answer for the turn.
-                        IT IS READ ONLY AS A RATIO. Both sides are lifetime totals of ONE run over ONE
-                        population (solver/engine.h's `step_us`: one charge per loop iteration that stepped),
-                        so their quotient divides out the 2x spread two passes of one revision show on this
-                        harness — which no count on this line survives. Both are also in the SLICE's own
-                        measure, so the quotient against the slice the run reports on its own `@QUANTUM` line
-                        needs no statement about whether that measure is CPU; only a sentence CALLING it CPU
-                        would, and `@QUANTUM` is where this run says so. `stepCostReading` reads both from
-                        that line rather than from this tree's header, so the yardstick belongs to the
-                        measured artifact and not to whatever revision is checked out while it is read. */
-                     "stepUs",
-                     /* `outOfPrograms` IS TO `programCursors` WHAT `live` IS TO `stepUnits` — not a total, but
-                        the one fact the histogram's own buckets cannot carry. A cursor value covers a member
-                        INSIDE the program at that index and a member PAST THE LAST ROW of its own sequence,
-                        and `framed` (which separates them) is a whole-frontier count that cannot be
-                        attributed to a bucket. Listed here so a composer that stops emitting it fails as a
-                        renamed row rather than reading `undefined` into the sentence below. */
-                     "outOfPrograms"];
+/* THE ROW SET IS THE CONTRACT AND THE READING IS A SUBSET OF IT, AND THE SET IS DERIVED — this reader's last
+   hand-kept copy closed rather than extended by three more names. Its job is not that every row is compared
+   (`hungCause` reads five of them): it is that a row solver/result.c STOPS EMITTING, or renames, fails the
+   build at this line instead of being compared as `undefined` — which is FALSE for every input, so the arm
+   reading it can never fire again — and that a row ADDED over there does not join the unchecked half by
+   default, which a required-PRESENCE loop over a typed-out list structurally cannot deliver.
+   THE MEASUREMENT THAT ENDED THE LIST IS THE SAME ONE `wfqFields()` WAS BUILT ON, TAKEN A SECOND TIME. That
+   half of this file abandoned "adding a row there is a change in two places on purpose" on evidence: EIGHT
+   rows had been added to the @WFQ census and to no reader, three of them in the hour the derivation was being
+   written. The sentence that stood here said these three lists AGREED with their composers at that revision
+   and were therefore a residual and not a defect — and it was TRUE WHEN WRITTEN AND WRONG WITHIN THE DAY.
+   `result_cold_json` gained `replayHits`, `replayLeft` and `replayLeftArms`; none of the three reached this
+   list; nothing broke, because `censusFields` requires the names it is GIVEN and is silent about a row it was
+   never told about. Eleven rows over two censuses, by two lanes' counts, is not a list anybody is going to
+   remember to update. It is a derivation somebody typed out.
+   THE ARTIFACT IT DERIVES FROM IS THE COMPOSER'S OWN FORMAT STRING — `idlgen`'s argument one layer down: an
+   auditor reads the declaration the producer already obeys and never a table of names beside it.
+   THE PER-ROW READING NOTES THAT STOOD HERE ARE GONE WITH THE LIST, deliberately and not as collateral, and
+   for a reason sharper than the @WFQ half's. Every one of them answered the question WHY IS THIS ROW LISTED —
+   why `resumed` rides beside the three orphanClaims rows, why `pendReady` partitions `pend`, why `steps` is
+   here rather than left to the histogram that is checked against it — and a DERIVED set does not list
+   anything, so that question has no referent left. What each of them said about the row's MEANING is
+   solver/result.c's own paragraph beside the row, one `git show` away and maintained where the row is
+   written; what they said about this file's READING of it lives at the reading (`stepCostReading` states the
+   ratio and its denomination, `programCursorReading` states what `deepest` and `completed` are read against,
+   `coldPartition` states the two population splits). A second copy of either, kept in the file whose whole
+   subject is what a second copy costs, is the thing being deleted here.
+   THE OBJECT ROWS ARE NOT NUMBERS AND ARE NOT IN THIS SET — `stepUnits`, `stepUnitRuns` and `programCursors`
+   are spliced with `%s` and are validated as PARTITIONS by `censusHistRows`, a contract a numeric-presence
+   loop cannot state and would refuse outright. The split is taken from the CONVERSION in the format string
+   and never from an exclusion list beside it, and `censusRowSet` is what refuses the day a fourth object
+   arrives with no reader.
+   MEMOIZED BECAUSE IT IS A FILE READ AND THE ANSWER CANNOT CHANGE UNDER ONE BUILD — and never evaluated at
+   module load, for `wfqFields`' reason: `HOST` is a `const` far below this line, so a top-level derivation
+   here would reach it in its temporal dead zone and `node --check` would pass on it. */
+let g_coldFields = null;
+const coldFields = () => (g_coldFields ??= censusRowSet(
+  "solver/result.c", "char *result_cold_json(void)", "\n}\n",
+  ["stepUnits", "stepUnitRuns", "programCursors"],
+  "the @COLD reader states which rows it requires of the frontier census, and it takes that set from the " +
+  "composer rather than from a list beside it"));
 /* THE POPULATION SPLITS ARE PARTITIONS AND THE PARTITION IS THE CONTRACT, checked here for the reason
    `stepUnitReading` checks its histogram against `live`: two rows that are supposed to be the whole of a third
    are two numbers that can drift, and drifted they are WORSE than the one number they replaced, because each
@@ -924,6 +838,40 @@ function censusComposerFields(file, from, to, why) {
                     `string, so a composer with none is one whose shape this reader no longer recognises and ` +
                     `an empty required-field list would pass every census ever printed.`);
   return { numeric, object };
+}
+/* AND THE HALF A NUMERIC ROW SET CANNOT SPEAK FOR: WHICH OBJECTS THE COMPOSER SPLICES, AND WHETHER THIS FILE
+   CHECKS THEM. `censusComposerFields` names the two kinds apart so that a caller asks for the one it can
+   check; that is the whole of what it can do, because it does not know who its caller is. What it cannot
+   notice is a composer that grows a FOURTH `%s` — the row is silently absent from `.numeric`, absent from
+   every presence loop, computed on every census of every run, and read by nothing. That is precisely the
+   defect the numeric derivation was built to end, arriving one KIND over and invisible to it.
+   SO THE CALLER STATES WHICH OBJECTS IT VALIDATES AND THE MISMATCH THROWS, IN BOTH DIRECTIONS. The @COLD
+   reader validates three as partitions (`censusHistRows`, called by name at each of its three readings,
+   because a row reached through a computed key is a row no reader of this file can see); @HEAP and @SWAP
+   validate none, and pass an EMPTY set to say so rather than by omission — "this census publishes no object"
+   is a claim, and the day one does the reader that cannot check it is told instead of quietly dropping it.
+   THE DIRECTION THAT IS ALREADY COVERED IS STILL CHECKED HERE, AND CHEAPLY: a renamed histogram would throw at
+   `censusHistRows` when the reading runs, but only if that reading is reached, whereas this fires while the
+   row set is being taken and names the composer. One throw, at the seam, for a set that is one line long. */
+function censusRowSet(file, from, to, objects, why) {
+  const d = censusComposerFields(file, from, to, why);
+  const extra = d.object.filter((k) => !objects.includes(k));
+  const gone = objects.filter((k) => !d.object.includes(k));
+  if (extra.length || gone.length)
+    throw new Error(`[build] the composer at ${JSON.stringify(from)} in engine/host/${file} splices ` +
+                    `[${d.object.join(", ")}] as objects and this reader validates [${objects.join(", ")}] — ` +
+                    `${why}. ` +
+                    (extra.length
+                      ? `${extra.join(", ")} is spliced and checked by NOTHING here: it is not a number, so no ` +
+                        `presence loop can hold it, and it would be computed on every census of every run and ` +
+                        `read by nobody — the same hole a hand-kept numeric list left, one kind over. Give it ` +
+                        `a reader (\`censusHistRows\` is the shape, if it is a partition) and name it here. `
+                      : ``) +
+                    (gone.length
+                      ? `${gone.join(", ")} is validated here and this composer no longer splices it, so the ` +
+                        `reading that takes it apart is reading a row that has been renamed or dropped.`
+                      : ``));
+  return d.numeric;
 }
 /* THE SAME RULE FOR A STRING — the two members of decide.c's fork census that this file has to recognise BY
    NAME rather than by shape, because neither is a row and both are spelled in prose that only decide.c owns.
@@ -1886,9 +1834,9 @@ function programCursorReading(b) {
                               "is still never empty, because solver/cold.c gives an empty frontier program 0");
   /* `deepest` AND `completed` ARE THE THING THIS ROW IS READ AGAINST, so their absence is not a missing
      decoration — it leaves the histogram with nothing to be low or high RELATIVE TO, which is the whole
-     reading. They are in COLD_FIELDS and `censusFields` has already refused a non-numeric one by the time this
-     runs; this says so rather than re-checking, because a second check here would be the second place a
-     renamed row has to be renamed. */
+     reading. They are in the derived @COLD row set and `censusFields` has already refused a non-numeric
+     one by the time this runs; this says so rather than re-checking, because a second check here would
+     be the second place a renamed row has to be renamed. */
   const at = rows.filter((r) => r[1] > 0);
   /* AN EMPTY FRONTIER IS A SENTENCE AND NOT AN EMPTY LIST, for `stepUnitReading`'s reason exactly: rendering
      nothing there reads as a histogram that failed rather than as a census taken with nobody standing, and
@@ -1943,8 +1891,18 @@ function programCursorReading(b) {
    @COLDPARK, and reporting `0 records` for that would be the same lie as counting a marker nothing writes. */
 /* THE TWO CONTRACTS IN FULL — spelled out rather than spread into each other, because a field list is only a
    contract if a reader can see the names in it: a computed key is a name that is not a static fact, and this
-   file's own record-field gate refuses one rather than guessing past it. */
-const COLDPARK_FIELDS = ["records", "segs", "flows", "cands", "orphans", "worlds", "bytes", "store"];
+   file's own record-field gate refuses one rather than guessing past it.
+   AND `store` IS NOT IN IT, BECAUSE THIS CONTRACT CERTIFIES NUMBERS AND `store` IS A PATH. `censusFields` is
+   one implementation of one contract — "every name in it is present and is a NUMBER" — and `store` was listed
+   under it while test_forced.c prints it as `\"store\":\"%s\"`, so `oneCensus` threw `has no numeric
+   \`store\`` on the exact bytes its own composer emits. That is not a strict reader refusing a broken census:
+   it is the reader unable to accept a correct one, so the round-trip report — which is guarded on both
+   sessions exiting 0 and reached only when a park HAPPENED — could not print for the runs it exists to
+   describe. A row's KIND is not in its key, and a list that says NUMBER about a string is the same defect as
+   summing a gauge: the check passes for the wrong reason or fails for no reason, and here it was the second.
+   The shelf identity is asserted at `coldRoundTrip`, where the value is READ and where a reader who hits it
+   is already holding both paths. */
+const COLDPARK_FIELDS = ["records", "segs", "flows", "cands", "orphans", "worlds", "bytes"];
 /* THE @S ARRIVAL CENSUS, SPELLED AS THE RESULT DOCUMENT SPELLS IT. test_forced.c prints the same four numbers
    the document carries as `_sourceReads`/`_sinkReached`/`_sinkTainted`/`_sinkSuppressed`, from the same
    producers, and it prints them under the document's own names — one namespace, so a reader who learns these
@@ -2030,6 +1988,15 @@ function coldRoundTrip(v1, v2, store) {
      — session two resumes from whatever is at the path it was given (an earlier build's residue, or nothing)
      and every number below is then a comparison between two unrelated runs. It is one string and it is the
      one thing that makes the rest of this function a round trip rather than two censuses side by side. */
+  /* AND ITS KIND IS ASSERTED HERE, WHERE IT IS READ — the one row of this census that is not a number, so it
+     is outside `censusFields`' contract and inside this one. An ABSENT row and a MISMATCHED shelf are
+     different facts and the sentence below would report the first as the second, naming `undefined` as the
+     path session ONE parked to; that is a composer change wearing a round-trip failure's message. */
+  if (typeof park.store !== "string" || !park.store.length)
+    throw new Error(`[build] the @COLDPARK census carries no \`store\` string — test_forced.c prints it as ` +
+                    `\`"store":"%s"\` on every park it takes, so its absence is that printf having changed ` +
+                    `rather than a park that went nowhere, and the shelf identity below cannot be asked of a ` +
+                    `path this census did not state.`);
   if (park.store !== store)
     throw new Error(`[build] session ONE parked its residue at ${JSON.stringify(park.store)} and this stage ` +
                     `handed it ${JSON.stringify(store)} — session TWO resumes from the path THIS stage names, ` +
@@ -2087,15 +2054,23 @@ function coldRoundTrip(v1, v2, store) {
    SAME FIELD CONTRACT AS @COLD AND @WFQ: the names are solver/result.c's composers, and an absent one THROWS
    rather than being silently compared as undefined. ABSENCE OF THE STREAM IS REPORTED AS ABSENCE, because a
    stage that drives no scheduler prints none of these and for that stage the silence is expected. */
-/* BOTH LISTS ARE THE CONTRACT IN FULL, for COLD_FIELDS' reason exactly — solver/result.c's `result_heap_json`
-   and `result_swap_json` format strings, every row, whether or not the sentence below reads it. */
-const HEAP_FIELDS = ["allocations", "atoms", "strings", "objects", "shapes", "props", "funcs", "funcCode",
-                     "arrays", "miscBytes", "miscParts", "childRealms", "childRealmsMade", "childRealmsPeak",
-                     "objBytes", "propBytes", "shapeBytes", "strBytes", "atomBytes", "funcBytes",
-                     "arrayElemBytes", "unattributed", "stepMachines", "trampFrames",
-                     "cLiveKiB", "arenaKiB"];
-const SWAP_FIELDS = ["installs", "entries", "worst", "mean",
-                     "heapSegs", "heapSegEntries", "domSegs", "domSegEntries"];
+/* BOTH ROW SETS ARE THE CONTRACT IN FULL AND BOTH ARE DERIVED, for `coldFields`' reason exactly — every row
+   solver/result.c's `result_heap_json` and `result_swap_json` publish, whether or not the sentences below read
+   it, taken from those composers' own format strings rather than retyped here. These two AGREED with their
+   composers name for name at the revision the third stopped agreeing with its own, which is not evidence that
+   a hand-kept copy works: it is what the @COLD list looked like the day before three rows landed in the
+   composer and in no reader. The empty object set is the positive statement that neither census splices an
+   object — see `censusRowSet`, which is what refuses the day one does. */
+let g_heapFields = null;
+const heapFields = () => (g_heapFields ??= censusRowSet(
+  "solver/result.c", "char *result_heap_json(JSContext *ctx)", "\n}\n", [],
+  "the @HEAP reader states which rows it requires of the runtime's memory census, and it takes that set " +
+  "from the composer rather than from a list beside it"));
+let g_swapFields = null;
+const swapFields = () => (g_swapFields ??= censusRowSet(
+  "solver/result.c", "char *result_swap_json(void)", "\n}\n", [],
+  "the @SWAP reader states which rows it requires of the delta-swap census, and it takes that set from the " +
+  "composer rather than from a list beside it"));
 function lastTwo(out, marker, fields, composer) {
   const s = [];
   for (const m of out.matchAll(new RegExp(`^${marker} (\\{.*\\})$`, "gm")))
@@ -2116,22 +2091,62 @@ const shareText = (pairs, total) => {
   return total > 0 ? `${t[0]} ${t[1]} (${Math.round(100 * t[1] / total)}%)` : `nothing — all ${pairs.length} are 0`;
 };
 function censusReading(out) {
-  const h = lastTwo(out, "@HEAP", HEAP_FIELDS, "solver/result.c's result_heap_json");
-  const w = lastTwo(out, "@SWAP", SWAP_FIELDS, "solver/result.c's result_swap_json");
-  const c = lastTwo(out, "@COLD", COLD_FIELDS, "solver/result.c's result_cold_json");
-  /* THE MEMBER-SIDE SUBSET CHAIN, CHECKED HERE FOR THE REASON THE @WFQ PAIRS ARE CHECKED IN THEIR OWN READER:
-     solver/result.c asserts `can_deliver <= stack_empty <= flows` in a DCHECK that is compiled out of a
-     release build, and this reader still runs on that build's bytes. The three rows are one walk of one
-     frontier — `canDeliver` is the reply-delivery arm's whole guard and `stackEmpty` its left conjunct — so an
-     excess is not a large number, it is two sums over different populations, and every sentence composed out
-     of the pair below would then be a reading of the disagreement rather than of the run. */
-  for (const x of [c.a, c.b])
-    if (x.canDeliver > x.stackEmpty || x.stackEmpty > x.live)
-      throw new Error(`[build] the @COLD census reports ${x.canDeliver} member(s) that can DELIVER a reply, ` +
-                      `${x.stackEmpty} whose execution context stack is empty and ${x.live} live — the first ` +
-                      `is the reply-delivery arm's whole guard and the second its left conjunct, counted in ` +
-                      `one pass of cold_census over one frontier, so this is two sums over different ` +
-                      `populations and not a frontier state.`);
+  const h = lastTwo(out, "@HEAP", heapFields(), "solver/result.c's result_heap_json");
+  const w = lastTwo(out, "@SWAP", swapFields(), "solver/result.c's result_swap_json");
+  const c = lastTwo(out, "@COLD", coldFields(), "solver/result.c's result_cold_json");
+  /* AND AN ABSENT @COLD STREAM IS AN ABSENCE, WHICH THIS GUARD IS AND THE DEREFERENCE ABOVE IT WAS NOT. The
+     banner over this reader states it — "a stage that drives no scheduler prints none of these and for that
+     stage the silence is expected" — and `h`, `w` and the cold arms below are all reached through `if (…)`,
+     while the internal-truth checks were reading `c.a` off a `lastTwo` that returns NULL for exactly that
+     stage. A TypeError there is not this file refusing a broken census; it is the reader falling over on the
+     one input its own contract says to expect, and it names neither the marker nor the stage. */
+  if (c) {
+    /* THE MEMBER-SIDE SUBSET CHAIN, CHECKED HERE FOR THE REASON THE @WFQ PAIRS ARE CHECKED IN THEIR OWN
+       READER: solver/result.c asserts `can_deliver <= stack_empty <= flows` in a DCHECK that is compiled out
+       of a release build, and this reader still runs on that build's bytes. The three rows are one walk of one
+       frontier — `canDeliver` is the reply-delivery arm's whole guard and `stackEmpty` its left conjunct — so
+       an excess is not a large number, it is two sums over different populations, and every sentence composed
+       out of the pair below would then be a reading of the disagreement rather than of the run. */
+    for (const x of [c.a, c.b])
+      if (x.canDeliver > x.stackEmpty || x.stackEmpty > x.live)
+        throw new Error(`[build] the @COLD census reports ${x.canDeliver} member(s) that can DELIVER a reply, ` +
+                        `${x.stackEmpty} whose execution context stack is empty and ${x.live} live — the ` +
+                        `first is the reply-delivery arm's whole guard and the second its left conjunct, ` +
+                        `counted in one pass of cold_census over one frontier, so this is two sums over ` +
+                        `different populations and not a frontier state.`);
+    /* AND THE REPLAY LEDGER'S IDENTITY, FOR THE SAME REASON AND WITHIN ONE SAMPLE ONLY. solver/result.c
+       asserts it where all three rows are in one hand and that DCHECK is compiled out of the build this
+       reader's bytes come from, so the three rows reach a human and — until this line — no automated reader.
+       KIND AND UNIT, READ OFF THE ACCESSOR AND NOT THE KEYS (solver/decide.h states both beside
+       `decide_replay_stats`, whose body is three plain static reads with no division behind it): all three
+       are LIFETIME counts over the SESSION, so they are differenceable between two samples of one session —
+       and `replayHits` and `replayLeftArms` are ARMS (decision-vector slots) while `replayLeft` is EVENTS,
+       one per divergence whatever it abandoned. The middle name reads as arms and is not, which is the
+       `svcMax` shape and the reason this comment states the unit rather than the row's spelling.
+       IT IS CHECKED PER SAMPLE AND NEVER ACROSS THE PAIR. §Testing: an identity holds WITHIN one sample and
+       nowhere else, and this session has already paid for the other reading — two rows taken at two ends of a
+       run were differenced into a contradiction that held of no quantity, and three mechanisms were written
+       down for it before the file's own owner read the constant that explained it. `lastTwo` hands back the
+       last census and the middle one, which may be two different SESSIONS of one stdout (`censusSessions`
+       exists because the host takes one runtime down and brings another up), so a difference of these rows
+       across the pair is a number about nothing. Each sample is asked alone.
+       BOTH CLAUSES, BECAUSE `replayLeftArms >= replayLeft` ALONE PERMITS `replayLeft == 0` BESIDE A NON-ZERO
+       SUM — which is what a counter incremented on the wrong side of dec_leave_path's early return produces,
+       and it is the one state a single-clause check would pass. Both come from that function's own
+       precondition (`g_c < dec_total()`, so every divergence abandons at least one arm). A break publishes
+       `replayLeftArms` as a loss no `replayLeft` accounts for, or a divergence that abandoned nothing. */
+    for (const x of [c.a, c.b])
+      if (x.replayLeftArms < x.replayLeft || (x.replayLeft === 0) !== (x.replayLeftArms === 0))
+        throw new Error(`[build] the @COLD census reports replayLeft ${x.replayLeft} divergence event(s) ` +
+                        `abandoning replayLeftArms ${x.replayLeftArms} arm(s) — every call of ` +
+                        `dec_leave_path abandons AT LEAST ONE arm (its precondition is that the cursor is ` +
+                        `short of the end), so the arm total can be neither smaller than the event count nor ` +
+                        `zero beside a non-zero one. The two are counted at one site two lines apart and are ` +
+                        `read here out of ONE census, so this is the ledger and not the sampling: one of the ` +
+                        `two increments is on the wrong side of that function's early return. They are about ` +
+                        `to be published as the statement of what this session's resume did with its ` +
+                        `recorded path (\`replayHits\` ${x.replayHits} arm(s) honoured).`);
+  }
   const parts = [];
   if (h) {
     const grew = (k) => h.b[k] - h.a[k];
@@ -2342,8 +2357,9 @@ function censusReading(out) {
       /* THE PRODUCER'S OWN DERIVATION, CHECKED RATHER THAN ASSUMED. result_cold_json emits `resumed` as
          literally `flows + cands > 0`, so a census claiming a rebuild whose two flow-producing arms are both
          zero is that composer contradicting itself, and every arm sentence below would be describing a
-         rebuild this same document says did not land anything. It throws for the reason a renamed COLD_FIELDS
-         row throws: the alternative is a reading composed out of a census that is not internally true. */
+         rebuild this same document says did not land anything. It throws for the reason a @COLD row that
+         solver/result.c renamed throws: the alternative is a reading composed out of a census that is
+         not internally true. */
       if (c.b.resumedFlows + c.b.resumedCands === 0)
         throw new Error(`[build] the @COLD census says resumed=${c.b.resumed} with resumedFlows and ` +
                         `resumedCands both 0 — solver/result.c derives that row as \`flows + cands > 0\`, so ` +
@@ -2486,7 +2502,7 @@ function censusReading(out) {
    THE CONTRACT IS ONE IMPLICATION AND IT IS CHECKED RATHER THAN DEFAULTED. A run that printed `@COLD` drove
    `run_scheduler`, whose census is printed only AFTER an `engine_sched_step`, and every step is bracketed by
    `quantum_begin`/`quantum_end` — so `@COLD` present with no `@QUANTUM` is a BROKEN CONTRACT and throws, in
-   the same way and for the same reason a renamed `COLD_FIELDS` row does. The converse is not a contract: a
+   the same way and for the same reason a renamed @COLD row does. The converse is not a contract: a
    stage that opens slices and drives no scheduler (the two-instance ABI drive) prints this line and no census,
    and a stage that declines the edge entirely prints neither. ABSENCE IS REPORTED AS ABSENCE — never as a
    default, and never as the positive claim that a run was CPU-denominated.
@@ -2632,11 +2648,11 @@ function hungCauseCensus(out) {
   const n = s.length;
   const width = Math.min(HUNG_WINDOW_CENSUSES, Math.max(1, Math.floor(n / 2)));
   const b = s[n - 1], a = s[n - 1 - width];
-  for (const f of COLD_FIELDS) for (const c of [a, b])
-    if (typeof c[f] !== "number")
-      throw new Error(`[build] the @COLD census has no numeric \`${f}\` — this discriminator reads ` +
-                      `${COLD_FIELDS.join(", ")} and engine.c's printf is what decides they exist; a renamed ` +
-                      `field must be renamed here rather than silently compared as undefined.`);
+  /* THE FIELD CONTRACT THROUGH ITS ONE IMPLEMENTATION, which is what `censusFields`' own banner asks for and
+     what this loop was the fourth hand-written copy of. It also carried the wrong composer: it named
+     "engine.c's printf" for a document solver/result.c's `result_cold_json` composes, so a reader who hit it
+     was sent to a file that has never emitted these rows. */
+  for (const c of [a, b]) censusFields(c, "@COLD", coldFields(), "solver/result.c's result_cold_json");
   /* AND THE PARTITIONS HOLD AT BOTH ENDS OF THE WINDOW, checked before anything is composed out of either.
      Every arm below reads a DIFFERENCE across the window, so a census whose parts do not sum is one whose
      difference is a difference of nothing. */
