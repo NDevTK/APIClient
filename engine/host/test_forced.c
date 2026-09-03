@@ -10954,10 +10954,24 @@ static int probes_report(const char *js, bool final, char *unanswered, size_t ca
        row's TWO READINGS the WHOLE table has, and it was on no line of this stream.
        A row's 0 is "a statement this run answered wrongly" or "one it never reached", and those send a reader
        to opposite places — the mechanism the row names, or the budget. Per-row the split is what a `why`'s
-       first clause and a ladder's lowest rung are for. WHOLE-TABLE it is one number, and this is it: a table
-       composed at `workDone` 0 is the table `run_scheduler` renders at the TOP of its loop, before
-       `engine_sched_step` has run once, so every 0 in it is a statement never reached; a table composed at
-       tens of thousands is a run that did the work and answered as it did.
+       first clause and a ladder's lowest rung are for. WHOLE-TABLE it is one number — and it is NOT `workDone`
+       0, which this line named as the pre-first-step marker and which is reachable at NO TABLE OF ANY RUN.
+       THE RETIRED ARGUMENT IS CORRECTED RATHER THAN DELETED, because a reader who re-derives it will
+       re-introduce it. The marker was read off `run_scheduler`'s LOOP ORDER — the park hook that composes this
+       table stands at the TOP of that loop, before `engine_sched_step` has run once — and that half is true
+       and is not enough. `engine_work_done` is forks + FLOWS CREATED + jobs + switches, and
+       `engine_sched_begin` SEEDS THE FRONTIER before the loop is entered at all: it takes exactly one of
+       `cold_resume`, which asserts `flows > 0`, or `flow_add`, and both reach flow_new, which is the one site
+       that raises the created count. So the pre-first-step table is composed at a work total of at least the
+       seed's flows and never at 0, and an arm keyed on 0 would be a reading with no state behind it — the
+       mirror of the defect this whole comment is about.
+       WHAT DOES ANSWER IT IS `_switches` 0, AND IT ANSWERS WITH NO CLAIM ABOUT THE LOOP AT ALL.
+       `engine_sched_step` raises that counter beside its only `flow_credit_pick`, which is its one site, so
+       `_switches` 0 IS "no flow has ever been handed the thread" — a fact about DISPATCH, checkable at the
+       counter, and true whatever order the hook and the step stand in. That is what the loop-order sentence
+       was reaching for and is the one form of it this line is entitled to state; it is also the row
+       engine/build.mjs's `standingText` keys its before-any-dispatch arm on. A table composed at tens of
+       thousands, with switches behind it, is a run that did the work and answered as it did.
        THE QUANTITY IS THIS TABLE'S OWN CADENCE AND WAS PRINTED NOWHERE. `fixture_have_answers` gates on
        `engine_work_done()` and `run_scheduler` gates its five censuses on the same call, and no line carries
        it — so the number that decides WHEN every measurement of this run is taken was not itself a
