@@ -52,8 +52,12 @@
  * IT IS A STEP, with the same return contract as the two algorithms below, because §3.7.10 step 3.1.6 runs it
  * INSIDE the member and what a standard writes there is not bounded by this file. Streams §4.2.5's step 1 is
  * `? AcquireReadableStreamDefaultReader(stream)`, and §4.3's acquisition SETTLES the reader's `closed` promise
- * at once on a stream that has already closed or errored — a resolving function, which reaches 27.5.1.3's resolveSteps step
- * 8's `then` read. A plain C body could only have driven that to completion.
+ * at once on a stream that has already closed or errored — a resolving function, which reaches 27.5.1.3's
+ * resolveSteps step 2.f's `then` read (`Let then be Completion(Get(resolution, "then"))`, the sixth sub-step,
+ * which ecmarkup renders lower-alpha at that depth). This read "step 8" until it was checked against the text:
+ * step 2.h is `Let thenAction be then.[[Value]]`, one step PAST the Get — the same off-by-one
+ * core/file/file_system_handle.c records having found at its own site. A plain C body could only have driven
+ * that to completion.
  * >0 means it parked (the member returns that code and this is re-entered at the same point with the answer in
  * `in`), 0 means the iterator is initialised, -1 means it threw — and the member then throws rather than
  * answering with an iterator, which is what the `?` on Streams §4.2.5's step 1 means.

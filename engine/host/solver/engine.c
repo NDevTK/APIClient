@@ -3310,7 +3310,7 @@ static void engine_queue_el_body(uint32_t doc, DynBody *body, DynKind kind, Scri
  * AND IT REORDERED THE PAGE'S MICROTASKS, which is the reason it could not merely be tidied. Every delivery
  * below runs through JS_CallAsFlow, which builds a CALL-ROOT FLOW: the native resolving function is a step
  * machine and offers a park at every re-entry, and 27.5.1.3 "CreateResolvingFunctions ( toResolve )"'s
- * resolveSteps — the closure that is step 2's one nested list — has at its step 6
+ * resolveSteps — the closure that is step 2's one nested list — has at step 2.f
  * `Get(resolution, "then")`, a read on an object whose prototype the page owns, so the settle of reply A can
  * PARK part-way. The drain did not stop for that. It went on and delivered reply B, whose settle ran to
  * completion — so B's promise reached 27.5.1.4 "FulfillPromise" step 7's TriggerPromiseReactions FIRST, and
@@ -3419,7 +3419,8 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                "a reply was delivered while another flow was switched in — the page's resolving function would "
                "run against that flow's delta and the reactions it triggers would be queued on that flow");
         /* TAKEN OFF THE REGISTER BEFORE IT IS DELIVERED, and that ordering is the record's own lifetime. The
-           delivery below runs the PAGE's code — 27.5.1.3 "CreateResolvingFunctions ( toResolve )"'s resolveSteps step 9 reads
+           delivery below runs the PAGE's code — 27.5.1.3 "CreateResolvingFunctions ( toResolve )"'s
+           resolveSteps, the closure that is step 2's one nested list, reads at step 2.f
            `Get(resolution, "then")` off an object whose prototype the page owns — and that code can issue
            another fetch, which appends to this very register. As a C array the walk held a `FlowPending *` into
            storage the append could realloc out from under it; as a JS record the reference here is what keeps
@@ -3590,8 +3591,10 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
             DCHECK(kind == FLOW_PENDING_RESOLVE,
                    "a synchronous host request's answer reached the reply delivery — its asking machine never "
                    "resumed to take it, so its parked continuation is the thing to look for");
-            /* AS A FLOW, not a JS_Call. The delivery settles the page's promise, and 27.5.1.3's resolveSteps "Promise
-               Resolve Functions" step 9 reads `Get(resolution, "then")` off the Response — an ordinary object
+            /* AS A FLOW, not a JS_Call. The delivery settles the page's promise, and
+               27.5.1.3 "CreateResolvingFunctions ( toResolve )"'s resolveSteps — the closure that is its step
+               2's one nested list, and NOT a titled section of its own since "Promise Resolve Functions" was
+               folded into it — reads `Get(resolution, "then")` at step 2.f off the Response, an ordinary object
                whose prototype the page owns, so `Object.prototype.then = { get(){…} }` makes that read the
                page's code. Out of a plain call it ran in a C activation with no flow base, which is the
                drive-to-completion this engine aborts on; prototype pollution is a gadget class the solver
