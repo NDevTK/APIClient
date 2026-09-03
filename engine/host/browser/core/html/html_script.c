@@ -19,6 +19,8 @@
 #include "core/dom/document.h"   /* which DOCUMENT this program belongs to: the realm it is compiled in */
 #include "core/dom/document_current_script.h"   /* "execute the script element" step 6's classic arm, steps 1-2 and 4 */
 #include "core/events/report_exception.h"       /* §8.1.4.4 "Calling scripts" step 8's third bullet */
+#include "core/events/event.h"           /* §4.12.1.1's error arm dispatches an Event, so it MINTS one */
+#include "core/events/event_target.h"    /* …through DOM §2.9's one dispatch, which runs the PAGE's listeners */
 #include "core/idl_args.h"       /* the `async` attribute's setter, declared like every other IDL member's */
 #include "core/url/url.h"        /* §4.12.1's "encoding-parsing a URL given src, relative to el's node document" */
 #include "core/loader/document_scripts.h"   /* §4.12.1's type-string steps, asked ONCE for both halves */
@@ -33,6 +35,8 @@ static JSAtom  g_atom_started = JS_ATOM_NULL;
 static JSValue g_force_async_key = JS_UNDEFINED;
 static JSAtom  g_atom_force_async = JS_ATOM_NULL;
 static int     g_id_set_async = -1;   /* the `async` setter's pool id — declared per AGENT, installed per REALM */
+/* §4.12.1.1's error arm, as a machine — registered per RUNTIME, like every other host step def. */
+static int     g_err_stepid = -1;
 
 /* CONFIGURABLE AND WRITABLE for the reason custom_elements.c's slots are: the flag is written more than once
    over one element's life — the parse marks it, and §4.12.1.1 "Processing model"'s cloning steps write the
@@ -44,6 +48,123 @@ static int     g_id_set_async = -1;   /* the `async` setter's pool id — declar
 static JSValue js_script_set_async(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic);
 
 static void script_children_changed(JSContext *ctx, lxb_dom_node_t *parent);
+
+/* ---- HTML §4.12.1.1 "Processing model"'s ERROR ARM ---------------------------------------------------------
+ *
+ * THE STANDARD SPELLS IT THE SAME WAY THREE TIMES INSIDE ONE BRANCH — "queue an element task on the DOM
+ * manipulation task source given el to fire an event named error at el, and return" — for a `src` the element
+ * may not fetch from (`importmap`/`speculationrules`), a `src` that is the empty string, and a `url` that is
+ * failure. It is ONE component and not an `if` at each of them for the reason every other repeated step in
+ * this file is: three copies of a sentence the standard states once is three places for it to drift.
+ *
+ * IT WAS A COMMENT, WHICH IS THE ONE THING IT MAY NOT BE. Both of the arms this file already stood at returned
+ * SILENTLY, with a paragraph above them recording that the event was "still owed" — so `<script src="">` and
+ * `<script src="http://[">` left the algorithm the way a browser leaves it and fired NOTHING, and a page's
+ * `s.onerror = () => loadFrom(FALLBACK_CDN)` never ran. That handler is not an edge case in this project's
+ * terms: §What-the-tool-produces is about reaching what the bundle CAN do but didn't, and a script element's
+ * error handler is exactly where a bundle keeps its fallback host and its degraded-mode configuration.
+ *
+ * IT IS A TASK, WHICH IS WHAT §4.12.1.1 SAYS IT IS. A synchronous fire inside `prepare` is two things wrong at
+ * once: it is the wrong position in HTML §8.1.7's event loop (a page's `s.src = ""` would see its own
+ * `onerror` run before the next statement), and it is unparkable — the listener list is the PAGE's, so the
+ * dispatch runs the page's code and must have a flow base under it. core/html/html_image.c's §4.8.4.3.5 task
+ * is the same sentence for `img` and this is built to match it.
+ *
+ * IT FIRES `error` AND NOTHING ELSE, AND THE NAME IS THEREFORE NOT A PARAMETER. §4.12.1.1's other event — "if
+ * el's from an external file is true, then fire an event named load at el" — is a BARE SYNCHRONOUS STEP of
+ * "execute the script element", so core/events/event_target.h assigns it to event_target_fire_run from the
+ * machine that is executing, never to a queued task. A task here that could fire `load` would be a task able
+ * to report that a script ran. */
+#define SCRIPT_ERR_STAGES(X) \
+    X(SERR_FIRE, "HTML §4.12.1.1 Processing model — the queued element task's fire of `error` at the element")
+enum { SCRIPT_ERR_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const script_err_steps[] = { SCRIPT_ERR_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    JSStepHdr   hdr;       /* FIRST — the driver writes the def and the operand bounds through it */
+    uint8_t     fphase;    /* the dispatch's own phase, held across a suspension */
+    uint8_t     started;
+    JSValue     ev;        /* the Event being dispatched (owned) */
+    EventFireCb cb;        /* §2.9's dispatch request buffer, whose width travels with its type */
+} ScriptErrTask;
+
+static void script_err_visit(JSContext *ctx, void *stp, JSStepVisit *v)
+{
+    ScriptErrTask *s = stp;
+    int k;
+
+    /* NOTHING IS OWNED UNTIL THE FIRST STEP RUNS. The state's block is ZEROED (quickjs-step.h) and a zeroed
+       JSValue is not JS_UNDEFINED, so a visit reaching a machine the driver has allocated and not yet entered
+       would hand the collector a value nobody wrote. */
+    if (!s->started) return;
+    v->val(ctx, &s->ev);
+    STEP_CB_FOREACH(s->cb, k) v->val(ctx, &s->cb[k]);
+}
+
+static int script_err_step(JSContext *ctx, void *stp, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    ScriptErrTask *s = stp;
+    JSValueConst element = step_arg(&s->hdr, 0);
+    int r;
+
+    STEP_DISPATCH(SCRIPT_ERR_STAGES, s->hdr.stage, s->hdr.def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(SERR_FIRE);
+        if (!s->started) {
+            int k;
+
+            /* EVERY OWNED FIELD IS PLACED BEFORE THE FIRST THING THAT CAN FAIL — `event_new` allocates, which
+               is a moment the collector can walk this machine through script_err_visit. */
+            s->started = 1;
+            s->fphase = 0;
+            s->ev = JS_UNDEFINED;
+            STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
+            /* NEITHER FLAG IS SET: the standard names the fire as "fire an event named error at el" and gives
+               no initialiser, so DOM §2.6 "Interface Event"'s defaults stand — it does not bubble and it is
+               not cancelable. An `error` that bubbled would reach the Window's `onerror`, which is a
+               DIFFERENT report (§8.1.4.4 "Calling scripts"' report an exception) about a different failure. */
+            s->ev = event_new(ctx, "error", /*bubbles*/ false, /*cancelable*/ false);
+            if (JS_IsException(s->ev)) { s->ev = JS_UNDEFINED; return JS_STEP_ABRUPT; }
+        }
+        r = event_target_fire_run(ctx, &s->fphase, STEP_CB(s->cb), element, s->ev, JS_UNDEFINED, cb_result,
+                                  NULL, out_cb, out_argc);
+        if (r > 0) return r;   /* parked INSIDE the dispatch: a listener is the page's code */
+        JS_FreeValue(ctx, s->ev);
+        s->ev = JS_UNDEFINED;
+        if (r < 0) return JS_STEP_ABRUPT;
+        return JS_STEP_DONE;
+}
+
+static const JSTrampStepDef script_err_def = {
+    sizeof(ScriptErrTask), script_err_step, NULL, 0,
+    .visit = script_err_visit,
+    .algorithm = "HTML §4.12.1.1 Processing model — a queued element task on the DOM manipulation task source",
+    .steps = script_err_steps
+};
+
+void html_script_queue_error(JSContext *ctx, lxb_dom_element_t *el)
+{
+    JSValueConst argv[1];
+    JSValue fn, elv;
+
+    DCHECK(el != NULL, "§4.12.1.1's error arm was queued for no element — every one of its three sites reaches "
+                       "it from inside `prepare the script element`, whose whole subject is EL, and the fire "
+                       "is `at el`");
+    DCHECK(g_err_stepid >= 0, "a §4.12.1.1 error task was queued before html_script_init registered its "
+                              "machine — the id is per RUNTIME and the register is that function's last act");
+    /* THE CALLEE IS MINTED IN THE ENQUEUING REALM. A C function runs in the realm that DEFINED it
+       (js_call_c_function reads `p->u.cfunc.realm`), and this one fires an event at an element of THIS
+       document — so a runtime-lifetime function object held in a static would answer every document's
+       §4.12.1.1 out of whichever realm happened to reach the arm first. */
+    fn = JS_NewCFunction2(ctx, NULL, "scriptElementTask", 1, JS_CFUNC_step, g_err_stepid);
+    CHECK(!JS_IsException(fn), "§4.12.1.1: the queued error task's callee could not be allocated");
+    elv = node_wrap(ctx, lxb_dom_interface_node(el));
+    CHECK(!JS_IsException(elv), "§4.12.1.1: OOM wrapping the element its error event is fired at");
+    argv[0] = elv;
+    JS_EnqueueCallTask(ctx, fn, 1, argv);   /* §4.12.1.1: the DOM manipulation task source */
+    JS_FreeValue(ctx, elv);
+    JS_FreeValue(ctx, fn);
+}
 
 void html_script_init(JSContext *ctx)
 {
@@ -64,6 +185,11 @@ void html_script_init(JSContext *ctx)
        into `prepare`. See
        script_children_changed for why only having the second one silently lost every text-injected chunk. */
     node_add_children_changed_hook(script_children_changed);
+    /* §4.12.1.1's ERROR ARM, whose machine is per RUNTIME because a step def is. `ctx` is this agent's first
+       realm and the runtime is the agent's, which is the same scope the atoms above are freed at. */
+    DCHECK(g_err_stepid < 0, "§4.12.1.1's error machine is already registered for this agent — a second id "
+                             "would leave the first one's def reachable by an element task nobody re-queued");
+    g_err_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &script_err_def);
 }
 
 void html_script_free(JSRuntime *rt)
@@ -77,6 +203,10 @@ void html_script_free(JSRuntime *rt)
     JS_FreeValueRT(rt, g_force_async_key);
     g_force_async_key = JS_UNDEFINED;
     g_id_set_async = -1;
+    /* GIVEN BACK WITH THE RUNTIME THAT ISSUED IT. The id is only meaningful against that runtime's table, and
+       a corpus host takes one down and brings another up per file — a stale id would have the next agent's
+       first `<script src="">` queue a task against a def the previous runtime owned. */
+    g_err_stepid = -1;
 }
 
 /* IS THIS NODE A `script` ELEMENT? The INTERNED TAG ID and the pair of namespaces a `script` can be in, which
@@ -489,7 +619,35 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
         /* HTML's null and the two data types: "No script is executed." An import map and a set of speculation
            rules are REGISTERED on the relevant global rather than evaluated, which is a capability this engine
            does not have — and their absence is honest, because neither runs code. */
-        if (!script_type_executes(st)) return;
+        if (!script_type_executes(st)) {
+            /* …BUT ONLY *NULL* LEAVES THE ALGORITHM AT THIS STEP, AND THE OTHER TWO LEAVE IT AT STEP 33.
+               §4.12.1.1's type switch returns in exactly one arm, its last: step 13 is "Otherwise, return.
+               (No script is executed, and el's type is left as null.)" — and `importmap` and
+               `speculationrules` are not that arm, they are steps 11 and 12, which SET el's type and fall
+               through. So they walk on through step 15's "Set el's already started to true." and step 18's
+               "If scripting is disabled for el, then return." and only then reach step 33, "If el has a src
+               content attribute:", whose FIRST sub-step is "If el's type is \"importmap\" or
+               \"speculationrules\", then queue an element task on the DOM manipulation task source given el
+               to fire an event named error at el, and return". Collapsing those returns into this one is
+               wrong in two observable ways at once — the element is left UNMARKED, so a later prepare runs
+               the whole algorithm again, and the `error` the standard owes is never fired.
+               IT CRASHES RATHER THAN FIRING THE EVENT FROM HERE, because firing it at step 13 would be the
+               observable half of a step whose other half (step 15's mark, and step 18's scripting-disabled
+               test, which can legitimately suppress the event entirely) would still be missing — a half-fix
+               wearing a fixed one. What the next diff builds is the fall-through: the two data types reach
+               steps 15 and 18 alongside the executing types and branch at step 33, where
+               html_script_queue_error is already waiting for them. Its absence shows as this abort, on markup
+               no browser supports either (§4.12.1.1's own note: "External import maps and speculation rules
+               are not currently supported"), which is why it is reachable at all rather than common. */
+            DCHECK(!has_src || (st != SCRIPT_TYPE_IMPORTMAP && st != SCRIPT_TYPE_SPECULATIONRULES),
+                   "a `<script type=importmap|speculationrules>` carries a `src` — HTML §4.12.1.1 "
+                   "\"Processing model\" does NOT return for these at its type step (only a null type does), "
+                   "so this element owes step 15's `already started` mark, step 18's scripting-disabled test "
+                   "and then the src branch's `queue an element task on the DOM manipulation task source "
+                   "given el to fire an event named error at el`. Let the two data types fall through to "
+                   "those steps and branch at the src step, where html_script_queue_error is");
+            return;
+        }
         /* A MODULE TRAVELS THIS ROUTE NOW, and the row is what carries it: the flow's dynamic sequence has a
            ScriptType per entry (solver/flow.h's `dyn_type`), so flow_step evaluates an injected
            `<script type=module>` with §8.1.4.4 "Calling scripts"'s run-a-module-script rather than handing the
@@ -588,22 +746,27 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
     /* §4.12.1's `src` BRANCH IS ENTERED ON THE ATTRIBUTE, which is the same correction the document scan needed
        and for the same reason: `get_attribute` answers NULL for an attribute whose value is absent, so a
        presence test written over the VALUE let `<script src="">` fall through to the child-text branch and RUN
-       it — markup a browser runs nothing for. The standard's second step is `src` being the empty string:
-       "queue an element task … to fire an event named error at el, and return". What is still owed is that
-       error event, which needs a task on this element's document rather than anything here. */
+       it — markup a browser runs nothing for. */
     if (has_src) {
         char *u;
 
         src = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"src", 3, &n_len);
-        if (!src || !n_len) return;
+        /* "IF SRC IS THE EMPTY STRING, THEN QUEUE AN ELEMENT TASK ON THE DOM MANIPULATION TASK SOURCE GIVEN EL
+           TO FIRE AN EVENT NAMED ERROR AT EL, AND RETURN." Both halves of that sentence run now; the return
+           alone stood here for as long as the event was a comment. A NULL from `get_attribute` is the same
+           arm: `has_src` was answered by `has_attribute`, so the attribute IS present and an absent VALUE is
+           the empty string — which is exactly what the step names. */
+        if (!src || !n_len) { html_script_queue_error(ctx, el); return; }
         /* "ENCODING-PARSING A URL GIVEN src, RELATIVE TO EL'S NODE DOCUMENT" — §4.12.1's own step, and the
            realm this chokepoint was entered with IS that document (core/dom/element.c hands the inserted node's
            document, not the mutating one). It was missing: the raw ATTRIBUTE went to the host, so an injected
            `<script src="./chunk.js">` named an address only the host's own base could resolve — and the host
            that has one is a different origin from the page. NULL is the standard's branch for a `src` that does
-           not parse — "return", so the element runs no script. */
+           not parse: "if url is failure, then queue an element task on the DOM manipulation task source given
+           el to fire an event named error at el, and return" — so the element runs no script AND the page is
+           told, which is the half that used to be a paragraph instead of a task. */
         u = script_src_absolute(ctx, (const char *)src, n_len);
-        if (!u) return;
+        if (!u) { html_script_queue_error(ctx, el); return; }
         /* FETCH §4.3 SCHEME FETCH IS ASKED BY WHICHEVER PARK THIS URL REACHES, AND NEITHER DESTINATION BELOW
            NEEDS A LINE HERE. §8.1.4.2 "Fetching scripts"' fetch is the same algorithm `fetch()` runs, so §4.3's
            switch decides who answers `<script src="data:text/javascript,…">` — a 200 built out of bytes already

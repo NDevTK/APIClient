@@ -322,8 +322,10 @@ void html_script_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char 
  *
  * NULL IS THE STANDARD'S OWN NEXT STEP and not an error code: "if url is failure, then queue an element task on
  * the DOM manipulation task source given el to fire an event named error at el, and RETURN" — so the element
- * runs no script, and what is still owed at every caller is that error event, which needs a task on the
- * document. A non-NULL answer is malloc'd and OWNED BY THE CALLER.
+ * runs no script AND the page is told. The second half is html_script_queue_error below, and a caller that
+ * takes the NULL arm without it performs half of one step: the element goes quiet exactly as it should and the
+ * `onerror` a bundle hangs its fallback host off never runs. A non-NULL answer is malloc'd and OWNED BY THE
+ * CALLER.
  *
  * ONE COPY, HERE, because there are FOUR ways a `<script src>` reaches a loader in this engine — an element a
  * SCRIPT inserted (this file's html_script_prepare), a child navigable's parsed Document
@@ -335,5 +337,29 @@ void html_script_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char 
  * ATTRIBUTE, so a page's own external module was named by its document and every real site shipping
  * `<script type=module src>` was unanalysable. */
 char *script_src_absolute(JSContext *ctx, const char *src, size_t src_len);
+
+/* HTML §4.12.1.1 "Processing model"'s ERROR ARM — "queue an element task on the DOM manipulation task source
+ * given el to fire an event named error at el". The standard writes that sentence three times inside its `src`
+ * branch (a `src` on an `importmap`/`speculationrules` element, a `src` that is the empty string, a `url` that
+ * is failure) and once more out of "execute the script element" step 4, whose "if el's result is null" is what
+ * a FAILED FETCH leaves behind: §4.12.1.1's `onComplete` is "mark as ready el given result", and marking with
+ * null (its own words: "null (representing an error)") is how a load failure reaches that step.
+ *
+ * SO THIS IS ALSO THE ARM A REFUSED LOAD OWES, and it is exported for that reason rather than kept static.
+ * The three sites above are `prepare`'s own and are called from this file; the fourth is a reply that never
+ * came — a network error, or the trusted zone declining to make the request at all — and the party holding
+ * that fact is the flow's pending register, not this file. What such a delivery must NOT do is settle the park
+ * as if bytes had arrived: a `<script src>` and an injected script are owed a PROGRAM, and there is no value
+ * that means "no program" which the compile path can be handed. It has an element (the park carries it) and it
+ * has this.
+ *
+ * IT IS NOT THE ARM A DYNAMIC `import()` OWES, WHICH IS A DIFFERENT ALGORITHM AND MUST NOT BE ROUTED HERE.
+ * `import()` has no element to fire at: HTML §8.1.6.7.3 HostLoadImportedModule ends in "fetch a single
+ * imported module script … and onSingleFetchComplete as defined below", whose first two steps are "let
+ * completion be null" and "if moduleScript is null, then set completion to ThrowCompletion(a new TypeError)",
+ * and the completion goes to FinishLoadingImportedModule — which for a dynamic import REJECTS the promise
+ * `import()` returned. An engine that answered a failed chunk load with this arm would fire an `error` event
+ * at nothing and leave the importing flow parked for ever. */
+void html_script_queue_error(JSContext *ctx, lxb_dom_element_t *el);
 
 #endif
