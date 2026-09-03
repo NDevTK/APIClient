@@ -14,6 +14,7 @@
 const path = require("path");
 const fs = require("fs");
 const puppeteer = require("puppeteer");
+const { artifactStamp } = require("./artifact_stamp.js");
 
 const LOCK_FILE = process.env.HARNESS_LOCK
   ? path.resolve(process.env.HARNESS_LOCK) : path.join(__dirname, "harness.lock");
@@ -28,9 +29,12 @@ const KEEP = /@WHY|@E\b|Aborted|abort\(\)|assert|DCHECK|CHECK|Error:|RuntimeErro
 async function main() {
   const urls = process.argv.slice(2);
   if (!urls.length) { console.error("usage: node testing/live-why.js <url> [url…]"); process.exit(2); }
-  const stamp = JSON.parse(fs.readFileSync(
-    path.join(__dirname, "..", "extension", "lib", "qjs", "qjs.mjs.build.json"), "utf8"));
-  console.log("# artifact " + JSON.stringify({ head: stamp.head, qjsHead: stamp.qjsHead, at: stamp.at }));
+  /* PRINTED FIRST BECAUSE EVERY @WHY BELOW IS FILED UNDER IT — and read through
+     artifact_stamp.js, which REFUSES a stamp older than the bytes beside it. This used to
+     be a bare JSON.parse here: it printed three fields as fact, so the one failure that
+     cannot be seen in the output (a wasm copied in over an older stamp) was the one this
+     tool published. An unreadable stamp is a refusal for the same reason and not an ENOENT. */
+  console.log("# artifact " + JSON.stringify(artifactStamp()));
 
   const lock = JSON.parse(fs.readFileSync(LOCK_FILE, "utf8"));
   const browser = await puppeteer.connect({

@@ -30,57 +30,16 @@
 const path = require("path");
 const fs = require("fs");
 const puppeteer = require("puppeteer");
+const { artifactStamp } = require("./artifact_stamp.js");
 
-const ROOT = path.resolve(__dirname, "..");
 const LOCK_FILE = process.env.HARNESS_LOCK
   ? path.resolve(process.env.HARNESS_LOCK) : path.join(__dirname, "harness.lock");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/* THE ARTIFACT IS NAMED IN THE OUTPUT, because §Testing requires the revision a number
-   belongs to be reported WITH the result. A number quoted without it is not a
-   measurement. This reads the build stamp the builder wrote, never a git command — the
-   working tree advances under a live session and the tree's HEAD is not the artifact. */
-function artifactStamp() {
-  const dir = path.join(ROOT, "extension", "lib", "qjs");
-  const p = path.join(dir, "qjs.mjs.build.json");
-  const j = JSON.parse(fs.readFileSync(p, "utf8"));
-  /* A STAMP IS A CLAIM ABOUT BYTES, SO IT IS REFUSED THE MOMENT THE BYTES ARE NEWER THAN THE CLAIM.
-     engine/build.mjs calls `stampArtifact` AFTER the link that produced the artifact, and says why at that
-     line: "stamping after a failed link would mark whatever qjs.mjs a PREVIOUS build left on disk as
-     belonging to this revision, which is §Testing's number about nothing with the stamp itself doing the
-     lying." This is that failure arriving from the other direction — the artifact REPLACED without the stamp
-     being rewritten — and it lies in exactly the same way, except that a copied-in build is the ordinary way
-     a fresh wasm reaches this directory. Because the build stamps last, a legitimate stamp is never older
-     than the artifact it describes by more than its own write, so the slack is small and a gap of minutes or
-     days is not an ordering artifact.
-     REFUSING IS THE WHOLE POINT AND A WARNING WOULD NOT DO. §Testing: "a result quoted without the revision
-     it came from is not a measurement" — and a result quoted with the WRONG revision is worse, because it
-     reads as authoritative and files today's numbers under a program that did not produce them. This driver
-     prints the stamp as the first line of every run, so anything it emits after a bad one is mislabelled at
-     the source.
-     MEASURED: a fresh `qjs.wasm`/`qjs.mjs` pair was copied into this directory beside a `.build.json` two
-     days older; every row this driver printed carried `head f6cbdd9b` while the bytes were built from
-     7a7cd512, ~350 commits later. Nothing in the output could have revealed it — the stamp parsed, the
-     fields were all present, and only the mtimes disagreed. */
-  const stampAt = fs.statSync(p).mtimeMs;
-  const SLACK_MS = 5000;
-  for (const art of ["qjs.wasm", "qjs.mjs"]) {
-    const ap = path.join(dir, art);
-    const artAt = fs.statSync(ap).mtimeMs;
-    if (artAt > stampAt + SLACK_MS) {
-      throw new Error(
-        "REFUSING TO REPORT: " + art + " is newer than the stamp that claims to describe it — " +
-        art + " " + new Date(artAt).toISOString() + " vs " + path.basename(p) + " " +
-        new Date(stampAt).toISOString() + ", which names head " + String(j.head).slice(0, 12) + ". " +
-        "engine/build.mjs stamps AFTER the link, so a stamp older than its artifact means the artifact was " +
-        "replaced without being re-stamped, and every number this driver prints would be filed under a " +
-        "revision that did not produce it. Re-stamp the pair (a build through engine/build.mjs does it) or " +
-        "copy the builder's .build.json in beside the wasm it belongs to.");
-    }
-  }
-  return { head: j.head, qjsHead: j.qjsHead, dirty: j.dirty, at: j.at };
-}
+/* THE ARTIFACT IS NAMED IN THE OUTPUT — see testing/artifact_stamp.js, which is where the refusal that
+   makes that name trustworthy lives, and which testing/live-why.js reads through as well. It was a copy
+   in each driver and only this one carried the refusal. */
 
 async function connect() {
   const lock = JSON.parse(fs.readFileSync(LOCK_FILE, "utf8"));
