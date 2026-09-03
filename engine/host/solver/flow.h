@@ -1200,6 +1200,49 @@ typedef struct {
        0.0 when the population is empty, so a reader takes the two together (build.mjs reads the series). */
     long never_picked;
     double never_picked_gap;
+    /* HOW THE DISPATCHES THAT DID HAPPEN WERE DISTRIBUTED, WHICH IS THE OTHER HALF OF THE PAIR ABOVE AND TAKES
+       OPPOSITE WORK FROM IT. `never_picked` says a tail exists and `never_picked_gap` says how far behind it
+       stands, and that pair has ONE answer for THREE states of the scheduler — states whose repairs are
+       different and two of which are not repairs at all. Write M for `members`, P for `members - never_picked`
+       (the live members ever chosen) and T for `picks_live` (the dispatches those members are still holding):
+         T/P ≈ 1                      the thread reached a FRESH member nearly every time. The frontier is
+                                      growing faster than one thread serves it, and that is a THROUGHPUT fact
+                                      about branching and slice length; no term of flow_weight reaches it, and
+                                      a weight change made against this reading fixes nothing and can only make
+                                      the order worse.
+         T/P ≫ 1, picks_max ≈ T/P     a reachable COHORT is being swept repeatedly while the tail waits: the
+                                      order is returning members it has already served ahead of members it has
+                                      never served. That is an ORDERING defect and it is the one the weight
+                                      owns.
+         picks_max ≈ T                ONE member is holding the thread and the switches are it and a single
+                                      rival trading. That is a MONOPOLIZER the aging term is failing to sink —
+                                      §scheduler's own sentence, and a third repair again.
+       AND THE ROW ABOVE IS A GAUGE THAT MOVES, WHICH IS WHAT MAKES THESE NECESSARY RATHER THAN MERELY FULLER.
+       `never_picked` counts the members standing NOW that have never been chosen, and a member that is chosen
+       leaves that population while every member born since joins it — so the number falls as well as rises, and
+       a single reading of it is a fact about one instant that says nothing about a run. Measured on one frozen
+       build's own @WFQ series, in order: 0, 25, 218, 18, 37, 261, 445, while `members` went 1, 153, 347, 369,
+       388, 612, 802. The 218 → 18 step is roughly two hundred members handed the thread between two samples, on
+       a frontier that had grown by twenty-two — so "the tail is not being reached" was FALSE across that
+       interval and true-looking at both ends of it, and the series that flow.h prescribes as the honest reading
+       cannot be differenced either, because differencing a gauge is arithmetic over no quantity. The dispatches
+       are what happened; only a counter can say how many there were.
+       THE PAIR OF KINDS IS THE POINT AND IT IS SPELLED IN THE NAMES. `picks_live` and `picks_max` are GAUGES:
+       they are taken over the members standing NOW, so a member that departs takes its dispatches out of both
+       and either may FALL between two censuses. Differencing them is arithmetic over no quantity — the defect
+       CLAUDE.md records as a gauge read as a lifetime histogram, whose free tell is a series that decreases.
+       `picks_lifetime` is the LIFETIME COUNTER: every dispatch this instance has ever made, held off the flows
+       entirely (flow.c's `g_picks_total`) because a per-member field cannot be one, and reset by nothing for
+       the reason `rank_changes` is reset by nothing. It is the ONLY one of the three a reader may difference.
+       THE IDENTITY THAT DEFINES THEM, and it is checked in both directions rather than described: within the
+       census, `picks_live <= picks_lifetime` with the difference being exactly what departed members took away
+       (asserted at the end of flow_wfq_census); across the document, `picks_lifetime` must EQUAL the result's
+       `_switches`, because flow_credit_pick has exactly one caller and engine.c raises its own switch count on
+       the line beside it. A reader who cannot check a counter's identity is holding a digit, not a
+       measurement. */
+    int64_t picks_live;       /* GAUGE: dispatches held by the members standing now */
+    int64_t picks_max;        /* GAUGE: the most any one of them holds */
+    int64_t picks_lifetime;   /* LIFETIME: every dispatch this instance has made, departed members included */
     int64_t svc_max;   /* the largest service notch in the frontier — who is actually consuming the thread */
     /* …AND THE OTHER END OF IT, WHICH IS THE ONLY NUMBER IN THIS STRUCT THAT CAN ANSWER "IS THE AGING TERM
        MEASURING THIS FLOW OR THE WHOLE FRONTIER". `svc_max` alone reads identically for a single monopolizer on

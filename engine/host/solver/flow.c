@@ -22,6 +22,19 @@ static long g_rank_changes = 0;   /* …and the same event counted for the LIFE 
                                      See frontier_rank_changed for why the generation NUMBER is not. */
 static unsigned g_gen = 0;   /* bumped whenever the frontier's membership changes (add/remove) — lets the
                                 value-yield recompute the rival only on a change, never per-opcode */
+/* EVERY DISPATCH THIS INSTANCE HAS EVER MADE — a LIFETIME COUNTER, and it is here rather than on a Flow
+   because that is the only place it can be one. `Flow.picks` is a GAUGE the moment a member departs: the
+   number leaves the frontier with it, so a sum over the members standing NOW is a statement about the live
+   population and can FALL between two censuses. This cannot; it only rises, so it is the one of the two that
+   may be differenced across samples, and the pair is what separates "each dispatch reached a fresh member"
+   from "the dispatches are landing on members that already had one" — which no row in this file could ask.
+   NOT RESET BY flow_registry_init, for the reason stated at `g_rank_changes` two lines up and at
+   frontier_rank_changed: a quantity a second registry would zero is not commensurable with the scan counters
+   nothing zeroes, and a reader dividing one lifetime by another lifetime-that-restarted gets a ratio about no
+   run at all. CROSS-CHECKABLE, which is what makes it a counter rather than a number: flow_credit_pick has
+   exactly ONE caller and engine.c increments its own `g_switches` on the line beside it, so this must equal
+   the result document's `_switches` for the same instance, and a divergence names a second dispatch path. */
+static int64_t g_picks_total = 0;
 static Flow *g_running = NULL;   /* the flow currently holding the worker (the scheduler sets it) */
 
 /* THE FORK TREE, which is what the aging term is actually about — and the one thing in this file that is not a
@@ -706,6 +719,12 @@ void flow_credit_pick(Flow *f) {
            "this feeds is taken over the members, so a departed flow's dispatch would be counted nowhere and "
            "the starvation reading would be a fraction of the wrong population");
     f->picks++;
+    /* …AND THE SAME EVENT COUNTED FOR THE LIFE OF THE INSTANCE, which the per-member field cannot answer for a
+       reason that has nothing to do with resets: a member that DEPARTS takes its share of this total off the
+       frontier, so the sum over the members standing now is a gauge and the difference between two of those
+       gauges is not a number of dispatches. Counted here because this is the one line every dispatch passes
+       through, so the two cannot be credited at different moments. */
+    g_picks_total++;
 }
 
 /* IS THIS FLOW'S JAVASCRIPT EXECUTION CONTEXT STACK EMPTY?
@@ -2972,6 +2991,12 @@ void flow_wfq_census(WfqCensus *out) {
     out->val_zero = out->self_emit = out->unrun = 0;
     out->never_picked = 0;
     out->never_picked_gap = 0.0;
+    out->picks_live = out->picks_max = 0;
+    /* THE LIFETIME HALF, WHICH IS NOT A READING OF THIS WALK AND IS ASSIGNED WHERE THAT IS OBVIOUS. It is the
+       count of dispatches this instance has EVER made, so it is unconditional on the frontier the way
+       `nonreward_max` is — the same number on an empty scan as on a full one — and it is the only one of the
+       three pick rows a reader may difference across two censuses. */
+    out->picks_lifetime = g_picks_total;
     out->svc_max = out->svc_min = out->svc_fam_max = out->svc_fam_min = 0;
     out->families = 0;
     /* A FRESH MARK FOR THIS SCAN, PAST ZERO, so a node minted since the last census (calloc'd to 0) reads as
@@ -3053,6 +3078,31 @@ void flow_wfq_census(WfqCensus *out) {
             out->never_picked++;
             if (!have_never || w > never_w) { never_w = w; have_never = 1; }
         }
+        /* …AND HOW THE DISPATCHES THAT DID HAPPEN WERE DISTRIBUTED OVER THE MEMBERS THAT GOT THEM, which is the
+           question `never_picked` structurally cannot ask and which takes OPPOSITE work from the one it can.
+           §scheduler's razor forbids a resume that "drops, starves, skips, reorders, or forgets ANY flow", and
+           `never_picked` climbing beside a growing `members` is the tail not being reached — but it is ONE
+           answer covering THREE states, which is the defect shape CLAUDE.md names in the instrument built to end
+           it. A frontier of M members, P of them ever chosen, and T dispatches spent is:
+             T / P near 1   the thread reached a FRESH member almost every time and the frontier is simply
+                            growing faster than one thread serves it. Nothing here is an ordering defect; the
+                            answer is throughput, and no weight change reaches it.
+             T / P large,
+             picks_max
+             near T / P     a REACHABLE COHORT is being swept over and over while the tail waits — the ordering
+                            is returning members it has already served ahead of members it has never served,
+                            which is the state a weight term has to answer for.
+             picks_max
+             near T         ONE member is holding the thread and the switches are it and one rival trading —
+                            a monopolizer the aging term is failing to sink, which is a different repair again.
+           Two of those three take a weight change and they take DIFFERENT weight changes, and the third takes
+           none at all; a report that cannot separate them is one a search cannot be directed by. `picks_live`
+           is the numerator (T restricted to the members still standing) and `picks_max` is what tells the
+           second state from the third; `members - never_picked` is P and is already on the same line.
+           IT IS A GAUGE AND IT SAYS SO — see `g_picks_total` for why the lifetime half is a separate quantity
+           held off the flows entirely, and flow.h's row for the identity that ties them. */
+        out->picks_live += f->picks;
+        if (f->picks > out->picks_max) out->picks_max = f->picks;
         /* THE OPTIMISM TERM'S OWN COORDINATE — completed units of work, which no service row can stand in for
            (flow.h). `vis_max == 0` on a frontier of thousands is the statement that not one member has reached
            the end of a program, and therefore that not one queued job can have run, whatever the switch and
@@ -3159,6 +3209,21 @@ void flow_wfq_census(WfqCensus *out) {
             if (dec > out->cand_dec_max) out->cand_dec_max = dec;
         }
     }
+    /* THE CONSERVATION IDENTITY THE PICK ROWS ARE DEFINED BY, ASSERTED RATHER THAN LEFT TO A READER. CLAUDE.md:
+       a quantity whose KIND you cannot name from its output is one you are not entitled to do arithmetic on,
+       and the identity that defines a counter is the one property of it a reader can actually check. Here it is
+       a one-sided inequality and the side it is one-sided on IS the statement: every live member's dispatches
+       were counted into the lifetime total when they happened, and the total additionally holds the dispatches
+       of every member that has since departed — so the gauge can never exceed the counter, and the DIFFERENCE
+       between them is exactly what the retired members took with them. Equality is the ordinary reading of a
+       frontier nothing has left; a gauge ABOVE the counter would mean `Flow.picks` had acquired a writer that
+       is not flow_credit_pick, which is precisely the way this instrument would come to describe a dispatch
+       nobody made. It costs one comparison of two integers already in hand. */
+    DCHECK(out->picks_live <= out->picks_lifetime,
+           "the frontier's live members hold MORE dispatches between them than the scheduler has ever made — "
+           "flow_credit_pick raises both in one statement and is the only writer of either, so a member's "
+           "`picks` has been written from somewhere else and every reading derived from these rows is about "
+           "dispatches that did not happen");
     top = flow_best();
     /* A NON-EMPTY FRONTIER HAS A FRONT, AND SAYING SO IS WHAT MAKES THE ROWS BELOW HONEST. flow_best is
        flow_pick with no seed, no exclusion and `runnable_only` OFF, so its loop skips nothing and takes the

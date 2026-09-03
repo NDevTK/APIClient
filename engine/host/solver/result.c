@@ -528,6 +528,17 @@ static char *errs_json_array(ErrsArray which) {
    reached, and that is a throughput statement. A single sample of this row — of any row here — characterises
    an instant and never a run, which is the same rule §Testing states for every other number in this tree.
 
+   AND EVEN THAT SERIES HAS THREE STATES BEHIND IT, WHICH IS WHY `picksLive`/`picksMax`/`picksLifetime` ARE ON
+   THIS LINE. "The tail is not being reached" is consistent with a frontier growing faster than one thread can
+   sweep it, with an order re-serving a reachable cohort ahead of members it has never served, and with one
+   member holding the thread outright — and the first of those is not an ordering defect at all while the other
+   two are ordering defects of different kinds, so a weight change made against the pair alone is a change made
+   against a reading that cannot say which repair it is asking for. `picksLive / (members - neverPicked)` is
+   the discriminator and `picksMax` separates the second state from the third; solver/flow.h derives all three
+   and states the identity `picksLifetime` is checked by, which is that it equals `_switches` on this same
+   document. Their KINDS are in their names because the kinds decide the arithmetic: the two gauges are taken
+   over the members standing now and can fall between samples, so only `picksLifetime` may be differenced.
+
    AND `topSvc`/`topSvcFam`/`nonrewardMax` ARE WHAT TURN `valTop` FROM A DIGIT INTO A STATEMENT ABOUT THE
    LEADER. `valTop` is the front flow's fork FAMILY's ledger, and a ledger only climbs — so a reward that has
    not moved between two censuses reads exactly like one being earned slowly, and "is the leading account still
@@ -566,6 +577,21 @@ char *result_wfq_json(void) {
                      "{\"members\":%ld,\"valMin\":%.1f,\"valMax\":%.1f,\"valTop\":%.1f,"
                      "\"valZero\":%ld,\"selfEmit\":%ld,\"unrun\":%ld,"
                      "\"neverPicked\":%ld,\"neverPickedGap\":%.3f,"
+                     /* …AND WHERE THE DISPATCHES THAT DID HAPPEN WENT, which the pair above cannot say and
+                        without which its reading has three states behind one answer. See solver/flow.h for
+                        the three and for why two of them take DIFFERENT weight changes while the third takes
+                        none. Read `picksLive / (members - neverPicked)`: near 1 and the thread reached a
+                        fresh member nearly every time, so the frontier is outgrowing one thread and no term
+                        of the order reaches it; well above 1 and the order is returning members it has
+                        already served ahead of members it never has, which is the ordering's own defect;
+                        `picksMax` near `picksLive` is neither — it is one member holding the thread.
+                        THE KINDS ARE IN THE KEYS BECAUSE THEY DECIDE WHAT MAY BE DONE WITH THE NUMBERS.
+                        `picksLive` and `picksMax` are gauges over the members standing NOW and can FALL
+                        between two samples, so neither may be differenced; `picksLifetime` is the only
+                        counter here and is the only one that may. Its identity is checkable on this same
+                        document and is the reason it is emitted at all: it must EQUAL `_switches`, since
+                        flow_credit_pick has one caller and engine.c raises the switch count beside it. */
+                     "\"picksLive\":%lld,\"picksMax\":%lld,\"picksLifetime\":%lld,"
                      "\"svcMax\":%lld,\"svcMin\":%lld,\"svcFamMax\":%lld,\"svcFamMin\":%lld,\"families\":%ld,"
                      "\"visMin\":%lld,\"visMax\":%lld,\"visZero\":%ld,"
                      "\"cands\":%ld,\"candUnrun\":%ld,\"candSvcMax\":%lld,\"candDecMax\":%ld,\"decMax\":%ld,"
@@ -599,6 +625,7 @@ char *result_wfq_json(void) {
                      w.members, w.val_min, w.val_max, w.val_top,
                      w.val_zero, w.self_emit, w.unrun,
                      w.never_picked, w.never_picked_gap,
+                     (long long)w.picks_live, (long long)w.picks_max, (long long)w.picks_lifetime,
                      (long long)w.svc_max, (long long)w.svc_min,
                      (long long)w.svc_fam_max, (long long)w.svc_fam_min, w.families,
                      (long long)w.vis_min, (long long)w.vis_max, w.vis_zero,
