@@ -2935,9 +2935,16 @@ function hungCauseCensus(out) {
    " (" or " — ", so this file's own record says a fact behind either is a fact the one line anybody reads does
    not carry. The separator is "; " for exactly the reason the landmarks use it — it is neither cut. The full
    sentence goes to the detail line, which `runNumbers` prints at EVERY outcome including the pass.
-   ONLY WHERE IT IS FALSE, because a mark on every verdict is a mark that stops being read. `cpu=1` is a
-   positive statement that THIS caveat does not apply — the wall-time charge landing on whichever flow the OS
-   left running — and it is stated in the detail rather than in silence.
+   ONLY WHERE IT IS FALSE, AND NARROWER THAN IT WAS. The argument that stood here — "a mark on every verdict
+   is a mark that stops being read" — was written when this was the ONLY mark a verdict carried, and it has
+   stopped being the standing rule: `runDependenceText` marks EVERY arm now, because the three readings that
+   cost this project a session were all taken off the stage table while the unconditional instruction sat in a
+   detail line beneath it. What that mark cannot say is what THIS one says, which is why this one stays and is
+   not a second copy of it: every arm of `hungCauseCensus` is a comparison of census SAMPLES, so this names the
+   currency the DIAGNOSIS's own evidence was taken in, where the verdict mark names what the line's TOTALS are
+   a reading of. `cpu=1` is a positive statement that this narrower caveat does not apply — the wall-time
+   charge landing on whichever flow the OS left running — and it is stated in the detail rather than in
+   silence.
    AND IT IS NOT A STATEMENT THAT THE DIFFERENCE BETWEEN TWO RUNS IS READABLE, which is the reading this mark
    would otherwise invite by its own absence. A CPU-clocked host still slices in CPU, and the work a
    microsecond of it buys is a property of the machine — see quantumText and quantum_measure_is_cpu()'s
@@ -3014,12 +3021,81 @@ function runChild(label, prog, args, hint) {
    slice and its aging charge in, which is what decides the order of the very census samples every verdict here
    is derived from. A run that says how much CPU it consumed and not which currency its frontier was ordered in
    has answered the cheaper of the two questions. */
-const runNumbers = (t) =>
-  `[build]   CPU consumed: ${cpuText(t.cpuSeconds)} of the ${RUN_CPU_BUDGET_S / 60} min budget — THIS IS THE ` +
+/* THE DENOMINATION IS PARSED BY THE CALLER AND HANDED IN, because the verdict line now states it too and one
+   input read twice is two readings that can disagree about one run. It is a REQUIRED argument and its absence
+   throws rather than reaching `quantumText` as `undefined` — which is not `null`, so the arm written for "this
+   stage opened no engine slice" would be skipped and the next line would read `.sliceMs` off nothing. A
+   consumer that defaults a producer's field is the defect this file is largely about; this is its own. */
+const runNumbers = (t, q) => {
+  if (q !== null && (typeof q !== "object" || typeof q.sliceMs !== "number" || typeof q.measure !== "string"))
+    throw new Error(`[build] runNumbers was handed ${JSON.stringify(q)} where quantumDenomination's reading ` +
+                    `belongs — that function returns either its {measure, sliceMs, isCpu, instances} record ` +
+                    `or \`null\` for a stage that opened no engine slice, and anything else is a caller that ` +
+                    `has stopped passing it rather than a run with nothing to say.`);
+  return `[build]   CPU consumed: ${cpuText(t.cpuSeconds)} of the ${RUN_CPU_BUDGET_S / 60} min budget — THIS IS THE ` +
   `MEASURE THE VERDICT IS IN\n` +
   `[build]   elapsed ${t.wallSeconds.toFixed(1)} s against a ${RUN_DEADLOCK_MS / 60000} min deadlock ` +
   `backstop, at load ${loadNow()} on ${cpus().length} cores — CONTEXT, never the verdict\n` +
-  quantumText(quantumDenomination(t.captured));
+  quantumText(q);
+};
+
+/* WHAT THIS LINE IS A MEASUREMENT OF, IN THE LINE ITSELF — because a caveat and the number it is about must
+   travel together or the caveat is not applied. The fact is already computed here: `quantumText` prints the
+   engine's own denomination at EVERY outcome, pass included, and ends with an instruction it calls
+   unconditional — "compare two runs of ONE revision before reading a difference between two revisions". That
+   sentence has been right and in the wrong place. It is a DETAIL line, and what gets pasted, quoted and
+   dispatched on is the STAGE TABLE row, which carries `standingText`'s fraction, its table count and its four
+   work totals and said nothing whatever about what any of them is a reading OF.
+   MEASURED, AND IT IS THE READER THAT FAILED RATHER THAN THE INSTRUMENT: three readings in one session, all
+   three taken off the stage table with the detail line available. Probe standings of 140, 141, 173 and 204
+   were quoted across revisions as if comparable; a counter reading 0 was raised as an alarm; and a lane was
+   dispatched at "the top abort". Then two runs of ONE frozen snapshot — same binary, same bytes, same
+   machine — answered 35/208 and 75/208, over 4 @H tables and 35, at 3,003 and 34,947 units of engine work,
+   with 0 and 22,603 jobs run, and TERMINATED DIFFERENTLY: one at a layout assert, one having spent its whole
+   CPU budget without ever reaching it. Every quantity in that sentence is a stage-table quantity and not one
+   of them is a property of the revision — the terminal event included, which is the one nobody suspects.
+   CLAUDE.md §A-CAVEAT-STATED-AND-THEN-NOT-APPLIED names this failure and names its tell as SYNTACTIC: "a
+   paragraph that names a source of variance, followed by a paragraph that reasons from a quantity that
+   variance governs, with nothing in between that BOUNDS it". A detail line above a stage table IS that shape.
+   Inside the row there is nothing in between, and the fraction cannot be quoted without it.
+   SO IT IS ON EVERY ARM, INCLUDING THE PASS, AND THE PASS IS THE ARM IT IS MOST NEEDED ON — the runs a reader
+   compares are the ones that finished, so a caveat carried only by the failures is a caveat absent from
+   precisely the comparison it is about. That is `quantumText`'s own argument, applied one line up rather than
+   restated.
+   AND IT IS NOT A CONSTANT STAMP, which is the one real argument against marking every verdict (`hungCause`
+   states it, and its paragraph is rewritten to the rule that now holds rather than left asserting the old
+   one). Two of the mark's three parts are READ OFF THE ARTIFACT and not written here — the engine's own word
+   for its denomination and its own slice, both off the `@QUANTUM` line solver/quantum.c composes, so a fork
+   that changes either moves this text by itself. The third VARIES BY ARM, which is the half a reader can act
+   on: what survives a repeat is the fixture's own denominator, plus an assertion's IDENTITY on the arms that
+   have one and nothing at all on the arms that do not. CLAUDE.md §Testing is where that list comes from — "a
+   crash's IDENTITY and its frame list, a conservation identity read within one sample, a count that cannot be
+   true, and a value that is wrong rather than small" survive; "any comparison of totals across two runs" does
+   not — so a verdict naming an abort has something quotable in it, a PASS has nothing, and the mark says
+   which rather than leaving a reader to know.
+   IT IS NOT A VERDICT AND IT DECIDES NOTHING (§NO BOUNDS). No arm branches on it, no code reads it back, no
+   stage's exit code moves by one. It is the sentence that stops a total being read as a property of the tree.
+   ABSENCE IS REPORTED AS ABSENCE, and the INVERSE READING IS REFUSED IN THE SAME BREATH. A stage that opens
+   no engine slice prints no `@QUANTUM` line, and this says so rather than defaulting to a denomination it did
+   not observe — and "no denomination stated" is not "these numbers are comparable", which is exactly the
+   reading an unmarked row invites. Measured on the two-instance ABI drive, which prints no `@QUANTUM` line at
+   all: one unchanged driver against one binary returned 5, 5, 31, 31 routed posts over four runs, and a 6x
+   "collapse" was localised to a commit by a bisect before anybody re-ran the old revision. */
+const survivesRepeat = (stand, aborted) => {
+  const s = [];
+  if (stand) s.push(`the ${stand.asked} statements the fixture itself asks`);
+  if (aborted) s.push(`the IDENTITY of the assertion named above — its file:line and what it says`);
+  return s.length ? s.join(", and ") : `nothing this line states`;
+};
+const runDependenceText = (q, stand, aborted) =>
+  q === null
+    ? `  [NO DENOMINATION STATED — this stage printed no @QUANTUM line, so nothing in its own output says ` +
+      `what its numbers are a reading OF. That is an absence, and an absence is not a licence to read them ` +
+      `across two runs.]`
+    : `  [ONE INTERLEAVING (${q.measure}-denominated ${q.sliceMs} ms slice) — WHICH terminal event this line ` +
+      `names, and any total it carries, is a reading of THIS RUN and not of this revision: a repeat of this ` +
+      `same artifact moves them and can end somewhere else entirely. Surviving a repeat: ` +
+      `${survivesRepeat(stand, aborted)}.]`;
 
 /* THE PAGE'S OWN UNCAUGHT ERRORS, WHICH ARE THE ONE THING A GREEN RUN CAN BE HIDING. A `<script>` that throws
    ends at the throw — spec-correct, and CLAUDE.md deliberately makes this a PRINT rather than an assert,
@@ -3275,9 +3351,23 @@ function runOutcome(label, t, hint) {
      `unanswered` was already computed for all of them; only its reader was missing from the arms that needed
      it most, which is the mirror of the defect the comment over probeStanding describes. */
   const stand = probeStanding(t.captured);
+  /* HOISTED ABOVE `bad`, WHICH IS WHAT MAKES IT READABLE FROM THE KILLING ARMS AT ALL. It used to be declared
+     below the SIGXCPU and ETIMEDOUT arms, and those arms CALL `bad` — so a closure reading it from there
+     would reach its temporal dead zone and throw a ReferenceError, turning a reportable stage into an
+     unhandled one. `abortRecord` is a pure match over the captured bytes, so computing it for every arm costs
+     one regex and changes no arm's answer. */
+  const aborted = abortRecord(t.captured);
+  /* THE SAME RULE AS `pe` DIRECTLY ABOVE, AND FOR THE SAME REASON: computed once here and folded into `bad`
+     rather than added at each arm, because the arm most likely to be added later is another failure arm and
+     it would be the one that drops it. The denomination is parsed ONCE and serves both readers — the mark on
+     the verdict and `quantumText` in the detail block — so the two can never state different slices for one
+     run. It is parsed BEFORE any arm returns, so a malformed `@QUANTUM` line throws for every outcome rather
+     than only for the outcomes whose detail block happened to be reached. */
+  const q = quantumDenomination(t.captured);
+  const rd = runDependenceText(q, stand, aborted);
   const bad = (verdict, code, why) => {
     console.error(`[build] ${label} ${why}`);
-    console.error(runNumbers(t));
+    console.error(runNumbers(t, q));
     if (hint) console.error(`[build]   ${hint}`);
     if (stand && stand.unanswered.length)
       console.error(`[build]   the rows still 0 (${stand.unanswered.length} of ${stand.asked}): ` +
@@ -3285,7 +3375,7 @@ function runOutcome(label, t, hint) {
                     `[build]   each of those is EITHER a statement this run answered wrongly OR one it never ` +
                     `reached — read them against the standing in the verdict above, and never read a single ` +
                     `0 as a verdict on the mechanism its row names while the others beside it are 0 too.`);
-    return { label, verdict: verdict + pe, code };
+    return { label, verdict: verdict + pe + rd, code };
   };
   /* THE BUDGET INSTALL, WHICH MUST NEVER FAIL QUIETLY. A run without its rlimit is an UNMEASURED run wearing a
      measured one's report, so the shell says so in the log and this reads the marker rather than trusting a
@@ -3326,7 +3416,6 @@ function runOutcome(label, t, hint) {
      nothing reached. `standingText` carries the measured number now (`probeWork`), so this is one call and not
      a sentence anybody has to compose. */
   const standWith = (v) => v + (stand ? " — " + standingText(stand) : "");
-  const aborted = abortRecord(t.captured);
   if (t.signal) {
     return bad(standWith("CRASHED on " + t.signal + (aborted ? " — " + causeName(aborted) : "")), 3,
       `DIED ON ${t.signal} — an abort is a DCHECK naming either an invariant to fix at its root or a ` +
@@ -3378,13 +3467,13 @@ function runOutcome(label, t, hint) {
      statement it makes and a stage that makes none both used to read `PASS`, and the CPU a passing smoke
      spends is the one number that says a revision made the fixture cheaper or dearer to answer — which is
      invisible if it is only ever printed on the runs that failed. */
-  console.log(runNumbers(t));
+  console.log(runNumbers(t, q));
   /* `stand` IS THE ONE HOISTED TO THE TOP OF THIS FUNCTION — the second `probeStanding(t.captured)` that stood
      here was a fourth reading of one input, taken in the arm least likely to disagree with the other three. */
   /* THE PASS ARM CARRIES IT TOO, AND IT IS THE ARM THAT NEEDS IT MOST — see pageErrorText. A run that answers
      every statement it makes while one of the page's scripts died is still a PASS of the probe table and is
      not a clean run of the document, and those two are the same green line without this. */
-  return { label, verdict: (stand ? `PASS — ${standingText(stand)}` : "PASS") + pe, code: 0 };
+  return { label, verdict: (stand ? `PASS — ${standingText(stand)}` : "PASS") + pe + rd, code: 0 };
 }
 
 /* A STAGE THAT CANNOT RUN IS REPORTED AS SKIPPED WITH ITS REASON, AND IT CARRIES A NON-ZERO CODE. Absorbing it
