@@ -1919,12 +1919,17 @@ static CssPx uv_replaced_size(lxb_dom_element_t *el, const ReplacedElement *rep,
     if (box == UV_BOX_TABLE)
         DFAIL("a REPLACED element whose computed `display` makes it a TABLE BOX. CSS 2.1 §17.5 owns a table's "
               "width and height and §10.3.2's intrinsic-dimension arms do not apply to it — §17.5.2's two "
-              "algorithms derive the width from the COLUMNS, and a replaced element has none. THE BOX "
-              "GENERATION IS BUILT — §17.2.1 Anonymous table objects' first two stages are "
-              "core/layout/table_box.h's and its grid is core/layout/table_grid.h's — so BUILD §17.5's algorithms "
-              "over them; what a table box "
+              "algorithms derive the width from the COLUMNS, and a replaced element has none. §17.5.2 IS "
+              "BUILT AND IS NOT WHAT THIS IS WAITING ON, which is what an earlier form of this line said: "
+              "§17.2.1 Anonymous table objects' first two stages are core/layout/table_box.h's, its grid is "
+              "core/layout/table_grid.h's, and both of §17.5.2's algorithms run over that grid in "
+              "core/layout/table_width.h — `uv_table_used_width` above reaches them for every NON-replaced "
+              "table box. WHAT NEITHER ALGORITHM HAS A RULE FOR is this element: §17.5.2.2 Automatic table "
+              "layout's four steps walk the CELLS of the grid and a replaced table box has no cell to walk, "
+              "while §17.5.2.1 Fixed table layout divides a declared width over columns that do not exist. So "
+              "what a table box "
               "does with a replaced "
-              "element's own natural dimensions is then their question and not this section's. CSS 2.1 §17.2 "
+              "element's own natural dimensions is their question to answer and not this section's. CSS 2.1 §17.2 "
               "The CSS table model is the sentence that puts this element here at all: \"Replaced elements with these "
               "'display' values are treated as their given display types during layout\"");
     if (box == UV_BOX_ITEM)
@@ -2505,10 +2510,16 @@ CssPx used_value_border_edge_from_content_px(lxb_dom_element_t *el, CssPx conten
               "§17.5.3 Table height algorithms gives the cell's own box height as \"the minimum height "
               "required by the content\", and that section's only "
               "distribution sentence is the one it DECLINES to define. §10.4/§10.7 say outright that their own "
-              "effect on table boxes is undefined. THE BOX STRUCTURE IS BUILT — §17.2.1 Anonymous table "
-              "objects' first two stages are core/layout/table_box.h's — so BUILD §17.5 Visual layout of table "
-              "contents' grid, §17.5.2's column widths and then §17.5.3; until then the walk must not "
-              "descend into one");
+              "effect on table boxes is undefined. WHAT IS LEFT IS §17.5.3 ALONE, and this line used to ask "
+              "for three things of which two now exist: §17.2.1 Anonymous table objects' first two stages are "
+              "core/layout/table_box.h's, §17.5 Visual layout of table contents' grid is "
+              "core/layout/table_grid.h's, §17.5.2's column widths are core/layout/table_width.h's, and a "
+              "CELL's used width comes out of them at `uv_table_cell_used_width` above — which is the operand "
+              "the cell-height sentence quoted here is measured over, since a cell's content height is a "
+              "block container's over its used width. A CAPTION's height is NOT that question and is not "
+              "§17.5.3's either: §17.4 Tables in the visual formatting model renders a caption as a normal "
+              "block box in the table WRAPPER, so §10.6.3 owns its height over a used width this file still "
+              "crashes for. Until §17.5.3 exists the walk must not descend into either");
     lim = uv_limits(el, box, vertical);
     /* The tentative value in the box css-sizing-3 §3.3 exposes, which is the box the two limits are measured
        in — "it affects the interpretation of all sizing properties". */
