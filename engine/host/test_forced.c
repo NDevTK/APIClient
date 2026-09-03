@@ -14462,6 +14462,325 @@ static void css_numeric_type_selftest(void)
     }
 }
 
+/* ─── WEB IDL §3.2.25 Union types, DECIDED BY RUNNING THE REAL CONVERSION ──────────────────────────────────
+ *
+ * THE HALF NO STATIC INSTRUMENT REACHES. `engine/uniongate.mjs` computes §3.2.25's function from the value
+ * shapes its twenty steps can tell apart to the arm each one takes, for every union the platform declares at
+ * an argument position, and reports any enumerator standing over two DIFFERENT such functions — one arm test
+ * being asked two questions. Its own header states what it cannot do: it never checks whether an arm test is
+ * RIGHT, and it names the defect that motivated it as one it would have passed. That defect was an arm test
+ * reading "V is not an Object", which answers §3.2.25's steps 11, 12 and 18 and NOT its step 4 — "If V is null
+ * or undefined, then: If types includes a dictionary type, then return the result of converting V to that
+ * dictionary type." — so an omitted argument took the boolean arm and `el.togglePopover()` force-HID a hidden
+ * popover on the plainest call spelling there is. Deciding an arm TEST needs the conversion RUN over real
+ * values, which is what this is.
+ *
+ * NOTHING IS STORED AND THE ORACLE IS THE IDL. Each row names the union AS DECLARED, the value it passes, and
+ * the STEP of §3.2.25 that decides it; the answer beside it is that step's, read off the standard. A §3.2.25
+ * partition is a function of the declared type alone, so it moves only when the IDL does — there is no
+ * expected-output file to regenerate, and a solver or a parser that learns more does not touch a row here.
+ *
+ * §3.2.25 IS PARAMETERISED BY THREE FACTS AND NOT BY ONE, which is why each row names the union with its `?`
+ * and its `undefined` intact. Step 1 asks whether the union type INCLUDES UNDEFINED, step 2 whether it
+ * INCLUDES A NULLABLE TYPE, and only step 3 onward reads the FLATTENED MEMBER TYPES — and §2.13 Types'
+ * flattening strips exactly the two annotations the first two steps are about. `(ReadableStream or
+ * XMLHttpRequestBodyInit)?` and `(ReadableStream or XMLHttpRequestBodyInit)` have identical flattened sets and
+ * disagree about `null` at the ladder's second rung.
+ *
+ * EVERY ROW'S TWO ARMS MUST BE OBSERVABLY DIFFERENT OR THE ROW PROVES NOTHING, so the observable is chosen per
+ * union rather than shared. `Response`'s arms differ in the Content-Type Fetch §5.2 BodyInit unions'
+ * extraction contributes — an interface arm hands the body over as itself, the string arm STRINGIFIES it, and
+ * `new Response(blob)` once carried the thirteen bytes of "[object Blob]" for that reason.
+ * `addEventListener`'s differ in DOM §2.9 Dispatching events' ORDER: a capturing listener on an ancestor
+ * fires before the target, a bubbling one after, so ONE string says which arm ran. `togglePopover`'s differ in its own
+ * return value, HTML §6.12 The popover attribute's togglePopover step 8 ("Return true if this's popover
+ * visibility state is showing; otherwise false"), which is why that family is a SEQUENCE: two arms move
+ * different subsets of the transitions, and a single call could not say which.
+ *
+ * WHERE THE TWO ARMS ARE NOT OBSERVABLE THE ROW SAYS SO INSTEAD OF ASSERTING A GREEN THAT MEANS NOTHING.
+ * `addEventListener(t, f, undefined)` is the case: step 4's dictionary arm leaves `capture` ABSENT (false) and
+ * the boolean arm's §3.2.3 boolean conversion of `undefined` is ALSO false, so the two arms compute the same
+ * dispatch order and no observable at that member separates them. The row is still asserted — it catches a
+ * refusal and an ignored member — but it is NOT the step-4 discriminator, and the one that is lives in the
+ * §6.12 sequence below.
+ *
+ * `scrollIntoView` IS THE OTHER MEMBER OF THAT SAME UNION SHAPE AND IT IS NOT COVERED, for exactly that
+ * reason: its two arms set CSSOM VIEW §6 Extensions to the Element Interface's `block` to "start" against
+ * "end", and this engine's viewport IS its scrolling area, so both alignments compute the same zero scroll and
+ * nothing here can tell them apart. It becomes coverable the day a scrolling box larger than its viewport
+ * exists; until then a row over it would pass whichever arm ran, which is worse than no row.
+ *
+ * THE §6.12 FAMILY LEAVES ONE QUEUED TASK BEHIND, AND THAT IS STATED RATHER THAN HIDDEN. Showing or hiding a
+ * popover queues a popover toggle event task, and that task is a FLOW. §6.12's queue a popover toggle event
+ * task step 1 COALESCES — it removes the pending task before queueing the next — so a sequence of transitions
+ * inside one turn leaves exactly ONE, not one per transition. It carries no listener and reaches no endpoint,
+ * but it IS a member of the frontier this fixture's document is then run over, which is the same accounting
+ * `--popover`'s own rows are an arithmetic over. */
+
+/* Run one §3.2.25 probe and answer with WHAT THE CONVERSION DID, as a string this file can compare.
+   A THROW IS AN ANSWER AND NOT A LOST ROW: an arm test that sends a value to the wrong arm fails either by
+   CONVERTING it — a different value reaches the body — or by REFUSING it, which is §3.2.17 Dictionary types'
+   step 1 TypeError over a value that is not undefined, null or an Object. A probe that could only see the
+   first would report the second as an abort with no row name on it, and the two are the SAME defect. */
+static char *tf_union_answer(JSContext *ctx, const char *body)
+{
+    char src[2048];
+    JSValue *flow;
+    JSValue res = JS_UNDEFINED;
+    const char *s;
+    char *out;
+    int n, r;
+
+    n = snprintf(src, sizeof src,
+                 "(function(){ try { %s } catch (e) { return 'throws ' + e.name; } })()", body);
+    CHECK(n > 0 && (size_t)n < sizeof src, "a §3.2.25 union probe's source did not fit its buffer");
+    flow = JS_FlowNew(ctx, src, strlen(src), "union-arm", 0);
+    CHECK(flow != NULL, "a §3.2.25 union probe could not create a flow");
+    for (;;) {
+        r = JS_FlowResume(ctx, flow, &res);
+        CHECK(r != JS_FLOW_DETACHED,
+              "a §3.2.25 union probe's flow detached — no probe holds a top-level await");
+        if (r == 0) break;
+    }
+    CHECK(!JS_IsException(res),
+          "a §3.2.25 union probe threw PAST its own catch — the throw did not come out of the conversion the "
+          "row is about, so the row cannot be read either way");
+    s = JS_ToCString(ctx, res);
+    CHECK(s != NULL, "a §3.2.25 union probe's answer would not stringify");
+    out = strdup(s);
+    CHECK(out != NULL, "a §3.2.25 union probe: OOM copying its answer");
+    JS_FreeCString(ctx, s);
+    JS_FreeValue(ctx, res);
+    JS_FlowFree(ctx, flow);
+    return out;
+}
+
+/* One row, run and judged. The observable is composed from a TEMPLATE per union rather than written out per
+   row, so a family's rows share ONE walk — two copies of the observable is the pair that drifts, and a row
+   whose expression differs from its neighbours' by more than the VALUE is measuring something else. */
+static void tf_union_row(JSContext *ctx, const char *type, const char *tmpl, const char *value,
+                         const char *want, const char *why)
+{
+    char body[1024];
+    char *got;
+    int n;
+
+    /* THE TEMPLATE IS A NON-LITERAL FORMAT, so the compiler checks NOTHING about it and a second conversion
+       would read a variadic argument this call never passes. Asserted here, at the one site that composes
+       one, rather than left to the day a row is written with two holes in it. */
+    DCHECK(strstr(tmpl, "%s") != NULL && strchr(strstr(tmpl, "%s") + 2, '%') == NULL,
+           "a §3.2.25 union row's template does not name exactly one `%s` — it is passed to snprintf as the "
+           "format, so a second conversion specifier reads an argument that was never pushed");
+    n = snprintf(body, sizeof body, tmpl, value);
+    CHECK(n > 0 && (size_t)n < sizeof body, "a §3.2.25 union row's body did not fit its buffer");
+    got = tf_union_answer(ctx, body);
+    CHECKF(!strcmp(got, want),
+           "Web IDL §3.2.25 Union types over `%s`: the value `%s` answered \"%s\" where the step that decides "
+           "it answers \"%s\" — %s", type, value, got, want, why);
+    free(got);
+}
+
+static void union_arm_selftest(JSContext *ctx)
+{
+    /* `(ReadableStream or XMLHttpRequestBodyInit)?` at Fetch §5.5 Response class' constructor — declared
+       IDL_BODYINIT_NULLABLE. XMLHttpRequestBodyInit flattens to Blob, BufferSource, FormData, URLSearchParams
+       and USVString, so this union exercises §3.2.25's step 2 (its own `?`), step 5 (an interface), steps 6, 8
+       and 9 (the three buffer clauses) and step 15 (the string type every remaining shape falls to) — and it
+       exercises their ORDER, because the buffer clauses sit ABOVE the string one and a value that reached the
+       string arm first would stringify a body the extraction is supposed to copy. */
+    static const struct { const char *value, *want, *why; } BODYINIT[] = {
+        { "", "null",
+          "step 2 — the union INCLUDES A NULLABLE TYPE (its own `?`), so an omitted argument is the IDL null "
+          "and §5.2's extraction never runs; anything reaching the USVString arm would have contributed "
+          "text/plain;charset=UTF-8" },
+        { "undefined", "null",
+          "step 2 names `null or undefined` together, so an explicit undefined is the IDL null exactly as an "
+          "omitted argument is" },
+        { "null", "null",
+          "step 2 — and this is the rung the union's own `?` decides, which §2.13 Types' flattening strips: "
+          "the flattened member types of this union and of the un-nullable spelling are IDENTICAL" },
+        { "'x'", "text/plain;charset=UTF-8",
+          "step 15 — the flattened set includes USVString, and every shape no clause above claimed reaches it" },
+        { "123", "text/plain;charset=UTF-8",
+          "step 13 asks for a numeric type and this union declares none, so a Number falls to step 15's string "
+          "type rather than being refused at step 20" },
+        { "true", "text/plain;charset=UTF-8",
+          "step 12 asks for `boolean` and this union declares none, so a Boolean falls to step 15" },
+        { "{}", "text/plain;charset=UTF-8",
+          "step 11 runs for every Object, and NONE of its seven sub-clauses matches here — this union names no "
+          "async sequence, sequence, frozen array, dictionary, record, callback interface or `object` — so a "
+          "plain Object falls past it to step 15 and is stringified" },
+        { "[]", "text/plain;charset=UTF-8",
+          "an Array carries %Symbol.iterator%, and step 11's sequence sub-clause is reached only where the "
+          "union DECLARES a sequence type; this one does not, so the iterator is never asked for" },
+        { "new Blob(['q'], {type: 'application/json'})", "application/json",
+          "step 5 — Blob is one of the flattened INTERFACE types, so §5.2 extracts the Blob's own type; the "
+          "USVString arm would have produced text/plain;charset=UTF-8 over the bytes \"[object Blob]\"" },
+        { "new Blob(['q'])", "null",
+          "step 5 again, over a Blob whose type is the empty string: §5.2 contributes NO Content-Type, which "
+          "is an answer the string arm structurally cannot produce" },
+        { "new URLSearchParams('a=1')", "application/x-www-form-urlencoded;charset=UTF-8",
+          "step 5 — URLSearchParams is an interface arm and §5.2 gives it its own type" },
+        { "new ArrayBuffer(4)", "null",
+          "step 6 — V has an [[ArrayBufferData]] internal slot and the union includes ArrayBuffer, so §3.2.26 "
+          "Buffer source types copies the bytes and no type is contributed" },
+        { "new DataView(new ArrayBuffer(4))", "null",
+          "step 8 — the [[DataView]] slot has its own clause ABOVE step 15, which is the ordering a string arm "
+          "reached first would destroy" },
+        { "new Uint8Array([1, 2, 3])", "null",
+          "step 9 — the [[TypedArrayName]] slot; the string arm would have stringified it to \"1,2,3\"" },
+        { "Symbol()", "throws TypeError",
+          "step 15 is REACHED by a Symbol (no clause above claims one) and §3.2.12 USVString's conversion runs "
+          "ToString, which throws for a Symbol — a refusal that comes from the ARM the union chose, not from "
+          "the union refusing to choose" },
+    };
+    /* `(AddEventListenerOptions or boolean)` at DOM §2.7 Interface EventTarget's addEventListener — declared
+       IDL_DICT_OR_BOOL_FIRST. The observable is DOM §2.9 Dispatching events' order over a DETACHED
+       parent/child pair, so nothing this family does is visible to the document the fixture goes on to run:
+       "PC" is a capturing ancestor listener (capture true), "CP" is a bubbling one (capture false). DOM §2.7
+       Interface EventTarget's flatten options is "If options is a boolean, then return options", and the
+       dictionary arm's ABSENT `capture` is false. */
+    static const struct { const char *value, *want, *why; } LISTENER[] = {
+        { "{capture: true}", "PC",
+          "step 11's dictionary sub-clause, with the member PRESENT — a control row: an engine that ignored "
+          "`capture` altogether would answer \"CP\" here and pass every other row in this family" },
+        { "{}", "CP",
+          "step 11's dictionary sub-clause with the member ABSENT, which §2.7's flatten options reads as "
+          "false. THE BOOLEAN ARM WOULD ANSWER \"PC\", because §3.2.3 boolean's ToBoolean of any Object is "
+          "true — so this row is the object-side discriminator" },
+        { "true", "PC",
+          "step 12 — V is a Boolean and the union includes `boolean`; the dictionary arm would be §3.2.17 "
+          "step 1's TypeError, since `true` is not undefined, null or an Object" },
+        { "false", "CP", "step 12 with the other value, for the reason the row above states" },
+        { "'x'", "PC",
+          "step 15 asks for a string type and this union declares none, so a String reaches step 18's "
+          "`boolean` and is converted by ToBoolean — a truthy string is a CAPTURING listener" },
+        { "''", "CP",
+          "step 18 again over a falsy string: the arm is decided by the value's TYPE and the capture flag by "
+          "its truthiness, which are two different questions about one value" },
+        { "0", "CP",
+          "step 13 asks for a numeric type and this union declares none, so a Number reaches step 18" },
+        { "1", "PC", "step 18 over a truthy Number" },
+        { "Symbol()", "PC",
+          "step 18 over a Symbol — every clause above it is refused, and §3.2.3 boolean's ToBoolean of a "
+          "Symbol is true. THE SYMBOL NEVER REACHES A ToString HERE, which is what separates this union from "
+          "the BodyInit one above: a union with a string type would have thrown" },
+        { "Object(false)", "CP",
+          "step 11 — a Boolean OBJECT is an Object, so it takes the DICTIONARY arm and its `capture` is "
+          "absent; step 12's \"If V is a Boolean\" is the ECMAScript Boolean TYPE and not a wrapper. The "
+          "boolean arm would answer \"PC\", since ToBoolean of any Object is true" },
+        { "[]", "CP",
+          "step 11 over an Array, for the reason above — an Object with an iterator is still a dictionary "
+          "where the union declares no sequence type" },
+        { "function(){}", "CP",
+          "step 10 is IsCallable and its two sub-clauses ask for a callback function type and for `object`, "
+          "NEITHER of which this union declares — so a function falls to step 11 and is a dictionary" },
+        { "undefined", "CP",
+          "step 4's dictionary arm. NOT A DISCRIMINATOR AND SAID SO: the boolean arm's ToBoolean(undefined) is "
+          "also false, so both arms compute this same order. What it still catches is a refusal and an engine "
+          "that ignores the option; the step-4 discriminator is §6.12's sequence below" },
+        { "null", "CP",
+          "step 4 names `null or undefined` together — and this union includes NO nullable type, so step 2 "
+          "does not claim it first. Not a discriminator either, for the row above's reason" },
+    };
+    /* `(DOMString or ElementCreationOptions)` at DOM §4.5 Interface Document's createElement — declared
+       IDL_STRING_OR_DICT. The string arm is IGNORED by §4.5's own steps (only the dictionary's `is` is read),
+       so the observable in that direction is a REFUSAL: a value the string arm accepts is one the dictionary
+       arm throws §3.2.17 step 1's TypeError over. The object direction has its own row below, which watches
+       the §3.2.17 walk's own [[Get]] happen. */
+    static const struct { const char *value, *want, *why; } CREATE_EL[] = {
+        { "{}", "DIV", "step 11's dictionary sub-clause — the union declares ElementCreationOptions" },
+        { "undefined", "DIV", "step 4 — the union declares a dictionary type, so undefined takes it" },
+        { "null", "DIV", "step 4 names null beside undefined" },
+        { "'a-b'", "DIV",
+          "step 15 — the union declares DOMString, so a String is the string arm and §4.5 ignores it. The "
+          "DICTIONARY arm would be §3.2.17 step 1's TypeError, which is what makes this row two-sided" },
+        { "123", "DIV",
+          "step 13 asks for a numeric type and this union declares none, so a Number reaches step 15's string "
+          "type; the dictionary arm would refuse it" },
+        { "true", "DIV",
+          "step 12 asks for `boolean` and this union declares none, so a Boolean reaches step 15" },
+    };
+    size_t i;
+
+    for (i = 0; i < sizeof BODYINIT / sizeof BODYINIT[0]; i++)
+        tf_union_row(ctx, "(ReadableStream or XMLHttpRequestBodyInit)?",
+                     "return String(new Response(%s).headers.get('content-type'));",
+                     BODYINIT[i].value, BODYINIT[i].want, BODYINIT[i].why);
+
+    for (i = 0; i < sizeof LISTENER / sizeof LISTENER[0]; i++)
+        tf_union_row(ctx, "(AddEventListenerOptions or boolean)",
+                     "var p = document.createElement('div'), c = document.createElement('span');"
+                     "p.appendChild(c);"
+                     "var g = '';"
+                     "p.addEventListener('u', function(){ g += 'P'; }, %s);"
+                     "c.addEventListener('u', function(){ g += 'C'; });"
+                     "c.dispatchEvent(new Event('u', { bubbles: true }));"
+                     "return g;",
+                     LISTENER[i].value, LISTENER[i].want, LISTENER[i].why);
+
+    for (i = 0; i < sizeof CREATE_EL / sizeof CREATE_EL[0]; i++)
+        tf_union_row(ctx, "(DOMString or ElementCreationOptions)",
+                     "return String(document.createElement('div', %s).tagName);",
+                     CREATE_EL[i].value, CREATE_EL[i].want, CREATE_EL[i].why);
+
+    /* THE DICTIONARY ARM'S OWN SIDE OF `(DOMString or ElementCreationOptions)`, which the rows above cannot
+       reach: a value the string arm accepts is observable as a NON-refusal, and a value the dictionary arm
+       accepts is observable only by watching §3.2.17's walk READ it. An accessor is that observation — the
+       walk performs a [[Get]] per declared member, and ToString of an object performs none. */
+    tf_union_row(ctx, "(DOMString or ElementCreationOptions)",
+                 "var ran = 0;"
+                 "var el = document.createElement('div', { get is(){ ran = 1; return %s; } });"
+                 "return String(ran) + el.tagName;",
+                 "'a-b'", "1DIV",
+                 "step 11 puts an Object on the dictionary arm, and §3.2.17 Dictionary types' walk does a "
+                 "[[Get]] of `is` — so the accessor RAN. The string arm would answer \"0DIV\": §3.2.10 "
+                 "DOMString's ToString of a plain object reads no member at all");
+
+    /* `(TogglePopoverOptions or boolean)` at HTML §6.12 The popover attribute's togglePopover — declared
+       IDL_BOOL_OR_DICT, and the union the motivating defect was found in. It is ONE SEQUENCE and not seven
+       rows because §6.12's answer is a function of the popover's CURRENT visibility state as well as of the
+       arm, so each call's expected answer is the previous call's effect — and because the two arms move
+       DIFFERENT SUBSETS of the seven transitions, which a boolean per call could not show.
+       'T'/'F' are step 8's two answers; '?' is anything else, which is the shape a §6.12 step that returned
+       early would leave and which a `? 'T' : 'F'` coding would have folded into 'F'. */
+    {
+        char *got = tf_union_answer(ctx,
+            "var el = document.createElement('div');"
+            "el.setAttribute('popover', 'auto');"
+            "document.body.appendChild(el);"
+            "var g = '';"
+            "function t(f){ var r;"
+              "try { r = f(); } catch (e) { return '!' + e.name; }"
+              "return r === true ? 'T' : r === false ? 'F' : '?'; }"
+            "g += t(function(){ return el.togglePopover(); });"
+            "g += t(function(){ return el.togglePopover({}); });"
+            "g += t(function(){ return el.togglePopover(false); });"
+            "g += t(function(){ return el.togglePopover(true); });"
+            "g += t(function(){ return el.togglePopover(0); });"
+            "g += t(function(){ return el.togglePopover(null); });"
+            "g += t(function(){ return el.togglePopover(); });"
+            "document.body.removeChild(el);"
+            "return g;");
+
+        CHECKF(!strcmp(got, "TFFTFTF"),
+               "Web IDL §3.2.25 Union types over `(TogglePopoverOptions or boolean)`: HTML §6.12 The popover "
+               "attribute's togglePopover answered \"%s\" across its seven transitions where §3.2.25's arms "
+               "answer \"TFFTFTF\". The sequence is, from a HIDDEN popover: (1) an OMITTED argument is step "
+               "4's dictionary arm, whose `force` is ABSENT, so step 6 SHOWS and step 8 answers true; (2) `{}` "
+               "is step 11's dictionary arm with `force` absent, so step 5 HIDES; (3) `false` is step 12's "
+               "boolean arm, so step 6's \"if force is null or true\" is not met and step 7 leaves it hidden; "
+               "(4) `true` is the boolean arm SHOWING; (5) `0` reaches step 18's `boolean` through ToBoolean "
+               "and HIDES; (6) `null` is step 4's dictionary arm again and SHOWS; (7) an omitted argument on a "
+               "SHOWING popover HIDES. Read the answer positionally: an 'F' at position 1 or 6 is step 4 "
+               "unimplemented — the arm test answering steps 11/12/18 only, which is the defect this file "
+               "exists for and which force-HID every `el.togglePopover()` there has ever been; a '!TypeError' "
+               "at position 3 or 5 is a non-Object sent to §3.2.17's walk; a '?' is a §6.12 step returning "
+               "before step 8", got);
+        free(got);
+    }
+}
+
 /* FILE API §6.3 Packaging data — the one part of the FileReader that is a PURE FUNCTION of four values, and
  * therefore the part a fixture can hold to a known answer without an event loop under it. The event ORDER
  * §6.2 produces is exercised by wpt/FileAPI/reading-data-section; what is checked here is what those tests
@@ -15965,6 +16284,10 @@ int main(int argc, char **argv) {
     /* FILE API §6.3's four arms, over known bytes. It needs only a realm — see the function for why this
        half of the FileReader is the half a C fixture can hold to an answer at all. */
     file_reader_package_selftest(ctx);
+    /* WEB IDL §3.2.25's ARMS, over the real conversion — the half `engine/uniongate.mjs` states it cannot
+       reach. Here rather than earlier because three of its four families need the DOCUMENT: the realm above
+       is what installs `document`, `Response` and §6.12's three members. */
+    union_arm_selftest(ctx);
     /* AFTER the platform init above, because the two rows it checks are declared by window_message_init. */
     message_source_selftest();   /* §9.3.3's sources, and the unforgeable-origin rule that decides their findings */
     /* AT THE BASELINE, where no flow has narrowed anything — the pins it writes are cleared after each one,
