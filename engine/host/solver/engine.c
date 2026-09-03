@@ -6390,8 +6390,29 @@ static long g_steps;
    A REPORT AND NEVER A BOUND (§NO BOUNDS). Nothing reads it to decide anything — no watchdog on a step that
    ran long, no cap on what a turn may cost, no fixpoint over a mean that stopped moving. A per-step time total
    is exactly the shape the next reader reaches for to build one, which is why that is said here as well as at
-   the header where they meet the number. */
-static long g_step_us;
+   the header where they meet the number.
+   AND IT IS `int64_t` RATHER THAN `long`, WHICH IS NOT A SPELLING — see solver/engine.h's `step_us` for the
+   arithmetic. The short of it is that the two counters above are counts and this is a CLOCK: on the wasm32
+   instance the extension actually ships, `long` is four bytes, so a microsecond accumulator overflows after
+   35.8 minutes of the slice's own measure, and the reading it feeds does not go absent, it INVERTS. */
+static int64_t g_step_us;
+/* THE WIDTH, MADE A BUILD FAILURE RATHER THAN A SENTENCE. A comment saying "this must be 64-bit" is read by
+   whoever is already thinking about it; the one edit that matters is the one that narrows the type back to
+   match its neighbours on this page, and the author of that edit is precisely the reader the comment misses.
+   BOTH OBJECTS, because the accumulator and the field it is copied into are two declarations in two files and
+   narrowing EITHER loses the same run: a 64-bit accumulator copied into a 32-bit field truncates at the
+   copy-out, which is silent in exactly the same direction. They are asserted together here because this is the
+   one translation unit that holds both: the copy-out (engine_step_unit_runs) and the single add (in
+   engine_sched_slice) are both below this declaration, so a reader who reaches either has passed this line. */
+_Static_assert(sizeof g_step_us >= 8,
+               "solver/engine.c: the dispatch loop's microsecond accumulator has been narrowed. On wasm32 "
+               "`long` is 4 bytes, so a 32-bit accumulator of the slice's own measure overflows after ~35.8 "
+               "minutes and hands its reader a NEGATIVE total, which reads as cheap turns rather than as a "
+               "broken number — see solver/engine.h's `step_us`.");
+_Static_assert(sizeof ((EngineStepUnitRuns *)0)->step_us >= sizeof g_step_us,
+               "solver/engine.h: EngineStepUnitRuns' `step_us` is narrower than the accumulator it is copied "
+               "from, so engine_step_unit_runs truncates the total on its way to solver/result.c's census — "
+               "the same lost run as an overflow and with the same inverted reading behind it.");
 /* THE HISTOGRAM'S SUM, for the one assertion that uses it — side-effect-free, as a DCHECK condition must be.
    NOT WRAPPED IN `#if APICLIENT_DEV`, and the reason is a trap worth stating rather than a preference: a
    release DCHECKF does not delete its condition, it makes it UNEVALUATED (`(void)sizeof(cond)`, and
@@ -9178,7 +9199,26 @@ static int engine_sched_slice(void) {
                reason a reading is taken before the thing that consumes it: `flow_age_running` is the WFQ's
                policy and this is a census, so the census may not be the thing that decides whether the policy
                ran. In every build, because a run's own cost is not a developer's question — a release engine
-               that could not say what a step cost would leave `steps` with no denominator anywhere. */
+               that could not say what a step cost would leave `steps` with no denominator anywhere.
+               AND THE ONE THING THAT CAN MAKE THIS TOTAL A LIE IS ASKED BEFORE THE ADD, NEVER AFTER. A sum of
+               non-negative charges only climbs — flow_age_running, which is handed this same delta below,
+               asserts its sign (flow.c: a negative charge PROMOTES a monopolizer) — so the sole way this
+               accumulator can hand a reader a number that is not a total is by
+               OVERFLOWING, and a check written after the addition would be reading a value the overflow had
+               already made undefined. Asked in the form the type allows: whether the headroom is there, which
+               is side-effect-free and is the whole of what a DCHECK condition may be.
+               THE WIDTH ABOVE IS WHY THIS CANNOT FIRE TODAY, AND THAT IS THE POINT RATHER THAN AN ARGUMENT
+               AGAINST IT. At int64_t the horizon is a few hundred thousand years of slice time; at the `long`
+               this used to be it is 35.8 minutes on the host that ships. The _Static_assert catches a
+               narrowing at BUILD time and this catches a clock that has stopped being what the reading assumes
+               — the two together are what make solver/engine.h's paragraph a checked claim instead of a
+               remembered one. */
+            DCHECK(now - t0 <= INT64_MAX - g_step_us,
+                   "the dispatch loop's microsecond total would overflow — its charges are non-negative and it "
+                   "only climbs, so this is either a slice measure that has stopped being microseconds or an "
+                   "accumulator that has been narrowed under solver/engine.h's `step_us`; either way the "
+                   "census's `stepUs / steps` would read as CHEAP turns rather than as a broken number, which "
+                   "is the one reading that row exists to make and the direction it inverts to");
             g_step_us += now - t0;
             flow_age_running(now - t0);
 #if APICLIENT_DEV

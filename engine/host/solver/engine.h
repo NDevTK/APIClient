@@ -9,6 +9,10 @@
 #define ENGINE_HOST_SOLVER_ENGINE_H
 
 #include <stddef.h>   /* size_t — every program crosses this header as (text, LENGTH); see engine_queue_fetched_script */
+#include <stdint.h>   /* int64_t — EngineStepUnitRuns' `step_us` is a MICROSECOND accumulator and its width is
+                         load-bearing rather than incidental; the paragraph at that field says why, and this
+                         include is what stops the width from depending on whichever header happened to be
+                         pulled in ahead of this one. */
 
 #include <lexbor/dom/dom.h>
 
@@ -1146,8 +1150,25 @@ typedef struct {
        scan); this is what a turn costs in the currency the scheduler actually spends.
        A REPORT AND NEVER A BOUND (§NO BOUNDS), for `arms`' reason exactly: nothing in the engine reads it, no
        arm of any verdict branches on it, and a per-step time total is precisely the shape a watchdog or a
-       step-cost cap would be built from. Its writer says the same thing at the site. */
-    long step_us;
+       step-cost cap would be built from. Its writer says the same thing at the site.
+       AND IT IS `int64_t` BECAUSE `long` IS 32 BITS ON THE ONE HOST THIS ROW WAS BUILT TO BE READ ON. The two
+       neighbours above are COUNTS of things the engine did and this is an accumulator of a CLOCK, which is a
+       different quantity with a different horizon: the extension's engine is a wasm32 instance, where
+       `__SIZEOF_LONG__` is 4, so a `long` of microseconds saturates at 2147483647 — 35.8 MINUTES of the
+       measure the slice is denominated in. Past that the addition is signed overflow, which is undefined
+       rather than merely wrapped, and the value a reader is handed is NEGATIVE.
+       THE NEGATIVE IS WHY THIS IS A DEFECT AND NOT A LIMIT. `step_us / steps` is compared against the slice,
+       and a negative numerator does not read as broken — it reads as a turn that cost far LESS than a slice,
+       which is the arm that says the loop is not slice-bound and that a small step count is about thread time
+       rather than granularity. So the one reading this row exists to make would silently INVERT on exactly the
+       long runs it was written for, on the only host that ships. §Testing's rule that a measurement a loaded
+       machine can falsify is no measurement is the same rule one layer down: a measurement its own arithmetic
+       can falsify is no measurement either.
+       THE WIDTH IS ASSERTED AT THE ACCUMULATOR (solver/engine.c's `_Static_assert` beside `g_step_us`, and a
+       DCHECK before the one addition), because prose here cannot stop the next edit and a build failure can.
+       result.c prints it through `(long long)`/`%lld` — the idiom the @WFQ census already uses for the notch
+       rows, which are int64_t for this same reason. */
+    int64_t step_us;
 } EngineStepUnitRuns;
 void engine_step_unit_runs(EngineStepUnitRuns *out);
 

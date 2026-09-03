@@ -1094,7 +1094,13 @@ char *result_cold_json(void) {
                  "\"segKiB\":%ld,\"domSegKiB\":%ld,\"pinSegs\":%ld,\"pinSegEntries\":%ld,"
                  "\"pinSegKiB\":%ld,\"decSegs\":%ld,\"decSegEntries\":%ld,\"decSegKiB\":%ld,"
                  "\"dynBodies\":%ld,\"dynKiB\":%ld,\"sharedKiB\":%ld,"
-                 "\"steps\":%ld,\"stepUs\":%ld,\"stepUnitRuns\":%s,"
+                 /* `stepUs` IS `%lld` AND ITS NEIGHBOUR IS `%ld` FOR A REASON THAT IS NOT STYLE: `steps` is a
+                    count and this is a MICROSECOND accumulator; on the wasm32 instance this engine ships as,
+                    a `long` of microseconds saturates in 35.8 minutes. solver/engine.h's `step_us` carries
+                    the arithmetic and solver/engine.c asserts the width; here it is the same `(long long)`
+                    cast the @WFQ census's notch rows already take, so this line has one idiom for 64-bit
+                    quantities rather than two. */
+                 "\"steps\":%ld,\"stepUs\":%lld,\"stepUnitRuns\":%s,"
                  "\"outOfPrograms\":%ld,"
                  "\"stepUnits\":%s,\"programCursors\":%s}",
                  c.flows, c.framed, c.blocked, flow_host_owed_count(),
@@ -1117,7 +1123,7 @@ char *result_cold_json(void) {
                  c.dec_seg_count, c.dec_seg_entries, c.dec_seg_bytes / 1024,
                  c.dyn_count, c.dyn_bytes / 1024,
                  (c.seg_bytes + c.dom_seg_bytes + c.pin_seg_bytes + c.dec_seg_bytes + c.dyn_bytes) / 1024,
-                 r.steps, r.step_us, runs,
+                 r.steps, (long long)r.step_us, runs,
                  c.out_of_programs,
                  hist, cursors);
     free(cursors);
