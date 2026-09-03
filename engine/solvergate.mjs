@@ -479,10 +479,13 @@ async function child(docPath, schedName) {
        schedules test the contract's CONSEQUENCE (the finding set the run ends with) against the reference,
        which is a cross-schedule comparison and therefore cannot separate "asking changed something" from
        "these two schedules interleaved differently". Asked twice at ONE boundary with NO step between the two
-       calls, it cannot: the frontier, the heap, the fork table and every counter are the same at both calls by
-       construction, so the two documents are the same TEXT — not the same canonical SET, the same bytes,
-       gauges included, with no DROP list and no canonicalization involved. A difference is a SIDE EFFECT in
-       the compose, and result_json reaches into endpoint.c, solve.c, world.c, cold.c and concolic.c to build
+       calls, it cannot: the frontier, the heap and the fork table are the same at both calls by construction,
+       and so is every counter the compose does not ITSELF raise — which is every counter but four, because
+       composing a document WEIGHS the frontier and this engine counts what it spends asking its own order.
+       main.c names those four over qjs_emit_partial and COMPOSE_COST_WFQ below exempts them BY NAME; so the
+       two documents are the same TEXT everywhere the contract is about — not the same canonical SET, the same
+       bytes, gauges included, with no DROP list and no canonicalization involved. A difference is a SIDE
+       EFFECT in the compose, and result_json reaches into endpoint.c, solve.c, world.c, cold.c and concolic.c to build
        one, so the candidates are a latch consumed, a list drained or a counter reset while rendering.
        WHY IT IS WORTH THE SECOND CALL. extension/bridge.js's `streamPartial` calls this entry on a `PARTIAL_MS`
        cadence for the whole of any analysis that outlives it, so a side effect here is not a diagnostic
@@ -510,25 +513,39 @@ async function child(docPath, schedName) {
       const first = readOne();
       const second = readOne();
       const owedAfter = str("qjs_pending");
-      /* PER TOP-LEVEL FIELD, NOT AS ONE STRING. A whole-document text comparison is what this check was first
-         written as, and it reported the byte offset of the first divergence — which named the ALLOCATOR
-         FIGURE the compose itself had moved and said nothing about the fields the contract is actually over.
-         Asked per field, the four self-measuring censuses leave by name (see INSTANT_CENSUSES) and every
-         other field is held to exact equality, so what the check reports is the FIELD that moved. */
+      /* PER TOP-LEVEL FIELD, AND PER ROW INSIDE `_wfq`, NOT AS ONE STRING. A whole-document text comparison
+         is what this check was first written as, and it reported the byte offset of the first divergence —
+         which named the ALLOCATOR FIGURE the compose itself had moved and said nothing about the fields the
+         contract is actually over. Asked per field, the four self-measuring censuses leave by name (see
+         INSTANT_CENSUSES), the four rows the compose's own weighing raises leave by name INSIDE `_wfq` (see
+         COMPOSE_COST_WFQ), and every other field — and every OTHER row of `_wfq` — is held to exact equality.
+         `_wfq` IS DESCENDED INTO RATHER THAN COMPARED WHOLE FOR A SECOND REASON, and it is the one a reader
+         meets first: reported as one value, a moved row prints as the name `_wfq` followed by 300 characters
+         of identical prefix, and the rows this entry can plausibly disturb are at the END of that object. The
+         reader is then told the name of a map holding fifty rows and nothing about which of them disagreed —
+         which is what this check's own first version did with the whole document, one level up. */
         {
+        const moved = [];
         const keys = [...new Set([...Object.keys(first.doc), ...Object.keys(second.doc)])]
           .filter((k) => !INSTANT_CENSUSES.includes(k));
-        const moved = keys.filter((k) => JSON.stringify(first.doc[k]) !== JSON.stringify(second.doc[k]));
+        for (const k of keys) {
+          if (k === "_wfq") { moved.push(...wfqRowsMoved(first.doc[k], second.doc[k])); continue; }
+          if (JSON.stringify(first.doc[k]) !== JSON.stringify(second.doc[k]))
+            moved.push([k, first.doc[k], second.doc[k]]);
+        }
         if (moved.length)
           engineFail("qjs_emit_partial was asked TWICE at one boundary, with no step between the two calls, " +
-                     `and answered two DIFFERENT documents — ${moved.join(", ")} moved. main.c's contract ` +
-                     "over that entry is that it READS: \"no flow is touched, nothing is drained, and the " +
+                     `and answered two DIFFERENT documents — ${moved.map(([k]) => k).join(", ")} moved. ` +
+                     "main.c's contract over that entry is that it READS: \"no flow is touched, nothing is drained, and the " +
                      "frontier the next step resumes is the one this was called on\". No flow ran between " +
                      "these calls, so every finding, every lifetime total, the frontier census and the " +
                      "quantum constants were the same at both and had to render identically; the four " +
                      "self-measuring censuses are already excluded by name, so this is not the compose " +
-                     "measuring its own allocation. It is a SIDE EFFECT in the render path: result_json goes " +
-                     "through endpoint.c, solve.c, world.c, cold.c and concolic.c, and one of them is " +
+                     "measuring its own allocation, and the four `_wfq` rows the compose's own weighing " +
+                     "raises are excluded by name too (COMPOSE_COST_WFQ, which main.c's contract paragraph " +
+                     "over that entry names one for one), so it is not the census pricing itself either. It " +
+                     "is a SIDE EFFECT in the render path: result_json goes through endpoint.c, solve.c, " +
+                     "world.c, cold.c and concolic.c, and one of them is " +
                      "consuming a latch, draining a list or resetting a counter as it renders. " +
                      "extension/bridge.js calls this on a `PARTIAL_MS` cadence for the whole of every long " +
                      "analysis, so whatever moved here moves on EVERY REAL PAGE and the run the product " +
@@ -536,9 +553,9 @@ async function child(docPath, schedName) {
                      "costs enough to shorten the run is measuring a different run\", with the instrument " +
                      "shipped. This is NOT a corpus defect and NOT a schedule effect: one call of one entry " +
                      "disagreed with the call before it.\n" +
-                     moved.map((k) => `           ${k}\n             call 1: ` +
-                                      `${JSON.stringify(first.doc[k]).slice(0, 300)}\n             call 2: ` +
-                                      `${JSON.stringify(second.doc[k]).slice(0, 300)}`).join("\n"));
+                     moved.map(([k, a, b]) => `           ${k}\n             call 1: ` +
+                                      `${JSON.stringify(a).slice(0, 300)}\n             call 2: ` +
+                                      `${JSON.stringify(b).slice(0, 300)}`).join("\n"));
       }
       if (owedBefore !== owedAfter)
         engineFail("the host-owed list changed across `qjs_emit_partial` — it was\n           " +
@@ -892,9 +909,111 @@ async function child(docPath, schedName) {
    1746 then 1750, on the build stamped f6cbdd9b — and it is not a violation of anything: main.c's contract
    over that entry promises that no flow is touched, that nothing is drained and that the frontier resumes as
    it was, and a self-measuring allocator figure is none of the three. So these four leave the two-call
-   comparison and EVERYTHING ELSE stays in it, `_wfq` and `_quantum` included: the compose creates no flows and
-   `_quantum` is three compile-time constants, so neither has anything for an observer to perturb. */
+   comparison.
+   AND THE SENTENCE THAT FOLLOWED THAT ONE WAS FALSE, WHICH IS WHY IT IS QUOTED HERE INSTEAD OF DELETED. It
+   said EVERYTHING ELSE stays in the two-call comparison, "`_wfq` and `_quantum` included: the compose creates
+   no flows and `_quantum` is three compile-time constants, so neither has anything for an observer to
+   perturb". THE PREMISE IS TRUE AND THE CONCLUSION DOES NOT FOLLOW: the compose creates no flows and it
+   WEIGHS them — solver/flow.c's flow_wfq_census walks every member calling flow_weight and then calls
+   flow_best, which walks them all again — and this engine COUNTS what it spends asking its own order, so four
+   LIFETIME rows of `_wfq` move at every boundary with no flow having run. `_quantum` survives the argument
+   unchanged (three compile-time constants have nothing to raise). A reader who re-derives "no flows, so
+   nothing to perturb" will re-introduce the false red this check produced for as long as that sentence stood;
+   the fix is a NESTED exemption, and it is the next declaration rather than this one. */
 const INSTANT_CENSUSES = ["_cold", "_heap", "_swap", "_forkAt"];
+/* AND THE FOUR ROWS THE COMPOSE ITSELF RAISES — A SECOND LIST BECAUSE IT ANSWERS A SECOND QUESTION, AND
+   MERGING IT INTO THE FIRST WOULD PAY FOR THIS SILENTLY OUT OF THE OTHER ONE. `INSTANT_CENSUSES` has TWO
+   consumers — `snapshot`'s per-field filter and the `...INSTANT_CENSUSES` spread into DROP[""] — so a name
+   added to it leaves the two-call comparison AND every cross-schedule comparison this gate makes. `_wfq` must
+   leave only the first, and the census row inside DROP[""] says why in as many words: "`_wfq` IS NOT IN THIS
+   LIST AND THAT IS NOT AN OVERSIGHT: it is the one census with an EMPTY shape … its value is `{members:0}`
+   under every schedule and comparing it is free." Pushing these names into the shared list would answer the
+   boundary question by dropping a whole surface out of the run-to-run one — CLAUDE.md's
+   §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS, where the cost lands on the question nobody was asking. So this
+   list is applied INSIDE `_wfq` and inside `snapshot` alone, and every other row of that map is held to
+   equality exactly as every other field of the document is.
+   BY NAME AND NEVER BY AN EXPECTED DELTA, WHICH IS NOT A STYLE PREFERENCE AND IS THE ONE PLACE THIS COULD
+   STILL BE GOT WRONG. `scanCensusRuns` and `scanOtherRuns` move by +1 per compose; the two `*Weights` rows
+   move by +MEMBERS, because each names a walk of the WHOLE frontier — so an expected-delta test is right only
+   at a one-member frontier and wrong at every other one. That is not a hypothetical the way it reads: while
+   this check failed, it failed at the FIRST boundary a streaming schedule reached, so the only frontier it
+   had ever compared at was a one-member one and both forms agree there. It now runs at every boundary of
+   every streaming schedule, so the frontier it compares at is whatever the document has standing, and the
+   difference between +1 and +MEMBERS is a difference a delta test would report as a moved row. A test whose
+   correctness depends on never being reached twice is not a test.
+   THE ENGINE STATES THIS CONTRACT AND STATES THIS CHECK'S SHAPE. main.c's paragraph over qjs_emit_partial
+   lists the four with their accessors and closes: "A checker of this contract exempts these four BY NAME and
+   holds the rest to equality; exempting `_wfq` whole would blind it to that, and nothing else in this tree
+   asks." It also refuses the repair a reader reaches for first — reading the counters before the walk — for
+   the reason that call two would still see call one's raise. */
+const COMPOSE_COST_WFQ = ["scanCensusRuns", "scanCensusWeights", "scanOtherRuns", "scanOtherWeights"];
+/* THE EXEMPTION IS CHECKED WHERE IT IS APPLIED, because an exclusion standing over nothing is a LICENCE — the
+   argument `reportStaleExclusions` makes about DROP[""] and the DROP census makes about every other path, and
+   this list needs it more than either: it is nested, so nothing else in this file ever names a row of `_wfq`.
+   The day result.c renames one of these the exemption goes on being applied to a name nobody emits, the row
+   that replaces it is compared, and BOTH halves are silent. Asking costs an `in` per row per boundary.
+   AND IT IS ASKED OF THE SHAPE THAT HAS ROWS, WHICH IS NOT A CONDITION SOFTENING THE CHECK BUT THE OTHER HALF
+   OF IT — MEASURED, AND IT FIRED ON THE FIRST RUN. `snapshot` is called at TWO kinds of boundary: mid-run,
+   where the frontier has members, and at the END, where a session has drained or parked. solver/result.h
+   states what the second composes and states it as a POSITIVE fact: "an empty frontier emits `{\"members\":0}`
+   and NOTHING ELSE: the ABSENCE of the term rows IS the statement that there was no order … no `_wfq` at all
+   is a BROKEN CONTRACT, `{\"members\":0}` is an EMPTY FRONTIER, and a full object is a READING". So the four
+   names are legitimately absent at the terminal boundary, and a check demanding them unconditionally reports
+   a stale exclusion for the one shape that is contractually rowless — a false red manufactured by the gate,
+   which is what the first version of this function did to both streaming schedules. Both shapes are therefore
+   asserted rather than one being defaulted past: an empty census must carry `members` AND NOTHING ELSE, and a
+   non-empty one must carry all four exempted names.
+   IT IS `engineFail` AND NOT `gateFail` FOR THE REASON THAT VOCABULARY EXISTS: the fixture is fine either
+   way. What disagrees is the document this artifact composes and the list this file holds — and which of the
+   two is behind is what the `[rev]` block at the top of the run answers, so the message sends the reader
+   there rather than to the corpus. */
+function wfqRowsMoved(a, b) {
+  const rows = [];
+  /* PRESENT IN ONE CALL AND NOT THE OTHER IS A MOVED FIELD, NOT A SHAPE DEFECT, and it is separated here so
+     the two do not share a message: the checks below ask what `_wfq` IS, and a surface that appears or
+     disappears across two calls at one boundary is precisely the side effect the caller reports. */
+  if (a === undefined || b === undefined) return [["_wfq", a, b]];
+  for (const [which, v] of [["call 1", a], ["call 2", b]]) {
+    if (v === null || typeof v !== "object" || Array.isArray(v) || !("members" in v))
+      engineFail(`\`_wfq\` came back from ${which} of qjs_emit_partial as ` +
+                 `${JSON.stringify(v)} and this gate DESCENDS into it to exempt the four rows a compose ` +
+                 "raises in itself (COMPOSE_COST_WFQ). solver/result.h declares that surface a map whose two " +
+                 "shapes both carry `members` — \"no `_wfq` at all is a BROKEN CONTRACT, `{\"members\":0}` " +
+                 "is an EMPTY FRONTIER, and a full object is a READING\" — so this is not a side effect in " +
+                 "the render path, it is the surface changing SHAPE under a check that names its rows. " +
+                 "Reclassify it and restate the exemption in terms of whatever now carries those four " +
+                 "counts; see the `[rev]` block for whether this artifact or this tree is the one that moved.");
+    if (v.members === 0) {
+      const extra = Object.keys(v).filter((n) => n !== "members");
+      if (extra.length)
+        engineFail(`\`_wfq\` from ${which} of qjs_emit_partial reports \`members\` 0 and also carries ` +
+                   `${extra.join(", ")}. solver/result.h says an empty frontier emits \`{"members":0}\` and ` +
+                   "NOTHING ELSE, because \"the ABSENCE of the term rows IS the statement that there was no " +
+                   "order\" — a row published beside a zero `members` is a reading of an order that does not " +
+                   "exist, which is the fabrication that shape was built to refuse. This gate exempts four " +
+                   "rows of the full shape by name and holds every other row to equality; it cannot do either " +
+                   "against a third shape nobody declared.");
+      continue;
+    }
+    const absent = COMPOSE_COST_WFQ.filter((n) => !(n in v));
+    if (absent.length)
+      engineFail(`\`_wfq\` from ${which} of qjs_emit_partial reports \`members\` ${v.members} and does not ` +
+                 `carry ${absent.join(", ")}, and this gate exempts that name from the two-call comparison ` +
+                 "BY NAME. The exemption stands over nothing, which is not inert: the row that now carries " +
+                 "that count is being COMPARED with no argument for why it may differ, and the day the old " +
+                 "name comes back — whatever it then means — it is silently exempt. Delete the name from " +
+                 "COMPOSE_COST_WFQ in engine/solvergate.mjs together with the paragraph above it arguing " +
+                 "about a count nobody emits, or say what now carries the number — engine/host/main.c's " +
+                 "contract paragraph over qjs_emit_partial names these four with their accessors and is " +
+                 "where the answer is. See the `[rev]` block for whether the artifact that answered is a " +
+                 "build of this revision.");
+  }
+  for (const r of [...new Set([...Object.keys(a), ...Object.keys(b)])]) {
+    if (COMPOSE_COST_WFQ.includes(r)) continue;
+    if (JSON.stringify(a[r]) !== JSON.stringify(b[r])) rows.push([`_wfq.${r}`, a[r], b[r]]);
+  }
+  return rows;
+}
 const DROP = new Map([
   ["", new Set(["_switches", "_flows", "_candidates", "_jobsQueued", "_jobsRun", "_unitsDone",
                 "_worldSegmentsHeld", "_worldSegmentsMade", "_worldSegmentsForked", "_park",
