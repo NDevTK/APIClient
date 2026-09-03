@@ -43,9 +43,10 @@
  *
  * A BOX ON A LINE IS PLACED BY A DIFFERENT SECTION, and it leaves through that section rather than through the
  * induction above. IT USED TO BE THE ONLY SUCH BOX AND IT IS NOT ANY MORE — CSS 2.1 §17.5 Visual layout of
- * table contents places a table ROW box, described in its own paragraph below — so the SHAPE is the rule and
- * the count was never part of it: a box whose own section positions it returns before the induction, and a
- * reader who takes "the one box" literally will fold the next such section back into §9.4.1's two rules.
+ * table contents places a table ROW box and a table CELL box, described in their own paragraph below — so the
+ * SHAPE is the rule and the count was never part of it: a box whose own section positions it returns before
+ * the induction, and a reader who takes "the one box" literally will fold the next such section back into
+ * §9.4.1's two rules.
  * §9.4's two normal-flow formatting contexts are ALTERNATIVES decided
  * by a box's own LEVEL and by nothing else: §9.4.1's two rules are written about a block-level box, and a box
  * on a line is §9.4.2's — "boxes are laid out horizontally, one after the other, beginning at the top of a
@@ -61,21 +62,32 @@
  * box is replaced HERE was one component answering a question about the fragment's SHAPE that belongs to the
  * component that delimits it.
  *
- * A TABLE ROW BOX IS PLACED BY CSS 2.1 §17.5 Visual layout of table contents AND NOT BY §9.4.1, and it is the
- * second box that leaves through its own section. CSS 2.1 §17.5's opening sentence is why §9.4.1 cannot be
- * stretched over it — "Internal table elements do not have margins" — so there is no margin edge for
- * §9.4.1's horizontal rule to touch and no margin for its vertical stacking to separate two rows by.
- * §17.5's rule 1 places the row
- * ("Each row box occupies one row of grid cells"), §17.5's own last paragraph puts its edges at the cells'
- * border edges in the separated model, and §17.6.1 The separated borders model's `border-spacing` is the gap
- * between them; the coordinate is that grid row turned into a distance from the TABLE BOX's content edge, and
- * the table box's own origin is an ordinary recursion into this same entry, because CSS 2.1 §17.4 Tables in the
- * visual formatting model puts the table WRAPPER on §9.4.1's stack and gives the table box inside it the
- * initial `margin-*`. The other seven table-internal boxes still crash, each naming what §17.5 leaves it
- * waiting on — and they are not one blocker: a cell has its rectangle and needs the other axis of the same sum
- * with rule 5's `rtl` interchange, a row group needs rule 2's run of grid rows, a column and a column group
- * need a mapping from an ELEMENT to a grid column that exists in neither direction, and a caption is not in the
- * grid at all.
+ * A TABLE ROW BOX AND A TABLE CELL BOX ARE PLACED BY CSS 2.1 §17.5 Visual layout of table contents AND NOT BY
+ * §9.4.1. CSS 2.1 §17.5's opening sentence is why §9.4.1 cannot be stretched over either — "Internal table
+ * elements do not have margins" — so there is no margin edge for §9.4.1's horizontal rule to touch and no
+ * margin for its vertical stacking to separate two boxes by.
+ * THEY ARE ONE PLACEMENT AND NOT TWO, WHICH IS THE PART A READER MUST TAKE AWAY FROM THIS PARAGRAPH, because a
+ * reader who takes them for two will build the third one twice. §17.5's rules 1 and 5 place both boxes at
+ * RECTANGLES OF ONE GRID and differ ONLY in which rectangle: rule 1 gives a row "one row of grid cells", which
+ * is every column of its own grid row, and rule 5 gives a cell "a rectangular box, one or more grid cells wide
+ * and high", which core/layout/table_grid.h has already placed. So one function turns a rectangle into a
+ * corner, and a ROW is the rectangle `[0, ncols)` rather than a case of its own.
+ * WHAT THAT FUNCTION IS: §17.5's own last paragraph puts a box's edges at the cells' border edges in the
+ * separated model and on the grid lines the cells' borders are centered on in the collapsing one, and §17.6.1
+ * The separated borders model's `border-spacing` is the gap between them — ZERO under §17.6.2, which is why
+ * ONE arithmetic serves both models. The coordinate is that rectangle turned into a distance from the TABLE
+ * BOX's content edge, and the table box's own origin is an ordinary recursion into this same entry, because
+ * CSS 2.1 §17.4 Tables in the visual formatting model puts the table WRAPPER on §9.4.1's stack and gives the
+ * table box inside it the initial `margin-*`.
+ * THE INLINE AXIS ASKS ONE QUESTION THE BLOCK AXIS DOES NOT, and it is the reason the cell is a diff and not a
+ * copy of the row: this grid numbers its columns in §17.5's own LOGICAL order, and rules 3 and 5 put logical
+ * column 0 at the LEFT under `ltr` and at the RIGHT under `rtl` — of the TABLE's own computed `direction`, not
+ * of the box's containing block. Rule 1 needed no such arm only because a whole-grid-row rectangle has no
+ * columns on either side of it, which the one function makes a consequence rather than an assumption.
+ * The other SIX table-internal boxes still crash, each naming what §17.5 leaves it waiting on — and they are
+ * not one blocker: a row group has rule 2's run of grid rows and needs only a decision for the EMPTY union an
+ * empty `<tbody>` is, a column and a column group need a mapping from an ELEMENT to a grid column that exists
+ * in neither direction, and a caption is not in the grid at all.
  *
  * WHAT STILL CRASHES, each naming ITS OWN missing piece rather than one shared "there is no layout": a float
  * is §9.5's own positioning, an out-of-flow box is §9.3.2's offsets over a static position, an `inline-flex`
