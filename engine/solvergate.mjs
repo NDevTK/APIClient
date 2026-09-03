@@ -392,6 +392,20 @@ function gateFail(msg) {
   console.log("@GATEFAIL " + msg);
   process.exit(2);
 }
+/* AND THE SECOND FAILURE VOCABULARY, BECAUSE THE PARENT RENDERS EVERY `@GATEFAIL` AS `CORPUS:` AND TWO OF THE
+   CHECKS BELOW ARE NOT ABOUT THE CORPUS AT ALL. The three refusals `gateFail` was written for — a host notice,
+   an unanswerable host request, a frontier that cannot drain — each say "this document is the wrong document
+   for this gate", and the reader's next act is to move or rewrite a fixture. A `qjs_emit_partial` that answers
+   two different documents at one boundary is the opposite instruction: the fixture is fine and the ENGINE's
+   render path has a side effect, so sending that reader to the corpus is a confident false attribution. This
+   file already made exactly that argument about the streamed document and solved it by crossing `partial` to
+   the parent rather than by borrowing the corpus sentence; a check that CANNOT cross its evidence needs the
+   other half of it, which is a token of its own. `@ENGINEFAIL` cannot collide with `@GATEFAIL `: the parent
+   matches that one on a trailing space and this one is a different word. */
+function engineFail(msg) {
+  console.log("@ENGINEFAIL " + msg);
+  process.exit(2);
+}
 
 async function child(docPath, schedName) {
   const html = readFileSync(docPath, "utf8");
@@ -442,7 +456,7 @@ async function child(docPath, schedName) {
        that is hard to locate, it is this channel carrying something nobody declared, and reading the LAST line
        the way a scanner would would make that invisible. Asked here rather than in the step loop so the take
        and the consume are one operation and no caller can leave a document behind for the next call to find. */
-    const snapshot = () => {
+    const readOne = () => {
       sink.length = 0;
       M.ccall("qjs_emit_partial", "void", [], []);
       if (sink.length !== 1)
@@ -452,14 +466,90 @@ async function child(docPath, schedName) {
                  "engine and its host either dropping the document or carrying a second writer nobody declared");
       const line = sink[0];
       sink.length = 0;
-      let doc;
-      try { doc = JSON.parse(line.slice("@RESULT ".length)); }
+      try { return { line, doc: JSON.parse(line.slice("@RESULT ".length)) }; }
       catch (err) {
         gateFail("the `@RESULT` line qjs_emit_partial printed is not JSON — the incremental merge does one " +
                  `JSON.parse of exactly this text, so this run would reach the trusted zone as a crashed ` +
                  `instance with every finding it had accumulated: ${String(err).slice(0, 120)}`);
       }
-      return doc;
+    };
+    /* AND IT IS ASKED TWICE, WHICH IS THE ONLY DIRECT TEST OF THE ONE SENTENCE main.c WRITES OVER THIS ENTRY.
+       That contract is "It READS: no flow is touched, nothing is drained, and the frontier the next step
+       resumes is the one this was called on", and until this pair NOTHING anywhere asked it — the `stream`
+       schedules test the contract's CONSEQUENCE (the finding set the run ends with) against the reference,
+       which is a cross-schedule comparison and therefore cannot separate "asking changed something" from
+       "these two schedules interleaved differently". Asked twice at ONE boundary with NO step between the two
+       calls, it cannot: the frontier, the heap, the fork table and every counter are the same at both calls by
+       construction, so the two documents are the same TEXT — not the same canonical SET, the same bytes,
+       gauges included, with no DROP list and no canonicalization involved. A difference is a SIDE EFFECT in
+       the compose, and result_json reaches into endpoint.c, solve.c, world.c, cold.c and concolic.c to build
+       one, so the candidates are a latch consumed, a list drained or a counter reset while rendering.
+       WHY IT IS WORTH THE SECOND CALL. extension/bridge.js's `streamPartial` calls this entry on a `PARTIAL_MS`
+       cadence for the whole of any analysis that outlives it, so a side effect here is not a diagnostic
+       curiosity: it is the product's own instrument changing the run it exists to observe, on every real page,
+       which is §Testing's "an instrument that costs enough to shorten the run is measuring a different run"
+       with the instrument shipped. This is the check for it and there is no other.
+       IT IS ALSO A SELF-DISAGREEMENT CHECK AND NOT A STORED EXPECTATION — nothing is written down, the answer
+       is carried by the run, and a solver that learns twice as much passes it unchanged: the only thing it can
+       fail on is one call of one entry disagreeing with the call before it.
+       AND THE COST IS STATED: it doubles the number of `qjs_emit_partial` calls on the two streaming schedules
+       and on nothing else. That does not make `stream` differ from `direct` in more than the one call site the
+       header holds fixed — the CALL COUNT was never the controlled variable there (the two streaming rows are
+       3-8 against 24-26 asks of the same entry, which is the axis they are), and the whole claim under test is
+       that the answer cannot depend on how many times the entry is asked. */
+    const snapshot = () => {
+      /* THE OWED LIST IS READ AROUND THE PAIR BECAUSE IT IS THE ONE WITNESS OF "NOTHING IS DRAINED" THAT THE
+         DOCUMENT DOES NOT STATE. Everything else the contract promises is inside the two documents compared
+         below; the host-owed list is not in `result_json` at all, so a drain there is invisible to every
+         surface this gate has. What it would cost is not a missing field: an owed entry that disappears is a
+         reply this host is never asked for and a flow parked on it for ever, and the frontier would then reach
+         DONE around that flow — which this gate reports as `the frontier STALLED and this gate could fill
+         nothing`, a sentence naming the CORPUS for a defect in the engine's render path. Reading it costs one
+         string the step loop is about to compose anyway. */
+      const owedBefore = str("qjs_pending");
+      const first = readOne();
+      const second = readOne();
+      const owedAfter = str("qjs_pending");
+      /* PER TOP-LEVEL FIELD, NOT AS ONE STRING. A whole-document text comparison is what this check was first
+         written as, and it reported the byte offset of the first divergence — which named the ALLOCATOR
+         FIGURE the compose itself had moved and said nothing about the fields the contract is actually over.
+         Asked per field, the four self-measuring censuses leave by name (see INSTANT_CENSUSES) and every
+         other field is held to exact equality, so what the check reports is the FIELD that moved. */
+        {
+        const keys = [...new Set([...Object.keys(first.doc), ...Object.keys(second.doc)])]
+          .filter((k) => !INSTANT_CENSUSES.includes(k));
+        const moved = keys.filter((k) => JSON.stringify(first.doc[k]) !== JSON.stringify(second.doc[k]));
+        if (moved.length)
+          engineFail("qjs_emit_partial was asked TWICE at one boundary, with no step between the two calls, " +
+                     `and answered two DIFFERENT documents — ${moved.join(", ")} moved. main.c's contract ` +
+                     "over that entry is that it READS: \"no flow is touched, nothing is drained, and the " +
+                     "frontier the next step resumes is the one this was called on\". No flow ran between " +
+                     "these calls, so every finding, every lifetime total, the frontier census and the " +
+                     "quantum constants were the same at both and had to render identically; the four " +
+                     "self-measuring censuses are already excluded by name, so this is not the compose " +
+                     "measuring its own allocation. It is a SIDE EFFECT in the render path: result_json goes " +
+                     "through endpoint.c, solve.c, world.c, cold.c and concolic.c, and one of them is " +
+                     "consuming a latch, draining a list or resetting a counter as it renders. " +
+                     "extension/bridge.js calls this on a `PARTIAL_MS` cadence for the whole of every long " +
+                     "analysis, so whatever moved here moves on EVERY REAL PAGE and the run the product " +
+                     "reports is not the run it would have made unobserved — §Testing's \"an instrument that " +
+                     "costs enough to shorten the run is measuring a different run\", with the instrument " +
+                     "shipped. This is NOT a corpus defect and NOT a schedule effect: one call of one entry " +
+                     "disagreed with the call before it.\n" +
+                     moved.map((k) => `           ${k}\n             call 1: ` +
+                                      `${JSON.stringify(first.doc[k]).slice(0, 300)}\n             call 2: ` +
+                                      `${JSON.stringify(second.doc[k]).slice(0, 300)}`).join("\n"));
+      }
+      if (owedBefore !== owedAfter)
+        engineFail("the host-owed list changed across `qjs_emit_partial` — it was\n           " +
+                   `${owedBefore.split("\n").filter(Boolean).join(" ; ") || "(nothing owed)"}\n         and ` +
+                   `after the call it is\n           ${owedAfter.split("\n").filter(Boolean).join(" ; ") || "(nothing owed)"}` +
+                   "\n         main.c says that entry READS and that \"nothing is drained\". An owed entry " +
+                   "that disappears across it is a reply this host will never be asked for and a flow parked " +
+                   "on it for ever; the frontier reaches DONE around that flow, and this gate then reports " +
+                   "`the frontier STALLED and this gate could fill nothing` — naming the CORPUS for a defect " +
+                   "in the engine's own render path. This is NOT a corpus defect.");
+      return second.doc;
     };
     return { M, cs, str, provide, snapshot };
   }
@@ -787,6 +877,24 @@ async function child(docPath, schedName) {
    keys are sorted. What survives is the SET of findings, which is what the invariant is about.
    A DROPPED FIELD IS DROPPED BY PATH, so the exclusion is stated about one place in one document rather than
    about a name that might mean something else somewhere else. */
+/* THE FOUR READINGS OF AN INSTANT, NAMED ONCE BECAUSE THEY NOW HAVE TWO READERS. The census row inside DROP[""]
+   below carries the whole argument for why they are dropped from the cross-schedule comparison and it is
+   unchanged; what is new is that `snapshot` needs the SAME four and needs them for a DIFFERENT reason, so the
+   list is declared here and spread into that row rather than typed a second time. This is `SURFACES_ACCUMULATING`'s
+   pattern — one declaration, two readers — and it is used for its reason: a hand-kept second copy agrees with
+   the first until the day it does not, and the disagreement is silent in the direction that reads as a pass.
+   THE SECOND READER'S REASON, WHICH IS NOT THE FIRST'S. The cross-schedule row drops them because their value
+   is a reading of whatever instant the document was composed at and two schedules reach that instant having
+   allocated and forked differently. `snapshot` excludes them because THE COMPOSE ITSELF MOVES THEM: asked
+   twice at one boundary with no step in between, `result_json` allocates to build the first document and the
+   second document's `_heap`/`_swap` then report the larger arena. That is MEASURED and not predicted —
+   flag_fork.html under `stream` answered `"arenaKiB":1754` then `"arenaKiB":1758`, and under `eagerstream`
+   1746 then 1750, on the build stamped f6cbdd9b — and it is not a violation of anything: main.c's contract
+   over that entry promises that no flow is touched, that nothing is drained and that the frontier resumes as
+   it was, and a self-measuring allocator figure is none of the three. So these four leave the two-call
+   comparison and EVERYTHING ELSE stays in it, `_wfq` and `_quantum` included: the compose creates no flows and
+   `_quantum` is three compile-time constants, so neither has anything for an observer to perturb. */
+const INSTANT_CENSUSES = ["_cold", "_heap", "_swap", "_forkAt"];
 const DROP = new Map([
   ["", new Set(["_switches", "_flows", "_candidates", "_jobsQueued", "_jobsRun", "_unitsDone",
                 "_worldSegmentsHeld", "_worldSegmentsMade", "_worldSegmentsForked", "_park",
@@ -830,7 +938,9 @@ const DROP = new Map([
                    than on a byte count. WHAT IT COSTS IS STATED PLAINLY: this gate cannot catch a census
                    itself regressing, and nothing else can either — the DCHECKs in solver/result.c and the
                    shape asserts in extension/bridge.js are what stand there. */
-                "_cold", "_heap", "_swap", "_forkAt",
+                /* Declared above INSTANT_CENSUSES and spread here, because `snapshot` reads the same four for
+                   a different reason — see that declaration. */
+                ...INSTANT_CENSUSES,
                 /* THE ONE COST IN THIS SET THAT IS NOT A COUNT, AND IT IS DROPPED ON THE SPEC'S OWN GATING
                    RATHER THAN ON A MAGNITUDE. Every other name above is a total or a reading of an instant
                    whose SIZE the schedule chooses, and that reason does not reach a LIST OF MESSAGES — a
@@ -1102,6 +1212,67 @@ if (!existsSync(CORPUS)) { console.error("[solvergate] no corpus at " + CORPUS);
 const REV_AT_START = gateRevision(["engine/host", "engine/qjs", "engine/solvergate.mjs", "engine/gate_revision.mjs"], WASM);
 for (const l of revisionLines(REV_AT_START)) console.log(l);
 
+/* IS THE PROGRAM THAT ANSWERED A BUILD OF THE TREE THAT CLASSIFIED IT — asked as a BOOLEAN because exactly one
+   check below is undecidable without it. engine/gate_revision.mjs's own comment states the three states this
+   collapses ("stamped and EQUAL to this tree -> the artifact is a build of the revision above"), and this reads
+   the same fields it stamps rather than re-deriving them: an artifact with no stamp, one stamped at another
+   revision, or one built from a tree that was dirty is not a build of THIS revision, and the difference
+   between the classification list in this file and the document that program emits is then a fact about
+   neither of them. It is not used to soften any other verdict — the run itself is measured either way. */
+const ARTIFACT_IS_THIS_REVISION =
+  !!REV_AT_START.stamp && REV_AT_START.stamp.head === REV_AT_START.head &&
+  REV_AT_START.stamp.qjsHead === REV_AT_START.qjsHead &&
+  !REV_AT_START.dirty.length && !REV_AT_START.unasked.length &&
+  !(REV_AT_START.stamp.dirty || []).length && !(REV_AT_START.stamp.unasked || []).length;
+
+/* AND THE COST LIST IN THE OTHER DIRECTION, WHICH IS `checkCoverage`'S OWN RULE APPLIED TO THE HALF IT SKIPPED.
+   That function argues "BOTH DIRECTIONS, because either one alone is silent" and then enforces both for
+   SURFACES and exactly one for COSTS: a key in neither list fails, and a COST this file names that the
+   document does not carry fails nothing. An exclusion standing over nothing is not inert — it is a LICENCE:
+   the day result.c emits that name again, whatever it then means, this gate drops it from every comparison
+   without a word, which is the silence the SURFACES half exists to end. It is also where the paragraphs inside
+   DROP[""] rot, since each dropped name carries an argument for why it legitimately differs and an argument
+   about a field nobody emits is a stale claim sitting inside the list a reader consults to classify the next
+   one.
+   IT IS ASKED ONCE PER RUN AND NOT PER (DOCUMENT, SCHEDULE), and it does NOT suppress the comparison. The
+   disagreement is between this file's list and the program, so it is the same fact on all seven schedules of
+   all seven documents — reporting it fifty times says nothing new — and the run it was found in is still a
+   valid measurement, because a name the document does not carry was being dropped from every comparison
+   anyway. Suppressing the invariance result over it would trade a real cross-schedule answer for a
+   classification note, which is the three-states-behind-one-answer shape this file argues about everywhere.
+   AND THE THREE STATES ARE KEPT THREE. `result.c stopped emitting this` and `the artifact predates the field`
+   ask for OPPOSITE work — delete a row, or rebuild — and the two are indistinguishable from the document
+   alone. MEASURED, WHICH IS WHY THIS IS WRITTEN THIS WAY RATHER THAN AS A FLAT FAILURE: the first run of this
+   check reported `pageErrorsExplored` as a stale exclusion on every schedule of flag_fork.html and told the
+   reader to delete the row — and `pageErrorsExplored` is in result.c's single `composef` literal at
+   origin/main. The artifact was a build stamped f6cbdd9b, 338 commits behind, that predates the field. The
+   check was right that the two disagree and its remedy was the wrong one of the two, which is exactly the
+   false attribution the `@ENGINEFAIL` token above exists to stop. */
+let staleAsked = false;
+function reportStaleExclusions(result) {
+  if (staleAsked) return 0;
+  staleAsked = true;
+  const stale = [...DROP.get("")].filter((k) => !(k in result));
+  if (!stale.length) return 0;
+  if (!ARTIFACT_IS_THIS_REVISION) {
+    console.log(`  UNDECIDED  this gate names ${stale.join(", ")} as a schedule-dependent COST and the result ` +
+                "document does not carry it — and the artifact that answered is NOT a build of this revision " +
+                "(see the [rev] block), so the two things that disagree were not made from one tree. Either " +
+                "result.c stopped emitting the field and the row in DROP[\"\"] is a licence standing over " +
+                "nothing, or the artifact simply predates the field. Those ask for opposite work — delete the " +
+                "row, or `node engine/build.mjs` — and this run cannot tell them apart. Rebuild and re-run to " +
+                "get an answer. NOT counted as a failure: the name was dropped from every comparison anyway, " +
+                "so the invariance result below is unaffected.");
+    return 0;
+  }
+  console.log(`  FAILED  this gate names ${stale.join(", ")} as a schedule-dependent COST and drops it from ` +
+              "every comparison, and the artifact — which IS a build of this revision — does not emit it. The " +
+              "exclusion stands over nothing, so the day that name comes back, whatever it then means, it is " +
+              "silently excluded. Delete the row from DROP[\"\"] in engine/solvergate.mjs together with the " +
+              "paragraph arguing about a field nobody emits, or say what now carries the number.");
+  return 1;
+}
+
 const arg = process.argv[2] || "";
 const docs = readdirSync(CORPUS).filter((f) => f.endsWith(".html")).sort()
                                 .filter((f) => !arg || f === arg || f === arg + ".html");
@@ -1144,10 +1315,21 @@ function runChild(doc, sched) {
     return { ok: true, out, result: e.result, partial: e.partial, snapshots: e.snapshots };
   }
 
-  /* WHICH OF THE FIVE THIS IS, said out loud — the same distinction engine/wpt.mjs draws, and for the same
-     reason: a DCHECK naming a missing capability, this gate's own corpus refusal, an ABI this artifact does
-     not have, a genuine cost, and a fact about the box are five different pieces of work, and a message naming
-     them all distinguishes none. */
+  /* WHICH OF THE SIX THIS IS, said out loud — the same distinction engine/wpt.mjs draws, and for the same
+     reason: a DCHECK naming a missing capability, this gate's own corpus refusal, an ENGINE render path that
+     disagreed with itself, an ABI this artifact does not have, a genuine cost, and a fact about the box are
+     six different pieces of work, and a message naming them all distinguishes none.
+     THE SIXTH IS FIRST BECAUSE IT IS THE ONE THAT WOULD OTHERWISE BE MISREAD RATHER THAN MISSED. Every
+     `@GATEFAIL` below is rendered `CORPUS:` and every one of the three refusals that raises it means "move or
+     rewrite this fixture"; a `qjs_emit_partial` that answers two different documents at one boundary means the
+     fixture is fine and the engine's compose has a side effect, so borrowing the corpus sentence for it sends
+     the reader to the one place the defect is not. Matched ahead of `@GATEFAIL` and on a different word, so
+     the two cannot collide.
+     AND IT CAPTURES TO THE END OF THE OUTPUT, not to the end of a line: `engineFail` exits the moment it has
+     printed, so nothing of this run follows it, and the evidence it carries — the diverging documents, or the
+     owed list on both sides of the call — is exactly the multi-line part a first-line match would throw away
+     at the one moment the reader needs it. */
+  const ef = out.match(/^@ENGINEFAIL ([\s\S]*)$/m);
   const gf = out.match(/^@GATEFAIL (.*)$/m);
   const why = out.match(/@WHY .*"reason":"([^"]*)/) || out.match(/^@WHY (.+)$/m);
   /* THE ARTIFACT DOES NOT HAVE THE ABI THIS DRIVER CALLS, and it is its own cause because it is its own piece
@@ -1161,7 +1343,8 @@ function runChild(doc, sched) {
      Matched on emscripten's message because that is where the fact is: the wrapper knows the arity the wasm
      exports and this driver knows the arity it passed, and nothing else in the run compares the two. */
   const abi = out.match(/native function `([a-z_0-9]+)` called with (\d+) args but expects (\d+)/);
-  const cause = gf ? "CORPUS: " + gf[1]
+  const cause = ef ? "ENGINE: " + ef[1]
+              : gf ? "CORPUS: " + gf[1]
               : why ? "DCHECK: " + why[1]
               : abi
                 ? `BUILD: the artifact does not export the ABI this driver calls — \`${abi[1]}\` takes ` +
@@ -1331,6 +1514,11 @@ for (const doc of docs) {
     detTally["not reached (the reference itself produced no result)"]++;
     continue;
   }
+  /* ASKED HERE BECAUSE THIS IS THE FIRST POINT A RESULT DOCUMENT EXISTS, and asked of the REFERENCE because
+     every other document in the run is the same program's `result_json` and would answer identically. It
+     returns 0 or 1 and reports itself; the latch inside it is what makes it once per run rather than once per
+     document. */
+  bad += reportStaleExclusions(ref);
   /* AND A COMPARISON NEEDS A SUBJECT, WHICH IS THE ONE THING THIS GATE HELD EVERY SURFACE TO AND NEVER ASKED
      OF THE DOCUMENT. `checkCoverage` already makes this argument one level down, in these words: a SURFACE
      that is not in the document "is a comparison over nothing, which reads as agreement". A DOCUMENT whose
