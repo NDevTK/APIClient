@@ -105,13 +105,47 @@ function _encodeSentence(item) {
   // escaped" beside a PoC built out of them. Confirmed on real Chrome through the declared delivery: the
   // fragment arrives as `#%3Csvg%20onload%3DX9()%3E`, the page decodes it, and the handler runs.
   // THE TWO ARE HELD AGAINST EACH OTHER, which is the whole reason the engine emits both. `sourceDelivers` is
-  // the MEASURED subset that reached a sink; its ABSENCE is two positive facts (nothing in question, or no
-  // delivery probe has arrived yet) and is NOT a licence to report the prior as a result — so with no
-  // measurement the sentence says what the browser does and stops there.
+  // the MEASURED subset that reached a sink; its ABSENCE is NOT a licence to report the prior as a result — so
+  // with no measurement the sentence says what the browser does and stops there.
+  //
+  // …AND THAT ABSENCE IS THREE FACTS, NOT THE TWO THIS SAID. solve.h says so at `sourceDelivers` in exactly
+  // those words — "ABSENT IS THREE FACTS AND IS READ WITH `deliveryProbed` BELOW OR NOT AT ALL, and this entry
+  // used to say TWO and name the wrong pair" — and this file carried the same wrong pair on the consumer side:
+  // the source declares no percent-encode set (handled above, where a non-string `sourceEncodes` returns
+  // early), no delivery probe of this search has reached a sink YET, or one HAS and the page destroyed every
+  // token it was built out of. The third was the one with no name here, and it is the LOUDEST reading this
+  // instrument takes: `deliv_seen` is raised per TOKEN FOUND (solve.c), so a probe the page ATE clears no byte
+  // and emits no `sourceDelivers` at all — arriving at this branch byte-identically with a search the
+  // scheduler has never run. The card printed "unmeasured here" over a finished answer, which is the exact
+  // inversion §@S forbids: a rung whose ABSENCE and whose ZERO read alike, and the two take opposite work.
+  // `deliveryProbed` is what splits them, counted at the ARRIVAL before a single token is looked for.
+  //
+  // ITS OWN ABSENCE IS READ AS A FACT ABOUT THE RECORD AND NOT ABOUT THE SEARCH, WHICH IS A SEAM DECISION AND
+  // IS DELIBERATE. solve.c emits `deliveryProbed` only where the search HOLDS a delivery probe
+  // (cand_has_delivery_probe), so on a current engine its absence is positive: a single-context class states
+  // its vectors at detection and runs none, and a derived search over server-injected page state has no byte
+  // in question. But the SHIPPED wasm predates that producer — `deliveryProbed` occurs zero times in
+  // extension/lib/qjs/qjs.wasm while `sourceDelivers` occurs once — so today every absent-`sourceDelivers`
+  // record arrives here with no arrival count at all, and a consumer cannot tell "this search holds no probe"
+  // from "this engine does not speak the field". Those are two facts under one absence, so this states
+  // NEITHER as a fact about the search: it reports what the RECORD carries, which is true under both engines
+  // and is the strongest claim this side is entitled to. It must not say "yet" here — that word fabricates a
+  // pending measurement for a search that may hold nothing to measure with.
   var enc = "the browser percent-encodes <code>" + esc(item.sourceEncodes) + "</code> in this source";
-  if (typeof item.sourceDelivers !== "string")
-    return enc + ", so a candidate needs those bytes to survive the way in — no delivery probe of this search "
-         + "has reached a sink yet, so whether they do is unmeasured here";
+  if (typeof item.sourceDelivers !== "string") {
+    if (item.deliveryProbed > 0)
+      return enc + ", and a delivery probe of this search REACHED a sink " + item.deliveryProbed + " time"
+           + (item.deliveryProbed === 1 ? "" : "s") + " and <strong>not one</strong> of its tokens was in "
+           + "what arrived — the page destroyed the instrument itself, so the source's own transform is the "
+           + "whole of the failure and no re-derivation reaches past it. A finished answer, not a distance";
+    if (item.deliveryProbed === 0)
+      return enc + ", so a candidate needs those bytes to survive the way in — this search HOLDS a delivery "
+           + "probe and it has not reached a sink yet, so whether they do is unmeasured and this is a "
+           + "scheduling state, not an answer about the source";
+    return enc + ", so a candidate needs those bytes to survive the way in — this record states no delivery "
+         + "probe arrival at all, so whether they do is unmeasured here and nothing on it says a probe was "
+         + "ever run";
+  }
   if (item.sourceDelivers === "")
     return enc + " and a run MEASURED that <strong>none</strong> of them arrives — the source's own transform "
          + "is the whole of the failure, and no re-derivation reaches past it";
@@ -293,13 +327,36 @@ function _parkedProgress(item) {
            + 'is a distance question, the same one `turns` and `survived` are asked for: the probes have not '
            + 'got this far through the document yet, and nothing here says anything about whether this '
            + 'source can carry an escape';
-    return held + ' and every one of them was an inert PROBE — ' + item.witnessed + ' sink context'
+    // …AND THE PRESCRIPTION AT THE END OF IT RESTED ON THE WRONG INSTRUMENT'S ARRIVAL. This branch is reached
+    // on `witnessed > 0`, and solve.c says in as many words that the two counts are one question asked of two
+    // instruments — "`witnessed` says the CONTEXT probe reached the sink; this says the DELIVERY probe did".
+    // The sentence claimed the probes had measured "which of the source's declared bytes survive delivery"
+    // and then instructed the reader to reach for a decode, off a delivery measurement that the CONTEXT
+    // probe's arrival says nothing whatever about. With `deliveryProbed:0` that instruction is confident,
+    // specific and unsupported — the same failure one rung down as the one this branch was added to end. So
+    // the delivery clause is stated only where the delivery probe actually arrived, and the seam arm keeps
+    // the context half (which `witnessed` does establish) while declining the delivery half the record on a
+    // pre-`deliveryProbed` engine cannot answer.
+    var builtNothing = held + ' and every one of them was an inert PROBE — ' + item.witnessed + ' sink context'
          + (item.witnessed === 1 ? ' was' : 's were') + ' READ and the derivation built no escape from '
          + (item.witnessed === 1 ? 'it' : 'any of them') + ', so this search has not constructed a breakout '
-         + 'at all and there is nothing that could arrive. The probes measure the context and which of the '
-         + 'source\'s declared bytes survive delivery, and a derivation that builds nothing from them is the '
-         + 'search reporting that the bytes an escape needs cannot reach this sink through this source. That '
-         + 'is neither a scheduling nor a filter question: it is answered by a decode, or by another source';
+         + 'at all and there is nothing that could arrive. ';
+    if (item.deliveryProbed > 0)
+      return builtNothing + 'The probes measure the context AND, on ' + item.deliveryProbed + ' separate '
+           + 'arrival' + (item.deliveryProbed === 1 ? "" : "s") + ', which of the source\'s declared bytes '
+           + 'survive delivery — and a derivation that builds nothing from both of those together is the '
+           + 'search reporting that the bytes an escape needs cannot reach this sink through this source. '
+           + 'That is neither a scheduling nor a filter question: it is answered by a decode, or by another '
+           + 'source';
+    if (item.deliveryProbed === 0)
+      return builtNothing + 'What has been measured is the CONTEXT only: this search\'s delivery probe has '
+           + 'not reached a sink even once, so which of the source\'s declared bytes survive the way in is '
+           + 'still unmeasured. The context read alone gave the derivation nothing to build from — that is a '
+           + 'statement about this sink\'s context, and NOT yet the finding that this source cannot carry an '
+           + 'escape';
+    return builtNothing + 'The context probes measure where in the parse the bytes land, and this record '
+         + 'states no delivery-probe arrival beside them — so whether the source\'s declared bytes survive '
+         + 'the way in is not answered here, and a decode is not yet established as what this needs';
   }
   if (item.reached === 0 && item.sinkStrings === 0)
     return held + ', their bytes entered the page\'s own program ' + item.substituted + ' time'
@@ -717,6 +774,43 @@ function renderSecurityPanel() {
         + "solve.c asserts the same at both of its sink entries, so this pair was measured on two different "
         + "searches (sink=" + pit.sink + " substituted=" + pit.substituted + " sinkStrings=" + pit.sinkStrings
         + " reached=" + pit.reached + ")");
+      // THE DELIVERY PROBE'S ARRIVAL COUNT IS ASSERTED ON PRESENCE AND NEVER FOR IT, WHICH IS THE OPPOSITE OF
+      // THE PAIR ABOVE AND FOR A REASON THAT IS ABOUT THE PRODUCER RATHER THAN ABOUT CAUTION. `substituted`
+      // and `sinkStrings` are written UNCONDITIONALLY, so 0 is their load-bearing reading and absence is the
+      // relay broken. `deliveryProbed` is written only where the search HOLDS a delivery probe
+      // (cand_has_delivery_probe, solve.c) — a single-context class states its vectors at detection and runs
+      // none — so its absence is a POSITIVE statement and demanding it would abort on a correct record. That
+      // is §A-FIELD-A-CONSUMER-DEFAULTS' other half: a field the producer may legitimately omit gets a
+      // presence TEST, and only its TYPE is asserted.
+      // IT ALSO CANNOT FIRE AGAINST THE SHIPPED ENGINE, AND THAT IS CHECKED RATHER THAN HOPED. The trusted
+      // zone's JS is interpreted from the tree and deploys on WRITE while the engine's C is live only after a
+      // build, so an assert added here runs first against a wasm that predates its producer. Measured by
+      // CONTENT, not by timestamp: `deliveryProbed` occurs ZERO times in extension/lib/qjs/qjs.wasm and
+      // `sourceDelivers` occurs once, so today this field is always absent and every clause below is guarded
+      // behind its presence. The assert is therefore inert on the current engine and live on the next one.
+      if (typeof pit.deliveryProbed !== "undefined") {
+        DCHECK(typeof pit.deliveryProbed === "number" && pit.deliveryProbed >= 0
+               && pit.deliveryProbed === Math.floor(pit.deliveryProbed),
+          "a parked @S record carries a `deliveryProbed` that is not a non-negative whole count — it is the "
+          + "number of times this search's delivery probe REACHED a sink (solve.c increments it at the "
+          + "arrival, before a single token is looked for), so a non-count here is the serializer or the "
+          + "relay broken and the card is about to tell the reader a page ate an instrument that never ran "
+          + "(sink=" + pit.sink + " source=" + pit.source + " deliveryProbed="
+          + JSON.stringify(pit.deliveryProbed) + ")");
+        // AND THE MONOTONE LINK BETWEEN THE TWO, WHICH IS THE ONLY THING THAT MAKES THE ABSENCE READABLE.
+        // `sourceDelivers` is gated on `deliv_seen`, raised per TOKEN FOUND, and a token can only be found in
+        // a string whose ARRIVAL was already counted — so a measured delivery set standing over
+        // `deliveryProbed:0` is a byte learned with no run behind it. solve.c asserts exactly this at the
+        // producer (`!deliv_seen || deliv_runs > 0`); it is asserted again here because a relay that drops or
+        // reorders a field produces precisely a violated implication, and this card now reads the two
+        // together to decide which of the three facts an absent `sourceDelivers` is.
+        DCHECK(typeof pit.sourceDelivers !== "string" || pit.deliveryProbed > 0,
+          "a parked @S record reports a MEASURED delivery set over a delivery probe that has never reached a "
+          + "sink — `sourceDelivers` is the subset of the declared bytes a RUN saw arrive and its gate is "
+          + "raised per token found, so this pair was measured on two different searches or the relay "
+          + "reordered them (sink=" + pit.sink + " source=" + pit.source + " sourceDelivers="
+          + JSON.stringify(pit.sourceDelivers) + " deliveryProbed=" + pit.deliveryProbed + ")");
+      }
       // THE TWO MIDDLE RUNGS ARE ASSERTED LIKE THE OTHERS AND FOR THE SAME REASON. solve_json_array writes
       // `survived`, `survivedOf` and `escaped` unconditionally on the parked shape, and 0 is a real value each
       // of them must be able to say — so an `|| 0` here would turn "this relay dropped the field" into "the
