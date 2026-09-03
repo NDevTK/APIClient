@@ -1624,10 +1624,29 @@ function wfqReading(out) {
    retiring are DOING, and the arms take opposite work: `start-a-classic-program` is a frontier moving THROUGH
    its documents while `resume-program` beside it is one grinding inside programs it has already started (one
    row carried both until solver/step_unit.h split them, and a frontier that admits members and retires none is
-   exactly the state in which that difference is the diagnosis), `queue-rendering-opportunity`/`fire-due-timer`/
-   `document-lifecycle-stage` is unbounded periodic work, the orphan arms are seeding drives, and
+   exactly the state in which that difference is the diagnosis), `queue-rendering-opportunity`/`fire-due-timer`
+   is unbounded periodic work, the orphan arms are seeding drives, and
    `host-blocked`/`await-owed-reply`/`await-fetch-record`/`await-peer-operation` are four distinct kinds of
    waiting. One verdict covered all of them.
+
+   AND `document-lifecycle-stage` IS NOT THE THIRD MEMBER OF THAT PERIODIC PAIR, WHICH IS WHAT THIS PARAGRAPH
+   USED TO SAY. solver/step_unit.h's own sentence — the authority, since it is the one place an arm is named —
+   groups exactly `queue-rendering-opportunity` OR `fire-due-timer` as "unbounded periodic work and is a
+   fidelity gap or a regression". This reader added a third arm to that group, and the two are opposite in the
+   property the group is ABOUT: core/dom/document.c's document_lifecycle_step is MONOTONE PER DOCUMENT, from
+   readiness 0 to 1 to 2, and it says so in two DCHECKs — "a document's DOMContentLoaded stage ran and left its
+   readiness where it was … which is a live-lock the scheduler cannot tell from progress", and the same again
+   at `load`. An arm that crashes rather than repeat itself is the opposite of unbounded periodic work.
+   SO THE MIS-GROUPING WAS NOT A WORDING SLIP — IT CHANGED THE DIFF A READER WOULD GO AND WRITE. A frontier
+   sitting in this arm is a document held at HTML §13.2.7 "The end" step 8, whose whole text is "Spin the event
+   loop until there is nothing that delays the load event in the Document" — so a member resting there is
+   WAITING BY THE SPEC'S OWN INSTRUCTION, which is the precise opposite of a loop that should not be running.
+   (§13.2.7 is 11 top-level steps with list depth tracked; 7 and 8 are both spins and only 8 is this one.) What
+   this engine models as the delayer is a CHILD document that is not ready yet, which is why document.c's
+   second pass walks innermost-first. The honest next question is which child and what it is owed — the
+   delaying-the-load-event sources document.c names at that site as belonging to their own components — and
+   NOT "find the fidelity gap making this loop". Reported under the periodic heading, a member parked on a
+   child reads as an engine spinning, which is a diagnosis of the wrong file.
 
    IT READS NO LIST OF ITS OWN, and that is deliberate. solver/step_unit.h is the only place an arm is named —
    the enum, the diagnostic string and this row are three expansions of one macro — so a copy of the names here
