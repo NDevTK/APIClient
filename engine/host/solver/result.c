@@ -575,7 +575,15 @@ char *result_wfq_json(void) {
         return composef("{\"members\":0}");
     return composef(
                      "{\"members\":%ld,\"valMin\":%.1f,\"valMax\":%.1f,\"valTop\":%.1f,"
-                     "\"valZero\":%ld,\"selfEmit\":%ld,\"unrun\":%ld,"
+                     /* `valZero` IS THE CEILING POPULATION AND `valArrived` IS THE ONE THAT EMITTED NOTHING, and they
+                        stopped being one row the day a from-baseline flow began entering at the frontier's
+                        virtual time rather than at zero. An @S candidate session now holds whatever the leader
+                        held while having produced nothing, so it is OUTSIDE `valZero` and inside `valArrived`.
+                        Read `valArrived` against `valMin`/`valMax`: a large count sitting at the FLOOR of the
+                        reward band is the arrival coordinate being left behind by accounts that earn past it,
+                        which no term of the order re-relates. `selfEmit` is the same question asked of one
+                        MEMBER rather than of its account. */
+                     "\"valZero\":%ld,\"valArrived\":%ld,\"selfEmit\":%ld,\"unrun\":%ld,"
                      "\"neverPicked\":%ld,\"neverPickedGap\":%.3f,"
                      /* …AND WHERE THE DISPATCHES THAT DID HAPPEN WENT, which the pair above cannot say and
                         without which its reading has three states behind one answer. See solver/flow.h for
@@ -675,7 +683,7 @@ char *result_wfq_json(void) {
                         learns the name off @HWORK reads it off here. */
                      "\"workDone\":%ld,\"rankChanges\":%ld}",
                      w.members, w.val_min, w.val_max, w.val_top,
-                     w.val_zero, w.self_emit, w.unrun,
+                     w.val_zero, w.val_arrived, w.self_emit, w.unrun,
                      w.never_picked, w.never_picked_gap,
                      (long long)w.picks_live, (long long)w.picks_max, (long long)w.picks_lifetime,
                      (long long)w.svc_max, (long long)w.svc_min,

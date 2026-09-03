@@ -120,7 +120,32 @@ typedef struct FlowAcct {
        charged once, so a family that emitted V holds the thread for V seconds of ITS OWN silence and is then
        passed. Neither scope can do the other's job, which is the same sentence flow_silence_notch already
        makes about the two halves of the aging. */
-    double val;
+    /* …AND IT IS TWO QUANTITIES, WHICH ONE FIELD HID UNTIL AN ASSERT WENT LOOKING FOR THE OTHER. The reward
+       this account is ranked by is `base + earned` and always was; what one field could not say is WHICH of the
+       two any given point came from, and they are not the same kind of thing at all.
+       `earned` IS A LEDGER: what THIS account has emitted, raised only by flow_credit_emit, one point per
+       finding, unbounded by §NO BOUNDS because bounding it would cap how much a family may be worth.
+       `base` IS A QUEUE COORDINATE: where this account ENTERED the order. A from-baseline flow founds its own
+       family and must not enter below the whole frontier, so flow_arrive_at_virtual_time places it at the
+       virtual time of the account in service; a resumed flow is placed at the total the session that parked it
+       wrote down. Neither is a thing this account emitted, and nothing about either says it did.
+       WHAT THE CONFLATION COST, AND IT IS NOT HYPOTHETICAL — IT WAS AN ASSERT THAT WOULD HAVE FIRED ON A
+       HEALTHY FRONTIER. The census asserts that an account's forgiveness count (`emit_gen`) is past zero
+       exactly when its reward is, because flow_credit_emit raises both in one statement with no return between
+       them. That is TRUE of `earned` and FALSE of the sum: an arrived account stands at a reward of whatever
+       the leader held — 189 points, measured — with `emit_gen` still at 0, because arriving is not emitting.
+       The assert had not fired only because such an account had never reached the FRONT of the order, which is
+       precisely the starvation the split is a step toward fixing: the first diff that let a candidate session
+       lead would have aborted the engine on an invariant that was right about the ledger and wrong about the
+       field.
+       AND IT IS THE SEAM THE REWARD BAND NEEDS. `val_min` pinned across a whole run while `val_max` gains two
+       hundred is an account sitting at the coordinate it ARRIVED at while another EARNS past it, and no term
+       can re-relate the first without naming it apart from the second. Split, that is one field to re-derive;
+       summed, it was a ledger nobody may touch. The order reads `base + earned` through acct_family_val and is
+       unchanged by this split, which is the point: the arithmetic is identical and the QUESTIONS are separable.
+       `self_emit` and `val_zero` (flow.h) are the census rows that were quietly answering about the sum. */
+    double base;
+    double earned;
     /* WHICH SILENCE WINDOW THIS ACCOUNT IS CURRENTLY IN — bumped by every emission credited here, and read by
        nothing except `Flow.cpu_gen` beside it. It is the OTHER half of the reset `fam_us` above performs, and
        it exists because the aging term has two halves that were measured over TWO DIFFERENT WINDOWS while being
@@ -285,7 +310,10 @@ static int64_t flow_own_silence(const Flow *f) {
    because the node is private to this file and the ranked-state cache and the cold tier both have to name the
    quantity the weight is actually a function of. */
 static double acct_family_val(const Flow *f) {
-    return f->family ? f->family->val : 0.0;    /* departed: its node is gone and so is its rank */
+    /* THE ORDER'S REWARD IS THE SUM OF THE TWO, and this is the one place that sum is spelled — every
+       reader in the tree comes through here, so the split above cannot leak into a caller that adds only one
+       of them. `base` is where the account entered the order and `earned` is what it has emitted since. */
+    return f->family ? f->family->base + f->family->earned : 0.0;   /* departed: its node is gone, so is its rank */
 }
 
 double flow_reward(const Flow *f) {
@@ -315,7 +343,13 @@ void flow_restore_reward(Flow *f, double val) {
     DCHECK(val == val && val >= 0.0 && val < 1e300,
            "a parked reward came back as something the WFQ cannot order by — a NaN compares false in both "
            "directions, so the resumed frontier's order would fall back on registry position");
-    f->family->val = val;
+    /* A RESUME RESTORES A COORDINATE, NOT EARNINGS, and the split is what lets that be said. The parked
+       number is where this recipe STOOD when the session that wrote it ended; crediting it as `earned` would
+       report last session's findings as this session's on the `self_emit` row and would make the census's
+       forgiveness identity claim this account had emitted without ever bumping its generation. `base + earned`
+       is unchanged, so §Time-travel's "a high-value flow suspended last week resumes ahead of a low-value
+       fresh one today" holds exactly as before. */
+    f->family->base = val;
 }
 
 /* THE RANKING CHANGED, SO THE RUNNING FLOW'S CLAIM ON THE THREAD MAY HAVE. §scheduler's VALUE YIELD fires "the
@@ -384,7 +418,7 @@ void flow_credit_emit(double v) {
            "the flow holding the thread belongs to no fork family, so there is nothing for this emission to be "
            "credited to — a departed flow was left running, and the reward this finding is worth is about to "
            "be dropped on the floor while the detector reports it as recorded");
-    g_running->family->val += v;
+    g_running->family->earned += v;
     /* …AND THIS ONE MEMBER'S OWN LEDGER, WHICH RANKS NOTHING AND IS NOT A SECOND COPY OF THE LINE ABOVE. The
        family total says what an ACCOUNT has emitted and is the order; this says what THIS FLOW emitted, which
        is the one question the total structurally cannot answer and the one the census exists to ask — a
@@ -893,7 +927,7 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
     DCHECK(sib->val == 0.0 && sib->cpu == 0 && sib->cpu_gen == 0 && sib->visits == 0 && sib->picks == 0 &&
            sib->cand_surv == 0.0 && sib->cand_rung == 0 && sib->path_forced == 0 &&
            sib->family == sib->acct && sib->family->fam_us == 0 && sib->family->emit_gen == 0 &&
-           sib->family->val == 0.0,
+           sib->family->base == 0.0 && sib->family->earned == 0.0,
            "a forked sibling was credited, charged, DISPATCHED or DECIDED before it inherited its parent's "
            "account — it was ranked, and possibly run, at a weight that belongs to no flow, and this "
            "assignment throws that away. `path_forced` is in the same list for the same reason one field over: "
@@ -1457,7 +1491,7 @@ static double flow_queue_weight(const Flow *f);
 static void flow_arrive_at_virtual_time(Flow *f) {
     DCHECK(f->val == 0.0 && f->cpu == 0 && f->cpu_gen == 0 && f->visits == 0 &&
            f->family == f->acct && f->family->fam_us == 0 && f->family->emit_gen == 0 &&
-           f->family->val == 0.0,
+           f->family->base == 0.0 && f->family->earned == 0.0,
            "a from-baseline flow was charged or handed an account before it arrived — the arrival rule ASSIGNS "
            "every term, so a caller that wrote one first has ranked this flow at a virtual time nobody chose "
            "and this assignment throws that away");
@@ -1472,7 +1506,7 @@ static void flow_arrive_at_virtual_time(Flow *f) {
        frontier is actually ordered by. `Flow.val` stays zero — this flow has emitted nothing itself, and the
        census row that asks what a member emitted ITSELF must not read a whole frontier of newcomers as
        productive on the strength of the flow that was running when they arrived. */
-    f->family->val = acct_family_val(g_running);
+    f->family->base = acct_family_val(g_running);
     f->visits = g_running->visits;                        /* the optimism term's coordinate */
     /* …AND THE AGING TERM'S OWN HALF, WHICH IS THE READING AND NOT THE FIELD. A newcomer FOUNDS its own family
        (the precondition above says so), so its `cpu_gen` is a mark in a generation space that is not the
@@ -3000,6 +3034,7 @@ void flow_wfq_census(WfqCensus *out) {
     out->members = g_flows_n;
     out->val_min = out->val_max = out->val_top = 0.0;
     out->val_zero = out->self_emit = out->unrun = 0;
+    out->val_arrived = 0;
     out->never_picked = 0;
     out->never_picked_gap = 0.0;
     out->picks_live = out->picks_max = 0;
@@ -3071,6 +3106,14 @@ void flow_wfq_census(WfqCensus *out) {
         if (i == 0 || acct_family_val(f) < out->val_min) out->val_min = acct_family_val(f);
         if (i == 0 || acct_family_val(f) > out->val_max) out->val_max = acct_family_val(f);
         if (acct_family_val(f) == 0.0) out->val_zero++;
+        /* …AND THE POPULATION THE ROW ABOVE STOPPED NAMING THE DAY AN ARRIVAL GOT A REWARD TAG — accounts that
+           have EARNED nothing, whatever coordinate they were placed at. The two were one test while a
+           from-baseline flow entered at zero; flow_arrive_at_virtual_time places it at the flow in service, so
+           an @S candidate session now stands at the leader's reward having emitted nothing, which is outside
+           the ceiling row and is exactly the population a pinned `val_min` is about. It is one field read
+           because FlowAcct's reward is two quantities — see there for why the ledger and the coordinate had to
+           be separable before this question could be asked at all. */
+        if (f->family && f->family->earned == 0.0) out->val_arrived++;
         /* …AND WHAT THIS MEMBER ITSELF PUT THERE, which is the one question the account cannot answer and the
            reason `Flow.val` exists at all. It is not a subtraction any more: nothing is inherited, so a
            member's own ledger IS what it emitted since it was born. */
@@ -3307,11 +3350,29 @@ void flow_wfq_census(WfqCensus *out) {
            the within-family order for nothing, and the second would leave a family carrying silence its own
            finding had paid for. Neither is reachable through the one writer, which is what makes this a check on
            a SECOND one. */
-        DCHECK((out->top_forgiven > 0) == (out->val_top > 0.0),
-               "the leading account's ledger and its forgiveness count disagree about whether it has ever "
-               "emitted — flow_credit_emit raises both in one statement and is the only writer of either, so "
-               "one of them has a second writer and every reading of the front's aging is about an account "
-               "whose window was opened or closed by something that emitted nothing");
+        /* AND THE ONE IDENTITY THAT DEFINES IT — ASKED OF THE LEDGER AND NOT OF THE ROW BESIDE IT, WHICH IS THE
+           CORRECTION THIS BLOCK CARRIES AND THE REASON FlowAcct's REWARD IS TWO FIELDS. It used to compare
+           against `val_top`, which is `base + earned`, on the reasoning that flow_credit_emit raises the reward
+           and bumps the generation in one statement with no return between them. That reasoning is exactly
+           right about `earned` and exactly wrong about the sum: a from-baseline account is PLACED at the
+           virtual time of the flow in service (flow_arrive_at_virtual_time), so it stands at a reward of
+           whatever the leader held — 189 points on the frontier this was written against — with `emit_gen`
+           still at zero, because arriving is not emitting. Written over the sum this fires on the first census
+           at which an arrived account leads, which is precisely the state a fix for the starvation would
+           create: the diff that finally let a candidate session reach the front would have aborted the engine
+           on an invariant that was true of the ledger and false of the field.
+           WHAT IT STILL CATCHES IS THE SECOND WRITER IT WAS ALWAYS FOR, in both directions: a generation past
+           zero on an account that has earned nothing is a bump from something that emitted nothing, and
+           earnings on an account at generation zero are a credit that never forgave the window it paid for.
+           Neither is reachable through the one writer. */
+        DCHECK(top->family == NULL ||
+               ((out->top_forgiven > 0) == (top->family->earned > 0.0)),
+               "the leading account's EARNED ledger and its forgiveness count disagree about whether it has "
+               "ever emitted — flow_credit_emit raises both in one statement and is the only writer of either, "
+               "so one of them has a second writer and every reading of the front's aging is about an account "
+               "whose window was opened or closed by something that emitted nothing. This is asked of `earned` "
+               "and not of the reward: an account PLACED at the frontier's virtual time holds a reward it did "
+               "not emit, and that is an arrival rather than a defect");
     }
 
     /* THE FRONT IS ONE OF THE MEMBERS THIS SCAN ALREADY WALKED, SO ITS SILENCE LIES INSIDE THE EXTREMA IT

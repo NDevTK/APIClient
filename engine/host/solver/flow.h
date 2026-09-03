@@ -1134,7 +1134,23 @@ typedef struct {
     double val_min;
     double val_max;
     double val_top;    /* …and flow_best's family's, so the top of the order is named rather than inferred */
-    long val_zero;     /* members whose fork family has emitted nothing — ceiling 1.0 (see above) */
+    /* MEMBERS WHOSE FORK FAMILY'S WHOLE REWARD IS ZERO — the population whose weight ceiling is 1.0, which is
+       an ARITHMETIC fact about the reward and is what this row is for. It used to be described as "has emitted
+       nothing" as well, and those were one population until a from-baseline flow started being PLACED at the
+       frontier's virtual time: an arrived account has emitted nothing and holds whatever the leader held, so it
+       is outside this row and inside the next one. Two questions, one bit, and the reward-band verdict needs
+       the other one — see flow.c's FlowAcct for the split that separates them. */
+    long val_zero;
+    /* …AND THE POPULATION THAT ACTUALLY EMITTED NOTHING, which no row could name while the reward was one
+       field. It is `earned == 0` at family scope: members standing entirely on the coordinate their account
+       ARRIVED at, having produced nothing of their own since. That is the @S candidate session, the joined
+       document's boot flow and the cold-resumed recipe — every from-baseline door — and it is exactly the
+       population a pinned `val_min` beside a climbing `val_max` is a statement about. Read it with those two:
+       a large count here whose accounts sit at the FLOOR of the reward band is the arrival coordinate being
+       left behind by accounts that earn past it, and no term of the order re-relates it. `self_emit` beside it
+       is the same question asked of ONE MEMBER rather than of its account, and the pair separates a family
+       coasting on an ancestor's findings from a family that has none. */
+    long val_arrived;
     long self_emit;    /* members with val > 0: they emitted something THEMSELVES rather than standing on an
                           account an ancestor filled. Zero here while `finished` climbs is work that advances no
                           statement. It is a plain test and no longer a subtraction, because nothing is
