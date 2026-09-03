@@ -176,7 +176,7 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
      parked search  `{"sink":..,"source":..,"search":"parked","tried":N,"resumed":R,"reached":M,"turns":T,
                       "substituted":D,"sinkStrings":X,"survived":S,
                       "survivedOf":L[,"survivedAt":A,"survivedTo":O],"escaped":E[,"fires":F][,"witnessed":W]
-                      ,"probes":P,"payloads":[..],
+                      [,"deliveryProbed":B],"probes":P,"payloads":[..],
                       "survivedBy":[..],"withdrawn":[..]
                       [,"sourceEncodes":".."][,"sourceDelivers":".."][,"delivery":".."][,"deliveryPrefix":"#"]}`
    The parked shape exists because absence is never a "safe" verdict: a sink an attacker source REACHES is
@@ -398,11 +398,25 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
                     a sink, taken off a delivery probe seeded beside the context probe (solve.c), and it is
                     what every derived escape is constructed under. An empty value beside a full declaration is
                     the strongest thing a parked markup search can say — the source's own transform is the
-                    whole of the failure and no re-derivation reaches past it. ABSENT is TWO facts and both are
-                    positive: the source declares no percent-encode set (nothing is in question), or no
-                    delivery probe of this search has reached a sink yet (no measurement was taken). It is
-                    never emitted from the permissive initial table, which would report "all of them arrive"
-                    for a question nobody has asked.
+                    whole of the failure and no re-derivation reaches past it. It is never emitted from the
+                    permissive initial table, which would report "all of them arrive" for a question nobody
+                    has asked. ABSENT IS THREE FACTS AND IS READ WITH `deliveryProbed` BELOW OR NOT AT ALL,
+                    and this entry used to say TWO and name the wrong pair: the source declares no
+                    percent-encode set (nothing is in question — `sourceEncodes` is then absent too), no
+                    delivery probe of this search has reached a sink yet (no measurement was taken), or one
+                    HAS and the page destroyed every token it was built out of (a measurement, and the
+                    loudest this instrument takes). The third was invisible: `deliv_seen` is raised per TOKEN
+                    FOUND, so a probe the page ate reported exactly what an unscheduled search reports, and
+                    the two take opposite work.
+     `deliveryProbed` HOW MANY TIMES THAT PROBE REACHED A SINK — `witnessed`'s counterpart for the search's
+                    OTHER instrument, and the field that makes the absence above readable. Counted at the
+                    arrival, before a single token is looked for, so the zero means "not yet" and nothing
+                    else. `deliveryProbed:0` with `sourceEncodes` present is a search waiting on the
+                    scheduler; `deliveryProbed:N` with `sourceDelivers` absent is a page whose own transform
+                    eats the instrument, which is a finished answer rather than a distance. ABSENT where the
+                    search HOLDS no delivery probe (a single-context class states its vectors at detection and
+                    runs none; a derived search over server-injected page state has no byte in question) —
+                    decided by reading the search's own entries, never by re-stating the rule that pushes one.
      `delivery`     HOW an attacker puts bytes in this source, from the source's own declaration in the
                     component that owns it: "address" (the victim's own URL, at `deliveryPrefix`), "plant"
                     (§S(b)'s TWO-STAGE plant-then-load — there is no separate `stored` flag because being

@@ -326,7 +326,19 @@ typedef struct {
        meanings — the defaulted-field defect exactly: a permissive table read as an observation would report a
        page that decodes its own fragment for one that has never been asked. The report emits the measured set
        only when this says there IS one, and its absence is the positive statement that none was taken. */
-    SolveDelivered deliv; int deliv_seen; char **wit; int nwit, witcap;
+    /* …AND HOW MANY TIMES THE DELIVERY PROBE ITSELF REACHED A SINK, WHICH IS A DIFFERENT FACT FROM THE ONE
+       ABOVE AND WAS READING AS THE SAME ONE. `deliv_seen` is raised only where a probe TOKEN was found in the
+       output, so a probe that arrived and whose every token the page destroyed leaves it at 0 — and
+       cand_delivers, which gates the report on it, then emits nothing, exactly as it does for a probe that has
+       never run. Those are opposite findings: the second is a search waiting on the scheduler, the FIRST is a
+       page whose own transform eats the INSTRUMENT, which is the strongest evidence a parked search can have
+       and is the state a derivation must stop constructing against. The tell §@S names, at the rung directly
+       above `turns`, inside the instrument built to end it.
+       IT IS COUNTED AND NOT GATED ON, so the fix adds a fact and takes none away: `deliv_seen` still decides
+       whether a MEASURED SET exists, and it must, because a table narrowed by nothing is the permissive one and
+       emitting it would state "every declared byte arrives" about a run that observed no byte at all — the
+       defaulted-field defect, one field over, in the direction that fabricates. */
+    SolveDelivered deliv; int deliv_seen; int deliv_runs; char **wit; int nwit, witcap;
     /* THE SEARCH'S RE-INJECTION POINT — the decision state the DETECTING flow stood on when the attacker value
        reached this sink, held so that EVERY candidate of this search REPLAYS that path instead of searching for
        it again from nothing. One capture, at add_pending; queue_derived asserts it rather than taking a second.
@@ -729,6 +741,7 @@ static Cand *sink_search(const char *src, int sink, int *created) {
        constraint out of whatever the allocator held and decline escapes at random. */
     solve_delivered_all(&e->deliv);
     e->deliv_seen = 0;
+    e->deliv_runs = 0;
     e->wit = NULL; e->nwit = e->witcap = 0;
     e->reinject = NULL;
     /* SAME LINE AND SAME REASON AS `reach_credited`: the array is realloc'd and never zeroed, and a latch left
@@ -798,6 +811,23 @@ static int cand_probes(const Cand *e) {
     DCHECK(e != NULL, "the probe count was asked of no search");
     for (int i = 0; i < e->npl; i++) if (e->pl[i].kind == CAND_PROBE) n++;
     return n;
+}
+
+/* …AND WHETHER ONE OF THEM IS THE DELIVERY PROBE — read off the entries this search HOLDS rather than by
+   re-deciding add_pending's rule for pushing one. That rule has two terms (the class derives, and the source
+   declares a percent-encode set) and a second copy of it here would be the third statement of one fact, of
+   which the copy nobody runs against reality is the one that drifts. The partition is the probe's own locator,
+   which is the SAME one observe_delivery routes the observation on, so there is one rule and this reads it.
+   IT IS WHAT MAKES `deliveryProbed` ABSENT RATHER THAN ZERO for a search that has no such probe — a
+   single-context class states its vectors at detection and runs none, and a derived search over server-injected
+   page state has no byte whose arrival is in question. A 0 for either would say "the probe never arrived" about
+   a search that has no probe, which is the reading `witnessed` and `fires` are absent for. */
+static int cand_has_delivery_probe(const Cand *e) {
+    DCHECK(e != NULL, "the delivery-probe question was asked of no search");
+    for (int i = 0; i < e->npl; i++)
+        if (e->pl[i].kind == CAND_PROBE && e->pl[i].bytes &&
+            !strncmp(e->pl[i].bytes, SOLVE_BYTES_LOCATOR, sizeof SOLVE_BYTES_LOCATOR - 1)) return 1;
+    return 0;
 }
 
 /* HAS THIS SEARCH CONSTRUCTED AN ESCAPE? — the question `npl > nprobe` was the arithmetic for. It is a
@@ -1308,6 +1338,14 @@ static void observe_delivery(Cand *e, const char *out) {
            "a delivery probe reached a sink for a search whose source declares no percent-encode set — the "
            "probe is BUILT out of that set (add_pending), so a search running one without a declaration was "
            "seeded a payload nothing in this file constructs");
+    /* THE ARRIVAL IS COUNTED BEFORE ANY TOKEN IS LOOKED FOR, which is the whole of what separates this
+       observation's ABSENCE from its ZERO — the same sentence filter_survived states one rung up about
+       `sinkStrings`, and for the same reason. Reaching this line IS the delivery probe's bytes turning up in a
+       string a sink was handed: the caller partitioned on the probe's own locator to get here, so the fact is
+       already established and none of the scan below can retract it. A run that finds nothing is the LOUDEST
+       result this instrument has — the page destroyed the probe — and counting it only on success would report
+       it as the search never having been scheduled. */
+    e->deliv_runs++;
     n = strlen(enc);
     memcpy(tok, SOLVE_BYTES_LOCATOR, tl);
     for (i = 0; i < n; i++) {
@@ -2678,6 +2716,28 @@ char *solve_json_array(JSContext *ctx) {
         if (sink_class(g_pending[i].sink)->derive != SINK_DERIVE_NONE) {
             json_buf_raw(&b, ","); json_buf_key(&b, "witnessed");
             snprintf(t, sizeof t, "%d", g_pending[i].nwit); json_buf_raw(&b, t);
+        }
+        /* …AND THE OTHER PROBE'S ARRIVAL COUNT, BESIDE IT, BECAUSE THE PAIR IS THE SAME QUESTION ASKED OF THE
+           SEARCH'S TWO INSTRUMENTS. `witnessed` says the CONTEXT probe reached the sink; this says the DELIVERY
+           probe did. Without it `sourceDelivers` carried two opposite states under one absence: the probe has
+           not run (wait for the scheduler), and the probe RAN, ARRIVED, and the page destroyed every token it
+           was made of (stop deriving — the source's own transform is the whole answer, and it is the strongest
+           thing a parked search can report). Those take opposite work, and the smoke's own `s-park-nodeliver`
+           and `s-attr-nodeliver` rows read 0 for both.
+           IT DOES NOT MOVE `sourceDelivers`' GATE, which stays on `deliv_seen`, because a table narrowed by
+           nothing IS the permissive one: emitting it after a run that observed no byte would state that every
+           declared byte arrives, which is the defaulted-field defect in the direction that fabricates. Two
+           facts, two fields — the run happened, and something was learned from it.
+           ASKED OF THE ENTRIES THE SEARCH HOLDS (cand_has_delivery_probe), so a search with no delivery probe
+           is ABSENT here rather than zero, for the reason `witnessed` is absent for a single-context class. */
+        if (cand_has_delivery_probe(&g_pending[i])) {
+            DCHECK(!g_pending[i].deliv_seen || g_pending[i].deliv_runs > 0,
+                   "an @S search reports a delivered byte observed while its delivery probe has never reached "
+                   "a sink — observe_delivery counts the arrival before it looks for a single token, so a byte "
+                   "learned without one is a second door into the delivery table, and `sourceDelivers` would "
+                   "be a constraint no run of this search measured");
+            json_buf_raw(&b, ","); json_buf_key(&b, "deliveryProbed");
+            snprintf(t, sizeof t, "%d", g_pending[i].deliv_runs); json_buf_raw(&b, t);
         }
         /* HOW MANY OF `payloads`' ENTRIES ARE PROBES — counted off the entries' own labels, which is the
            producer fact that splits `reached:0` one more time and the one state of this search the report
