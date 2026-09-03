@@ -1894,7 +1894,53 @@ QJS_EXPORT void qjs_request_park(void)
 /* STREAM what is known so far. The host reads findings off the print sink, so this writes the same one result
    document qjs_result returns, on the same @RESULT line the smoke entry uses — a long analysis reports as it
    goes instead of only at the end. It READS: no flow is touched, nothing is drained, and the frontier the next
-   step resumes is the one this was called on. */
+   step resumes is the one this was called on.
+
+   THAT SENTENCE IS TRUE, AND IT WAS READ AS A STRONGER ONE — SO THE STRONGER ONE IS STATED AND REFUSED HERE
+   RATHER THAN LEFT TO BE RE-DERIVED. Nothing above says the DOCUMENT is a pure function of the frontier, and
+   it is not. Composing one WEIGHS the frontier: solver/flow.c's flow_wfq_census walks every member calling
+   flow_weight, then calls flow_best, which walks them again — and this engine COUNTS what it spends asking
+   its own order. So two documents composed at ONE boundary, with no step between them, differ by construction
+   in exactly four rows of `_wfq`, every one a LIFETIME COUNT of scan work and none of them a fact about any
+   member:
+
+     scanCensusRuns     +1        flow_scan_runs(FLOW_SCAN_CENSUS)     — one census walk performed
+     scanCensusWeights  +members  flow_scan_weights(FLOW_SCAN_CENSUS)  — that walk's own flow_weight calls
+     scanOtherRuns      +1        flow_scan_runs(FLOW_SCAN_OTHER)      — the flow_best inside that census
+     scanOtherWeights   +members  flow_scan_weights(FLOW_SCAN_OTHER)   — and that flow_best's own walk
+
+   THE `+1`s AND THE MOVED SET ARE MEASURED; THE `+members` IS ASSERTED IN THE ENGINE AND NOT EXTRAPOLATED
+   FROM THEM. Twenty-four runs — four corpus documents under `stream` and `eagerstream`, three runs each, on
+   the artifact stamped at engine 7a7cd512 — moved that set and no other field of the document, every time, at
+   a one-member frontier where each `+members` is `+1`. What makes it `+members` in general is flow.c's own
+   DCHECK at the end of flow_wfq_census, which holds `g_scan_weights[FLOW_SCAN_OTHER]`'s delta across the
+   flow_best equal to `g_flows_n`, beside a census walk whose comment states it skips nothing.
+
+   IT IS NOT A LOOPHOLE, AND THE ARGUMENT IS solver/flow.h's OWN AT FLOW_SCANS: an instrument whose cost is
+   unmeasured is a defect one level up, and the price of a census has to be a COUNT because this host's
+   quantum is wall-denominated and a duration would be a fact about the machine rather than about what the
+   engine did. An entry that composed a document WITHOUT raising these would be under-reporting its own cost
+   by precisely the quantity the rows exist to price — `scanCensusWeights / scanCensusRuns` is the mean
+   frontier a sample paid for, and `scanCensusWeights` against `scanNextWeights` is the share of all
+   frontier-weighing that went to REPORTING rather than to running, which is the only thing that settles
+   whether this entry is heavy enough to change the run it samples. Nor is the fix to READ the counters before
+   the walk, and that is written down so nobody builds it: call two would still see call one's raise, so the
+   two documents would still differ and the published figure would merely be one sample stale.
+
+   AND `scanOther*` IS THE HALF A READER MUST NOT TAKE AS THE HOST'S. That entry is SHARED — flow.c gives it
+   to flow_best and to the pager's eviction tail, and engine.c's own top-weight read runs under it — so a host
+   that STREAMS inflates it by one whole frontier per call, for the whole of every analysis, and this entry is
+   the only production caller on that cadence. `scanOtherWeights` off a streamed run is therefore not a
+   reading of what the host's reads and the pager cost. flow_wfq_census brackets its own contribution to
+   assert the doubling, but nothing subtracts it afterwards and no row here carries it separately.
+
+   WHAT THIS EXEMPTS IS FOUR ROWS AND NOTHING ELSE, WHICH IS THE POINT OF NAMING THEM. Every other row of
+   `_wfq` — the reward band, the seven notch quotients, `picksLifetime`, the never-picked and job and delivery
+   pairs — and every other field of the document are composed out of state this entry does not touch. A
+   difference in ANY of those across two calls at one boundary is exactly the side effect the first paragraph
+   denies: a latch consumed, a list drained or a counter reset while rendering, on the path every real
+   analysis takes every PARTIAL_MS. A checker of this contract exempts these four BY NAME and holds the rest
+   to equality; exempting `_wfq` whole would blind it to that, and nothing else in this tree asks. */
 QJS_EXPORT void qjs_emit_partial(void)
 {
     char *js;
