@@ -381,10 +381,22 @@ static void fp_require_placeable(lxb_dom_element_t *el)
               "the vertical spacing above it — are what turns that rectangle into the distance this entry "
               "reports, and the ROW and ROW GROUP and COLUMN boxes need the same sums taken over their own "
               "spans. BUILD those two prefix sums here, over `TableUsedWidths.columns` and "
-              "`TableUsedHeights.rows`, keyed by `table_grid_cell_of`; a CAPTION is the one box in this list "
-              "that is NOT in the grid at all — §17.4 Tables in the visual formatting model puts it in the "
-              "table WRAPPER, so it is §9.4.1's own stack inside a box no element names, and it waits on that "
-              "box rather than on any of this",
+              "`TableUsedHeights.rows`. "
+              "THEY CANNOT ALL BE KEYED BY `table_grid_cell_of`, WHICH IS WHAT THIS LINE USED TO SAY, AND THE "
+              "BOX THAT ABORTS HERE IS THE COUNTEREXAMPLE: that entry maps a CELL element to its rectangle, so "
+              "a ROW is reachable only through the cells anchored in it and `<tr></tr>` has none — a real row "
+              "with a real grid row and a real height (§17.5.3's maximum over no cell) that no mapping in "
+              "core/layout/table_grid.h names. A ROW GROUP and a COLUMN are unreachable the same way. So the "
+              "FIRST diff is that mapping, where the rows are already generated in grid order with their "
+              "elements — core/layout/table_box.h's `table_box_rows` is what `table_grid_build` walks — "
+              "reported as a row INDEX beside the grid, so this becomes a lookup rather than a search. "
+              "core/layout/used_value.c's ROW-height read states the same missing mapping in its own crash and "
+              "is its second consumer, which is how you will know it fired: both stop naming it. "
+              "A CAPTION IS NOT IN THE GRID AT ALL and no longer waits on a box nothing can name — §17.4 "
+              "Tables in the visual formatting model puts it in the table WRAPPER, which §10.1's walk now "
+              "reports (core/layout/used_value.h) and whose used width and height "
+              "core/layout/used_value.c answers; what a caption still waits on is §9.4.1's stack over the "
+              "WRAPPER'S OWN CHILD BOX LIST, which core/layout/block_flow.c names in full",
               box_subject(el, nbuf, sizeof nbuf));
     if (inline_level)
         DFAILF("%s: "
