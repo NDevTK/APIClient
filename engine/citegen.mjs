@@ -5026,7 +5026,17 @@ function audit(argv, opts = {}) {
    * watched a count go UP, which is correct behaviour reported by a number with no denominator on it. Stating
    * both sides makes the movement legible in the one line a reader keeps: the judged population is what a
    * repair grows, and a finding count is only comparable against the population it was drawn from. */
-  const findingChannels = [["section/term/title", findings], ["quotation", quoteFindings], ["step", stepFindings]];
+  /* EACH CHANNEL CARRIES ITS OWN DENOMINATOR, BECAUSE THE ONE PRINTED BELOW IS NOT THE ONE THAT MOVES. The
+   * citation-resolution denominator is a fact about the TREE, and a run whose corpus changed leaves it
+   * IDENTICAL — 26630 of 48994 in both halves of the incident that produced this line. What moved was each
+   * channel's OWN population: quotations COMPARED fell 5156 → 2962 when two standards' text corpora were
+   * refused, and the finding total fell with it, so a report that lost half the quotation channel read as a
+   * 978 → 688 improvement. The reader who ran it said outright that on the total alone they would have
+   * committed it as a win. CLAUDE.md's rule is that a coverage figure states what it is a fraction of IN THE
+   * SAME LINE; this is that rule applied to the one line two runs are actually compared on. */
+  const findingChannels = [["section/term/title", findings, () => judged, "resolved citations"],
+                           ["quotation", quoteFindings, () => qstat.checked, "compared"],
+                           ["step", stepFindings, () => sstat.checked, "compared"]];
   const allFindings = findingChannels.flatMap(([, g]) => g);
   const allFiles = new Set(allFindings.map((f) => f.file));
   const namedWithFinding = [...named].filter((f) => allFiles.has(f));
@@ -5040,9 +5050,32 @@ function audit(argv, opts = {}) {
   if (judged + unjudged !== stat.total)
     throw new Error(`citegen: the resolution census does not tile the corpus — judged ${judged} + unjudged ${unjudged} != ${stat.total} citations. ` +
       `A resolution outcome was added without a counter, and the coverage line below would understate its own denominator.`);
-  console.log(`\n${allFindings.length} finding(s) = ${findingChannels.map(([n, g]) => `${g.length} ${n}`).join(" + ")}` +
+  console.log(`\n${allFindings.length} finding(s) = ${findingChannels.map(([n, g, d, lbl]) => `${g.length} ${n} of ${d()} ${lbl}`).join(" + ")}` +
     ` — the total over EVERY channel this run judges, which is the set --since compares. The four category headers above` +
     ` (UNKNOWN-SECTION, MISATTRIBUTED, TITLE-MISMATCH, RETIREMENT-NOTE-WRONG) sum to ${findings.length} and are one of the three.`);
+  /* AND THE CORPUS STATE IS PRINTED HERE AND NOT ONLY MID-REPORT, because it is the one condition under which
+   * a FALLING finding total means LOST COVERAGE rather than repair, and it is invisible in every other number
+   * on this line. It arises from a PARTIAL corpus: `--regen` writes a standard's section index, its text and
+   * its steps from ONE fetch, so it cannot produce this state — but copying `text/` and `steps/` into a tree
+   * whose index is older can, and did. The editions then disagree, the staleness pair refuses those standards
+   * outright, and the standards that vanish are whichever ones the WHATWG happened to edit that week: the
+   * measured instance lost html and fetch, which between them carried 2205 of the run's quotations.
+   * IT IS SAID WHEN THERE IS NOTHING TO SAY, TOO. A line that appears only on the bad day is a line nobody
+   * learns to look for, and its absence then reads as the clean case rather than as a line that was never
+   * printed — the silent zero this file is written against, in the summary itself. */
+  {
+    const ref = [...new Set([...txtStale.keys(), ...stpStale.keys()])].sort();
+    const lost = qstat.noCorpus + sstat.noCorpus + sstat.staleCorpus;
+    console.log(`  CORPUS: ${txt.size} standard(s) with a text corpus, ${stp.size} with steps` +
+      (stpNoPos.size ? ` (${stpNoPos.size} of those carrying no item positions, so the step CONTENT check is not asked of them)` : "") +
+      (ref.length
+        ? `. REFUSED: ${ref.join(" ")} — the corpus is a different EDITION from the section index it is keyed by, which is what a`
+          + ` partial regen leaves behind (text or steps copied in without the index beside them). Those standards are removed from the`
+          + ` judged population WHOLE, so a finding total that falls here has lost coverage rather than gained repairs.`
+          + ` Re-run: node engine/citegen.mjs --regen ${ref.join(" ")}.`
+        : `. None refused: every committed corpus agrees in edition with the section index it is keyed by.`) +
+      ` ${lost} quotation(s) and step reference(s) went unjudged this run for want of a corpus.`);
+  }
   console.log(`  drawn from ${judged} citation(s) resolved on their own evidence, of ${stat.total} read` +
     ` — the other ${unjudged} (${stat.byFile} placed only by a file vote, ${stat.other} naming an unindexed standard, ${stat.skipped} naming no standard and no term)` +
     ` are outside every check here. Writing a standard, term or title at one of those MOVES it into the judged population,` +
