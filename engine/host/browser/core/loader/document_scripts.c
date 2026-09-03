@@ -196,8 +196,11 @@ DocScripts document_exec_scripts(lxb_html_document_t *dom) {
             /* §4.12.1's src BRANCH is entered on the ATTRIBUTE, and its second step is `src` being the empty
                string: "queue an element task … to fire an event named error at el, and return". So the element
                runs NOTHING — not its child text, which is what a value-length test let through
-               (`<script src="">alert(1)</script>` ran the alert). What is still owed is the error event, which
-               needs a task on this document rather than anything here. */
+               (`<script src="">alert(1)</script>` ran the alert). The error event is
+               core/html/html_script.h's html_script_queue_error and is NOT owed HERE: this is a pure DOM SCAN
+               of a parsed tree with no realm and no flow under it, so queuing a task from it would be the
+               baseline walk ISSUING work rather than RECORDING it. The caller that holds a realm performs
+               §4.12.1.1's steps over these rows and is the party that fires. */
             if (src && sl) {
                 /* THE ROW IS NOT CONDITIONAL ON THE ALLOCATION, for the same reason the inline branch below is
                    not: a `<script src>` this scan drops is an external program the document never fetches, and
