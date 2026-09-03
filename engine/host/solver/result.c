@@ -618,6 +618,23 @@ char *result_wfq_json(void) {
                      "\"valZero\":%ld,\"valArrived\":%ld,\"valUnplaced\":%ld,\"selfEmit\":%ld,"
                      "\"unrun\":%ld,"
                      "\"neverPicked\":%ld,\"neverPickedGap\":%.3f,"
+                     /* …AND HOW WIDE THE PLATEAU IS, WITHOUT WHICH THE GAP ABOVE IS SILENT IN EXACTLY THE
+                        DIRECTION THAT DECIDES THE REPAIR. `neverPickedGap` reads 0.0 for the best of a
+                        six-hundred-wide tie AND for the best of a lone near-miss, and solver/flow.h's own
+                        retired sentence says a 0.0 is ALSO the expected reading of a healthy sweep — the pick
+                        returns one of N tied maxima and the other N-1 stand at the front with `picks == 0`.
+                        N was reported NOWHERE, so the pair could not tell a sweep in progress from an order
+                        that separates nothing. This is N.
+                        A GAUGE, NEVER DIFFERENCED, for `neverPicked`'s reason: a member that is chosen leaves
+                        this population and every member born since joins it, so the series falls as well as
+                        rises. It is `<= neverPicked` by construction and non-zero exactly when
+                        `neverPickedGap` is 0.000 — both asserted at the end of flow_wfq_census, so the row
+                        already had a reader in every dev build before it had one here. Read it beside
+                        `visZero` and `jobsFramed`, which is what says WHICH of the two within-family
+                        separators flattened the order: the optimism bonus (frozen because flow_credit_visit
+                        asserts `frame == NULL` and a member inside a program cannot advance `visits`) or the
+                        own silence (forgiven for a whole account at any arm's emission). */
+                     "\"neverPickedAtTop\":%ld,"
                      /* …AND WHERE THE DISPATCHES THAT DID HAPPEN WENT, which the pair above cannot say and
                         without which its reading has three states behind one answer. See solver/flow.h for
                         the three and for why two of them take DIFFERENT weight changes while the third takes
@@ -734,7 +751,7 @@ char *result_wfq_json(void) {
                      "\"workDone\":%ld,\"rankChanges\":%ld}",
                      w.members, w.val_min, w.val_max, w.val_top, w.vt,
                      w.val_zero, w.val_arrived, w.val_unplaced, w.self_emit, w.unrun,
-                     w.never_picked, w.never_picked_gap,
+                     w.never_picked, w.never_picked_gap, w.never_picked_at_top,
                      (long long)w.picks_live, (long long)w.picks_max, (long long)w.picks_lifetime,
                      (long long)w.svc_max, (long long)w.svc_min,
                      (long long)w.svc_fam_max, (long long)w.svc_fam_min, w.families,
