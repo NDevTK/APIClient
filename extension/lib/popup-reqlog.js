@@ -25,6 +25,29 @@ function _claimedOriginPair(req) {
   return half(req.sourceOrigin) + " → " + half(req.targetOrigin);
 }
 
+/* THE CARD'S TAB ID IS ASSERTED AT THE MINT, NOT CONVERTED — the same defect as the replay lookup's key one
+   field over, and it survives the fix that closed that one because it wears a different construct. Every card
+   substituted the tab id through `String()` into its own attribute, and ECMAScript §7.1.19 ToString
+   ( argument ) answers the String value "undefined" for `undefined` and "NaN" for `NaN` — both NON-EMPTY, so
+   both are TRUTHY when the click handler asks `c.dataset.tabId ? parseInt(…) : undefined`, the guard that
+   exists precisely to notice an absent one. `parseInt("undefined", 10)` and `parseInt("NaN", 10)` are both
+   `NaN`, `NaN != null` is TRUE, and
+   `replayRequest` then stamps `req._tabId = NaN` under a comment explaining that the stamp is what stops a
+   cross-tab replay reaching the wrong origin. A replay carrying a tab id that is not one is worse than a
+   missing stamp, because the missing stamp has a fallback the code names and NaN has none: it is the
+   defaulted-field defect with the absence MINTED into a plausible datum rather than passed through, which is
+   why no band of the record-field audit can see it (it reads the substitution as a template's own text).
+   `renderResponsePanel` is the ONLY producer of a flattened entry — `entries.push({ ...req, _tabId: tid })`
+   with `tid = parseInt(tidStr, 10)` off `allTabsData`'s own keys — and `_renderLogCard` is reached from
+   nowhere else, so an entry without an integer here is this document disagreeing with itself. */
+function _cardTabId(req) {
+  DCHECK(Number.isInteger(req._tabId),
+         "a request-log card was rendered from an entry carrying no integer `_tabId` — renderResponsePanel " +
+         "is the one mint of a flattened entry and it stamps `parseInt(tidStr, 10)` off allTabsData's own " +
+         "keys, so a non-integer here is a key that is not a tab id or a card built off an unflattened record");
+  return String(req._tabId);
+}
+
 function _renderLogCard(req, showTabLabel) {
   const hasProto = !!req.decodedBody;
 
@@ -35,7 +58,7 @@ function _renderLogCard(req, showTabLabel) {
     const recvCount = msgs.filter((m) => m.dir === "recv").length;
     const statusClass = req.wsOpen ? "ws-status-open" : "ws-status-closed";
     const statusText = req.wsOpen ? "OPEN" : "CLOSED";
-    return `<div class="card request-card clickable-card mb-8" data-id="${esc(String(req.id))}" data-tab-id="${esc(String(req._tabId))}">
+    return `<div class="card request-card clickable-card mb-8" data-id="${esc(String(req.id))}" data-tab-id="${esc(_cardTabId(req))}">
     <div class="card-label flex-between">
       <span>
         <span class="badge badge-ws">WEBSOCKET</span>
@@ -58,7 +81,7 @@ function _renderLogCard(req, showTabLabel) {
     const sentCount = msgs.filter((m) => m.dir === "sent").length;
     const recvCount = msgs.filter((m) => m.dir === "recv").length;
     const origins = _claimedOriginPair(req);
-    return `<div class="card request-card clickable-card mb-8" data-id="${esc(String(req.id))}" data-tab-id="${esc(String(req._tabId))}">
+    return `<div class="card request-card clickable-card mb-8" data-id="${esc(String(req.id))}" data-tab-id="${esc(_cardTabId(req))}">
     <div class="card-label flex-between">
       <span>
         <span class="badge badge-pm">POSTMESSAGE</span>
@@ -81,7 +104,7 @@ function _renderLogCard(req, showTabLabel) {
     const sentCount = msgs.filter((m) => m.dir === "sent").length;
     const recvCount = msgs.filter((m) => m.dir === "recv").length;
     const origins = _claimedOriginPair(req);
-    return `<div class="card request-card clickable-card mb-8" data-id="${esc(String(req.id))}" data-tab-id="${esc(String(req._tabId))}">
+    return `<div class="card request-card clickable-card mb-8" data-id="${esc(String(req.id))}" data-tab-id="${esc(_cardTabId(req))}">
     <div class="card-label flex-between">
       <span>
         <span class="badge badge-mc">MSGCHANNEL</span>
@@ -98,7 +121,7 @@ function _renderLogCard(req, showTabLabel) {
   </div>`;
   }
 
-  return `<div class="card request-card clickable-card mb-8" data-id="${esc(String(req.id))}" data-tab-id="${esc(String(req._tabId))}">
+  return `<div class="card request-card clickable-card mb-8" data-id="${esc(String(req.id))}" data-tab-id="${esc(_cardTabId(req))}">
     <div class="card-label flex-between">
       <span>
         <span class="badge ${esc(req.method)}">${esc(req.method)}</span>
@@ -167,8 +190,13 @@ function _renderVisibleSlice() {
   // Attach click handlers
   container.querySelectorAll(".request-card").forEach((c) => {
     c.onclick = () => {
-      const sourceTabId = c.dataset.tabId ? parseInt(c.dataset.tabId, 10) : undefined;
-      replayRequest(c.dataset.id, sourceTabId);
+      /* READ BACK WITHOUT THE TRUTHINESS TEST, because that test is what let "undefined" and "NaN" through
+         as if they were ids. §_cardTabId stamps every card this handler is hung on, so a card without a
+         decimal-integer attribute is a card this document did not render. */
+      DCHECK(/^-?[0-9]+$/.test(c.dataset.tabId || ""),
+             "a request-log card reached its click handler with no decimal `data-tab-id` — _cardTabId writes " +
+             "one on every card _renderLogCard emits and this handler is attached to those cards alone");
+      replayRequest(c.dataset.id, parseInt(c.dataset.tabId, 10));
     };
   });
 

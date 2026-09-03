@@ -4,9 +4,15 @@
 // of silently corrupting globalStore).
 //
 // LOADED FIRST IN EVERY REALM THAT ASSERTS, because a realm without this file does not assert LESS — it
-// asserts NOTHING, and the seams it sits on are read with `||` instead. ast-worker.html loads it before
-// offscreen-brain.js, popup.html loads it, the renderer frame is handed its bytes in the boot record it
-// checks itself against, and the CONTENT SCRIPT's isolated world gets it from manifest content_scripts —
+// asserts NOTHING, and the seams it sits on are read with `||` instead. FIRST means FIRST OF THE SCRIPT TAGS,
+// not merely present: this line said "popup.html loads it" while that document loaded it NINETEENTH of twenty,
+// after eighteen libraries, under an argument about what those libraries happen to do at load — a claim about
+// code nobody re-checks, standing in a header whose subject is that an assumption must crash at its origin. A
+// realm named here is named with its POSITION so the next divergence is one grep rather than a reading of
+// eighteen files. ast-worker.html loads it first of its script tags, popup.html loads it first of its script
+// tags (ahead of lib/field-def.js), the renderer frame is handed its bytes in the boot record it
+// checks itself against, and the CONTENT SCRIPT's isolated world gets it from manifest content_scripts, where
+// it is listed AHEAD of content.js —
 // content.js is a party to two seams (intercept.js's per-transport RESPONSE_BODY detail, and the trusted
 // zone's PAGE_FETCH / *_SEND_MSG relays) and had no way to state either contract before it was injected
 // there. A content script is UNTRUSTED (SECURITY.md) and that is not in tension with this: the assertions it

@@ -2134,10 +2134,69 @@ function functionScopes(struct, code) {
     s.paramList = splitTop(struct, s.params[0], s.params[1])
       .map(([a, b]) => { const p2 = /^\s*([A-Za-z_$][\w$]*)\s*(?:=|$)/.exec(code.slice(a, b)); return p2 ? p2[1] : null; });
   }
-  /* `const`/`let`/`var` declarators, and the name a `function`/`class` declaration introduces. Attributed to
-     the innermost enclosing FUNCTION body rather than to the innermost block: a `const` in a loop body and a
-     read of it after the loop are one binding by any reading, and splitting them would cost an anchor for
-     nothing. Two same-named declarations inside ONE function body still merge, which is the residue. */
+  /* The end of the expression that STARTS at `from`: the first `;` or `,` at depth zero, or the closer that
+     ends the construct the expression sits inside. The same walk `inits` already runs over a write's right-hand
+     side, named once so the constructs below cannot spell it several ways. Defined HERE, above the declaration
+     walk, because §the LEXICAL EXTENT needs it to find where a `for`-head's controlled statement ends. */
+  const exprEnd = (from) => {
+    let e = from, d = 0;
+    for (; e < struct.length; e++) {
+      const ch = struct[e];
+      if (PAIRS[ch]) d++;
+      else if (ch === ")" || ch === "]" || ch === "}") { if (!d) break; d--; }
+      else if ((ch === ";" || ch === ",") && !d) break;
+    }
+    return e;
+  };
+
+  /* §the LEXICAL EXTENT — A `const`/`let` DECLARATION IS BOUND BY ITS BLOCK, NOT BY ITS FUNCTION, AND ATTRIBUTING
+   * IT TO THE FUNCTION MERGES DISTINCT BINDINGS INTO ONE RECEIVER. This walk used to hand every `const`/`let` to
+   * the innermost enclosing FUNCTION body and record the consequence as a residue — "two same-named declarations
+   * inside ONE function body still merge". That residue is not a narrowing, it is a WRONG ANCHOR, and it accused
+   * correct code: `engine/idlgen.mjs` binds `n` at module top level in `for (const n of idl.declarations)` and
+   * again in `for (const n of dictNameds)`, so ONE receiver `n@file` carried six reads of a `webidl2` node and
+   * nine of a record this corpus builds. §the ORIGIN of a value answered "the `webidl2` module" for the first
+   * six and nothing for the other nine, `agreeOrigin` requires unanimity, and the merged receiver therefore
+   * reached the SHAPE anchor — which read the UNION of two objects' field names and reported three `|| []` over
+   * a foreign node as DEFAULTED. `engine/route.mjs` is the same defect one band over: `for (const r of
+   * reads.values())` and a `const r = JSON.parse(…)` inside a later loop merged, the union anchored on the
+   * engine result, and the map record's own five fields were reported OFF-RECORD — with this gate's own output
+   * naming their writer, in this corpus, two lines away. A wrong anchor is worse than an undecided one, and an
+   * auditor that accuses correct code is the one direction §Architecture rates as unrecoverable.
+   *
+   * SO THE BINDER IS THE DECLARATION'S OWN EXTENT, WHICH IS WHAT ECMAScript SAYS IT IS. §14.2.2 Runtime
+   * Semantics: BlockDeclarationInstantiation ( code, env ) instantiates a block's lexical declarations in that
+   * block's environment, and §14.7.5.7 ForIn/OfBodyEvaluation ( lhs, stmt, iteratorRecord, iterationKind,
+   * lhsKind, labelSet [ , iteratorKind ] ) does "Let iterationEnv be NewDeclarativeEnvironment ( oldEnv )" per
+   * iteration for a `for`-head declaration. `var` and a `function`/`class` declaration are NOT block-scoped and
+   * keep the function span they always had. The extent is the innermost enclosing BRACKET: a `{` is the block
+   * itself, and a `(` is a `for`/`catch` head whose binding also governs the statement it controls. A
+   * declaration with no enclosing bracket is the module's own top level and still answers `"file"`, which is
+   * what §the ORIGIN of a value and §GLOBAL_IFACE read as "no scope in this file binds this name". */
+  const lexOf = (at) => {
+    let d = 0, open = -1;
+    for (let x = at - 1; x >= 0; x--) {
+      const c = struct[x];
+      if (c === ")" || c === "]" || c === "}") d++;
+      else if (c === "(" || c === "[" || c === "{") { if (!d) { open = x; break; } d--; }
+    }
+    if (open < 0) return null;
+    if (struct[open] === "{") { const close = matchAt(struct, open); return close < 0 ? null : [open, close]; }
+    if (struct[open] !== "(") return null;                 /* a `[` — not a position a declaration can be in */
+    const close = matchAt(struct, open);
+    if (close < 0) return null;
+    const b = sig(struct, close, struct.length);
+    return [open, struct[b] === "{" ? matchAt(struct, b) : exprEnd(b)];
+  };
+  /* Every lexical binding this file introduces, by name, innermost-first — the list `binderOf` walks. */
+  const lexBinds = new Map();
+  const addLex = (name, at) => {
+    const ext = lexOf(at);
+    if (!ext || ext[1] < 0) return null;
+    if (!lexBinds.has(name)) lexBinds.set(name, []);
+    lexBinds.get(name).push({ open: ext[0], close: ext[1] });
+    return ext;
+  };
   /* A DECLARATION IS A LIST, AND READING ONLY ITS FIRST DECLARATOR LEFT EVERY LATER NAME FREE. `let out = "", i
      = 0, n = src.length` declares three bindings and a first-name-only walk saw one, so `i` and `n` were names
      NO scope in this file bound — which is the answer reserved for an IMPORT, and it is the one answer that
@@ -2173,25 +2232,38 @@ function functionScopes(struct, code) {
     }
     return out;
   };
-  const VAR = /\b(?:const|let|var)\s+/g;
-  const declSites = [];   // {name, at, kwAt} — every binding a `const`/`let`/`var` in this file introduces
+  const VAR = /\b(const|let|var)\s+/g;
+  const declSites = [];   // {name, at, kwAt, ext} — every binding a `const`/`let`/`var` in this file introduces
   let d;
   while ((d = VAR.exec(struct))) {
     const s = innermost(d.index);
+    const lexical = d[1] !== "var";
     for (const n of declaratorsAt(d.index + d[0].length)) {
-      declSites.push({ ...n, kwAt: d.index });
+      /* A LEXICAL DECLARATION IS RECORDED AT ITS OWN EXTENT AND A `var` AT ITS FUNCTION, which is the one
+         difference §the LEXICAL EXTENT is about. A lexical declaration with no enclosing bracket is the
+         module's top level and has no extent, so it falls through to the span walk exactly as `var` does. */
+      declSites.push({ ...n, kwAt: d.index, ext: lexical ? addLex(n.name, d.index) : null });
       bound.add(n.name);
       if (s) s.binds.add(n.name);
     }
   }
-  /* The name a `function`/`class` declaration and a `catch` binding introduce, which are not lists. */
+  /* The name a `function`/`class` declaration and a `catch` binding introduce, which are not lists. A `catch`
+     parameter is lexical and its extent is its own head's paren, so it is asked from INSIDE that paren — asking
+     at the `catch` keyword would find the enclosing block and give the binding a scope wider than the clause.
+     A `function`/`class` declaration is not block-scoped the way a `const` is and keeps the span it had. */
   const NAMED = /\bfunction\s*\*?\s*([A-Za-z_$][\w$]*)|\bclass\s+([A-Za-z_$][\w$]*)|\bcatch\s*\(\s*([A-Za-z_$][\w$]*)/g;
   while ((d = NAMED.exec(struct))) {
     const name = d[1] || d[2] || d[3];
     const s = innermost(d.index);
+    if (d[3]) addLex(name, d.index + d[0].length);
     bound.add(name);
     if (s) s.binds.add(name);
   }
+  for (const [, list] of lexBinds) list.sort((a, b) => b.open - a.open);   /* innermost first */
+  /* The key a binding is filed under. The two namespaces are kept apart by the `L` — a block whose brace is a
+     function's own body brace would otherwise key its `const x` and that function's parameter `x` alike, and
+     those are two bindings that cannot both exist but can both be asked. */
+  const binderKey = (ext, s) => ext ? `L${ext[0]}` : s ? String(s.open) : "file";
 
   /* A BINDING'S DECLARATION IS EVERY WRITE THAT NAMES IT, AND A DECLARATOR'S INITIALIZER IS NOT A SPECIAL KIND
    * OF WRITE. `const url = new URL(x)` states what `url` is in the same construct that creates it, and reading
@@ -2227,7 +2299,7 @@ function functionScopes(struct, code) {
      construct that could see it. */
   for (const q of declSites) {
     const s = innermost(q.kwAt);
-    const key = `${s ? s.open : "file"}\0${q.name}`;
+    const key = `${binderKey(q.ext, s)}\0${q.name}`;
     if (inits.has(key)) { inits.set(key, null); continue; }   /* two declarations of one name — doubtful */
     /* A DESTRUCTURED NAME'S OWN INITIALIZER IS NOT READABLE HERE — `const { ok } = f()` declares `ok` out of a
        field of `f()`'s answer, which is not an expression this walk can hand back. Its LATER assignments are
@@ -2235,7 +2307,9 @@ function functionScopes(struct, code) {
        be easy: the false COMPLETE this file refuses everywhere. Doubtful, which is what it was before the walk
        could see the name at all. */
     if (q.pattern) { inits.set(key, null); continue; }
-    const span = s ? [s.open, s.close] : [0, struct.length];
+    /* THE WRITES SEARCHED ARE THE ONES INSIDE THIS BINDING'S OWN EXTENT. A `var` and a top-level declaration
+       have the function span (or the file) for an extent, which is what every declaration had before. */
+    const span = q.ext ? q.ext : s ? [s.open, s.close] : [0, struct.length];
     const writes = assignmentSites(struct, q.name, span[0], span[1]);
     if (!writes.length || writes.some((w) => w.rhs < 0)) { inits.set(key, null); continue; }
     inits.set(key, writes.map((w) => {
@@ -2250,8 +2324,10 @@ function functionScopes(struct, code) {
     }));
   }
 
-  /* The binder of `name` at `off`: the innermost enclosing body that binds it, or the file when none does. */
+  /* The binder of `name` at `off`: the innermost LEXICAL EXTENT that declares it and contains `off`, else the
+     innermost enclosing function body that binds it, else the file. */
   const binderOf = (name, off) => {
+    for (const b of lexBinds.get(name) || []) if (off >= b.open && off < b.close) return `L${b.open}`;
     for (let s = innermost(off); s; s = innermost(s.open)) if (s.binds.has(name)) return String(s.open);
     return "file";
   };
@@ -2311,32 +2387,28 @@ function functionScopes(struct, code) {
     }
     return out;
   };
-  /* The end of the expression that STARTS at `from`: the first `;` or `,` at depth zero, or the closer that
-     ends the construct the expression sits inside. The same walk `inits` already runs over a write's right-hand
-     side, named once so the three constructs below cannot spell it three ways. */
-  const exprEnd = (from) => {
-    let e = from, d = 0;
-    for (; e < struct.length; e++) {
-      const ch = struct[e];
-      if (PAIRS[ch]) d++;
-      else if (ch === ")" || ch === "]" || ch === "}") { if (!d) break; d--; }
-      else if ((ch === ";" || ch === ",") && !d) break;
-    }
-    return e;
-  };
-
   /* WHAT A `for … of` ITERATES — the one declaration `inits` cannot read, and it says so: "a declaration with
      no write at all — `for (const n of xs)`, whose binding is the loop's and not an assignment's — has no
      declaration text and is doubtful". That was true of a walk looking for ASSIGNMENTS, and the loop header is
      a construct of its own: `of` is a keyword in that position and the expression after it runs to the header's
      own `)`. It states what the binding IS everywhere in the loop, exactly as an initializer does, so it is
      read at the same place and held to the same standard — TWO loops binding one name in one scope is two
-     declarations of one identity and is doubtful, the same answer `inits` gives that case. */
+     declarations of one identity and is doubtful, the same answer `inits` gives that case.
+
+     THE LOOP-EXTENT SEARCH THIS USED TO CARRY IS GONE, BECAUSE §the LEXICAL EXTENT MADE IT REDUNDANT. It walked
+     every `for (const <name> of …)` head in the file and kept the ones whose BODY contained the read, precisely
+     because the binder attributed both loops of a two-loop function to one scope and could not separate them —
+     a workaround for the merge, written where the merge was visible. Now the head's own extent IS its binder,
+     so `binderOf` at the head and `binderOf` at the read agree for exactly one loop and disagree for every
+     other, and the filter one line down is the whole of the answer. Keeping the search beside the fix would be
+     a superseded mechanism left as a fallback: it answered a read standing OUTSIDE every loop with the file's
+     one remaining head — `engine/route.mjs`'s `const r = JSON.parse(e.str('qjs_result'))` was told it iterated
+     `reads.values()` — which is a wrong answer where the binder now gives none. */
   const iterOf = (name, off) => {
     const RE = new RegExp(`\\bfor\\s*(?:await\\s+)?\\(\\s*(const|let|var)\\s+${name}\\s+of\\s+`, "g");
     const here = binderOf(name, off);
-    const hits = new Set(), inside = new Set();
-    let konst = true;
+    const hits = new Set();
+    let konst = true, at = -1;   /* the head's own offset — §pushArgsOf's rule, for the same reason */
     let m2;
     while ((m2 = RE.exec(struct))) {
       if (binderOf(name, m2.index + m2[0].length) !== here) continue;
@@ -2345,23 +2417,14 @@ function functionScopes(struct, code) {
       const closeParen = matchAt(struct, openParen);
       if (closeParen < 0) continue;
       hits.add(code.slice(m2.index + m2[0].length, closeParen - 1).replace(/\s+/g, " ").trim());
-      /* THE LOOP'S OWN EXTENT, which is what makes this answerable at all where the scope model cannot help.
-         ECMAScript §14.7.5.7 ForIn/OfBodyEvaluation ( lhs, stmt, iteratorRecord, iterationKind, lhsKind,
-         labelSet [ , iteratorKind ] ) binds the head's declaration PER ITERATION, so a read inside one
-         loop is a read of THAT loop's binding — while this file attributes a declaration to the innermost
-         enclosing FUNCTION body and says so ("Two same-named declarations inside ONE function body still
-         merge, which is the residue"). Two `for (const n of …)` loops over DIFFERENT expressions in one
-         function body are two identities the binder cannot separate, and the loop body separates them. */
-      const b = sig(struct, closeParen, struct.length);
-      const end = struct[b] === "{" ? matchAt(struct, b) : exprEnd(b);
-      if (off >= m2.index && off < end)
-        inside.add(code.slice(m2.index + m2[0].length, closeParen - 1).replace(/\s+/g, " ").trim());
+      at = m2.index + m2[0].length;
     }
     /* SEVERAL LOOPS OVER ONE EXPRESSION ARE SEVERAL DECLARATIONS OF ONE IDENTITY, which is the standard `inits`
        states for a binding's writes — a file that walks `encodings` five times says the same thing five times.
-       Two loops over DIFFERENT expressions, with the read in NEITHER of them, leave it undecided. */
-    const text = inside.size === 1 ? [...inside][0] : hits.size === 1 ? [...hits][0] : null;
-    return text === null ? null : { text, konst };
+       A `var` head is function-scoped, so two of those in one function still reach this together and two
+       different expressions leave the binding undecided, exactly as two disagreeing writes do. */
+    const text = hits.size === 1 ? [...hits][0] : null;
+    return text === null ? null : { text, konst, at };
   };
 
   /* WHAT IS PUSHED INTO AN ARRAY — the other half of what an array binding's declaration says. `const decls =
@@ -2369,7 +2432,17 @@ function functionScopes(struct, code) {
      hold is named, and reading only the initializer answers "an empty array" about a binding whose whole
      purpose is what was put in it. A `...spread` argument contributes the ELEMENTS of its operand and a plain
      one contributes ITSELF, which is the distinction the syntax already draws. Every push must answer and all
-     of them must agree, the standard §localParamSlot applies to a call's arguments. */
+     of them must agree, the standard §localParamSlot applies to a call's arguments.
+
+     EACH ARGUMENT CARRIES ITS OWN OFFSET, which is the standard §returnsOf states one screen up and for the
+     identical reason: "a caller resolving a name inside the returned expression must resolve it in the SCOPE
+     THAT WROTE IT". A push is not where its consumer stands — `idl_members.mjs` pushes `...ast` from inside a
+     loop body and the walk that asks about it arrives holding the offset of the `return` statement a hundred
+     lines below. While a declaration was filed under its whole FUNCTION the two offsets answered alike and this
+     could not be seen; under §the LEXICAL EXTENT the `const ast` inside that loop body is not in scope at the
+     `return`, so resolving there answered NOTHING and the whole `webidl2` origin chain went undecided — eleven
+     receivers losing a correct DECIDED FOREIGN and one of them landing in READ-WITH-NO-WRITER over a field
+     `webidl2` emits. The offset is the fix; the extent only exposed which caller was already asking wrongly. */
   const pushArgsOf = (name, off) => {
     const RE = new RegExp(`(^|[^\\w$.])${name}\\s*\\.\\s*push\\s*\\(`, "g");
     const here = binderOf(name, off);
@@ -2383,7 +2456,7 @@ function functionScopes(struct, code) {
       for (const [a, b] of splitTop(struct, open + 1, close - 1)) {
         const t = code.slice(a, b).replace(/\s+/g, " ").trim();
         if (!t) return null;
-        out.push(/^\.\.\./.test(t) ? { spread: true, text: t.slice(3).trim() } : { spread: false, text: t });
+        out.push(/^\.\.\./.test(t) ? { spread: true, text: t.slice(3).trim(), at: a } : { spread: false, text: t, at: a });
       }
     }
     return out.length ? out : null;
@@ -4314,15 +4387,17 @@ function originOfExpr(t0, off, scan, st, mode) {
      * immutable (§9.1.1.1.3 CreateImmutableBinding ( name, strict )), and §9.1.1.1.5 SetMutableBinding ( name,
      * value, strict ) says "If the binding is an immutable binding, a TypeError is thrown if strict is true".
      * So a `name = …` the assignment scan attributes to a `const` loop variable CANNOT be a write to
-     * it: it is another binding's, merged in because `inits` reads every write in the enclosing FUNCTION body
-     * and this file's scope model attributes declarations to that body rather than to the block.
-     * Measured: `for (const n of declarations)` in one module read as declared by `n = name` and
+     * it: it is another binding's. §the LEXICAL EXTENT now files each head under its own loop, so `inits` reads
+     * writes inside THAT extent rather than everywhere in the enclosing function — which removes the merge this
+     * paragraph was written against and leaves the ORDER standing on its own reason, the head being the only
+     * construct that declares the binding at all.
+     * Measured before that fix: `for (const n of declarations)` in one module read as declared by `n = name` and
      * `n = dictInheritanceOf.get(n)` — the `for (let n = name; …)` of a nested arrow two helpers down. Taking
      * `inits` first therefore did not leave the binding undecided, it answered it with another binding's
      * declarations, which is worse. `let`/`var` heads are NOT authoritative in the same way and fall through
      * to the writes, where the two must agree like any other pair of declarations. */
     const head = scan.iterOf(t, off);
-    if (head && head.konst) return elem || bytes ? null : originOfExpr(head.text, off, scan, st, "elem");
+    if (head && head.konst) return elem || bytes ? null : originOfExpr(head.text, head.at, scan, st, "elem");
     const decls = scan.initOf(t, off);
     if (decls) {
       const answers = decls.filter((d) => d && d !== "null" && d !== "undefined")
@@ -4334,7 +4409,7 @@ function originOfExpr(t0, off, scan, st, mode) {
          second-guessed by what was appended to it. */
       if (elem && decls.every((d) => /^\[\s*\]$/.test(d || ""))) {
         const pushed = scan.pushArgsOf(t, off);
-        if (pushed) return agreeOrigin(pushed.map((p) => originOfExpr(p.text, off, scan, st,
+        if (pushed) return agreeOrigin(pushed.map((p) => originOfExpr(p.text, p.at, scan, st,
                                                                      p.spread ? "elem" : "value")));
       }
       return null;
@@ -4343,7 +4418,7 @@ function originOfExpr(t0, off, scan, st, mode) {
        is the ELEMENT question about the header, and there is no arm for the elements OF a loop variable. A
        `const` head was already taken above; this is the `let`/`var` one, reached only where the writes said
        nothing. */
-    if (head) return elem || bytes ? null : originOfExpr(head.text, off, scan, st, "elem");
+    if (head) return elem || bytes ? null : originOfExpr(head.text, head.at, scan, st, "elem");
     const ps = scan.paramSlot(t, off);
     if (ps && mode === "value" && ps.param === 0) {
       const cm2 = memberSplit(ps.callee);

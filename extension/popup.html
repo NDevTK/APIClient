@@ -215,6 +215,17 @@
       </div>
     </section>
 
+    <!-- check.js FIRST, BEFORE ANY FILE THAT ASSERTS, which is what its own header says of every realm and
+         what this one was the single exception to. It stood at the bottom of this list, nineteenth of twenty,
+         under an argument about the OTHER files: "every renderer only DEFINES functions at load, so this
+         position is before any assertion can run." That was TRUE of the eighteen libraries below it and it is
+         an invariant nothing enforces — it is a property of code somebody else maintains, re-checked by
+         nobody, and the first library that asserts at its top level gets `DCHECK is not defined` from a realm
+         whose whole point is that a violated assumption crashes at its ORIGIN. ast-worker.html loads check.js
+         first and the manifest lists it ahead of content.js, so this position also made one realm disagree
+         with a claim the other two obey. Nothing here can load too early: check.js reads no DOM, no `chrome.*`
+         and no other file — it is an IIFE over `self` that installs DCHECK/CHECK/DFAIL/RETHROW_FATAL. -->
+    <script src="check.js"></script>
     <!-- lib/field-def.js FIRST among the libraries: it is the ONE definition of the Send panel's field
          record, and every producer below (discovery.js, openapi-import.js, popup-gql.js, popup-form.js)
          builds through it. A realm that loads a producer without it does not assert LESS — it asserts
@@ -244,9 +255,8 @@
     <script src="lib/popup-discovery.js"></script>
     <!-- The popup is a bridge EDGE (it renders the engine's result), so per CLAUDE.md §Architecture it gets
          the same DCHECK mechanism the offscreen has: a malformed/drifted engine record crashes LOUD where it
-         is read, instead of a card quietly rendering less than it claims. Loaded before popup.js; every
-         renderer only DEFINES functions at load, so this position is before any assertion can run. -->
-    <script src="check.js"></script>
+         is read, instead of a card quietly rendering less than it claims. check.js is loaded at the TOP of
+         this list, ahead of every file that asserts — see the note there for why it is not here. -->
     <script src="popup.js"></script>
   </body>
 </html>
