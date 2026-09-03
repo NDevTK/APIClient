@@ -482,7 +482,19 @@ IdbKeyPathResult idb_key_path_walk_take(JSContext *ctx, IdbKeyWalk *w, IdbKeyPat
  * optimisation. WPT's bindings-inject-values-bypass puts `a` on Object.prototype and a SETTER on `id`, and
  * asserts the stored value ends up with OWN properties and that the setter never fires: the standard says
  * `! HasOwnProperty` and `CreateDataProperty`, which are an own-slot read and a [[DefineOwnProperty]], so both
- * hold by construction here and there is nothing for a page to intercept. */
+ * hold by construction here and there is nothing for a page to intercept.
+ *
+ * §7.2 HOLDS TWO ALGORITHMS, SO A BARE STEP NUMBER NAMES NOTHING — the convention is stated once here rather
+ * than re-derived at each site. A `STEP n` in `idb_key_path_can_inject` is a step of §7.2's "check that a key
+ * could be injected into a value", whose top-level list is FIVE steps; a `STEP n` in `idb_key_path_inject` is a
+ * step of §7.2's "inject a key into a value using a key path", whose top-level list is EIGHT: 1 strictly split,
+ * 2 assert the identifiers are not empty, 3 take and remove `last`, 4 the walk over what remains, 5 "Assert:
+ * value is an Object or an Array", 6 convert the key to a value, 7 the CreateDataProperty of it, 8 "Assert:
+ * status is true".
+ * BOTH COUNTS TRACK LIST DEPTH: step 4 of each is ONE step that HOLDS a nested list, so counting its sub-items
+ * as peers promotes them and renumbers everything after. Step 5 of the inject is the step a reader walks past,
+ * because this file makes it as a precondition of the write below it rather than as a numbered action — count
+ * the standard's top-level list items, never this file's statements, or 6, 7 and 8 all read one too low. */
 
 /* §7.2's SPLIT AND ITS NEXT STEP AT ONCE — "let identifiers be the result of strictly splitting keyPath on
    U+002E FULL STOP", then "remove the last item of identifiers" / "let last be the last item of identifiers and
@@ -617,36 +629,60 @@ void idb_key_path_inject(JSContext *ctx, JSValueConst value, JSValueConst key, J
         CHECK(has >= 0, "IndexedDB: §7.2's own-property read threw — the value is the output of "
                         "StructuredDeserialize and holds nothing that can run");
         if (has == 0) {                                            /* STEP 4.3 */
-            /* "Let o be a new Object created as if by the expression ({}). Let status be
+            /* STEPS 4.3.1-4.3.3. "Let o be a new Object created as if by the expression ({}). Let status be
                CreateDataProperty(value, identifier, o). Assert: status is true." A DEFINE, so the `a` a page
-               left on Object.prototype is neither read nor written — WPT's bindings-inject-values-bypass. */
+               left on Object.prototype is neither read nor written — WPT's bindings-inject-values-bypass.
+               THE STATUS IS TWO FACTS AND NOT ONE, exactly as it is in §7.1's list arm above, so it is two
+               predicates over the one bit: a single `status == 1` is decided by the STRICTER of them and
+               charges the other to nothing, which is what a discarded status then hides.
+               -1 is THREW — an allocation failure inside the define, and it is fatal in RELEASE because this
+               algorithm returns `void` and has no channel to report anything: the object §7.2 step 4.3.1 made
+               never reaches `value`, `cur` walks on into an object reachable from nothing, §7.2 step 7 writes
+               the generated key THERE, and §4.5 stores a record whose in-line key path resolves to NOTHING while a
+               pending exception rides out into a caller that was told the inject happened. A record with no
+               key at the address its own key path names is not a shorter answer, it is a WRONG one, and no
+               later read can tell it from a value the page genuinely stored.
+               0 is REFUSED, which is this engine disagreeing with itself and so is the DCHECK. */
             next = JS_NewObject(ctx);
             CHECK(!JS_IsException(next),
                   "IndexedDB: §7.2 could not allocate the object it inserts on the way to the last identifier");
             status = JS_DefinePropertyValue(ctx, cur, atom, JS_DupValue(ctx, next), JS_PROP_C_W_E);
-            DCHECK(status == 1, "§7.2's CreateDataProperty was refused on the way to the key path's last "
-                                "identifier — the value is §4.5 step 10's clone, which this engine built and "
-                                "no page has reached, so nothing can have made it non-extensible");
-            (void)status;
+            CHECK(status >= 0, "IndexedDB: §7.2 step 4.3.2's CreateDataProperty THREW while inserting the "
+                               "object its step 4.3.1 made — an allocation failure, which leaves the rest of "
+                               "the key path writing into an object unreachable from the value, and an "
+                               "exception pending on an inject that reports nothing to anyone");
+            DCHECK(status == 1, "IndexedDB: §7.2 step 4.3.3's `Assert: status is true` does not hold — the "
+                                "define was REFUSED on the way to the key path's last identifier, and the "
+                                "value is §4.5 step 10's clone, which this engine built and no page has "
+                                "reached, so nothing can have made it non-extensible");
         }
         JS_FreeAtom(ctx, atom);
         JS_FreeValue(ctx, cur);
         cur = next;
     }
-    DCHECK(JS_IsObject(cur), "§7.2's inject has no Object to write the key into at the key path's last "
-                             "identifier — see the assertion inside the walk, which is the same fact");
+    DCHECK(JS_IsObject(cur),                                       /* STEP 5 */
+           "§7.2's inject has no Object to write the key into at the key path's last "
+           "identifier — see the assertion inside the walk, which is the same fact");
     DCHECK(i < len, "§7.2's key path ended in a separator, so the `last` its steps remove is the empty string "
                     "— §2.5's validity refuses a trailing period and idb_key_path_precondition asserts it");
-    /* "Let keyValue be the result of converting a key to a value with key. Let status be
-       CreateDataProperty(value, last, keyValue). Assert: status is true." */
-    key_value = idb_key_to_value(ctx, key);                        /* STEP 5 */
+    /* STEPS 6-8. "Let keyValue be the result of converting a key to a value with key. Let status be
+       CreateDataProperty(value, last, keyValue). Assert: status is true."
+       THE SAME TWO FACTS AS §7.2 STEP 4.3.2, AND THIS IS THE SITE WHERE THEY COST THE MOST: the define here IS the
+       inject. -1 is an allocation failure, so the generated key §6.1's key generator produced is written
+       NOWHERE, the record is stored with its key path resolving to nothing, and the exception rides out of a
+       `void` return into a caller told the key was injected. 0 is a refusal the check above already excluded —
+       it proved this identifier is either absent or an own data property of a clone this engine built. */
+    key_value = idb_key_to_value(ctx, key);                        /* STEP 6 */
     atom = JS_NewAtomLen(ctx, path + i, len - i);
-    status = JS_DefinePropertyValue(ctx, cur, atom, key_value, JS_PROP_C_W_E);   /* STEP 6 */
+    status = JS_DefinePropertyValue(ctx, cur, atom, key_value, JS_PROP_C_W_E);   /* STEP 7 */
     JS_FreeAtom(ctx, atom);
-    DCHECK(status == 1, "§7.2's CreateDataProperty of the generated key was refused — the value is §4.5 step "
-                        "10's clone and the identifier is one the check above proved is either absent or an "
+    CHECK(status >= 0, "IndexedDB: §7.2 step 7's CreateDataProperty of the generated key THREW — an "
+                       "allocation failure, which stores the record with NO key at the address its key path "
+                       "names, and leaves an exception pending on an inject that reports nothing to anyone");
+    DCHECK(status == 1, "IndexedDB: §7.2 step 8's `Assert: status is true` does not hold — the "
+                        "CreateDataProperty of the generated key was REFUSED, and the value is §4.5 step "
+                        "10's clone while the identifier is one the check above proved is either absent or an "
                         "own data property");
-    (void)status;
     JS_FreeValue(ctx, cur);
     JS_FreeCString(ctx, path);
 }
