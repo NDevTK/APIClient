@@ -209,6 +209,14 @@ const CORPUS = join(ENGINE, "tests", "solver");
  *                which is a SCHEDULE-INVARIANCE claim and had no reader anywhere in this tree. See the entry's
  *                own block below for why an entry the extension calls on a cadence for the whole of every long
  *                analysis had never once been driven by a gate.
+ *   `eagerstream`— `eager`'s own (+inf, "reported") pair with that same call at every boundary: the CONTROLLED
+ *                TWIN of `eager`, and the other end of the axis `stream` opens. The two streaming rows differ
+ *                from each other in the FLOOR alone and each differs from its non-streaming pair in the third
+ *                field alone, so a mismatch on either names one call or one floor and never a choice between
+ *                them. It exists because the floor decides HOW OFTEN the entry is asked: at -inf the engine
+ *                returns only where it is stuck, so `stream` asks it a handful of times per document, while at
+ *                +inf the slice ends after every unit of work. A perturbation that needs more than a handful of
+ *                reads to accumulate is visible to this row and to nothing else in the set.
  * `direct` is the reference because it is what the extension does when no other document is competing.
  *
  * AND THE REPLY POLICIES ARE THREE, EACH NAMED FOR WHAT IT MODELS RATHER THAN FOR WHEN IT FIRES:
@@ -236,7 +244,9 @@ const CORPUS = join(ENGINE, "tests", "solver");
  * does not call it and neither did this file, so the entry's contract was carried entirely by main.c's own
  * prose. That is the §Testing shape exactly: the shipped entry is the one that rots, and this one composes the
  * finding document the product's incremental merge is built out of.
- *   false — the host asks nothing between steps. Every schedule above.
+ *   false — the host asks nothing between steps. Every schedule but `stream` and `eagerstream`, which are named
+ *           rather than counted by position: this line read "every schedule above" while exactly one row
+ *           declared `true`, and a second one landing below it would have made the sentence quietly false.
  *   true  — `qjs_emit_partial` at EVERY boundary the engine reports, plus once more after the frontier answers
  *           DONE. The last of those is compared against `qjs_result`'s document (see the parent's row): both
  *           are `result_json(g_ctx)` with no step between them, so any difference is one of the two composers
@@ -255,16 +265,43 @@ const POLICY = new Map([
      NOT DEFAULTED HERE, which is this file's own lesson about the reply policy repeated rather than re-learned:
      a field one schedule states and the others inherit is how the second decision came to be read off the
      schedule's NAME.
-     WHAT THIS DOES NOT COVER, and it is a residual rather than a TODO because the schedule is correct for what
-     it drives and narrower than the entry's contract: at floor -inf the engine returns only where it can make
-     no further progress, so a corpus document that fits inside one cooperative quantum gives this schedule ~3
-     boundaries and therefore ~3 mid-run snapshots (the header's own measured table: 3 host turns at -inf
-     against 25-28 at +inf). What the next diff builds is the SECOND twin — (floor +inf, reply "reported",
-     partial true), which is `eager`'s pair and therefore `eager`'s controlled twin — so the same entry is
-     asked ~25 times per document instead of ~3 without either row losing its single-variable attribution. Its
-     absence shows as a perturbation that needs more than three calls to accumulate: this schedule agreeing
-     with the reference on every document while the +inf twin, once it exists, does not. */
+     AT FLOOR -inf THE ENGINE RETURNS ONLY WHERE IT CAN MAKE NO FURTHER PROGRESS, so this row asks the entry a
+     HANDFUL of times per document and cannot accumulate a perturbation that needs more calls than that. The row
+     below is the other end of that axis and is why this one is no longer alone. */
   ["stream",    { floor: -Infinity, reply: "reported", partial: true  }],
+  /* THE CONTROLLED TWIN OF `eager` — its own (+inf, "reported") pair with the boundary question turned on, so
+     this row differs from `eager` in exactly the third field and from `stream` in exactly the first. That is
+     what makes a mismatch attributable: a row against `eager` accuses `qjs_emit_partial`, a row against
+     `stream` accuses the FLOOR, and neither has two candidate causes. It is the second half of one axis, not a
+     seventh name — at -inf the engine hands the thread back only where it is stuck, so `stream` asks the entry
+     a handful of times, while at +inf the slice ends after every unit of work and the same entry is asked once
+     per unit for the whole run.
+     WHY BOTH ROWS AND NOT THE +inf ONE ALONE: main.c's contract over that entry is that it READS — "no flow is
+     touched, nothing is drained, and the frontier the next step resumes is the one this was called on" — and a
+     read performed a handful of times and a read performed at every boundary are different amounts of exposure
+     to the same claim, while only the pair holds the floor as a controlled variable. Deleting `stream` would
+     buy one child per document and lose the single-variable attribution that makes either row diagnostic.
+     WHAT IT COSTS, stated because it is a real one: one more child process per document on every run of this
+     gate, which is the whole-corpus cost this row has to be worth.
+     MEASURED WHERE IT LANDED AND NOT PREDICTED, WITH ITS RUN COUNT AND ITS SPREAD — flag_fork.html against the
+     build stamped f6cbdd9b, on a 4-core box at load 4.4-7.4. That quantum is WALL-denominated on emscripten
+     (see the block beside REFERENCE), so this is a count the BOX moves and a single sample of it would state
+     nothing: `stream` took 3-8 snapshots over SEVEN runs (5/8/8/7 as a child, 6/4/3 under the parent) and this
+     row took 24-26 over SIX (24/25/25/26 as a child, 25/24 under the parent). What licenses the sentence above
+     about the two ends of the axis is that those two RANGES DO NOT OVERLAP — 3-8 against 24-26 — so the
+     separation is larger than the noise that was actually measured rather than larger than a noise nobody
+     looked at.
+     AND THE SPREAD IS THE FINDING, NOT A DISCLAIMER ON IT. A prediction stood here before those runs and gave
+     each end of this axis a SINGLE number, "~3" against "~25". The +inf end holds. The -inf end has no single
+     value to hold: its measured range is 3-8 over seven runs, so "~3" is not so much wrong as UNFALSIFIABLE AS
+     STATED — it names the bottom of a range it does not admit exists, and any one run can be quoted to confirm
+     it or to refute it. That is the shape to avoid here specifically, because the quantity is wall-denominated
+     and this box moves it: a point estimate of a noisy count reads as a measurement and is a draw. Every number
+     in this block therefore carries its run count and its range, and the only claim made from them is the one
+     two non-overlapping ranges support.
+     THE NUMBERS ARE A SPREAD AND NEVER A THRESHOLD — nothing in this file compares them, `midrun` is printed on
+     `_switches`' own ground, and a row that started asserting one would be a metric used as a target. */
+  ["eagerstream", { floor: Infinity, reply: "reported", partial: true  }],
 ]);
 const SCHEDULES = [...POLICY.keys()];
 const REFERENCE = "direct";
@@ -1393,17 +1430,72 @@ for (const doc of docs) {
   let doc_bad = 0;
   for (const [sched, result] of runs) {
     if (sched === REFERENCE) continue;
+    /* THE ROWS ARE COLLECTED BEFORE ANY IS PRINTED, because the sentence each one carries depends on a
+       measurement that is made ONCE PER SCHEDULE and not once per surface. Printing inside the surface loop is
+       what forced the old wording to be chosen before the evidence for it existed. */
+    const rows = [];
     for (const surface of SURFACES.keys()) {
       const a = surfaceSet(ref, surface), b = surfaceSet(result, surface);
       const onlyRef = a.filter((x) => !b.includes(x));
       const onlyThis = b.filter((x) => !a.includes(x));
-      if (!onlyRef.length && !onlyThis.length) continue;
+      if (onlyRef.length || onlyThis.length) rows.push({ surface, a, b, onlyRef, onlyThis });
+    }
+    if (!rows.length) continue;
+
+    /* ─── THE DISAGREEING SCHEDULE, ASKED A SECOND TIME ────────────────────────────────────────────────────
+       THE REFERENCE IS REPEATED AND EVERY OTHER SCHEDULE WAS NOT, so a MISMATCH row had exactly one sample on
+       each side and stated a two-schedule diagnosis over it. That is the block beside REFERENCE's own argument
+       — "if two runs of the reference can differ, then every MISMATCH row is two draws of a noisy process
+       reported as a schedule effect" — applied to the reference alone, while the row it protects names TWO
+       schedules and the other one had never been asked twice. `refNoisy` closes the half where the BASELINE
+       moves; this closes the half where the OTHER SIDE does, and until it existed those two failures printed
+       the same sentence.
+       THE THREE STATES ARE KEPT THREE, on §Testing's ground that an absent measurement is not a measurement
+       that held: REPRODUCED (the schedule agrees with itself and still differs from the reference — a
+       cross-schedule effect, which is the cap the row has always claimed), SELF-INCONSISTENT (the schedule
+       disagrees with ITSELF, so the finding set is not a function of the document under a FIXED schedule, which
+       is a STRONGER violation of the same razor and a different investigation), and NOT MEASURED (the repeat
+       produced no result). A row that cannot tell the first from the second sends the reader to compare two
+       schedules when the defect is inside one of them.
+       IT RUNS ONLY ON A DOCUMENT THAT ALREADY FAILED, so it costs nothing on a green corpus: at most one extra
+       child per disagreeing schedule, taken at the point where the gate is already reporting a defect and the
+       question "which defect" is the one thing worth another 25 seconds.
+       MEASURED, AND THIS IS WHY IT IS HERE RATHER THAN AN IMPROVEMENT IN PRINCIPLE: hash_sink.html produced a
+       `direct`/`lastreply` securitySinks MISMATCH in ONE of three gate runs against the build stamped f6cbdd9b,
+       and in the failing run `lastreply` carried 3 flows where all the passing runs carried 4 — while three
+       direct child runs of `lastreply` on that document all reached the sink. One sample per schedule cannot
+       tell that from a schedule effect, and the row it printed named two schedules for a difference the
+       evidence puts inside one. */
+    const retry = runChild(doc, sched);
+    let selfNote;
+    if (!retry.ok) {
+      selfNote = "           AND THE DISAGREEING SCHEDULE WAS NOT RE-MEASURED: its repeat produced no result " +
+                 `(${retry.cause}), so whether it agrees with ITSELF is unknown and the sentence above is the ` +
+                 "row's weakest reading rather than its established one.";
+    } else {
+      const selfDiff = [...SURFACES.keys()].filter((s) => {
+        const x = surfaceSet(result, s), y = surfaceSet(retry.result, s);
+        return x.some((v) => !y.includes(v)) || y.some((v) => !x.includes(v));
+      });
+      selfNote = selfDiff.length
+        ? `           AND \`${sched}\` DISAGREES WITH ITSELF — a second run of the SAME schedule on the SAME ` +
+          `document differs from the first on ${selfDiff.join(", ")} (${result._flows} flows then ` +
+          `${retry.result._flows}). So this is NOT a difference between two schedules: the finding set is not ` +
+          "a function of the document under a FIXED schedule, which is the same razor violated harder, and the " +
+          "two-schedule sentence above is the wrong investigation. Start from this schedule alone."
+        : `           AND \`${sched}\` AGREES WITH ITSELF — a second run of it emitted the same set on every ` +
+          `surface (${result._flows} flows then ${retry.result._flows}), so the disagreement with the ` +
+          "reference REPRODUCED and the two-schedule reading above is the measured one, not the assumed one.";
+    }
+
+    for (const { surface, a, b, onlyRef, onlyThis } of rows) {
       doc_bad++; bad++;
       console.log(`  MISMATCH ${doc}  ${surface}: \`${REFERENCE}\` has ${a.length}, \`${sched}\` has ${b.length}` +
                   "\n           The finding set is a function of the DOCUMENT alone (CLAUDE.md §scheduler: only " +
                   "WHICH flow runs next is value-reranked), so a difference here is a flow that one of these " +
                   "two schedules dropped, starved, skipped, reordered or forgot — which is the definition of " +
                   "a cap — or a switched-in flow reading another flow's state.");
+      console.log(selfNote);
       /* …UNLESS THE BASELINE IS NOT A MEASUREMENT, in which case the sentence above is a claim this run cannot
          support. A reference that disagrees with ITSELF makes every row against it a difference between two
          draws, so the row is still printed — it is real data — and it is labelled rather than suppressed:
