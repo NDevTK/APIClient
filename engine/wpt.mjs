@@ -1599,6 +1599,59 @@ function corpusTrafficSince() {
   return { asked, answered };
 }
 
+/* AND THE SAME QUESTION ASKED OF THE WHOLE RUN, WHICH IS THE ONLY WAY IT REACHES A FILE THAT PASSED.
+ *
+ * `trafficEvidence` below is EVIDENCE ON A VERDICT ALREADY REACHED, and it says so in its own banner: it is
+ * printed under a file that failed to complete and never under one that finished. That is right for a verdict
+ * and it leaves a hole exactly the shape of the one this gate exists to close. A test can ask the corpus server
+ * for a fixture, be REFUSED, and go on to report a SMALL HONEST PASS — and its 404 is parsed by this driver,
+ * read once, and dropped. §Testing names that shape by its cost: a test that is collected, runs, and reports is
+ * still not a test that MEASURED anything, and the number it returns is the concealment.
+ *
+ * THE THREE STATIC CHECKS IN THE RUN LOOP COVER THE FIXTURES A TEST DECLARES — a META script the driver hands
+ * over, an `.idl` the harness fetches, a `<script src>` a document names. Every OTHER way a test names a
+ * resource is invisible to all three: a `fetch` of a `.py` handler, an `<iframe src>`, a worker script, an
+ * `importScripts`. Adding a fourth kind, and a fifth, would be a list that only ever describes the last one
+ * somebody hit — the shape this file already rejected for the runner's source list and for its type rules.
+ *
+ * SO IT IS NOT ENUMERATED, IT IS OBSERVED. The run's own traffic already states, in the SERVER'S own words,
+ * every path a test asked for and what it was answered. Kept rather than dropped, that is a census of what this
+ * checkout could not supply, derived from the run instead of from a table of ways to spell a reference — the
+ * same reason `metaScripts` reads `// META: script=` out of the file rather than guessing at it, and the same
+ * reason `idlFixtures` reads the source rather than the filename.
+ *
+ * ANSWERED LINES ONLY, BECAUSE A STATUS IS A FACT THE SERVER STATED. A path that was ASKED and never answered
+ * is a hung socket; the per-file evidence reports that where the reader is standing when they need it, and
+ * run-wide it cannot be told apart from a reply line written after this driver's last read.
+ *
+ * IT RUNS AT THE FREQUENCY OF WHAT IT OBSERVES: one map update per response line, on lines this driver has
+ * already parsed for the block below. Nothing here spawns a process — git is asked once per surviving path, at
+ * the foot of the run, where a corpus run has already spent an hour. */
+const g_fixture = new Map();
+let g_trafficUnvouched = 0, g_fixtureUndecodable = 0;
+function corpusFixtureLedger(rel, traffic) {
+  /* AN ABSENT MEASUREMENT IS COUNTED AS ONE. `null` is the log declining to vouch for this file's slice, and
+     folding that into "this file asked for nothing" is the averaging §Testing forbids. The census says how many
+     runs it could not see, rather than printing a total that quietly excludes them. */
+  if (!traffic) { g_trafficUnvouched++; return; }
+  for (const a of traffic.answered) {
+    /* THE PATH AS THE CORPUS FILES IT — query and fragment stripped, for the reason `trafficEvidence` gives one
+       block down: a query is a HANDLER'S argument and never part of a filename. */
+    let file = a.path.split("?")[0].split("#")[0].replace(/^\/+/, "");
+    if (file.includes("%")) {
+      /* A REQUEST PATH IS THE TEST'S BYTES AND NOT THIS DRIVER'S, so a malformed escape is FOREIGN INPUT: the
+         answer is to refuse it, never to judge a filename this driver invented by guessing past it. Counted, so
+         the census reports what it could not decide instead of reading clean about it. */
+      try { file = decodeURIComponent(file); } catch { g_fixtureUndecodable++; continue; }
+    }
+    if (!file) continue;
+    let e = g_fixture.get(file);
+    if (!e) g_fixture.set(file, e = { n: 0, statuses: new Set(), by: rel });
+    e.n++;
+    e.statuses.add(a.status);
+  }
+}
+
 /* DOES THE PINNED CORPUS HAVE THIS PATH — the question that separates "this checkout is short an entry" from
    "the corpus does not contain it at all", and it has TWO callers now, so it is one function rather than two
    copies of an `ls-tree` invocation that must agree about which revision they ask at.
@@ -1790,11 +1843,19 @@ function metaScripts(file) {
   const md = scriptMetadata(file);
   if (md === null) return null;   /* the file itself is gone; the run loop reports that, it does not die of it */
   return md.filter(([k]) => k === "script").map(([, v]) => {
-    /* THE REWRITE APPLIES HERE AND NOWHERE ELSE. A META script is a PROGRAM INPUT — the driver hands the runner
-       its file to execute before the test — so this path is resolved on disk and needs wptserve's rewrite table
-       to find /resources/WebIDLParser.js, which is the webidl2 library under its historical name. Everything the
-       test FETCHES goes through the real server, which applies its own rewrites; this table is not a second copy
-       of those, it is the one entry the driver itself must resolve. */
+    /* THE REWRITE APPLIES WHEREVER THIS DRIVER RESOLVES A REFERENCE ON DISK, WHICH IS HERE AND AT
+       `docScriptFixtures`. It used to say HERE AND NOWHERE ELSE, and that sentence was false the moment a
+       document's `<script src>` became a disk question too — every idlharness DOCUMENT names
+       /resources/WebIDLParser.js, which is on nobody's disk under that name, so a reader who believed the
+       exclusivity would conclude those files must abort on a fixture the server serves perfectly well. An
+       EXCLUSIVITY CLAIM IS THE STALE SENTENCE NOBODY GREPS, because it reads as a completed question rather
+       than as something to check.
+       WHAT IS STILL TRUE IS THE RULE UNDER IT, and it is the rule that decides where a future site belongs: a
+       META script is a PROGRAM INPUT — the driver hands the runner its file to execute before the test — so
+       this path is resolved against the disk and needs wptserve's rewrite table to find the webidl2 library
+       under its historical name. Everything the test FETCHES goes through the real server, which applies its
+       own rewrites; this table is not a second copy of those, it is what the driver must resolve for itself
+       whenever it answers a disk question about a path the corpus states as a URL. */
     const ref = SERVER_REWRITES[v] || v;
     return ref.startsWith("/") ? join(WPT, ref.slice(1)) : join(dirname(file), ref);
   });
@@ -2029,6 +2090,10 @@ function abortRun(area, kind, rel, detail) {
 /* THE CENSUS BELOW IS A VERDICT, so it needs a home outside its own block: a test file on disk that neither list
    accounts for is an excluded test, and an excluded test is a failure — not a row a reader may skip. */
 let g_undecided = 0;
+/* AND THE FIXTURE CENSUS'S OWN, FOR THE SAME REASON AND ONLY FOR ITS FIRST ARM — a path the PINNED CORPUS HAS
+   that a test asked for and this checkout could not serve is the same fact as a missing META script, which
+   already aborts its file. Its second arm is reported and never counted; see the census for why. */
+let g_refused = 0;
 
 /* WHY THE HARNESS ENDED THE WAY IT DID, OUT OF WHAT THE RUN ALREADY STREAMED.
  *
@@ -2308,6 +2373,10 @@ for (const { file: f, kind, variant } of runs) {
        evidence" rather than as "no requests" — an absent measurement and a zero measurement are different facts
        and §Testing forbids averaging them. */
     const traffic = corpusTrafficSince();
+    /* AND INTO THE RUN-WIDE LEDGER, HERE RATHER THAN AT ANY OF THE READERS BELOW, because every one of those is
+       a FAILURE path: a file that completed cleanly reaches none of them, and a clean file's refused fixture is
+       precisely the case the census exists for. See `corpusFixtureLedger`. */
+    corpusFixtureLedger(rel, traffic);
     const out = (r.stdout || "") + (r.stderr || "");
     /* An ABORT is a result about this file, not an accident: it is a DCHECK naming a capability the browser half
        does not have, which is exactly what this gate is for. It is counted apart from a FAIL because the two ask
@@ -2912,6 +2981,75 @@ console.log("  ---- summary");
   }
 }
 
+/* AND WHAT THE CORPUS SERVER REFUSED FOR A PATH THIS CHECKOUT DOES NOT HAVE — the fixture question asked of the
+   RUN rather than of a list of ways to declare one. See `corpusFixtureLedger` for why the traffic is kept past
+   the file that generated it; this is what it is kept FOR.
+   TWO FILTERS, IN THIS ORDER, AND THE FIRST IS THE WHOLE REASON THIS IS NOT A FALSE-ALARM MACHINE. A non-2xx is
+   not by itself a defect: a `.py` status handler's entire job is to return one, and plenty of tests ask for a
+   404 on purpose. So a path that IS ON DISK is the SERVER'S own answer and nothing this gate has to say about
+   it. What survives is a path this checkout cannot serve out of any file, which is a different sentence.
+   THEN GIT SPLITS THE REMAINDER INTO THREE FINDINGS THAT MUST NOT READ ALIKE, through the same `corpusHas` the
+   META-script and `.idl` reports use, so all three agree about which revision they ask at. A path the PINNED
+   REVISION HAS is a checkout this gate can fix, and the entry that would supply it is named. A path it does NOT
+   have cannot be supplied by any entry — it is the test's own subject, or a reference the pinned corpus does not
+   satisfy, and widening WPT_PATHS would do nothing either way. And git DECLINING to answer is the third thing,
+   written out rather than folded into the second, because "the corpus does not have it" is a positive claim and
+   an unanswered question is not evidence for it.
+   ONLY THE FIRST ARM FAILS THE GATE, AND THE ASYMMETRY IS THE ARGUMENT FOR IT. A refused fixture the corpus HAS
+   is the same fact as a META script this driver could not hand over, which already aborts its file: the test ran
+   against a corpus it was not written for, so its number is a statement about WPT_PATHS and not about the
+   engine. The second arm is printed and not counted, because failing on it would be a verdict this driver cannot
+   support — nothing here can tell a deliberate 404 from a broken reference, and a gate that stops the tree on a
+   guess is worse than one that prints it.
+   IT PRINTS ON THE CLEAN DAY TOO. A line that appears only when something is wrong is one nobody learns to look
+   for, and its silence then reads as a clean bill rather than as a question nobody asked — which is exactly how
+   a family of tests can report a floor of two subtests for as long as nobody prints the floor. */
+{
+  const refused = [...g_fixture.entries()]
+    /* EVERY status non-2xx, never ANY: a path answered 200 once and 404 once was served, and the 404 is that
+       test's own business. */
+    .filter(([, e]) => [...e.statuses].every((s) => s < 200 || s >= 300))
+    .filter(([p]) => !existsSync(join(WPT, p)))
+    .sort((a, b) => b[1].n - a[1].n);
+  const supply = [], cannot = [], unknown = [];
+  for (const [p, e] of refused) {
+    const has = corpusHas(p);
+    (!has.known ? unknown : has.present ? supply : cannot).push([p, e, has]);
+  }
+  g_refused = supply.length;
+  /* THE DENOMINATOR ON THE SAME LINE AS THE FINDINGS, because a count of findings falls both when defects are
+     fixed and when the instrument stops looking. How many distinct paths the server answered at all is what
+     says which of those two a smaller number is. */
+  console.log(`  ---- corpus fixtures: the server answered ${g_fixture.size} distinct path(s) this run` +
+              (g_trafficUnvouched ? `; ${g_trafficUnvouched} run(s) whose traffic slice could not be vouched for` +
+                                    " — an absent measurement for those, not an absence of requests" : "") +
+              (g_fixtureUndecodable ? `; ${g_fixtureUndecodable} response path(s) carried an escape this driver ` +
+                                      "could not decode and were NOT judged" : ""));
+  if (!refused.length)
+    console.log("       every path answered outside 2xx is present on disk, so each of those statuses is the " +
+                "corpus's own answer and none of them is a fixture this checkout is short of");
+  if (supply.length) {
+    console.log(`       REFUSED — ${supply.length} path(s) a test asked for, answered outside 2xx, absent from ` +
+                "this checkout and PRESENT at the pinned revision. The test ran against a corpus it was not " +
+                "written for, so its numbers are about WPT_PATHS. This FAILS the gate.");
+    for (const [p, e, has] of supply)
+      console.log(`       ${String(e.n).padStart(4)}  /${p}  [${[...e.statuses].sort().join(",")}]  first asked ` +
+                  `while running ${e.by} — it EXISTS at ${has.at}, so WPT_PATHS is short of ${dirname(p)}`);
+  }
+  if (cannot.length) {
+    console.log(`       ${cannot.length} refused path(s) do NOT exist at the pinned revision at all, so no ` +
+                "WPT_PATHS entry can supply them: each is a test's own subject (a deliberate 404) or a " +
+                "reference the pinned corpus does not satisfy. Reported, not counted — see the block comment.");
+    for (const [p, e] of cannot.slice(0, 20))
+      console.log(`       ${String(e.n).padStart(4)}  /${p}  [${[...e.statuses].sort().join(",")}]  first asked ` +
+                  `while running ${e.by}`);
+    if (cannot.length > 20) console.log(`       … and ${cannot.length - 20} more`);
+  }
+  for (const [p, , has] of unknown)
+    console.log(`       UNDECIDED  /${p} — ${has.why}, so this driver does not know which of the two above it ` +
+                "is and is not guessing");
+}
+
 /* AND WHAT THE VARIANTS CAME TO. A WPT `variant` is a SEPARATE TEST RUN of the same file at a different address
    — `<meta name="variant" content="?wrapper">`, or `// META: variant=` — and WPT runs one per declaration,
    never the bare file. This gate used to run the bare file and none of the variants, and reported the shortfall
@@ -3018,10 +3156,13 @@ console.log(`  files ${files.length}   runs ${attempted}${attempted === runs.len
             `   fail ${fail}   notrun ${notrun}   aborted-runs ${aborted}${abortSplit(g_abKind, aborted)}` +
             `   errored-runs ${errored}` +
             `   unreadable-runs ${unread}   undecided-files ${g_undecided}` +
+            /* ON THE QUOTED LINE, because this is the line that ends up in a report or another agent's context,
+               and a fixture the checkout could not serve is a statement about what these numbers MEASURED. */
+            `   refused-fixtures ${g_refused}` +
             (g_truncated ? `   *** TRUNCATED at ${g_truncated.rel}: ${runs.length - attempted} run(s) never ` +
                            "attempted — this is NOT a corpus measurement ***" : ""));
 console.log("===========================================================");
 /* A TRUNCATED RUN FAILS THE GATE WHATEVER ITS COLUMNS SAY. Its numbers are a strict subset of a corpus and the
    thing that stopped it is a defect in how this gate is being run, so a green exit here would be the gate
    certifying a measurement it did not take. */
-process.exit(fail || aborted || unread || g_undecided || g_truncated ? 1 : 0);
+process.exit(fail || aborted || unread || g_undecided || g_refused || g_truncated ? 1 : 0);
