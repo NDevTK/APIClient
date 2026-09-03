@@ -796,9 +796,12 @@ void text_run_measure_finish(TextRunMeasure *m)
     /* css-text-3 §5.5's OWN TAILORING, APPLIED TO THE ONE ARRAY BEFORE ANY PARTITION READS IT — see the
        function for which single boundary it is and for why it is not a second rule set. */
     tr_atomic_nbsp_tailoring(m, cps);
-    /* THE TWO ANSWERS ARE THE SAME WALK OVER DIFFERENT LINES, which is css-sizing-3 §2.1's own construction:
-       the sizes differ by "if NONE of the soft wrap opportunities were taken" against "if ALL" were. So the
-       max-content lines are cut by FORCED breaks alone — CSS 2.2 §10.3.5's "without breaking lines other than
+    /* THE TWO ANSWERS ARE THE SAME WALK OVER DIFFERENT LINES, which is css-sizing-3 §2.1 "Auto Box Sizes"'s
+       own construction: the sizes differ by "if none of the soft wrap opportunities within the box were taken"
+       against "if all soft wrap opportunities within the box were taken". WITHIN THE BOX is not decoration and
+       is why this walk is over ONE run — an opportunity belonging to a descendant box is that box's answer to
+       the same question, not a break this collection may take. So the max-content lines are cut by FORCED
+       breaks alone — CSS 2.2 §10.3.5 "Floating, non-replaced elements"'s "without breaking lines other than
        where explicit line breaks occur" — and the min-content lines by every break there is. `actions[count]`
        is LB3's mandatory break at eot, so the last line of each answer is closed by the loop rather than after
        it, and there is no tail case to get wrong. */

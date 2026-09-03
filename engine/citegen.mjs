@@ -323,18 +323,42 @@ const USE_FLOOR = 3;
  * `anchors` are the names this tree writes in front of a §, lowercased. A standard NOT listed here is not
  * audited — its citations are counted and named in the report so the blind spot is printed rather than
  * assumed to be zero. */
+/* `edition` IS THE ANSWER TO "WHICH OF THIS STANDARD'S DOCUMENTS DOES A CITATION MEAN", AND IT IS DECLARED
+ * RATHER THAN INFERRED BECAUSE A URL DOES NOT STATE IT. A spec with an Editor's Draft and a /TR/ snapshot is
+ * TWO DOCUMENTS: different section numbers, different wording, sometimes a rule the working group has since
+ * replaced. A tree that resolves that per author, in whichever direction whoever was standing there happened
+ * to fetch, ends up citing both with nothing recording which — so the row answers it once, here.
+ *   "maintained" — the document this standard's own EDITORS WRITE IN. For a CSSWG module that is the Editor's
+ *     Draft; for a living standard it is the only document there is.
+ *   "final"      — the editors have STOPPED, so the published Recommendation is not a snapshot OF anything
+ *     that moves, it IS the standard. CSS 2.1, CSS 2.2 and XML 1.0 are here, and they are instances of the
+ *     rule rather than exceptions to it.
+ * WHY MAINTAINED AND NOT THE SNAPSHOT, WHICH IS THE ANSWER THAT LOOKS SAFER: a citation's job is to be
+ * CHECKABLE, and stability is a different property that is easily mistaken for it. A snapshot never moves, so
+ * nothing ever reports that the implementation target moved AWAY from it — a citation of one goes on reading
+ * authoritative while the component beneath it implements a rule its own standard replaced, which is the
+ * stale-claim failure mode with no instrument that can see it. A maintained document moves, and every
+ * mechanism for THAT already runs on every audit: the title beside the number survives a renumber, --regen
+ * prints each moved section, and the loader refuses a corpus whose edition disagrees with the numbers it is
+ * keyed by. So the residual cost of this answer is a renumber landing between two regens, which is loud and
+ * one command from being found, against the other answer's cost of being quietly wrong for years.
+ * THE DECLARATION IS CHECKED TWO WAYS, because a rule that only reads well is a rule that drifts. A row
+ * calling itself "maintained" may not point at a /TR/ snapshot (see below), and no committed corpus is
+ * consulted until its recorded `base` is confirmed to be the document THIS row names (see audit) — otherwise
+ * retargeting a standard at another edition would silently re-point every quotation at a corpus of the other
+ * document, which is the one failure this field exists to make impossible. */
 const SPECS = [
   { key: "html", label: "HTML Living Standard", kind: "whatwg-multipage",
-    base: "https://html.spec.whatwg.org/multipage/", anchors: ["html", "htmls"] },
+    base: "https://html.spec.whatwg.org/multipage/", edition: "maintained", anchors: ["html", "htmls"] },
   { key: "ecmascript", label: "ECMAScript Language Specification", kind: "tc39-multipage",
-    base: "https://tc39.es/ecma262/multipage/",
+    base: "https://tc39.es/ecma262/multipage/", edition: "maintained",
     anchors: ["ecmascript", "ecma", "ecma262", "ecma-262", "es", "tc39", "js"] },
   { key: "dom", label: "DOM Standard", kind: "bikeshed",
-    base: "https://dom.spec.whatwg.org/", anchors: ["dom"] },
+    base: "https://dom.spec.whatwg.org/", edition: "maintained", anchors: ["dom"] },
   { key: "url", label: "URL Standard", kind: "bikeshed",
-    base: "https://url.spec.whatwg.org/", anchors: ["url"] },
+    base: "https://url.spec.whatwg.org/", edition: "maintained", anchors: ["url"] },
   { key: "fetch", label: "Fetch Standard", kind: "bikeshed",
-    base: "https://fetch.spec.whatwg.org/", anchors: ["fetch"] },
+    base: "https://fetch.spec.whatwg.org/", edition: "maintained", anchors: ["fetch"] },
   /* STREAMS EARNED ITS ROW BY BEING THE BLIND SPOT THAT COST A HAND-AUDIT. `core/streams/pipe.c` cited
      §4.2.4 for ReadableStreamPipeTo at twenty-three sites — every stage label, every DCHECK and the
      `algorithm` string — and the operation is defined at §4.9.1 "Working with readable streams"; §4.2.4
@@ -343,7 +367,7 @@ const SPECS = [
      checked, and 226 of them were. That is the coverage loss this file's own header says is printed rather
      than assumed to be zero — and printing it is what made someone read the number. */
   { key: "streams", label: "Streams Standard", kind: "bikeshed",
-    base: "https://streams.spec.whatwg.org/", anchors: ["streams"] },
+    base: "https://streams.spec.whatwg.org/", edition: "maintained", anchors: ["streams"] },
   /* THE EIGHT BELOW WERE COUNTED AND NEVER CHECKED, WHICH READS EXACTLY LIKE A CLEAN BILL AND IS A SILENT ZERO.
      Streams proved the size of that: the run before its row reported 226 citations under OTHER_SPECS, the run
      after audited 928 and raised 26 misattributions that were not new — they were newly SEEN. Every standard
@@ -354,21 +378,21 @@ const SPECS = [
      one-word `view` and `api` deliberately — see anchorTokens for why the last word of a multi-word name is
      the part that collides. */
   { key: "idl", label: "Web IDL Standard", kind: "bikeshed",
-    base: "https://webidl.spec.whatwg.org/", anchors: ["idl", "webidl", "web idl"] },
+    base: "https://webidl.spec.whatwg.org/", edition: "maintained", anchors: ["idl", "webidl", "web idl"] },
   /* `database` alone is an English word this tree writes in prose, so this standard is anchored ONLY by the
      two-word name it is actually cited under. Every one of its citations spells it that way. */
   { key: "database", label: "Indexed Database API", kind: "bikeshed",
-    base: "https://w3c.github.io/IndexedDB/", anchors: ["indexed database", "indexeddb"] },
+    base: "https://w3c.github.io/IndexedDB/", edition: "maintained", anchors: ["indexed database", "indexeddb"] },
   { key: "cssomview", label: "CSSOM View Module", kind: "bikeshed",
-    base: "https://drafts.csswg.org/cssom-view/", anchors: ["cssom view", "cssom-view"] },
+    base: "https://drafts.csswg.org/cssom-view/", edition: "maintained", anchors: ["cssom view", "cssom-view"] },
   { key: "cssom", label: "CSS Object Model (CSSOM)", kind: "bikeshed",
-    base: "https://drafts.csswg.org/cssom/", anchors: ["cssom"] },
+    base: "https://drafts.csswg.org/cssom/", edition: "maintained", anchors: ["cssom"] },
   { key: "csp", label: "Content Security Policy Level 3", kind: "bikeshed",
-    base: "https://w3c.github.io/webappsec-csp/", anchors: ["csp"] },
+    base: "https://w3c.github.io/webappsec-csp/", edition: "maintained", anchors: ["csp"] },
   { key: "xhr", label: "XMLHttpRequest Standard", kind: "bikeshed",
-    base: "https://xhr.spec.whatwg.org/", anchors: ["xhr", "xmlhttprequest"] },
+    base: "https://xhr.spec.whatwg.org/", edition: "maintained", anchors: ["xhr", "xmlhttprequest"] },
   { key: "fileapi", label: "File API", kind: "bikeshed",
-    base: "https://w3c.github.io/FileAPI/", anchors: ["file api", "fileapi"] },
+    base: "https://w3c.github.io/FileAPI/", edition: "maintained", anchors: ["file api", "fileapi"] },
   /* THE FILE SYSTEM STANDARD, PROMOTED OUT OF OTHER_SPECS, AND THE PROMOTION IS THE WHOLE POINT: a foreign row
      STOPS the resolver guessing and an indexed row ANSWERS. Both were needed and in that order. The foreign row
      ended a WRONG ANSWER — `file_system_writable.c` cites this standard's §2.5 `write a chunk` in its
@@ -390,9 +414,9 @@ const SPECS = [
      without a number. `file system access` and `fsa` stay on the foreign list one screen below, and must: that
      is a DIFFERENT document whose numbers collide with this one head-on. */
   { key: "fs", label: "File System Standard", kind: "bikeshed",
-    base: "https://fs.spec.whatwg.org/", anchors: ["file system", "fs"] },
+    base: "https://fs.spec.whatwg.org/", edition: "maintained", anchors: ["file system", "fs"] },
   { key: "permissions", label: "Permissions", kind: "respec",
-    base: "https://w3c.github.io/permissions/", anchors: ["permissions"] },
+    base: "https://w3c.github.io/permissions/", edition: "maintained", anchors: ["permissions"] },
   /* FULLSCREEN, AND IT IS THE MANUFACTURED-FINDING SHAPE THIS TABLE'S hrtime ROW DESCRIBES RATHER THAN A SILENT
      ZERO. Its section numbers are SMALL — §2 "Model", §3 "API", §7 "Permissions Policy Integration" — which is
      exactly the range every indexed standard also numbers, so with no row here a `§3` of this standard is
@@ -404,7 +428,7 @@ const SPECS = [
      `permissions` is not: anchorTokens matches WHOLE words separated by whitespace, so `allowfullscreen` and
      `onfullscreenchange` cannot present a bare `fullscreen`, and no other row in this table is a tail of it. */
   { key: "fullscreen", label: "Fullscreen API Standard", kind: "bikeshed",
-    base: "https://fullscreen.spec.whatwg.org/", anchors: ["fullscreen api", "fullscreen"] },
+    base: "https://fullscreen.spec.whatwg.org/", edition: "maintained", anchors: ["fullscreen api", "fullscreen"] },
   /* PERMISSIONS POLICY IS A DIFFERENT STANDARD FROM PERMISSIONS AND THE ROW ABOVE DOES NOT COVER IT — which is
      the silent-zero shape this table's own comment describes, arriving through a NEAR MISS rather than an
      absence. `engine/specindex/permissions.json` indexes w3c.github.io/permissions, whose deepest heading is
@@ -416,7 +440,7 @@ const SPECS = [
      in the direction that judges §9.6 against a standard that stops at §8. It is bikeshed like the other
      W3C-hosted rows, so it needs no reader of its own. */
   { key: "permissionspolicy", label: "Permissions Policy", kind: "bikeshed",
-    base: "https://w3c.github.io/webappsec-permissions-policy/", anchors: ["permissions policy"] },
+    base: "https://w3c.github.io/webappsec-permissions-policy/", edition: "maintained", anchors: ["permissions policy"] },
   /* AN UNINDEXED STANDARD DOES NOT ONLY LOSE COVERAGE — WHERE AN INDEXED ONE DEFINES AN ADJACENT TERM, IT
      MANUFACTURES FINDINGS AGAINST CORRECT CITATIONS, and that is the cry-wolf direction this file's header
      names as the one that gets a checker muted. Streams and Permissions Policy were silent zeros: their
@@ -432,7 +456,7 @@ const SPECS = [
      writes in prose constantly and would swallow every unanchored citation near it; both listed spellings are
      the ones the tree actually writes in front of a §. It is bikeshed, so it needs no reader of its own. */
   { key: "hrtime", label: "High Resolution Time", kind: "bikeshed",
-    base: "https://w3c.github.io/hr-time/", anchors: ["hr-time", "hrtime", "high resolution time"] },
+    base: "https://w3c.github.io/hr-time/", edition: "maintained", anchors: ["hr-time", "hrtime", "high resolution time"] },
   /* THE FIRST LEVELLED CSS MODULE IN THIS TABLE, AND THE LEVEL IS PART OF THE ANCHOR RATHER THAN NOISE ON IT.
      A CSS module's levels are different documents with different numbering that this tree cites SIDE BY SIDE:
      css-images-3 §2 "Image Values: the <image> type" is `<url> | <gradient>`, and css-images-4 §2 "2D Image
@@ -447,7 +471,7 @@ const SPECS = [
      production stood beside a component implementing the two-arm css-images-3 one, and the audit reported
      nothing about either — an unindexed standard's citations are counted and never checked. */
   { key: "cssimages3", label: "CSS Images Module Level 3", kind: "bikeshed",
-    base: "https://drafts.csswg.org/css-images-3/", anchors: ["css-images-3"] },
+    base: "https://drafts.csswg.org/css-images-3/", edition: "maintained", anchors: ["css-images-3"] },
   /* THE REST OF THE CSS MODULES THIS TREE LAYS OUT WITH, AND THEY WERE THE LARGEST SILENT ZERO IN THIS TABLE.
      Every one of them is bikeshed on drafts.csswg.org, so each is a row and one curl and no reader — which is
      exactly why leaving them out was the shape CLAUDE.md refuses: the cost of coverage was a line of table and
@@ -464,46 +488,46 @@ const SPECS = [
      css-images-3 row states above: two levels of one module are two documents with two numberings, and an
      unlevelled `CSS Text §3.1` names neither. Those sites are normalized at the citation. */
   { key: "cssvalues4", label: "CSS Values and Units Module Level 4", kind: "bikeshed",
-    base: "https://drafts.csswg.org/css-values-4/", anchors: ["css-values-4"] },
+    base: "https://drafts.csswg.org/css-values-4/", edition: "maintained", anchors: ["css-values-4"] },
   { key: "csssizing3", label: "CSS Box Sizing Module Level 3", kind: "bikeshed",
-    base: "https://drafts.csswg.org/css-sizing-3/", anchors: ["css-sizing-3"] },
+    base: "https://drafts.csswg.org/css-sizing-3/", edition: "maintained", anchors: ["css-sizing-3"] },
   { key: "csstext3", label: "CSS Text Module Level 3", kind: "bikeshed",
-    base: "https://drafts.csswg.org/css-text-3/", anchors: ["css-text-3"] },
+    base: "https://drafts.csswg.org/css-text-3/", edition: "maintained", anchors: ["css-text-3"] },
   { key: "csstext4", label: "CSS Text Module Level 4", kind: "bikeshed",
-    base: "https://drafts.csswg.org/css-text-4/", anchors: ["css-text-4"] },
+    base: "https://drafts.csswg.org/css-text-4/", edition: "maintained", anchors: ["css-text-4"] },
   { key: "csswritingmodes4", label: "CSS Writing Modes Level 4", kind: "bikeshed",
-    base: "https://drafts.csswg.org/css-writing-modes-4/", anchors: ["css-writing-modes-4"] },
+    base: "https://drafts.csswg.org/css-writing-modes-4/", edition: "maintained", anchors: ["css-writing-modes-4"] },
   { key: "cssinline3", label: "CSS Inline Layout Module Level 3", kind: "bikeshed",
-    base: "https://drafts.csswg.org/css-inline-3/", anchors: ["css-inline-3"] },
+    base: "https://drafts.csswg.org/css-inline-3/", edition: "maintained", anchors: ["css-inline-3"] },
   { key: "cssoverflow3", label: "CSS Overflow Module Level 3", kind: "bikeshed",
-    base: "https://drafts.csswg.org/css-overflow-3/", anchors: ["css-overflow-3"] },
+    base: "https://drafts.csswg.org/css-overflow-3/", edition: "maintained", anchors: ["css-overflow-3"] },
   { key: "cssdisplay3", label: "CSS Display Module Level 3", kind: "bikeshed",
-    base: "https://drafts.csswg.org/css-display-3/", anchors: ["css-display-3"] },
+    base: "https://drafts.csswg.org/css-display-3/", edition: "maintained", anchors: ["css-display-3"] },
   { key: "cssflexbox1", label: "CSS Flexible Box Layout Module Level 1", kind: "bikeshed",
-    base: "https://drafts.csswg.org/css-flexbox-1/", anchors: ["css-flexbox-1"] },
+    base: "https://drafts.csswg.org/css-flexbox-1/", edition: "maintained", anchors: ["css-flexbox-1"] },
   { key: "cssgrid2", label: "CSS Grid Layout Module Level 2", kind: "bikeshed",
-    base: "https://drafts.csswg.org/css-grid-2/", anchors: ["css-grid-2"] },
+    base: "https://drafts.csswg.org/css-grid-2/", edition: "maintained", anchors: ["css-grid-2"] },
   { key: "cssposition3", label: "CSS Positioned Layout Module Level 3", kind: "bikeshed",
-    base: "https://drafts.csswg.org/css-position-3/", anchors: ["css-position-3"] },
+    base: "https://drafts.csswg.org/css-position-3/", edition: "maintained", anchors: ["css-position-3"] },
   /* LEVEL 4 IS A SEPARATE ROW FOR THE REASON THE css-images-3 ROW STATES: two levels of one module are two
      documents with two numberings, and the TOP LAYER is Level 4's — §3 "Top Layer" and §3.3 "Top Layer
      Manipulation" exist in css-position-4 and nowhere in css-position-3, whose §3 is a different heading
      entirely. Anchored only by the hyphenated levelled shortname, which is the one spelling that names a
      document; `CSS Positioned Layout §3` names neither and is normalized at the citation. */
   { key: "cssposition4", label: "CSS Positioned Layout Module Level 4", kind: "bikeshed",
-    base: "https://drafts.csswg.org/css-position-4/", anchors: ["css-position-4"] },
+    base: "https://drafts.csswg.org/css-position-4/", edition: "maintained", anchors: ["css-position-4"] },
   { key: "cssbackgrounds3", label: "CSS Backgrounds and Borders Module Level 3", kind: "bikeshed",
-    base: "https://drafts.csswg.org/css-backgrounds-3/", anchors: ["css-backgrounds-3"] },
+    base: "https://drafts.csswg.org/css-backgrounds-3/", edition: "maintained", anchors: ["css-backgrounds-3"] },
   { key: "csstransforms1", label: "CSS Transforms Module Level 1", kind: "bikeshed",
-    base: "https://drafts.csswg.org/css-transforms-1/", anchors: ["css-transforms-1"] },
+    base: "https://drafts.csswg.org/css-transforms-1/", edition: "maintained", anchors: ["css-transforms-1"] },
   { key: "csscascade5", label: "CSS Cascading and Inheritance Level 5", kind: "bikeshed",
-    base: "https://drafts.csswg.org/css-cascade-5/", anchors: ["css-cascade-5"] },
+    base: "https://drafts.csswg.org/css-cascade-5/", edition: "maintained", anchors: ["css-cascade-5"] },
   { key: "csssyntax3", label: "CSS Syntax Module Level 3", kind: "bikeshed",
-    base: "https://drafts.csswg.org/css-syntax-3/", anchors: ["css-syntax-3"] },
+    base: "https://drafts.csswg.org/css-syntax-3/", edition: "maintained", anchors: ["css-syntax-3"] },
   { key: "cssfonts4", label: "CSS Fonts Module Level 4", kind: "bikeshed",
-    base: "https://drafts.csswg.org/css-fonts-4/", anchors: ["css-fonts-4"] },
+    base: "https://drafts.csswg.org/css-fonts-4/", edition: "maintained", anchors: ["css-fonts-4"] },
   { key: "csscolor4", label: "CSS Color Module Level 4", kind: "bikeshed",
-    base: "https://drafts.csswg.org/css-color-4/", anchors: ["css-color-4"] },
+    base: "https://drafts.csswg.org/css-color-4/", edition: "maintained", anchors: ["css-color-4"] },
   /* THE TWO EDITIONS OF CSS 2, AND THEY ARE THE FIRST STANDARD HERE WHOSE DOCUMENT IS SPLIT ACROSS CHAPTERS AND
      WHOSE PIPELINE PREDATES EVERY GENERATOR ABOVE — see regenW3cChapters for how a multi-document standard is
      indexed and why the chapter list is READ rather than listed.
@@ -517,14 +541,31 @@ const SPECS = [
      would make every fetch depend on a redirect staying put. `/TR/CSS22/` is its own First Public Working
      Draft and is not redirected anywhere. */
   { key: "css21", label: "Cascading Style Sheets Level 2 Revision 1 (CSS 2.1)", kind: "w3c-chapters",
-    base: "https://www.w3.org/TR/CSS2/", anchors: ["css-2-1"] },
+    base: "https://www.w3.org/TR/CSS2/", edition: "final", anchors: ["css-2-1"] },
   { key: "css22", label: "Cascading Style Sheets Level 2 Revision 2 (CSS 2.2)", kind: "w3c-chapters",
-    base: "https://www.w3.org/TR/CSS22/", anchors: ["css-2-2"] },
+    base: "https://www.w3.org/TR/CSS22/", edition: "final", anchors: ["css-2-2"] },
   { key: "xml", label: "Extensible Markup Language (XML) 1.0 (Fifth Edition)", kind: "xmlspec",
-    base: "https://www.w3.org/TR/xml/", anchors: ["xml"] },
+    base: "https://www.w3.org/TR/xml/", edition: "final", anchors: ["xml"] },
 ];
 const SPEC_BY_KEY = new Map(SPECS.map((s) => [s.key, s]));
 const indexFileOf = (key) => join(INDEX_DIR, key + ".json");
+
+/* THE EDITION DECLARATION IS ENFORCED AT THE ROW, because the failure it guards against is a row EDIT and not
+ * a citation. Retargeting a standard's base is one keystroke and looks like a URL correction; what it actually
+ * does is re-point every quotation of that standard at a different document. A missing declaration takes the
+ * same arm as a wrong one — CLAUDE.md's rule for a value a consumer must not default — so an author adding a
+ * standard has to ANSWER the question rather than inherit whichever answer the neighbouring row happened to
+ * carry.
+ * THE ONE MECHANICAL HALF OF THE RULE IS THE ONE THAT IS CHECKED: a /TR/ path is W3C's PUBLICATION space, so a
+ * row claiming its editors still write there is claiming something the URL contradicts. The converse is NOT
+ * asserted — a standard whose editors have stopped need not be a W3C publication at all, and asserting that
+ * would be encoding today's three rows as though they were the rule. */
+for (const s of SPECS) {
+  if (s.edition !== "maintained" && s.edition !== "final")
+    throw new Error(`${s.key}: no edition declared — a row states "maintained" (the document its editors write in: an Editor's Draft, or a living standard) or "final" (its editors have stopped, so the published Recommendation IS the standard). See the registry header for why this is declared and not inferred.`);
+  if (s.edition === "maintained" && /^https?:\/\/(?:www\.)?w3\.org\/TR\//i.test(s.base))
+    throw new Error(`${s.key}: declared "maintained" but its base ${s.base} is a /TR/ snapshot, which is a published copy rather than the document its editors write in. Either point it at the Editor's Draft, or declare it "final" because its editors have stopped.`);
+}
 
 /* ---- shared text normalization -------------------------------------------------------------------------- */
 
@@ -2491,9 +2532,21 @@ function audit(argv, opts = {}) {
      * READS, and CLAUDE.md's rule for that is an assert rather than a default: `ix.uses || {}` would turn
      * "this index predates the use-site scan" into the plausible datum "no section is about any term", and
      * every citation confirmed by a use would silently become a finding. */
-    for (const need of ["sections", "dfns", "ops", "uses", "specUpdated", "fetched"]) {
+    for (const need of ["sections", "dfns", "ops", "uses", "specUpdated", "fetched", "base"]) {
       if (!ix[need]) throw new Error(`${relative(ROOT, f)} has no "${need}" — it was written by an older reader; re-run: node engine/citegen.mjs --regen ${s.key}`);
     }
+    /* THE CORPUS RECORDS WHICH DOCUMENT IT WAS FETCHED FROM, AND UNTIL THIS LINE NOTHING HAD EVER READ IT —
+     * a field written by every regen and consulted by no run, which is the mirror of the defect CLAUDE.md
+     * names for a reader with no writer and is quieter, because a stamp nobody reads cannot go wrong loudly.
+     * What it costs is the whole of the edition guarantee: an ED and a /TR/ snapshot of one standard are two
+     * documents with two numberings, so retargeting a row's base without regenerating leaves every quotation
+     * of that standard measured against the words of the document the registry no longer names — and each
+     * verdict is individually plausible, because the corpus is internally consistent and merely about
+     * something else. `specUpdated` cannot catch it: two editions of one standard can carry the SAME date,
+     * and the pair below only asks whether the text and the section numbers came from one fetch, never which
+     * document that fetch was of. So the identity of the document is asserted, not the freshness of it. */
+    if (ix.base !== s.base)
+      throw new Error(`${relative(ROOT, f)} was fetched from ${ix.base} and this registry now names ${s.base} — two editions of one standard are two documents with two numberings, so every citation would be judged against words the registry does not claim. Re-run: node engine/citegen.mjs --regen ${s.key}`);
     /* A LOOKUP TABLE MUST NOT ANSWER FOR A KEY IT DOES NOT HOLD. JSON.parse hands back objects that inherit
      * Object.prototype, so `dfns["constructor"]` returns a FUNCTION and `dfns["to string"]`-shaped phrases
      * reach members nothing indexed — the table saying yes to a term the standard never defined. It crashed
@@ -2513,8 +2566,15 @@ function audit(argv, opts = {}) {
     const f = textFileOf(key);
     if (!existsSync(f)) continue;
     const tx = JSON.parse(readFileSync(f, "utf8"));
-    for (const need of ["sections", "specUpdated", "fetched"])
+    for (const need of ["sections", "specUpdated", "fetched", "base"])
       if (!tx[need]) throw new Error(`${relative(ROOT, f)} has no "${need}" — re-run: node engine/citegen.mjs --regen ${key}`);
+    /* THE DOCUMENT'S IDENTITY IS ASSERTED HERE TOO AND NOT INHERITED FROM THE SECTION INDEX, because THIS is
+     * the artifact a quotation is actually compared against — the index decides which numbers exist and the
+     * text decides which words do, and it is the words an edition changes. The pair below asks whether these
+     * two were fetched from one EDITION; this asks whether they were fetched from the same DOCUMENT, which
+     * is a different question wherever two editions share a date. */
+    if (tx.base !== SPEC_BY_KEY.get(key).base)
+      throw new Error(`${relative(ROOT, f)} holds the words of ${tx.base} and this registry names ${SPEC_BY_KEY.get(key).base} — every quotation of this standard would be judged against another document's sentences. Re-run: node engine/citegen.mjs --regen ${key}`);
     /* THE EDITION IS THE STANDARD'S OWN STATEMENT AND THE FETCH DATE IS OURS, so the agreement that matters is
      * the EDITION. Two fetches on different days of an unmoved standard are the same document, and demanding
      * the same fetch date would refuse a corpus that is exactly right — a check spending its own coverage. A

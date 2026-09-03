@@ -15,10 +15,11 @@
  * keywords and HTML §15.3.4 declares them. In both cases the answer is HTML's, so a predicate living inside
  * one layout walk would be the one fact answered from two places — and there are two walks over exactly this
  * child list, core/layout/line_box.c's (which measures CSS 2.2 §10.8 over the line boxes) and
- * core/layout/intrinsic_size.c's (which measures css-sizing-3 §2.1's two sizes over the same run). A `br`
- * invisible to the second is not a crash there but a WRONG NUMBER: §2.1's max-content size is stated over
- * content "formatted without breaking lines OTHER THAN WHERE EXPLICIT LINE BREAKS OCCUR" (CSS 2.2 §10.3.5), so
- * a run whose forced break the walk never saw reports a paragraph's whole width as the width of its longest
+ * core/layout/intrinsic_size.c's (which measures css-sizing-3 §2.1 "Auto Box Sizes"'s two sizes over the same
+ * run). A `br` invisible to the second is not a crash there but a WRONG NUMBER: §2.1 states the max-content
+ * size over content laid out as CSS 2.2 §10.3.5 "Floating, non-replaced elements" lays out its preferred
+ * width, "formatting the content without breaking lines other than where explicit line breaks occur" — so a
+ * run whose forced break the walk never saw reports a paragraph's whole width as the width of its longest
  * line.
  *
  * THE ANSWER IS THE ELEMENT'S OWN, NOT ITS BOX'S, and the two questions the consumers then ask are theirs.
