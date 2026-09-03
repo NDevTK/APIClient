@@ -441,6 +441,30 @@ const SPECS = [
      is a DIFFERENT document whose numbers collide with this one head-on. */
   { key: "fs", label: "File System Standard", kind: "bikeshed",
     base: "https://fs.spec.whatwg.org/", edition: "maintained", anchors: ["file system", "fs"] },
+  /* THE ENCODING STANDARD, PROMOTED OUT OF OTHER_SPECS, AND IT IS THE SHARPEST CASE IN THIS TABLE FOR WHY A
+     FOREIGN ROW IS A SILENT ZERO RATHER THAN A CLEAN BILL — because the blind spot was a WHOLE COMPONENT and
+     the component is a table of section numbers. `core/encoding/encoding.c` is eleven decoders, and each one
+     is introduced by the number of the section that defines it; the audit before this row raised ZERO
+     misattributions over that whole directory and the file's numbering was SHIFTED throughout. Nor was the
+     silence only a coverage gap — with no row here the file vote read this component as WEB IDL, which is the
+     wrong-answer direction the hrtime row below describes: 72 of its citations were placed on a standard the
+     component never names. THE DEFECT SHAPE, which is what generalises:
+     this standard numbers its legacy families as siblings of the utf-8 one — §8 "The encoding", §9 "Legacy
+     single-byte encodings", §10 and §11 "Legacy multi-byte Chinese (simplified)/(traditional) encodings",
+     §12 "Legacy multi-byte Japanese encodings", §13 "Legacy multi-byte Korean encodings" and §14 "Legacy
+     miscellaneous encodings" — so a reader who counts the families and forgets that utf-8 is one of them is off by
+     exactly one for every family after it, and every number they write is a REAL section of this standard
+     naming a DIFFERENT decoder. That is the failure this whole file exists for: not a number the standard
+     lacks, which a reader notices, but a number it has.
+     ITS ANCHOR IS THE ONE-WORD NAME, AND THAT IS THE `database` HAZARD — a common noun this tree writes in
+     prose — SO IT WAS CHECKED RATHER THAN ASSUMED, TWO WAYS. Every `encoding §` in the audited tree is
+     written with a capital E and is a citation of this standard; the lowercase form a `character encoding`
+     or `an output encoding` sentence would produce appears NOWHERE in front of a §, and no C string literal
+     ends on the word with the next literal opening on the §, which is the split-literal shape that makes a
+     grep answer a false zero. anchorTokens strips a trailing `Standard`, so `Encoding Standard §7.2` and
+     `Encoding §7.2` are one spelling by the time classifyAnchor sees them. */
+  { key: "encoding", label: "Encoding Standard", kind: "bikeshed",
+    base: "https://encoding.spec.whatwg.org/", edition: "maintained", anchors: ["encoding"] },
   { key: "permissions", label: "Permissions", kind: "respec",
     base: "https://w3c.github.io/permissions/", edition: "maintained", anchors: ["permissions"] },
   /* FULLSCREEN, AND IT IS THE MANUFACTURED-FINDING SHAPE THIS TABLE'S hrtime ROW DESCRIBES RATHER THAN A SILENT
@@ -1626,7 +1650,7 @@ function regen(keys) {
  * wrong answer — the citation is counted under its own name and printed in the report. The list exists so an
  * unanchored citation in such a file is not mistaken for one of ours. */
 const OTHER_SPECS = [
-  "namespaces", "encoding", "infra", "storage",
+  "namespaces", "infra", "storage",
   "webcrypto", "svg", "mathml", "wasm", "uievents", "console", "performance",
   "workers", "websockets", "mimesniff", "rfc", "unicode", "utf", "trusted", "clipboard",
   "notifications", "geolocation", "geometry", "fullscreen", "pointerevents", "webaudio", "webrtc",

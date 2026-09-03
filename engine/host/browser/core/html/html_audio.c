@@ -48,7 +48,7 @@ static bool g_ready;
  *
  * WHAT ASKS IT NOW is core/idl_args.h's idl_arg_given, which is that rule as one named question. The same
  * distinction is HTML §4.8.3 "The img element"'s `Image(optional unsigned long width, optional unsigned long
- * height)` — two more positions declared optional with no default, and that component still reads its count.
+ * height)` — two more positions declared optional with no default, and that component asks the same question.
  *
  * DOM §4.9 "Interface Element"'s CREATE AN ELEMENT is what step 2 names, not DOM §4.5 "Interface Document"'s
  * `createElement`, and the difference is that create-an-element runs no page code: there is no custom element

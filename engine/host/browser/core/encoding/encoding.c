@@ -4,7 +4,18 @@
  * reaches for the moment it touches bytes — `new TextDecoder().decode(await res.arrayBuffer())` is the ordinary
  * way to read a binary reply, and a page that calls it against an absent global aborts its own boot.
  *
- * THE DECODERS ARE THE STANDARD'S, STATE MACHINE BY STATE MACHINE. §4.4's UTF-8 decoder is written here as the
+ * EVERY SECTION NUMBER BELOW NAMES THE Encoding Standard UNLESS ANOTHER STANDARD IS WRITTEN IN FRONT OF IT,
+ * and this file's numbers were SHIFTED for every legacy family until the standard gained an index row in
+ * engine/citegen.mjs. The shape of the mistake is worth keeping because nothing about it is specific to this
+ * file: the standard numbers utf-8 as a FAMILY — §8 "The encoding", §9 "Legacy single-byte encodings", §10 and
+ * §11 "Legacy multi-byte Chinese (simplified)/(traditional) encodings", §12 "Legacy multi-byte Japanese
+ * encodings", §13 "Legacy multi-byte Korean encodings", §14 "Legacy miscellaneous encodings" — so counting the
+ * legacy families and forgetting that utf-8 is one of them puts every number after it one heading late, and each of
+ * those wrong numbers is a REAL section of this same standard naming a DIFFERENT decoder. §11.1.1 for gb18030
+ * is "Big5 decoder"; §12.1.1 for Big5 is "EUC-JP decoder"; §14.1.1 for EUC-KR is "replacement decoder". A
+ * number the standard does not have is caught by a reader; a number it has, naming the neighbour, is not.
+ *
+ * THE DECODERS ARE THE STANDARD'S, STATE MACHINE BY STATE MACHINE. §8.1.1 "UTF-8 decoder" is written here as the
  * three-variable machine the standard writes (bytes-needed, bytes-seen, and the lower/upper bound the NEXT byte
  * must fall in) rather than as a switch over sequence lengths — because that is what makes an overlong
  * encoding, a surrogate encoded in three bytes, and a truncated sequence at the end of a STREAMING chunk each
@@ -12,15 +23,16 @@
  *
  * THE MULTI-BYTE CJK DECODERS ARE BUILT — Big5, EUC-JP, EUC-KR, gb18030/GBK, ISO-2022-JP and Shift_JIS each
  * run their own algorithm over the standard's index, dispatched beside the single-byte arm below. This banner
- * used to head a paragraph naming those six as WHAT IS ABSENT, saying each "needs its own algorithm over a
- * hundreds-of-kilobyte index" and that a decode "CRASHES naming the encoding, which is the work queue". They
- * were built and the paragraph was not deleted, so the file's own header and the crash at the end of that
- * dispatch had come to say opposite things: the crash reads "every one the standard names now has one, so
- * reaching this means a NEW encoding was added to the registry and the decode was not", which is the accurate
- * one. A reader who trusted the banner would have set out to write six decoders that are already here.
+ * once headed a paragraph naming those six as WHAT IS ABSENT, and it outlived them: the header said they were
+ * unwritten while the crash at the end of that same dispatch said every encoding the standard names now has a
+ * decoder, so one component stated both, and a reader who trusted the banner would have set out to write six
+ * decoders that were already here.
  * THE GENERAL RULE THIS IS AN INSTANCE OF: a statement about what this tree CONTAINS is true when written and
  * wrong soon after, so when you build a capability, delete the crash that named it AND the prose that agreed
- * with it in the same diff — and before writing what such a note asks for, grep for the entry it names. */
+ * with it in the same diff — and before writing what such a note asks for, grep for the entry it names.
+ * THE RETIRED SENTENCES ARE NOT REPRODUCED HERE, and that is the same rule one turn further on: a specimen of
+ * deleted prose is a COORDINATE, it teaches nothing the shape above does not, and quoted beside a spec citation
+ * it is indistinguishable — to a reader and to engine/citegen.mjs alike — from a quotation of the standard. */
 #include <stdlib.h>
 #include <string.h>
 
@@ -103,33 +115,40 @@ static void enc_put(EncBuf *o, uint32_t cp)
     }
 }
 
-/* ---- §7.1's TextDecoder ------------------------------------------------------------------------------------ */
+/* ---- §7.2 "Interface TextDecoder" --------------------------------------------------------------------------- */
 
-/* §13.3.1's decoder MODES. They are the standard's own states, named as it names them. */
+/* §12.2.1 "ISO-2022-JP decoder"'s MODES. They are the standard's own states, named as it names them. */
 enum { JIS_ASCII = 0, JIS_ROMAN, JIS_KATAKANA, JIS_LEAD, JIS_TRAIL, JIS_ESC_START, JIS_ESC };
 
 /* THE DECODER'S STATE, which is what makes `stream: true` work: a sequence split across two calls resumes in
-   the middle, and §7.1's "serialize stream" only flushes an incomplete one when the last chunk arrives. */
+   the middle. THE ALGORITHM THAT DOES THAT IS NOT A FLUSH AND IS NOT §7.1's — §7.1 "Interface mixin
+   TextDecoderCommon" defines "serialize I/O queue", which walks the decoded SCALAR VALUES and drops a leading
+   BOM and flushes nothing at all. What holds the half-read sequence is §7.2's decode(input, options): step 2
+   sets `do not flush` to options["stream"], step 1 rebuilds the decoder only when `do not flush` is false, and
+   step 5.2 returns early on end-of-queue while it is true — so the incomplete tail is turned into an error by
+   the first call that arrives WITHOUT `stream`, at step 5.3's "processing an item". (A prior version of this
+   comment named an algorithm called "serialize stream", which occurs nowhere in the standard.) */
 typedef struct EncDecoder {
     EncodingId enc;
     uint8_t fatal, ignore_bom, bom_seen;
     /* §14.1.1's "replacement error returned", which is the whole state the replacement decoder has: it answers
        ONE error for a non-empty sequence and `finished` for everything after it. */
     uint8_t rep_error_returned;
-    /* §4.4's UTF-8 machine: how many continuation bytes are still owed, how many have been seen, the code
-       point so far, and the range the NEXT byte must fall in (which is what rejects an overlong sequence and a
-       surrogate without a table of special cases). */
+    /* §8.1.1 "UTF-8 decoder"'s machine: how many continuation bytes are still owed, how many have been seen,
+       the code point so far, and the range the NEXT byte must fall in (which is what rejects an overlong
+       sequence and a surrogate without a table of special cases). */
     uint32_t cp;
     uint8_t needed, seen, lo, hi;
     /* The UTF-16 machines' half-read unit and pending lead surrogate, for the same reason. */
     int16_t half;          /* -1 when no byte is held */
     int32_t lead_surrogate; /* -1 when none */
-    /* §11.1.1's three held bytes. The standard names them gb18030 first/second/third and tests each against 0,
-       so 0 IS the "nothing held" value rather than a separate flag — a byte of 0x00 never reaches them because
-       the machine only holds bytes in 0x81..0xFE and 0x30..0x39. */
+    /* §10.2.1 "gb18030 decoder"'s three held bytes. The standard names them gb18030 first/second/third and
+       tests each against 0, so 0 IS the "nothing held" value rather than a separate flag — a byte of 0x00
+       never reaches them because the machine only holds bytes in 0x81..0xFE and 0x30..0x39. */
     uint8_t gb_first, gb_second, gb_third;
-    /* §12/§13/§14's single held LEAD byte, and EUC-JP's jis0212 flag — the one bit that decides which of two
-       indexes its pointer is looked up in. §13.3.1's ISO-2022-JP is the one with a state rather than a lead:
+    /* §11/§12/§13's single held LEAD byte — Big5's, EUC-JP's, Shift_JIS's and EUC-KR's — and EUC-JP's jis0212
+       flag, the one bit that decides which of two indexes its pointer is looked up in. §12.2.1's ISO-2022-JP
+       is the one with a state rather than a lead:
        its escape sequences switch the whole decoder between ASCII, Roman, Katakana and two-byte modes, and
        `jis_out` is the state it returns to when an escape turns out not to be one. */
     uint8_t mb_lead, jis0212;
@@ -186,7 +205,7 @@ static void dec_push_back(EncDecoder *d, uint8_t b)
     d->back[d->nback++] = b;
 }
 
-/* §4.4's UTF-8 decoder, byte by byte. Returns 0 on success; -1 means the byte was an ERROR, and `*prepeat` says
+/* §8.1.1 "UTF-8 decoder", byte by byte. Returns 0 on success; -1 means the byte was an ERROR, and `*prepeat` says
    the byte must be reprocessed after it (which is how the standard recovers from a truncated sequence without
    swallowing the byte that ended it). */
 static int utf8_step(EncDecoder *d, uint8_t b, EncBuf *o, int *prepeat, int fatal)
@@ -234,7 +253,10 @@ static int utf8_step(EncDecoder *d, uint8_t b, EncBuf *o, int *prepeat, int fata
     return 0;
 }
 
-/* §14.4/§14.5's UTF-16 decoders. One machine, `be` deciding the byte order — they differ in nothing else. */
+/* §14.2.1 "shared UTF-16 decoder". One machine, `be` deciding the byte order — which is the standard's own
+   shape rather than this file's economy: §14.3.1 "UTF-16BE decoder" is one sentence saying the shared decoder
+   with `is UTF-16BE decoder` set to true, and §14.4.1 "UTF-16LE decoder" is one sentence saying the shared
+   decoder. */
 static int utf16_step(EncDecoder *d, uint8_t b, EncBuf *o, int *prepeat, int fatal, int be)
 {
     uint32_t unit;
@@ -288,7 +310,7 @@ static uint32_t gb18030_ranges_code_point(uint32_t pointer)
     return cp_offset + pointer - offset;
 }
 
-/* §11.1.1's gb18030 decoder, byte by byte — and the one in this file whose state is THREE held bytes, because
+/* §10.2.1 "gb18030 decoder", byte by byte — and the one in this file whose state is THREE held bytes, because
  * the four-byte form is a range lookup that cannot be recognised until its fourth byte.
  *
  * Bytes the machine held but then finds do not belong to a sequence are PUSHED BACK rather than swallowed, so
@@ -300,7 +322,7 @@ static int gb18030_step(EncDecoder *d, uint8_t b, EncBuf *o, bool fatal)
 
     if (d->gb_third != 0) {
         if (b < 0x30 || b > 0x39) {
-            dec_push_back(d, d->gb_second);   /* §11.1.1 prepends second, third and this byte */
+            dec_push_back(d, d->gb_second);   /* §10.2.1 prepends second, third and this byte */
             dec_push_back(d, d->gb_third);
             dec_push_back(d, b);
             d->gb_first = d->gb_second = d->gb_third = 0;
@@ -319,7 +341,7 @@ static int gb18030_step(EncDecoder *d, uint8_t b, EncBuf *o, bool fatal)
     }
     if (d->gb_second != 0) {
         if (b >= 0x81 && b <= 0xFE) { d->gb_third = b; return 0; }
-        dec_push_back(d, d->gb_second);   /* §11.1.1 prepends second and this byte */
+        dec_push_back(d, d->gb_second);   /* §10.2.1 prepends second and this byte */
         dec_push_back(d, b);
         d->gb_first = d->gb_second = 0;
         if (!fatal) enc_put(o, 0xFFFD);
@@ -337,14 +359,14 @@ static int gb18030_step(EncDecoder *d, uint8_t b, EncBuf *o, bool fatal)
                 return 0;
             }
         }
-        /* §11.1.1: an ASCII byte that ended a truncated sequence is RE-READ, so `\x81a` is an error followed
+        /* §10.2.1: an ASCII byte that ended a truncated sequence is RE-READ, so `\x81a` is an error followed
            by `a` rather than an error that ate it. */
         if (b < 0x80) dec_push_back(d, b);
         if (!fatal) enc_put(o, 0xFFFD);
         return -1;
     }
     if (b < 0x80) { enc_put(o, b); return 0; }
-    if (b == 0x80) { enc_put(o, 0x20AC); return 0; }   /* §11.1.1: the euro sign, which is not in the index */
+    if (b == 0x80) { enc_put(o, 0x20AC); return 0; }   /* §10.2.1: the euro sign, which is not in the index */
     if (b >= 0x81 && b <= 0xFE) { d->gb_first = b; return 0; }
     if (!fatal) enc_put(o, 0xFFFD);
     return -1;
@@ -355,7 +377,7 @@ static int gb18030_step(EncDecoder *d, uint8_t b, EncBuf *o, bool fatal)
    its end is absent rather than a read off the end. */
 #define ENC_INDEX_CP(tbl, n, ptr) ((ptr) < (uint32_t)(n) ? (uint32_t)(tbl)[(ptr)] : 0u)
 
-/* §12.1.1's Big5 decoder. Four pointers answer TWO code points each — the standard writes them out rather than
+/* §11.1.1 "Big5 decoder". Four pointers answer TWO code points each — the standard writes them out rather than
    putting them in the index, because an index maps a pointer to one — so this is the only decoder here that
    emits twice from one step. */
 static int big5_step(EncDecoder *d, uint8_t b, EncBuf *o, bool fatal)
@@ -389,7 +411,7 @@ static int big5_step(EncDecoder *d, uint8_t b, EncBuf *o, bool fatal)
     return -1;
 }
 
-/* §13.2.1's EUC-JP decoder. Its 0x8F lead selects the OTHER index for the pair that follows, which is what
+/* §12.1.1 "EUC-JP decoder". Its 0x8F lead selects the OTHER index for the pair that follows, which is what
    `jis0212` carries: one flag, cleared by the step that reads it, exactly as the standard clears it. */
 static int euc_jp_step(EncDecoder *d, uint8_t b, EncBuf *o, bool fatal)
 {
@@ -426,7 +448,7 @@ static int euc_jp_step(EncDecoder *d, uint8_t b, EncBuf *o, bool fatal)
     return -1;
 }
 
-/* §13.4.1's Shift_JIS decoder. Its pointers 8836..10715 are the private use area rather than an index entry,
+/* §12.3.1 "Shift_JIS decoder". Its pointers 8836..10715 are the private use area rather than an index entry,
    which is why that range is answered before the lookup rather than filled into the table. */
 static int shift_jis_step(EncDecoder *d, uint8_t b, EncBuf *o, bool fatal)
 {
@@ -458,7 +480,7 @@ static int shift_jis_step(EncDecoder *d, uint8_t b, EncBuf *o, bool fatal)
     return -1;
 }
 
-/* §14.1.1's EUC-KR decoder — the simplest of the five: one lead, one pointer, one index. */
+/* §13.1.1 "EUC-KR decoder" — the simplest of the five: one lead, one pointer, one index. */
 static int euc_kr_step(EncDecoder *d, uint8_t b, EncBuf *o, bool fatal)
 {
     uint32_t pointer, cp = 0;
@@ -482,7 +504,7 @@ static int euc_kr_step(EncDecoder *d, uint8_t b, EncBuf *o, bool fatal)
     return -1;
 }
 
-/* §13.3.1's ISO-2022-JP decoder — the one encoding here that is a MODE MACHINE rather than a lead byte. Its
+/* §12.2.1 "ISO-2022-JP decoder" — the one encoding here that is a MODE MACHINE rather than a lead byte. Its
  * escape sequences switch the whole decoder, and an escape that turns out not to be one has to unwind to the
  * mode it interrupted, which is what `jis_out` holds. The `output` flag is the standard's own: an escape that
  * lands on the mode already in force with nothing emitted since is an error, which is how it rejects
@@ -606,7 +628,8 @@ static int decoder_run(EncDecoder *d, const uint8_t *p, size_t len, EncBuf *o)
         } else if (d->enc == ENC_UTF_16LE || d->enc == ENC_UTF_16BE) {
             err = utf16_step(d, b, o, &repeat, d->fatal, d->enc == ENC_UTF_16BE);
         } else if (d->enc == ENC_X_USER_DEFINED) {
-            /* §14.6: a byte below 0x80 is itself, and everything else maps into the private use area. */
+            /* §14.5.1 "x-user-defined decoder": a byte below 0x80 is itself, and everything else maps into the
+               private use area. */
             enc_put(o, b < 0x80 ? b : (uint32_t)(0xF780 + b - 0x80));
         } else if (row >= 0) {
             /* §9.1: below 0x80 is ASCII, and above it is one index lookup. A 0 entry is not U+0000 — the
@@ -619,8 +642,9 @@ static int decoder_run(EncDecoder *d, const uint8_t *p, size_t len, EncBuf *o)
                 else { if (!d->fatal) enc_put(o, 0xFFFD); err = -1; }
             }
         } else if (d->enc == ENC_GB18030 || d->enc == ENC_GBK) {
-            /* §11.1.1 serves BOTH: gbk is gb18030 with an encoder difference, and the standard gives it no
-               decoder of its own. */
+            /* §10.2.1 serves BOTH: gbk is gb18030 with an encoder difference, and the standard gives it no
+               decoder of its own — §10.1.1 "GBK decoder" is the one sentence "GBK's decoder is gb18030's
+               decoder". */
             err = gb18030_step(d, b, o, d->fatal);
         } else if (d->enc == ENC_BIG5) {
             err = big5_step(d, b, o, d->fatal);
@@ -638,9 +662,10 @@ static int decoder_run(EncDecoder *d, const uint8_t *p, size_t len, EncBuf *o)
                ONE error — one U+FFFD under "replacement", the caller's error under "fatal" — and the read after
                it answers `finished`, at which "process a queue" RETURNS. So the bytes past the first are never
                read, and the whole sequence decodes to a single U+FFFD however long it is. That is the point of
-               the encoding: §14 says it "exists to prevent certain attacks that abuse a mismatch between
-               encodings supported on the server and the client", and a decoder that fell through to a real one
-               would be that mismatch. It is REACHABLE from a byte hook and not from §7.1: the constructors
+               the encoding: §14.1 "replacement" says it "exists to prevent certain attacks that abuse a
+               mismatch between encodings supported on the server and the client", and a decoder that fell
+               through to a real one would be that mismatch. It is REACHABLE from a byte hook and not from
+               §7.2: the constructors
                refuse the label, but Fetch §3.5's legacy extract an encoding hands `replacement` straight to
                §6.1's decode when a server labels a script `charset=iso-2022-kr`. */
             if (!d->rep_error_returned) {
@@ -655,7 +680,7 @@ static int decoder_run(EncDecoder *d, const uint8_t *p, size_t len, EncBuf *o)
                   "decode was not");
         }
         /* §4.1's "fatal" error mode RETURNS the error to whoever is processing the queue; it does not itself
-           know what a caller makes of one. §7.1's decode() makes it a TypeError, and §6's byte-sequence hooks
+           know what a caller makes of one. §7.2's decode() makes it a TypeError, and §6's byte-sequence hooks
            below have no realm to throw into at all — reaching for a `ctx` here is the whole reason this
            function used to need one. */
         if (err && d->fatal) return -1;
@@ -664,11 +689,11 @@ static int decoder_run(EncDecoder *d, const uint8_t *p, size_t len, EncBuf *o)
     return 0;
 }
 
-/* THE END OF THE QUEUE, for every caller that has one — §7.1's `stream: false`, §7.5's flush, and each of §6's
+/* THE END OF THE QUEUE, for every caller that has one — §7.2's `stream: false`, §7.5's flush, and each of §6's
    byte hooks, which are whole-sequence by construction. It is ONE function because WHICH held state means "the
    input stopped in the middle of a character" is per-decoder and the answer must not differ by caller: UTF-8's
    owed continuation bytes, UTF-16's half unit and orphaned lead surrogate, gb18030's three held bytes, a
-   multi-byte lead, and §13.3.1's escape and two-byte modes (whose MODE is what is unfinished). The byte hooks
+   multi-byte lead, and §12.2.1's escape and two-byte modes (whose MODE is what is unfinished). The byte hooks
    used to test `needed` alone, which is complete for UTF-8 and for nothing else — and §6.1's decode below runs
    every decoder in the registry.
    Returns -1 in "fatal" mode, where the incompleteness is the caller's error to answer with. */
@@ -682,7 +707,7 @@ static int decoder_flush(EncDecoder *d, EncBuf *o)
 
     if (!incomplete) return 0;
     if (d->fatal) return -1;
-    /* §13.3.1's escape states PREPEND what they were holding before returning the error, and the standard says
+    /* §12.2.1's escape states PREPEND what they were holding before returning the error, and the standard says
        so for the EOF byte too — so `ESC $` at the end of a stream is U+FFFD followed by the `$` it was holding,
        not U+FFFD alone. The flush is a STEP of the decoder, which means what it pushes back is then decoded. */
     if (d->enc == ENC_ISO_2022_JP) {
@@ -761,7 +786,7 @@ static int enc_buffer_source(JSContext *ctx, JSValueConst v, const uint8_t **pp,
     return 0;
 }
 
-/* RUN BYTES THROUGH A DECODER — §7.1's decode() minus its arguments, which is exactly what §7.5's "decode and
+/* RUN BYTES THROUGH A DECODER — §7.2's decode() minus its arguments, which is exactly what §7.5's "decode and
    enqueue a chunk" and "flush and enqueue" are. The `stream` flag decides whether an incomplete sequence at
    the end is HELD for the next call or flushed as an error, which is the whole reason a decoder has state at
    all; the streaming interface is the same decoder driven by a TransformStream rather than by a page's calls,
@@ -773,8 +798,14 @@ JSValue enc_decoder_decode(JSContext *ctx, EncDecoder *d, const uint8_t *p, size
 
     DCHECK(d != NULL, "bytes were run through a decoder that does not exist");
     if (decoder_run(d, p, len, &o) < 0) {
-        /* §7.1 step 4: "If … a decoder error occurs, then throw a TypeError." The decoder answered the error;
-           this is the caller that has a realm to turn it into one. */
+        /* Encoding §7.2 "Interface TextDecoder"'s decode(input, options) step 5.3.3: "Otherwise, if result is
+           error, throw a TypeError." The decoder answered the error; this is the caller that has a realm to
+           turn it into one. THE SENTENCE THAT STOOD HERE — `§7.1 step 4: "If … a decoder error occurs, then
+           throw a TypeError."` — was WRONG IN BOTH HALVES, and it is kept as a worked example because a
+           quotation is the part of a citation a reader trusts most and verifies least: §7.1 is "Interface mixin
+           TextDecoderCommon" and holds no decode() at all, and the phrase "decoder error" occurs NOWHERE in the
+           Encoding Standard. §7.2 holds SEVERAL lists — the constructor's and decode()'s — so the citation
+           names the list in the standard's own words rather than writing a bare step number no reading fixes. */
         free(o.b);
         decoder_reset(d);
         return JS_ThrowTypeError(ctx, "the encoded data was not valid %s", encoding_name(d->enc));
@@ -1012,7 +1043,7 @@ char *encoding_utf8_decode_without_bom(const char *p, size_t n, size_t *out_n)
     /* THE END OF THE QUEUE. "If byte is end-of-queue and UTF-8 bytes needed is not 0, then set UTF-8 bytes
        needed to 0 and return error" — a sequence the input stops in the middle of is one error, and
        "replacement" makes it one U+FFFD. Without this a trailing `%C3` would vanish instead. It is the SHARED
-       flush: §7.1's non-streaming decode reaches the same states through the same function, so a hook cannot
+       flush: §7.2's non-streaming decode reaches the same states through the same function, so a hook cannot
        come to disagree with the interface about what "ended mid-sequence" means. */
     r = decoder_flush(&d, &o);
     DCHECK(r == 0, "the end-of-queue flush of a \"replacement\" decode answered an error, which only the "
@@ -1062,7 +1093,9 @@ bool encoding_is_scalar_value_string(const char *p, size_t n)
    all. This file's own later statements of the same fact already say §7.2 (the prototype pair at the end of
    this file, and the detached-buffer paragraph above), so the two numbers stood side by side in one component;
    §7.1 is a LIVE section about something else, which is the failure mode a wrong number has and a missing one
-   does not. The sites still reading §7.1 for the decoder's `decode()` are named in this diff's report. */
+   does not. Every §7.1 left in this file is the mixin's own — the associated state, the `encoding` getter's
+   "ASCII lowercased", and "serialize I/O queue"'s BOM removal — and a §7.1 that names a constructor, a
+   `decode()`, a `stream` option or a TypeError is this mistake returning. */
 /* WHERE THIS MACHINE RESTS. §7.2's constructor is five steps and none of them can run the page's code — the
    declaration has converted `label` to a DOMString and the options dictionary to booleans before this is
    entered — so the machine has one stage and never returns to it. */
