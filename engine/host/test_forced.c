@@ -16148,6 +16148,24 @@ int main(int argc, char **argv) {
 
     concolic_init(ctx);
     flow_registry_init("fixture");   /* one document in this fixture; the world namespace is named by it */
+    /* THE DOM CHOKEPOINT'S CONTEXT, NAMED BY THIS HOST IN ITS OWN INIT — the third host to owe it, and the
+       second to have forgotten. DOM §4.2.3 Mutation algorithms' insertion and removing steps are fired from
+       the solver's tree chokepoint, which needs the runtime they run in; `dom_cow_set_tree_hook` is called
+       for this host the moment `element_init` registers the first of them, so from `tf_agent_init` onward
+       the hook is LIVE. This host named no context at all and rode `engine_sched_begin`'s call, which is at
+       the very END of the run — so every line between the agent and the run was a window in which a
+       DOM-API tree write ran with the hook live and no context. Nothing here had ever made one (the
+       document parse takes the tree-construction ops, which fire no hook), so the window was invisible
+       until a fixture appended an element to the body — and the same window was open on a second road, since
+       the chokepoint's attribute-removal path asserts this context DIRECTLY, so an `el.removeAttributeNode(x)`
+       in here would have found it just as well and named the taint shadow instead of the insertion steps.
+       IT IS THE HOST'S TO STATE AND NOT THE ENGINE'S TO INFER, which is what `engine/host/wpt_runner.c`
+       records at its own copy of this line: that runner ran NO insertion steps for its whole life — no
+       <script> preparation, no custom-element upgrade, no child navigable — and the failure surfaced three
+       layers away as an iframe whose `contentWindow` was null. Beside `flow_registry_init` because that is
+       where that host states it, and BEFORE the agent for the reason the assert exists: the hook goes live
+       inside the agent's own init, so a context named after it is a context named too late. */
+    dom_cow_set_ctx(ctx);
     world_registry_selftest(ctx);   /* the peer half: worlds minted as if by another document */
     flow_job_selftest(ctx);         /* §8.1.7's two queues, §7.5.10 step 7, and the fork's copy-on-nothing */
     sort_merge_selftest(ctx);       /* 23.1.3.30.1 step 4 rests per element, and both schedules agree */
