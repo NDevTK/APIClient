@@ -191,6 +191,22 @@ typedef struct Flow {
        INHERITED AT A FORK for the same reason `cpu` is — an arm has, by construction, completed every unit its
        parent completed before the branch. flow_fork_inherit's rank-neutrality DCHECK is what forces the
        inheritance, and it fires the moment it is forgotten.
+       AND **NOT** PLACED AT AN ARRIVAL, WHICH IS THE OPPOSITE CASE AND USED TO BE THE SAME ONE. The two doors
+       look alike and their premises are contradictory: a fork IS its parent's execution with one more arm on
+       it, while flow_add_unseeded routes a flow to the arrival precisely BECAUSE it stands on nobody's
+       decisions. So the fork's "by construction" reasoning is exactly false of an arrival, and the arrival was
+       copying the count of whichever flow happened to hold the thread — a fact about a stranger. That is the
+       two-instants test failed at a second door: two newcomers arriving at two instants read 1/9 and 1/14 for
+       units NEITHER completed. What it cost is §scheduler's guarantee at the only door that guarantee is
+       about — "a UCB optimism bonus proportional to 1/(visits+1) so a NEVER-RUN FLOW IS NEVER STARVED" is a
+       sentence whose whole content is this term's value at zero, and every from-baseline flow (the @S
+       candidate session, a joined document's boot flow, a cold-resumed recipe) was born at a tenth of it.
+       Measured: twelve candidate sessions at one reward for a whole run, `turns:0` on every one.
+       THE TERM IS THEREFORE OUTSIDE THE ARRIVAL'S COORDINATE ENTIRELY (flow.c's flow_optimism, split out of
+       flow_queue_weight beside §@S's distance for the identical sentence — a reading of the flow is not a
+       position in the queue). A newcomer ties the flow in service on the coordinate and stands one optimism
+       range above it on the weight, which is the rank §scheduler assigns a flow that has completed nothing and
+       is bounded at one emission by flow_nonreward. It pays that back at FLOW_AGE_QUANTUM per quantum burned.
        AND NOT RESET BY AN EMISSION, WHICH IS THE ONE THING ABOUT THIS FIELD THAT USED TO BE A QUESTION AND IS
        NOW SETTLED. It used to be written to zero on the EMITTER, on the reasoning that a flow which has just
        produced something is not one the frontier needs protecting from and "then leads by its REWARD". That

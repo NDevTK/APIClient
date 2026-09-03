@@ -1507,7 +1507,29 @@ static void flow_arrive_at_virtual_time(Flow *f) {
        census row that asks what a member emitted ITSELF must not read a whole frontier of newcomers as
        productive on the strength of the flow that was running when they arrived. */
     f->family->base = acct_family_val(g_running);
-    f->visits = g_running->visits;                        /* the optimism term's coordinate */
+    /* AND THE OPTIMISM TERM IS **NOT** PLACED, WHICH IS THE ONE ASSIGNMENT THIS RULE NO LONGER MAKES. It used
+       to read `f->visits = g_running->visits` and call that "the optimism term's coordinate", and the term has
+       no coordinate: it is 1/(1+units THIS FLOW has completed), a reading of the flow rather than a position in
+       the queue, and the precondition above has already asserted this one has completed none. A from-baseline
+       flow stands on NOBODY's decisions — that is the predicate flow_add_unseeded routes it here by — so unlike
+       a fork it has not, by construction, finished what the flow in service finished; it has finished nothing,
+       and the count it was being handed belonged to whichever flow happened to hold the thread.
+       WHAT THE COPY COST IS §scheduler'S GUARANTEE, AT THE ONE DOOR IT WAS WRITTEN FOR. "A UCB optimism bonus
+       proportional to 1/(visits+1) so a NEVER-RUN FLOW IS NEVER STARVED" is a sentence whose entire content is
+       the value of that term at zero. Every from-baseline door is an arrival — the @S candidate session, a
+       joined document's boot flow, a cold-resumed recipe — so on a frontier whose members carried 8 to 13
+       completed units, every one of them was born at 1/9 to 1/14 of the bonus the guarantee is made of. Twelve
+       candidate sessions stood at one reward for a whole run with `turns:0` on every one of them, and the row
+       that finally named them (`val_arrived`) froze at exactly 12 while the frontier grew to 660.
+       SO THE NEWCOMER IS BORN EXACTLY ONE OPTIMISM RANGE ABOVE THE FLOW IN SERVICE, WHICH IS THE RANK
+       §scheduler ASSIGNS IT AND NOT A PROMOTION. flow_nonreward bounds that range at 1.0 for the stated reason
+       that "a PROMISE never outweighs a FINDING", so an untouched member is worth one emission's worth of
+       promise over the place it was put and no more — and it pays that back at FLOW_AGE_QUANTUM per quantum it
+       burns, so the lift buys it turns and never a monopoly. The failure direction the assert below names —
+       "a page promoting the documents and candidate sessions it creates over the whole backlog" — is what an
+       UNBOUNDED lift would be; this one is the bounded term the scheduler is defined in terms of, and
+       suppressing it to avoid at most one point of lift voided the guarantee across a reward band measured at
+       two hundred and seventeen points wide. */
     /* …AND THE AGING TERM'S OWN HALF, WHICH IS THE READING AND NOT THE FIELD. A newcomer FOUNDS its own family
        (the precondition above says so), so its `cpu_gen` is a mark in a generation space that is not the
        running flow's and copying `g_running->cpu` verbatim would place the newcomer at a raw number rather
@@ -1529,14 +1551,24 @@ static void flow_arrive_at_virtual_time(Flow *f) {
        express. Written over flow_queue_weight rather than over a list of fields for the reason
        flow_fork_inherit gives about its own: a list cannot fire when a term is ADDED, and every term this rule
        has ever been missing was added to the weight by somebody who did not know this function existed.
-       THE FITNESS IS THE ONE TERM NAMED RATHER THAN CARRIED, and naming it is what keeps this exact. §@S's
-       distance is a fraction OF A PAYLOAD, and a newcomer's payload is not the payload the flow in service
-       holds — there is no position for it to arrive at, which is why flow_queue_weight excludes it and why a
-       second per-item reading added to flow_weight would fire flow_fork_inherit's assert instead of this one.
+       TWO TERMS ARE NAMED RATHER THAN CARRIED, AND NAMING THEM IS WHAT KEEPS THIS EXACT. §@S's distance is a
+       fraction OF A PAYLOAD, and a newcomer's payload is not the payload the flow in service holds — there is
+       no position for it to arrive at. The OPTIMISM bonus is the same sentence one term over and used to be
+       carried anyway: it is 1/(1+units this flow has COMPLETED), so a flow that has completed nothing reads it
+       at 1.0 whoever is in service, and there is no position for that to arrive at either. Both now sit outside
+       flow_queue_weight (see flow_optimism), so this equality is over the TAGS alone — the reward and the
+       aging, which are facts about where the queue stands — and a second per-item reading added to flow_weight
+       would fire flow_fork_inherit's assert instead of this one, which is the door that must carry it.
+       WHAT THAT MEANS FOR WHAT THIS ASSERTS, STATED PLAINLY BECAUSE IT IS A WEAKER SENTENCE THAN IT LOOKS: the
+       newcomer ties the flow in service on the QUEUE COORDINATE and stands exactly one optimism range above it
+       on the full weight, which is §scheduler's rank for a member that has completed no unit of work and is
+       bounded at one emission by flow_nonreward. It is picked, it burns, and it pays that lift back at
+       FLOW_AGE_QUANTUM per quantum — turns, never a monopoly.
        EXACT WITH NO EPSILON: every tag is copied as the QUANTITY its reader returns — the reward onto the
-       newcomer's own family node, the family silence as a value, the visit count and the own silence onto the
-       flow — and the notch is an integer division of equal integers, so the two sides are the same float
-       expression over the same values. */
+       newcomer's own family node, the family silence as a value and the own silence onto the flow — and the
+       notch is an integer division of equal integers, so the two sides are the same float expression over the
+       same values. The visit count is no longer among them, which is what makes that list shorter by one and
+       this equality no less complete: it never belonged to the coordinate. */
     DCHECK(flow_queue_weight(f) == flow_queue_weight(g_running),
            "a flow arriving from the baseline did not enter at the frontier's virtual time — it was placed "
            "above the flow in service (a page promoting the documents and candidate sessions it creates over "
@@ -2399,8 +2431,15 @@ static double flow_queue_nonreward(const Flow *f) {
        §scheduler's "a deep loop suspends and yields so siblings run, then resumes" measured in the unit the
        page's own code is written in. What it may NOT do is monopolise a unit that never ends, and that is the
        aging term's job below — not this one's. */
-    int64_t visits = f->visits;
-    double ucb     = 1.0 / (1.0 + (double)visits);
+    /* THE OPTIMISM TERM IS NO LONGER ONE OF THIS FUNCTION'S SUMMANDS, AND ITS ABSENCE IS THE MECHANISM. This
+       function is what an ARRIVAL is placed at (flow_queue_weight, flow_arrive_at_virtual_time), and every term
+       of that placement has to be a TAG a newcomer can stand at rather than a READING of what the newcomer has
+       done. §@S's fitness was already excluded for exactly that sentence — "a per-payload reading is not a
+       position; the payload a newcomer carries is not the payload the flow in service carries, so there is
+       nothing for it to arrive at" — and the optimism bonus is the same kind of quantity one field over: it is
+       1/(1+units this flow has COMPLETED), and a from-baseline flow has completed nothing whatever the flow in
+       service has completed. There was no position for it to arrive at either, and the arrival copied one
+       anyway. See flow_optimism below, and flow_arrive_at_virtual_time for what the copy cost. */
     /* THE AGING IS THE FLOW'S OWN SILENCE **AND** ITS FAMILY'S, and the second half is what the family charge
        could never do alone. The family reading was landed for a real defect and stays: `val` is copied to every
        arm (flow_fork_inherit), so a family that emitted V with N live arms presented V exactly N times, and the
@@ -2468,7 +2507,37 @@ static double flow_queue_nonreward(const Flow *f) {
        O(1) to read: every flow points straight at its family's root, so this adds one indirection to the pick
        and no walk. It is why the preempt hook's seam assertion snapshots this notch and the visit count
        (engine.c) — between two of them a flow's weight cannot move except through an emission. */
-    return ucb - (double)flow_silence_notch(f) * FLOW_AGE_QUANTUM;
+    return -(double)flow_silence_notch(f) * FLOW_AGE_QUANTUM;
+}
+
+/* THE OPTIMISM TERM, ON ITS OWN, BECAUSE IT IS A READING OF THE FLOW AND NOT A PLACE IN THE QUEUE — the same
+   split the fitness distance already sits on the far side of, and made for the same reason. §scheduler: "a UCB
+   optimism bonus proportional to 1/(visits+1) so a NEVER-RUN FLOW IS NEVER STARVED". The population that
+   sentence is about is a flow that has COMPLETED NO UNIT OF WORK, and the value it names for such a flow is
+   1.0 — the whole range, one emission's worth of promise, which is exactly what flow_nonreward's bound prices
+   it at and no more.
+   IT IS NOT SOMETHING A NEWCOMER CAN INHERIT, and that is the whole content of moving it here. A FORK carries
+   it and must (flow_fork_inherit: an arm has, by construction, finished every program its parent finished
+   before the branch, because it IS that execution with one more arm on it). An ARRIVAL is the opposite case by
+   the very predicate that routes it — flow_add_unseeded sends a flow here when it stands on NOBODY's decisions
+   — so it has finished nothing, and handing it the count of whichever flow happened to hold the thread is
+   handing it a fact about a stranger.
+   WHAT THAT COST, MEASURED. Every from-baseline door is an arrival: the @S candidate session, a joined
+   document's boot flow, a cold-resumed recipe. On a frontier whose members carried 8 to 13 completed units,
+   an arriving candidate was born with a bonus of 1/9 to 1/14 instead of 1.0 — so §scheduler's never-starved
+   guarantee, whose entire content is the value of this term at zero, was VOIDED at the one door it was written
+   for, and voided in favour of a number belonging to a flow the newcomer had nothing to do with. Twelve
+   candidate sessions stood at one coordinate for a whole run with `turns:0` on every one of them.
+   AND IT IS THE TWO-INSTANTS TEST, FAILED AT THE ARRIVAL DOOR. CLAUDE.md's rule for a weight term is not "does
+   a fork carry it" but "would two arms of ONE parent, forked at TWO instants, read it the same"; the same
+   question at this door is whether two newcomers arriving at two instants read it the same, and copying the
+   incumbent's count answered 1/9 for one and 1/14 for the other — a whole range apart, for units NEITHER of
+   them completed. Read at zero for both, they do.
+   ITS RANGE IS UNCHANGED AND SO IS flow_weight'S VALUE. This is the same summand it always was, moved from one
+   side of the arrival split to the other; flow_nonreward adds it back and FLOW_NONREWARD_MAX still prices it
+   at its reading at zero visits. What changed is only which of the two questions it belongs to. */
+static double flow_optimism(const Flow *f) {
+    return 1.0 / (1.0 + (double)f->visits);
 }
 
 /* THE QUEUE COORDINATE — the reward plus the remainder above, and this function is now the reward and nothing
@@ -2607,7 +2676,10 @@ double flow_distance(const Flow *f) {
    of the instruction. The tell that the rule does apply is the one absent here — a message whose remedy names
    an action with no object; this one names a place, and the place is where the crash already points. */
 static double flow_nonreward(const Flow *f) {
-    double n = flow_queue_nonreward(f) + flow_distance(f);
+    /* THE TWO READINGS AND THE ONE TAG, which is what this sum is now made of explicitly: the optimism
+       bonus and the fitness distance are facts about THIS FLOW, and the aging is the queue coordinate it
+       shares with whatever it was placed beside. flow_weight is unchanged in value. */
+    double n = flow_queue_nonreward(f) + flow_optimism(f) + flow_distance(f);
     DCHECK(n <= FLOW_NONREWARD_MAX,
            "a term of the WFQ's order other than the REWARD lifted a flow further than one emission and a full "
            "fitness reading can — so the ordering is no longer made of one unranged ledger plus terms that each "
