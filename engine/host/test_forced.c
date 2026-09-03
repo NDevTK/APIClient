@@ -7426,11 +7426,59 @@ static int s_derived(const char *js, const char *sink, const char *src, int stag
     return s_arraylen(js, sink, src, "survivedBy") > s_num(js, sink, src, "probes");
 }
 
+/* THE TWO RUNGS BELOW `-witnessed`, AND THE LOWER OF THEM IS THE ONLY ONE ON THE RUNWAY. §@S(i) requires every
+ * rung to have an observation site STRICTLY BEFORE the thing it is a distance to, and names the failure by
+ * name: a fitness whose sites all sit at or past the sink "is not a distance at all, it is the outcome
+ * restated". Read against this file that was exact — `-seeded` is flow creation and `-ran` is a switch-in, and
+ * then the ladder jumped straight to `-witnessed`, which is the CONTEXT PROBE arriving AT the sink. Everything
+ * between "the WFQ gave this search the thread" and "its bytes were in a string a sink was handed" was one
+ * unmeasured gap, and every 0 above `-ran` sat behind it.
+ * `substituted` IS THE RUNG IN THAT GAP AND THE PRODUCER HAS EMITTED IT ALL ALONG. solve.c raises it from
+ * solve_observe_substitution, which solver/concolic.c calls at the moment it performs the substitution — the
+ * SOURCE READ, which is the last point in the program strictly before any sink — and solve.h declares it
+ * unconditional on every parked entry. Nothing in this file read it, so `-ran=1, -witnessed=0` went on saying
+ * two opposite things at once:
+ *   substituted:0  the candidate flows held the thread and none of them reached its own source read. A
+ *                  question about the PATH IN FRONT OF THE SOURCE — a gate turning the flows away — and
+ *                  nothing whatever about the payload, the filter or the sink.
+ *   substituted:D  the bytes ARE in the page's own program and the distance question begins there.
+ * That is CLAUDE.md's own tell (an observation with a computed writer and no reader is not a mechanism) inside
+ * the instrument built to end it, and it is the one rung a search sitting at `turns:0` would report differently
+ * from a search whose flows run and are turned back.
+ * `sinkStrings` IS THE NEXT ONE UP AND ITS SITE IS AT A SINK, WHICH IS WHY IT IS A SEPARATE ROW AND NOT THIS
+ * ONE. It counts every string a code-execution sink was handed while this search's substitution was live —
+ * class-independently, on the RUNNING FLOW'S search, wherever the bytes surface — so it is what splits
+ * `substituted:D, -witnessed=0` into "no sink has run at all while these bytes were live" (a distance question)
+ * and "sinks RAN and this search's probe was in none of their strings" (a question about the page's own
+ * transform or routing). Those take opposite work.
+ * THE FIRED ARM IS A POSITIVE STATEMENT FOR BOTH, on the same ground s_witnessed states it: a fired record
+ * carries the reproduction envelope in place of the search's counters, and a PoC exists only because a breakout
+ * arrived at a sink — breakout_arrived DCHECKs `substituted > 0` at the arrival and filter_survived raises
+ * `sinkStrings` on the same string one call earlier, at all three sink classes. S_UNSEEN is the other end:
+ * there is no record to ask.
+ * ASKED OF EVERY CLASS, WHICH IS THE ONE PLACE THESE DIFFER FROM `witnessed`. solve.c emits `witnessed` only
+ * where `derive != SINK_DERIVE_NONE`, so the single-context URL search has no such field and no such row; both
+ * of these are emitted unconditionally for every parked entry, and solve.c says why in as many words — "the
+ * zero is the load-bearing reading in both cases, so there is no absence here to read positively". So the URL
+ * search gains both rungs, and it is the search for which they say the most: it has no derivation to wait on,
+ * so `-ran=1, -substituted=0` on it is a pure statement about the path to the source read. */
+static int s_substituted(const char *js, const char *sink, const char *src, int stage) {
+    if (stage == S_FIRED)  return 1;
+    if (stage == S_UNSEEN) return 0;
+    return s_num(js, sink, src, "substituted") > 0;
+}
+static int s_sinkstrings(const char *js, const char *sink, const char *src, int stage) {
+    if (stage == S_FIRED)  return 1;
+    if (stage == S_UNSEEN) return 0;
+    return s_num(js, sink, src, "sinkStrings") > 0;
+}
+
 /* AND THE LADDER IS MONOTONE, ASSERTED AT EACH SEARCH RATHER THAN ONCE FOR ALL OF THEM. Every implication below
  * is an invariant the ENGINE already asserts at the site that establishes it, read back off the emitted
  * document — breakout_arrived DCHECKs `npl > nprobe` at the arrival, derive_from_witness runs only on a stored
- * witness, learn_witness DCHECKs `turns > 0`, and escape_reached DCHECKs `reached > 0` — so a pair can only
- * disagree if a number is being written about a different quantity than the field it lands in.
+ * witness, filter_survived raises `sinkStrings` on the same string learn_witness is about and one call before
+ * it, and escape_reached DCHECKs `reached > 0` — so a pair can only disagree if a number is being written
+ * about a different quantity than the field it lands in.
  * IT IS A MACRO AND NOT A FUNCTION, WHICH IS THE POINT. A DCHECK stamps the line it is WRITTEN at, so five
  * searches sharing one helper would share one reported line and the remedy ("open this search's record") would
  * name an action with no object — the defect CLAUDE.md §AN-ASSERT-THAT-NAMES-A-REMEDY describes, which is why
@@ -7439,8 +7487,15 @@ static int s_derived(const char *js, const char *sink, const char *src, int stag
  * address a reader needs.
  * ONE DIRECTION ONLY on the first two, because only one direction is an implication: a witnessed search that has
  * built nothing is the CORRECT and final answer for a source whose percent-encode set holds every byte the
- * state's exit needs, which is exactly what the raw-fragment markup search must report. */
-#define S_LADDER_MONOTONE(js, sink, src, stage, wit, built)                                                     \
+ * state's exit needs, which is exactly what the raw-fragment markup search must report.
+ * AND ITS BOTTOM LINK NOW LANDS ON THE RUNG BELOW IT INSTEAD OF THREE RUNGS DOWN. It read `!wit || stage >=
+ * S_RAN`, which was TRUE and skipped `sinkStrings` and `substituted` because neither was measured here — so
+ * when it fired, three different links could be the broken one and the crash named none of them. The chain is
+ * now one link per rung: this macro holds the DERIVING half (witness, build, arrival, escape) and
+ * S_RUNWAY_MONOTONE below holds the half every class has, and `!wit || strings` is the joint between them.
+ * `!wit || stage >= S_RAN` is not lost — it follows from the two, and the LOWEST failing link is the one that
+ * names what to open. */
+#define S_LADDER_MONOTONE(js, sink, src, stage, strings, wit, built)                                            \
     do {                                                                                                        \
         DCHECKF((stage) < S_ARRIVED || (built),                                                                  \
                 "the @S search %s <- %s reports a BREAKOUT arriving at its sink while its own record says it "   \
@@ -7452,16 +7507,67 @@ static int s_derived(const char *js, const char *sink, const char *src, int stag
                 "class reads its lexical state off the string a real run handed the sink and has no other "      \
                 "observation to read one off, so an escape with no witness was built from a static shape of "    \
                 "the expression", (sink), (src));                                                                \
-        DCHECKF(!(wit) || (stage) >= S_RAN,                                                                      \
-                "the @S search %s <- %s witnessed a context while the scheduler reports it has never been "      \
-                "given a turn — learn_witness DCHECKs `turns > 0` at the site that stores a witness, so "        \
-                "`turns` is counting something other than the flows that do this search's work and `turns:0` "   \
-                "would be read as WFQ starvation for a search that has run the whole document",                  \
+        DCHECKF(!(wit) || (strings),                                                                             \
+                "the @S search %s <- %s witnessed a context while its own record says no string has ever "       \
+                "reached a code-execution sink while its substitution was live — learn_witness runs DOWNSTREAM " \
+                "of filter_survived on the SAME string at every sink class, and filter_survived raises "         \
+                "`sinkStrings` before it looks at a byte, so a witness standing over `sinkStrings:0` is a "      \
+                "second route into the witness that the observation counter does not see",                       \
                 (sink), (src));                                                                                  \
         DCHECKF((stage) != S_ESCAPED || s_num((js), (sink), (src), "reached") > 0,                                \
                 "the @S search %s <- %s reports its marker at an EXECUTABLE position while no breakout of it "   \
                 "has been recorded as ARRIVING — escape_reached asserts the arrival at the escape site itself, " \
                 "so these are two counts about two different strings", (sink), (src));                           \
+    } while (0)
+
+/* AND THE HALF OF THE LADDER EVERY CLASS HAS, WHICH IS WHY IT IS ITS OWN MACRO AND NOT THREE MORE LINES ABOVE.
+ * `witnessed` and `survivedBy` are emitted only where the class DERIVES, so the macro above is expanded at six
+ * of this fixture's seven searches and the single-context URL search is deliberately absent from it. Both rungs
+ * here are emitted UNCONDITIONALLY for every parked entry, so all seven get these — and splitting along the
+ * line the PRODUCER splits its own fields on is what keeps the URL search from either losing the invariants or
+ * being handed a claim about a mechanism it has not got.
+ * EVERY LINK IS AN INVARIANT THE ENGINE ALREADY ASSERTS AT THE SITE THAT ESTABLISHES IT, read back off the
+ * emitted document: solve_observe_substitution DCHECKs `turns > 0` before it increments, filter_survived
+ * DCHECKs `substituted > 0` at the line that raises `sinkStrings`, and breakout_arrived DCHECKs `substituted >
+ * 0` at the arrival. So a pair can only disagree if a number is being written about a different quantity than
+ * the field it lands in — which is the same thing the macro above says and the reason both are read-backs
+ * rather than second copies of the producer's rule.
+ * A MACRO AND NOT A FUNCTION, for the reason the macro above gives: seven searches sharing one helper would
+ * share one reported line and the remedy would name an action with no object. */
+#define S_RUNWAY_MONOTONE(sink, src, stage, subst, strings)                                                     \
+    do {                                                                                                        \
+        DCHECKF(!(subst) || (stage) >= S_RAN,                                                                    \
+                "the @S search %s <- %s performed a substitution while the scheduler reports it has never "     \
+                "been given a turn — solve_observe_substitution DCHECKs `turns > 0` before it increments, and " \
+                "a flow reaches its own source read only while it holds the thread, so `turns` is counting "    \
+                "something other than the flows that do this search's work and `turns:0` would be read as WFQ " \
+                "starvation for a search that ran", (sink), (src));                                             \
+        DCHECKF(!(strings) || (subst),                                                                           \
+                "the @S search %s <- %s reports a string reaching a code-execution sink while its substitution " \
+                "was live and no substitution recorded — filter_survived DCHECKs `substituted > 0` on the very " \
+                "line that raises `sinkStrings`, so this is a second door into the substitution that does not "  \
+                "report one and the parked card would state these runs never reached their own source read",    \
+                (sink), (src));                                                                                  \
+        DCHECKF((stage) < S_ARRIVED || (subst),                                                                  \
+                "the @S search %s <- %s reports a BREAKOUT arriving at its sink over a record that has never "  \
+                "recorded a substitution — the bytes got there, so they entered the program, and "              \
+                "breakout_arrived asserts `substituted > 0` at the arrival itself", (sink), (src));             \
+    } while (0)
+
+/* AND THE DELIVERY PROBE'S OWN TWO LINKS, HELD ONLY WHERE THE SEARCH RUNS ONE. `sourceDelivers` is emitted only
+ * when a token of the probe was OBSERVED arriving (cand_delivers gates on `deliv_seen`), and observe_delivery
+ * counts the ARRIVAL before it looks for a token — so a measured delivery set standing over `deliveryProbed:0`,
+ * or over an ABSENT `deliveryProbed`, is a byte learned without a run behind it. The producer asserts the first
+ * of those at the emitter; this reads it back, and adds the one the producer cannot ask: that the two fields
+ * are about the same entry of the same record. */
+#define S_DELIVERY_MONOTONE(sink, src, probed, measured)                                                        \
+    do {                                                                                                        \
+        DCHECKF(!(measured) || (probed) > 0,                                                                     \
+                "the @S search %s <- %s carries a MEASURED delivery set while its delivery probe has never "    \
+                "reached a sink (or it holds no such probe at all) — observe_delivery counts the arrival "      \
+                "before it looks for a single token, so a set narrowed with no arrival behind it is a "         \
+                "constraint no run of this search measured, and every derived escape is constructed under it",  \
+                (sink), (src));                                                                                  \
     } while (0)
 
 /* A FIRE-VERIFIED PoC IS A FIELD OF ITS OWN RECORD, NEVER A SUBSTRING OF THE DOCUMENT — and reading it the
@@ -7495,6 +7601,22 @@ static int s_field(const char *js, const char *sink, const char *src, const char
     if (span < nl) return 0;
     for (p = e; p + nl <= e + span; p++) if (!memcmp(p, needle, nl)) return 1;
     return 0;
+}
+
+/* HOW MANY TIMES THIS SEARCH'S DELIVERY PROBE REACHED A SINK, AND -1 WHERE IT HOLDS NONE — the reader
+ * `deliveryProbed` was emitted for and did not have.
+ * THE FIELD IS CONDITIONAL, SO THE ABSENCE IS PART OF THE ANSWER AND MUST NOT BE COLLAPSED INTO THE ZERO. That
+ * is the whole defect it was added to close one level down: solve.h declares it ABSENT where the search holds
+ * no delivery probe and `0` where it holds one that has not arrived, and those are a ROUTING fact and a
+ * DISTANCE fact. Reading an absent key as 0 would state that a class which runs no such probe has one that
+ * never arrived — so presence is asked first, with s_field over the key's own bytes, and s_num (which aborts by
+ * name on an absent key) is only reached once the key is known to be there.
+ * -1 AND NOT A BOOLEAN PAIR, because the two questions want two rows off ONE read: a second call would ask the
+ * same record twice and could answer a different instant of a live run, which is the reading-two-moments defect
+ * this file already refuses one row up (see the frontier census taken once per table). */
+static int s_delivery_probed(const char *js, const char *sink, const char *src) {
+    if (!s_field(js, sink, src, ",\"deliveryProbed\":")) return -1;
+    return s_num(js, sink, src, "deliveryProbed");
 }
 
 static int s_poc(const char *js, const char *sink, const char *src, const char *poc) {
@@ -10054,6 +10176,44 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     int s_park_built  = s_derived  (ss, "innerHTML", LOCATION_HASH_SRC,   st_lpark);
     int s_attr_wit    = s_witnessed(ss, "innerHTML", ATTR_SRC,            st_attr);
     int s_attr_built  = s_derived  (ss, "innerHTML", ATTR_SRC,            st_attr);
+    /* AND THE TWO RUNGS BELOW THEM, FOR ALL SEVEN SEARCHES — the URL one included, which is the whole reason
+       these are read here and not inside the deriving set above. See s_substituted for what each 0 names; what
+       belongs here is that this is the FIRST time anything in this file has read a fact whose observation site
+       is on the runway. Every rung the ladder had sat AT or PAST the sink, which is §@S(i)'s named failure
+       ("not a distance at all, it is the outcome restated"), and the producer had been emitting the missing
+       one on every parked entry the whole time. */
+    int s_eval_sub    = s_substituted(ss, "eval",      "{state}.code",    st_eval);
+    int s_eval_str    = s_sinkstrings(ss, "eval",      "{state}.code",    st_eval);
+    int s_evalc_sub   = s_substituted(ss, "eval",      "{state}.note",    st_evalc);
+    int s_evalc_str   = s_sinkstrings(ss, "eval",      "{state}.note",    st_evalc);
+    int s_html_sub    = s_substituted(ss, "innerHTML", "{state}.html",    st_html);
+    int s_html_str    = s_sinkstrings(ss, "innerHTML", "{state}.html",    st_html);
+    int s_url_sub     = s_substituted(ss, "location",  "{state}.next",    st_url);
+    int s_url_str     = s_sinkstrings(ss, "location",  "{state}.next",    st_url);
+    int s_loc_sub     = s_substituted(ss, "eval",      LOCATION_HASH_SRC, st_loc);
+    int s_loc_str     = s_sinkstrings(ss, "eval",      LOCATION_HASH_SRC, st_loc);
+    int s_park_sub    = s_substituted(ss, "innerHTML", LOCATION_HASH_SRC, st_lpark);
+    int s_park_str    = s_sinkstrings(ss, "innerHTML", LOCATION_HASH_SRC, st_lpark);
+    int s_attr_sub    = s_substituted(ss, "innerHTML", ATTR_SRC,          st_attr);
+    int s_attr_str    = s_sinkstrings(ss, "innerHTML", ATTR_SRC,          st_attr);
+    /* AND THE DELIVERY PROBE'S OWN ARRIVAL COUNT FOR THE TWO SEARCHES WHOSE ROWS TURNED ON IT. `-nodeliver`
+       asks whether the MEASURED set is present and empty, and 0 there was three states: the search holds no
+       delivery probe, it holds one that has never reached a sink, and it holds one that arrived and found some
+       byte still delivering — the last of which is a real positive result and the first two of which are the
+       absence §@S forbids reading as a zero. solve.c emitted `deliveryProbed` to split exactly that and NO C
+       OR JS CONSUMER ASKED IT ANYTHING: grep for the key finds its writer in solve.c, its declaration in
+       solve.h, and no third site — the popup's parked card still branches on `sourceDelivers` alone, and
+       solvergate compares the number for equality across schedules without reading what it says.
+       -1 is "holds none", 0 is "has not arrived yet".
+       `-nodelivmeas` IS THE PRESENCE OF THE SET AND `-nodeliver` IS ITS EMPTINESS, which are two facts and were
+       one row: the field is emitted only when a token was observed, so its absence is the probe having taught
+       this search nothing yet and its presence-and-emptiness is the measurement that every declared byte dies.
+       Only presence can carry the monotone link to `deliveryProbed`, because a NON-empty measured set stands on
+       exactly the same arrival. */
+    int s_park_dprobe = s_delivery_probed(ss, "innerHTML", LOCATION_HASH_SRC);
+    int s_attr_dprobe = s_delivery_probed(ss, "innerHTML", ATTR_SRC);
+    int s_park_dmeas  = s_field(ss, "innerHTML", LOCATION_HASH_SRC, ",\"sourceDelivers\":");
+    int s_attr_dmeas  = s_field(ss, "innerHTML", ATTR_SRC,          ",\"sourceDelivers\":");
 
     /* …AND THE TWO SETS ARE HELD AGAINST EACH OTHER, WHICH IS WHAT WOULD HAVE CAUGHT THE FALSE GREEN THE DAY
        IT APPEARED. A verdict row and its stage row are computed from the SAME bytes about the SAME record, so
@@ -10085,12 +10245,24 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        search cannot gain a row without gaining the invariants that keep the row honest, and the URL search is
        absent from both for the one reason (it derives nothing, so there is no witness for any of these to be
        about). */
-    S_LADDER_MONOTONE(ss, "eval",      "{state}.code",    st_eval,  s_eval_wit,  s_eval_built);
-    S_LADDER_MONOTONE(ss, "eval",      "{state}.note",    st_evalc, s_evalc_wit, s_evalc_built);
-    S_LADDER_MONOTONE(ss, "innerHTML", "{state}.html",    st_html,  s_html_wit,  s_html_built);
-    S_LADDER_MONOTONE(ss, "eval",      LOCATION_HASH_SRC, st_loc,   s_loc_wit,   s_loc_built);
-    S_LADDER_MONOTONE(ss, "innerHTML", LOCATION_HASH_SRC, st_lpark, s_park_wit,  s_park_built);
-    S_LADDER_MONOTONE(ss, "innerHTML", ATTR_SRC,          st_attr,  s_attr_wit,  s_attr_built);
+    S_LADDER_MONOTONE(ss, "eval",      "{state}.code",    st_eval,  s_eval_str,  s_eval_wit,  s_eval_built);
+    S_LADDER_MONOTONE(ss, "eval",      "{state}.note",    st_evalc, s_evalc_str, s_evalc_wit, s_evalc_built);
+    S_LADDER_MONOTONE(ss, "innerHTML", "{state}.html",    st_html,  s_html_str,  s_html_wit,  s_html_built);
+    S_LADDER_MONOTONE(ss, "eval",      LOCATION_HASH_SRC, st_loc,   s_loc_str,   s_loc_wit,   s_loc_built);
+    S_LADDER_MONOTONE(ss, "innerHTML", LOCATION_HASH_SRC, st_lpark, s_park_str,  s_park_wit,  s_park_built);
+    S_LADDER_MONOTONE(ss, "innerHTML", ATTR_SRC,          st_attr,  s_attr_str,  s_attr_wit,  s_attr_built);
+    /* AND THE RUNWAY HALF, HELD FOR ALL SEVEN — the URL search is in this set and absent from the one above
+       for the one reason both lists give: it derives nothing, so it has no witness and no build for those
+       invariants to be about, and it substitutes and meets sinks exactly like every other search. */
+    S_RUNWAY_MONOTONE("eval",      "{state}.code",    st_eval,  s_eval_sub,  s_eval_str);
+    S_RUNWAY_MONOTONE("eval",      "{state}.note",    st_evalc, s_evalc_sub, s_evalc_str);
+    S_RUNWAY_MONOTONE("innerHTML", "{state}.html",    st_html,  s_html_sub,  s_html_str);
+    S_RUNWAY_MONOTONE("location",  "{state}.next",    st_url,   s_url_sub,   s_url_str);
+    S_RUNWAY_MONOTONE("eval",      LOCATION_HASH_SRC, st_loc,   s_loc_sub,   s_loc_str);
+    S_RUNWAY_MONOTONE("innerHTML", LOCATION_HASH_SRC, st_lpark, s_park_sub,  s_park_str);
+    S_RUNWAY_MONOTONE("innerHTML", ATTR_SRC,          st_attr,  s_attr_sub,  s_attr_str);
+    S_DELIVERY_MONOTONE("innerHTML", LOCATION_HASH_SRC, s_park_dprobe, s_park_dmeas);
+    S_DELIVERY_MONOTONE("innerHTML", ATTR_SRC,          s_attr_dprobe, s_attr_dmeas);
     /* AND THE TWO HALVES OF THE ONE SOURCE CANNOT BOTH BE THE SAME VERDICT, which is what makes this pair a
        measurement of the DERIVATION rather than of the transform. Both writes are fed from `location.hash`
        and both are markup sinks; the only thing that differs is the §13.2.5 state the bytes land in and
@@ -10712,8 +10884,28 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "s-loc", s_loc, "location.hash", SESS_EXPLORE },
         { "s-park", s_park, "location.hash", SESS_EXPLORE, s_park_why },
         /* THE MEASURED CONSTRAINT BEHIND THE NEGATIVE, and the POSITIVE it is the counterpart of. */
+        /* THE DELIVERY PROBE'S OWN LADDER, LOWEST RUNG FIRST, BENEATH THE ROW THAT WAS STANDING ON ITS ABSENCE.
+           `-nodeliver` asks whether the MEASURED set is present AND EMPTY, which is the strongest thing a parked
+           markup search can report — and its 0 was FOUR states, three of which are not that finding at all: the
+           search holds no delivery probe, it holds one that has never reached a sink, it holds one that arrived
+           and found a byte still delivering. solve.c emitted `deliveryProbed` to split precisely the first two,
+           and a grep for the key answers with its writer, its declaration and nothing else — these are its
+           first readers.
+             -delivprobe  the search HOLDS a delivery probe          (`deliveryProbed` present at all)
+             -delivran    that probe REACHED a sink                  (`deliveryProbed` > 0)
+             -delivmeas   a byte was OBSERVED, so a set was emitted  (`sourceDelivers` present)
+             -nodeliver   and that set is EMPTY — every declared byte measured dead
+           Presence and emptiness are two facts and were one row: the field is emitted only when a token was
+           seen, so its absence is the probe having taught this search nothing yet, and only presence carries
+           the monotone link back to the arrival — a NON-empty measured set stands on exactly the same run. */
+        { "s-park-delivprobe", s_park_dprobe >= 0, "location.hash", SESS_EXPLORE },
+        { "s-park-delivran", s_park_dprobe > 0, "location.hash", SESS_EXPLORE },
+        { "s-park-delivmeas", s_park_dmeas, "location.hash", SESS_EXPLORE },
         { "s-park-nodeliver", s_nodeliver, "location.hash", SESS_EXPLORE },
         { "s-attr", s_attr, "location.hash", SESS_EXPLORE },
+        { "s-attr-delivprobe", s_attr_dprobe >= 0, "location.hash", SESS_EXPLORE },
+        { "s-attr-delivran", s_attr_dprobe > 0, "location.hash", SESS_EXPLORE },
+        { "s-attr-delivmeas", s_attr_dmeas, "location.hash", SESS_EXPLORE },
         { "s-attr-nodeliver", s_attrd, "location.hash", SESS_EXPLORE },
         /* THE STAGES, so a 0 above names one. Each row carries its parent's key, so selection is unchanged.
            AND THE FOUR DERIVED LADDERS ARE THE SEVEN-RUNG ONE, NOT A THREE-RUNG PREFIX OF IT. `-seen`/`-ran`/
@@ -10729,24 +10921,50 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            that is exactly why it is the one search of the five that arrives. */
         { "s-eval-seen", st_eval >= S_SEEN, "state.code", SESS_EXPLORE },
         { "s-eval-ran", st_eval >= S_RAN, "state.code", SESS_EXPLORE },
+        /* THE RUNG ON THE RUNWAY AND THE ONE ABOVE IT. `-substituted` is the only row in this table read off an
+           observation site STRICTLY BEFORE the sink (the SOURCE READ, in the component that performs the
+           substitution), which is what §@S(i) requires of a distance and what nothing here had. Its 0 over
+           `-ran=1` says a gate IN FRONT OF THE SOURCE is turning these flows away — a statement about the path,
+           not about the payload, the filter or the sink — and it is the one rung that carries information while
+           `-witnessed` and everything above it sit behind a search the WFQ has barely served. `-sinkstrings`
+           is the next one up and its site IS a sink: it splits "the bytes are in the program and no
+           code-execution sink has run while they were live" from "sinks RAN and none of their strings held a
+           byte of this search's probe". See s_substituted for the producer facts and why every class has both.
+        */
+        { "s-eval-substituted", s_eval_sub, "state.code", SESS_EXPLORE },
+        { "s-eval-sinkstrings", s_eval_str, "state.code", SESS_EXPLORE },
         { "s-eval-witnessed", s_eval_wit, "state.code", SESS_EXPLORE },
         { "s-eval-derived", s_eval_built, "state.code", SESS_EXPLORE },
         { "s-eval-atsink", st_eval >= S_ARRIVED, "state.code", SESS_EXPLORE },
         { "s-evalc-seen", st_evalc >= S_SEEN, "state.note", SESS_EXPLORE },
         { "s-evalc-ran", st_evalc >= S_RAN, "state.note", SESS_EXPLORE },
+        { "s-evalc-substituted", s_evalc_sub, "state.note", SESS_EXPLORE },
+        { "s-evalc-sinkstrings", s_evalc_str, "state.note", SESS_EXPLORE },
         { "s-evalc-witnessed", s_evalc_wit, "state.note", SESS_EXPLORE },
         { "s-evalc-derived", s_evalc_built, "state.note", SESS_EXPLORE },
         { "s-evalc-atsink", st_evalc >= S_ARRIVED, "state.note", SESS_EXPLORE },
         { "s-html-seen", st_html >= S_SEEN, "state.html", SESS_EXPLORE },
         { "s-html-ran", st_html >= S_RAN, "state.html", SESS_EXPLORE },
+        { "s-html-substituted", s_html_sub, "state.html", SESS_EXPLORE },
+        { "s-html-sinkstrings", s_html_str, "state.html", SESS_EXPLORE },
         { "s-html-witnessed", s_html_wit, "state.html", SESS_EXPLORE },
         { "s-html-derived", s_html_built, "state.html", SESS_EXPLORE },
         { "s-html-atsink", st_html >= S_ARRIVED, "state.html", SESS_EXPLORE },
         { "s-url-seen", st_url >= S_SEEN, "state.next", SESS_EXPLORE },
         { "s-url-ran", st_url >= S_RAN, "state.next", SESS_EXPLORE },
+        /* AND THE URL SEARCH HAS BOTH, WHICH IS THE ASYMMETRY WORTH READING. It declares SINK_DERIVE_NONE, so it
+           has no `-witnessed` and no `-derived` and its ladder used to go `-ran` straight to `-atsink` — a jump
+           over the entire runway AND the sink-observation rung, on the one search whose first seeded candidate
+           is already a breakout. These two are emitted unconditionally for every parked entry, so here they say
+           the most they can say anywhere: with no derivation to wait on, `-ran=1, -substituted=0` is a pure
+           statement about the path in front of the source read. */
+        { "s-url-substituted", s_url_sub, "state.next", SESS_EXPLORE },
+        { "s-url-sinkstrings", s_url_str, "state.next", SESS_EXPLORE },
         { "s-url-atsink", st_url >= S_ARRIVED, "state.next", SESS_EXPLORE },
         { "s-loc-seen", st_loc >= S_SEEN, "location.hash", SESS_EXPLORE },
         { "s-loc-ran", st_loc >= S_RAN, "location.hash", SESS_EXPLORE },
+        { "s-loc-substituted", s_loc_sub, "location.hash", SESS_EXPLORE },
+        { "s-loc-sinkstrings", s_loc_str, "location.hash", SESS_EXPLORE },
         { "s-loc-witnessed", s_loc_wit, "location.hash", SESS_EXPLORE },
         { "s-loc-derived", s_loc_built, "location.hash", SESS_EXPLORE },
         { "s-loc-atsink", st_loc >= S_ARRIVED, "location.hash", SESS_EXPLORE },
@@ -10764,6 +10982,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            probes the WFQ runs first. What replaces it as the statement of a genuine failure is
            `s-park-nodeliver`, which is the observation itself. */
         { "s-park-ran", st_lpark >= S_RAN, "location.hash", SESS_EXPLORE },
+        { "s-park-substituted", s_park_sub, "location.hash", SESS_EXPLORE },
+        { "s-park-sinkstrings", s_park_str, "location.hash", SESS_EXPLORE },
         /* …AND THE REST OF THAT PREMISE, WHICH `-ran` ALONE DOES NOT MAKE. `s-park` says this search emits no
            PoC and is still reported; `s-park-ran` says its candidates executed. Neither says the sink was ever
            SEEN by one of them, and until it has been, "the fragment percent-encode set defeated the derivation"
@@ -10807,6 +11027,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "s-attr-seen", st_attr >= S_SEEN, "location.hash", SESS_EXPLORE },
         { "s-attr-seeded", st_attr >= S_SEEDED, "location.hash", SESS_EXPLORE },
         { "s-attr-ran", st_attr >= S_RAN, "location.hash", SESS_EXPLORE },
+        { "s-attr-substituted", s_attr_sub, "location.hash", SESS_EXPLORE },
+        { "s-attr-sinkstrings", s_attr_str, "location.hash", SESS_EXPLORE },
         { "s-attr-witnessed", s_attr_wit, "location.hash", SESS_EXPLORE },
         { "s-attr-derived", s_attr_built, "location.hash", SESS_EXPLORE },
         { "s-attr-atsink", st_attr >= S_ARRIVED, "location.hash", SESS_EXPLORE },
