@@ -16,6 +16,7 @@
 #include "core/layout/box_subject.h"
 #include "core/layout/intrinsic_size.h"
 #include "core/layout/table_box.h"
+#include "core/layout/table_column_box.h"
 #include "core/layout/table_column_width.h"
 #include "core/layout/table_grid.h"
 #include "core/layout/table_width.h"
@@ -63,7 +64,9 @@ static void tw_require_separated_borders(lxb_dom_element_t *table)
            "widths — the winner §17.6.2.1 Border conflict resolution picks among the borders of the adjoining "
            "cell, row, row group, column, column group and table boxes — as a per-edge answer beside "
            "core/layout/table_column_width.h's four-term sum, and make the spacing term below zero under this "
-           "model. THE CHOICE OF MODEL IS NOT WHAT IS MISSING: `border-collapse` is in "
+           "model. TWO OF THOSE SIX BOXES CAN NOW BE NAMED: core/layout/table_column_box.h answers which column "
+           "and column-group box occupies a grid column, which is CSS 2.1 §17.5's rules 3 and 4. THE CHOICE OF "
+           "MODEL IS NOT WHAT IS MISSING EITHER: `border-collapse` is in "
            "core/css/css_computed_value.c's modelled set and was just read here",
            box_subject(table, nbuf, sizeof nbuf));
 }
@@ -444,7 +447,7 @@ static void tw_auto_layout(lxb_dom_element_t *table, const TableGrid *grid, CssP
 static void tw_fixed_layout(lxb_dom_element_t *table, const TableGrid *grid, CssPx spacing, CssPx declared,
                             TableUsedWidths *out)
 {
-    lxb_dom_element_t *col_box = table_column_box_with_declared_width(table);
+    TableColumnBoxMap boxes;
     CssPx spacing_total = tw_spacing_total(spacing, grid->ncols);
     CssPx assigned_sum = css_px(0.0);
     CssPx avail, sum;
@@ -452,26 +455,28 @@ static void tw_fixed_layout(lxb_dom_element_t *table, const TableGrid *grid, Css
     size_t n = grid->ncols, remaining = 0, k, i;
     char nbuf[160];
 
-    /* STEP 1: "A column element with a value other than 'auto' for the 'width' property sets the width for that
-       column." WHICH grid columns such a box covers is CSS 2.1 §17.5 Visual layout of table contents' rules 3
-       and 4, and core/layout/table_grid.h states in its own header that it does not place those boxes — so the
-       width is readable and the COLUMN INDEX it belongs to is not. Leaving it out is not available: this step is
-       what the whole algorithm is anchored on, and a column left to step 3's equal division would be sized from
-       the space left over instead of from the author's declaration, which is a wrong width and not a narrower
-       one. */
-    if (col_box != NULL)
-        DFAILF("%s: CSS 2.1 §17.5.2.1 Fixed table layout's step 1 reads a DECLARED `width` off this box — \"A "
-               "column element with a value other than 'auto' for the 'width' property sets the width for that "
-               "column\" — and core/layout/table_grid.h does not place it, so which grid column it sets is "
-               "unknown. BUILD CSS 2.1 §17.5 Visual layout of table contents' rules 3 and 4 — \"A column box "
-               "occupies one or more columns of grid cells. Column boxes are placed next to each other in the "
-               "order they occur\" and \"A column group box occupies the same grid cells as the columns it "
-               "contains\" — as a COLUMN-INDEX assignment beside that component's cell placement, over the same "
-               "indices this algorithm writes into. It is the SAME missing capability "
-               "core/layout/table_column_width.c names for CSS 2.1 §17.5.2.2 Automatic table layout's steps 2 "
-               "and 4, and the two crashes want different things from it: that one wants a FLOOR under a "
-               "column, this one wants the column's whole width",
-               box_subject(col_box, nbuf, sizeof nbuf));
+    table_column_boxes_build(table, n, &boxes);
+    /* THE COLUMN COUNT THIS ALGORITHM DIVIDES SPACE OVER IS THE SECTION'S OWN AND IT IS NOT THE GRID'S ALONE.
+       §17.5.2.1 says so where it says what happens when they differ: "If a subsequent row has more columns than
+       the greater of the number determined by the table-column elements and the number determined by the first
+       row, then additional columns may not be rendered." — so the table-column elements DETERMINE a number, and
+       the table's count is at least it. core/layout/table_grid.h grows `ncols` only to cover the cells it
+       places, so `<colgroup span="5">` over two-cell rows leaves this algorithm dividing the table's space over
+       TWO columns where a browser divides it over five, and step 3's "Any remaining columns equally divide the
+       remaining horizontal table space" then hands each of them more than twice its width. THAT IS WHY THIS
+       CRASH IS UNCONDITIONAL HERE AND CONDITIONED ON A DECLARED WIDTH IN §17.5.2.2 Automatic table layout: an
+       `auto` column contributes nothing to a FLOOR, and it takes a full share of an equal DIVISION. */
+    if (boxes.noccupied > n)
+        DFAILF("%s: CSS 2.1 §17.5.2.1 Fixed table layout is dividing this table's width over the %zu grid "
+               "columns core/layout/table_grid.h places from its cells, and its own column boxes occupy %zu — "
+               "\"the greater of the number determined by the table-column elements and the number determined "
+               "by the first row\" is this section's own count, so every column this algorithm reports is "
+               "wider than a browser lays it out. BUILD HTML §4.9.12.1 Forming a table's COLUMN-GROUP "
+               "CONTRIBUTION TO x_width in core/layout/table_grid.c, whose `ncols` today is only ever grown to "
+               "`col + colspan` for a cell it places: that algorithm walks the `colgroup` children first and "
+               "increases x_width by each span before it reaches a row, so the grid's column count must start "
+               "at core/layout/table_column_box.h's `noccupied` rather than at zero",
+               box_subject(table, nbuf, sizeof nbuf), n, boxes.noccupied);
     out->ncols = n;
     out->columns = NULL;
     if (n > 0) {
@@ -481,6 +486,57 @@ static void tw_fixed_layout(lxb_dom_element_t *table, const TableGrid *grid, Css
               "CSS 2.1 §17.5.2.1 Fixed table layout could not allocate one used width per grid column of the "
               "table being laid out");
         for (i = 0; i < n; i++) out->columns[i] = css_px(0.0);
+    }
+    /* STEP 1: "A column element with a value other than 'auto' for the 'width' property sets the width for that
+       column." WHICH grid columns such a box covers is CSS 2.1 §17.5 Visual layout of table contents' rules 3
+       and 4, which is core/layout/table_column_box.h.
+       "A COLUMN ELEMENT" IS THE COLUMN BOX AND NOT THE GROUP, AND THAT NARROWNESS IS RECORDED RATHER THAN
+       GUESSED AT. §17.2 The CSS table model makes 'table-column' and 'table-column-group' two box types, and
+       this section names only the first — here and again in its own later sentence, "the number determined by
+       the table-column elements". A `<colgroup width="100">` over columns of its own therefore sets nothing in
+       THIS algorithm and its columns fall to steps 2 and 3, which is the section read literally; §17.5.2.2
+       Automatic table layout's step 4 is where a column group's width is given an effect, and it gives it a
+       different one (a floor under the SUM of the minima, not a width).
+       NO BOX CONVERSION IS OWED, WHICH SEPARATES THIS FROM STEP 2's CELL BELOW. A column width is a border-box
+       width (core/layout/table_column_width.h's recorded choice), and in this border model a column box has
+       neither a border nor a padding to differ by: CSS 2.1 §17.6.1 The separated borders model states "Rows,
+       columns, row groups and column groups cannot have borders (i.e., user agents must ignore the border
+       properties for those elements)." and §17.5's own opening states "Internal table elements generate
+       rectangular boxes with content and borders. Cells have padding as well." — padding for the cells alone.
+       So the declared number is already the column's whole width. */
+    for (i = 0; i < n; i++) {
+        CssLength cw;
+        CssPx width;
+
+        if (boxes.cols[i].column == NULL) continue;
+        cw = css_computed_length(boxes.cols[i].column, "width");
+        if (cw.kind == CSS_LENGTH_KEYWORD && strcmp(cw.keyword, "auto") == 0) continue;
+        if (cw.kind == CSS_LENGTH_ABSOLUTE) {
+            width = cw.px;
+        } else if (cw.kind == CSS_LENGTH_PERCENTAGE || cw.kind == CSS_LENGTH_CALCULATED) {
+            /* §17.5.2.2's "A percentage value for a column width is relative to the table width." — resolvable
+               HERE and a cycle there, for this algorithm's own first reason: "the horizontal layout of the
+               table does not depend on the contents of the cells; it only depends on the table's width, the
+               width of the columns, and borders or cell spacing", and that width is the declared one, already
+               in hand. It is the identical arm step 2 below takes for a first-row cell. */
+            width = css_length_resolve_pct(cw, declared);
+        } else {
+            DFAILF("%s: CSS 2.1 §17.5.2.1 Fixed table layout's step 1 reads \"A column element with a value "
+                   "other than 'auto' for the 'width' property\", and this column box's computed `width` is "
+                   "neither a length, a percentage nor `auto`. css-sizing-3 §3.1.1 \"Preferred Size Properties: "
+                   "the width and height properties\" carries the intrinsic sizing keywords in that grammar, "
+                   "and every one of them is a measurement of CONTENT — which this algorithm's own first "
+                   "sentence forbids: \"the horizontal layout of the table does not depend on the contents of "
+                   "the cells\", and a column box has no content of its own to measure instead (CSS 2.1 §17.2 "
+                   "The CSS table model: the column boxes \"are not rendered (exactly as if they had 'display: "
+                   "none')\"). So there is no arm here that is this algorithm's, and what CSS 2.1 leaves open "
+                   "is whether such a column counts as `auto` for step 1. RECORD whichever reading is built "
+                   "rather than guessing it",
+                   box_subject(boxes.cols[i].column, nbuf, sizeof nbuf));
+            continue;
+        }
+        out->columns[i] = css_px_max(width, css_px(0.0));
+        assigned[i] = true;
     }
     /* STEP 2: "Otherwise, a cell in the first row with a value other than 'auto' for the 'width' property
        determines the width for that column. If the cell spans more than one column, the width is divided over
@@ -568,6 +624,7 @@ static void tw_fixed_layout(lxb_dom_element_t *table, const TableGrid *grid, Css
     out->content = css_px_max(declared, sum);
     tw_distribute(out->columns, NULL, n, css_px_sub(out->content, sum));
     free(assigned);
+    table_column_boxes_release(&boxes);
 }
 
 void table_widths(lxb_dom_element_t *table, const TableGrid *grid, TableUsedWidths *out)

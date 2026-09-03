@@ -14,7 +14,7 @@
 #include "core/css/css_property_applies.h"
 #include "core/layout/box_subject.h"
 #include "core/layout/intrinsic_size.h"
-#include "core/layout/table_box.h"
+#include "core/layout/table_column_box.h"
 #include "core/layout/table_column_width.h"
 #include "core/layout/table_grid.h"
 
@@ -51,7 +51,10 @@ static CssPx tcw_coherent(CssPx min, CssPx max)
  * `border-collapse: separate`, which is that property's initial value and therefore what an undeclared document
  * is in. WHAT THE NEXT DIFF BUILDS: §17.6.2's own used border widths — the resolution §17.6.2.1 Border conflict
  * resolution states over the adjoining cell, row, row group, column, column group and table borders — answered
- * per cell edge, so that the sum below has a second arm to take. THE ASK THAT SELECTS BETWEEN THEM IS ALREADY
+ * per cell edge, so that the sum below has a second arm to take. THE COLUMN AND COLUMN-GROUP HALF OF THAT
+ * RESOLUTION CAN NOW BE ASKED: core/layout/table_column_box.h answers WHICH column and column-group box occupies
+ * a grid column, which is CSS 2.1 §17.5's rules 3 and 4 and was the one operand of §17.6.2.1 no component in
+ * this tree could name. What is still missing is the resolution itself and the geometry it moves. THE ASK THAT SELECTS BETWEEN THEM IS ALREADY
  * BUILT AND IS NOT HERE: core/layout/table_width.c reads `border-collapse` at §17.5.2's entry and refuses
  * `collapse` by name before any column is measured, and `table_column_widths` asserts that routing at its own
  * boundary — so a reader looking for the ask in this function will not find one, by design. An earlier draft of
@@ -216,107 +219,149 @@ static TableColumnWidth tcw_cell_widths(lxb_dom_element_t *cell)
     return out;
 }
 
-/* §17.5.2.2's STEPS 2 AND 4 EACH READ A `width` OFF A BOX THIS ENGINE DOES NOT PLACE, and this is the probe
-   that stops the walk exactly where its answer would be WRONG rather than merely narrow.
-   Step 2 takes a column's minimum as "that required by the cell with the largest minimum cell width (or the
-   column 'width', whichever is larger)" and its maximum the same way; step 4 is "For each column group element
-   with a 'width' other than 'auto', increase the minimum widths of the columns it spans, so that together they
-   are at least as wide as the column group's 'width'." Both are FLOORS, so omitting one reports a column
-   NARROWER than the document asks for — a number that then travels into a used width and out through CSSOM
-   VIEW as a rectangle indistinguishable from a measured one.
-   A COLUMN BOX WITH `width: auto` CONTRIBUTES NOTHING TO EITHER FLOOR, so its presence is not a defect and
-   this probe does not stop for one: §17.5.2.2's step 4 excludes it in its own antecedent, "For each column
-   group element with a 'width' other than 'auto'", and step 2's parenthesis then compares a cell against
-   nothing. That is why the crash is conditioned on the VALUE and not on the box — a `<colgroup>` wrapping the
-   columns of an ordinary table is the common shape and its answer here is complete. */
-static TableBoxKind tcw_kind_of(lxb_dom_element_t *el)
+/* §17.5.2.2's STEPS 2 AND 4 EACH READ A DECLARED `width` OFF A COLUMN OR COLUMN-GROUP BOX, and both are
+   FLOORS. Step 2 takes a column's minimum as "The minimum is that required by the cell with the largest minimum
+   cell width (or the column 'width', whichever is larger)." and its maximum by the matching sentence; step 4 is
+   "For each column group element with a 'width' other than 'auto', increase the minimum widths of the columns
+   it spans, so that together they are at least as wide as the column group's 'width'." Omitting either reports
+   a column NARROWER than the document asks for, and that number travels into a used width and out through
+   CSSOM VIEW as a rectangle no reader can distinguish from a measured one.
+   THE BOX IS core/layout/table_column_box.h's AND THE PROPERTY IS THIS FILE'S — that component answers WHICH
+   box occupies a grid column and reads nothing off it, because §17.5.2.1 Fixed table layout and CSS 2.1
+   §17.6.2.1 Border conflict resolution ask the same walk for different properties of the same boxes.
+   WHICH BOX THE NUMBER IS A WIDTH OF is settled by §17.5's own closing paragraph rather than assumed: "In the
+   separated borders model, the edges coincide with the border edges of cells." A column's edges are therefore
+   its cells' BORDER edges, which is the box `TableColumnWidth` is already measured in (see the header), so the
+   declared width floors the pair directly and needs no conversion. The collapsing model moves those edges —
+   §17.5's same sentence gives them to the grid lines the borders are centred on — and is refused at §17.5.2's
+   entry before any of this runs. */
+typedef struct {
+    bool  declared;   /* the computed `width` is other than `auto` — step 4's own antecedent */
+    CssPx px;         /* meaningless unless `declared` */
+} TcwDeclaredWidth;
+
+static TcwDeclaredWidth tcw_declared_width(lxb_dom_element_t *box)
 {
-    char *display = css_computed_value(el, "display");
-    TableBoxKind kind;
-
-    DCHECK(display != NULL, "the cascade produced no computed `display` — the UA layer answers `inline` for "
-                            "every element it does not name, so this cannot be unset");
-    kind = table_box_kind(display);
-    free(display);
-    return kind;
-}
-
-/* ONE column or column-group box, asked. Split out so the two nesting levels below are one call each rather
-   than one loop with a level flag in it — the flag was the only thing making the walk hard to read, and
-   §17.2's box types nest no deeper than a column inside a column group. */
-static bool tcw_column_box_declares_width(lxb_dom_element_t *box)
-{
-    CssLength cw = css_computed_length(box, "width");
-
-    return !(cw.kind == CSS_LENGTH_KEYWORD && strcmp(cw.keyword, "auto") == 0);
-}
-
-/* CSS 2.1 §17.5's rules 3 and 4 over `table`'s own child list — see the header for why this is EXPORTED and
-   why it decides nothing. §17.2's box types nest no deeper than a column inside a column group, which is why
-   the walk is two levels and not a recursion. */
-lxb_dom_element_t *table_column_box_with_declared_width(lxb_dom_element_t *table)
-{
-    lxb_dom_node_t *n, *c;
-
-    DCHECK(table != NULL, "CSS 2.1 §17.5's column boxes were asked for of no element");
-    n = lxb_dom_interface_node(table);
-    for (c = n->first_child; c != NULL; c = c->next) {
-        lxb_dom_element_t *el;
-        TableBoxKind kind;
-
-        if (c->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
-        el = lxb_dom_interface_element(c);
-        kind = tcw_kind_of(el);
-        if (kind == TABLE_BOX_COLUMN) {
-            if (tcw_column_box_declares_width(el)) return el;
-        } else if (kind == TABLE_BOX_COLUMN_GROUP) {
-            lxb_dom_node_t *m;
-
-            /* CSS 2.1 §17.5 Visual layout of table contents' rule 4: "A column group box occupies the same
-               grid cells as the columns it contains", so the group's own `width` and each column's are two
-               separate floors and both are asked. */
-            if (tcw_column_box_declares_width(el)) return el;
-            for (m = c->first_child; m != NULL; m = m->next) {
-                lxb_dom_element_t *col;
-
-                if (m->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
-                col = lxb_dom_interface_element(m);
-                if (tcw_kind_of(col) == TABLE_BOX_COLUMN && tcw_column_box_declares_width(col)) return col;
-            }
-        }
-    }
-    return NULL;
-}
-
-static void tcw_require_no_declared_column_width(lxb_dom_element_t *table)
-{
-    lxb_dom_element_t *box = table_column_box_with_declared_width(table);
+    TcwDeclaredWidth out;
+    CssLength w;
     char nbuf[160];
 
-    if (box == NULL) return;
-    DFAILF("%s: CSS 2.1 §17.5.2.2 Automatic table layout reads a DECLARED `width` off this box and "
-                       "core/layout/table_grid.h does not place it. Two of the four steps need it and both are "
-                       "FLOORS, so leaving it out reports every column it covers narrower than the document "
-                       "asks for: step 2 takes a column's minimum as \"that required by the cell with the "
-                       "largest minimum cell width (or the column 'width', whichever is larger)\" and its "
-                       "maximum by the same sentence, and step 4 is \"For each column group element with a "
-                       "'width' other than 'auto', increase the minimum widths of the columns it spans, so "
-                       "that together they are at least as wide as the column group's 'width'.\" BUILD CSS 2.1 "
-                       "§17.5 Visual layout of table contents' rules 3 and 4 — \"A column box occupies one or "
-                       "more columns of grid cells\" and \"A column group box occupies the same grid cells as "
-                       "the columns it contains\" — as a COLUMN-INDEX assignment beside core/layout/"
-                       "table_grid.h's cell placement, which is where that header already says they belong "
-                       "and which numbers the same columns this component indexes; the boxes themselves are "
-                       "not rendered (§17.2 The CSS table model: \"are not rendered (exactly as if they had "
-                       "'display: none')\"), so nothing else is owed. A `width: auto` on such a box is NOT "
-           "this crash and never was — step 4's own antecedent excludes it and step 2's "
-           "parenthesis then compares against nothing",
-           box_subject(box, nbuf, sizeof nbuf));
+    out.declared = false;
+    out.px = css_px(0.0);
+    DCHECK(css_property_applies(box, "width"),
+           "CSS 2.1 §17.5.2.2 Automatic table layout is reading a declared `width` off a column or column-group "
+           "box and CSS 2.1 §10.2 \"Content width: the 'width' property\"' Applies-to line now excludes it. "
+           "That line is \"all elements but non-replaced inline elements, table rows, and row groups\", which "
+           "names the ROW boxes and not the column ones, so a disagreement here is that component and this "
+           "step having been carried apart — and the cost is silent, because a column whose floor is dropped "
+           "is a column that is merely narrow");
+    w = css_computed_length(box, "width");
+    if (w.kind == CSS_LENGTH_KEYWORD && strcmp(w.keyword, "auto") == 0) return out;
+    /* EVERY REFUSAL BELOW LEAVES `declared` FALSE, AND THAT IS THIS DIFF'S LINE RATHER THAN DECORATION.
+       core/layout/used_value.c already routes a table's used width through this component in RELEASE, where a
+       `DFAILF` compiles to nothing — so a refusal that fell through to the assignment at the end would report
+       `declared` with a `px` that is not the width (a `CssLength`'s `px` is the ABSOLUTE arm's field; the
+       percentage arm carries `pct`), and a fabricated column floor is indistinguishable downstream from a
+       measured one. Falling out with `declared` false drops the floor instead, which is the same release
+       behaviour every declared column width had before this walk existed: narrower than the document, and
+       never a number the document does not contain. The header's own note that these sites become CLAUDE.md's
+       data-integrity case once wired is about the SEVERITY of the whole family, padding included, and is not
+       split here for one member of it. */
+    if (w.kind == CSS_LENGTH_PERCENTAGE || w.kind == CSS_LENGTH_CALCULATED) {
+        DFAILF("%s: a column or column-group box declares a PERCENTAGE `width` and CSS 2.1 §17.5.2.2 Automatic "
+               "table layout cannot resolve it. The section refers it to the one number this algorithm is being "
+               "run to produce — \"A percentage value for a column width is relative to the table width.\" — and "
+               "CSS 2.1 §10.2 \"Content width: the 'width' property\" names exactly this case as one it does "
+               "not define: \"If the containing block's width depends on this element's width, then the "
+               "resulting layout is undefined in CSS 2.1.\" So the resolution is a CYCLE and not a missing "
+               "lookup, and §17.5.2.2 offers only \"If the table has 'width: auto', a percentage represents a "
+               "constraint on the column's width, which a UA should try to satisfy.\" BUILD the fixed point the "
+               "way this file's percentage-padding crash already names — run the four steps with the "
+               "percentage terms at zero, derive the table width from them, resolve against it and re-run — "
+               "and RECORD that as the reading taken, because §17.5.2.2 is non-normative from \"The remainder "
+               "of this section is non-normative.\" onward and offers no other. A `calc()` reaches this same "
+               "crash and for the same reason whenever a percentage is inside it",
+               box_subject(box, nbuf, sizeof nbuf));
+        return out;
+    }
+    if (w.kind != CSS_LENGTH_ABSOLUTE) {
+        DFAILF("%s: a column or column-group box's computed `width` is a keyword that is neither `auto` nor a "
+               "length. CSS 2.1 §10.2 \"Content width: the 'width' property\"' Computed value line is \"the "
+               "percentage or 'auto' as specified or the absolute length\", so every arm of that derivation "
+               "produces one of three things and this is a fourth — a rule that did not run, not a value the "
+               "cascade can hand back",
+               box_subject(box, nbuf, sizeof nbuf));
+        return out;
+    }
+    DCHECK(w.px.px >= 0.0,
+           "a column or column-group box's computed `width` is NEGATIVE, which CSS 2.1 §10.2 \"Content width: "
+           "the 'width' property\" states outright is not a value: \"Negative values for 'width' are illegal.\" "
+           "lexbor drops such a declaration, so this is arithmetic that lost a sign rather than a document");
+    out.declared = true;
+    out.px = w.px;
+    return out;
+}
+
+/* §17.5.2.2's STEP 4 DEFICIT, and step 3's own sentence is the only guidance either step gives. Step 4 says
+   what the columns must reach and nothing about how they get there; step 3, which is the same shape over a
+   spanning CELL, says "If possible, widen all spanned columns by approximately the same amount." That names a
+   FAMILY of distributions and not one, and §17.5.2.2 is non-normative from "The remainder of this section is
+   non-normative." onward, so an even split is RECORDED as the reading taken rather than crashed on — a crash
+   here would refuse a document every reading is conforming for. It is the same split step 3 above already
+   takes, which is what keeps one table from being widened two ways. */
+static void tcw_raise_run_minimum(TableColumnWidth *cols, size_t from, size_t to, CssPx want)
+{
+    CssPx sum = css_px(0.0);
+    size_t c;
+
+    DCHECK(to > from, "CSS 2.1 §17.5.2.2's step 4 was asked to widen an EMPTY run of columns. A column group is "
+                      "only reached by the walk below at a column it occupies, so an empty run is that walk "
+                      "having advanced past its own start");
+    for (c = from; c < to; c++) sum = css_px_add(sum, cols[c].min);
+    if (want.px <= sum.px) return;
+    {
+        CssPx share = css_px_scale(css_px_sub(want, sum), 1.0 / (double) (to - from));
+
+        for (c = from; c < to; c++) cols[c].min = css_px_add(cols[c].min, share);
+    }
+}
+
+/* THE COLUMN BOXES A DOCUMENT DECLARES CAN OUTNUMBER THE GRID COLUMNS ITS CELLS FILL, AND THE DIFFERENCE IS
+   NOT THIS COMPONENT'S TO ABSORB. HTML §4.9.12.1 Forming a table increases the table's own x_width by every
+   column group's span before a single row is read, so `<colgroup span="5">` over two-cell rows is a FIVE-column
+   table there, while core/layout/table_grid.h grows `ncols` only to cover the cells it places and reports two.
+   The difference is invisible while every extra column is `width: auto` — such a column floors nothing and
+   contributes nothing to MIN or MAX — and is a WRONG table width the moment one of them declares a width, so
+   that is exactly where this stops. */
+static void tcw_require_columns_within_grid(const TableColumnBoxMap *map, size_t ngrid)
+{
+    size_t i;
+    char nbuf[160];
+
+    for (i = ngrid; i < map->ncols; i++) {
+        lxb_dom_element_t *box = (map->cols[i].column != NULL) ? map->cols[i].column : map->cols[i].column_group;
+
+        if (box == NULL) continue;
+        if (!tcw_declared_width(box).declared) continue;
+        DFAILF("%s: CSS 2.1 §17.5.2.2 Automatic table layout found a column or column-group box declaring a "
+               "`width` for grid column %zu of a table core/layout/table_grid.h reports as %zu columns wide. "
+               "That box's floor covers a column no cell of this table occupies, so the floor is DROPPED and "
+               "the table comes out narrower than a browser lays it out — CSS 2.1 §17.5's rule 3 gives the box "
+               "those grid columns (\"A column box occupies one or more columns of grid cells. Column boxes are "
+               "placed next to each other in the order they occur.\") whether or not a cell ever reaches them. "
+               "BUILD HTML §4.9.12.1 Forming a table's COLUMN-GROUP CONTRIBUTION TO x_width in "
+               "core/layout/table_grid.c, whose `ncols` today is only ever grown to `col + colspan` for a cell "
+               "it places: that algorithm walks the `colgroup` children first and increases x_width by each "
+               "span before it reaches a row, so the grid's column count must start at "
+               "core/layout/table_column_box.h's `noccupied` rather than at zero",
+               box_subject(box, nbuf, sizeof nbuf), i, ngrid);
+    }
 }
 
 size_t table_column_widths(lxb_dom_element_t *table, const TableGrid *grid, TableColumnWidth **out)
 {
     TableColumnWidth *cols;
+    TableColumnBoxMap boxes;
     size_t i, k;
 
     DCHECK(table != NULL, "CSS 2.1 §17.5.2.2's column widths were asked for of no element");
@@ -349,8 +394,16 @@ size_t table_column_widths(lxb_dom_element_t *table, const TableGrid *grid, Tabl
                "route to these steps, so this table reached them past that refusal and the two have come apart");
     }
     *out = NULL;
-    if (grid->ncols == 0) return 0;
-    tcw_require_no_declared_column_width(table);
+    /* §17.5's rules 3 and 4, BUILT BEFORE THE ZERO-COLUMN RETURN BELOW AND NOT AFTER IT. A table whose rows
+       generate no cell still has the column boxes its own child list declares, and `<table><colgroup span="3"
+       style="width: 100px"></table>` is exactly the shape whose floor the early return would drop in silence —
+       the guard is about columns the GRID does not have, so a grid with none of them is its sharpest case. */
+    table_column_boxes_build(table, grid->ncols, &boxes);
+    tcw_require_columns_within_grid(&boxes, grid->ncols);
+    if (grid->ncols == 0) {
+        table_column_boxes_release(&boxes);
+        return 0;
+    }
     cols = (TableColumnWidth *) calloc(grid->ncols, sizeof *cols);
     CHECK(cols != NULL,
           "CSS 2.1 §17.5.2.2's column widths could not allocate one pair per grid column of the table being "
@@ -363,8 +416,10 @@ size_t table_column_widths(lxb_dom_element_t *table, const TableGrid *grid, Tabl
        "For each column, determine a maximum and minimum column width from the cells that span only that
        column." It is written per COLUMN and run here per CELL over the same set, which is the same reduction
        with the loops exchanged: every cell is examined once and lands in exactly the column it spans, where a
-       per-column form would re-scan every cell for each column. The column `width` half of the sentence is
-       the probe above's subject and is settled before this loop runs.
+       per-column form would re-scan every cell for each column. The column `width` half of the sentence is the
+       loop AFTER this one, and it is after rather than merged into it because the two halves have different
+       operands — this one walks CELLS and that one walks COLUMNS — while `css_px_max` makes their order
+       immaterial to the answer.
        §17.5's RULE 5 OVERLAP CASE NEEDS NO ARM HERE. core/layout/table_grid.h records `overlaps` for a
        column-spanning cell that reaches into a row-spanning one and states which of §17.5's two conforming
        readings it took; under that reading the cell OCCUPIES the columns it covers, so its width is an input
@@ -394,6 +449,24 @@ size_t table_column_widths(lxb_dom_element_t *table, const TableGrid *grid, Tabl
         cw = tcw_cell_widths(cell->element);
         cols[cell->col].min = css_px_max(cols[cell->col].min, cw.min);
         cols[cell->col].max = css_px_max(cols[cell->col].max, cw.max);
+    }
+    /* ---- §17.5.2.2's STEP 2, SECOND HALF: THE COLUMN'S OWN `width` -------------------------------------
+       "The minimum is that required by the cell with the largest minimum cell width (or the column 'width',
+       whichever is larger)." and "The maximum is that required by the cell with the largest maximum cell width
+       (or the column 'width', whichever is larger)." The parenthesis is the SAME on both lines, so one declared
+       width floors BOTH ends of the pair — which is what separates it from step 4's group width below, and from
+       a cell's own declared `width`, each of which the section writes over the minimum alone.
+       A COLUMN THE GRID HAS AND NO COLUMN BOX OCCUPIES IS THE ORDINARY CASE and is not asked: a `<col>` styling
+       the first of three columns leaves the other two with a NULL entry, which core/layout/table_column_box.h
+       states is the positive answer "no column box occupies this one" rather than a value to default past. */
+    for (i = 0; i < grid->ncols; i++) {
+        TcwDeclaredWidth w;
+
+        if (boxes.cols[i].column == NULL) continue;
+        w = tcw_declared_width(boxes.cols[i].column);
+        if (!w.declared) continue;
+        cols[i].min = css_px_max(cols[i].min, w.px);
+        cols[i].max = css_px_max(cols[i].max, w.px);
     }
     /* ---- §17.5.2.2's STEP 3 ---------------------------------------------------------------------------
        "For each cell that spans more than one column, increase the minimum widths of the columns it spans so
@@ -444,10 +517,32 @@ size_t table_column_widths(lxb_dom_element_t *table, const TableGrid *grid, Tabl
                 cols[c].max = css_px_add(cols[c].max, share);
         }
     }
-    /* ---- §17.5.2.2's STEP 4 is the probe above's other subject, and there is nothing left for it to do here:
-       a column group with `width: auto` floors nothing, and any other value stopped this walk before a column
-       was measured. ---------------------------------------------------------------------------------------
-       ---- "This gives a maximum and minimum width for each column." ------------------------------------- */
+    /* ---- §17.5.2.2's STEP 4 ---------------------------------------------------------------------------
+       "For each column group element with a 'width' other than 'auto', increase the minimum widths of the
+       columns it spans, so that together they are at least as wide as the column group's 'width'."
+       THE MINIMA ONLY, AND THAT ASYMMETRY IS THE SECTION'S. Step 2 floors both ends from a column's `width` and
+       step 3 widens both from a spanning cell; step 4 names the minimum alone and says nothing of the maximum,
+       so raising the maximum here would be this engine adding a term. The coherence floor below is what then
+       lifts a maximum that the widened minimum crossed, which is the same crossing the header already records
+       for step 3 and is handled in the one place rather than at each step.
+       THE GROUP'S RUN IS READ OFF THE MAPPING RATHER THAN RE-WALKED, which is rule 4 held as a fact instead of
+       restated as a loop: "A column group box occupies the same grid cells as the columns it contains", so the
+       columns a group spans are exactly the consecutive entries naming it and a run scan finds them without
+       asking the DOM a second time. A run truncated by the grid's own column count cannot carry a declared
+       width — `tcw_require_columns_within_grid` stopped this walk above if one did — so a short run here is a
+       group whose `width` is `auto`, which floors nothing. */
+    for (i = 0; i < grid->ncols; ) {
+        lxb_dom_element_t *group = boxes.cols[i].column_group;
+        size_t end = i + 1;
+        TcwDeclaredWidth w;
+
+        if (group == NULL) { i = end; continue; }
+        while (end < grid->ncols && boxes.cols[end].column_group == group) end++;
+        w = tcw_declared_width(group);
+        if (w.declared) tcw_raise_run_minimum(cols, i, end, w.px);
+        i = end;
+    }
+    /* ---- "This gives a maximum and minimum width for each column." ------------------------------------- */
     for (i = 0; i < grid->ncols; i++) {
         /* The second of the two crossings the header records: step 3 widens the minima and the maxima over
            the same columns from two independent sums, so a column can come out of it with a minimum above a
@@ -462,6 +557,7 @@ size_t table_column_widths(lxb_dom_element_t *table, const TableGrid *grid, Tabl
                "against the containing block, and a pair that crossed would put the table's own width on the "
                "wrong side of it with nothing downstream to say so");
     }
+    table_column_boxes_release(&boxes);
     *out = cols;
     return grid->ncols;
 }

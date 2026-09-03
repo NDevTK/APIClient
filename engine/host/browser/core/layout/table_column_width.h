@@ -104,16 +104,11 @@ size_t table_column_widths(lxb_dom_element_t *table, const TableGrid *grid, Tabl
    §17.5.2's entry refuses that model by name before any of this runs, and `table_column_widths` asserts it. */
 CssPx table_cell_border_edges(lxb_dom_element_t *cell);
 
-/* CSS 2.1 §17.5 Visual layout of table contents' RULES 3 AND 4 — the COLUMN and COLUMN-GROUP boxes, which
-   core/layout/table_grid.h states outright that it does not place — asked as the one question CSS 2.1 §17.5.2
-   Table width algorithms: the 'table-layout' property's TWO algorithms both put to them, so the walk over the
-   table's child list exists once rather than once per algorithm.
-   ANSWERS THE FIRST such box whose computed `width` is other than `auto`, or NULL when none is. It DECIDES
-   NOTHING: a `width: auto` on a column box floors nothing in either algorithm (§17.5.2.2's step 4 excludes it
-   in its own antecedent and §17.5.2.1's step 1 is written over "a value other than 'auto'"), so a `<colgroup>`
-   wrapping the columns of an ordinary table is the common shape and answers NULL here. A caller that gets a
-   box back CRASHES with ITS OWN section's sentence — the two algorithms want different things from that box
-   and a shared message would name the wrong one. */
-lxb_dom_element_t *table_column_box_with_declared_width(lxb_dom_element_t *table);
+/* CSS 2.1 §17.5 Visual layout of table contents' RULES 3 AND 4 ARE NOT HERE — they are
+   core/layout/table_column_box.h, which answers WHICH column and column-group box occupies each grid column
+   and reads no property off either. What stood here was a narrower question over the same walk (the FIRST such
+   box whose computed `width` is other than `auto`) and it went out with the crash it existed to raise: it could
+   answer only whether SOME column declared a width, which is enough to refuse a document and not enough to lay
+   one out, and CSS 2.1 §17.6.2.1 Border conflict resolution needs the same walk to name a box PER EDGE. */
 
 #endif
