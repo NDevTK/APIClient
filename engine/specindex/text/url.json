@@ -3,7 +3,7 @@
  "key": "url",
  "base": "https://url.spec.whatwg.org/",
  "specUpdated": "18 August 2026",
- "fetched": "2026-08-31",
+ "fetched": "2026-09-03",
  "sections": {
   "1": "1 infrastructure this specification depends on infra infra some terms used in this specification are defined in the following standards and specifications encoding encoding file api fileapi html html unicode idna compatibility processing uts46 web idl webidl to serialize an integer represent it as the shortest possible decimal number",
   "2": "2 security considerations the security of a url is a function of its environment care is to be taken when rendering interpreting and passing urls around when rendering and allocating new urls spoofing needs to be considered an attack whereby one host or url can be confused for another for instance consider how 1 l i m rn rri 0 o and a can all appear eerily similar or worse consider how u 202a left to right embedding and similar code points are invisible utr36 when passing a url from party a to b both need to carefully consider what is happening a might end up leaking data it does not want to leak b might receive input it did not expect and take an action that harms the user in particular b should never trust a as at some point urls from a can come from untrusted sources",

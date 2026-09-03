@@ -3,7 +3,7 @@
  "key": "dom",
  "base": "https://dom.spec.whatwg.org/",
  "specUpdated": "25 August 2026",
- "fetched": "2026-08-31",
+ "fetched": "2026-09-03",
  "sections": {
   "1": "1 infrastructure this specification depends on the infra standard infra some of the terms used in this specification are defined in encoding selectors trusted types web idl xml namespaces in xml and associating style sheets with xml documents encoding selectors4 trusted types webidl xml xml names xml stylesheet when extensions are needed the dom standard can be updated accordingly or a new standard can be written that hooks into the provided extensibility hooks for applicable specifications",
   "2": "2 events",

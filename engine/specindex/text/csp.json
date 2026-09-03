@@ -3,7 +3,7 @@
  "key": "csp",
  "base": "https://w3c.github.io/webappsec-csp/",
  "specUpdated": "13 August 2026",
- "fetched": "2026-08-31",
+ "fetched": "2026-09-03",
  "sections": {
   "1": "1 introduction this section is not normative this document defines content security policy csp a tool which developers can use to lock down their applications in various ways mitigating the risk of content injection vulnerabilities such as cross site scripting and reducing the privilege with which their applications execute csp is not intended as a first line of defense against content injection vulnerabilities instead csp is best used as defense in depth it reduces the harm that a malicious injection can cause but it is not a replacement for careful input validation and output encoding this document is an iteration on content security policy level 2 with the goal of more clearly explaining the interactions between csp html and fetch on the one hand and providing clear hooks for modular extensibility on the other ideally this will form a stable core upon which we can build new functionality",
   "2": "2 framework",

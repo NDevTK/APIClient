@@ -2,8 +2,8 @@
  "spec": "HTML Living Standard",
  "key": "html",
  "base": "https://html.spec.whatwg.org/multipage/",
- "specUpdated": "1 September 2026",
- "fetched": "2026-09-02",
+ "specUpdated": "3 September 2026",
+ "fetched": "2026-09-03",
  "sections": {
   "1": {
    "title": "Introduction",
@@ -14035,6 +14035,7 @@
    "4.13.4": 4,
    "3.2.3": 2,
    "8.4.1": 2,
+   "8.5.2": 2,
    "6.10.2": 3,
    "7.2.2.3": 8,
    "7.2.2.6": 7,
@@ -16665,7 +16666,7 @@
    "7.5.10": 2,
    "8.4.1": 2,
    "8.5.1": 3,
-   "8.5.2": 2,
+   "8.5.2": 4,
    "8.5.4": 2,
    "4.8.5": 3,
    "2.1.1": 2,

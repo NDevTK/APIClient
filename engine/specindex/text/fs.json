@@ -3,7 +3,7 @@
  "key": "fs",
  "base": "https://fs.spec.whatwg.org/",
  "specUpdated": "15 March 2026",
- "fetched": "2026-08-31",
+ "fetched": "2026-09-03",
  "sections": {
   "1": "1 introduction this section is non normative this document defines fundamental infrastructure for file system apis in addition it defines an api that makes it possible for websites to get access to a file system directory without having to first prompt the user for access this enables use cases where a website wants to save data to disk before a user has picked a location to save to without forcing the website to use a completely different storage mechanism with a different api for such files the entry point for this is the navigator storage getdirectory method",
   "2": "2 files and directories",

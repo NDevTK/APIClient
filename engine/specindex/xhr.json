@@ -3,7 +3,7 @@
  "key": "xhr",
  "base": "https://xhr.spec.whatwg.org/",
  "specUpdated": "18 August 2026",
- "fetched": "2026-08-31",
+ "fetched": "2026-09-03",
  "sections": {
   "1": {
    "title": "Introduction",

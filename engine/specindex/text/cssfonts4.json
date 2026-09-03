@@ -3,7 +3,7 @@
  "key": "cssfonts4",
  "base": "https://drafts.csswg.org/css-fonts-4/",
  "specUpdated": "30 August 2026",
- "fetched": "2026-09-02",
+ "fetched": "2026-09-03",
  "sections": {
   "1": "1 introduction this specification includes and expands on the basic font features described in the css3 fonts specification css fonts 3",
   "2": "2 basic font properties the particular font face used to render a character is determined by the font family and other font properties that apply to a given element this structure allows settings to be varied independently of each other",

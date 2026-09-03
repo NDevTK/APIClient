@@ -3,7 +3,7 @@
  "key": "xhr",
  "base": "https://xhr.spec.whatwg.org/",
  "specUpdated": "18 August 2026",
- "fetched": "2026-08-31",
+ "fetched": "2026-09-03",
  "sections": {
   "1": "1 introduction this section is non normative the xmlhttprequest object is an api for fetching resources the name xmlhttprequest is historical and has no bearing on its functionality some simple code to do something with data from an xml document fetched over the network function processdata data taking care of data function handler if this status 200 this responsexml null this responsexml getelementbyid test textcontent success processdata this responsexml getelementbyid test textcontent else something went wrong var client new xmlhttprequest client onload handler client open get unicorn xml client send if you just want to log a message to the server function log message var client new xmlhttprequest client open post log client setrequestheader content type text plain charset utf 8 client send message or if you want to check the status of a document on the server function fetchstatus address var client new xmlhttprequest client onload function in case of network errors this might not give reliable results returnstatus this status client open head address client send",
   "2": "2 terminology this specification depends on the infra standard infra this specification uses terminology from dom dom parsing and serialization encoding fetch file api html url web idl and xml dom dom parsing encoding fetch fileapi html url webidl xml xml names",

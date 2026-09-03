@@ -3,7 +3,7 @@
  "key": "css22",
  "base": "https://www.w3.org/TR/CSS22/",
  "specUpdated": "W3C First Public Working Draft 12 April 2016",
- "fetched": "2026-08-31",
+ "fetched": "2026-09-03",
  "sections": {
   "1": "1 about the css 2 2 specification contents 1 1 css 2 2 vs css 2 1 2 reading the specification 1 3 how the specification is organized 1 4 conventions 1 4 1 document language elements and attributes 1 4 2 css property definitions 1 4 2 1 value 1 4 2 2 initial 1 4 2 3 applies to 1 4 2 4 inherited 1 4 2 5 percentage values 1 4 2 6 media groups 1 4 2 7 computed value 1 4 3 shorthand properties 1 4 4 notes and examples 1 4 5 images and long descriptions 1 5 acknowledgments",
   "2": "2 introduction to css 2 2 contents 2 1 a brief css 2 2 tutorial for html 2 2 a brief css 2 2 tutorial for xml 2 3 the css 2 2 processing model 2 3 1 the canvas 2 3 2 css 2 2 addressing model 2 4 css design principles",

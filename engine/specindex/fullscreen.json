@@ -3,7 +3,7 @@
  "key": "fullscreen",
  "base": "https://fullscreen.spec.whatwg.org/",
  "specUpdated": "17 July 2026",
- "fetched": "2026-09-01",
+ "fetched": "2026-09-03",
  "sections": {
   "1": {
    "title": "Terminology",
