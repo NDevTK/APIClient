@@ -1129,6 +1129,57 @@ static const char *park_comma(const char *p)
     return p + 1;
 }
 
+/* THE CROSS-TIER NAME OF A FROZEN DECISION CHAIN, READ THROUGH ONE SPELLER — park_reward's discipline applied
+   to the field beside it, and the argument for it is the same one with a sharper consequence: the reward
+   decides where a rebuilt flow stands in the ORDER, and this decides WHICH PATH it stands on.
+   THE ADVANCE IS CHECKED BESIDE THE VALUE, for park_reward's reason exactly. `strtol`'s answer for a field it
+   could not read at all is 0 — which is not a nonsense ordinal, it is the FIRST one, and every park document
+   that froze a chain has written it. So an ABSENT field and a real `0` were one number, and the two range
+   asserts that stand over these fields each cover only the half the other misses: `id == seg_n` accepts an
+   unreadable 's' ordinal exactly when `seg_n` is 0, which is the first segment record of every document, and
+   `sid < seg_n` accepts an unreadable 'f'/'c' ordinal exactly when `seg_n` is above 0, which is every flow
+   record after the first segment. Between them `s,-,<slots>` and `f,<reward>` are both read today without a
+   word, and both stand a flow on segment 0 — a real chain, whose arms are internally consistent and whose
+   questions are another flow's, so decide.c's divergence check cannot see it either: it compares the branch's
+   question against the key beside the arm, and both belong to the wrong path together. That is §scheduler's
+   razor arriving as a silently different flow rather than as a crash.
+   THE '-' IS A FIELD VALUE AND NOT A NUMBER, so it is spelled here rather than at three call sites: it says
+   the flow stands on NO segment, which is what a park taken before the first pick writes. A '-' followed by
+   digits is not a negative ordinal — this consumes the one character and the digits become the next field,
+   which park_comma then refuses, exactly as it did when the three sites spelled the arm themselves.
+   THE NEGATIVE END IS A `CHECK` AND THE REASON IS THE SUBSCRIPT IT FEEDS, not the rarity of the state. The
+   value indexes `seg[]` at the two 'f'/'c' sites and at the base link, and a subscript is compiled into EVERY
+   build — so a dev-only guard vanishes in exactly the build where the load happens, and check.h's own header
+   states what that costs on the target this engine ships on: a WebAssembly load has one trap condition, so an
+   index outside the table does not fault, it returns a value, and `decide_blob_new` then takes a reference
+   through it. cold_census made this identical promotion for its own histogram store, in this file, for this
+   reason. The upper end cannot be checked here — it is the table's length, which only the caller holds — so it
+   is a `CHECK` at each of the three sites and is the same one bound read from both ends.
+   AND ASSERTING ON THIS DOCUMENT IS NOT ASSERTING ON A STRANGER'S BYTES (§THE-DISCRIMINATOR-IS-WHOSE-BYTES-
+   STATE-THE-VALUE). The park document is written by this file, stored by the trusted zone under the extension's
+   own origin, and handed back unchanged; no server states any of it. It is a value this codebase computed,
+   round-tripped through its own store, so a malformed one is this engine's own invariant broken and not input
+   to be refused into a declared absence. */
+static long park_ordinal(const char *p, char **ep)
+{
+    long v;
+
+    if (*p == '-') { *ep = (char *)p + 1; return -1; }
+    v = strtol(p, ep, 10);
+    DCHECK(*ep != p,
+           "a park record carries no segment ordinal where the grammar puts one — a segment names itself and "
+           "every flow names the chain it stands on, and a field strtol could not read at all answers 0, which "
+           "is the FIRST ordinal every park document that froze a chain has written. Absent and zero are then "
+           "one number, and the flow resumes replaying arms that answer another path's questions");
+    CHECK(v >= 0,
+          "engine: a park record carries a NEGATIVE segment ordinal — '-' is how this grammar says a flow "
+          "stands on no segment at all and is read one line above, so a signed number here names nothing this "
+          "writer assigns. It is a subscript into the rebuild's segment table in every build, and on wasm an "
+          "out-of-range load returns a value instead of trapping, so the flow would take a reference through "
+          "whatever lies before that allocation");
+    return v;
+}
+
 /* THE ONE NUMBER THE RESUMED FRONTIER IS ORDERED BY, READ THROUGH ONE SPELLER SO BOTH KINDS ARE CHECKED BY ONE
    SENTENCE — the same reason park_comma is one speller for the separator and park_flow_add is one landing for
    every record that names a flow.
@@ -1298,19 +1349,29 @@ void cold_resume(JSContext *ctx, const char *recipes)
             uint32_t *keys;
             int n, span;
 
-            id = strtol(q, &ep, 10); q = ep;
+            id = park_ordinal(q, &ep); q = ep;
             q = park_comma(q);
-            if (*q == '-') { bid = -1; q++; }
-            else { bid = strtol(q, &ep, 10); q = ep; }
+            bid = park_ordinal(q, &ep); q = ep;
             q = park_comma(q);
             span = (int)(end - q);
             n = span / 9;                       /* one arm char + eight hex digits per slot — see the writer */
             DCHECK(id == seg_n,
                    "a park document names its segments out of order — the ordinals are dense and ascending in "
                    "emission order, and a gap means a segment nothing wrote is about to be stood on");
-            DCHECK(bid < id,
-                   "a decision segment stands on one that has not been read yet — a base is written before "
-                   "every user of it, so this document was not written by this engine's park");
+            /* THE BASE IS BOUNDED AGAINST THE TABLE AND NOT AGAINST `id`, which is the same statement made
+               where it can be checked in every build. `bid < id` said the ordering — a base is written before
+               every user of it — and it said it against a number the assert above is what makes equal to
+               `seg_n`, so in a release build, where that assert is gone, it bounded a subscript by another
+               unchecked field. `bid < seg_n` is the ordering AND the subscript's upper end, and the pair with
+               `id == seg_n` gives back exactly what was there. See park_ordinal for why this end is a `CHECK`
+               and for the lower end it is one half of. */
+            CHECK(bid < seg_n,
+                  "engine: a decision segment stands on one that has not been read yet — a base is written "
+                  "before every user of it, so this document was not written by this engine's park. The "
+                  "ordinal is a subscript into the rebuild's segment table on the line below, in every build, "
+                  "and on wasm an out-of-range load returns a value rather than trapping: the segment would be "
+                  "built over whatever that address held and every flow standing above it would replay arms "
+                  "read out of it");
             /* THE WIDTH IS THE VERSION CHECK, AND IT IS ASKED BEFORE THE COUNT, because a document written
                before the question-key column has a SHORT field rather than an empty one — two arms are two
                characters, which divides to zero slots, and asking the count first would report that residue as
@@ -1361,13 +1422,18 @@ void cold_resume(JSContext *ctx, const char *recipes)
             double val;
             Flow *fl;
 
-            if (*q == '-') { sid = -1; q++; }
-            else { sid = strtol(q, &ep, 10); q = ep; }
+            sid = park_ordinal(q, &ep); q = ep;
             q = park_comma(q);
             val = park_reward(q, &ep); q = ep;
-            DCHECK(sid < seg_n,
-                   "a parked flow stands on a decision segment this document never wrote — it would resume "
-                   "from the baseline instead of from its own path");
+            /* `CHECK` FOR THE SUBSCRIPT BELOW, which is compiled into every build — see park_ordinal, whose
+               lower end this is the other half of. The message keeps what the DCHECK said, because that is
+               still what a break MEANS; what changed is the build it is stated in. */
+            CHECK(sid < seg_n,
+                  "engine: a parked flow stands on a decision segment this document never wrote — it would "
+                  "resume from the baseline instead of from its own path, and the ordinal is a subscript into "
+                  "the rebuild's segment table on the line below in every build. On wasm an out-of-range load "
+                  "returns a value rather than trapping, so decide_blob_new would take a chain reference "
+                  "through an address no segment of this document occupies");
             /* A RESUMED FLOW IS NOT A THIRD KIND OF FLOW. It is `started` — it stands on a recorded chain, so
                the scheduler RESUMES it — with no frame and cursor 0, which is what makes the resume a REPLAY:
                it re-runs the document from its first script, consumes one recorded arm at each branch it
@@ -1491,8 +1557,7 @@ void cold_resume(JSContext *ctx, const char *recipes)
             char sname[32];
             size_t sl;
 
-            if (*q == '-') { sid = -1; q++; }
-            else { sid = strtol(q, &ep, 10); q = ep; }
+            sid = park_ordinal(q, &ep); q = ep;
             q = park_comma(q);
             val = park_reward(q, &ep); q = ep;
             q = park_comma(q);
@@ -1508,9 +1573,15 @@ void cold_resume(JSContext *ctx, const char *recipes)
             q = park_comma(q);
             for (xb = q; q < end && *q != ','; q++)
                 ;
-            DCHECK(sid < seg_n,
-                   "a parked @S candidate stands on a decision segment this document never wrote — it would "
-                   "resume from the baseline instead of from the path its search had reached");
+            /* `CHECK` FOR THE SUBSCRIPT, the same one bound the 'f' arm reads from the same end — see
+               park_ordinal. A candidate is the record that also carries attacker text, so a wrong ordinal here
+               replays a payload against another search's gates. */
+            CHECK(sid < seg_n,
+                  "engine: a parked @S candidate stands on a decision segment this document never wrote — it "
+                  "would resume from the baseline instead of from the path its search had reached, and the "
+                  "ordinal is a subscript into the rebuild's segment table in every build. On wasm an "
+                  "out-of-range load returns a value rather than trapping, so this candidate's payload would "
+                  "be replayed over arms read out of an address no segment of this document occupies");
             fl = park_flow_add(ctx, val, before, flows);
             fl->cand_src = park_unhex(xb, q);
             q = park_comma(q);
