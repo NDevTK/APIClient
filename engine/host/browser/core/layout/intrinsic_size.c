@@ -11,6 +11,7 @@
 #include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
 #include "core/layout/block_flow.h"
+#include "core/layout/box_subject.h"
 #include "core/layout/intrinsic_size.h"
 #include "core/layout/phrasing_break.h"
 #include "core/layout/replaced_element.h"
@@ -254,20 +255,30 @@ static void is_atomic_replaced(TextRunMeasure *m, lxb_dom_element_t *el)
 /* ONE CHILD NODE of the box whose intrinsic sizes are being measured. The shape mirrors core/layout/
    line_box.c's own child walk deliberately: both are iterating the SAME inline formatting context, and the two
    answering differently about which children are in it would be one classification with two copies. */
-static void is_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_t *n);
+/* `in_inline_box` IS THE ORIGIN OF THE CHILD AND IT IS THREADED FROM THE CALLER, never re-derived here: FALSE
+   is a child of the box being measured, whose whole child list CSS 2.2 §9.2.1 "Block-level elements and block
+   boxes"' dispatch has already classified ("A block container box either contains only block-level boxes or
+   establishes an inline formatting context and thus contains only inline-level boxes"), and TRUE is a child of
+   a `display: inline` box this walk descended into, about which that dispatch said NOTHING — it was asked over
+   the measured box's list, and an inline box's own children were not in it. The two crashes at the tail of
+   this function are two DIFFERENT missing capabilities and the flag is the only thing that tells them apart,
+   which is why it is a parameter and not a test. */
+static void is_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_t *n, bool in_inline_box);
 
 static void is_walk(TextRunMeasure *m, lxb_dom_element_t *el)
 {
     lxb_dom_node_t *n = lxb_dom_interface_node(el), *c;
 
-    for (c = n->first_child; c != NULL; c = c->next) is_child(m, el, c);
+    /* THE ONLY CALLER IS THE INLINE-BOX DESCENT BELOW, so every child this reaches is inside one. */
+    for (c = n->first_child; c != NULL; c = c->next) is_child(m, el, c, true);
 }
 
-static void is_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_t *n)
+static void is_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_t *n, bool in_inline_box)
 {
     lxb_dom_element_t *el;
     char *d;
     bool inline_box;
+    char nbuf[160];
 
     switch (n->type) {
     case LXB_DOM_NODE_TYPE_TEXT:
@@ -308,9 +319,10 @@ static void is_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_
     if (is_computed_is(el, "position", "absolute") || is_computed_is(el, "position", "fixed")) return;
     if (!is_computed_is(el, "float", "none"))
         DFAIL("CSS 2.2 §9.5 \"Floats\" takes this child out of the line, and css-sizing-3 §5.2 \"Intrinsic "
-              "Contributions\" still counts it: CSS 2.2 §10.3.5's preferred width is the box \"formatted "
-              "without breaking lines other than where explicit line breaks occur\", and a float shortens the "
-              "line boxes beside it rather than leaving them alone — §9.4.2's own \"line boxes may vary in "
+              "Contributions\" still counts it: CSS 2.2 §10.3.5 \"Floating, non-replaced elements\" computes "
+              "the preferred width \"by formatting the content without breaking lines other than where "
+              "explicit line breaks occur\", and a float shortens the line boxes beside it rather than "
+              "leaving them alone — §9.4.2's own \"line boxes may vary in "
               "width if available horizontal space is reduced due to floats\". So the contribution is neither "
               "this walk's sum along the line nor a maximum over it, and there is no arm here that is right by "
               "default. BUILD §9.5.1's float placement, which core/layout/line_box.c and "
@@ -323,9 +335,10 @@ static void is_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_
     free(d);
     if (inline_box) {
         /* HTML §15.3.4 "Phrasing content" FIRST, because what it declares changes the PARTITION and not a term
-           in the sum. css-sizing-3 §2.1's max-content inline size is CSS 2.2 §10.3.5's content "formatted
-           without breaking lines OTHER THAN WHERE EXPLICIT LINE BREAKS OCCUR", so a `br` this walk did not see
-           would not be a small error in the answer — it would report a whole paragraph's width as the width of
+           in the sum. css-sizing-3 §2.1's max-content inline size is what CSS 2.2 §10.3.5 "Floating,
+           non-replaced elements" computes "by formatting the content without breaking lines other than where
+           explicit line breaks occur", so a `br` this walk did not see would not be a small error in the
+           answer — it would report a whole paragraph's width as the width of
            its longest line. core/layout/line_box.c's walk over the same children asks the same component the
            same question, which is what keeps the two from disagreeing about how many lines a run has. */
         switch (phrasing_break_of(el)) {
@@ -372,42 +385,171 @@ static void is_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_
         text_run_measure_add_box_edge(m, el, is_intrinsic_edge_px(el, true));
         return;
     }
-    DFAIL("css-sizing-3 §5.2 \"Intrinsic Contributions\" is what an ELEMENT CHILD adds to this box's intrinsic "
-          "inline sizes, and it is a different quantity from the text beside it: §2.2 defines the max-content "
-          "contribution as \"the size that a box contributes to its containing block's max-content size\" and "
-          "says both contributions \"are based on the OUTER SIZE of the box; for this purpose auto margins are "
-          "treated as zero\" — so a child's own margins, borders and padding are in the number, and its own "
-          "intrinsic sizes are inside that. WHICH ALGORITHM COMBINES THEM DEPENDS ON THE FORMATTING CONTEXT "
-          "THIS BOX ESTABLISHES, and the two do not share a step: CSS 2.2 §9.4.2's INLINE formatting context "
-          "flows the child ALONG the line, so its contribution is ADDED to the run's (and css-text-3 §5.5 "
-          "\"Line Breaking Details\" puts \"a soft wrap opportunity before and after each replaced element or "
-          "other ATOMIC INLINE\", which cuts the min-content segment there), while §9.4.1's BLOCK formatting "
-          "context stacks the child DOWN a column, so this box's intrinsic sizes are the MAXIMUM over its "
-          "in-flow children's contributions and not a sum at all. §9.2.1.1 \"Anonymous block boxes\" is what "
-          "decides which — a container holding both gets an anonymous block box per run of inline-level "
-          "children — and core/layout/block_flow.c already delimits exactly those runs for the height walk. "
-          "BUILD the contribution in that order: take block_flow.c's own child classification and its run "
-          "delimitation as the thing THIS walk iterates too (so one list answers for both), then §5.2's outer "
-          "size over a child whose used inline size is itself an intrinsic one — which is this same entry, one "
-          "level down. TWO ARMS ARE BUILT AND ARE NO LONGER PART OF WHAT THIS NAMES, both of them §9.4.2's: a "
-          "non-replaced `display: inline` box, whose text joins the SAME run this walk accumulates — what "
-          "§4.1.1's boundary-crossing collapsing and §5.5's \"inline box boundaries do not introduce a forced "
-          "line break or soft wrap opportunity in the flow\" together make correct — and a REPLACED child, "
-          "which `is_atomic_replaced` above emits as §5.5's one atomic item over CSS 2.1 §10.3.2's used "
-          "content width. WHAT NEITHER OF THEM COVERS IS AN ATOMIC INLINE THAT IS NOT REPLACED — an "
-          "`inline-block`, an `inline-flex`, an `inline-grid` or an `inline-table` reaches THIS crash, not "
-          "that arm, because its `display` fails the `inline` test above. Its item is the same one; what it "
-          "does not have is a size, since CSS 2.2 §10.3.9's shrink-to-fit for an `inline-block` reads an "
-          "AVAILABLE width, which is again this walk's own output. Both remaining arms still crash for a "
-          "PERCENTAGE that resolves against that width, and css-sizing-3 §5.2.1 \"Intrinsic Contributions of "
-          "Percentage-Sized Boxes\" is the section both of those crashes name");
+    if (in_inline_box)
+        DFAILF("CSS 2.2 §9.2.1.1 \"Anonymous block boxes\"' BLOCK-IN-INLINE, or an atomic inline nested one box "
+               "deeper — and THIS WALK MAY NOT GUESS WHICH. The child sits inside a `display: inline` box this "
+               "walk descended into, so §9.2.1's dispatch has said nothing about its level: that question was "
+               "asked over the MEASURED box's child list and an inline box's own children were not in it. If "
+               "the child is BLOCK-LEVEL the algorithm is §9.2.1.1's breaking, which rebuilds the BOX TREE "
+               "rather than adding a term to a sum — \"When an inline box contains an in-flow block-level box, "
+               "the inline box (and its inline ancestors within the same line box) is broken around the "
+               "block-level box\", and \"The line boxes before the break and after the break are enclosed in "
+               "anonymous block boxes, and the block-level box becomes a sibling of those anonymous boxes\", so "
+               "the measured box stops establishing ONE inline formatting context and becomes §9.4.1 \"Block "
+               "formatting contexts\"' stack of three. If it is INLINE-LEVEL it is the atomic inline this same "
+               "function names for a direct child, and the missing thing is the item pair rather than the box "
+               "tree. THE LEVEL OF A CHILD IS core/layout/block_flow.c's `bf_child_kind` AND IT IS `static` "
+               "THERE, so neither arm can be written until it is an exported entry of core/layout/block_flow.h "
+               "over one child node — the same entry this file's own §9.4.1 arm waits on. BUILD IT, then split "
+               "this crash on its answer. %s",
+               box_subject_node(n, nbuf, sizeof nbuf));
+    DFAILF("CSS 2.2 §9.2.2 \"Inline-level elements and inline boxes\"' ATOMIC INLINE-LEVEL BOX THAT IS NOT "
+           "REPLACED — an `inline-block`, an `inline-flex`, an `inline-grid` or an `inline-table`, and the list "
+           "is closed rather than illustrative. §9.2.1's dispatch has already established that the measured box "
+           "\"either contains only block-level boxes or establishes an inline formatting context and thus "
+           "contains only inline-level boxes\" and that it is the second, so a DIRECT child reaching here is "
+           "inline-level; it failed the `display: inline` test above and `replaced_element_of` says it is not "
+           "replaced, which leaves exactly those four. ITS ITEM IS THE ONE `is_atomic_replaced` ALREADY EMITS "
+           "and its size is `intrinsic_inline_sizes` one level down under css-sizing-3 §2.2 \"Intrinsic Size "
+           "Contributions\"' outer size (\"Intrinsic size contributions are based on the outer size of the box; "
+           "for this purpose, auto margins are treated as zero\"), which `is_intrinsic_edge_px` answers on both "
+           "sides. WHAT IS MISSING IS THAT THE ITEM CARRIES ONE NUMBER: core/layout/text_run.h's `TextRunItem` "
+           "holds a single `CssPx size` and `text_run_measure_add_atomic` takes one, and a REPLACED box is the "
+           "only atomic inline for which that is enough — its used width does not depend on where lines break, "
+           "so css-sizing-3 §5.1 \"Intrinsic Sizes\" gives it two EQUAL numbers, while an `inline-block`'s own "
+           "content wraps and gives it two different ones. BUILD THE PAIR ON THE ITEM — a min-content and a "
+           "max-content size on `TEXT_RUN_ITEM_ATOMIC` and on `text_run_measure_add_atomic`, with text_run.c's "
+           "two accumulators reading their own — which is the SAME missing thing `is_require_acyclic` above "
+           "names for a percentage `width` on a replaced box, so one diff retires both. %s",
+           box_subject_node(n, nbuf, sizeof nbuf));
+}
+
+/* CSS 2.2 §9.4.2's INLINE FORMATTING CONTEXT, MEASURED — the walk this component was written as, reached only
+   through §9.2.1's dispatch below and therefore only for a box whose child list holds no block-level box. */
+static IntrinsicInlineSizes is_inline_context(lxb_dom_element_t *el)
+{
+    TextRunMeasure m;
+    IntrinsicInlineSizes out;
+    lxb_dom_node_t *n = lxb_dom_interface_node(el), *c;
+
+    text_run_measure_init(&m);
+    for (c = n->first_child; c != NULL; c = c->next) is_child(&m, el, c, false);
+    /* THE MEASUREMENT DOES NOT EXIST UNTIL THIS RUNS, and that is [UAX14]'s doing rather than a lifecycle
+       anybody chose: its rules read forward past the boundary they decide (LB25's `PO × OP IS NU` by three
+       characters) and LB9 puts an unbounded run of combining marks between the two, so no per-character state
+       can settle a break as the character arrives. core/layout/text_run.h states it in full. It RETAINS what
+       the walk collected — CSS 2.2 §9.4.2's fill is a third partition over the same [UAX14] pass — so the
+       release below is this function's to make and the two numbers are read between them. */
+    text_run_measure_finish(&m);
+    out.min_content = text_run_measure_min_content(&m);
+    out.max_content = text_run_measure_max_content(&m);
+    /* §5.1's answer is a PAIR OF NUMBERS and not a view onto the run, so the measurement ends here: this
+       component asks §9.4.2 nothing, and a caller of it holds no items to be handed. */
+    text_run_measure_release(&m);
+    return out;
+}
+
+/* CSS 2.2 §9.4.1 "Block formatting contexts"' CONTEXT, whose intrinsic inline sizes are a MAXIMUM AND NOT A
+   SUM, and the section says why in one sentence: "in a block formatting context, each box's left outer edge
+   touches the left edge of the containing block". The children therefore OVERLAP in the inline axis instead of
+   sharing it, so css-sizing-3 §5.2 "Intrinsic Contributions"' hypothetical float — "a box's min-content
+   contribution / max-content contribution in each axis is the size of the content box of a hypothetical
+   auto-sized float that contains only that box" — must be as wide as the WIDEST of them and no wider. That is
+   the whole of the difference from §9.4.2's walk above, and it is why the two share no step.
+   THE EMPTY CHILD LIST IS THIS ARM'S ONLY COMPLETE CASE AND IT IS A REAL ANSWER, not a floor: a maximum over
+   no boxes is zero, which is the same number §9.4.2's walk returns for the same document, so routing CSS 2.2
+   §9.2.1's third state — a block container with no in-flow child at all — to this arm rather than to that one
+   costs nothing and keeps the dispatch a single question. An empty `<td>` is the common shape and
+   core/layout/table_column_width.c asks for one on every table.
+   WHAT IS NOT COVERED, AND IT IS THE LIST RATHER THAN THE TERM: the term is `is_intrinsic_edge_px` on both
+   sides around `intrinsic_inline_sizes` ONE LEVEL DOWN, which is §2.2's outer size over a child whose own used
+   inline size is itself an intrinsic one, and every piece of that is built. WHICH BOXES to take the maximum
+   over is not, and that narrowing is a CRASH and not a named residual: an arm that guessed a child's level
+   would answer a WRONG width for a real document rather than a narrower one, so there is nothing here that is
+   right-but-incomplete to name — the crash below carries the whole of what is missing. */
+static IntrinsicInlineSizes is_block_context(lxb_dom_element_t *el)
+{
+    lxb_dom_node_t *n = lxb_dom_interface_node(el), *c;
+    IntrinsicInlineSizes out;
+    char nbuf[160];
+
+    out.min_content = css_px(0.0);
+    out.max_content = css_px(0.0);
+    for (c = n->first_child; c != NULL; c = c->next) {
+        lxb_dom_element_t *ch;
+
+        /* THE NODES THAT GENERATE NO BOX, asked in the SAME ORDER and through the SAME components as `is_child`
+           above, because the two walks are the two arms of one dispatch and a child either walk skipped and the
+           other did not would be one document with two box lists. */
+        switch (c->type) {
+        case LXB_DOM_NODE_TYPE_TEXT:
+            /* CSS 2.2 §9.2.2.1 "Anonymous inline boxes"' collapsed run generates no box; a run that survives is
+               INLINE-LEVEL content beside a block-level box, which is §9.2.1.1's anonymous block box and falls
+               to the crash below. */
+            if (!block_flow_text_child_generates_box(el, c)) continue;
+            break;
+        case LXB_DOM_NODE_TYPE_COMMENT:
+        case LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION:
+        case LXB_DOM_NODE_TYPE_DOCUMENT_TYPE:
+            continue;
+        case LXB_DOM_NODE_TYPE_ELEMENT:
+            ch = lxb_dom_interface_element(c);
+            /* css-display-3 §2.5 "Box Generation: the none and contents keywords": "The element and its
+               descendants generate no boxes or text sequences." */
+            if (is_computed_is(ch, "display", "none")) continue;
+            /* §9.3.1 takes an absolutely positioned box out of normal flow, so it is not one of the boxes
+               §9.4.1's stack holds and §5.2's hypothetical float does not have to contain it. */
+            if (is_computed_is(ch, "position", "absolute") || is_computed_is(ch, "position", "fixed")) continue;
+            if (!is_computed_is(ch, "float", "none"))
+                DFAILF("CSS 2.2 §9.5 \"Floats\" takes this child off §9.4.1's stack, and css-sizing-3 §5.2 "
+                       "\"Intrinsic Contributions\" still counts it — §5.2's hypothetical float \"contains only "
+                       "that box\", and a float INSIDE that hypothetical box sits BESIDE its in-flow siblings "
+                       "rather than above them, so its contribution is neither one more operand of the maximum "
+                       "below nor a term added to one and there is no arm here that is right by default. §9.4.1 "
+                       "\"Block formatting contexts\" says the same thing from the other end: each box's left "
+                       "outer edge touches the containing block's left edge \"even in the presence of floats, "
+                       "although a box's line boxes may shrink due to the floats\". BUILD §9.5.1 \"Positioning "
+                       "the float: the 'float' property\"'s placement, which core/layout/line_box.c and "
+                       "core/layout/flow_position.c both name as the same absent capability. %s",
+                       box_subject_node(c, nbuf, sizeof nbuf));
+            break;
+        default:
+            DFAILF("a node type CSS 2.2 §9.2 \"Controlling box generation\" does not describe is inside a block "
+                   "container being measured — the tree this walk iterates holds elements, text, comments, "
+                   "processing instructions and a doctype, and a CDATA section, a document or a fragment is not "
+                   "a child any parser this engine runs produces there. Find the writer that inserted it. %s",
+                   box_subject_node(c, nbuf, sizeof nbuf));
+        }
+        DFAILF("css-sizing-3 §5.2 \"Intrinsic Contributions\" is a MAXIMUM over this box's in-flow children "
+               "here, and WHICH BOXES those children are is the one input this walk does not have. THE TERM IS "
+               "BUILT AND THE LIST IS NOT: §5.2 states each contribution over the child's OUTER size — "
+               "css-sizing-3 §2.2 \"Intrinsic Size Contributions\": \"Intrinsic size contributions are based on "
+               "the outer size of the box; for this purpose, auto margins are treated as zero\" — so one "
+               "operand is `is_intrinsic_edge_px` on each side around `intrinsic_inline_sizes` ONE LEVEL DOWN, "
+               "and all three of those exist. WHAT DOES NOT is the enumeration: CSS 2.2 §9.2.1.1 \"Anonymous "
+               "block boxes\" says \"if a block container box (such as that generated for the DIV above) has a "
+               "block-level box inside it (such as the P above), then we force it to have only block-level "
+               "boxes inside it\", so the boxes to maximise over are the BLOCK-LEVEL children plus ONE "
+               "anonymous block box per maximal run of inline-level children — and whether a given child is "
+               "block-level or inline-level is core/layout/block_flow.c's `bf_child_kind`, which is `static` "
+               "there. BUILD IT AS AN EXPORTED ENTRY OF core/layout/block_flow.h over ONE child node, answering "
+               "§9.2.1 \"Block-level elements and block boxes\"' level and nothing else, and this walk then "
+               "iterates the same list core/layout/block_flow.c's own stack does. "
+               "`block_flow_anonymous_boxes` IS NOT THAT ENTRY AND MUST NOT BE REACHED FROM HERE, for a reason "
+               "that is a cycle and not a preference: it answers each run's `content_y` and its `height`, which "
+               "are §9.4.1's BLOCK-axis placement, and a run's height is core/layout/line_box.h's over its "
+               "container's used CONTENT WIDTH — which for the only two boxes that ask this walk at all, CSS "
+               "2.2 §10.3.5 \"Floating, non-replaced elements\"' float and §10.3.9's `inline-block`, IS "
+               "core/layout/used_value.h's shrink-to-fit over the number this walk is being run to produce. So "
+               "the exported entry must answer a LEVEL and place nothing. %s",
+               box_subject_node(c, nbuf, sizeof nbuf));
+    }
+    return out;
 }
 
 IntrinsicInlineSizes intrinsic_inline_sizes(lxb_dom_element_t *el)
 {
-    TextRunMeasure m;
     IntrinsicInlineSizes out;
-    lxb_dom_node_t *n, *c;
 
     DCHECK(el != NULL, "css-sizing-3 §5.1's intrinsic inline sizes were asked for with no element");
     /* THE REPLACED QUESTION IS ASKED FIRST, exactly as CSS 2.2 §10.3 asks it before the box type: a replaced
@@ -447,21 +589,25 @@ IntrinsicInlineSizes intrinsic_inline_sizes(lxb_dom_element_t *el)
                   "one this `display` names; the flex and grid arms each need their own box tree first and "
                   "none of the three is this walk with a different accumulator");
     }
-    text_run_measure_init(&m);
-    n = lxb_dom_interface_node(el);
-    for (c = n->first_child; c != NULL; c = c->next) is_child(&m, el, c);
-    /* THE MEASUREMENT DOES NOT EXIST UNTIL THIS RUNS, and that is [UAX14]'s doing rather than a lifecycle
-       anybody chose: its rules read forward past the boundary they decide (LB25's `PO × OP IS NU` by three
-       characters) and LB9 puts an unbounded run of combining marks between the two, so no per-character state
-       can settle a break as the character arrives. core/layout/text_run.h states it in full. It RETAINS what
-       the walk collected — CSS 2.2 §9.4.2's fill is a third partition over the same [UAX14] pass — so the
-       release below is this function's to make and the two numbers are read between them. */
-    text_run_measure_finish(&m);
-    out.min_content = text_run_measure_min_content(&m);
-    out.max_content = text_run_measure_max_content(&m);
-    /* §5.1's answer is a PAIR OF NUMBERS and not a view onto the run, so the measurement ends here: this
-       component asks §9.4.2 nothing, and a caller of it holds no items to be handed. */
-    text_run_measure_release(&m);
+    /* CSS 2.2 §9.2.1 "Block-level elements and block boxes"' ALTERNATIVE, ASKED ONCE OVER THE WHOLE CHILD LIST
+       AND BEFORE EITHER ALGORITHM RUNS: "A block container box either contains only block-level boxes or
+       establishes an inline formatting context and thus contains only inline-level boxes." The two are
+       different algorithms sharing no step — §9.4.2's sum along a line and §9.4.1's maximum down a stack — so
+       which one this box gets is a fact about its CHILD LIST and never a case discovered part-way through a
+       measurement. A walk that classified as it accumulated had already begun summing an inline run before it
+       met the block-level child that made the sum the wrong operation.
+       IT IS core/layout/block_flow.h's PREDICATE AND NOT A SECOND COPY OF §9.4.2's CONDITION, which is the
+       reason that predicate is exported: core/layout/block_flow.c's own stack chooses between the same two
+       sections over the same child list, and two answers to one question is one document with two box trees,
+       free to disagree about whether a run of white space is content.
+       ITS CLASSIFICATION REFUSES MORE THAN THIS FILE'S DOES, and that is a consequence to know rather than a
+       defect to work around: a float, a `display: contents` child, a misparented table-internal box and an
+       unmodelled `display` each abort inside that classification now, naming block_flow.c's own reason. For
+       three of the four that reason is sharper than what this file said; for a FLOAT it names §9.4.1's
+       clearance where §9.4.2's shortened line box is what a reader arriving from an intrinsic size wants, and
+       both name §9.5.1's placement as the thing to build. */
+    if (block_flow_establishes_inline_context(el)) out = is_inline_context(el);
+    else out = is_block_context(el);
     /* THE TWO ARE NON-NEGATIVE because every advance summed into them is, and a negative intrinsic size would
        make CSS 2.2 §10.3.5's formula produce a negative used width for a box with content in it — which
        css-sizing-3 §3.3's "as the content width and height cannot be negative, this computation is floored at

@@ -34,12 +34,21 @@
  * used_value.c applies it to §10.3.3's constraint equation — so this component never asks about `box-sizing`
  * and a caller that forgot to is wrong in one place rather than in two.
  *
- * WHAT REACHES THIS WALK IS AN INLINE FORMATTING CONTEXT AND EVERYTHING ELSE CRASHES BY NAME. CSS 2.2 §9.4.2
- * says which box establishes one — "a block container box that contains no block-level boxes" — and a box that
- * contains one is §9.4.1's, whose intrinsic size is css-sizing-3 §5.2's MAXIMUM over its in-flow children's
- * contributions rather than a sum along a line. Both are real algorithms and they share no step, so this
- * component implements the one whose inputs exist and crashes for the other rather than running a walk that
- * would be right for half the documents it is handed.
+ * WHICH OF CSS 2.2 §9.4's TWO FORMATTING CONTEXTS THIS BOX ESTABLISHES IS ASKED ONCE, OVER THE WHOLE CHILD
+ * LIST, BEFORE EITHER ALGORITHM RUNS. §9.2.1 "Block-level elements and block boxes" states the alternative —
+ * "A block container box either contains only block-level boxes or establishes an inline formatting context
+ * and thus contains only inline-level boxes" — and §9.4.2 states the condition, "a block container box that
+ * contains no block-level boxes". The two algorithms share no step: §9.4.2's flows the children ALONG a line
+ * and sums, §9.4.1's stacks them DOWN a column so css-sizing-3 §5.2's contribution is the MAXIMUM over them.
+ * A walk that discovered the difference part-way through a measurement had already begun summing a run before
+ * it met the child that made the sum the wrong operation, which is why the question is a dispatch and not a
+ * case. It is core/layout/block_flow.h's exported predicate rather than a second copy of §9.4.2's condition,
+ * because that component's own stack chooses between the same two sections over the same list.
+ * BOTH ARMS ARE HERE AND THEY ARE NOT EQUALLY FINISHED. §9.4.2's is the whole of the run measurement below.
+ * §9.4.1's has the TERM — css-sizing-3 §2.2 "Intrinsic Size Contributions"' outer size, which is where that
+ * phrase is defined rather than at §5.2, over a child whose own inline size is this same entry one level down
+ * — and not the LIST, so it is complete for a box whose children generate no boxes at all and crashes by name
+ * for every other, stating what must be exported before it can enumerate.
  *
  * NOTHING IS STORED, for core/layout/used_value.h's reason: a layout is per-flow state, so a cached intrinsic
  * size is shared state solver/dom_cow.h does not swap and a stale one is another flow's document. */
