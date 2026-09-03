@@ -1,0 +1,806 @@
+{
+ "spec": "Encoding Standard",
+ "key": "encoding",
+ "base": "https://encoding.spec.whatwg.org/",
+ "specUpdated": "21 May 2026",
+ "fetched": "2026-09-03",
+ "sections": {
+  "1": {
+   "title": "Preface",
+   "page": "",
+   "id": "preface"
+  },
+  "2": {
+   "title": "Security background",
+   "page": "",
+   "id": "security-background"
+  },
+  "3": {
+   "title": "Terminology",
+   "page": "",
+   "id": "terminology"
+  },
+  "4": {
+   "title": "Encodings",
+   "page": "",
+   "id": "encodings"
+  },
+  "5": {
+   "title": "Indexes",
+   "page": "",
+   "id": "indexes"
+  },
+  "6": {
+   "title": "Hooks for standards",
+   "page": "",
+   "id": "specification-hooks"
+  },
+  "7": {
+   "title": "API",
+   "page": "",
+   "id": "api"
+  },
+  "8": {
+   "title": "The encoding",
+   "page": "",
+   "id": "the-encoding"
+  },
+  "9": {
+   "title": "Legacy single-byte encodings",
+   "page": "",
+   "id": "legacy-single-byte-encodings"
+  },
+  "10": {
+   "title": "Legacy multi-byte Chinese (simplified) encodings",
+   "page": "",
+   "id": "legacy-multi-byte-chinese-(simplified)-encodings"
+  },
+  "11": {
+   "title": "Legacy multi-byte Chinese (traditional) encodings",
+   "page": "",
+   "id": "legacy-multi-byte-chinese-(traditional)-encodings"
+  },
+  "12": {
+   "title": "Legacy multi-byte Japanese encodings",
+   "page": "",
+   "id": "legacy-multi-byte-japanese-encodings"
+  },
+  "13": {
+   "title": "Legacy multi-byte Korean encodings",
+   "page": "",
+   "id": "legacy-multi-byte-korean-encodings"
+  },
+  "14": {
+   "title": "Legacy miscellaneous encodings",
+   "page": "",
+   "id": "legacy-miscellaneous-encodings"
+  },
+  "15": {
+   "title": "Browser UI",
+   "page": "",
+   "id": "browser-ui"
+  },
+  "4.1": {
+   "title": "Encoders and decoders",
+   "page": "",
+   "id": "encoders-and-decoders"
+  },
+  "4.2": {
+   "title": "Names and labels",
+   "page": "",
+   "id": "names-and-labels"
+  },
+  "4.3": {
+   "title": "Output encodings",
+   "page": "",
+   "id": "output-encodings"
+  },
+  "6.1": {
+   "title": "Legacy hooks for standards",
+   "page": "",
+   "id": "legacy-hooks"
+  },
+  "7.1": {
+   "title": "Interface mixin TextDecoderCommon",
+   "page": "",
+   "id": "interface-mixin-textdecodercommon"
+  },
+  "7.2": {
+   "title": "Interface TextDecoder",
+   "page": "",
+   "id": "interface-textdecoder"
+  },
+  "7.3": {
+   "title": "Interface mixin TextEncoderCommon",
+   "page": "",
+   "id": "interface-mixin-textencodercommon"
+  },
+  "7.4": {
+   "title": "Interface TextEncoder",
+   "page": "",
+   "id": "interface-textencoder"
+  },
+  "7.5": {
+   "title": "Interface TextDecoderStream",
+   "page": "",
+   "id": "interface-textdecoderstream"
+  },
+  "7.6": {
+   "title": "Interface TextEncoderStream",
+   "page": "",
+   "id": "interface-textencoderstream"
+  },
+  "8.1": {
+   "title": "UTF-8",
+   "page": "",
+   "id": "utf-8"
+  },
+  "8.1.1": {
+   "title": "UTF-8 decoder",
+   "page": "",
+   "id": "utf-8-decoder"
+  },
+  "8.1.2": {
+   "title": "UTF-8 encoder",
+   "page": "",
+   "id": "utf-8-encoder"
+  },
+  "9.1": {
+   "title": "single-byte decoder",
+   "page": "",
+   "id": "single-byte-decoder"
+  },
+  "9.2": {
+   "title": "single-byte encoder",
+   "page": "",
+   "id": "single-byte-encoder"
+  },
+  "10.1": {
+   "title": "GBK",
+   "page": "",
+   "id": "gbk"
+  },
+  "10.1.1": {
+   "title": "GBK decoder",
+   "page": "",
+   "id": "gbk-decoder"
+  },
+  "10.1.2": {
+   "title": "GBK encoder",
+   "page": "",
+   "id": "gbk-encoder"
+  },
+  "10.2": {
+   "title": "gb18030",
+   "page": "",
+   "id": "gb18030"
+  },
+  "10.2.1": {
+   "title": "gb18030 decoder",
+   "page": "",
+   "id": "gb18030-decoder"
+  },
+  "10.2.2": {
+   "title": "gb18030 encoder",
+   "page": "",
+   "id": "gb18030-encoder"
+  },
+  "11.1": {
+   "title": "Big5",
+   "page": "",
+   "id": "big5"
+  },
+  "11.1.1": {
+   "title": "Big5 decoder",
+   "page": "",
+   "id": "big5-decoder"
+  },
+  "11.1.2": {
+   "title": "Big5 encoder",
+   "page": "",
+   "id": "big5-encoder"
+  },
+  "12.1": {
+   "title": "EUC-JP",
+   "page": "",
+   "id": "euc-jp"
+  },
+  "12.1.1": {
+   "title": "EUC-JP decoder",
+   "page": "",
+   "id": "euc-jp-decoder"
+  },
+  "12.1.2": {
+   "title": "EUC-JP encoder",
+   "page": "",
+   "id": "euc-jp-encoder"
+  },
+  "12.2": {
+   "title": "ISO-2022-JP",
+   "page": "",
+   "id": "iso-2022-jp"
+  },
+  "12.2.1": {
+   "title": "ISO-2022-JP decoder",
+   "page": "",
+   "id": "iso-2022-jp-decoder"
+  },
+  "12.2.2": {
+   "title": "ISO-2022-JP encoder",
+   "page": "",
+   "id": "iso-2022-jp-encoder"
+  },
+  "12.3": {
+   "title": "Shift_JIS",
+   "page": "",
+   "id": "shift_jis"
+  },
+  "12.3.1": {
+   "title": "Shift_JIS decoder",
+   "page": "",
+   "id": "shift_jis-decoder"
+  },
+  "12.3.2": {
+   "title": "Shift_JIS encoder",
+   "page": "",
+   "id": "shift_jis-encoder"
+  },
+  "13.1": {
+   "title": "EUC-KR",
+   "page": "",
+   "id": "euc-kr"
+  },
+  "13.1.1": {
+   "title": "EUC-KR decoder",
+   "page": "",
+   "id": "euc-kr-decoder"
+  },
+  "13.1.2": {
+   "title": "EUC-KR encoder",
+   "page": "",
+   "id": "euc-kr-encoder"
+  },
+  "14.1": {
+   "title": "replacement",
+   "page": "",
+   "id": "replacement"
+  },
+  "14.1.1": {
+   "title": "replacement decoder",
+   "page": "",
+   "id": "replacement-decoder"
+  },
+  "14.2": {
+   "title": "Common infrastructure for UTF-16BE/LE",
+   "page": "",
+   "id": "common-infrastructure-for-utf-16be-and-utf-16le"
+  },
+  "14.2.1": {
+   "title": "shared UTF-16 decoder",
+   "page": "",
+   "id": "shared-utf-16-decoder"
+  },
+  "14.3": {
+   "title": "UTF-16BE",
+   "page": "",
+   "id": "utf-16be"
+  },
+  "14.3.1": {
+   "title": "UTF-16BE decoder",
+   "page": "",
+   "id": "utf-16be-decoder"
+  },
+  "14.4": {
+   "title": "UTF-16LE",
+   "page": "",
+   "id": "utf-16le"
+  },
+  "14.4.1": {
+   "title": "UTF-16LE decoder",
+   "page": "",
+   "id": "utf-16le-decoder"
+  },
+  "14.5": {
+   "title": "x-user-defined",
+   "page": "",
+   "id": "x-user-defined"
+  },
+  "14.5.1": {
+   "title": "x-user-defined decoder",
+   "page": "",
+   "id": "x-user-defined-decoder"
+  },
+  "14.5.2": {
+   "title": "x-user-defined encoder",
+   "page": "",
+   "id": "x-user-defined-encoder"
+  }
+ },
+ "dfns": {
+  "big5 leading": [
+   "11.1.1"
+  ],
+  "bom seen": [
+   "7.1"
+  ],
+  "bom sniff": [
+   "6.1"
+  ],
+  "constructor(label options)": [
+   "7.2",
+   "7.5"
+  ],
+  "convert code unit to scalar value": [
+   "7.6"
+  ],
+  "create a uint8array object": [
+   "3"
+  ],
+  "decode and enqueue a chunk": [
+   "7.5"
+  ],
+  "decode( input options )": [
+   "7.2"
+  ],
+  "decode(input options)": [
+   "7.2"
+  ],
+  "do not flush": [
+   "7.2"
+  ],
+  "encode and enqueue a chunk": [
+   "7.6"
+  ],
+  "encode and flush": [
+   "7.6"
+  ],
+  "encode or fail": [
+   "6.1"
+  ],
+  "encode( input )": [
+   "7.4"
+  ],
+  "encodeinto( source destination )": [
+   "7.4"
+  ],
+  "end of queue": [
+   "3"
+  ],
+  "error mode": [
+   "4.1",
+   "7.1"
+  ],
+  "escape start": [
+   "12.2.1"
+  ],
+  "euc jp jis0212": [
+   "12.1.1"
+  ],
+  "euc jp leading": [
+   "12.1.1"
+  ],
+  "euc kr leading": [
+   "13.1.1"
+  ],
+  "flush and enqueue": [
+   "7.5"
+  ],
+  "gb18030 first": [
+   "10.2.1"
+  ],
+  "gb18030 second": [
+   "10.2.1"
+  ],
+  "gb18030 third": [
+   "10.2.1"
+  ],
+  "get an encoder": [
+   "6.1"
+  ],
+  "get an encoding": [
+   "4.2"
+  ],
+  "get an output encoding": [
+   "4.3"
+  ],
+  "getting an encoder": [
+   "6.1"
+  ],
+  "getting an encoding": [
+   "4.2"
+  ],
+  "i o queue": [
+   "3",
+   "7.1"
+  ],
+  "ignore bom": [
+   "7.1"
+  ],
+  "index big5": [
+   "5"
+  ],
+  "index big5 pointer": [
+   "5"
+  ],
+  "index code point": [
+   "5"
+  ],
+  "index euc kr": [
+   "5"
+  ],
+  "index gb18030": [
+   "5"
+  ],
+  "index gb18030 ranges": [
+   "5"
+  ],
+  "index gb18030 ranges code point": [
+   "5"
+  ],
+  "index gb18030 ranges pointer": [
+   "5"
+  ],
+  "index iso 2022 jp katakana": [
+   "5"
+  ],
+  "index jis0208": [
+   "5"
+  ],
+  "index jis0212": [
+   "5"
+  ],
+  "index pointer": [
+   "5"
+  ],
+  "index shift jis pointer": [
+   "5"
+  ],
+  "index single byte": [
+   "9"
+  ],
+  "is gbk": [
+   "10.2.2"
+  ],
+  "is utf 16be decoder": [
+   "14.2.1"
+  ],
+  "iso 2022 jp decoder ascii": [
+   "12.2.1"
+  ],
+  "iso 2022 jp decoder escape": [
+   "12.2.1"
+  ],
+  "iso 2022 jp decoder escape start": [
+   "12.2.1"
+  ],
+  "iso 2022 jp decoder katakana": [
+   "12.2.1"
+  ],
+  "iso 2022 jp decoder leading byte": [
+   "12.2.1"
+  ],
+  "iso 2022 jp decoder output state": [
+   "12.2.1"
+  ],
+  "iso 2022 jp decoder roman": [
+   "12.2.1"
+  ],
+  "iso 2022 jp decoder state": [
+   "12.2.1"
+  ],
+  "iso 2022 jp decoder trailing byte": [
+   "12.2.1"
+  ],
+  "iso 2022 jp encoder ascii": [
+   "12.2.2"
+  ],
+  "iso 2022 jp encoder jis0208": [
+   "12.2.2"
+  ],
+  "iso 2022 jp encoder roman": [
+   "12.2.2"
+  ],
+  "iso 2022 jp encoder state": [
+   "12.2.2"
+  ],
+  "iso 2022 jp leading": [
+   "12.2.1"
+  ],
+  "iso 2022 jp output": [
+   "12.2.1"
+  ],
+  "iso 8859 10": [
+   "9"
+  ],
+  "iso 8859 13": [
+   "9"
+  ],
+  "iso 8859 14": [
+   "9"
+  ],
+  "iso 8859 15": [
+   "9"
+  ],
+  "iso 8859 16": [
+   "9"
+  ],
+  "iso 8859 2": [
+   "9"
+  ],
+  "iso 8859 3": [
+   "9"
+  ],
+  "iso 8859 4": [
+   "9"
+  ],
+  "iso 8859 5": [
+   "9"
+  ],
+  "iso 8859 6": [
+   "9"
+  ],
+  "iso 8859 7": [
+   "9"
+  ],
+  "iso 8859 8": [
+   "9"
+  ],
+  "iso 8859 8 i": [
+   "9"
+  ],
+  "koi8 r": [
+   "9"
+  ],
+  "koi8 u": [
+   "9"
+  ],
+  "leading byte": [
+   "12.2.1"
+  ],
+  "leading surrogate": [
+   "7.6"
+  ],
+  "new textdecoder( label options )": [
+   "7.2"
+  ],
+  "new textdecoderstream( label options )": [
+   "7.5"
+  ],
+  "new textencoder()": [
+   "7.4"
+  ],
+  "new textencoderstream()": [
+   "7.6"
+  ],
+  "process a queue": [
+   "4.1"
+  ],
+  "process an item": [
+   "4.1"
+  ],
+  "processing a queue": [
+   "4.1"
+  ],
+  "processing an item": [
+   "4.1"
+  ],
+  "replacement error returned": [
+   "14.1.1"
+  ],
+  "scalar value from surrogates": [
+   "3"
+  ],
+  "serialize i o queue": [
+   "7.1"
+  ],
+  "set up a text decoder stream": [
+   "7.5"
+  ],
+  "shift jis leading": [
+   "12.3.1"
+  ],
+  "single byte encoding": [
+   "9"
+  ],
+  "textdecoder(label options)": [
+   "7.2"
+  ],
+  "textdecoderstream(label options)": [
+   "7.5"
+  ],
+  "trailing byte": [
+   "12.2.1"
+  ],
+  "utf 16 leading byte": [
+   "14.2.1"
+  ],
+  "utf 16 leading surrogate": [
+   "14.2.1"
+  ],
+  "utf 16be le": [
+   "14.2"
+  ],
+  "utf 8 bytes needed": [
+   "8.1.1"
+  ],
+  "utf 8 bytes seen": [
+   "8.1.1"
+  ],
+  "utf 8 code point": [
+   "8.1.1"
+  ],
+  "utf 8 decode": [
+   "6"
+  ],
+  "utf 8 decode without bom": [
+   "6"
+  ],
+  "utf 8 decode without bom or fail": [
+   "6"
+  ],
+  "utf 8 encode": [
+   "6"
+  ],
+  "utf 8 lower boundary": [
+   "8.1.1"
+  ],
+  "utf 8 upper boundary": [
+   "8.1.1"
+  ],
+  "windows 1250": [
+   "9"
+  ],
+  "windows 1251": [
+   "9"
+  ],
+  "windows 1252": [
+   "9"
+  ],
+  "windows 1253": [
+   "9"
+  ],
+  "windows 1254": [
+   "9"
+  ],
+  "windows 1255": [
+   "9"
+  ],
+  "windows 1256": [
+   "9"
+  ],
+  "windows 1257": [
+   "9"
+  ],
+  "windows 1258": [
+   "9"
+  ],
+  "windows 874": [
+   "9"
+  ],
+  "x mac cyrillic": [
+   "9"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "create a uint8array object": {
+   "7.6": 2
+  },
+  "decode( input options )": {
+   "15": 4
+  },
+  "encode( input )": {
+   "15": 3
+  },
+  "encodeinto( source destination )": {
+   "15": 2
+  },
+  "end of queue": {
+   "7.2": 4,
+   "7.4": 2,
+   "7.5": 3,
+   "7.6": 2,
+   "8.1.1": 2,
+   "10.2.1": 2,
+   "11.1.1": 2,
+   "12.1.1": 2,
+   "12.2.1": 7,
+   "12.2.2": 2,
+   "12.3.1": 2,
+   "13.1.1": 2,
+   "14.2.1": 2
+  },
+  "error mode": {
+   "15": 2,
+   "7.2": 4,
+   "7.5": 6
+  },
+  "gb18030 first": {
+   "15": 2
+  },
+  "gb18030 second": {
+   "15": 2
+  },
+  "gb18030 third": {
+   "15": 3
+  },
+  "get an encoder": {
+   "15": 2
+  },
+  "get an encoding": {
+   "15": 2
+  },
+  "i o queue": {
+   "15": 3,
+   "4.1": 5,
+   "7.2": 6,
+   "7.4": 4,
+   "7.5": 9,
+   "7.6": 4
+  },
+  "ignore bom": {
+   "7.2": 2,
+   "7.5": 2
+  },
+  "index gb18030": {
+   "10.2.2": 2
+  },
+  "index jis0208": {
+   "12.1.2": 2,
+   "12.2.2": 2
+  },
+  "index pointer": {
+   "12.1.2": 2,
+   "12.2.2": 2
+  },
+  "iso 2022 jp encoder state": {
+   "15": 2
+  },
+  "iso 8859 10": {
+   "4.2": 2
+  },
+  "iso 8859 14": {
+   "4.2": 2
+  },
+  "iso 8859 16": {
+   "4.2": 2
+  },
+  "iso 8859 3": {
+   "4.2": 2
+  },
+  "new textdecoder( label options )": {
+   "15": 7
+  },
+  "new textdecoderstream( label options )": {
+   "15": 7
+  },
+  "new textencoder()": {
+   "15": 3
+  },
+  "new textencoderstream()": {
+   "15": 3
+  },
+  "process a queue": {
+   "6": 3,
+   "15": 2,
+   "6.1": 3
+  },
+  "process an item": {
+   "15": 2,
+   "7.5": 2
+  },
+  "serialize i o queue": {
+   "7.2": 2,
+   "7.5": 2
+  },
+  "utf 16be le": {
+   "15": 3
+  },
+  "windows 1252": {
+   "4.2": 4
+  },
+  "x mac cyrillic": {
+   "4.2": 2
+  }
+ }
+}
