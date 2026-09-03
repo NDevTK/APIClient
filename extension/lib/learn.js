@@ -70,6 +70,40 @@
  * for the field's PRESENCE and passes nothing when it is absent. Collapsing those two would let a parameter
  * that no engine run ever touched erase every domain the engine emits. */
 
+/* EVERY KEY THIS FILE READS OFF AN @H PARAM, NAMED ONCE SO THE ONE THAT ARRIVES UNREAD CAN CRASH.
+ *
+ * The producer is `endpoint_json_array` in engine/host/solver/endpoint.c, and solver/endpoint.h carries the
+ * record's own sketch; this is the CONSUMER's half of that one contract, and it exists because the two halves
+ * drift in an asymmetry no other assert in this file can see. A key the engine STOPS writing breaks a reader
+ * loudly — the four `in` tests below each take their no-key arm and the intersection erases a claim. A key the
+ * engine STARTS writing breaks nothing whatever: no reader asks for it, so a fact the forced execution proved
+ * about a parameter is dropped between the engine and the popup, and the parameter renders with the bytes of
+ * one nothing ever tested. §@H names that failure and its direction — "a shape carrying provenance alone
+ * renders an UNCONSTRAINED parameter and a range-gated one with identical bytes, so its silence about the
+ * gate is read as the positive statement 'anything goes'".
+ *
+ * THREE ARE UNCONDITIONAL AND FOUR ARE WRITTEN ONLY WHERE A GATE HELD, and that split is the contract rather
+ * than a property of this list: `name`, `location` and `validValues` are on every param, while `excludes`,
+ * `bounds`, `predicates` and `looselyEquals` are OMITTED where no constraint of that kind survived every
+ * observed path — so each of those four absences is a POSITIVE statement and is read with an `in` test and
+ * never with a `||`. This list is the set of names, not a claim about which of them arrived.
+ *
+ * IT IS A SET AND DELIBERATELY NOT A COUNT. A tally is a second copy of a fact that moves, and it rots in
+ * silence: this project has already carried a header naming "the eight cost counters" and "all thirteen
+ * fields" where both numbers were wrong before anything was added to them, and lib/merge.js's restatement of
+ * THIS record spelled a param as `{name, location, validValues[], excludes[], bounds{}}` — written before
+ * `predicates` and `looselyEquals` were added to the emission, and never revisited when they were, so it went
+ * on naming the fields a reader "may read" while two of them were missing from it. A set is checkable by
+ * grepping this file for each name; a number is checkable by nothing.
+ *
+ * WIDENING IT IS HALF A DIFF AND NEVER A DIFF. The crash below says so at the site, because the tempting
+ * repair — add the name, make the abort stop — converts a loud unread key into the silent dropped one this
+ * whole mechanism exists to prevent. */
+const AST_PARAM_KEYS = Object.freeze([
+  "name", "location", "validValues",              // written on every param
+  "excludes", "bounds", "predicates", "looselyEquals",  // written only where that gate held on every path
+]);
+
 /* Exclusions: intersect, because only a token EVERY observed path proved the value is not belongs to the
    endpoint. `observed` is the array this sighting proved (empty = this sighting proved nothing). A target
    that has never carried the field takes the sighting whole — it has no claim to intersect against. */
@@ -135,7 +169,7 @@ function widenBoundsInto(target, observed) {
    equality: two producers writing the same three facts in two orders would compose two keys, and the
    intersection would drop a claim every observed path obeyed. The length prefix is the engine's own encoding
    rule for the same reason it uses one — no argument's contents can spell an argument boundary, so a
-   `["a","b"]` and an `["a b"]` can never collide. */
+   `["a","b"]` and an `["a\0b"]` can never collide. */
 function _predKey(p) {
   const parts = [String(p.method), p.holds ? "1" : "0"];
   for (const a of p.arguments) parts.push(String(a).length + ":" + String(a));
@@ -669,8 +703,34 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
     DCHECK(p && typeof p.name === "string" && Array.isArray(p.validValues) &&
            (p.location === "path" || p.location === "query" || p.location === "body"),
            "an @H param is not {name, location, validValues[]} with a location of path/query/body — " +
-           "endpoint.c writes exactly those three keys per param, and a param that arrives without them " +
-           "takes every learned example value out of this method");
+           "endpoint.c writes those three keys on EVERY param (the four domain keys below are written only " +
+           "where a gate held), and a param that arrives without them takes every learned example value " +
+           "out of this method");
+    /* AND THAT NO FIFTH DOMAIN ARRIVED THAT THIS FILE READS NOWHERE — the check the four `in` tests above
+       cannot make, because each of them asks about a key it already knows. A consumer never defaults a
+       producer's field, and an unread key is that defect with the default supplied by the language: the
+       record carries the fact, every reader here is silent about it, and the popup renders the parameter
+       exactly as it renders one nothing ever tested. §@H calls that a WRONG report and not a thin one, and
+       it is the one direction of drift no assert in this file could see — a key REMOVED breaks a reader
+       loudly, a key ADDED breaks nothing at all.
+       IT IS A DCHECK AND NOT A REFUSAL because of who authored the bytes (§THE-DISCRIMINATOR-IS-WHOSE-BYTES-
+       STATE-THE-VALUE): an @H param is this zone's own forced execution talking to itself — lib/endpoint-
+       record.js states the same trust for the record around it — so an unknown key is OUR two halves having
+       parted, which is precisely what a DCHECK asserts. A third party's document gets a refusal; this does
+       not, and must not, because a silent skip is the whole defect.
+       IT ASSERTS THE KEY SET AND NEVER A COUNT. A tally is a second copy of a fact that moves, and this file
+       and lib/merge.js have each already carried one that was wrong before anything was added to it. What is
+       written here is the set this file READS, which is checkable by grepping this function for each name —
+       so the list cannot drift from the readers without the drift being the thing that fires. */
+    for (const _k of Object.keys(p)) {
+      DCHECK(AST_PARAM_KEYS.indexOf(_k) >= 0,
+             "an @H param carries the key `" + _k + "`, which nothing in lib/learn.js reads — endpoint.c's " +
+             "`endpoint_json_array` and this file are the two halves of one record, so a name on one and " +
+             "not the other is a fact the engine proved about this parameter and the popup will render as " +
+             "absent. Add the reader (a domain intersects, like `excludes`; a value unions, like " +
+             "`validValues`) and name it in AST_PARAM_KEYS — never widen the list alone, which turns the " +
+             "crash into the silent drop it exists to prevent");
+    }
     if (p.location === "body") { _bodyParams.push(p); continue; }
     if (!m.parameters[p.name]) {
       m.parameters[p.name] = {

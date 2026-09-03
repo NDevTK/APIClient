@@ -95,18 +95,33 @@ function mergeASTResultsIntoVDD(tab, results) {
     var newEndpoints = 0;
     for (var fc = 0; fc < analysis.fetchCallSites.length; fc++) {
       var callSite = analysis.fetchCallSites[fc];
-      /* THE CALL-SITE CONTRACT, ASSERTED WHERE IT ARRIVES. endpoint.c's `endpoint_json_array` writes exactly
-         five keys per record — method, url, provenance,
-         params[{name,location,validValues[],excludes[] and bounds{} when observed}],
-         and headers ONLY when it observed
-         one — so those are the fields this loop and learnFromAstCallSite may read, and each one is guaranteed
-         rather than defaulted. `params` is always present (possibly empty), which is why the `|| []` that
-         stood at each use is gone: an absent array here would mean the engine's serializer changed shape, and
-         that must crash rather than register every endpoint of the run as parameterless.
-         `excludes` and `bounds` are the OPTIONAL keys on a param and each absence is a POSITIVE statement —
-         no equality gate over that hole took its false arm, and no ordering gate's claim survived every
-         observed path to this request — so both are read with an `in` test and never with a `||`, which
-         would make "unconstrained" and "the engine stopped emitting the field" the same datum. */
+      /* THE CALL-SITE CONTRACT, ASSERTED WHERE IT ARRIVES — STATED AS A RULE, BECAUSE THE ENUMERATION THAT
+         STOOD HERE HAD ALREADY DRIFTED FROM THE PRODUCER IT DESCRIBED. It said `endpoint_json_array` writes
+         "exactly five keys per record" and spelled a param as `{name, location, validValues[], excludes[],
+         bounds{}}`, and two further kinds of gate — `predicates` and `looselyEquals` — have been added to the
+         emission since, each with its reader in lib/learn.js and neither reaching this sentence. That is the
+         drift a restatement decays by: it was true when written, nothing falsified it, and it went on naming
+         the fields a reader "may read" while two of them were missing from it. The count was wrong in the
+         same breath that stated it: `headers` is written ONLY where a header was observed, so a record has
+         four keys or five and never "exactly five". Thirty lines above, this file already records deleting a
+         count rather than updating it, for the reason that applies here too — a replacement number rots on
+         the next field, while the ORIGIN of a name stays checkable by opening the producer.
+         SO THE RULE, WHICH IS WHAT DOES NOT ROT. A record states its verb, its address and what it is
+         evidence of unconditionally (`method`, `url`, `provenance`) plus its `params` array, always present
+         and possibly empty; `headers` is written ONLY where the run observed one. A param states `name`,
+         `location` and `validValues` unconditionally, plus one key per KIND OF GATE that held on every
+         observed path to this request — an equality's false arm, an ordering's interval, a method call, a
+         loose equality — each OMITTED where that kind proved nothing.
+         THE AUTHORITY IS THE PRODUCER AND NOT THIS PARAGRAPH. solver/endpoint.h carries the record's own
+         sketch beside the emission, and lib/learn.js's `AST_PARAM_KEYS` is the consumer half — a list that
+         CRASHES on a param key no reader in that file asks for, which is the mechanism this comment used to
+         stand in for. A fifth kind of gate therefore cannot land here unasserted; before, it landed silently
+         and rendered as a parameter nothing had ever tested.
+         WHY NONE OF IT IS DEFAULTED. `params` absent would mean the serializer changed shape, and that must
+         crash rather than register every endpoint of the run as parameterless — which is why the `|| []` that
+         stood at each use is gone. Each optional key's ABSENCE is a POSITIVE statement (no gate of that kind
+         survived every observed path), so it is read with an `in` test and never with a `||`, which would
+         make "unconstrained" and "the engine stopped emitting the field" the same datum. */
       DCHECK(callSite && typeof callSite === "object", "a fetchCallSites entry is not an object — endpoint.c emits one JSON object per deduped endpoint");
       DCHECK(typeof callSite.method === "string" && callSite.method, "a fetchCallSites entry carries no method — endpoint_record takes it as a required argument, so an absent one is the @H serializer broken");
       DCHECK(Array.isArray(callSite.params), "a fetchCallSites entry carries no params array — endpoint.c writes \"params\":[…] for every endpoint (empty when the request carried no templated path segment, no query and no readable body), so its absence is the whole parameter surface arriving as nothing");
