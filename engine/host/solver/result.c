@@ -568,6 +568,23 @@ char *result_wfq_json(void) {
     WfqCensus w;
 
     flow_wfq_census(&w);
+    /* THE ONE IDENTITY THAT DEFINES `picksLifetime`, CHECKED AT THE ONE MOMENT BOTH TERMS ARE IN ONE HAND.
+       solver/flow.h states it ("across the document, `picks_lifetime` must EQUAL the result's `_switches`")
+       and the composition below repeats it, and until this line NOTHING asserted it — a counter whose stated
+       identity is checked nowhere is a digit with a paragraph attached, which is the shape §Testing calls
+       holding a digit rather than a measurement. It is asserted HERE and not at either writer because that is
+       what makes it a statement about ONE SAMPLE: `g_picks_total` and `g_switches` are raised seven lines
+       apart in engine_sched_step's one `best != cur` block (flow_credit_pick is its only caller and neither
+       counter is reset with an agent), so within one composition — which steps nothing — they cannot differ.
+       Read across two documents they can and must not be: that is the two-moments reading this session paid
+       three wrong mechanisms for. A break is a second writer of one of the two, and every reading built on
+       either row is then about dispatches that did not happen. */
+    DCHECK(w.picks_lifetime == (int64_t)engine_switch_count(),
+           "the scheduler's lifetime dispatch count and its context-switch count disagree WITHIN ONE "
+           "COMPOSITION — flow_credit_pick has exactly one caller and engine_sched_step raises `g_switches` in "
+           "the same straight-line block, so these are one event counted twice and nothing between the two "
+           "reads can step the engine. One of them has acquired a writer that is not that block, and `_wfq`'s "
+           "`picksLifetime` is about to be published beside a `_switches` it is defined to equal");
     /* AN EMPTY FRONTIER SAYS SO AND SAYS NOTHING ELSE — result.h states why the term rows are absent rather
        than zero. This is the shape `qjs_result` composes, because a session answers DONE by draining or by
        parking and both leave no members standing. */
@@ -616,6 +633,23 @@ char *result_wfq_json(void) {
                         document and is the reason it is emitted at all: it must EQUAL `_switches`, since
                         flow_credit_pick has one caller and engine.c raises the switch count beside it. */
                      "\"picksLive\":%lld,\"picksMax\":%lld,\"picksLifetime\":%lld,"
+                     /* THE SEVEN NOTCH ROWS ARE QUOTIENTS AND THEIR NAMES DO NOT SAY SO, WHICH IS THE ONE
+                        THING A READER OF THIS DOCUMENT CANNOT RECOVER FROM IT. `svcMax`, `svcMin`,
+                        `svcFamMax`, `svcFamMin`, `candSvcMax`, `topSvc` and `topSvcFam` are every one of them
+                        `<thread time> / FLOW_SERVICE_US` — flow.c's flow_service_notch and flow_family_notch,
+                        which divide flow_own_silence and acct_family_us by one cooperative quantum. So one
+                        increment is ONE QUANTUM OF UNFORGIVEN SILENCE, never one dispatch, never one step and
+                        never one microsecond, and a reading that multiplies by FLOW_AGE_QUANTUM gets the
+                        points the weight actually charges. MEASURED, AS A WRONG RELAY: `svcMax: 1764` beside
+                        `svcMin: 0` was passed on as "one member serviced 1764 times while another has zero",
+                        and the count that reading names EXISTS NOWHERE IN THIS PROGRAM — 1764 was twenty-one
+                        seconds of unforgiven thread time and the zero was what an emission by ANY arm of a
+                        family writes for every arm at once. The dispatch count a reader reaches for is
+                        `picksLive`/`picksMax`/`picksLifetime` one line up, and those are not these.
+                        THEY ARE GAUGES BESIDE THAT: a notch is silence SINCE the account's last forgiveness,
+                        so flow_credit_emit sends every one of them to zero for a whole family in one
+                        statement and each may FALL between two samples. `topForgiven` below counts those
+                        events and is the only row on this line that is a lifetime count of them. */
                      "\"svcMax\":%lld,\"svcMin\":%lld,\"svcFamMax\":%lld,\"svcFamMin\":%lld,\"families\":%ld,"
                      "\"visMin\":%lld,\"visMax\":%lld,\"visZero\":%ld,"
                      "\"cands\":%ld,\"candUnrun\":%ld,\"candSvcMax\":%lld,\"candDecMax\":%ld,\"decMax\":%ld,"
@@ -729,6 +763,18 @@ char *result_wfq_json(void) {
    frontier of four flows whose chains hold tens of thousands of frozen segments is a lifetime bug that reads
    exactly like a healthy run in the first three numbers.
 
+   THE KINDS, PER ROW, BECAUSE THEY DECIDE WHAT MAY BE DONE WITH THE NUMBERS AND THE KEYS DO NOT SAY.
+   `installs` and `entries` are LIFETIME COUNTS (cow.c's `g_swap_count`/`g_swap_entries`, raised at the swap
+   and lowered by nothing), so only those two may be differenced across two samples. `worst` is a HIGH-WATER
+   MARK, monotone but not a count of anything — differencing it answers about no quantity. `mean` is a
+   DIVISION, `entries / installs`, which is invisible from its key and is the trap CLAUDE.md records under
+   `svcMax`: it is per-switch cost and is not a count, so it moves when either term moves and cannot be summed
+   with anything. `heapSegs`/`heapSegEntries`/`domSegs`/`domSegEntries` are GAUGES of the live frozen chains
+   (`g_seg_live`/`g_seg_entries_live`, which the release path decrements) and FALL whenever a segment is let
+   go, which is the one event they exist to make visible.
+   THE IDENTITY IS `entries >= worst` WHENEVER `installs > 0` and holds by construction (`worst` is a maximum
+   over the terms `entries` sums), which is the whole of what a reader can check from these bytes.
+
    NO BYTE COUNT — see solver/compose.h's `composef`. */
 char *result_swap_json(void) {
     long sc = 0, st = 0, sm = 0, hs = 0, he = 0, ds = 0, de = 0;
@@ -745,6 +791,34 @@ char *result_swap_json(void) {
 /* WHAT THE FRONTIER IS MADE OF AND WHAT ITS PARKED SNAPSHOTS WEIGH — solver/cold.h's ColdCensus, this
    instance's own totals (solver/engine.h's EngineFrontierCensus) and what a resume rebuilt out of a residue.
    See result.h for why it composes here.
+
+   THE KINDS, AND THIS CENSUS IS THE ONE THAT MIXES THEM — the grouping is MECHANICAL because it is exactly
+   the four structs this composer fills, so a row added to any of them inherits its kind from the accessor
+   rather than from anybody remembering to write it down here.
+     From `cold_census` — ONE WALK OF THE LIVE FRONTIER, so every one of these is a GAUGE and may FALL:
+     `live`, `framed`, `blocked`, `stackEmpty`, `canDeliver`, `pend`, `pendReady`, `outOfPrograms`, every
+     `*Entries`/`*KiB` row, `dynBodies`, `pinSegs`/`decSegs` and their entry counts, and the two histograms
+     `stepUnits` and `programCursors`. `owed` is `flow_host_owed_count()`, a second walk of the same frontier
+     and a gauge for the same reason. `perFlowKiB` and `sharedKiB` are SUMS OF GAUGES taken in that one walk.
+     From `engine_frontier_census` — LIFETIME COUNTS over this session, the only rows here a reader may
+     difference: `finished`/`finishedFlows`/`finishedCands`, `sold`/`soldFlows`/`soldCands`, `forks`,
+     `orphanClaimsMet`/`orphanClaimsUnmet`, every `host*` row, and `pagedReqs`/`pagedAsks`/`pagedUnarmed`/
+     `pagedFloor`. TWO OF ITS ROWS ARE NOT COUNTS AT ALL: `deepest` and `completed` are HIGH-WATER MARKS —
+     monotone, a count of nothing, and a difference between two of them answers about no quantity.
+     From `engine_step_unit_runs` — LIFETIME COUNTS: `steps`, the `stepUnitRuns` histogram, and `stepUs`,
+     which is a MICROSECOND ACCUMULATOR rather than a count and is on this line as `steps`' denominator.
+     From `decide_replay_stats` — LIFETIME COUNTS in TWO UNITS, which is the half a key cannot carry:
+     `replayHits` and `replayLeftArms` are ARMS (decision-vector slots) and `replayLeft` is EVENTS (one per
+     divergence, whatever it abandoned), so the three may be differenced and only two of them may be compared.
+     From `pending_index_*_total` — LIFETIME COUNTS: `replyAsked`, `replyAnswered`.
+     From `cold_resumed` — A LAST-EVENT RECORD AND NOT A COUNTER OF ANY KIND: `resumed`, `resumedSegs`,
+     `resumedFlows`, `resumedCands`, `resumedWorlds` and `orphanClaims` describe the MOST RECENT rebuild
+     (`cold_resume` memsets the record on entry), so they are neither monotone nor a reading of the frontier,
+     and differencing them is arithmetic over no quantity. `resumed` is the row that says whether the other
+     five describe anything at all.
+   `stepUnits` VERSUS `stepUnitRuns` IS THE ONE PAIR WHOSE KEYS ALREADY CARRY THE DISTINCTION, and it is the
+   worked example of why the rest of this list has to be written down: the same two questions are asked of
+   `finished` (lifetime) beside `live` (gauge) with nothing in either key to say so.
 
    THE PER-FLOW ROWS ARE WHAT MULTIPLY BY THE FRONTIER'S SIZE and the SHARED rows are counted once for the
    whole frontier, because a frozen segment is referenced by every flow forked below it — so `perFlowKiB` and
@@ -1312,6 +1386,18 @@ char *result_cold_json(void) {
    holding builtin and a heap call frame are the two largest things quickjs cannot name, and a frontier of
    parked flows holds one of each per parked call and per suspended activation.
 
+   THE KINDS, PER ROW. Everything JS_ComputeMemoryUsage answers is a GAUGE of what the runtime holds NOW —
+   `allocations` included, which reads as a lifetime count and is not: quickjs raises `malloc_count` on every
+   allocation and LOWERS it on every free, so it is the live allocation population and may fall. So may
+   `childRealms` (navigable.c's `g_realms_n`), `stepMachines`, `trampFrames` and the two mallinfo rows, which
+   are readings of the C allocator at the instant of the census. `unattributed` is a SUBTRACTION of two gauges
+   taken in one reading and is a gauge for that reason.
+   THE TWO EXCEPTIONS ARE NAMED IN THEIR KEYS AND ARE THE ONLY ONES: `childRealmsMade` is the LIFETIME COUNT
+   (`g_realms_made`) and is the only row here a reader may difference, and `childRealmsPeak` is a HIGH-WATER
+   MARK (`g_realms_peak`) — monotone, a count of nothing, and not differenceable either. That is exactly why
+   the paragraph above can read `made == peak` as "not one realm was reclaimed": it is a comparison between a
+   lifetime total and a high-water live, WITHIN one sample, and it holds of no pair taken at two moments.
+
    NO BYTE COUNT — see solver/compose.h's `composef`. */
 char *result_heap_json(JSContext *ctx) {
     JSMemoryUsage mem;
@@ -1484,18 +1570,58 @@ char *result_json(JSContext *ctx) {
                              "\"_sourceReads\":%ld,\"_sinkReached\":%ld,\"_sinkTainted\":%ld,"
                              "\"_sinkSuppressed\":%ld,"
                              /* AND THE ORDER THE FRONTIER WAS IN WHEN THIS DOCUMENT WAS COMPOSED — result.h
-                                says why it rides here and what its two shapes mean. Every counter above is a
-                                TOTAL over the run; this one is a READING OF AN INSTANT, which is why it is one
-                                nested object and not twenty-three more `_`-prefixed siblings: a consumer that
-                                mixed them into the same row would be showing an instantaneous spread beside a
-                                cumulative switch count and calling both "so far". */
+                                says why it rides here and what its two shapes mean. It is ONE nested object
+                                and not twenty-three more `_`-prefixed siblings because its rows are mostly
+                                readings of an INSTANT and the siblings above are mostly totals, and a
+                                consumer that mixed them into one row would show an instantaneous spread
+                                beside a cumulative switch count and call both "so far".
+                                MOSTLY, AND THE WORD IS LOAD-BEARING: THE NESTING SEPARATES SUBSYSTEMS AND
+                                NEVER KINDS, AND A BLANKET SENTENCE HERE SAID OTHERWISE FOR AS LONG AS IT
+                                STOOD. It read "Every counter above is a TOTAL over the run", and
+                                `_worldSegmentsHeld` is directly above it and is `world_segments_held()` —
+                                world.c's `g_segs_n`, the LIVE table, which `world_release` LOWERS and which
+                                the paragraph composing it twenty lines down calls the live table in those
+                                words. So this document already carried a gauge among the siblings the
+                                sentence promised were totals, and the derivation a reader takes from that
+                                promise — `_`-prefixed scalar ⇒ lifetime total ⇒ safe to difference — is
+                                wrong for exactly that row and right for every other one, which is the shape
+                                CLAUDE.md names: a gauge and a lifetime counter printed side by side under one
+                                key vocabulary WILL be summed, and the sum is of nothing. It is not renamed
+                                here because its key is asserted by four consumers this file cannot land with
+                                (extension/bridge.js, extension/popup.js, engine/solvergate.mjs,
+                                engine/route.mjs, testing/live-run.js), and a rename that ships in the
+                                interpreted half before the built half is the half-deployed state; what is
+                                fixed is the CLAIM, per row, at the row.
+                                SO THE RULE FOR THIS BLOCK, STATED AS A GROUPING RATHER THAN AS A PROMISE:
+                                every `_`-prefixed sibling above is a LIFETIME COUNT OF EVENTS — monotone
+                                within one document's session and differenceable across two samples of it —
+                                EXCEPT `_worldSegmentsHeld`, which is a GAUGE and may fall. Its pair is
+                                `_worldSegmentsMade` beside it, which is the lifetime half and the one to
+                                difference. AND "LIFETIME" MEANS THIS SESSION'S: `_candidates`, `_sourceReads`
+                                and the three `_sink*` rows are zeroed by solve_init/concolic_init,
+                                `_orphansDriven`/`_orphansAsked` at the agent's release, and
+                                `_worldSegmentsMade`/`_worldSegmentsForked` with the world registry — so on a
+                                host that runs several documents in one process (the native WPT runner) every
+                                one of those falls at a document boundary and only there. `_switches`,
+                                `_flows`, `_jobsQueued`, `_jobsRun`, `_unitsDone` and the routed rows are
+                                reset by nothing and are the instance's own. */
                              "\"_orphansDriven\":%ld,\"_orphansAsked\":%ld,\"_wfq\":%s,"
-                             /* THE THREE SUBSYSTEM CENSUSES, EACH ONE NESTED OBJECT, for the reason `_wfq` is
-                                one: every `_`-prefixed sibling above is a TOTAL over the run and every row
-                                inside these is a READING OF AN INSTANT, so spreading them into siblings would
-                                put a cumulative switch count beside a momentary byte figure and call both "so
-                                far". Three objects and not one, because a reader compares WITHIN a census and
-                                never across — see result.h. */
+                             /* THE THREE SUBSYSTEM CENSUSES, EACH ONE NESTED OBJECT, for the reason `_wfq`
+                                is one: spreading them into siblings would put a cumulative switch count
+                                beside a momentary byte figure and call both "so far". Three objects and not
+                                one, because a reader compares WITHIN a census and never across — see
+                                result.h.
+                                WHAT THE NESTING DOES NOT SAY IS THE KIND OF ANY ROW, and the sentence that
+                                stood here said it did — "every row inside these is a READING OF AN INSTANT".
+                                That is true of `_swap`'s four segment rows and of most of `_heap`, and it is
+                                FALSE of the larger half of `_cold`, whose `finished`, `sold`, `forks`,
+                                `steps`, `stepUs`, `stepUnitRuns`, `replay*`, `host*`, `reply*`, `paged*` and
+                                `orphanClaims*` rows are lifetime counts — as this file's own composer says of
+                                them in those words two hundred lines up, so the two statements contradicted
+                                each other on one document. A consumer had already acted on the wrong one.
+                                EACH COMPOSER STATES ITS OWN GROUPING, at the composer, because that is the
+                                only place the accessor that decides it is in view: see result_cold_json,
+                                result_heap_json and result_swap_json. */
                              "\"_cold\":%s,\"_heap\":%s,\"_swap\":%s,\"_forkAt\":%s,"
                              /* AND WHAT ALL OF THE ABOVE WERE DENOMINATED IN — the one nested object here that
                                 is neither a total nor a reading of an instant, but a property of the HOST that

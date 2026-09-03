@@ -92,11 +92,22 @@ char *result_swap_json(void);
 /* ---- AND THE ONE FIELD THAT IS NOT A CENSUS, WHICH IS WHY IT IS COMPOSED ELSEWHERE ------------------------
  *
  * `_quantum` (solver/quantum.h's `quantum_json`) rides this document beside the four above and is a DIFFERENT
- * KIND OF FACT, so nothing here composes it and nothing treats it as a fifth census. Every row of the four is
- * a READING OF AN INSTANT — the frontier's live size, the runtime's live heap, the allocator's arena, the fork
- * table — taken at whatever moment a document was composed at. `_quantum` is a constant property of the HOST
- * and the BUILD: what the cooperative slice and, more importantly, engine.c's `flow_age_running` charge are
+ * KIND OF FACT, so nothing here composes it and nothing treats it as a fifth census. The four are taken at
+ * whatever moment a document was composed at; `_quantum` is a constant property of the HOST and the BUILD: what the cooperative slice and, more importantly, engine.c's `flow_age_running` charge are
  * DENOMINATED in, plus how long a slice is.
+ *
+ * THIS SENTENCE USED TO SAY "EVERY ROW OF THE FOUR IS A READING OF AN INSTANT", AND THAT WAS FALSE OF MOST
+ * OF `_cold`, WHOSE OWN COMPOSER CALLS ITS ROWS LIFETIME COUNTS IN THOSE WORDS. It is retired rather than
+ * softened, because a reader who takes it re-derives the arithmetic it licenses: a row that is a reading of
+ * an instant may not be differenced, so a header promising that of every row of `_cold` tells a reader NOT to
+ * difference `finished`, `forks`, `steps` and `replayHits`, which are the only rows there a reader may
+ * difference — the error runs in both directions at once. The nesting on this document separates SUBSYSTEMS
+ * and never KINDS: `_cold` mixes a gauge walk of the live frontier with this session's lifetime totals, two
+ * high-water maxima and one last-event record, `_heap` is gauges but for two realm rows, `_swap` is two
+ * lifetime counts, a high-water mark, a quotient and four gauges, and one top-level `_`-prefixed sibling
+ * (`_worldSegmentsHeld`) is a gauge among counters. Each composer states its own grouping AT the composer,
+ * where the accessor that decides it is in view, and this header states none — because a kind restated at a
+ * second site is a second copy, and the copy that goes stale is the one furthest from the accessor.
  *
  * IT IS ON THIS DOCUMENT BECAUSE IT IS WHAT MAKES THE FOUR ABOVE COMPARABLE. On a host with no CPU clock both
  * are billed in wall time, and the aging charge is a comparison BETWEEN flows — so a descheduling the OS chose
