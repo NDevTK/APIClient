@@ -1117,6 +1117,37 @@ typedef struct {
                                 assertion about routing rather than an arithmetic identity — engine.c asserts it
                                 at the convergence point, where it is exact and where the offending step is
                                 still in hand. */
+    /* WHAT THE STEPS ABOVE COST, IN THE ONE MEASURE THE SLICE AND THE AGING CHARGE ARE ALREADY DENOMINATED IN
+       — and it is in THIS struct rather than beside any other row because it is over exactly the population
+       `steps` is: one charge per iteration of the scheduler loop that stepped a flow, taken at the line that
+       already computes the delta for `flow_age_running`. A total whose denominator lives on another line, or
+       in another census, is the lifetime-over-instant collapse this file's own rows keep having to correct.
+       WHAT IT IS A TOTAL OF, EXACTLY, because "time per step" reads as if the step were the whole of it and it
+       is not. The readings TELESCOPE — each charge is the clock at the end of this iteration minus the clock at
+       the end of the previous one, or at slice entry for the first — so the quantity covers the PICK
+       (solve_seed_candidates and flow_next_to_run), the CONTEXT SWITCH (both delta swaps) and the step itself,
+       and it EXCLUDES the host's own time between slices, which each slice's fresh reading opens past. It is
+       therefore what one turn of the dispatch loop costs, which is the quantity a reader wants when the
+       question is why a run made so few choices.
+       WHY THE RATIO AND NOT THE TOTAL IS THE READING. §Testing: two passes of one revision on one artifact are
+       a 2x spread apart on this harness, so no count here may be quoted against another run. `step_us / steps`
+       is two lifetime totals of ONE run that move together, so the spread divides out of it — and both sides
+       are in the SLICE's own measure, which is what makes the quotient answerable without knowing whether that
+       measure is CPU or wall (solver/quantum.h's `quantum_measure`, published as `@QUANTUM`). Any sentence
+       that calls this CPU needs that line; the ratio against the slice does not, because the slice is armed on
+       the same clock — which is also why a reader takes the slice off `@QUANTUM` rather than off
+       ENGINE_QUANTUM_MS below: the run's own report belongs to the artifact that produced the total, and a
+       header read afterwards belongs to whatever revision happens to be checked out.
+       WHAT IT SEPARATES, which is the axis nothing in this census could reach. `steps` alone says how many
+       choices a run made and cannot say why so few: a loop whose every turn consumes a whole slice makes about
+       one choice per slice by construction — a granularity floor, not an ordering finding — while a loop whose
+       turns are cheap made few choices because it was given little thread time at all, and those take opposite
+       work. The @WFQ census answers the neighbouring half (what ASKING the order costs, in members walked per
+       scan); this is what a turn costs in the currency the scheduler actually spends.
+       A REPORT AND NEVER A BOUND (§NO BOUNDS), for `arms`' reason exactly: nothing in the engine reads it, no
+       arm of any verdict branches on it, and a per-step time total is precisely the shape a watchdog or a
+       step-cost cap would be built from. Its writer says the same thing at the site. */
+    long step_us;
 } EngineStepUnitRuns;
 void engine_step_unit_runs(EngineStepUnitRuns *out);
 

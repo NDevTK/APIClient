@@ -753,6 +753,24 @@ char *result_swap_json(void) {
    is where a reader MEETS the numbers and a lifetime per-arm total is exactly the shape someone reaches for
    when they want a no-progress detector.
 
+   `stepUs` IS `steps`' DENOMINATOR AND IS ON THE SAME LINE FOR THAT REASON. It is the thread time the dispatch
+   loop's turns consumed, telescoped across the pick, the context switch and the step, in the SLICE's own
+   measure (solver/engine.h's `step_us` states the extent exactly). The pair is the axis this census had no row
+   for: `steps` says how many choices a run made and is silent about why so few, and the two candidate answers
+   take opposite work — a turn that costs a whole slice makes about one choice per slice BY CONSTRUCTION, which
+   is a granularity floor and no ordering finding at all, while cheap turns mean the loop was simply given
+   little thread time and the question moves off the scheduler entirely. Neither `steps` nor the @WFQ census's
+   scan counts can separate those: the scan rows price what ASKING THE ORDER costs in members walked, which is
+   one term of a turn and not the turn.
+   IT IS READ AS A RATIO AND NEVER AS A TOTAL. §Testing: two passes of one revision on one artifact came back a
+   2x spread apart, so a count here is unquotable against another run; `stepUs / steps` is two lifetime totals
+   of ONE run that move together, and both sides are in one measure, so the quotient is what that spread cannot
+   reach. A sentence that calls the quantity CPU needs the `@QUANTUM` line, which is where this host says
+   whether it has a CPU clock; the ratio against the slice does not, because the slice is denominated in the
+   same measure.
+   A REPORT AND NEVER A BOUND (§NO BOUNDS), for the two rows above: nothing in the engine reads it, and a
+   per-step cost is exactly what a watchdog would be built out of.
+
    `programCursors` IS THE SAME SERVICE PERFORMED FOR `deepest` AND `completed`, AND IT IS THE ROW THIS CENSUS
    WAS MISSING. Those two are GLOBAL MAXIMA (solver/engine.h), so each is set by whichever ONE member got
    furthest through the document and neither states anything about where the rest of the frontier is: `deepest
@@ -1076,7 +1094,7 @@ char *result_cold_json(void) {
                  "\"segKiB\":%ld,\"domSegKiB\":%ld,\"pinSegs\":%ld,\"pinSegEntries\":%ld,"
                  "\"pinSegKiB\":%ld,\"decSegs\":%ld,\"decSegEntries\":%ld,\"decSegKiB\":%ld,"
                  "\"dynBodies\":%ld,\"dynKiB\":%ld,\"sharedKiB\":%ld,"
-                 "\"steps\":%ld,\"stepUnitRuns\":%s,"
+                 "\"steps\":%ld,\"stepUs\":%ld,\"stepUnitRuns\":%s,"
                  "\"outOfPrograms\":%ld,"
                  "\"stepUnits\":%s,\"programCursors\":%s}",
                  c.flows, c.framed, c.blocked, flow_host_owed_count(),
@@ -1099,7 +1117,7 @@ char *result_cold_json(void) {
                  c.dec_seg_count, c.dec_seg_entries, c.dec_seg_bytes / 1024,
                  c.dyn_count, c.dyn_bytes / 1024,
                  (c.seg_bytes + c.dom_seg_bytes + c.pin_seg_bytes + c.dec_seg_bytes + c.dyn_bytes) / 1024,
-                 r.steps, runs,
+                 r.steps, r.step_us, runs,
                  c.out_of_programs,
                  hist, cursors);
     free(cursors);

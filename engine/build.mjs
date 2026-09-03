@@ -253,6 +253,23 @@ const COLD_FIELDS = ["live", "framed", "blocked", "owed",
                         `deepest`/`completed` are what the third is READ against, which is why all four are
                         listed here rather than left to those readers. */
                      "steps",
+                     /* `stepUs` IS `steps`' DENOMINATOR AND IS LISTED BESIDE IT SO IT CANNOT ARRIVE ALONE.
+                        `steps` says how many choices the dispatch loop made and is structurally silent about
+                        why so few, and the two answers take opposite work: a turn that costs a whole slice
+                        makes about one choice per slice BY CONSTRUCTION — a granularity floor and no ordering
+                        finding at all — while cheap turns mean the loop was given little thread time and the
+                        question is not the scheduler's. The @WFQ census's scan rows price one TERM of a turn
+                        (members walked per scan) and cannot answer for the turn.
+                        IT IS READ ONLY AS A RATIO. Both sides are lifetime totals of ONE run over ONE
+                        population (solver/engine.h's `step_us`: one charge per loop iteration that stepped),
+                        so their quotient divides out the 2x spread two passes of one revision show on this
+                        harness — which no count on this line survives. Both are also in the SLICE's own
+                        measure, so the quotient against the slice the run reports on its own `@QUANTUM` line
+                        needs no statement about whether that measure is CPU; only a sentence CALLING it CPU
+                        would, and `@QUANTUM` is where this run says so. `stepCostReading` reads both from
+                        that line rather than from this tree's header, so the yardstick belongs to the
+                        measured artifact and not to whatever revision is checked out while it is read. */
+                     "stepUs",
                      /* `outOfPrograms` IS TO `programCursors` WHAT `live` IS TO `stepUnits` — not a total, but
                         the one fact the histogram's own buckets cannot carry. A cursor value covers a member
                         INSIDE the program at that index and a member PAST THE LAST ROW of its own sequence,
@@ -1558,6 +1575,79 @@ function stepUnitRunReading(b) {
            : ` — every arm has run at least once`);
 }
 
+/* WHAT A TURN OF THE DISPATCH LOOP COST — the row every reading above is structurally silent about, and the
+   one the question "why did this run make so few choices" actually needs.
+   THE TWO READINGS ABOVE ARE ABOUT WHERE THE STEPS WENT AND THIS IS ABOUT HOW MANY THERE COULD BE. A run's
+   step count has two candidate explanations that take OPPOSITE work and that no arm histogram separates: a
+   turn that consumes a whole cooperative slice makes about one choice per slice BY CONSTRUCTION — a
+   granularity floor, and no finding about the order at all — while turns that are cheap mean the loop was
+   given little thread time and the question moves off the scheduler entirely. The @WFQ census answers the
+   neighbouring half (what ASKING the order costs, in members walked per scan), which is one TERM of a turn
+   and not the turn.
+   IT IS A RATIO AND NEVER A COUNT, which is the whole of why it can be printed at all. §Testing: two passes
+   of one revision on one frozen artifact came back a 2x spread apart on this harness, so `stepUs` and `steps`
+   are each unquotable against another run — while their QUOTIENT is two lifetime totals of ONE run over ONE
+   population (solver/engine.h's `step_us`: one charge per loop iteration that stepped a flow) that move
+   together, so the spread divides out of it. The INTERVAL form beside it is the same discipline the @WFQ
+   reader's scan rows use: a delta between two adjacent censuses is a trajectory rather than a magnitude, and
+   it is what says whether a turn has been getting more expensive as the frontier grew.
+   THE YARDSTICK IS THE RUN'S OWN SLICE AND NOT THIS TREE'S HEADER. `sliceMs` comes off the `@QUANTUM` line
+   the measured run printed, so the comparison is against the slice that run was actually scheduled on; reading
+   ENGINE_QUANTUM_MS out of solver/engine.h here would be today's working tree answering for an artifact built
+   from some other revision, which is §Testing's frozen-snapshot defect arriving through the reader.
+   AND THE MEASURE CONSTRAINS THE CONCLUSION RATHER THAN DECORATING IT. Where the host has a thread CPU clock,
+   a mean at the slice says the turn CONSUMED a slice. Where it does not (solver/quantum.h answers per host;
+   emscripten's every WASI clock is wall), the same mean is equally consistent with a turn that was
+   DESCHEDULED for a slice's worth of wall — and since the slice is armed on that same clock, the engine
+   cannot tell those apart either. That does not make the number useless and it does eliminate one reading of
+   it, so the sentence says which, rather than printing a caveat and then reasoning past it.
+   IT DECIDES NOTHING (§NO BOUNDS). Nothing here throws on a value, no verdict branches on it, and no run is
+   refused for a slow turn — a per-step cost is exactly the shape a watchdog would be built from, which is why
+   that is said at the engine's counter, at the census composer and here. */
+function stepCostReading(a, b, q) {
+  /* THE DENOMINATOR IS ASKED FOR BEFORE IT IS USED, because a mean over zero turns is the empty denominator
+     §Testing names and a `0` printed for one is a magnitude somebody will compare. A census taken before the
+     scheduler's first pick is a real state and is reported as one. */
+  if (b.steps === 0)
+    return `dispatch turns cost: no step has been taken, so there is no turn to be a cost of — a census taken ` +
+           `before the scheduler's first pick and not a loop that ran for free`;
+  const per = b.stepUs / b.steps;
+  const dSteps = b.steps - a.steps, dUs = b.stepUs - a.stepUs;
+  const ivl = dSteps > 0
+    ? `, and ${(dUs / dSteps).toFixed(0)} over the last window's ${dSteps} turn(s)`
+    : `, and the window between the two censuses this reading spans contains NO turn, so it has no interval ` +
+      `rate — a trajectory needs two points and this is one`;
+  /* THE SLICE IS THE RUN'S, SO ITS ABSENCE IS AN ABSENCE AND NEVER A DEFAULT. A stage that opened no engine
+     slice prints no @QUANTUM line, and substituting a number here would be this reader asserting a
+     denomination the run never claimed. */
+  if (q === null)
+    return `dispatch turns cost ${per.toFixed(0)} unit(s) of the scheduler's own measure each over the whole ` +
+           `run (${b.stepUs} over ${b.steps} turns)${ivl} — this stage printed no @QUANTUM line, so there is ` +
+           `no slice to read that against and the number is a rate with no yardstick rather than a verdict`;
+  const sliceUs = q.sliceMs * 1000;
+  const frac = per / sliceUs;
+  return `dispatch turns cost ${per.toFixed(0)} ${q.measure} microsecond(s) each over the whole run ` +
+         `(${b.stepUs} over ${b.steps} turns)${ivl} — that is ${frac.toFixed(2)} of the ${q.sliceMs} ms ` +
+         `cooperative slice, both sides in the same measure, so this quotient is what the run-to-run spread ` +
+         `cannot reach. ` +
+         (frac >= 0.5
+           ? `A turn costing most of a slice means the loop makes about one choice per slice BY ` +
+             `CONSTRUCTION: the number of picks a run can make is its thread time divided by the slice, and ` +
+             `a frontier larger than that is not being under-served by the ORDER — it is a granularity ` +
+             `floor, and no re-pricing of a weight term reaches it` +
+             (q.cpu
+               ? `. That is real thread CPU, so the turn CONSUMED it`
+               : `. THAT IS NOT CPU: an equally good reading is a turn DESCHEDULED for a slice's worth of ` +
+                 `wall, which the engine cannot tell apart either because the slice is armed on this same ` +
+                 `clock. The consumed reading is not established here — only the arithmetic that follows ` +
+                 `from a turn taking a slice's worth of the clock the scheduler runs on`)
+           : `A turn well inside the slice means the loop is NOT slice-bound: the picks a run made are not ` +
+             `capped by what a turn costs, so a small step count is a statement about how much thread time ` +
+             `the loop was given rather than about the granularity` +
+             (q.cpu ? `` : `. Not CPU, so a descheduled turn would have read HIGH — this reading is the ` +
+                           `direction that survives that`));
+}
+
 /* AND WHERE IN ITS DOCUMENT THE FRONTIER'S MASS IS STANDING — the row `deepest` and `completed` structurally
    cannot give, and the reason one stall in this scheduler has now been diagnosed three ways, each reading
    refuting the last.
@@ -2406,8 +2496,17 @@ function hungCauseCensus(out) {
                   WHERE IN THE DOCUMENT they are standing, and the pair `deepest`/`completed` above — being
                   maxima — cannot answer it at any value. A frontier every member of which is in
                   `resume-program` reads identically whether its mass is at program 3 with one member at 11 or
-                  every member is at 11, and only this row separates them. */
-               stepUnitReading(b) + "; " + stepUnitRunReading(b) + "; " + programCursorReading(b);
+                  every member is at 11, and only this row separates them.
+                  AND THE FOURTH IS A DIFFERENT AXIS AGAIN AND IS THE ONE THE OTHER THREE PRESUPPOSE. All
+                  three above are about WHERE the steps a run took went; `stepCostReading` is about how many
+                  there could have been, which is the question a frontier that grows and does not retire
+                  actually raises — "the tail is not being reached" is a THROUGHPUT statement, and until this
+                  row nothing said where the throughput went. It is handed the `@QUANTUM` denomination
+                  because its yardstick is the slice THAT RUN was scheduled on and because the measure decides
+                  which readings of the number are available; both are facts of the run and neither is this
+                  tree's to supply. */
+               stepUnitReading(b) + "; " + stepUnitRunReading(b) + "; " +
+               stepCostReading(a, b, quantumDenomination(out)) + "; " + programCursorReading(b);
   /* AND WHICH OF THE STILL-0 ROWS WERE EVER ANYTHING ELSE, which is the distinction `flipped.length === 0`
      cannot draw and which decides what "still advancing" is worth. Measured across six builds: the rows that
      reached 1 in the last window were, every time, the ten members of ONE family (the @S search rows), while

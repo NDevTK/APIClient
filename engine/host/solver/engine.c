@@ -6377,6 +6377,21 @@ static long g_step_unit_runs[STEP_UNIT_N];
    lesson made checkable rather than restated. A total incremented on the line beside the bucket would be
    equal by construction and would assert nothing at all. */
 static long g_steps;
+/* …AND WHAT THOSE STEPS COST, IN THE SLICE'S OWN MEASURE. See EngineStepUnitRuns' `step_us` in solver/engine.h
+   for what the quantity covers, why the reading is a RATIO against `g_steps` and never a total, and why it is
+   in that struct rather than beside any other census row. Declared here because this is where its denominator
+   is declared and where the one line that adds to it stands: a total whose numerator and denominator are
+   written in two files is two populations waiting to be divided by one another.
+   IT IS THE SAME MICROSECONDS `flow_age_running` IS CHARGED, TAKEN AT THE SAME LINE. Not a second clock
+   reading — a second reading would be a different quantity wearing this one's name, and the two would drift by
+   whatever ran between them. The charge already asserts the delta is non-negative (flow.c: a negative charge
+   PROMOTES a monopolizer), so this accumulator inherits that guarantee rather than restating it, and it is why
+   `g_step_us` only climbs.
+   A REPORT AND NEVER A BOUND (§NO BOUNDS). Nothing reads it to decide anything — no watchdog on a step that
+   ran long, no cap on what a turn may cost, no fixpoint over a mean that stopped moving. A per-step time total
+   is exactly the shape the next reader reaches for to build one, which is why that is said here as well as at
+   the header where they meet the number. */
+static long g_step_us;
 /* THE HISTOGRAM'S SUM, for the one assertion that uses it — side-effect-free, as a DCHECK condition must be.
    NOT WRAPPED IN `#if APICLIENT_DEV`, and the reason is a trap worth stating rather than a preference: a
    release DCHECKF does not delete its condition, it makes it UNEVALUATED (`(void)sizeof(cond)`, and
@@ -7916,6 +7931,11 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
     DCHECK(out != NULL, "the lifetime step histogram was asked for into nothing — a reading that lands nowhere "
                         "is a reading whose caller cannot have taken it");
     out->steps = g_steps;
+    /* AND WHAT THEY COST, COPIED OUT IN THE SAME READING AS THE COUNT IT IS DIVIDED BY. The two are taken here
+       rather than through two accessors precisely so that a caller cannot compose the quotient out of two
+       instants: between two entries the loop can step, and a total read one call later than its denominator is
+       the collapse this struct exists to prevent. */
+    out->step_us = g_step_us;
     for (i = 0; i < STEP_UNIT_N; i++) out->arms[i] = g_step_unit_runs[i];
 }
 
@@ -9153,6 +9173,13 @@ static int engine_sched_slice(void) {
             int64_t age_notch0 = flow_silence_notch(cur);
 #endif
             now = quantum_thread_us();
+            /* WHAT THIS TURN OF THE DISPATCH LOOP COST, ACCUMULATED FROM THE SAME DELTA THE CHARGE BILLS AND
+               NOT FROM A SECOND READING — see g_step_us. It is written BEFORE the charge for the ordinary
+               reason a reading is taken before the thing that consumes it: `flow_age_running` is the WFQ's
+               policy and this is a census, so the census may not be the thing that decides whether the policy
+               ran. In every build, because a run's own cost is not a developer's question — a release engine
+               that could not say what a step cost would leave `steps` with no denominator anywhere. */
+            g_step_us += now - t0;
             flow_age_running(now - t0);
 #if APICLIENT_DEV
             /* §scheduler'S MONOPOLIZER HALF, ASSERTED AT THE SEAM WHERE THE CHARGE MEETS THE PICK — and it is
