@@ -92,6 +92,19 @@ typedef struct {
    §17.5.3's height over it is the sum of no row heights, which is a number. */
 void table_grid_build(lxb_dom_element_t *table, TableGrid *out);
 
+/* WHICH RECTANGLE OF GRID CELLS one CELL ELEMENT was placed at — the grid read back the way a consumer holding
+   an element rather than a walk has to read it, and NULL when this grid placed no cell for that element.
+   IT IS AN ENTRY AND NOT A SCAN AT THE CALLER because the NULL is a REAL ANSWER with two distinct causes and
+   only this component can tell a consumer which invariant to state about it: the element is not a cell of THIS
+   table (a caller that walked to the wrong table box), or it is a cell no rule placed. Both are a consumer's
+   crash and neither is this component's, so the answer is the honest NULL rather than an abort here — but a
+   scan written at each consumer would be one loop per consumer over a field whose ONE-MATCH invariant is a
+   fact about §17.5's placement, which is this file's and not theirs.
+   §17.2.1's ANONYMOUS 'table-cell' BOX CANNOT BE ASKED FOR, and that is the section's own doing rather than a
+   narrowing: such a box has no element to name it (the `element` field above is NULL for it), so `cell` must
+   not be NULL and this entry asserts that instead of matching the first anonymous cell in the grid. */
+const TableGridCell *table_grid_cell_of(const TableGrid *grid, const lxb_dom_element_t *cell);
+
 /* Releases what `table_grid_build` stored. A zero-cell grid holds NULL and is accepted. */
 void table_grid_release(TableGrid *grid);
 

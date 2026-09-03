@@ -153,6 +153,24 @@ size_t table_box_rows(lxb_dom_element_t *table, TableBoxRow **out);
    zero is the answer that entry gives for a table with no rows and is accepted here. */
 void table_box_rows_free(TableBoxRow *rows, size_t nrows);
 
+/* THE TABLE BOX an INTERNAL TABLE BOX is inside — §17.2.1 Anonymous table objects' box generation read UPWARD,
+   which is the direction every consumer holding one internal box has to read it and the opposite of the two
+   entries above. `internal` must be one of §17.2's internal table boxes (`table_box_kind_is_internal`); a
+   'table-caption' is NOT one and must not be asked here, because §17.4 Tables in the visual formatting model
+   puts a caption in the WRAPPER beside the table box rather than in it, so "which table box is it inside" has
+   no answer for a caption and a table returned for one would be the wrong box.
+   THE ANSWER IS AN ELEMENT AND NEVER NULL: every case where the walk cannot name one CRASHES here rather than
+   handing a consumer an absence to interpret, because §17.2.1's box generation guarantees a table box exists
+   over every internal box — what it does not guarantee is that an ELEMENT generates it. A `display:
+   table-cell` box whose ancestors are ordinary block boxes really is inside a table box; that box is the
+   ANONYMOUS one §17.2.1's third stage generates, no element names it, and answering with the nearest table
+   element up the tree would name a table this cell is not in.
+   IT IS EXPORTED RATHER THAN WRITTEN AT ITS CONSUMER because the walk encodes WHICH BOXES MAY STAND BETWEEN a
+   cell and its table — a row, a row group, and nothing else — and that is §17.2's own box nesting, so a second
+   copy at a second consumer would be free to disagree about which table an anonymous-table cell belongs to
+   while both looked locally right. */
+lxb_dom_element_t *table_box_table_of(lxb_dom_element_t *internal);
+
 /* §17.4's CAPTION BOXES of `table`, in document order — "The caption boxes are block-level boxes that retain
    their own content, padding, margin, and border areas, and are rendered as normal block boxes inside the
    table wrapper box." They are not rows and are not in the table box at all, which is why they are a second

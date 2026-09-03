@@ -17,6 +17,7 @@
 #include "core/layout/intrinsic_size.h"
 #include "core/layout/replaced_element.h"
 #include "core/layout/table_box.h"
+#include "core/layout/table_column_width.h"
 #include "core/layout/table_grid.h"
 #include "core/layout/table_width.h"
 #include "core/layout/used_value.h"
@@ -549,18 +550,135 @@ static CssPx uv_table_used_width(lxb_dom_element_t *el)
     return content;
 }
 
-/* WHICH of §17.2 The CSS table model's box types this element generates, as the ONE question the two width
-   arms below both have to ask: `uv_display_is_table` covers all ten of them, and §17.5.2 is stated over exactly
-   two ("the 'table' or 'inline-table' element"). A CELL's used width is a COLUMN's, which is a different
-   number with a different owner, so the arms that reach a table-internal box crash rather than answering with
-   the table's. */
-static bool uv_generates_table_box(lxb_dom_element_t *el)
+/* WHICH of §17.2 The CSS table model's box types this element generates, as the ONE question every arm below
+   that reaches `UV_BOX_TABLE` has to ask: `uv_display_is_table` covers all ten of them and each has its own
+   owner. §17.5.2 is stated over exactly two ("the 'table' or 'inline-table' element"); a CELL's used width is
+   the used width of the columns its rectangle covers, which is a DERIVATION over §17.5.2's answer rather than
+   that answer; a CAPTION is not in the table box at all (§17.4 Tables in the visual formatting model puts it
+   in the wrapper beside it); and the row, row-group and column boxes are §17.5's own rules. So the box type is
+   read ONCE per arm, through this one entry, and the arm then ROUTES or CRASHES on the KIND rather than on a
+   second read of `display`. A `uv_generates_table_box` predicate stood beside this and is deleted with it: it
+   answered one of the five questions the kind answers, so an arm asking it still had to re-read `display` to
+   tell a cell from a caption, and the two reads were free to see different values of one property. */
+static TableBoxKind uv_table_box_kind(lxb_dom_element_t *el)
 {
     char *d = uv_computed(el, "display");
-    bool table_box = table_box_kind_generates_table_box(table_box_kind(d));
+    TableBoxKind kind = table_box_kind(d);
 
     free(d);
-    return table_box;
+    return kind;
+}
+
+/* CSS 2.1 §17.5 Visual layout of table contents' USED WIDTH OF ONE CELL, which the section states as a fact
+   about the GRID rather than about the cell — "Each cell is thus a rectangular box, one or more grid cells
+   wide and high" — so the number is the used width of the columns that rectangle covers and §17.5.2's own
+   answer is what holds them. THIS IS A ROUTE AND NOT AN ALGORITHM, exactly as `uv_table_used_width` above is:
+   the table box is found (core/layout/table_box.h), §17.5.2 is run over its grid, and the cell is read out of
+   the result.
+   THE GRID AND THE WIDTHS ARE BUILT PER CALL for the reason core/layout/block_flow.h states of every layout in
+   this directory: a layout is per-flow state, so a cached one is shared state solver/dom_cow.h's delta does
+   not swap and a stale one is another flow's document.
+   §17.5.2's ANSWER IS IN THE BORDER BOX AND CSS 2.1's `width` IS NOT, which is the one conversion this
+   function owns. core/layout/table_column_width.h measured each cell's own padding and border INTO the column
+   (that header records the choice and the reasons), so the content box is that same sum taken back OUT — and
+   it is taken out through `table_cell_border_edges`, the identical spelling that put it in, never through
+   `uv_surround` beside it. The two are four reads of the same four properties and would still be two
+   different questions: this file's resolves a percentage padding against §10.1's containing block, and a
+   CELL's containing block is a rectangle §10.1 cannot name, so the two would come apart on exactly the
+   document where the difference shows.
+   THE FLOOR IS css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property"'s OWN, in its own words —
+   "the content box width and height are calculated by subtracting the border and padding in the corresponding
+   axis from the specified length/percentage, and flooring the result at zero, as the inner size of a box
+   cannot be negative" — and it is REACHABLE here rather than decorative: §17.5.2.1 Fixed table layout divides
+   the declared table width over the columns and never consults a cell's edges, so a `table-layout: fixed`
+   table declared narrower than one cell's own padding and border leaves that cell no content box at all. */
+static CssPx uv_table_cell_used_width(lxb_dom_element_t *el)
+{
+    lxb_dom_element_t *table = table_box_table_of(el);
+    TableGrid grid;
+    TableUsedWidths widths;
+    const TableGridCell *cell;
+    CssPx border_box, content;
+    char nbuf[160], tbuf[160];
+
+    table_grid_build(table, &grid);
+    table_widths(table, &grid, &widths);
+    cell = table_grid_cell_of(&grid, el);
+    if (cell == NULL)
+        DFAILF("%s: CSS 2.1 §17.5 Visual layout of table contents placed NO cell for this box in %s's grid, "
+               "which is the table box CSS 2.1 §17.2's own nesting puts it inside. The two walks have come "
+               "apart: core/layout/table_box.h reached this table by climbing the internal boxes above the "
+               "cell, and core/layout/table_grid.h reached the cells by descending the same table's rows, so "
+               "a box that is in one and not the other is a row this cell hangs under that §17.2.1 Anonymous "
+               "table objects' box generation does not report as a row of this table. There is no width to "
+               "answer with — the columns in hand belong to a grid this cell is not in",
+               box_subject(el, nbuf, sizeof nbuf), box_subject(table, tbuf, sizeof tbuf));
+    border_box = table_cell_used_border_box(&widths, cell);
+    content = css_px_max(css_px_sub(border_box, table_cell_border_edges(el)), css_px(0.0));
+    table_widths_release(&widths);
+    table_grid_release(&grid);
+    if (uv_is_border_box(el)) return border_box;
+    return content;
+}
+
+/* THE TABLE BOXES WHOSE USED WIDTH IS STILL UNANSWERED, which after the cell's route is three different
+   questions and not one leftover — so the crash NAMES the box and says which section owns it. It is ONE
+   function called from the declared arm and the `auto` arm because for every kind below the DECLARATION IS
+   NOT THE ANSWER either way, so two copies would be two places for that to stop being true silently.
+   THE SITE TRAVELS AS THE BOX AND NOT AS A LINE: `box_subject` prints the element and its computed `display`,
+   which is the address a reader of this abort needs — the file and line would name this helper for all three. */
+static void uv_table_non_cell_width_fail(lxb_dom_element_t *el, TableBoxKind kind)
+{
+    char nbuf[160];
+
+    if (kind == TABLE_BOX_CAPTION)
+        DFAILF("%s: a CAPTION box's used width, which CSS 2.1 §17.5.2 Table width algorithms: the "
+               "'table-layout' property does not state and must not be taken from — that section's rules are "
+               "written over \"the 'table' or 'inline-table' element\", and §17.5.2.2 Automatic table layout "
+               "reads a caption ONLY as CAPMIN, \"the MCW of a hypothetical table cell that contains the "
+               "caption formatted as 'display: block'\", which is an INTRINSIC minimum it feeds into the "
+               "TABLE's width and never the caption's own. §17.4 Tables in the visual formatting model places "
+               "the box instead: \"The caption boxes are block-level boxes that retain their own content, "
+               "padding, margin, and border areas, and are rendered as normal block boxes inside the table "
+               "wrapper box\" — so this is §10.3.3's constraint equation over the WRAPPER's content edge, and "
+               "§17.4 gives that rectangle outright: \"The width of the table wrapper box is the border-edge "
+               "width of the table box inside it, as described by section 17.5.2.\" THE NUMBER IS ALREADY "
+               "COMPOSABLE and is not what is missing: it is `used_value_border_edge_px` over the table "
+               "element, whose §17.5.2 width core/layout/table_width.h now answers. WHAT IS MISSING IS THAT "
+               "§10.1's containing block is an ELEMENT here and the wrapper is an ANONYMOUS box no element "
+               "names — the identical box `used_value_containing_block`'s own table arm crashes for. BUILD "
+               "that box, and DO NOT GUESS AT IT MEANWHILE: §17.4.1 Caption position and alignment warns that "
+               "\"CSS2 described a different width and horizontal alignment behavior; that behavior will be "
+               "introduced in CSS3 using the values 'top-outside' and 'bottom-outside' on this property\", and "
+               "its own example says \"The caption will be as wide as the parent of the table\" — a THIRD "
+               "rectangle again, so a wrapper picked by resemblance would be a real width of the wrong box",
+               box_subject(el, nbuf, sizeof nbuf));
+    if (kind == TABLE_BOX_ROW || table_box_kind_is_row_group(kind))
+        DFAILF("%s: a ROW box's or ROW GROUP box's used width. CSS 2.1 §17.5 Visual layout of table contents' "
+               "rules 1 and 2 give each of them a whole grid row — \"Each row box occupies one row of grid "
+               "cells\" and \"A row group occupies the same grid cells as the rows it contains\" — and that "
+               "section's own last paragraph is what turns that into a WIDTH, in the two border models "
+               "separately: \"in the separated borders model the edges coincide with the border edges of "
+               "cells, and thus in this model there may be gaps between the rows, columns, row groups or "
+               "column groups corresponding to the 'border-spacing' property\", while in the collapsing model "
+               "\"the rows together exactly cover the table leaving no gaps\". SO IT IS NOT THE TABLE'S "
+               "CONTENT WIDTH, which an earlier form of this crash claimed: §17.6.1 The separated borders "
+               "model counts a spacing at each END of the row into the table's width and the row's own edges "
+               "stand inside both of them. BUILD it as the sum of `TableUsedWidths.columns` plus the spacings "
+               "BETWEEN them — the same reading `table_cell_used_border_box` takes for a spanning cell, over "
+               "the whole grid row — and the collapsing model stays refused at §17.5.2's entry either way",
+               box_subject(el, nbuf, sizeof nbuf));
+    DFAILF("%s: a COLUMN box's or COLUMN GROUP box's used width, which CSS 2.1 §17.5 Visual layout of table "
+           "contents' rules 3 and 4 state as a PLACEMENT and not as a size — \"A column box occupies one or "
+           "more columns of grid cells\" and \"A column group box occupies the same grid cells as the columns "
+           "it contains\" — and which core/layout/table_grid.h states outright that it does not place. So the "
+           "used width is the sum of the grid columns the box covers once something assigns them, and the "
+           "assignment is the missing piece rather than the arithmetic. §17.2 The CSS table model is why this "
+           "is not urgent and is also why it must not be answered with a guess: these boxes \"are not "
+           "rendered (exactly as if they had 'display: none')\", so nothing paints this rectangle and the "
+           "only consumer of the number is a reader asking CSSOM for it, which is exactly the reader a "
+           "fabricated width would mislead",
+           box_subject(el, nbuf, sizeof nbuf));
 }
 
 /* ---- CSS 2.1 §10.1's CONTAINING BLOCK ---------------------------------------------------------------------
@@ -1462,18 +1580,47 @@ static CssPx uv_margin(lxb_dom_element_t *el, const char *name, const char *oppo
         return uv_block_auto_margin(el, name, opposite, box, size_len,
                                     uv_pass_size(el, *size_len, box, false));
     }
-    if (box == UV_BOX_TABLE)
-        DFAIL("a horizontal `auto` margin on a TABLE box. CSS 2.1 §17.5.2 derives the table's own width first "
-              "— an intrinsic size over its columns — and only then is there a slack for §10.3.3's margin "
-              "rules to divide, which is what makes `table { margin: 0 auto }` centre it. THE BOX GENERATION "
-              "IS BUILT — §17.2.1 Anonymous table objects' first two stages are core/layout/table_box.h's — so "
-              "core/layout/table_grid.h answers §17.5 Visual layout of table contents' grid over its rows, so BUILD "
-              "§17.5.2's algorithms over it; "
-              "the margin rule is then the same "
-              "code the block-level arm above already runs. AND THE MARGIN IS NOT THIS BOX'S ANYWAY, which is "
-              "the half this line did not say: §17.4 Tables in the visual formatting model uses `margin-*` on "
-              "the TABLE WRAPPER BOX and not on the table box, so what §10.3.3's rules divide is the wrapper's "
-              "slack over the border-edge width §17.5.2 gives the box inside it");
+    if (box == UV_BOX_TABLE) {
+        TableBoxKind kind = uv_table_box_kind(el);
+        char nbuf[160];
+
+        /* THIS ARM COVERS ALL TEN of CSS 2.1 §17.2 The CSS table model's box types and they do not have one
+           answer, which is what the single message that stood here got wrong: it named the table wrapper box
+           for a `<td>` as readily as for a `<table>`, and §17.5 Visual layout of table contents says of the
+           internal boxes that "internal table elements do not have margins" at all. */
+        if (table_box_kind_is_internal(kind))
+            DFAILF("%s: a horizontal `auto` margin on an INTERNAL table box, which CSS 2.1 §17.5 Visual "
+                   "layout of table contents says has NO margin to resolve — \"internal table elements do not "
+                   "have margins\" — so this is not an unbuilt algorithm but a call that should not have been "
+                   "made: CSSOM §9 Resolved Values' first conjunct is that the property APPLIES to the "
+                   "element, and core/css/css_property_applies.c decides that same sentence. The two have "
+                   "come apart, and the used value §10.3.3 would compute here is a share of a slack this box "
+                   "has no margin to take",
+                   box_subject(el, nbuf, sizeof nbuf));
+        if (kind == TABLE_BOX_CAPTION)
+            DFAILF("%s: a horizontal `auto` margin on a CAPTION box, which unlike the internal boxes above "
+                   "really does have one — CSS 2.1 §17.4 Tables in the visual formatting model: \"The caption "
+                   "boxes are block-level boxes that retain their own content, padding, margin, and border "
+                   "areas, and are rendered as normal block boxes inside the table wrapper box.\" So §10.3.3's "
+                   "rules 4 and 6 are the right ones and the code the block-level arm above runs is the right "
+                   "code; what it has no basis for is the SLACK, because §10.1's containing block here is the "
+                   "table WRAPPER box and that is an anonymous box no element names. It is the same missing "
+                   "box `uv_table_non_cell_width_fail` names for this caption's WIDTH, and neither is a "
+                   "§17.5.2 question any longer",
+                   box_subject(el, nbuf, sizeof nbuf));
+        DFAILF("%s: a horizontal `auto` margin on a TABLE box. §10.3.3's rules divide the SLACK a width leaves "
+               "in its containing block, which is what makes `table { margin: 0 auto }` centre it — and CSS "
+               "2.1 §17.5.2 Table width algorithms: the 'table-layout' property ANSWERS that width now "
+               "(`uv_table_used_width` above), so a line telling its reader to build those algorithms is what "
+               "used to stand here and is retired. THE MARGIN IS NOT THIS BOX'S, which is what is actually "
+               "missing: §17.4 Tables in the visual formatting model uses `margin-*` on the TABLE WRAPPER BOX "
+               "and not on the table box, and gives that box its own width outright — \"The width of the table "
+               "wrapper box is the border-edge width of the table box inside it, as described by section "
+               "17.5.2\" — so the slack to divide is the WRAPPER's, in the WRAPPER's containing block, and the "
+               "wrapper is an anonymous box no element in this tree names. BUILD that box; the number it needs "
+               "is already composable as `used_value_border_edge_px` over this element",
+               box_subject(el, nbuf, sizeof nbuf));
+    }
     if (box == UV_BOX_ITEM)
         DFAIL("a horizontal `auto` margin on a FLEX or GRID ITEM, which css-flexbox §9.5 answers before "
               "alignment does: 'if the remaining free space is positive and at least one main-axis auto margin "
@@ -1816,6 +1963,22 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
     bool pct = len.kind == CSS_LENGTH_PERCENTAGE || len.kind == CSS_LENGTH_CALCULATED;
     bool resolves = false;
 
+    /* A TABLE CELL'S USED WIDTH IS ANSWERED BEFORE `len` IS EVEN LOOKED AT, and the position is the whole
+       point rather than an optimisation. §17.5.2's second paragraph overrides §10.3 for everything inside a
+       table — "Note that this section overrides the rules that apply to calculating widths as described in
+       section 10.3" — and §17.5 Visual layout of table contents then makes a cell's width a fact about the
+       GRID: it is the used width of the columns its rectangle covers, whatever `width` says. §17.5.2.2
+       Automatic table layout's step 1 is the only place the declaration is read at all and it reads it as a
+       FLOOR ("If the specified 'width' (W) of the cell is greater than MCW, W is the minimum cell width"),
+       inside the algorithm `uv_table_cell_used_width` runs.
+       SO A PERCENTAGE ON A CELL MUST NOT REACH THE BASIS BELOW. §10.1's containing block for a cell is a
+       rectangle no element's content edge is, so resolving one would run a walk that crashes to produce a
+       number no rule consults — and `width: 50%` and `width: 50px` on one `<td>` would then answer through
+       two different mechanisms, one of them an abort. The DECLARED and `auto` arms further down are where the
+       TABLE BOX's own two routes live, because a table's declared `width` IS an operand of §17.5.2's final
+       comparison and its percentage does resolve. */
+    if (!vertical && box == UV_BOX_TABLE && uv_table_box_kind(el) == TABLE_BOX_CELL)
+        return uv_table_cell_used_width(el);
     if (pct && !vertical) {
         basis = used_value_containing_block_width(el);
         resolves = true;
@@ -1861,22 +2024,18 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
            arm — §17.5.2 Table width algorithms: the 'table-layout' property takes the declared width as a
            minimum ("the used width is the greater of W, CAPMIN, and … MIN") and core/layout/table_width.h runs
            it, while §17.5.3 Table height algorithms says the same of a declared height in its own words and has
-           no component yet. A TABLE-INTERNAL box is a third case and crashes as one: §17.5.2 is stated over
-           "the 'table' or 'inline-table' element", and a cell's or a row's width is a different number. */
-        if (box == UV_BOX_TABLE && !vertical && uv_generates_table_box(el)) return uv_table_used_width(el);
-        if (box == UV_BOX_TABLE && !vertical)
-            DFAIL("a DECLARED `width` on a TABLE-INTERNAL box, whose used width CSS 2.1 §17.5.2 Table width "
-                  "algorithms: the 'table-layout' property does not state: that section's two rules are written "
-                  "over \"the 'table' or 'inline-table' element\", and §17.5 Visual layout of table contents "
-                  "gives the internal boxes their widths from the GRID instead. A CELL's used width is the used "
-                  "width of the column it occupies, which core/layout/table_width.h answers for the whole table "
-                  "at once and reports per column; a ROW's and a ROW GROUP's is the table's own content width, "
-                  "by that section's rules 1 and 2; a COLUMN's and a COLUMN GROUP's is its rules 3 and 4, which "
-                  "core/layout/table_grid.h states outright that it does not place. WIRE this arm to the table "
-                  "box above the element — §10.1's containing-block walk is not it, because a cell's containing "
-                  "block is not the table box — and index the column core/layout/table_grid.h assigned the "
-                  "cell. A declared `width` on such a box is then not this arm's answer either: §17.5.2.2 "
-                  "Automatic table layout's step 1 makes it a FLOOR under the cell's column and nothing more");
+           no component yet. A TABLE-INTERNAL box is a third case: §17.5.2 is stated over "the 'table' or
+           'inline-table' element", and a cell's or a row's width is a different number. THE CELL DOES NOT
+           REACH THIS LINE AT ALL — `uv_pass_size` answered it before the declaration was resolved, because
+           §17.5.2.2 Automatic table layout's step 1 makes a cell's declared `width` a FLOOR under its column
+           ("If the specified 'width' (W) of the cell is greater than MCW, W is the minimum cell width") and
+           never the used value, so there is nothing for this arm to do with it. */
+        if (box == UV_BOX_TABLE && !vertical) {
+            TableBoxKind kind = uv_table_box_kind(el);
+
+            if (table_box_kind_generates_table_box(kind)) return uv_table_used_width(el);
+            uv_table_non_cell_width_fail(el, kind);
+        }
         if (box == UV_BOX_TABLE)
             DFAIL("a DECLARED `height` on a TABLE box or a table-internal box, which is NOT the used height: "
                   "CSS 2.1 §17.5.3 Table height algorithms says in its own words that \"Any other value is "
@@ -1969,10 +2128,14 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
                   "algorithms measures it through a cell: \"In CSS 2.1, the height of a cell box is the "
                   "minimum height required by the content\" — a BLOCK CONTAINER's content height over the "
                   "cell's USED WIDTH. "
-                  "THAT WIDTH IS WHAT IS MISSING, NOT THE BOX STRUCTURE: §17.2.1 Anonymous table objects' "
-                  "first two stages are core/layout/table_box.h's, and a cell is as wide as its column, so "
-                  "§17.5 Visual layout of table contents' grid is core/layout/table_grid.h's, so BUILD §17.5.2 over "
-                  "it and only then §17.5.3");
+                  "THAT WIDTH IS NO LONGER WHAT IS MISSING, and this line used to say it was: §17.2.1 "
+                  "Anonymous table objects' first two stages are core/layout/table_box.h's, §17.5 Visual "
+                  "layout of table contents' grid is core/layout/table_grid.h's, §17.5.2 over that grid is "
+                  "core/layout/table_width.h's, and a CELL's used width is answered from it by "
+                  "`uv_table_cell_used_width` above — which is the operand §17.5.3's cell-height sentence is "
+                  "stated over. WHAT IS MISSING IS §17.5.3 ITSELF: the cell's own content height, which is a "
+                  "block container's over that width (core/layout/block_flow.h), then the row's maximum of "
+                  "three terms, then this sum over the rows");
         if (box == UV_BOX_ITEM)
             DFAIL("a FLEX or GRID ITEM with `height: auto`. Its cross size is its CONTAINER's algorithm — "
                   "css-flexbox §9.4 collects the items into flex lines and §9.7 resolves the flexible lengths, "
@@ -2035,17 +2198,16 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
        inline-table') means use the automatic table layout algorithm"), so `table-layout` does not reach this
        line at all — core/layout/table_width.h owns that dispatch. §10.3.3's equation does not apply to a table
        and never did. */
-    if (box == UV_BOX_TABLE && uv_generates_table_box(el)) return uv_table_used_width(el);
-    if (box == UV_BOX_TABLE)
-        DFAIL("`width: auto` on a TABLE-INTERNAL box, which CSS 2.1 §17.5.2 Table width algorithms: the "
-              "'table-layout' property does not state — both of its rules are written over \"the 'table' or "
-              "'inline-table' element\" — and which §10.3.3's equation does not answer either, because §17.5.2's "
-              "own second paragraph overrides §10.3 for everything inside a table. A CELL's used width is the "
-              "used width of the column core/layout/table_grid.h placed it in, which core/layout/table_width.h "
-              "answers for the whole table at once; a ROW's and a ROW GROUP's is the table's own content width, "
-              "by §17.5 Visual layout of table contents' rules 1 and 2; a COLUMN's and a COLUMN GROUP's is that "
-              "section's rules 3 and 4, which core/layout/table_grid.h states outright that it does not place. "
-              "WIRE this arm to the table box above the element and index the column that grid assigned");
+    /* A CELL never reaches here either — `uv_pass_size` answers it before this function is called, because
+       §17.5's grid decides a cell's width whether the declaration is `auto` or a length and the two arms are
+       therefore ONE route. What is left is the caption and the row/column machinery, which is the same three
+       questions the declared arm has and is refused by the same function. */
+    if (box == UV_BOX_TABLE) {
+        TableBoxKind kind = uv_table_box_kind(el);
+
+        if (table_box_kind_generates_table_box(kind)) return uv_table_used_width(el);
+        uv_table_non_cell_width_fail(el, kind);
+    }
     if (box == UV_BOX_ITEM)
         DFAIL("a FLEX or GRID ITEM with `width: auto`. css-flexbox §9.7 makes the FLEX BASE SIZE the item's "
               "max-content contribution and then flexes it against the container's free space; css-grid §11 "

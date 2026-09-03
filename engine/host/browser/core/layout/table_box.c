@@ -502,6 +502,65 @@ void table_box_rows_free(TableBoxRow *rows, size_t nrows)
     free(rows);
 }
 
+/* §17.2's BOX NESTING READ UPWARD. What may stand between a cell and its table box is a 'table-row' and a row
+   group box and nothing else, which is the same nesting `table_box_rows` descends and is why this is one
+   `while` rather than a recursion: §17.2 The CSS table model nests a cell in a row, a row in a row group or in
+   the table box, and a column in a column group, so the chain is at most two links deep before the table.
+   A NON-TABLE BOX IN THE CHAIN IS §17.2.1's ANONYMOUS TABLE BOX AND IT CRASHES BY NAME. §17.2.1's third stage
+   generates a table box around a run of internal boxes whose parent is not a tabular container, so a cell
+   under an ordinary `<div>` IS in a table box — one no element in this tree names. The nearest `<table>`
+   further up is a DIFFERENT box and returning it would report this cell's used width out of another table's
+   columns, which is why this is a crash and not a wider walk. */
+lxb_dom_element_t *table_box_table_of(lxb_dom_element_t *internal)
+{
+    lxb_dom_node_t *n;
+    char nbuf[160], abuf[160];
+
+    DCHECK(internal != NULL, "CSS 2.1 §17.2's box nesting was asked for the table box of no element");
+    {
+        char *d = tb_computed(internal, "display");
+        TableBoxKind k = table_box_kind(d);
+
+        free(d);
+        DCHECKF(table_box_kind_is_internal(k),
+                "%s: CSS 2.1 §17.2's box nesting was asked which TABLE BOX this box is inside, and it is not "
+                "an INTERNAL table box — §17.2's own definition is \"A 'table-cell' box, 'table-row' box, row "
+                "group box, 'table-column' box, or 'table-column-group' box\". A 'table-caption' is the near "
+                "miss and is the one this test exists to stop: §17.4 Tables in the visual formatting model "
+                "puts it in the table WRAPPER box beside the table box, not inside it, so the table returned "
+                "for one would be the wrong box and every number taken from it would be a real width of a "
+                "rectangle the caption is not in",
+                box_subject(internal, nbuf, sizeof nbuf));
+    }
+    for (n = lxb_dom_interface_node(internal)->parent;
+         n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT;
+         n = n->parent) {
+        lxb_dom_element_t *anc = lxb_dom_interface_element(n);
+        char *d = tb_computed(anc, "display");
+        TableBoxKind k = table_box_kind(d);
+
+        free(d);
+        if (table_box_kind_generates_table_box(k)) return anc;
+        if (table_box_kind_is_internal(k)) continue;
+        DFAILF("%s, whose ancestor %s generates neither a TABLE box nor an INTERNAL table box: CSS 2.1 "
+               "§17.2.1 Anonymous table objects' third stage puts an ANONYMOUS 'table' box around a run of "
+               "internal boxes whose parent is not a tabular container, so this box IS inside a table box and "
+               "that box is one NO ELEMENT NAMES. Walking past this ancestor to the next `<table>` above would "
+               "answer with a different table entirely — its columns, its cell spacing, its width — and every "
+               "number taken from it would be a real measurement of a rectangle this box is not in. BUILD "
+               "§17.2.1's third stage as a BOX this walk can return, which is the same anonymous box "
+               "core/layout/used_value.c's §10.1 containing-block walk needs for the table WRAPPER and is "
+               "the reason neither can be answered by an element",
+               box_subject(internal, nbuf, sizeof nbuf), box_subject(anc, abuf, sizeof abuf));
+    }
+    DFAILF("%s: CSS 2.1 §17.2's box nesting walked off the top of the tree without reaching a TABLE box. "
+           "§17.2.1 Anonymous table objects' third stage generates one over every run of internal boxes, so "
+           "this box is inside an ANONYMOUS table box that no element names — the same crash as the ancestor "
+           "arm above, reached where the run has no element ancestor at all",
+           box_subject(internal, nbuf, sizeof nbuf));
+    return NULL;
+}
+
 size_t table_box_captions(lxb_dom_element_t *table, lxb_dom_element_t ***out)
 {
     TbChild *v = NULL;

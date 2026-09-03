@@ -197,6 +197,39 @@ void table_grid_build(lxb_dom_element_t *table, TableGrid *out)
     out->any_overlap = any_overlap;
 }
 
+/* THE ONE-MATCH INVARIANT IS THE POINT OF THE SCAN AND NOT A SIDE EFFECT OF IT. CSS 2.1 §17.5 Visual layout of
+   table contents places each cell box ONCE — "Each cell is thus a rectangular box, one or more grid cells wide
+   and high", one rectangle per cell — so an element appearing twice in `cells` is the placement above having
+   run over the same row or the same cell node twice, and the two entries would disagree about which columns
+   the cell covers. A consumer taking the first hit would then get a width for one of the two placements with
+   nothing to say the other exists, so the loop runs to the END rather than returning early. */
+const TableGridCell *table_grid_cell_of(const TableGrid *grid, const lxb_dom_element_t *cell)
+{
+    const TableGridCell *found = NULL;
+    size_t i;
+
+    DCHECK(grid != NULL, "CSS 2.1 §17.5's grid was asked which cell an element is through no grid");
+    DCHECK(grid->cells != NULL || grid->ncells == 0,
+           "CSS 2.1 §17.5's grid was asked for a cell while holding no cell array and a non-zero cell count — "
+           "`table_grid_build` stores NULL only for a table whose rows generate no cell, so the two have been "
+           "carried apart since it answered");
+    DCHECK(cell != NULL,
+           "CSS 2.1 §17.5's grid was asked which rectangle a NULL element occupies. CSS 2.1 §17.2.1 Anonymous "
+           "table objects' anonymous 'table-cell' box is the only cell here with no element, and it is not "
+           "something a caller can name — a NULL would match the first such box in the grid and answer a "
+           "question about a different cell entirely");
+    for (i = 0; i < grid->ncells; i++) {
+        if (grid->cells[i].element != cell) continue;
+        DCHECK(found == NULL,
+               "CSS 2.1 §17.5 Visual layout of table contents placed ONE cell element at TWO rectangles of "
+               "grid cells. The section gives each cell box exactly one — \"Each cell is thus a rectangular "
+               "box, one or more grid cells wide and high\" — so this is the placement above having walked the "
+               "same row or the same cell node twice, and the two entries name different columns for one box");
+        found = &grid->cells[i];
+    }
+    return found;
+}
+
 void table_grid_release(TableGrid *grid)
 {
     DCHECK(grid != NULL, "CSS 2.1 §17.5's grid was released through no grid");

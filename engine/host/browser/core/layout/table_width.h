@@ -68,10 +68,17 @@
 #include "core/css/css_length.h"
 #include "core/layout/table_grid.h"
 
-/* §17.5.2's ANSWER, which is ONE fact in two shapes and never two facts: `content` is the sum of `columns` and
-   the cell spacing between and around them, and the entry below asserts that at its boundary. They are
-   returned together because a consumer holding one of them cannot derive the other — a caller with the columns
-   alone does not know the spacing term, and a caller with the table width alone cannot place a single cell. */
+/* §17.5.2's ANSWER, which is ONE fact in three shapes and never three facts: `content` is the sum of `columns`
+   and `spacing` taken between and around them, and the entry below asserts that at its boundary. They are
+   returned together because a consumer holding one of them cannot derive the others — a caller with the
+   columns alone does not know the spacing term, and a caller with the table width alone cannot place a single
+   cell.
+   `spacing` IS A FIELD RATHER THAN A CONSUMER'S SECOND READ OF `border-spacing`, and the reason is the one
+   case where the arithmetic cannot recover it: a table with NO columns takes no spacing at all, so `content`
+   less the columns is zero there whatever the property says, and a consumer inverting the sum would answer a
+   spacing of zero for a table that declares one. A second read of the property would also be a second place
+   for §17.6.1's `Computed value: two absolute lengths` to be resolved, free to disagree with the one the
+   columns were laid out under. */
 typedef struct {
     /* The USED width of each grid column, in §17.5's own logical column order (core/layout/table_grid.h), as a
        BORDER-BOX width of the cells that occupy it. `ncols` entries, or NULL when `ncols` is zero. */
@@ -82,6 +89,13 @@ typedef struct {
        §17.4's wrapper width adds the table box's own horizontal padding and border to it — which is what
        core/layout/used_value.h's border edge already does for every other box. */
     CssPx   content;
+    /* §17.6.1 The separated borders model's HORIZONTAL `border-spacing`, which that section defines as "The
+       'border-spacing' property specifies the distance between the borders of adjoining cells" and which
+       `content` holds `ncols + 1` of — one between each adjoining pair and one at each end, since §17.6.1
+       also says "The distance between the table border and the borders of the cells on the edge of the table
+       is the table's padding for that side plus the relevant border-spacing distance". The VERTICAL half is
+       §17.5.3 Table height algorithms' and is not here. */
+    CssPx   spacing;
 } TableUsedWidths;
 
 /* §17.5.2 over `table` and `grid`, which must be that table's own (core/layout/table_grid.h). `table` must
@@ -96,6 +110,28 @@ typedef struct {
    and that number travels into §17.4's wrapper, into core/layout/flow_position.h's coordinates and out through
    CSSOM VIEW as a rectangle no reader can distinguish from a measured one. */
 void table_widths(lxb_dom_element_t *table, const TableGrid *grid, TableUsedWidths *out);
+
+/* ONE CELL'S USED BORDER-BOX WIDTH, taken out of the answer above — the number CSS 2.1 §17.5 Visual layout of
+   table contents leaves implicit and every consumer of a cell's geometry needs: "Each cell is thus a
+   rectangular box, one or more grid cells wide and high", so a cell's width is the used width of the columns
+   its rectangle covers. `cell` must be a cell of the grid `widths` was computed over
+   (core/layout/table_grid.h's `table_grid_cell_of`), and the answer is in the same BORDER box the columns are.
+   THE SPANNING CASE IS A CHOICE CSS 2.1 DECLINES TO MAKE AND IT IS RECORDED HERE RATHER THAN CRASHED ON. A
+   cell covering N columns gets those N used widths PLUS N-1 of `spacing`, because §17.6.1 The separated
+   borders model defines `border-spacing` as "the distance between the borders of adjoining cells" and the
+   columns inside one cell's rectangle have no adjoining cell borders between them — the spacing there is
+   inside the cell, not between two of them. §17.5.2.2 Automatic table layout's step 3 states the FLOOR without
+   that term ("For each cell that spans more than one column, increase the minimum widths of the columns it
+   spans so that together they are at least as wide as the cell"), which is what makes this a reading rather
+   than a derivation: under it a spanning cell ends at least as wide as its own minimum and up to N-1 spacings
+   WIDER, never narrower than its content. The other reading — charging the cell only its columns — makes a
+   spanning cell narrower than the row it sits in by exactly those N-1 spacings, so the two disagree about
+   whether the table's own width covers its cells, and only this one keeps §17.6.1's sum whole.
+   IT IS NOT A USED `width` IN CSS 2.1's SENSE and a caller must not report it as one: css-sizing-3 §3.3 "Box
+   Edges for Sizing: the box-sizing property" decides which box a used value is exposed in, and under the
+   initial `content-box` that is the content box — this number less the cell's own padding and border, which
+   core/layout/table_column_width.h's `table_cell_border_edges` is the ONE spelling of. */
+CssPx table_cell_used_border_box(const TableUsedWidths *widths, const TableGridCell *cell);
 
 /* Releases what `table_widths` stored. A zero-column answer holds NULL and is accepted. */
 void table_widths_release(TableUsedWidths *w);

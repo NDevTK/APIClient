@@ -595,12 +595,18 @@ void table_widths(lxb_dom_element_t *table, const TableGrid *grid, TableUsedWidt
                "box — both of its final rules name \"the 'table' or 'inline-table' element\" — and this box's "
                "computed `display` (printed above) is a different one of CSS 2.1 §17.2 The CSS table model's "
                "box types. The width of a table-internal box is NOT this question and must not be answered "
-               "from it: a CELL's is the used width of the column it occupies, which this component "
-               "distributes and reports in `TableUsedWidths.columns`; a ROW's and a ROW GROUP's is the table's "
-               "own content width, since §17.5 Visual layout of table contents' rules 1 and 2 give each of them "
-               "the whole grid; and a COLUMN box's is that section's rules 3 and 4, which nothing in this "
-               "directory places yet. ROUTE the caller to the table box above this one and ask it for the "
-               "column the caller wants",
+               "from it: a CELL's is the used width of the columns it occupies, which this component "
+               "distributes and reports in `TableUsedWidths.columns` and which "
+               "`table_cell_used_border_box` above takes out of them; a ROW's and a ROW GROUP's is NOT the "
+               "table's own content width, which an earlier form of this line claimed — §17.5 Visual layout "
+               "of table contents' rules 1 and 2 give each of them the whole grid row, and that section's own "
+               "last paragraph then places their EDGES, \"in the separated borders model the edges coincide "
+               "with the border edges of cells, and thus in this model there may be gaps between the rows, "
+               "columns, row groups or column groups corresponding to the 'border-spacing' property\", so a "
+               "row is narrower than the table's content width by the TWO OUTER spacings §17.6.1 The "
+               "separated borders model counts into it; and a COLUMN box's is that section's rules 3 and 4, "
+               "which nothing in this directory places yet. ROUTE the caller to the table box above this one "
+               "(core/layout/table_box.h's `table_box_table_of`) and ask it for the columns the caller wants",
                box_subject(table, nbuf, sizeof nbuf));
     tw_require_separated_borders(table);
     /* §17.6.1's `Computed value: two absolute lengths` — core/css/css_computed_value.h answers the pair whole
@@ -629,6 +635,10 @@ void table_widths(lxb_dom_element_t *table, const TableGrid *grid, TableUsedWidt
        the same paragraph offers and this component declines. */
     if (fixed && has_declared) tw_fixed_layout(table, grid, spacing.horizontal, declared, out);
     else tw_auto_layout(table, grid, spacing.horizontal, has_declared, declared, out);
+    /* THE SPACING IS PART OF THE ANSWER AND IS STORED FROM THE ONE READ THE LAYOUT RAN UNDER — see
+       table_width.h for why a consumer cannot recover it from `content` and the columns. It is written HERE,
+       past both algorithms, so neither of them can store a different one. */
+    out->spacing = spacing.horizontal;
     DCHECK(out->ncols == grid->ncols && (out->columns != NULL || out->ncols == 0),
            "CSS 2.1 §17.5.2 answered a different number of used column widths than the grid it was run over "
            "holds, or a non-zero count with no array — every consumer of this answer indexes it by the grid's "
@@ -665,6 +675,46 @@ void table_widths(lxb_dom_element_t *table, const TableGrid *grid, TableUsedWidt
            "CSS 2.1 §17.5.2 gave a table a NEGATIVE used width. Every operand of both algorithms' final "
            "comparison is a floored declared length, a containing block width, CAPMIN or a sum of non-negative "
            "column widths");
+}
+
+/* See table_width.h for the reading the N-1 spacings encode and for why this is a BORDER-box number. */
+CssPx table_cell_used_border_box(const TableUsedWidths *widths, const TableGridCell *cell)
+{
+    CssPx w;
+    size_t c;
+
+    DCHECK(widths != NULL && cell != NULL,
+           "CSS 2.1 §17.5's cell width was asked for with no table width answer or no grid cell — a cell's "
+           "used width IS the used width of the columns it covers, so neither operand has a substitute");
+    DCHECK(widths->columns != NULL || widths->ncols == 0,
+           "CSS 2.1 §17.5.2's answer was indexed for a cell while holding no column array and a non-zero "
+           "column count — `table_widths` stores NULL only for a table with no columns, so the two have been "
+           "carried apart since it answered");
+    DCHECK(cell->colspan >= 1,
+           "CSS 2.1 §17.5 Visual layout of table contents' grid reported a cell covering NO column, and that "
+           "section states the floor in the sentence that defines a cell's rectangle: \"Each cell is thus a "
+           "rectangular box, one or more grid cells wide and high\". core/layout/table_grid.h answers that "
+           "field and its own contract puts the same floor of one on it, so a zero here is that guarantee "
+           "having been lost between the placement and this read");
+    DCHECK(cell->col + cell->colspan <= widths->ncols,
+           "CSS 2.1 §17.5's grid placed a cell past the last column CSS 2.1 §17.5.2 Table width algorithms: "
+           "the 'table-layout' property gave a used width. `table_grid_build` grows `ncols` to `col + colspan` "
+           "for every cell it places and `table_widths` answers one width per grid column, so this is a cell "
+           "and a width array from TWO DIFFERENT GRIDS — the caller walked to the wrong table box, and the "
+           "widths it would take out of this one are real widths of another table's columns");
+    w = css_px(0.0);
+    for (c = cell->col; c < cell->col + cell->colspan; c++) w = css_px_add(w, widths->columns[c]);
+    /* The N-1 spacings a spanning cell covers, added only when there are any — `border-spacing` is not an
+       operand of a cell that spans one column, and multiplying it by zero would union its environment facts
+       into an answer it contributes nothing to (core/css/css_length.h's domain rides every operand). */
+    if (cell->colspan > 1)
+        w = css_px_add(w, css_px_scale(widths->spacing, (double) (cell->colspan - 1)));
+    DCHECK(w.px >= 0.0,
+           "CSS 2.1 §17.5 gave a cell a NEGATIVE used border-box width. Every term is a used column width, "
+           "which `table_widths` asserts non-negative where it answers, or a multiple of `border-spacing`, "
+           "which CSS 2.1 §17.6.1 The separated borders model states \"Lengths may not be negative\" of — so "
+           "this is arithmetic that lost a sign rather than a document");
+    return w;
 }
 
 void table_widths_release(TableUsedWidths *w)
