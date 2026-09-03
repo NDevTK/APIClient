@@ -3873,17 +3873,18 @@ const oneFieldWhy = (shared, unwritten) =>
  * the refusal to guess between them is right. What was wrong is what the refusal was allowed to take with it.
  * A base answers TWO questions: WHOSE contract this receiver is on, which the CONSTRUCT decides by itself
  * (`getElementById` is declared to return `Element?`, so whatever the object is, the platform made it), and
- * WHICH interface it is, which needs the read set too. §Architecture: "a predicate that answers two questions is
- * decided by the stricter one, and the cost lands silently on the other". Here the stricter question was WHICH,
- * one `null` carried both answers away, and the receiver fell through to an anchor decided by NAME COLLISION —
- * which is the failure the platform arm is asked FIRST to prevent, reached through the arm itself.
- * MEASURED AT cb454cff, before the split: 72 receivers had a base a construct decided and a narrowing that
- * refused. SIX of them reached AMBIGUOUS, printed under a reason about an engine emission — a wrong statement
- * of what was undecided, since which record it is was never open. The other SIXTY-SIX reached the shape anchor,
- * scored under two of an emission's names, and were printed in NO band at all: not audited, not decided, not
- * counted — a removal nobody can see, which is the concealment this file exists to report performed on its own
- * output. None of the 66 scored TWO, so the name-collision anchor is a HAZARD this closes and not a wrong
- * answer it was measured making; what was measured is the silence.
+ * WHICH interface it is, which needs the read set too. That is CLAUDE.md's predicate-that-answers-two-questions
+ * defect exactly — the stricter question decides and the cost lands silently on the other. Here the stricter
+ * question was WHICH, one `null` carried both answers away, and the receiver fell through to an anchor decided
+ * by NAME COLLISION — the failure the platform arm is asked FIRST to prevent, reached through the arm itself.
+ * MEASURED AT cb454cff, before the split: of 193 receivers whose base a construct decided, 115 narrowed and
+ * were printed and the other SEVENTY-EIGHT had that answer thrown away. SIX of the 78 reached AMBIGUOUS,
+ * printed under a reason about an engine emission — a wrong statement of what was undecided, since which record
+ * it is was never open. The other SEVENTY-TWO reached the shape anchor, scored under two of an emission's
+ * names, and were printed in NO band at all: not audited, not decided, not counted — a removal nobody can see,
+ * which is the concealment this file exists to report performed on its own output. NONE of the 78 scored TWO,
+ * so the name-collision anchor is a HAZARD this closes and not a wrong answer it was measured making; what was
+ * measured is the silence.
  * So the two questions are two predicates over the ONE fact: the base decides the band, and the narrowing
  * decides only what may be said about members — which keeps them from ever disagreeing, because there is still
  * exactly one bit underneath.
