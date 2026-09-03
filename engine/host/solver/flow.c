@@ -1631,6 +1631,31 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
  * advantage should decay is a different question from this one. What is closed here is the population that had
  * never been reached AT ALL.
  *
+ * SO `val_min` DOES NOT CLIMB WITH `val_max` AFTER THIS, AND THAT IS A RESULT RATHER THAN A SHORTFALL — the
+ * derivation is written out because the obvious next diff is inadmissible and a reader will otherwise build
+ * it. A pinned floor beside a climbing ceiling can be lifted in exactly three ways and two of them break
+ * flow_nonreward's bound or the ledger:
+ *   (a) KEEP RE-RELATING UNTIL THE ACCOUNT EARNS. Then an account that has emitted ONCE stands at its own tag
+ *       while one that has emitted NEVER stands at the clock, so a single finding DEMOTES its author by the
+ *       whole reward spread — 199 points, measured — and a PROMISE outweighs a FINDING by an unbounded amount,
+ *       which is precisely what flow_nonreward exists to make impossible. It is also inverted against the UCB
+ *       term it would be imitating: the never-earning account here has been DISPATCHED, so it is tried and
+ *       unproductive, which is the arm optimism ranks lowest.
+ *   (b) RE-RELATE EVERY ACCOUNT — `max(v(t), base + earned)` for all — which has no inversion and flattens
+ *       every account below the clock onto it, so `earned` orders nothing between accounts and §scheduler's
+ *       reward term is a common offset. That is the erasure the base/earned split was made to be able to
+ *       refuse rather than the re-relation it was made to allow.
+ *   (c) MAKE THE CLOCK NOT RUN AWAY — a leader's advantage that decays, or a reward that is a rate rather than
+ *       a total. §scheduler's sentence forbids the second in terms ("Additive (not a literal value/cpu
+ *       ratio)"), and the first is a policy question about the LEADER and not about this door.
+ * A UNIFORM lift changes no order at all (it cancels), so the handicap this rule grants is by construction a
+ * promise outweighing findings — and the only principled place to stop granting it is the moment the account
+ * has had the OPPORTUNITY the handicap was compensating for, which is its first dispatch. What a pinned
+ * `val_min` then says is "an account that was given its turn and produced nothing stands below one that
+ * produced", which is the ordering working. `val_unplaced` beside it is the row that tells that reading apart
+ * from the one this rule was written for — accounts still being held at the clock because nothing has reached
+ * them — and `turns` (solve.h) is where the fix is actually visible.
+ *
  * IT CANNOT PROMOTE. The newcomer TIES the frontier's virtual time on the queue coordinate and stands exactly
  * one optimism range above it on the full weight — the term flow_nonreward bounds at 1.0 precisely so that "a
  * PROMISE never outweighs a FINDING" — and it pays that lift back at FLOW_AGE_QUANTUM per quantum it burns. So
