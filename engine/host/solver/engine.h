@@ -1314,9 +1314,16 @@ void engine_routed_census(long *delivered, long *refused);
  *                                     rendering opportunity that is generated for ever on a document that has
  *                                     one, and asking there made this row a fact about the DOCUMENT'S shape
  *                                     rather than about the frontier. A run in which it reads 0 while `live`
- *                                     climbs is now a statement about the FIVE conditions above the rung —
- *                                     frame, sequence, job, block, lifecycle — and the frontier census
- *                                     (`framed`, `outOfPrograms`, `blocked`, `stepUnits`) is what says which.
+ *                                     climbs is now a statement about the five conditions above the rung —
+ *                                     frame, sequence, job, block, lifecycle — and, AHEAD OF ALL FIVE, about
+ *                                     whether the members were DISPATCHED at all: every one of those is asked
+ *                                     inside flow_step, so a member the pick never reaches asks nothing and
+ *                                     appears in none of them. Read solver/cold.h's `stepUnits` `none` row
+ *                                     (solver/step_unit.h's NONE, paired with @WFQ's `unrun`) FIRST, then
+ *                                     `framed`, `outOfPrograms`
+ *                                     and `blocked` for which arm holds the rest. Reasoning over the five
+ *                                     without asking the zeroth is how this row gets read as a ladder defect
+ *                                     when it is a pick-order one.
  *     asked > 0, driven == 0          the walk ran and the heap held no uncalled function — a fact about the
  *                                     PAGE. It is NOT evidence about pick order, and reading it as such is
  *                                     reading "there was nothing to drive" as "something was starved".

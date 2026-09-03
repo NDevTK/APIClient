@@ -7128,10 +7128,17 @@ static int flow_step(JSContext *ctx, Flow *f) {
                that is reached. This is that correction for the surface §What-the-tool-produces calls the
                headline.
                AND WHAT STANDS ABOVE THIS RUNG IS THE WHOLE OF THE REMAINING PRECONDITION, so it is worth
-               stating as the conjunction it is rather than leaving each arm to imply it. A flow reaches here
-               with: no live frame at all (the `!f->frame` block is skipped otherwise, and a member grinding
-               inside a program never asks); no row left in its own sequence; no queued job; not blocked on a
-               cross-instance read; and no document-lifecycle stage left. That last one TERMINATES and is not a
+               stating as the conjunction it is rather than leaving each arm to imply it. THE ZEROTH CONJUNCT
+               IS NOT AN ARM AND IS THE ONE A READER OF THIS LADDER MISSES: the member has to be DISPATCHED at
+               all. Every condition below is asked inside flow_step, so a member the pick never reaches asks
+               nothing, satisfies none of them, and is invisible in every one of them — and a frontier can be
+               mostly such members while every arm here looks healthy. solver/cold.h's `step_units` histogram
+               carries them as its own row (solver/step_unit.h's `NONE`, "a member that has never been handed the
+               thread", which pairs with the @WFQ census's `unrun`); ask that BEFORE reading anything below as
+               the holder. Then, dispatched, a flow
+               reaches here with: no live frame at all (the `!f->frame` block is skipped otherwise, and a member
+               grinding inside a program never asks); no row left in its own sequence; no queued job; not
+               blocked on a cross-instance read; and no document-lifecycle stage left. That last one TERMINATES and is not a
                periodic source, which is worth knowing because it is grouped with the two clock-driven ones in
                at least one reader's prose: core/dom/document.c's document_lifecycle_step advances a readiness
                0 -> 1 -> 2, one stage per call, DCHECKs at BOTH stages that the readiness moved (its own message
