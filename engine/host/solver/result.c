@@ -648,7 +648,32 @@ char *result_wfq_json(void) {
                         forks three times costs three and a step that forks none costs at most one. Read
                         against this row instead, the same count answers the cache's own question. See
                         solver/flow.h for the two readings that disagreed without it. */
-                     "\"rankChanges\":%ld}",
+                     /* AND WHEN THIS CENSUS WAS TAKEN, IN THE ONE CLOCK EVERY OTHER STREAM OF THIS RUN IS
+                        CADENCED BY — `engine_work_done()`, which is what `fixture_have_answers` samples on and
+                        what run_scheduler gates its censuses on. Every row above is a reading at a MOMENT and
+                        no row said which moment, so a reader holding two lines of one run had nothing to align
+                        them by but the order they were printed in. That is not a small gap: it is the whole
+                        difference between a quantity that is WRONG and one that is EARLY, and the two send a
+                        reader to opposite places.
+                        MEASURED, ON THIS ENGINE, AT THE COST OF A BISECT. A reader took `workDone: 1` and
+                        `_switches: 0` off the @H stream, set them beside `forks: 175` off @COLD, and concluded
+                        the work accounting was broken — because `workDone` is defined as @COLD's `forks` +
+                        `_flows` + `_jobsRun` + `_switches`, and 1 cannot be 175 plus anything. Both numbers
+                        were exactly right. The @H sampler fires every PROBE_SAMPLE_EVERY units from zero, so
+                        its first table is composed at `workDone` 1 — one flow created, nothing run — and a run
+                        whose whole lifetime total never reaches the second threshold prints that table and no
+                        other, while @COLD goes on being emitted to the end. Two lines, two moments, one
+                        identity that holds at neither. The identity is real; it is only ever checkable BETWEEN
+                        ROWS OF ONE SAMPLE, and until this row there was no sample to belong to.
+                        IT IS A LIFETIME COUNTER AND MAY BE DIFFERENCED, which is what most of this line is
+                        not: the gauges above characterise an instant, and dividing any of them by the interval
+                        between two of these is the only way to get a RATE out of this stream. `picksLifetime`
+                        against this is dispatches per unit of work; `scanCensusWeights` against it is what the
+                        instrument costs per unit of what the engine did — the question a reader cannot
+                        otherwise settle without a clock, and a clock on this host is a fact about the machine.
+                        SPELLED THE WAY THE DOCUMENT SPELLS IT, one namespace and one spelling, so a reader who
+                        learns the name off @HWORK reads it off here. */
+                     "\"workDone\":%ld,\"rankChanges\":%ld}",
                      w.members, w.val_min, w.val_max, w.val_top,
                      w.val_zero, w.self_emit, w.unrun,
                      w.never_picked, w.never_picked_gap,
@@ -666,7 +691,7 @@ char *result_wfq_json(void) {
                      flow_scan_runs(FLOW_SCAN_RIVAL), flow_scan_weights(FLOW_SCAN_RIVAL),
                      flow_scan_runs(FLOW_SCAN_OTHER), flow_scan_weights(FLOW_SCAN_OTHER),
                      flow_scan_runs(FLOW_SCAN_CENSUS), flow_scan_weights(FLOW_SCAN_CENSUS),
-                     flow_rank_changes());
+                     engine_work_done(), flow_rank_changes());
 }
 
 /* WHAT A CONTEXT SWITCH COSTS, AND WHAT THE TWO CHAINS ARE STILL HOLDING — see result.h for why this composes
