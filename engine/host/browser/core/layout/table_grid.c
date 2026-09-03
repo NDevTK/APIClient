@@ -95,7 +95,7 @@ static size_t *tg_group_ends(const TableBoxRow *rows, size_t nrows)
 void table_grid_build(lxb_dom_element_t *table, TableGrid *out)
 {
     TableBoxRow *rows = NULL;
-    size_t nrows, y;
+    size_t nrows, y, anchor;
     size_t *group_end;
     /* PER COLUMN, THE FIRST GRID ROW THAT COLUMN IS FREE AGAIN AT — the whole of §17.5's occupancy state, and
        it is a row index rather than a bitmap for a reason the section supplies: every cell covers a CONTIGUOUS
@@ -106,6 +106,7 @@ void table_grid_build(lxb_dom_element_t *table, TableGrid *out)
     TableGridCell *cells = NULL;
     size_t ncells = 0, cell_cap = 0;
     bool any_overlap = false;
+    lxb_dom_element_t **row_els = NULL;
 
     DCHECK(table != NULL, "CSS 2.1 §17.5's grid was asked for of no element");
     DCHECK(out != NULL,
@@ -114,6 +115,7 @@ void table_grid_build(lxb_dom_element_t *table, TableGrid *out)
            "could not be computed from it, and that is the whole of what this entry is asked for");
     out->cells = NULL;
     out->ncells = 0;
+    out->rows = NULL;
     out->nrows = 0;
     out->ncols = 0;
     out->any_overlap = false;
@@ -121,6 +123,18 @@ void table_grid_build(lxb_dom_element_t *table, TableGrid *out)
        of grid cells… the table occupies exactly as many grid rows as there are row elements." */
     nrows = table_box_rows(table, &rows);
     group_end = tg_group_ends(rows, nrows);
+    /* RULE 1's OTHER HALF, WHICH IS THE PLACEMENT AND NOT THE COUNT: "Together, the row boxes fill the table
+       from top to bottom in the order they occur in the source document." `table_box_rows` answers them in
+       §17.2's display order, so the index of a row in that answer IS its grid row and this loop copies rather
+       than derives. It is a COPY and not a borrow of `rows` because `table_box_rows_free` runs below and every
+       other field of this grid outlives it. */
+    if (nrows != 0) {
+        row_els = (lxb_dom_element_t **) calloc(nrows, sizeof *row_els);
+        CHECK(row_els != NULL,
+              "CSS 2.1 §17.5's rule 1 could not allocate one row element per grid row of the table being laid "
+              "out");
+        for (y = 0; y < nrows; y++) row_els[y] = rows[y].element;
+    }
     for (y = 0; y < nrows; y++) {
         size_t x = 0, k;
 
@@ -192,9 +206,16 @@ void table_grid_build(lxb_dom_element_t *table, TableGrid *out)
     table_box_rows_free(rows, nrows);
     out->cells = cells;
     out->ncells = ncells;
+    out->rows = row_els;
     out->nrows = nrows;
     out->ncols = ncols;
     out->any_overlap = any_overlap;
+    for (anchor = 0; anchor < ncells; anchor++)
+        DCHECK(cells[anchor].row < nrows,
+               "CSS 2.1 §17.5's grid anchored a cell in a grid row rule 1 did not place a row box at. \"The top "
+               "row of this rectangle is in the row specified by the cell's parent\", and every cell here was "
+               "reached by descending a row of this same walk, so a row index past the row array is the two "
+               "halves of one loop having been carried apart");
 }
 
 /* THE ONE-MATCH INVARIANT IS THE POINT OF THE SCAN AND NOT A SIDE EFFECT OF IT. CSS 2.1 §17.5 Visual layout of
@@ -230,6 +251,43 @@ const TableGridCell *table_grid_cell_of(const TableGrid *grid, const lxb_dom_ele
     return found;
 }
 
+/* THE ONE-MATCH INVARIANT IS THE SAME INVARIANT ONE AXIS OVER, AND IT IS RULE 1's OWN SENTENCE RATHER THAN AN
+   ANALOGY. "Each row box occupies one row of grid cells" — one grid row per row box — so an element occupying
+   two of them is `table_box_rows` having reported one row twice, and a consumer taking the first hit would read
+   one of the two heights with nothing to say the other exists. The loop therefore runs to the END, exactly as
+   the cell entry's does. */
+bool table_grid_row_of(const TableGrid *grid, const lxb_dom_element_t *row, size_t *out)
+{
+    bool found = false;
+    size_t i;
+
+    DCHECK(grid != NULL, "CSS 2.1 §17.5's grid was asked which grid row an element occupies through no grid");
+    DCHECK(grid->rows != NULL || grid->nrows == 0,
+           "CSS 2.1 §17.5's grid was asked for a row while holding no row array and a non-zero row count — "
+           "`table_grid_build` stores NULL only for a table with no rows at all, so the two have been carried "
+           "apart since it answered");
+    DCHECK(row != NULL,
+           "CSS 2.1 §17.5's grid was asked which grid row a NULL element occupies. CSS 2.1 §17.2.1 Anonymous "
+           "table objects' anonymous 'table-row' box is the only row here with no element, and it is not "
+           "something a caller can name — a NULL would match the first such row in the grid and answer a "
+           "question about a different row entirely");
+    DCHECK(out != NULL,
+           "CSS 2.1 §17.5's rule 1 was read back with nowhere to put the grid row. The index IS the answer — "
+           "the boolean says only whether there is one — so a caller with nowhere to put it has asked a "
+           "question it cannot use the answer to");
+    for (i = 0; i < grid->nrows; i++) {
+        if (grid->rows[i] != row) continue;
+        DCHECK(!found,
+               "CSS 2.1 §17.5 Visual layout of table contents placed ONE row element at TWO grid rows. Rule 1 "
+               "gives each row box exactly one — \"Each row box occupies one row of grid cells\" — so this is "
+               "core/layout/table_box.h's row generation having reported one row twice, and the two entries "
+               "name different heights and different positions for one box");
+        found = true;
+        *out = i;
+    }
+    return found;
+}
+
 void table_grid_release(TableGrid *grid)
 {
     DCHECK(grid != NULL, "CSS 2.1 §17.5's grid was released through no grid");
@@ -237,9 +295,15 @@ void table_grid_release(TableGrid *grid)
            "a table grid was released holding no cell array with a non-zero cell count — `table_grid_build` "
            "stores NULL only for a table whose rows generate no cell, so the two have been carried apart since "
            "it answered");
+    DCHECK(grid->rows != NULL || grid->nrows == 0,
+           "a table grid was released holding no row array with a non-zero row count — `table_grid_build` "
+           "stores NULL only for a table with no rows at all, so the two have been carried apart since it "
+           "answered");
     free(grid->cells);
+    free(grid->rows);
     grid->cells = NULL;
     grid->ncells = 0;
+    grid->rows = NULL;
     grid->nrows = 0;
     grid->ncols = 0;
     grid->any_overlap = false;

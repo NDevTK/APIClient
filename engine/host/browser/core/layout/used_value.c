@@ -795,37 +795,37 @@ static CssPx uv_table_row_used_height(lxb_dom_element_t *el)
     TableGrid grid;
     TableUsedHeights heights;
     CssPx h = css_px(0.0);
-    bool found = false;
-    size_t i;
+    bool found;
+    size_t row = 0;
     char nbuf[160], tbuf[160];
 
     table_grid_build(table, &grid);
     table_heights(table, &grid, &heights);
-    /* §17.5's rule 1 numbers the grid rows in the order core/layout/table_box.h reports them, and
-       `table_grid_cell_of` indexes by CELL rather than by row — so the row is found through the cells anchored
-       in it, which is the only mapping from an element to a grid row either component states. A row with NO
-       cell at all is a real row (`<tr></tr>`) and §17.5.3's maximum over no cell is its own declared height,
-       which is the answer `table_heights` already stored for it. */
-    for (i = 0; i < grid.ncells && !found; i++)
-        if (grid.cells[i].element != NULL &&
-            lxb_dom_interface_node(grid.cells[i].element)->parent == lxb_dom_interface_node(el)) {
-            DCHECK(grid.cells[i].row < heights.nrows,
-                   "CSS 2.1 §17.5's grid anchored a cell in a row CSS 2.1 §17.5.3 answered no height for");
-            h = heights.rows[grid.cells[i].row];
-            found = true;
-        }
+    /* §17.5's RULE 1 IS THE MAPPING AND IT IS READ, NOT RE-DERIVED. "Each row box occupies one row of grid
+       cells", numbered in the order core/layout/table_box.h reports the rows, and core/layout/table_grid.h now
+       reports that placement back per row element. THE SEARCH THAT STOOD HERE WAS NOT MERELY SLOWER: it reached
+       a row only through the cells anchored in it, so `<tr></tr>` — a real row, with a real grid row and a real
+       height, §17.5.3's maximum over no cell — was reported as a row this grid does not contain, and the abort
+       below fired for a document nothing is wrong with. That is why the mapping had to be built where the rows
+       are placed rather than inferred from where the cells are. */
+    found = table_grid_row_of(&grid, el, &row);
+    if (found) {
+        DCHECK(row < heights.nrows,
+               "CSS 2.1 §17.5's rule 1 placed a row box at a grid row CSS 2.1 §17.5.3 answered no height for. "
+               "`table_heights` answers one height per grid row of the grid it was given and asserts that count "
+               "against the grid's own, so the two arrays have been carried apart since it answered");
+        h = heights.rows[row];
+    }
     table_heights_release(&heights);
     table_grid_release(&grid);
     if (!found)
-        DFAILF("%s: CSS 2.1 §17.5.3 Table height algorithms answered heights for every grid row of %s and this "
-               "ROW box is not one of them by the only mapping either component states — its own cells' anchor "
-               "positions (CSS 2.1 §17.5 Visual layout of table contents: \"The top row of this rectangle is in "
-               "the row specified by the cell's parent\"). A row with NO CELL is exactly the shape that reaches "
-               "here: `<tr></tr>` has a real height (§17.5.3's maximum over no cell, which is the row's own "
-               "computed `height`) and nothing in the GRID names it, because core/layout/table_grid.h places "
-               "CELLS. BUILD the mapping where the rows are generated — core/layout/table_box.h's "
-               "`table_box_rows` already answers them in grid order with their elements — and report the row "
-               "INDEX beside the height so this read is a lookup rather than a search",
+        DFAILF("%s: CSS 2.1 §17.5 Visual layout of table contents' rule 1 placed NO grid row for this ROW box "
+               "in %s's grid, which is the table box CSS 2.1 §17.2's own nesting puts it inside. The two walks "
+               "have come apart, exactly as they can for a cell: core/layout/table_box.h reached this table by "
+               "climbing the internal boxes above the row, and core/layout/table_grid.h reached the rows by "
+               "descending the same table's row groups, so a box that is in one and not the other is a row this "
+               "table's own box generation does not report as a row of it. There is no height to answer with — "
+               "the rows in hand belong to a grid this row is not in",
                box_subject(el, nbuf, sizeof nbuf), box_subject(table, tbuf, sizeof tbuf));
     DCHECK(!uv_is_border_box(el) || css_px_add(uv_surround_total(uv_surround(el, true)), css_px(0.0)).px == 0.0,
            "CSS 2.1 §17.6.1 The separated borders model says \"rows, columns, row groups, and column groups "
@@ -2402,7 +2402,17 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
        percentage values"), and core/layout/table_height.c takes that decline as a recorded choice inside the
        algorithm — where a resolution here would have run §10.1's walk to produce a number no rule consults. The
        TABLE BOX's own percentage is the one case that is neither: it is a real minimum §17.5.3 would use, and
-       `th_declared_minimum` crashes for it naming the anonymous wrapper §10.5 would have to resolve against. */
+       `th_declared_minimum` crashes for it — naming a BASIS this file does not export, not a box nothing can
+       name. §17.4 Tables in the visual formatting model states the rectangle in one sentence: "Percentages on
+       'width' and 'height' on the table are relative to the table wrapper box's containing block, not the table
+       wrapper box itself", which is the ordinary ancestor box §10.1's walk already answers for a table element.
+       WHAT THIS LINE USED TO SAY, AND WHY IT IS RECORDED RATHER THAN DELETED: that the wrapper was an ANONYMOUS
+       box §10.5 would have to resolve against. It is not — §17.4 calls it the table's principal block box — and
+       even for an anonymous one CSS 2 §9.2.1.1 Anonymous block boxes orders the resolution past it. A reader
+       who re-derives "the wrapper is anonymous" from §17.4's own silence about an element naming it would
+       re-introduce the whole reading, so the refutation stays beside the rule. What is genuinely missing is the
+       HEIGHT twin of `used_value_containing_block_width`: this file's own `uv_cb_height` computes it over the
+       same `uv_cb` walk and only the width half of that pair is exported. */
     if (vertical && box == UV_BOX_TABLE) {
         TableBoxKind kind = uv_table_box_kind(el);
 

@@ -16,6 +16,11 @@
 #include "core/layout/flow_position.h"
 #include "core/layout/line_box.h"
 #include "core/layout/replaced_element.h"
+#include "core/layout/table_box.h"
+#include "core/layout/table_grid.h"
+#include "core/layout/table_height.h"
+#include "core/layout/table_width.h"
+#include "core/layout/table_wrapper.h"
 #include "core/layout/used_value.h"
 
 /* THE SUBJECT OF EVERY CRASH IN THIS FILE, WHICH IS A BOX AND NOT A PLACE.
@@ -174,6 +179,115 @@ static CssPx fp_edge_before(lxb_dom_element_t *el, bool vertical)
                       used_value_px(el, vertical ? "padding-top" : "padding-left"));
 }
 
+/* CSS 2.1 §17.5 Visual layout of table contents' PLACEMENT OF ONE ROW BOX, which is §17.5's rule 1 and §17.6.1
+ * The separated borders model's spacing turned into the coordinate this file reports, and NOT §9.4.1's two
+ * rules — a row is not stacked after its siblings by its margins, because CSS 2.1 §17.5 Visual layout of table
+ * contents' opening sentence says "Internal table elements do not have margins."
+ *
+ * WHERE THE ROW'S EDGES ARE IS THE SECTION'S OWN SENTENCE AND NOT A CHOICE. §17.5's last paragraph: "In the
+ * separated borders model, the edges coincide with the border edges of cells. (And thus, in this model, there
+ * may be gaps between the rows, columns, row groups or column groups, corresponding to the 'border-spacing'
+ * property.)" So the row's top border edge is the top border edge of the cells anchored in its grid row, and
+ * its left border edge is the left border edge of the cells in the first grid column. CSS 2.1 §17.6.1 The
+ * separated borders model places those: "The distance between the table border and the borders of the cells
+ * on the edge of the table is the table's padding for that side, plus the relevant border spacing distance."
+ * Measured from the table box's CONTENT edge — which is past that padding — the first cell border is exactly
+ * one border-spacing in, on each axis.
+ *
+ * THE HORIZONTAL ANSWER IS THE SAME UNDER BOTH `direction` VALUES, WHICH IS WHY THIS BOX IS PLACEABLE AND A
+ * CELL IS NOT YET. Rule 1 gives a row box the WHOLE row of grid cells, so it spans every column whichever end
+ * column 0 is painted at, and §17.6.1's sentence is written "for that side" — symmetric across the two edges.
+ * CSS 2.1 §17.5's rule 5 parenthesis ("This constraint holds if the 'direction' property of the table is
+ * 'ltr'; if the 'direction' is 'rtl', interchange \"left\" and \"right\" in the previous two sentences") is a
+ * statement about a CELL's column, and a cell is the box that still needs it.
+ *
+ * THE SPACINGS ARE READ OFF THE TWO ALGORITHMS' ANSWERS AND NEVER OFF THE PROPERTY, which is the rule
+ * core/layout/table_width.h and core/layout/table_height.h each state about their own `spacing` field: a second
+ * read of `border-spacing` would be a second place for CSS 2.1 §17.6.1 The separated borders model's
+ * "Computed value: two absolute lengths" to be resolved, free to disagree with the one the columns and rows
+ * were laid out under. It is also why §17.6.2 The collapsing border model needs no refusal here — both
+ * entries refuse it by name before answering, so this function cannot run the separated model's arithmetic
+ * over a collapsing table.
+ *
+ * THE TABLE BOX'S OWN ORIGIN IS THE WRAPPER'S, AND THAT IS ASSERTED RATHER THAN ASSUMED. §17.4 Tables in the
+ * visual formatting model gives the table element's `margin-*` to the WRAPPER and everything else to the table
+ * box, and its parenthesis gives each box the initial value of what it does not get — so the wrapper has no
+ * border and no padding, the table box has no margin, and with no caption between them the table box's border
+ * edge IS the wrapper's content edge, which is the point `flow_border_box_origin` answers for a table element.
+ * A CAPTION BREAKS EXACTLY THAT and is refused by name below. */
+static FlowPoint fp_table_row_origin(lxb_dom_element_t *el)
+{
+    lxb_dom_element_t *table = table_box_table_of(el);
+    lxb_dom_element_t **captions = NULL;
+    TableGrid grid;
+    TableUsedWidths widths;
+    TableUsedHeights heights;
+    FlowPoint p = { { 0.0, CSS_ENV_NONE, NULL }, { 0.0, CSS_ENV_NONE, NULL } };
+    FlowPoint table_origin;
+    CssPx y;
+    size_t ncaptions, row = 0, j;
+    bool found;
+    char nbuf[160], tbuf[160];
+
+    DCHECK(!table_wrapper_owns_property("border-top-width") && !table_wrapper_owns_property("padding-top") &&
+               !table_wrapper_owns_property("padding-left") && table_wrapper_owns_property("margin-top"),
+           "CSS 2.1 §17.4 Tables in the visual formatting model's declaration split is what makes the table "
+           "box's border-box origin the same point as the table wrapper box's: the wrapper takes the table "
+           "element's `margin-*` and the INITIAL value of its border and padding, and the table box takes the "
+           "border and padding and the initial `margin-*`. This arithmetic reads the table element's own border "
+           "and padding as the TABLE BOX's and adds nothing for the wrapper — so if that list has moved, the "
+           "two boxes no longer coincide and every row below is offset by a border nobody accounted for");
+    ncaptions = table_box_captions(table, &captions);
+    free(captions);
+    if (ncaptions != 0)
+        DFAILF("%s, in %s: CSS 2.1 §17.4 Tables in the visual formatting model puts this row's table box inside "
+               "a WRAPPER that also contains %zu CAPTION box(es) — \"the table generates a principal block box "
+               "called the table wrapper box that contains the table box itself and any caption boxes (in "
+               "document order)\" — and §17.4.1 Caption position and alignment decides which of them stand "
+               "ABOVE it (`caption-side: top`, the initial value, \"Positions the caption box above the table "
+               "box\"). Every such caption shifts the table box down inside the wrapper, and this function "
+               "takes the table box's origin to BE the wrapper's, which is exact only when nothing precedes it. "
+               "There is no distance to add: a caption's own margin-box height is CSS 2.1 §10.6.3's over its "
+               "content, taken on the WRAPPER's child box list, which is not any element's DOM child list — "
+               "core/layout/block_flow.c owns that walk and names what it still lacks. BUILD it there and this "
+               "arm becomes a sum over the captions §17.4.1 puts above the table box",
+               box_subject(el, nbuf, sizeof nbuf), box_subject(table, tbuf, sizeof tbuf), ncaptions);
+    /* §17.4's wrapper is what §9.4.1 stacks, so the table element's own origin is an ordinary recursion into
+       this entry and not a second rule. */
+    table_origin = flow_border_box_origin(table);
+    table_grid_build(table, &grid);
+    found = table_grid_row_of(&grid, el, &row);
+    if (!found) {
+        table_grid_release(&grid);
+        DFAILF("%s: CSS 2.1 §17.5 Visual layout of table contents' rule 1 placed NO grid row for this ROW box "
+               "in %s's grid, which is the table box CSS 2.1 §17.2's own nesting puts it inside. The two walks "
+               "have come apart: core/layout/table_box.h reached this table by climbing the internal boxes "
+               "above the row, and core/layout/table_grid.h reached the rows by descending the same table's row "
+               "groups, so a box that is in one and not the other is a row this table's own box generation does "
+               "not report as a row of it. There is no position to answer with — the grid in hand is not this "
+               "row's",
+               box_subject(el, nbuf, sizeof nbuf), box_subject(table, tbuf, sizeof tbuf));
+        return p;
+    }
+    table_widths(table, &grid, &widths);
+    table_heights(table, &grid, &heights);
+    DCHECK(row < heights.nrows,
+           "CSS 2.1 §17.5's rule 1 placed a row box at a grid row CSS 2.1 §17.5.3 Table height algorithms "
+           "answered no height for. `table_heights` answers one height per grid row of the grid it was given "
+           "and asserts that count against the grid's own, so the two arrays have been carried apart");
+    /* §17.6.1: one border-spacing between the table box's content edge and the first cell border, and one more
+       between each adjoining pair of rows. */
+    p.x = css_px_add(css_px_add(table_origin.x, fp_edge_before(table, false)), widths.spacing);
+    y = css_px_add(css_px_add(table_origin.y, fp_edge_before(table, true)), heights.spacing);
+    for (j = 0; j < row; j++)
+        y = css_px_add(css_px_add(y, heights.rows[j]), heights.spacing);
+    p.y = y;
+    table_heights_release(&heights);
+    table_widths_release(&widths);
+    table_grid_release(&grid);
+    return p;
+}
+
 /* WHICH BOX TYPES §9.4.1 PLACES, asked HERE and not left to whichever component this one calls next. The two
  * rules §9.4.1 states — "boxes are laid out one after the other, vertically, beginning at the top of a
  * containing block" and "each box's left outer edge touches the left edge of the containing block" — are
@@ -307,8 +421,11 @@ static FlowPoint fp_line_box_origin(lxb_dom_element_t *el)
 
 static void fp_require_placeable(lxb_dom_element_t *el)
 {
+    /* `table-row` IS NOT ON THIS LIST AND ITS ABSENCE IS THE PLACEMENT, NOT AN OVERSIGHT: a row box leaves
+       through `fp_table_row_origin` above, exactly as a box on a line box leaves through
+       `fp_line_box_origin`. */
     static const char *const TABLE_INTERNAL[] = {
-        "table-row-group", "table-header-group", "table-footer-group", "table-row",
+        "table-row-group", "table-header-group", "table-footer-group",
         "table-cell", "table-column-group", "table-column", "table-caption",
     };
     char *d = css_computed_value(el, "display");
@@ -360,38 +477,42 @@ static void fp_require_placeable(lxb_dom_element_t *el)
     if (table_internal)
         DFAILF("%s: "
               "this box is TABLE-INTERNAL, and CSS 2.1 §17.5 'Visual layout of table contents' positions it "
-              "rather than §9.4.1: a row group, a row, a cell, a column, a column group and a caption are laid "
+              "rather than §9.4.1: a row group, a cell, a column, a column group and a caption are laid "
               "out inside the TABLE's own grid of rows and columns, so a cell's position is the accumulated "
               "widths of the columns before it and the accumulated heights of the rows above it, and neither "
-              "is a distance §9.4.1's two rules can produce. THE BOX STRUCTURE IS NO LONGER WHAT IT NEEDS: "
-              "core/layout/table_box.h answers §17.2.1 Anonymous table objects' first two stages — this "
-              "table's rows in §17.2's display order, each with its cells — so what is left is §17.5 Visual "
-              "layout of table contents' grid over those rows — which core/layout/table_grid.h answers, spans "
-              "and all. NEITHER IS THE COLUMN WIDTH ANY LONGER: CSS 2.1 §17.5.2 Table width algorithms: the "
-              "'table-layout' property is core/layout/table_width.h, which answers a used width for EVERY "
-              "column of the grid at once, so a cell's horizontal offset is a prefix sum over "
-              "`TableUsedWidths.columns` plus CSS 2.1 §17.6.1 The separated borders model's spacing before it. "
-              "AND NEITHER IS THE OTHER AXIS OR THE PER-CELL ROUTE, both of which this line used to ask for: "
-              "CSS 2.1 §17.5.3 Table height algorithms is core/layout/table_height.h, which answers a used "
-              "height for EVERY grid row at once, and core/layout/used_value.c hands ONE cell the used width "
-              "of the columns its rectangle covers and the used height of the rows it covers rather than "
-              "crashing for either. WHAT IS LEFT IS THIS FUNCTION'S OWN SUBJECT AND NOTHING BELOW IT: a "
-              "coordinate. §17.5's grid gives a cell a RECTANGLE OF GRID CELLS and no origin, so the two "
-              "prefix sums — the column widths and §17.6.1's spacing before this cell, and the row heights and "
-              "the vertical spacing above it — are what turns that rectangle into the distance this entry "
-              "reports, and the ROW and ROW GROUP and COLUMN boxes need the same sums taken over their own "
-              "spans. BUILD those two prefix sums here, over `TableUsedWidths.columns` and "
-              "`TableUsedHeights.rows`. "
-              "THEY CANNOT ALL BE KEYED BY `table_grid_cell_of`, WHICH IS WHAT THIS LINE USED TO SAY, AND THE "
-              "BOX THAT ABORTS HERE IS THE COUNTEREXAMPLE: that entry maps a CELL element to its rectangle, so "
-              "a ROW is reachable only through the cells anchored in it and `<tr></tr>` has none — a real row "
-              "with a real grid row and a real height (§17.5.3's maximum over no cell) that no mapping in "
-              "core/layout/table_grid.h names. A ROW GROUP and a COLUMN are unreachable the same way. So the "
-              "FIRST diff is that mapping, where the rows are already generated in grid order with their "
-              "elements — core/layout/table_box.h's `table_box_rows` is what `table_grid_build` walks — "
-              "reported as a row INDEX beside the grid, so this becomes a lookup rather than a search. "
-              "core/layout/used_value.c's ROW-height read states the same missing mapping in its own crash and "
-              "is its second consumer, which is how you will know it fired: both stop naming it. "
+              "is a distance §9.4.1's two rules can produce. "
+              "A ROW IS NO LONGER ONE OF THEM AND THAT IS THE SHAPE OF EVERY ANSWER BELOW: §17.5's rule 1 "
+              "PLACES a row box (\"Each row box occupies one row of grid cells\"), core/layout/table_grid.h now "
+              "reports that placement back per row element, and `fp_table_row_origin` above turns the grid row "
+              "into this coordinate — the vertical prefix sum over `TableUsedHeights.rows` with §17.6.1 The "
+              "separated borders model's spacing between and before them, measured from the table box's content "
+              "edge. So the OPERANDS are all built and what each box below still lacks is a NAME FOR ITS OWN "
+              "PLACE IN THE GRID, which is a different missing thing per box and not one blocker. "
+              "A CELL HAS ITS PLACE ALREADY — `table_grid_cell_of` gives it a rectangle — and needs the OTHER "
+              "AXIS OF THE SAME SUM: a prefix sum over `TableUsedWidths.columns` plus §17.6.1's spacing before "
+              "it, over the columns its rectangle starts at. THAT AXIS IS NOT A MIRROR OF THE ROW'S, which is "
+              "why it is a diff and not a copy: CSS 2.1 §17.5's rule 5 ends \"(This constraint holds if the "
+              "'direction' "
+              "property of the table is 'ltr'; if the 'direction' is 'rtl', interchange \"left\" and "
+              "\"right\" in the previous two sentences.)\", and this grid numbers its columns in §17.5's own "
+              "LOGICAL order — so a cell's PHYSICAL x is the prefix sum under `ltr` and the table's content "
+              "width less that sum and less the cell's own width under `rtl`. A ROW needed no such arm because "
+              "rule 1 gives it the whole row of grid cells, so it spans every column whichever end column 0 is "
+              "painted at. "
+              "A ROW GROUP NEEDS CSS 2.1 §17.5's RULE 2 AND NOTHING ELSE: \"A row group occupies the same grid "
+              "cells as "
+              "the rows it contains\", so its origin is its FIRST grid row's — the sum above, unchanged. The "
+              "run is derivable from which row group each row is inside, which core/layout/table_box.h's "
+              "`TableBoxRow.group` already carries and which core/layout/table_grid.h deliberately does not "
+              "store yet; that header names the field and the run entry as one diff. "
+              "A COLUMN AND A COLUMN GROUP NEED A MAPPING THAT DOES NOT EXIST IN EITHER DIRECTION YET, and this "
+              "is the one place below where the operand is genuinely absent rather than merely unrouted. "
+              "core/layout/table_column_box.h answers §17.5's rules 3 and 4 from the GRID COLUMN's side — "
+              "`TableColumnBoxMap.cols[i]` names the column and column-group boxes occupying column `i` — and a "
+              "box holding an ELEMENT needs the reverse, which is that component's entry to add and not this "
+              "file's scan. Note its own `ncols` can EXCEED the grid's, since HTML §4.9.12.1 Forming a table "
+              "counts a `<colgroup span>` into the table's width, so the reverse answer can name a column no "
+              "cell occupies and the horizontal sum above has no width for it. "
               "A CAPTION IS NOT IN THE GRID AT ALL and no longer waits on a box nothing can name — §17.4 "
               "Tables in the visual formatting model puts it in the table WRAPPER, which §10.1's walk now "
               "reports (core/layout/used_value.h) and whose used width and height "
@@ -487,6 +608,11 @@ FlowPoint flow_border_box_origin(lxb_dom_element_t *el)
        as a float and an out-of-flow box leave through theirs above: the two rules at the end of this function
        are §9.4.1's and say nothing about a box on a line box. */
     if (fp_is_on_a_line_box(el)) return fp_line_box_origin(el);
+    /* CSS 2.1 §17.5 Visual layout of table contents PLACES A ROW BOX, and it leaves HERE for the reason a box
+       on a line box does: §9.4.1's two rules are not an approximation of §17.5's grid, they are a different
+       algorithm over a different containing rectangle, so a row must not fall through to them. The other seven
+       table-internal boxes still crash below, each naming what §17.5 leaves it waiting on. */
+    if (fp_computed_is(el, "display", "table-row")) return fp_table_row_origin(el);
     fp_require_placeable(el);
 
     /* §10.1's FIRST CASE, which is §9.4.1's base case as well: the root element's containing block is the ICB,

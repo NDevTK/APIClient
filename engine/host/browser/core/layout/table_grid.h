@@ -42,14 +42,28 @@
  * other reading has the fact rather than having to re-derive it. Crashing here would refuse a document both
  * readings are conforming for.
  *
- * WHAT IS NOT HERE. §17.5's rules 3 and 4 place COLUMN and COLUMN-GROUP boxes ("A column box occupies one or
- * more columns of grid cells… A column group box occupies the same grid cells as the columns it contains"),
- * and this component does not, because §17.2 The CSS table model says those boxes "are not rendered (exactly
- * as if they had 'display: none')" and what §17.5.2 wants from them is a DECLARED WIDTH on a column, which is
- * a property lookup over the same column indices this grid already numbers. Rule 3's `direction` clause — "The
- * first column box may be either on the left or on the right" — is likewise a mapping from these indices to
- * positions and belongs with the widths, not with the assignment; the indices here are in the spec's own
- * LOGICAL order, so a caller reading them right-to-left needs no second grid. */
+ * THE ROW AXIS IS HERE AND THE COLUMN AXIS IS NOT, AND THE TWO ARE NOT AN INCONSISTENCY. §17.5's rule 1 is a
+ * PLACEMENT this walk performs — "Each row box occupies one row of grid cells. Together, the row boxes fill the
+ * table from top to bottom in the order they occur in the source document (i.e., the table occupies exactly as
+ * many grid rows as there are row elements)" — so a row's grid row IS this component's own output, produced by
+ * the same walk over core/layout/table_box.h's rows that anchors the cells, and asking anywhere else for it
+ * would be a second walk free to number the rows differently. §17.5's rules 3 and 4 place COLUMN and
+ * COLUMN-GROUP boxes ("A column box occupies one or more columns of grid cells… A column group box occupies the
+ * same grid cells as the columns it contains") and this component does not, because §17.2 The CSS table model
+ * says those boxes "are not rendered (exactly as if they had 'display: none')": there is no cell walk that
+ * numbers them, only a MAPPING onto the column indices this one already numbers, and that mapping is
+ * core/layout/table_column_box.h's. Rule 3's `direction` clause — "The first column box may be either on the
+ * left or on the right" — is likewise a mapping from these indices to positions and belongs with the widths,
+ * not with the assignment; the indices here are in the spec's own LOGICAL order, so a caller reading them
+ * right-to-left needs no second grid.
+ *
+ * §17.5's RULE 2 IS NOT ANSWERED HERE EITHER, AND ITS ABSENCE IS THE ROW AXIS'S OWN GAP RATHER THAN THE COLUMN
+ * AXIS'S. "A row group occupies the same grid cells as the rows it contains" is a run of the grid rows below,
+ * derivable from nothing but which row group each row is inside — a fact core/layout/table_box.h's
+ * `TableBoxRow.group` already carries and this component currently drops. It is not stored because storing it
+ * with no consumer would be a field written and read nowhere; the diff that places a ROW GROUP box adds the
+ * field and the run entry beside it. Its absence is not silent and is not this file's to report: a row group
+ * box has no origin without it, so core/layout/flow_position.c aborts for one by name. */
 #ifndef ENGINE_HOST_BROWSER_CORE_LAYOUT_TABLE_GRID_H
 #define ENGINE_HOST_BROWSER_CORE_LAYOUT_TABLE_GRID_H
 
@@ -80,8 +94,18 @@ typedef struct {
 typedef struct {
     TableGridCell *cells;
     size_t ncells;
-    size_t nrows;       /* §17.5's rule 1: "the table occupies exactly as many grid rows as there are row
-                           elements" — so this is table_box_rows' own count and is not re-derived */
+    /* §17.5's RULE 1, WHICH IS A PLACEMENT AND NOT A COUNT: "Each row box occupies one row of grid cells."
+       `rows[y]` is the ROW ELEMENT whose box occupies grid row `y`, in the order core/layout/table_box.h
+       reports the rows, which §17.2's display order makes the top-to-bottom order rule 1 fills the table in.
+       A NULL entry is §17.2.1 Anonymous table objects' anonymous 'table-row' box, exactly as `TableGridCell`'s
+       own `element` is NULL for an anonymous cell — a positive statement that the section generated that row
+       and no element names it, never a row that is missing.
+       `nrows` IS THIS ARRAY'S LENGTH AND THAT IS THE WHOLE OF WHY IT IS ONE FIELD AND NOT TWO. Rule 1's own
+       parenthesis is "the table occupies exactly as many grid rows as there are row elements", so the count and
+       the array are the same fact; a second count could disagree with the array and nothing downstream could
+       tell. NULL when `nrows` is zero. */
+    lxb_dom_element_t **rows;
+    size_t nrows;
     size_t ncols;       /* the widest any row reached, which is the table's column count */
     bool any_overlap;   /* whether rule 5's undefined case arose at all, so a consumer can ask once */
 } TableGrid;
@@ -104,6 +128,26 @@ void table_grid_build(lxb_dom_element_t *table, TableGrid *out);
    narrowing: such a box has no element to name it (the `element` field above is NULL for it), so `cell` must
    not be NULL and this entry asserts that instead of matching the first anonymous cell in the grid. */
 const TableGridCell *table_grid_cell_of(const TableGrid *grid, const lxb_dom_element_t *cell);
+
+/* WHICH GRID ROW one ROW ELEMENT's box occupies — §17.5's rule 1 read back the way a consumer holding an
+   element rather than a walk has to read it. Answers true and stores that row's index at `*out`; answers FALSE
+   and leaves `*out` untouched when this grid placed no row for that element.
+   IT IS AN ENTRY AND NOT A SCAN AT THE CALLER for `table_grid_cell_of`'s reason, and the shape of the scan it
+   replaces is why the distinction is not cosmetic here. A consumer that had only the cell entry could reach a
+   row ONLY through the cells anchored in it, and `<tr></tr>` has none — so such a scan answers "no such row"
+   for a row that really is in this grid, with a real height (CSS 2.1 §17.5.3 Table height algorithms' maximum
+   over no cell) and a real position. That is not a slower lookup, it is a WRONG one, and it is wrong exactly
+   for the shape a caller is least likely to have in front of it.
+   FALSE IS A REAL ANSWER WITH ONE CAUSE and it is the consumer's crash rather than this component's: the
+   element is not a row of THIS table, so the caller reached the wrong table box. `table_grid_build` walks
+   core/layout/table_box.h's rows and stores every one of them, so a row of this table is always found.
+   `*out` IS NOT WRITTEN ON FALSE, DELIBERATELY, and a sentinel index would have been the weaker choice: a
+   caller that ignores the answer then does arithmetic on an UNINITIALISED index, which `-Wall` and a sanitizer
+   both name, where a sentinel past the end reads as an ordinary number the caller can quietly add to.
+   §17.2.1's ANONYMOUS 'table-row' BOX CANNOT BE ASKED FOR, exactly as its anonymous cell cannot: it has no
+   element to name it, so `row` must not be NULL and this entry asserts that instead of matching the first
+   anonymous row in the grid. */
+bool table_grid_row_of(const TableGrid *grid, const lxb_dom_element_t *row, size_t *out);
 
 /* Releases what `table_grid_build` stored. A zero-cell grid holds NULL and is accepted. */
 void table_grid_release(TableGrid *grid);
