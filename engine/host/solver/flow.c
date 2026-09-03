@@ -2985,7 +2985,18 @@ void flow_wfq_census(WfqCensus *out) {
     double never_w = 0.0;
     int have_never = 0;
 
+    /* THE WEIGHINGS flow_best WILL PERFORM BELOW, READ BEFORE IT RUNS — the other half of what a sample costs,
+       and it is captured here rather than derived afterwards because FLOW_SCAN_OTHER is SHARED (the host's
+       best-weight read and the pager's tail run under it too), so the only way to know what THIS call spent is
+       to bracket it. It is the reference the identity at the end of this function is stated against. */
+    long other_before;
+
     DCHECK(out != NULL, "the WFQ was asked to report its ordering into nothing");
+    /* THIS WALK, COUNTED — see flow.h's FLOW_SCANS for why the report's own cost is a row rather than an
+       argument. Raised at the top for flow_pick's reason at its own counter: every exit of this function is one
+       walk performed, and a count taken at the end would miss whichever exit somebody adds next. */
+    g_scan_runs[FLOW_SCAN_CENSUS]++;
+    other_before = g_scan_weights[FLOW_SCAN_OTHER];
     out->members = g_flows_n;
     out->val_min = out->val_max = out->val_top = 0.0;
     out->val_zero = out->self_emit = out->unrun = 0;
@@ -3025,6 +3036,11 @@ void flow_wfq_census(WfqCensus *out) {
         /* THE SUM THE PICK USES, not only the terms it is made of — see flow.h for the reading that went wrong
            without it. One call per member, and this scan still decides nothing. */
         double w = flow_weight(f);
+        /* …AND PRICED WHERE IT IS TAKEN, exactly as flow_pick prices its own — weight EVALUATIONS and not loop
+           trips, so the two rows are the same quantity and a reader may divide one by the other. This walk
+           skips nothing, so its count is the frontier's size per sample by construction, which is what makes
+           the identity below an assertion rather than a restatement. */
+        g_scan_weights[FLOW_SCAN_CENSUS]++;
         /* HOW MANY DECISIONS THIS FLOW STANDS ON, read from wherever its decision state currently lives: a
            parked flow's blob, and decide.c's live globals for the one the scheduler is switched into — the
            same split cold.c's census makes, because there is only one place each can be. Asked of EVERY
@@ -3330,6 +3346,24 @@ void flow_wfq_census(WfqCensus *out) {
        starved" from "the most-starved member is standing at the front". See flow.h for the pair's reading. */
     if (have_never && top) out->never_picked_gap = out->w_top - never_w;
 
+    /* WHAT A SAMPLE COST, ASSERTED AS THE IDENTITY IT IS: this function weighs the frontier EXACTLY TWICE, once
+       in its own walk and once inside flow_best, so the weighings flow_best just performed must equal the
+       members this walk enumerated. It is worth an assert rather than a comment because both sides can move for
+       reasons that look local and neither would say so: a filter added to flow_best would weigh FEWER (which
+       the front-of-the-order assert above already worries about from the other direction, and which would make
+       every gap row a comparison against a member some other member was hidden from), and a `continue` added to
+       the walk here would weigh fewer still while the rows it fills silently stopped covering the frontier.
+       Either way the census's price and the census's population would stop being the same number, and the row
+       that exists to say what the instrument costs would be costing something else.
+       IT IS ALSO THE ONE PLACE THE DOUBLING IS STATED. A reader who sees `scanCensusWeights` alone will price a
+       sample at one frontier; it is two, and the second is charged to a SHARED entry (the host's read and the
+       pager's tail run under OTHER too) where it cannot be told apart afterwards. Bracketing the call is the
+       only way to attribute it, which is why `other_before` is taken at the top rather than reconstructed. */
+    DCHECK(g_scan_weights[FLOW_SCAN_OTHER] - other_before == (long)g_flows_n,
+           "the WFQ census and the flow_best inside it disagree about how many members there are to weigh — a "
+           "sample is supposed to cost exactly two weighings of the frontier, so one of the two walks has "
+           "acquired a filter, and the rows this census fills no longer cover the same population the order "
+           "does");
     /* AND IT IS NON-NEGATIVE BY THE SAME CONSTRUCTION, ASSERTED FOR THE SAME REASON — `w_top` is flow_best's
        maximum over every member and a never-dispatched member is one of those members, read through the same
        flow_weight in the same scan. A negative deficit here would say the pick and this census have stopped

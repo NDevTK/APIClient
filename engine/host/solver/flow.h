@@ -1635,8 +1635,23 @@ void flow_wfq_census(WfqCensus *out);
  *      the next opcode rescans. A forking page therefore pays this one per fork rather than per step, which is
  *      a rate nothing about the dispatch loop would predict.
  *   `best` and `eviction-tail` are the host's and the pager's, asked per report and at the RAM floor.
+ *   `wfq-census-walk` is the REPORT's own, one per sample — the instrument measuring what the instrument costs.
+ *      There are TWO samplers and a smoke's count is both of them: the result document's composer, which is the
+ *      only one the shipped program has, and the native fixture's probe table. That matters the moment somebody
+ *      compares a fixture number against a shipped one.
  * Summed, a scan the hook made per fork and a scan the loop made per step are one number, and the two take
  * opposite work — the same collapse `resume-program` carried until solver/step_unit.h split it.
+ *
+ * AND THE LAST ENTRY IS THERE BECAUSE AN INSTRUMENT WHOSE OWN COST IS UNMEASURED IS THE DEFECT THIS FILE
+ * ALREADY NAMES ONE LEVEL UP. §Testing's rule is that a gate reading a tree no revision contains measures
+ * nothing; an instrument heavy enough to change the run it samples is the same fault wearing a census, and it
+ * cannot be argued about — a count is the only thing that settles it, because this host's quantum is
+ * wall-denominated and a duration would be about the machine. The census is the natural place for it to hide:
+ * it is O(members) in a frontier that grows because forking is the point, it calls flow_weight AND
+ * flow_distance AND decide_blob_stats per member, and at APICLIENT_DEV=1 — which every smoke is — the asserts
+ * inside those are live. Read `scanCensusWeights / scanCensusRuns` for the mean frontier a sample paid for and
+ * `scanCensusWeights` against `scanNextWeights` for what fraction of all frontier-weighing the REPORT is,
+ * rather than the run. A census is worth its cost; a census nobody can price is not a measurement of anything.
  *
  * IT IS A COUNT AND NOT A CLOCK, deliberately and for §Testing's reason: a measurement a loaded machine can
  * falsify is not a measurement, and this host's quantum is wall-denominated. Scans and weight evaluations are
@@ -1654,7 +1669,15 @@ void flow_wfq_census(WfqCensus *out);
     /* the preempt hook's rival rescan — one per frontier-generation change */            \
     X(RIVAL, "rival-of-incumbent")                                                        \
     /* the host's best-weight read and the pager's tail, per report and at the RAM floor */\
-    X(OTHER, "best-and-eviction-tail")
+    X(OTHER, "best-and-eviction-tail")                                                     \
+    /* the CENSUS's own walk — one per sample, and the only frontier-weighing walk in this  \
+       engine that nothing priced. flow_wfq_census weighs every member itself AND calls     \
+       flow_best, which weighs every member again under OTHER, so a sample costs TWO        \
+       weighings of the frontier and only one of them was visible. Counted apart from       \
+       OTHER for the same reason the three above are counted apart: its cadence is the      \
+       REPORT's, so summing it into a scan the dispatch loop makes per step would put the   \
+       instrument's own cost inside the rate that exists to price the dispatch. */          \
+    X(CENSUS, "wfq-census-walk")
 #define FLOW_SCAN_ENUM(id, name) FLOW_SCAN_##id,
 typedef enum { FLOW_SCANS(FLOW_SCAN_ENUM) FLOW_SCAN_N } FlowScan;
 #undef FLOW_SCAN_ENUM

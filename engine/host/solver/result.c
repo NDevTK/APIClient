@@ -628,6 +628,20 @@ char *result_wfq_json(void) {
                      "\"scanNextRuns\":%ld,\"scanNextWeights\":%ld,"
                      "\"scanRivalRuns\":%ld,\"scanRivalWeights\":%ld,"
                      "\"scanOtherRuns\":%ld,\"scanOtherWeights\":%ld,"
+                     /* …AND WHAT THIS CENSUS ITSELF COSTS, which every row above is silent about because every
+                        row above is about the engine and this one is about the instrument. flow_wfq_census
+                        weighs the frontier TWICE per sample — once in its own walk, counted here, and once
+                        inside the flow_best it calls, which lands in `scanOther*` where a shared entry makes
+                        it unattributable afterwards; the engine asserts the two are equal at the sample, so
+                        `scanCensusWeights` doubled is what a sample really costs.
+                        READ IT AS A FRACTION, NEVER AS A TOTAL. `scanCensusWeights / scanCensusRuns` is the
+                        mean frontier a sample paid for, and `scanCensusWeights` against `scanNextWeights` is
+                        the share of all frontier-weighing that went to REPORTING rather than to running —
+                        which is the only way to settle whether an instrument is heavy enough to change the run
+                        it samples. A count and not a clock, for the reason solver/flow.h gives at FLOW_SCANS:
+                        this host's quantum is wall-denominated, so a duration here would be a fact about the
+                        machine and these are facts about what the engine did. */
+                     "\"scanCensusRuns\":%ld,\"scanCensusWeights\":%ld,"
                      /* AND THE DENOMINATOR THE HOOK'S RESCAN COUNT HAS. `scanRivalRuns / scanNextRuns` is
                         a COST — scan work per step — and it was being read as the hook's cadence, which it
                         is not: the rescan fires on a rank change or an incumbent switch, so a step that
@@ -651,6 +665,7 @@ char *result_wfq_json(void) {
                      flow_scan_runs(FLOW_SCAN_NEXT),  flow_scan_weights(FLOW_SCAN_NEXT),
                      flow_scan_runs(FLOW_SCAN_RIVAL), flow_scan_weights(FLOW_SCAN_RIVAL),
                      flow_scan_runs(FLOW_SCAN_OTHER), flow_scan_weights(FLOW_SCAN_OTHER),
+                     flow_scan_runs(FLOW_SCAN_CENSUS), flow_scan_weights(FLOW_SCAN_CENSUS),
                      flow_rank_changes());
 }
 
