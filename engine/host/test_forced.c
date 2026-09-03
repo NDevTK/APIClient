@@ -2097,6 +2097,193 @@ static const char *HTML =
     "var fo = document.createElement('form'); fo.action = '/api/didsubmit';"
     "var foi = document.createElement('input'); foi.name = 'ok'; fo.appendChild(foi);"
     "document.body.appendChild(fo); foi.value = 'rs'; fo.requestSubmit();"
+    /* ─── Web IDL §3.7.2 "Legacy factory functions", AND §3.6 "Overload resolution algorithm"'s "missing" ─────
+     *
+     * THREE NAMES AND ONE PRIMITIVE, AND NOT ONE OF THE ASSERTIONS PUBLISHED WITH THEM HAD EVER BEEN EXECUTED.
+     * `Audio` (HTML §4.8.9 "The audio element", FIVE top-level steps), `Image` (§4.8.3 "The img element", FIVE)
+     * and `Option` (§4.10.10 "The option element", SEVEN) are the only three `[LegacyFactoryFunction]`s HTML
+     * declares, and each landed with a precise falsifier list that lived in a commit message and nowhere a run
+     * could reach. An absent crash is not a correct value: what a clean build established was that the path
+     * COMPLETES, and nothing whatever about the bytes it returns. These are those lists, as statements.
+     *
+     * EACH STATEMENT EMITS ONE LETTER PER CLAUSE and the failing ones arrive UPPERCASED, which is this
+     * document's `uascarm` shape and is here for its reason: one address per algorithm keeps a row's 0 localised
+     * to a spec section, and the letter inside the emitted value localises it to a step. A row folded over all
+     * of them would be the count-with-no-name-in-it the probe table already refuses.
+     *
+     * AND AN ABSENT NAME IS NOT A WRONG ANSWER. Every block is guarded by `typeof` and a failed guard emits
+     * `absent`, because `Audio.length === 0` asked of an engine with no `Audio` is a ReferenceError that takes
+     * the whole statement with it — and the record's absence would then read as the SCHEDULE not having got
+     * here. Three states, three readings, which is the whole reason these are statements and not one strstr.
+     *
+     * NOTHING HERE FORKS. Every predicate is over an object this engine built from literals, so the block adds
+     * no world to any frontier — deliberate, because a fixture that spends a fork tree answering a concrete
+     * question has spent the run's reach on a question that did not need it. */
+
+    /* Web IDL §3.7.2's FUNCTION OBJECT, asked once per factory through one page-level helper so that the
+       ADDRESS names which factory and the letters name which clause. §3.7.2's own steps: `length` is "the
+       length of the shortest argument list of the entries in S" and every position of all three factories is
+       optional, so it is 0; `prototype` is "! DefinePropertyOrThrow(F, "prototype", PropertyDescriptor{
+       [[Value]]: proto, [[Writable]]: false, [[Enumerable]]: false, [[Configurable]]: false})"; and step 1 of
+       the function's steps is "If NewTarget is undefined, then throw a TypeError", which is the plain call.
+       THE `constructor` CLAUSE IS THE ONE THAT SAYS THIS IS NOT AN INTERFACE OBJECT: §3.7.2 defines no
+       `constructor` back-pointer, so `HTMLAudioElement.prototype.constructor` must still be
+       `HTMLAudioElement` — a JS_SetConstructor here would answer `Audio` and nothing else would notice. */
+    "function lfaFn(F, I) { var d = Object.getOwnPropertyDescriptor(F, 'prototype'), r = '';"
+    " r += (F.length === 0 ? 'l' : 'L');"
+    " r += (F.prototype === I.prototype ? 'p' : 'P');"
+    " r += (I.prototype.constructor === I ? 'c' : 'C');"
+    " r += (d && d.writable === false && d.enumerable === false && d.configurable === false ? 'd' : 'D');"
+    " try { F(); r += 'N'; } catch (e) { r += (e instanceof TypeError ? 't' : 'E'); }"
+    " return r; }"
+    "var lfaFa = (typeof Audio === 'undefined' || typeof HTMLAudioElement === 'undefined') ? 'absent'"
+    " : lfaFn(Audio, HTMLAudioElement);"
+    "fetch('/api/lfafnaud?v=' + (lfaFa === 'lpcdt' ? 'isfnaud' : 'fa' + lfaFa));"
+    "var lfaFi = (typeof Image === 'undefined' || typeof HTMLImageElement === 'undefined') ? 'absent'"
+    " : lfaFn(Image, HTMLImageElement);"
+    "fetch('/api/lfafnimg?v=' + (lfaFi === 'lpcdt' ? 'isfnimg' : 'fi' + lfaFi));"
+    "var lfaFo = (typeof Option === 'undefined' || typeof HTMLOptionElement === 'undefined') ? 'absent'"
+    " : lfaFn(Option, HTMLOptionElement);"
+    "fetch('/api/lfafnopt?v=' + (lfaFo === 'lpcdt' ? 'isfnopt' : 'fo' + lfaFo));"
+
+    /* HTML §4.8.9 "The audio element"'s five top-level steps, counted with list depth tracked against the
+       standard's own <ol> so a nested item cannot be promoted to a peer. STEP 3 IS UNCONDITIONAL and is the
+       whole reason this is not `createElement('audio')` — every element the factory makes carries
+       `preload="auto"`, which §4.8.11 "Media elements" reads as the strongest hint an element can carry. STEP 4
+       is "If src is given", and `new Audio(undefined)` is §3.6 step 15.4.2's "missing" rather than a `src` of
+       the four characters `undefined`: an `argc` test answers "given" for exactly that call, which is the
+       defect the byte-equality clause below refuses. Both `preload` readings are asserted because they are two
+       questions — `a` is step 3's attribute and `p` is §4.8.11's reflection of it, and an engine missing the
+       member would otherwise redden a row about step 3. */
+    "var lfaAu = 'absent';"
+    "if (typeof Audio !== 'undefined' && typeof HTMLAudioElement !== 'undefined') {"
+    " var lau0 = new Audio(), lau1 = new Audio('a.mp3'), lau2 = new Audio(undefined);"
+    " lfaAu = (lau0 instanceof HTMLAudioElement ? 'i' : 'I')"
+    "  + (lau0.getAttribute('preload') === 'auto' ? 'a' : 'A')"
+    "  + (lau0.preload === 'auto' ? 'p' : 'P')"
+    "  + (lau0.hasAttribute('src') ? 'S' : 's')"
+    "  + (lau1.getAttribute('src') === 'a.mp3' ? 'r' : 'R')"
+    "  + (lau0.outerHTML === '<audio preload=\"auto\"></audio>' ? 'h' : 'H')"
+    "  + (lau2.outerHTML === lau0.outerHTML ? 'm' : 'M'); }"
+    "fetch('/api/lfaudio?v=' + (lfaAu === 'iapsrhm' ? 'islfaudio' : 'au' + lfaAu));"
+
+    /* HTML §4.8.3 "The img element"'s five top-level steps and the same §3.6 pair at two positions.
+       `new Image(undefined).outerHTML` was `<img width="undefined">` because the body read `argc` — how far the
+       page REACHED — where §3.6 asks which kind of entry step 9 put in `values`; the two readings agree for
+       `new Image()` and disagree for exactly this call, so the BYTE-EQUALITY of the two is the clause that
+       carries the fix. `im2` is the mixed call the count cannot express at all: position 0 given, position 1
+       reached and `undefined`, which is one attribute and not two. */
+    "var lfaIm = 'absent';"
+    "if (typeof Image !== 'undefined' && typeof HTMLImageElement !== 'undefined') {"
+    " var lim0 = new Image(), lim1 = new Image(undefined), lim2 = new Image(5, undefined),"
+    "     lim3 = new Image(5, 6);"
+    " lfaIm = (lim0 instanceof HTMLImageElement ? 'i' : 'I')"
+    "  + (lim0.outerHTML === '<img>' ? 'n' : 'N')"
+    "  + (lim1.outerHTML === lim0.outerHTML ? 'm' : 'M')"
+    "  + (lim2.outerHTML === '<img width=\"5\">' ? 'w' : 'W')"
+    "  + (lim3.outerHTML === '<img width=\"5\" height=\"6\">' ? 'h' : 'H'); }"
+    "fetch('/api/lfaimage?v=' + (lfaIm === 'inmwh' ? 'islfaimage' : 'im' + lfaIm));"
+
+    /* HTML §4.10.10 "The option element"'s SEVEN top-level steps — depth-tracked; none of the seven holds a
+       nested list, so these sub-numbers are the standard's own and are unambiguous. Step 3's test is "If text
+       is not the empty string", so `new Option()` has NO child node at all, which `childNodes.length` sees.
+       Step 4 is "If value is given" and `new Option('a', undefined)` is §3.6's "missing", so a `value="undefined"`
+       refutes it. AND STEP 6 IS WHY THE COMPONENT EXISTS: it sets selectedness EXPLICITLY, after step 5 has
+       added the very attribute whose change steps set it — "If selected is true, then set option's selectedness
+       to true; otherwise set its selectedness to false (even if defaultSelected is true)" — which the standard
+       restates in its own note: "The Option() constructor, when called with three or fewer arguments, overrides
+       the initial state of the selectedness state to always be false even if the third argument is true". So
+       `new Option('a','b',true)` SERIALIZES with the attribute and ANSWERS `selected === false`, and the two
+       clauses are held apart because the content attribute alone cannot say the second. */
+    "var lfaOp = 'absent';"
+    "if (typeof Option !== 'undefined' && typeof HTMLOptionElement !== 'undefined') {"
+    " var lop0 = new Option(), lop1 = new Option('a', 'b'), lop2 = new Option('a', undefined),"
+    "     lop3 = new Option('a', 'b', true), lop4 = new Option('a', 'b', true, true);"
+    " lfaOp = (lop0 instanceof HTMLOptionElement ? 'i' : 'I')"
+    "  + (lop0.childNodes.length === 0 ? 'e' : 'E')"
+    "  + (lop1.outerHTML === '<option value=\"b\">a</option>' ? 'v' : 'V')"
+    "  + (lop2.outerHTML === '<option>a</option>' ? 'u' : 'U')"
+    "  + (lop3.defaultSelected === true ? 'd' : 'D')"
+    "  + (lop3.hasAttribute('selected') ? 'a' : 'A')"
+    "  + (lop3.selected === false ? 's' : 'S')"
+    "  + (lop4.selected === true ? 'f' : 'F'); }"
+    "fetch('/api/lfaoption?v=' + (lfaOp === 'ievudasf' ? 'islfaoption' : 'op' + lfaOp));"
+
+    /* §4.10.10's DIRTINESS — the state the content attribute cannot express, and the one the factory
+       deliberately does NOT set. The attribute change steps are conditioned on it ("if its dirtiness is false,
+       its selectedness must be set to false"), so a CLEAN option tracks `selected` at every add and remove and
+       a DIRTY one stops; the `selected` SETTER is what makes an option dirty ("set the element's selectedness
+       to the new value, set its dirtiness to true, and then cause the element to ask for a reset") and it
+       writes NO attribute, which `B` asserts as an absence.
+       BOTH HALVES ARE HERE BECAUSE EITHER ALONE IS UNFALSIFIABLE: an engine whose selectedness never tracked
+       the attribute at all would satisfy `c` — the dirty option keeping its selectedness across an add and a
+       remove — while being wrong about everything, and `d`/`e` are the clean option that refuses that. */
+    "var lfaDy = 'absent';"
+    "if (typeof Option !== 'undefined') {"
+    " var lod = new Option(); lod.selected = true;"
+    " lfaDy = (lod.selected === true ? 'a' : 'A') + (lod.hasAttribute('selected') ? 'B' : 'b');"
+    " lod.setAttribute('selected', ''); lod.removeAttribute('selected');"
+    " lfaDy += (lod.selected === true ? 'c' : 'C');"
+    " var loc = new Option(); loc.setAttribute('selected', '');"
+    " lfaDy += (loc.selected === true ? 'd' : 'D');"
+    " loc.removeAttribute('selected');"
+    " lfaDy += (loc.selected === false ? 'e' : 'E'); }"
+    "fetch('/api/lfadirty?v=' + (lfaDy === 'abcde' ? 'islfadirty' : 'dy' + lfaDy));"
+
+    /* §4.10.7 "The select element"'s SELECTEDNESS SETTING ALGORITHM, read through §4.10.10's `selected` getter
+       — which runs it, because this engine's spelling of the standard's invocation points is to run it at the
+       read. Step 1: "If element's multiple attribute is absent, and element's display size is 1, and no option
+       elements in the element's list of options have their selectedness set to true, then set the selectedness
+       of the first option element in the list of options in tree order that is not disabled, if any, to true",
+       which is why `q` asserts that no `selected` ATTRIBUTE appeared anywhere while `p` is true. Step 2: "and
+       two or more option elements … have their selectedness set to true, then set the selectedness of all but
+       the last … to false", which is why `opts[1].selected = true` must leave `opts[0].selected` false.
+       THE SELECT IS DETACHED ON PURPOSE: html_form_select_of_option walks the option's own ancestors, so this
+       states §4.10.7 without adding a widget to the document the layout walk then has to have a box for —
+       which is a different component's claim and would fold two spec sections into one row's 0. */
+    "var lfaSe = 'absent';"
+    "if (typeof Option !== 'undefined') {"
+    " var lsl = document.createElement('select');"
+    " var lsA = new Option('a'), lsB = new Option('b');"
+    " lsl.appendChild(lsA); lsl.appendChild(lsB);"
+    " lfaSe = (lsA.selected === true ? 'p' : 'P') + (lsA.hasAttribute('selected') ? 'Q' : 'q');"
+    " lsB.selected = true;"
+    " lfaSe += (lsB.selected === true ? 'r' : 'R') + (lsA.selected === false ? 's' : 'S'); }"
+    "fetch('/api/lfareset?v=' + (lfaSe === 'pqrs' ? 'islfareset' : 'se' + lfaSe));"
+
+    /* …AND THE SAME TWO STEPS AS AN ENTRY LIST, which is the half a member read cannot state. §4.10.22.4 step
+       5.6 emits one entry per option whose selectedness is true and that is not disabled, so step 1's answer IS
+       `sc=a` for a select nothing selected, and step 2's is `sd=b` ALONE for one where the factory made both
+       options selected. `submit()` DERIVES the request without sending it, exactly as this document's other
+       forms do, and a form must be CONNECTED to submit — which is why these two are appended where the
+       `/api/lfareset` select is not. An option with no `value` attribute submits its collected text, which is
+       what makes `a` and `b` readable as values at all. */
+    "if (typeof Option !== 'undefined') {"
+    " var lsf = document.createElement('form'); lsf.action = '/api/lfasel1';"
+    " var ls1 = document.createElement('select'); ls1.name = 'sc';"
+    " ls1.appendChild(new Option('a')); ls1.appendChild(new Option('b'));"
+    " lsf.appendChild(ls1); document.body.appendChild(lsf); lsf.submit();"
+    " var lsg = document.createElement('form'); lsg.action = '/api/lfasel2';"
+    " var ls2 = document.createElement('select'); ls2.name = 'sd';"
+    " ls2.appendChild(new Option('a', 'a', true, true));"
+    " ls2.appendChild(new Option('b', 'b', true, true));"
+    " lsg.appendChild(ls2); document.body.appendChild(lsg); lsg.submit(); }"
+
+    /* THE CONTROL, AND IT IS A CONTROL BECAUSE ITS ANSWERS MUST NOT HAVE MOVED. Web IDL §3.6's OTHER arm is a
+       position DECLARED WITH A DEFAULT, where steps 15.4.1 and 16.1 both append that value and 15.4.2's
+       "missing" is never reached: `encode(optional USVString input = "")` and `constructor(optional DOMString
+       label = "utf-8", …)`. The honest falsifier here is an EQUALITY rather than a difference — passing
+       `undefined` and passing nothing must answer THE SAME — because the failure this guards against is the
+       "missing" primitive being mistaken for a rule about every optional position, at which point these four
+       start disagreeing and no row above would say so. */
+    "var lfaTd = 'absent';"
+    "if (typeof TextEncoder !== 'undefined' && typeof TextDecoder !== 'undefined') {"
+    " var lte = new TextEncoder();"
+    " lfaTd = (lte.encode().length === 0 ? 'a' : 'A')"
+    "  + (lte.encode(undefined).length === 0 ? 'b' : 'B')"
+    "  + (new TextDecoder().encoding === 'utf-8' ? 'c' : 'C')"
+    "  + (new TextDecoder(undefined).encoding === 'utf-8' ? 'd' : 'D'); }"
+    "fetch('/api/lfadefault?v=' + (lfaTd === 'abcd' ? 'islfadefault' : 'td' + lfaTd));"
     /* §4.13 CUSTOM ELEMENTS — the reason this component exists: connectedCallback's body is code NOTHING ELSE IN
        THE PROGRAM CALLS. The endpoints below are reachable only through the lifecycle, so their presence is the
        whole claim. `extends HTMLElement` is what a real bundle writes, and after the upgrade `this.setAttribute`
@@ -10684,6 +10871,168 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "neither is a defect in §6.10 or §6.12; the number itself is in the @RESULT line's "
              "`stepUnitRuns`. FEWER cannot reach this row, because the clause above it is >= 2");
 
+    /* ─── WEB IDL §3.7.2's THREE FACTORIES AND §3.6's "missing", AS ELEVEN ROWS ──────────────────────────────
+     *
+     * ONE ADDRESS PER ALGORITHM, so a 0 names a spec section, and the record's own `v` names the CLAUSE. Every
+     * one of these is a fold of exactly the two questions this table keeps apart everywhere else: is there a
+     * record at all (the SCHEDULE, which says nothing about the engine), and does that record's `v` carry the
+     * statement's success token.
+     * THE THIRD READING IS IN THE VALUE AND NOT IN A ROW, which is the one design choice here worth stating.
+     * `absent` — the `typeof` guard having refused — must never read as the same 0 as a wrong answer, and it
+     * cannot be a row of its own because the two are mutually exclusive answers to ONE statement rather than two
+     * statements. So the failure branch emits it, the wrong-value message below names it, and a reader with the
+     * result document in hand can tell an unbuilt name from a built one that lies.
+     * `param_value_is` AND NOT A WHOLE-DOCUMENT `strstr`: the success tokens share no bytes with each other,
+     * but `absent` and the clause letters are emitted by EVERY one of these statements, so an unscoped test
+     * would be answerable out of a neighbour's record — the join defect this file's readers exist to refuse. */
+    const char *lfafnaud_why = NULL; int lfafnaud_tt = 1;
+    fold_row(&lfafnaud_tt, &lfafnaud_why, !!strstr(js, "\"/api/lfafnaud\""),
+             "NOT REACHED: there is no /api/lfafnaud record at all, so Web IDL §3.7.2's `Audio` function "
+             "object was never asked about. That is the SCHEDULE");
+    fold_row(&lfafnaud_tt, &lfafnaud_why, param_value_is(js, "/api/lfafnaud", "v", "isfnaud"),
+             "Web IDL §3.7.2's `Audio` FUNCTION OBJECT is wrong, or `Audio`/`HTMLAudioElement` is not on the "
+             "global at all — the record's `v` says WHICH: `faabsent` is the guard having refused, and `fa` "
+             "followed by `lpcdt` with the failing letters UPPERCASED names the clause. l=`Audio.length` is 0 "
+             "(every position of the factory is optional, so §3.7.2's \"length of the shortest argument list\" "
+             "is 0); p=`Audio.prototype` IS `HTMLAudioElement.prototype`; c=`HTMLAudioElement.prototype."
+             "constructor` is still `HTMLAudioElement` and NOT the factory (§3.7.2 defines no back-pointer, so "
+             "a JS_SetConstructor here would answer `Audio` and nothing else would notice); d=the `prototype` "
+             "descriptor's writable/enumerable/configurable are all false; t=`Audio()` without `new` throws a "
+             "TypeError, which is step 1 of the function's steps");
+    const char *lfafnimg_why = NULL; int lfafnimg_tt = 1;
+    fold_row(&lfafnimg_tt, &lfafnimg_why, !!strstr(js, "\"/api/lfafnimg\""),
+             "NOT REACHED: there is no /api/lfafnimg record at all, so Web IDL §3.7.2's `Image` function "
+             "object was never asked about. That is the SCHEDULE");
+    fold_row(&lfafnimg_tt, &lfafnimg_why, param_value_is(js, "/api/lfafnimg", "v", "isfnimg"),
+             "Web IDL §3.7.2's `Image` FUNCTION OBJECT is wrong, or `Image`/`HTMLImageElement` is not on the "
+             "global — `fiabsent` is the guard, and `fi` + `lpcdt` uppercased names the clause; the letters "
+             "are the ones spelled out under /api/lfafnaud, read against HTMLImageElement");
+    const char *lfafnopt_why = NULL; int lfafnopt_tt = 1;
+    fold_row(&lfafnopt_tt, &lfafnopt_why, !!strstr(js, "\"/api/lfafnopt\""),
+             "NOT REACHED: there is no /api/lfafnopt record at all, so Web IDL §3.7.2's `Option` function "
+             "object was never asked about. That is the SCHEDULE");
+    fold_row(&lfafnopt_tt, &lfafnopt_why, param_value_is(js, "/api/lfafnopt", "v", "isfnopt"),
+             "Web IDL §3.7.2's `Option` FUNCTION OBJECT is wrong, or `Option`/`HTMLOptionElement` is not on "
+             "the global — `foabsent` is the guard, and `fo` + `lpcdt` uppercased names the clause; the "
+             "letters are the ones spelled out under /api/lfafnaud, read against HTMLOptionElement. `l` is "
+             "the one worth naming twice here: `Option` declares FOUR positions and all four are optional, so "
+             "its length is 0 and not 4");
+    /* §4.8.9's own five steps, and §3.6's "missing" at the one optional position. */
+    const char *lfaudio_why = NULL; int lfaudio_tt = 1;
+    fold_row(&lfaudio_tt, &lfaudio_why, !!strstr(js, "\"/api/lfaudio\""),
+             "NOT REACHED: there is no /api/lfaudio record at all, so HTML §4.8.9 \"The audio element\"'s "
+             "factory steps were never observed. That is the SCHEDULE");
+    fold_row(&lfaudio_tt, &lfaudio_why, param_value_is(js, "/api/lfaudio", "v", "islfaudio"),
+             "HTML §4.8.9 \"The audio element\"'s legacy factory function answered wrong — `auabsent` is the "
+             "`typeof` guard, and `au` + `iapsrhm` with the failing letters UPPERCASED names the step. "
+             "i=`new Audio()` is an HTMLAudioElement; a=step 3 put the `preload` CONTENT ATTRIBUTE at `auto` "
+             "UNCONDITIONALLY (this is what tells the factory apart from createElement('audio')); p=§4.8.11's "
+             "reflection of that attribute reads `auto` (a separate question from `a`, so an absent member "
+             "cannot redden a row about step 3); s=`new Audio()` has NO `src` attribute — step 4 is \"if src "
+             "is given\"; r=`new Audio('a.mp3')` set it; h=the serialization is byte-for-byte "
+             "`<audio preload=\"auto\"></audio>`; m=`new Audio(undefined)` serializes IDENTICALLY to "
+             "`new Audio()`, which is Web IDL §3.6 step 15.4.2's \"missing\" — an `argc` test answers "
+             "\"given\" for exactly that call and puts `src=\"undefined\"` on the element, and M is that "
+             "regression returning");
+    /* §4.8.3's five steps, and §3.6's "missing" at BOTH of its optional positions. */
+    const char *lfaimage_why = NULL; int lfaimage_tt = 1;
+    fold_row(&lfaimage_tt, &lfaimage_why, !!strstr(js, "\"/api/lfaimage\""),
+             "NOT REACHED: there is no /api/lfaimage record at all, so HTML §4.8.3 \"The img element\"'s "
+             "factory steps were never observed. That is the SCHEDULE");
+    fold_row(&lfaimage_tt, &lfaimage_why, param_value_is(js, "/api/lfaimage", "v", "islfaimage"),
+             "HTML §4.8.3 \"The img element\"'s legacy factory function answered wrong — `imabsent` is the "
+             "guard, and `im` + `inmwh` uppercased names the step. i=`new Image()` is an HTMLImageElement; "
+             "n=it serializes as `<img>` with NO attribute, where a defaulted 0 would write `width=\"0\"`; "
+             "m=`new Image(undefined)` serializes IDENTICALLY — the §3.6 \"missing\" clause, which read "
+             "`<img width=\"undefined\">` while the body tested `argc`; w=`new Image(5, undefined)` is ONE "
+             "attribute and not two, which is the mixed call a count cannot express at all; h=`new Image(5,6)` "
+             "writes both, in that order");
+    /* §4.10.10's SEVEN steps, its step 6 override, and §3.6's "missing" at `value`. */
+    const char *lfaoption_why = NULL; int lfaoption_tt = 1;
+    fold_row(&lfaoption_tt, &lfaoption_why, !!strstr(js, "\"/api/lfaoption\""),
+             "NOT REACHED: there is no /api/lfaoption record at all, so HTML §4.10.10 \"The option element\"'s "
+             "factory steps were never observed. That is the SCHEDULE");
+    fold_row(&lfaoption_tt, &lfaoption_why, param_value_is(js, "/api/lfaoption", "v", "islfaoption"),
+             "HTML §4.10.10 \"The option element\"'s legacy factory function answered wrong — `opabsent` is "
+             "the guard, and `op` + `ievudasf` uppercased names the step. i=`new Option()` is an "
+             "HTMLOptionElement; e=step 3's \"if text is not the empty string\" left NO child node; "
+             "v=`new Option('a','b')` serializes `<option value=\"b\">a</option>`; u=`new Option('a',undefined)` "
+             "serializes `<option>a</option>` — §3.6's \"missing\", and a `value=\"undefined\"` is U; "
+             "d/a=step 5 set `defaultSelected` and the `selected` ATTRIBUTE for a third argument of true; "
+             "s=STEP 6, the whole reason this component exists — selectedness is set EXPLICITLY after step 5 "
+             "added the attribute whose change steps set it, so `new Option('a','b',true).selected` is FALSE; "
+             "f=the fourth argument is what sets it true. S is the one to read first: it means step 5's "
+             "attribute write decided selectedness and step 6 never overrode it");
+    /* §4.10.10's dirtiness, both halves. */
+    const char *lfadirty_why = NULL; int lfadirty_tt = 1;
+    fold_row(&lfadirty_tt, &lfadirty_why, !!strstr(js, "\"/api/lfadirty\""),
+             "NOT REACHED: there is no /api/lfadirty record at all, so §4.10.10's DIRTINESS was never "
+             "observed. That is the SCHEDULE");
+    fold_row(&lfadirty_tt, &lfadirty_why, param_value_is(js, "/api/lfadirty", "v", "islfadirty"),
+             "§4.10.10's DIRTINESS is wrong — `dyabsent` is the guard, and `dy` + `abcde` uppercased names "
+             "the clause. a=the `selected` SETTER set selectedness; b=it wrote NO content attribute (B means "
+             "one appeared, which is the setter reaching for the attribute instead of the slot); c=the option "
+             "is now DIRTY, so a later add AND remove of `selected` do not move selectedness; d/e=a CLEAN "
+             "option DOES track the attribute at an add and at a remove. Both halves are asserted because "
+             "either alone is unfalsifiable: an engine whose selectedness never tracked the attribute at all "
+             "satisfies `c` while being wrong about everything, and `d`/`e` are what refuse that");
+    /* §4.10.7's two steps through §4.10.10's member. */
+    const char *lfareset_why = NULL; int lfareset_tt = 1;
+    fold_row(&lfareset_tt, &lfareset_why, !!strstr(js, "\"/api/lfareset\""),
+             "NOT REACHED: there is no /api/lfareset record at all, so §4.10.7 \"The select element\"'s "
+             "selectedness setting algorithm was never observed through the member. That is the SCHEDULE");
+    fold_row(&lfareset_tt, &lfareset_why, param_value_is(js, "/api/lfareset", "v", "islfareset"),
+             "§4.10.7's SELECTEDNESS SETTING ALGORITHM is wrong — `seabsent` is the guard, and `se` + `pqrs` "
+             "uppercased names the step. p=step 1 made the FIRST non-disabled option selected on a select "
+             "whose display size is 1 with nothing selected; q=it did so WITHOUT any `selected` attribute "
+             "appearing (Q means the algorithm wrote a content attribute, which it never names); r/s=step 2 — "
+             "assigning `selected = true` to the SECOND option leaves it true and the first FALSE, because "
+             "\"all but the last\" are cleared. S is the interesting failure: two options selected at once on "
+             "a single-select is the state step 2 exists to make unreachable");
+    /* …and the same two steps as §4.10.22.4's ENTRY LIST, which is the half a member read cannot state. The
+       negative clause is the assertion in each: step 1 picks `a` AND NOT `b`, step 2 keeps `b` AND NOT `a`. It
+       is spelled as an equality plus a refusal rather than as param_value_only, because two provenance grades
+       of ONE statement legitimately carry the same value twice and `only` would read that as a fork. */
+    const char *lfasel1_why = NULL; int lfasel1_tt = 1;
+    fold_row(&lfasel1_tt, &lfasel1_why, !!strstr(js, "\"/api/lfasel1\""),
+             "NOT REACHED: there is no /api/lfasel1 record at all, so the select's ENTRY LIST was never "
+             "derived — `submit()` did not run, or the form was not connected. That is the SCHEDULE");
+    fold_row(&lfasel1_tt, &lfasel1_why, param_value_is(js, "/api/lfasel1", "sc", "a"),
+             "§4.10.7 step 1 + §4.10.22.4 step 5.6: `<select name=x><option>a<option>b</select>` must submit "
+             "`x=a` with no `selected` attribute anywhere, and this record's `sc` does not carry `a` — either "
+             "step 1 selected nothing (the entry list is then EMPTY, which is the same 0 as selecting the "
+             "wrong option and is why the clause below is separate) or the option's value did not fall back "
+             "to its collected text");
+    fold_row(&lfasel1_tt, &lfasel1_why, !param_value_is(js, "/api/lfasel1", "sc", "b"),
+             "§4.10.7 step 1 selected MORE than the first option, or the wrong one: `sc` carries `b`, so the "
+             "entry list has an option step 1 never names — it selects the FIRST non-disabled one and returns");
+    const char *lfasel2_why = NULL; int lfasel2_tt = 1;
+    fold_row(&lfasel2_tt, &lfasel2_why, !!strstr(js, "\"/api/lfasel2\""),
+             "NOT REACHED: there is no /api/lfasel2 record at all, so step 2's entry list was never derived. "
+             "That is the SCHEDULE");
+    fold_row(&lfasel2_tt, &lfasel2_why, param_value_is(js, "/api/lfasel2", "sd", "b"),
+             "§4.10.7 step 2 + §4.10.22.4 step 5.6: with BOTH options made selected by the factory's fourth "
+             "argument, a single-select submits the LAST one alone, and this record's `sd` does not carry "
+             "`b` — step 2 cleared the wrong end of the list, or it cleared everything");
+    fold_row(&lfasel2_tt, &lfasel2_why, !param_value_is(js, "/api/lfasel2", "sd", "a"),
+             "§4.10.7 step 2 did not run: `sd` carries `a` as well as `b`, so TWO options were selected on a "
+             "select with no `multiple` attribute — \"set the selectedness of all but the last option element "
+             "with its selectedness set to true … to false\" is exactly what did not happen");
+    /* THE CONTROL — Web IDL §3.6's DECLARED-DEFAULT arm, whose answers must NOT have moved. */
+    const char *lfadefault_why = NULL; int lfadefault_tt = 1;
+    fold_row(&lfadefault_tt, &lfadefault_why, !!strstr(js, "\"/api/lfadefault\""),
+             "NOT REACHED: there is no /api/lfadefault record at all, so Web IDL §3.6's DECLARED-DEFAULT arm "
+             "was never observed. That is the SCHEDULE");
+    fold_row(&lfadefault_tt, &lfadefault_why, param_value_is(js, "/api/lfadefault", "v", "islfadefault"),
+             "Web IDL §3.6's DECLARED-DEFAULT arm moved — `tdabsent` is the guard, and `td` + `abcd` "
+             "uppercased names the clause. a/b=`new TextEncoder().encode()` and `.encode(undefined)` are BOTH "
+             "the empty result, because `encode(optional USVString input = \"\")` sends both of §3.6 steps "
+             "16.1 and 15.4.1 to the DECLARED default and neither to 15.4.2's \"missing\"; c/d=`new "
+             "TextDecoder().encoding` and `new TextDecoder(undefined).encoding` are BOTH `utf-8`, for the same "
+             "reason at `constructor(optional DOMString label = \"utf-8\", …)`. THIS ROW ASSERTS AN EQUALITY "
+             "AND NOT A DIFFERENCE: it is the control for the three above, and it reddens when the \"missing\" "
+             "primitive has been mistaken for a rule about every optional position");
+
     /* EVERY ROW NAMES THE STATEMENT IT IS ABOUT, and the two cold sessions are two answers and not one: they run
        the same document and one is about what a park WROTE while the other is about what a resume REBUILT. */
     Probe probes[] = {
@@ -10783,6 +11132,20 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "idl", idlcoerce_tt, "/api/idlcoerce", SESS_EXPLORE, idlcoerce_why },
         { "dom-idl", domidl_tt, "/api/protoid", SESS_EXPLORE, domidl_why },
         { "node-algo", nodealgo_tt, "/api/nodeconst", SESS_EXPLORE, nodealgo_why },
+        /* Web IDL §3.7.2's three legacy factory functions and §3.6's "missing" — one row per algorithm, keyed
+           on the address of its own statement. See their computation for why `absent` is in the VALUE and not
+           in a row of its own, and for what each letter of the emitted code is. */
+        { "lfa-fn-audio", lfafnaud_tt, "/api/lfafnaud", SESS_EXPLORE, lfafnaud_why },
+        { "lfa-fn-image", lfafnimg_tt, "/api/lfafnimg", SESS_EXPLORE, lfafnimg_why },
+        { "lfa-fn-option", lfafnopt_tt, "/api/lfafnopt", SESS_EXPLORE, lfafnopt_why },
+        { "lfa-audio", lfaudio_tt, "/api/lfaudio", SESS_EXPLORE, lfaudio_why },
+        { "lfa-image", lfaimage_tt, "/api/lfaimage", SESS_EXPLORE, lfaimage_why },
+        { "lfa-option", lfaoption_tt, "/api/lfaoption", SESS_EXPLORE, lfaoption_why },
+        { "lfa-dirty", lfadirty_tt, "/api/lfadirty", SESS_EXPLORE, lfadirty_why },
+        { "lfa-reset", lfareset_tt, "/api/lfareset", SESS_EXPLORE, lfareset_why },
+        { "lfa-select-1", lfasel1_tt, "/api/lfasel1", SESS_EXPLORE, lfasel1_why },
+        { "lfa-select-2", lfasel2_tt, "/api/lfasel2", SESS_EXPLORE, lfasel2_why },
+        { "lfa-default", lfadefault_tt, "/api/lfadefault", SESS_EXPLORE, lfadefault_why },
         /* §8.1.6.4 step 7.4's FOUR STATES, one row per state per ROUTE — see their computation for why the
            document and the stream each answer half of each state, and why the stream clauses are ratios. Keyed
            on the chunk that stages them, which is the statement these rows are about; the control below is
