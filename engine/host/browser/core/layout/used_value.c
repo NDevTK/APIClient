@@ -9,6 +9,7 @@
 #include "check.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
+#include "core/css/css_property_applies.h"
 #include "core/dom/document.h"
 #include "core/frame/screen.h"
 #include "core/frame/viewport.h"
@@ -16,6 +17,7 @@
 #include "core/layout/box_subject.h"
 #include "core/layout/intrinsic_size.h"
 #include "core/layout/replaced_element.h"
+#include "core/layout/table_border_collapse.h"
 #include "core/layout/table_box.h"
 #include "core/layout/table_column_width.h"
 #include "core/layout/table_grid.h"
@@ -434,12 +436,193 @@ static CssLength uv_len_px(CssPx px)
     return len;
 }
 
-/* THE FOUR TERMS OF css-sizing-3 §3.3's CONVERSION BETWEEN THE TWO BOXES, on one axis, and the ONE place that
-   computes them. css-sizing-3 §3.3 converts a border box into a content box by subtracting "the border and
-   padding in the corresponding axis", and every arm below needs that sum or half of it — the `border-box` size ADDS it, the
-   padding edge subtracts it and adds the paddings back. Two copies of a four-term sum are two places for the
-   terms to come to disagree, which is the only way the padding edge and the size it is derived from can stop
-   describing the same box. */
+/* ---- CSS 2.1 §8.1's FOUR SIDES, AND WHICH OF THEM A BOX ACTUALLY HAS ---------------------------------------
+   CSS 2.1 §8.1 "Box dimensions" nests four boxes inside one another and names the perimeters between them —
+   "The perimeter of each of the four areas (content, padding, border, and margin) is called an "edge", so each
+   box has four edges" — so the distance between a box's BORDER edge and its CONTENT edge on one side is that
+   side's border width plus that side's padding. EVERY conversion in this file is stated over that pair, which
+   is why it is computed in ONE place: two spellings of one four-term sum are two places for the terms to come
+   to disagree, and the disagreement is invisible because both answers are a real width of a real box.
+ *
+ * THE PAIR IS NOT ALWAYS THE CASCADE'S, AND THAT IS THIS COMPONENT'S QUESTION RATHER THAN §17's. What stood
+ * here read `padding-*` and `border-*-width` off the computed style unconditionally, and CSS 2.1 §17 Tables
+ * denies one or both of them to FIVE of §17.2 The CSS table model's ten box types — for two of which the
+ * answer differs BETWEEN THE TWO BORDER MODELS. A read that cannot ask has no way to be right: `uv_edge_px`
+ * ADDS the terms to a used size and `uv_content_size` SUBTRACTS them from it, so a term the box does not have
+ * corrupts the derived rectangle in one direction or the other whatever `box-sizing` says, and the number
+ * leaves through CSSOM VIEW as a rectangle no reader can tell from a measured one.
+ *
+ * THE FIVE, WITH THE SENTENCE THAT DECIDES EACH:
+ *   - A ROW, ROW GROUP, COLUMN or COLUMN GROUP box has NEITHER TERM, in BOTH models. The padding is CSS 2.1
+ *     §8.4 "Padding properties: 'padding-top', 'padding-right', 'padding-bottom', 'padding-left', and
+ *     'padding'"' own Applies-to line — "all elements except table-row-group, table-header-group,
+ *     table-footer-group, table-row, table-column-group and table-column" — which core/css/css_property_applies.h
+ *     owns and which is ASKED below rather than restated, so the day the two classifications disagree is a day
+ *     this file stops. §17.5 Visual layout of table contents' opening says the same in its own words,
+ *     "Internal table elements generate rectangular boxes with content and borders. Cells have padding as
+ *     well." The border is TWO sentences, one per model, and they arrive at the same zero by different routes:
+ *     §17.6.1 The separated borders model refuses the declaration outright ("Rows, columns, row groups, and
+ *     column groups cannot have borders (i.e., user agents must ignore the border properties for those
+ *     elements)"), while §17.6.2 The collapsing border model ADMITS it as an input to §17.6.2.1 Border
+ *     conflict resolution and then puts the box's own edges ON the resolved line — §17.5's last normative
+ *     paragraph, "The edges of the rows, columns, row groups and column groups in the collapsing borders model
+ *     coincide with the hypothetical grid lines on which the borders of the cells are centered" — so the
+ *     resolved width is already inside the cells' boxes and the row has no border AREA of its own. Adding the
+ *     declared value INVENTS it under §17.6.1 and DOUBLE-COUNTS it under §17.6.2.
+ *   - A TABLE box under §17.6.2 has NO PADDING and a border that is not its own declared width. Both are that
+ *     section's own sentences: "Also, in this model, a table does not have padding (but does have margins)",
+ *     and "The left border width of the table is half of the first cell's collapsed left border, and the right
+ *     border width of the table is half of the last cell's collapsed right border" with "The top border width
+ *     of the table is equal to half of the maximum collapsed top border" for the other axis.
+ *     core/layout/table_border_collapse.h answers all four whole, and it is the SAME entry
+ *     core/layout/table_width.c already converts a declared border-box width through — so the two files now
+ *     add and subtract one number instead of two that differed by the declared padding plus the difference
+ *     between a declared border and half a resolved one.
+ *   - A CELL under §17.6.2 keeps its padding (§17.5's "Cells have padding as well" is not about the model) and
+ *     loses the same half: §17.6.2 centres each border on the grid line between two cells, so a cell carries
+ *     half of the resolved border at each INTERIOR line and none at all at the table's perimeter, where the
+ *     table box above carries it. That is `table_collapsed_cell_edges`, which is where the two halves are
+ *     stated once and therefore cannot fail to meet at the line.
+ * A CAPTION IS NOT ONE OF THE FIVE and takes the declared arm like any other block box: §17.4 Tables in the
+ * visual formatting model renders it "as normal block boxes inside the table wrapper box", §8.4's Applies-to
+ * line does not exclude it, and neither border model says anything about it.
+ *
+ * THE COLLAPSING ARMS ARE ROUTES AND NOT ARITHMETIC, which is what keeps this from being a second reading of
+ * §17.6.2 beside core/layout/table_border_collapse.c's. Nothing here halves anything or resolves any conflict;
+ * it asks WHICH sentence covers this box and reads the answer. */
+typedef enum {
+    /* Every box outside §17's exceptions, and a TABLE or CELL box under §17.6.1 — the computed `padding-*` and
+       `border-*-width`, which is what CSS 2.1 §8.4 and css-backgrounds-3 §3.3 give the box. */
+    UV_EDGES_DECLARED = 0,
+    /* §17.5's row, row group, column and column group boxes, in BOTH border models — neither term. */
+    UV_EDGES_INTERNAL_NONE,
+    /* A TABLE box under §17.6.2 — no padding, and §17.6.2's own four halves for the border. */
+    UV_EDGES_COLLAPSED_TABLE,
+    /* A CELL box under §17.6.2 — the declared padding, and §17.6.2's half at each interior grid line. */
+    UV_EDGES_COLLAPSED_CELL
+} UvEdgeModel;
+
+/* WHICH OF THE FOUR SENTENCES ABOVE COVERS `el`, from the ONE fact that decides it: the computed `display`
+   §17.2 classifies (core/layout/table_box.h), and for the two kinds whose answer is model-dependent, §17.6's
+   `border-collapse` read off the TABLE (core/layout/table_border_collapse.h owns that read, including that the
+   property is asked of the table and never of a cell).
+   EVERY ENUMERATOR IS LISTED AND THERE IS NO `default`, so a box type added to §17.2's ten fails to compile
+   here rather than falling silently into the declared arm — which is the arm that is wrong for five of them. */
+static UvEdgeModel uv_edge_model(lxb_dom_element_t *el)
+{
+    char *d = uv_computed(el, "display");
+    TableBoxKind kind = table_box_kind(d);
+    UvEdgeModel model = UV_EDGES_DECLARED;
+
+    free(d);
+    switch (kind) {
+    case TABLE_BOX_ROW:
+    case TABLE_BOX_ROW_GROUP:
+    case TABLE_BOX_HEADER_GROUP:
+    case TABLE_BOX_FOOTER_GROUP:
+    case TABLE_BOX_COLUMN:
+    case TABLE_BOX_COLUMN_GROUP:
+        model = UV_EDGES_INTERNAL_NONE;
+        break;
+    case TABLE_BOX_TABLE:
+    case TABLE_BOX_INLINE_TABLE:
+        if (table_border_collapse_selected(el)) model = UV_EDGES_COLLAPSED_TABLE;
+        break;
+    case TABLE_BOX_CELL:
+        if (table_border_collapse_selected(table_box_table_of(el))) model = UV_EDGES_COLLAPSED_CELL;
+        break;
+    case TABLE_BOX_CAPTION:
+    case TABLE_BOX_NOT_A_TABLE_BOX:
+        break;
+    }
+    return model;
+}
+
+static bool uv_edge_model_is_collapsed(UvEdgeModel model)
+{
+    return model == UV_EDGES_COLLAPSED_TABLE || model == UV_EDGES_COLLAPSED_CELL;
+}
+
+/* §17.6.2's FOUR WIDTHS for whichever of its two boxes this is, asked ONCE per surround rather than once per
+   side: both entries gather the table's boxes and build its grid per call (core/layout/table_border_collapse.h
+   names that cost), so a per-side ask would do it twice for one axis and four times for a box. */
+static TableCollapsedEdges uv_collapsed_edges(lxb_dom_element_t *el, UvEdgeModel model)
+{
+    DCHECK(model == UV_EDGES_COLLAPSED_TABLE || model == UV_EDGES_COLLAPSED_CELL,
+           "CSS 2.1 §17.6.2 The collapsing border model's border widths were asked for of a box this file "
+           "classified as being in neither of that section's two arms — the routing above answers four cases "
+           "and only these two have a collapsed border width to read");
+    if (model == UV_EDGES_COLLAPSED_TABLE) return table_collapsed_table_edges(el);
+    return table_collapsed_cell_edges(el);
+}
+
+/* THE TWO TERMS ON ONE SIDE. `side` indexes the four in the order every four-side rule in CSS states them —
+   top, right, bottom, left — which is also `TableCollapsedEdges`' own field order, so the two cannot come
+   apart by a rotation. */
+typedef struct {
+    CssPx padding;
+    CssPx border;
+} UvSide;
+
+static CssPx uv_collapsed_side(const TableCollapsedEdges *e, int side)
+{
+    switch (side) {
+    case 0: return e->top;
+    case 1: return e->right;
+    case 2: return e->bottom;
+    default: return e->left;
+    }
+}
+
+static UvSide uv_side(lxb_dom_element_t *el, UvEdgeModel model, const TableCollapsedEdges *collapsed, int side)
+{
+    static const char *const PADDINGS[4] = {
+        "padding-top", "padding-right", "padding-bottom", "padding-left",
+    };
+    static const char *const BORDERS[4] = {
+        "border-top-width", "border-right-width", "border-bottom-width", "border-left-width",
+    };
+    UvSide s = { css_px(0.0), css_px(0.0) };
+
+    DCHECK(side >= 0 && side < 4, "a box side outside CSS 2.1 §8.1 \"Box dimensions\"' four");
+    if (model == UV_EDGES_INTERNAL_NONE) {
+        /* §8.4's Applies-to line is ASKED of the component that owns it rather than restated, so the two
+           classifications cannot come apart silently: `css_property_applies` decides §8.4's exclusion list from
+           the computed `display`, and `uv_edge_model` above decides §17.2's box kind from the same value. A
+           disagreement means one of them read a `display` the other did not. */
+        DCHECK(!css_property_applies(el, PADDINGS[side]),
+               "CSS 2.1 §8.4 \"Padding properties: 'padding-top', 'padding-right', 'padding-bottom', "
+               "'padding-left', and 'padding'\"' Applies-to line — \"all elements except table-row-group, "
+               "table-header-group, table-footer-group, table-row, table-column-group and table-column\" — now "
+               "COVERS a box CSS 2.1 §17.2 The CSS table model classifies as a row, a row group, a column or a "
+               "column group, so this file is dropping a padding the cascade gives the box and every rectangle "
+               "derived from its edges is short by it");
+        return s;
+    }
+    if (uv_edge_model_is_collapsed(model)) {
+        s.border = uv_collapsed_side(collapsed, side);
+    } else {
+        CssLength len = css_computed_length(el, BORDERS[side]);
+
+        DCHECK(len.kind == CSS_LENGTH_ABSOLUTE,
+               "a `border-*-width` computed to something that is not an absolute length. css-backgrounds-3 "
+               "§3.3 \"Line Thickness: the border-width properties\"' `Computed value:` line is `absolute "
+               "length, snapped as a border width` and every arm of that derivation produces one — 0 for a "
+               "`none`/`hidden` style, 1/3/5px for the three keywords, the absolutized length otherwise — so a "
+               "percentage or a keyword here is a rule that did not run");
+        s.border = len.px;
+    }
+    /* §17.6.2's "a table does not have padding (but does have margins)" is the ONE arm with a border and no
+       padding; a CELL under the same model keeps §17.5's "Cells have padding as well". */
+    if (model != UV_EDGES_COLLAPSED_TABLE) s.padding = used_value_px(el, PADDINGS[side]);
+    return s;
+}
+
+/* THE FOUR TERMS OF css-sizing-3 §3.3's CONVERSION BETWEEN THE TWO BOXES, on one axis. css-sizing-3 §3.3
+   converts a border box into a content box by subtracting "the border and padding in the corresponding axis",
+   and every arm below needs that sum or half of it — the `border-box` size ADDS it, the padding edge subtracts
+   it and adds the paddings back. It is the two SIDES above summed, so which terms a box has is decided in the
+   one place that decides it and never here. */
 typedef struct {
     CssPx padding;   /* padding-left + padding-right, or padding-top + padding-bottom */
     CssPx border;    /* border-left-width + border-right-width, or the top/bottom pair */
@@ -447,27 +630,17 @@ typedef struct {
 
 static UvSurround uv_surround(lxb_dom_element_t *el, bool vertical)
 {
-    static const char *const PADDINGS[2][2] = {
-        { "padding-left", "padding-right" }, { "padding-top", "padding-bottom" },
-    };
-    static const char *const BORDERS[2][2] = {
-        { "border-left-width", "border-right-width" }, { "border-top-width", "border-bottom-width" },
-    };
-    int axis = vertical ? 1 : 0, i;
-    UvSurround s = { css_px(0.0), css_px(0.0) };
+    TableCollapsedEdges collapsed = { { 0.0, CSS_ENV_NONE, NULL }, { 0.0, CSS_ENV_NONE, NULL },
+                                      { 0.0, CSS_ENV_NONE, NULL }, { 0.0, CSS_ENV_NONE, NULL } };
+    UvEdgeModel model = uv_edge_model(el);
+    UvSide before, after;
+    UvSurround s;
 
-    for (i = 0; i < 2; i++) {
-        CssLength len = css_computed_length(el, BORDERS[axis][i]);
-
-        DCHECK(len.kind == CSS_LENGTH_ABSOLUTE,
-               "a `border-*-width` computed to something that is not an absolute length. css-backgrounds-3 "
-               "§3.3's `Computed value:` line is `absolute length, snapped as a border width` and every arm of "
-               "that derivation produces one — 0 for a `none`/`hidden` style, 1/3/5px for the three keywords, "
-               "the absolutized length otherwise — so a percentage or a keyword here is a rule that did not "
-               "run");
-        s.border  = css_px_add(s.border, len.px);
-        s.padding = css_px_add(s.padding, used_value_px(el, PADDINGS[axis][i]));
-    }
+    if (uv_edge_model_is_collapsed(model)) collapsed = uv_collapsed_edges(el, model);
+    before = uv_side(el, model, &collapsed, vertical ? 0 : 3);
+    after  = uv_side(el, model, &collapsed, vertical ? 2 : 1);
+    s.padding = css_px_add(before.padding, after.padding);
+    s.border  = css_px_add(before.border, after.border);
     DCHECK(s.padding.px >= 0.0 && s.border.px >= 0.0,
            "css-sizing-3 §3.3's conversion between the content box and the border box was handed a NEGATIVE "
            "surround. CSS 2.1 §8.4 states outright that \"Unlike margin properties, values for padding values "
@@ -475,6 +648,22 @@ static UvSurround uv_surround(lxb_dom_element_t *el, bool vertical)
            "either declaration — a negative here is a used value this component derived rather than one an "
            "author wrote, and every box it is a term of would be smaller than the box it contains");
     return s;
+}
+
+/* THE SAME PAIR ON THE AXIS'S LEADING SIDE — the LEFT one for `vertical` false and the TOP one for true, which
+   is the side CSS 2.1 §10.1's second case and §9.4.1's placement both measure from ("the content edge of the
+   nearest block container ancestor box"). It is an ENTRY rather than two reads at the caller for the reason
+   the extents above are: which terms the box has is §17's question, and a caller holding the two property
+   names cannot answer it — core/layout/flow_position.c read them directly and placed every row of a collapsed
+   table by the table's DECLARED border and padding, neither of which §17.6.2 gives it. */
+static UvSide uv_leading_side(lxb_dom_element_t *el, bool vertical)
+{
+    TableCollapsedEdges collapsed = { { 0.0, CSS_ENV_NONE, NULL }, { 0.0, CSS_ENV_NONE, NULL },
+                                      { 0.0, CSS_ENV_NONE, NULL }, { 0.0, CSS_ENV_NONE, NULL } };
+    UvEdgeModel model = uv_edge_model(el);
+
+    if (uv_edge_model_is_collapsed(model)) collapsed = uv_collapsed_edges(el, model);
+    return uv_side(el, model, &collapsed, vertical ? 0 : 3);
 }
 
 /* §5's SUM, as one function rather than as the expression `s.padding + s.border` written twice. That is not
@@ -734,45 +923,17 @@ static CssPx uv_table_row_used_width(lxb_dom_element_t *el)
            "non-negative where it answers them — §17.6.1 The separated borders model states the second outright "
            "(\"Lengths may not be negative\") — so a negative here is arithmetic that lost a sign, and the "
            "rectangle it would put through CSSOM VIEW is one no reader can tell from a measured one");
-    /* THE SURROUND IS ASSERTED WHERE THE EXTENT IS PRODUCED RATHER THAN AT EVERY CONSUMER OF IT, AND IT IS TWO
-       ASSERTS BECAUSE IT IS TWO QUESTIONS. The padding term and the border term are refused by different
-       sections, and the border one is refused DIFFERENTLY IN THE TWO BORDER MODELS, so one conjoined check
-       would have to cite a sentence that is false in one of them — which is how a crash comes to name a rule
-       the document does not have. Both are checked on BOTH `box-sizing` values, unlike the block-axis twin in
-       `uv_table_row_used_height`, because the two mistakes are not the same size: under `border-box`
-       `uv_content_size` SUBTRACTS the surround from this number and under `content-box` `uv_edge_px` ADDS it,
-       so a phantom term corrupts the derived rectangle either way and only one of those cases was covered. */
-    DCHECK(uv_surround(el, false).padding.px == 0.0,
-           "CSS 2.1 §17.5 Visual layout of table contents' own first paragraph says which internal table boxes "
-           "have padding and this is not one of them — \"Internal table elements generate rectangular boxes "
-           "with content and borders. Cells have padding as well. Internal table elements do not have "
-           "margins.\" — and CSS 2.1 §8.4 Padding properties: 'padding-top' , 'padding-right' , "
-           "'padding-bottom' , 'padding-left' , and 'padding' says the same in its own Applies-to line, \"all "
-           "elements except table-row-group, table-header-group, table-footer-group, table-row, "
-           "table-column-group and table-column\". Neither sentence is about the border model, so a row box's "
-           "and a row group box's padding term is zero under §17.6.1 The separated borders model and under "
-           "§17.6.2 The collapsing border model alike — and this box reports a non-zero horizontal one. "
-           "`uv_surround` is reading the DECLARED `padding-left`/`padding-right` of a box §8.4 does not let "
-           "have them, so `uv_edge_px` adds them to the extent above and `uv_content_size` subtracts them, and "
-           "every rectangle derived from either is wrong by that sum. BUILD §8.4's Applies-to line into "
-           "`uv_surround`, which its own comment already calls the ONE place the four terms are computed and "
-           "which is where both axes meet. `tr { padding: 4px }` is how this arrives");
-    DCHECK(uv_surround(el, false).border.px == 0.0,
-           "a ROW box or ROW GROUP box carries a horizontal BORDER width into CSS 2.1 §17.5's extent, and "
-           "neither border model puts one there. Under CSS 2.1 §17.6.1 The separated borders model the box "
-           "cannot have one at all — \"Rows, columns, row groups, and column groups cannot have borders (i.e., "
-           "user agents must ignore the border properties for those elements)\". Under CSS 2.1 §17.6.2 The "
-           "collapsing border model it MAY declare one — that section's first sentence says borders may "
-           "surround \"all or part of a cell, row, row group, column, and column group\" — but the declaration "
-           "is an INPUT to §17.6.2.1 Border conflict resolution, which resolves it at the grid line it is "
-           "specified on together with every other element meeting there (\"cells, rows, row groups, columns, "
-           "column groups, and the table itself\"), and §17.5's last paragraph then puts the row's own edges ON "
-           "those grid lines. So the resolved border is already inside the column widths summed above and the "
-           "row box has no border AREA outside them in either model. Adding this term DOUBLE-COUNTS it under "
-           "§17.6.2 and invents it under §17.6.1. BUILD the two models' readings into `uv_surround` beside "
-           "§8.4's — the collapsing half is the same question core/layout/table_border_collapse.h already "
-           "answers for the TABLE box, one box type over. `tr { border: 1px solid }` is how this arrives on "
-           "THIS axis; a `border-bottom` alone reaches the block-axis twin instead");
+    /* THE SURROUND IS NOT ASSERTED HERE AND THE TWO ASSERTS THAT STOOD HERE ARE GONE, WHICH IS A FIX AND NOT A
+       RELAXATION — kept as a paragraph rather than deleted so that nobody re-derives the reading that made
+       them necessary. They said that `uv_surround` was reading a DECLARED `padding-left`/`padding-right` and
+       `border-*-width` off a box CSS 2.1 §8.4 "Padding properties: 'padding-top', 'padding-right',
+       'padding-bottom', 'padding-left', and 'padding'" and §17.6.1 The separated borders model deny it, so
+       `uv_edge_px` added a phantom term to this extent and `uv_content_size` subtracted one from it. That was
+       true, and the remedy they named — build both sections' readings into `uv_surround`, the one place the
+       four terms are computed — is BUILT: `uv_edge_model` asks §17.2 The CSS table model which box this is and
+       answers neither term for a row, a row group, a column or a column group, in BOTH border models. So the
+       invariant now holds at its ORIGIN, where it covers every consumer of a row's edges and not only this
+       one, and a check here would be this file asserting its own arithmetic two functions later. */
     return w;
 }
 
@@ -900,9 +1061,18 @@ static CssPx uv_table_cell_used_height(lxb_dom_element_t *el)
    is calculated once the user agent has all the cells in the row available", which is why it is a read of the
    whole table's answer rather than a rule this function could apply to one row.
    IT IS A BORDER-BOX NUMBER AND A ROW HAS NO BORDER TO SUBTRACT: §17.6.1 The separated borders model says
-   outright that "rows, columns, row groups, and column groups cannot have borders (i.e., user agents must
+   outright that "Rows, columns, row groups, and column groups cannot have borders (i.e., user agents must
    ignore the border properties for those elements)", so the row's border box and its content box coincide on
-   this axis and css-sizing-3 §3.3's conversion is the identity for it. That is asserted rather than assumed. */
+   this axis and css-sizing-3 §3.3's conversion is the identity for it.
+   THAT USED TO BE ASSERTED HERE AND IS NOW TRUE BY CONSTRUCTION, which is why the assert is gone. The check
+   that stood below said this row reports a non-zero vertical padding or border and named the two ways that
+   could happen — the sentence above not being enforced where the properties are read, or §17.5.3's row height
+   being measured in a different box from the one it is reported in. The first is now impossible: `uv_surround`
+   asks §17.2 The CSS table model which box it is being asked about and answers neither term for a row box,
+   under §17.6.1 and §17.6.2 The collapsing border model alike, so the identity holds at the ORIGIN of the pair
+   rather than at this one consumer of it. The assert also carried a `!uv_is_border_box(el) ||` guard the
+   inline twin did not, which made it silent on exactly the `box-sizing` value where `uv_edge_px` ADDS the
+   phantom term — so replacing it with the routing is strictly more coverage and not less. */
 static CssPx uv_table_row_used_height(lxb_dom_element_t *el)
 {
     lxb_dom_element_t *table = table_box_table_of(el);
@@ -941,13 +1111,6 @@ static CssPx uv_table_row_used_height(lxb_dom_element_t *el)
                "table's own box generation does not report as a row of it. There is no height to answer with — "
                "the rows in hand belong to a grid this row is not in",
                box_subject(el, nbuf, sizeof nbuf), box_subject(table, tbuf, sizeof tbuf));
-    DCHECK(!uv_is_border_box(el) || css_px_add(uv_surround_total(uv_surround(el, true)), css_px(0.0)).px == 0.0,
-           "CSS 2.1 §17.6.1 The separated borders model says \"rows, columns, row groups, and column groups "
-           "cannot have borders (i.e., user agents must ignore the border properties for those elements)\", so "
-           "a row's border box and its content box are one rectangle on the block axis and css-sizing-3 §3.3's "
-           "conversion is the identity here — and this row has a non-zero vertical padding or border. Either "
-           "that sentence is not being enforced where the properties are read, or §17.5.3's row height is being "
-           "measured in a different box from the one it is reported in");
     return h;
 }
 
@@ -3010,6 +3173,21 @@ CssPx used_value_border_edge_px(lxb_dom_element_t *el, bool vertical)
 {
     DCHECK(el != NULL, "a border edge's extent was asked for with no element");
     return uv_edge_px(el, vertical, true);
+}
+
+CssPx used_value_leading_border_px(lxb_dom_element_t *el, bool vertical)
+{
+    DCHECK(el != NULL, "CSS 2.1 §8.1's leading border width was asked for with no element");
+    return uv_leading_side(el, vertical).border;
+}
+
+CssPx used_value_leading_edge_px(lxb_dom_element_t *el, bool vertical)
+{
+    UvSide s;
+
+    DCHECK(el != NULL, "CSS 2.1 §8.1's leading border and padding were asked for with no element");
+    s = uv_leading_side(el, vertical);
+    return css_px_add(s.border, s.padding);
 }
 
 /* CSS 2 §8.1's OUTERMOST NESTING, stated over the border edge above rather than over a third surround — "the

@@ -206,6 +206,34 @@ CssPx used_value_padding_edge_px(lxb_dom_element_t *el, bool vertical);
    core/layout/flow_position.h owns that half. */
 CssPx used_value_border_edge_px(lxb_dom_element_t *el, bool vertical);
 
+/* CSS 2.1 §8.1 "Box dimensions"' ONE EDGE between a box's BORDER box and its PADDING box on the axis's LEADING
+   side — the `border-left-width` for `vertical` false and the `border-top-width` for true, as USED values.
+   IT IS AN ENTRY BECAUSE THE COMPUTED VALUE IS NOT ALWAYS THE USED ONE, and that is the whole of its reason
+   for existing. CSS 2.1 §17.6.1 The separated borders model makes a row, row group, column or column group
+   box's border widths ZERO ("Rows, columns, row groups, and column groups cannot have borders (i.e., user
+   agents must ignore the border properties for those elements)"), §17.6.2 The collapsing border model makes a
+   TABLE box's HALF of the collapsed border at the grid's edge and a CELL's half of the resolved border at
+   each INTERIOR grid line, and none of those is a value the cascade holds. A caller reading
+   `css_computed_length(el, "border-left-width")` gets the declaration in every one of those cases, so the
+   question is asked here, once, for every consumer.
+   ITS CALLER IS core/layout/flow_position.c's PADDING-BOX ORIGIN — CSS 2.1 §8.1's border box origin moved
+   inward by this one edge on each axis. */
+CssPx used_value_leading_border_px(lxb_dom_element_t *el, bool vertical);
+
+/* THE SAME SIDE'S TWO EDGES — that border width plus that side's USED padding, which is CSS 2.1 §8.1's
+   distance from a box's BORDER edge to its CONTENT edge on the leading side of one axis.
+   ITS CALLERS ARE §10.1's SECOND CASE AND §9.4.2's FRAGMENTS, both core/layout/flow_position.c: a containing
+   block is "the content edge of the nearest block container ancestor box" while the coordinate this engine
+   places every box at is its BORDER edge, and this pair is the whole of the difference.
+   THE PADDING IS NOT ALWAYS THE CASCADE'S EITHER, which is why this is not the entry above plus
+   `used_value_px(el, "padding-left")` at a caller. CSS 2.1 §8.4 "Padding properties: 'padding-top',
+   'padding-right', 'padding-bottom', 'padding-left', and 'padding'"' Applies-to line excludes the row, row
+   group, column and column group boxes, and CSS 2.1 §17.6.2 The collapsing border model says of a table box
+   that "in this model, a table does not have padding (but does have margins)" — so a caller composing the two
+   reads itself would place every row of a `border-collapse: collapse` table by a padding the table does not
+   have. See used_value.c for the routing and for the five box types it answers. */
+CssPx used_value_leading_edge_px(lxb_dom_element_t *el, bool vertical);
+
 /* THE USED EXTENT OF THE MARGIN EDGE on one axis, in CSS pixels — CSS 2 §8.1 "Box dimensions"' outermost
    nesting, "the margin edge surrounds the box margin … the four margin edges define the box's MARGIN BOX". It
    is the border edge plus the two margins on the axis, and it is the third entry of the same one nesting for

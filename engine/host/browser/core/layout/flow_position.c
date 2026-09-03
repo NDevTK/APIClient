@@ -154,30 +154,24 @@ static CssPx fp_left_offset(lxb_dom_element_t *el, CssPx cb_width)
                       used_value_border_edge_px(el, false));
 }
 
-/* CSS 2 §8.1's ONE edge between a box's BORDER box and its PADDING box on the leading side of one axis. */
-static CssPx fp_border_before(lxb_dom_element_t *el, bool vertical)
-{
-    CssLength b = css_computed_length(el, vertical ? "border-top-width" : "border-left-width");
-    char nbuf[160];
-
-    DCHECKF(b.kind == CSS_LENGTH_ABSOLUTE,
-           "%s, property `%s`, computed kind %d: "
-           "a `border-*-width` computed to something that is not an absolute length. css-backgrounds-3 §3.3's "
-           "`Computed value:` line is `absolute length, snapped as a border width`, so every arm of that "
-           "derivation produces one and a percentage or a keyword here is a rule that did not run",
-           box_subject(el, nbuf, sizeof nbuf),
-           vertical ? "border-top-width" : "border-left-width", (int) b.kind);
-    return b.px;
-}
-
-/* CSS 2 §8.1's two edges between a box's BORDER box and its CONTENT box on the leading side of one axis — the
-   top border and padding, or the left pair. §10.1's second case makes a containing block the CONTENT edge of a
-   box whose own origin is its BORDER edge, and this is the whole of the difference. */
-static CssPx fp_edge_before(lxb_dom_element_t *el, bool vertical)
-{
-    return css_px_add(fp_border_before(el, vertical),
-                      used_value_px(el, vertical ? "padding-top" : "padding-left"));
-}
+/* CSS 2 §8.1's edges between a box's BORDER box and its PADDING box, and between that and its CONTENT box, on
+ * the leading side of one axis, are `used_value_leading_border_px` and `used_value_leading_edge_px`.
+ *
+ * THEY ARE READ FROM core/layout/used_value.h AND WERE ONCE COMPOSED HERE, AND THE DIFFERENCE IS NOT TIDINESS.
+ * What stood here read `border-top-width`/`border-left-width` off the cascade and added
+ * `used_value_px(el, "padding-*")` beside it — two computed values, composed by a caller that had no way to
+ * ask whether the box HAS them. CSS 2.1 §17 Tables says it does not, for five of §17.2 The CSS table model's
+ * ten box types: §17.6.1 The separated borders model refuses a row, row group, column or column group box a
+ * border outright, §8.4 "Padding properties: 'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
+ * and 'padding'"' Applies-to line refuses those same four a padding, and §17.6.2 The collapsing border model
+ * says of a table box that "in this model, a table does not have padding (but does have margins)" and makes
+ * its border widths halves of the collapsed borders at the grid's edges rather than the declared value. So
+ * `fp_table_row_origin` below placed every row of a `border-collapse: collapse` table by a padding the table
+ * does not have and a border twice the one §17.6.2 gives it — a whole-table offset with nothing to say so,
+ * because both operands were real lengths the author really wrote.
+ * THE FIX IS THE ENTRY AND NOT A BRANCH HERE. Four call sites composed the pair and a fifth composed the
+ * border alone; a §17 branch at each would have been the same routing decision written five times over a
+ * difference none of them can see. */
 
 /* CSS 2.1 §17.5 Visual layout of table contents' PLACEMENT OF ONE ROW BOX, which is §17.5's rule 1 and §17.6.1
  * The separated borders model's spacing turned into the coordinate this file reports, and NOT §9.4.1's two
@@ -286,8 +280,8 @@ static FlowPoint fp_table_row_origin(lxb_dom_element_t *el)
            "and asserts that count against the grid's own, so the two arrays have been carried apart");
     /* §17.6.1: one border-spacing between the table box's content edge and the first cell border, and one more
        between each adjoining pair of rows. */
-    p.x = css_px_add(css_px_add(table_origin.x, fp_edge_before(table, false)), widths.spacing);
-    y = css_px_add(css_px_add(table_origin.y, fp_edge_before(table, true)), heights.spacing);
+    p.x = css_px_add(css_px_add(table_origin.x, used_value_leading_edge_px(table, false)), widths.spacing);
+    y = css_px_add(css_px_add(table_origin.y, used_value_leading_edge_px(table, true)), heights.spacing);
     for (j = 0; j < row; j++)
         y = css_px_add(css_px_add(y, heights.rows[j]), heights.spacing);
     p.y = y;
@@ -396,8 +390,8 @@ size_t flow_inline_fragment_rects(lxb_dom_element_t *el, FlowRect **out)
        writing mode crashes by its own section) plus CSS 2 §8.1's leading border and padding, which is the
        difference between that box's BORDER edge and the CONTENT edge core/layout/line_box.h measures from. */
     o = flow_border_box_origin(style);
-    left = css_px_add(o.x, fp_edge_before(style, false));
-    top = css_px_add(o.y, fp_edge_before(style, true));
+    left = css_px_add(o.x, used_value_leading_edge_px(style, false));
+    top = css_px_add(o.y, used_value_leading_edge_px(style, true));
     rects = malloc(n * sizeof *rects);
     CHECK(rects != NULL, "out of memory placing CSS 2 §9.4.2's box fragments — one entry per fragment of one "
                          "inline box, so a failure here is the physical floor");
@@ -654,9 +648,9 @@ FlowPoint flow_border_box_origin(lxb_dom_element_t *el)
            "come apart",
            box_subject(el, nbuf, sizeof nbuf), box_subject_node(n->parent, vbuf, sizeof vbuf));
     o = flow_border_box_origin(cb);
-    p.x = css_px_add(css_px_add(o.x, fp_edge_before(cb, false)),
+    p.x = css_px_add(css_px_add(o.x, used_value_leading_edge_px(cb, false)),
                      fp_left_offset(el, used_value_containing_block_width(el)));
-    p.y = css_px_add(css_px_add(o.y, fp_edge_before(cb, true)), block_flow_child_top(el));
+    p.y = css_px_add(css_px_add(o.y, used_value_leading_edge_px(cb, true)), block_flow_child_top(el));
     return p;
 }
 
@@ -668,7 +662,7 @@ FlowPoint flow_padding_box_origin(lxb_dom_element_t *el)
 {
     FlowPoint p = flow_border_box_origin(el);
 
-    p.x = css_px_add(p.x, fp_border_before(el, false));
-    p.y = css_px_add(p.y, fp_border_before(el, true));
+    p.x = css_px_add(p.x, used_value_leading_border_px(el, false));
+    p.y = css_px_add(p.y, used_value_leading_border_px(el, true));
     return p;
 }

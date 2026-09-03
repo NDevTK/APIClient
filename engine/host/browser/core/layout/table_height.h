@@ -114,11 +114,15 @@ typedef struct {
        block axis has no such peculiarity and a declared `height` is an ordinary content-box length under the
        initial `box-sizing`.
        A CONSUMER CONVERTING THIS TO A BORDER BOX UNDER §17.6.2 The collapsing border model MUST NOT READ THE
-       PROPERTIES, for the reason core/layout/table_width.h's own `content` field states as a named residual and
-       does not repeat here: a collapsed table box has no padding at all and its top and bottom border widths
-       are half of the maximum collapsed border at the grid's top and bottom lines, which
-       core/layout/table_border_collapse.h's `table_collapsed_table_edges` answers on both axes at once. The one
-       diff that fixes it fixes this axis with the other. */
+       PROPERTIES, for the reason core/layout/table_width.h's own `content` field states and does not repeat
+       here: a collapsed table box has no padding at all and its top and bottom border widths are half of the
+       maximum collapsed border at the grid's top and bottom lines, which
+       core/layout/table_border_collapse.h's `table_collapsed_table_edges` answers on both axes at once. THAT
+       WAS A NAMED RESIDUAL ON BOTH AXES AND ONE DIFF BUILT BOTH, as it said it would: core/layout/used_value.c
+       routes the surround by §17.2 The CSS table model's box kind and by §17.6's model, so this axis's
+       conversion reads those halves and no property. The reading is kept rather than deleted because a
+       consumer re-deriving "the border box is this plus `border-top-width` plus `border-bottom-width`" would
+       re-introduce exactly the term §17.6.2 halves. */
     CssPx   content;
     /* §17.6.1's VERTICAL `border-spacing` — "the first gives the horizontal spacing and the second the vertical
        spacing" — which `content` holds `nrows + 1` of, one between each adjoining pair of rows and one at each

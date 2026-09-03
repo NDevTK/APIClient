@@ -93,20 +93,23 @@ typedef struct {
        §17.4's wrapper width adds the table box's own horizontal SURROUND to it — which is what
        core/layout/used_value.h's border edge already does for every other box.
        WHAT THAT SURROUND IS DEPENDS ON THE BORDER MODEL, AND A CONSUMER READING THE PROPERTIES DIRECTLY IS
-       WRONG UNDER §17.6.2 The collapsing border model. NAMED RESIDUAL. WHAT IS NOT COVERED: a collapsed table
-       box has NO padding at all ("Also, in this model, a table does not have padding (but does have margins)")
-       and its border widths are not its computed `border-*-width` but §17.6.2's own halves ("The left border
-       width of the table is half of the first cell's collapsed left border"), which
-       core/layout/table_border_collapse.h's `table_collapsed_table_edges` answers whole; a consumer that reads
-       the four properties instead reports a collapsed table's border box too wide by its declared padding plus
-       the difference between its declared border and that half. WHAT THE NEXT DIFF BUILDS: the §17.6.2 arm of
-       core/layout/used_value.c's `uv_surround` for a box whose `display` generates a TABLE box, taken from
-       that entry — one branch, in the one function every border-edge conversion in this tree goes through, so
-       core/layout/flow_position.c's row origin (which measures from this content edge) is fixed by the same
-       line. HOW ITS ABSENCE WOULD SHOW: for `<table style="border-collapse:collapse;border:10px solid">` whose
-       cells declare no border of their own, the resolved border at each outermost grid line is 10 and §17.6.2
-       gives the table box a border width of 5 on each side — so its border box is the content width plus 10,
-       and a consumer reading `border-left-width` and `border-right-width` reports it plus 20. */
+       WRONG UNDER §17.6.2 The collapsing border model — which is why the conversion goes through
+       core/layout/used_value.h and never through `css_computed_length` at a caller. A collapsed table box has
+       NO padding at all ("Also, in this model, a table does not have padding (but does have margins)") and its
+       border widths are not its computed `border-*-width` but §17.6.2's own halves ("The left border width of
+       the table is half of the first cell's collapsed left border"), which
+       core/layout/table_border_collapse.h's `table_collapsed_table_edges` answers whole.
+       THIS WAS A NAMED RESIDUAL AND IT IS BUILT; the reading is kept rather than deleted so that nobody
+       re-derives the four-property version. core/layout/used_value.c's surround now asks §17.2 The CSS table
+       model which box it is being asked about and takes §17.6.2's halves for a table box in that model, so
+       every border-edge conversion in this tree — the one `used_value_border_edge_px` performs over this
+       field, and the leading pair core/layout/flow_position.c measures a row's origin from — reads the SAME
+       number `tw_table_edges` subtracts a declared border-box width by, one file over. WHAT IT LOOKED LIKE
+       WHILE IT WAS OPEN, since that is the shape a regression would take again: for
+       `<table style="border-collapse:collapse;border:10px solid">` whose cells declare no border of their own,
+       the resolved border at each outermost grid line is 10 and §17.6.2 gives the table box a border width of
+       5 on each side, so its border box is this content width plus 10 — and a consumer reading
+       `border-left-width` and `border-right-width` reported it plus 20. */
     CssPx   content;
     /* §17.6.1 The separated borders model's HORIZONTAL `border-spacing`, which that section defines as "The
        'border-spacing' property specifies the distance between the borders of adjoining cells" and which
