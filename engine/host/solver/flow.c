@@ -140,12 +140,39 @@ typedef struct FlowAcct {
        field.
        AND IT IS THE SEAM THE REWARD BAND NEEDS. `val_min` pinned across a whole run while `val_max` gains two
        hundred is an account sitting at the coordinate it ARRIVED at while another EARNS past it, and no term
-       can re-relate the first without naming it apart from the second. Split, that is one field to re-derive;
+       can re-relate the first without naming it apart from the second — and `placed` one field down is that
+       re-relation, which is why the split had to land before it could. Split, that is one field to re-derive;
        summed, it was a ledger nobody may touch. The order reads `base + earned` through acct_family_val and is
        unchanged by this split, which is the point: the arithmetic is identical and the QUESTIONS are separable.
        `self_emit` and `val_zero` (flow.h) are the census rows that were quietly answering about the sum. */
     double base;
     double earned;
+    /* …AND WHETHER `base` IS A STORED TAG AT ALL, WHICH IS THE OTHER HALF OF THE SPLIT ABOVE AND THE THING THAT
+       MAKES THE COORDINATE A RELATION RATHER THAN A COPY. `base` above says this account entered the order at
+       the frontier's virtual time; what it could not say is WHEN that reading was taken, and a reading taken
+       ONCE, at creation, is stale from the instant the account in service earns past it.
+       ZERO MEANS THE ACCOUNT HAS NEVER HELD THE THREAD, and while it is zero `base` is not read at all: the
+       account's coordinate IS the frontier's virtual time (g_vt), re-read at every pick. ONE means the account
+       has been dispatched at least once, and from that dispatch onward `base` is the tag frozen at the virtual
+       time it was standing at — SFQ's F, taken when the item is first served. So an account that has been
+       given nothing does not fall behind, and an account that HAS been served stands on its own tag plus its
+       own ledger, which is what keeps `earned` an ordering between accounts instead of a number the arrival
+       rule erases.
+       WHY THE FREEZE IS AT SERVICE AND NOT AT CREATION, WHICH IS THE WHOLE OF THIS FIELD. Start-time fair
+       queueing's `max(v(t), F_prev)` is evaluated at each ARRIVAL, and its content is that a member which has
+       not been SERVED does not fall behind the clock — in SFQ that holds for free, because the server takes the
+       MINIMUM tag and v(t) can therefore never pass a waiting member. This order takes the MAXIMUM and an
+       emission RAISES the served account's tag, so v(t) runs AWAY from the waiting members instead of toward
+       them, and a coordinate stamped at creation is passed by exactly what the incumbent earns afterwards.
+       Measured, on the build smoke fixture: `valMin` pinned at 183.0 from the second census to the last while
+       `valMax` gained 217 and the frontier grew to 660 members, with `valArrived` — accounts standing entirely
+       on the coordinate they arrived at — frozen at 12 beside `cands: 12`, `turns: 0` on every one of them.
+       Those twelve were the @S candidate sessions, so every §@S mechanism was unreachable by construction.
+       AND IT MUST BE A FACT ABOUT THE ACCOUNT, NEVER ABOUT A MEMBER. Two arms of one parent forked at two
+       instants must read the coordinate the same, so there is nothing here for a fork to carry differently:
+       the arm joins the family (flow_fork_inherit) and reads this bit through the same pointer. A per-flow
+       copy of it would be reset-by-splitting arriving through the arrival door. */
+    unsigned char placed;
     /* WHICH SILENCE WINDOW THIS ACCOUNT IS CURRENTLY IN — bumped by every emission credited here, and read by
        nothing except `Flow.cpu_gen` beside it. It is the OTHER half of the reset `fam_us` above performs, and
        it exists because the aging term has two halves that were measured over TWO DIFFERENT WINDOWS while being
@@ -304,6 +331,66 @@ static int64_t flow_own_silence(const Flow *f) {
            "forecloses, which is §scheduler's razor's STARVES: fix the transition this abort names so both "   \
            "halves move over the epoch FlowAcct's `emit_gen` keeps")
 
+/* THE QUEUE COORDINATE, forward-declared because the frontier's virtual time below is a reading OF it and the
+   ordering itself is stated once, further down beside the terms it is made of. */
+static double flow_queue_weight(const Flow *f);
+
+/* THE FRONTIER'S VIRTUAL TIME — SFQ's v(t), WHICH IS THE SERVICE TAG OF THE ITEM IN SERVICE AND NOT A QUANTITY
+ * OF ITS OWN. It is the one place the queue's clock is spelled, and the reason it is a stored scalar rather
+ * than a derivation is that it has to be readable when NOTHING is in service: the frontier persists across
+ * slices and across sessions, so a definition that answers only while `g_running` is set would hand every
+ * newcomer a different coordinate depending on whether the host happened to be between two dispatches.
+ *
+ * IT IS WRITTEN AT EXACTLY TWO EVENTS, AND BOTH OF THEM MOVE THE SERVING ITEM'S TAG. A DISPATCH makes a new
+ * item the one in service, so v(t) becomes that item's queue coordinate; an EMISSION by the item in service
+ * raises that same item's coordinate by what it just earned, so v(t) follows it up. Between those two events
+ * the clock is CONSTANT, which is what SFQ says of it and what makes a newcomer's placement a fact rather than
+ * a race with whichever microsecond it was created in.
+ *
+ * AND IT DELIBERATELY DOES **NOT** FOLLOW THE AGING DOWN, WHICH IS THE ASYMMETRY THE WHOLE FIX RESTS ON. The
+ * item in service sinks as it burns the thread, and following it down would charge every member that has never
+ * been served for the thread time of the one that IS being served — the unforgivable debt this file already
+ * removed from the arrival door in the aging term, arriving through the clock instead. A member that has been
+ * given nothing owes nothing.
+ *
+ * FLOORED AT ZERO, WHICH IS THE CLOCK'S ORIGIN AND NOT A CLAMP ON A COMPUTED VALUE. The frontier's first flow
+ * enters at v(0) = 0 and no member has ever entered below that, so a serving tag below zero — an item that has
+ * burned more than its whole reward is worth, which is exactly the state flow_pick's monopolizer guard names —
+ * moves the clock no further back than the start of the busy period. The floor is also what keeps that guard's
+ * own derivation true: it reads `val + 1` off the picked flow and off the untouched member it is compared
+ * against, and a negative reward on a member that has done nothing would make the bound fire on a healthy run.
+ *
+ * READ-ONLY AND O(1) AT EVERY READER, because acct_family_val is called once per member per pick and from
+ * inside DCHECK conditions, where a reader that walked or normalised anything would make every assertion in
+ * this file mutate the structure it is asking about. */
+static double g_vt;
+
+static double frontier_vt(void) {
+    DCHECK(g_vt >= 0.0 && g_vt == g_vt,
+           "the frontier's virtual time is not a coordinate any member could have entered at — the clock is "
+           "floored at the start of the busy period where it is written, so a negative or NaN reading here is "
+           "a second writer that did not go through frontier_vt_serve, and every unplaced account is being "
+           "ranked at a position no flow has ever stood at");
+    return g_vt;
+}
+
+/* …AND THE ONE WRITER OF IT. `f` is the item whose tag the clock is now a reading of: the flow just dispatched,
+   or the flow in service whose own tag an emission has just raised. Called with the flow ALREADY installed as
+   `g_running`, so the coordinate it reads is the one every other member is about to be compared against. */
+static void frontier_vt_serve(const Flow *f) {
+    double v;
+    DCHECK(f != NULL && f->family != NULL,
+           "the frontier's clock was asked to follow a flow that owns no account — a departed flow cannot be "
+           "the item in service, and taking its coordinate would drop the clock to zero and bury every member "
+           "that has never been served underneath the whole frontier");
+    DCHECK(f->family->placed,
+           "the frontier's clock was asked to follow an account that is still reading the clock — the two "
+           "would define each other, so this is a dispatch that installed a flow without stamping its account "
+           "first (see flow_set_running, which does both in one operation and in that order)");
+    v = flow_queue_weight(f);
+    g_vt = v > 0.0 ? v : 0.0;   /* the clock's origin: no member has ever entered below the busy period's start */
+}
+
 /* …AND THE REWARD THAT SILENCE IS SUBTRACTED FROM, read through the SAME pointer for the same reason — see
    FlowAcct's `val`. It is the WFQ's reward term and the only reading of it the order makes: `Flow.val` beside
    it is what ONE member emitted and is a census quantity, never a rank. Exported as flow_reward (flow.h)
@@ -312,8 +399,25 @@ static int64_t flow_own_silence(const Flow *f) {
 static double acct_family_val(const Flow *f) {
     /* THE ORDER'S REWARD IS THE SUM OF THE TWO, and this is the one place that sum is spelled — every
        reader in the tree comes through here, so the split above cannot leak into a caller that adds only one
-       of them. `base` is where the account entered the order and `earned` is what it has emitted since. */
-    return f->family ? f->family->base + f->family->earned : 0.0;   /* departed: its node is gone, so is its rank */
+       of them. `base` is where the account entered the order and `earned` is what it has emitted since.
+       AND THE FIRST OF THE TWO IS A RELATION WHILE THE ACCOUNT HAS NEVER BEEN SERVED, which is the whole of
+       what `placed` says. An unplaced account has emitted nothing (only the flow holding the thread can be
+       credited, and holding the thread is what places an account), so its reward IS the frontier's virtual
+       time — re-read here at every pick rather than copied once at its creation. That is start-time fair
+       queueing's `max(v(t), F)` as a CONTINUING relation: a member the order has never reached does not fall
+       behind the clock, and the instant it is served its tag freezes and it stands on its own ledger like
+       every other account.
+       THE `+ earned` IS WRITTEN ON BOTH ARMS RATHER THAN FACTORED OUT, and the assert says why: it is zero on
+       the unplaced arm by construction, so factoring it would read as an arm where a ledger is DISCARDED
+       rather than one where it is empty, and the day an emission could reach an unplaced account the two
+       spellings would differ by exactly the findings nobody could see going missing. */
+    if (!f->family) return 0.0;                                     /* departed: its node is gone, so is its rank */
+    DCHECK(f->family->placed || f->family->earned == 0.0,
+           "an account that has never held the thread has been credited with an emission — only the running "
+           "flow is credited and a dispatch is what places an account, so either a detector credited a flow "
+           "that is not in service or an account was placed and then un-placed, and this account's reward is "
+           "now the frontier's clock plus a ledger the clock knows nothing about");
+    return (f->family->placed ? f->family->base : frontier_vt()) + f->family->earned;
 }
 
 double flow_reward(const Flow *f) {
@@ -348,8 +452,29 @@ void flow_restore_reward(Flow *f, double val) {
        report last session's findings as this session's on the `self_emit` row and would make the census's
        forgiveness identity claim this account had emitted without ever bumping its generation. `base + earned`
        is unchanged, so §Time-travel's "a high-value flow suspended last week resumes ahead of a low-value
-       fresh one today" holds exactly as before. */
-    f->family->base = val;
+       fresh one today" holds exactly as before.
+       AND IT IS A TAG AND NOT A READING, WHICH IS THE ONE LINE BELOW IT. `base` is only read at all once the
+       account is PLACED (FlowAcct's `placed`), so writing the parked number without placing the account would
+       store last session's coordinate and then rank the recipe at THIS session's clock, discarding exactly the
+       cross-session ordering the park exists to preserve. A rebuilt flow is not a newcomer — it is a member
+       coming BACK with a tag of its own — so it is placed here, by the same statement that writes the tag.
+       NAMED RESIDUAL — A RECIPE PARKED BEFORE IT WAS EVER SERVED COMES BACK PLACED, AND IT SHOULD COME BACK
+       READING. Not covered: an account whose flows never once held the thread is parked as a single number
+       (cold.c writes `%.17g` of flow_reward, which for such an account is the coordinate THIS session's clock
+       stood at) and is restored here as a frozen tag — so a never-served recipe re-enters the next session at
+       a foreign clock's reading rather than continuing to track the one it is now a member of, which is the
+       one-time copy the arrival rule stopped making, arriving through the tier instead of through the door.
+       It is CORRECT for the population the entry was written for — a member coming back that HAS earned — and
+       narrower than the rule, which is why it is named here rather than crashed on: the value is a real
+       coordinate and there is nothing wrong to abort at. What the next diff builds: a park record that carries
+       the account's two quantities apart, as `base` and `earned` are apart here, plus the placement bit, so a
+       rebuild restores a served account at its own tag and a never-served one UNPLACED; that record's format
+       and its writer are cold.c's, and this entry's signature is one number today. How its absence shows: a
+       resumed session reporting `valUnplaced: 0` at its FIRST census while rebuilt recipes are standing, with
+       `valMin` pinned at a coordinate no member of this session has ever been served at — the same signature
+       the arrival copy left, one session removed. */
+    f->family->base   = val;
+    f->family->placed = 1;
 }
 
 /* THE RANKING CHANGED, SO THE RUNNING FLOW'S CLAIM ON THE THREAD MAY HAVE. §scheduler's VALUE YIELD fires "the
@@ -379,6 +504,11 @@ Flow *flow_at(int i) { return (i >= 0 && i < g_flows_n) ? g_flows[i] : NULL; }
 
 void flow_registry_init(const char *doc_name) {
     g_flows = NULL; g_flows_n = 0; g_flows_cap = 0; g_gen = 0; g_running = NULL;
+    /* THE QUEUE'S CLOCK COMES UP WITH THE QUEUE, at SFQ's v(0) = 0. Left standing from a previous registry it
+       would place this frontier's first from-baseline flows at the coordinate a DIFFERENT document's leader
+       had reached — a lifetime quantity read as an instant, which is the collapse `g_rank_changes` beside
+       `g_gen` already records one instance of. */
+    g_vt = 0.0;
     /* THE WORLD NAMESPACE COMES UP WITH THE FRONTIER, not beside it: every flow added below is minted a world
        named by this document, and a frontier whose worlds were unnamed could not be reached from another
        instance at all. */
@@ -391,7 +521,39 @@ unsigned flow_frontier_gen(void) { return g_gen; }
    rescan count has and `scanNextRuns` is not. See solver/flow.h. */
 long flow_rank_changes(void) { return g_rank_changes; }
 
-void  flow_set_running(Flow *f) { g_running = f; }
+/* A FLOW TAKES OR RELEASES THE THREAD — and a dispatch is where an account's coordinate STOPS being a reading
+   of the frontier's clock and becomes a tag of its own. The two statements are ONE operation and in this order,
+   because between them the clock would be defined by an account that is defined by the clock.
+   THE STAMP IS VALUE-PRESERVING BY CONSTRUCTION AND IS ASSERTED AS SUCH. An unplaced account's reward IS
+   frontier_vt(), so freezing that same reading into `base` cannot move the flow's queue coordinate by so much
+   as an ulp — a dispatch is not a re-ranking. What the assertion catches is a stamp that writes some OTHER
+   quantity (the flow's own weight, the incumbent's reward, a sum that has picked up a per-member reading), any
+   of which would move a member at the instant it is picked and make the pick that led there a decision about a
+   weight the member no longer has.
+   RELEASING THE THREAD LEAVES THE CLOCK WHERE IT IS, which is the idle case and is deliberate: v(t) holds
+   between busy periods, so a newcomer created while the host is between two slices enters at the coordinate
+   the frontier last stood at rather than at zero. */
+void  flow_set_running(Flow *f) {
+    if (f && f->family && !f->family->placed) {
+        double w = flow_queue_weight(f);
+        DCHECK(f->family->earned == 0.0,
+               "an account is being placed with a ledger already on it — placement freezes the frontier's "
+               "clock into `base`, and a non-zero `earned` here means this account emitted before it ever held "
+               "the thread, so the reward it is about to be ranked on counts one finding twice");
+        f->family->base   = frontier_vt();
+        f->family->placed = 1;
+        DCHECK(flow_queue_weight(f) == w,
+               "freezing the frontier's clock into an account's tag moved the flow's queue coordinate — an "
+               "unplaced account's reward IS that clock, so the stamp must be exact; a dispatch has just "
+               "re-ranked the member the WFQ picked, and the comparison that picked it was about a weight this "
+               "flow no longer carries");
+    }
+    g_running = f;
+    /* …AND THE CLOCK NOW READS THE ITEM IN SERVICE. Written AFTER the install so the coordinate it takes is
+       the one every other member is about to be ranked against, and only for a dispatch — a release holds the
+       clock rather than dropping it. */
+    if (f && f->family) frontier_vt_serve(f);
+}
 Flow *flow_running(void) { return g_running; }
 
 /* Credit the running flow with newly EMITTED value (a new @H endpoint / @S PoC): its WFQ reward rises and its
@@ -418,7 +580,19 @@ void flow_credit_emit(double v) {
            "the flow holding the thread belongs to no fork family, so there is nothing for this emission to be "
            "credited to — a departed flow was left running, and the reward this finding is worth is about to "
            "be dropped on the floor while the detector reports it as recorded");
+    DCHECK(g_running->family->placed,
+           "the flow holding the thread belongs to an account that has never been dispatched — a dispatch is "
+           "what places an account and this credit is being made from inside one, so the two writers of that "
+           "fact have come apart and this account's reward is about to be a ledger stacked on a clock reading "
+           "that is still moving underneath it");
     g_running->family->earned += v;
+    /* …AND THE FRONTIER'S CLOCK, BECAUSE THE ITEM IN SERVICE IS WHAT THE CLOCK IS A READING OF AND ITS TAG HAS
+       JUST MOVED. This is the second of frontier_vt_serve's two events and the one that makes v(t) a
+       CONTINUING relation rather than a per-dispatch sample: without it, every account that has never been
+       served would stand at the coordinate the leader held when it was last picked, and would be passed by
+       exactly the findings the leader makes during the slice it is holding — which is the arrival copy going
+       stale again, one slice at a time instead of once. */
+    frontier_vt_serve(g_running);
     /* …AND THIS ONE MEMBER'S OWN LEDGER, WHICH RANKS NOTHING AND IS NOT A SECOND COPY OF THE LINE ABOVE. The
        family total says what an ACCOUNT has emitted and is the order; this says what THIS FLOW emitted, which
        is the one question the total structurally cannot answer and the one the census exists to ask — a
@@ -927,7 +1101,7 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
     DCHECK(sib->val == 0.0 && sib->cpu == 0 && sib->cpu_gen == 0 && sib->visits == 0 && sib->picks == 0 &&
            sib->cand_surv == 0.0 && sib->cand_rung == 0 && sib->path_forced == 0 &&
            sib->family == sib->acct && sib->family->fam_us == 0 && sib->family->emit_gen == 0 &&
-           sib->family->base == 0.0 && sib->family->earned == 0.0,
+           sib->family->base == 0.0 && sib->family->earned == 0.0 && !sib->family->placed,
            "a forked sibling was credited, charged, DISPATCHED or DECIDED before it inherited its parent's "
            "account — it was ranked, and possibly run, at a weight that belongs to no flow, and this "
            "assignment throws that away. `path_forced` is in the same list for the same reason one field over: "
@@ -1410,170 +1584,117 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
     return f;
 }
 
-/* THE QUEUE COORDINATE, forward-declared because the arrival rule below is the OTHER half of the split that
-   defines it and the ordering itself is stated once, further down beside the terms it is made of. */
-static double flow_queue_weight(const Flow *f);
-
-/* THE ARRIVAL RULE — START-TIME FAIR QUEUEING'S `max{v(t), F_prev}`, APPLIED TO THE ENTRIES THAT WERE MISSING IT.
+/* THE ARRIVAL RULE — START-TIME FAIR QUEUEING'S `max{v(t), F_prev}`, AND IT IS A RELATION RATHER THAN A COPY.
  *
- * flow_fork_inherit already states this rule and already obeys it: "a continuation of an active flow enters at
- * that flow's virtual time, never at the system's, or any flow can reset its own virtual clock by splitting."
- * That sentence is about a FORK because a fork was the only entry anybody had looked at. It is a statement about
- * ENTERING, and the other three ways a flow enters this frontier were all entering at virtual time ZERO:
+ * flow_fork_inherit already states half of this rule and already obeys it: "a continuation of an active flow
+ * enters at that flow's virtual time, never at the system's, or any flow can reset its own virtual clock by
+ * splitting." That sentence is about a FORK because a fork was the only entry anybody had looked at. It is a
+ * statement about ENTERING, and the other three ways a flow enters this frontier are the ones this rule covers:
  *
  *   - engine_join_document's boot flow (engine.c) — a Document the browser handed this agent mid-run,
  *   - solve.c's candidate session — one per @S search the run seeds, and
  *   - cold.c's park_flow_add — one per recipe the tier rebuilds.
  *
- * A flow at `cpu == 0` carries the FULL optimism bonus, so its weight is its reward + 1.0, and 1.0 is strictly
- * above every flow that has consumed a single quantum (bonus <= 0.5 against 0.012 of aging). So each of those
- * three minted a member at the very front of the queue, ahead of the entire backlog, no matter how long that
- * backlog had been waiting — which is the exact defect flow_fork_inherit was written to close, arriving through
- * the doors it did not cover. It is worst at the first of them, because that one is reachable from the PAGE: a
- * document that creates same-origin navigables mints a boot flow per document, so a page can promote work it
- * MANUFACTURES above every flow already on the frontier, without the manufacturing flow paying anything for it.
- * Inheritance closes that for `f(){g()}` and left it open for `open()`.
+ * Each of those FOUNDS a family, which is the whole of what "from-baseline" means, so it has an account of its
+ * own and that account has to be placed. A flow at zero reward and zero silence carries only the optimism
+ * bonus, so it entered the queue at 1.0 against a leader worth hundreds — below the entire backlog, for
+ * findings it had no opportunity to make. That is the defect this rule was written for, and closing it by
+ * COPYING the leader's reward onto the newcomer's account closed it for one instant only.
  *
- * v(t) IS THE SERVICE OF THE FLOW IN SERVICE, which is SFQ's own definition and is O(1) — not a minimum over the
- * frontier, which would be O(n) inside a function the pick already calls n times. When nothing is running there
- * is no busy period to enter and v(0) is 0, which is why the first flow of a session, and every recipe the cold
- * tier rebuilds before the first step, still enter at 0 exactly as they did.
+ * WHY A COPY CANNOT BE THE ANSWER, WHICH IS THE CORRECTION THIS FUNCTION NOW CARRIES. `max(v(t), F_prev)` is
+ * evaluated at every ARRIVAL, and its content is that a member which has not been SERVED does not fall behind
+ * the clock. In SFQ that holds for free: the server takes the MINIMUM tag, so v(t) can never pass a waiting
+ * member. THIS order takes the MAXIMUM and an emission RAISES the served account's tag, so v(t) runs AWAY from
+ * the waiting members rather than toward them — and a coordinate stamped once, at creation, is passed by
+ * exactly what the incumbent earns afterwards. Two newcomers created at two instants then read two different
+ * coordinates for something NEITHER of them did, which is CLAUDE.md's two-instants test failed at this door,
+ * one term over from where flow_optimism already failed it and for the same reason.
+ * MEASURED, on the build smoke fixture and quoted at the revision it was taken at (cfbc8f48): `valMin` pinned
+ * at 183.0 from the second census to the last while `valMax` gained 217 to 400.0 and the frontier grew from 89
+ * to 660 members; `valZero` was 0 at every sample, so nothing was entering at the floor any more — the floor
+ * was where the arrivals had been LEFT. `valArrived` froze at exactly 12 beside `cands: 12`, with `turns: 0`
+ * on every one of them: the twelve were the @S candidate sessions, so the delivery probe, the derived
+ * breakout, the byte-provenance distance and the fire were all unreachable BY CONSTRUCTION, and the run
+ * reported a clean parked search instead of a starved one.
  *
- * IT CANNOT INVERT A PAIR THAT ALREADY EXISTS. Every weight in the frontier is untouched; the only thing that
- * changes is where a NEW member is placed among them, so no existing ordering decision can be reversed by this.
+ * SO THE COORDINATE IS READ, NOT WRITTEN, UNTIL THE ACCOUNT IS FIRST SERVED. An unplaced account's reward IS
+ * frontier_vt() (acct_family_val), re-read at every pick; the dispatch that first gives it the thread freezes
+ * that reading into `base` (flow_set_running) and from then on it stands on its own tag plus its own ledger
+ * like every other account. That is `max(v(t), F_prev)` with the max evaluated CONTINUOUSLY for a member with
+ * no F_prev to compare against, and it is what makes the placement a fact about the queue rather than a race
+ * with whichever microsecond the newcomer happened to be created in.
  *
- * IT IS THREE TAGS NOW AND IT WAS ONE, WHICH IS THE HALF THE FAMILY CHARGE MADE VISIBLE. `cpu` used to carry both
- * of flow_weight's non-reward terms, so copying it placed the newcomer in both dimensions at once. With the
- * aging reading the FAMILY (FlowAcct's `fam_us`), a from-baseline flow founds a family whose service is ZERO —
- * so copying `cpu` alone would hand it the incumbent's spent optimism and none of the incumbent's aging, and it
- * would arrive STRICTLY ABOVE the flow in service the moment that flow's family had burned more than its reward
- * is worth. Which is not a hypothetical: it is the ordinary state of this frontier (svcFamMax 8910 against a
- * valMax of 10.0), so the newcomer would jump the entire backlog exactly as it did before this rule existed.
- * The assertion below is what says so — it FIRES on the one-tag version of this function — and the fix is that
- * the rule assigns every term the weight is made of, which is what "enters at the system's virtual time" means
- * once the system's virtual time has two coordinates.
+ * WHAT IT DOES NOT DO, STATED HERE BECAUSE THE NEXT READER WILL OTHERWISE ATTRIBUTE IT: it does not re-relate
+ * an account that HAS been served. Such an account earns and ages on its own tag, so a leader that keeps
+ * emitting still leads and a served-once account that produces nothing can be passed by it again. That is the
+ * bandit ordering §scheduler asks for ("accumulated emitted VALUE ... ORDER-only"), and whether a leader's
+ * advantage should decay is a different question from this one. What is closed here is the population that had
+ * never been reached AT ALL.
  *
- * IT IS FOUR TAGS NOW AND THE FOURTH IS THE REWARD, WHICH IS THE ONE THAT DECIDES ANYTHING. The sentence above
- * — "the rule assigns every term the weight is made of" — was written while the rule assigned THREE of four,
- * and the term it left out is the term the whole ordering is built on. A one-sided `<=` cannot see that: the
- * omission can only push a newcomer DOWN, and the assert passed however far down it went. flow_fork_inherit's
- * parallel assertion is an EQUALITY over the weight and would have fired at the very first fork, which is
- * exactly the difference between an assert that FORCES a rule and one that merely records a direction.
+ * IT CANNOT PROMOTE. The newcomer TIES the frontier's virtual time on the queue coordinate and stands exactly
+ * one optimism range above it on the full weight — the term flow_nonreward bounds at 1.0 precisely so that "a
+ * PROMISE never outweighs a FINDING" — and it pays that lift back at FLOW_AGE_QUANTUM per quantum it burns. So
+ * a page that manufactures documents and candidate sessions buys each of them turns and none of them a
+ * monopoly, and it buys no more of them than it did before: what changed is that the ones it made an hour ago
+ * are not buried by what the leader has earned since.
  *
- * WHAT IT COST, MEASURED, AND IT IS THE WHOLE @S SURFACE. The reward was then copied to every arm at every
- * fork, so a document's frontier stood at its boot family's reward — 401 members at `valMax` 118 on the smoke
- * fixture — while a from-baseline flow entered at reward ZERO. The only members of that frontier at zero were the twelve
- * @S candidate sessions (`valZero:12` beside `cands:12`, the same twelve flows counted twice), so their weight
- * was `1.0 − aging` = 0.976 for the entire run against a `wTop` that never fell below 56. They were never
- * picked: `turns:0` on all twelve after 254,181 switches, in the field solve.h added precisely to tell "the WFQ
- * has never once given this search the thread" from "its flows have run and have not reached the sink". Every
- * §@S mechanism — the delivery probe, the derived breakout, the byte-provenance distance, the fire — executes
- * only inside a candidate flow, so on any document whose exploration keeps emitting, all of them were
- * unreachable BY CONSTRUCTION and the run reported a clean parked search instead of a starved one.
- *
- * INHERITING THE REWARD IS NOT CREDITING IT, AND THE TWO DOORS ARE NOT SYMMETRIC — WHICH IS THE CORRECTION
- * THIS PARAGRAPH CARRIES. A FORK does not inherit the reward at all any more: it JOINS the family that holds
- * it, so there is no copy at that door and nothing for a copy to be wrong about (flow_fork_inherit says why).
- * A FROM-BASELINE FLOW FOUNDS A FAMILY, which is the whole of what "from-baseline" means, so it has an account
- * of its own and that account has to be PLACED — at the frontier's virtual time, which is the reward the
- * account in service stands at. It cannot promote: the newcomer TIES with the flow in service, and flow_pick's
- * STRICT comparison leaves the thread where it is until the incumbent's own service moves it, which is start-
- * time fair queueing doing exactly what this rule is.
- * IT IS PLACED AND IT IS NOT PAID, AND THE DIFFERENCE IS WHAT THE NEW FAMILY OWES AFTERWARDS. The newcomer's
- * account starts at V having emitted nothing, and then pays for it: its own silence is charged to its own
- * family alone, so it falls below the frontier after V seconds of its own unproductive thread time exactly as
- * the family it was placed beside would. Entering at zero instead is not the conservative choice, it is the
- * measured defect this rule was written for — a candidate session placed V points below a frontier it can
- * never re-enter, with `turns:0` in the field that exists to say so.
- * The prose above already reached this conclusion for the boot-flow door and stopped one step short of it:
- * "Inheritance closes that for `f(){g()}` and left it open for `open()`." The join is the closure at the fork;
- * this is the closure at the other three doors. */
+ * THE FUNCTION IS THEREFORE AN ASSERTION AND NOT AN ASSIGNMENT, AND THAT IS THE MECHANISM RATHER THAN A
+ * SHRINKING. Four tags used to be written here — the reward, the optimism count, and both halves of the aging
+ * — and each was a copy of a fact about whichever flow happened to hold the thread. The optimism count went
+ * first (flow_optimism: a flow that has completed nothing reads 1.0 whoever is in service, so there was no
+ * position for it to arrive at). The reward is now a reading. AND THE AGING GOES WITH THEM, WHICH IS THE
+ * SECOND DEFECT AT THIS DOOR: `flow_own_silence(g_running)` and `acct_family_us(g_running)` were copied onto
+ * an account that FOUNDS its own family, so the source family's identical debt was forgiven at its very next
+ * emission (FlowAcct's `emit_gen`) while the newcomer's could be forgiven only by an emission of its own — a
+ * debt whose only currency was the dispatch the debt itself was foreclosing, which is §scheduler's razor's
+ * STARVES. It is not needed either: frontier_vt() is the serving item's QUEUE COORDINATE, aging included, so
+ * copying the aging again would charge the newcomer twice for thread time it never consumed.
+ */
 static void flow_arrive_at_virtual_time(Flow *f) {
     DCHECK(f->val == 0.0 && f->cpu == 0 && f->cpu_gen == 0 && f->visits == 0 &&
            f->family == f->acct && f->family->fam_us == 0 && f->family->emit_gen == 0 &&
-           f->family->base == 0.0 && f->family->earned == 0.0,
-           "a from-baseline flow was charged or handed an account before it arrived — the arrival rule ASSIGNS "
-           "every term, so a caller that wrote one first has ranked this flow at a virtual time nobody chose "
-           "and this assignment throws that away");
-    if (!g_running) return;   /* SFQ's v(0): no busy period to enter, so the frontier's clock is still at zero */
-    DCHECK(flow_is_member(g_running),
-           "the flow holding the thread is not a member of the frontier, so the virtual time a newcomer would "
-           "enter at is a tag belonging to no queue — a newcomer placed against it is placed against nothing");
-    /* THE REWARD TERM'S COORDINATE, WRITTEN ON THE NEW FAMILY AND READ OFF THE RUNNING ONE — the same quantity
-       at both ends, which is what makes the equality below exact. It is NOT `g_running->val`: that is one
-       member's own ledger and ranks nothing, and reading it here would place the newcomer at whatever prefix
-       the flow that happened to hold the thread had earned rather than at the virtual time of the account the
-       frontier is actually ordered by. `Flow.val` stays zero — this flow has emitted nothing itself, and the
-       census row that asks what a member emitted ITSELF must not read a whole frontier of newcomers as
-       productive on the strength of the flow that was running when they arrived. */
-    f->family->base = acct_family_val(g_running);
-    /* AND THE OPTIMISM TERM IS **NOT** PLACED, WHICH IS THE ONE ASSIGNMENT THIS RULE NO LONGER MAKES. It used
-       to read `f->visits = g_running->visits` and call that "the optimism term's coordinate", and the term has
-       no coordinate: it is 1/(1+units THIS FLOW has completed), a reading of the flow rather than a position in
-       the queue, and the precondition above has already asserted this one has completed none. A from-baseline
-       flow stands on NOBODY's decisions — that is the predicate flow_add_unseeded routes it here by — so unlike
-       a fork it has not, by construction, finished what the flow in service finished; it has finished nothing,
-       and the count it was being handed belonged to whichever flow happened to hold the thread.
-       WHAT THE COPY COST IS §scheduler'S GUARANTEE, AT THE ONE DOOR IT WAS WRITTEN FOR. "A UCB optimism bonus
-       proportional to 1/(visits+1) so a NEVER-RUN FLOW IS NEVER STARVED" is a sentence whose entire content is
-       the value of that term at zero. Every from-baseline door is an arrival — the @S candidate session, a
-       joined document's boot flow, a cold-resumed recipe — so on a frontier whose members carried 8 to 13
-       completed units, every one of them was born at 1/9 to 1/14 of the bonus the guarantee is made of. Twelve
-       candidate sessions stood at one reward for a whole run with `turns:0` on every one of them, and the row
-       that finally named them (`val_arrived`) froze at exactly 12 while the frontier grew to 660.
-       SO THE NEWCOMER IS BORN EXACTLY ONE OPTIMISM RANGE ABOVE THE FLOW IN SERVICE, WHICH IS THE RANK
-       §scheduler ASSIGNS IT AND NOT A PROMOTION. flow_nonreward bounds that range at 1.0 for the stated reason
-       that "a PROMISE never outweighs a FINDING", so an untouched member is worth one emission's worth of
-       promise over the place it was put and no more — and it pays that back at FLOW_AGE_QUANTUM per quantum it
-       burns, so the lift buys it turns and never a monopoly. The failure direction the assert below names —
-       "a page promoting the documents and candidate sessions it creates over the whole backlog" — is what an
-       UNBOUNDED lift would be; this one is the bounded term the scheduler is defined in terms of, and
-       suppressing it to avoid at most one point of lift voided the guarantee across a reward band measured at
-       two hundred and seventeen points wide. */
-    /* …AND THE AGING TERM'S OWN HALF, WHICH IS THE READING AND NOT THE FIELD. A newcomer FOUNDS its own family
-       (the precondition above says so), so its `cpu_gen` is a mark in a generation space that is not the
-       running flow's and copying `g_running->cpu` verbatim would place the newcomer at a raw number rather
-       than at a virtual time — nonzero own-silence against a runner that reads zero, whenever the runner has
-       not been charged since its family last emitted. What is copied is the QUANTITY flow_own_silence returns,
-       tagged with the newcomer's OWN account generation so it reads as a current window; the equality below is
-       what would fire on either half being left out. */
-    f->cpu     = flow_own_silence(g_running);
-    f->cpu_gen = f->family->emit_gen;
-    f->family->fam_us = acct_family_us(g_running);        /* …and its family half */
-    /* AND THE NEWCOMER'S TWO HALVES CAME FROM ONE FLOW'S, so they are still one reading. This site COPIES the
-       pair across an account boundary — out of the running flow's family and into a fresh one whose generation
-       space is its own — which is the one transition where the two halves are read through different pointers,
-       and therefore the one where they could be taken from different windows without anything else noticing. */
-    DCHECK_AGING_ONE_WINDOW(f, "a newcomer entered at the running flow's virtual time");
-    /* THE RULE ITSELF, ASSERTED WHERE IT IS APPLIED, AND IT IS AN EQUALITY. A newcomer enters AT the system's
-       virtual time — not at or below it — and flow_pick's STRICT comparison is what then leaves the thread with
-       the incumbent, so a tie is the whole of what "arrives" means and there is nothing left for a `<=` to
-       express. Written over flow_queue_weight rather than over a list of fields for the reason
-       flow_fork_inherit gives about its own: a list cannot fire when a term is ADDED, and every term this rule
-       has ever been missing was added to the weight by somebody who did not know this function existed.
+           f->family->base == 0.0 && f->family->earned == 0.0 && !f->family->placed,
+           "a from-baseline flow was charged, credited or DISPATCHED before it arrived — the arrival is the "
+           "absence of every one of these, so a caller that wrote one first has ranked this flow at a virtual "
+           "time nobody chose, and `placed` is in the list because a stamped account stops reading the clock "
+           "at all and would stand for ever at a coordinate written before it existed on the frontier");
+    /* THE PLACEMENT IS THE ABSENCE OF A STAMP, so there is nothing to write and nothing to skip when the
+       frontier is idle. `frontier_vt()` answers SFQ's v(0) = 0 for a session that has dispatched nothing, and
+       holds the last serving coordinate between two slices, which is the case the old `if (!g_running) return`
+       could not tell apart from a fresh registry. */
+    DCHECK(!g_running || flow_is_member(g_running),
+           "the flow holding the thread is not a member of the frontier, so the coordinate the clock is a "
+           "reading of belongs to no queue — every unplaced account is being ranked against nothing");
+    /* THE RULE ITSELF, ASSERTED WHERE IT IS APPLIED, AND IT IS AN EQUALITY AGAINST THE CLOCK RATHER THAN
+       AGAINST THE INCUMBENT. A newcomer enters AT the frontier's virtual time — not at or below it — and
+       flow_pick's STRICT comparison is what then leaves the thread with whoever holds it, so a tie is the whole
+       of what "arrives" means and there is nothing left for a `<=` to express. It reads the CLOCK and not
+       `flow_queue_weight(g_running)` because those are two different quantities between two dispatches: the
+       item in service sinks as it burns, and frontier_vt_serve deliberately does not follow it down, since a
+       member that has been given nothing may not be charged for the thread time of the one that has.
+       WRITTEN OVER flow_queue_weight RATHER THAN OVER A LIST OF FIELDS for the reason flow_fork_inherit gives
+       about its own equality: a list cannot fire when a term is ADDED, and every term this rule has ever been
+       missing was added to the weight by somebody who did not know this function existed. A term added to the
+       queue coordinate that a newcomer cannot stand at — anything read off the newcomer's own payload or its
+       own history — makes the two sides differ here, at the door, instead of six censuses later in a `valMin`
+       that does not move.
        TWO TERMS ARE NAMED RATHER THAN CARRIED, AND NAMING THEM IS WHAT KEEPS THIS EXACT. §@S's distance is a
        fraction OF A PAYLOAD, and a newcomer's payload is not the payload the flow in service holds — there is
-       no position for it to arrive at. The OPTIMISM bonus is the same sentence one term over and used to be
-       carried anyway: it is 1/(1+units this flow has COMPLETED), so a flow that has completed nothing reads it
-       at 1.0 whoever is in service, and there is no position for that to arrive at either. Both now sit outside
-       flow_queue_weight (see flow_optimism), so this equality is over the TAGS alone — the reward and the
-       aging, which are facts about where the queue stands — and a second per-item reading added to flow_weight
-       would fire flow_fork_inherit's assert instead of this one, which is the door that must carry it.
-       WHAT THAT MEANS FOR WHAT THIS ASSERTS, STATED PLAINLY BECAUSE IT IS A WEAKER SENTENCE THAN IT LOOKS: the
-       newcomer ties the flow in service on the QUEUE COORDINATE and stands exactly one optimism range above it
-       on the full weight, which is §scheduler's rank for a member that has completed no unit of work and is
-       bounded at one emission by flow_nonreward. It is picked, it burns, and it pays that lift back at
-       FLOW_AGE_QUANTUM per quantum — turns, never a monopoly.
-       EXACT WITH NO EPSILON: every tag is copied as the QUANTITY its reader returns — the reward onto the
-       newcomer's own family node, the family silence as a value and the own silence onto the flow — and the
-       notch is an integer division of equal integers, so the two sides are the same float expression over the
-       same values. The visit count is no longer among them, which is what makes that list shorter by one and
-       this equality no less complete: it never belonged to the coordinate. */
-    DCHECK(flow_queue_weight(f) == flow_queue_weight(g_running),
+       no position for it to arrive at. The OPTIMISM bonus is the same sentence one term over: it is 1/(1+units
+       this flow has COMPLETED), so a flow that has completed nothing reads it at 1.0 whoever is in service.
+       Both sit outside flow_queue_weight (see flow_optimism), so this equality is over the TAGS alone.
+       EXACT WITH NO EPSILON, and now for a stronger reason than before: nothing is copied at all. The reward
+       IS frontier_vt() by construction (acct_family_val's unplaced arm) and the newcomer's aging notch is an
+       integer division of zero, so the two sides are the same float read twice. */
+    DCHECK(flow_queue_weight(f) == frontier_vt(),
            "a flow arriving from the baseline did not enter at the frontier's virtual time — it was placed "
-           "above the flow in service (a page promoting the documents and candidate sessions it creates over "
-           "the whole backlog) or below it (a newcomer the ordering can never reach, which is what starved "
-           "every @S candidate session behind a boot family whose account the whole frontier stood on)");
+           "above the clock (a page promoting the documents and candidate sessions it creates over the whole "
+           "backlog) or below it (a newcomer the ordering can never reach, which is what starved every @S "
+           "candidate session behind a boot family whose account the whole frontier stood on)");
+    /* AND BOTH HALVES OF THE AGING ARE STILL ONE READING — of nothing, which is what a member that has never
+       been offered the thread owes. Asserted at this transition like every other one that can move either
+       half, so a future edit that puts a copy back here fires at the door rather than in a census. */
+    DCHECK_AGING_ONE_WINDOW(f, "a newcomer entered at the frontier's virtual time");
 }
 
 /* THE PROGRAMS A NEW FLOW STARTS WITH — installed by the session, asked at the ONE place a flow is created.
@@ -2380,11 +2501,15 @@ int64_t flow_silence_notch(const Flow *f) {
    at, and a per-payload reading is not one — the payload a newcomer carries is not the payload the flow in
    service carries, so there is nothing for it to arrive at. It is the one term the arrival names rather than
    copies, and naming it is what keeps the assert below an exact equality instead of a tolerance.
-   EXACT IN INTEGERS AND IN FLOATS. The reward is read through a POINTER a fork shares and is copied verbatim
-   at the one door that founds a family, `visits` is copied verbatim by both entries, and the silence notch is
-   an integer division of copied integers, so two flows that arrived at one another compare EQUAL here with no
-   epsilon — which is the same property flow_fork_inherit's assert already rests on, and the reward half of it
-   is now an identity of the structure rather than a property of two copies agreeing. */
+   EXACT IN INTEGERS AND IN FLOATS, AND NOW BECAUSE NOTHING IS COPIED AT ALL RATHER THAN BECAUSE TWO COPIES
+   AGREE. This paragraph used to rest on the copies — the reward "copied verbatim at the one door that founds a
+   family", `visits` "copied verbatim by both entries", the notch "an integer division of copied integers" —
+   and every one of those was retired by the arrival becoming a RELATION. At a fork the reward is read through
+   a POINTER the arm shares, so there is nothing to copy; at an arrival the reward is frontier_vt() read by
+   both sides of the equality and the aging notch is an integer division of ZERO, so there is nothing to copy
+   there either. Two flows standing at one another therefore compare EQUAL with no epsilon because they are
+   reading one value twice, which is the strongest form of the property flow_fork_inherit's assert also rests
+   on. */
 /* EVERY TERM OF THE QUEUE COORDINATE EXCEPT THE REWARD, AND THE SPLIT IS STRUCTURAL RATHER THAN EDITORIAL.
    "the reward is the only unranged term" is the sentence every ordering assertion in this file is derived from,
    and until this split there was nowhere to ASK it: the remainder existed only as `flow_weight(f) − reward`,
@@ -2924,6 +3049,17 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        within one quantum of an emission, and the two guards below — each of which short-circuits on it —
        assert NOTHING on a frontier that has gone quiet, which is precisely the frontier §scheduler's sentence
        is about. That is the §Testing empty-denominator defect standing in the guard written to catch it.
+       THE ARRIVAL DOOR NO LONGER AGREES WITH THAT SENTENCE, AND THE CORRECTION IS WORTH MORE THAN THE
+       PARAGRAPH IT AMENDS. The clause above says "both doors copy the incumbent's coordinates verbatim", and
+       for an ARRIVAL that is now false: a from-baseline flow copies NOTHING (flow_arrive_at_virtual_time), so
+       it stands at zero own silence, zero family silence and zero completed units, and it ANSWERS this test.
+       Every unplaced account therefore refills this population and keeps it non-empty for as long as one of
+       them stands, which is exactly the interval in which §scheduler's never-starved guarantee is a claim
+       about somebody. The guards below are correspondingly LIVE where they used to short-circuit, and that is
+       a forcing function rather than a result: what they assert is an identity under flow_weight as it stands,
+       so they fire only on an edit that breaks the derivation — and they now get the chance to.
+       WHAT IS STILL UNCOVERED IS A FRONTIER WHOSE ACCOUNTS HAVE ALL BEEN SERVED, which is the residual at the
+       bottom of this function and is narrower than it was by exactly this population.
        AND THE VISIT-COUNT CLAUSE IS NOW A NARROWER TEST THAN IT WAS, WHICH IS A HONEST POPULATION AND NOT A
        WIDER HOLE. flow_credit_emit used to zero the EMITTER's `visits` as well, so within a quantum of any
        emission the emitter itself answered this test however many programs it had finished — a member that had
@@ -3016,14 +3152,18 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        beside the reward spread, with `self_emit` saying whether the leading account earned what it is ranked
        on or was placed at it by the arrival rule.
 
-       NAMED RESIDUAL — THE TWO GUARDS ABOVE ARE STILL GATED ON `unrun` AND STILL ASSERT NOTHING ON A QUIET
-       FRONTIER. Not covered: §scheduler's monopolizer-sinks sentence and its never-run floor, on any frontier
-       more than one cooperative quantum past its last emission — which is most of a long run — AND, since the
-       emitter's per-member visit zero went (flow_credit_emit), on the picks INSIDE that quantum at which the
-       only member the silence clause admits is one that has completed a unit. That second set is a widening of
-       this residual and not a new one: the reason both are uncovered is the same reference member, and the
-       reason to record the widening rather than absorb it is that a guard which fires less often than it did
-       must say so or its silence reads as a stronger result. Both are RIGHT
+       NAMED RESIDUAL — THE TWO GUARDS ABOVE ARE STILL GATED ON `unrun`, AND THE POPULATION IS NARROWER THAN
+       IT WAS BY EXACTLY THE ACCOUNTS THAT HAVE NEVER BEEN SERVED. Not covered: §scheduler's monopolizer-sinks
+       sentence and its never-run floor, on a frontier more than one cooperative quantum past its last emission
+       IN WHICH EVERY ACCOUNT HAS ALREADY BEEN PLACED — which is a long run's steady state once the arrivals
+       have each had their first turn — AND, since the emitter's per-member visit zero went (flow_credit_emit),
+       on the picks INSIDE that quantum at which the only member the silence clause admits is one that has
+       completed a unit. The residual USED TO cover every quiet frontier without qualification, and the
+       qualification is the whole of what the arrival becoming a relation bought here: an unplaced account
+       copies nothing, so it answers the test, so the guards are live while one stands. That is a narrowing of
+       this residual and it is stated rather than absorbed, because a guard that fires MORE often than it did
+       must say so as surely as one that fires less — the population it covers is what its silence is a
+       statement about. Both are RIGHT
        where they fire and NARROWER than the sentence they cite, which is why they crash on nothing today: the
        range claim they leaned on has moved to a guard that cannot be gated, and what is left in them is a
        claim about a PAIR, which structurally needs a reference member whose weight is known — and the only
@@ -3106,7 +3246,13 @@ void flow_wfq_census(WfqCensus *out) {
     out->members = g_flows_n;
     out->val_min = out->val_max = out->val_top = 0.0;
     out->val_zero = out->self_emit = out->unrun = 0;
-    out->val_arrived = 0;
+    out->val_arrived = out->val_unplaced = 0;
+    /* THE CLOCK ITSELF, WHICH IS NOT A READING OF THIS WALK. It is the frontier's virtual time at the instant
+       the census is taken — the coordinate every unplaced account is standing at — so it is assigned here,
+       unconditionally, exactly as `nonreward_max` and `picks_lifetime` are: the same number on an empty scan
+       as on a full one. Without it `valMin` and `valUnplaced` are two halves of a sentence with no subject —
+       a reader cannot tell a floor that is TRACKING the clock from one that has been left behind by it. */
+    out->vt = frontier_vt();
     out->never_picked = 0;
     out->never_picked_gap = 0.0;
     out->picks_live = out->picks_max = 0;
@@ -3186,6 +3332,14 @@ void flow_wfq_census(WfqCensus *out) {
            because FlowAcct's reward is two quantities — see there for why the ledger and the coordinate had to
            be separable before this question could be asked at all. */
         if (f->family && f->family->earned == 0.0) out->val_arrived++;
+        /* …AND THE SUBSET OF THOSE WHOSE COORDINATE IS STILL A READING RATHER THAN A TAG, which is the one
+           question that separates a candidate the order has never reached from one it has served and passed.
+           Both answer `val_arrived`; only this one is still tracking `vt`, so `valArrived - valUnplaced` is
+           the population that HAS held the thread and emitted nothing with it — the members a search should be
+           mutated toward, rather than the members it has never been given. Read off the account for the reason
+           the row above is: placement is a fact about the account, and every arm of a family reads it through
+           the one pointer, so a fork cannot carry it differently. */
+        if (f->family && !f->family->placed) out->val_unplaced++;
         /* …AND WHAT THIS MEMBER ITSELF PUT THERE, which is the one question the account cannot answer and the
            reason `Flow.val` exists at all. It is not a subtraction any more: nothing is inherited, so a
            member's own ledger IS what it emitted since it was born. */

@@ -575,15 +575,31 @@ char *result_wfq_json(void) {
         return composef("{\"members\":0}");
     return composef(
                      "{\"members\":%ld,\"valMin\":%.1f,\"valMax\":%.1f,\"valTop\":%.1f,"
+                     /* …AND THE CLOCK THOSE THREE ARE POSITIONS ON, without which a pinned `valMin` has no
+                        subject. `vt` is the frontier's virtual time (solver/flow.h): the queue coordinate of
+                        the item in service, and therefore the coordinate every account that has never been
+                        served is standing at. Read `valMin` AGAINST it — a floor far below `vt` is accounts
+                        being left behind by a clock that moved on, a floor tracking `vt` is the queue's own
+                        position — and read `vt` against `valMax`, since a clock above the whole band is a
+                        clock no member stands at and a clock frozen while the band climbs is the one-time
+                        copy the arrival rule stopped making. */
+                     "\"vt\":%.1f,"
                      /* `valZero` IS THE CEILING POPULATION AND `valArrived` IS THE ONE THAT EMITTED NOTHING, and they
                         stopped being one row the day a from-baseline flow began entering at the frontier's
                         virtual time rather than at zero. An @S candidate session now holds whatever the leader
                         held while having produced nothing, so it is OUTSIDE `valZero` and inside `valArrived`.
                         Read `valArrived` against `valMin`/`valMax`: a large count sitting at the FLOOR of the
-                        reward band is the arrival coordinate being left behind by accounts that earn past it,
-                        which no term of the order re-relates. `selfEmit` is the same question asked of one
-                        MEMBER rather than of its account. */
-                     "\"valZero\":%ld,\"valArrived\":%ld,\"selfEmit\":%ld,\"unrun\":%ld,"
+                        reward band is the arrival coordinate being left behind by accounts that earn past it.
+                        `valUnplaced` IS THE ROW THAT SAYS WHICH OF TWO OPPOSITE THINGS THAT IS, and it is the
+                        subset of `valArrived` whose coordinate is still a READING of `vt` because the order
+                        has never once given the account the thread. A large `valUnplaced` sitting far below
+                        `vt` is a placement defect; `valUnplaced` at zero with the same floor is a frontier of
+                        accounts that have all been served and been out-earned, which is the bandit doing its
+                        job. `valArrived - valUnplaced` is then the population §@S's "a dead candidate starves"
+                        is about: served, and still carrying nothing. `selfEmit` is the same question asked of
+                        one MEMBER rather than of its account. */
+                     "\"valZero\":%ld,\"valArrived\":%ld,\"valUnplaced\":%ld,\"selfEmit\":%ld,"
+                     "\"unrun\":%ld,"
                      "\"neverPicked\":%ld,\"neverPickedGap\":%.3f,"
                      /* …AND WHERE THE DISPATCHES THAT DID HAPPEN WENT, which the pair above cannot say and
                         without which its reading has three states behind one answer. See solver/flow.h for
@@ -682,8 +698,8 @@ char *result_wfq_json(void) {
                         SPELLED THE WAY THE DOCUMENT SPELLS IT, one namespace and one spelling, so a reader who
                         learns the name off @HWORK reads it off here. */
                      "\"workDone\":%ld,\"rankChanges\":%ld}",
-                     w.members, w.val_min, w.val_max, w.val_top,
-                     w.val_zero, w.val_arrived, w.self_emit, w.unrun,
+                     w.members, w.val_min, w.val_max, w.val_top, w.vt,
+                     w.val_zero, w.val_arrived, w.val_unplaced, w.self_emit, w.unrun,
                      w.never_picked, w.never_picked_gap,
                      (long long)w.picks_live, (long long)w.picks_max, (long long)w.picks_lifetime,
                      (long long)w.svc_max, (long long)w.svc_min,

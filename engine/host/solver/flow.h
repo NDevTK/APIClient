@@ -1078,10 +1078,14 @@ void flow_credit_pick(Flow *f);
  * `val_zero` NAMES A POPULATION THE ARRIVAL RULE DELETED, AND THE ROW IS KEPT PRECISELY TO SAY SO. It used to
  * be the from-baseline population — a candidate session, a joined document's boot flow, the first flow — on
  * the reasoning that such a flow "enters at reward 0 (flow_add's zeros), so its weight is at most 1.0 for its
- * whole life". That stopped being true the moment flow.c's flow_arrive_at_virtual_time began assigning the
- * REWARD among the four tags a newcomer arrives at (onto the newcomer's own family node, since founding a
- * family is what from-baseline means): a from-baseline flow now enters at the INCUMBENT's reward,
- * ties with it, and is placed by flow_pick's strict comparison rather than held under a ceiling. So inside a
+ * whole life". That stopped being true the moment flow.c's arrival rule stopped writing a zero there, and the
+ * mechanism has since been corrected once more in a way this row must not be read against the old version of:
+ * the arrival ASSIGNS NOTHING AT ALL now. A from-baseline flow founds an account that is UNPLACED, and an
+ * unplaced account's reward IS the frontier's virtual time (flow.c's FlowAcct `placed`), re-read at every
+ * pick until the dispatch that first gives it the thread freezes it. So such a flow does not merely enter at
+ * the incumbent's reward — it STAYS at the frontier's clock until it is served, which is the difference
+ * between a one-time copy and a relation and is why this row cannot be non-zero for a member the order is
+ * holding. So inside a
  * busy period this row is 0 BY CONSTRUCTION — it can be non-zero only before the first pick, where SFQ's v(0)
  * is 0 — and a reader that tests it for "is there a population down at the bottom" is testing for a set the
  * arrival rule made empty. That is not a hypothetical reading. The pairing this file cites the other way round
@@ -1150,6 +1154,18 @@ typedef struct {
     double val_min;
     double val_max;
     double val_top;    /* …and flow_best's family's, so the top of the order is named rather than inferred */
+    /* THE FRONTIER'S VIRTUAL TIME AT THE INSTANT OF THE CENSUS — flow.c's `g_vt`, SFQ's v(t), which is the
+       queue coordinate of the item in service and therefore the coordinate every account that has never been
+       served is standing at. It is NOT a reading of the walk and is assigned unconditionally, like
+       `nonreward_max` beside it, so an empty frontier reports the clock rather than a zero that would read as
+       one.
+       IT IS THE SUBJECT `val_min` HAS ALWAYS BEEN MISSING. A pinned floor is a statement about the clock or
+       about the members, and which one it is cannot be recovered from the floor alone: `val_min` far below
+       `vt` says accounts are being LEFT BEHIND by a clock that has moved on; `val_min` tracking `vt` says the
+       floor is where the queue actually stands. The pair is also the cheapest tell that this quantity has
+       stopped being a clock at all — `vt` above `val_max` is a clock leading a frontier no member is standing
+       at, and `vt` frozen while `val_max` climbs is the one-time copy this row was added to end. */
+    double vt;
     /* MEMBERS WHOSE FORK FAMILY'S WHOLE REWARD IS ZERO — the population whose weight ceiling is 1.0, which is
        an ARITHMETIC fact about the reward and is what this row is for. It used to be described as "has emitted
        nothing" as well, and those were one population until a from-baseline flow started being PLACED at the
@@ -1163,10 +1179,28 @@ typedef struct {
        document's boot flow and the cold-resumed recipe — every from-baseline door — and it is exactly the
        population a pinned `val_min` beside a climbing `val_max` is a statement about. Read it with those two:
        a large count here whose accounts sit at the FLOOR of the reward band is the arrival coordinate being
-       left behind by accounts that earn past it, and no term of the order re-relates it. `self_emit` beside it
-       is the same question asked of ONE MEMBER rather than of its account, and the pair separates a family
-       coasting on an ancestor's findings from a family that has none. */
+       left behind by accounts that earn past it. THAT SENTENCE USED TO END "and no term of the order
+       re-relates it", and `val_unplaced` below is the row that says whether it still applies to a given
+       reading: the arrival is a CONTINUING relation now (flow.c's FlowAcct `placed`), so an account is held at
+       the clock until it is first served and can be left behind only AFTER that. A large `val_arrived` at the
+       floor with `val_unplaced` at zero is accounts that have been served and out-earned — the bandit working;
+       the same reading with `val_unplaced` large is the relation itself having stopped working, which is a
+       different defect and a different fix. `self_emit` beside it is the same question asked of ONE MEMBER
+       rather than of its account, and the pair separates a family coasting on an ancestor's findings from a
+       family that has none. */
     long val_arrived;
+    /* …AND THE SUBSET OF THAT POPULATION WHOSE COORDINATE IS STILL A READING OF THE FRONTIER'S CLOCK RATHER
+       THAN A TAG OF ITS OWN — accounts that have never once held the thread (flow.c's FlowAcct `placed`). The
+       two rows are one question asked before and after the only event that changes the answer, and the pair is
+       what makes `val_min` readable: an account is unplaced exactly while its reward IS `vt`, so a `val_min`
+       far below `vt` with a large count HERE is the ordering failing to reach members it is holding at the
+       clock, while the same `val_min` with this row at zero is a frontier of accounts that have all been
+       served and have simply been out-earned. Those are opposite work — the first is a placement defect and
+       the second is the bandit doing its job — and no single row can tell them apart.
+       `val_arrived - val_unplaced` IS THE OTHER HALF AND IS THE MORE INTERESTING ONE ONCE THE FIRST IS ZERO:
+       accounts that HAVE been given the thread and have emitted nothing with it, which is the population §@S
+       means by "a near-miss is mutated toward the gap; a dead candidate starves". */
+    long val_unplaced;
     long self_emit;    /* members with val > 0: they emitted something THEMSELVES rather than standing on an
                           account an ancestor filled. Zero here while `finished` climbs is work that advances no
                           statement. It is a plain test and no longer a subtraction, because nothing is
@@ -1281,8 +1315,13 @@ typedef struct {
        an otherwise-idle frontier and for a frontier every member of which has burned the same thread time, and
        those take opposite actions: the first is the case the aging term was priced for, the second is one where
        every member is being charged for work the frontier as a whole did. The FLOOR is what separates them, and
-       it is also the virtual time a from-baseline flow now arrives at (flow.c's flow_arrive_at_virtual_time), so
-       `svc_max - svc_min` is the SPREAD of service the ranking is actually made of.
+       `svc_max - svc_min` is the SPREAD of service the ranking is actually made of. This clause used to add
+       that the floor "is also the virtual time a from-baseline flow now arrives at", and that is retired: the
+       arrival copies NO silence at all (flow.c's flow_arrive_at_virtual_time), because frontier_vt() is the
+       serving item's whole queue coordinate with its aging already in it and copying the aging again would
+       charge a newcomer twice for thread time it never consumed. A from-baseline family is born at zero
+       service, so it enters this spread at the FLOOR by construction rather than at whatever the incumbent
+       had burned.
        THE THREE WEIGHTS BELOW CANNOT ANSWER IT, which is a correction to what this file claimed. It said of
        `w_top`/`w_min`/`cand_w_max` that "these three numbers are what will show that" — and they cannot, by the
        arithmetic of the function they are readings of: raise EVERY member's service by the same amount and all
@@ -1345,11 +1384,13 @@ typedef struct {
        different findings and the first of them is the one that says stop looking, so reading one number for
        both is how a real ordering defect gets closed as a known constant.
        IT READS EQUAL AT A GENUINE SPLIT TOO, which is why the ambiguity is the ordinary case rather than a
-       corner: a from-baseline flow founds its own family and ARRIVES at the running family's service
-       (flow.c's flow_arrive_at_virtual_time assigns `fam_us` among the four tags), so two families are born
-       EQUAL and diverge only once one of them is charged — flow_age_running bills the running flow's family
-       alone, flow_credit_emit zeroes its own alone. A census taken between the split and the first charge is
-       a multi-family frontier reading as a single-family one, exactly.
+       corner — though no longer for the reason this paragraph used to give. It said a from-baseline flow
+       "ARRIVES at the running family's service", and the arrival copies no service at all any more: a new
+       family is born at ZERO on both halves, so it reads equal to every other family that has not been charged
+       since its own last emission, which on a frontier whose leader keeps emitting is most of them. They
+       diverge only once one is charged — flow_age_running bills the running flow's family alone,
+       flow_credit_emit zeroes its own alone. A census taken between the split and the first charge is a
+       multi-family frontier reading as a single-family one, exactly.
        COUNTED BY IDENTITY, NEVER BY VALUE: two families standing at one service are two families, so the count
        is of distinct family ROOTS reached through the members (flow.c marks each root as the one scan passes
        it). Read beside the pair, the three numbers say which of the two states a run is in: `families: 1` is
@@ -1440,7 +1481,10 @@ typedef struct {
      * HALF OF IT IS BUILT AND THE HALF IS THE ENTRY, NOT THE TERM. flow.c's flow_arrive_at_virtual_time applies
      * SFQ's `max{v(t), F_prev}` to the three from-baseline entries that were placing a newcomer at virtual time
      * ZERO — ahead of the whole backlog — so a flow can no longer promote the documents and candidate sessions
-     * it CREATES above every member already waiting. What is still absolute is the aging term itself, and the
+     * it CREATES above every member already waiting, and it applies it as a CONTINUING relation: an account
+     * that has never been served reads the clock rather than a number written when it was created, so it is
+     * not left behind by what the incumbent earns afterwards either. What is still absolute is the aging term
+     * itself, and the
      * consequence is at LEVEL-1 rather than here: `engine_top_weight` is this function's value with no frame of
      * reference, so a document's best flow falls by one point per second of unproductive CPU without bound while
      * a document that boots today enters at 1.0. Nothing but an EMISSION ever raises a weight, and a document
