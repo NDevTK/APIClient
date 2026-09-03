@@ -137,14 +137,14 @@ static void lb_require_baseline_alignment(lxb_dom_element_t *el)
               "alternative and not an empty one. §4.2.1's own `auto` is \"last-baseline alignment for "
               "inline-block, first-baseline alignment for everything else\", which is exactly the LAST line box "
               "§10.8.1 states (\"the baseline of its last line box in the normal flow\") and is what "
-              "`LbLines.last_baseline` carries. WHAT IS NOT BUILT IS THE `first` ARM, AND IT IS NO LONGER ONE "
-              "FIELD: `lb_reduce` overwrites one running position per existing line and keeps the last, so the "
-              "FIRST existing line's baseline is a second field of that same reduction — but the arm "
-              "`lb_atomic_extent` reads is `block_flow_last_line_box_baseline`, which reduces §9.4.1's whole "
-              "STACK and whose own first-line answer is the first box on that stack to have a line box rather "
-              "than the last. BUILD the pair in `lb_reduce`, carry it out through "
-              "`line_box_content_height`, and carry THAT pair through core/layout/block_flow.h's entry, which "
-              "is where the stack decides which box the first line is in. An `inline-block` the "
+              "`LbLines.last_baseline` carries. THE `first` ARM'S NUMBER IS NOW CARRIED and this line used to "
+              "say it was not: `lb_reduce` keeps BOTH running positions, `line_box_content_height` reports the "
+              "pair, and core/layout/block_flow.h's `block_flow_first_line_box_baseline` reduces §9.4.1's whole "
+              "STACK to the FIRST box on it that has a line box — which is the distinction that made this more "
+              "than one field, since a stack's first line is in a different box from its last. WHAT IS STILL "
+              "NOT BUILT IS THE SELECTION: `lb_atomic_extent` reads the LAST-baseline entry unconditionally, so "
+              "§4.2.1's `first` and `last` keywords choose nothing here. READ THIS LONGHAND at that call and "
+              "route it to whichever of the two entries it names. An `inline-block` the "
               "exception sends to its bottom margin edge (a scroll container, or one with no in-flow line box) "
               "still has ONE source and is not a set this longhand indexes into. DECIDE which of the four is "
               "here, before reading a source that may select nothing");
@@ -177,8 +177,10 @@ typedef struct {
 /* WHAT ONE REDUCTION OVER ONE FILL ANSWERS — see `lb_reduce` for why these three are one pass. */
 typedef struct {
     CssPx height;         /* §10.6.3's first bullet: to the BOTTOM EDGE of the last line box that exists */
-    CssPx last_baseline;  /* §10.8.1's `inline-block` arm: to the BASELINE of that same line box */
-    bool  any;            /* §9.4.2's other answer; false says the two distances are about no line box */
+    CssPx first_baseline; /* css-inline-3 §4.2.1's `first` arm and CSS 2.1 §17.5.3's cell baseline: to the
+                             BASELINE of the FIRST line box that exists */
+    CssPx last_baseline;  /* §10.8.1's `inline-block` arm: to the BASELINE of the LAST one */
+    bool  any;            /* §9.4.2's other answer; false says the three distances are about no line box */
 } LbLines;
 
 /* TWO SUMS OF THE SAME REAL NUMBER, taken in different orders — the only comparison this file makes between
@@ -947,6 +949,7 @@ static LbLines lb_reduce(lxb_dom_element_t *style, lxb_dom_node_t *first, lxb_do
     size_t n, i;
 
     out.height = css_px(0.0);
+    out.first_baseline = css_px(0.0);
     out.last_baseline = css_px(0.0);
     out.any = false;
     n = lb_fill(&m, style, first, end, &lines);
@@ -956,7 +959,6 @@ static LbLines lb_reduce(lxb_dom_element_t *style, lxb_dom_node_t *first, lxb_do
         CssPx lh;
 
         if (!exists) continue;
-        out.any = true;
         lh = css_px_add(e.above, e.below);
         DCHECK(lh.px >= 0.0,
                "CSS 2.2 §10.8's step 3 produced a NEGATIVE height for one line box. It is \"the distance "
@@ -971,6 +973,15 @@ static LbLines lb_reduce(lxb_dom_element_t *style, lxb_dom_node_t *first, lxb_do
            the advance, and overwritten by each line that exists, so what survives the loop is the LAST one's:
            §10.8.1's own words, and the same coordinate `line_box_inline_fragments` hangs its fragments from. */
         out.last_baseline = css_px_add(out.height, e.above);
+        /* The SAME coordinate kept for the FIRST line that exists rather than the last — css-inline-3 §4.2.1's
+           `first` arm and CSS 2.1 §17.5.3 Table height algorithms' "the baseline of a cell is the baseline of
+           the first in-flow line box in the cell". `out.any` is still false for exactly one iteration, which is
+           why the test is that flag and not an index: §9.4.2's zero-height line boxes are `continue`d above and
+           "must be treated as NOT EXISTING for any other purpose", so line 0 of the fill is not necessarily the
+           first line box that exists. Written before `any` is raised, and raised immediately after, so the two
+           cannot be reordered without the compiler saying so. */
+        if (!out.any) out.first_baseline = out.last_baseline;
+        out.any = true;
         /* §9.4.2: "line boxes are stacked with NO VERTICAL SEPARATION (except as specified elsewhere) and they
            never overlap", so §10.6.3's "distance from its top content edge to the bottom edge of the last line
            box" is the SUM of the heights above it — no gap term, and no need to carry a running position. */
@@ -985,10 +996,17 @@ static LbLines lb_reduce(lxb_dom_element_t *style, lxb_dom_node_t *first, lxb_do
 }
 
 CssPx line_box_content_height(lxb_dom_element_t *style, lxb_dom_node_t *first, lxb_dom_node_t *end,
-                              bool *any_line_box, CssPx *last_baseline)
+                              bool *any_line_box, CssPx *first_baseline, CssPx *last_baseline)
 {
     LbLines r;
 
+    DCHECK(first_baseline != NULL,
+           "CSS 2.2 §9.4.2's line boxes were asked for with nowhere to report the FIRST one's baseline. It is "
+           "not an optional out-parameter either: css-inline-3 §4.2.1 \"Alignment Baseline Source: the "
+           "baseline-source longhand\" and CSS 2.1 §17.5.3 \"Table height algorithms\" both ask for it by "
+           "name, and the reduction below computes it out of the same running position the height ends at — so "
+           "declining it buys nothing and a caller holding a nullable one would be a second walk waiting to be "
+           "written");
     DCHECK(any_line_box != NULL,
            "CSS 2.2 §9.4.2's line boxes were asked for with nowhere to report whether any of them exists — "
            "that is not an optional out-parameter, it is §8.3.1's own question");
@@ -1004,8 +1022,25 @@ CssPx line_box_content_height(lxb_dom_element_t *style, lxb_dom_node_t *first, l
        height is exactly the zero the reduction started at — the caller learns through `any_line_box` that this
        is an ABSENT line box rather than a measured zero, which is the distinction §8.3.1 needs and a single
        number cannot carry. §10.8.1's baseline is the same zero for the same reason: there is no line box for a
-       baseline to be inside, and the same `any_line_box` says so for both. */
+       baseline to be inside, and the same `any_line_box` says so for both. The FIRST baseline is the same zero
+       for the same reason and is written on the same paths, so a caller reading it after a false is reading an
+       absence rather than whatever it initialised. */
+    *first_baseline = r.first_baseline;
     *last_baseline = r.last_baseline;
+    /* THE TWO BASELINES ARE ONE NUMBER FOR A ONE-LINE BOX AND THE FIRST IS NEVER BELOW THE LAST, which is
+       §9.4.2's stacking read as an ordering: "line boxes are stacked with no vertical separation … and they
+       never overlap", so the running position is non-decreasing and each line's `A'` is non-negative only when
+       its own `line-height` is — which §10.8.1 permits to be exceeded by a negative leading. The assert is
+       therefore over the POSITIONS the loop wrote, not over the line heights: the first existing line's
+       baseline was recorded at a running position no later than the last's. */
+    DCHECK(!r.any || r.first_baseline.px <= r.last_baseline.px + 1e-9 * (1.0 + (r.last_baseline.px < 0.0 ?
+                                                                               -r.last_baseline.px :
+                                                                               r.last_baseline.px)),
+           "CSS 2.2 §9.4.2 stacks line boxes \"with no vertical separation\" and they \"never overlap\", so the "
+           "FIRST existing line box's baseline cannot sit BELOW the last one's — the two were read off one "
+           "running position that only advances. A first above the last means the loop recorded them out of "
+           "order, which would put css-inline-3 §4.2.1's `first` arm and CSS 2.1 §17.5.3's cell baseline on a "
+           "line the height had not counted");
     return r.height;
 }
 

@@ -20,10 +20,14 @@
  *
  * WHAT IS DELIBERATELY NOT HERE, AND WHY EACH IS NAMED RATHER THAN GUESSED.
  *   - The wrapper's HEIGHT is §10.6.3's over its own in-flow children, and those children are the caption
- *     boxes and the table box — so it is not this component's until the table box HAS a height, which is
- *     §17.5.3 Table height algorithms' over §17.5.2's used column widths. core/layout/block_flow.c's table arm
- *     names what that still needs, and it is the one place to read for it: a claim here about which piece is
- *     built would be a claim about a tree that moves, made in a header nothing re-checks.
+ *     boxes and the table box — so it belongs to whichever component runs that walk, which is
+ *     core/layout/block_flow.c's §9.4.1 stack and not this one. Read its table arm for what the walk needs and
+ *     what it refuses; a claim here about which piece is built would be a claim about a tree that moves, made
+ *     in a header nothing re-checks. What is permanent is the SHAPE of the answer, and it is worth stating
+ *     because it is not obvious: §17.4 gives this box the INITIAL value of every non-inherited property, so it
+ *     has no border and no padding and its border box IS its content box, and it gives the TABLE BOX inside it
+ *     the initial `margin-*` — so with no caption there is nothing for §10.6.3's collapsing to do and the
+ *     wrapper's height is exactly the table box's border-box height.
  *   - The wrapper's WIDTH is stated by §17.4 itself and is a question this component ASKS RATHER THAN ANSWERS:
  *     "The width of the table wrapper box is the border-edge width of the table box inside it, as described by
  *     section 17.5.2." That is §17.5.2 Table width algorithms: the 'table-layout' property's number with the

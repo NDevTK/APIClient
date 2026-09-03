@@ -90,20 +90,33 @@
    reading it after a crash-free return is reading a measurement rather than whatever it initialised.
    `*last_baseline` RECEIVES CSS 2.2 §10.8.1 "Leading and half-leading"'s OTHER DISTANCE DOWN THE SAME LINE
    BOXES — the offset from the same top content edge to the BASELINE of that same last line box, which is a
-   position INSIDE the box the returned height ends at. It is a THIRD OUT-PARAMETER AND NOT A SECOND ENTRY for
+   position INSIDE the box the returned height ends at. It is an OUT-PARAMETER AND NOT A SECOND ENTRY for
    the reason the walk behind it states in full: §10.6.3's bottom edge and §10.8.1's baseline are one running
    position read at two points of one loop over one fill, and a second pass could put the baseline on a line
    the height had not counted. It is a distance ONLY WHEN `*any_line_box` IS TRUE; its zero otherwise is not a
    coordinate, exactly as the returned height's is not, and both are written on every path.
-   NONE OF THE THREE IS OPTIONAL, which is why neither out-parameter may be NULL: they are the three answers
-   ONE reduction has, so a caller that wanted only some of them would still be paying for all three, and a
+   `*first_baseline` RECEIVES THE SAME OFFSET TO THE FIRST EXISTING LINE BOX's BASELINE, and it is here rather
+   than in a second entry for exactly the reason the last one is: it is the same running position read at a
+   third point of the SAME loop, so it costs nothing and a second reduction over one fill is what this file
+   refuses everywhere else. TWO SECTIONS ASK FOR IT BY NAME AND NEITHER IS §10.8.1's. css-inline-3 §4.2.1
+   "Alignment Baseline Source: the baseline-source longhand"'s `first` arm is one — §4.2.1's own `auto` is
+   "last-baseline alignment for inline-block, first-baseline alignment for everything else", so the alternative
+   it names is this number and not §10.8.1's. CSS 2.1 §17.5.3 "Table height algorithms" is the other and is the
+   one that made it load-bearing: "The baseline of a cell is the baseline of the first in-flow line box in the
+   cell", which is what that section's row baseline — "the maximum distance between the top of the cell box and
+   the baseline over all cells that have 'vertical-align: baseline'" — is the maximum of. For a box holding ONE
+   line box the two baselines are the same number, and for a box holding several they are not; reading the last
+   where §17.5.3 asks for the first makes a row too SHORT whenever a taller cell's first line sits above its
+   last, which is a rectangle no reader can tell from a measured one.
+   NONE OF THE FOUR IS OPTIONAL, which is why no out-parameter may be NULL: they are the four answers
+   ONE reduction has, so a caller that wanted only some of them would still be paying for all four, and a
    nullable one is the shape that invites a second walk to be added for the answer it declined.
    THE CALLER HAS ALREADY ESTABLISHED §9.4.2's OWN CONDITION over the run it passes — that this box contains no
    block-level boxes — because deciding it requires classifying every child, which core/layout/block_flow.c
    does once, both to choose between the two formatting contexts and to delimit §9.2.1.1's runs. A block-level
    box reaching this walk is those two classifications having come apart, and it crashes here saying so. */
 CssPx line_box_content_height(lxb_dom_element_t *style, lxb_dom_node_t *first, lxb_dom_node_t *end,
-                              bool *any_line_box, CssPx *last_baseline);
+                              bool *any_line_box, CssPx *first_baseline, CssPx *last_baseline);
 
 /* WHERE THE BOXES ON THIS FORMATTING CONTEXT'S LINE BOXES REACH on ONE PHYSICAL AXIS — `*lo` and `*hi` receive
  * the lowest and highest coordinates any of them occupies, as OFFSETS FROM THE ESTABLISHING BOX'S CONTENT BOX

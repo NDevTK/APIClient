@@ -463,18 +463,40 @@ typedef struct {
     BfRun top;               /* the run adjoining its top border edge, its own margin-top included */
     BfRun bottom;
     bool  collapse_through;  /* §8.3.1: the two runs are ONE run and the box places nothing */
-    /* §10.8.1's `inline-block` baseline, IN THE SAME FRAME AS `content_h` — the distance from this box's own
+    /* THE BASELINE THE PASS WAS ASKED FOR, IN THE SAME FRAME AS `content_h` — the distance from this box's own
        TOP CONTENT EDGE — so the struct carries one origin and a reader cannot take one distance for the other.
-       THEY ARE A MEASUREMENT ONLY WHERE THE WALK WAS ASKED FOR ONE (`bf_layout`'s `baseline` argument), AND
+       THEY ARE A MEASUREMENT ONLY WHERE THE WALK WAS ASKED FOR ONE (`bf_layout`'s `pass` argument), AND
        THE ONE READER IS THE WALK ITSELF, under that same flag. A `false` from a walk that was not asked would
        be indistinguishable from §9.4.2's own "this box has no line box", which is a real and different answer
        — so the flag gates the READ and not merely the write, and there is no path on which the two can be
-       confused. `bf_layout` is asked for the baseline exactly when its caller was, all the way down. */
-    CssPx last_baseline;
+       confused. `bf_layout` is asked for the baseline exactly when its caller was, all the way down.
+       WHICH baseline it is, is the PASS's and not a second field, and that is a statement about §9.4.1's stack
+       rather than about storage: the first line box on the stack and the last are in DIFFERENT boxes, so
+       carrying both would mean walking every box for a distance one of the two callers throws away. One field
+       under one pass keeps the frame single and keeps `has_line_box` meaning the same thing for both. */
+    CssPx baseline;
     bool  has_line_box;
+    /* CSS 2.1 §17.4 Tables in the visual formatting model's TABLE WRAPPER BOX, reported because ONE reader
+       needs to tell it from every other box on the stack and reading `display` a second time to do so would be
+       one property answered from two places. CSS 2.1 §17.5.3 Table height algorithms is that reader: a cell's
+       baseline is "the baseline of the first in-flow line box in the cell, OR THE FIRST IN-FLOW TABLE-ROW IN
+       THE CELL, whichever comes first", so a wrapper reached before any line box is the OTHER arm of that
+       sentence and not a box to walk past. It is written on every path, like the two above. */
+    bool  is_table_wrapper;
 } BfBox;
 
-static BfBox bf_box(lxb_dom_element_t *el, bool baseline);
+/* WHICH BASELINE §9.4.1's STACK IS BEING REDUCED TO, which is a three-way question and never a flag: CSS 2.2
+   §10.8.1 "Leading and half-leading" asks for the LAST line box in the normal flow, css-inline-3 §4.2.1
+   "Alignment Baseline Source: the baseline-source longhand"'s `first` keyword and CSS 2.1 §17.5.3 "Table
+   height algorithms"' cell baseline ("the baseline of the first in-flow line box in the cell") ask for the
+   FIRST, and §10.6.3's height asks for neither and must not pay for one. */
+typedef enum {
+    BF_BASELINE_NONE = 0,
+    BF_BASELINE_LAST,
+    BF_BASELINE_FIRST
+} BfBaseline;
+
+static BfBox bf_box(lxb_dom_element_t *el, BfBaseline pass);
 
 /* ---- WHICH FORMATTING CONTEXT THIS BLOCK CONTAINER ESTABLISHES ------------------------------------------
    CSS 2.2 §9.4.2 states the condition and §9.2.1 states the alternative in the same breath: a block container
@@ -668,12 +690,14 @@ static lxb_dom_node_t *bf_anon_run_end(lxb_dom_element_t *el, lxb_dom_node_t *fi
 /* ONE ANONYMOUS BLOCK BOX over the run `[first, end)` of `parent`'s children, as §9.4.1's stack sees it.
    §10.6.3's FIRST BULLET is its height — it establishes an inline formatting context, by construction the only
    thing it can contain — and §8.3.1's fourth adjoining pair is the rest of its contribution. */
-static BfBox bf_anon_box(lxb_dom_element_t *parent, lxb_dom_node_t *first, lxb_dom_node_t *end)
+static BfBox bf_anon_box(lxb_dom_element_t *parent, lxb_dom_node_t *first, lxb_dom_node_t *end,
+                         BfBaseline pass)
 {
     bool any_line_box = false;
     char *d = bf_computed(parent, "display");
     bool container = block_flow_display_is_block_container(d);
     BfBox out;
+    CssPx first_baseline = css_px(0.0), last_baseline = css_px(0.0);
     CssPx h;
 
     free(d);
@@ -700,8 +724,12 @@ static BfBox bf_anon_box(lxb_dom_element_t *parent, lxb_dom_node_t *first, lxb_d
        their initial values, so this box's border edge, padding edge and content edge are ONE rectangle and the
        distance line_box.h measures from the top CONTENT edge is the distance the stack outside measures from
        the top BORDER edge. That is the same identity `bf_anon_record` states for the position. */
-    h = line_box_content_height(parent, first, end, &any_line_box, &out.last_baseline);
+    h = line_box_content_height(parent, first, end, &any_line_box, &first_baseline, &last_baseline);
+    out.baseline = pass == BF_BASELINE_FIRST ? first_baseline : last_baseline;
     out.has_line_box = any_line_box;
+    /* §9.2.1.1's anonymous block box wraps a run of INLINE-LEVEL children; a table wrapper is block-level
+       (§17.4: "a 'block' box if the table is block-level"), so it is never inside one. */
+    out.is_table_wrapper = false;
     if (!any_line_box) {
         /* §8.3.1's own note, every conjunct of which is a constant for this box except the last two: "a box's
            own margins collapse if the 'min-height' property is zero, and it has neither top or bottom borders
@@ -741,7 +769,7 @@ static BfBox bf_anon_box(lxb_dom_element_t *parent, lxb_dom_node_t *first, lxb_d
    already decided its size (`bf_height_needs_content`), so a height walk that always asked would look inside
    boxes §10.6.3 never needs to open, doubling the tree walked at every level and reaching sections that crash. */
 static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *want_top, bool *found,
-                       BfAnonSink *anon, bool baseline)
+                       BfAnonSink *anon, BfBaseline pass)
 {
     lxb_dom_node_t *n = lxb_dom_interface_node(el), *c;
     /* §8.3.1's THIRD and FOURTH adjoining pairs are different conditions and were one flag here, which got
@@ -780,14 +808,18 @@ static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wa
     /* §10.8.1's pair starts where §9.4.1's stack starts and where §9.4.2's line boxes start — the top content
        edge, with nothing met — so a box that places nothing reports NOT MET rather than a coordinate. Every
        arm below either overwrites both or leaves both, and no arm writes one without the other. */
-    out.last_baseline = css_px(0.0);
+    out.baseline = css_px(0.0);
     out.has_line_box = false;
+    /* This is the box the WALK is reducing, never a child of it — the flag is a fact `bf_box` decides about a
+       child from its own `display`, and `bf_layout`'s subject reaches it through that function. */
+    out.is_table_wrapper = false;
     if (bf_content_kind(el) == BF_CONTENT_INLINE) {
         /* §9.4.2's INLINE FORMATTING CONTEXT. Nothing below this branch applies to it: §8.3.1's adjoining
            margins are stated over boxes that "both belong to in-flow BLOCK-LEVEL boxes participating in the
            same block formatting context", and there is no such box here — an inline box's vertical margins are
            not adjoining margins at all, so no run enters or leaves through this container's edges. */
         bool any_line_box = false;
+        CssPx first_baseline = css_px(0.0), last_baseline = css_px(0.0);
         CssPx h;
 
         DCHECK(want == NULL,
@@ -804,7 +836,10 @@ static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wa
            formatting context, so "its last line box in the normal flow" is the last EXISTING line box of this
            very reduction and the distance is already measured from this box's top content edge — the frame
            `BfBox` states. It is taken from the same call that answers the height, never a second one. */
-        h = line_box_content_height(el, n->first_child, NULL, &any_line_box, &out.last_baseline);
+        h = line_box_content_height(el, n->first_child, NULL, &any_line_box, &first_baseline, &last_baseline);
+        /* WHICH of the two the caller asked for — this box establishes the ONE inline formatting context here,
+           so both of §9.4.2's ends are inside it and the pass is the whole of the choice. */
+        out.baseline = pass == BF_BASELINE_FIRST ? first_baseline : last_baseline;
         out.has_line_box = any_line_box;
         if (any_line_box) {
             DCHECK(h.px >= 0.0,
@@ -877,13 +912,13 @@ static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wa
                    "CSS 2.2 §9.2.1.1's run ended where it began, so this walk would generate the same "
                    "anonymous block box for ever. The run starts at a child that generates an inline-level "
                    "box and therefore always contains at least that one");
-            b = bf_anon_box(el, c, end);
+            b = bf_anon_box(el, c, end, pass);
             anon_first = c;
             anon_end = end;
             c = end;
         } else {
             ce = lxb_dom_interface_element(c);
-            b = bf_box(ce, baseline);
+            b = bf_box(ce, pass);
             c = c->next;
         }
         /* §8.3.1's second adjoining pair — "bottom margin of box and top margin of its next in-flow following
@@ -909,7 +944,7 @@ static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wa
                note's conjunct is decided over the box's own children and `has_line_box` is decided over the
                same reduction, so a box answering both would be §9.4.2's "not existing for any other purpose"
                read one way for the collapse and the other way for the baseline. */
-            DCHECK(!baseline || !b.has_line_box,
+            DCHECK(pass == BF_BASELINE_NONE || !b.has_line_box,
                    "CSS 2.2 §8.3.1's collapse-through note lists \"it does not contain a line box\" among the "
                    "conjuncts that let a box's own two margins collapse, and this box COLLAPSED THROUGH while "
                    "reporting a line box for §10.8.1's baseline. One of the two readings is wrong about "
@@ -951,16 +986,53 @@ static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wa
            JUST USED. §9.4.1 lays the boxes out "one after the other, vertically, beginning at the top of a
            containing block", so the last of them to hold a line box holds THE last line box — which is why
            this is an overwrite per box that has one and not a search, and why nothing here decides anything
-           about ORDER that the stack has not already decided.
+           about ORDER that the stack has not already decided. UNDER `BF_BASELINE_FIRST` THE SAME SENTENCE READ
+           FROM THE OTHER END makes the FIRST such box the one that holds it, so the overwrite becomes a
+           first-write and no second traversal is needed for it — `out.has_line_box` is the only state the two
+           readings differ over.
            THE FRAME CONVERSION IS §8.1's AND IS THE ONLY ARITHMETIC: `pos` is this box's TOP BORDER EDGE and
-           `b.last_baseline` is measured from its TOP CONTENT EDGE, so the border and the padding between them
+           `b.baseline` is measured from its TOP CONTENT EDGE, so the border and the padding between them
            are added here. §9.2.1.1's anonymous block box has neither — "the margins will be 0" and every other
            non-inherited property is at its initial value — so its two edges are one and its term is a literal
            zero, the same identity `bf_anon_record` above relies on for the position. */
-        if (baseline && b.has_line_box) {
+        /* CSS 2.1 §17.5.3 Table height algorithms' OTHER ARM, refused where it would otherwise be walked past
+           in silence. The cell baseline that section defines is "the baseline of the first in-flow line box in
+           the cell, or the first in-flow table-row in the cell, WHICHEVER COMES FIRST" — so a table wrapper
+           standing on this stack ahead of every line box IS the answer, and it is not one this walk can give:
+           a table's line boxes are inside its cells' own formatting contexts, so `bf_box` reports no line box
+           for it (which is right for §10.8.1, whose "last line box in the normal flow" does not reach into a
+           nested formatting context) and a first-baseline pass would sail past it to a LATER line box.
+           BUILD it as §17.5.3's own recursion — the first ROW's baseline, "the maximum distance between the
+           top of the cell box and the baseline over all cells that have 'vertical-align: baseline'" applied to
+           that row, which core/layout/table_height.h computes the row heights of and which CSS 2.2 §10.8 asks
+           for in the same words for an atomic inline ("The baseline of an 'inline-table' is the baseline of
+           the first row of the table") — and report it on `BfBox` beside `baseline`, in this same frame.
+           IT IS ONLY EVER ASKED ON THE FIRST-BASELINE PASS AND ONLY BEFORE A LINE BOX IS MET, which is what
+           keeps an ordinary `<td>text<table>…</table></td>` out of it: that cell's first in-flow line box does
+           come first, so §17.5.3's own "whichever comes first" is decided by the line box and the wrapper
+           below it is never consulted. */
+        if (pass == BF_BASELINE_FIRST && !out.has_line_box && b.is_table_wrapper)
+            DFAILF("%s: CSS 2.1 §17.5.3 Table height algorithms' CELL BASELINE is \"the baseline of the first "
+                   "in-flow line box in the cell, or the first in-flow table-row in the cell, whichever comes "
+                   "first\", and CSS 2 §9.4.1's stack reached a TABLE WRAPPER BOX (printed above) before any "
+                   "line box — so the SECOND arm is the one that applies here and this walk has only the "
+                   "first. It must not skip the wrapper: a table's line boxes live in its cells' own "
+                   "formatting contexts, so taking a line box further down the stack would answer with a "
+                   "baseline from a box that is not the first in-flow thing in this cell at all, and the row "
+                   "height built on it would be too SHORT with nothing to say so. BUILD §17.5.3's own "
+                   "recursion — the first ROW's baseline, which is that section's \"maximum distance between "
+                   "the top of the cell box and the baseline over all cells that have 'vertical-align: "
+                   "baseline'\" over the rows core/layout/table_height.h already answers — and report it on "
+                   "`BfBox` beside `baseline` in this same frame. CSS 2.2 §10.8 \"Line height calculations: "
+                   "the 'line-height' and 'vertical-align' properties\" wants the identical number for an "
+                   "atomic inline (\"The baseline of an 'inline-table' is the baseline of the first row of the "
+                   "table\"), so ONE component answers both and neither reader derives it",
+                   box_subject(ce, nbuf, sizeof nbuf));
+        if (pass != BF_BASELINE_NONE && b.has_line_box &&
+            !(pass == BF_BASELINE_FIRST && out.has_line_box)) {
             CssPx inner = ce != NULL ? bf_content_top_from_border_edge(ce) : css_px(0.0);
 
-            out.last_baseline = css_px_add(css_px_add(pos, inner), b.last_baseline);
+            out.baseline = css_px_add(css_px_add(pos, inner), b.baseline);
             out.has_line_box = true;
         }
         pos = css_px_add(pos, b.border_h);
@@ -1050,7 +1122,7 @@ static bool bf_height_needs_content(lxb_dom_element_t *el)
    (§10.8.1 asks for that baseline, not for a clamped one). So when the baseline is asked for, the walk RUNS
    whatever `height` says — `block_flow_anonymous_boxes` runs it for the same reason and states it in the same
    words — and only the SIZE is still taken from used_value.h. */
-static BfBox bf_box(lxb_dom_element_t *el, bool baseline)
+static BfBox bf_box(lxb_dom_element_t *el, BfBaseline pass)
 {
     CssPx sink = css_px(0.0);
     bool sunk = false;
@@ -1068,79 +1140,94 @@ static BfBox bf_box(lxb_dom_element_t *el, bool baseline)
     b.top = bf_run_of(used_value_px(el, "margin-top"));
     b.bottom = bf_run_of(used_value_px(el, "margin-bottom"));
     b.collapse_through = false;
-    b.last_baseline = css_px(0.0);
+    b.baseline = css_px(0.0);
     b.has_line_box = false;
+    b.is_table_wrapper = wrapper;
     /* CSS 2.1 §17.4 Tables in the visual formatting model's TABLE WRAPPER BOX, which is what §9.4.1's stack
        placed and which is NOT the table box. Its two margins are already read above and that is §17.4's rule
        running rather than an accident: "The computed values of properties 'position', 'float', 'margin-*',
        'top', 'right', 'bottom', and 'left' on the table element are used on the table wrapper box and not the
        table box" — core/layout/table_wrapper.h is that split, asked once. What the same sentence takes AWAY is
-       why this cannot fall through to the arm below: every other non-inherited value, `border-*`, `padding-*`
-       and `height` among them, is used on the TABLE BOX, and the wrapper gets the initial value instead — so
-       `used_value_border_edge_px` on the table ELEMENT is a measurement of the wrong box, and it would be one
-       whether or not it happened to succeed. */
-    /* IT IS A `CHECK` AND NOT A `DCHECK`, WHICH IS A DECISION AND NOT A DEFAULT — CLAUDE.md's own rule is that
-       when unsure it is a DCHECK, so the reason has to be positive. A `DFAILF` here is compiled out in release
-       and execution FALLS THROUGH to the arm below, which returns `used_value_border_edge_px` on the table
-       ELEMENT — and §17.4's split makes that a measurement of the OTHER BOX: `border-*`, `padding-*` and
-       `height` are used on the table box, so the number is not the wrapper's edge under any reading. What
-       makes that production-fatal rather than merely wrong is WHERE IT GOES. This height becomes
-       `block_flow_child_top`'s running offset, which becomes core/layout/flow_position.c's coordinates, which
-       become CSSOM VIEW's `getBoundingClientRect`, the scrolling area, and
-       core/intersection_observer/intersection_observer.c's chain — and this engine's OUTPUT is findings
-       derived from what it observed. A fabricated rectangle there is a plausible datum indistinguishable from
-       a measurement, which is the defect this project names at the field level and refuses; it is the DATA
-       INTEGRITY case CLAUDE.md's CHECK list carries, so it must not PROCEED in release either.
-       THE COST IS STATED BECAUSE IT IS VISIBLE: engine/wpt.mjs reads the marker, so this site reports in the
-       `fatal` column and not in `gap`, which that gate calls THE WORK QUEUE. It is still the work queue —
-       §17.5 below is what to build — and the column says only that shipping past it is not an option.
-       THE ARM BELOW HAS THE SAME SHAPE FOR A FLEX OR GRID CONTAINER and is NOT promoted here: that is another
-       lane's box type, its wrong number is the same element's own border edge rather than a different box's,
-       and moving its aborts between columns without a measurement to attribute them to would be this diff
-       spending someone else's signal. It is named, not changed. */
-    if (wrapper)
-        CHECK_FAILF("%s: "
-               "CSS 2.1 §17.4 Tables in the visual formatting model's TABLE WRAPPER BOX is on §9.4.1's stack "
-               "and its BORDER-BOX HEIGHT is what this walk needs. The wrapper's own edges are settled and are "
-               "not what is missing: CSS 2.1 §17.4 Tables in the visual formatting model gives it the table "
-               "element's `margin-*` (read above) and the "
-               "INITIAL value of every other non-inherited property — \"(Where the table element's values are "
-               "not used on the table and table wrapper boxes, the initial values are used instead.)\" — so it "
-               "has NO border and NO padding, and its border box IS its content box. "
-               "THAT CONTENT HEIGHT IS §10.6.3's OVER ITS OWN IN-FLOW CHILDREN, and CSS 2.1 §17.4 Tables in the "
-               "visual formatting model says what they are: "
-               "the wrapper \"contains the table box itself and any caption boxes (in document order)\". "
-               "core/layout/table_box.h answers the caption boxes (`table_box_captions`) and the table box's "
-               "rows and cells (§17.2.1 Anonymous table objects' first two stages), so the STRUCTURE is in "
-               "hand — AND SO IS THE WHOLE WIDTH CHAIN, which is what this crash used to be waiting on and no "
-               "longer is: CSS 2.1 §17.5.2 Table width algorithms: the 'table-layout' property is "
-               "core/layout/table_width.h, both of its algorithms, over core/layout/table_grid.h's grid and "
-               "core/layout/table_column_width.h's per-column minimum and maximum, and "
-               "`used_value_border_edge_px(table, false)` is therefore §17.4's own sentence answered — \"The "
-               "width of the table wrapper box is the border-edge width of the table box inside it, as "
-               "described by section 17.5.2\". "
-               "WHAT IS MISSING IS THE HEIGHT, IN TWO PIECES. (1) The table box's own height is CSS 2.1 §17.5.3 "
-               "Table height algorithms' — \"A value of 'auto' means that the height is the sum of the row "
-               "heights plus any cell spacing or borders\" — over row heights that are each \"the maximum of the "
-               "row's computed 'height', the computed 'height' of each cell in the row, and the minimum height "
-               "(MIN) required by the cells\", whose content term is a cell's content height over that cell's "
-               "USED WIDTH. That width is the used width of the COLUMN the cell occupies, which "
-               "core/layout/table_width.h computes for the whole table at once and reports per column; what is "
-               "unbuilt is §17.5.3 itself, and the ROUTE that answers one cell — `used_value_px` on a "
-               "table-internal box crashes by name in core/layout/used_value.c saying exactly this. "
-               "(2) Each caption box's height is §10.6.3's over ITS used width, which §17.4 makes the wrapper's "
-               "content width — the number named above — and that is the same missing route: a caption is a "
-               "table-internal box for `used_value_px`, so §10.6.3's walk cannot be run over one until its used "
-               "width is answered from the table beside it rather than from §10.3. "
-               "THE CAPTIONS' ORDER IS NOT A GAP HERE AND THIS CRASH USED TO SAY IT WAS, TWICE OVER: which "
-               "captions sit above the table box and which below is `caption-side`'s (§17.4.1 Caption position "
-               "and alignment), that property IS in core/css/css_computed_value.c's modelled set and IS in "
-               "core/css/css_defaulting.c's inherited list — so it can be read — and the ORDER it decides is a "
-               "PLACEMENT question, which a SUM of the children's heights does not ask. It is what "
-               "core/layout/flow_position.c will need, not this walk. BUILD §17.5.3 over the used column widths, "
-               "and the cell-and-caption width route beneath it; this walk then measures the wrapper with no "
-               "arm added to it",
-               box_subject(el, nbuf, sizeof nbuf));
+       every other non-inherited value: `border-*`, `padding-*` and `height` are used on the TABLE BOX, and the
+       wrapper gets the initial value instead — "(Where the table element's values are not used on the table
+       and table wrapper boxes, the initial values are used instead.)" So the wrapper has NO border and NO
+       padding, and ITS BORDER BOX IS ITS CONTENT BOX.
+       THAT CONTENT HEIGHT IS §10.6.3's OVER ITS OWN IN-FLOW CHILDREN, and §17.4 says what they are: the
+       wrapper "contains the table box itself and any caption boxes (in document order)". WITH NO CAPTION THE
+       WALK IS ONE BOX LONG AND HAS A CLOSED FORM, which is why this arm is arithmetic rather than a recursion:
+       §10.6.3's distance runs "to the bottom edge of the bottom (possibly collapsed) margin of its last in-flow
+       child", the only child is the table box, and §17.4 has just given that box the INITIAL `margin-*` — so
+       there is no margin to collapse and the distance IS the table box's border-box height. The wrapper adds
+       nothing to it on either side.
+       SO THE NUMBER IS `used_value_border_edge_px` ON THE TABLE ELEMENT, AND THE CRASH THAT STOOD HERE SAID
+       THAT WOULD BE "A MEASUREMENT OF THE WRONG BOX". That was right about the general case and wrong about
+       this one, and the difference is worth stating because the two boxes are genuinely different: §17.4 puts
+       `border-*`, `padding-*` and `height` on the TABLE BOX, so that call measures the TABLE BOX's border edge
+       — which is exactly what this arm wants, because the wrapper's own edge coincides with it whenever the
+       wrapper has no other child. It stops coinciding the moment a CAPTION exists, and that case crashes
+       below rather than borrowing this identity.
+       WHAT MAKES IT ANSWERABLE AT ALL IS §17.5.3, WHICH IS NOW BUILT: `used_value_border_edge_px` on a table
+       box reaches CSS 2.1 §17.5.3 Table height algorithms through core/layout/table_height.h — the sum of the
+       row heights plus the vertical cell spacing — over §17.5.2's used column widths. The crash here was
+       waiting on that section and on nothing else in the no-caption case. */
+    if (wrapper) {
+        lxb_dom_element_t **captions = NULL;
+        size_t ncaptions = table_box_captions(el, &captions);
+
+        free(captions);
+        /* IT IS A `CHECK` AND NOT A `DCHECK`, WHICH IS A DECISION AND NOT A DEFAULT — CLAUDE.md's own rule is
+           that when unsure it is a DCHECK, so the reason has to be positive. A `DFAILF` here is compiled out
+           in release and execution FALLS THROUGH to the arm below, which returns the TABLE BOX's border edge
+           — and with a caption in the wrapper that is the wrapper's height MINUS every caption's margin box,
+           which is a real number for a real box and is not this one. What makes that production-fatal rather
+           than merely wrong is WHERE IT GOES. This height becomes `block_flow_child_top`'s running offset,
+           which becomes core/layout/flow_position.c's coordinates, which become CSSOM VIEW's
+           `getBoundingClientRect`, the scrolling area, and core/intersection_observer/intersection_observer.c's
+           chain — and this engine's OUTPUT is findings derived from what it observed. A fabricated rectangle
+           there is a plausible datum indistinguishable from a measurement, which is the defect this project
+           names at the field level and refuses; it is the DATA INTEGRITY case CLAUDE.md's CHECK list carries,
+           so it must not PROCEED in release either.
+           THE COST IS STATED BECAUSE IT IS VISIBLE: engine/wpt.mjs reads the marker, so this site reports in
+           the `fatal` column and not in `gap`, which that gate calls THE WORK QUEUE. It is still the work
+           queue — the caption's used width is what to build — and the column says only that shipping past it
+           is not an option. THE ARM BELOW HAS THE SAME SHAPE FOR A FLEX OR GRID CONTAINER and is NOT promoted
+           here: that is another lane's box type, its wrong number is the same element's own border edge rather
+           than a different box's, and moving its aborts between columns without a measurement to attribute
+           them to would be this diff spending someone else's signal. It is named, not changed. */
+        if (ncaptions != 0)
+            CHECK_FAILF("%s: CSS 2.1 §17.4 Tables in the visual formatting model's TABLE WRAPPER BOX has %zu "
+                   "CAPTION BOX(ES) in it beside the table box — \"the table generates a principal block box "
+                   "called the table wrapper box that contains the table box itself and any caption boxes (in "
+                   "document order)\" — so §10.6.3's walk over its in-flow children has more than one child "
+                   "and the table box's own border edge is no longer the whole of the wrapper's height. WHAT "
+                   "IS MISSING IS ONE NUMBER AND IT IS NOT §17.5.3's: a caption is \"rendered as [a] normal "
+                   "block box[] inside the table wrapper box\", so its height is §10.6.3's over ITS USED "
+                   "WIDTH, and §17.4 makes that width the WRAPPER's content edge — \"The width of the table "
+                   "wrapper box is the border-edge width of the table box inside it, as described by section "
+                   "17.5.2\". THAT WIDTH IS ALREADY COMPOSABLE (`used_value_border_edge_px` on the table "
+                   "element, over core/layout/table_width.h's §17.5.2 answer) AND IS NOT WHAT IS MISSING "
+                   "EITHER. What is missing is that §10.1's containing block is an ELEMENT and the wrapper is "
+                   "an ANONYMOUS box no element in this tree names — the identical box "
+                   "`used_value_containing_block`'s own table arm crashes for, and the reason "
+                   "`used_value_px(caption, \"width\")` crashes rather than answering. BUILD THAT BOX, then "
+                   "this arm is §10.6.3's ordinary walk over the caption boxes and the table box with "
+                   "`caption-side` (§17.4.1 Caption position and alignment) deciding only their ORDER, which "
+                   "a SUM does not ask. DO NOT GUESS AT THE RECTANGLE MEANWHILE: §17.4.1 warns that \"CSS2 "
+                   "described a different width and horizontal alignment behavior; that behavior will be "
+                   "introduced in CSS3 using the values 'top-outside' and 'bottom-outside' on this property\", "
+                   "and its own example says \"The caption will be as wide as the parent of the table\" — a "
+                   "THIRD rectangle again, so a wrapper picked by resemblance would be a real width of the "
+                   "wrong box",
+                   box_subject(el, nbuf, sizeof nbuf), ncaptions);
+        /* §10.8.1's BASELINE IS NOT THIS ARM'S AND MUST NOT BE SKIPPED INTO. A wrapper reports NO line box —
+           §10.8.1's "last line box in the normal flow" does not reach into the cells' own formatting contexts
+           — and `is_table_wrapper` above is what lets the ONE reader that needs the other answer (CSS 2.1
+           §17.5.3 Table height algorithms' cell baseline, whose second arm is "the first in-flow table-row in
+           the cell") crash in `bf_layout` naming it, at the point where it knows whether a line box came
+           first. Nothing is decided here, which is why there is no `pass` test in this arm. */
+        b.border_h = used_value_border_edge_px(el, true);
+        return b;
+    }
     /* Not a block container: a flex or grid CONTAINER, whose height is its own spec's and which establishes an
        independent formatting context, so its margins are its own and nothing inside it is this walk's. The
        height is asked for and crashes in the section that owns it. */
@@ -1149,7 +1236,7 @@ static BfBox bf_box(lxb_dom_element_t *el, bool baseline)
            therefore be the LAST box holding a line box, so an answer of "no line box here" is not a skip — it
            would hand §10.8.1's sentence the baseline of some EARLIER box, or its own bottom margin edge, and
            both are real coordinates on a real line that nothing downstream can tell from a measured one. */
-        if (baseline)
+        if (pass != BF_BASELINE_NONE)
             DFAILF("CSS 2.2 §10.8.1 \"Leading and half-leading\" is walking §9.4.1's stack for the baseline of "
                    "an enclosing `inline-block` — \"the baseline of its last line box in the normal flow\" — and "
                    "reached a box on that stack that is NOT a block container (%s), so it holds no line box of "
@@ -1181,7 +1268,7 @@ static BfBox bf_box(lxb_dom_element_t *el, bool baseline)
         return b;
     }
     if (!bf_height_needs_content(el)) {
-        if (!baseline) {
+        if (pass == BF_BASELINE_NONE) {
             b.border_h = used_value_border_edge_px(el, true);
             return b;
         }
@@ -1190,7 +1277,7 @@ static BfBox bf_box(lxb_dom_element_t *el, bool baseline)
            be §10.6.3's rule running for a box §10.6.2 already sized. */
         b.border_h = used_value_border_edge_px(el, true);
         {
-            BfBox inner = bf_layout(el, NULL, &sink, &sunk, NULL, true);
+            BfBox inner = bf_layout(el, NULL, &sink, &sunk, NULL, pass);
 
             DCHECK(!sunk, "the child walk reported placing a box it was not looking for");
             /* §8.3.1's fourth adjoining pair needs "zero or auto computed height", which is exactly what
@@ -1203,12 +1290,12 @@ static BfBox bf_box(lxb_dom_element_t *el, bool baseline)
                    "for it one line above. The walk nevertheless reported it collapsing through, so the "
                    "note's conjunct and css-sizing-3 §3.2.1's behaves-as-auto have come apart, and the run "
                    "this box would have merged is one every sibling below it is placed against");
-            b.last_baseline = inner.last_baseline;
+            b.baseline = inner.baseline;
             b.has_line_box = inner.has_line_box;
         }
         return b;
     }
-    b = bf_layout(el, NULL, &sink, &sunk, NULL, baseline);
+    b = bf_layout(el, NULL, &sink, &sunk, NULL, pass);
     DCHECK(!sunk, "the child walk reported placing a box it was not looking for");
     if (b.collapse_through) return b;
     /* A box whose height BEHAVES AS AUTO (css-sizing-3 §3.2.1) is the one whose border-box height is this
@@ -1253,7 +1340,7 @@ CssPx block_flow_auto_height(lxb_dom_element_t *el)
               "context' — so there is no block formatting context inside it for this walk to run over. The "
               "caller is core/layout/used_value.c, which classifies the box type before asking, so the two "
               "lists have come apart");
-    b = bf_layout(el, NULL, &unused, &found, NULL, false);
+    b = bf_layout(el, NULL, &unused, &found, NULL, BF_BASELINE_NONE);
     DCHECK(!found, "the content-height walk reported placing the box it was not looking for");
     return b.content_h;
 }
@@ -1285,11 +1372,50 @@ bool block_flow_last_line_box_baseline(lxb_dom_element_t *el, CssPx *baseline)
            "stated over exactly that box, and core/layout/line_box.c has classified the box type — and taken "
            "out the REPLACED `inline-block`, which has no baseline at all — before asking, so the two lists "
            "have come apart");
-    b = bf_layout(el, NULL, &unused, &found, NULL, true);
+    b = bf_layout(el, NULL, &unused, &found, NULL, BF_BASELINE_LAST);
     DCHECK(!found, "the baseline walk reported placing a box it was not looking for");
     /* `bf_layout` measures both of its distances from this box's TOP CONTENT EDGE, which is the frame this
        entry's contract states, so there is no conversion here and none is hidden in the caller either. */
-    *baseline = b.last_baseline;
+    *baseline = b.baseline;
+    return b.has_line_box;
+}
+
+bool block_flow_first_line_box_baseline(lxb_dom_element_t *el, CssPx *baseline)
+{
+    CssPx unused = css_px(0.0);
+    bool found = false;
+    char *d;
+    bool container;
+    BfBox b;
+
+    DCHECK(el != NULL, "CSS 2.1 §17.5.3's FIRST-line-box baseline was asked for with no element");
+    DCHECK(baseline != NULL,
+           "CSS 2.1 §17.5.3 Table height algorithms' FIRST-line-box baseline was asked for with nowhere to "
+           "put the distance. The return value is only the section's \"if there is no such line box\" "
+           "disjunct, so a caller holding it alone would know a baseline EXISTS and have no coordinate to "
+           "align the row to");
+    d = bf_computed(el, "display");
+    container = block_flow_display_is_block_container(d);
+    free(d);
+    /* THE SAME §9.2.1 ALTERNATIVE THE LAST-BASELINE ENTRY ASSERTS, over the same box and for the same reason —
+       a box that is neither of §9.2.1's two shapes has no §9.4.2 line boxes of its own and no §9.4.1 stack to
+       walk. CSS 2.1 §9.2.1 Block-level elements and block boxes is also what makes this entry's own caller
+       legitimate: "non-replaced inline blocks and NON-REPLACED TABLE CELLS are block containers but not
+       block-level boxes", so a cell is exactly the box §17.5.3 measures a baseline inside. */
+    DCHECK(container,
+           "CSS 2.1 §17.5.3 Table height algorithms' cell baseline was asked of a box that is not a BLOCK "
+           "CONTAINER. §9.2.1's \"either contains only block-level boxes or establishes an inline formatting "
+           "context\" is stated over exactly that box, and §9.2.1 puts a non-replaced table cell inside it by "
+           "name — so a box here that is not one is core/layout/table_box.h's cell classification and this "
+           "list having come apart, and a REPLACED cell (an `<img style=\"display:table-cell\">`) reaching "
+           "this walk is CSS 2.1 §17.2 The CSS table model's \"replaced elements with these 'display' values "
+           "are treated as their given display types during layout\" needing an arm §17.5.3 does not write");
+    b = bf_layout(el, NULL, &unused, &found, NULL, BF_BASELINE_FIRST);
+    DCHECK(!found, "the first-baseline walk reported placing a box it was not looking for");
+    /* Same frame as the entry above and as `block_flow_auto_height`: the distance is from this box's own TOP
+       CONTENT EDGE, so a caller measuring from a BORDER edge adds its own border and padding and this file
+       adds neither. */
+    *baseline = b.baseline;
     return b.has_line_box;
 }
 
@@ -1325,7 +1451,7 @@ CssPx block_flow_child_top(lxb_dom_element_t *el)
            "reached the box",
            box_subject(el, nbuf, sizeof nbuf), box_subject(cb, cbuf, sizeof cbuf),
            box_subject_node(lxb_dom_interface_node(el)->parent, pbuf, sizeof pbuf));
-    (void)bf_layout(cb, el, &top, &found, NULL, false);
+    (void)bf_layout(cb, el, &top, &found, NULL, BF_BASELINE_NONE);
     if (!found)
         DFAIL("CSS 2 §9.4.1's walk over this box's containing block placed every in-flow block-level child it "
               "found and NEVER REACHED THIS BOX, so there is no position to report. The walk skips exactly what "
@@ -1368,7 +1494,7 @@ size_t block_flow_anonymous_boxes(lxb_dom_element_t *el, BlockFlowAnonBox **out)
        come from. It is run whatever this container's `height` says — `bf_height_needs_content` decides whether
        a box's own content decides ITS SIZE, which is a different question from where the boxes inside it are,
        and a container with a declared height is exactly the one whose text can overflow it. */
-    (void)bf_layout(el, NULL, &unused, &found, &sink, false);
+    (void)bf_layout(el, NULL, &unused, &found, &sink, BF_BASELINE_NONE);
     DCHECK(!found, "the anonymous-box walk reported placing a box it was not looking for");
     DCHECK(sink.n > 0,
            "CSS 2.2 §9.2.1.1's forcing generated NO anonymous block box inside a container whose child list "

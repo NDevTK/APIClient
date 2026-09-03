@@ -19,6 +19,7 @@
 #include "core/layout/table_box.h"
 #include "core/layout/table_column_width.h"
 #include "core/layout/table_grid.h"
+#include "core/layout/table_height.h"
 #include "core/layout/table_width.h"
 #include "core/layout/used_value.h"
 
@@ -588,8 +589,8 @@ static TableBoxKind uv_table_box_kind(lxb_dom_element_t *el)
    document where the difference shows.
    THE FLOOR IS css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property"'s OWN, in its own words —
    "the content box width and height are calculated by subtracting the border and padding in the corresponding
-   axis from the specified length/percentage, and flooring the result at zero, as the inner size of a box
-   cannot be negative" — and it is REACHABLE here rather than decorative: §17.5.2.1 Fixed table layout divides
+   axis from the specified <length-percentage>, and flooring the result at zero (as the inner size of a box
+   cannot be negative)" — and it is REACHABLE here rather than decorative: §17.5.2.1 Fixed table layout divides
    the declared table width over the columns and never consults a cell's edges, so a `table-layout: fixed`
    table declared narrower than one cell's own padding and border leaves that cell no content box at all. */
 static CssPx uv_table_cell_used_width(lxb_dom_element_t *el)
@@ -678,6 +679,191 @@ static void uv_table_non_cell_width_fail(lxb_dom_element_t *el, TableBoxKind kin
            "rendered (exactly as if they had 'display: none')\", so nothing paints this rectangle and the "
            "only consumer of the number is a reader asking CSSOM for it, which is exactly the reader a "
            "fabricated width would mislead",
+           box_subject(el, nbuf, sizeof nbuf));
+}
+
+/* CSS 2.1 §17.5.3 Table height algorithms, as the one thing §10.6 has to say about a TABLE box's height:
+   nothing. §17.5.2's handover sentence is written about widths — "this section overrides the rules that apply
+   to calculating widths as described in section 10.3" — and §17.5.3 needs no such sentence because it simply
+   states the height itself: "The height of a table is given by the 'height' property for the 'table' or
+   'inline-table' element. A value of 'auto' means that the height is the sum of the row heights plus any cell
+   spacing or borders. Any other value is treated as a minimum height." So this is a ROUTE and not an algorithm,
+   exactly as `uv_table_used_width` above is, and it answers BOTH arms — the declared value is an input to
+   §17.5.3's own comparison rather than the used value, so there is nothing left here for a declared-height arm
+   to do and there is none.
+   THE GRID IS BUILT PER CALL AND NOT CACHED, for the reason core/layout/block_flow.h states of every layout in
+   this directory: a layout is per-flow state, so a cached grid is shared state solver/dom_cow.h's delta does
+   not swap and a stale one is another flow's document.
+   THE RESULT IS CONVERTED BY css-sizing-3 §3.3 EXACTLY AS EVERY OTHER ARM'S IS. §17.5.3 answers CSS 2.1's own
+   `height` — the table box's content extent on this axis — and §3.3 decides which box a used value is exposed
+   in. §17.6.1 The separated borders model's border-edge exception does NOT apply on this axis and that is its
+   own wording rather than a reading taken here: "in HTML and XHTML1, the WIDTH of the <table> element is the
+   distance from the left border edge to the right border edge" says nothing about the height. */
+static CssPx uv_table_used_height(lxb_dom_element_t *el)
+{
+    TableGrid grid;
+    TableUsedHeights heights;
+    CssPx content;
+
+    table_grid_build(el, &grid);
+    table_heights(el, &grid, &heights);
+    content = heights.content;
+    table_heights_release(&heights);
+    table_grid_release(&grid);
+    if (uv_is_border_box(el)) return css_px_add(content, uv_surround_total(uv_surround(el, true)));
+    return content;
+}
+
+/* CSS 2.1 §17.5 Visual layout of table contents' USED HEIGHT OF ONE CELL — the block-axis twin of
+   `uv_table_cell_used_width` above, and a fact about the GRID for the same reason: "Each cell is thus a
+   rectangular box, one or more grid cells wide and high", and §17.5's own last paragraph puts the row edges at
+   the cell border edges in the separated model, so a cell box fills the rows its rectangle covers. §17.5.3
+   states the same thing from the cell's side — "Cell boxes that are smaller than the height of the row receive
+   extra top or bottom padding".
+   THE DECLARED `height` IS NOT THE USED VALUE HERE AND §17.5.3 SAYS SO IN ONE SENTENCE: "The table cell's
+   'height' property can influence the height of the row (see above), but it does not increase the height of the
+   cell box." So the declaration is an input to the ROW's maximum, inside the algorithm this function runs, and
+   both of §10's arms route here — which is why `uv_pass_size` answers a cell before `len` is looked at, exactly
+   as it does on the inline axis.
+   §17.5.3's ANSWER IS IN THE BORDER BOX AND CSS 2.1's `height` IS NOT, which is the one conversion this
+   function owns, and it is taken out through `table_cell_vertical_edges` — the identical spelling
+   core/layout/table_height.c put it in with, never through `uv_surround` beside it, for the reason the inline
+   twin states: this file's surround resolves a percentage padding against §10.1's containing block, and a
+   CELL's containing block is a rectangle §10.1 cannot name. */
+static CssPx uv_table_cell_used_height(lxb_dom_element_t *el)
+{
+    lxb_dom_element_t *table = table_box_table_of(el);
+    TableGrid grid;
+    TableUsedHeights heights;
+    const TableGridCell *cell;
+    CssPx border_box, content;
+    char nbuf[160], tbuf[160];
+
+    table_grid_build(table, &grid);
+    table_heights(table, &grid, &heights);
+    cell = table_grid_cell_of(&grid, el);
+    if (cell == NULL)
+        DFAILF("%s: CSS 2.1 §17.5 Visual layout of table contents placed NO cell for this box in %s's grid, "
+               "which is the table box CSS 2.1 §17.2's own nesting puts it inside. The two walks have come "
+               "apart: core/layout/table_box.h reached this table by climbing the internal boxes above the "
+               "cell, and core/layout/table_grid.h reached the cells by descending the same table's rows, so "
+               "a box that is in one and not the other is a row this cell hangs under that §17.2.1 Anonymous "
+               "table objects' box generation does not report as a row of this table. There is no height to "
+               "answer with — the rows in hand belong to a grid this cell is not in",
+               box_subject(el, nbuf, sizeof nbuf), box_subject(table, tbuf, sizeof tbuf));
+    border_box = table_cell_used_border_box_height(&heights, cell);
+    content = css_px_max(css_px_sub(border_box, table_cell_vertical_edges(el)), css_px(0.0));
+    table_heights_release(&heights);
+    table_grid_release(&grid);
+    if (uv_is_border_box(el)) return border_box;
+    return content;
+}
+
+/* CSS 2.1 §17.5.3's ROW HEIGHT, read back out of the same answer — "The height of a 'table-row' element's box
+   is calculated once the user agent has all the cells in the row available", which is why it is a read of the
+   whole table's answer rather than a rule this function could apply to one row.
+   IT IS A BORDER-BOX NUMBER AND A ROW HAS NO BORDER TO SUBTRACT: §17.6.1 The separated borders model says
+   outright that "rows, columns, row groups, and column groups cannot have borders (i.e., user agents must
+   ignore the border properties for those elements)", so the row's border box and its content box coincide on
+   this axis and css-sizing-3 §3.3's conversion is the identity for it. That is asserted rather than assumed. */
+static CssPx uv_table_row_used_height(lxb_dom_element_t *el)
+{
+    lxb_dom_element_t *table = table_box_table_of(el);
+    TableGrid grid;
+    TableUsedHeights heights;
+    CssPx h = css_px(0.0);
+    bool found = false;
+    size_t i;
+    char nbuf[160], tbuf[160];
+
+    table_grid_build(table, &grid);
+    table_heights(table, &grid, &heights);
+    /* §17.5's rule 1 numbers the grid rows in the order core/layout/table_box.h reports them, and
+       `table_grid_cell_of` indexes by CELL rather than by row — so the row is found through the cells anchored
+       in it, which is the only mapping from an element to a grid row either component states. A row with NO
+       cell at all is a real row (`<tr></tr>`) and §17.5.3's maximum over no cell is its own declared height,
+       which is the answer `table_heights` already stored for it. */
+    for (i = 0; i < grid.ncells && !found; i++)
+        if (grid.cells[i].element != NULL &&
+            lxb_dom_interface_node(grid.cells[i].element)->parent == lxb_dom_interface_node(el)) {
+            DCHECK(grid.cells[i].row < heights.nrows,
+                   "CSS 2.1 §17.5's grid anchored a cell in a row CSS 2.1 §17.5.3 answered no height for");
+            h = heights.rows[grid.cells[i].row];
+            found = true;
+        }
+    table_heights_release(&heights);
+    table_grid_release(&grid);
+    if (!found)
+        DFAILF("%s: CSS 2.1 §17.5.3 Table height algorithms answered heights for every grid row of %s and this "
+               "ROW box is not one of them by the only mapping either component states — its own cells' anchor "
+               "positions (CSS 2.1 §17.5 Visual layout of table contents: \"The top row of this rectangle is in "
+               "the row specified by the cell's parent\"). A row with NO CELL is exactly the shape that reaches "
+               "here: `<tr></tr>` has a real height (§17.5.3's maximum over no cell, which is the row's own "
+               "computed `height`) and nothing in the GRID names it, because core/layout/table_grid.h places "
+               "CELLS. BUILD the mapping where the rows are generated — core/layout/table_box.h's "
+               "`table_box_rows` already answers them in grid order with their elements — and report the row "
+               "INDEX beside the height so this read is a lookup rather than a search",
+               box_subject(el, nbuf, sizeof nbuf), box_subject(table, tbuf, sizeof tbuf));
+    DCHECK(!uv_is_border_box(el) || css_px_add(uv_surround_total(uv_surround(el, true)), css_px(0.0)).px == 0.0,
+           "CSS 2.1 §17.6.1 The separated borders model says \"rows, columns, row groups, and column groups "
+           "cannot have borders (i.e., user agents must ignore the border properties for those elements)\", so "
+           "a row's border box and its content box are one rectangle on the block axis and css-sizing-3 §3.3's "
+           "conversion is the identity here — and this row has a non-zero vertical padding or border. Either "
+           "that sentence is not being enforced where the properties are read, or §17.5.3's row height is being "
+           "measured in a different box from the one it is reported in");
+    return h;
+}
+
+/* THE TABLE BOXES WHOSE USED HEIGHT IS STILL UNANSWERED, which after §17.5.3's own three routes is two
+   different questions and not one leftover — so the crash NAMES the box and says which section owns it. It is
+   ONE function reached from the one place the block axis is decided, for the reason its inline twin is one:
+   for every kind below the DECLARATION IS NOT THE ANSWER either way.
+   THE SITE TRAVELS AS THE BOX AND NOT AS A LINE: `box_subject` prints the element and its computed `display`,
+   which is the address a reader of this abort needs — the file and line would name this helper for both. */
+static void uv_table_non_cell_height_fail(lxb_dom_element_t *el, TableBoxKind kind)
+{
+    char nbuf[160];
+
+    if (kind == TABLE_BOX_CAPTION)
+        DFAILF("%s: a CAPTION box's used height, which CSS 2.1 §17.5.3 Table height algorithms does not state "
+               "and must not be taken from — that section is written over the table box and its rows, and a "
+               "caption is in neither. §17.4 Tables in the visual formatting model places it instead: \"The "
+               "caption boxes are block-level boxes that retain their own content, padding, margin, and border "
+               "areas, and are rendered as normal block boxes inside the table wrapper box\" — so this is "
+               "§10.6.3's ORDINARY content-based height, which core/layout/block_flow.h runs for every other "
+               "block box. WHAT BLOCKS IT IS THE SAME ONE THING THAT BLOCKS THE CAPTION'S WIDTH, one function "
+               "up: §10.6.3's walk resolves each descendant's containing block through §10.1, and a caption's "
+               "is the WRAPPER — an ANONYMOUS box no element in this tree names, which "
+               "`used_value_containing_block`'s own table arm crashes for. BUILD that box; this height then "
+               "needs no arm of its own at all, because a caption is a block container like any other and the "
+               "walk already covers it",
+               box_subject(el, nbuf, sizeof nbuf));
+    if (kind == TABLE_BOX_ROW || table_box_kind_is_row_group(kind))
+        DFAILF("%s: a ROW GROUP box's used height, which CSS 2.1 §17.5.3 Table height algorithms DECLINES TO "
+               "DEFINE in its own words: \"CSS 2.1 does not define the meaning of 'height' on row groups.\" "
+               "This is therefore NOT a missing algorithm and must not be built as one — it is a case with no "
+               "answer in this standard, and a number returned here would be this engine deciding it. WHAT "
+               "CSS 2.1 DOES SAY about the box is where it sits: §17.5 Visual layout of table contents' rule 2 "
+               "gives it the grid rows of the rows it contains (\"A row group occupies the same grid cells as "
+               "the rows it contains\"), so its EXTENT is the sum of those rows' heights plus the "
+               "`border-spacing` between them — the same reading `table_cell_used_border_box_height` takes for "
+               "a row-spanning cell, over a group's rows instead. THAT IS A PLACEMENT AND NOT A USED `height`, "
+               "and the difference is the whole reason this crashes rather than answering: reporting the "
+               "extent as the used value of `height` would answer a CSSOM reader with a number no cascade "
+               "produced. A ROW reaches this arm only if `uv_pass_size`'s own route above stopped answering "
+               "for it, since §17.5.3 states a row's height outright",
+               box_subject(el, nbuf, sizeof nbuf));
+    DFAILF("%s: a COLUMN box's or COLUMN GROUP box's used height, which CSS 2.1 §17.5 Visual layout of table "
+           "contents' rules 3 and 4 state as a PLACEMENT and not as a size — \"A column box occupies one or "
+           "more columns of grid cells\" and \"A column group box occupies the same grid cells as the columns "
+           "it contains\" — and which core/layout/table_grid.h states outright that it does not place. §10.7 "
+           "\"Minimum and maximum heights: 'min-height' and 'max-height'\" excludes these two boxes from its "
+           "own Applies-to line by name (\"all elements but non-replaced inline elements, table columns, and "
+           "column groups\"), which is the standard treating them as boxes with no block-axis size question at "
+           "all. §17.2 The CSS table model is why this is not urgent and is also why it must not be answered "
+           "with a guess: these boxes \"are not rendered (exactly as if they had 'display: none')\", so "
+           "nothing paints this rectangle and the only consumer of the number is a reader asking CSSOM for "
+           "it, which is exactly the reader a fabricated height would mislead",
            box_subject(el, nbuf, sizeof nbuf));
 }
 
@@ -1396,10 +1582,15 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
        the margin takes all the slack;
      rule 6, "if both 'margin-left' and 'margin-right' are 'auto', their used values are equal" — they split
        it, which is what `margin: 0 auto` means;
-     rule 2, "if 'width' is not 'auto' and border + padding + width (plus any of 'margin-left' or
-       'margin-right' that are not 'auto') is larger than the width of the containing block, then any 'auto'
-       values for 'margin-left' or 'margin-right' are, for the following rules, treated as zero" — which is
-       exactly the slack being negative.
+     rule 2, "If 'width' is not 'auto' and 'border-left-width' + 'padding-left' + 'width' + 'padding-right' +
+       'border-right-width' (plus any of 'margin-left' or 'margin-right' that are not 'auto') is larger than
+       the width of the containing block, then any 'auto' values for 'margin-left' or 'margin-right' are, for
+       the following rules, treated as zero" — which is exactly the slack being negative. THE FIVE PER-SIDE
+       TERMS ARE THE SPEC'S OWN AND WERE COMPRESSED HERE TO "border + padding + width", which read as a
+       paraphrase of the equation above and is not one: the equation is over SEVEN terms including both
+       margins, and rule 2's antecedent is the same sum with the two margins moved into its parenthetical. The
+       clause beneath this list was right either way, so what the compression cost was a reader's ability to
+       check it.
    THE SIGN TEST RUNS ON THE EXAMPLE, and that is css_length.h's stated layering rather than a shortcut past
    it: the containing block's width may be the viewport's, so `slack < 0` is a question the environment could
    answer either way, and it is decided here on the modelled viewport exactly as Media Queries §4 decides
@@ -1984,6 +2175,30 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
        comparison and its percentage does resolve. */
     if (!vertical && box == UV_BOX_TABLE && uv_table_box_kind(el) == TABLE_BOX_CELL)
         return uv_table_cell_used_width(el);
+    /* AND THE WHOLE BLOCK AXIS OF A TABLE BOX IS ANSWERED HERE, WHICH IS ONE ROUTE WHERE THE INLINE AXIS NEEDS
+       THREE. CSS 2.1 §17.5.3 Table height algorithms admits the declaration and the `auto` value into the SAME
+       comparison — "A value of 'auto' means that the height is the sum of the row heights plus any cell spacing
+       or borders. Any other value is treated as a minimum height" — so a declared height is an INPUT to that
+       section and never the used value, for the table box, for a row ("the maximum of the row's computed
+       'height', …") and for a cell alike ("The table cell's 'height' property can influence the height of the
+       row (see above), but it does not increase the height of the cell box"). There is therefore nothing for a
+       later declared-height arm to do with any of the three, and the arms that used to crash for them below are
+       gone rather than left standing behind this one.
+       SO A PERCENTAGE HEIGHT ON ANY OF THEM MUST NOT REACH THE BASIS BELOW, exactly as a cell's percentage
+       width must not: §17.5.3 declines the case in its own words for the two internal boxes ("CSS 2.1 does not
+       define how the height of table cells and table rows is calculated when their height is specified using
+       percentage values"), and core/layout/table_height.c takes that decline as a recorded choice inside the
+       algorithm — where a resolution here would have run §10.1's walk to produce a number no rule consults. The
+       TABLE BOX's own percentage is the one case that is neither: it is a real minimum §17.5.3 would use, and
+       `th_declared_minimum` crashes for it naming the anonymous wrapper §10.5 would have to resolve against. */
+    if (vertical && box == UV_BOX_TABLE) {
+        TableBoxKind kind = uv_table_box_kind(el);
+
+        if (table_box_kind_generates_table_box(kind)) return uv_table_used_height(el);
+        if (kind == TABLE_BOX_CELL) return uv_table_cell_used_height(el);
+        if (kind == TABLE_BOX_ROW) return uv_table_row_used_height(el);
+        uv_table_non_cell_height_fail(el, kind);
+    }
     if (pct && !vertical) {
         basis = used_value_containing_block_width(el);
         resolves = true;
@@ -2035,23 +2250,23 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
            §17.5.2.2 Automatic table layout's step 1 makes a cell's declared `width` a FLOOR under its column
            ("If the specified 'width' (W) of the cell is greater than MCW, W is the minimum cell width") and
            never the used value, so there is nothing for this arm to do with it. */
-        if (box == UV_BOX_TABLE && !vertical) {
+        if (box == UV_BOX_TABLE) {
             TableBoxKind kind = uv_table_box_kind(el);
 
+            DCHECK(!vertical,
+                   "CSS 2.1 §17.5.3 Table height algorithms owns the BLOCK axis of every one of CSS 2.1 §17.2 "
+                   "The CSS table model's box types, and `uv_pass_size` routes or refuses all ten of them "
+                   "before this function is reached — so a vertical size arriving at §17.5.2 Table width "
+                   "algorithms: the 'table-layout' property's arm is that route having been lost, and the "
+                   "number it would answer with is this box's WIDTH reported as its height");
             if (table_box_kind_generates_table_box(kind)) return uv_table_used_width(el);
             uv_table_non_cell_width_fail(el, kind);
         }
-        if (box == UV_BOX_TABLE)
-            DFAIL("a DECLARED `height` on a TABLE box or a table-internal box, which is NOT the used height: "
-                  "CSS 2.1 §17.5.3 Table height algorithms says in its own words that \"Any other value is "
-                  "treated as a minimum height\", and the height it is a minimum under is that section's sum, "
-                  "\"the height is the sum of the row heights plus any cell spacing or borders\" over rows whose "
-                  "own heights are \"the maximum of the row's computed 'height', the computed 'height' of each "
-                  "cell in the row, and the minimum height (MIN) required by the cells\". BUILD §17.5.3 over "
-                  "the used column widths core/layout/table_width.h now answers — a cell's content height is a "
-                  "block container's over its USED WIDTH, which is that column's, so §17.5.2 Table width "
-                  "algorithms: the 'table-layout' property is no longer what this is waiting on and the row "
-                  "structure (core/layout/table_box.h) and the grid (core/layout/table_grid.h) are not either");
+        /* A TABLE BOX's, a ROW's and a CELL's declared `height` NEVER REACH THIS ARM — `uv_pass_size`
+           answered all three above, because CSS 2.1 §17.5.3 Table height algorithms takes the
+           declaration as an INPUT to its own comparison rather than as the used value ("Any other
+           value is treated as a minimum height"), so the declared and `auto` cases are ONE route.
+           The crash that stood here told its reader to build §17.5.3, which is built. */
         if (box == UV_BOX_ITEM)
             DFAIL("this box is a FLEX or GRID ITEM, so its used main and cross sizes come from its container's "
                   "algorithm and not from CSS 2.1 §10 at all — css-flexbox §9.7 resolves the flexible lengths "
@@ -2116,31 +2331,10 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
                   "flow. §9.4.1's normal flow is BUILT for IN-FLOW boxes (core/layout/flow_position.h) and "
                   "§10.6.3 is what keeps an out-of-flow child out of its walk, so EXTEND core/layout/"
                   "block_flow.c to report a skipped child's would-be position, then §10.6.4 over it");
-        if (box == UV_BOX_TABLE)
-            DFAIL("a TABLE box with `height: auto` is not §10.6.3's but CSS 2.1 §17.5.3 Table height "
-                  "algorithms', and this line used to state that section BACKWARDS IN BOTH OF ITS TERMS. "
-                  "CSS 2.1 §17.5.3 Table height algorithms is a SUM and "
-                  "not a distribution: \"A value of 'auto' means that the height is the sum of the row heights "
-                  "plus any cell spacing or borders. Any other value is treated as a minimum height\". The distribution "
-                  "this line described is the case CSS 2.1 §17.5.3 Table height algorithms explicitly "
-                  "DECLINES: \"CSS 2.1 "
-                  "does not define how extra space is distributed when the 'height' property causes the table "
-                  "to be taller than it otherwise would be\". And a row's height is not its cells' content "
-                  "either. CSS 2.1 §17.5.3 Table height algorithms makes it the MAXIMUM OF THREE TERMS: \"it is the "
-                  "maximum of the row's computed "
-                  "'height', the computed 'height' of each cell in the row, and the minimum height (MIN) "
-                  "required by the cells\". Only the third of those is content, and CSS 2.1 §17.5.3 Table height "
-                  "algorithms measures it through a cell: \"In CSS 2.1, the height of a cell box is the "
-                  "minimum height required by the content\" — a BLOCK CONTAINER's content height over the "
-                  "cell's USED WIDTH. "
-                  "THAT WIDTH IS NO LONGER WHAT IS MISSING, and this line used to say it was: §17.2.1 "
-                  "Anonymous table objects' first two stages are core/layout/table_box.h's, §17.5 Visual "
-                  "layout of table contents' grid is core/layout/table_grid.h's, §17.5.2 over that grid is "
-                  "core/layout/table_width.h's, and a CELL's used width is answered from it by "
-                  "`uv_table_cell_used_width` above — which is the operand §17.5.3's cell-height sentence is "
-                  "stated over. WHAT IS MISSING IS §17.5.3 ITSELF: the cell's own content height, which is a "
-                  "block container's over that width (core/layout/block_flow.h), then the row's maximum of "
-                  "three terms, then this sum over the rows");
+        /* A TABLE BOX with `height: auto` does not reach here either, for the same reason and through
+           the same route: CSS 2.1 §17.5.3 Table height algorithms owns both of its arms and
+           `uv_pass_size` takes them together. §10.6.3's stack of block-level children is not a
+           table's height under any value of the property. */
         if (box == UV_BOX_ITEM)
             DFAIL("a FLEX or GRID ITEM with `height: auto`. Its cross size is its CONTAINER's algorithm — "
                   "css-flexbox §9.4 collects the items into flex lines and §9.7 resolves the flexible lengths, "
@@ -2210,6 +2404,12 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
     if (box == UV_BOX_TABLE) {
         TableBoxKind kind = uv_table_box_kind(el);
 
+        DCHECK(!vertical,
+               "CSS 2.1 §17.5.3 Table height algorithms owns the BLOCK axis of every one of CSS 2.1 §17.2 "
+               "The CSS table model's box types, and `uv_pass_size` routes or refuses all ten of them "
+               "before this function is reached — so a vertical size arriving at §17.5.2 Table width "
+               "algorithms: the 'table-layout' property's arm is that route having been lost, and the "
+               "number it would answer with is this box's WIDTH reported as its height");
         if (table_box_kind_generates_table_box(kind)) return uv_table_used_width(el);
         uv_table_non_cell_width_fail(el, kind);
     }
@@ -2500,26 +2700,23 @@ CssPx used_value_border_edge_from_content_px(lxb_dom_element_t *el, CssPx conten
        §17.5's message here rather than through `uv_limits`' assert, which is about the two classifications
        agreeing and would say the wrong thing about a real page. */
     if (box == UV_BOX_TABLE)
-        DFAIL("a TABLE-INTERNAL box reached §8.1's border edge through §10.6.3's walk. CSS 2.1 §17.5.3 Table "
-              "height algorithms owns a cell's and a caption's height, and the reason no cell's height is a "
-              "fact about that cell alone is the ROW's rule rather than a distribution this line used to "
-              "describe. CSS 2.1 §17.5.3 Table height algorithms gives a row's height as \"the maximum of the "
-              "row's computed 'height', the computed 'height' "
-              "of each cell in the row, and the minimum height (MIN) required by the cells\", so every cell in "
-              "the row is an input to the row and the row is then what the cell is sized against. CSS 2.1 "
-              "§17.5.3 Table height algorithms gives the cell's own box height as \"the minimum height "
-              "required by the content\", and that section's only "
-              "distribution sentence is the one it DECLINES to define. §10.4/§10.7 say outright that their own "
-              "effect on table boxes is undefined. WHAT IS LEFT IS §17.5.3 ALONE, and this line used to ask "
-              "for three things of which two now exist: §17.2.1 Anonymous table objects' first two stages are "
-              "core/layout/table_box.h's, §17.5 Visual layout of table contents' grid is "
-              "core/layout/table_grid.h's, §17.5.2's column widths are core/layout/table_width.h's, and a "
-              "CELL's used width comes out of them at `uv_table_cell_used_width` above — which is the operand "
-              "the cell-height sentence quoted here is measured over, since a cell's content height is a "
-              "block container's over its used width. A CAPTION's height is NOT that question and is not "
-              "§17.5.3's either: §17.4 Tables in the visual formatting model renders a caption as a normal "
-              "block box in the table WRAPPER, so §10.6.3 owns its height over a used width this file still "
-              "crashes for. Until §17.5.3 exists the walk must not descend into either");
+        DFAIL("a TABLE-INTERNAL box reached §8.1's border edge through §10.6.3's walk, and the content extent "
+              "handed in is NOT this box's height. CSS 2.1 §17.5.3 Table height algorithms is BUILT "
+              "(core/layout/table_height.h) and it is precisely what makes this a crash rather than an "
+              "arithmetic: a CELL's used box height is the ROW's, not the cell's own content — \"Cell boxes "
+              "that are smaller than the height of the row receive extra top or bottom padding\" — and the "
+              "row is \"the maximum of the row's computed 'height', the computed 'height' of each cell in the "
+              "row, and the minimum height (MIN) required by the cells\", so every OTHER cell in the row is "
+              "an input to this one's box. Converting the extent in hand would answer with the cell's own "
+              "content height, which is one term of one term of the answer. `used_value_px` on a cell routes "
+              "to §17.5.3 and gets the whole of it. A CAPTION is not §17.5.3's at all: §17.4 Tables in the "
+              "visual formatting model renders it as a normal block box in the table WRAPPER, so §10.6.3 does "
+              "own its height and this conversion would be the right one for it — what is missing there is "
+              "one level up, its used WIDTH, which needs the wrapper as a box §10.1 can name. §10.4/§10.7 say "
+              "outright that their own effect on table boxes is undefined, so the clamp below is not what "
+              "this arm is skipping either. WHO CAN REACH THIS: core/layout/block_flow.c's stack holds no "
+              "cell and no caption (neither is block-level), so a box here is that walk having descended "
+              "somewhere §9.4.1 does not go");
     lim = uv_limits(el, box, vertical);
     /* The tentative value in the box css-sizing-3 §3.3 exposes, which is the box the two limits are measured
        in — "it affects the interpretation of all sizing properties". */

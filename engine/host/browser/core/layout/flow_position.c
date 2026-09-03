@@ -371,10 +371,20 @@ static void fp_require_placeable(lxb_dom_element_t *el)
               "'table-layout' property is core/layout/table_width.h, which answers a used width for EVERY "
               "column of the grid at once, so a cell's horizontal offset is a prefix sum over "
               "`TableUsedWidths.columns` plus CSS 2.1 §17.6.1 The separated borders model's spacing before it. "
-              "WHAT IS LEFT IS THE OTHER AXIS AND THE ROUTE: §17.5.3 Table height algorithms' row heights, and "
-              "an entry that hands ONE cell the column width belonging to it — core/layout/used_value.c "
-              "crashes by name for a table-internal box's used width and says the same thing from its side. "
-              "BUILD §17.5.3 over those columns, and the per-cell route beneath it",
+              "AND NEITHER IS THE OTHER AXIS OR THE PER-CELL ROUTE, both of which this line used to ask for: "
+              "CSS 2.1 §17.5.3 Table height algorithms is core/layout/table_height.h, which answers a used "
+              "height for EVERY grid row at once, and core/layout/used_value.c hands ONE cell the used width "
+              "of the columns its rectangle covers and the used height of the rows it covers rather than "
+              "crashing for either. WHAT IS LEFT IS THIS FUNCTION'S OWN SUBJECT AND NOTHING BELOW IT: a "
+              "coordinate. §17.5's grid gives a cell a RECTANGLE OF GRID CELLS and no origin, so the two "
+              "prefix sums — the column widths and §17.6.1's spacing before this cell, and the row heights and "
+              "the vertical spacing above it — are what turns that rectangle into the distance this entry "
+              "reports, and the ROW and ROW GROUP and COLUMN boxes need the same sums taken over their own "
+              "spans. BUILD those two prefix sums here, over `TableUsedWidths.columns` and "
+              "`TableUsedHeights.rows`, keyed by `table_grid_cell_of`; a CAPTION is the one box in this list "
+              "that is NOT in the grid at all — §17.4 Tables in the visual formatting model puts it in the "
+              "table WRAPPER, so it is §9.4.1's own stack inside a box no element names, and it waits on that "
+              "box rather than on any of this",
               box_subject(el, nbuf, sizeof nbuf));
     if (inline_level)
         DFAILF("%s: "

@@ -38,11 +38,17 @@
  *     §10.3.7 and §10.3.9 each say the same for their own box type. A TABLE may be widened past it (§17.5.2.2
  *     Automatic table layout makes a declared width a FLOOR that CAPMIN and the columns' MIN may exceed) and a
  *     FLEX ITEM's size is its container's algorithm and not §10's at all, so this bullet answers for neither.
- *     WHAT HAPPENS INSTEAD NOW DIFFERS BY AXIS AND NOT BY BOX TYPE, and this line used to say both simply
- *     crash: a table box's WIDTH is ROUTED to core/layout/table_width.h, which answers §17.5.2 on the declared
- *     arm and the `auto` arm alike; its HEIGHT still crashes, naming CSS 2.1 §17.5.3 Table height algorithms,
- *     which has no component; a TABLE-INTERNAL box crashes on both axes, since §17.5.2's rules are stated over
- *     the table element and no entry yet indexes a cell's own column; and a flex or grid item crashes.
+ *     WHAT HAPPENS INSTEAD IS A ROUTE PER BOX TYPE PER AXIS, and neither half of that sentence is a spare
+ *     word: a TABLE box's width is core/layout/table_width.h's §17.5.2 and its height is
+ *     core/layout/table_height.h's §17.5.3, both on the declared arm and the `auto` arm alike, because each of
+ *     those sections takes the declaration as an INPUT to its own comparison rather than as the used value. A
+ *     CELL is answered on both axes too — its width is the used width of the columns its rectangle covers and
+ *     its height is the rows' — and a ROW is answered on the block axis alone, which is where §17.5.3 states
+ *     it and §17.5.2 does not. WHAT STILL CRASHES IS FOUR BOXES AND EACH FOR ITS OWN REASON, not one gap: a
+ *     CAPTION on both axes (§17.4 puts it in the WRAPPER, an anonymous box §10.1 cannot name), a ROW's width
+ *     and a ROW GROUP's both ways (§17.5's rules 1 and 2 place them and §17.5.3 declines a row group's height
+ *     outright), and a COLUMN or COLUMN GROUP both ways (§17.5's rules 3 and 4 are a placement nothing here
+ *     performs). A flex or grid item crashes on both.
  *   - AND §10.4 "Minimum and maximum widths: 'min-width' and 'max-width'" and §10.7 "Minimum and maximum
  *     heights: 'min-height' and 'max-height'", WHICH ARE A SECOND PASS AND NOT A CLAMP ON THE NUMBER. Both
  *     sections say the same three sentences about their own axis: the tentative used value is §10.3's answer

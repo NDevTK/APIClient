@@ -62,11 +62,12 @@
  *     caption boxes" — and that box is block-level, establishes a block formatting context, and carries the
  *     table element's `margin-*`, so the CHILD CLASSIFICATION is answered here like any other block-level box
  *     (core/layout/table_wrapper.h owns §17.4's declaration split). Its HEIGHT is §10.6.3's over the caption
- *     boxes and the table box, and the table box's own height is §17.5.3 Table height algorithms' — so the
- *     walk stops in `bf_box`, which names what that height is waiting on. It is not the box generation
- *     (core/layout/table_box.h) and it is not §17.5.2 Table width algorithms: the 'table-layout' property's
- *     used column widths (core/layout/table_width.h); read the crash rather than this line, which is a header
- *     nothing re-checks and which said exactly that about §17.5.2 until the day it was built.
+ *     boxes and the table box, and it is MEASURED in `bf_box` rather than walked, because with no caption that
+ *     walk has a closed form: §17.4 gives the wrapper the INITIAL value of every non-inherited property and
+ *     gives the table box the initial `margin-*`, so there is nothing to collapse and the wrapper's height is
+ *     the table box's border-box height. A caption makes it a real walk and `bf_box` refuses it, naming the one
+ *     number that walk still lacks. Read the site rather than this line — it is a header nothing re-checks, and
+ *     it said the walk simply stopped here until the day §17.5.3 was built.
  *   - An OUT-OF-FLOW child is not a gap at all: §10.6.3 states outright that "absolutely positioned boxes are
  *     ignored", so skipping one is the rule running, and the box's own position is §9.3.2's over a static
  *     position that this walk is what will one day provide.
@@ -222,6 +223,26 @@ bool block_flow_establishes_inline_context(lxb_dom_element_t *el);
    an absent one. */
 bool block_flow_last_line_box_baseline(lxb_dom_element_t *el, CssPx *baseline);
 
+/* CSS 2.1 §17.5.3 "Table height algorithms"' CELL BASELINE, as far as §9.4.1's stack answers it: the offset
+   from `el`'s TOP CONTENT EDGE to the baseline of the FIRST in-flow line box under it, and whether there is
+   one at all. Same frame, same two answers and the same walk as the entry above — only the END of the stack it
+   reads differs, which is why it is a second entry and not a second field: the first line box and the last are
+   in DIFFERENT boxes on that stack, so one pass cannot report both without walking every box for a distance
+   one caller throws away.
+   §17.5.3's SENTENCE HAS THREE ARMS AND THIS ENTRY ANSWERS TWO. "The baseline of a cell is the baseline of the
+   first in-flow line box in the cell, or the first in-flow table-row in the cell, whichever comes first. If
+   there is no such line box or table-row, the baseline is the bottom of content edge of the cell box." The
+   FIRST arm is the distance stored here; the THIRD is what a `false` return sends the caller to, and it is the
+   caller's own arithmetic because a bottom content edge is a fact about the box's own height rather than about
+   its lines. The SECOND — a nested table reached before any line box — CRASHES INSIDE the walk, naming itself,
+   because a table's line boxes are in its cells' own formatting contexts and skipping past it would answer
+   with a line box that is not the first in-flow thing in this cell at all.
+   css-inline-3 §4.2.1 "Alignment Baseline Source: the baseline-source longhand"'s `first` KEYWORD WANTS THE
+   SAME NUMBER and is the second caller this exists for; that longhand selects between this entry and the one
+   above, and nothing here reads it — the selection belongs where the box is measured.
+   `el` MUST BE A BLOCK CONTAINER (§9.2.1), which a non-replaced table cell is by that section's own sentence. */
+bool block_flow_first_line_box_baseline(lxb_dom_element_t *el, CssPx *baseline);
+
 /* CSS 2.2 §9.2.1.1 "Anonymous block boxes"' OTHER SHAPE OF §9.4.2's CONTEXT — the one with no element to name
    it. §9.2.1.1: "if a block container box (such as that generated for the DIV above) has a block-level box
    inside it (such as the P above), then we force it to have only block-level boxes inside it", and the boxes
@@ -272,10 +293,18 @@ size_t block_flow_anonymous_boxes(lxb_dom_element_t *el, BlockFlowAnonBox **out)
    HEIGHT of `el`'s box, in CSS pixels — the used value of a `height` that BEHAVES AS AUTO (css-sizing-3
    §3.2.1, `used_value_height_behaves_as_auto`), which is a computed `auto` and also a percentage whose
    containing block's height is indefinite.
-   THE CALLER HAS ALREADY ESTABLISHED that the height behaves as auto and that the box is one §10.6.3 or
-   §10.6.6 covers; core/layout/used_value.c's `uv_size` is that caller and it has classified the box type
-   first. Every
-   case this component does not lay out crashes naming its own section — see the header. */
+   THE CALLER HAS ALREADY ESTABLISHED that the box is one §10.6.3 or §10.6.6 covers; core/layout/used_value.c's
+   `uv_size` is one caller and it has classified the box type first. Every case this component does not lay out
+   crashes naming its own section — see the header.
+   THAT IT BEHAVES AS AUTO IS THE CALLER'S CLAIM AND IS NOT ASKED HERE, WHICH ONE CALLER RELIES ON. This entry
+   runs §10.6.3's walk over `el`'s children and returns its distance whatever `height` says — the property is
+   read only for §8.3.1's collapsing conjuncts — and CSS 2.1 §17.5.3 "Table height algorithms" needs exactly
+   that: "In CSS 2.1, the height of a cell box is the minimum height required by the content", and its next
+   sentence says the declaration does not change it ("The table cell's 'height' property can influence the
+   height of the row (see above), but it does not increase the height of the cell box"). So
+   core/layout/table_height.c asks for a CELL's content height with a declared `height` on the box, and that is
+   the section running rather than a contract being bent. An earlier form of this paragraph said the caller had
+   established the property behaves as auto, which was true of the one caller there was. */
 CssPx block_flow_auto_height(lxb_dom_element_t *el);
 
 /* CSS 2 §9.4.1's VERTICAL PLACEMENT of `el`: the distance from the TOP CONTENT EDGE of `el`'s containing block
