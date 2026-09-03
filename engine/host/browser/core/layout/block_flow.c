@@ -229,12 +229,8 @@ static bool bf_min_height_is_zero(lxb_dom_element_t *el)
 
 /* ---- the child list --------------------------------------------------------------------------------------- */
 
-typedef enum {
-    BF_CHILD_NO_BOX = 0,   /* generates no box at all, or is out of flow: §10.6.3 ignores it */
-    BF_CHILD_BLOCK,        /* an in-flow block-level box this walk places */
-    BF_CHILD_INLINE        /* in-flow inline-level content: §9.4.2's, not this walk's */
-} BfChildKind;
-
+/* §9.2's box generation, §9.3.1's and §9.5's flow membership and §9.2.1's level, for ONE child — see
+   block_flow.h for the four values and for why a FLOAT is one of them rather than a refusal inside here. */
 /* THE CHARACTERS §9.2.2.1's SENTENCE IS ABOUT — "white space content that WOULD SUBSEQUENTLY BE COLLAPSED AWAY
    according to the 'white-space' property" — which makes the set css-text-3 §4.1.1 "Phase I: Collapsing and
    Transformation"'s COLLAPSIBLE one and NOT HTML's ASCII whitespace. The two differ by exactly one character
@@ -307,35 +303,22 @@ bool block_flow_text_child_generates_box(lxb_dom_element_t *parent, const lxb_do
     return !collapses;
 }
 
-static BfChildKind bf_element_child(lxb_dom_element_t *el)
+/* CSS 2.2 §9.7 "Relationships between 'display', 'position', and 'float'" IS THE ORDER THESE THREE QUESTIONS
+   ARE ASKED IN, and it is the section's whole content: "if 'display' has the value 'none', then 'position' and
+   'float' do not apply. In this case, the element generates no box"; "otherwise, if 'position' has the value
+   'absolute' or 'fixed', the box is absolutely positioned, the computed value of 'float' is 'none'"; "otherwise,
+   if 'float' has a value other than 'none', the box is floated". ASKING THEM IN ANOTHER ORDER ANSWERS A
+   DIFFERENT DOCUMENT and this walk used to: it read `float` before `display`, so `display: none; float: left` —
+   an ordinary way to turn a floated rule off — reported a FLOAT for an element §9.7 says generates no box at
+   all, and the crash that stood at that test fired for a box no section of CSS 2 places anywhere. */
+static BlockFlowChildKind bf_element_child(lxb_dom_element_t *el)
 {
-    char *d;
+    char *d = bf_computed(el, "display");
     bool block, inline_level;
     TableBoxKind table;
     char nbuf[160];
 
-    /* §10.6.3: "Only children in the normal flow are taken into account (i.e., floating boxes and absolutely
-       positioned boxes are ignored…)". The absolutely positioned half is the rule RUNNING and not a gap: the
-       box is out of flow, so it contributes nothing to this walk, and its own position is §9.3.2's offsets over
-       a static position that this walk is what will one day supply. */
-    if (bf_computed_is(el, "position", "absolute") || bf_computed_is(el, "position", "fixed"))
-        return BF_CHILD_NO_BOX;
-    if (!bf_computed_is(el, "float", "none"))
-        DFAIL("CSS 2 §9.5 'Floats' positions this child, and §10.6.3's own parenthesis says a float is IGNORED "
-              "when the container's height is computed — so the float alone would not stop this walk. What "
-              "stops it is what a float does to its SIBLINGS: §9.5.2's `clear` on a later block-level box "
-              "introduces CLEARANCE, §8.3.1 makes a margin with clearance NON-ADJOINING ('no line boxes, no "
-              "clearance, no padding and no border separate them'), and §9.5.2 then shifts that box down past "
-              "the float's bottom margin edge. One float therefore invalidates every collapse and every offset "
-              "below it in this formatting context, and `clear` is not among the properties "
-              "core/css/css_computed_value.c models, so there is nothing to read it through either. §10.6.7 "
-              "wants the float as well, for a container that establishes a formatting context: 'if the element "
-              "has any floating descendants whose bottom margin edge is below the element's bottom content "
-              "edge, then the height is increased to include those edges'. BUILD §9.5.1's float placement, and "
-              "record `clear` — CSS 2 §9.5.2 gives it `Computed value: as specified`, so it is a row of "
-              "css_computed_models' as-specified arm and a row of css_shorthand_complete_for");
-    d = bf_computed(el, "display");
-    if (strcmp(d, "none") == 0) { free(d); return BF_CHILD_NO_BOX; }
+    if (strcmp(d, "none") == 0) { free(d); return BLOCK_FLOW_CHILD_NO_BOX; }
     if (strcmp(d, "contents") == 0)
         DFAIL("css-display-3 §2.5 \"Box Generation: the none and contents keywords\" gives this child "
               "`display: contents`: \"The element itself does not generate any boxes, but its children and "
@@ -350,6 +333,24 @@ static BfChildKind bf_element_child(lxb_dom_element_t *el)
               "its pseudo-elements, such as ::before and ::after pseudo-elements, which are generated "
               "before/after the element's children as normal).\" — as the thing this walk iterates, so a "
               "`contents` element is invisible to every consumer at once");
+    /* §9.7's SECOND arm. §9.3.1 states what it means for every caller of this classification at once —
+       "Absolutely positioned boxes are taken out of the normal flow. This means they have no impact on the
+       layout of later siblings" — and §10.6.3 says the same thing for the one walk in this file: "Only children
+       in the normal flow are taken into account (i.e., floating boxes and absolutely positioned boxes are
+       ignored…)". That is the rule RUNNING and not a gap; the box's OWN position is §9.3.2's offsets over a
+       static position, which is a different question this walk is what will one day answer. */
+    if (bf_computed_is(el, "position", "absolute") || bf_computed_is(el, "position", "fixed")) {
+        free(d);
+        return BLOCK_FLOW_CHILD_NO_BOX;
+    }
+    /* §9.7's THIRD arm, ANSWERED AND NOT REFUSED — see block_flow.h. Every caller of this classification meets
+       a float with a different missing capability, so the refusal belongs at each of their own lines: this
+       file's stack names §9.5.2's clearance below, core/layout/line_box.c names §9.4.2's shortened line box,
+       and core/layout/intrinsic_size.c names what a shortened line box does to a contribution. */
+    if (!bf_computed_is(el, "float", "none")) {
+        free(d);
+        return BLOCK_FLOW_CHILD_FLOAT;
+    }
     block = strcmp(d, "block") == 0 || strcmp(d, "flow-root") == 0 || strcmp(d, "list-item") == 0 ||
             strcmp(d, "flex") == 0 || strcmp(d, "grid") == 0;
     inline_level = strcmp(d, "inline") == 0 || strcmp(d, "inline-block") == 0 ||
@@ -362,11 +363,11 @@ static BfChildKind bf_element_child(lxb_dom_element_t *el)
        them as one. */
     table = table_box_kind(d);
     free(d);
-    if (block) return BF_CHILD_BLOCK;
+    if (block) return BLOCK_FLOW_CHILD_BLOCK;
     /* CSS 2.2 §9.2.2 "Inline-level elements and inline boxes": this child is inline-level, so it is not on
        §9.4.1's stack at all — §9.4.2's line boxes hold it, and which of the two formatting contexts this block
        container establishes is decided over the WHOLE child list rather than here (bf_content_kind). */
-    if (inline_level) return BF_CHILD_INLINE;
+    if (inline_level) return BLOCK_FLOW_CHILD_INLINE;
     /* CSS 2.1 §17.4 Tables in the visual formatting model ANSWERS THIS CLASSIFICATION, and it used to abort
        here. The box §9.4.1's stack places for a `display: table` element is not the table box at all: "the
        table generates a principal block box called the table wrapper box that contains the table box itself
@@ -381,7 +382,7 @@ static BfChildKind bf_element_child(lxb_dom_element_t *el)
        classify. §9.2.1 is why one test could not answer both: "Except for table boxes, which are described in
        a later chapter, and replaced elements, a block-level box is also a block container box", so a table is
        block-LEVEL without being a block CONTAINER, and a walk that asked only the second stopped here. */
-    if (table_box_kind_generates_table_box(table)) return BF_CHILD_BLOCK;
+    if (table_box_kind_generates_table_box(table)) return BLOCK_FLOW_CHILD_BLOCK;
     if (table != TABLE_BOX_NOT_A_TABLE_BOX)
         DFAILF("%s: "
               "this child is a TABLE-INTERNAL box — a row, a cell, a row group, a column, a column group or a "
@@ -413,11 +414,20 @@ static BfChildKind bf_element_child(lxb_dom_element_t *el)
           "has never had to answer for (`ruby`, `math`, a two-value `inline flow-root`), and each is a box type "
           "with its own formatting context. BUILD the classification in css_computed_value.c's computed_display, "
           "whose css-display §2.7 blockification already normalises the values this walk does understand");
-    return BF_CHILD_NO_BOX;
+    return BLOCK_FLOW_CHILD_NO_BOX;
 }
 
-static BfChildKind bf_child_kind(lxb_dom_element_t *parent, lxb_dom_node_t *n)
+BlockFlowChildKind block_flow_child_kind(lxb_dom_element_t *parent, lxb_dom_node_t *n)
 {
+    DCHECK(parent != NULL && n != NULL,
+           "CSS 2 §9.2's box generation was asked about a child with no node, or with no block container for "
+           "it to be a child OF — the parent is not decoration here, §9.2.2.1's white-space rule reads its "
+           "inherited `white-space` to decide whether a run of character data is a box at all");
+    DCHECK(n->parent == lxb_dom_interface_node(parent),
+           "CSS 2 §9.2's box generation was asked about a node that is not a CHILD of the block container it "
+           "was asked with. Every answer here is stated over `parent`'s child list — §9.2.2.1's collapsing, "
+           "§9.2.1's level, §9.7's three-property order — so a node from elsewhere in the tree would be "
+           "classified against a formatting context it is not in");
     switch (n->type) {
     case LXB_DOM_NODE_TYPE_ELEMENT:
         return bf_element_child(lxb_dom_interface_element(n));
@@ -425,20 +435,21 @@ static BfChildKind bf_child_kind(lxb_dom_element_t *parent, lxb_dom_node_t *n)
         /* §9.2.2.1's anonymous inline box is INLINE-level — the box that text generates is an inline box, not
            a block-level one, and calling it block-level here is what used to make a text run look like
            something §9.4.1's stack could place. */
-        return block_flow_text_child_generates_box(parent, n) ? BF_CHILD_INLINE : BF_CHILD_NO_BOX;
+        return block_flow_text_child_generates_box(parent, n) ? BLOCK_FLOW_CHILD_INLINE
+                                                             : BLOCK_FLOW_CHILD_NO_BOX;
     case LXB_DOM_NODE_TYPE_COMMENT:
     case LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION:
     case LXB_DOM_NODE_TYPE_DOCUMENT_TYPE:
         /* CSS 2 §9.2 generates boxes for elements and for text; a comment, a processing instruction and a
            doctype are neither, and every user agent lays out none of the three. */
-        return BF_CHILD_NO_BOX;
+        return BLOCK_FLOW_CHILD_NO_BOX;
     default:
         DFAIL("a node type CSS 2 §9.2's box generation does not describe is a CHILD of a block container being "
               "laid out — the tree this walk iterates holds elements, text, comments, processing instructions "
               "and a doctype, and a CDATA section, a document or a fragment is not a child any parser this "
               "engine runs produces there. Find the writer that inserted it");
     }
-    return BF_CHILD_NO_BOX;
+    return BLOCK_FLOW_CHILD_NO_BOX;
 }
 
 /* ---- the walk ---------------------------------------------------------------------------------------------- */
@@ -494,10 +505,20 @@ static BfContent bf_content_kind(lxb_dom_element_t *el)
     bool block = false, inl = false;
 
     for (c = n->first_child; c != NULL; c = c->next) {
-        switch (bf_child_kind(el, c)) {
-        case BF_CHILD_NO_BOX: break;
-        case BF_CHILD_BLOCK:  block = true; break;
-        case BF_CHILD_INLINE: inl = true; break;
+        switch (block_flow_child_kind(el, c)) {
+        case BLOCK_FLOW_CHILD_NO_BOX: break;
+        /* §9.4.2's condition is "a block container box that CONTAINS NO BLOCK-LEVEL BOXES" and §9.2.1.1's
+           forcing is triggered by one — and a float is neither, because it is not in this container's flow at
+           all: §9.5's "since a float is not in the flow, non-positioned block boxes created before and after
+           the float box flow vertically as if the float did not exist". §9.2.1.1's own splitting paragraph
+           reads the same way from the other end, treating block-level siblings "that are consecutive or
+           separated only by collapsible whitespace and/or out-of-flow elements" as one break. So a float
+           decides NOTHING here, and this classification ANSWERS for a container that has one; what a float
+           does to the answer is a fact about the WIDTH of line boxes and about §9.5.2's clearance, which is
+           each walk's own question at its own line. */
+        case BLOCK_FLOW_CHILD_FLOAT:  break;
+        case BLOCK_FLOW_CHILD_BLOCK:  block = true; break;
+        case BLOCK_FLOW_CHILD_INLINE: inl = true; break;
         }
     }
     if (block) return inl ? BF_CONTENT_MIXED : BF_CONTENT_BLOCK;
@@ -537,10 +558,10 @@ bool block_flow_establishes_inline_context(lxb_dom_element_t *el)
    generate any anonymous inline boxes." The space in `<div><p>x</p>  <p>y</p></div>` is therefore not
    inline-level content at all — there is nothing between the two block boxes to wrap, and no anonymous block
    box is generated there. §9.2.1.1's own splitting paragraph leans on the same fact when it treats block-level
-   siblings "separated only by collapsible whitespace and/or out-of-flow elements" as consecutive. `bf_child_kind`
-   has already applied §9.2.2.1 (such a run is BF_CHILD_NO_BOX), so a run here is delimited by the first and the
-   last child that generate an inline-level BOX, and a boxless child inside one is carried along with it because
-   there is nothing of it to carry.
+   siblings "separated only by collapsible whitespace and/or out-of-flow elements" as consecutive.
+   `block_flow_child_kind` has already applied §9.2.2.1 (such a run is BLOCK_FLOW_CHILD_NO_BOX), so a run here
+   is delimited by the first and the last child that generate an inline-level BOX, and a boxless child inside
+   one is carried along with it because there is nothing of it to carry.
    THE BOX HAS NO STYLE OF ITS OWN, which is what makes it a `BfBox` with no element rather than a synthesised
    one: "the properties of anonymous boxes are inherited from the enclosing non-anonymous box …. Non-inherited
    properties have their initial value. For example, the font of the anonymous box is inherited from the DIV,
@@ -592,27 +613,46 @@ static void bf_anon_record(BfAnonSink *s, lxb_dom_node_t *first, lxb_dom_node_t 
     s->n++;
 }
 
-/* One past the LAST child of the run starting at `first` that generates an inline-level box — the exclusive
-   end of §9.2.1.1's anonymous block box. `first` must itself generate one. */
-static lxb_dom_node_t *bf_anon_run_end(lxb_dom_element_t *el, lxb_dom_node_t *first, lxb_dom_element_t *want)
+/* §9.2.1.1's RUN, DELIMITED AND NOTHING ELSE — see block_flow.h for the contract and for why the delimitation
+   is exported while `block_flow_anonymous_boxes` may not be reached from an intrinsic pass. */
+lxb_dom_node_t *block_flow_anonymous_box_end(lxb_dom_element_t *el, lxb_dom_node_t *first)
 {
-    lxb_dom_node_t *c, *end = first->next;
-    BfChildKind first_kind = bf_child_kind(el, first);
+    lxb_dom_node_t *c, *end;
 
-    DCHECK(first_kind == BF_CHILD_INLINE,
+    DCHECK(el != NULL && first != NULL, "CSS 2.2 §9.2.1.1's run was delimited with no container or no child");
+    DCHECK(block_flow_child_kind(el, first) == BLOCK_FLOW_CHILD_INLINE,
            "CSS 2.2 §9.2.1.1's anonymous block box was started at a child that generates no inline-level box. "
            "The section generates one only to wrap inline-level content — \"we assume that there is an "
-           "anonymous block box around 'Some text'\" — so this box would be EMPTY, and §9.4.1's stack below "
-           "would place a box the element tree never asked for and take a height from it");
+           "anonymous block box around 'Some text'\" — so this box would be EMPTY, and every caller would then "
+           "hold a box the element tree never asked for: §9.4.1's stack would take a height from it and "
+           "css-sizing-3 §5.2's maximum would take a width");
+    end = first->next;
     for (c = first; c != NULL; c = c->next) {
-        BfChildKind kind = bf_child_kind(el, c);
+        BlockFlowChildKind kind = block_flow_child_kind(el, c);
 
         /* The run ends at the block-level box §9.2.1.1 makes the anonymous box's SIBLING rather than its
-           content. Everything after the last inline-level child and before it generates no box at all, so it
-           is left outside: the boundary is drawn where a box is, which is the only place it is observable. */
-        if (kind == BF_CHILD_BLOCK) break;
-        if (kind != BF_CHILD_INLINE) continue;
-        if (c->type == LXB_DOM_NODE_TYPE_ELEMENT && lxb_dom_interface_element(c) == want)
+           content. Everything after the last inline-level child and before it generates no box at all, or is
+           out of flow, so it is left outside: the boundary is drawn where an in-flow box is, which is the only
+           place it is observable. A FLOAT inside the run is carried along by the same reading — §9.2.1.1's own
+           splitting paragraph steps over "collapsible whitespace and/or out-of-flow elements" — and it is the
+           MEASUREMENT of the run, not this delimitation, that then has to answer for it. */
+        if (kind == BLOCK_FLOW_CHILD_BLOCK) break;
+        if (kind != BLOCK_FLOW_CHILD_INLINE) continue;
+        end = c->next;
+    }
+    return end;
+}
+
+/* §9.4.1's OWN reading of that run: the same delimitation, plus the one thing only a PLACEMENT can ask — has
+   the box whose position was requested turned out to be inside an anonymous box rather than on the stack. */
+static lxb_dom_node_t *bf_anon_run_end(lxb_dom_element_t *el, lxb_dom_node_t *first, lxb_dom_element_t *want)
+{
+    lxb_dom_node_t *end = block_flow_anonymous_box_end(el, first), *c;
+
+    if (want == NULL) return end;
+    for (c = first; c != end; c = c->next)
+        if (c->type == LXB_DOM_NODE_TYPE_ELEMENT && lxb_dom_interface_element(c) == want &&
+            block_flow_child_kind(el, c) == BLOCK_FLOW_CHILD_INLINE)
             DFAIL("CSS 2 §9.4.1's vertical placement was asked for a box CSS 2.2 §9.2.1.1 puts INSIDE an "
                   "anonymous block box: it is an inline-level child of a block container that also holds a "
                   "block-level box, so its position is a position ALONG a line box in that anonymous box's "
@@ -622,8 +662,6 @@ static lxb_dom_node_t *bf_anon_run_end(lxb_dom_element_t *el, lxb_dom_node_t *fi
                   "classifications have come apart. It is decided HERE rather than left to the walk's "
                   "never-reached-this-box crash, because this box IS in the container's box tree and merely "
                   "not on its stack, which is a different fact and a different fix");
-        end = c->next;
-    }
     return end;
 }
 
@@ -733,6 +771,7 @@ static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wa
     BfRun esc_run = bf_run_empty();
     bool escaping = esc_top, placed = false;
     BfBox out;
+    char nbuf[160];
 
     out.top = bf_run_of(used_value_px(el, "margin-top"));
     out.bottom = bf_run_of(used_value_px(el, "margin-bottom"));
@@ -799,15 +838,39 @@ static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wa
        difference the placement below has to know about — everything else it reads is on `BfBox`. */
     c = n->first_child;
     while (c != NULL) {
-        BfChildKind kind = bf_child_kind(el, c);
+        BlockFlowChildKind kind = block_flow_child_kind(el, c);
         lxb_dom_element_t *ce = NULL;
         /* The run this iteration's box holds, meaningful for the ANONYMOUS box alone — `ce == NULL` is what
            says which box this is, and it is the same test the placement below already makes. */
         lxb_dom_node_t *anon_first = NULL, *anon_end = NULL;
         BfBox b;
 
-        if (kind == BF_CHILD_NO_BOX) { c = c->next; continue; }
-        if (kind == BF_CHILD_INLINE) {
+        if (kind == BLOCK_FLOW_CHILD_NO_BOX) { c = c->next; continue; }
+        /* THE FLOAT'S REFUSAL IS HERE, AT THE WALK THAT WOULD PLACE IT, and it names §9.4.1's OWN missing
+           capability rather than any other caller's — this is the line a reader of this crash can act on.
+           CSS 2 §9.5 "Floats" positions this child, and §10.6.3's own parenthesis says a float is IGNORED when
+           the container's height is computed, so the float alone would not stop this walk. What stops it is
+           what a float does to its SIBLINGS: §9.5.2's `clear` on a later block-level box introduces CLEARANCE,
+           §8.3.1 makes a margin with clearance NON-ADJOINING ("no line boxes, no clearance, no padding and no
+           border separate them"), and §9.5.2 then shifts that box down past the float's bottom margin edge.
+           One float therefore invalidates every collapse and every offset below it in this formatting context,
+           and `clear` is not among the properties core/css/css_computed_value.c models, so there is nothing to
+           read it through either. §10.6.7 wants the float as well, for a container that establishes a
+           formatting context: "if the element has any floating descendants whose bottom margin edge is below
+           the element's bottom content edge, then the height is increased to include those edges". */
+        if (kind == BLOCK_FLOW_CHILD_FLOAT)
+            DFAILF("CSS 2 §9.5 \"Floats\" takes this child off §9.4.1's stack and then changes where every box "
+                   "BELOW it sits: §9.5.2 \"Controlling flow next to floats: the 'clear' property\"' clearance "
+                   "makes a later block-level box's margin non-adjoining and shifts it past the float's bottom "
+                   "margin edge, and §10.6.7's own rule pulls this container's height down to a floating "
+                   "descendant's edge. So there is no arm on this stack that is right by default. BUILD "
+                   "§9.5.1 \"Positioning the float: the 'float' property\"'s placement, and record `clear` — "
+                   "CSS 2 §9.5.2 gives it `Computed value: as specified`, so it is a row of "
+                   "css_computed_models' as-specified arm and a row of css_shorthand_complete_for. "
+                   "core/layout/line_box.c and core/layout/intrinsic_size.c each name §9.5.1 as the same "
+                   "absent capability under their own section's reason. %s",
+                   box_subject_node(c, nbuf, sizeof nbuf));
+        if (kind == BLOCK_FLOW_CHILD_INLINE) {
             lxb_dom_node_t *end = bf_anon_run_end(el, c, want);
 
             DCHECK(end != c,

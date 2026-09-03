@@ -121,6 +121,59 @@ bool block_flow_display_is_block_container(const char *display);
    copy of §9.2.2.1 would be one rule with two answers about whether a page's white space is content. */
 bool block_flow_text_child_generates_box(lxb_dom_element_t *parent, const lxb_dom_node_t *text);
 
+/* ---- ONE CHILD NODE'S BOX, CLASSIFIED --------------------------------------------------------------------
+   CSS 2 §9.2 "Controlling box generation" decides whether a child of a block container generates a box at all,
+   §9.3.1 "Choosing a positioning scheme: 'position' property" and §9.5 "Floats" decide whether that box is in
+   the container's NORMAL FLOW, and §9.2.1 "Block-level elements and block boxes" / §9.2.2 "Inline-level
+   elements and inline boxes" decide its LEVEL. This is those three questions' ONE answer for one child, and
+   every walk over a block container's children needs it before it can do anything else.
+   IT ANSWERS AND IT NEVER REFUSES, which is the whole of why it can be shared. A value here is a FACT about
+   the child — the four are exhaustive over §9.2's box types — and what each caller DOES with a fact is the
+   caller's own section: §10.6.3's height walk, css-sizing-3 §5.2 "Intrinsic Contributions"' maximum and CSSOM
+   VIEW §2's scrolling area each meet a FLOAT with a different missing capability and a different sentence to
+   say about it. A classification that crashed for one of them would report ITS line and ITS remedy for every
+   caller, which is a crash whose reader has nowhere to apply the instruction: a `DCHECK` stamps the line it is
+   WRITTEN at, so a refusal inside a shared helper names the helper for callers it has never heard of.
+   THE CRASHES THAT REMAIN INSIDE IT ARE ABOUT BOX GENERATION AND ARE THEREFORE EVERY CALLER'S, and that is the
+   line: a `display: contents` splice, a misparented table-internal box and an unmodelled `display` are each a
+   BOX TREE this list is not yet, so the thing to build is this enumeration and the site is this entry.
+   NO_BOX FOLDS TWO FACTS AND THE FOLD IS THE ANSWER'S OWN QUESTION. A comment generates no box at all; an
+   absolutely positioned element generates one that is not in this container's flow — §9.3.1: "Absolutely
+   positioned boxes are taken out of the normal flow. This means they have no impact on the layout of later
+   siblings." Both are "not a member of this box's in-flow child box list AND contributing nothing to it", which
+   is the question every caller asks. A FLOAT is not folded in with them because it fails only the first half:
+   §9.5 "Floats" takes it out of the flow — "since a float is not in the flow, non-positioned block boxes
+   created before and after the float box flow vertically as if the float did not exist" — and then the SAME
+   sentence goes on to say it still changes the result, "however, the current and subsequent line boxes created
+   next to the float are shortened as necessary to make room for the margin box of the float". A caller that
+   treated it as a NO_BOX would silently drop a box every one of its sections still counts. */
+typedef enum {
+    BLOCK_FLOW_CHILD_NO_BOX = 0,  /* §9.2 generates none, or §9.3.1 takes it out of flow: contributes nothing */
+    BLOCK_FLOW_CHILD_BLOCK,       /* §9.2.1's in-flow BLOCK-LEVEL box */
+    BLOCK_FLOW_CHILD_INLINE,      /* §9.2.2's in-flow INLINE-LEVEL content */
+    BLOCK_FLOW_CHILD_FLOAT        /* §9.5's float: out of flow, and still counted by every caller's section */
+} BlockFlowChildKind;
+
+BlockFlowChildKind block_flow_child_kind(lxb_dom_element_t *parent, lxb_dom_node_t *child);
+
+/* CSS 2.2 §9.2.1.1 "Anonymous block boxes"' RUN DELIMITATION: one past the LAST child of the maximal run of
+   inline-level children that starts at `first`, EXCLUSIVE, in the (first, end) form core/layout/line_box.h
+   takes. `first` must itself be `BLOCK_FLOW_CHILD_INLINE` — §9.2.1.1 generates a box only "around 'Some text'",
+   so a run that starts anywhere else would be an EMPTY anonymous box.
+   THE RUN ENDS AT A BLOCK-LEVEL CHILD AND AT NOTHING ELSE. §9.2.1.1 makes that child the anonymous box's
+   SIBLING rather than its content, and everything else is carried along inside the run because there is nothing
+   of it to carry: a boxless child is §9.2.2.1's collapsed white space, and an out-of-flow child is one
+   §9.2.1.1's own splitting paragraph steps over by name when it treats block-level siblings "that are
+   consecutive or separated only by collapsible whitespace and/or out-of-flow elements" as one break.
+   IT IS EXPORTED AND `block_flow_anonymous_boxes` IS NOT WHAT AN INTRINSIC PASS MAY CALL, which is a CYCLE and
+   not a layering preference. That entry answers each run's `content_y` and `height`, and a run's height is
+   core/layout/line_box.h's over the CONTAINER'S USED CONTENT WIDTH — which for a float or an `inline-block`,
+   the only two boxes that ask for an intrinsic size at all, is core/layout/used_value.h's shrink-to-fit over
+   `intrinsic_inline_sizes`, the number such a caller is being run to produce. So the two entries are the same
+   §9.2.1.1 split at the place the cycle is: this one DELIMITS and measures nothing, and a caller that needs the
+   boxes PLACED is a caller whose container's width is already decided. */
+lxb_dom_node_t *block_flow_anonymous_box_end(lxb_dom_element_t *el, lxb_dom_node_t *first);
+
 /* CSS 2.2 §9.4.2's OWN CONDITION over `el`'s WHOLE CHILD LIST: "an inline formatting context is established by
    a block container box that contains no block-level boxes."
    IT IS THE QUESTION "IS THIS ELEMENT WHERE core/layout/line_box.h's RUN IS THE WHOLE CHILD LIST", which is the

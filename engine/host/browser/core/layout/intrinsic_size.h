@@ -44,11 +44,21 @@
  * it met the child that made the sum the wrong operation, which is why the question is a dispatch and not a
  * case. It is core/layout/block_flow.h's exported predicate rather than a second copy of §9.4.2's condition,
  * because that component's own stack chooses between the same two sections over the same list.
- * BOTH ARMS ARE HERE AND THEY ARE NOT EQUALLY FINISHED. §9.4.2's is the whole of the run measurement below.
- * §9.4.1's has the TERM — css-sizing-3 §2.2 "Intrinsic Size Contributions"' outer size, which is where that
- * phrase is defined rather than at §5.2, over a child whose own inline size is this same entry one level down
- * — and not the LIST, so it is complete for a box whose children generate no boxes at all and crashes by name
- * for every other, stating what must be exported before it can enumerate.
+ * BOTH ARMS ARE HERE. §9.4.2's is the whole of the run measurement below. §9.4.1's takes the MAXIMUM over the
+ * box list §9.2.1.1 "Anonymous block boxes" forces the container to have — its block-level children plus one
+ * anonymous block box per maximal run of inline-level children — with each operand css-sizing-3 §2.2
+ * "Intrinsic Size Contributions"' OUTER size, which is where that phrase is defined rather than at §5.2. The
+ * enumeration is core/layout/block_flow.h's, both halves of it: one classification and one run delimitation,
+ * shared with the walk that PLACES the same boxes so that two answers to "is this child block-level" cannot
+ * exist. `block_flow_anonymous_boxes` is deliberately NOT what it asks — that entry PLACES, and a placement
+ * needs the container's used width, which for the only two boxes that ask for an intrinsic size is a
+ * shrink-to-fit over this very entry.
+ * WHAT IT DOES NOT DO IS APPLY A CHILD'S OWN DECLARED INLINE SIZE. §5.2's contribution is the size of a
+ * hypothetical float CONTAINING the child, so a child with `width: 500px` contributes 500px and not what its
+ * text measures; css-sizing-3 §5.2.1 substitutes a cyclic PERCENTAGE away (to `auto` / `none`, which is what
+ * this walk already computes) and leaves a LENGTH standing. That case crashes rather than answering, because
+ * the measured number would be a WRONG width for a real document rather than a narrower one — CSS 2.1 §10.4's
+ * clamp and css-sizing-3 §3.3's `box-sizing` conversion are what the term still needs.
  *
  * NOTHING IS STORED, for core/layout/used_value.h's reason: a layout is per-flow state, so a cached intrinsic
  * size is shared state solver/dom_cow.h does not swap and a stale one is another flow's document. */
