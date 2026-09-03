@@ -267,6 +267,10 @@ const posts = [];   /* routed records, in emission order, held until their targe
    witnesses is that the receiving page's own code RAN; how many times it ran is the engine's to state (the
    four ends of §9.3.3 step 8's task, read off `qjs_result` at the bottom of this file). */
 const got = [];
+/* ROUNDS THAT ENDED WITHOUT A NEW MEMBER OF IT, which is a fact about this ZONE's wait and not about any
+   record's fate. Kept so the two can be printed together at the bottom: read apart, this number looks like a
+   count of lost messages and is not comparable to one — see the line that increments it. */
+let noNewGot = 0;
 /* EVERY CROSS-AGENT OPERATION THIS ZONE WAS ASKED TO PERFORM, keyed by the asking engine's request id, and
    whether it was ever answered. Keyed rather than counted because `qjs_host_requests` deliberately does NOT
    dedupe — an unanswered request is re-reported on every single step, so a count would be a step count, and
@@ -861,7 +865,19 @@ async function routePending() {
        at all), so a `b` with no runnable member says STALLED for ever and never DONE. Without the third exit
        this line was the hang — the whole drive stopped at the FIFTH post on every build. */
     const why = await pumpUntil(target, () => got.length !== before);
-    if (why !== PUMP_EMITTED) console.log(`  NOT DELIVERED (${why}): ${p.world}`);
+    /* AND IT SAYS WHAT IT SAW, WHICH IS NOT WHETHER THE RECORD WAS DELIVERED. This line read `NOT DELIVERED`
+       and it was a claim this loop is not entitled to make: `got` is a DEDUPED SET keyed on the (method, URL)
+       pair — its own declaration says so, in as many words, "which is NOT a count of listener invocations and
+       was read as one" — and every timeline of one document runs the same listener over data that renders as
+       the same shape, so the SECOND delivery of an identical record adds no member and this terminator waits
+       out the target's stall. The wait is still right, because a stalled target has no runnable member left;
+       the LABEL was wrong. Measured over five runs of one artifact (82c1a924), byte-identical in every
+       delivery-side number: 434 rounds ended this way while the receiving engines' own `_routedDelivered`
+       summed to 305 of 477 records — so 262 of the lines this printed as a loss were records that had
+       arrived. That is the same defect as the phase-4 exit one function down (a cumulative deduped set read as
+       a per-record event), and the same cure: say what was observed and leave the count to the party that
+       holds it. */
+    if (why !== PUMP_EMITTED) { noNewGot++; console.log(`  NO NEW /got (${why}): ${p.world}`); }
   }
 }
 await routePending();
@@ -966,7 +982,12 @@ const reusedWorlds = [...new Set([...resumedReads.map((r) => r.world),
                                   ...posts.slice(postsAtPark).map((p) => p.world)]
                                  .map((v) => v.split(',')[0]))].filter((h) => preParkWorlds.has(h));
 
-console.log(`\nposts routed: ${posts.length}   messages the receiving page saw: ${got.length}`);
+console.log(`\nposts routed: ${posts.length}   messages the receiving page saw: ${got.length}` +
+            `   routing rounds that ended without a new one: ${noNewGot}`);
+/* THE TWO NUMBERS ABOVE ARE NOT COMPARABLE AND ARE PRINTED TOGETHER SO THAT IS VISIBLE. `got` is deduped by
+   (method, URL) and the round count is a property of this zone's wait; what a record's fate was is the
+   receiving ENGINE's to state, and it does below as `routedDelivered`/`routedRefused` per instance. A reader
+   who differences these two is measuring the dedup. */
 for (const u of got) console.log('  ' + u);
 const readsAnswered = [...reads.values()].filter((r) => r.answered).length;
 console.log(`cross-agent reads asked: ${reads.size}   answered: ${readsAnswered}`);
