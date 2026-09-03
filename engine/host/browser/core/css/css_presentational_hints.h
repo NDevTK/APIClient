@@ -16,9 +16,19 @@
  * also why the answer is derived per read like every other layer of this cascade — the attributes are per-flow
  * DOM state, and a hint cached anywhere would be shared state the flow machinery does not swap.
  *
- * WHAT IS HERE IS §15.3.2's PAGE MARGINS. Every other hint HTML defines (a `bgcolor`, an `align`, an `<img>`
- * `width`) is honestly ABSENT: it is a row this file does not have yet, and its absence reads as the property
- * being undeclared by this origin rather than as a wrong value. */
+ * A HINT'S DECLARATION IS THE PROPERTY HTML WRITES AND THE CASCADE IS OVER LONGHANDS, and those are routinely
+ * not the same name: HTML §15.3.8 Tables writes `text-align: center`, which css-text-4 §7.1 makes a shorthand.
+ * So a row keeps the standard's own spelling and the expansion is DERIVED, per read, from the component that
+ * owns that shorthand's grammar — never restated as a list of longhand names, which would be one fact with two
+ * sources of which only one is ever run against a grammar. A row whose value that grammar rejects CRASHES,
+ * because a hint the cascade drops is a declaration no read can reach and the property still has an initial
+ * value to answer with.
+ *
+ * WHAT IS ABSENT IS ABSENT PER ATTRIBUTE, and the absence reads as the property being undeclared by this
+ * origin rather than as a wrong value. Some of what HTML's rendering section defines needs an algorithm before
+ * it needs a row — a `bgcolor` is the rules for parsing a legacy colour value, an `<img>` `width` is the rules
+ * for parsing dimension values, a `background` is encoding-parse-and-serialize — and a row written without one
+ * would be inventing the value rather than transcribing it. */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_PRESENTATIONAL_HINTS_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_PRESENTATIONAL_HINTS_H
 #include <lexbor/dom/dom.h>
