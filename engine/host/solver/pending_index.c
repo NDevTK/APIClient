@@ -76,6 +76,12 @@ static PendIndexNode    *g_nodes_tail;  /* appended in creation order, so the jo
  * reply writes its value (`pending_index_answered`, which untracks it so it can never re-enter). Each record
  * therefore contributes at most one to each, and answered implies keyed — so `answered <= asked` is a real
  * invariant and result.c asserts it, exactly as engine.c asserts the synchronous door's.
+ * THERE IS A THIRD END AND IT PAYS NOTHING, WHICH IS WHY IT DOES NOT DISTURB THAT INVARIANT. A record may also
+ * leave REFUSED (`pending_index_declined`), and a refusal is not a reply: it credits neither term, so it can
+ * only ever take a record OUT of the population that could later be answered. The pair therefore still
+ * describes one population and the inequality holds a fortiori — what a session full of refusals makes wide is
+ * the GAP between the two, and that gap is what a refused surface should look like rather than a host failing
+ * to pay. Nothing here can tell those two apart; the record's own `declined` reason is what can.
  *
  * THE UNIT IS THE RECORD AND NOT THE ISSUED REQUEST, and the difference is the sharing this file is built on:
  * N arms share ONE record (pending.h's PEND_SHARE), the join dedups over the pair, so one issued request may
@@ -313,6 +319,26 @@ void pending_index_answered(JSValueConst rec)
        set — nothing ever clears `haveValue` — so keeping a member for it would grow this index with the very
        thing it exists to stop walking. The namer count goes with it, which is why the two calls above are
        documented as no-ops on an untracked record rather than as errors. */
+    pend_untrack(m);
+}
+
+void pending_index_declined(JSValueConst rec)
+{
+    PendIndexMember *m = pend_member(rec);
+
+    DCHECK(m != NULL, "a refusal landed on a record this index is not tracking — a fetch record is tracked from "
+                      "its push until it is answered or refused, so this is a second refusal of one request or "
+                      "a write onto a record every register has already dropped");
+    /* AND NEITHER TOTAL MOVES, WHICH IS THE WHOLE OF WHAT MAKES THIS A SEPARATE ENTRY POINT — see the
+       derivation at pending_index.h. The record entered `asked` when its pair completed and it leaves WITHOUT
+       ever having been answered, which is what a refused request IS; crediting either term here would put a
+       payment nobody made into a rate, and the surplus is spent by the next reply the host genuinely
+       mispaired. The per-pair `answered` is left alone for the same reason one level down: it separates a
+       reply sent TWICE from a reply for a request nobody made, and a refusal is neither.
+       SO THE PAIR'S NODE MAY NOW BE EMPTY WITH `answered` AT ZERO, and that is a fourth reading it did not
+       have — no member parked, none answered, because the zone refused them. It is not ambiguous with the
+       others: `engine_provide` tells "answered twice" from "answered for nobody" by whether ANY record
+       matched, and a refused pair matches nothing, so it takes the arm the host's own pairing assert owns. */
     pend_untrack(m);
 }
 

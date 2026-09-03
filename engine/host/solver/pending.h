@@ -196,9 +196,16 @@ int pending_prov_compose(int kind, int path_forced);
  * DIFFERENT timeline that diverged after the park, so each owes its own failure arm. A mark written on the
  * shared record would give the first flow to step its arm and silently deny every other one, which is
  * §scheduler's razor exactly ("drops, starves, skips … ANY flow"). So each side of the fork takes a private
- * copy of the record and marks it, the shared original loses those two namings, and when the last register has
- * taken its decline the record leaves the frontier's outstanding set on its own — which is also what stops the
- * host being shown, and re-declining, a request it has already refused.
+ * copy of the record and marks it, and the shared original loses those two namings.
+ * WHAT THE LAST NAMING NO LONGER DECIDES IS MEMBERSHIP OF THE FRONTIER'S OUTSTANDING SET, and the sentence
+ * that stood here said it did: it had the record leaving that set on its own once the last register had taken
+ * its decline. It leaves at the REFUSAL now (solver/pending.c's pend_index_sync decline arm), which is a whole
+ * fork-and-take earlier, because while it stayed the pair went on naming it and the next reply for that
+ * address filled a record already carrying a refusal.
+ * NOR WAS THAT MEMBERSHIP EVER WHAT STOPPED THE HOST BEING RE-SHOWN THE REQUEST, which the same sentence also
+ * claimed. engine_pending_fetches walks the REGISTERS and skips a refused entry by reading `declined` off the
+ * record; it does not consult this index at all. The two answer that question independently, and the index's
+ * answer was never the one the host saw.
  * SHARE, for `answerFixed`'s reason exactly: an arm forked AFTER the decline was taken is that timeline
  * continued, and its own failure path is explored by the failure arm's own branch-siblings rather than by a
  * second arm of the same decline. */

@@ -32,9 +32,14 @@
  *
  * IT IS NOT A BOUND AND IT DROPS NOTHING (§NO BOUNDS). Membership is the SAME predicate the walks computed for
  * themselves — an entry that carries an address, is not a synchronous host request, and has no value yet — and
- * a record leaves only when that predicate stops holding: it is answered, or the last register naming it is
- * gone. Nothing is deduped by identity, nothing is capped, nothing is forgotten; this changes how the set is
- * LOOKED UP and never what is in it.
+ * a record leaves only when that predicate stops holding: it is answered, the trusted zone REFUSES it, or the
+ * last register naming it is gone. Nothing is deduped by identity, nothing is capped, nothing is forgotten;
+ * this changes how the set is LOOKED UP and never what is in it.
+ * THE REFUSAL EXIT IS NOT A DROP AND TAKES NO WORK AWAY (§NO BOUNDS), which is worth saying because it is the
+ * one exit that removes a record no reply has answered. This set is "which requests can the host still be
+ * ASKED", and a zone that has said it will not ask has answered that question — the FLOW is untouched: it
+ * stays parked at the line that asked, its register still says so, and it is owed the failure arm §@S
+ * requires. What leaves is a lookup key, not a piece of work.
  *
  * THE SYNCHRONOUS REQUEST KIND IS NOT IN IT AT ALL. FLOW_PENDING_HOSTREQ is keyed by a REQUEST ID and not by a
  * pair — pending.h: "two flows asking the same question in different worlds must get different answers" — so it
@@ -52,9 +57,9 @@ typedef struct PendIndexNode PendIndexNode;
 /* TRACK a record from its PUSH. Tracking is what holds the count of registers naming it, and it has to begin
    before the record can be shared, which is why it is the push and not the moment the address arrives. */
 void pending_index_track(JSValueConst rec);
-/* IS THIS RECORD TRACKED — false for a synchronous host request (never tracked) and for one already answered
-   or already dropped by every register. The two calls below are no-ops on an untracked record, deliberately:
-   a fork copies a register whose entries are a mix of all four states. */
+/* IS THIS RECORD TRACKED — false for a synchronous host request (never tracked) and for one already answered,
+   already REFUSED, or already dropped by every register. The two calls below are no-ops on an untracked
+   record, deliberately: a fork copies a register whose entries are a mix of all five states. */
 int  pending_index_tracked(JSValueConst rec);
 /* HAS IT AN ADDRESS THE HOST CAN BE SHOWN — tracked AND keyed under a (method, url) pair. */
 int  pending_index_keyed(JSValueConst rec);
@@ -71,6 +76,21 @@ void pending_index_unref(JSValueConst rec);
 void pending_index_key(JSValueConst rec, const char *method, const char *url);
 /* THE REPLY LANDED — it leaves the outstanding set for good, and its pair remembers that it did. */
 void pending_index_answered(JSValueConst rec);
+/* THE TRUSTED ZONE REFUSED IT — it leaves the outstanding set for good, and NEITHER COUNTER MOVES.
+   A REFUSAL IS AN ANSWER TO THE FLOW AND NOT A REPLY TO THE REQUEST, which is the whole reason this is its own
+   entry point rather than `answered` reached by a second road. Both untrack; there the two part company:
+     - `answered_total` is the numerator of the reply door's RATE, and paying it here would credit a payment
+       nobody made. The surplus is then spent excusing the next reply the host GENUINELY mispaired, which is
+       the one thing `answered <= asked` exists to keep visible (solver/result.c asserts it).
+     - the PAIR's own `answered` is the ONE fact that separates a reply the host sent TWICE from a reply for a
+       request nobody ever made, and a refusal is neither of those. Bumping it would make a later reply for
+       this pair report "every parked entry has ALREADY been answered", which is false in exactly the way that
+       collapses two states into one answer.
+   WHAT IT DOES NOT CHANGE IS WHETHER THE FLOW IS STILL WAITING, and that distinction is the point. This moves
+   the record out of the set the HOST is looked up in; it stays OUTSTANDING on every register naming it, which
+   is solver/pending.c's `pend_owed` against its `pend_host_owed` — the flow is parked at the line that asked,
+   and a flow that reads as FINISHED has its whole timeline torn down. Two sets, and this is one of them. */
+void pending_index_declined(JSValueConst rec);
 
 /* ---- the two host doors ---------------------------------------------------------------------------------- */
 

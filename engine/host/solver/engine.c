@@ -3176,26 +3176,50 @@ int engine_decline(JSContext *ctx, const char *method, const char *url, const ch
     matched = node ? pending_index_node_count(node) : 0;
     rv = JS_NewString(ctx, reason);
     CHECK(!JS_IsException(rv), "engine: OOM recording the trusted zone's refusal of a request");
+    /* BOUNDED BY THE COUNT TAKEN ABOVE AND ALWAYS TAKING THE HEAD, which is engine_provide's fill loop exactly
+       and is now true for the same reason: each mark REMOVES its own record from the set, because the
+       `declined` write reaches solver/pending.c — which owns every mutation of a register and tells the index —
+       so the list shrinks under the loop by one per iteration and a fixed trip count over index 0 visits each
+       member once and terminates whatever the writes do.
+       IT WAS AN INCREASING INDEX OVER A LIST THAT DID NOT SHRINK, WHICH IS WHY THE TWO HALVES ARE ONE DIFF. The
+       refusal did not unlist, so `mem[i]` was a stable walk; the moment it does, the survivors slide DOWN into
+       the holes behind the cursor (pend_unkey fills a hole with the last member), and an increasing index then
+       steps over one member for every member it marks. The ones it stepped over would be refused for nobody:
+       still keyed, still listed to the host by the join, refused again on the next slice, forking a failure arm
+       per round for the rest of the session. Landing either half alone produces that; the head is what makes
+       the walk independent of where the removals land, and reading the count first is not enough on its own. */
     for (i = 0; i < matched; i++) {
-        JSValue p = pending_index_node_member(node, i);
-        /* AN ALREADY-REFUSED RECORD IS LEFT AS IT IS RATHER THAN RE-MARKED, and that is not idempotence for
-           its own sake. A record leaves this node only when the last register naming it gives it back, so a
-           pair whose flows have not yet TAKEN their declines still holds them here — and a fresh park on the
-           same address (an @S candidate re-fire re-runs the document and re-issues its fetches) puts an
-           unrefused record in the same node, which is what the zone is answering. Overwriting the old ones
-           would replace the sentence their waiting arms are going to report with one written for a different
-           park. */
-        if (!pending_entry_declined(p)) {
-            DCHECK(!pending_get_int(p, PEND_HAVE_VALUE),
-                   "the frontier's outstanding set holds an ANSWERED record — a record leaves that set on the "
-                   "write that answers it, so this member outlived its own answer and would be refused after "
-                   "the server had already replied to it");
-            pending_set(p, PEND_DECLINED, JS_DupValue(ctx, rv));
-            marked++;
-        }
+        JSValue p = pending_index_node_member(node, 0);
+        /* AN ALREADY-REFUSED RECORD CANNOT BE A MEMBER, AND THE `if` THAT SKIPPED ONE IS GONE WITH THE STATE.
+           Its reason was that a record left this node only when the last register naming it gave it back, so a
+           pair whose flows had not yet TAKEN their declines still held them — true while the refusal did not
+           unlist, and now the refusal is exactly what takes the record out of the pair. What that guard
+           protected is unchanged and has become structural rather than checked: a fresh park on the same
+           address (an @S candidate re-fire re-runs the document and re-issues its fetches) puts an UNREFUSED
+           record in the same node, and the refused ones are no longer in it to be overwritten, so no waiting
+           arm can have the sentence it is going to report replaced by one written for a different park. */
+        DCHECK(!pending_entry_declined(p),
+               "the frontier's outstanding set holds an ALREADY-REFUSED record — a record leaves its pair on "
+               "the write that refuses it, so this member outlived its own refusal, and marking it again would "
+               "replace the reason its waiting arms are going to report with one written for a different park");
+        DCHECK(!pending_get_int(p, PEND_HAVE_VALUE),
+               "the frontier's outstanding set holds an ANSWERED record — a record leaves that set on the "
+               "write that answers it, so this member outlived its own answer and would be refused after "
+               "the server had already replied to it");
+        pending_set(p, PEND_DECLINED, JS_DupValue(ctx, rv));
+        marked++;
         JS_FreeValue(ctx, p);
     }
     JS_FreeValue(ctx, rv);
+    /* AND THE SET IS EMPTY FOR THIS PAIR, which is the closing assert engine_provide makes about its own fill
+       and says the writes did what the structure above assumes. A survivor is a member whose `declined` write
+       did not reach this index — the join would go on listing it, the host would refuse it again next slice,
+       and each refusal that reached the engine would fork another failure arm. */
+    DCHECK(!node || pending_index_node_count(node) == 0,
+           "a refusal marked every record the frontier's outstanding set held for its request and the set "
+           "still holds one — the refusal is what removes a record, so this member's `declined` write did not "
+           "reach the index, and the host will be shown this request again on the next slice and refuse it "
+           "again, one failure arm per round for the rest of the session");
     if (marked) flow_clear_host_owed_all();
     /* NOBODY IS PARKED ON IT — the same two shapes engine_provide's caller tells apart, and the same credit
        excuses one of them. A refusal for a pair no flow ever asked for is the host's pending/decline pairing

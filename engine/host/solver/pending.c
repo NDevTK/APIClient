@@ -529,8 +529,43 @@ static void pend_index_sync(JSValueConst e, int field)
 {
     JSValue uv, mv;
 
-    if (field != PEND_URL && field != PEND_METHOD && field != PEND_HAVE_VALUE) return;
-    if (!pending_index_tracked(e)) return;   /* answered, synchronous, or dropped by every register */
+    if (field != PEND_URL && field != PEND_METHOD && field != PEND_HAVE_VALUE &&
+        field != PEND_DECLINED) return;
+    if (!pending_index_tracked(e)) return;   /* answered, refused, synchronous, or dropped by every register */
+    /* A REFUSAL TAKES THE RECORD OUT OF THE SET THE HOST IS LOOKED UP IN, and this arm is asked BEFORE the
+       `haveValue` one below because the two pay different counters and only one of them is right for a request
+       no reply is coming for.
+       WHAT ITS ABSENCE COST, SAID HERE BECAUSE THIS SWITCH IS WHERE IT WAS ABSENT. `declined` was not among the
+       fields this function reacts to, so a record the trusted zone had REFUSED stayed a keyed member of its
+       pair — and the pair is what `engine_provide` delivers against. The next reply for that address therefore
+       filled a record already carrying a refusal, and the flow woke holding both: told the server answered AND
+       that nobody asked it, which are opposite directions. It surfaced two seams away, at flow_decline_fork's
+       "a request carries BOTH a reply and a refusal", which can say the two raced and cannot say which write
+       should never have happened. This is the write that should never have happened, refused at its origin.
+       IT LEAVES THE PAIR INDEX AND IT STAYS OUTSTANDING, AND THOSE ARE TWO SETS. This one answers "can the
+       host still be asked"; `pend_owed` above answers "is this flow still waiting", and the refused flow IS
+       still waiting — parked at the line that asked, owed the failure arm §@S requires. Collapsing them would
+       read the flow as FINISHED and tear its whole timeline down, which is why `pend_host_owed` exists and why
+       the assert below stands on the field this arm does not touch. */
+    if (field == PEND_DECLINED) {
+        DCHECK(pending_entry_declined(e),
+               "the frontier's outstanding set was told about a `declined` write that is not a REFUSAL — the "
+               "field's one writer is engine_decline and it writes the zone's own words, so a write leaving "
+               "the record un-refused is a path trying to UN-decline one, and this arm would take the record "
+               "out of the set the host is looked up in while every register goes on listing it as refused");
+        DCHECK(pending_index_keyed(e),
+               "a request carrying no (METHOD, ADDRESS) pair was refused — the host is shown a request only "
+               "once its identity is complete, so a refusal of one that was never askable answers a question "
+               "this frontier never put, and engine_decline reaches records only through the pair they are "
+               "keyed under");
+        DCHECK(pend_owed(e),
+               "a record was refused while it already carries a reply — `haveValue` says the server answered "
+               "and `declined` says nobody asked it, so the flow parked on it would run its failure path over "
+               "a body it already holds. engine_decline asserts the same pair at the write it makes; this is "
+               "the index's half, at the instant the record would leave the set the reply seam is keyed on");
+        pending_index_declined(e);
+        return;
+    }
     if (pending_get_int(e, PEND_HAVE_VALUE)) { pending_index_answered(e); return; }
     /* A REQUEST'S IDENTITY IS WRITTEN ONCE, AT THE PARK, and the set is keyed on it — so a second write of
        either half would leave this index answering for an address that is no longer on the record, and the
@@ -986,13 +1021,15 @@ JSValue pending_unshare(JSValueConst reg, int i)
        the set still names through the original: the host would answer the original, and the arm holding the
        copy would wait for the rest of the session with nothing anywhere to say so. */
     /* …AND THE SECOND IS A RECORD THE ZONE HAS REFUSED, which is the SAME rule and not an exception to it. What
-       makes an unshare unsound is a reply that can still arrive for the original: the copy is outside the
+       makes an unshare unsound is a reply that can still arrive for the ORIGINAL: the copy is outside the
        frontier's outstanding set, so the host answers the original and the arm holding the copy waits for the
        rest of the session with nothing to say so. A HOSTREQ is admitted because it was never in that set; a
-       DECLINED record is admitted because no reply is coming for it at all — this zone has stated it will not
-       ask — and the wait it leaves the arm in is the PARK §@S requires, with the refusal's own reason on the
-       record as the something that says so. The failure arm forked beside it is answered in the same operation
-       and leaves the set by being answered. */
+       DECLINED record is admitted because it is NO LONGER IN IT — the refusal itself took it out, at
+       pend_index_sync's decline arm above — so "no reply is coming for it" is a property of the index that
+       holds by construction rather than a promise about what the zone intends to do next. The wait it leaves
+       the arm in is the PARK §@S requires, with the refusal's own reason on the record as the something that
+       says so; the failure arm forked beside it takes its own private copy, which was never in the set
+       either. */
     DCHECK(pending_get_int(src, PEND_KIND) == FLOW_PENDING_HOSTREQ || pending_entry_declined(src),
            "a pending record that is neither a synchronous host request nor a DECLINED one was unshared — a "
            "fetch record copied here would leave the copy outside the frontier's outstanding set while the "
@@ -1004,9 +1041,10 @@ JSValue pending_unshare(JSValueConst reg, int i)
        exactly: the slot held an unanswered synchronous request before this line and holds one after it. What
        changes is WHICH record the slot names, and the count is over slots. */
     /* THIS REGISTER STOPS NAMING THE ORIGINAL, so the naming goes back exactly as it does at a remove — the
-       count is over registers and this slot has just changed which record it holds. A no-op for the kind the
-       assert above admits, and the bookkeeping is written anyway because the count's correctness is a property
-       of every naming change and not of the kinds that happen to reach one. */
+       count is over registers and this slot has just changed which record it holds. A no-op for BOTH kinds the
+       assert above admits — one was never tracked, the other stopped being tracked at its refusal — and the
+       bookkeeping is written anyway because the count's correctness is a property of every naming change and
+       not of the kinds that happen to reach one. */
     pending_index_unref(src);
     JS_FreeValue(pend_ctx(), src);
     cow_engine_write_begin();
