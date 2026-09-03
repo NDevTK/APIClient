@@ -365,11 +365,16 @@ static FlowPoint fp_table_grid_origin(const FpTableFrame *f, size_t row, size_t 
            "asserts its own column count against the grid's — so a rectangle outside it is a grid and a "
            "placement that were carried apart, and the prefix sum below would read a used width that is not "
            "this table's");
-    /* §17.6.1: one border-spacing between the table box's content edge and the first cell border, and one more
-       between each adjoining pair of rows. */
-    y = css_px_add(css_px_add(f->origin.y, used_value_leading_edge_px(f->table, true)), f->heights.spacing);
-    for (j = 0; j < row; j++)
-        y = css_px_add(css_px_add(y, f->heights.rows[j]), f->heights.spacing);
+    /* §17.5.3's OWN PREFIX SUM, ASKED RATHER THAN RE-SPELLED. `table_row_used_block_offset`
+       (core/layout/table_height.h) is the distance from the table box's content edge to the TOP EDGE of grid
+       row `row` — `row` used row heights and `row + 1` of §17.5.3's cell-spacing term — and that component
+       states why the one arithmetic is right under both of §17.6's border models: the term is the ALGORITHM's
+       and never the `border-spacing` property, so it is §17.6.1 The separated borders model's leading spacing
+       and ZERO under §17.6.2 The collapsing border model. A loop here would be a second spelling of terms that
+       belong to `TableUsedHeights`, free to come apart from the answer the rows were laid out under — the
+       defect `table_cell_vertical_edges` is exported one axis over to prevent. */
+    y = css_px_add(css_px_add(f->origin.y, used_value_leading_edge_px(f->table, true)),
+                   table_row_used_block_offset(&f->heights, row));
     /* The same on the inline axis, over the columns §17.5's rules 3 and 5 put BEFORE this rectangle — which
        under `rtl` are the ones logically after it. */
     x = css_px_add(css_px_add(f->origin.x, used_value_leading_edge_px(f->table, false)), f->widths.spacing);
