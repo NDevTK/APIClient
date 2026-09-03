@@ -3255,6 +3255,11 @@ void flow_wfq_census(WfqCensus *out) {
        below, and "no such member" must not be spelled the same way as "one standing at weight zero". */
     double never_w = 0.0;
     int have_never = 0;
+    /* …AND HOW MANY NEVER-DISPATCHED MEMBERS STAND AT THAT MAXIMUM, held beside it for the same reason the
+       maximum itself is held here: whether the plateau is AT THE FRONT is a question about a top this scan
+       does not know until flow_best runs below, so the width is COLLECTED here and only ATTRIBUTED to the
+       front there. It costs no weighing — the walk has already computed this member's weight. */
+    long never_at_w = 0;
 
     /* THE WEIGHINGS flow_best WILL PERFORM BELOW, READ BEFORE IT RUNS — the other half of what a sample costs,
        and it is captured here rather than derived afterwards because FLOW_SCAN_OTHER is SHARED (the host's
@@ -3280,6 +3285,7 @@ void flow_wfq_census(WfqCensus *out) {
     out->vt = frontier_vt();
     out->never_picked = 0;
     out->never_picked_gap = 0.0;
+    out->never_picked_at_top = 0;
     out->picks_live = out->picks_max = 0;
     /* THE LIFETIME HALF, WHICH IS NOT A READING OF THIS WALK AND IS ASSIGNED WHERE THAT IS OBVIOUS. It is the
        count of dispatches this instance has EVER made, so it is unconditional on the frontier the way
@@ -3387,7 +3393,16 @@ void flow_wfq_census(WfqCensus *out) {
            make it (flow.h). */
         if (f->picks == 0) {
             out->never_picked++;
-            if (!have_never || w > never_w) { never_w = w; have_never = 1; }
+            /* THE MAXIMUM AND THE WIDTH OF IT, TAKEN IN ONE PASS AND WITHOUT A SECOND WEIGHING. The width
+               RESETS with the maximum rather than accumulating beside it: a member that raises `never_w`
+               establishes a new plateau of one, and every later member reading EXACTLY that weight joins it.
+               EXACT `==` AND NO EPSILON, which is this file's established idiom rather than a shortcut — two
+               members standing at one another are reading ONE value twice (flow_queue_nonreward says so of the
+               arrival equality, and flow_fork_inherit's rank-neutrality check is an exact double equality over
+               flow_weight), so a tolerance here would admit members the PICK can already tell apart and would
+               report a plateau the ordering does not have. */
+            if (!have_never || w > never_w) { never_w = w; have_never = 1; never_at_w = 1; }
+            else if (w == never_w) never_at_w++;
         }
         /* …AND HOW THE DISPATCHES THAT DID HAPPEN WERE DISTRIBUTED OVER THE MEMBERS THAT GOT THEM, which is the
            question `never_picked` structurally cannot ask and which takes OPPOSITE work from the one it can.
@@ -3656,7 +3671,15 @@ void flow_wfq_census(WfqCensus *out) {
     /* …AND THE SAME DIFFERENCE FOR THE MEMBERS THE SCHEDULER HAS NEVER CHOSEN — taken here for the identical
        reason and left at 0.0 when there are none, so `never_picked` beside it is what tells "nobody is
        starved" from "the most-starved member is standing at the front". See flow.h for the pair's reading. */
-    if (have_never && top) out->never_picked_gap = out->w_top - never_w;
+    if (have_never && top) {
+        out->never_picked_gap = out->w_top - never_w;
+        /* …AND THE PLATEAU IS THE FRONT'S ONLY WHEN THE BEST STARVED MEMBER IS STANDING ON IT, which is why
+           this is conditioned on the exact equality and not on the gap being small. The row answers "how many
+           members is the order failing to separate FROM THE FLOW THE PICK RETURNED", and a member a hair
+           behind the front IS separated — the comparison can tell it apart, which is the whole question. Left
+           at 0 otherwise, which is the same statement `never_picked_gap` is making with a positive value. */
+        if (never_w == out->w_top) out->never_picked_at_top = never_at_w;
+    }
 
     /* WHAT A SAMPLE COST, ASSERTED AS THE IDENTITY IT IS: this function weighs the frontier EXACTLY TWICE, once
        in its own walk and once inside flow_best, so the weighings flow_best just performed must equal the
@@ -3686,6 +3709,30 @@ void flow_wfq_census(WfqCensus *out) {
            "flow_best's maximum is taken over the same members this scan walks, so a negative deficit means "
            "the pick and the census are no longer reading one comparator, and the starvation row would be "
            "reporting a property of the instrument rather than of the ordering");
+    /* …AND THE WIDTH IS A COUNT OVER THE POPULATION THE GAP IS A READING OF, ASSERTED SO THE TWO ROWS CANNOT
+       COME TO BE ABOUT DIFFERENT SETS. Both are collected inside the ONE branch that tests `picks == 0`, so a
+       width above the count is a member counted into the plateau that the population never admitted — the
+       shape an edit that moves one of the two out of that branch takes, after which the pair reads as a
+       plateau wider than the starved set it is supposed to be a subset of. */
+    DCHECK(out->never_picked_at_top <= out->never_picked,
+           "the WFQ census reports more never-dispatched members standing at the front of the order than there "
+           "are never-dispatched members at all — the width and the count are collected in one branch over one "
+           "population, so they have stopped being about the same set and the plateau row is a fact about the "
+           "instrument");
+    /* …AND THE TWO ROWS AGREE ABOUT WHETHER THE STARVED TAIL TOUCHES THE FRONT, which is the identity that
+       makes the pair readable and is what gives the width a reader in every dev build. `never_picked_gap` is
+       `w_top` minus the best starved weight and the width is non-zero exactly when that best weight IS
+       `w_top` — one comparison written twice, so the two spellings are asserted equal rather than trusted to
+       stay so. What it catches is an edit that gives either row its own notion of "at the front" (a tolerance
+       added to one and not the other is the shape), after which a reader taking the pair together reads two
+       questions as one. Conditioned on the population being non-empty, because both rows are left at their
+       zeros when nothing is starved and a zero gap then means "nobody" rather than "at the front". */
+    DCHECK(out->never_picked == 0 ||
+           ((out->never_picked_at_top > 0) == (out->never_picked_gap == 0.0)),
+           "the WFQ census's starvation rows disagree about whether the tail touches the front of the order — "
+           "the width is non-zero exactly when the best starved member's weight IS the top, and those are two "
+           "spellings of one comparison, so a reader taking the count, the gap and the width together would be "
+           "reading a plateau the gap says is not there");
 
     /* AND IT IS NON-NEGATIVE BY CONSTRUCTION, WHICH IS WHY THIS IS AN ASSERTION AND NOT A CLAMP. `w_top` is
        flow_best's maximum over EVERY member (flow_pick with no seed, no exclusion and `runnable_only` off) and

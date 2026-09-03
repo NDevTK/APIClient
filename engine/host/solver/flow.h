@@ -1266,6 +1266,36 @@ typedef struct {
        0.0 when the population is empty, so a reader takes the two together (build.mjs reads the series). */
     long never_picked;
     double never_picked_gap;
+    /* HOW MANY OF THEM STAND AT EXACTLY THE FRONT — the N of the retired sentence above, which that sentence
+       NAMES and this struct could not supply. The refutation it carries is that a gap of 0.0 is the EXPECTED
+       reading of a healthy sweep, because the pick returns "ONE of N tied maxima and the other N-1 stand, at
+       that instant, exactly at the front with `picks == 0`"; with N unreported, a plateau of three and a
+       plateau of six hundred are the same two digits on the same line. Those are not shades of one state.
+       Three is a sweep in progress. Six hundred is an order whose within-family terms have stopped separating
+       anything, so what returns the pick is the member's POSITION in flow.c's `g_flows` array and the weight
+       is deciding nothing at all — and §scheduler's one WFQ is then a comparator standing beside the ordering
+       rather than being it.
+       IT IS A COUNT AND THE ROW ABOVE IT IS A DISTANCE, WHICH IS WHY NEITHER SUBSTITUTES FOR THE OTHER.
+       `never_picked_gap` is a reading of ONE member — the most-favoured starved one — so it is silent about
+       how many stand with it, and it is silent in exactly the direction that decides the repair: the best of a
+       six-hundred-wide plateau and the best of a lone near-miss both read 0.0. This is that plateau's width,
+       restricted to the population §scheduler's never-starved sentence is actually about.
+       WHAT THE TWO WITHIN-FAMILY TERMS ARE, so a reader can price the number rather than only rank it. On a
+       ONE-FAMILY frontier — every flow descending from the boot flow, which flow.c's `FlowAcct.val` calls the
+       ordinary case — the reward and the FAMILY half of the aging are common offsets that cancel out of every
+       comparison between members, so members are separated by the optimism bonus and their OWN silence and by
+       nothing else. The bonus is 1/(1+`visits`), and `visits` is raised only by flow_credit_visit, which
+       asserts `frame == NULL`: a member INSIDE a program cannot advance it, and a fork copies its parent's, so
+       a chain of framed arms reads ONE bonus for all of them. The own silence is forgiven for the whole
+       account at any arm's emission (flow.c's `FlowAcct.emit_gen`), so every member the thread has not been
+       handed since that emission reads ZERO of it. This row is how many members those two facts have left the
+       order unable to tell apart, and read beside `vis_zero` and `jobs_framed` it says which of the two did it.
+       A GAUGE, NEVER DIFFERENCED, exactly like `never_picked` beside it and for its reason: a member that is
+       chosen leaves this population and every member born since joins it, so the series falls as well as
+       rises. `never_picked_at_top <= never_picked` by construction, and it is non-zero exactly when
+       `never_picked_gap` is 0.0 — both asserted at the end of flow_wfq_census, which is what gives this row a
+       reader in every dev build and what stops the pair coming to be about two different sets. */
+    long never_picked_at_top;
     /* HOW THE DISPATCHES THAT DID HAPPEN WERE DISTRIBUTED, WHICH IS THE OTHER HALF OF THE PAIR ABOVE AND TAKES
        OPPOSITE WORK FROM IT. `never_picked` says a tail exists and `never_picked_gap` says how far behind it
        stands, and that pair has ONE answer for THREE states of the scheduler — states whose repairs are
