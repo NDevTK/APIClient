@@ -615,7 +615,10 @@ JSValue *report_exception_flow(JSContext *ctx, JSValueConst exception)
        thing that just went wrong. */
     fn = JS_NewCFunction2(ctx, NULL, "reportAnException", 1, JS_CFUNC_step, g_flow_stepid);
     CHECK(!JS_IsException(fn), "§8.1.4.4 step 8's report callee could not be allocated");
-    base = JS_FlowNewCall(ctx, fn, JS_UNDEFINED, 1, &exception);
+    /* take_result FALSE — HTML §8.1.4.6 "Runtime script errors"' report an exception has no completion value
+       to hand anybody: what its frame owes the scheduler is whether it ITSELF completed abruptly, which is
+       the throw, and which arrives through `pres` either way. */
+    base = JS_FlowNewCall(ctx, fn, JS_UNDEFINED, 1, &exception, false);
     JS_FreeValue(ctx, fn);   /* JS_FlowNewCall dup'd the callee and the argument into the frame */
     CHECK(base != NULL, "§8.1.4.4 step 8's report frame could not be allocated — the exception has already "
                         "been taken off the context, so there is no second chance to report it");

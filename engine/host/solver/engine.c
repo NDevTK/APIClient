@@ -4778,7 +4778,12 @@ static JSValue *engine_orphan_call(JSContext *ctx, JSValueConst fn, int argc, ui
     snprintf(id, sizeof id, "{orphan%016llx.this}", (unsigned long long)hash);
     self = concolic_new(ctx, id, id, JS_UNDEFINED);
 
-    base = JS_FlowNewCall(ctx, fn, self, argc, (JSValueConst *)args);
+    /* take_result FALSE — A DRIVE IS FOR WHAT THE BODY REACHES, NOT FOR WHAT IT RETURNS, and here the two
+       answers are not merely uninteresting-versus-interesting. `cv` is read by arms of flow_step that
+       dispatch on its TYPE, so an orphan returning a string would arrive at the one asking whether a
+       javascript: URL evaluated to one; the drive's own completion is already carried by the exception
+       arms, which is everything this caller needs of it. */
+    base = JS_FlowNewCall(ctx, fn, self, argc, (JSValueConst *)args, false);
     CHECK(base != NULL, "engine: a driven orphan's call frame could not be allocated — the bit that made "
                         "this function an orphan is already consumed, so there is no second chance at it");
     /* JS_FlowNewCall dup'd the receiver and every argument into the frame; the mints are ours to release. */
@@ -7608,7 +7613,10 @@ static int flow_step(JSContext *ctx, Flow *f) {
                 DCHECK(JS_IsBool(cv),
                        "HTML §6.10.1 Close requests' task completed with something that is not a boolean — "
                        "its machine's fini yields step 9's one fact and nothing else, so a value of another "
-                       "type is a completion that came from somewhere that is not the task");
+                       "type is a completion that came from somewhere that is not the task. UNDEFINED HERE "
+                       "IS A DIFFERENT FAULT AND NAMES ITS OWN SITE: it is what a call flow answers when "
+                       "nobody takes its result, so close_request_flow's JS_FlowNewCall was built with "
+                       "take_result false and the boolean was freed one frame below this read");
                 if (JS_ToBool(ctx, cv)) f->close_req_none = 1;
             }
             /* A CROSS-AGENT OPERATION'S COMPLETION IS AN ANSWER, AND IT IS ASKED AHEAD OF EVERY THROW ARM

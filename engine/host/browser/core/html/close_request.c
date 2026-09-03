@@ -308,7 +308,13 @@ JSValue *close_request_flow(JSContext *ctx, lxb_dom_node_t *document)
     CHECK(!JS_IsException(fn), "HTML §6.10.1 Close requests' task callee could not be allocated");
     arg = node_wrap(dctx, document);
     CHECK(!JS_IsException(arg), "HTML §6.10.1 Close requests' target Document could not be wrapped");
-    base = JS_FlowNewCall(dctx, fn, JS_UNDEFINED, 1, (JSValueConst *)&arg);
+    /* take_result TRUE — AND IT IS THE WHOLE REASON THIS IS A FLOW WITH A COMPLETION VALUE AT ALL. The task's
+       completion is step 9's one fact (the machine's `fini` above yields it), and the caller LATCHES it: a
+       `false` here would free that boolean one frame below the reader and hand the reader JS_UNDEFINED, which
+       `JS_ToBool` turns into the POSITIVE claim that something was watching — a claim no run made, and one
+       that stops the arrival ever being answered, so this document's close request is modelled again on every
+       later step of the flow. */
+    base = JS_FlowNewCall(dctx, fn, JS_UNDEFINED, 1, (JSValueConst *)&arg, true);
     JS_FreeValue(dctx, arg);   /* JS_FlowNewCall dup'd the callee and the argument into the frame */
     JS_FreeValue(dctx, fn);
     CHECK(base != NULL, "HTML §6.10.1 Close requests' task frame could not be allocated");
