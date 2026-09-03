@@ -521,23 +521,37 @@ void table_heights(lxb_dom_element_t *table, const TableGrid *grid, TableUsedHei
        and dropped the comparison would be doing one pass over the runs for nothing. */
 #if APICLIENT_DEV
     if (nrows != 0) {
-        CssPx runs_total = css_px_scale(used_spacing, (double) (grid->ngroups + 1));
-        CssPx runs_slack;
+        CssPx run_bottom = css_px(0.0), run_top, run_expect, run_slack;
 
-        for (i = 0; i < grid->ngroups; i++)
-            runs_total = css_px_add(runs_total, table_row_group_used_extent(out, &grid->groups[i]));
-        runs_slack = css_px_sub(runs_total, sum);
-        DCHECK(runs_slack.px <= 1e-9 * (1.0 + (sum.px < 0.0 ? -sum.px : sum.px)) &&
-                   runs_slack.px >= -1e-9 * (1.0 + (sum.px < 0.0 ? -sum.px : sum.px)),
+        for (i = 0; i < grid->ngroups; i++) {
+            run_top = table_row_used_block_offset(out, grid->groups[i].first);
+            run_expect = i == 0 ? used_spacing : css_px_add(run_bottom, used_spacing);
+            run_slack = css_px_sub(run_top, run_expect);
+            DCHECK(run_slack.px <= 1e-9 * (1.0 + (run_top.px < 0.0 ? -run_top.px : run_top.px)) &&
+                       run_slack.px >= -1e-9 * (1.0 + (run_top.px < 0.0 ? -run_top.px : run_top.px)),
+                   "CSS 2.1 §17.5 Visual layout of table contents' row groups do not TILE the block axis. "
+                   "§17.5's last paragraph names the gaps \"between the rows, columns, row groups or column "
+                   "groups\" as ONE set corresponding to 'border-spacing', so exactly one vertical spacing "
+                   "stands between the bottom of one row group and the top of the next — the same single "
+                   "spacing that stands between the two rows meeting there — and one stands between the "
+                   "table box's content edge and the first. This run starts somewhere else, so either the "
+                   "runs core/layout/table_grid.h reports no longer partition the rows this answer was "
+                   "computed over, or a spacing is being counted twice at a group boundary. The second is "
+                   "invisible in every document, since a row group box one spacing too tall looks exactly "
+                   "like a table one spacing taller");
+            run_bottom = css_px_add(run_top, table_row_group_used_extent(out, &grid->groups[i]));
+        }
+        run_slack = css_px_sub(css_px_add(run_bottom, used_spacing), sum);
+        DCHECK(run_slack.px <= 1e-9 * (1.0 + (sum.px < 0.0 ? -sum.px : sum.px)) &&
+                   run_slack.px >= -1e-9 * (1.0 + (sum.px < 0.0 ? -sum.px : sum.px)),
                "CSS 2.1 §17.5 Visual layout of table contents' row groups do not add up to the table CSS 2.1 "
-               "§17.5.3 Table height algorithms answers. §17.5's last paragraph names the gaps \"between the "
-               "rows, columns, row groups or column groups\" as ONE set corresponding to 'border-spacing', so "
-               "the gap between two adjoining row groups is the same single vertical spacing that stands "
-               "between the two rows meeting there — and §17.5.3's own sum, \"the sum of the row heights plus "
-               "any cell spacing or borders\", has no row-group term because of it. Either the runs "
-               "core/layout/table_grid.h reports no longer partition the rows, or a spacing is being counted "
-               "twice at a group boundary — and the second is invisible in every document, since a row group "
-               "box one spacing too tall looks exactly like a table one spacing taller");
+               "§17.5.3 Table height algorithms answers. The last run's bottom edge plus the one spacing "
+               "§17.6.1 The separated borders model puts between the table border and the cells on the edge "
+               "of the table must BE §17.5.3's sum, \"the sum of the row heights plus any cell spacing or "
+               "borders\" — which has no row-group term at all, because §17.5's last paragraph makes every "
+               "gap a group could contribute a gap between two rows that the sum already holds. The tiling "
+               "above pins where each run STARTS; this pins where the last one ENDS, and the two together "
+               "are the whole of §17.5's placement of the row groups on this axis");
     }
 #endif
     has_declared = th_declared_minimum(table, &declared);
@@ -646,7 +660,17 @@ CssPx table_row_group_used_extent(const TableUsedHeights *heights, const TableGr
        PLACEMENT and a box a placement gives no grid cell to is placed, not unplaceable, and a crash would
        refuse a document CSS 2.1 conforms for. A REAL BROWSER MAY DISAGREE AND NOTHING HERE WOULD SAY SO: the
        zero is unobservable in the table's own height (the group holds no row, so no row height and no spacing
-       moves), and it shows only in `getBoundingClientRect().height` on the empty `<tbody>` itself. */
+       moves), and it shows only in `getBoundingClientRect().height` on the empty `<tbody>` itself.
+       THE SIZE IS DECIDED HERE AND THE POSITION IS NOT, AND THAT IS THE NAMED RESIDUAL RATHER THAN A SECOND
+       CHOICE THIS SITE COULD MAKE. `table_row_used_block_offset` takes a GRID ROW, and rule 2's union over
+       zero rows names none — so a box with no run has an extent and no `first` to be measured from, and this
+       component has nothing to answer its origin with. WHAT THE NEXT DIFF MUST LEAVE BEHIND is an enumeration
+       of a table's ROW GROUP BOXES in CSS 2.1 §17.2 The CSS table model's display order, from which an empty
+       group's place is the boundary between its neighbours' runs; core/layout/table_box.h answers a table's
+       ROWS (`table_box_rows`) and its CAPTIONS (`table_box_captions`) and no walk there enumerates the row
+       group boxes, so the group holding no row is invisible to every array this file reads. HOW ITS ABSENCE
+       SHOWS: `getBoundingClientRect()` on an empty `<tbody>` — the height is the zero decided above and the
+       `top` has no operand at all, so the rectangle cannot be composed rather than being composed wrongly. */
     if (group == NULL) return css_px(0.0);
     DCHECK(group->nrows >= 1,
            "CSS 2.1 §17.5's rule 2 reported a row group run covering NO grid row. core/layout/table_grid.h "
@@ -672,6 +696,42 @@ CssPx table_row_group_used_extent(const TableUsedHeights *heights, const TableGr
            "each non-negative and a `border-spacing` §17.6.1 The separated borders model forbids to be "
            "negative (\"Lengths may not be negative\")");
     return h;
+}
+
+/* See table_height.h for why this is ONE distance with three names, for the leading spacing in each of CSS 2.1
+   §17.6's two border models, and for why it is measured from the table box's CONTENT edge. */
+CssPx table_row_used_block_offset(const TableUsedHeights *heights, size_t row)
+{
+    CssPx y;
+    size_t j;
+
+    DCHECK(heights != NULL,
+           "CSS 2.1 §17.5 Visual layout of table contents was asked where a grid row starts with no table "
+           "height answer. The distance is the row heights above it and CSS 2.1 §17.5.3 Table height "
+           "algorithms' cell-spacing term between them, and neither has a substitute operand");
+    DCHECK(heights->rows != NULL || heights->nrows == 0,
+           "CSS 2.1 §17.5.3's answer was indexed for a grid row's block-axis offset while holding no row array "
+           "and a non-zero row count — `table_heights` stores NULL only for a table with no rows, so the two "
+           "have been carried apart since it answered");
+    DCHECK(row < heights->nrows,
+           "CSS 2.1 §17.5 Visual layout of table contents was asked where a grid row starts for a row past the "
+           "last one rule 1 placed — \"the table occupies exactly as many grid rows as there are row "
+           "elements\" — so there is no row box at it and no top edge to measure to. A caller wanting the "
+           "distance to the BOTTOM of the last row asks for this at that row and adds its height, which is the "
+           "one arithmetic that stays right when the row count is zero");
+    /* §17.6.1 The separated borders model's one spacing before the first row, and one more between each
+       adjoining pair above `row`. Under §17.6.2 The collapsing border model `spacing` is the algorithm's own
+       term rather than the property and is ZERO, so this collapses to the row heights and grid row 0 starts at
+       the table box's content edge — which is where §17.5's last paragraph puts it in that model. */
+    y = heights->spacing;
+    for (j = 0; j < row; j++) y = css_px_add(css_px_add(y, heights->rows[j]), heights->spacing);
+    DCHECK(y.px >= 0.0,
+           "CSS 2.1 §17.5 Visual layout of table contents placed a grid row at a NEGATIVE distance inside the "
+           "table box. Every term is a row height CSS 2.1 §17.5.3 Table height algorithms asserts is "
+           "non-negative or a `border-spacing` §17.6.1 The separated borders model forbids to be negative "
+           "(\"Lengths may not be negative\"), so a negative here is arithmetic that lost a sign — and the box "
+           "it would place sits above the table's own content edge");
+    return y;
 }
 
 void table_heights_release(TableUsedHeights *h)

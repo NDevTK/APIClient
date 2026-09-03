@@ -197,8 +197,12 @@ CssPx table_cell_used_border_box_height(const TableUsedHeights *heights, const T
    THERE IS NO EXTRA SPACING BETWEEN TWO ROW GROUPS, and that is why §17.5.3's table sum has no term for one:
    the gap between the last row of one group and the first row of the next is ONE vertical `border-spacing`,
    described twice by the paragraph above — once as a gap between rows and once as a gap between row groups.
-   `table_heights` asserts exactly that, by checking every run's extent plus the gaps between and around them
-   against the sum it answers the table with.
+   `table_heights` asserts exactly that, and it asserts it POSITIONALLY rather than as a total: every run's own
+   top edge — `table_row_used_block_offset` below, at the run's first grid row — must be exactly one spacing
+   below where the previous run ended, and the last run's bottom plus one spacing must be the sum it answers
+   the table with. Telescoping that chain IS the total, so nothing is lost by not checking it separately; what
+   the total alone could not see is a run STARTING somewhere the rows do not put it, which is the half a
+   consumer placing a row group's rectangle stands on.
    IT IS AN EXTENT AND NOT A USED `height`, AND THE DIFFERENCE IS WHY §17.5.3 CAN DECLINE ONE AND THIS CAN
    ANSWER THE OTHER. §17.5.3 Table height algorithms says "CSS 2.1 does not define the meaning of 'height' on
    row groups", so a CSSOM reader asking `getComputedStyle(tbody).height` must NOT be answered with this
@@ -210,6 +214,42 @@ CssPx table_cell_used_border_box_height(const TableUsedHeights *heights, const T
    THE RUN MUST BE ONE `table_heights` ANSWERED OVER, exactly as `table_cell_used_border_box_height`'s cell
    must be: the grid rows are indices into `rows` and an index from another grid names another table's row. */
 CssPx table_row_group_used_extent(const TableUsedHeights *heights, const TableGridRowGroup *group);
+
+/* WHERE ONE GRID ROW STARTS ON THE BLOCK AXIS — the distance from the TABLE BOX'S CONTENT EDGE to the TOP EDGE
+   of grid row `row`, which is the entry above's other half: that one is a row group's SIZE and this one is
+   where any of §17.5's stacked boxes BEGINS.
+   IT IS ONE DISTANCE WITH THREE NAMES, AND THAT IS THE WHOLE REASON IT IS A COMPONENT ENTRY RATHER THAN A LOOP
+   AT EACH CONSUMER. A ROW box starts at this, at its own grid row (CSS 2.1 §17.5 Visual layout of table
+   contents' rule 1, "Each row box occupies one row of grid cells"). A ROW GROUP box starts at this, at the
+   FIRST grid row of its run, because rule 2 gives it "the same grid cells as the rows it contains" and the
+   first of those is where it begins — so the block axis's answer for a group is this offset and the extent
+   above, and nothing else. A CELL box starts at this, at its ANCHOR row, which §17.5 fixes in the sentence
+   that defines its rectangle: "The top row of this rectangle is in the row specified by the cell's parent."
+   Three boxes, three different ways of NAMING a grid row, ONE distance — and a consumer that re-spelled the
+   prefix sum would be a second place for the same terms to come to disagree, which is exactly why
+   `table_cell_vertical_edges` below is exported one axis over.
+   ONE ARITHMETIC SERVES BOTH BORDER MODELS AND THE OPERAND IS AGAIN WHY. The sum is `row` used row heights and
+   `row + 1` of `TableUsedHeights.spacing` — one before the first row and one between each adjoining pair — and
+   that field is §17.5.3's own cell-spacing TERM, never the `border-spacing` property. Under §17.6.1 The
+   separated borders model the leading spacing is that section's own sentence, "The distance between the table
+   border and the borders of the cells on the edge of the table is the table's padding for that side, plus the
+   relevant border spacing distance", measured here from the CONTENT edge and so past the padding it names.
+   Under §17.6.2 The collapsing border model the term is ZERO, the leading spacing vanishes with the rest, and
+   grid row 0's top edge IS the table box's content edge — which is that model's own arithmetic rather than a
+   coincidence: §17.6.2 centres the borders on the grid lines ("Borders are centered on the grid lines between
+   the cells") and gives the table box the outer half of the top one ("The top border width of the table is
+   equal to half of the maximum collapsed top border"), so the table's content edge lands ON the first grid
+   line, and §17.5's last paragraph puts the first row's edge there too. A BRANCH ON `border-collapse` HERE
+   WOULD BE THE PLACE THE TWO MODELS CAME APART.
+   IT IS MEASURED FROM THE CONTENT EDGE AND A CONSUMER ADDS THE REST, which is what keeps this entry free of
+   §17.6's models a second time: the table box's own border and padding are `used_value_leading_edge_px`'s and
+   its origin is core/layout/flow_position.h's, and both differ between the models in ways that are not this
+   algorithm's terms. What this answers is the distance INSIDE the table box, which §17.5.3 is stated over.
+   `row` MUST BE A GRID ROW `heights` ANSWERED FOR — at or past `nrows` is a caller's crash, exactly as an
+   out-of-range cell or run is above. A ROW GROUP HOLDING NO ROW HAS NO GRID ROW TO ASK ABOUT, and that is the
+   one place this entry cannot answer a box the section places; see the recorded choice at
+   `table_row_group_used_extent`'s site for what is decided there and what is not. */
+CssPx table_row_used_block_offset(const TableUsedHeights *heights, size_t row);
 
 /* ONE CELL'S VERTICAL PADDING AND BORDER, in CSS pixels — the exact mirror of core/layout/table_column_width.h's
    `table_cell_border_edges`, on the other axis, and exported for the same reason: it is the difference between
