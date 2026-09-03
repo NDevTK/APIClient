@@ -30,8 +30,15 @@
  *   padding plus core/layout/block_flow.h's stack of the preceding siblings' used heights with §8.3.1's
  *   collapsing between them. That was the one subproblem §10.6.3's content-based height was waiting on too,
  *   and building it built both. What still crashes there is named per box and not per component: a float is
- *   §9.5's own positioning, an out-of-flow box is §9.3.2's offsets over a static position, and an inline box is
- *   §9.4.2's line boxes.
+ *   §9.5's own positioning, an out-of-flow box is §9.3.2's offsets over a static position, a table-internal box
+ *   is §17.5 "Visual layout of table contents"' grid, and an atomic `inline-table`/`inline-flex`/`inline-grid`
+ *   waits on a number its own module owns.
+ *   AN INLINE BOX WAS IN THAT LIST AND IS NOT ANY MORE, and the retired reason is kept because it is the one a
+ *   reader re-derives: §9.4.2 "Inline formatting contexts" IS a different positioning scheme from §9.4.1's
+ *   stacking, so an inline box genuinely could not be placed by the induction above — and it is placed by that
+ *   other section now, through core/layout/line_box.h, with flow_position.h composing the coordinate out of the
+ *   FIRST fragment for a `display: inline` box, for a replaced element and for both halves of `inline-block`.
+ *   Following the retired sentence would build a placement this engine has.
  *   SO §6 SPLITS EXACTLY THERE, and each member's own text says which side it is on. `clientTop`/`clientLeft`
  *   are neither — §6 defines them as a COMPUTED VALUE, core/css/css_computed_value.h's `border-*-width`, and
  *   not as a geometry at all. `clientWidth`/`clientHeight` ask for "the unscaled width of the PADDING EDGE",
@@ -126,9 +133,13 @@
  * between naming a missing capability and shrugging at "there is no layout". The fragment COUNT is decided
  * first (an inline box is one fragment per line box, a `table` is step 3's own table-plus-caption pair, and
  * nothing else in this model is more than one); then the border area's two EXTENTS, which crash inside
- * used_value.h for a box §10 does not size; then its POSITION, which flow_position.h answers for an in-flow
- * block-level box and refuses for a float, an out-of-flow box, an inline box and a vertical writing mode, each
- * naming its own section; then step 3's FIRST CONSTRAINT, "apply the
+ * used_value.h for a box §10 does not size; then its POSITION, which flow_position.h answers for an in-flow box
+ * — block-level through §9.4.1's stacking, inline-level through §9.4.2's line boxes — and refuses for a float,
+ * an out-of-flow box, a table-internal box, an atomic `inline-table`/`inline-flex`/`inline-grid` and a vertical
+ * writing mode, each naming its own section. THE INLINE TERM STOOD IN THAT REFUSAL LIST AND IS FALSE: a
+ * `display: inline` box and both halves of `inline-block` are PLACED, so what that clause named as the last
+ * blocker for every member reaching a position — and it is most of what a page clicks — had already been built.
+ * Then step 3's FIRST CONSTRAINT, "apply the
  * transforms that apply to the element and its ancestors", which has no computed `transform` to apply and
  * crashes naming the computed-value rule css_computed_value.c's own transform crash already asks for. A
  * rectangle reported without that last one would be a WRONG rectangle rather than an absent one — an author's

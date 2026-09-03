@@ -72,38 +72,53 @@
  * agent has a hit-test result at dispatch time that is more precise than the `long` it reported, and an `if`
  * over the dispatch flag here would be two spellings of one derivation with one chance to disagree.
  *
- * `offsetX` AND `offsetY` ARE THE TWO OF §10's SIX THAT ARE NOT HERE, and the reason is a POSITION and not a
- * policy. Their step 2 is `pageX`, which this file now has; their step 1, taken whenever the dispatch flag is
- * set — which is every read inside a listener, and therefore every read a library makes — is the position
- * "relative to the origin of the padding edge of the target node, ignoring the transforms that apply to the
- * element and its ancestors".
+ * `offsetX` AND `offsetY` ARE §10's OTHER TWO DERIVED COORDINATES, and BOTH of their steps are answered here.
+ * Step 2 is `pageX`, above. Step 1, taken whenever the dispatch flag is set — which is every read inside a
+ * listener, and therefore every read a library makes — is the position "relative to the origin of the padding
+ * edge of the target node, ignoring the transforms that apply to the element and its ancestors".
  *
- * WHAT STEP 1 NEEDS IS SMALLER THAN THIS PARAGRAPH USED TO SAY, AND THE HALF THAT SHRANK IS THE LAYOUT. It
- * named three missing things and TWO OF THEM HAVE SINCE BEEN BUILT, which is the failure CLAUDE.md describes:
- * a sentence true when written, read afterwards as an instruction, sending its one reader — the person who has
- * already decided to do the work — to build what the tree has. Both are checkable at the entry rather than in
- * prose. core/layout/flow_position.h publishes `flow_padding_box_origin` DIRECTLY, so "§8.1's leading border to
- * reach the padding edge" is not work at all; and a box on a line IS placed, by CSS 2 §9.4.2 through
- * core/layout/line_box.h, so the clause that had that component "crash by name for an INLINE one — the last
- * being most of what a page clicks" was false of the very case it called decisive. What it still refuses is
- * named per box at its own crash: a float, an out-of-flow box, a table-internal box, an atomic
- * `inline-table`/`inline-flex`/`inline-grid`, and a writing mode that is not `horizontal-tb`.
- * THE FRAME COSTS NOTHING EITHER, by this file's own `pageX` derivation above: §10 states pageX's step 1
- * "relative to the origin of the initial containing block" and flow_position.h answers in that same space, so
- * step 1 is `pageX` less that origin's x with no conversion between the two.
+ * STEP 1 IS ONE SUBTRACTION, AND THE FRAME COSTS NOTHING, by this file's own `pageX` derivation above: §10
+ * states pageX's step 1 "relative to the origin of the initial containing block", core/layout/flow_position.h
+ * answers `flow_padding_box_origin` in that same space, so step 1 is `pageX` less that origin's coordinate on
+ * the same axis with no conversion between the two. The layout half of this paragraph named three missing
+ * things and had gone stale about two of them, which is the failure mode a residual's next-diff clause has: a
+ * sentence true when written, read afterwards as an instruction, by the one person who has already decided to
+ * do the work. `flow_padding_box_origin` is published DIRECTLY, so "§8.1's leading border to reach the padding
+ * edge" was never work; and a box on a line IS placed, by CSS 2 §9.4.2 "Inline formatting contexts" through
+ * core/layout/line_box.h, so the clause that had that component crash by name for an INLINE box — "the last
+ * being most of what a page clicks" — was false of the very case it called decisive. The third was real and is
+ * built: DOM §2.9's `target` was a setter with no reader, and `event_target` is the reader.
  *
- * TWO THINGS ARE GENUINELY LEFT, and the second is not this engine's to build.
- *   - DOM §2.9's `target` is not readable from C. event.h publishes `event_current_target`,
- *     `event_related_target` and `event_path_first_invocation_target`; the target the event was DISPATCHED at
- *     has a setter (`event_set_target`) and no reader, and §10's step 1 asks about exactly that one.
- *   - §10 states NO ANSWER AT ALL for a target that generates no box — a Document, a Window, a Text node, a
- *     `display: none` element. That is a gap in the SPEC, so it is neither a capability to build nor a value to
- *     invent, and a crash is not available to stand in for it either: a listener on `document` reading
- *     `offsetX` is ordinary page code, so whatever is settled has to be an ANSWER. It is the question to settle
- *     before the member is installed rather than after.
- * SO THESE TWO STAY ON THE IDL GAP AUDIT'S ABSENT LIST AND THAT IS CORRECT. An `idl_members_excluded`
- * declaration says a member this user agent must NOT have; these are members it SHOULD have and does not yet,
- * and declaring them would be that mechanism used as the exclusion list it exists not to be.
+ * THE NODE IS THE TARGET AND NEVER THE CURRENT TARGET, which is the one way this member could be wrong while
+ * every number in it is real — one dispatch inside a shadow tree hands five listeners five current targets and
+ * one target, and only the second is what §10's step 1 names. core/events/event.h states it at the reader.
+ *
+ * A TARGET THAT GENERATES NO BOX IS A GAP IN §10 ITSELF, AND THE ANSWER IS STEP 2. §10 states no value for a
+ * Document, a Window, a Text node, a `display: none` element or an EventTarget that is no node at all (an
+ * XMLHttpRequest is one), and `document.addEventListener('click', e => e.offsetX)` is ordinary page code — so
+ * there is nothing to build, and a crash would fire on a case every browser answers. What settles it is that
+ * step 1's own words DENOTE NOTHING for such a target: a coordinate relative to the origin of a padding edge
+ * that does not exist is not a value the step can return, so the algorithm reaches step 2, which states one
+ * unconditionally. That is a value §10 COMPUTES, out of data this event already carries, and it is the value
+ * §10 REQUIRES for the identical read one dispatch-flag bit away — which is what makes it an answer rather than
+ * an invention. A zero would be the invention: nothing in §10 states it, and it would be indistinguishable from
+ * a measured coordinate at every site downstream.
+ *
+ * A BOX THE LAYOUT CANNOT PLACE ABORTS, AND THAT IS A DIFFERENT ANSWER BECAUSE IT IS A DIFFERENT QUESTION. A
+ * float, an out-of-flow box, a table-internal box, an atomic `inline-table`/`inline-flex`/`inline-grid` and a
+ * writing mode that is not `horizontal-tb` crash inside core/layout/flow_position.c, each naming its own
+ * section — THIS ENGINE's absence rather than the standard's, and the same crash `getClientRects()` already
+ * reaches. Nothing is added here for them: a second description of one absence is the site nobody deletes.
+ *
+ * ONE DIVERGENCE IS KNOWN AND IT IS THE SPEC'S TO SETTLE. For a NON-REPLACED INLINE target, "the padding edge
+ * of the target node" has as many candidates as the box has fragments and §10 does not say which; this engine
+ * reads the FIRST, which is the same corner CSSOM VIEW §7's `offsetLeft` publishes for that element, so the two
+ * members a page reads together cannot disagree. WPT shadow-dom/MouseEvent-prototype-offsetX-offsetY.html's
+ * first subtest wants another one, and it says so against itself: for one `<span>` at one `clientX` of 51 it
+ * asserts `target.offsetLeft` is 45 and `offsetX` is 21, so the origin it expects sits 15 CSS pixels left of
+ * the corner its own other assertion names. Its second and third subtests, whose targets are BLOCK boxes, are
+ * exactly the arithmetic below (51 − 20 = 31 against a host placed at 20, and 51 − 45 = 6 against a div placed
+ * at 45), which is what says the derivation is right and the fragment choice is the open question.
  *
  * `layerX`/`layerY` HAVE NO INIT MEMBER — the IDL declares the attributes and no dictionary member for them,
  * so their value is the un-initialized 0 for every event that is not produced by a hit-test against a laid-out
@@ -131,6 +146,9 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/agent_state.h"
+#include "core/css/css_length.h"
+#include "core/dom/element_view.h"
+#include "core/dom/node.h"
 #include "core/events/event.h"
 #include "core/events/event_target.h"
 #include "core/events/input_device_capabilities.h"
@@ -140,6 +158,7 @@
 #include "core/frame/window_proxy.h"
 #include "core/idl_args.h"
 #include "core/idl_slots.h"
+#include "core/layout/flow_position.h"
 #include "core/realm.h"
 
 static JSValue   g_key = JS_UNDEFINED;   /* the private Symbol this interface's own slots hang off */
@@ -372,11 +391,16 @@ static JSValue js_md_get(JSContext *ctx, JSValueConst this_val, int magic)
     return v;
 }
 
-/* CSSOM VIEW §10's `pageX`/`pageY` — the ONE derivation their three steps state; see the file comment for why
-   the dispatch-flag branch is not a second expression. `magic` is MD_CLIENT_X or MD_CLIENT_Y: the coordinate
-   this member is the page-relative form OF, so the axis and the operand are ONE fact here rather than two that
-   a later edit could pair the wrong way round. */
-static JSValue js_md_get_page(JSContext *ctx, JSValueConst this_val, int magic)
+/* CSSOM VIEW §10's `pageX`/`pageY` AS THE INTERNAL ALGORITHM — the ONE derivation their three steps state; see
+   the file comment for why the dispatch-flag branch is not a second expression. `magic` is MD_CLIENT_X or
+   MD_CLIENT_Y: the coordinate this member is the page-relative form OF, so the axis and the operand are ONE
+   fact here rather than two that a later edit could pair the wrong way round.
+   IT ANSWERS A `double` AND NOT A JSValue, AND THAT IS WHY `offsetX` CANNOT DRIFT FROM `pageX`. §10 writes
+   `offsetX` step 2 as "the value of the event's pageX attribute", and CSSOM VIEW §2 Terminology's own rule is
+   that an algorithm said to call an attribute must invoke its INTERNAL API — so `offsetX` runs this and never
+   the member, and a page that overwrites `MouseEvent.prototype.pageX` cannot change what `offsetX` measures.
+   Answers false for a receiver that is not a MouseEvent; both members turn that into the same TypeError. */
+static bool md_page_coord(JSContext *ctx, JSValueConst this_val, int magic, double *out)
 {
     JSValue slots = md_slots(ctx, this_val), v;
     JSContext *view;
@@ -387,7 +411,7 @@ static JSValue js_md_get_page(JSContext *ctx, JSValueConst this_val, int magic)
            "steps add the scroll offset to");
     if (!JS_IsObject(slots)) {
         JS_FreeValue(ctx, slots);
-        return JS_ThrowTypeError(ctx, "a MouseEvent attribute was read on something that is not one");
+        return false;
     }
     v = JS_GetPropertyStr(ctx, slots, MD_SLOT[magic]);
     JS_FreeValue(ctx, slots);
@@ -410,7 +434,55 @@ static JSValue js_md_get_page(JSContext *ctx, JSValueConst this_val, int magic)
        longer presented has a Window and no viewport. */
     view = ui_event_view_realm(ctx, this_val);
     offset = view ? viewport_window_scroll(view, /*vertical*/ magic == MD_CLIENT_Y) : 0.0;
-    return JS_NewFloat64(ctx, offset + client);
+    *out = offset + client;
+    return true;
+}
+
+static JSValue js_md_get_page(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    double page;
+
+    if (!md_page_coord(ctx, this_val, magic, &page))
+        return JS_ThrowTypeError(ctx, "a MouseEvent attribute was read on something that is not one");
+    return JS_NewFloat64(ctx, page);
+}
+
+/* CSSOM VIEW §10's `offsetX`/`offsetY` — its TWO steps, in order. `magic` names the axis the same way the page
+   pair above does. See the file comment for the target that generates no box, for why the node is the TARGET
+   and not the current target, and for the fragment an inline target's origin is read out of. */
+static JSValue js_md_get_offset(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    JSValue target;
+    lxb_dom_node_t *n;
+    double page;
+    CssPx origin_axis, off;
+    FlowPoint origin;
+
+    if (!md_page_coord(ctx, this_val, magic, &page))
+        return JS_ThrowTypeError(ctx, "a MouseEvent attribute was read on something that is not one");
+    /* Step 2, which is also step 1's minuend — the dispatch flag is the whole of what chooses between them. */
+    if (!event_dispatch_flag(ctx, this_val))
+        return JS_NewFloat64(ctx, page);
+    target = event_target(ctx, this_val);
+    n = node_of(target);
+    JS_FreeValue(ctx, target);
+    /* §10 states step 1 over the TARGET NODE's padding edge and states nothing for a target that has none — an
+       EventTarget that is no node at all (a Window, an XMLHttpRequest), a Document, a Text node, or an element
+       css-display-3 §2.5 "Box Generation: the none and contents keywords" gives no box. Step 2 is the only
+       value §10 defines for any of them; the file comment derives why that is an answer and a zero would not
+       be. The node test comes FIRST because core/dom/element_view.h's predicate is asked of elements only. */
+    if (n == NULL || n->type != LXB_DOM_NODE_TYPE_ELEMENT || !element_view_has_box(n))
+        return JS_NewFloat64(ctx, page);
+    origin = flow_padding_box_origin(lxb_dom_interface_element(n));
+    origin_axis = magic == MD_CLIENT_Y ? origin.y : origin.x;
+    /* THE SUBTRACTION RUNS IN `CssPx` AND NOT IN C DOUBLES, so the padding edge's environment facts ride the
+       answer out: an ancestor sized `auto` makes that origin a function of the initial containing block, and an
+       `offsetX` that dropped the fact would report a coordinate as viewport-independent in exactly the world
+       where a responsive bundle branches on it. The page coordinate carries NO fact today — its two operands
+       are a stored slot and a derived scroll position, which is what `md_page_coord`'s own DCHECK is about — so
+       it enters as a bare example and the union css_px_sub forms is the origin's alone. */
+    off = css_px_sub(css_px(page), origin_axis);
+    return viewport_env_derived(off, JS_NewFloat64(ctx, off.px));
 }
 
 /* §2.2's relatedTarget, read off the EVENT — the value §2.9 step 4 retargets. */
@@ -603,6 +675,10 @@ static const JSCFunctionListEntry js_md_proto[] = {
     /* §10's page coordinates, DERIVED — the axis is named by the client coordinate each one is built on. */
     JS_CGETSET_MAGIC_DEF("pageX", js_md_get_page, NULL, MD_CLIENT_X),
     JS_CGETSET_MAGIC_DEF("pageY", js_md_get_page, NULL, MD_CLIENT_Y),
+    /* §10's offset coordinates, DERIVED from the page pair above and the target's padding edge — same axis
+       convention, and the same one getter for both so the two cannot take different roads through step 1. */
+    JS_CGETSET_MAGIC_DEF("offsetX", js_md_get_offset, NULL, MD_CLIENT_X),
+    JS_CGETSET_MAGIC_DEF("offsetY", js_md_get_offset, NULL, MD_CLIENT_Y),
     /* Pointer Lock 2.0 §6's two, STORED — §7 declares the dictionary members that fill them and §6 states the
        un-initialized 0 they otherwise carry, so they are slots exactly as `clientX` is. */
     JS_CGETSET_MAGIC_DEF("movementX", js_md_get, NULL, MD_MOVEMENT_X),

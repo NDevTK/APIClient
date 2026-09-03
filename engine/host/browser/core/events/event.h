@@ -105,6 +105,20 @@ void    event_set_the_canceled_flag(JSContext *ctx, JSValueConst ev);
    4 reads it (its special-error-event-handling test is about the CURRENT target, not the event's target) and
    step 5 invokes the handler with it as the callback this value. */
 JSValue event_current_target(JSContext *ctx, JSValueConst ev);
+/* §2.2's TARGET, read — "the object to which event is dispatched", which §2.9's `invoke` step 3 writes at every
+   path item out of the nearest shadow-adjusted target at or before that item. A new owned reference, or JS_NULL
+   for an event that has never been dispatched and after §2.9 step 11's clearTargets; both of those are POSITIVE
+   answers and not misses, and one of them is the state CSSOM VIEW §10 "Extensions to the MouseEvent Interface"
+   writes `offsetX` step 2 for.
+   IT IS NOT `event_current_target`, AND SUBSTITUTING EITHER FOR THE OTHER IS WRONG AT EVERY SITE THAT ASKS ABOUT
+   A NODE'S GEOMETRY OR ITS TREE. §10 states `offsetX` step 1 over "the padding edge of the target node", and one
+   dispatch separates the two five ways: in WPT shadow-dom/MouseEvent-prototype-offsetX-offsetY.html a single
+   `mousedown` reports ONE offset to listeners on the inner node, on its container, on the shadow root, on the
+   host and on the document body, because the current target is five objects over that walk and the target is
+   the one node the event was dispatched at.
+   The setter beside it shipped alone for as long as no member asked §2.9's own question of the target — a name
+   written everywhere and read nowhere, which is a broken contract rather than an unused API. */
+JSValue event_target(JSContext *ctx, JSValueConst ev);
 bool    event_stop_immediate(JSContext *ctx, JSValueConst ev);  /* the stop-immediate-propagation flag */
 bool    event_bubbles(JSContext *ctx, JSValueConst ev);         /* does it travel up the propagation path */
 bool    event_stop_propagation(JSContext *ctx, JSValueConst ev);
@@ -132,8 +146,17 @@ void    event_set_touch_target_list(JSContext *ctx, JSValueConst ev, JSValueCons
    event whose outermost target was inside a shadow tree kept handing out a retargeted relatedTarget after the
    walk, which is the same leak step 11 exists to close. */
 void    event_clear_targets(JSContext *ctx, JSValueConst ev);
-/* §2.9 "invoke" steps 3 and 7, which are two steps: the target the event was dispatched at (set once for the
-   whole walk) and the object whose listeners are running right now (set at every path item). */
+/* §2.9 "invoke" steps 3 and 7, which are two steps and BOTH RUN AT EVERY PATH ITEM. This line used to say the
+   target was set once for the whole walk (this file's retired sentence, so it carries no quotation mark — that
+   mark is a standard's here, and the citation audit judges anything wearing it against the section cited beside
+   it), and its ONE caller's own comment says the opposite in as many words:
+   steps 1-2 walk BACKWARD from this item to the nearest one whose shadow-adjusted target is non-null and step 3
+   writes THAT, so a listener outside a closed shadow tree reads the HOST where a listener inside reads the node
+   the event was dispatched at — which is the whole of what retargeting is. What IS written once is neither of
+   them: it is each path ITEM's shadow-adjusted target, fixed while §2.9 built the path.
+   The retired sentence is kept here because it is the one a reader re-derives from the IDL, where `target` looks
+   like a property of the dispatch: acting on it would cache the target across the walk and hand every outer
+   listener a node from a tree the page cannot see, which is the leak step 11 exists to close arriving earlier. */
 void    event_set_target(JSContext *ctx, JSValueConst ev, JSValueConst target);
 void    event_set_current(JSContext *ctx, JSValueConst ev, JSValueConst current);
 /* §2.9 step 3: an event the page dispatches is untrusted, whatever it was when constructed. */

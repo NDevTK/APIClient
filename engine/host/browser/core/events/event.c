@@ -13,8 +13,11 @@
  * a shortcut around a C struct — it is what makes the event's state TIME-TRAVEL for free: a flag set by one
  * forked arm's listener is a property write like any other, so the COW delta captures it and the sibling arm's
  * dispatch of the same event object never sees it. A C struct behind an opaque would need its own delta kind.
- * It is also the brand: a page cannot forge the symbol, so "does it carry the slot record" IS `instanceof
- * Event` for the algorithms, and it stays true across subclassing the way a class-id check would not.
+ * It is also the brand: a page cannot forge the symbol, so asking whether an object carries the slot record IS
+ * `instanceof Event` for the algorithms, and it stays true across subclassing the way a class-id check would
+ * not. (That question was written here in DOUBLE QUOTES, which is the mark this tree reserves for a STANDARD's
+ * own words — so the citation audit could not tell it from a sentence claiming to be DOM §2.2's, and reported
+ * it as a quotation that standard does not contain. A phrase this file coined is written without the mark.)
  *
  * WHAT IS ABSENT AND WHY. CustomEvent and the typed events this tree has not reached yet (FocusEvent,
  * InputEvent, TouchEvent…) are their own interfaces with their own state; they are honestly missing rather
@@ -283,15 +286,34 @@ void event_set_in_passive(JSContext *ctx, JSValueConst ev, bool on)
 }
 
 /* §2.9 "invoke" step 3 and step 7 — TWO writes at two different steps, and they were one call taking both.
-   `target` is the path item's shadow-adjusted target and is set once for the whole walk; `currentTarget` is
-   whose listeners are running and moves at every item. A single setter forced the walk to restate the target it
-   was not changing, and passing a placeholder for it is how an event ends up with `target` undefined. */
+   BOTH MOVE AT EVERY PATH ITEM. This comment used to say `target` was set once for the whole walk — written
+   without quotation marks here because it is THIS FILE's retired sentence and not any standard's, which is the
+   distinction the citation audit cannot make for itself. The one site that calls this already contradicted it
+   in prose: step 3 writes the nearest shadow-adjusted target AT OR
+   BEFORE this item, found by walking the path backward, so it is the node inside a closed shadow tree for the
+   items inside it and the HOST for every item from the host outward. `currentTarget` is whose listeners are
+   running and moves at every item too, which is why the two are still two writes: they move on different rules,
+   not at different rates. A single setter forced the walk to restate one of them while changing the other, and
+   passing a placeholder for the one it was not changing is how an event ends up with `target` undefined. */
 void event_set_target(JSContext *ctx, JSValueConst ev, JSValueConst target)
 {
     JSValue slots = event_slots(ctx, ev);
     if (!JS_IsObject(slots)) { JS_FreeValue(ctx, slots); return; }
     JS_SetPropertyStr(ctx, slots, "target", JS_DupValue(ctx, target));
     JS_FreeValue(ctx, slots);
+}
+
+/* §2.2's TARGET, READ — the slot the write above places, and the one §2.9's `invoke` step 3 owns. JS_NULL
+   outside a dispatch and after step 11's clearTargets; see event.h for why a member that wants a NODE must ask
+   this and never `event_current_target`. */
+JSValue event_target(JSContext *ctx, JSValueConst ev)
+{
+    JSValue slots = event_slots(ctx, ev), v;
+
+    if (!JS_IsObject(slots)) { JS_FreeValue(ctx, slots); return JS_NULL; }
+    v = JS_GetPropertyStr(ctx, slots, "target");
+    JS_FreeValue(ctx, slots);
+    return v;
 }
 
 /* DOM §2.2's SET THE CANCELED FLAG — see event.h for why it is one function and not three spellings.
