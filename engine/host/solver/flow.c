@@ -377,7 +377,28 @@ static double frontier_vt(void) {
 /* …AND THE ONE WRITER OF IT. `f` is the item whose tag the clock is now a reading of: the flow just dispatched,
    or the flow in service whose own tag an emission has just raised. Called with the flow ALREADY installed as
    `g_running`, so the coordinate it reads is the one every other member is about to be compared against. */
-static void frontier_vt_serve(const Flow *f) {
+/* WHICH OF THE CLOCK'S TWO EVENTS IS HAPPENING — carried as an argument rather than derived, because the two
+   callers differ in exactly the property the assertion below is about and nothing at the write site can tell
+   them apart: an EMISSION raises the frontier generation on the same statement, so the hook rescans and both
+   sides of its comparison are read against one clock; a DISPATCH raises nothing and is followed immediately by
+   engine.c's snapshot of what the winner was ranked on. It is the same reason solver/step_unit.h's arm is
+   assigned at each arm rather than inferred: a fact about the OPERATION travels with it. */
+typedef enum { VT_SERVE_DISPATCH, VT_SERVE_EMIT } VtServeEvent;
+
+/* HOW MANY ACCOUNTS ARE STILL READING THE CLOCK RATHER THAN STANDING ON A TAG — the population an unplaced
+   account's live reward makes, and therefore the population a move of the clock re-ranks. Counted over the
+   members because an account is reached through its arms (the census counts families the same way), and this
+   is a QUESTION and not a row: it is mentioned only inside the DCHECK below, so release neither calls it nor
+   emits it, exactly as flow_is_min_weight is. */
+static long acct_unplaced_count(void) {
+    long n = 0;
+    int i;
+    for (i = 0; i < g_flows_n; i++)
+        if (g_flows[i]->family && !g_flows[i]->family->placed) n++;
+    return n;
+}
+
+static void frontier_vt_serve(const Flow *f, VtServeEvent ev) {
     double v;
     DCHECK(f != NULL && f->family != NULL,
            "the frontier's clock was asked to follow a flow that owns no account — a departed flow cannot be "
@@ -388,7 +409,45 @@ static void frontier_vt_serve(const Flow *f) {
            "would define each other, so this is a dispatch that installed a flow without stamping its account "
            "first (see flow_set_running, which does both in one operation and in that order)");
     v = flow_queue_weight(f);
-    g_vt = v > 0.0 ? v : 0.0;   /* the clock's origin: no member has ever entered below the busy period's start */
+    v = v > 0.0 ? v : 0.0;      /* the clock's origin: no member has ever entered below the busy period's start */
+    /* A DISPATCH MAY NOT RE-RANK THE MEMBERS THE PICK JUST COMPARED AGAINST — this function's own exactness
+       claim, asked of the population it is actually about. flow_set_running already asserts that freezing the
+       clock into the winner's tag does not move THE WINNER's coordinate ("a dispatch has just re-ranked the
+       member the WFQ picked, and the comparison that picked it was about a weight this flow no longer
+       carries"). That sentence is true of every UNPLACED account too and was asserted for none of them: an
+       unplaced account's reward IS this clock, read live (acct_family_val), so moving it here moves their
+       weight — after the pick has decided and before engine.c records what the winner was ranked on.
+       WHY THAT IS NOT A SHADE OF THE SAME THING. The five terms engine.c snapshots at the switch-in are all
+       terms of the RUNNING flow, so a term that moved on the OTHER side of the comparison is invisible in
+       every one of them — which is exactly the state its value-yield assertion reports: "the pick and the hook
+       are answering one unchanged state two different ways". It is not one unchanged state. The arithmetic:
+       after this store an unplaced never-run account R stands at `g_vt + 1.0 + distance(R)` while the flow
+       just dispatched stands at `g_vt + 1/(1+visits) + distance`, so R outranks it strictly the moment that
+       flow has completed one unit of work — for every dispatch, by construction, with no term of the running
+       flow having moved at all. The pick's own choice is what promotes the tail above it.
+       IT IS THE DISPATCH EVENT AND NOT THE EMISSION, which is why this function now takes which one it is
+       rather than deriving it: flow_credit_emit's call is the one carrying an argument ("without it, every
+       account that has never been served would stand at the coordinate the leader held when it was last
+       picked, and would be passed by exactly the findings the leader makes during the slice it is holding"),
+       it is a real production event, and it raises the frontier generation on the same statement — so the
+       hook rescans and the two sides are read against one clock. A dispatch raises nothing and is followed
+       immediately by the snapshot, which is the whole difference.
+       WHAT THE NEXT DIFF BUILDS, and it is a POLICY question this assert deliberately does not decide: either
+       the clock stops following the item in service at a dispatch (leaving frontier_vt_serve with its
+       emission caller alone, which is the caller the argument was written for), or an unplaced account's
+       coordinate stops being a live read of it. What it must NOT be is a fifth clause in engine.c's
+       assertion, for the reason that assertion already gives about the host-owed mark: a clause there would
+       silence this while the hook went on ranking against a clock the pick had not used.
+       O(members) and DEV-ONLY, in the shape flow_is_min_weight already establishes in this file: a static
+       helper mentioned only inside a DCHECK condition, so release neither calls it nor emits it. A dispatch
+       already costs a walk of the frontier in the pick that led to it, so this is the same order. */
+    DCHECK(ev != VT_SERVE_DISPATCH || v == g_vt || acct_unplaced_count() == 0,
+           "a DISPATCH moved the frontier's virtual time while accounts that read it live were standing — an "
+           "unplaced account's reward IS this clock, so every one of them has just been re-ranked by the act "
+           "of choosing somebody else, after the pick compared them and before the scheduler records what the "
+           "winner was ranked on. The winner is now outranked by the tail it beat, no term of the winner has "
+           "moved, and the value yield fires on a state its five clauses cannot see");
+    g_vt = v;
 }
 
 /* …AND THE REWARD THAT SILENCE IS SUBTRACTED FROM, read through the SAME pointer for the same reason — see
@@ -552,7 +611,7 @@ void  flow_set_running(Flow *f) {
     /* …AND THE CLOCK NOW READS THE ITEM IN SERVICE. Written AFTER the install so the coordinate it takes is
        the one every other member is about to be ranked against, and only for a dispatch — a release holds the
        clock rather than dropping it. */
-    if (f && f->family) frontier_vt_serve(f);
+    if (f && f->family) frontier_vt_serve(f, VT_SERVE_DISPATCH);
 }
 Flow *flow_running(void) { return g_running; }
 
@@ -592,7 +651,7 @@ void flow_credit_emit(double v) {
        served would stand at the coordinate the leader held when it was last picked, and would be passed by
        exactly the findings the leader makes during the slice it is holding — which is the arrival copy going
        stale again, one slice at a time instead of once. */
-    frontier_vt_serve(g_running);
+    frontier_vt_serve(g_running, VT_SERVE_EMIT);
     /* …AND THIS ONE MEMBER'S OWN LEDGER, WHICH RANKS NOTHING AND IS NOT A SECOND COPY OF THE LINE ABOVE. The
        family total says what an ACCOUNT has emitted and is the order; this says what THIS FLOW emitted, which
        is the one question the total structurally cannot answer and the one the census exists to ask — a
