@@ -2635,6 +2635,33 @@ static const JSCFunctionListEntry XHR_CONSTANTS[] = {
     JS_PROP_INT32_DEF("DONE", XHR_DONE, JS_PROP_ENUMERABLE),
 };
 
+/* THE ONE MEMBER OF `XMLHttpRequest` THIS USER AGENT MUST NOT HAVE. PRIVATE STATE TOKEN API §8 Integration
+   with XMLHttpRequest puts `undefined setPrivateToken(PrivateToken privateToken)` on this interface by a
+   partial, and the published corpus carries that partial FLAT — with no way to say that a user agent which
+   does not ship the API does not have it. Most do not. So the engine says it here, where the gap auditor and
+   the next reader of this prototype read one answer instead of each re-deriving it.
+   EVERY SECTION NUMBER BELOW REPEATS ITS STANDARD'S NAME, because a bare one in this file names the WRONG
+   DOCUMENT: XMLHttpRequest is this file's own standard and its numbers run in the same range.
+   ITS THREE STEPS ARE PERFORMABLE AND THAT IS EXACTLY WHY INSTALLING THEM WOULD BE WRONG. PRIVATE STATE TOKEN
+   API §8.1 Attach PrivateToken states them in full — throw "InvalidStateError" unless the state is "opened",
+   throw again if the send() flag is set, then "Set this's private state token to privateToken" — and the whole
+   observable effect of that store is PRIVATE STATE TOKEN API §8.2 send() monkeypatch, which adds one step
+   running "set private token properties for request from private token" over the stored token and the request.
+   What consumes THAT is PRIVATE STATE TOKEN API §12.1's `Sec-Private-State-Token` header field, its §9
+   Issuing Protocol and its §10 Redeeming Tokens — none of them built, and none of them a conversion. A member
+   installed with those three steps and nothing behind them answers `typeof xhr.setPrivateToken === "function"`
+   — which IS the feature detection a page writes — with a yes, and then attaches no token: a capability CLAIM
+   with no capability under it, which is §NO STUBS' dedicated no-effect member standing where the spec states a
+   real effect. Absent, this engine is exactly a user agent that does not ship the API, which most browsers
+   are, and the page's own TypeError is the forcing function.
+   THE SAME DECISION'S OTHER HALF IS core/fetch/request.c's REQUEST_INIT, which declines to declare the
+   `privateToken` member PRIVATE STATE TOKEN API §6.1 Definitions adds to `RequestInit`, for this reason and
+   one more that applies here too: `PrivateToken`'s `issuers` is `sequence<USVString>`, and there is no such
+   row in IdlArgType — `IDL_SEQUENCE_DOMSTRING` is a DIFFERENT type, since WEB IDL §3.2.12 USVString replaces
+   every unpaired surrogate with U+FFFD and an issuer is an origin that goes on the wire.
+   WHAT WOULD CHANGE THIS IS THE FEATURE, never the signature. */
+static const char *const XHR_ABSENT[] = { "setPrivateToken" };
+
 void xhr_install_protos(JSContext *ctx)
 {
     JSValue et_p, up_p, xhr_p, prev;
@@ -2683,6 +2710,13 @@ void xhr_install_protos(JSContext *ctx)
     idl_install_accessor_step(ctx, xhr_p, "response", g_response_getter_id, -1);
     idl_install_accessor(ctx, xhr_p, "responseText", js_xhr_get_response_text, 0, -1);
     idl_install_accessor_step(ctx, xhr_p, "responseXML", g_response_xml_getter_id, -1);
+    idl_members_excluded(ctx, xhr_p, "XMLHttpRequest", XHR_ABSENT,
+                         (int)(sizeof(XHR_ABSENT) / sizeof(XHR_ABSENT[0])),
+                         "PRIVATE STATE TOKEN API §8.1 Attach PrivateToken's three steps end in \"Set this's "
+                         "private state token to privateToken\", and the only reader of that store is PRIVATE "
+                         "STATE TOKEN API §8.2 send() monkeypatch, feeding a header field and an issuing and "
+                         "redemption protocol this user agent does not ship — so an installed member would "
+                         "answer a page's typeof detection yes and then attach no token");
     JS_SetClassProto(ctx, g_xhr_class, xhr_p);
     /* §5's prototype is NOT built here: progress_event_init declared it as a per-realm intrinsic of its own,
        and building it a second time would leave everything already chained to the first answering out of a

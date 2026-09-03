@@ -75,13 +75,35 @@
  * `offsetX` AND `offsetY` ARE THE TWO OF §10's SIX THAT ARE NOT HERE, and the reason is a POSITION and not a
  * policy. Their step 2 is `pageX`, which this file now has; their step 1, taken whenever the dispatch flag is
  * set — which is every read inside a listener, and therefore every read a library makes — is the position
- * "relative to the origin of the PADDING EDGE of the target node". That needs three things this engine does
- * not yet put in one place: DOM §2.9's `target` read out to C (event.c stores it and exposes no getter),
- * core/layout/flow_position.h's border-box origin for the target's box (which places in-flow block-level boxes
- * and crashes by name for a float, an out-of-flow box and an INLINE one — the last being most of what a page
- * clicks), and §8.1's leading border to reach the padding edge from it. And §10 states no answer at all for a
- * target that generates no box — a Document, a Window, a `display: none` element — which is a gap in the spec
- * and not in this engine, so it is a question to settle before a member is installed rather than after.
+ * "relative to the origin of the padding edge of the target node, ignoring the transforms that apply to the
+ * element and its ancestors".
+ *
+ * WHAT STEP 1 NEEDS IS SMALLER THAN THIS PARAGRAPH USED TO SAY, AND THE HALF THAT SHRANK IS THE LAYOUT. It
+ * named three missing things and TWO OF THEM HAVE SINCE BEEN BUILT, which is the failure CLAUDE.md describes:
+ * a sentence true when written, read afterwards as an instruction, sending its one reader — the person who has
+ * already decided to do the work — to build what the tree has. Both are checkable at the entry rather than in
+ * prose. core/layout/flow_position.h publishes `flow_padding_box_origin` DIRECTLY, so "§8.1's leading border to
+ * reach the padding edge" is not work at all; and a box on a line IS placed, by CSS 2 §9.4.2 through
+ * core/layout/line_box.h, so the clause that had that component "crash by name for an INLINE one — the last
+ * being most of what a page clicks" was false of the very case it called decisive. What it still refuses is
+ * named per box at its own crash: a float, an out-of-flow box, a table-internal box, an atomic
+ * `inline-table`/`inline-flex`/`inline-grid`, and a writing mode that is not `horizontal-tb`.
+ * THE FRAME COSTS NOTHING EITHER, by this file's own `pageX` derivation above: §10 states pageX's step 1
+ * "relative to the origin of the initial containing block" and flow_position.h answers in that same space, so
+ * step 1 is `pageX` less that origin's x with no conversion between the two.
+ *
+ * TWO THINGS ARE GENUINELY LEFT, and the second is not this engine's to build.
+ *   - DOM §2.9's `target` is not readable from C. event.h publishes `event_current_target`,
+ *     `event_related_target` and `event_path_first_invocation_target`; the target the event was DISPATCHED at
+ *     has a setter (`event_set_target`) and no reader, and §10's step 1 asks about exactly that one.
+ *   - §10 states NO ANSWER AT ALL for a target that generates no box — a Document, a Window, a Text node, a
+ *     `display: none` element. That is a gap in the SPEC, so it is neither a capability to build nor a value to
+ *     invent, and a crash is not available to stand in for it either: a listener on `document` reading
+ *     `offsetX` is ordinary page code, so whatever is settled has to be an ANSWER. It is the question to settle
+ *     before the member is installed rather than after.
+ * SO THESE TWO STAY ON THE IDL GAP AUDIT'S ABSENT LIST AND THAT IS CORRECT. An `idl_members_excluded`
+ * declaration says a member this user agent must NOT have; these are members it SHOULD have and does not yet,
+ * and declaring them would be that mechanism used as the exclusion list it exists not to be.
  *
  * `layerX`/`layerY` HAVE NO INIT MEMBER — the IDL declares the attributes and no dictionary member for them,
  * so their value is the un-initialized 0 for every event that is not produced by a hit-test against a laid-out

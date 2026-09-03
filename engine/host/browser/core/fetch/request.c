@@ -450,8 +450,13 @@ static const IdlDictMember REQUEST_INIT[] = {
        init["targetAddressSpace"] exists, then switch on init["targetAddressSpace"]" and its two arms are
        `public`, "Do nothing", and `local`, "Set request's targetAddressSpace to local" (the enumeration's
        third value, `loopback`, has no arm at all in that draft) — stores nothing here.
-       AND THE ATTRIBUTE THE SAME PARTIAL DECLARES IS A DIFFERENT ROW, WHICH THE IDL GAP AUDIT REPORTS AND
-       WHICH IS ABSENT ON PURPOSE. `partial interface Request { readonly attribute IPAddressSpace
+       AND THE ATTRIBUTE THE SAME PARTIAL DECLARES IS A DIFFERENT ROW, ABSENT ON PURPOSE, AND THE ENGINE NOW
+       SAYS SO WHERE AN INSTRUMENT CAN READ IT — `idl_members_excluded` at this file's prototype build. This
+       paragraph said the gap audit REPORTS it, and it did, as one of the four hundred-odd members whose verdict
+       line instructs a reader to "implement the member in its real component". For this member that instruction
+       is SPEC-WRONG, and a wrong instruction in an instrument every lane reads is the stale-DFAIL failure with
+       nothing to grep: a decision reasoned out in prose is, to the auditor, indistinguishable from a member
+       nobody has looked at. `partial interface Request { readonly attribute IPAddressSpace
        targetAddressSpace; }` states no getter steps, and the slot it would reflect cannot be spelled in its
        own declared type: LOCAL NETWORK ACCESS §3.1.1 Fetching says, in full, "Request objects are given a new
        target IP address space property, initially null", while `IPAddressSpace` is NOT NULLABLE and its three
@@ -463,7 +468,11 @@ static const IdlDictMember REQUEST_INIT[] = {
        target IP address space is not public", so the one value a getter could plausibly return is the one
        value the algorithm guarantees is never stored. That is §NO STUBS' getter returning a value where the
        spec computes none, so absence is the correct answer here and stays correct until the draft states
-       getter steps or makes the attribute nullable. The next diff carries the member on the request
+       getter steps or makes the attribute nullable. THAT LAST CLAUSE IS THE ONE THE EXCLUSION CANNOT CHECK
+       FOR YOU, and saying so is part of declaring it: the two sides the declaration IS checked from are that
+       the corpus still carries the name and that this file does not install it, neither of which moves when a
+       draft gains getter steps — so a reader who finds getter steps in that section deletes the exclusion, and
+       no run will have told them to. The next diff carries the member on the request
        record the chokepoint receives, so `safe-fetch.js` decides the local-network question with the page's
        own declaration in hand instead of from the host alone.
        ITS ABSENCE SHOWS as `fetch("http://router.local/ping", {targetAddressSpace: "local"})` being graded by
@@ -1002,6 +1011,11 @@ static const JSCFunctionListEntry js_request_proto_funcs[] = {
     JS_CGETSET_MAGIC_DEF("signal", js_request_get, NULL, REQ_SIGNAL),
 };
 
+/* THE ONE MEMBER OF `Request` THIS USER AGENT MUST NOT HAVE — LOCAL NETWORK ACCESS §3.1.2 Fetch API's
+   `partial interface Request`. The argument is at the REQUEST_INIT row that declares the same partial's
+   DICTIONARY half, because that is where a reader asks; what is here is the assertion. */
+static const char *const REQUEST_ABSENT[] = { "targetAddressSpace" };
+
 void request_init(JSContext *ctx)
 {
     JSClassDef def = { "Request", .finalizer = request_finalizer, .gc_mark = request_gc_mark };
@@ -1046,6 +1060,15 @@ void request_install_proto(JSContext *ctx)
     JS_SetPropertyFunctionList(ctx, proto, js_request_proto_funcs,
                                (int)(sizeof(js_request_proto_funcs) / sizeof(js_request_proto_funcs[0])));
     body_install(ctx, proto, g_request_body_handle);
+    idl_members_excluded(ctx, proto, "Request", REQUEST_ABSENT,
+                         (int)(sizeof(REQUEST_ABSENT) / sizeof(REQUEST_ABSENT[0])),
+                         "LOCAL NETWORK ACCESS §3.1.1 Fetching states \"Request objects are given a new target "
+                         "IP address space property, initially null\" and LOCAL NETWORK ACCESS §3.1.2 Fetch "
+                         "API states no getter steps over it, while the `IPAddressSpace` the attribute is "
+                         "declared to return is not nullable and has no value naming that initial state — so "
+                         "every answer a getter could give is invented, and \"public\" worst of all, since "
+                         "LOCAL NETWORK ACCESS §3.1.1 Fetching's own check asserts \"request's target IP "
+                         "address space is not public\"");
     JS_SetClassProto(ctx, g_request_class, proto);
 }
 
