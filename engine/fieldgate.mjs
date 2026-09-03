@@ -83,6 +83,13 @@
  *                    authority instead of the IDL: it says WHERE the producer is, which is all a specifier can
  *                    say, and it claims no interface. Without it those receivers reach the SHAPE anchor and are
  *                    decided by name collision — Node's `IncomingMessage` reads `url`, `headers` and `method`.
+ *   DECIDED REMOTE-STATED
+ *                    the same scoping answer for a producer that is NOT a module and has no specifier at all: a
+ *                    body read off a `Response`, which is bytes a party outside this process stated. It is its
+ *                    own band because the two differ on the question the VERDICT asks — a module's record may be
+ *                    DCHECKed and a stranger's may never be, so one band could not say which remedy a row is
+ *                    owed. §REMOTE-STATED at the mint, §THE-TWO-QUESTIONS-A-DECIDED-NEGATIVE-ANSWERS at the
+ *                    print.
  *   OFF-INTERFACE    that same object, read for a name the spec does not declare on it AND that no producer in
  *                    the corpus writes either. The interface's member list is the whole member list, so this
  *                    is READ-NO-WRITER landing on a platform object — the one defect the decided negative
@@ -4228,6 +4235,19 @@ const pathOverParams = (cbText) => {
 
 const originName = (spec) => `the \`${spec}\` module`;
 
+/* §REMOTE-STATED — THE ONE PRODUCER ON THIS WALK THAT IS NOT A MODULE, AND THE ONLY ONE WHOSE ROWS MAY NOT BE
+ * TOLD TO ASSERT. Every other answer `originOfExpr` gives names a package, a `node:` builtin or a callback of
+ * one: a producer that is IN THIS PROCESS, whose declaration a reader can open, and about which a wrong
+ * assumption is this codebase's own to hold. A body read off a `Response` is none of those — nobody wrote the
+ * producer, nobody can read it, and it can answer differently on the next request.
+ *
+ * IT IS A NAMED CONSTANT SO THE SPLIT AT THE PRINT IS DERIVED FROM THE SITE THAT MINTS IT rather than from a
+ * second copy of the same rule spelled as a text match. §AN-AUDITOR-DERIVES-THE-RULE-IT-CHECKS: the day a
+ * second remote producer is minted, it is minted through this constant and the band knows; a `/response/` test
+ * at the print would have been the third copy of a fact whose second copy is what this gate exists to catch. */
+const REMOTE_BYTES = "a fetched HTTP response body";
+const isRemoteStated = (from) => from === REMOTE_BYTES;
+
 /* Strip what does not change WHICH producer made the value: `await`, a grouping, and a `||`/`??` whose right
    operand is a LITERAL — the default is the concealment this gate reports elsewhere and never the producer. */
 function originHead(t) {
@@ -4341,8 +4361,8 @@ function originOfExpr(t0, off, scan, st, mode) {
         return originOfExpr(cm.base, off, scan, st, "elem");
       if (BODY_READER.has(cm.name) && ifaceOfExpr(cm.base, off, scan, null) === "Response")
         /* Fetch §5.3 Body mixin: these read THE BODY, and a body is bytes some SERVER wrote — an answer to the
-           bytes question, which is exactly the one a filesystem read cannot answer. */
-        return bytes ? "a fetched HTTP response body" : null;
+           bytes question, which is exactly the one a filesystem read cannot answer. §REMOTE-STATED. */
+        return bytes ? REMOTE_BYTES : null;
       /* A NODE API'S RETURN VALUE IS NODE'S RECORD and the bytes it carries are not. `readFileSync` answers a
          Buffer or a string whose CONTENT this corpus may well have written; the object is `node:fs`'s and the
          text is nobody-this-can-name's, which is why the two questions part company here. */
@@ -5045,15 +5065,49 @@ if (ambiguous.length) {
 /* PRINTED IN FULL, AND NOT A DEFECT — a decided negative nobody can see is the concealment this file reports.
    Every row is a claim about the tree made on @webref/idl's authority, so every row is somewhere a reader can
    disagree with it; the alternative is a count that shrank for reasons nobody can check. */
-if (foreignDecided.length) {
+/* §THE-TWO-QUESTIONS-A-DECIDED-NEGATIVE-ANSWERS. These rows used to print as ONE band, and one band is one bit
+   answering two questions that a case has already arrived to separate — §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS,
+   performed by this gate on its own output. The questions are:
+
+     (1) IS THE PRODUCER OUTSIDE THIS CORPUS — the scoping question, and the only one the band was built for.
+     (2) IS THIS CODEBASE ENTITLED TO ASSERT ON THE VALUE — §THE-DISCRIMINATOR-IS-WHOSE-BYTES-STATE-THE-VALUE.
+
+   Both populations answer (1) the same way, so the merged bit kept whatever (1) needed and the cost landed
+   silently on (2) — the shape that rule names, with the refusal's stated reason being about a different
+   question than the row raises. The old banner made it literal: "The specifier says where the producer is" is
+   TRUE of a package and a `node:` builtin, and of a body read off a `Response` it is not true in any part —
+   there is no specifier, there is no module, and there is no producer anybody can open. Same conclusion,
+   reached for a reason that does not hold, which this file's own §WHY REFUSING IS THE WHOLE DISCIPLINE rates
+   as the outcome worse than no answer.
+
+   AND THE COST IS THE VERDICT'S REMEDY, NOT THE ROW. The verdict below instructs the reader to DCHECK the
+   field. For a module's record that is right — the producer is in this process and a wrong assumption about it
+   is ours to hold. For remote-stated bytes it is the FORBIDDEN action: an assert on a value a stranger's server
+   stated hands a remote party an abort switch for the zone that reads it, which is a measured incident and not
+   a hypothetical. Nothing in one merged band could tell a reader which of those they were standing in, so the
+   split is what makes the gate able to answer the question at all. It moves NO row out of decided and changes
+   NO count: both bands are decided-not-passed exactly as the one band was. */
+const remoteDecided = foreignDecided.filter((f) => isRemoteStated(f.by));
+const moduleDecided = foreignDecided.filter((f) => !isRemoteStated(f.by));
+if (moduleDecided.length) {
   const byCallee = new Map();
-  for (const f of foreignDecided) byCallee.set(f.by, (byCallee.get(f.by) || 0) + 1);
-  log(`── DECIDED FOREIGN — ${foreignDecided.length} receiver(s) a module OUTSIDE this corpus produced, either ` +
+  for (const f of moduleDecided) byCallee.set(f.by, (byCallee.get(f.by) || 0) + 1);
+  log(`── DECIDED FOREIGN — ${moduleDecided.length} receiver(s) a module OUTSIDE this corpus produced, either ` +
       `by handing it to a callback or by returning it. The specifier says where the producer is; this gate's ` +
       `subject is the serialized seam, so they are out of it — decided, not passed ──`);
-  for (const f of foreignDecided) log(`  ${place(f)}  \`${f.recv}\` ${f.why} — ` +
-                                      f.names.map((n) => `\`${n}\``).join(", "));
+  for (const f of moduleDecided) log(`  ${place(f)}  \`${f.recv}\` ${f.why} — ` +
+                                     f.names.map((n) => `\`${n}\``).join(", "));
   log(`  by producer: ` + [...byCallee].sort((a, b) => b[1] - a[1]).map(([c, n]) => `${c}×${n}`).join(", "));
+}
+if (remoteDecided.length) {
+  log(`── DECIDED REMOTE-STATED — ${remoteDecided.length} receiver(s) whose bytes a party outside this process ` +
+      `stated. There is no specifier and no producer to open: the value is INPUT, so which names it carries is ` +
+      `not a contract this corpus is one side of — decided, not passed. THE VERDICT'S REMEDY DOES NOT APPLY ` +
+      `HERE: a DCHECK on a value a stranger stated hands that stranger an abort switch, so the answer to a ` +
+      `malformed one is a REFUSAL yielding the record's declared absence — and equally never a default that ` +
+      `turns the absence into a plausible datum ──`);
+  for (const f of remoteDecided) log(`  ${place(f)}  \`${f.recv}\` ${f.why} — ` +
+                                     f.names.map((n) => `\`${n}\``).join(", "));
 }
 if (assertedDecided.length) {
   log(`── DECIDED ASSERTED — ${assertedDecided.length} receiver(s) whose record identity is still OPEN and ` +
@@ -5277,8 +5331,13 @@ for (const [k, n] of cats) log(`  ${String(n).padStart(5)}  ${k}`);
 console.error(`[field-gate] FAILED — ${cats.length} category(ies) above. A read with no writer is a wrong number ` +
               `already being reported; a write with no reader is a measurement nobody sees; a defaulted read is ` +
               `what stops either from being a crash, and a CONVERTED one stops it from even looking empty. ` +
-              `Fix at the ROOT: make the consumer DCHECK the field ` +
-              `(extension/check.js mirrors check.h), or delete the half of the contract that has gone stale.`);
+              `Fix at the ROOT, and WHOSE BYTES STATE THE VALUE decides which root: where this codebase ` +
+              `computed it, make the consumer DCHECK the field (extension/check.js mirrors check.h) — its ` +
+              `TYPE, never its content, since a path this corpus composes is legitimately empty; where a party ` +
+              `outside this process stated it, an assert is the forbidden answer and a REFUSAL yielding the ` +
+              `record's declared absence is the right one. Or delete the half of the contract that has gone ` +
+              `stale. The DECIDED REMOTE-STATED band above is the population the first half must not be ` +
+              `applied to.`);
 process.exit(1);
 
 /* WHAT IS STILL ONE-SIDED, now that the ABI's four descriptions are read together: the CALLER'S READ of a mojo
