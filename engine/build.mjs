@@ -164,15 +164,29 @@ const loadNow = () => {
    The probe table is the second stream and the fixture's OWN measure of progress — @COLD says work is moving,
    @H says whether any of it arrived — so the discriminator reads both or it is guessing from half the evidence.
    The window is the same absolute window, for the same reason: one WFQ re-ranking pause is not a freeze. */
-/* THE LIST IS THE CONTRACT AND THE READING IS A SUBSET OF IT, which is exactly what WFQ_FIELDS is and why it
-   is written the same way. Its job is not that every name below is compared — `hungCause` uses five of them —
-   it is that a row solver/result.c STOPS EMITTING, or renames, fails the build at this line instead of being
-   compared as `undefined` (which is FALSE for every input, so the arm reading it can never fire again). That
-   is not hypothetical here: this file records THREE separate WFQ rows that were added to the census and not to
-   its list, each one a number computed on every sample and read by nothing until somebody noticed months
-   later. A census whose consumer names a subset is a census whose next row joins the unchecked half by
-   default. So the list is solver/result.c's `result_cold_json` format string, in full, and adding a row there
-   is a change in two places on purpose. */
+/* THE LIST IS THE CONTRACT AND THE READING IS A SUBSET OF IT. Its job is not that every name below is
+   compared — `hungCause` uses five of them — it is that a row solver/result.c STOPS EMITTING, or renames,
+   fails the build at this line instead of being compared as `undefined` (which is FALSE for every input, so
+   the arm reading it can never fire again). A census whose consumer names a subset is a census whose next row
+   joins the unchecked half by default.
+   RESIDUAL — THIS LIST, `HEAP_FIELDS` AND `SWAP_FIELDS` ARE THE LAST HAND-KEPT COPIES OF A ROW SET HERE, AND
+   THEY ARE RIGHT TODAY, WHICH IS THE WHOLE OF WHY THIS IS A RESIDUAL AND NOT A DEFECT. The sentence that used
+   to stand here — "adding a row there is a change in two places on purpose" — is the argument the @WFQ half of
+   this file has now abandoned on evidence: EIGHT rows were added to that census and to no reader, three of
+   them in the hour `wfqFields()` was being written. So the same question was asked of these three, by running
+   `censusComposerFields` over their composers, and the answer was that all three AGREE EXACTLY with
+   `result_cold_json`, `result_heap_json` and `result_swap_json` at this revision — 60, 26 and 8 numeric rows,
+   name for name, none missing and none extra. They have not rotted; they are the same mechanism that did.
+   WHAT THE NEXT DIFF BUILDS is these three arrays replaced by `censusComposerFields(…).numeric`, which needs
+   nothing built first: that function already returns the `%s` object rows APART from the numeric ones, which
+   is the only thing this census needs and @WFQ did not, since `stepUnits`, `stepUnitRuns` and
+   `programCursors` are validated as PARTITIONS by `censusHistRows` and a numeric-presence loop would refuse
+   them outright. Because the three lists agree today the change is byte-identical in behaviour at this
+   revision — that is a reason it is safe, and no evidence at all that it works, so it is landed with the
+   derivation's answer quoted beside each list rather than on the argument that nothing moved.
+   HOW ITS ABSENCE WOULD SHOW is exactly how the @WFQ half's did: a row added to one of those three composers,
+   computed on every census of every run, compared by nothing, and found by somebody grepping months later for
+   a name they expected to see in a verdict. */
 /* AND `finished`/`sold` EACH ARRIVE WITH THE TWO POPULATIONS THEY ARE THE SUM OF, which is the row every
    reading in this file that turns on retirement was missing. The frontier holds exploration flows and @S
    candidate sessions, and on a real document the second are the great majority of it — so `retiring` was true,
@@ -588,7 +602,7 @@ function probeWork(out) {
   if (!w.length) return w;
   const fields = censusComposerFields("test_forced.c", 'printf("@HWORK {', '}\\n"',
     "`standingText` states how far a run had got when its probe table was composed, and that is the one " +
-    "number deciding which of a 0 row's two readings the WHOLE table has");
+    "number deciding which of a 0 row's two readings the WHOLE table has").numeric;
   for (const r of w) for (const f of fields)
     if (typeof r[f] !== "number")
       throw new Error(`[build] an @HWORK record has no numeric \`${f}\` — this reader takes its field list ` +
@@ -807,129 +821,42 @@ const causeName = (raw) => {
    candidate session, a joined document's boot flow) enters at reward 0 and is exactly that population.
    Same field contract as @COLD: the names are engine.c's printf, and an absent one throws rather than being
    silently compared as undefined. */
-const WFQ_FIELDS = ["members", "valMin", "valMax", "valTop", "valZero", "selfEmit", "unrun",
-                    "cands", "candUnrun", "candDecMax", "decMax", "wTop", "wMin", "candWMax",
-                    /* THE TERMS THAT ARE NOT THE REWARD, WHICH THIS LIST OMITTED AND THE VERDICT BELOW NEEDED.
-                       `ordered` is FALSE whenever the reward spread is within one optimism bonus, and the text
-                       that case printed said only that the reward is not what is holding the run and that "that
-                       census is the measurement to start from" — while naming none of the terms that ARE
-                       ordering it. Measured on the smoke fixture: reward spread 0.0, aging 856 points, whole
-                       weight spread 0.020, and every number in that sentence absent from this list. A
-                       discriminator that can rule a cause out and cannot name the alternative sends the reader
-                       back to a census it did not read. */
-                    "svcMax", "svcMin", "svcFamMax", "svcFamMin", "visMin", "visMax", "distMax",
-                    /* AND THE MOST SERVICE ANY ONE @S CANDIDATE HAS CONSUMED, which the census has emitted
-                       since the candidate rows were added and which no reader took. Without it this
-                       discriminator names TWO of the three states solver/flow.h says the candidate rows exist
-                       to separate — served-and-progressing (a distance problem: build the fitness) and
-                       never-served (a starvation problem: the ordering) — and is silent about the third,
-                       SERVED WHILE PINNED AT ZERO, which is a candidate being RESTARTED rather than resumed
-                       and which no amount of thread time fixes. Three states behind one silence is the defect
-                       §@S names about a search's own instrument. */
-                    "candSvcMax",
-                    /* AND HOW MANY FORK FAMILIES THE PAIR ABOVE ARE THE ENDS OF, which is the row that turns
-                       `svcFamMin === svcFamMax` from an ambiguity into a reading. The engine has emitted it
-                       since the census learned to count it and this list did not read it, so the verdict below
-                       was inferring which of two opposite states held from a pair of extrema that cannot
-                       distinguish them: on a ONE-family frontier the equality is an identity of the structure
-                       (every member reads one node's service through one pointer) and the family half can
-                       never order that document at all; on a several-family frontier it is one instant's
-                       coincidence that the next charge moves. "Structurally an offset" is the finding that
-                       says stop looking. The reader states it now instead of assuming it. */
-                    "families",
-                    /* AND WHAT THE ORDER IS COSTING THE JOB QUEUE, which the cold line's `jobs` could never
-                       say. One number read the same whether the scheduler was broken or merely mis-scaled, and
-                       solver/result.c splits it by WHAT EACH JOB WAITS ON: the host (`jobsOwed` — the pick
-                       refuses it), the member finishing its own program (`jobsFramed` — HTML §8.1.4.4 "Calling
-                       scripts"' clean up after running script step 3 forbids running it while the JavaScript
-                       execution context stack is non-empty, which is a SPEC PRECONDITION and not an ordering
-                       problem), or RANK ALONE (`jobsReady`). Only the last is the WFQ's to move, so only the
-                       last is a finding about the order — and `jobWGap`, the distance from the front of the
-                       queue to the best ready holder in the order's own points, is what says whether it is
-                       outranked at all. Those two take opposite work and read identically without each other.
-                       `visZero` is the count `visMin` cannot give: how many members have completed NO unit of
-                       work, which is the population whose optimism bonus is at its undecayed maximum. It is
-                       NOT `unrun` — that row is ZERO OWN SILENCE, which an emission by any arm of a member's
-                       fork family RESETS for the whole family at once, so a member that
-                       has run and whose account emitted is in `unrun` with visits to its name. */
-                    "visZero", "jobsReady", "jobsFramed", "jobsOwed", "jobWGap",
-                    /* AND THE ONE WORD OF §scheduler'S RAZOR THIS READER COULD NOT SPEAK. It forbids a resume
-                       that "drops, starves, skips, reorders, or forgets ANY flow", and STARVES had no row: the
-                       three fields that look like the starved population are all TERMS OF THE WEIGHT and
-                       flow_credit_emit resets the SILENCE ones, which is why this file already has to warn,
-                       twice, that `unrun` counts a member that has run and emitted. `visZero` used to carry the
-                       same flaw one field over — an emission wrote `visits = 0` on the emitter — and no longer
-                       does; it is still not the row, because a member completes no unit for a whole run when it
-                       is dispatched into a program that never ends, which is a resume-seam defect and not an
-                       ordering one. So a reader asking "is some member never being chosen" had only
-                       rows that answer "…or chose to emit recently", and the two states take opposite work.
-                       `neverPicked` is the dispatch count's zero — nothing resets it, because a member that
-                       was never handed the thread did nothing that could — and `neverPickedGap` is how far the
-                       best of that population stands behind the weight the pick returned, which is the same
-                       count/distance pair as `jobsReady`/`jobWGap` and is read the same way. */
-                    "neverPicked", "neverPickedGap",
-                    /* AND THE FRONT'S OWN SILENCE, WHICH IS WHAT MAKES THE PAIR ABOVE A DIAGNOSIS RATHER THAN A
-                       SYMPTOM. `neverPickedGap` says how far the most-favoured starved member stands behind the
-                       leader, and the obvious next question — is the leader keeping its place by EARNING it, or
-                       is the gap simply not closing — has no row: `valTop` is the leading account's ledger and a
-                       ledger only climbs, so a frozen reward and a slowly-earned one are the same digit at any
-                       one census. The silence is the half an emission RESETS, so `topSvcFam` climbing IS the
-                       leading account being silent and `topSvcFam` near zero is its aging being forgiven.
-                       `topSvc` IS THE HALF THAT CAN MOVE A GAP AND `topSvcFam` IS NOT, which is the reading
-                       that matters and the one a reader gets backwards. Every arm of a family reads one
-                       `fam_us`, so on a `families: 1` frontier the family charge lands on the leader and on
-                       every member behind it at the same instant and cancels out of the difference entirely;
-                       only the OWN half is charged to the flow being dispatched. So a leader genuinely
-                       monopolising the thread shows `topSvc` climbing and the gap closing behind it, while a
-                       front being REFILLED by freshly-minted arms shows `topSvc` low or sawtoothing with the
-                       same gap standing — and those two take opposite work while looking identical in every
-                       other row here, because `svcMax`/`svcMin` are the frontier's ends and the leader need be
-                       neither of them.
-                       `nonrewardMax` is flow.c's FLOW_NONREWARD_MAX, carried out of the engine for the same
-                       reason `ageQuantum` is read from it: it is the bound `flow_nonreward` asserts, it folds
-                       three terms together (the optimism ceiling, the fitness ladder over FLOW_RUNGS_N and the
-                       aging's zero), and a reader that re-derived it would be a second copy that goes stale the
-                       day a rung is added. It is EMITTED rather than grepped because `hostDefine` reads plain
-                       numeric defines and this one is an expression. */
-                    "topSvc", "topSvcFam", "nonrewardMax",
-                    /* AND THE SAME FOUR ROWS FOR THE OTHER BACKLOG, WHICH THE ENGINE HAS EMITTED SINCE
-                       solver/flow.h CALLED THEM "the missing twin of the four rows above" AND WHICH NO READER
-                       ANYWHERE TOOK. `jobsReady`/`jobsFramed`/`jobsOwed`/`jobWGap` split the JOB backlog by
-                       what each job waits on; `deliv*` split the REPLY backlog the same way and for the same
-                       reason, and that backlog is the larger of the two by orders of magnitude — a frontier
-                       can stand on hundreds of thousands of answered-and-undelivered register entries while
-                       its job queue holds a handful. Emitted, asserted in C, and consumed by nothing: the
-                       computed-writer-with-no-reader defect (§Architecture) in the one instrument built to
-                       report it, which is why it survived — the value is real, so nothing reads wrong.
-                       THE THREE COUNTS ARE OVER MEMBERS AND THE JOB THREE ARE OVER JOBS, deliberately, and a
-                       reader that adds them or quotes them as one population is comparing two units.
-                       solver/flow.h states why: `pending_deliverable_count` is a WALK of a register holding
-                       hundreds of entries and the census walk is already over a frontier in the thousands, so
-                       the delivery rows ask the cheap half — not how big the debt is, but WHO is holding it.
-                       AND `delivReady` IS NOT THE @COLD CENSUS'S `canDeliver`, WHICH IS THE READING THIS PAIR
-                       MAKES POSSIBLE AND THE ONE NOBODY HAD. That row is `flow_stack_empty && pending_ready`
-                       and this one subtracts the members flow_pick REFUSES for carrying the host-owed mark, so
-                       `canDeliver - delivReady` is exactly the population the ARM could serve and the PICK
-                       will not offer the thread to. Two questions, two answers, and until both were read the
-                       difference between them was a reading nobody could perform. */
-                    "delivReady", "delivFramed", "delivOwed", "delivWGap",
-                    /* AND WHAT ASKING THIS ORDER COSTS, which every row above is silent about because every
-                       row above is about what the order DECIDED. The census can already say the tail is not
-                       being reached and call that a THROUGHPUT statement; what it cannot say is where the
-                       throughput went, and there are two causes that take opposite work — not enough thread
-                       time exists for the members standing, or the thread is being spent ASKING the order
-                       rather than running it. solver/flow.c's flow_pick is a LINEAR scan of the frontier and
-                       the four entries above it run at different cadences, so its cost is a function of a
-                       frontier that grows because forking is the point.
-                       COUNTS AND NOT CLOCKS, which is why this reader may compare them across runs at all:
-                       this host's quantum is wall-denominated and §Testing's rule is that a measurement a
-                       loaded machine can falsify is not one. Scans and weight evaluations are things the
-                       engine DID. */
-                    "scanNextRuns", "scanNextWeights", "scanRivalRuns", "scanRivalWeights",
-                    "scanOtherRuns", "scanOtherWeights",
-                    /* AND THE DENOMINATOR THE HOOK'S RESCAN COUNT HAS — see solver/flow.h for the two
-                       readings of `scanRivalRuns` that disagreed with each other without it. */
-                    "rankChanges"];
+/* THE LIST IS DERIVED AND IS NO LONGER A LIST, which is this reader's own defect closed rather than another
+   row added to it. What stood here was `result_wfq_json`'s format string retyped by hand, on the argument
+   that "adding a row there is a change in two places on purpose" — and the measurement is that it never was.
+   The second place does not get changed. This file already recorded THREE rows found months after they were
+   added; at the revision this was written the count was EIGHT — `picksLive`, `picksMax`, `picksLifetime`,
+   `topForgiven`, `scanCensusRuns`, `scanCensusWeights`, `workDone`, and the four of test_forced.c's progress
+   line — and THREE of those landed in the hour this function was being written. A required-PRESENCE loop
+   cannot notice a row that was never in its list, so every row added over there joins the unchecked half by
+   default, is computed on every sample of every run, and is read by nothing.
+   SO THE ROW SET COMES FROM THE COMPOSER THAT DECIDES IT (`censusComposerFields`), which is `hostDefine`'s
+   rule for a constant and `forkCensusName`'s for a spelling, applied to the one fact this file kept a copy of.
+   The contract is unchanged and is now unforgettable: a row solver/result.c stops emitting, or renames, fails
+   at this line instead of being compared as `undefined` — which is FALSE for every input, so the arm reading
+   it can never fire again.
+   THE PER-ROW READING NOTES THAT STOOD HERE ARE GONE WITH THE LIST, deliberately and not as collateral. Every
+   one of them restated a paragraph solver/result.c or solver/flow.h already carries beside the row itself —
+   what `topSvc` says that `topSvcFam` cannot, why `visZero` is not `unrun`, what the three candidate rows
+   separate — so they were second copies of the producer's own reasoning, kept in the file whose whole subject
+   is what a second copy costs. The producer is one `git show` away and is where a row's meaning is maintained.
+   WHAT SURVIVES IS THE READING THAT BELONGS TO THIS FILE AND TO NO OTHER, because it spans two lines and the
+   producer of neither can state it: `delivReady` is NOT the @COLD census's `canDeliver`. That row is
+   `flow_stack_empty && pending_ready`; this one subtracts the members flow_pick REFUSES for carrying the
+   host-owed mark, so `canDeliver - delivReady` is exactly the population the ARM could serve and the PICK will
+   not offer the thread to. And `nonrewardMax` is carried out of the engine rather than grepped for the reason
+   `ageQuantum` is read and not restated — it is the bound `flow_nonreward` asserts, folding the optimism
+   ceiling, the fitness ladder over FLOW_RUNGS_N and the aging's zero, and `hostDefine` reads plain numeric
+   defines while that one is an expression.
+   MEMOIZED BECAUSE IT IS A FILE READ AND THE ANSWER CANNOT CHANGE UNDER ONE BUILD — and never evaluated at
+   module load, which is the shape that has already left an instrument throwing for every lane in this shared
+   tree: `HOST` is a `const` far below this line, so a top-level derivation here would reach it in its temporal
+   dead zone and `node --check` would pass on it. */
+let g_wfqFields = null;
+const wfqFields = () => (g_wfqFields ??= censusComposerFields(
+  "solver/result.c", "char *result_wfq_json(void)", "\n}\n",
+  "the @WFQ reader states which rows it requires of a census that claims an order, and it takes that set " +
+  "from the composer rather than from a list beside it").numeric);
 /* A CONSTANT OF THE ENGINE IS READ FROM THE ENGINE, NEVER RESTATED HERE — the rule `ageQuantum` was written
    for and which now has a second reader (`hungCause`'s census cadence), so it is one function rather than two
    copies of one regex. Throws on an absent or unparseable define, because the alternative is this reader
@@ -980,15 +907,23 @@ function censusComposerFields(file, from, to, why) {
                     `${JSON.stringify(to)} — ${why}. An unterminated region yields a SHORT row set, which is ` +
                     `a contract that silently got weaker rather than one that broke, so it stops here.`);
   const body = src.slice(open, close).replace(/\/\*[\s\S]*?\*\//g, " ").replace(/^[ \t]*\/\/.*$/gm, " ");
-  const names = [];
-  for (const m of body.matchAll(/\\"([A-Za-z_][A-Za-z0-9_]*)\\":%/g))
-    if (!names.includes(m[1])) names.push(m[1]);
-  if (!names.length)
+  /* SPLIT BY THE CONVERSION, BECAUSE THE TWO KINDS TAKE DIFFERENT CHECKS AND A CALLER THAT CONFLATES THEM
+     THROWS ON A HEALTHY CENSUS. A row spliced in with `%s` is a nested composer's object — @COLD's `stepUnits`,
+     `stepUnitRuns` and `programCursors` — and its rows are validated as a PARTITION by `censusHistRows`, which
+     is a contract a numeric-presence loop cannot state and would refuse outright. Everything else is a number.
+     The distinction is NAMED rather than filtered silently: a caller asks for the kind it can check, so the day
+     a composer splices a fourth object the caller that wanted numbers is not handed one. */
+  const numeric = [], object = [];
+  for (const m of body.matchAll(/\\"([A-Za-z_][A-Za-z0-9_]*)\\":%([-0-9.]*)([a-zA-Z]+)/g)) {
+    const to = m[3] === "s" ? object : numeric;
+    if (!numeric.includes(m[1]) && !object.includes(m[1])) to.push(m[1]);
+  }
+  if (!numeric.length && !object.length)
     throw new Error(`[build] the composer at ${JSON.stringify(from)} in engine/host/${file} names no field ` +
                     `at all — ${why}. Every row it publishes is written \`\\"name\\":%…\` in its own format ` +
                     `string, so a composer with none is one whose shape this reader no longer recognises and ` +
                     `an empty required-field list would pass every census ever printed.`);
-  return names;
+  return { numeric, object };
 }
 /* THE SAME RULE FOR A STRING — the two members of decide.c's fork census that this file has to recognise BY
    NAME rather than by shape, because neither is a row and both are spelled in prose that only decide.c owns.
@@ -1063,13 +998,16 @@ function wfqReading(out) {
              text: `@WFQ: 0 members. The last census of this run was taken with no flow standing, so it ` +
                    `reports no order — which is a fact about WHEN it was taken and says nothing about how ` +
                    `the run was ordered. Read a census from while the frontier was live.` };
-  for (const f of WFQ_FIELDS)
+  const fields = wfqFields();
+  for (const f of fields)
     if (typeof w[f] !== "number")
-      throw new Error(`[build] the @WFQ census has no numeric \`${f}\` — this discriminator reads ` +
-                      `${WFQ_FIELDS.join(", ")} and solver/result.c's result_wfq_json is what decides they ` +
-                      `exist; a renamed field must be renamed here rather than silently compared as ` +
-                      `undefined. A census with \`members: ${w.members}\` states that there WAS an order, so ` +
-                      `this is not the empty-frontier shape handled above.`);
+      throw new Error(`[build] the @WFQ census has no numeric \`${f}\` — this reader requires every row ` +
+                      `solver/result.c's result_wfq_json publishes (${fields.join(", ")}), taken from that ` +
+                      `composer's own format string rather than from a list here, so a renamed or dropped ` +
+                      `row fails at this line instead of being silently compared as \`undefined\` — which is ` +
+                      `FALSE for every input, so the arm reading it could never fire again. A census with ` +
+                      `\`members: ${w.members}\` states that there WAS an order, so this is not the ` +
+                      `empty-frontier shape handled above.`);
   /* THE CENSUS AGAINST ITSELF, on the two pairs whose rows are one fact twice over. The engine DCHECKs the
      first at flow_wfq_census and that check is compiled out of a release build, where this reader still runs;
      the second is not asserted anywhere, because it spans two rows that are computed in one walk and nothing
@@ -1080,6 +1018,35 @@ function wfqReading(out) {
     throw new Error(`[build] the @WFQ census reports jobWGap ${w.jobWGap} — it is \`wTop\` minus the best ` +
                     `READY job holder's weight, and the front of the order cannot be behind a member of it, ` +
                     `so a negative gap is the pick and the census reading two different comparators.`);
+  /* AND THE DISPATCH ROWS AGAINST THEMSELVES AND AGAINST THE ROW THEY WERE ADDED BESIDE. Three of these hold
+     in one walk of flow_wfq_census, so none of them can be a reading of two instants: `picks_live` sums
+     `f->picks` over the standing members while `picks_max` is their maximum and `never_picked` counts the ones
+     at zero, and `Flow.picks` is written to 0 exactly once at flow_add and raised only by flow_credit_pick —
+     which is why the last of these is a BICONDITIONAL and is exact rather than a guard that might fire on a
+     healthy frontier. The lifetime bound is the one the engine states itself, and it is checked here for the
+     reason `jobWGap` is: flow_wfq_census DCHECKs it and that DCHECK is compiled out of a release build, where
+     this reader still runs.
+     THE BICONDITIONAL IS WRITTEN OUT BECAUSE THIS FILE HAS ALREADY GOT ONE WRONG. The `jobsReady`/`jobWGap`
+     pair was written as an equivalence, fired on the healthiest state its rows can produce, and had to be
+     retired to an implication — so this one carries its derivation rather than its plausibility: over
+     non-negative counts a SUM is zero exactly when every term is, and `neverPicked` is the count of the terms
+     that are. Nothing about the ordering is inferred from either side. */
+  if (!(w.picksMax <= w.picksLive))
+    throw new Error(`[build] the @WFQ census reports picksMax ${w.picksMax} above picksLive ${w.picksLive} — ` +
+                    `one walk of flow_wfq_census accumulates the sum and takes the maximum over the SAME ` +
+                    `members and \`Flow.picks\` never falls, so a maximum above the sum is that walk reading ` +
+                    `two populations and every sweep reading below is about a frontier that did not exist.`);
+  if (!(w.picksLive <= w.picksLifetime))
+    throw new Error(`[build] the @WFQ census reports picksLive ${w.picksLive} above picksLifetime ` +
+                    `${w.picksLifetime} — flow_credit_pick raises the member's count and the runtime total in ` +
+                    `one statement and is the only writer of either, so the live members cannot hold more ` +
+                    `dispatches between them than the scheduler has ever made. solver/flow.c asserts this at ` +
+                    `the census; that DCHECK is compiled out of a release build and this is not.`);
+  if ((w.picksLive === 0) !== (w.neverPicked === w.members))
+    throw new Error(`[build] the @WFQ census reports picksLive ${w.picksLive} with ${w.neverPicked} of ` +
+                    `${w.members} members never picked — those are two readings of one walk over ` +
+                    `non-negative counts, so the sum is zero exactly when every member is at zero, and a ` +
+                    `disagreement means one of the two rows is not counting the members the other is.`);
   /* THE IMPLICATION AND NOT THE BICONDITIONAL, WHICH IS A CORRECTION THE EXERCISE MADE RATHER THAN A CAUTION.
      Written as `(ready === 0) !== (gap === 0)` this refused the state solver/result.c names by name — "0 with
      `jobsReady > 0` is the top of the queue holding a runnable job and no ordering problem at all" — so the
@@ -1311,11 +1278,28 @@ function wfqReading(out) {
      same shape as the `jobsReady`/`jobWGap` biconditional this file already had to correct: a guard that fires
      on the healthiest reading its rows can produce. What is left is the one claim with no state behind it — a
      lifetime count that only climbs cannot be negative. */
-  /* THE SIX NAMES, ONCE. They are the guard's subject and the series filter's, and a second spelling of
-     them is the second list this file already warns about at WFQ_FIELDS — one that agrees with the other
-     only until a row is renamed on one side. */
-  const scanRows = ["scanNextRuns", "scanNextWeights", "scanRivalRuns", "scanRivalWeights",
-                    "scanOtherRuns", "scanOtherWeights", "rankChanges"];
+  /* THE SCAN NAMES, TAKEN FROM THE CENSUS AND NOT SPELLED AGAIN. They are the guard's subject and the series
+     filter's, and this was the second hand-kept spelling of them in one function — one that agrees with the
+     first only until a row is renamed on one side, which is exactly the contract `wfqFields()` was derived to
+     stop being. It was ALSO already wrong: solver/flow.h's FLOW_SCANS gained a CENSUS entry, so
+     `scanCensusRuns`/`scanCensusWeights` were emitted on every sample, excluded from the only guard that
+     checks a scan row is a lifetime count, and excluded from the filter that decides which censuses carry an
+     interval — a row this reader was blind to in TWO places at once.
+     DERIVED BY THE COMPOSER'S OWN NAMING AND NOT BY A CONVENTION THIS FILE INVENTS: an entry of that enum is
+     published as `scan<Entry>Runs` and `scan<Entry>Weights` in result_wfq_json's format string, so the set is
+     whatever `wfqFields()` returns matching that shape, and a new entry joins both the guard and the filter
+     without anybody remembering. `rankChanges` is named beside them because it is the denominator those
+     readings are taken against and is a lifetime count under the same argument — it is not a scan row and is
+     therefore not derivable from their shape.
+     IT REFUSES AN EMPTY MATCH, for `censusComposerFields`' reason: a guard over no rows passes every census
+     ever printed, and a naming change over there would turn this check off rather than break it. */
+  const scanRows = wfqFields().filter((k) => /^scan[A-Z][A-Za-z0-9]*(?:Runs|Weights)$/.test(k));
+  if (!scanRows.length)
+    throw new Error(`[build] result_wfq_json publishes no \`scan<Entry>Runs\`/\`scan<Entry>Weights\` row — ` +
+                    `solver/flow.h's FLOW_SCANS is what this reader prices the order's own cost from, and a ` +
+                    `guard with no rows under it passes every census ever printed rather than reporting that ` +
+                    `it has nothing to check.`);
+  scanRows.push("rankChanges");
   for (const k of scanRows)
     if (w[k] < 0)
       throw new Error(`[build] the @WFQ census reports ${k} ${w[k]} — the order-scan counters are lifetime ` +
@@ -1558,6 +1542,72 @@ function wfqReading(out) {
           `could give it, so the best of them already carries a NET NEGATIVE non-reward sum and is behind by ` +
           `AGING, which no bounded term reaches. Nothing that member can do closes this; only the leader ` +
           `sinking does, which is what the front's own silence beside this says`);
+  /* AND WHERE THE DISPATCHES THAT DID HAPPEN WENT, WHICH IS THE ROW ABOVE'S THREE STATES BEHIND ONE ANSWER.
+     `starved` says the tail is not being reached; solver/flow.h names three frontiers that produce that same
+     sentence and says two of them take DIFFERENT weight changes while the third takes none — a frontier simply
+     outgrowing one thread, an order re-serving a reachable cohort ahead of members it has never served, and
+     one member holding the thread outright. The rows that separate them have been emitted since they were
+     added and read by NOTHING: `picksLive` is T restricted to the members still standing, `members -
+     neverPicked` is P, and `picksMax` tells the second state from the third.
+     NO THRESHOLD IS INVENTED HERE, and that is a decision rather than an omission. flow.h's discriminators are
+     "T/P near 1", "T/P large" and "picksMax near T", and a number this file chose for `near` would be the
+     remembered `1` §the-lift-bound already had to retire — a restatement with no artifact behind it, going
+     stale the day the engine's shape changes and reading as authority in the meantime. What CAN be stated
+     exactly is each range's ENDPOINT, because each is an equality over integers from one walk: `picksLive ===
+     P` is T/P at exactly 1, and `picksMax === picksLive` is exactly one member holding every dispatch the
+     standing members hold. Those two are named; between them the two ratios are printed and the reader has
+     what flow.h asks for.
+     THE KINDS DECIDE THE ARITHMETIC AND ARE WHY THIS IS ONE SAMPLE'S READING. `picksLive` and `picksMax` are
+     GAUGES over the members standing NOW and can FALL between two censuses as members depart, so neither may
+     be differenced; `picksLifetime` is the only counter of the three and is the only one that may. It is
+     rendered as the DIFFERENCE it defines — what the departed members took with them — which is the one thing
+     the gauges cannot say and is a statement about retirement rather than about order. */
+  const P = w.members - w.neverPicked;
+  const dispatch = (P === 0
+    ? `no member standing has ever been handed the thread (picksLive 0 over ${w.members} members), so this ` +
+      `census states no distribution at all — the scheduler has made ${w.picksLifetime} dispatch(es) in this ` +
+      `instance's lifetime and every member that received one has since departed or none was ever made`
+    : `${w.picksLive} dispatch(es) are held by the ${P} member(s) ever chosen` +
+      (w.picksLive === P
+         ? ` — EXACTLY one each, so the thread reached a FRESH member every time it was handed out and this ` +
+           `frontier is outgrowing one thread rather than being mis-ordered: no term of the weight reaches ` +
+           `that, and the answer is throughput`
+         : `, ${(w.picksLive / P).toFixed(2)} apiece`) +
+      (w.picksMax === w.picksLive && w.picksLive > 0
+         ? `, and ONE member holds every one of them — a monopolizer the aging term is failing to sink, which ` +
+           `is a different repair from an order re-serving a reachable cohort`
+         /* THE MAXIMUM ALONE, WITH NO RATIO BESIDE IT. `picksLive / picksMax` has exactly ONE reading and
+            solver/result.c states it — the mean sweep DEPTH between two emissions, and only under the tier
+            hypothesis `topForgiven` is what tests. Printed here it would be a second, unlabelled copy of a
+            number whose meaning is stated below, and the label this line first carried for it ("of those held
+            by others") named a quantity that exists nowhere in the program: a sum over the other members
+            divided by nothing. A row is labelled from its accessor or it is not labelled. */
+         : `, the most any one holds being ${w.picksMax}`) +
+      `; ${w.picksLifetime} made in this instance's lifetime, so departed members took ` +
+      `${w.picksLifetime - w.picksLive} away`) +
+      /* RENDERED ON BOTH ARMS ABOVE AND NOT ONLY ON THE ONE THAT HAS A DISTRIBUTION TO REPORT — which is the
+         decision the `leader` row two paragraphs down is written for and the reason this clause is outside the
+         conditional rather than inside its second half. A frontier before its first dispatch still HAS a front
+         and a forgiveness count, and dropping the reading there would make it an observation computed on one
+         arm and absent on the other: the pre-dispatch census is precisely where "the leading account has never
+         emitted" is the whole of what there is to say.
+         AND THE EVENT THE FRONT'S TWO SILENCE NOTCHES ARE A READING BETWEEN, which is what turns "the leader's
+         aging is being reset" from an inference into a count. It is NOT a lifetime counter even though it only
+         climbs for one account: the count belongs to whichever account is at the FRONT, and that changes — so
+         a FALL between two samples is a change of leader, which `valTop` falling beside it confirms, and this
+         row is read per sample and never differenced on its own. The engine asserts the equivalence this arm
+         splits on (flow_credit_emit raises the ledger and bumps the generation in one statement), so a
+         forgiveness count at zero IS a leading account that has never emitted, not a hole. */
+      (w.topForgiven === 0
+         ? `. The leading account has never been forgiven its silence window, which is the same fact as its ` +
+           `ledger standing at ${w.valTop} — flow_credit_emit raises both in one statement — so its aging is ` +
+           `accumulating and has never been reset`
+         : `. The leading account's silence window has been forgiven ${w.topForgiven} time(s) for a ledger of ` +
+           `${w.valTop}, ${(w.valTop / w.topForgiven).toFixed(2)} point(s) per finding; an emission zeroes ` +
+           `both aging halves for EVERY arm of it at once, so read this against the ${w.picksMax} above — if ` +
+           `the frontier is collapsing into tied visit tiers and flow_pick is sweeping one from its oldest ` +
+           `member forward, that maximum tracks this count and ${w.picksMax > 0 ? (w.picksLive / w.picksMax).toFixed(2) : "the sweep depth"} ` +
+           `is the mean depth between two emissions`);
   const terms = `terms over the frontier: reward ${rangeVal.toFixed(3)}, fitness ${w.distMax.toFixed(3)}, ` +
                 `optimism ${rangeUcb.toFixed(3)}, aging ${(rangeOwn + rangeFam).toFixed(3)} ` +
                 `(own ${rangeOwn.toFixed(3)}, family ${rangeFam.toFixed(3)}) — against a total order spread ` +
@@ -1568,7 +1618,7 @@ function wfqReading(out) {
                    the mirror of the defect this reader's own field list exists to stop — and it is the row a
                    reader needs BEFORE a gap opens, because the discriminator it carries is a shape across the
                    stream and a stream is only assembled from censuses that all state it. */
-                `${ucb}; ${starved}; ${leader}; ${series}`;
+                `${ucb}; ${starved}; ${dispatch}; ${leader}; ${series}`;
   /* WHOSE REWARD THE ORDER IS, which is a different question from whether the reward is ordering it and is the
      one the verdict's own sentence makes a claim about. `selfEmit` counts members that have emitted something
      THEMSELVES, so the difference is how many stand on an account some other arm of their fork family filled.
