@@ -1140,9 +1140,35 @@ async function cmdNetDiff(args) {
       if (typeof globalRequestLog !== "undefined" && Array.isArray(globalRequestLog)) {
         const _byTab = new Map();
         for (const r of globalRequestLog) {
-          // url/method/service/callStack are asserted on every record `_pushGlobalLog` files, so the scheme
-          // test is the only real question here — is this an HTTP round trip we can compare against a
-          // learned endpoint — and the `|| "GET"` / `|| ""` copies were answers to a settled one.
+          /* THE PRODUCER'S OWN DISCRIMINATOR, AND THE SCHEME WAS NEVER ONE. offscreen-brain.js files FOUR
+             record shapes onto this one log — websocket / postmessage / msgchannel / http — and states which
+             one at the call site, precisely because a consumer may not infer it: its header says "a
+             discriminator a consumer branches on must be a fact the PRODUCER states", and "`method` stays
+             what it always was: the verb, reported, never routed on". A CHANNEL record's `url` is the
+             DOCUMENT's address, so it is `https:` like any other and the scheme test admitted all three
+             channel kinds into a loop that then reads the HTTP arm's fields off them.
+             WHAT STOOD HERE SAID "url/method/service/callStack are asserted on every record
+             `_pushGlobalLog` files, so the scheme test is the only real question" — and `callStack` is
+             asserted on the `http` arm ALONE. The channel arm asserts `channelId`/`messages` instead and
+             carries no call site at all, by design: a postMessage was fired by no bundle `fetch()`. So the
+             sentence that justified the test was itself the defect, which is why it is rewritten to the rule
+             that now holds rather than deleted.
+             MEASURED, on a live supabase run at artifact 7a7cd512: 33 `http` records and 7 `postmessage`
+             records on one log, and `r.callStack.split` threw on the first postmessage — so
+             `netdiff --unused`, the diagnostic CLAUDE.md names as the moat's headline, returned the single
+             string "Cannot read properties of undefined (reading 'split')" and no census whatever. The kind
+             is asked FIRST, and a spelling outside the four crashes here rather than being diffed as a round
+             trip nobody made. */
+          DCHECK(r.kind === "http" || r.kind === "websocket" ||
+                 r.kind === "postmessage" || r.kind === "msgchannel",
+                 "a captured traffic record carries the log kind `" + r.kind + "` — offscreen-brain.js files " +
+                 "exactly four (websocket/postmessage/msgchannel/http) and asserts the vocabulary at the " +
+                 "push, so a fifth spelling is that producer having changed under this reader, and this loop " +
+                 "would read the HTTP arm's `callStack` off a record that never carried one");
+          if (r.kind !== "http") continue;
+          /* AND THE SCHEME IS STILL A QUESTION, just not that one: an `http` record is a round trip the page
+             made, and `fetch("data:…")` is one — a real capture, with no address a learned endpoint could be
+             compared against. */
           if (!/^https?:/.test(r.url)) continue;
           const k = r.method + " " + norm(r.url);
           if (seen.has(k)) continue; seen.add(k);
