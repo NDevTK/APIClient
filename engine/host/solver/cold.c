@@ -1313,6 +1313,8 @@ void cold_resume(JSContext *ctx, const char *recipes)
                carries the WRITER's generation and world_session_resume mints one above it — the successor is
                computed here rather than written out there, so a document cannot state a namespace that is not
                strictly beyond the one its own flows ran in. */
+            uint32_t gen;
+
             DCHECK(p == recipes,
                    "a park document's generation record is not its first — every flow read before it would be "
                    "rebuilt in the ENDED session's namespace, and a peer that never left memory already holds "
@@ -1321,9 +1323,30 @@ void cold_resume(JSContext *ctx, const char *recipes)
                    "a park document names TWO generations — one document is one session's residue, however "
                    "many partial parks appended to it, so a second is two sessions' flows merged into one");
             gen_seen = 1;
-            world_session_resume((uint32_t)strtoul(q, &ep, 10));
+            /* THE ADVANCE IS CHECKED BESIDE THE VALUE, AND `ep == end` IS NOT THAT CHECK — the two coincide on
+               the one input that matters, which is why the field had no reader-side statement at all. A bare
+               'g' record puts `q` AT `end`, so `strtoul` converts nothing, leaves `ep` where it started, and
+               `ep == end` is satisfied by the very position that says it read nothing; the generation then
+               installs as 0 and world_session_resume mints 1 — the namespace the FIRST resumed session of this
+               document minted in, which is precisely the collision this record exists to prevent, and it
+               arrives wearing the record's own success. It is park_reward's and park_ordinal's hole in the one
+               field that names the WHOLE document's namespace rather than one flow's path: an unreadable
+               generation and a real `g0` are the same number, and `g0` is what every FIRST park of a document
+               legitimately writes (solver/world.c: a document reaching world_registry_init for the first time
+               is generation 0), so nothing downstream can tell them apart either.
+               TWO ASSERTS AND NOT ONE, because they refuse different things — a field that was not read, and a
+               record that carries something after the field — and a single condition over both would report
+               whichever fired under the message written for the other. */
+            gen = (uint32_t)strtoul(q, &ep, 10);
+            DCHECK(ep != q,
+                   "a park document's generation record carries no number — `strtoul` converts nothing and "
+                   "answers 0, which is the generation a document's FIRST session legitimately parks under, so "
+                   "an unreadable record and a real `g0` are one value. The resumed session would mint in "
+                   "generation 1 — the namespace the first resumed session of this document already used — and "
+                   "a peer that never left memory keys its segments on exactly those names");
             DCHECK(ep == end, "a generation record carries something after its number — the record is one "
                               "unsigned integer and nothing else");
+            world_session_resume(gen);
         } else if (kind == 'w') {
             /* A PEER'S TIMELINE, RE-MATERIALIZED FROM THE ONE THING ABOUT IT THAT HAS AN IDENTITY OUTSIDE THE
                SESSION THAT HELD IT. The vector is handed straight back to world_segment, which is the same
