@@ -159,15 +159,144 @@ const includesNullable = (t) => !!t.nullable || nullableMemberCount(t) === 1;
  *
  * The domain is FIXED and small because the ladder is: every step tests either the JavaScript type of V, one
  * internal slot, IsCallable, or the presence of an iteration method. Two shapes are separated here exactly
- * when some step separates them, so a partition over this domain IS §3.2.25's function and not a sample of it.
+ * when some step separates them, so a partition over this domain IS Web IDL §3.2.25 Union types' function and
+ * not a sample of it.
+ *
+ * A SHAPE'S NAME IS A LABEL AND NEVER A FACT — WHICH IS THE ONLY REASON THIS DOMAIN CAN BE TRUSTED. The list
+ * below used to be bare strings, and every step read them by comparing the string: `V === "Object @@iterator"`
+ * WAS the question "does V have %Symbol.iterator%". That spells a claim about JavaScript into a name, and the
+ * claim it makes about every OTHER object shape is the silent one — each name that is not the iterator one
+ * asserts, by not being it, that its shape has no iteration method. Two of those assertions were FALSE. A
+ * String object inherits `%Symbol.iterator%` from String.prototype and a typed array inherits it from
+ * %TypedArray%.prototype, so both reach step 11.2's `? GetMethod(V, %Symbol.iterator%)` and get a method back;
+ * the name-comparison sent both past 11.2 and 11.3 to step 15's string arm. Web IDL §3.2.25 carries exactly ONE
+ * String-object carve-out and it is step 11.1.1's — "If types does not include a string type or V does not
+ * have a [[StringData]] internal slot, then" — under the ASYNC sequence clause alone. Steps 11.2 and 11.3 have
+ * no such condition, so a name-derived model of iteration disagrees with the ladder at the two shapes whose
+ * iteration comes from a prototype rather than from their own construction.
+ *
+ * SO EVERY FACT IS DERIVED BY RUNNING THE OPERATION THE STEP NAMES, ON A REAL VALUE, IN THIS REALM. Node is a
+ * conforming ECMAScript implementation and Web IDL §3.2.25's steps are ECMAScript operations, so the
+ * implementation is
+ * the artifact that OWNS these answers — the same reason idlgen reads the real `.idl` through webidl2 rather
+ * than a table of member names somebody typed. `String object -> sequence` is then not a special case anybody
+ * wrote; it is what `new String("")[%Symbol.iterator%]` answers. The one shape that CANNOT be derived is the
+ * platform object, which has no witness outside a browser, and it is declared as one below with its reason.
+ *
  * The two Object-with-an-iterator shapes are EXCLUSIVE (`@@asyncIterator` means no `@@iterator` and the
  * reverse), because step 11's sub-steps fall through on an undefined method and a shape carrying both could
- * not show that. */
-const SHAPES = ["undefined", "null", "platform object", "ArrayBuffer", "SharedArrayBuffer", "DataView",
-  "typed array", "callable", "Object @@asyncIterator", "Object @@iterator", "String object", "plain Object",
-  "boolean", "number", "bigint", "string", "symbol"];
-const IS_OBJECT = new Set(["platform object", "ArrayBuffer", "SharedArrayBuffer", "DataView", "typed array",
-  "callable", "Object @@asyncIterator", "Object @@iterator", "String object", "plain Object"]);
+ * not show that. That is asserted of the witnesses rather than assumed of the names. */
+
+/* The brand checks Web IDL §3.2.25 Union types' steps 6-9 name, reached through the ECMAScript accessors that
+   OWN them rather than
+   restated: each getter below begins by requiring the very internal slot its step asks about, so a throw from
+   it and an absent slot are one fact and not two, and the ArrayBuffer/SharedArrayBuffer pair splits
+   on IsSharedArrayBuffer exactly as steps 6 and 7 do because that is what those two getters disagree about.
+   %TypedArray%.prototype[%Symbol.toStringTag%] RETURNS undefined rather than throwing for a value with no
+   [[TypedArrayName]], which is why the probe reads the result and does not merely survive the call. */
+const SLOT = {
+  arrayBuffer: Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, "byteLength").get,
+  sharedArrayBuffer: Object.getOwnPropertyDescriptor(SharedArrayBuffer.prototype, "byteLength").get,
+  dataView: Object.getOwnPropertyDescriptor(DataView.prototype, "byteLength").get,
+  typedArray: Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Int8Array.prototype), Symbol.toStringTag).get,
+  stringData: String.prototype.valueOf,
+};
+const hasSlot = (get, v) => { try { return get.call(v) !== undefined; } catch { return false; } };
+
+/* ECMAScript's GetMethod(V, P) — the operation Web IDL §3.2.25 steps 11.1.1.1, 11.1.1.3, 11.2.1 and 11.3.1 all
+   name, and not a
+   plain [[Get]]. undefined and null are both "there is no method"; anything else that is not callable is a
+   TypeError. The domain carries no shape for that third outcome — no union arm is ever chosen by a throw — so a
+   witness that reached it would be a shape this partition cannot express, and it aborts here rather than
+   quietly answering as if the method were absent. */
+function getMethod(v, sym, who) {
+  const m = v[sym];
+  if (m === undefined || m === null) return false;
+  if (typeof m !== "function")
+    throw new Error(`the witness for the \`${who}\` shape carries a non-callable ${String(sym)}, so Web IDL `
+      + "§3.2.25's "
+      + "GetMethod would throw a TypeError — an outcome this partition's arms cannot name");
+  return true;
+}
+
+/* The facts of one witness, each answered by the operation its step names. `platform` is the ONE fact no
+   ECMAScript value can state, so it is passed in rather than probed. */
+function factsOf(who, v, platform) {
+  const object = (typeof v === "object" && v !== null) || typeof v === "function";
+  return {
+    kind: v === null ? "null" : typeof v,      /* steps 1, 2, 4, 12, 13 and 14 ask only this */
+    object,                                    /* step 11's own condition */
+    platform,                                  /* step 5 */
+    callable: typeof v === "function",         /* step 10's IsCallable(V) */
+    arrayBuffer: object && hasSlot(SLOT.arrayBuffer, v),              /* step 6 */
+    sharedArrayBuffer: object && hasSlot(SLOT.sharedArrayBuffer, v),  /* step 7 */
+    dataView: object && hasSlot(SLOT.dataView, v),                    /* step 8 */
+    typedArray: object && hasSlot(SLOT.typedArray, v),                /* step 9 */
+    stringData: object && hasSlot(SLOT.stringData, v),                /* step 11.1.1 */
+    iterator: object && getMethod(v, Symbol.iterator, who),           /* steps 11.1.1.3, 11.2.1, 11.3.1 */
+    asyncIterator: object && getMethod(v, Symbol.asyncIterator, who), /* step 11.1.1.1 */
+  };
+}
+
+/* THE PLATFORM OBJECT IS DECLARED AND NOT DERIVED, because no ECMAScript value is one: "platform object" is
+   Web IDL's own notion and a witness for it exists only inside a browser. Its facts are therefore the one
+   place in this domain where a human states an answer, and they are stated here so that the narrowness is
+   READABLE rather than implied by a name — which is exactly the defect the rest of this section removes.
+   RESIDUAL — WHAT IS NOT COVERED: a platform object whose interface carries an `iterable<>`, `maplike<>`,
+   `setlike<>` or `async_iterable` declaration HAS %Symbol.iterator% on its prototype, so it reaches Web IDL
+   §3.2.25 step 11.2
+   and takes the sequence arm; this witness models only the non-iterable platform object, and the domain
+   therefore holds no shape for the iterable one. WHAT THE NEXT DIFF BUILDS: a second declared witness with
+   `iterator: true`, admitted to SHAPES only when the loaded corpus actually declares such an interface — the
+   member types to look for are `iterable`, `maplike`, `setlike` and `async_iterable`, which is what
+   idl_members.mjs's iterationMembers reads, and inhabitation must be derived from the corpus rather than
+   asserted here. HOW ITS ABSENCE WOULD SHOW: a `(DOMString or sequence<DOMString>)` position handed a NodeList
+   is converted by the engine to a sequence and printed by this table as `platform object -> string`, so an
+   enumerator that answers those two positions differently is judged CONSISTENT here and the differential
+   written from this table encodes the wrong expectation for that row. */
+const PLATFORM_OBJECT_FACTS = { kind: "object", object: true, platform: true, callable: false,
+  arrayBuffer: false, sharedArrayBuffer: false, dataView: false, typedArray: false, stringData: false,
+  iterator: false, asyncIterator: false };
+
+/* The domain, in the order the table prints. Each entry is a NAME and the value whose facts define it. */
+const WITNESSES = [
+  ["undefined", undefined], ["null", null],
+  ["platform object", PLATFORM_OBJECT_FACTS],
+  ["ArrayBuffer", new ArrayBuffer(0)],
+  ["SharedArrayBuffer", new SharedArrayBuffer(0)],
+  ["DataView", new DataView(new ArrayBuffer(0))],
+  ["typed array", new Uint8Array(0)],
+  ["callable", function () {}],
+  ["Object @@asyncIterator", { [Symbol.asyncIterator]() {} }],
+  ["Object @@iterator", { [Symbol.iterator]() {} }],
+  ["String object", new String("")],
+  ["plain Object", {}],
+  ["boolean", true], ["number", 0], ["bigint", 0n], ["string", ""], ["symbol", Symbol("uniongate")],
+];
+const SHAPES = WITNESSES.map(([name]) => name);
+const FACTS = {};
+for (const [name, w] of WITNESSES)
+  FACTS[name] = (w === PLATFORM_OBJECT_FACTS) ? w : factsOf(name, w, false);
+
+/* The domain's own invariants, asserted at the origin rather than described above it. */
+if (!(FACTS["Object @@asyncIterator"].asyncIterator && !FACTS["Object @@asyncIterator"].iterator))
+  throw new Error("the @@asyncIterator witness also answers @@iterator, so the domain can no longer show "
+    + "Web IDL §3.2.25 step 11.2 falling through on an undefined method");
+if (!(FACTS["Object @@iterator"].iterator && !FACTS["Object @@iterator"].asyncIterator))
+  throw new Error("the @@iterator witness also answers @@asyncIterator, so the domain can no longer show "
+    + "Web IDL §3.2.25 step 11.1.1.1 falling through to 11.1.1.3");
+{
+  /* Two shapes with the same facts are one shape: the ladder cannot tell them apart, so printing both states a
+     distinction that does not exist and pads the partition key with a duplicated column. */
+  const seen = new Map();
+  for (const name of SHAPES) {
+    const k = JSON.stringify(FACTS[name]);
+    if (seen.has(k))
+      throw new Error(`the \`${name}\` and \`${seen.get(k)}\` shapes have identical facts, so no step of `
+        + "Web IDL §3.2.25 separates them and this domain names one value shape twice");
+    seen.set(k, name);
+  }
+}
 
 /* §3.2.25 Union types, read in the standard's own step order. Its twenty top-level steps are parameterised by
    THREE facts the IDL states and not by one: whether the union type includes undefined (step 1), whether it
@@ -187,41 +316,57 @@ function partition(t) {
     : has("bigint") ? "bigint"                                                         /* step 19 */
     : "TypeError";                                                                     /* step 20 */
 
+  /* Each clause reads the FACT its step tests, never the shape's name — see the domain's own banner for why a
+     name comparison answered two of them wrongly. Every sub-step pair falls THROUGH when the union names
+     neither arm, exactly as the standard's nested lists do. */
   const of = (V) => {
-    if (undef && V === "undefined") return "undefined";                                /* step 1 */
-    if (nullable && (V === "null" || V === "undefined")) return "null";                /* step 2 */
-    if (V === "null" || V === "undefined")                                             /* step 4 */
+    const f = FACTS[V];
+    if (undef && f.kind === "undefined") return "undefined";                           /* step 1 */
+    if (nullable && (f.kind === "null" || f.kind === "undefined")) return "null";       /* step 2 */
+    if (f.kind === "null" || f.kind === "undefined")                                   /* step 4 */
       return has("dictionary") ? "dictionary" : tail();
-    if (V === "platform object" && has("interface")) return "interface";               /* step 5 */
-    if (V === "platform object" && has("object")) return "object";
-    if (V === "ArrayBuffer" && has("ArrayBuffer")) return "ArrayBuffer";                /* step 6 */
-    if (V === "ArrayBuffer" && has("object")) return "object";
-    if (V === "SharedArrayBuffer" && has("SharedArrayBuffer")) return "SharedArrayBuffer"; /* step 7 */
-    if (V === "SharedArrayBuffer" && has("object")) return "object";
-    if (V === "DataView" && has("DataView")) return "DataView";                        /* step 8 */
-    if (V === "DataView" && has("object")) return "object";
-    if (V === "typed array" && has("typed array")) return "typed array";               /* step 9 */
-    if (V === "typed array" && has("object")) return "object";
-    if (V === "callable" && has("callback function")) return "callback function";      /* step 10 */
-    if (V === "callable" && has("object")) return "object";
-    if (IS_OBJECT.has(V)) {                                                            /* step 11 */
-      /* "If types includes an async sequence type, then: If types does not include a string type or V does not
-         have a [[StringData]] internal slot, then …" — and its two sub-steps take @@asyncIterator first and
-         @@iterator second, so either iteration method answers the async sequence arm. */
-      if (has("async sequence") && !(has("string") && V === "String object")
-          && (V === "Object @@asyncIterator" || V === "Object @@iterator")) return "async sequence";
-      /* The sequence and frozen-array sub-steps read @@iterator ONLY, so an object carrying @@asyncIterator
-         alone falls past both. */
-      if (has("sequence") && V === "Object @@iterator") return "sequence";
-      if (has("frozen array") && V === "Object @@iterator") return "frozen array";
-      if (has("dictionary")) return "dictionary";
-      if (has("record")) return "record";
-      if (has("callback interface")) return "callback interface";
+    if (f.platform) {                                                                  /* step 5 */
+      if (has("interface")) return "interface";
       if (has("object")) return "object";
     }
-    if (V === "boolean" && has("boolean")) return "boolean";                           /* step 12 */
-    if (V === "number" && has("numeric")) return "numeric";                            /* step 13 */
-    if (V === "bigint" && has("bigint")) return "bigint";                              /* step 14 */
+    if (f.arrayBuffer) {                                                               /* step 6 */
+      if (has("ArrayBuffer")) return "ArrayBuffer";
+      if (has("object")) return "object";
+    }
+    if (f.sharedArrayBuffer) {                                                         /* step 7 */
+      if (has("SharedArrayBuffer")) return "SharedArrayBuffer";
+      if (has("object")) return "object";
+    }
+    if (f.dataView) {                                                                  /* step 8 */
+      if (has("DataView")) return "DataView";
+      if (has("object")) return "object";
+    }
+    if (f.typedArray) {                                                                /* step 9 */
+      if (has("typed array")) return "typed array";
+      if (has("object")) return "object";
+    }
+    if (f.callable) {                                                                  /* step 10 */
+      if (has("callback function")) return "callback function";
+      if (has("object")) return "object";
+    }
+    if (f.object) {                                                                    /* step 11 */
+      /* 11.1.1 — "If types does not include a string type or V does not have a [[StringData]] internal slot,
+         then" — and its four steps take @@asyncIterator first and @@iterator second, so either iteration
+         method answers the async sequence arm. This is Web IDL §3.2.25's ONLY String-object carve-out. */
+      if (has("async sequence") && !(has("string") && f.stringData)
+          && (f.asyncIterator || f.iterator)) return "async sequence";
+      /* 11.2 and 11.3 read @@iterator ONLY and carry NO String-object condition, so an object carrying
+         @@asyncIterator alone falls past both while a String object — which inherits @@iterator — does not. */
+      if (has("sequence") && f.iterator) return "sequence";                            /* step 11.2 */
+      if (has("frozen array") && f.iterator) return "frozen array";                    /* step 11.3 */
+      if (has("dictionary")) return "dictionary";                                      /* step 11.4 */
+      if (has("record")) return "record";                                              /* step 11.5 */
+      if (has("callback interface")) return "callback interface";                      /* step 11.6 */
+      if (has("object")) return "object";                                              /* step 11.7 */
+    }
+    if (f.kind === "boolean" && has("boolean")) return "boolean";                      /* step 12 */
+    if (f.kind === "number" && has("numeric")) return "numeric";                       /* step 13 */
+    if (f.kind === "bigint" && has("bigint")) return "bigint";                         /* step 14 */
     return tail();
   };
   const map = {};
