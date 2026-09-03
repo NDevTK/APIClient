@@ -2129,6 +2129,24 @@ export function installedMembers(paths, env) {
      identifiers a MINT_FORM whose callback is not §3.7.1's refusal names. Both, because either alone is a
      false ABSENT: read as CONSTRUCTING_FORM only, seven built interfaces reported as refusals. */
   const constructs = new Set();
+  /* THE CONSTRUCTING MINTS THIS SCAN COULD NOT READ, kept as their own list beside `unresolved` rather than
+     recovered from it by matching a form name — the caller must not re-derive which unresolved entries were
+     constructor mints, because that would be a second copy of the rule this file owns. `constructs` is a set of
+     NAMES, so a site that produced none makes it incomplete by an unknown amount: while this list is non-empty
+     NO interface's absence from `constructs` proves anything, and a consumer that charges one ABSENT anyway is
+     the false direction section 1b's header names. */
+  const constructsUnread = [];
+  /* HOW EACH NAME WAS READ, because the two readings do not prove the same thing and the difference is
+     REPORTABLE rather than decidable here. A literal beside the mint names ONE interface and proves it. A name
+     read out of a table COLUMN through a helper's parameter is one CELL of the set the caller's loop iterates,
+     and a C loop may `continue` past a row for a reason no static reader can evaluate — so the column proves
+     the mint REACHES these names and not that it runs for each of them. That is the same rule the member axis
+     already states out loud: `idl_install_covers_column` exists exactly because a loop's row filter can remove
+     a name, and it is the C that declares it does not. Nothing here guesses which way an unread filter went;
+     the caller prints the provenance wherever a credited name contradicts the IDL, which is where the
+     difference can matter. */
+  const constructsDirect = new Set();
+  const constructsForwarded = new Map();
   const { forms } = env;
   /* which GENERATED_FORMS installers the corpus calls at all — see the loop after the file walk */
   const called = new Set();
@@ -2183,18 +2201,84 @@ export function installedMembers(paths, env) {
     return out;
   };
 
+  /* Keyed by the FUNCTION RECORD, so it is the same answer wherever it is asked from — the caller-side reader
+     below resolves a name in a function belonging to another file than the one being walked. */
+  const localsCache = new Map();
+  const localsFor = (f) => {
+    if (!f) return null;
+    if (!localsCache.has(f)) localsCache.set(f, localAssignments(f.body));
+    return localsCache.get(f);
+  };
+
+  /* A MINT WHOSE INTERFACE IDENTIFIER IS A PARAMETER OF THE FUNCTION IT STANDS IN — read at the CALLERS,
+     because that is where the name is. `fromParam` above answers the MEMBER axis's version of this question by
+     SKIPPING the forwarding line, and that is sound there for a reason that does not hold here: a shared member
+     installer forwards to a form the audit reads at every caller too, so the names are collected anyway. A
+     constructing mint reached through a helper is not: `custom_elements_element_constructor(ctx, iface)` is not
+     `idl_step_constructor`, so no caller of it is a site this scan reads, and the parameter was the only place
+     the name could have come from. Skipping it there loses the name; reporting it loses nothing but proves
+     nothing, and section 1b's own header says which direction that error runs in — an unread constructing mint
+     reads as an interface the engine REFUSES to construct, which is the false ABSENT.
+     THE RULE IS DERIVED AND NOT RESTATED: the parameter's POSITION comes from the function's own parameter
+     list, the argument at that position is read by the SAME `strings()` every other name goes through, and a
+     caller whose own argument is a parameter forwards again. Nothing here knows a helper's name.
+     IT ABSTAINS RATHER THAN CREDITING A SUBSET, at every step: a helper the corpus never calls, a caller whose
+     argument cannot be read, a caller whose argument COUNT does not match the parameter list (the parse drops
+     an unnamed parameter, so the positions cannot be aligned and an index would name the wrong argument), and
+     a forwarding cycle all answer null, which leaves the site UNRESOLVED exactly as before. */
+  const throughCallers = (f, expr, seen, via) => {
+    const v = String(expr).trim();
+    if (!f || !/^[A-Za-z_]\w*$/.test(v)) return null;
+    const at = f.params.indexOf(v);
+    if (at < 0 || seen.has(f)) return null;
+    seen.add(f);
+    const callers = callersOf(f.name);
+    if (!callers.length) return null;
+    const out = [];
+    for (const c of callers) {
+      if (c.site.args.length !== f.params.length) return null;
+      const arg = c.site.args[at];
+      if (arg === undefined) return null;
+      const R = env.resolver.for(c.path, c.fn.name);
+      const src = env.sources.get(c.path);
+      /* `callersOf` scans a function BODY, so its offsets are body-relative and the file offset is the
+         function's start plus that — the same conversion the SELECTED-installer reader below makes. Reading
+         the raw offset names a line near the top of the file, which is a coordinate that looks plausible and
+         sends the reader nowhere. */
+      const where = { file: c.path, line: src ? lineOf(src.orig, c.fn.start + c.site.at) : 0,
+                      expr: String(arg).trim().replace(/\s+/g, " ") };
+      const direct = R.strings(arg, localsFor(c.fn));
+      const names = direct || throughCallers(c.fn, arg, seen, via);
+      if (!names) return null;
+      if (direct) for (const n of names) via.push({ name: n, ...where });
+      out.push(...names);
+    }
+    return out.length ? out : null;
+  };
+  /* One writer of `constructs`, so the provenance cannot be recorded at one site and forgotten at the other. */
+  const noteConstructs = (got, file, line, form) => {
+    for (const n of got.names) constructs.add(n);
+    if (!got.via) { for (const n of got.names) constructsDirect.add(n); return; }
+    for (const v of got.via)
+      if (!constructsForwarded.has(v.name))
+        constructsForwarded.set(v.name, { mint: { file, line, form }, read: v });
+  };
+
+  /* The one reader both constructing-mint sites use, so the two cannot disagree about what a name is. */
+  const mintNames = (path, f, expr) => {
+    const direct = env.resolver.for(path, f ? f.name : null).strings(expr, localsFor(f));
+    if (direct) return { names: direct, via: null };
+    const via = [];
+    const names = throughCallers(f, expr, new Set(), via);
+    return names ? { names, via } : null;
+  };
+
   for (const path of paths) {
     const src = env.sources.get(path);
     if (!src) { unresolved.push({ file: path, line: 0, form: "(file)", expr: "not found" }); continue; }
     const { orig, masked } = src;
     const fns = env.fnsOf.get(path);
     const fnAt = (off) => fns.find((f) => off >= f.start && off < f.end);
-    const localsCache = new Map();
-    const localsFor = (f) => {
-      if (!f) return null;
-      if (!localsCache.has(f)) localsCache.set(f, localAssignments(f.body));
-      return localsCache.get(f);
-    };
     /* A NAME THIS FUNCTION WAS GIVEN, however many hops it took to reach the install. The forwarding line of a
        shared installer resolves to nothing by construction — the name is the CALLER's, and every caller is
        audited — but only `nav_env`-shaped helpers spell the parameter AT the install. `idl_install_accessor_step`
@@ -2418,9 +2502,14 @@ export function installedMembers(paths, env) {
     for (const site of callSites(masked, CONSTRUCTING_FORM.fn)) {
       const f = fnAt(site.at);
       if (!f) continue;
-      const names = scoped(f).strings(site.args[CONSTRUCTING_FORM.iface] || "", localsFor(f));
-      if (!names) { report(site.at, CONSTRUCTING_FORM.fn, site.args[CONSTRUCTING_FORM.iface] || ""); continue; }
-      for (const n of names) constructs.add(n);
+      const got = mintNames(path, f, site.args[CONSTRUCTING_FORM.iface] || "");
+      if (!got) {
+        report(site.at, CONSTRUCTING_FORM.fn, site.args[CONSTRUCTING_FORM.iface] || "");
+        constructsUnread.push({ file: path, line: lineOf(orig, site.at), form: CONSTRUCTING_FORM.fn,
+                                expr: String(site.args[CONSTRUCTING_FORM.iface] || "").trim() });
+        continue;
+      }
+      noteConstructs(got, path, lineOf(orig, site.at), CONSTRUCTING_FORM.fn);
     }
 
     /* 1c. THE SAME QUESTION ASKED OF THE MINT ITSELF — see MINT_FORM. `idl_step_constructor` is one way this
@@ -2449,12 +2538,25 @@ export function installedMembers(paths, env) {
         /* A callback this file does not define is one whose body cannot be classified. Reported, never
            assumed: guessing "constructs" credits an interface that throws, guessing "refuses" sends someone
            to build what is there, and both are the false bill this file exists to refuse. */
-        if (body === undefined) { report(site.at, MINT_FORM.fn, `${cb} is not a function this file defines`); continue; }
+        if (body === undefined) {
+          /* UNCLASSIFIABLE IS UNREAD FOR THIS AXIS TOO. The mint has a constructing cproto, so it either
+             constructs or is §3.7.1's refusal, and a body this file cannot see decides neither — which is the
+             same false-ABSENT exposure as an unreadable identifier, one question earlier. */
+          report(site.at, MINT_FORM.fn, `${cb} is not a function this file defines`);
+          constructsUnread.push({ file: path, line: lineOf(orig, site.at), form: MINT_FORM.fn,
+                                  expr: `${cb} is not a function this file defines` });
+          continue;
+        }
         if (REFUSING_BODY.test(body)) continue;
       }
-      const names = scoped(f).strings(site.args[MINT_FORM.iface] || "", localsFor(f));
-      if (!names) { report(site.at, MINT_FORM.fn, site.args[MINT_FORM.iface] || ""); continue; }
-      for (const n of names) constructs.add(n);
+      const got = mintNames(path, f, site.args[MINT_FORM.iface] || "");
+      if (!got) {
+        report(site.at, MINT_FORM.fn, site.args[MINT_FORM.iface] || "");
+        constructsUnread.push({ file: path, line: lineOf(orig, site.at), form: MINT_FORM.fn,
+                                expr: String(site.args[MINT_FORM.iface] || "").trim() });
+        continue;
+      }
+      noteConstructs(got, path, lineOf(orig, site.at), MINT_FORM.fn);
     }
 
     /* 2. the JSCFunctionListEntry tables, read only where one is installed */
@@ -2642,5 +2744,6 @@ export function installedMembers(paths, env) {
                                   : `${form.partial}'s installer is declared to live in \`${form.in}\`, and ` +
                                     `this corpus has no such file` });
   }
-  return { records, unresolved, offInstaller, excluded, unselected, constructs };
+  return { records, unresolved, offInstaller, excluded, unselected, constructs, constructsUnread,
+           constructsDirect, constructsForwarded };
 }

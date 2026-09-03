@@ -787,7 +787,19 @@ const noIdl = [];
    column. Three lists rather than two counters, because the denominator has to be printed beside the gap:
    `built + html + ordinary` is every AUDITED interface whose IDL declares a constructor operation, which is
    the only set either gap number means anything against. */
-const ctorBuilt = [], htmlCtorAbsent = [], ordinaryCtorAbsent = [];
+const ctorBuilt = [], htmlCtorAbsent = [], ordinaryCtorAbsent = [], ctorUnproven = [];
+/* THE ASYMMETRY THAT LET SIXTY-NINE FALSE ABSENCES PRINT. The MEMBER axis has had an UNPROVEN column since it
+   was written — a member whose install construct the scan cannot read is neither counted absent nor credited —
+   and the CONSTRUCTOR axis had no counterpart: it asked `!world.constructs.has(iface)` and charged ABSENT, with
+   nothing in the question about whether every mint had been READ. idl_installed.mjs's own section 1b already
+   said which way that error runs ("an unread constructing mint would read as an interface the engine refuses to
+   construct, which is the false direction"), and it ran that way: one unreadable mint reported sixty-nine built
+   interfaces as unbuilt, each with an instruction to build HTML §3.2.3, which is built.
+   `constructs` IS A SET OF NAMES, so ONE unread mint makes it incomplete by an unknown amount and no
+   interface's absence from it proves anything — the abstention is therefore GLOBAL over the axis and not
+   per-file, because an unread name could be any interface and a shared helper mints for interfaces audited
+   under other components entirely. That is coarse on purpose: the alternative is a scope nothing justifies. */
+const ctorUnread = world.constructsUnread;
 
 /* -----------------------------------------------------------------------------------------------------------
  * WEB IDL §3.3.7 [Exposed] — A MEMBER NO REALM THIS ENGINE BUILDS MAY CARRY IS NOT A GAP, AND CHARGING IT AS
@@ -1007,7 +1019,11 @@ for (const [iface, paths] of AUDITED) {
   if (ctors === null)
     throw new Error(`[idl-audit] ${iface} reached the constructor census and the IDL index does not carry it — ` +
                     `the noIdl guard above is meant to make that unreachable`);
-  const ctorAbsent = ctors.length && !world.constructs.has(iface);
+  /* NOT IN `constructs` IS TWO ANSWERS AND THIS ASKS WHICH. With every mint read it means the engine refuses;
+     with one unread it means this scan does not know, and saying "absent" then is a claim the evidence does not
+     carry. See ctorUnread above for why the second reading is global rather than per-site. */
+  const ctorMissing = ctors.length && !world.constructs.has(iface);
+  const ctorAbsent = ctorMissing && !ctorUnread.length;
   /* HTML §3.2.3's population is counted apart, because it is ONE piece of work and not sixty-nine. §3.2.3 says
      interfaces annotated with [HTMLConstructor] "have the following overridden constructor steps" — one
      algorithm, shared, parameterised by the interface, which is why custom_elements.c's single
@@ -1016,6 +1032,7 @@ for (const [iface, paths] of AUDITED) {
      two questions is the defect this audit keeps finding in itself. */
   const ctorIsHtml = ctors.some(isHtmlConstructor);
   if (ctorAbsent) (ctorIsHtml ? htmlCtorAbsent : ordinaryCtorAbsent).push(iface);
+  else if (ctorMissing) ctorUnproven.push(iface);
   else if (ctors.length) ctorBuilt.push(iface);
   /* A CONDITIONAL member — one the component DECLARES this user agent must not have (idl_members_excluded). It
      is not a gap and it is not installed, so it is neither counted nor dropped: it is named, with the spec
@@ -1143,6 +1160,13 @@ for (const [iface, paths] of AUDITED) {
       `its Web IDL §3.7.1 Interface object [[Construct]] steps, so \`new ${iface}()\` is the shared "Illegal ` +
       `constructor" TypeError${ctorIsHtml ? " — HTML §3.2.3 \"HTML element constructors\", whose steps are " +
       "OVERRIDDEN and shared, so this is one mechanism and not one job per interface" : ""}`);
+  /* THE ROW SAYS THE THIRD ANSWER TOO, in the same place and for the same reason: `${iface}: complete` and
+     `ABSENT CONSTRUCTOR` are both wrong sentences for an interface whose mint this scan could not read. */
+  else if (ctorMissing)
+    parts.push(`UNPROVEN CONSTRUCTOR — its IDL declares a constructor${ctorIsHtml ? " [HTMLConstructor]" : ""} ` +
+               `and no mint this scan READ names it, but ${ctorUnread.length} constructing mint(s) in this ` +
+               `engine name an interface the scan could not read (see the verdict), so whether \`new ${iface}()\` ` +
+               `runs anything is not decided here`);
   if (unproven.length) parts.push(`UNPROVEN ${unproven.length} — ${unproven.map((n) => {
     const r = maybeHere.get(n);
     return `${n} (installed at ${r.file.replace(BROWSER + "/", "")}:${r.line}, ${r.why})`;
@@ -1202,7 +1226,17 @@ defect(`js_noop-STUB members (distinct; ${pairsNoop} interface-member pairs)`, d
    because the WORK is separate, not because the count looks better split: HTML §3.2.3's are one shared
    overridden algorithm reached from sixty-odd interface objects, and the ordinary ones are that many distinct
    construct steps to write. One count over both would name neither job. */
-const ctorDeclaring = ctorBuilt.length + htmlCtorAbsent.length + ordinaryCtorAbsent.length;
+const ctorDeclaring = ctorBuilt.length + htmlCtorAbsent.length + ordinaryCtorAbsent.length + ctorUnproven.length;
+defect(`interfaces whose \`new\` this audit CANNOT DECIDE — ${ctorUnread.length} constructing mint(s) name an ` +
+       `interface this scan could not read, so the set of names it minted is incomplete by an unknown amount ` +
+       `and no interface's absence from it proves a thing (of ${ctorDeclaring} audited interfaces declaring a ` +
+       `constructor). Closed by making the mint READABLE — a name the scan can resolve at the site or through ` +
+       `the callers of the helper that was handed it — never by charging these ABSENT, which is the false ` +
+       `direction that reports a built interface as unbuilt`, ctorUnproven.length);
+for (const u of ctorUnread)
+  console.log(`[idl-audit] UNREADABLE MINT ${u.file.replace(BROWSER + "/", "")}:${u.line} — \`${u.form}\` is ` +
+              `handed \`${u.expr}\`, which this scan cannot resolve to an interface identifier. While this ` +
+              `stands, the whole constructor axis abstains.`);
 defect(`interfaces a page cannot \`new\` — §3.7.1 construct steps absent (of ${ctorDeclaring} audited ` +
        `interfaces whose IDL declares a constructor operation, ${ctorBuilt.length} of which this engine mints; ` +
        `HTML §3.2.3's [HTMLConstructor] population is its own category in this ledger)`, ordinaryCtorAbsent.length);
@@ -1224,9 +1258,53 @@ if (htmlCtorAbsent.length)
    no interface's — so those are recognised from the IDL rather than excused by name, and anything left is a
    mint naming something the corpus does not declare, which is a typo the run must not swallow. */
 const legacyFactories = new Set();
+/* THE DECLARATION, KEPT WITH THE INTERFACE IT IS ON — see the presence audit below, which is why this is a Map
+   and not only the Set the stray filter needs. */
+const legacyFactoryOf = new Map();
 for (const n of idl.declarations)
   for (const a of n.extAttrs || [])
-    if (a.name === "LegacyFactoryFunction" && a.rhs && typeof a.rhs.value === "string") legacyFactories.add(a.rhs.value);
+    if (a.name === "LegacyFactoryFunction" && a.rhs && typeof a.rhs.value === "string") {
+      legacyFactories.add(a.rhs.value);
+      if (!legacyFactoryOf.has(a.rhs.value)) legacyFactoryOf.set(a.rhs.value, n.name);
+    }
+
+/* WEB IDL §3.7.2 "Legacy factory functions" — THE PRESENCE QUESTION, WHICH NOTHING IN THIS TREE ASKED. The set
+   above was computed to SUBTRACT: it excused a name in `constructs` that the corpus declares no interface for,
+   and was read in that one direction only. A set you already derive and only ever subtract from is a set you
+   can also ASSERT over, and the cost of not doing so is measurable rather than theoretical — `Audio` was
+   declared by the platform, absent from this engine, and reported by no gate in the tree until a person read
+   the IDL by hand. That is the same shape as a read-with-no-writer: the fact was computed, and consumed by
+   nothing that could fail.
+   IT IS ITS OWN AXIS, and the axis is PRESENCE OF A GLOBAL NAME — not members, not arity, not what the factory
+   accepts. §3.7.2: "A legacy factory function that exists due to one or more [LegacyFactoryFunction] extended
+   attributes with a given identifier is a built-in function object." It is a name on the global that
+   CONSTRUCTS, so `world.constructs` is exactly the right evidence and the same evidence the constructor axis
+   uses — which is why it inherits that axis's abstention: while a mint is unread, absence proves nothing here
+   either.
+   AN INTERFACE THIS ENGINE DOES NOT BUILD OWES NO FACTORY: the extended attribute is on the interface, so the
+   factory's absence is the interface's absence and is already accounted for by UNBUILT / the unmapped list.
+   Reporting it twice would charge one gap to two axes. */
+const legacyFactoryAbsent = [], legacyFactoryUnproven = [];
+for (const [id, iface] of [...legacyFactoryOf].sort()) {
+  if (!AUDITED.has(iface) || UNBUILT[iface]) continue;
+  if (world.constructs.has(id)) continue;
+  (ctorUnread.length ? legacyFactoryUnproven : legacyFactoryAbsent).push([id, iface]);
+}
+defect(`Web IDL §3.7.2 "Legacy factory functions" the platform declares that this engine does not install (of ` +
+       `${[...legacyFactoryOf].filter(([, i]) => AUDITED.has(i) && !UNBUILT[i]).length} declared on an ` +
+       `interface this engine builds). Each is a GLOBAL NAME that constructs, minted by the component that ` +
+       `owns the interface and hung on the global beside the interface object — never on the interface ` +
+       `object's own prototype, since §3.7.2's function has no \`constructor\` back-pointer`,
+       legacyFactoryAbsent.length);
+for (const [id, iface] of legacyFactoryAbsent)
+  console.log(`[idl-audit] ${id}: the corpus declares \`[LegacyFactoryFunction=${id}(…)]\` on ${iface} and no ` +
+              `mint in this engine gives the global name \`${id}\` [[Construct]] steps, so a page writing ` +
+              `\`new ${id}(…)\` gets a TypeError no browser gives it. §3.7.2's own steps are the job: overload ` +
+              `resolution, internally create a new object implementing ${iface}, run the constructor steps, ` +
+              `and a non-writable non-configurable \`prototype\` pointing at ${iface}'s interface prototype ` +
+              `object.`);
+defect(`Web IDL §3.7.2 legacy factory functions whose presence this audit CANNOT DECIDE — see the unreadable ` +
+       `mint(s) above`, legacyFactoryUnproven.length);
 /* THE LIVE PATH FOR `ownConstructors`'s MISS — see its own comment. A name here is one the ENGINE mints, so it
    need not be an interface at all, and the two readings are told apart rather than merged: the corpus carries
    the interface and it declares no constructor, or the corpus carries no such name. Both belong in this one
@@ -1236,13 +1314,30 @@ const strayConstructs = [...world.constructs]
   .filter((n) => { const c = ownConstructors(n); return !legacyFactories.has(n) && !(c && c.length); }).sort();
 defect("interface objects this engine gives [[Construct]] that the platform declares no constructor for",
        strayConstructs.length);
-for (const n of strayConstructs)
+/* THE ROW STATES HOW THE NAME WAS READ, because the two readings do not support the same accusation and the
+   difference decides which of three things a reader should go and do. A name read as a LITERAL beside the mint
+   is evidence about THAT interface and the row's original two branches are the whole answer. A name read out of
+   a table COLUMN handed to a shared minting helper is one CELL of the set that helper's caller loops over, and a
+   C loop may `continue` past a row for a reason no static reader evaluates — so the column proves the mint
+   REACHES the name, and a row filter this scan cannot see is the third explanation. Printing the first two
+   alone for a forwarded name is the same defect this diff is closing, one category over: right about the
+   observable, wrong about the cause, with an instruction ("fix a typo") that does not fit what happened. */
+for (const n of strayConstructs) {
+  const via = world.constructsForwarded.get(n);
+  const how = !via || world.constructsDirect.has(n)
+    ? `either the identifier beside the mint misspells an interface, or the mint is a Web IDL §3.7.2 ` +
+      `"Legacy factory functions" name this index does not carry`
+    : `the name was not written beside the mint: ${via.mint.file.replace(BROWSER + "/", "")}:${via.mint.line}'s ` +
+      `\`${via.mint.form}\` is handed a parameter, and this name is one cell of \`${via.read.expr}\` at ` +
+      `${via.read.file.replace(BROWSER + "/", "")}:${via.read.line}. So either that identifier misspells an ` +
+      `interface, or the C's own row filter removes this row and this scan cannot evaluate it — which is a ` +
+      `coverage fact the C states (idl_install_covers_column) and this audit reads, not one it may assume`;
   console.log(`[idl-audit] ${n}: this engine mints a CONSTRUCTING interface object for it and ` +
               `${byName.has(n) ? `the corpus declares \`${n}\` with no constructor operation`
-                               : `NO IDL in the corpus declares \`${n}\` at all`} — either the identifier beside the mint ` +
-              `misspells an interface, or the mint is a Web IDL §3.7.2 "Legacy factory functions" name this index does ` +
-              `not carry. Web IDL §3.7.1's construct steps throw a TypeError for an interface not declared ` +
+                               : `NO IDL in the corpus declares \`${n}\` at all`} — ${how}. Web IDL §3.7.1's ` +
+              `construct steps throw a TypeError for an interface not declared ` +
               `with one, so a page reaching this gets behaviour no browser has`);
+}
 if (totalMissing)
   console.log(`[idl-audit] ${distinct.size} distinct spec members this engine does not install (${totalMissing} ` +
               `across all interfaces, since an inherited gap is absent on each) — see the ABSENT category in ` +
@@ -1578,7 +1673,12 @@ for (const r of world.records) {
        three members that no conversion could ever have read. The absent constructor is reported below instead,
        which is the true instruction and the one an engineer can act on. */
     if (ctors && world.constructs.has(r.name)) asks.push([`new ${r.name}`, ctors]);
-    else if (ctors) noteCtorAbsent(r.name, ctors, r);
+    /* THE SAME ABSTENTION AS THE CONSTRUCTOR AXIS, and for the same reason — this arm reads the same
+       `world.constructs`, so an unread mint makes its ELSE unsound in exactly the way section 1b of
+       idl_installed.mjs names by example: "it would make a dictionary that IS reachable report as unreachable".
+       Repairing the verdict category and leaving this reading the incomplete set would have left the defect
+       alive in the axis the header used to describe it. */
+    else if (ctors && !ctorUnread.length) noteCtorAbsent(r.name, ctors, r);
   }
   for (const [what, ops] of asks)
     for (const op of ops)
