@@ -90,4 +90,30 @@ typedef struct {
    measured one. */
 size_t table_column_widths(lxb_dom_element_t *table, const TableGrid *grid, TableColumnWidth **out);
 
+/* ONE CELL'S HORIZONTAL PADDING AND BORDER, in CSS pixels — the difference between the content box
+   core/layout/intrinsic_size.h answers in and the BORDER box every column width in §17.5.2 is measured in (the
+   choice the header above records). It is EXPORTED because CSS 2.1 §17.5.2 Table width algorithms: the
+   'table-layout' property has TWO algorithms and both need it: §17.5.2.2 Automatic table layout's step 1
+   converts a cell's intrinsic sizes, and §17.5.2.1 Fixed table layout's step 2 converts the DECLARED `width` of
+   "a cell in the first row" into the same box. Two spellings of one four-term sum are two places for the terms
+   to come to disagree, and the disagreement would be invisible: both answers are real widths of real boxes.
+   IT IS NOT core/layout/used_value.h's SURROUND and must not become a call to it — see table_column_width.c for
+   the cycle that makes them two different questions over the same four properties.
+   THE SEPARATED BORDER MODEL IS THE CALLER'S TO ESTABLISH. Under CSS 2.1 §17.6.2 The collapsing border model a
+   cell's used border is not its own computed `border-*-width`, so this sum double-counts the shared halves;
+   §17.5.2's entry refuses that model by name before any of this runs, and `table_column_widths` asserts it. */
+CssPx table_cell_border_edges(lxb_dom_element_t *cell);
+
+/* CSS 2.1 §17.5 Visual layout of table contents' RULES 3 AND 4 — the COLUMN and COLUMN-GROUP boxes, which
+   core/layout/table_grid.h states outright that it does not place — asked as the one question CSS 2.1 §17.5.2
+   Table width algorithms: the 'table-layout' property's TWO algorithms both put to them, so the walk over the
+   table's child list exists once rather than once per algorithm.
+   ANSWERS THE FIRST such box whose computed `width` is other than `auto`, or NULL when none is. It DECIDES
+   NOTHING: a `width: auto` on a column box floors nothing in either algorithm (§17.5.2.2's step 4 excludes it
+   in its own antecedent and §17.5.2.1's step 1 is written over "a value other than 'auto'"), so a `<colgroup>`
+   wrapping the columns of an ordinary table is the common shape and answers NULL here. A caller that gets a
+   box back CRASHES with ITS OWN section's sentence — the two algorithms want different things from that box
+   and a shared message would name the wrong one. */
+lxb_dom_element_t *table_column_box_with_declared_width(lxb_dom_element_t *table);
+
 #endif

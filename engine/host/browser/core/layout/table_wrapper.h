@@ -21,18 +21,21 @@
  * WHAT IS DELIBERATELY NOT HERE, AND WHY EACH IS NAMED RATHER THAN GUESSED.
  *   - The wrapper's HEIGHT is §10.6.3's over its own in-flow children, and those children are the caption
  *     boxes and the table box — so it is not this component's until the table box HAS a height, which is
- *     §17.5.3 Table height algorithms' over §17.5.2's used column widths over §17.5's grid, which
- *     core/layout/table_grid.h answers. That chain is what
- *     core/layout/block_flow.c's table arm names, in that order.
- *   - The wrapper's WIDTH is stated by §17.4 itself and is equally not available yet: "The width of the table
- *     wrapper box is the border-edge width of the table box inside it, as described by section 17.5.2."
+ *     §17.5.3 Table height algorithms' over §17.5.2's used column widths. core/layout/block_flow.c's table arm
+ *     names what that still needs, and it is the one place to read for it: a claim here about which piece is
+ *     built would be a claim about a tree that moves, made in a header nothing re-checks.
+ *   - The wrapper's WIDTH is stated by §17.4 itself and is a question this component ASKS RATHER THAN ANSWERS:
+ *     "The width of the table wrapper box is the border-edge width of the table box inside it, as described by
+ *     section 17.5.2." That is §17.5.2 Table width algorithms: the 'table-layout' property's number with the
+ *     table box's own padding and border around it, which is core/layout/used_value.h's border edge over
+ *     core/layout/table_width.h's content width — two entries that already exist, composed by whoever needs
+ *     the rectangle. Restating the composition here would be a second copy of one sentence.
  *   - The wrapper's CHILD ORDER — which captions sit above the table box and which below — is `caption-side`'s
- *     (§17.4.1 Caption position and alignment), and that property is NOT in core/css/css_computed_value.c's
- *     modelled set, so it cannot be read at all today. §17.4.1 gives it `Computed value: as specified`, which
- *     makes it one row of that file's as-specified arm; core/css/css_defaulting.c already lists it among the
- *     INHERITED properties, which §17.4.1's own `Inherited: yes` requires, so only the computed-value half is
- *     missing. The order is not built here because its only consumer is the height above, and building it
- *     first would be an ordering nothing can yet ask for.
+ *     (§17.4.1 Caption position and alignment). It is not built here because it is a PLACEMENT question
+ *     (core/layout/flow_position.h's), and a SUM of the children's heights does not ask it; building it here
+ *     would put an ordering in the component that decides box generation. A previous version of this paragraph
+ *     said the property could not be read at all, which stopped being true the day it entered
+ *     core/css/css_computed_value.c's modelled set — the reason it is not here was never that.
  *   - Which boxes the wrapper contains BESIDES the table box is already answered one component over:
  *     core/layout/table_box.h's `table_box_captions`. This component does not re-derive it. */
 #ifndef ENGINE_HOST_BROWSER_CORE_LAYOUT_TABLE_WRAPPER_H

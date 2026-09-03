@@ -16,6 +16,9 @@
 #include "core/layout/box_subject.h"
 #include "core/layout/intrinsic_size.h"
 #include "core/layout/replaced_element.h"
+#include "core/layout/table_box.h"
+#include "core/layout/table_grid.h"
+#include "core/layout/table_width.h"
 #include "core/layout/used_value.h"
 
 /* CSS 2.1 §10.3's OWN LIST OF BOX TYPES, which is the list of algorithms `width` has. The names are the
@@ -513,6 +516,51 @@ static CssPx uv_content_size(lxb_dom_element_t *el, bool vertical, UvSurround s)
 
     if (!uv_is_border_box(el)) return used;
     return css_px_sub(used, uv_surround_total(s));
+}
+
+/* CSS 2.1 §17.5.2 Table width algorithms: the 'table-layout' property, as the one thing §10 has to say about a
+   TABLE box's width: nothing. §17.5.2's own second paragraph is the handover — "Note that this section
+   OVERRIDES the rules that apply to calculating widths as described in section 10.3" — and its next sentence is
+   the handback, "once the calculated value of 'width' for the table is found using the algorithms given below …
+   then the other parts of section 10.3 do apply". So this is a ROUTE and not an algorithm: the width comes from
+   core/layout/table_width.h and the two `auto` margins that centre a table are still §10.3.3's, over the slack
+   this number leaves.
+   THE GRID IS BUILT PER CALL AND NOT CACHED, for the reason core/layout/block_flow.h states of every layout in
+   this directory: a layout is per-flow state, so a cached grid is shared state solver/dom_cow.h's delta does
+   not swap and a stale one is another flow's document.
+   THE RESULT IS CONVERTED BY css-sizing-3 §3.3 EXACTLY AS EVERY OTHER ARM'S IS. §17.5.2 answers CSS 2.1's own
+   `width` — CSS 2.1 §17.6.1 The separated borders model's "distance from the left inner padding edge to the
+   right inner padding edge", which is the CONTENT box — and §3.3 decides which box a used value is exposed in.
+   §17.6.1's other sentence, that an HTML `<table>`'s declared width is its BORDER-edge distance, is applied
+   where the declaration is READ (core/layout/table_width.c) and not here, because it is a rule about the
+   author's input rather than about which box `getComputedStyle` reports. */
+static CssPx uv_table_used_width(lxb_dom_element_t *el)
+{
+    TableGrid grid;
+    TableUsedWidths widths;
+    CssPx content;
+
+    table_grid_build(el, &grid);
+    table_widths(el, &grid, &widths);
+    content = widths.content;
+    table_widths_release(&widths);
+    table_grid_release(&grid);
+    if (uv_is_border_box(el)) return css_px_add(content, uv_surround_total(uv_surround(el, false)));
+    return content;
+}
+
+/* WHICH of §17.2 The CSS table model's box types this element generates, as the ONE question the two width
+   arms below both have to ask: `uv_display_is_table` covers all ten of them, and §17.5.2 is stated over exactly
+   two ("the 'table' or 'inline-table' element"). A CELL's used width is a COLUMN's, which is a different
+   number with a different owner, so the arms that reach a table-internal box crash rather than answering with
+   the table's. */
+static bool uv_generates_table_box(lxb_dom_element_t *el)
+{
+    char *d = uv_computed(el, "display");
+    bool table_box = table_box_kind_generates_table_box(table_box_kind(d));
+
+    free(d);
+    return table_box;
 }
 
 /* ---- CSS 2.1 §10.1's CONTAINING BLOCK ---------------------------------------------------------------------
@@ -1069,14 +1117,15 @@ static UvLimits uv_limits(lxb_dom_element_t *el, UvBox box, bool vertical)
 
     /* CSS 2.1 §10.4: "In CSS 2.1, the effect of 'min-width' and 'max-width' on tables, inline tables, table
        cells, table columns, and column groups is undefined" — and §10.7 says the same of rows and row groups.
-       Every one of those is a `UV_BOX_TABLE`, and every one of them has already crashed in the section that
-       owns its size, so this asserts the two classifications agree rather than choosing an answer the spec
-       declines to give. */
+       Every one of those is a `UV_BOX_TABLE`, and `uv_sized` returns before this function for every one of
+       them, so this asserts the two classifications agree rather than choosing an answer the spec declines to
+       give. */
     DCHECK(box != UV_BOX_TABLE,
            "CSS 2.1 §10.4 and §10.7 leave the effect of the four limits on a TABLE BOX undefined, and §17.5's "
-           "own algorithms are what decide it — a declared width is a MINIMUM there and the automatic layout "
-           "may exceed it. A table box reaching here means the crash in §17.5's own arm was bypassed, so "
-           "uv_box_kind's list and that arm have come apart");
+           "own algorithms are what decide it — a declared width is a MINIMUM there and CSS 2.1 §17.5.2 Table "
+           "width algorithms: the 'table-layout' property may exceed it. `uv_sized` returns a table box's "
+           "tentative value before reaching this function, so a table box here means that return and "
+           "uv_box_kind's list have come apart");
     lim.min = css_px(0.0);
     lim.max = css_px(0.0);
     lim.has_min = uv_limit(el, box, vertical, false, &lim.min);
@@ -1806,17 +1855,39 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
            the equation solves for `width` only when `width` is `auto`, so a declared length IS the used value.
            §10.6.2 and §10.6.3 say the same for `height`. What does NOT agree is a table box and a flex or grid
            item, and both crash below. */
+        /* CSS 2.1 §17.5 owns a TABLE box's width and height and §10 does not apply to either, so a declared
+           length is NOT the used value here: it is an INPUT to §17.5's own algorithms. The two axes are two
+           different sections and only one of them is built, which is why they split here rather than sharing an
+           arm — §17.5.2 Table width algorithms: the 'table-layout' property takes the declared width as a
+           minimum ("the used width is the greater of W, CAPMIN, and … MIN") and core/layout/table_width.h runs
+           it, while §17.5.3 Table height algorithms says the same of a declared height in its own words and has
+           no component yet. A TABLE-INTERNAL box is a third case and crashes as one: §17.5.2 is stated over
+           "the 'table' or 'inline-table' element", and a cell's or a row's width is a different number. */
+        if (box == UV_BOX_TABLE && !vertical && uv_generates_table_box(el)) return uv_table_used_width(el);
+        if (box == UV_BOX_TABLE && !vertical)
+            DFAIL("a DECLARED `width` on a TABLE-INTERNAL box, whose used width CSS 2.1 §17.5.2 Table width "
+                  "algorithms: the 'table-layout' property does not state: that section's two rules are written "
+                  "over \"the 'table' or 'inline-table' element\", and §17.5 Visual layout of table contents "
+                  "gives the internal boxes their widths from the GRID instead. A CELL's used width is the used "
+                  "width of the column it occupies, which core/layout/table_width.h answers for the whole table "
+                  "at once and reports per column; a ROW's and a ROW GROUP's is the table's own content width, "
+                  "by that section's rules 1 and 2; a COLUMN's and a COLUMN GROUP's is its rules 3 and 4, which "
+                  "core/layout/table_grid.h states outright that it does not place. WIRE this arm to the table "
+                  "box above the element — §10.1's containing-block walk is not it, because a cell's containing "
+                  "block is not the table box — and index the column core/layout/table_grid.h assigned the "
+                  "cell. A declared `width` on such a box is then not this arm's answer either: §17.5.2.2 "
+                  "Automatic table layout's step 1 makes it a FLOOR under the cell's column and nothing more");
         if (box == UV_BOX_TABLE)
-            DFAIL("CSS 2.1 §17.5 owns a TABLE box's width and height, and §10 does not apply to it. A declared "
-                  "`width` on a table is a MINIMUM in both of §17.5.2's algorithms — the fixed layout "
-                  "algorithm distributes it over the columns and the automatic one may widen the table past it "
-                  "to fit the content — and CSS 2.1 §17.5.3 Table height algorithms says the same of a declared height "
-                  "in its own words: \"Any other value is treated as a minimum height.\" BUILD §17.5's "
-                  "two table layout algorithms. THE INTERNAL BOX STRUCTURE IS NO LONGER WHAT THEY ARE WAITING "
-                  "ON and this line said it was: §17.2.1 Anonymous table objects' first two stages are "
-                  "core/layout/table_box.h's, so what stands between them and this arm is §17.5 Visual layout "
-                  "of table contents' grid — which column each cell occupies and what it spans — which "
-                  "core/layout/table_grid.h now answers, leaving §17.5.2 itself");
+            DFAIL("a DECLARED `height` on a TABLE box or a table-internal box, which is NOT the used height: "
+                  "CSS 2.1 §17.5.3 Table height algorithms says in its own words that \"Any other value is "
+                  "treated as a minimum height\", and the height it is a minimum under is that section's sum, "
+                  "\"the height is the sum of the row heights plus any cell spacing or borders\" over rows whose "
+                  "own heights are \"the maximum of the row's computed 'height', the computed 'height' of each "
+                  "cell in the row, and the minimum height (MIN) required by the cells\". BUILD §17.5.3 over "
+                  "the used column widths core/layout/table_width.h now answers — a cell's content height is a "
+                  "block container's over its USED WIDTH, which is that column's, so §17.5.2 Table width "
+                  "algorithms: the 'table-layout' property is no longer what this is waiting on and the row "
+                  "structure (core/layout/table_box.h) and the grid (core/layout/table_grid.h) are not either");
         if (box == UV_BOX_ITEM)
             DFAIL("this box is a FLEX or GRID ITEM, so its used main and cross sizes come from its container's "
                   "algorithm and not from CSS 2.1 §10 at all — css-flexbox §9.7 resolves the flexible lengths "
@@ -1959,16 +2030,22 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
               "is the same three-term `min(max(...))` the function above already computes");
     /* The two box types §10 does not own at all reach the `auto` arm as well as the declared one, and their
        `auto` case is a DIFFERENT algorithm from their declared case, so each says which. */
+    /* A TABLE box with `width: auto` is CSS 2.1 §17.5.2.2 Automatic table layout's, and §17.5.2.1 Fixed table
+       layout sends its own `auto` case there too ("A value of 'auto' (for both 'display: table' and 'display:
+       inline-table') means use the automatic table layout algorithm"), so `table-layout` does not reach this
+       line at all — core/layout/table_width.h owns that dispatch. §10.3.3's equation does not apply to a table
+       and never did. */
+    if (box == UV_BOX_TABLE && uv_generates_table_box(el)) return uv_table_used_width(el);
     if (box == UV_BOX_TABLE)
-        DFAIL("a TABLE box with `width: auto` is sized by CSS 2.1 §17.5.2's AUTOMATIC table layout algorithm: "
-              "the table's width comes from its COLUMNS, each of which is derived from its cells' minimum and "
-              "maximum content widths — an intrinsic size over the box structure §17.2.1 Anonymous table "
-              "objects generates, and not §10.3.3's equation, which does not apply to a table at all. THAT "
-              "STRUCTURE IS BUILT and this line used to ask for it first: core/layout/table_box.h answers "
-              "§17.2.1's first two stages, so what §17.5.2 still needs over it is §17.5 Visual layout of table "
-              "contents' grid — which column each cell is in, since a COLUMN's minimum and maximum are taken "
-              "across the cells that occupy it and core/layout/table_grid.h is what says which those are. BUILD "
-              "§17.5.2's two algorithms over it");
+        DFAIL("`width: auto` on a TABLE-INTERNAL box, which CSS 2.1 §17.5.2 Table width algorithms: the "
+              "'table-layout' property does not state — both of its rules are written over \"the 'table' or "
+              "'inline-table' element\" — and which §10.3.3's equation does not answer either, because §17.5.2's "
+              "own second paragraph overrides §10.3 for everything inside a table. A CELL's used width is the "
+              "used width of the column core/layout/table_grid.h placed it in, which core/layout/table_width.h "
+              "answers for the whole table at once; a ROW's and a ROW GROUP's is the table's own content width, "
+              "by §17.5 Visual layout of table contents' rules 1 and 2; a COLUMN's and a COLUMN GROUP's is that "
+              "section's rules 3 and 4, which core/layout/table_grid.h states outright that it does not place. "
+              "WIRE this arm to the table box above the element and index the column that grid assigned");
     if (box == UV_BOX_ITEM)
         DFAIL("a FLEX or GRID ITEM with `width: auto`. css-flexbox §9.7 makes the FLEX BASE SIZE the item's "
               "max-content contribution and then flexes it against the container's free space; css-grid §11 "
@@ -2050,9 +2127,17 @@ static UvSized uv_sized(lxb_dom_element_t *el, UvBox box, bool vertical)
 
     r.len = css_computed_length(el, vertical ? "height" : "width");
     /* STEP 1 — the TENTATIVE used value, "calculated WITHOUT 'min-width' and 'max-width'". It runs before the
-       limits are even read, which is also what puts the box types §10 does not own (a table box, a flex or
-       grid item) on their own crashes rather than on `uv_limits`' assert that they never arrive. */
+       limits are even read, which is also what sends the box types §10 does not own to their own section — a
+       flex or grid item to its crash, and a table box to CSS 2.1 §17.5.2 Table width algorithms: the
+       'table-layout' property — rather than to `uv_limits`' assert that they never arrive. */
     r.used = uv_pass_size(el, r.len, box, vertical);
+    /* §10.4's THREE STEPS DO NOT RUN OVER A TABLE BOX, and that is the section's own sentence rather than a
+       shortcut: "In CSS 2.1, the effect of 'min-width' and 'max-width' on tables, inline tables, table cells,
+       table columns, and column groups is undefined", with §10.7 saying the same of rows and row groups. So the
+       tentative value IS the used value here, and `uv_limits`' assert that no table box ever reaches it stays
+       true — which is what it is for. The comment above used to say the crashes were what kept a table out of
+       that assert; §17.5.2 now ANSWERS for a table's width, so the return is what keeps it out. */
+    if (box == UV_BOX_TABLE) return r;
     lim = uv_limits(el, box, vertical);
     uv_require_no_ratio_table(el, &lim);
     /* STEP 2 — "if the tentative used width is greater than 'max-width' … using the computed value of

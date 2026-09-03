@@ -366,10 +366,15 @@ static void fp_require_placeable(lxb_dom_element_t *el)
               "is a distance §9.4.1's two rules can produce. THE BOX STRUCTURE IS NO LONGER WHAT IT NEEDS: "
               "core/layout/table_box.h answers §17.2.1 Anonymous table objects' first two stages — this "
               "table's rows in §17.2's display order, each with its cells — so what is left is §17.5 Visual "
-              "layout of table contents' grid over those rows — which core/layout/table_grid.h answers, spans and "
-              "all, so what is left is §17.5.2's and §17.5.3's algorithms, "
-              "which core/layout/used_value.c already crashes for when a table's EXTENT is asked. BUILD "
-              "§17.5.2 over table_grid.h's columns, then §17.5.3",
+              "layout of table contents' grid over those rows — which core/layout/table_grid.h answers, spans "
+              "and all. NEITHER IS THE COLUMN WIDTH ANY LONGER: CSS 2.1 §17.5.2 Table width algorithms: the "
+              "'table-layout' property is core/layout/table_width.h, which answers a used width for EVERY "
+              "column of the grid at once, so a cell's horizontal offset is a prefix sum over "
+              "`TableUsedWidths.columns` plus CSS 2.1 §17.6.1 The separated borders model's spacing before it. "
+              "WHAT IS LEFT IS THE OTHER AXIS AND THE ROUTE: §17.5.3 Table height algorithms' row heights, and "
+              "an entry that hands ONE cell the column width belonging to it — core/layout/used_value.c "
+              "crashes by name for a table-internal box's used width and says the same thing from its side. "
+              "BUILD §17.5.3 over those columns, and the per-cell route beneath it",
               box_subject(el, nbuf, sizeof nbuf));
     if (inline_level)
         DFAILF("%s: "
@@ -389,8 +394,10 @@ static void fp_require_placeable(lxb_dom_element_t *el)
               "module outside CSS 2.1 §10, without which there is nothing for §9.4.2's fill to put on a line. "
               "AN `inline-table` HAS CSS 2.1 §17.2 The CSS table model's box structure — the row groups, rows "
               "and cells §17.2.1 Anonymous table objects generates, which core/layout/table_box.h answers — so "
-              "what it still needs is §17.5.2's used inline "
-              "size over it, and only then the baseline CSS 2.2 §10.8.1 \"Leading and half-leading\" states "
+              "what it still needs is NOT that inline size — CSS 2.1 §17.5.2 Table width algorithms: the "
+              "'table-layout' property is core/layout/table_width.h and core/layout/used_value.c routes a "
+              "table box's `width` to it, so `used_value_margin_edge_px` answers an `inline-table`'s margin-box "
+              "inline size like any other box's — but the baseline CSS 2.2 §10.8.1 \"Leading and half-leading\" states "
               "for it (\"The baseline of an 'inline-table' is the baseline of the first row of the table\"), "
               "which is a position inside that structure and not a rule that can be built beside it. "
               "AN `inline-flex` AND AN `inline-grid` ARE ALREADY CLASSIFIED — `uv_box_kind`'s "
@@ -404,8 +411,10 @@ static void fp_require_placeable(lxb_dom_element_t *el)
               "Container Baselines\" derives one from the items on the container's startmost flex line and "
               "css-grid-1 §10.6 \"Grid Container Baselines\" does the same — so both numbers fall out of the "
               "module's layout and neither is this file's to invent. BUILD the module this box's `display` "
-              "names as a second producer of `IntrinsicInlineSizes`; an `inline-table`'s is §17.5.2's and is "
-              "the same shape one module over. Then this box reaches the line and this arm deletes",
+              "names as a second producer of `IntrinsicInlineSizes`. An `inline-table` is NOT waiting on that "
+              "and this line used to say it was: its inline size is answered, and what it needs is §10.8.1's "
+              "own sentence above, which is a position inside CSS 2.1 §17.5.3 Table height algorithms' rows. "
+              "Then this box reaches the line and this arm deletes",
               box_subject(el, nbuf, sizeof nbuf));
     /* What is left is a box CSS 2.1 §9.2.1 'Block-level elements and block boxes' makes block-level, which is
        what the two rules below are written about. A `table` is one of them and stays on this path: §17.4

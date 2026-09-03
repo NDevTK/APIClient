@@ -62,9 +62,11 @@
  *     caption boxes" — and that box is block-level, establishes a block formatting context, and carries the
  *     table element's `margin-*`, so the CHILD CLASSIFICATION is answered here like any other block-level box
  *     (core/layout/table_wrapper.h owns §17.4's declaration split). Its HEIGHT is §10.6.3's over the caption
- *     boxes and the table box, and the table box's own height is §17.5.3's — so the walk stops in `bf_box`,
- *     with §17.2.1's box generation already in hand (core/layout/table_box.h) and §17.5.2's used column widths
- *     the number it is waiting on.
+ *     boxes and the table box, and the table box's own height is §17.5.3 Table height algorithms' — so the
+ *     walk stops in `bf_box`, which names what that height is waiting on. It is not the box generation
+ *     (core/layout/table_box.h) and it is not §17.5.2 Table width algorithms: the 'table-layout' property's
+ *     used column widths (core/layout/table_width.h); read the crash rather than this line, which is a header
+ *     nothing re-checks and which said exactly that about §17.5.2 until the day it was built.
  *   - An OUT-OF-FLOW child is not a gap at all: §10.6.3 states outright that "absolutely positioned boxes are
  *     ignored", so skipping one is the rule running, and the box's own position is §9.3.2's over a static
  *     position that this walk is what will one day provide.

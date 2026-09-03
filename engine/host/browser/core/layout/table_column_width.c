@@ -43,23 +43,24 @@ static CssPx tcw_coherent(CssPx min, CssPx max)
  * table columns, and column groups is undefined." A clamp applied here would be this engine deciding a case
  * the standard declines to.
  *
- * NAMED RESIDUAL — §17.6.1 The separated borders model ONLY. WHAT IS NOT COVERED: CSS 2.1 §17.6.2 The
- * collapsing border model, in which a cell's used border is not its own computed `border-*-width` — the
- * section resolves the borders of adjacent cells into one and divides it between them, so the sum taken here
- * double-counts the shared halves. The border read below is right under `border-collapse: separate`, which is
- * that property's initial value — so it is what an undeclared document is in, and this component does not yet
- * ASK which model is in force. WHAT THE NEXT DIFF BUILDS: the ask itself — read `border-collapse` here and
- * take §17.6.2's arm when it answers `collapse`. Both properties are now modelled, so nothing is missing
- * underneath: they are in core/css/css_computed_value.c's `css_computed_models` set, and they landed in
- * DIFFERENT arms rather than the one arm an earlier draft of this residual named. `border-collapse` is
- * as-specified; `border-spacing` is NOT, and could not have been — CSS 2.1 §17.6.1 The separated borders
- * model states its `Computed value: two absolute lengths`, a pair, which no as-specified row can hold. That
- * clause was spec-wrong when it was written and a reader who acted on it would have built the wrong shape,
- * which is why it is corrected here rather than deleted. HOW ITS ABSENCE WOULD SHOW: a table
- * declaring `border-collapse: collapse` with a non-zero cell border reports every column WIDER than a browser
- * does, by one border width per shared edge, and the table that grows out of those columns is wider than the
- * one Chrome lays out for the same document. */
-static CssPx tcw_cell_edges(lxb_dom_element_t *cell)
+ * NAMED RESIDUAL — §17.6.1 The separated borders model ONLY, AND THE ASK IS NOW THE CALLER'S. WHAT IS NOT
+ * COVERED: CSS 2.1 §17.6.2 The collapsing border model, in which a cell's used border is not its own computed
+ * `border-*-width` — that section centres each border on the grid line between two cells ("borders are centered
+ * on the grid lines between the cells") and its own row-width equation charges each of the two outermost
+ * borders at HALF, so the sum taken here double-counts every shared edge. The border read below is right under
+ * `border-collapse: separate`, which is that property's initial value and therefore what an undeclared document
+ * is in. WHAT THE NEXT DIFF BUILDS: §17.6.2's own used border widths — the resolution §17.6.2.1 Border conflict
+ * resolution states over the adjoining cell, row, row group, column, column group and table borders — answered
+ * per cell edge, so that the sum below has a second arm to take. THE ASK THAT SELECTS BETWEEN THEM IS ALREADY
+ * BUILT AND IS NOT HERE: core/layout/table_width.c reads `border-collapse` at §17.5.2's entry and refuses
+ * `collapse` by name before any column is measured, and `table_column_widths` asserts that routing at its own
+ * boundary — so a reader looking for the ask in this function will not find one, by design. An earlier draft of
+ * this residual told its reader to build that ask HERE, which would have put a second copy of one routing
+ * decision one level below the component that owns it. HOW ITS ABSENCE WOULD SHOW: a table declaring
+ * `border-collapse: collapse` reaches §17.5.2's refusal instead of a width, so no document in that model is
+ * laid out at all — and the day the refusal is lifted without this arm, every such table with a non-zero cell
+ * border reports every column WIDER than a browser does, by one border width per shared edge. */
+CssPx table_cell_border_edges(lxb_dom_element_t *cell)
 {
     static const char *const PADDINGS[2] = { "padding-left", "padding-right" };
     static const char *const BORDERS[2] = { "border-left-width", "border-right-width" };
@@ -137,7 +138,7 @@ static TableColumnWidth tcw_cell_widths(lxb_dom_element_t *cell)
     char nbuf[160];
 
     DCHECK(cell != NULL, "CSS 2.1 §17.5.2.2's step 1 was asked for of no cell element");
-    edges = tcw_cell_edges(cell);
+    edges = table_cell_border_edges(cell);
     sizes = intrinsic_inline_sizes(cell);
     min_content = sizes.min_content;
     /* §17.5.2.2 says the SPECIFIED `width`, and css-sizing-3 §3.1.1 "Preferred Size Properties: the width and
@@ -240,15 +241,59 @@ static TableBoxKind tcw_kind_of(lxb_dom_element_t *el)
     return kind;
 }
 
-/* ONE column or column-group box, checked. Split out so the two nesting levels below are one call each rather
+/* ONE column or column-group box, asked. Split out so the two nesting levels below are one call each rather
    than one loop with a level flag in it — the flag was the only thing making the walk hard to read, and
    §17.2's box types nest no deeper than a column inside a column group. */
-static void tcw_check_column_box(lxb_dom_element_t *box)
+static bool tcw_column_box_declares_width(lxb_dom_element_t *box)
 {
     CssLength cw = css_computed_length(box, "width");
+
+    return !(cw.kind == CSS_LENGTH_KEYWORD && strcmp(cw.keyword, "auto") == 0);
+}
+
+/* CSS 2.1 §17.5's rules 3 and 4 over `table`'s own child list — see the header for why this is EXPORTED and
+   why it decides nothing. §17.2's box types nest no deeper than a column inside a column group, which is why
+   the walk is two levels and not a recursion. */
+lxb_dom_element_t *table_column_box_with_declared_width(lxb_dom_element_t *table)
+{
+    lxb_dom_node_t *n, *c;
+
+    DCHECK(table != NULL, "CSS 2.1 §17.5's column boxes were asked for of no element");
+    n = lxb_dom_interface_node(table);
+    for (c = n->first_child; c != NULL; c = c->next) {
+        lxb_dom_element_t *el;
+        TableBoxKind kind;
+
+        if (c->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
+        el = lxb_dom_interface_element(c);
+        kind = tcw_kind_of(el);
+        if (kind == TABLE_BOX_COLUMN) {
+            if (tcw_column_box_declares_width(el)) return el;
+        } else if (kind == TABLE_BOX_COLUMN_GROUP) {
+            lxb_dom_node_t *m;
+
+            /* CSS 2.1 §17.5 Visual layout of table contents' rule 4: "A column group box occupies the same
+               grid cells as the columns it contains", so the group's own `width` and each column's are two
+               separate floors and both are asked. */
+            if (tcw_column_box_declares_width(el)) return el;
+            for (m = c->first_child; m != NULL; m = m->next) {
+                lxb_dom_element_t *col;
+
+                if (m->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
+                col = lxb_dom_interface_element(m);
+                if (tcw_kind_of(col) == TABLE_BOX_COLUMN && tcw_column_box_declares_width(col)) return col;
+            }
+        }
+    }
+    return NULL;
+}
+
+static void tcw_require_no_declared_column_width(lxb_dom_element_t *table)
+{
+    lxb_dom_element_t *box = table_column_box_with_declared_width(table);
     char nbuf[160];
 
-    if (cw.kind == CSS_LENGTH_KEYWORD && strcmp(cw.keyword, "auto") == 0) return;
+    if (box == NULL) return;
     DFAILF("%s: CSS 2.1 §17.5.2.2 Automatic table layout reads a DECLARED `width` off this box and "
                        "core/layout/table_grid.h does not place it. Two of the four steps need it and both are "
                        "FLOORS, so leaving it out reports every column it covers narrower than the document "
@@ -269,37 +314,6 @@ static void tcw_check_column_box(lxb_dom_element_t *box)
            box_subject(box, nbuf, sizeof nbuf));
 }
 
-static void tcw_require_no_declared_column_width(lxb_dom_element_t *table)
-{
-    lxb_dom_node_t *n = lxb_dom_interface_node(table), *c;
-
-    for (c = n->first_child; c != NULL; c = c->next) {
-        lxb_dom_element_t *el;
-        TableBoxKind kind;
-
-        if (c->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
-        el = lxb_dom_interface_element(c);
-        kind = tcw_kind_of(el);
-        if (kind == TABLE_BOX_COLUMN) {
-            tcw_check_column_box(el);
-        } else if (kind == TABLE_BOX_COLUMN_GROUP) {
-            lxb_dom_node_t *m;
-
-            /* CSS 2.1 §17.5 Visual layout of table contents' rule 4: "A column group box occupies the same
-               grid cells as the columns it contains", so the group's own `width` and each column's are two
-               separate floors and both are checked. */
-            tcw_check_column_box(el);
-            for (m = c->first_child; m != NULL; m = m->next) {
-                lxb_dom_element_t *col;
-
-                if (m->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
-                col = lxb_dom_interface_element(m);
-                if (tcw_kind_of(col) == TABLE_BOX_COLUMN) tcw_check_column_box(col);
-            }
-        }
-    }
-}
-
 size_t table_column_widths(lxb_dom_element_t *table, const TableGrid *grid, TableColumnWidth **out)
 {
     TableColumnWidth *cols;
@@ -314,6 +328,26 @@ size_t table_column_widths(lxb_dom_element_t *table, const TableGrid *grid, Tabl
            "CSS 2.1 §17.5.2.2 was handed a grid with no cell array and a non-zero cell count — "
            "`table_grid_build` stores NULL only for a table whose rows generate no cell, so the two have been "
            "carried apart since it answered");
+    /* THE BORDER MODEL IS THE CALLER'S ROUTING DECISION, ASSERTED HERE RATHER THAN ASKED HERE — the split
+       core/layout/table_width.c makes at §17.5.2's entry is what decides whether these four steps may run at
+       all, and this is the boundary where that decision is RELIED ON. `table_cell_border_edges` sums each
+       cell's own computed `border-*-width`, which is §17.6.1 The separated borders model's used border and is
+       NOT §17.6.2 The collapsing border model's (see the residual on that function), so a table in the
+       collapsing model reaching these steps would come out wider by one border width per shared edge with
+       nothing downstream to say so. It is asked ONCE, of the table, rather than per cell: §17.6's
+       `border-collapse` is `Inherited: yes` and applies to the table, so every cell in it is in one model. */
+    {
+        char *collapse = css_computed_value(table, "border-collapse");
+        bool separated = collapse != NULL && strcmp(collapse, "separate") == 0;
+
+        free(collapse);
+        DCHECK(separated,
+               "CSS 2.1 §17.5.2.2 Automatic table layout's four steps were entered for a table in CSS 2.1 "
+               "§17.6.2 The collapsing border model, whose used cell borders are not the computed "
+               "`border-*-width` this component sums. core/layout/table_width.c refuses that model by name at "
+               "CSS 2.1 §17.5.2 Table width algorithms: the 'table-layout' property's entry, which is the only "
+               "route to these steps, so this table reached them past that refusal and the two have come apart");
+    }
     *out = NULL;
     if (grid->ncols == 0) return 0;
     tcw_require_no_declared_column_width(table);
