@@ -36,6 +36,13 @@
  *     declaration); the dictionary-member one is not — dicttypegate.mjs reports its own as "candidates predict
  *     {…} over N dictionaries" — and grouping by enumerator over an ambiguous join would put a position under
  *     a partition that may not be its own. Those rows stay in dicttypegate's silent band and say so there.
+ *   - ITS DOMAIN IS COMPLETE OVER WHAT THE LADDER OBSERVES, AND OVER NOTHING ELSE. §3.2.25 reads V through
+ *     its JavaScript type, platform-object-ness, four internal slots, IsCallable and GetMethod at two property
+ *     keys; the domain is every base an ECMAScript constructor produces crossed with every assignment of those
+ *     two keys, so a shape a page can build and this table cannot name would have to be one the standard's own
+ *     steps cannot name either. The one corner a human still states is the platform object's step-5-to-10
+ *     facts, which no ECMAScript value can witness — the residual is at that declaration, with what would show
+ *     it.
  *   - IT READS THE CORPUS `idl_installed.mjs` IS POINTED AT, and a member installed outside it is not seen.
  *   - AN OVERLOADED MEMBER IS NOT JUDGED. §3.6 gives one member several signatures and this engine declares
  *     one entry; which signature a declaration is meant to be is a question about the member's algorithm.
@@ -157,10 +164,12 @@ const includesNullable = (t) => !!t.nullable || nullableMemberCount(t) === 1;
 
 /* ---- the value shapes §3.2.25's twenty steps can tell apart -----------------------------------------------
  *
- * The domain is FIXED and small because the ladder is: every step tests either the JavaScript type of V, one
- * internal slot, IsCallable, or the presence of an iteration method. Two shapes are separated here exactly
- * when some step separates them, so a partition over this domain IS Web IDL §3.2.25 Union types' function and
- * not a sample of it.
+ * The domain is the set of shapes the ladder can DISTINGUISH, and every step tests exactly one of five things
+ * about V: its JavaScript type, whether it is a platform object, one internal slot, IsCallable, or the answer
+ * of ECMAScript's GetMethod at one property key. Two shapes are separated here exactly when some step
+ * separates them, so a partition over this domain IS Web IDL §3.2.25 Union types' function and not a sample of
+ * it. That is a claim about COMPLETENESS as much as about correctness, and the completeness half is what the
+ * cross product below is for.
  *
  * A SHAPE'S NAME IS A LABEL AND NEVER A FACT — WHICH IS THE ONLY REASON THIS DOMAIN CAN BE TRUSTED. The list
  * below used to be bare strings, and every step read them by comparing the string: `V === "Object @@iterator"`
@@ -183,9 +192,35 @@ const includesNullable = (t) => !!t.nullable || nullableMemberCount(t) === 1;
  * wrote; it is what `new String("")[%Symbol.iterator%]` answers. The one shape that CANNOT be derived is the
  * platform object, which has no witness outside a browser, and it is declared as one below with its reason.
  *
- * The two Object-with-an-iterator shapes are EXCLUSIVE (`@@asyncIterator` means no `@@iterator` and the
- * reverse), because step 11's sub-steps fall through on an undefined method and a shape carrying both could
- * not show that. That is asserted of the witnesses rather than assumed of the names. */
+ * AND THE SHAPES A PAGE CAN BUILD ARE NOT THE SHAPES ECMASCRIPT'S CONSTRUCTORS PRODUCE, WHICH IS THE HALF
+ * DERIVING THE FACTS DOES NOT CLOSE. Running the real operation on a real value makes every ROW right; it says
+ * nothing about which rows the table should HAVE, and a domain built by listing one value per constructor
+ * silently asserts that a page hands Web IDL only the shapes a constructor emitted. In this project's threat
+ * model that is precisely the wrong assumption: the values reaching a Web IDL entry point are the page's, and
+ * the page writes properties. So the domain is a CROSS PRODUCT, and its two axes are the standard's own
+ * distinction rather than a taxonomy invented here. Steps 5-10 ask what V IS — "V is a platform object",
+ * "V has an [[ArrayBufferData]] internal slot", IsCallable(V) — and no ECMAScript operation adds an internal
+ * slot to a value or takes one away, so those facts are fixed by the constructor that made it. Steps 11.1.1.1,
+ * 11.1.1.3, 11.2.1 and 11.3.1 ask `? GetMethod(V, P)`, which is an ordinary [[Get]] and therefore answers
+ * whatever was last written at P on V or on its prototype chain. GetMethod's keys are the axes a page moves a
+ * value along, and they are the ONLY ones — so the domain is { every base a constructor produces } x { every
+ * assignment of those keys }, which is derived from the key list and grows with it rather than being widened
+ * by hand.
+ *
+ * THE CROSSINGS ARE REACHABLE, WHICH IS NOT AUTOMATIC AND IS THE REASON THIS IS A DOMAIN AND NOT A PADDING.
+ * §3.2.25 is ORDERED, so a decoration read at step 11 is invisible for a value whose brand step already
+ * returned — but steps 5-10 each hold exactly two sub-steps and FALL THROUGH when the union names neither of
+ * them, and a union that names no `object` arm and no arm for V's own brand is the ordinary case rather than
+ * the exotic one. `(DOMString or sequence<DOMString>)` is such a union: an ArrayBuffer carrying
+ * `%Symbol.iterator%` falls past step 6 and takes step 11.2's sequence arm where an undecorated one takes
+ * step 15's string arm, and a typed array whose `%Symbol.iterator%` has been masked does the reverse. Both
+ * values are two lines of page script. A crossing the ladder CANNOT observe costs nothing either, because it
+ * produces a fact vector some other shape already has and the dedup below removes it — so the cross product
+ * cannot manufacture a partition, only reveal one.
+ *
+ * The domain's own duplicate check is what enforces that, and it is not a formality: a widening that adds a
+ * shape the ladder cannot separate from an existing one is a domain naming one value shape twice, and it
+ * aborts here rather than padding every partition key with a duplicated column. */
 
 /* The brand checks Web IDL §3.2.25 Union types' steps 6-9 name, reached through the ECMAScript accessors that
    OWN them rather than
@@ -202,6 +237,16 @@ const SLOT = {
   stringData: String.prototype.valueOf,
 };
 const hasSlot = (get, v) => { try { return get.call(v) !== undefined; } catch { return false; } };
+
+/* THE PROPERTY KEYS THE LADDER READS THROUGH GetMethod, each named beside the sub-step that reads it. This is
+   the whole of what §3.2.25 observes about V that is not its JavaScript type, an internal slot, IsCallable or
+   platform-object-ness — so it is also the whole of what a page can change about a value's arm without
+   changing what the value is. The cross product below is generated from this list, which is why adding a key
+   here widens the domain instead of requiring the domain to be widened. */
+const GET_METHOD_KEYS = [
+  ["asyncIterator", Symbol.asyncIterator], /* step 11.1.1.1 */
+  ["iterator", Symbol.iterator],           /* steps 11.1.1.3, 11.2.1, 11.3.1 */
+];
 
 /* ECMAScript's GetMethod(V, P) — the operation Web IDL §3.2.25 steps 11.1.1.1, 11.1.1.3, 11.2.1 and 11.3.1 all
    name, and not a
@@ -223,7 +268,7 @@ function getMethod(v, sym, who) {
    ECMAScript value can state, so it is passed in rather than probed. */
 function factsOf(who, v, platform) {
   const object = (typeof v === "object" && v !== null) || typeof v === "function";
-  return {
+  const f = {
     kind: v === null ? "null" : typeof v,      /* steps 1, 2, 4, 12, 13 and 14 ask only this */
     object,                                    /* step 11's own condition */
     platform,                                  /* step 5 */
@@ -233,70 +278,131 @@ function factsOf(who, v, platform) {
     dataView: object && hasSlot(SLOT.dataView, v),                    /* step 8 */
     typedArray: object && hasSlot(SLOT.typedArray, v),                /* step 9 */
     stringData: object && hasSlot(SLOT.stringData, v),                /* step 11.1.1 */
-    iterator: object && getMethod(v, Symbol.iterator, who),           /* steps 11.1.1.3, 11.2.1, 11.3.1 */
-    asyncIterator: object && getMethod(v, Symbol.asyncIterator, who), /* step 11.1.1.1 */
   };
+  for (const [fact, key] of GET_METHOD_KEYS) f[fact] = object && getMethod(v, key, who);
+  return f;
 }
 
 /* THE PLATFORM OBJECT IS DECLARED AND NOT DERIVED, because no ECMAScript value is one: "platform object" is
    Web IDL's own notion and a witness for it exists only inside a browser. Its facts are therefore the one
    place in this domain where a human states an answer, and they are stated here so that the narrowness is
-   READABLE rather than implied by a name — which is exactly the defect the rest of this section removes.
-   RESIDUAL — WHAT IS NOT COVERED: a platform object whose interface carries an `iterable<>`, `maplike<>`,
-   `setlike<>` or `async_iterable` declaration HAS %Symbol.iterator% on its prototype, so it reaches Web IDL
-   §3.2.25 step 11.2
-   and takes the sequence arm; this witness models only the non-iterable platform object, and the domain
-   therefore holds no shape for the iterable one. WHAT THE NEXT DIFF BUILDS: a second declared witness with
-   `iterator: true`, admitted to SHAPES only when the loaded corpus actually declares such an interface — the
-   member types to look for are `iterable`, `maplike`, `setlike` and `async_iterable`, which is what
-   idl_members.mjs's iterationMembers reads, and inhabitation must be derived from the corpus rather than
-   asserted here. HOW ITS ABSENCE WOULD SHOW: a `(DOMString or sequence<DOMString>)` position handed a NodeList
-   is converted by the engine to a sequence and printed by this table as `platform object -> string`, so an
-   enumerator that answers those two positions differently is judged CONSISTENT here and the differential
-   written from this table encodes the wrong expectation for that row. */
+   READABLE rather than implied by a name — which is exactly the defect the rest of this section removes. Only
+   its step-5-to-10 facts are stated: the GetMethod facts are varied over it by the cross product like every
+   other object base, because a page assigns `%Symbol.iterator%` to a platform object with the same one line
+   it assigns it to anything else, and because an interface declaring `iterable<>`, `maplike<>`, `setlike<>` or
+   `async_iterable` carries one already. The ladder reads GetMethod and nothing else there, so it cannot tell
+   those two apart and this domain does not model them apart.
+   RESIDUAL — WHAT IS NOT COVERED: the platform object is ONE declared fact vector, so an implementation whose
+   platform objects answer a step-5-to-10 probe differently from this declaration — IsCallable true, or a brand
+   slot present — has a shape this domain does not name. WHAT THE NEXT DIFF BUILDS: nothing, until such a shape
+   is shown to exist; Web IDL's own steps 6 to 9 are the exhaustive brand list and a platform object holding
+   one of those slots would be a value the engine constructs, so the evidence would come from `idl_args.c`'s
+   own conversions rather than from this file. HOW ITS ABSENCE WOULD SHOW: a union naming both an interface arm
+   and a buffer arm would be printed here as sending every platform object to the interface arm, and a
+   differential written from that row would expect the interface conversion for a platform object the engine
+   converts to a buffer. */
 const PLATFORM_OBJECT_FACTS = { kind: "object", object: true, platform: true, callable: false,
   arrayBuffer: false, sharedArrayBuffer: false, dataView: false, typedArray: false, stringData: false,
   iterator: false, asyncIterator: false };
 
-/* The domain, in the order the table prints. Each entry is a NAME and the value whose facts define it. */
-const WITNESSES = [
-  ["undefined", undefined], ["null", null],
-  ["platform object", PLATFORM_OBJECT_FACTS],
-  ["ArrayBuffer", new ArrayBuffer(0)],
-  ["SharedArrayBuffer", new SharedArrayBuffer(0)],
-  ["DataView", new DataView(new ArrayBuffer(0))],
-  ["typed array", new Uint8Array(0)],
-  ["callable", function () {}],
-  ["Object @@asyncIterator", { [Symbol.asyncIterator]() {} }],
-  ["Object @@iterator", { [Symbol.iterator]() {} }],
-  ["String object", new String("")],
-  ["plain Object", {}],
-  ["boolean", true], ["number", 0], ["bigint", 0n], ["string", ""], ["symbol", Symbol("uniongate")],
+/* The bases, in the order the table prints — one THUNK per base, because each assignment of the GetMethod keys
+   needs its own value to write them on and a shared one would carry the previous assignment's properties. */
+const BASES = [
+  ["undefined", () => undefined], ["null", () => null],
+  ["platform object", () => PLATFORM_OBJECT_FACTS],
+  ["ArrayBuffer", () => new ArrayBuffer(0)],
+  ["SharedArrayBuffer", () => new SharedArrayBuffer(0)],
+  ["DataView", () => new DataView(new ArrayBuffer(0))],
+  ["typed array", () => new Uint8Array(0)],
+  ["callable", () => function () {}],
+  ["Object", () => ({})],
+  ["String object", () => new String("")],
+  ["boolean", () => true], ["number", () => 0], ["bigint", () => 0n], ["string", () => ""],
+  ["symbol", () => Symbol("uniongate")],
 ];
-const SHAPES = WITNESSES.map(([name]) => name);
-const FACTS = {};
-for (const [name, w] of WITNESSES)
-  FACTS[name] = (w === PLATFORM_OBJECT_FACTS) ? w : factsOf(name, w, false);
 
-/* The domain's own invariants, asserted at the origin rather than described above it. */
-if (!(FACTS["Object @@asyncIterator"].asyncIterator && !FACTS["Object @@asyncIterator"].iterator))
-  throw new Error("the @@asyncIterator witness also answers @@iterator, so the domain can no longer show "
-    + "Web IDL §3.2.25 step 11.2 falling through on an undefined method");
-if (!(FACTS["Object @@iterator"].iterator && !FACTS["Object @@iterator"].asyncIterator))
-  throw new Error("the @@iterator witness also answers @@asyncIterator, so the domain can no longer show "
-    + "Web IDL §3.2.25 step 11.1.1.1 falling through to 11.1.1.3");
+/* Every assignment of the GetMethod keys, generated from the key list rather than enumerated, so the count is
+   2^|GET_METHOD_KEYS| by construction and a key added above cannot be forgotten here. */
+let ASSIGNMENTS = [[]];
+for (const [, key] of GET_METHOD_KEYS)
+  ASSIGNMENTS = ASSIGNMENTS.flatMap((s) => [s, [...s, key]]);
+
+/* Writing an assignment onto a base. Both directions are page-reachable and both are used: an own data
+   property holding a function makes GetMethod answer where the base had nothing, and an own data property
+   holding `undefined` makes it answer nothing where the base inherited a method from its prototype — which is
+   the only way this domain reaches a typed array or a String object that does NOT take step 11.2's sequence
+   arm. Nothing else about the value is touched, and the facts recorded are re-probed rather than intended. */
+function decorate(v, present) {
+  for (const [, key] of GET_METHOD_KEYS)
+    Object.defineProperty(v, key, { value: present.includes(key) ? function () {} : undefined,
+      writable: true, configurable: true });
+  return v;
+}
+
+/* The declared platform-object row must state EVERY fact the probes derive, or a fact the ladder reads would
+   answer `undefined` there and the table would be silent about a step rather than wrong about it. */
+{
+  const derived = Object.keys(factsOf("Object", {}, false)).sort().join(",");
+  const declared = Object.keys(PLATFORM_OBJECT_FACTS).sort().join(",");
+  if (derived !== declared)
+    throw new Error(`the declared platform-object facts state {${declared}} while Web IDL §3.2.25's steps are `
+      + `probed for {${derived}}, so that row answers a step this domain reads`);
+}
+
+const SHAPES = [];
+const FACTS = {};
+/* A shape's printed name is rendered from the facts the probes RETURNED, never from the assignment that built
+   the witness, so a name cannot state an iteration the ladder would not find — and a base whose prototype
+   already supplies a method is named for what GetMethod answers rather than for how it came to answer. */
+const nameOf = (base, f) =>
+  base + (f.iterator ? " +@@iterator" : "") + (f.asyncIterator ? " +@@asyncIterator" : "");
+
+for (const [base, make] of BASES) {
+  const bare = make();
+  const bareFacts = (bare === PLATFORM_OBJECT_FACTS) ? bare : factsOf(base, bare, false);
+  /* Step 11's own condition gates every GetMethod §3.2.25 makes, so a value that is not an Object is never
+     asked at these keys: it has exactly one shape and the cross product does not run over it. */
+  if (!bareFacts.object) { SHAPES.push(base); FACTS[base] = bareFacts; continue; }
+  for (const present of ASSIGNMENTS) {
+    const f = (bare === PLATFORM_OBJECT_FACTS)
+      ? { ...PLATFORM_OBJECT_FACTS, asyncIterator: present.includes(Symbol.asyncIterator),
+          iterator: present.includes(Symbol.iterator) }
+      : factsOf(base, decorate(make(), present), false);
+    /* The witness is re-probed and the probe must agree with what was written on it. This is what the two
+       hand-written exclusivity checks it replaces were reaching for, and it is stronger: it holds every base
+       against every assignment rather than one pair of witnesses against each other. The two ways a base can
+       fail to carry an assignment abort at their own origins and neither can produce a silently wrong row —
+       a base that cannot take the write at all (non-extensible, or the key non-configurable) throws from
+       `Object.defineProperty` at the write, and a base that ANSWERS past what was written (a Proxy whose get
+       trap ignores the property table) is this check, which names the base and the key. */
+    for (const [fact, key] of GET_METHOD_KEYS)
+      if (f[fact] !== present.includes(key))
+        throw new Error(`the \`${base}\` witness was written ${String(key)} = `
+          + `${present.includes(key) ? "a function" : "undefined"} and Web IDL §3.2.25's GetMethod then `
+          + `answered ${f[fact]}, so this base cannot carry the assignments the domain is built from`);
+    const name = nameOf(base, f);
+    SHAPES.push(name);
+    FACTS[name] = f;
+  }
+}
+
 {
   /* Two shapes with the same facts are one shape: the ladder cannot tell them apart, so printing both states a
-     distinction that does not exist and pads the partition key with a duplicated column. */
+     distinction that does not exist and pads the partition key with a duplicated column. This is also what
+     keeps the cross product honest — a crossing no step of §3.2.25 can observe is removed here rather than
+     manufacturing a partition, and a base whose brand facts duplicate another's is caught the same way. */
   const seen = new Map();
   for (const name of SHAPES) {
-    const k = JSON.stringify(FACTS[name]);
+    const f = FACTS[name];
+    const k = JSON.stringify(Object.keys(f).sort().map((key) => [key, f[key]]));
     if (seen.has(k))
       throw new Error(`the \`${name}\` and \`${seen.get(k)}\` shapes have identical facts, so no step of `
         + "Web IDL §3.2.25 separates them and this domain names one value shape twice");
     seen.set(k, name);
   }
 }
+const SHAPE_PAD = Math.max(...SHAPES.map((s) => s.length));
+
 
 /* §3.2.25 Union types, read in the standard's own step order. Its twenty top-level steps are parameterised by
    THREE facts the IDL states and not by one: whether the union type includes undefined (step 1), whether it
@@ -427,7 +533,7 @@ for (const rec of world.records) {
 
 /* ---- the findings ------------------------------------------------------------------------------------------ */
 const showMap = (map, indent) =>
-  SHAPES.map((V) => `${indent}${V.padEnd(23)} -> ${map[V]}`).join("\n");
+  SHAPES.map((V) => `${indent}${V.padEnd(SHAPE_PAD)} -> ${map[V]}`).join("\n");
 
 /* HOW MANY ARMS A PARTITION ACTUALLY HAS, which is what decides whether a union NEEDS a union row. A partition
    whose only outcomes are one arm and §3.2.25 step 20's TypeError (and step 2's IDL null, which every nullable
