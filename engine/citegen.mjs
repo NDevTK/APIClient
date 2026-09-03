@@ -9,9 +9,11 @@
  *   node engine/citegen.mjs --unanchored  the citations naming no standard that only a file vote placed — the
  *                                         ones inside a DCHECK/DFAIL/CHECK message first, since a crash prints them
  *   node engine/citegen.mjs --gaps        the quotation check's verified/not-found split by distance from the §
- *   node engine/citegen.mjs --steps       the step numbers the step check counted and REFUSED to accuse — those
+ *   node engine/citegen.mjs --steps       the step numbers the step checks counted and REFUSED to accuse — those
  *                                         whose cited section holds no list reaching them, which is not the same
- *                                         claim as the section being wrong
+ *                                         claim as the section being wrong, and those whose claim about a step's
+ *                                         CONTENT stands over several lists at once, where the number names
+ *                                         several different steps and no reading can be accused
  *   node engine/citegen.mjs --regen [key] fetch the standard(s), rewrite engine/specindex/<key>.json
  *
  * WHY THIS EXISTS. CLAUDE.md §Browser half: a named spec with no number cannot be looked up, so it cannot
@@ -241,13 +243,16 @@
  * first number a reader tests is always the one that is still right. So --regen writes a THIRD artifact,
  * engine/specindex/steps/<key>.json, holding each section's list structure — see collectCorpus, which fills it
  * from the SAME boundary walk as the text so a step can never be filed under a section its own words are not.
- * It costs a fifth of a megabyte across the standards, against the text corpus's eight, because it stores counts
- * and indices rather than prose.
+ * It is a small fraction of the text corpus because it stores COUNTS AND OFFSETS and never prose: each item's
+ * extent is two integers INTO the text corpus, so the standard's sentences exist in exactly one place and the
+ * two artifacts cannot come to disagree about what a step says.
  *
- * WHAT IT ACCUSES IS ONLY A NUMBER THAT CANNOT EXIST, and everything else about a step is outside it. It cannot
- * tell 6.4 from 6.5 where step 6 holds seven sub-steps — only MEANING separates those, and a reader must do it.
- * What it catches is the number that ran off the end, which is what the drift produces once it passes the last
- * item, and what the promoted-nested-list defect produces at every depth below the promotion.
+ * IT ANSWERS TWO QUESTIONS AND THEY ARE NOT THE SAME QUESTION. The first is whether the number CAN EXIST, which
+ * is the drift caught after it runs off the end of a list. The second is whether the step it names SAYS what the
+ * citation says it says, which is that same drift caught while it is still IN RANGE — `step 16's string` where
+ * the string arm is step 15 and step 16 is another clause of the one ladder, a citation nothing else here can
+ * fault: the number resolves, the section is right, no quotation is being made. What still separates 6.4 from
+ * 6.5 where neither carries the claim's own words is MEANING, and a reader must do that.
  *
  * TWO BANDS, AND ONLY ONE OF THEM IS A CLAIM ABOUT THE CITATION — the same asymmetry check (1) draws when it
  * refuses to ask whether a term-resolved standard HAS the cited number.
@@ -274,6 +279,27 @@
  * charged with the wrong section. A number some OTHER citation in the same prose unit admits is confirmed and
  * counted apart, which is what keeps that mechanism to the residue it is; what escapes is the case where the
  * owning algorithm is named in ENGLISH and nowhere in a number.
+ *
+ * AND THE CONTENT QUESTION SPLITS THE SAME WAY, ON EVIDENCE READ THE SAME WAY. A claim is only ever a
+ * POSSESSIVE — `step N's X`, the one form that attaches a thing to a list position in one breath — and only
+ * where the author BOUNDED the phrase: a bare word, or a run the standard itself defines as a term. Then:
+ *   — ONE READING: the cited section holds exactly one list reaching that step, so the number names ONE step,
+ *     and a rival step that DOES carry the word stands in that same list. This is the finding,
+ *     STEP-SAYS-OTHERWISE.
+ *   — SEVERAL READINGS: the number names as many steps as there are lists, which is CLAUDE.md's ambiguous
+ *     sub-number — every candidate reading confirms it — and the rival would be picked from whichever list
+ *     happened to hold the word, which can be another algorithm entirely. Counted, listed under --steps, never
+ *     accused.
+ * BOTH BANDS WERE READ, at the revision this landed, against the fetched standards rather than against the
+ * corpus that produced them. Of the several-reading band three of ten were real; of the one-reading band the
+ * only row that was not real was a retirement note quoting a step claim in order to RETIRE it — which is the
+ * use-versus-mention defect this file already names, and it is now asked at the step and not only at the
+ * citation. What is left in the reported band is what the standard's own words falsify.
+ * WHAT IS NOT COVERED, NAMED: the EXISTENCE check does not ask the use-versus-mention question — only the
+ * content check does, because that is where a disclaimed row was measured. A retirement note quoting an
+ * out-of-range number would therefore still be accused. The next diff asks mentionOf at the same point in the
+ * existence check, AFTER its band has been read the way this one's was; its absence shows as a
+ * STEP-OUT-OF-RANGE row whose surrounding prose says the number STOOD as something.
  *
  * A CITATION IS NOT ALWAYS SPELLED WITH A §, AND THE ONE THAT IS NOT IS WHERE THE ERRORS WERE. quickjs.c
  * writes `7.4.9 IteratorClose`, never `§7.4.9` — 58 times, and the §-only reader saw NONE of them. A bare
@@ -858,9 +884,44 @@ function withBoundaries(body, marks) {
  * reading admit this path", which is the only question about them that has an answer. */
 const LIST_TAG = /<\/?(ol|ul|dl|li|dd)\b[^>]*>/gi;
 
-function scanLists(slice) {
-  const clean = slice.replace(/<!--[\s\S]*?-->/g, " ")
-    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, " ");
+/* A COMMENT IS BLANKED IN PLACE RATHER THAN REMOVED, because two readings of one slice now have to agree on
+ * where things ARE and not only on what they say. This walk records each item's POSITION, and those positions
+ * are handed to the token mapping below as offsets into this same string — so a replacement that SHORTENS the
+ * slice would slide every position after it by the length of a comment nobody can see, and the step whose
+ * words the audit then reads would be the wrong one by however much markup the standard hides in its source.
+ * Equal-length filler keeps one coordinate system for both readings, and whitespace is what the tokenizer
+ * already turns these bytes into, so the two agree on the words as well as on the offsets. */
+const blankRun = (s) => " ".repeat(s.length);
+function listSource(slice) {
+  return slice.replace(/<!--[\s\S]*?-->/g, blankRun)
+    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, blankRun);
+}
+
+/* AN ITEM'S EXTENT IN TOKENS OF THE VERY TEXT THE QUOTATION CHECK READS, so the step corpus stores no prose of
+ * its own: a step's words ARE the section's words, sliced, and two artifacts that cannot hold different bytes
+ * cannot drift apart. The mapping is a COUNT and not a second tokenization, and it is EXACT for a reason the
+ * markup guarantees rather than one this function is careful about: every cut here falls at a list tag;
+ * `stripMarkup` turns a tag run that ENDS a fragment into a space whatever else the run holds; and `<li>`,
+ * `<ol>`, `<ul>`, `<dl>` and `<dd>` are all in SPLIT_TAG, so a run containing one is a space in the joined
+ * reading too. No token can straddle a cut in either reading, so the pieces' counts add up to the whole's.
+ * `base` is where this slice's tokens begin in the section's stream — a section whose boundaries appear twice
+ * has its text CONCATENATED, and an item of the second appearance is that far along. */
+function toTokenSpans(clean, roots, base) {
+  const cuts = new Set([0, clean.length]);
+  const each = (l, f) => { f(l); for (const a of l.ch.values()) for (const x of a) each(x, f); };
+  for (const r of roots) each(r, (l) => { for (const it of l.sp) { cuts.add(it.from); cuts.add(it.to); } });
+  const ord = [...cuts].sort((a, b) => a - b);
+  const at = new Map();
+  let acc = base;
+  for (let i = 0; i < ord.length; i++) {
+    at.set(ord[i], acc);
+    if (i + 1 < ord.length) { const t = tokenText(clean.slice(ord[i], ord[i + 1])); if (t) acc += t.split(" ").length; }
+  }
+  for (const r of roots) each(r, (l) => { for (const it of l.sp) { it.from = at.get(it.from); it.to = at.get(it.to); } });
+}
+
+function scanLists(slice, base) {
+  const clean = listSource(slice);
   const roots = [];
   const st = [];                                   /* the open list elements, innermost last */
   LIST_TAG.lastIndex = 0;
@@ -879,11 +940,26 @@ function scanLists(slice) {
       f.cur = Number.isInteger(v) && v > 0 ? v : f.next;
       f.next = f.cur + 1;
       if (f.cur > f.n) f.n = f.cur;
+      /* AN ITEM RUNS TO WHATEVER ENDS IT, WHICH IS NEVER ITS OWN CLOSE TAG on the standard this tool cites
+         most — the same omitted `</li>` the count above is written around. So the item OPEN that follows it in
+         the same list closes it, and a list close closes the last item of every list it pops; anything left
+         open at the end of the slice runs to the end. Its extent therefore INCLUDES its sub-steps, which is
+         what a reader means by "what step 11 says". */
+      if (f.open) f.open.to = m.index;
+      f.open = { i: f.cur, from: m.index + m[0].length, to: clean.length };
+      f.sp.push(f.open);
       continue;
     }
-    if (close) { for (let i = st.length - 1; i >= 0; i--) if (st[i].kind === name) { st.length = i; break; } continue; }
+    if (close) {
+      for (let i = st.length - 1; i >= 0; i--) if (st[i].kind === name) {
+        for (let j = st.length - 1; j >= i; j--) if (st[j].open) { st[j].open.to = m.index; st[j].open = null; }
+        st.length = i; break;
+      }
+      continue;
+    }
     const start = name === "ol" ? Number(attrOf(m[0], "start")) : NaN;
-    const f = { kind: name, n: 0, cur: 0, next: Number.isInteger(start) && start > 0 ? start : 1, ch: new Map() };
+    const f = { kind: name, n: 0, cur: 0, next: Number.isInteger(start) && start > 0 ? start : 1, ch: new Map(),
+                sp: [], open: null };
     /* ALL THREE LIST KINDS ARE NODES, AND A <ul> UNDER A STEP IS WHY. The corpus records what the markup IS;
        which of those a citation may be NAMING is a question about convention and belongs to the audit, not
        here — see how the audit flattens this tree. Recording only <ol> would decide that question in the
@@ -897,17 +973,34 @@ function scanLists(slice) {
     else roots.push(f);
     st.push(f);
   }
+  toTokenSpans(clean, roots, base);
   return roots;
 }
 
-/* A LIST WITH NO SUB-LIST IS ITS COUNT AND NOTHING ELSE — the corpus is one number per algorithm wherever it
- * can be, because the alternative is a per-<li> record of a fact nobody asks: the audit's only question is
- * whether a path can exist, so an item with no numbered children is indistinguishable from its own index. */
+/* A LIST IS ITS COUNT, ITS SUB-LISTS, AND WHERE EACH OF ITS ITEMS STANDS IN THE SECTION'S WORDS — three facts
+ * and a fixed shape, `[n, kids, spans]`, with `kids` empty where nothing under it is numbered. THE COUNT ALONE
+ * USED TO BE THE WHOLE RECORD and the paragraph that stood here defended that: the audit's only question was
+ * whether a path can EXIST, so an item with no numbered children was indistinguishable from its own index. The
+ * audit now asks a second question — does the step the citation names SAY what the citation says it says — and
+ * that question is about an item and not about a list, so an item has to be addressable. The positions are two
+ * integers, never prose: the words stay in the text corpus, which is the only place any check reads words
+ * from, so there is exactly one copy of the standard's sentences and this artifact indexes into it.
+ * READERS TOLERATE THE OLD SHAPE ON PURPOSE — `listN` and `listKids` answer for a bare count, and the span
+ * reader answers `null` — so a corpus written before this is UNCHECKED for the second question rather than a
+ * crash or, worse, a silent zero. The `positions` stamp is what says which of those two a file is. */
 function encList(l) {
-  if (!l.ch.size) return l.n;
   const ch = {};
   for (const [i, a] of [...l.ch].sort((x, y) => x - y)) ch[i] = a.map(encList);
-  return [l.n, ch];
+  const sp = {};
+  /* TWO ITEMS CAN CARRY ONE NUMBER — `value=` lets a standard resume a numbering, and nothing stops it landing
+     on an index already used. The span is WIDENED to cover both rather than replaced, because every use of it
+     is a question of the form "does this step mention X" and a wider step can only ever answer YES more
+     often, which is the direction that withholds an accusation. */
+  for (const it of l.sp) {
+    const e = sp[it.i];
+    sp[it.i] = e ? [Math.min(e[0], it.from), Math.max(e[1], it.to)] : [it.from, it.to];
+  }
+  return [l.n, ch, sp];
 }
 
 /* A SECTION CONTAINS ITS SUBSECTIONS, and this stores each section's OWN slice so that containment is a JOIN
@@ -924,8 +1017,12 @@ function collectCorpus(body, marks, into) {
     const end = i + 1 < b.length ? b[i + 1].at : body.length;
     const slice = body.slice(b[i].at, end);
     const t = tokenText(slice);
-    if (t) into.texts.set(b[i].no, into.texts.has(b[i].no) ? into.texts.get(b[i].no) + " " + t : t);
-    const enc = scanLists(slice).filter((r) => r.n > 0).map(encList);
+    /* WHERE THIS SLICE'S WORDS BEGIN, read BEFORE the append that makes it untrue. A section whose boundaries
+       appear twice has its text joined with a single space, so the second appearance's items are offset by the
+       first's word count — and a step span is only ever read back through this same stream. */
+    const prior = into.texts.get(b[i].no);
+    if (t) into.texts.set(b[i].no, prior ? prior + " " + t : t);
+    const enc = scanLists(slice, prior ? prior.split(" ").length : 0).filter((r) => r.n > 0).map(encList);
     if (enc.length) into.steps.set(b[i].no, (into.steps.get(b[i].no) || []).concat(enc));
   }
 }
@@ -948,15 +1045,26 @@ function writeCorpus(spec, sections, corpus, specUpdated) {
   /* WRITTEN COMPACT, because this artifact is read by a machine and never by a person: it is counts and
      indices, so an indented spelling would triple a file whose whole content is punctuation. */
   mkdirSync(STEPS_DIR, { recursive: true });
+  /* `positions` IS A STATEMENT ABOUT THIS FILE'S SHAPE, and it is written rather than sniffed for the reason
+     the edition stamps beside it are: a reader that inferred the answer from the first list it happened to
+     open would answer for the file from one sample, and the state it would get wrong — a corpus that carries
+     the counts and not the offsets — is exactly the one whose second channel must report NOT CHECKED. */
   writeFileSync(stepsFileOf(spec.key), JSON.stringify(
-    { ...stamp, sections: Object.fromEntries([...steps].sort((a, b) => cmpNo(a[0], b[0]))) }) + "\n");
-  let lists = 0, deepest = 0;
+    { ...stamp, positions: true, sections: Object.fromEntries([...steps].sort((a, b) => cmpNo(a[0], b[0]))) }) + "\n");
+  let lists = 0, deepest = 0, items = 0, placed = 0;
   const depth = (l, d) => {
     deepest = Math.max(deepest, d);
-    if (Array.isArray(l)) for (const a of Object.values(l[1])) for (const x of a) depth(x, d + 1);
+    if (!Array.isArray(l)) return;
+    items += l[0];
+    placed += Object.keys(l[2] || {}).length;
+    for (const a of Object.values(l[1])) for (const x of a) depth(x, d + 1);
   };
   for (const ls of steps.values()) for (const l of ls) { lists++; depth(l, 1); }
-  console.log(`  ${spec.key} steps: ${steps.size} sections holding a list, ${lists} outermost lists, deepest nesting ${deepest}`);
+  /* THE TWO NUMBERS ARE PRINTED APART BECAUSE THEY CAN DISAGREE AND THE GAP IS THE ONE THING WORTH SEEING: an
+     item's INDEX comes from the document's own `value=`, so a list can legitimately end at a number larger
+     than the count of items it holds, and every such gap is a step the second channel cannot read. */
+  console.log(`  ${spec.key} steps: ${steps.size} sections holding a list, ${lists} outermost lists, deepest nesting ${deepest}` +
+    `, ${placed} item(s) positioned in the section's own words across a numbering that runs to ${items}`);
 }
 
 /* A dfn whose whole content is a link OUT to another standard is an IMPORT, not a definition. HTML §2.1.9
@@ -1909,12 +2017,13 @@ function precedingProse(src, spans, at) {
  * off by one — and three separate clusters were found BY HAND in one session, each because somebody happened to
  * open the standard.
  *
- * WHAT IT ACCUSES IS ONLY THE NUMBER THAT CANNOT EXIST, and that limit is the whole of its precision argument.
- * A step that exists and means something ELSE is invisible here exactly as it is everywhere else: if `clone a
- * node` step 6 holds seven sub-steps, this channel cannot tell 6.4 from 6.5, and only a reader comparing
- * MEANING can. What it can state is that 6.8 is not a step of anything in that section — which is precisely the
- * shape the drift produces once it runs off the end, and it is what the one hand-found cluster of this session
- * that ran past the end would have tripped.
+ * WHAT THIS CHECK ACCUSES IS ONLY THE NUMBER THAT CANNOT EXIST, and that limit is the whole of its precision
+ * argument. What it can state is that 6.8 is not a step of anything in that section — which is precisely the
+ * shape the drift produces once it runs off the end, and it is what the one hand-found cluster of the session
+ * that built it would have tripped. A step that exists and means something ELSE is a DIFFERENT question and it
+ * has its own check below, over the item positions the corpus carries: see STEP_CLAIM. Where neither the number
+ * nor the words falsify anything — 6.4 against 6.5 when the claim carries none of the standard's own vocabulary
+ * — only a reader comparing MEANING can, and both checks say so rather than guessing.
  *
  * EVERY REFUSAL IS AN OVER-APPROXIMATION, DELIBERATELY, because the accusation is "no reading admits this":
  *   — a section is joined with its SUBSECTIONS, so an algorithm one heading down still answers;
@@ -1955,6 +2064,69 @@ const STEP_MORE = new RegExp(STEP_NO, "g");
  * declaration map in PASS 5 for what each one cost. */
 const ADJ_STEP = new RegExp(
   `^(?:['’]s|s['’])?\\s*(?:"[^"]{0,80}"\\s*)?(?:\\([^)]{0,80}\\)\\s*)?[-,:–—]?\\s*(?:the\\s+)?steps?\\s+(${STEP_NO})`, "i");
+
+/* THE SECOND QUESTION ABOUT A STEP, AND THE ONE THE PARAGRAPH ABOVE SAYS IT CANNOT ANSWER: not whether the
+ * number can exist, but whether the step it names SAYS what the citation says it says. A number that exists
+ * and is in range can still be the wrong step for the claim made about it — a comment reading `step 16's
+ * string` where the string arm is step 15 and step 16 is a different clause of the same ladder. Nothing here
+ * could see that: the existence channel confirms the number, the quotation channel is not looking at a
+ * quotation, and the citation is well-formed. It is the drift CLAUDE.md describes caught one index BEFORE it
+ * runs off the end, which is where all of it that stays in range lives.
+ *
+ * WHAT COUNTS AS A CLAIM IS THE WHOLE OF THE DESIGN, AND IT IS ONE GRAMMATICAL FORM: the POSSESSIVE. `step
+ * N's X` is an author saying, in one breath, that step N HAS an X — a statement about that step's content,
+ * made about that exact list position, with nothing between the number and the claim for an attribution rule
+ * to get wrong. Every looser reading was refused for a reason this file has already paid for once: a step
+ * number and a noun three clauses apart are not a claim about each other, and a checker that reads them as one
+ * manufactures findings out of ordinary prose. This form is also common enough to be worth checking — the
+ * tree writes it thousands of times — so the narrow rule costs recall it can afford.
+ *
+ * THE ORACLE IS THE STANDARD'S OWN WORDS, sliced by the corpus's item positions, exactly as the quotation
+ * channel compares against the standard's own sentences. Nothing here holds an opinion about what any step
+ * says, and no table anywhere records it; the audit asks the corpus, and the corpus is the document.
+ *
+ * WHERE THE PHRASE ENDS IS NOT RECOVERABLE, SO ONLY TWO SHAPES ARE READ — the ones in which the author has
+ * bounded it themselves. `step 5.4's max is the member's own maxarg` runs straight into a verb; `step 3's
+ * second constraint` puts a modifier where the claim's noun should be; `step 1's other arm` and `step 4's two
+ * spellings` do the same. A reader that takes the run to the next comma is reading a SENTENCE and calling it
+ * a claim, and that is measurable rather than arguable: it is where every false accusation in this channel's
+ * first measurement came from — a step charged with not saying `a`, `was` or `two` because some sibling
+ * happened to. What is left is:
+ *   BARE — `step N's W` and then a full stop, a comma, a dash, the end of the prose. One word, no modifier,
+ *     nothing to mis-attach: the author has named a thing and stopped.
+ *   TERM — the phrase's leading run IS a term the standard DEFINES, so its extent is the STANDARD'S statement
+ *     and not this reader's guess, and it is checked as a whole phrase rather than as a word. `step 8's
+ *     removing steps` is a claim about a named algorithm; two words matching in one item is evidence a single
+ *     word can never be.
+ * Everything else is COUNTED and never judged. The recall that costs is real and is the right price. */
+const STEP_CLAIM = /^['’]s\s+([^.,;:()"\n—–]{1,48})/;
+
+/* HOW MANY STEPS MAY HOLD A WORD BEFORE NAMING THEM STOPS BEING A REPAIR. The accusation this channel makes is
+ * not "the step does not say X" on its own — that is true of most steps and most words, and a reader cannot
+ * act on it. It is "the step does not say X and THESE do", so the tool must be able to NAME where the word is,
+ * and a word standing in a dozen steps names nothing. */
+const NAME_CAP = 3;
+
+/* HOW FAR A DEFINED TERM MAY RUN. The longest key in any of these indexes is a handful of words; the bound is
+ * on the SEARCH and not on the vocabulary, so a longer term simply is not matched from its head. */
+const TERM_WORDS = 8;
+
+/* AND A BARE WORD MUST BE ONE THE STANDARD USES AS VOCABULARY, WHICH IS A QUESTION THE STANDARD ANSWERS ITSELF.
+ * This is the gate that decides whether this channel is worth having, and the first version of it did not
+ * exist: rarity WITHIN a list was taken for informativeness, and it is not — a short ladder in which `a`
+ * happens to fall in two items makes `a` rare, and the tool then charged a step with not saying `a` and named
+ * a rival on that basis. Eighty-eight findings, and reading them is what produced the two gates here.
+ *   — THE VOCABULARY is the dfn and operation index this file already builds and every other check already
+ *     trusts. A word inside some term the cited standard DEFINES is a word that standard uses to name things;
+ *     `second`, `three`, `rounding` and `answer` are not, and neither is anything this tree invented. It is
+ *     derived from the standard's own markup, so it needs no list to be kept and cannot drift from what the
+ *     document says.
+ *   — THE FREQUENCY is what the vocabulary alone cannot see. A standard's terms are noun PHRASES, so `a`, `to`
+ *     and `is` are inside dozens of them and pass the first gate; what they cannot pass is standing in most of
+ *     the standard's sections. A word that common carries no information about WHICH step, which is the only
+ *     question here.
+ * Both err toward silence, and the population they refuse is COUNTED so the silence is visible. */
+const DF_CAP = 0.4;
 
 /* A DECLARATION IS ONLY WORTH JOINING ON WHEN THE PATH IDENTIFIES A LIST POSITION, AND A BARE ONE-COMPONENT
  * PATH DOES NOT. Measured on 6581 checked step references: joining on any declared path silences 18 of the 69
@@ -2082,8 +2254,16 @@ function stepMsg(f, path, no, spec) {
  * assert plants a red nobody can clear. */
 const MENTION_RETIRED = /\b(?:stood(?: here)?|used to (?:be|say|read|stand|cite|carry)|previously (?:cited|read|said|stood)|formerly|this file cited|(?:was|were) (?:cited (?:as|at)|written here)|cited here as|mis-?cited|retired)\b[^.;]{0,100}$/i;
 const MENTION_RETIRED_AFTER = /^[^.;]{0,40}?\b(?:stood here|used to stand|stood at this site|was written here)\b/i;
+/* THE RULE ITSELF TAKES THE TWO SIDES OF THE SITE AND NOTHING ELSE, so a second reader that has prose rather
+ * than an offset asks the SAME question rather than a copy of it. The step channel is that reader: a step
+ * number carries no § of its own, so it is not a citation and has no `at` in a citation's span, and its
+ * disclaimer sits in exactly the same place — measured, at a site whose parenthetical says the numbers STOOD
+ * as something, quoting a step claim in order to retire it. Restating the two detectors there would be the
+ * second copy this file's own header says drifts. */
 function mentionNotClaim(src, spans, at, after) {
-  const pre = precedingProse(src, spans, at);
+  return mentionOf(precedingProse(src, spans, at), after);
+}
+function mentionOf(pre, after) {
   /* An ODD number of backticks between the start of the prose unit and the number means the number stands
    * inside an open run — and PARITY ALONE IS NOT ENOUGH, because one unbalanced backtick anywhere earlier in
    * a long comment flips every citation below it into a mention and the findings vanish with nothing to say
@@ -2592,7 +2772,7 @@ function audit(argv, opts = {}) {
    * for text: a quotation checked against a slightly older edition usually still matches, while a step COUNT is
    * exactly the thing an editorial insertion changes, so an edition mismatch here is not a degraded answer, it is
    * a wrong one. */
-  const stp = new Map(), stpStale = new Map();
+  const stp = new Map(), stpStale = new Map(), stpNoPos = new Set();
   for (const [key, ix] of idx) {
     const f = stepsFileOf(key);
     if (!existsSync(f)) continue;
@@ -2603,6 +2783,11 @@ function audit(argv, opts = {}) {
       stpStale.set(key, `the corpus is edition "${sp.specUpdated}" and the section index is "${ix.specUpdated}"`);
       continue;
     }
+    /* A CORPUS WRITTEN BEFORE THE ITEM POSITIONS EXISTED IS NOT REFUSED — it still answers the question it was
+     * built for, and the question it CANNOT answer is reported as unchecked rather than as clean. Absent is a
+     * missing FIELD and not a missing FILE, so it is read once here and counted once below: the alternative is
+     * a check that silently declines per site, which is the shape this whole file is written against. */
+    if (!sp.positions) stpNoPos.add(key);
     Object.setPrototypeOf(sp.sections, null);
     stp.set(key, sp);
   }
@@ -2708,7 +2893,7 @@ function audit(argv, opts = {}) {
                   voted: 0, votedCrash: 0, foreign: 0, foreignCrash: 0, unresolved: 0, unresolvedCrash: 0 };
   const noCorpusBy = new Map();
   const gapHist = [];
-  const stepsOut = [], stepsAway = [];
+  const stepsOut = [], stepsAway = [], stepsSays = [], stepsSaysAmbig = [];
   /* THE STEP CENSUS PARTITIONS THE WHOLE POPULATION, INCLUDING EVERY REFUSAL, because CLAUDE.md's recurring
    * defect is several states behind one answer: a step this channel cannot judge because the standard has no
    * corpus, one it cannot judge because only a file vote placed the standard, and one it judged and found
@@ -2717,7 +2902,13 @@ function audit(argv, opts = {}) {
    * CLAUDE.md says the drift lives in — a promoted nested list renumbers sub-steps and leaves top-level ones
    * untouched. */
   const sstat = { seen: 0, sub: 0, checked: 0, exists: 0, okNearby: 0, okDeclared: 0, reworded: 0, out: 0, away: 0,
-                  noCorpus: 0, staleCorpus: 0, noSection: 0, noList: 0, voted: 0, foreign: 0, unresolved: 0, citeFlagged: 0 };
+                  noCorpus: 0, staleCorpus: 0, noSection: 0, noList: 0, voted: 0, foreign: 0, unresolved: 0, citeFlagged: 0,
+                  /* The content channel's own partition, kept apart from the existence channel's for the reason
+                     the existence census gives: a step whose corpus carries no positions, one whose phrase is
+                     this tree's vocabulary rather than the standard's, and one whose claim was CONFIRMED are
+                     three facts, and one "checked" would make the first two read like the third. */
+                  claimNone: 0, claimSeen: 0, claimNoPos: 0, claimNotTerm: 0, claimMention: 0, claimOk: 0,
+                  claimUnseen: 0, claimAmbig: 0, claimOut: 0 };
   const stepNoCorpusBy = new Map(), stepForeignBy = new Map();
   /* One standard's whole text, joined once. The divergence probe asks it repeatedly and rebuilding a
    * four-megabyte string per finding would make the mode's cost quadratic in its own findings. */
@@ -4022,6 +4213,83 @@ function audit(argv, opts = {}) {
         for (const n of Object.keys(sx)) if (n === no || contains(no, n)) for (const l of sx[n]) flatten(l, out);
         return out;
       };
+      /* THE SAME FLATTEN, CARRYING THE SECTION EACH LIST CAME FROM. A span is an offset into ONE section's own
+       * token stream — the corpus stores each section's slice and the audit JOINS containment — so a list
+       * reached through a subsection has to remember whose words its numbers index into. Dropping that and
+       * reading the spans against the joined text would slice the wrong region of the wrong section and
+       * produce a step whose words belong to neither, which is the manufactured finding this file rates as
+       * its one unacceptable failure. */
+      const rootsFor = (spec, no) => {
+        const sx = stp.get(spec).sections;
+        const out = [];
+        const fl = (l, sec) => {
+          out.push({ sec, l });
+          if (Array.isArray(l)) for (const a of Object.values(l[1])) for (const x of a) fl(x, sec);
+        };
+        for (const n of Object.keys(sx)) if (n === no || contains(no, n)) for (const l of sx[n]) fl(l, n);
+        return out;
+      };
+      const itemSpan = (l, i) => (Array.isArray(l) && l.length > 2 && l[2] && Object.hasOwn(l[2], i) ? l[2][i] : null);
+      /* THE STANDARD'S OWN VOCABULARY, ONE SET PER STANDARD, built from the same dfn and operation index the
+       * term channel resolves on — so a word this gate admits is a word some check here already treats as
+       * that standard's. */
+      const vocab = new Map();
+      const vocabOf = (spec) => {
+        if (!vocab.has(spec)) {
+          const v = new Set(), ix = idx.get(spec);
+          for (const k of [...Object.keys(ix.dfns), ...Object.keys(ix.ops || {})])
+            for (const w of k.split(/[^a-z0-9]+/)) if (w) v.add(w);
+          vocab.set(spec, v);
+        }
+        return vocab.get(spec);
+      };
+      /* IS THIS RUN OF WORDS A TERM THIS STANDARD DEFINES — asked of the same two indexes, so a phrase this
+       * admits is a phrase some other check here already resolves citations by. */
+      const termOf = (spec, run) => {
+        const ix = idx.get(spec);
+        return Object.hasOwn(ix.dfns, run) || (ix.ops && Object.hasOwn(ix.ops, run));
+      };
+      /* HOW MUCH OF A STANDARD A WORD STANDS IN, counted over the same section texts every other word question
+       * here is answered from, and cached per word because the gate asks it once per site. */
+      const dfCache = new Map();
+      const dfOf = (spec, word) => {
+        const k = spec + " " + word;
+        if (!dfCache.has(k)) {
+          const sx = txt.get(spec).sections, tok = " " + word + " ";
+          let n = 0, all = 0;
+          for (const no of Object.keys(sx)) { all++; if ((" " + sx[no] + " ").includes(tok)) n++; }
+          dfCache.set(k, all ? n / all : 1);
+        }
+        return dfCache.get(k);
+      };
+      const secWords = new Map();
+      const wordsOf = (spec, sec) => {
+        const k = spec + " " + sec;
+        if (!secWords.has(k)) {
+          const s = txt.has(spec) ? txt.get(spec).sections[sec] : null;
+          secWords.set(k, s ? s.split(" ") : null);
+        }
+        return secWords.get(k);
+      };
+      /* EVERY LIST UNDER THE SECTION THAT HAS AN ITEM AT THIS PATH — one entry per READING the corpus admits,
+       * for the same reason the existence check seeks a path from every list: nothing at the site says WHICH
+       * algorithm, and picking one would be the invented-citation defect. The consequences of that are
+       * asymmetric here and both are wanted — ONE reading that admits the claim silences it, and a finding
+       * needs one reading that demonstrates it. */
+      const stepSites = (spec, no, path) => {
+        const sites = [];
+        const last = path[path.length - 1];
+        for (const { sec, l } of rootsFor(spec, no)) {
+          let cur = [l];
+          for (let k = 0; k < path.length - 1 && cur.length; k++) {
+            const nx = [];
+            for (const c of cur) { const kids = listKids(c, path[k]); if (kids) nx.push(...kids); }
+            cur = nx;
+          }
+          for (const c of cur) if (itemSpan(c, last)) sites.push({ sec, list: c });
+        }
+        return sites;
+      };
       for (let i = 0; i < admitted.length; i++) {
         const c = admitted[i];
         const stop = i + 1 < admitted.length ? admitted[i + 1].at : null;
@@ -4058,7 +4326,98 @@ function audit(argv, opts = {}) {
           if (!lists.length) { sstat.noList++; continue; }
           sstat.checked++;
           const fail = stepFail(lists, s.path);
-          if (!fail) { sstat.exists++; continue; }
+          if (!fail) {
+            sstat.exists++;
+            /* THE STEP EXISTS — SO ASK THE SECOND QUESTION. See STEP_CLAIM: only a POSSESSIVE is read as a
+             * claim about the step's content, and only the standard's own words answer it.
+             *
+             * FOUR THINGS DECIDE IT, AND EVERY ONE ERRS TOWARD SILENCE.
+             *   (1) THE PHRASE MUST BE ONE THE AUTHOR BOUNDED — a bare word, or a run the standard itself
+             *       defines as a term. See STEP_CLAIM for why anything else is a sentence and not a claim.
+             *   (2) A BARE WORD MUST BE THE STANDARD'S OWN VOCABULARY AND MUST NOT BE UBIQUITOUS IN IT — see
+             *       DF_CAP. Anything else is this tree's word for something, and a word the standard never
+             *       uses to name anything cannot say which step it belongs to. A DEFINED TERM needs neither
+             *       gate: the standard has already said it names something, and a multi-word phrase is not
+             *       the shape a common word takes.
+             *   (3) ONE ADMITTING READING SILENCES THE SITE. Where the cited step uses the word under ANY of
+             *       the readings the corpus admits, the claim checks out and nothing is reported — nothing at
+             *       the site says which list the author meant, so no reading may be preferred.
+             *   (4) AN ACCUSATION MUST NAME WHERE THE WORD IS. The finding is `step N does not say X and step
+             *       M does`, which is a repair; `step N does not say X` alone is true of almost everything and
+             *       actionable for nothing.
+             * THE ATTRIBUTION RESIDUAL, NAMED because it is the one direction this can be wrong in: the
+             * section is the nearest-preceding citation's, as everywhere in this pass, so a comment crediting
+             * one section while stepping through another's algorithm could be accused. It is a far smaller
+             * exposure here than in the existence check, because the word has to be that standard's vocabulary
+             * AND stand in the cited section's own list before a finding is possible at all. What would show
+             * it is a finding whose named rival step is unrelated to the comment's subject. */
+            const cm = STEP_CLAIM.exec(prose.slice(s.at + s.raw.length));
+            const pt = cm ? tokenText(cm[1]).split(" ").filter(Boolean) : [];
+            if (!pt.length) { sstat.claimNone++; continue; }
+            sstat.claimSeen++;
+            /* USE VERSUS MENTION, ASKED AT THE STEP AND NOT AT THE CITATION — the same rule mentionNotClaim
+             * states, reached through its own function so there is one copy of it. A step claim is disclaimed
+             * exactly as a section citation is, and this tree writes the shape: a parenthetical recording that
+             * two numbers STOOD as something, one of them a possessive step claim, is a retirement note doing
+             * what CLAUDE.md requires and not a claim anybody is making. Accusing it would be this channel
+             * committing the defect the whole file exists to find. */
+            const mention = mentionOf(precedingProse(src, spans, c.at) + prose.slice(0, s.at), prose.slice(s.at));
+            if (mention) { sstat.claimMention++; continue; }
+            if (stpNoPos.has(c.spec) || !txt.has(c.spec)) { sstat.claimNoPos++; continue; }
+            let ev = "";
+            for (let k = Math.min(TERM_WORDS, pt.length); k >= 2; k--) {
+              const run = pt.slice(0, k).join(" ");
+              if (termOf(c.spec, run)) { ev = run; break; }
+            }
+            if (!ev && pt.length === 1 && vocabOf(c.spec).has(pt[0]) && dfOf(c.spec, pt[0]) < DF_CAP) ev = pt[0];
+            if (!ev) { sstat.claimNotTerm++; continue; }
+            const last = s.path[s.path.length - 1];
+            const tok = " " + ev + " ";
+            let best = null, admitted = false, readable = 0;
+            for (const site of stepSites(c.spec, c.no, s.path)) {
+              const w = wordsOf(c.spec, site.sec);
+              if (!w) continue;
+              const items = Object.keys(site.list[2]).map(Number);
+              if (!items.length) continue;
+              readable++;
+              const textAt = (i) => { const sp = itemSpan(site.list, i); return sp ? " " + w.slice(sp[0], sp[1]).join(" ") + " " : ""; };
+              const hits = items.filter((i) => textAt(i).includes(tok));
+              if (hits.includes(last)) { admitted = true; break; }
+              if (hits.length && hits.length <= NAME_CAP && (!best || hits.length < best.hits.length))
+                best = { hits, sec: site.sec };
+            }
+            if (admitted) { sstat.claimOk++; continue; }
+            if (!readable) { sstat.claimNoPos++; continue; }
+            if (!best) { sstat.claimUnseen++; continue; }
+            /* TWO BANDS, AND ONLY ONE OF THEM IS A CLAIM ABOUT THE CITATION — the same asymmetry the existence
+             * check draws, drawn on the same evidence and for the same reason.
+             *   ONE READING: the section holds exactly one list that reaches this step, so `step K` names ONE
+             *     step, the tool can say what that step says, and the rival it names stands in the same list —
+             *     which is what makes the finding a repair rather than an observation.
+             *   SEVERAL: `step K` names as many different steps as there are lists, and CLAUDE.md's own rule
+             *     for that is that every candidate reading confirms it and none can be accused. It is not only
+             *     unfalsifiable, it MIS-ADDRESSES: the rival is picked from whichever list happens to hold the
+             *     term, which can be a different algorithm entirely.
+             * MEASURED BEFORE THE SPLIT WAS CHOSEN, by reading every row of both bands against the fetched
+             * standards. In the several-reading band three of ten were real; in the one-reading band the only
+             * row that was not real was a retirement note, which is now disclaimed one gate up. The band that
+             * is refused is COUNTED and LISTED under --steps, never accused — and it holds real defects a
+             * human can act on, which is exactly why it is printed rather than dropped. */
+            const where = best.hits.length === 1
+              ? `step ${best.hits[0]} of` : `steps ${best.hits.join(" and ")} of`;
+            const verb = best.hits.length === 1 ? "does" : "do";
+            const rec = {
+              file: relative(ROOT, file), line: lineOf(c.at), no: c.no, spec: c.spec, how: c.how,
+              step: s.raw, depth: s.path.length, word: ev, crash: inCrashMessage(src, spans, c.at),
+              msg: `${c.spec} §${c.no} step ${s.raw} does not use \`${ev}\` — ${where} ` +
+                   (readable === 1 ? `the one list under it that reaches that step ${verb}`
+                                   : `one of the ${readable} lists under it that reach a step ${s.raw} ${verb}, and which list the citation means is not stated`) +
+                   (best.sec === c.no ? "" : ` (that list stands in §${best.sec})`),
+              text: prose.slice(Math.max(0, s.at - 60), s.at + 60).trim() };
+            if (readable === 1) { sstat.claimOut++; stepsSays.push(rec); }
+            else { sstat.claimAmbig++; stepsSaysAmbig.push(rec); }
+            continue;
+          }
           /* A NUMBER THE AUTHOR WROTE IN THIS SAME COMMENT IS A NUMBER THE AUTHOR CITED — the rule PASS 4
            * already states, and it matters more here, because a step is routinely written BEFORE the § it
            * belongs to (`step 3 of §4.9`) and nearest-preceding then charges the wrong section. A path some
@@ -4181,7 +4540,11 @@ function audit(argv, opts = {}) {
    * step, so the delta key already tells them apart. The REFUSED band is deliberately not returned — it is not a finding, and
    * handing it to a delta channel would turn every one of those sites into a red in the first diff to touch
    * the file. */
-  const stepFindings = stepsOut.map((v) => ({ ...v, kind: "STEP-OUT-OF-RANGE" }));
+  /* AND THE CONTENT FINDING TRAVELS WITH IT, for the same reason and one more: a wrong step is written by the
+   * lane writing the comment, in the diff it is landing, and this is the axis that lane has no other way to
+   * check — the number resolves, the section is right, and only the standard's own words disagree. */
+  const stepFindings = [...stepsOut.map((v) => ({ ...v, kind: "STEP-OUT-OF-RANGE" })),
+                        ...stepsSays.map((v) => ({ ...v, kind: "STEP-SAYS-OTHERWISE" }))];
   if (opts.quiet) return [...findings, ...quoteFindings, ...stepFindings];
   /* WHAT THE OTHER SITES ON THIS NUMBER RESOLVED TO IS THE ONE THING THE READER NEEDS AND THE ONE THING THIS
    * CAN PROVE. A file writing `7.4.9 IteratorClose` six times and `7.4.9 IteratorStepValue` four times has
@@ -4486,6 +4849,21 @@ function audit(argv, opts = {}) {
         console.log(`      …${v.text}…`);
       }
       elided(aord, acap, "STEP-NOT-IN-THIS-SECTION");
+      /* THE CONTENT CHANNEL'S REFUSED BAND, PRINTED BESIDE THE EXISTENCE CHANNEL'S AND FOR THE SAME REASON.
+       * These are claims whose section holds SEVERAL lists reaching the step, so the number names several
+       * different steps and no reading may be accused — but reading them was how the split was measured, and
+       * three of the ten read were real defects. A band nobody can see is the silent zero this file is written
+       * against; a band nobody may be accused from is the discipline. Both, at once, is what this prints. */
+      console.log(`\nSTEP-CONTENT-SEVERAL-READINGS: ${stepsSaysAmbig.length} — the cited section holds more than one list reaching this`);
+      console.log(`  step, so the number names more than one step and none of them can be accused. Listed so a human can read`);
+      console.log(`  them; never counted as a finding. Some are real, and the one that decides which is the reader.`);
+      const cacap = argv.includes("--all") ? Infinity : 60;
+      const caord = [...stepsSaysAmbig].sort((a, b) => (a.crash ? 0 : 1) - (b.crash ? 0 : 1) || b.depth - a.depth);
+      for (const v of head(caord, cacap)) {
+        console.log(`  ${v.file}:${v.line}  step ${v.step} — ${v.msg}`);
+        console.log(`      …${v.text}…`);
+      }
+      elided(caord, cacap, "STEP-CONTENT-SEVERAL-READINGS");
     }
     const slimit = argv.includes("--all") ? Infinity : 60;
     /* A CRASH PRINTS ITS MESSAGE TO SOMEONE WITH NO FILE OPEN, so a step number inside one is listed first —
@@ -4497,6 +4875,34 @@ function audit(argv, opts = {}) {
       console.log(`      …${v.text}…`);
     }
     elided(sord, slimit, "STEP-OUT-OF-RANGE");
+
+    /* THE CONTENT CHANNEL REPORTS ITS OWN DENOMINATOR IN ITS OWN LINE, because it is a fraction of a fraction:
+     * only a step that EXISTS is asked, only a possessive is read as a claim, and only a standard whose corpus
+     * carries item positions can be asked at all. A count printed without those three would be read as a
+     * statement about every step reference in the tree, and it is a statement about the few that are all of
+     * those things at once. */
+    console.log(`\nSTEP CONTENT — does the step a citation names SAY what the citation says it says?`);
+    console.log(`  (only \`step N's X\` is read as a claim; only the standard's own words answer it; and an accusation`);
+    console.log(`   must be able to NAME the step that does use the word, or it is not a repair and is not made.)`);
+    console.log(`  ${sstat.claimSeen} of the ${sstat.exists} step reference(s) that EXIST make a possessive claim` +
+      ` (${sstat.claimNone} do not, and are outside this channel entirely)`);
+    console.log(`    CONFIRMED ${sstat.claimOk} — the cited step uses the word the claim attaches to it` +
+      `  REPORTED ${sstat.claimOut}` +
+      `  SEVERAL-READINGS ${sstat.claimAmbig} (listed, never accused — see --steps)` +
+      `  NOT CHECKED ${sstat.claimNoPos + sstat.claimNotTerm + sstat.claimMention + sstat.claimUnseen}: ${sstat.claimNoPos} cite a standard whose step corpus carries` +
+      ` no item positions${stpNoPos.size ? ` (${[...stpNoPos].sort().join(" ")}` +
+        ` — re-run: node engine/citegen.mjs --regen)` : ""}` +
+      `, ${sstat.claimNotTerm} attach a phrase that is neither a term the standard defines nor one bare word of its own vocabulary standing in under ${Math.round(DF_CAP * 100)}% of its sections` +
+      ` — this tree's word for something, a modifier, or a run of prose with no end this reader can find` +
+      `, ${sstat.claimMention} stand in prose that DISCLAIMS them (a retirement note, a displayed spelling)` +
+      `, ${sstat.claimUnseen} attach a term the cited section's own lists never use at all`);
+    const cord = [...stepsSays].sort((a, b) => (a.crash ? 0 : 1) - (b.crash ? 0 : 1) || b.depth - a.depth);
+    console.log(`\nSTEP-SAYS-OTHERWISE: ${stepsSays.length}`);
+    for (const v of head(cord, slimit)) {
+      console.log(`  ${v.file}:${v.line}  step ${v.step} — ${v.msg}`);
+      console.log(`      …${v.text}…`);
+    }
+    elided(cord, slimit, "STEP-SAYS-OTHERWISE");
   }
 
   const groups = new Map();
