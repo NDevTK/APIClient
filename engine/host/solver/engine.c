@@ -4817,9 +4817,11 @@ static JSValue *engine_orphan_call(JSContext *ctx, JSValueConst fn, int argc, ui
  * member had been ready to retire. The observable was a frontier that only ever grew.
  * Split, the ladder asks the flow's own question and then the frontier's, at ONE boundary — the last moment
  * before the clock is allowed to move. Which is NOT where the split first put them: the seed went to the exit
- * that declares a timeline OVER, and that exit sits BELOW the two clock-driven sources, so on any agent that
- * has a fully-active document it is not reached at all. See the rung in flow_step for the reachability
- * argument; the split itself was right and only its landing was somewhere nothing arrives. */
+ * that declares a timeline OVER, and that exit sits BELOW the two clock-driven sources — so whether it was
+ * reached at all was decided by whether core/rendering's opportunity fires, which is a property of the
+ * DOCUMENT and not of the scheduler. See the rung in flow_step for that argument and for the two measurements
+ * that bound it in both directions; the split itself was right and only its landing was somewhere whose
+ * arrivals nobody chose. */
 static int engine_orphan_resume(JSContext *ctx, Flow *f) {
     JSValue *base;
 
@@ -7100,19 +7102,44 @@ static int flow_step(JSContext *ctx, Flow *f) {
                out of the work the page ARRANGED for it, which is the condition the take is about; a flow
                standing at the exit at the bottom has additionally established that its timeline is OVER, which
                on a document that renders is never.
-               IT WAS ASKED AT THAT EXIT AND WAS THEREFORE ASKED BY NOBODY, and the reachability is decidable by
-               reading rather than by quoting a run: core/rendering's opportunity answers 0 only where its
-               declaration latch is down, where no navigable holds a fully-active document, where a timer is due
-               first (and then the arm directly below it runs that timer), or where event_loop_may_advance is
-               false — which IS `pending_outstanding(f->pending)`, the same predicate the OWED arm below returns
-               on. Every one of those either cannot hold for a page or routes to a DIFFERENT arm above the exit,
-               so on any agent that has a document the exit was structurally unreachable and both halves of the
-               orphan mechanism below it were code that compiled and could not run. That is §scheduler's own
+               IT WAS ASKED AT THAT EXIT, AND WHETHER THE EXIT IS REACHED WAS A PROPERTY OF THE DOCUMENT — which
+               is a WEAKER claim than the one that first stood on this line, and the weaker one is the true one.
+               core/rendering's opportunity answers 0 where its declaration latch is down, where no navigable
+               holds a fully-active document, where a timer is due first (and then the arm directly below it
+               runs that timer), or where event_loop_may_advance is false — which IS
+               `pending_outstanding(f->pending)`, the same predicate the OWED arm below returns on. On a
+               document that HAS a fully-active navigable and no outstanding reply, the arm fires, jumps the
+               clock a frame and returns 1, for ever: there is no terminating condition, so the exit below it is
+               reached by nobody and both halves of the orphan mechanism were code that compiled and could not
+               run. On a document that does NOT — an agent whose navigable set is empty at the moment of the
+               ask, which is what a small child navigable and the solvergate fixtures exercise — the arm answers
+               0 and everything below it is perfectly reachable.
+               THIS LINE FIRST SAID "on any agent that has a document", AND THAT ABSOLUTE WAS REFUTED BY TWO
+               MEASUREMENTS AT ONCE, from opposite directions: the close-request arm, which sits below the same
+               rendering arm, is REACHED on the solvergate fixtures; and the first build carrying this rung
+               drove an orphan in a child navigable while the smoke's own document went on reporting `asked`
+               0. Both are the same fact — the old placement's reachability depended on the shape of the
+               document rather than on the scheduler — and it is exactly the kind of clause §PUSH-BACK warns an
+               absolute invites, since one grep ends the reading and takes the true part with the false.
+               WHAT THE MOVE BUYS IS THAT THE ANSWER STOPS DEPENDING ON THE DOCUMENT. That is §scheduler's own
                sentence — a justification RESTING ON A DRAIN is not a guarantee, and "on a frontier that grows it
                is the same starvation with a reason attached" — and it is the SECOND time this one ladder has
                had it: §8.1.4.7's notify arm was DELETED from below for exactly this reason and moved to a seam
                that is reached. This is that correction for the surface §What-the-tool-produces calls the
                headline.
+               AND WHAT STANDS ABOVE THIS RUNG IS THE WHOLE OF THE REMAINING PRECONDITION, so it is worth
+               stating as the conjunction it is rather than leaving each arm to imply it. A flow reaches here
+               with: no live frame at all (the `!f->frame` block is skipped otherwise, and a member grinding
+               inside a program never asks); no row left in its own sequence; no queued job; not blocked on a
+               cross-instance read; and no document-lifecycle stage left. That last one TERMINATES and is not a
+               periodic source, which is worth knowing because it is grouped with the two clock-driven ones in
+               at least one reader's prose: core/dom/document.c's document_lifecycle_step advances a readiness
+               0 -> 1 -> 2, one stage per call, DCHECKs at BOTH stages that the readiness moved (its own message
+               calls a re-fire "a live-lock the scheduler cannot tell from progress"), and answers 0 once every
+               document of the agent is at 2. The sequence arm is the one that can legitimately stay true for
+               ever, and that is not this rung's to fix: a flow with a program still to run has NOT run out of
+               the work the page arranged, so driving an orphan in front of it would empty the precondition of
+               its meaning.
                DRIVING EARLY IS NOT DRIVING WRONGLY, WHICH IS WHAT THE OLD PLACEMENT WAS BUYING. Its objection
                was that "nothing called this function" is a guess until the run is finished — and a run that
                renders is never finished, so the guarantee bought nothing and cost the whole surface. What being

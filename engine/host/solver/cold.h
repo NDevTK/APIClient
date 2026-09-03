@@ -121,8 +121,9 @@ typedef struct {
        one of the other four — and the census reported them identically. (That list used to end "timer,
        rendering opportunity, outstanding reply or unmodelled close request", which was the seat the seed had
        at the ladder's EXIT. Those three sit BELOW the two clock-driven sources and a rendering opportunity is
-       generated for ever, so that seat was reached by nobody at all and the reading it named was the wrong one
-       to hold — which is why the numbers below were measured against a row that could not have moved.)
+       generated for ever on a document that has one, so that seat was reached only where the opportunity did
+       NOT fire and the reading it named was the wrong one to hold — which is why the numbers below were
+       measured against a row whose movement was a fact about the document rather than about the frontier.)
        Measured on the native smoke fixture: 129 members standing at
        the top bucket with `deepest 10`, i.e. every program the document has, against a run reporting zero
        orphan asks. Those two together are the second reading and say which of the four to open; either one

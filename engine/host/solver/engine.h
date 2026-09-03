@@ -1310,9 +1310,13 @@ void engine_routed_census(long *delivered, long *refused);
  *                                     the last moment BEFORE the clock may move, so "ran out of its own work"
  *                                     is "has no program, job, delivery, checkpoint or lifecycle stage due at
  *                                     the current moment" and NOT "has no frame, timer or reply left" — the
- *                                     second is the exit that declares a timeline OVER, it sits below two
- *                                     unbounded periodic sources, and asking there is what made this row read
- *                                     0 for every session there had been.
+ *                                     second is the exit that declares a timeline OVER, it sits below a
+ *                                     rendering opportunity that is generated for ever on a document that has
+ *                                     one, and asking there made this row a fact about the DOCUMENT'S shape
+ *                                     rather than about the frontier. A run in which it reads 0 while `live`
+ *                                     climbs is now a statement about the FIVE conditions above the rung —
+ *                                     frame, sequence, job, block, lifecycle — and the frontier census
+ *                                     (`framed`, `outOfPrograms`, `blocked`, `stepUnits`) is what says which.
  *     asked > 0, driven == 0          the walk ran and the heap held no uncalled function — a fact about the
  *                                     PAGE. It is NOT evidence about pick order, and reading it as such is
  *                                     reading "there was nothing to drive" as "something was starved".
