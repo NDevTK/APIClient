@@ -15,6 +15,7 @@
 #include "core/css/css_property_applies.h"
 #include "core/layout/box_subject.h"
 #include "core/layout/intrinsic_size.h"
+#include "core/layout/table_border_collapse.h"
 #include "core/layout/table_box.h"
 #include "core/layout/table_column_box.h"
 #include "core/layout/table_column_width.h"
@@ -34,41 +35,22 @@ static char *tw_computed(lxb_dom_element_t *el, const char *name)
 
 /* ---- §17.6 Borders' TWO MODELS, asked once, at the entry ---------------------------------------------------
    §17.6's `border-collapse` selects between §17.6.1 The separated borders model and §17.6.2 The collapsing
-   border model, and every piece of arithmetic below is the FIRST one's: the cell spacing term is §17.6.1's
-   `border-spacing`, which §17.6.2 gives no meaning to at all, and the column widths this component distributes
-   over are sums of each cell's OWN computed `border-*-width`, which §17.6.2 replaces. */
-static void tw_require_separated_borders(lxb_dom_element_t *table)
+   border model, and exactly TWO of the terms below are the first model's alone.
+   THE CELL SPACING is §17.6.1's `border-spacing` — "The lengths specify the distance that separates adjoining
+   cell borders" — and §17.6.2 has no such distance at all, because "Borders are centered on the grid lines
+   between the cells" and the cells meet. So the spacing TERM is zero under the collapsing model, which is that
+   sentence read rather than a floor invented here.
+   THE TABLE'S OWN EDGES are the other, and `tw_table_edges` answers both models in one place.
+   THE COLUMN WIDTHS NEED NO ARM AT THIS LEVEL: core/layout/table_column_width.h's `table_cell_border_edges`
+   answers a cell's border box under either model — its own computed `border-*-width` under §17.6.1, and half
+   of §17.6.2.1 Border conflict resolution's winner at each grid line it abuts under §17.6.2 — so the four
+   steps and the distribution below are stated over the same quantity in both.
+   WHAT IS STORED IN `TableUsedWidths.spacing` IS THIS TERM AND NOT THE PROPERTY. Every consumer of that field
+   is reconstructing this arithmetic (see table_width.h for the N-1 spacings a cell's used width re-adds), so
+   handing them a `border-spacing` that §17.6.2 gives no meaning to would be handing them a length to add. */
+static CssPx tw_used_spacing(CssPx horizontal, bool collapsing)
 {
-    char *collapse = tw_computed(table, "border-collapse");
-    bool separated = strcmp(collapse, "separate") == 0;
-    bool collapsed = strcmp(collapse, "collapse") == 0;
-    char nbuf[160];
-
-    free(collapse);
-    DCHECK(separated || collapsed,
-           "a `border-collapse` computed to something that is neither of the two keywords CSS 2.1 §17.6 "
-           "Borders' `collapse | separate | inherit` grammar admits, and §17.6 gives it `Computed value: as "
-           "specified` over a keyword-only value — so nothing between the declaration and here had a rule that "
-           "could produce a third one");
-    if (separated) return;
-    DFAILF("%s: CSS 2.1 §17.5.2 Table width algorithms: the 'table-layout' property was asked for a table in "
-           "CSS 2.1 §17.6.2 The collapsing border model, and every width below is CSS 2.1 §17.6.1 The separated "
-           "borders model's. TWO TERMS ARE WRONG UNDER §17.6.2 AND NEITHER IS MERELY NARROWER. (1) The CELL "
-           "SPACING: §17.6.1's `border-spacing` is what separates adjoining cell borders — \"The lengths specify "
-           "the distance that separates adjoining cell borders\" — and §17.6.2 has no such distance, because "
-           "\"borders are centered on the grid lines between the cells\" and the cells meet. (2) Each COLUMN's "
-           "width, which core/layout/table_column_width.h measures as the BORDER BOX of the cells that occupy "
-           "it, over each cell's own computed `border-*-width`: §17.6.2 resolves the borders of the two cells "
-           "meeting at a grid line into ONE, so that sum charges the shared edge twice, and the section's own "
-           "row-width equation charges the two OUTERMOST borders at HALF each. BUILD §17.6.2's used border "
-           "widths — the winner §17.6.2.1 Border conflict resolution picks among the borders of the adjoining "
-           "cell, row, row group, column, column group and table boxes — as a per-edge answer beside "
-           "core/layout/table_column_width.h's four-term sum, and make the spacing term below zero under this "
-           "model. TWO OF THOSE SIX BOXES CAN NOW BE NAMED: core/layout/table_column_box.h answers which column "
-           "and column-group box occupies a grid column, which is CSS 2.1 §17.5's rules 3 and 4. THE CHOICE OF "
-           "MODEL IS NOT WHAT IS MISSING EITHER: `border-collapse` is in "
-           "core/css/css_computed_value.c's modelled set and was just read here",
-           box_subject(table, nbuf, sizeof nbuf));
+    return collapsing ? css_px(0.0) : horizontal;
 }
 
 /* ---- §17.6.1's CELL SPACING -------------------------------------------------------------------------------
@@ -95,14 +77,28 @@ static CssPx tw_spacing_total(CssPx spacing, size_t ncols)
    REFUSES. A percentage padding on a CELL resolves against the table's content width, which §17.5.2 is being
    run to produce; a percentage padding on the TABLE resolves against the table's own containing block, which
    CSS 2.1 §10.1 Definition of "containing block" answers without any of this. Two different bases, one of
-   which exists already. */
-static CssPx tw_table_edges(lxb_dom_element_t *table)
+   which exists already.
+   §17.6.2 The collapsing border model TAKES THE OTHER ARM ENTIRELY, AND ITS TWO HALVES ARE THE SECTION'S OWN
+   SENTENCES. There is no padding to read — "Also, in this model, a table does not have padding (but does have
+   margins)" — and the border is not the table's computed `border-*-width` either: "UAs must compute an initial
+   left and right border width for the table by examining the first and last cells in the first row of the
+   table. The left border width of the table is half of the first cell's collapsed left border, and the right
+   border width of the table is half of the last cell's collapsed right border."
+   core/layout/table_border_collapse.h answers that pair, and it is the SAME half the columns below do not
+   carry: a cell at the grid's perimeter is charged nothing there, so the two numbers meet at the grid line and
+   neither counts the other's length. */
+static CssPx tw_table_edges(lxb_dom_element_t *table, bool collapsing)
 {
     static const char *const PADDINGS[2] = { "padding-left", "padding-right" };
     static const char *const BORDERS[2] = { "border-left-width", "border-right-width" };
     CssPx edges = css_px(0.0);
     int i;
 
+    if (collapsing) {
+        TableCollapsedEdges own = table_collapsed_table_edges(table);
+
+        return css_px_add(own.left, own.right);
+    }
     DCHECK(!table_wrapper_owns_property("padding-left") && !table_wrapper_owns_property("border-left-width"),
            "CSS 2.1 §17.4 Tables in the visual formatting model's declaration split now puts a table element's "
            "padding or border on the TABLE WRAPPER BOX, and CSS 2.1 §17.5.2 Table width algorithms: the "
@@ -635,9 +631,9 @@ static void tw_fixed_layout(lxb_dom_element_t *table, const TableGrid *grid, Css
 void table_widths(lxb_dom_element_t *table, const TableGrid *grid, TableUsedWidths *out)
 {
     CssBorderSpacing spacing;
-    CssPx edges, declared = css_px(0.0), check_sum, slack;
+    CssPx used_spacing, edges, declared = css_px(0.0), check_sum, slack;
     char *display, *layout;
-    bool is_table_box, fixed, has_declared;
+    bool is_table_box, fixed, has_declared, collapsing;
     size_t i;
     char nbuf[160];
 
@@ -670,7 +666,10 @@ void table_widths(lxb_dom_element_t *table, const TableGrid *grid, TableUsedWidt
                "which nothing in this directory places yet. ROUTE the caller to the table box above this one "
                "(core/layout/table_box.h's `table_box_table_of`) and ask it for the columns the caller wants",
                box_subject(table, nbuf, sizeof nbuf));
-    tw_require_separated_borders(table);
+    /* §17.6's MODEL, ASKED ONCE FOR THE WHOLE ALGORITHM. It is a fact about the TABLE — `border-collapse` is
+       `Inherited: yes` and its Applies-to line is "'table' and 'inline-table' elements" — so every term below
+       takes its arm from this one read and no arm re-asks. */
+    collapsing = table_border_collapse_selected(table);
     /* §17.6.1's `Computed value: two absolute lengths` — core/css/css_computed_value.h answers the pair whole
        because neither the text entry nor the single-length one can carry it. Only the horizontal half is a
        term of a WIDTH; the vertical half is CSS 2.1 §17.5.3 Table height algorithms'. */
@@ -679,7 +678,8 @@ void table_widths(lxb_dom_element_t *table, const TableGrid *grid, TableUsedWidt
            "CSS 2.1 §17.6.1 The separated borders model states \"Lengths may not be negative\" of "
            "`border-spacing`, and core/css/css_computed_value.c asserts that where it computes the pair — so a "
            "negative reaching here is arithmetic that lost a sign rather than a document");
-    edges = tw_table_edges(table);
+    used_spacing = tw_used_spacing(spacing.horizontal, collapsing);
+    edges = tw_table_edges(table, collapsing);
     layout = tw_computed(table, "table-layout");
     fixed = strcmp(layout, "fixed") == 0;
     DCHECK(fixed || strcmp(layout, "auto") == 0,
@@ -695,17 +695,17 @@ void table_widths(lxb_dom_element_t *table, const TableGrid *grid, TableUsedWidt
        `table-layout` alone does not decide, and a component that dispatched on it alone would run the fixed
        algorithm with no table space for its step 3 to divide. See table_width.h for the optional §10.3.3 arm
        the same paragraph offers and this component declines. */
-    if (fixed && has_declared) tw_fixed_layout(table, grid, spacing.horizontal, declared, out);
-    else tw_auto_layout(table, grid, spacing.horizontal, has_declared, declared, out);
+    if (fixed && has_declared) tw_fixed_layout(table, grid, used_spacing, declared, out);
+    else tw_auto_layout(table, grid, used_spacing, has_declared, declared, out);
     /* THE SPACING IS PART OF THE ANSWER AND IS STORED FROM THE ONE READ THE LAYOUT RAN UNDER — see
        table_width.h for why a consumer cannot recover it from `content` and the columns. It is written HERE,
        past both algorithms, so neither of them can store a different one. */
-    out->spacing = spacing.horizontal;
+    out->spacing = used_spacing;
     DCHECK(out->ncols == grid->ncols && (out->columns != NULL || out->ncols == 0),
            "CSS 2.1 §17.5.2 answered a different number of used column widths than the grid it was run over "
            "holds, or a non-zero count with no array — every consumer of this answer indexes it by the grid's "
            "own column number, so the two must not come apart");
-    check_sum = tw_spacing_total(spacing.horizontal, out->ncols);
+    check_sum = tw_spacing_total(used_spacing, out->ncols);
     for (i = 0; i < out->ncols; i++) {
         DCHECK(out->columns[i].px >= 0.0,
                "CSS 2.1 §17.5.2 gave a grid column a NEGATIVE used width. Every term is an intrinsic size, a "
@@ -725,14 +725,22 @@ void table_widths(lxb_dom_element_t *table, const TableGrid *grid, TableUsedWidt
        greater of its own declared `width` and CAPMIN. THE TOLERANCE IS THE DISTRIBUTION'S OWN ROUNDING —
        `tw_distribute` gives the last column the remainder so the shares sum to the surplus by construction, but
        the per-column additions there and this re-summation are two different orders of the same terms and IEEE
-       addition is not associative. */
+       addition is not associative.
+       ONE ASSERTION COVERS BOTH MODELS BECAUSE THE SPACING TERM CARRIES THE DIFFERENCE. Under §17.6.2 The
+       collapsing border model the spacing is zero and the relation is `content == the used column widths`,
+       which is that section's own arithmetic read out: its row-width equation's two `0.5 * border-width` terms
+       are the TABLE box's border widths (they are what `edges` above holds), a cell at the grid's perimeter is
+       charged neither of them, and every interior grid line is charged once — as the halves its two
+       neighbouring columns each carry. So the columns sum to the distance between the table's two inner edges
+       under §17.6.2 exactly as they sum to it plus the spacing under §17.6.1. */
     DCHECK(out->ncols == 0 ||
                slack.px <= 1e-9 * (1.0 + (out->content.px < 0.0 ? -out->content.px : out->content.px)),
-           "CSS 2.1 §17.6.1 The separated borders model defines a table's width as the distance from its left "
-           "inner padding edge to its right inner padding edge including the border spacing, which is exactly "
-           "the used column widths plus that spacing — and this answer's two halves disagree by more than the "
-           "distribution's own rounding. A consumer placing cells from the columns and sizing the box from the "
-           "content width would lay them out in two different rectangles");
+           "CSS 2.1 §17.6 Borders' definition of a table's width — §17.6.1 The separated borders model's "
+           "distance from its left inner padding edge to its right inner padding edge including the border "
+           "spacing, or §17.6.2 The collapsing border model's same distance with no spacing in it — is exactly "
+           "the used column widths plus this component's spacing term, and this answer's two halves disagree "
+           "by more than the distribution's own rounding. A consumer placing cells from the columns and sizing "
+           "the box from the content width would lay them out in two different rectangles");
     DCHECK(out->content.px >= 0.0,
            "CSS 2.1 §17.5.2 gave a table a NEGATIVE used width. Every operand of both algorithms' final "
            "comparison is a floored declared length, a containing block width, CAPMIN or a sum of non-negative "

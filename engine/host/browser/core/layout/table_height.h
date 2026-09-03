@@ -66,12 +66,17 @@
  * sentence rather than an omission here: "In CSS 2.1, the effect of 'min-height' and 'max-height' on tables,
  * inline tables, table cells, table rows, and row groups is undefined."
  *
- * §17.6.2 The collapsing border model IS REFUSED BY NAME AT THIS COMPONENT'S ENTRY, exactly as §17.5.2's is and
- * for the vertical twin of its reasons: §17.5.3's "plus any cell spacing or borders" is §17.6.1's vertical
- * `border-spacing` in the separated model and the table's own resolved borders in the collapsing one, and a
- * cell box's height here is measured over that cell's OWN computed `border-*-width`, which §17.6.2 replaces
- * with a resolution across the grid line. Running one model's arithmetic over the other reports every row and
- * the whole table taller than a browser lays them out.
+ * §17.6.2 The collapsing border model IS LAID OUT AND NOT REFUSED, AND IT COSTS THIS COMPONENT ONE TERM.
+ * §17.5.3's "plus any cell spacing or borders" is §17.6.1's vertical `border-spacing` in the separated model
+ * and NOTHING in the collapsing one, where the section has no distance between adjoining cell borders at all
+ * ("Borders are centered on the grid lines between the cells") — so the spacing term is zero and every
+ * consumer of `TableUsedHeights.spacing` gets that term rather than the property. The other half is not this
+ * component's: a cell box's height is measured over the cell's own computed `border-*-width` under §17.6.1 and
+ * over half of §17.6.2.1 Border conflict resolution's winner at each horizontal grid line it abuts under
+ * §17.6.2, and `table_cell_vertical_edges` below answers both — so every row maximum here is stated over one
+ * quantity in both models. core/layout/table_border_collapse.h owns that reading whole, including why a cell
+ * at the table's top or bottom is charged NOTHING there: §17.6.2 gives that half to the TABLE box's own border
+ * width ("The top border width of the table is equal to half of the maximum collapsed top border").
  *
  * NOTHING IS STORED BETWEEN CALLS, for core/layout/block_flow.h's reason: a layout is per-flow state, so a
  * cached table height is shared state solver/dom_cow.h's delta does not swap and a stale one is another flow's
@@ -107,13 +112,22 @@ typedef struct {
        border-edge exception — "in HTML and XHTML1, the width of the <table> element is the distance from the
        left border edge to the right border edge" — is written about the WIDTH and about nothing else, so the
        block axis has no such peculiarity and a declared `height` is an ordinary content-box length under the
-       initial `box-sizing`. */
+       initial `box-sizing`.
+       A CONSUMER CONVERTING THIS TO A BORDER BOX UNDER §17.6.2 The collapsing border model MUST NOT READ THE
+       PROPERTIES, for the reason core/layout/table_width.h's own `content` field states as a named residual and
+       does not repeat here: a collapsed table box has no padding at all and its top and bottom border widths
+       are half of the maximum collapsed border at the grid's top and bottom lines, which
+       core/layout/table_border_collapse.h's `table_collapsed_table_edges` answers on both axes at once. The one
+       diff that fixes it fixes this axis with the other. */
     CssPx   content;
     /* §17.6.1's VERTICAL `border-spacing` — "the first gives the horizontal spacing and the second the vertical
        spacing" — which `content` holds `nrows + 1` of, one between each adjoining pair of rows and one at each
        end, since §17.6.1's "the distance between the table border and the borders of the cells on the edge of
        the table is the table's padding for that side, plus the relevant border spacing distance" is written
-       "for that side" and so covers the top and the bottom. The HORIZONTAL half is §17.5.2's and is not here. */
+       "for that side" and so covers the top and the bottom. The HORIZONTAL half is §17.5.2's and is not here.
+       IT IS THIS ALGORITHM'S TERM AND NOT THE PROPERTY, which differs only under §17.6.2 The collapsing border
+       model: there it is ZERO whatever `border-spacing` computed to, because that model has no distance
+       between adjoining cell borders at all. A consumer adds this field and never re-reads the property. */
     CssPx   spacing;
 } TableUsedHeights;
 
@@ -141,7 +155,10 @@ void table_heights(lxb_dom_element_t *table, const TableGrid *grid, TableUsedHei
    THE SPANNING CASE TAKES THE SAME READING THE WIDTH ANSWER TAKES, for the same §17.6.1 reason: a cell covering
    N rows gets those N used heights PLUS N-1 of `spacing`, because `border-spacing` is "the distance that
    separates adjoining cell borders" and the rows inside one cell's rectangle have no adjoining cell borders
-   between them — that spacing is inside the cell, not between two of them. It is also what makes §17.5.3's own
+   between them — that spacing is inside the cell, not between two of them. UNDER §17.6.2 The collapsing border
+   model that term is zero and the answer is still exact: each of the N-1 horizontal grid lines running through
+   the cell is charged HALF to the row above it and half to the row below, so the N used heights already carry
+   every one of those borders whole. It is also what makes §17.5.3's own
    spanning CONSTRAINT ("the sum of the row heights involved must be great enough to encompass the cell spanning
    the rows") a statement this component can assert, since both sides are then measured in the same box.
    IT IS NOT A USED `height` IN CSS 2.1's SENSE and a caller must not report it as one: css-sizing-3 §3.3 "Box
@@ -162,9 +179,12 @@ CssPx table_cell_used_border_box_height(const TableUsedHeights *heights, const T
    as the one it does not define, "if the containing block's width depends on this element, then the resulting
    layout is undefined in CSS 2.1". §17.5.2.2 Automatic table layout's MCW makes that dependence real for every
    cell.
-   THE SEPARATED BORDER MODEL IS THE CALLER'S TO ESTABLISH, exactly as it is for the horizontal twin: under
-   §17.6.2 a cell's used border is not its own computed `border-*-width`, so this sum double-counts the shared
-   halves. `table_heights` refuses that model by name before any of this runs. */
+   BOTH OF CSS 2.1 §17.6 Borders' MODELS ARE ANSWERED AND THE CALLER ESTABLISHES NEITHER, exactly as for the
+   horizontal twin: under §17.6.1 The separated borders model the border term is the cell's own computed
+   `border-*-width`, and under §17.6.2 The collapsing border model it is half of §17.6.2.1 Border conflict
+   resolution's winner at each of the two horizontal grid lines the cell abuts, and zero at a grid line on the
+   table's perimeter (core/layout/table_border_collapse.h). The ask is made once, off the table box above the
+   cell. */
 CssPx table_cell_vertical_edges(lxb_dom_element_t *cell);
 
 /* Releases what `table_heights` stored. A zero-row answer holds NULL and is accepted. */

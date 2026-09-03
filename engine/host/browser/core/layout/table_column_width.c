@@ -14,6 +14,8 @@
 #include "core/css/css_property_applies.h"
 #include "core/layout/box_subject.h"
 #include "core/layout/intrinsic_size.h"
+#include "core/layout/table_border_collapse.h"
+#include "core/layout/table_box.h"
 #include "core/layout/table_column_box.h"
 #include "core/layout/table_column_width.h"
 #include "core/layout/table_grid.h"
@@ -43,31 +45,23 @@ static CssPx tcw_coherent(CssPx min, CssPx max)
  * table columns, and column groups is undefined." A clamp applied here would be this engine deciding a case
  * the standard declines to.
  *
- * NAMED RESIDUAL — §17.6.1 The separated borders model ONLY, AND THE ASK IS NOW THE CALLER'S. WHAT IS NOT
- * COVERED: CSS 2.1 §17.6.2 The collapsing border model, in which a cell's used border is not its own computed
- * `border-*-width` — that section centres each border on the grid line between two cells ("borders are centered
- * on the grid lines between the cells") and its own row-width equation charges each of the two outermost
- * borders at HALF, so the sum taken here double-counts every shared edge. The border read below is right under
- * `border-collapse: separate`, which is that property's initial value and therefore what an undeclared document
- * is in. WHAT THE NEXT DIFF BUILDS: §17.6.2's own used border widths — the resolution §17.6.2.1 Border conflict
- * resolution states over the adjoining cell, row, row group, column, column group and table borders — answered
- * per cell edge, so that the sum below has a second arm to take. THE COLUMN AND COLUMN-GROUP HALF OF THAT
- * RESOLUTION CAN NOW BE ASKED: core/layout/table_column_box.h answers WHICH column and column-group box occupies
- * a grid column, which is CSS 2.1 §17.5's rules 3 and 4 and was the one operand of §17.6.2.1 no component in
- * this tree could name. What is still missing is the resolution itself and the geometry it moves. THE ASK THAT SELECTS BETWEEN THEM IS ALREADY
- * BUILT AND IS NOT HERE: core/layout/table_width.c reads `border-collapse` at §17.5.2's entry and refuses
- * `collapse` by name before any column is measured, and `table_column_widths` asserts that routing at its own
- * boundary — so a reader looking for the ask in this function will not find one, by design. An earlier draft of
- * this residual told its reader to build that ask HERE, which would have put a second copy of one routing
- * decision one level below the component that owns it. HOW ITS ABSENCE WOULD SHOW: a table declaring
- * `border-collapse: collapse` reaches §17.5.2's refusal instead of a width, so no document in that model is
- * laid out at all — and the day the refusal is lifted without this arm, every such table with a non-zero cell
- * border reports every column WIDER than a browser does, by one border width per shared edge. */
+ * BOTH OF §17.6 Borders' MODELS ARE ANSWERED HERE, AND THE ASK IS THIS FUNCTION'S. Under CSS 2.1 §17.6.1 The
+ * separated borders model "each cell has an individual border" and the sum is the cell's own computed
+ * `border-*-width`. Under CSS 2.1 §17.6.2 The collapsing border model it is not: that section centres each
+ * border on the grid line between two cells ("Borders are centered on the grid lines between the cells"), so
+ * the border at an edge is §17.6.2.1 Border conflict resolution's winner among the boxes meeting there and the
+ * cell carries HALF of it — core/layout/table_border_collapse.h owns that whole reading, including why a cell
+ * at the table's perimeter carries NONE of the border there. The ask is here rather than at the caller because
+ * both of §17.5.2's algorithms and core/layout/used_value.c's cell content width read this ONE sum, and a
+ * caller-side dispatch would be that routing decision written three times over a difference none of them can
+ * see: both answers are a real width of a real box. */
 CssPx table_cell_border_edges(lxb_dom_element_t *cell)
 {
     static const char *const PADDINGS[2] = { "padding-left", "padding-right" };
     static const char *const BORDERS[2] = { "border-left-width", "border-right-width" };
     CssPx edges = css_px(0.0);
+    lxb_dom_element_t *table;
+    bool collapsing;
     char nbuf[160];
     int i;
 
@@ -81,9 +75,13 @@ CssPx table_cell_border_edges(lxb_dom_element_t *cell)
            "§8.3 \"Margin properties\"' Applies-to line now says the horizontal margins DO apply to this box — "
            "so css-sizing-3 §2.2 \"Intrinsic Size Contributions\"' outer size has a term this walk is not "
            "adding and every column the box occupies is reported narrower than its content");
+    /* §17.6's `border-collapse` is `Inherited: yes` and its Applies-to line is "'table' and 'inline-table'
+       elements", so the model is a fact about the TABLE and one ask covers both of this cell's sides. */
+    table = table_box_table_of(cell);
+    collapsing = table_border_collapse_selected(table);
     for (i = 0; i < 2; i++) {
         CssLength pad = css_computed_length(cell, PADDINGS[i]);
-        CssLength bor = css_computed_length(cell, BORDERS[i]);
+        CssLength bor;
 
         if (pad.kind != CSS_LENGTH_ABSOLUTE)
             DFAILF("%s: a table cell's `%s` is not an absolute length, and CSS 2.1 §17.5.2.2 Automatic table "
@@ -104,13 +102,25 @@ CssPx table_cell_border_edges(lxb_dom_element_t *cell)
                    "line is \"the percentage as specified or the absolute length\", so neither is a value the "
                    "cascade can hand back",
                    box_subject(cell, nbuf, sizeof nbuf), PADDINGS[i]);
+        edges = css_px_add(edges, pad.px);
+        /* §17.6.2 replaces this cell's OWN border with the resolution at the grid line, so the two sides are
+           added together below rather than one per iteration — there is no per-side answer to read here. */
+        if (collapsing) continue;
+        bor = css_computed_length(cell, BORDERS[i]);
         DCHECK(bor.kind == CSS_LENGTH_ABSOLUTE,
                "a `border-*-width` computed to something that is not an absolute length. css-backgrounds-3 "
                "§3.3 \"Line Thickness: the border-width properties\"' `Computed value:` line is `absolute "
                "length, "
                "snapped as a border width` and every arm of that derivation produces one, so a percentage or a "
                "keyword here is a rule that did not run");
-        edges = css_px_add(edges, css_px_add(pad.px, bor.px));
+        edges = css_px_add(edges, bor.px);
+    }
+    if (collapsing) {
+        /* §17.6.2's charge at the two vertical grid lines this cell abuts — half the resolution at each, and
+           zero at one on the table's perimeter, which core/layout/table_border_collapse.h owns whole. */
+        TableCollapsedEdges charge = table_collapsed_cell_edges(cell);
+
+        edges = css_px_add(edges, css_px_add(charge.left, charge.right));
     }
     DCHECK(edges.px >= 0.0,
            "CSS 2.1 §17.5.2.2's cell edges came out NEGATIVE. CSS 2.1 §8.4 states outright that \"unlike "
@@ -232,9 +242,16 @@ static TableColumnWidth tcw_cell_widths(lxb_dom_element_t *cell)
    WHICH BOX THE NUMBER IS A WIDTH OF is settled by §17.5's own closing paragraph rather than assumed: "In the
    separated borders model, the edges coincide with the border edges of cells." A column's edges are therefore
    its cells' BORDER edges, which is the box `TableColumnWidth` is already measured in (see the header), so the
-   declared width floors the pair directly and needs no conversion. The collapsing model moves those edges —
-   §17.5's same sentence gives them to the grid lines the borders are centred on — and is refused at §17.5.2's
-   entry before any of this runs. */
+   declared width floors the pair directly and needs no conversion.
+   THE COLLAPSING MODEL MOVES THOSE EDGES AND THE FLOOR IS STILL APPLIED AS WRITTEN, WHICH IS RECORDED RATHER
+   THAN DERIVED. The same paragraph's first sentence gives them elsewhere — "The edges of the rows, columns, row
+   groups and column groups in the collapsing borders model coincide with the hypothetical grid lines on which
+   the borders of the cells are centered." — and a cell's border box under CSS 2.1 §17.6.2 The collapsing border
+   model reaches exactly those grid lines at every INTERIOR one, since it carries half of a border centred
+   there. The two differ only at the table's two OUTERMOST lines, by the half-border §17.6.2 gives to the TABLE
+   box ("The left border width of the table is half of the first cell's collapsed left border"), and CSS 2.1
+   states no rule reconciling a declared column width with that half. So the floor is taken on the same pair in
+   both models, and the difference is a length the table box already carries rather than one dropped here. */
 typedef struct {
     bool  declared;   /* the computed `width` is other than `auto` — step 4's own antecedent */
     CssPx px;         /* meaningless unless `declared` */
@@ -373,26 +390,12 @@ size_t table_column_widths(lxb_dom_element_t *table, const TableGrid *grid, Tabl
            "CSS 2.1 §17.5.2.2 was handed a grid with no cell array and a non-zero cell count — "
            "`table_grid_build` stores NULL only for a table whose rows generate no cell, so the two have been "
            "carried apart since it answered");
-    /* THE BORDER MODEL IS THE CALLER'S ROUTING DECISION, ASSERTED HERE RATHER THAN ASKED HERE — the split
-       core/layout/table_width.c makes at §17.5.2's entry is what decides whether these four steps may run at
-       all, and this is the boundary where that decision is RELIED ON. `table_cell_border_edges` sums each
-       cell's own computed `border-*-width`, which is §17.6.1 The separated borders model's used border and is
-       NOT §17.6.2 The collapsing border model's (see the residual on that function), so a table in the
-       collapsing model reaching these steps would come out wider by one border width per shared edge with
-       nothing downstream to say so. It is asked ONCE, of the table, rather than per cell: §17.6's
-       `border-collapse` is `Inherited: yes` and applies to the table, so every cell in it is in one model. */
-    {
-        char *collapse = css_computed_value(table, "border-collapse");
-        bool separated = collapse != NULL && strcmp(collapse, "separate") == 0;
-
-        free(collapse);
-        DCHECK(separated,
-               "CSS 2.1 §17.5.2.2 Automatic table layout's four steps were entered for a table in CSS 2.1 "
-               "§17.6.2 The collapsing border model, whose used cell borders are not the computed "
-               "`border-*-width` this component sums. core/layout/table_width.c refuses that model by name at "
-               "CSS 2.1 §17.5.2 Table width algorithms: the 'table-layout' property's entry, which is the only "
-               "route to these steps, so this table reached them past that refusal and the two have come apart");
-    }
+    /* NO BORDER-MODEL ASSERT STANDS HERE ANY LONGER, AND ITS REMOVAL IS THE POINT RATHER THAN A RELAXATION.
+       What stood here refused CSS 2.1 §17.6.2 The collapsing border model on the ground that
+       `table_cell_border_edges` sums each cell's own computed `border-*-width` — and that function now answers
+       BOTH of §17.6 Borders' models at its own site, so these four steps are stated over a border box that is
+       right in either one and there is nothing left for a caller to have got wrong. A predicate kept past the
+       thing it selected against is a fallback with no second arm to fall back to. */
     *out = NULL;
     /* §17.5's rules 3 and 4, BUILT BEFORE THE ZERO-COLUMN RETURN BELOW AND NOT AFTER IT. A table whose rows
        generate no cell still has the column boxes its own child list declares, and `<table><colgroup span="3"

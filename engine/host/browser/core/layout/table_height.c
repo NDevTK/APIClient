@@ -15,6 +15,7 @@
 #include "core/layout/block_flow.h"
 #include "core/layout/box_subject.h"
 #include "core/layout/replaced_element.h"
+#include "core/layout/table_border_collapse.h"
 #include "core/layout/table_box.h"
 #include "core/layout/table_grid.h"
 #include "core/layout/table_height.h"
@@ -32,40 +33,19 @@ static char *th_computed(lxb_dom_element_t *el, const char *name)
 
 /* ---- §17.6 Borders' TWO MODELS, asked once, at the entry ---------------------------------------------------
    §17.6's `border-collapse` selects between §17.6.1 The separated borders model and §17.6.2 The collapsing
-   border model. This refusal is the VERTICAL twin of core/layout/table_width.c's and not a second copy of it:
-   that one is about the terms of a WIDTH — the horizontal spacing and the column sums — and this one is about
-   the terms of a HEIGHT, which §17.6.2 changes independently. A caller reaching §17.5.3 without having gone
-   through §17.5.2 (a table whose height is asked for and whose width is not) would otherwise meet no refusal
-   at all. */
-static void th_require_separated_borders(lxb_dom_element_t *table)
+   border model, and this is the VERTICAL twin of core/layout/table_width.c's split rather than a second copy
+   of it: that one is about the terms of a WIDTH — the horizontal spacing and the table's own left and right
+   edges — and this one is about the terms of a HEIGHT, which §17.6.2 changes independently. A caller reaching
+   §17.5.3 without having gone through §17.5.2 (a table whose height is asked for and whose width is not) meets
+   its own arm here rather than none.
+   §17.5.3's SUM IS "the row heights plus any cell spacing or borders", and the cell spacing is §17.6.1's
+   VERTICAL `border-spacing`, which §17.6.2 gives no meaning to at all — "Borders are centered on the grid
+   lines between the cells" and the cells meet, so what stands between two rows there is the resolved border
+   and not a spacing. The ROW HEIGHTS need no arm at this level: they are maxima over CELL BOXES, and
+   `th_cell_vertical_edges_pair` below answers a cell's vertical edges under either model. */
+static CssPx th_used_spacing(CssPx vertical, bool collapsing)
 {
-    char *collapse = th_computed(table, "border-collapse");
-    bool separated = strcmp(collapse, "separate") == 0;
-    bool collapsed = strcmp(collapse, "collapse") == 0;
-    char nbuf[160];
-
-    free(collapse);
-    DCHECK(separated || collapsed,
-           "a `border-collapse` computed to something that is neither of the two keywords CSS 2.1 §17.6 "
-           "Borders' `collapse | separate | inherit` grammar admits, and §17.6 gives it `Computed value: as "
-           "specified` over a keyword-only value — so nothing between the declaration and here had a rule that "
-           "could produce a third one");
-    if (separated) return;
-    DFAILF("%s: CSS 2.1 §17.5.3 Table height algorithms was asked for a table in CSS 2.1 §17.6.2 The "
-           "collapsing border model, and every height below is CSS 2.1 §17.6.1 The separated borders model's. "
-           "TWO TERMS ARE WRONG UNDER §17.6.2 AND NEITHER IS MERELY NARROWER. (1) The CELL SPACING: §17.5.3's "
-           "sum is \"the row heights plus any cell spacing or borders\", and the cell spacing is §17.6.1's "
-           "vertical `border-spacing`, which §17.6.2 gives no meaning to at all — \"borders are centered on "
-           "the grid lines between the cells\" and the cells meet, so what stands between two rows there is "
-           "the resolved border and not a spacing. (2) Each ROW's height, which is a maximum over the CELL "
-           "BOXES in it and so is measured over each cell's own computed `border-*-width`: §17.6.2.1 Border "
-           "conflict resolution replaces that with one border shared between the two adjoining cells and "
-           "charges the outermost at half, so every row below is reported taller than a browser lays it out "
-           "by one border width per shared edge. BUILD §17.6.2's used border widths per cell edge — the same "
-           "operand core/layout/table_column_width.c's own residual names for the other axis — and give both "
-           "the spacing term and the cell-edge sum a second arm. THE CHOICE OF MODEL IS NOT WHAT IS MISSING: "
-           "`border-collapse` is in core/css/css_computed_value.c's modelled set and was just read here",
-           box_subject(table, nbuf, sizeof nbuf));
+    return collapsing ? css_px(0.0) : vertical;
 }
 
 /* ---- §17.6.1's CELL SPACING, ON THE BLOCK AXIS -------------------------------------------------------------
@@ -95,6 +75,9 @@ static void th_cell_vertical_edges_pair(lxb_dom_element_t *cell, CssPx *top, Css
     static const char *const PADDINGS[2] = { "padding-top", "padding-bottom" };
     static const char *const BORDERS[2] = { "border-top-width", "border-bottom-width" };
     CssPx side[2];
+    TableCollapsedEdges charge;
+    lxb_dom_element_t *table;
+    bool collapsing;
     char nbuf[160];
     int i;
 
@@ -108,9 +91,18 @@ static void th_cell_vertical_edges_pair(lxb_dom_element_t *cell, CssPx *top, Css
            "\"Margin properties\"' Applies-to line now says the vertical margins DO apply to this box — so a "
            "cell's contribution to its row has a term this walk is not adding, and §17.5's own \"the edges "
            "coincide with the border edges of cells\" no longer places the row where this component puts it");
+    /* §17.6's `border-collapse` is `Inherited: yes` and its Applies-to line is "'table' and 'inline-table'
+       elements", so the model is a fact about the TABLE and one ask covers both of this cell's sides. */
+    table = table_box_table_of(cell);
+    collapsing = table_border_collapse_selected(table);
+    charge.top = css_px(0.0);
+    charge.right = css_px(0.0);
+    charge.bottom = css_px(0.0);
+    charge.left = css_px(0.0);
+    if (collapsing) charge = table_collapsed_cell_edges(cell);
     for (i = 0; i < 2; i++) {
         CssLength pad = css_computed_length(cell, PADDINGS[i]);
-        CssLength bor = css_computed_length(cell, BORDERS[i]);
+        CssLength bor;
 
         if (pad.kind != CSS_LENGTH_ABSOLUTE)
             DFAILF("%s: a table cell's `%s` is not an absolute length, and CSS 2.1 §17.5.3 Table height "
@@ -126,12 +118,20 @@ static void th_cell_vertical_edges_pair(lxb_dom_element_t *cell, CssPx *top, Css
                    "at all: CSS 2.1 §8.4's `Value:` line is `<padding-width> | inherit` and its `Computed "
                    "value:` line is \"the percentage as specified or the absolute length\"",
                    box_subject(cell, nbuf, sizeof nbuf), PADDINGS[i]);
-        DCHECK(bor.kind == CSS_LENGTH_ABSOLUTE,
-               "a `border-*-width` computed to something that is not an absolute length. css-backgrounds-3 "
-               "§3.3 \"Line Thickness: the border-width properties\"' `Computed value:` line is `absolute "
-               "length, snapped as a border width` and every arm of that derivation produces one, so a "
-               "percentage or a keyword here is a rule that did not run");
-        side[i] = css_px_add(pad.px, bor.px);
+        if (collapsing) {
+            /* §17.6.2 replaces this cell's OWN border with half the resolution at the grid line it abuts —
+               top first, then bottom, which is the order `TableCollapsedEdges` states its four sides in and
+               the order this loop runs in. */
+            side[i] = css_px_add(pad.px, i == 0 ? charge.top : charge.bottom);
+        } else {
+            bor = css_computed_length(cell, BORDERS[i]);
+            DCHECK(bor.kind == CSS_LENGTH_ABSOLUTE,
+                   "a `border-*-width` computed to something that is not an absolute length. css-backgrounds-3 "
+                   "§3.3 \"Line Thickness: the border-width properties\"' `Computed value:` line is `absolute "
+                   "length, snapped as a border width` and every arm of that derivation produces one, so a "
+                   "percentage or a keyword here is a rule that did not run");
+            side[i] = css_px_add(pad.px, bor.px);
+        }
         DCHECK(side[i].px >= 0.0,
                "CSS 2.1 §17.5.3's cell edges came out NEGATIVE on one side. CSS 2.1 §8.4 states outright that "
                "\"unlike margin properties, values for padding values cannot be negative\" and "
@@ -359,9 +359,9 @@ void table_heights(lxb_dom_element_t *table, const TableGrid *grid, TableUsedHei
     CssBorderSpacing spacing;
     TableBoxRow *rows = NULL;
     ThRowCell *bucket = NULL;
-    CssPx declared = css_px(0.0), sum, check_sum, slack;
+    CssPx used_spacing, declared = css_px(0.0), sum, check_sum, slack;
     char *display;
-    bool is_table_box, has_declared;
+    bool is_table_box, has_declared, collapsing;
     size_t nrows, r, i;
     char nbuf[160];
 
@@ -389,7 +389,11 @@ void table_heights(lxb_dom_element_t *table, const TableGrid *grid, TableUsedHei
                "to the table box above this one (core/layout/table_box.h's `table_box_table_of`) and ask it "
                "for the rows the caller wants",
                box_subject(table, nbuf, sizeof nbuf));
-    th_require_separated_borders(table);
+    /* §17.6's MODEL, ASKED ONCE FOR THE WHOLE ALGORITHM — a fact about the TABLE (`border-collapse` is
+       `Inherited: yes`, Applies-to "'table' and 'inline-table' elements"), so the spacing term below takes its
+       arm from this one read and every cell's own edges take theirs from the same ask inside
+       `th_cell_vertical_edges_pair`. */
+    collapsing = table_border_collapse_selected(table);
     /* §17.6.1's `Computed value: two absolute lengths` — core/css/css_computed_value.h answers the pair whole
        because neither the text entry nor the single-length one can carry it. Only the VERTICAL half is a term
        of a height; the horizontal half is CSS 2.1 §17.5.2 Table width algorithms: the 'table-layout'
@@ -407,7 +411,8 @@ void table_heights(lxb_dom_element_t *table, const TableGrid *grid, TableUsedHei
            "than re-deriving it. Two different counts here means the two walks ran over different trees, and "
            "every row index below would name a different row in each");
     out->nrows = nrows;
-    out->spacing = spacing.vertical;
+    used_spacing = th_used_spacing(spacing.vertical, collapsing);
+    out->spacing = used_spacing;
     out->rows = nrows == 0 ? NULL : calloc(nrows, sizeof(*out->rows));
     CHECK(nrows == 0 || out->rows != NULL, "out of memory allocating CSS 2.1 §17.5.3's row heights");
     bucket = grid->ncells == 0 ? NULL : calloc(grid->ncells, sizeof(*bucket));
@@ -474,13 +479,13 @@ void table_heights(lxb_dom_element_t *table, const TableGrid *grid, TableUsedHei
                "its `<tbody>` and into the next one is inside the table and would pass here");
         need = c->element == NULL ? css_px(0.0)
                                   : css_px_max(th_cell_box_height(c->element), th_declared_term(c->element));
-        have = css_px_scale(spacing.vertical, (double) (c->rowspan - 1));
+        have = css_px_scale(used_spacing, (double) (c->rowspan - 1));
         for (k = 0; k < c->rowspan; k++) have = css_px_add(have, out->rows[c->row + k]);
         if (need.px > have.px)
             out->rows[c->row + c->rowspan - 1] =
                 css_px_add(out->rows[c->row + c->rowspan - 1], css_px_sub(need, have));
     }
-    sum = th_spacing_total(spacing.vertical, nrows);
+    sum = th_spacing_total(used_spacing, nrows);
     for (r = 0; r < nrows; r++) sum = css_px_add(sum, out->rows[r]);
     has_declared = th_declared_minimum(table, &declared);
     /* §17.5.3's TWO SENTENCES, IN ORDER: the `auto` height IS the sum, and any other value "is treated as a
@@ -491,7 +496,7 @@ void table_heights(lxb_dom_element_t *table, const TableGrid *grid, TableUsedHei
        — spreading it over the rows, or over the last row alone — are equally conforming and equally arbitrary,
        and this one is chosen because it leaves every row where a reader measuring one row can predict. */
     out->content = has_declared ? css_px_max(sum, declared) : sum;
-    check_sum = th_spacing_total(spacing.vertical, out->nrows);
+    check_sum = th_spacing_total(used_spacing, out->nrows);
     for (r = 0; r < out->nrows; r++) check_sum = css_px_add(check_sum, out->rows[r]);
     slack = css_px_sub(out->content, check_sum);
     /* §17.5.3's SUM, ASSERTED RATHER THAN ASSUMED — the vertical twin of the identity core/layout/table_width.c
@@ -511,7 +516,7 @@ void table_heights(lxb_dom_element_t *table, const TableGrid *grid, TableUsedHei
 
         if (c->rowspan == 1 || c->element == NULL) continue;
         need = css_px_max(th_cell_box_height(c->element), th_declared_term(c->element));
-        have = css_px_scale(spacing.vertical, (double) (c->rowspan - 1));
+        have = css_px_scale(used_spacing, (double) (c->rowspan - 1));
         for (k = 0; k < c->rowspan; k++) have = css_px_add(have, out->rows[c->row + k]);
         DCHECK(have.px >= need.px - 1e-9 * (1.0 + (need.px < 0.0 ? -need.px : need.px)),
                "CSS 2.1 §17.5.3 Table height algorithms states the ONE thing it does require of a row-spanning "

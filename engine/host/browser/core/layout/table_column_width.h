@@ -99,9 +99,12 @@ size_t table_column_widths(lxb_dom_element_t *table, const TableGrid *grid, Tabl
    to come to disagree, and the disagreement would be invisible: both answers are real widths of real boxes.
    IT IS NOT core/layout/used_value.h's SURROUND and must not become a call to it — see table_column_width.c for
    the cycle that makes them two different questions over the same four properties.
-   THE SEPARATED BORDER MODEL IS THE CALLER'S TO ESTABLISH. Under CSS 2.1 §17.6.2 The collapsing border model a
-   cell's used border is not its own computed `border-*-width`, so this sum double-counts the shared halves;
-   §17.5.2's entry refuses that model by name before any of this runs, and `table_column_widths` asserts it. */
+   BOTH OF CSS 2.1 §17.6 Borders' MODELS ARE ANSWERED, AND THE CALLER ESTABLISHES NEITHER. Under §17.6.1 The
+   separated borders model the border term is the cell's own computed `border-*-width`; under §17.6.2 The
+   collapsing border model it is half of §17.6.2.1 Border conflict resolution's winner at each of the two
+   vertical grid lines the cell abuts, and zero at a grid line on the table's perimeter, which
+   core/layout/table_border_collapse.h owns whole. The ask is made HERE, once, off the table box above the
+   cell — a caller-side dispatch would be one routing decision written at every consumer of this sum. */
 CssPx table_cell_border_edges(lxb_dom_element_t *cell);
 
 /* CSS 2.1 §17.5 Visual layout of table contents' RULES 3 AND 4 ARE NOT HERE — they are

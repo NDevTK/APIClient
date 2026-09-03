@@ -48,12 +48,16 @@
  * UA style sheet rules and the 'box-sizing' property"), and adding the declaration would change what
  * `getComputedStyle(table).boxSizing` reports, which is an observable this section says nothing about.
  *
- * §17.6.2 The collapsing border model IS REFUSED BY NAME AT THIS COMPONENT'S ENTRY, and that is a crash rather
- * than a recorded choice because the answer would be WRONG and not merely one of several conforming ones: under
- * §17.6.2 a cell's used border is not its own computed `border-*-width` — that section centres each border on
- * the grid line between two cells and charges the outermost two at half in its own row-width equation — and
- * `border-spacing` has no meaning there at all. Running the separated model's arithmetic over it reports every
- * column and the whole table wider than a browser lays them out.
+ * §17.6.2 The collapsing border model IS LAID OUT AND NOT REFUSED, AND IT COSTS THIS COMPONENT TWO TERMS.
+ * Under §17.6.2 a cell's used border is not its own computed `border-*-width` — that section centres each
+ * border on the grid line between two cells and its own row-width equation charges the two OUTERMOST at half —
+ * and `border-spacing` has no meaning there at all. Both changes are made where they belong rather than as a
+ * mode of this algorithm: core/layout/table_border_collapse.h owns §17.6.2.1 Border conflict resolution and
+ * what a cell is charged by it, core/layout/table_column_width.h's `table_cell_border_edges` takes that arm so
+ * the four steps below are stated over the same border box in either model, and the two terms THIS component
+ * owns are the SPACING (zero under §17.6.2) and the TABLE BOX'S OWN EDGES (no padding, and §17.6.2's own two
+ * half-borders instead of the computed `border-*-width`). Every other line of §17.5.2 is model-independent,
+ * which is why there is no second algorithm here and no `if` inside one.
  *
  * NOTHING IS STORED BETWEEN CALLS, for core/layout/block_flow.h's reason: a layout is per-flow state, so a
  * cached table width is shared state solver/dom_cow.h's delta does not swap and a stale one is another flow's
@@ -86,15 +90,36 @@ typedef struct {
     size_t  ncols;
     /* §17.6.1's "width of the table": the table BOX's used content width, INCLUDING the border spacing and
        excluding its own padding and border. This is CSS 2.1's `width` for the table box, so a consumer wanting
-       §17.4's wrapper width adds the table box's own horizontal padding and border to it — which is what
-       core/layout/used_value.h's border edge already does for every other box. */
+       §17.4's wrapper width adds the table box's own horizontal SURROUND to it — which is what
+       core/layout/used_value.h's border edge already does for every other box.
+       WHAT THAT SURROUND IS DEPENDS ON THE BORDER MODEL, AND A CONSUMER READING THE PROPERTIES DIRECTLY IS
+       WRONG UNDER §17.6.2 The collapsing border model. NAMED RESIDUAL. WHAT IS NOT COVERED: a collapsed table
+       box has NO padding at all ("Also, in this model, a table does not have padding (but does have margins)")
+       and its border widths are not its computed `border-*-width` but §17.6.2's own halves ("The left border
+       width of the table is half of the first cell's collapsed left border"), which
+       core/layout/table_border_collapse.h's `table_collapsed_table_edges` answers whole; a consumer that reads
+       the four properties instead reports a collapsed table's border box too wide by its declared padding plus
+       the difference between its declared border and that half. WHAT THE NEXT DIFF BUILDS: the §17.6.2 arm of
+       core/layout/used_value.c's `uv_surround` for a box whose `display` generates a TABLE box, taken from
+       that entry — one branch, in the one function every border-edge conversion in this tree goes through, so
+       core/layout/flow_position.c's row origin (which measures from this content edge) is fixed by the same
+       line. HOW ITS ABSENCE WOULD SHOW: for `<table style="border-collapse:collapse;border:10px solid">` whose
+       cells declare no border of their own, the resolved border at each outermost grid line is 10 and §17.6.2
+       gives the table box a border width of 5 on each side — so its border box is the content width plus 10,
+       and a consumer reading `border-left-width` and `border-right-width` reports it plus 20. */
     CssPx   content;
     /* §17.6.1 The separated borders model's HORIZONTAL `border-spacing`, which that section defines as "The
        'border-spacing' property specifies the distance between the borders of adjoining cells" and which
        `content` holds `ncols + 1` of — one between each adjoining pair and one at each end, since §17.6.1
        also says "The distance between the table border and the borders of the cells on the edge of the table
        is the table's padding for that side plus the relevant border-spacing distance". The VERTICAL half is
-       §17.5.3 Table height algorithms' and is not here. */
+       §17.5.3 Table height algorithms' and is not here.
+       IT IS THIS ALGORITHM'S TERM AND NOT THE PROPERTY, WHICH IS A DIFFERENCE ONLY §17.6.2 The collapsing
+       border model MAKES: there it is ZERO whatever `border-spacing` computed to, because that model has no
+       distance between adjoining cell borders at all ("Borders are centered on the grid lines between the
+       cells"). A consumer adds this field and never re-reads the property, so a collapsed table adds nothing
+       — and the property still has a computed value, since it is `Inherited: yes` and a descendant table may
+       be in the other model. */
     CssPx   spacing;
 } TableUsedWidths;
 
@@ -127,6 +152,11 @@ void table_widths(lxb_dom_element_t *table, const TableGrid *grid, TableUsedWidt
    WIDER, never narrower than its content. The other reading — charging the cell only its columns — makes a
    spanning cell narrower than the row it sits in by exactly those N-1 spacings, so the two disagree about
    whether the table's own width covers its cells, and only this one keeps §17.6.1's sum whole.
+   UNDER §17.6.2 The collapsing border model THAT TERM IS ZERO AND THE ANSWER IS STILL EXACT, which is the
+   reading rather than a case this falls through. The N-1 grid lines running under a spanning cell are each
+   charged HALF to the column on either side of them (core/layout/table_border_collapse.h), so the N used
+   widths this loop sums already contain every one of those borders whole — which is precisely the length the
+   `border-spacing` term supplies in the other model, arriving through the columns instead of beside them.
    IT IS NOT A USED `width` IN CSS 2.1's SENSE and a caller must not report it as one: css-sizing-3 §3.3 "Box
    Edges for Sizing: the box-sizing property" decides which box a used value is exposed in, and under the
    initial `content-box` that is the content box — this number less the cell's own padding and border, which
