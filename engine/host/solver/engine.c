@@ -4929,7 +4929,19 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
        frontier ever GOT to the question: `driven == 0` is "this bundle ships no uncalled code", "no flow ever
        reached the end of its own work", and "the walk happened and the heap had none" at once, and the three
        take opposite actions. The first is a fact about the page, the second is a scheduling result worth
-       acting on, and only the pair separates them.
+       acting on, and the pair separates them.
+       WITHIN A FORKING SESSION, WHICH IS THE READING THIS COUNTER IS IN AND HAD NOT SAID. The gate above
+       returns BEFORE this line, so a session declared non-forking reads `asked == 0` by construction however
+       many flows ran out of work — a FOURTH state, and one that is byte-identical to the second, which is the
+       one the pair exists to separate. It is not ambiguous to a reader who asks, because the fact that
+       distinguishes it is public and is not this pair: `engine_session_forks()`. The counter is left counting
+       WALKS PERFORMED rather than moved above the gate to count flows that ran out of work — that would not
+       resolve the fourth reading, it would give the number a different meaning and leave the old one unread —
+       so what closes it is that the regime is stated, here and by whatever publishes the pair.
+       IT IS LIVE, NOT HYPOTHETICAL: the conformance host begins its sessions non-forking, and the shipped host
+       begins them forking. Any consumer of this pair that can run under both — a census row, a diagnostic that
+       names a cause — must read the session's own bit before it may say the frontier never reached the
+       question, or it states the SCHEDULE as the cause of a zero the policy guaranteed.
        BEFORE THE MEMO ON PURPOSE. The memo answers the question from a previous walk's result; a flow that
        reaches it HAS asked, and counting past it would make this number a fact about the memo instead of
        about the frontier — the same one-number-two-mechanisms defect solver/solve.h's arrival census exists
