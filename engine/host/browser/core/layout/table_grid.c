@@ -10,6 +10,7 @@
 
 #include "check.h"
 #include "core/html/integer_microsyntax.h"
+#include "core/layout/box_subject.h"
 #include "core/layout/table_box.h"
 #include "core/layout/table_grid.h"
 
@@ -393,6 +394,62 @@ const TableGridRowGroup *table_grid_row_group_of(const TableGrid *grid, lxb_dom_
         found = &grid->groups[i];
     }
     return found;
+}
+
+/* See table_grid.h for why an EMPTY row group box has to be answered by re-running §17.2's box generation and
+   why the LINE is a fact while the DISTANCE is a choice made at the placement. */
+size_t table_grid_empty_row_group_line(const TableGrid *grid, lxb_dom_element_t *group)
+{
+    TableBoxRowGroup *groups = NULL;
+    size_t ngroups, i, line = 0;
+    bool found = false;
+    char nbuf[160];
+
+    DCHECK(grid != NULL,
+           "CSS 2.1 §17.5's rule 2 was asked which grid line an empty row group stands on through no grid");
+    DCHECK(group != NULL,
+           "CSS 2.1 §17.5's rule 2 was asked which grid line a NULL row group stands on. The NULL-element run "
+           "is the stretch whose rows' parent is the TABLE BOX itself and it names no box — §17.2.1 Anonymous "
+           "table objects generates no anonymous row group — so there is no box here to place");
+    DCHECK(table_box_table_of(group) == grid->table,
+           "CSS 2.1 §17.5's rule 2 was asked about a ROW GROUP box that is not in this grid's table. The walk "
+           "below re-runs §17.2's box generation over THIS grid's table box, so a group of another table would "
+           "be absent from it and the crash a reader met would name the wrong absence");
+    DCHECK(table_grid_row_group_of(grid, group) == NULL,
+           "CSS 2.1 §17.5's rule 2 was asked which grid LINE a row group with ROWS stands on. A group holding "
+           "rows occupies grid CELLS — \"the same grid cells as the rows it contains\" — so its first grid row "
+           "is `first` of the run `table_grid_row_group_of` answers with, and this entry's line is the answer "
+           "for the one group that has no such row. Asking here would place a real group at the line above its "
+           "own first row's top edge, which is one `border-spacing` out under §17.6.1 The separated borders "
+           "model and exactly right under §17.6.2 The collapsing border model — so a document would have to "
+           "declare one to show it");
+    ngroups = table_box_row_groups(grid->table, &groups);
+    for (i = 0; i < ngroups; i++) {
+        if (groups[i].element != group) continue;
+        DCHECK(!found,
+               "CSS 2.1 §17.2 The CSS table model's display order reported ONE row group box TWICE. That walk "
+               "visits each of the table box's children once and moves at most one header and one footer, so a "
+               "second visit is the box generation having placed one element in two positions of the order");
+        DCHECK(groups[i].nrows == 0,
+               "CSS 2.1 §17.2's box generation reported ROWS for a row group core/layout/table_grid.h has no "
+               "run for. This grid's runs are built from the same walk's row array, so a group with rows there "
+               "and no run here is those two readings of one box generation having come apart");
+        line = groups[i].first;
+        found = true;
+    }
+    free(groups);
+    DCHECKF(found,
+            "%s: CSS 2.1 §17.2 The CSS table model's display order does not contain this ROW GROUP box, though "
+            "core/layout/table_box.h's own upward walk puts it in this grid's table. The two readings of "
+            "§17.2.1 Anonymous table objects' box generation have come apart — `table_box_table_of` climbed "
+            "from the group to the table and `table_box_row_groups` descended from the table and did not reach "
+            "it — and there is no line to place it on",
+            box_subject(group, nbuf, sizeof nbuf));
+    DCHECK(line <= grid->nrows,
+           "CSS 2.1 §17.5's rule 2 put an empty row group past the last GRID LINE. There are `nrows + 1` lines "
+           "and §17.2's display order counts the rows before the group, so a count above the total is that "
+           "order having emitted rows this grid did not store");
+    return line;
 }
 
 /* See table_grid.h. The partition is asserted where it is built, so this is a walk to the run that contains

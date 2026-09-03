@@ -155,6 +155,41 @@ size_t table_box_rows(lxb_dom_element_t *table, TableBoxRow **out);
    zero is the answer that entry gives for a table with no rows and is accepted here. */
 void table_box_rows_free(TableBoxRow *rows, size_t nrows);
 
+/* ONE ROW GROUP BOX of a table, with the GRID ROWS it contributes — CSS 2.1 §17.5 Visual layout of table
+   contents' rule 2 ("A row group occupies the same grid cells as the rows it contains") read from the BOX's
+   side, which is the side rule 2's EMPTY union can be seen from and the row array cannot.
+   `first` IS AN INDEX INTO `table_box_rows`' ANSWER and therefore a GRID ROW, which is rule 1's own doing
+   rather than a convention chosen here: "Each row box occupies one row of grid cells. Together, the row boxes
+   fill the table from top to bottom in the order they occur in the source document (i.e., the table occupies
+   exactly as many grid rows as there are row elements)." So the two arrays are one enumeration, and
+   core/layout/table_grid.h builds its own grid rows from this component's row order for that reason.
+   `nrows` IS ZERO FOR AN EMPTY ROW GROUP BOX, AND THAT IS THE WHOLE REASON THIS ENTRY EXISTS. `<tbody></tbody>`
+   generates no row, so it is invisible in `table_box_rows`' answer and in every array derived from it —
+   core/layout/table_grid.h's runs included, which is why `table_grid_row_group_of` answers NULL for it. Its
+   `first` is then the count of rows emitted BEFORE it, which is the grid row its first row WOULD occupy and
+   may be the table's row count: there are `nrows + 1` grid LINES and a trailing empty group stands on the
+   last one. */
+typedef struct {
+    lxb_dom_element_t *element;
+    size_t first;
+    size_t nrows;
+} TableBoxRowGroup;
+
+/* §17.2 The CSS table model's ROW GROUP BOXES of `table`, in that section's own DISPLAY ORDER — the same order
+   `table_box_rows` reports the rows in, because ONE walk produces both: §17.2's two exceptions to source order
+   ("for visual formatting, the row group is always displayed before all other rows and row groups", and its
+   footer twin) and its "only the first is rendered as a header" sentence are stated once, so no second
+   enumeration can order the groups differently from the rows inside them.
+   Answers the count and stores a newly allocated array of that many at `*out`, WHICH THE CALLER OWNS AND FREES
+   with `free`; a count of zero stores NULL. There is no per-entry release because an entry owns nothing —
+   unlike `table_box_rows`, whose rows own their cell arrays.
+   A ROW WHOSE PARENT IS THE TABLE BOX ITSELF IS IN NO GROUP AND APPEARS HERE NOWHERE, which is §17.2.1
+   Anonymous table objects' own shape rather than a gap: that section generates no anonymous row group, so such
+   a row's grid rows are covered by this array's `first`/`nrows` ranges and not by any entry of it. A consumer
+   summing `nrows` over this answer therefore does NOT get the table's row count, and must not.
+   ZERO IS A REAL TABLE — one whose rows are all parented by the table box, or one with no rows at all. */
+size_t table_box_row_groups(lxb_dom_element_t *table, TableBoxRowGroup **out);
+
 /* THE TABLE BOX an INTERNAL TABLE BOX is inside — §17.2.1 Anonymous table objects' box generation read UPWARD,
    which is the direction every consumer holding one internal box has to read it and the opposite of the two
    entries above. `internal` must be one of §17.2's internal table boxes (`table_box_kind_is_internal`); a

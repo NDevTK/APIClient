@@ -207,6 +207,25 @@ bool table_grid_row_of(const TableGrid *grid, const lxb_dom_element_t *row, size
    a box that does not exist. */
 const TableGridRowGroup *table_grid_row_group_of(const TableGrid *grid, lxb_dom_element_t *group);
 
+/* WHICH GRID LINE an EMPTY ROW GROUP BOX stands on — the other arm of the entry above, and the ONE question
+   rule 2's union over zero rows leaves an answer for. `group` must be a row group box of this grid's table for
+   which the entry above answered NULL; a group holding rows is a caller's crash here, because that group has a
+   RUN and its first grid row is `first` of it.
+   IT IS A GRID LINE AND NOT A GRID ROW, and the difference is the whole content of the answer. There are
+   `nrows + 1` lines and the empty group stands on the one its first row WOULD occupy — the count of grid rows
+   §17.2 The CSS table model's display order places BEFORE it — which is `nrows` itself for a trailing empty
+   group. That count is a FACT and not a choice: rule 1 fills the table with the row boxes "from top to bottom
+   in the order they occur in the source document", so the rows before this group are the rows before it. WHAT
+   IS A CHOICE is the DISTANCE that line is turned into, and it is recorded where the box is placed
+   (core/layout/flow_position.c) rather than here, because §17.6.1 The separated borders model leaves one
+   `border-spacing` of gap either side of the line and §17.5 names no edges for a box occupying no grid cell.
+   IT IS AN ENTRY HERE AND NOT A WALK AT THE CONSUMER for the reason every entry above is: an EMPTY row group
+   box is invisible in this grid's own arrays — it has no run, no row and no cell — so answering it means
+   re-running core/layout/table_box.h's box generation, and a consumer that did so would be free to disagree
+   with this grid about §17.2's display order while both looked locally right. That disagreement is silent: it
+   moves the box and nothing else. */
+size_t table_grid_empty_row_group_line(const TableGrid *grid, lxb_dom_element_t *group);
+
 /* WHICH RUN a given GRID ROW is in — the same partition read from the other side, which is the side §17.5's
    RULE 6 is stated from: "A cell box cannot extend beyond the last row box of a table or row group", asked of
    a cell that knows its anchor row and not its group. NEVER NULL for `row < grid->nrows`, because the runs

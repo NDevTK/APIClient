@@ -245,10 +245,14 @@ CssPx table_row_group_used_extent(const TableUsedHeights *heights, const TableGr
    §17.6's models a second time: the table box's own border and padding are `used_value_leading_edge_px`'s and
    its origin is core/layout/flow_position.h's, and both differ between the models in ways that are not this
    algorithm's terms. What this answers is the distance INSIDE the table box, which §17.5.3 is stated over.
-   `row` MUST BE A GRID ROW `heights` ANSWERED FOR — at or past `nrows` is a caller's crash, exactly as an
-   out-of-range cell or run is above. A ROW GROUP HOLDING NO ROW HAS NO GRID ROW TO ASK ABOUT, and that is the
-   one place this entry cannot answer a box the section places; see the recorded choice at
-   `table_row_group_used_extent`'s site for what is decided there and what is not. */
+   `row` IS A GRID LINE AND NOT A GRID ROW, WHICH IS ONE MORE VALUE AND IS RULE 2's DOING. There are `nrows`
+   rows and `nrows + 1` LINES, and this entry answers every one of them: at `nrows` the sum is every row height
+   and every spacing before it, which is the line the row after the last one would begin at. That value is
+   admitted because rule 2's union over ZERO rows names no grid ROW while still placing a BOX — an empty
+   `<tbody>` stands on the line its first row would occupy, and a TRAILING one stands on the last line. Rules 1
+   and 5 index a ROW and are strictly inside the range; their callers hold that stricter check at their own
+   sites, where the rule that needs it is, so nothing is lost by this entry's domain being the lines.
+   PAST `nrows` IS A CALLER'S CRASH, exactly as an out-of-range cell or run is above. */
 CssPx table_row_used_block_offset(const TableUsedHeights *heights, size_t row);
 
 /* ONE CELL'S VERTICAL PADDING AND BORDER, in CSS pixels — the exact mirror of core/layout/table_column_width.h's

@@ -661,16 +661,17 @@ CssPx table_row_group_used_extent(const TableUsedHeights *heights, const TableGr
        refuse a document CSS 2.1 conforms for. A REAL BROWSER MAY DISAGREE AND NOTHING HERE WOULD SAY SO: the
        zero is unobservable in the table's own height (the group holds no row, so no row height and no spacing
        moves), and it shows only in `getBoundingClientRect().height` on the empty `<tbody>` itself.
-       THE SIZE IS DECIDED HERE AND THE POSITION IS NOT, AND THAT IS THE NAMED RESIDUAL RATHER THAN A SECOND
-       CHOICE THIS SITE COULD MAKE. `table_row_used_block_offset` takes a GRID ROW, and rule 2's union over
-       zero rows names none — so a box with no run has an extent and no `first` to be measured from, and this
-       component has nothing to answer its origin with. WHAT THE NEXT DIFF MUST LEAVE BEHIND is an enumeration
-       of a table's ROW GROUP BOXES in CSS 2.1 §17.2 The CSS table model's display order, from which an empty
-       group's place is the boundary between its neighbours' runs; core/layout/table_box.h answers a table's
-       ROWS (`table_box_rows`) and its CAPTIONS (`table_box_captions`) and no walk there enumerates the row
-       group boxes, so the group holding no row is invisible to every array this file reads. HOW ITS ABSENCE
-       SHOWS: `getBoundingClientRect()` on an empty `<tbody>` — the height is the zero decided above and the
-       `top` has no operand at all, so the rectangle cannot be composed rather than being composed wrongly. */
+       THE SIZE IS DECIDED HERE AND THE POSITION IS DECIDED WHERE THE BOX IS PLACED, and the residual that
+       stood here is retired rather than deleted, because a reader re-deriving its argument would rebuild the
+       gap. It said `table_row_used_block_offset` takes a GRID ROW and rule 2's union over zero rows names
+       none, so an empty group had an extent and no `first` to be measured from. That was true of a component
+       whose block-axis entry was stated over ROWS; it is stated over grid LINES now, of which there are
+       `nrows + 1`, and core/layout/table_grid.h's `table_grid_empty_row_group_line` answers which one an empty
+       group stands on out of CSS 2.1 §17.2 The CSS table model's display order — the enumeration that residual
+       named as what the next diff had to leave behind, which core/layout/table_box.h's `table_box_row_groups`
+       now is. WHICH DISTANCE that line becomes is the remaining choice and it is recorded at the placement
+       (core/layout/flow_position.c) rather than here, for the same reason this file records the extent: the
+       choice is only visible in the box's own rectangle. */
     if (group == NULL) return css_px(0.0);
     DCHECK(group->nrows >= 1,
            "CSS 2.1 §17.5's rule 2 reported a row group run covering NO grid row. core/layout/table_grid.h "
@@ -713,12 +714,14 @@ CssPx table_row_used_block_offset(const TableUsedHeights *heights, size_t row)
            "CSS 2.1 §17.5.3's answer was indexed for a grid row's block-axis offset while holding no row array "
            "and a non-zero row count — `table_heights` stores NULL only for a table with no rows, so the two "
            "have been carried apart since it answered");
-    DCHECK(row < heights->nrows,
-           "CSS 2.1 §17.5 Visual layout of table contents was asked where a grid row starts for a row past the "
-           "last one rule 1 placed — \"the table occupies exactly as many grid rows as there are row "
-           "elements\" — so there is no row box at it and no top edge to measure to. A caller wanting the "
-           "distance to the BOTTOM of the last row asks for this at that row and adds its height, which is the "
-           "one arithmetic that stays right when the row count is zero");
+    DCHECK(row <= heights->nrows,
+           "CSS 2.1 §17.5 Visual layout of table contents was asked where a grid LINE is for a line past the "
+           "last one rule 1 places — \"the table occupies exactly as many grid rows as there are row "
+           "elements\", so there are `nrows` rows and `nrows + 1` lines and this index is above both. Rules 1 "
+           "and 5 index a ROW and their callers hold the stricter range at their own sites; what this entry "
+           "admits at `nrows` is rule 2's union over ZERO rows, whose box stands on the line its first row "
+           "would occupy. A caller wanting the distance to the BOTTOM of the last row asks for this at that "
+           "row and adds its height, which is the one arithmetic that stays right when the row count is zero");
     /* §17.6.1 The separated borders model's one spacing before the first row, and one more between each
        adjoining pair above `row`. Under §17.6.2 The collapsing border model `spacing` is the algorithm's own
        term rather than the property and is ZERO, so this collapses to the row heights and grid row 0 starts at

@@ -294,6 +294,25 @@ typedef struct {
     size_t n, cap;
 } TbRowSink;
 
+/* THE ROW GROUP BOXES §17.2's display order visits, RECORDED BY THE SAME WALK THAT EMITS THE ROWS. It is a
+   second sink and not a second walk because §17.2's two exceptions to source order (a header group's rows
+   before every other row, a footer group's after) are ONE statement, and a walk written a second time to
+   enumerate the groups would be free to order them differently from the rows they contain — which no document
+   could distinguish from a table whose row groups are simply somewhere else. */
+typedef struct {
+    TableBoxRowGroup *v;
+    size_t n, cap;
+} TbGroupSink;
+
+static void tb_group_push(TbGroupSink *s, lxb_dom_element_t *element, size_t first, size_t nrows)
+{
+    s->v = (TableBoxRowGroup *) tb_reserve(s->v, s->n, &s->cap, sizeof *s->v);
+    s->v[s->n].element = element;
+    s->v[s->n].first = first;
+    s->v[s->n].nrows = nrows;
+    s->n++;
+}
+
 static void tb_row_push(TbRowSink *s, lxb_dom_element_t *element, lxb_dom_element_t *group,
                         lxb_dom_node_t *first, lxb_dom_node_t *end, TableBoxCell *cells, size_t ncells)
 {
@@ -385,6 +404,19 @@ static void tb_rows_of_group(lxb_dom_element_t *group, TableBoxKind gk, TbRowSin
     free(v);
 }
 
+/* ONE ROW GROUP BOX VISITED — its rows generated into `sink` and, where a caller asked for them, the box
+   itself recorded into `gsink` with the range of rows it contributed. THE RANGE IS TAKEN AROUND THE CALL AND
+   NOT COUNTED AFTERWARD, which is what makes an EMPTY row group box appear at all: `<tbody></tbody>` generates
+   no row, so it is invisible in `table_box_rows`' answer and in every array derived from it, and the only
+   moment at which it is distinguishable from a group that is not there is the moment the walk stands on it. */
+static void tb_visit_group(lxb_dom_element_t *group, TableBoxKind gk, TbRowSink *sink, TbGroupSink *gsink)
+{
+    size_t first = sink->n;
+
+    tb_rows_of_group(group, gk, sink);
+    if (gsink != NULL) tb_group_push(gsink, group, first, sink->n - first);
+}
+
 /* ---- the answer -------------------------------------------------------------------------------------------- */
 
 /* The table box's own kind, with the caller's classification asserted rather than re-decided. */
@@ -407,24 +439,19 @@ static TableBoxKind tb_table_kind(lxb_dom_element_t *table, const char *asked)
     return tk;
 }
 
-size_t table_box_rows(lxb_dom_element_t *table, TableBoxRow **out)
+/* §17.2.1's SECOND STAGE OVER A WHOLE TABLE BOX, RUN ONCE FOR BOTH ANSWERS THIS FILE GIVES ABOUT IT. `sink`
+   collects the rows and `gsink`, when a caller passes one, collects the row group boxes the same visit passes
+   through. The two entries below are the two ways of asking for what this walk produces and never two walks:
+   §17.2's display order, §17.2.1's three anonymous-box rules and the "only the first is rendered as a header"
+   sentence are stated HERE and nowhere else, so no second enumeration can order the groups differently from
+   the rows inside them. */
+static void tb_generate(lxb_dom_element_t *table, const char *asked, TbRowSink *sink, TbGroupSink *gsink)
 {
     TbChild *v = NULL;
-    TbRowSink sink;
     TableBoxKind tk;
     size_t n, i, hdr, ftr;
 
-    DCHECK(table != NULL, "CSS 2.1 §17.2.1's box generation was asked for the rows of no element");
-    DCHECK(out != NULL,
-           "CSS 2.1 §17.2.1's box generation was asked for a table's rows with nowhere to put them. A count "
-           "alone names no row and no cell, so a caller holding one would know how many grid rows §17.5's "
-           "first rule gives the table and have no way to reach any of them — which is the whole of what this "
-           "entry is asked for");
-    sink.v = NULL;
-    sink.n = 0;
-    sink.cap = 0;
-    *out = NULL;
-    tk = tb_table_kind(table, "rows");
+    tk = tb_table_kind(table, asked);
     n = tb_children(table, &v);
     n = tb_remove_irrelevant(tk, v, n);
     /* §17.2's own two exceptions to source order, and the sentence that makes each of them apply to exactly
@@ -442,7 +469,7 @@ size_t table_box_rows(lxb_dom_element_t *table, TableBoxRow **out)
        any top captions" — the captions are §17.4's wrapper box's and not the table box's, so what that
        sentence decides HERE is only that the header's rows come first. */
     if (hdr < n)
-        tb_rows_of_group(lxb_dom_interface_element(v[hdr].node), TABLE_BOX_HEADER_GROUP, &sink);
+        tb_visit_group(lxb_dom_interface_element(v[hdr].node), TABLE_BOX_HEADER_GROUP, sink, gsink);
     i = 0;
     while (i < n) {
         TableBoxCell *cells = NULL;
@@ -453,7 +480,7 @@ size_t table_box_rows(lxb_dom_element_t *table, TableBoxRow **out)
             continue;
         }
         if (table_box_kind_is_row_group(v[i].kind)) {
-            tb_rows_of_group(lxb_dom_interface_element(v[i].node), v[i].kind, &sink);
+            tb_visit_group(lxb_dom_interface_element(v[i].node), v[i].kind, sink, gsink);
             i++;
             continue;
         }
@@ -462,7 +489,7 @@ size_t table_box_rows(lxb_dom_element_t *table, TableBoxRow **out)
 
             ncells = tb_cells_of_row_element(row, &cells);
             j = i + 1;
-            tb_row_push(&sink, row, NULL, v[i].node, (j < n) ? v[j].node : NULL, cells, ncells);
+            tb_row_push(sink, row, NULL, v[i].node, (j < n) ? v[j].node : NULL, cells, ncells);
             i = j;
             continue;
         }
@@ -480,14 +507,59 @@ size_t table_box_rows(lxb_dom_element_t *table, TableBoxRow **out)
            that are not proper table children." */
         for (j = i; j < n && !table_box_kind_is_proper_table_child(v[j].kind); j++) { }
         ncells = tb_cells(v, n, i, j, &cells);
-        tb_row_push(&sink, NULL, NULL, v[i].node, (j < n) ? v[j].node : NULL, cells, ncells);
+        tb_row_push(sink, NULL, NULL, v[i].node, (j < n) ? v[j].node : NULL, cells, ncells);
         i = j;
     }
     if (ftr < n)
-        tb_rows_of_group(lxb_dom_interface_element(v[ftr].node), TABLE_BOX_FOOTER_GROUP, &sink);
+        tb_visit_group(lxb_dom_interface_element(v[ftr].node), TABLE_BOX_FOOTER_GROUP, sink, gsink);
     free(v);
+}
+
+size_t table_box_rows(lxb_dom_element_t *table, TableBoxRow **out)
+{
+    TbRowSink sink;
+
+    DCHECK(table != NULL, "CSS 2.1 §17.2.1's box generation was asked for the rows of no element");
+    DCHECK(out != NULL,
+           "CSS 2.1 §17.2.1's box generation was asked for a table's rows with nowhere to put them. A count "
+           "alone names no row and no cell, so a caller holding one would know how many grid rows §17.5's "
+           "first rule gives the table and have no way to reach any of them — which is the whole of what this "
+           "entry is asked for");
+    sink.v = NULL;
+    sink.n = 0;
+    sink.cap = 0;
+    *out = NULL;
+    tb_generate(table, "rows", &sink, NULL);
     *out = sink.v;
     return sink.n;
+}
+
+size_t table_box_row_groups(lxb_dom_element_t *table, TableBoxRowGroup **out)
+{
+    TbRowSink sink;
+    TbGroupSink gsink;
+
+    DCHECK(table != NULL, "CSS 2.1 §17.2's row group boxes were asked for of no element");
+    DCHECK(out != NULL,
+           "CSS 2.1 §17.2's row group boxes were asked for with nowhere to put them. A count alone names no "
+           "box and no grid row, so a caller holding one could not tell which group it had counted — and the "
+           "EMPTY row group box this entry exists to report is exactly the one that is indistinguishable from "
+           "its neighbours by anything but its place in this array");
+    sink.v = NULL;
+    sink.n = 0;
+    sink.cap = 0;
+    gsink.v = NULL;
+    gsink.n = 0;
+    gsink.cap = 0;
+    *out = NULL;
+    /* THE ROWS ARE GENERATED AND RELEASED, AND THAT IS NOT WASTE THIS ENTRY COULD AVOID: a group's `first` is
+       a COUNT OF ROWS EMITTED BEFORE IT, so the rows are this answer's arithmetic and not a by-product of it.
+       Nothing in this directory caches a layout (core/layout/block_flow.h's reason — a cached one is shared
+       state solver/dom_cow.h's delta does not swap), so a caller wanting both asks for both. */
+    tb_generate(table, "row groups", &sink, &gsink);
+    table_box_rows_free(sink.v, sink.n);
+    *out = gsink.v;
+    return gsink.n;
 }
 
 void table_box_rows_free(TableBoxRow *rows, size_t nrows)

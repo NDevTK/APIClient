@@ -354,10 +354,13 @@ static FlowPoint fp_table_grid_origin(const FpTableFrame *f, size_t row, size_t 
     CssPx x, y;
     size_t j;
 
-    DCHECK(row < f->heights.nrows,
-           "CSS 2.1 §17.5's rules 1 and 5 placed a box at a grid row CSS 2.1 §17.5.3 Table height algorithms "
-           "answered no height for. `table_heights` answers one height per grid row of the grid it was given "
-           "and asserts that count against the grid's own, so the two arrays have been carried apart");
+    DCHECK(row <= f->heights.nrows,
+           "CSS 2.1 §17.5's rules 1, 2 and 5 placed a box at a grid LINE CSS 2.1 §17.5.3 Table height "
+           "algorithms answered no row for. There are `nrows` rows and `nrows + 1` lines; rules 1 and 5 name a "
+           "ROW and are strictly inside that range, and rule 2's union over ZERO rows names the last line for "
+           "a trailing empty row group. `table_heights` answers one height per grid row of the grid it was "
+           "given and asserts that count against the grid's own, so an index above the lines is those two "
+           "arrays having been carried apart");
     DCHECK(col + colspan <= f->widths.ncols && col + colspan >= col,
            "CSS 2.1 §17.5's rules 1 and 5 placed a box at a rectangle reaching past the grid's own column "
            "count, or at one whose span wrapped. core/layout/table_grid.h grows `ncols` to `col + colspan` for "
@@ -447,6 +450,52 @@ static FlowPoint fp_table_cell_origin(lxb_dom_element_t *el)
         return p;
     }
     p = fp_table_grid_origin(&f, cell->row, cell->col, cell->colspan);
+    fp_table_frame_release(&f);
+    return p;
+}
+
+/* §17.5's RULE 2 — "A row group occupies the same grid cells as the rows it contains" — which is the rectangle
+ * spanning every column of the group's own RUN of grid rows, handed to the one placement above. A GROUP AND A
+ * ROW HAVE THE SAME INLINE EXTENT AND THE SAME x, and that is rule 1's doing rather than a shortcut: rule 1
+ * gives a row every column of its grid row, so rule 2's union over the group's rows is every column too —
+ * which is why core/layout/used_value.c answers both boxes' inline size from one function that reads no row.
+ * What separates them is the block axis, where a group covers a RUN and a row covers one row.
+ *
+ * RULE 2's EMPTY UNION IS A RECORDED CHOICE AND THIS IS ITS SITE. `<tbody></tbody>` is a real row group box
+ * containing no row, so rule 2's union over its rows is empty and §17.5's last paragraph names it no edges —
+ * it places the row group edges at "the border edges of cells" under §17.6.1 The separated borders model and
+ * at "the hypothetical grid lines on which the borders of the cells are centered" under §17.6.2 The collapsing
+ * border model, and this box has no cell in either. core/layout/table_grid.h answers which grid LINE it stands
+ * on (`table_grid_empty_row_group_line` — the count of grid rows §17.2 The CSS table model's display order
+ * places before it, which is a fact and not a choice), and the choice made HERE is that the line becomes the
+ * SAME distance a row starting there would have: `table_row_used_block_offset` at that line, which is the TOP
+ * BORDER EDGE of the cells in the next grid row.
+ * THE ALTERNATIVE IS THE OTHER SIDE OF ONE `border-spacing` — the BOTTOM border edge of the cells in the
+ * previous grid row — and the two differ by exactly that one distance under §17.6.1 and are IDENTICAL under
+ * §17.6.2, where the term is zero. WHAT DECIDES BETWEEN THEM IS CONTINUITY IN THE OPERATION THE BOX IS DEFINED
+ * BY: rule 2 defines a group's placement by the rows it contains, so giving a row to an empty group must not
+ * MOVE the group. Under the choice taken it does not — the line the empty group stood on is exactly the grid
+ * row that row now occupies, at every line including the last and including a table with no rows at all, where
+ * the distance is §17.6.1's one leading spacing. Under the alternative every empty group would jump by one
+ * `border-spacing` the moment it stopped being empty. A REAL BROWSER MAY DISAGREE AND ONLY ONE THING WOULD
+ * SAY SO: `getBoundingClientRect().top` on an empty `<tbody>` of a table that declares a vertical
+ * `border-spacing`; the height is the zero core/layout/table_height.h records and the table's own geometry
+ * does not move, since the group holds no row.
+ * THERE IS NO REFUSAL ARM HERE and that is not an omission: `table_grid_row_group_of` asserts the wrong-table
+ * walk at its own site and answers NULL for exactly one cause, and `table_grid_empty_row_group_line` asserts
+ * that its group really is one this table's box generation reaches. Both crashes name the component whose walk
+ * came apart, which is where a reader has to stand. */
+static FlowPoint fp_table_row_group_origin(lxb_dom_element_t *el)
+{
+    FpTableFrame f;
+    FlowPoint p;
+    const TableGridRowGroup *run;
+    size_t line;
+
+    fp_table_frame_build(el, &f);
+    run = table_grid_row_group_of(&f.grid, el);
+    line = (run != NULL) ? run->first : table_grid_empty_row_group_line(&f.grid, el);
+    p = fp_table_grid_origin(&f, line, 0, f.widths.ncols);
     fp_table_frame_release(&f);
     return p;
 }
@@ -584,11 +633,13 @@ static FlowPoint fp_line_box_origin(lxb_dom_element_t *el)
 
 static void fp_require_placeable(lxb_dom_element_t *el)
 {
-    /* NEITHER `table-row` NOR `table-cell` IS ON THIS LIST AND THEIR ABSENCE IS THE PLACEMENT, NOT AN
-       OVERSIGHT: CSS 2.1 §17.5's rules 1 and 5 place both, and each leaves through `fp_table_row_origin` or
-       `fp_table_cell_origin` above exactly as a box on a line box leaves through `fp_line_box_origin`. */
+    /* NEITHER `table-row`, NOR `table-cell`, NOR ANY OF §17.2's THREE ROW GROUP DISPLAYS IS ON THIS LIST, AND
+       THEIR ABSENCE IS THE PLACEMENT AND NOT AN OVERSIGHT: CSS 2.1 §17.5's rules 1, 2 and 5 place all three
+       box types, and each leaves through `fp_table_row_origin`, `fp_table_row_group_origin` or
+       `fp_table_cell_origin` above exactly as a box on a line box leaves through `fp_line_box_origin`. What is
+       left here is the two COLUMN boxes, which need a mapping that does not exist in either direction, and the
+       CAPTION, which §17.4 Tables in the visual formatting model takes out of the grid entirely. */
     static const char *const TABLE_INTERNAL[] = {
-        "table-row-group", "table-header-group", "table-footer-group",
         "table-column-group", "table-column", "table-caption",
     };
     char *d = css_computed_value(el, "display");
@@ -647,11 +698,13 @@ static void fp_require_placeable(lxb_dom_element_t *el)
               "DIFFERENT REASON AND NOT FOR THAT ONE: §17.4 Tables in the visual formatting model takes it "
               "OUT of the grid entirely, so what refuses it below is the WRAPPER's child box list and not "
               "§17.5 at all. "
-              "A ROW AND A CELL ARE NO LONGER AMONG THEM AND THAT IS THE SHAPE OF EVERY ANSWER BELOW: §17.5's "
-              "rules 1 and 5 PLACE both (\"Each row box occupies one row of grid cells\" and \"Each cell is "
-              "thus a rectangular box, one or more grid cells wide and high\"), core/layout/table_grid.h "
+              "A ROW, A CELL AND A ROW GROUP ARE NO LONGER AMONG THEM AND THAT IS THE SHAPE OF EVERY ANSWER "
+              "BELOW: §17.5's rules 1, 2 and 5 PLACE all three (\"Each row box occupies one row of grid "
+              "cells\", \"A row group occupies the same grid cells as the rows it contains\" and \"Each cell "
+              "is thus a rectangular box, one or more grid cells wide and high\"), core/layout/table_grid.h "
               "reports each placement back per element, and `fp_table_grid_origin` above turns ONE RECTANGLE OF "
-              "GRID CELLS into this coordinate — the prefix sums over `TableUsedHeights.rows` and "
+              "GRID CELLS into this coordinate — the block-axis distance asked of "
+              "core/layout/table_height.h's `table_row_used_block_offset` and the inline-axis prefix sum over "
               "`TableUsedWidths.columns` with §17.6.1 The separated borders model's spacing between and before "
               "them, measured from the table box's content edge, with rules 3 and 5's `direction` deciding "
               "which end logical column 0 is painted at. So the OPERANDS and the ARITHMETIC are both built and "
@@ -666,19 +719,15 @@ static void fp_require_placeable(lxb_dom_element_t *el)
               "asserts only to within its own distribution's rounding and which legitimately FAILS for a "
               "zero-column table. `fp_table_grid_origin` performs rule 5's interchange on the COLUMN INDEX "
               "instead, so both arms read `columns` and `spacing` and neither reads `content`. "
-              "A ROW GROUP NEEDS CSS 2.1 §17.5's RULE 2 AND ONE DECISION THE STANDARD DECLINES: \"A row group "
-              "occupies the same grid "
-              "cells as the rows it contains\", so its rectangle is its rows' — every column, over the RUN of "
-              "grid rows core/layout/table_grid.h's `TableGridRowGroup` partitions the grid into, and "
-              "`fp_table_grid_origin` above answers `(group->first, 0, ncols)` with no new arithmetic. THE "
-              "SENTENCE THAT STOOD HERE SAID THAT RUN WAS NOT STORED YET AND THAT WAS FALSE WHEN IT WAS READ: "
-              "the runs are built, `table_grid_row_group_of` reads one back per element, and "
-              "core/layout/table_height.h already turns one into an extent. What is genuinely open is rule 2's "
-              "EMPTY union — an empty `<tbody>` is a real row group box occupying NO grid cell, which "
-              "`table_grid_row_group_of` answers NULL for and which §17.5 gives no edges; the extent taken for "
-              "it is ZERO (core/layout/table_height.h records that choice at its site) and there is no "
-              "corresponding reading for a POSITION, because a zero-extent box still has to sit somewhere and "
-              "the grid names nowhere. DECIDE THAT ONE CASE and the other arm is three lines. "
+              "THE ROW GROUP'S INSTRUCTION THAT STOOD HERE IS RETIRED WITH THE CODE IT GUARDED, and its last "
+              "sentence was right about the size of the work and wrong about where the decision lived: it said "
+              "rule 2's EMPTY union had no reading for a POSITION \"because a zero-extent box still has to sit "
+              "somewhere and the grid names nowhere\", and the grid names it now — an empty `<tbody>` stands on "
+              "the grid LINE §17.2 The CSS table model's display order counts the rows before it to "
+              "(core/layout/table_grid.h's `table_grid_empty_row_group_line`, out of "
+              "core/layout/table_box.h's `table_box_row_groups`), and WHICH DISTANCE that line becomes is the "
+              "choice `fp_table_row_group_origin` above records with its alternative. A reader re-deriving the "
+              "retired sentence would build a second placement for a box that has one. "
               "A COLUMN AND A COLUMN GROUP NEED A MAPPING THAT DOES NOT EXIST IN EITHER DIRECTION YET, and this "
               "is the one place below where the operand is genuinely absent rather than merely unrouted. "
               "core/layout/table_column_box.h answers §17.5's rules 3 and 4 from the GRID COLUMN's side — "
@@ -785,12 +834,19 @@ FlowPoint flow_border_box_origin(lxb_dom_element_t *el)
     /* CSS 2.1 §17.5 Visual layout of table contents PLACES A ROW BOX AND A CELL BOX, and they leave HERE for
        the reason a box on a line box does: §9.4.1's two rules are not an approximation of §17.5's grid, they
        are a different algorithm over a different containing rectangle, so neither may fall through to them.
-       THEY ARE TWO LINES AND ONE ANSWER — `fp_table_grid_origin` places a rectangle of grid cells and rules 1
-       and 5 differ only in which rectangle — so a reader who takes the pair for two placements will build the
-       third one twice. The other SIX table-internal boxes still crash below, each naming what §17.5 leaves it
-       waiting on. */
+       THEY ARE FIVE LINES AND ONE ANSWER — `fp_table_grid_origin` places a rectangle of grid cells and rules
+       1, 2 and 5 differ only in which rectangle — so a reader who takes them for three placements will build
+       the next one again. §17.2's THREE row group displays are ONE box type and are spelled out rather than
+       classified through `table_box_kind_is_row_group` because that predicate is stated over a `TableBoxKind`
+       and this test is stated over the computed `display` string, exactly as the two above it are; routing
+       through the enum would put a second classification of the same six values in this file.
+       The other THREE table-internal boxes still crash below, each naming what §17.5 leaves it waiting on. */
     if (fp_computed_is(el, "display", "table-row")) return fp_table_row_origin(el);
     if (fp_computed_is(el, "display", "table-cell")) return fp_table_cell_origin(el);
+    if (fp_computed_is(el, "display", "table-row-group") ||
+        fp_computed_is(el, "display", "table-header-group") ||
+        fp_computed_is(el, "display", "table-footer-group"))
+        return fp_table_row_group_origin(el);
     fp_require_placeable(el);
 
     /* §10.1's FIRST CASE, which is §9.4.1's base case as well: the root element's containing block is the ICB,
