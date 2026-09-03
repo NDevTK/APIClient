@@ -1,7 +1,8 @@
 /* THE POLICY CONTAINER — HTML §7.1.7 "Policy containers", over CSP's own policy/directive model.
  *
- * WHY IT EXISTS, AND WHY IT IS THE ANSWER TO "how does an about:blank child get a policy". A navigable created
- * with no URL — `window.open()` with no argument, `<iframe>` with no src — gets its initial `about:blank`
+ * WHY IT EXISTS, AND WHY IT IS THE ANSWER TO how an about:blank child gets a policy — a question of this
+ * tree's and not a sentence of §7.1.7's. A navigable created with no URL — `window.open()` with no argument,
+ * `<iframe>` with no src — gets its initial `about:blank`
  * Document SYNCHRONOUSLY, and that Document has no response to take a policy from. HTML's answer is not a
  * special case: every Document has a POLICY CONTAINER, and §7.3.2.1 "Creating browsing contexts" says that when
  * creator is non-null, "set document's policy container to a clone of creator's policy container". So the child
@@ -491,8 +492,8 @@ bool policy_allows_string_compilation(const PolicyContainer *p)
  * whose pre-request check can answer "Blocked".
  *
  * WHY THE SPEC'S LOOP OVER EVERY DIRECTIVE COLLAPSES TO ONE LOOKUP, and it is an identity rather than a
- * shortcut. §6.7.2.1 runs each directive's pre-request check; the fourteen directives that HAVE one (§6.1.1-
- * §6.1.15's fetch directives, plus §6.2.2's worker-src) each open with the SAME two lines — take §6.8.1's
+ * shortcut. §6.7.2.1 runs each directive's pre-request check; the fourteen that HAVE one — thirteen of §6.1
+ * "Fetch Directives"' fifteen, plus §6.2.2's worker-src — each open with the SAME two lines: take §6.8.1's
  * effective directive name for the request, and return "Allowed" immediately unless §6.8.4 says THIS directive
  * is the one that executes for that name. §6.8.4 answers Yes for at most one directive of a policy, and
  * csp_policy_governing_directive is that walk. Every other directive of a policy — base-uri, form-action,
