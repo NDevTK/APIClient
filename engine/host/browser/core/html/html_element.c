@@ -56,6 +56,7 @@
 #include "core/html/html_style_element.h"
 #include "core/html/html_script.h"
 #include "core/html/html_image.h"
+#include "core/html/html_audio.h"
 #include "core/html/html_link.h"
 #include "core/html/html_base_element.h"
 #include "core/html/autofill.h"   /* §4.10.19.7.2's IDL-exposed autofill value */
@@ -905,6 +906,10 @@ void html_element_init(JSContext *ctx)
        here because HTMLImageElement is a row of the table above and `Image` is a global NAME this file owns
        the list of, exactly as §4.8.11's three interface objects are. */
     html_image_declare(ctx);
+    /* §4.8.9's `Audio` — the second of the three names HTML declares with Web IDL §3.7.2's
+       `[LegacyFactoryFunction]`, declared beside `Image` because HTMLAudioElement is a row of the table above
+       and because a legacy factory function is a global NAME, and this file owns the list of those. */
+    html_audio_declare(ctx);
     /* §4.2.4's link processing model — its per-element state key and the task that fires a preload's
        `load`/`error` — declared here because HTMLLinkElement is a row of the table above, exactly as §4.8.3's
        image requests are. */
@@ -1247,12 +1252,24 @@ void html_element_install(JSContext *ctx, JSValueConst global)
            is what §3.2.3's own "have the following OVERRIDDEN constructor steps" says it is. */
         node_install_interface_ctor(ctx, global, HTML_IFACE[i].iface, p,
                                     custom_elements_element_constructor(ctx, HTML_IFACE[i].iface));
-        /* Web IDL §3.7.2's LEGACY FACTORY FUNCTION for §4.8.3's `Image`, which is a global name of its own
-           beside `HTMLImageElement` and whose non-configurable `prototype` is the interface prototype object
-           this loop is holding. It goes here rather than beside the interface object's own install because
-           this is where that object is in hand and because this file owns which names the global carries. */
+        /* Web IDL §3.7.2's LEGACY FACTORY FUNCTIONS, which are global names of their own beside the interface
+           objects this loop installs and whose non-configurable `prototype` is the interface prototype object
+           it is holding. They go here rather than beside the interface object's own install because this is
+           where that object is in hand and because this file owns which names the global carries.
+           A LEGACY FACTORY FUNCTION IS NOT AN INTERFACE OBJECT AND MUST NOT BE MISTAKEN FOR ONE: it has no
+           `constructor` back-pointer, so `Image.prototype.constructor` is `HTMLImageElement` — which is why
+           each is minted by its own component and hung on the global here, rather than by the shared
+           node_install_interface_ctor above.
+           HTML DECLARES EXACTLY THREE — `Image` (§4.8.3), `Audio` (§4.8.9) and `Option` (§4.10.10) — and that
+           is a fact about the IDL rather than about this list, so it is checkable: the extended attribute is
+           `[LegacyFactoryFunction=...]` and a fourth would appear there first. `Option` is not built; its
+           steps need a create-a-Text-node-and-append that is not the `createTextNode` member's step machine,
+           and §4.10.10's SELECTEDNESS as a slot separate from the `selected` content attribute — see
+           core/html/html_audio.h. A page writing `new Option(...)` gets its own TypeError. */
         if (!strcmp(HTML_IFACE[i].iface, "HTMLImageElement"))
             html_image_install_global(ctx, global, p);
+        if (!strcmp(HTML_IFACE[i].iface, "HTMLAudioElement"))
+            html_audio_install_global(ctx, global, p);
         JS_FreeValue(ctx, p);
     }
     /* WHAT THE LOOP ABOVE LEAVES ON THE GLOBAL, said as a claim about the global rather than about the loop.
@@ -1304,6 +1321,7 @@ void html_element_free(JSRuntime *rt)
     popover_free(rt);   /* §6.12's slot keys and member ids, and the top layer's two slot keys with them */
     media_element_free(rt);
     html_image_free(rt);
+    html_audio_free(rt);
     html_link_free(rt);
     element_internals_free(rt);
     if (g_dataset_key != JS_ATOM_NULL) { JS_FreeAtomRT(rt, g_dataset_key); g_dataset_key = JS_ATOM_NULL; }
