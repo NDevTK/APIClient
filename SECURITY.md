@@ -330,10 +330,29 @@ guarantees, in one auditable place:
   one address has both promises settled with the GET's body. The fix is in the engine — the pending record
   and the provide key are `(method, url)`, not `url`.
 - **`opts.headers` COMES FROM THE UNTRUSTED BUNDLE on the XHR path** — a correction; `safe-fetch.js`'s own
-  "analyzer probe headers only" comment is no longer the whole truth. `fetchedXhr` forwards the page's
-  header list. It is within the model (an uncredentialed GET to a public host, with forbidden header names
-  stripped by the browser), and it stays within it only because credentialed mode is off: a bundle-chosen
-  header list on a cookie-bearing request is a different question and must be re-decided when that lands.
+  "analyzer probe headers only" comment was no longer the whole truth, and both halves of that correction are
+  now landed rather than noted. `fetchedXhr` forwards the page's header list. It is within the model (an
+  uncredentialed GET to a public host, with forbidden header names stripped by the browser) — a header on a
+  request the page can already make for itself confers nothing.
+  **AND THE SCOPE IS NOW A CHECK RATHER THAN A SENTENCE ABOUT WHO THE CALLERS ARE.** This bullet said the
+  header path "stays within it only because credentialed mode is off", and that premise stopped being true
+  the moment the document load started sending cookies — which THIS FILE records under the heading
+  "CREDENTIALED MODE HAS EXACTLY ONE CALLER, AND IT IS THE DOCUMENT LOAD". What
+  actually kept the combination from arising was that the callers stating a header list and the callers
+  asking for cookies were disjoint sets of FUNCTIONS: a fact no site can see, that no diff has to preserve,
+  and that CLAUDE.md names as the durable way to get an invariant wrong (an exemption scoped by a fact the
+  exempting site cannot see). It matters because RFC 9110 §9.2.1 "Safe Methods" is enforced at the chokepoint
+  STRUCTURALLY — the verb is a literal and `_refuseUnreadOptions` makes a caller-stated one unwritable — and
+  a header list is the OTHER route to a verb: `X-Http-Method-Override` is a convention this project's own
+  code sends (`lib/discovery.js` calls it "the documented trick"), so a bundle-chosen header list on a
+  cookie-bearing request is CLAUDE.md's never-a-setting triple rebuilt one layer above the place that literal
+  closed it. `_credentialedOf` in `safe-fetch.js` now derives the credential flag at the entry and **CHECKs**
+  that a credentialed request states no header list — fatal in release, on the same discriminator
+  `_destinationOf` and `_provenanceOf` carry, because the arm a compiled-out assert leaves is the one that
+  sends them. It may assert at all for `_refuseUnreadOptions`' reason: the KEYS are trusted-zone literals at
+  every call site, so no bundle can reach the abort. What the combination still needs before it can exist is
+  a statement of WHOSE header list it is, carried from the site that knows exactly as `provenance` and the
+  page-context relay's initiator grade already are; its absence shows as that abort and nowhere else.
 - **http(s) only** — `file:`/`data:`/`blob:`/`chrome-extension:` are rejected.
 - **origin-relative SSRF (Private Network Access):** a *private* target (loopback / link-local /
   RFC1918) is blocked **unless the page principal is itself private** — a public page cannot use the

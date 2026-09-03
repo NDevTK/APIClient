@@ -476,6 +476,62 @@ function _refuseUnreadOptions(opts) {
            "SITE, and `safeFetchMethodRefusal` is that answer in this file's own refusal vocabulary");
   }
 }
+/* ── WHETHER THE PERSON'S SESSION PAYS FOR THIS REQUEST — AND THE ONE OPTION THAT MAY NOT RIDE ALONG ──────
+   `credentialed` is this zone's own literal at every call site; nothing on the wire states it, and the
+   engine cannot ask for it. What it decides is whether the browser attaches the person's cookies, so it is
+   the conjunct every other rule in this file is scoped BY: the destructive-path deny list runs only when it
+   is true, and the credentialed SOP below exists only for the replies it produces.
+   `opts.headers` IS THE ONE OPTION THIS FILE READS WHOSE VALUES COME FROM THE UNTRUSTED ZONE. The XHR path
+   forwards the analysed BUNDLE's own header list; a browser strips the forbidden names, and on an
+   uncredentialed GET to a public host that is within the model — the bundle is choosing headers on a request
+   it already gets to make for itself, which confers nothing.
+   THE TWO TOGETHER ARE A DIFFERENT QUESTION, AND IT WAS ANSWERED BY A SENTENCE ABOUT WHO THE CALLERS ARE.
+   SECURITY.md §Network stated the scope in as many words — the header path "stays within it only because
+   credentialed mode is off: a bundle-chosen header list on a cookie-bearing request is a different question
+   and must be re-decided when that lands" — and that premise had stopped being true: the same file records
+   that credentialed mode now has a caller (the document load). That bullet carries the correction rather
+   than the claim now, so this comment is quoting what it RETIRED. What actually kept the combination from
+   arising was that the callers passing a header list and the callers asking for cookies are disjoint
+   SETS OF FUNCTIONS, which is a fact no site can see and no diff has to preserve. CLAUDE.md names that shape
+   exactly — an invariant whose subject is absent from the site that relies on it — and says the cure is
+   always the same: the fact is asserted where it is relied on rather than described somewhere else.
+   WHY IT IS WORTH CLOSING RATHER THAN RESTATING. RFC 9110 §9.2.1 "Safe Methods" is enforced here
+   STRUCTURALLY — the verb is a literal and `_refuseUnreadOptions` makes a caller-stated one impossible to
+   write — and that is what makes the state-mutating conjunct of CLAUDE.md's never-a-setting triple
+   (credentialed AND state-mutating AND forced) false by construction. A header list is the OTHER route to a
+   verb: `X-Http-Method-Override` is a convention this project's own code sends (`lib/discovery.js` calls it
+   "the documented trick"), and a server that honours it reads a GET as whatever the header names. So a
+   bundle-chosen header list on a cookie-bearing request is the triple reconstituted one layer up, past the
+   one place this file closed it. That is not a bug anybody has written; it is a bug this file would not
+   refuse if somebody did.
+   CHECK AND NOT DCHECK, on this file's own discriminator: release must be able to PROCEED correctly with the
+   assert compiled out, and here it cannot — the combination would go out, with cookies, carrying header
+   values from the zone this one does not trust. That is the fail-open direction on a security boundary,
+   which is what `_destinationOf` and `_provenanceOf` are CHECKs for one and two functions up.
+   AND IT MAY ASSERT AT ALL FOR THE REASON `_refuseUnreadOptions` GIVES: the KEYS are composed in trusted-zone
+   source at every call site — the untrusted engine supplies header VALUES and never the decision to ask for
+   cookies — so no bundle and no compromised renderer can reach this abort.
+   WHAT THE NEXT DIFF BUILDS IF THIS REFUSES SOMEBODY. Not an exemption for the caller: a statement of WHOSE
+   header list it is. The bundle's and this zone's own analyzer-probe list are two populations that arrive
+   through one parameter, and the credentialed question is answerable for one of them and not the other —
+   so what is missing is that distinction, carried from the site that knows, exactly as `provenance` and the
+   page-context relay's initiator grade already are. Its absence shows as this abort and nowhere else. */
+function _credentialedOf(opts) {
+  var credentialed = !!opts.credentialed;
+  CHECK(!(credentialed && opts.headers),
+        "safeFetch was asked for a CREDENTIALED request that also states a header list — these are two " +
+        "populations arriving through one parameter and only one of them has been decided. The header list " +
+        "on the XHR path is the analysed BUNDLE's own, which is within the model while the request is " +
+        "uncredentialed (a header on a request the page can already make itself confers nothing) and is a " +
+        "different question the moment the person's cookies pay for it: this file enforces RFC 9110 §9.2.1 " +
+        "\"Safe Methods\" by making the verb a literal, and a header list is the other route to a verb — " +
+        "`X-Http-Method-Override` is a convention this project's own code sends, and a server honouring it " +
+        "reads this GET as whatever the header names, which is CLAUDE.md's never-a-setting triple " +
+        "(credentialed AND state-mutating AND forced) rebuilt past the place this file closed it. State " +
+        "whose header list it is at the site that knows, the way `provenance` is stated, or send it " +
+        "uncredentialed");
+  return credentialed;
+}
 /* THE PER-ORIGIN EXPLORATION WIDENING — A PERSON'S SENTENCE, NEVER AN INFERENCE.
    CLAUDE.md §Attacker-sources: firing what a bundle only reaches past a forced gate is
    "CONFIGURABLE AND PER-ORIGIN, BECAUSE EXPERIMENTATION IS NOT ALWAYS WRONG AND A SINGLE
@@ -686,6 +742,16 @@ function _isPrivateHost(host) {
 //               state this parameter ends: `engine/trusted.mjs` declined every
 //               DERIVED and FORCED park while `bridge.js` fired every one of them,
 //               two answers to one question, neither of them the policy.
+//   opts.headers:
+//               THE ONE OPTION THIS FILE READS WHOSE VALUES CROSS FROM THE UNTRUSTED
+//               ZONE — on the XHR path they are the analysed BUNDLE's own list.
+//               Within the model on the request this file issues (an uncredentialed
+//               GET, forbidden header names stripped by the browser, to a host the
+//               page can already reach itself); REFUSED on a credentialed one, by a
+//               CHECK in `_credentialedOf` rather than by the callers happening to be
+//               disjoint. A header list is the other route to a verb
+//               (`X-Http-Method-Override`), so the combination is the never-a-setting
+//               triple rebuilt past the place the literal `method:"GET"` closed it.
 //   opts.destination:
 //               Fetch §2.2.5 "Requests"' DESTINATION, verbatim from the request the
 //               engine parked (solver/engine.h puts it on the pending line). A
@@ -915,6 +981,11 @@ async function safeFetch(url, opts) {
      happens before any byte moves. Read ONCE here and passed down, never re-read at the two gates below — a
      field consulted twice is a field two gates can disagree about. */
   var provenance = _provenanceOf(opts);
+  /* AND WHETHER THE PERSON'S SESSION PAYS FOR IT, DERIVED ONCE AT THE SAME DOOR — see `_credentialedOf`,
+     which is also where the one option this file reads from the UNTRUSTED zone is refused a place on a
+     cookie-bearing request. It was derived below, beside the deny list; one derivation is what stops the
+     credential mode and the invariant scoped BY the credential mode from being two reads that can differ. */
+  var credentialed = _credentialedOf(opts);
   var parsed;
   try { parsed = new URL(String(url)); }
   // No URL at all, so there is no URL list either — « » is the honest report, and
@@ -1021,7 +1092,11 @@ async function safeFetch(url, opts) {
   // GET-only (method is forced below) so a well-designed server performs no account
   // action. The reply is gated by our OWN SOP/CORS check after the fetch (see below) —
   // the browser's does not apply to an extension fetch with host_permissions.
-  var credentialed = !!opts.credentialed;
+  /* THE FLAG ITSELF IS DERIVED AT THE ENTRY (`_credentialedOf`) AND READ HERE. It used to be derived on this
+     line, which put the one fact three rules below are scoped by downstream of the door where the request's
+     shape is judged — and left the invariant that IS scoped by it (no bundle-stated header list on a
+     cookie-bearing request) with nowhere early enough to stand. One derivation, above every gate that reads
+     it, is the same rule this file already applies to the landed URL and to `provenance`. */
   // THE DENY LIST, BEFORE THE REQUEST EXISTS — see _destructiveToken. Scoped to the
   // credentialed case because that is half of where the harm is: without the person's
   // cookies a logout path ends no session. The refusal names the token so it is
@@ -1055,9 +1130,14 @@ async function safeFetch(url, opts) {
       return _refused("decline", "blocked-destructive:" + _dtok, [parsed.href], {});
   }
   var init = { method: "GET", credentials: credentialed ? "include" : "omit", redirect: "follow" };
-  // Analyzer probe headers only (e.g. discovery's X-Goog-Api-Key / X-Http-Method-
-  // Override). Auth headers are never added here; cookies (credentialed mode) are the
-  // browser's, attached by credentials:"include", and gated by the SOP/CORS check below.
+  /* THE CALLER'S HEADER LIST — AND IT IS NOT "ANALYZER PROBE HEADERS ONLY", WHICH IS WHAT THIS COMMENT SAID.
+     SECURITY.md §Network corrects it by name: on the XHR path `fetchedXhr` forwards the analysed BUNDLE's
+     own header list, so the values here come from the zone this one does not trust. That is within the model
+     for the request this file actually issues — an uncredentialed GET, whose forbidden header names the
+     browser strips, to a host the page could ask itself — and it is refused outright on a cookie-bearing one
+     (`_credentialedOf`), which is where the correction stops being a note and becomes a rule.
+     Auth headers are never ADDED here; cookies, in credentialed mode, are the browser's own, attached by
+     `credentials:"include"` and gated by the SOP/CORS check below. */
   if (opts.headers) init.headers = opts.headers;
   if (opts.signal) init.signal = opts.signal;
   var resp = await fetch(parsed.href, init);
