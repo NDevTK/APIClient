@@ -1189,8 +1189,8 @@ static BfBox bf_box(lxb_dom_element_t *el, BfBaseline pass)
            so it must not PROCEED in release either.
            THE COST IS STATED BECAUSE IT IS VISIBLE: engine/wpt.mjs reads the marker, so this site reports in
            the `fatal` column and not in `gap`, which that gate calls THE WORK QUEUE. It is still the work
-           queue — the caption's used width is what to build — and the column says only that shipping past it
-           is not an option. THE ARM BELOW HAS THE SAME SHAPE FOR A FLEX OR GRID CONTAINER and is NOT promoted
+           queue — the wrapper's own CHILD BOX LIST is what to build — and the column says only that shipping
+           past it is not an option. THE ARM BELOW HAS THE SAME SHAPE FOR A FLEX OR GRID CONTAINER and is NOT promoted
            here: that is another lane's box type, its wrong number is the same element's own border edge rather
            than a different box's, and moving its aborts between columns without a measurement to attribute
            them to would be this diff spending someone else's signal. It is named, not changed. */
@@ -1199,25 +1199,33 @@ static BfBox bf_box(lxb_dom_element_t *el, BfBaseline pass)
                    "CAPTION BOX(ES) in it beside the table box — \"the table generates a principal block box "
                    "called the table wrapper box that contains the table box itself and any caption boxes (in "
                    "document order)\" — so §10.6.3's walk over its in-flow children has more than one child "
-                   "and the table box's own border edge is no longer the whole of the wrapper's height. WHAT "
-                   "IS MISSING IS ONE NUMBER AND IT IS NOT §17.5.3's: a caption is \"rendered as [a] normal "
-                   "block box[] inside the table wrapper box\", so its height is §10.6.3's over ITS USED "
-                   "WIDTH, and §17.4 makes that width the WRAPPER's content edge — \"The width of the table "
-                   "wrapper box is the border-edge width of the table box inside it, as described by section "
-                   "17.5.2\". THAT WIDTH IS ALREADY COMPOSABLE (`used_value_border_edge_px` on the table "
-                   "element, over core/layout/table_width.h's §17.5.2 answer) AND IS NOT WHAT IS MISSING "
-                   "EITHER. What is missing is that §10.1's containing block is an ELEMENT and the wrapper is "
-                   "an ANONYMOUS box no element in this tree names — the identical box "
-                   "`used_value_containing_block`'s own table arm crashes for, and the reason "
-                   "`used_value_px(caption, \"width\")` crashes rather than answering. BUILD THAT BOX, then "
-                   "this arm is §10.6.3's ordinary walk over the caption boxes and the table box with "
-                   "`caption-side` (§17.4.1 Caption position and alignment) deciding only their ORDER, which "
-                   "a SUM does not ask. DO NOT GUESS AT THE RECTANGLE MEANWHILE: §17.4.1 warns that \"CSS2 "
-                   "described a different width and horizontal alignment behavior; that behavior will be "
-                   "introduced in CSS3 using the values 'top-outside' and 'bottom-outside' on this property\", "
-                   "and its own example says \"The caption will be as wide as the parent of the table\" — a "
-                   "THIRD rectangle again, so a wrapper picked by resemblance would be a real width of the "
-                   "wrong box",
+                   "and the table box's own border edge is no longer the whole of the wrapper's height. "
+                   "THE CAPTION'S OWN NUMBERS ARE NO LONGER WHAT IS MISSING, AND THE CRASH THAT STOOD HERE "
+                   "SAID THEY WERE: it named the caption's used WIDTH and the table wrapper box as \"an "
+                   "anonymous box no element in this tree names\". core/layout/used_value.c answers both now — "
+                   "§10.1's walk reports the wrapper as a box (§17.2.1 Anonymous table objects decides a "
+                   "caption's box parent, and §17.4 gives the wrapper's width outright as \"the border-edge "
+                   "width of the table box inside it, as described by section 17.5.2\"), so "
+                   "`used_value_px(caption, \"width\")` is §10.3.3's constraint equation and "
+                   "`used_value_px(caption, \"height\")` is §10.6.3's ordinary content-based height. "
+                   "WHAT IS MISSING IS THE WRAPPER'S OWN CHILD BOX LIST, WHICH IS NOT AN ELEMENT'S CHILD "
+                   "LIST — and that is why this walk cannot simply be run. §17.4's wrapper contains \"the "
+                   "table box itself and any caption boxes\": the captions are children of the table ELEMENT, "
+                   "the table box is that SAME element wearing its other box, and the rows are not in the "
+                   "wrapper at all — so `bf_element_child` over `el`'s children reaches neither the right set "
+                   "nor the right boxes, and `bf_layout` has no list to stack. BUILD THAT LIST as the thing "
+                   "§9.4.1's stack iterates. It is the SAME box-tree step this file already crashes for twice "
+                   "over — CSS 2.2 §9.2.1.1 Anonymous block boxes' runs, which `block_flow_anonymous_boxes` "
+                   "delimits but `bf_layout` still walks as elements, and css-display-3 §2.5 Box Generation: "
+                   "the none and contents keywords' `contents` splice, which `bf_element_child` names by "
+                   "hand — so it is one construction with three rules and not three constructions. Once the "
+                   "walk iterates boxes, this arm is §8.3.1's ordinary collapsing stack over the captions and "
+                   "the table box, with `caption-side` (§17.4.1 Caption position and alignment) deciding only "
+                   "their ORDER, which a SUM does not ask, and §17.4's own initial-value sentence guaranteeing "
+                   "the table box brings no margin to collapse with theirs. DO NOT SUM THE HEIGHTS HERE "
+                   "MEANWHILE: a second copy of §8.3.1's run algebra beside `bf_layout`'s is two "
+                   "implementations of one section, free to disagree about a collapsed margin on exactly the "
+                   "documents where the difference shows",
                    box_subject(el, nbuf, sizeof nbuf), ncaptions);
         /* §10.8.1's BASELINE IS NOT THIS ARM'S AND MUST NOT BE SKIPPED INTO. A wrapper reports NO line box —
            §10.8.1's "last line box in the normal flow" does not reach into the cells' own formatting contexts

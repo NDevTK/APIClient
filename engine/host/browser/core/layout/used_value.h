@@ -44,11 +44,13 @@
  *     those sections takes the declaration as an INPUT to its own comparison rather than as the used value. A
  *     CELL is answered on both axes too — its width is the used width of the columns its rectangle covers and
  *     its height is the rows' — and a ROW is answered on the block axis alone, which is where §17.5.3 states
- *     it and §17.5.2 does not. WHAT STILL CRASHES IS FOUR BOXES AND EACH FOR ITS OWN REASON, not one gap: a
- *     CAPTION on both axes (§17.4 puts it in the WRAPPER, an anonymous box §10.1 cannot name), a ROW's width
- *     and a ROW GROUP's both ways (§17.5's rules 1 and 2 place them and §17.5.3 declines a row group's height
- *     outright), and a COLUMN or COLUMN GROUP both ways (§17.5's rules 3 and 4 are a placement nothing here
- *     performs). A flex or grid item crashes on both.
+ *     it and §17.5.2 does not. A CAPTION IS NOT ONE OF §17.5's BOXES AT ALL and is answered by §10 like any
+ *     other block-level box in normal flow: §17.4 renders it "as normal block boxes inside the table wrapper
+ *     box", and no algorithm of §17.5 is stated over it — §17.5.2 reads it only as CAPMIN, an intrinsic
+ *     minimum it feeds into the TABLE's width. WHAT STILL CRASHES IS THREE BOXES AND EACH FOR ITS OWN REASON,
+ *     not one gap: a ROW's width and a ROW GROUP's both ways (§17.5's rules 1 and 2 place them and §17.5.3
+ *     declines a row group's height outright), and a COLUMN or COLUMN GROUP both ways (§17.5's rules 3 and 4
+ *     are a placement nothing here performs). A flex or grid item crashes on both.
  *   - AND §10.4 "Minimum and maximum widths: 'min-width' and 'max-width'" and §10.7 "Minimum and maximum
  *     heights: 'min-height' and 'max-height'", WHICH ARE A SECOND PASS AND NOT A CLAMP ON THE NUMBER. Both
  *     sections say the same three sentences about their own axis: the tentative used value is §10.3's answer
@@ -267,12 +269,22 @@ CssPx used_value_default_replaced_size(bool vertical);
    needs nothing else of the box; core/layout/flow_position.c and core/layout/block_flow.c need the BOX — its
    origin, its top and left border and padding, and the child list §9.4.1 stacks below it — and a second walk
    for it would be §10.1's four cases implemented twice, free to disagree about which ancestor the rectangle
-   belongs to. Every case §10.1 defines and this component does not answer crashes naming that case. */
+   belongs to. Every case §10.1 defines and this component does not answer crashes naming that case.
+   AN ELEMENT IS NOT ALWAYS ENOUGH TO NAME THE BOX, AND THIS ENTRY IS THE VIEW THAT SAYS SO RATHER THAN THE
+   ONE THAT DECIDES IT. CSS 2.1 §17.4 Tables in the visual formatting model has one table element generate TWO
+   boxes with two different content edges — the TABLE WRAPPER BOX and the table box inside it — so a caption's
+   containing block is a box this return type cannot spell. The WALK answers it; this view REFUSES it, naming
+   what a caller wanting the box still needs (the wrapper's own child box list, which is not any element's DOM
+   child list). A caller that wants only the rectangle's WIDTH or its `direction` is answered by the two
+   entries below, which read the same walk and do not refuse. THE `NULL` STAYS §10.1's FIRST CASE ALONE — it
+   is never "there is no answer", which is what makes the refusal a crash rather than a third meaning for it. */
 lxb_dom_element_t *used_value_containing_block(lxb_dom_element_t *el);
 
 /* THE SAME RECTANGLE'S WIDTH — §10.1's first case out of the viewport, its second out of the CONTENT EDGE of
-   the box above. It is a second entry rather than arithmetic over the first because the first case has no box
-   at all, so a caller holding the NULL could not derive it. */
+   the box above, and §17.4's table wrapper box out of §17.4's own sentence ("The width of the table wrapper
+   box is the border-edge width of the table box inside it, as described by section 17.5.2"). It is a second
+   entry rather than arithmetic over the first because the first case has no box at all and the third is a box
+   the first entry cannot name, so a caller holding that entry's answer could derive neither. */
 CssPx used_value_containing_block_width(lxb_dom_element_t *el);
 
 /* css-sizing-3 §3.2.1 "“Behaving as auto”" — DOES `el`'s `height` BEHAVE AS AUTO, which is the question CSS
