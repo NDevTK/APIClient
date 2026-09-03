@@ -684,11 +684,16 @@ static const char *HTML =
        unknown — which the branch proves by forking. A collapse to NaN or to a bare number leaves one arm. */
     "var bwm = screen.width & 1023; if (bwm > 100) { fetch('/api/bwfork?v=bwwide'); } else { fetch('/api/bwfork?v=bwnarrow'); }"
     "fetch('/api/bwhash?h=' + (((screen.width << 5) ^ (screen.width >>> 3)) | 0));"
-    /* THE OBJECT SIDE ON THE TRAMPOLINE, with a concolic on the other side. 13.15.3 step 3's ToNumeric(left)
-       must NOT be performed at the operator's C boundary when the left is unknown (its ToNumeric is step 7's
-       operation, which the hook answers), and step 4's ToPrimitive(right) is the PAGE's code with a loop in it,
-       so it parks on the trampoline and resumes at the exact point. The result is still unknown, so the
-       comparison forks — both arms are the claim. */
+    /* THE OBJECT SIDE ON THE TRAMPOLINE, with a concolic on the other side.
+       13.15.3 ApplyStringOrNumericBinaryOperator ( leftValue, opText, rightValue )
+       step 3's ToNumeric(leftValue) must NOT be performed at the operator's C boundary when the left
+       is unknown (its ToNumeric is step 7's operation, which the hook answers), and step 4's
+       ToNumeric(rightValue) is where the PAGE's code runs — 7.1.3 ToNumeric ( arg )'s own step 1 is
+       "ToPrimitive(arg, number)", which reaches this object's `valueOf`, and it has a loop in it, so it parks
+       on the trampoline and resumes at the exact point. IT IS NOT STEP 1's ToPrimitive: that arm is the `+`
+       arm and `&` never enters it, so a reader chasing the literal word "ToPrimitive" through 13.15.3 lands on
+       a step this expression does not take. The result is still unknown, so the comparison forks — both arms
+       are the claim. */
     "var bwo = { valueOf: function(){ var n = 0; for (var i = 0; i < 500; i++) { n += i; } return 12; } };"
     "fetch('/api/bwtramp?v=' + ((screen.width & bwo) !== 0 ? 'bwand' : 'bwzero'));"
     "var ac0c = new AbortController(); var ac0 = ac0c.signal;"

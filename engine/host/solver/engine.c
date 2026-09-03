@@ -3309,8 +3309,9 @@ static void engine_queue_el_body(uint32_t doc, DynBody *body, DynKind kind, Scri
  *
  * AND IT REORDERED THE PAGE'S MICROTASKS, which is the reason it could not merely be tidied. Every delivery
  * below runs through JS_CallAsFlow, which builds a CALL-ROOT FLOW: the native resolving function is a step
- * machine and offers a park at every re-entry, and 27.5.1.3 "CreateResolvingFunctions ( toResolve )"'s resolveSteps step 9's
- * `Get(resolution, "then")` is a read on an object whose prototype the page owns, so the settle of reply A can
+ * machine and offers a park at every re-entry, and 27.5.1.3 "CreateResolvingFunctions ( toResolve )"'s
+ * resolveSteps — the closure that is step 2's one nested list — has at its step 6
+ * `Get(resolution, "then")`, a read on an object whose prototype the page owns, so the settle of reply A can
  * PARK part-way. The drain did not stop for that. It went on and delivered reply B, whose settle ran to
  * completion — so B's promise reached 27.5.1.4 "FulfillPromise" step 7's TriggerPromiseReactions FIRST, and
  * 27.5.1.8 "TriggerPromiseReactions ( reactions, arg )" step 1.b enqueued B's reaction jobs ahead of A's.

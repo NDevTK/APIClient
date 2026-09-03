@@ -1247,7 +1247,9 @@ typedef struct {
     void      (*visit)(JSContext *ctx, void *state, JSStepVisit *v);
     /* WHAT THE DECLARATION CANNOT NAME, AND WHAT HOLDS NO REFERENCE — a lexbor handle, a foreign C allocation,
        a global or per-object FLAG the algorithm took and must give back on every exit (§4.13.4 step 14's
-       "regardless of whether the above steps threw", HTML §4.10.22.3 step 8's constructing-entry-list flag).
+       "regardless of whether the above steps threw", HTML §4.10.22.4 "Constructing the entry list" step 8's
+       give-back of the constructing-entry-list flag its step 2 took — §4.10.22.3's form-submission algorithm
+       only READS that flag, at its step 2, and never sets it).
        It runs BEFORE the declaration is discharged, so it may READ an owned value — those flags live on one —
        and idl_args.c folds the declaration into a number on each side of the call and requires the two to
        agree. A member with nothing of that kind declares NULL.

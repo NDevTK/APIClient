@@ -487,8 +487,8 @@ void slot_removed_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *pa
 
     DCHECK(g_ready, "§4.2.3's slot steps ran before slot_init");
     if (!node || !parent) return;
-    DCHECK(node->parent != parent, "§4.2.3 remove's slot steps ran BEFORE the detach — step 4 recomputes the "
-                                   "slot's assigned nodes and would find the node it is removing");
+    DCHECK(node->parent != parent, "§4.2.3 remove's slot steps ran BEFORE step 7's detach — step 8 recomputes "
+                                   "the slot's assigned nodes and would find the node it is removing");
     /* "If node is ASSIGNED, then run assign slottables for node's assigned slot." */
     assigned = slot_ref_of(ctx, node, g_atom_slot_of);
     if (assigned && slot_is(assigned)) assign_slottables(ctx, assigned);

@@ -118,7 +118,7 @@ typedef struct {
     uint32_t    i;          /* how far through disposedNHEs the step-13 walk is */
     JSValue     disposed;   /* §7.2.6.4 step 3's disposedNHEs (owned) */
     JSValue     ev;         /* the event held across the dispatch (owned) */
-    /* §7.2.6.4 STEP 10's navigateEvent, READ AT STEP 10 AND USED AT STEP 14 (owned; JS_NULL for none). It is a
+    /* §7.2.6.4 STEP 9's navigateEvent, READ AT STEP 9 AND USED AT STEP 14 (owned; JS_NULL for none). It is a
        field and not a read at the step that needs it because the standard reads it early on purpose: steps 12
        and 13 dispatch `currententrychange` and then `dispose` at each thrown-away entry, and any of those
        listeners can start a navigation — which replaces the Navigation's ongoing navigate event with a

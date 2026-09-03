@@ -1013,9 +1013,12 @@ static void sh_apply_history_step_begin(JSContext *ctx, SessionHistoryApply *a, 
            the branch is not taken, and that is a fact about this build rather than a gap in it — the branch
            exists to let a NESTED navigable's traversal be canceled from its own document.
            THIS SITE CARRIED THE ASSERTION FOR THE TRAVERSE NAVIGATE EVENT AND IT WAS THE WRONG SITE. Its own
-           text said the top-level fire "would fire it here", and it would not: §7.4.6.1 step 8 is where the
-           NESTED fire lives, and the one a traversable performs for ITSELF is step 5's CHECK IF UNLOADING IS
-           CANCELED — see sh_apply_history_step_begin, whose step-5 comment made the matching mistake. An
+           text said the top-level fire "would fire it here", and it would not: §7.4.6.1 step 12.7.2 is where
+           the NESTED fire lives (step 12's per-navigable job, its step 7's not-a-traversable conjunction, its
+           step 2), and the one a traversable performs for ITSELF is step 5's CHECK IF UNLOADING IS CANCELED,
+           whose own step 4.3 fires it — see sh_apply_history_step_begin, whose step-5 comment made the
+           matching mistake. Step 8 is the per-navigable job that NULLS the ongoing navigate event, which is
+           the opposite of a fire and is what the old number named. An
            assertion at a branch that is never taken is an assertion that never fires, which is why the
            misplacement was invisible. */
         sh_assert_is_traversable(ctx);

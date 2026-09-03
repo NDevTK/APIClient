@@ -2970,11 +2970,15 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
        in the standard `window.open("javascript:x()")` reaches §7.4.2.3.2 through NAVIGATE, in a navigable that
        already has an active document to run the program in and to take its settings object and API base URL
        from. This engine folds step 8 and step 15 into one call that takes a url, so the same spelling arrives
-       HERE with no active document yet, and there is no realm for §7.4.2.3.2 step 5's settings object to be.
+       HERE with no active document yet, and there is no realm for the settings object §7.4.2.3.2's EVALUATE A
+       `javascript:` URL takes at its step 4 ("let settings be targetNavigable's active document's relevant
+       settings object", whose API base URL its step 5 then reads) to be. The section holds two algorithms —
+       navigate-to-a-`javascript:`-URL and evaluate-a-`javascript:`-URL — so the one is named rather than the
+       step number left bare.
        UNFOLDING IT IS THE BUILD, not a second evaluate here: make navigable_create take no url, give
-       §7.2.2.1's step 15 and §4.6.5's step 9 the navigate they each already own (navigable.h states the
-       asymmetry this leaves in the meantime), and this arm then reaches navigable_navigate below like every
-       other destination. */
+       §7.2.2.1's step 15 and §4.6.5's follow-the-hyperlink step 11 the navigate they each already own
+       (navigable.h states the asymmetry this leaves in the meantime), and this arm then reaches
+       navigable_navigate below like every other destination. */
     DCHECK(!destination_is_javascript,
            "§7.4's create was asked to make a navigable whose ADDRESS is a `javascript:` URL — §7.3.1.7 step 8 "
            "creates a navigable with no url at all and §7.2.2.1 step 15 navigates it, which is the algorithm "

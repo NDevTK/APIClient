@@ -1924,9 +1924,10 @@ static void element_iterator_pre_remove(JSContext *ctx, lxb_dom_node_t *n, lxb_d
     if (phase == NODE_TREE_REMOVING) node_iterator_pre_remove(ctx, n);
 }
 
-/* §4.2.3's SLOT steps, both sides of the detach — insert's two and remove's three. Registered between the
-   pre-remove steps and the removing steps because that is where the standard's own `remove` runs them: after
-   step 3's detach and before step 8's removing steps. */
+/* §4.2.3's SLOT steps, both sides of the detach — `insert`'s three (steps 7.4/7.5/7.6) and `remove`'s three
+   (steps 8/9/10). Registered between the pre-remove steps and the removing steps because that is where the
+   standard's own `remove` runs them: after step 7's "remove node from its parent's children" and before step
+   11's removing steps. */
 static void element_slot_steps(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *parent, int phase)
 {
     if (phase == NODE_TREE_INSERTED)     slot_insert_steps(ctx, n, parent);

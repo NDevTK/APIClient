@@ -22,13 +22,14 @@
  * do not run and for each one's own reason.
  *
  * "THIS'S RELEVANT GLOBAL OBJECT'S ASSOCIATED DOCUMENT" IS HELD BY THE OBJECT, and that is why this interface
- * has a record at all when the standard gives it no state. §8.5.1 step 2 takes the new Document's URL from the
- * DOMParser's OWN relevant global, not from whoever called the method — and a C member runs in the realm that
+ * has a record at all when the standard gives it no state. §8.5.1 step 2 reads "this's relevant global
+ * object's associated Document" and step 3 takes the new Document's URL from it — from the DOMParser's OWN
+ * relevant global, not from whoever called the method — and a C member runs in the realm that
  * DEFINED it (js_call_c_function takes `ctx` from the function object), so
  * `frames[0].DOMParser.prototype.parseFromString.call(myParser, …)` arrives with the FRAME's ctx while the
  * standard asks for THIS document's URL. core/html/user_activation.c has the same question and can only assert
  * against it, because a UserActivation is minted with a realm and carries nothing that says whose it is. This
- * object is CONSTRUCTED, so it can carry it: the constructor holds this realm's `document` wrapper, and step 2
+ * object is CONSTRUCTED, so it can carry it: the constructor holds this realm's `document` wrapper, and step 3
  * reads that Document's address. Holding the DOCUMENT rather than the realm is what the standard says (a Window
  * has exactly one associated Document for its whole life) and is also the version with no dangling pointer —
  * the wrapper keeps the Document alive for as long as a page can still reach the parser.
@@ -134,7 +135,8 @@ static JSValue js_domparser_ctor(JSContext *ctx, JSValueConst this_val, int argc
     p->document = JS_DupValue(ctx, document_object(ctx));
     DCHECK(JS_IsObject(p->document),
            "a DOMParser was constructed in a realm whose `document` object does not exist — §8.5.1 step 2 reads "
-           "the relevant global's associated Document's URL, and a realm with no Document has no address to "
+           "the relevant global's associated Document and step 3 takes its URL, and a realm with no Document "
+           "has no address to "
            "resolve the parsed document's relative URLs against");
     JS_SetOpaque(obj, p);
     return obj;
@@ -181,7 +183,7 @@ static JSValue domparser_concrete(JSContext *ctx, JSValueConst v)
 /* HTML §8.5.1's "parse HTML from a string", given a Document `document` and a string `html`.
  *
  * 1. Set document's type to "html". — the CONTENT TYPE is what records that here (DOM §4.5, and
- *    core/dom/document.h's own note on it), and step 2 of parseFromString already set it to `type`.
+ *    core/dom/document.h's own note on it), and step 3 of parseFromString already set it to `type`.
  * 2. A new HTML parser whose ALLOW DECLARATIVE SHADOW ROOTS is document's — which is FALSE for every document
  *    document_new builds, so this is the one parse-boundary seam that must not run (see below).
  * 3-4. Place `html` into the input stream and run the parser to the end. Lexbor's document parse is that, in
@@ -204,11 +206,14 @@ static JSValue parse_html_from_a_string(JSContext *ctx, const char *url, const c
        so no sibling flow can hold it and §13.2.6's writes need no delta entry (solver/dom_cow.h). */
     CHECK(html_parse_document(dom, DOM_PARSE_ROOT_PRIVATE, HTML_SCRIPTING_DISABLED, (const lxb_char_t *)html, len) == LXB_STATUS_OK,
           "DOMParser: the markup handed to parseFromString could not be parsed");
-    /* §8.5.1 step 2: the URL is the relevant global's associated Document's, and the content type is `type` —
-       which for this arm is "text/html", the string that makes a Document an HTML document. */
-    /* §8.5.1 step 2's content type is `type`, which on THIS arm is the string "text/html" that selected it —
-       and step 3's first sub-step, "Set document's type to `html`", is the other half of the pair. */
-    /* …and step 2's "a NEW DOCUMENT" is DOM §4.5's `Document` interface, which this arm shares with the XML one
+    /* §8.5.1 STEP 3: "Let document be a new Document, whose content type is type, origin is relevantDocument's
+       origin, and URL is relevantDocument's URL" — relevantDocument being step 2's read of this's relevant
+       global object's associated Document. On THIS arm `type` is the string "text/html" that selected it, the
+       string that makes a Document an HTML document.
+       ITS PAIR IS IN A DIFFERENT ALGORITHM AND THAT IS WHY THE TWO ARE SET APART: step 4's "text/html" arm
+       runs PARSE HTML FROM A STRING, whose own step 1 is "Set document's type to `html`". The content type is
+       §8.5.1's; the type is that algorithm's.
+       …and step 3's "a new Document" is DOM §4.5's `Document` interface, which this arm shares with the XML one
        below — see there for why the interface is stated rather than taken from the type. */
     doc = document_new(ctx, dom, url, DOCUMENT_IFACE_DOCUMENT, document_kind(/*is_xml*/false, "text/html"));
     root = lxb_dom_interface_node(dom);
@@ -261,7 +266,7 @@ static JSValue parse_html_from_a_string(JSContext *ctx, const char *url, const c
     return doc;
 }
 
-/* §8.5.1 step 3's OTHERWISE arm: "Create an XML parser parser, associated with document, and with XML
+/* §8.5.1 step 4's OTHERWISE arm: "Create an XML parser parser, associated with document, and with XML
  * scripting support disabled. Parse compliantString using parser." — then its next step, which builds a
  * `parsererror` document when that parse reported "an XML well-formedness or XML namespace well-formedness
  * error". core/xml/xml_parse.h owns both halves and the three consumers of an XML parse share it.
@@ -310,21 +315,24 @@ static JSValue parse_xml_from_a_string(JSContext *ctx, const char *url, const ch
            any other node the flow made. */
         for (c = root->first_child; c != NULL; c = next) { next = c->next; dom_cow_take_private(root, c); }
         DCHECK(root->first_child == NULL,
-               "HTML §8.5.1 step 3's parsererror branch begins \"Assert: document has no child nodes\" and "
+               "HTML §8.5.1 step 4's parsererror branch begins \"Assert: document has no child nodes\" and "
                "this document still has one — the partial tree an ill-formed parse left is what was just "
                "discarded, so a survivor is a node nothing in this build put there");
         xml_parse_error_document(lxb_dom_interface_document(dom), root, DOM_PARSE_ROOT_PRIVATE, &report);
     }
-    /* §8.5.1 step 2: the URL is the relevant global's associated Document's, and the content type is `type` —
-       which for this arm is whichever XML DOMParserSupportedType the caller passed, unchanged. */
-    /* …AND ITS TYPE STAYS `xml`. Step 2's Document is a new Document, whose §4.5 default type is `xml`, and
-       only the "text/html" arm's first sub-step sets it to `html` — so this arm is an XML DOCUMENT, which is
+    /* §8.5.1 step 3: the URL and origin are relevantDocument's — step 2's read of this's relevant global
+       object's associated Document — and the content type is `type`, which for this arm is whichever XML
+       DOMParserSupportedType the caller passed, unchanged. */
+    /* …AND ITS TYPE STAYS `xml`. Step 3's Document is a new Document, whose §4.5 default type is `xml`, and
+       only step 4's "text/html" arm sets it to `html`, in parse-HTML-from-a-string's own step 1 — so this arm
+       is an XML DOCUMENT, which is
        what makes `parseFromString(…, "application/xml").createCDATASection(…)` work and what keeps HTML
        §13.2's parse-boundary correction (which this arm deliberately does not run) unreachable for it. */
     /* …AND IT IMPLEMENTS `Document`, NOT `XMLDocument`, WHICH IS THE ONE PLACE THAT DISTINCTION IS OBSERVABLE
-       AND THE ONE PLACE A READER EXPECTS THE OTHER ANSWER. §8.5.1 step 2 is "Let document be a NEW DOCUMENT,
-       whose content type is type and URL is this's relevant global object's associated Document's URL" — a new
-       Document, where DOM §4.5.1's createDocument says "creating a document that implements XMLDocument". Same
+       AND THE ONE PLACE A READER EXPECTS THE OTHER ANSWER. §8.5.1 step 3 is "Let document be a new Document,
+       whose content type is type, origin is relevantDocument's origin, and URL is relevantDocument's URL" — a
+       new Document, where DOM §4.5.1's createDocument says "creating a document that implements XMLDocument".
+       Same
        §4.5 type, different interface, so `new DOMParser().parseFromString("<foo/>", "text/xml") instanceof
        XMLDocument` is FALSE and `document.implementation.createDocument(ns, "")`'s is true. */
     return document_new(ctx, dom, url, DOCUMENT_IFACE_DOCUMENT, document_kind(/*is_xml*/true, type));
@@ -394,7 +402,7 @@ static JSValue js_domparser_parse_from_string(JSContext *ctx, JSValueConst this_
         xdoc = parse_xml_from_a_string(ctx, url, type, markup, len);
         JS_FreeCString(ctx, markup);
         JS_FreeCString(ctx, type);
-        return xdoc;                                 /* step 4 */
+        return xdoc;                                 /* step 5 */
     }
 
     concrete = domparser_concrete(ctx, compliant);
@@ -409,7 +417,7 @@ static JSValue js_domparser_parse_from_string(JSContext *ctx, JSValueConst this_
     if (!markup) return JS_EXCEPTION;
     doc = parse_html_from_a_string(ctx, url, markup, len);
     JS_FreeCString(ctx, markup);
-    return doc;                                  /* step 4 */
+    return doc;                                  /* step 5 */
 }
 
 void domparser_init(JSContext *ctx)

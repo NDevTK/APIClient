@@ -391,12 +391,16 @@ int navigation_update_entries_run(JSContext *ctx, NavigationUpdateWork *w, JSVal
     JS_FreeValue(ctx, list);
     /* STEP 8 — "if navigation's ongoing API method tracker is non-null, then NOTIFY ABOUT THE COMMITTED-TO
        ENTRY" — is what carries the `committed` promise of a `navigation.navigate()` call, and §7.2.6.7's
-       methods are the only producers of a tracker, so it is null and the step does nothing.
-       STEP 10: "let navigateEvent be navigation's ONGOING NAVIGATE EVENT." READ HERE, USED AT STEP 14, and the
-       standard's own note says why it is read this early: steps 12 and 13 fire `currententrychange` and then
-       `dispose`, and "event handlers could start another navigation, or otherwise change the value of" what
-       these steps are about. So the operation takes its input with it rather than reading it back four steps
-       later. STEP 9's apiMethodTracker is the same read for the tracker, and there is none.
+       methods are the only producers of a tracker, so it is null and the step does nothing. ITS OWN NOTE is
+       where the standard states the early-read rule, and the note is about the TRACKER rather than about the
+       event: "It is important to do this before firing the dispose or currententrychange events, since event
+       handlers could start another navigation, or otherwise change the value of navigation's ongoing API
+       method tracker."
+       STEP 9: "let navigateEvent be navigation's ONGOING NAVIGATE EVENT." READ HERE, USED AT STEP 14, for that
+       same hazard one field over: steps 12 and 13 fire `currententrychange` and then `dispose`, and a listener
+       of either can start a navigation, which replaces the Navigation's ongoing navigate event with a
+       different one. So the operation takes its input with it rather than reading it back five steps later.
+       STEP 10's apiMethodTracker is the same read for the tracker, and there is none.
        STEP 11's PREPARE TO RUN SCRIPT has nothing to suppress in this engine, which is an answer about this
        agent rather than a shrug: its own note says it is there to stop the JavaScript execution context stack
        becoming empty and forcing a microtask checkpoint between the event handlers below and the promise
@@ -455,10 +459,13 @@ fire_dispose:
         w->i++;
     }
     /* STEP 14: "Run the NAVIGATE EVENT INTERCEPT COMMIT HANDLER STEPS given navigation, navigateEvent, and
-       apiMethodTracker" — over the event step 10 took, not over whatever is ongoing now. They are what ENDS a
+       apiMethodTracker" — over the event step 9 took, not over whatever is ongoing now. They are what ENDS a
        navigate event: they null the Navigation's ongoing navigate event out and fire `navigatesuccess`, and
        they run in a microtask rather than here (core/frame/navigate_event_fire.c says why). The tracker is
-       null, which those steps' step 6 is the only reader of.
+       null, and those steps read it in exactly one place: their step 4 waits for all of promisesList and its
+       SUCCESS STEPS' step 6 is "if apiMethodTracker is non-null, then resolve the finished promise for
+       apiMethodTracker". Step 4 carries two lists — the success steps and one failure step — so the list is
+       named rather than the sub-number left bare.
        STEP 15's clean up after running script is step 11's other half. */
     /* THE FIELD IS A NavigateEvent OR NULL, so asking the BRAND asks both halves at once — and it is asked as
        an assertion rather than as an `if`, which would be this same invariant softened into a silent skip of
