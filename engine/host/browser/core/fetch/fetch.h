@@ -206,4 +206,27 @@ char *fetch_reply_computed_type(JSContext *ctx, JSValueConst reply);
    every reader downstream would be correct about the value it was handed. */
 int fetch_reply_status(JSContext *ctx, JSValueConst reply);
 
+/* …AND THE STATUS MESSAGE BESIDE IT — Fetch §2.2.6 "Responses"' status message, as a malloc'd string the
+   caller frees. It is the LAST field of this record that two consumers still read by hand, and it defaults in
+   both: the fetch() delivery did `JS_ToCString(...); stx ? stx : ""` and XMLHttpRequest's §3.5.6 reply read did
+   `JS_IsString(v) ? dup : JS_NewString(ctx, "")`. That is `fetch_reply_status`' argument arriving at the one
+   field where the default is INDISTINGUISHABLE FROM THE COMMONEST REAL VALUE rather than merely from a legal
+   one: §2.2.6 says "A response has an associated status message. Unless stated otherwise it is the empty byte
+   sequence." and, for the protocol most of the web now speaks, "Responses over an HTTP/2 connection will
+   always have the empty byte sequence as status message as HTTP/2 does not support them." So `""` is not an
+   edge case a reader might notice — it is what a correct producer writes most of the time, and a producer that
+   stopped writing the field at all lands on the same two bytes with nothing anywhere to say which happened.
+   THE FIELD IS ASSERTED AND NEVER DEFAULTED, for `computedType`'s reason. `fetch_reply_new` defines it on
+   every record and the trusted zone's `safeFetch` stamps it on both of its return paths — a real reply carries
+   the server's reason phrase and a REFUSED one carries the refusal's own reason, which extension/lib/
+   safe-fetch.js calls "the only account a page or a person ever gets of a request this zone did not make". So
+   an absent one is a producer that stopped, and the account it was carrying is what gets deleted.
+   ONLY THE TYPE IS ASSERTED, NEVER THE CONTENT. The bytes are a SERVER'S reason phrase, so what they say is
+   not an invariant this codebase's logic can violate; that the field is a string is this project's producers'
+   contract, and it is the half worth crashing on.
+   A NETWORK ERROR (the JSON `null`) ANSWERS NULL, WHICH IS THE ONE THING A READER MUST NOT CONFUSE WITH "" —
+   §2.2.6 gives a network error "status message is the empty byte sequence", so "nothing answered" and "it
+   answered and named nothing" are two facts that the spec's own value cannot separate and this reader can. */
+char *fetch_reply_status_text(JSContext *ctx, JSValueConst reply);
+
 #endif

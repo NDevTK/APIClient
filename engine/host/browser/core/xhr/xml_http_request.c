@@ -1545,7 +1545,7 @@ static const char *const XHR_ERR_EXC[] = { NULL, "TimeoutError", "AbortError", "
    which is what §5.5's network error is on the Fetch side too. */
 static void xhr_take_reply(JSContext *ctx, XhrData *d, JSValueConst reply)
 {
-    JSValue st_v, stx_v, hs_v, bd_v;
+    JSValue st_v, hs_v, bd_v;
     uint32_t hn = 0, i;
     int32_t status = 0;
 
@@ -1559,11 +1559,34 @@ static void xhr_take_reply(JSContext *ctx, XhrData *d, JSValueConst reply)
            "fetch with the reply record fetch_reply_new builds, whose body is an ArrayBuffer, and a STRING "
            "here is a zone that ran a decode §3.6.6 owns");
     st_v = JS_GetPropertyStr(ctx, reply, "status");
-    stx_v = JS_GetPropertyStr(ctx, reply, "statusText");
     hs_v = JS_GetPropertyStr(ctx, reply, "headers");
     JS_ToInt32(ctx, &status, st_v);
     d->status = status;
-    xhr_set(ctx, d, &d->status_text, JS_IsString(stx_v) ? JS_DupValue(ctx, stx_v) : JS_NewString(ctx, ""));
+    /* Fetch §2.2.6 "Responses"' STATUS MESSAGE, THROUGH THE ONE READER OF THAT FIELD (core/fetch/fetch.h) —
+       the second of the two hand-written reads of it, and the one whose default was written out as a test:
+       `JS_IsString(stx_v) ? dup : JS_NewString(ctx, "")`. Asking `JS_IsString` and then answering `""` is not
+       a check, it is the defaulted-field shape with the branch visible: §2.2.6 says a response's status message
+       is "the empty byte sequence" unless stated otherwise and that HTTP/2 replies "will always have the empty
+       byte sequence", so the arm taken when the producer has stopped writing the field is the same two bytes
+       the commonest correct producer writes. §3.6.3 The statusText getter is what a page reads off this, and
+       for a request the trusted zone REFUSED it is the refusal's own reason — the only account of it anybody
+       gets. The reader asserts the field instead, and this record cannot be the network error it answers NULL
+       for: `xhr_take_reply` returned above unless the reply is an object with a body. */
+    {
+        char *stx = fetch_reply_status_text(ctx, reply);
+        /* A `CHECK` AND NOT A `DCHECK`, BECAUSE THIS POINTER IS DEREFERENCED IN EVERY BUILD. The reader
+           answers NULL for the JSON `null` alone and this function returned above for anything that is not an
+           object carrying a body, so a NULL here is the two disagreeing about what a network error is — and
+           `JS_NewString` would read through it in the build where a dev-only guard is compiled out, which
+           trades a named abort for a segfault. There is no `?: ""` under it: that is the very default this
+           diff removes, and it would answer §3.6.2 The statusText getter with a phrase no producer wrote. */
+        CHECK(stx != NULL,
+              "XMLHttpRequest read a NULL status message off a reply that is not a network error — "
+              "core/fetch/fetch.h's fetch_reply_status_text answers NULL for the JSON `null` alone, and "
+              "xhr_take_reply returns above for anything that is not an object carrying a body");
+        xhr_set(ctx, d, &d->status_text, JS_NewString(ctx, stx));
+        free(stx);
+    }
     xhr_set(ctx, d, &d->response_headers, JS_NewArray(ctx));
     {
         JSValue len_v = JS_GetPropertyStr(ctx, hs_v, "length");
@@ -1607,7 +1630,7 @@ static void xhr_take_reply(JSContext *ctx, XhrData *d, JSValueConst reply)
         free(ser);
     }
     d->network_error = 0;
-    JS_FreeValue(ctx, st_v); JS_FreeValue(ctx, stx_v); JS_FreeValue(ctx, hs_v); JS_FreeValue(ctx, bd_v);
+    JS_FreeValue(ctx, st_v); JS_FreeValue(ctx, hs_v); JS_FreeValue(ctx, bd_v);
 }
 
 /* The request the host is owed, as one self-describing JSON record: `{method, url, credentials, provenance,

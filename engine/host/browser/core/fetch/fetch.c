@@ -282,9 +282,14 @@ static int js_fetch_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JS
                the host can answer: the fetch is the TRUSTED zone's (SECURITY.md), so the redirect chain is
                observed there and crosses here as TEXT carrying its type — an Array of serialized URLs. */
             JSValue ul_v = JS_GetPropertyStr(ctx, body_v, "urlList");
-            JSValue stx_v = JS_GetPropertyStr(ctx, body_v, "statusText");
             JSValue bd_v = JS_GetPropertyStr(ctx, body_v, "body");
-            const char *stx = JS_ToCString(ctx, stx_v);
+            /* §2.2.6's STATUS MESSAGE, THROUGH THE ONE READER OF THAT FIELD (fetch.h), for the reason the
+               status and the header list beside it are. This was `JS_ToCString(...)` and `stx ? stx : ""` at
+               the call — the same default the status carried, at the one field where "" is not a rare legal
+               value but what every HTTP/2 reply legitimately has, so a record that had lost the field was
+               indistinguishable from the ordinary case and the REFUSAL REASON a blocked request carries here
+               would have been deleted in silence. */
+            char *stx = fetch_reply_status_text(ctx, body_v);
             /* THE BODY, AS BYTES. §2.2.5 makes a response's body a byte sequence and the record now carries one
                (fetch.h), so this is a read of the bytes rather than a re-encode of a string somebody else had
                already decoded — which is what `arrayBuffer()` used to under-report at the first interior NUL
@@ -309,12 +314,18 @@ static int js_fetch_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JS
             DCHECK(JS_IsArray(ul_v),
                    "the host delivered a reply carrying no `urlList` — §2.2.6's URL list is what `url` and "
                    "`redirected` are, and the host is the only zone that performed the fetch that grew it");
-            s->value = response_new(ctx, ul_v, status, stx ? stx : "",
+            /* NON-NULL BY CONSTRUCTION AND ASSERTED ANYWAY: this arm runs only where `body_v` is not the
+               JSON `null`, which is the one input the reader answers NULL for, so a NULL here is the null
+               test above and the reader having parted company about what a network error is. */
+            DCHECK(stx != NULL,
+                   "the reply delivery read a NULL status message off a record that is not a network error — "
+                   "fetch_reply_status_text answers NULL for the JSON `null` alone, and this arm already "
+                   "tested for that, so the two disagree about which reply has no response at all");
+            s->value = response_new(ctx, ul_v, status, stx,
                                     hl.n ? &hl : NULL, (const char *)body, body_len);
             header_list_free(&hl);
-            if (stx) JS_FreeCString(ctx, stx);
+            free(stx);
             JS_FreeValue(ctx, ul_v);
-            JS_FreeValue(ctx, stx_v);
             JS_FreeValue(ctx, bd_v);
             if (JS_IsException(s->value)) return JS_STEP_ABRUPT;
         }
@@ -588,6 +599,45 @@ char *fetch_reply_computed_type(JSContext *ctx, JSValueConst reply)
     s = JS_ToCString(ctx, v);
     out = s ? strdup(s) : NULL;
     if (s) JS_FreeCString(ctx, s);
+    JS_FreeValue(ctx, v);
+    return out;
+}
+
+/* §2.2.6 "Responses"' STATUS MESSAGE, READ BACK — see fetch.h for why the empty string is the one
+   default that cannot show as one. */
+char *fetch_reply_status_text(JSContext *ctx, JSValueConst reply)
+{
+    JSValue v;
+    const char *s;
+    char *out;
+
+    DCHECK(JS_IsObject(reply) || JS_IsNull(reply),
+           "a status message was asked of something that is not the host's reply record — qjs_provide parses "
+           "the trusted zone's JSON and every C host builds the same record, and a network error is the JSON "
+           "`null`");
+    /* §2.2.6 gives a network error the EMPTY status message, so answering "" here would be spec-correct and
+       would delete the distinction this reader exists for. NULL says nothing answered; "" says it answered and
+       named nothing. */
+    if (!JS_IsObject(reply)) return NULL;
+    v = JS_GetPropertyStr(ctx, reply, "statusText");
+    DCHECK(JS_IsString(v),
+           "the host's reply record carries no `statusText` — every producer writes one (fetch_reply_new "
+           "takes it as a parameter, and the trusted zone stamps the server's reason phrase on a reply and the "
+           "REFUSAL'S OWN REASON on a request it declined to make), and an absent one is indistinguishable "
+           "from Fetch §2.2.6 \"Responses\"' own commonest value: \"Responses over an HTTP/2 connection will "
+           "always have the empty byte sequence as status message as HTTP/2 does not support them.\" So the "
+           "account of a blocked request would arrive here already deleted, wearing the shape of an ordinary "
+           "HTTP/2 reply");
+    s = JS_ToCString(ctx, v);
+    /* ALWAYS FATAL, for `status`' coercion reason: there is no message to continue with, and continuing means
+       answering `response.statusText` with a phrase no producer wrote. */
+    CHECK(s != NULL,
+          "fetch: a reply record's `statusText` would not read back as a C string — the field is written as a "
+          "string by every producer, so this is OOM or a value the page put where the trusted zone's reason "
+          "phrase belongs");
+    out = strdup(s);
+    CHECK(out != NULL, "fetch: OOM copying a reply's status message");
+    JS_FreeCString(ctx, s);
     JS_FreeValue(ctx, v);
     return out;
 }
