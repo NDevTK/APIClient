@@ -7029,11 +7029,68 @@ static int tf_err_listed(const char *js, const char *field, const char *tok) {
  * `why` is the caller's local and is reset to NULL at every sample of a live run, so a statement that becomes
  * true stops reporting; the buffer is only storage for the text of THIS sample's first failing clause, and it
  * is rewritten on every sample. One buffer per expansion, so no two rows share it. */
+
+/* HOW MUCH OF THIS FRONTIER HAS NEVER BEEN HANDED THE THREAD — THE RUNG EVERY MULTI-WORLD ROW WAS MISSING, AND
+ * WITHOUT WHICH ITS SECOND MESSAGE IS AN OVER-CLAIM RATHER THAN A DIAGNOSIS. A fork row that finds the
+ * statement's record but not one of its worlds has THREE states behind it and not two: the arm ran and the
+ * mechanism this row names dropped its value; the arm ran and has not yet reached its own sink; and the arm's
+ * FLOW HAS NEVER RUN AT ALL. Only the first is a finding about that mechanism, and the message said the first
+ * for all three — naming clone_deep_flow, the fast-array-append capture, do_forward_call's reshape and
+ * eighteen other innocent components as the object of a defect the run had not established. A wrong file at
+ * least sends a reader somewhere they find out; a plausible diagnosis tells them where to look and is wrong,
+ * which is the §@S sentence one level up: a candidate killed by a gate must be distinguishable from one a
+ * filter ate and from one that was NEVER SCHEDULED.
+ * THE THIRD STATE IS ALREADY COUNTED AND NO ROW WAS READING IT. solver/flow.h's WfqCensus carries
+ * `never_picked` — members whose `picks` is zero, "the only field in this struct nothing resets, because the
+ * member did nothing to reset it" — and `members`, the live frontier. A frontier holding ANY never-picked
+ * member cannot support a claim that a particular world's flow RAN and lost its value; a frontier that has
+ * DRAINED can, because there is nothing left that could still produce it.
+ * IT IS THE AGGREGATE AND NOT THIS ROW'S OWN ARM, AND EVERY MESSAGE SAYS SO. Nothing here can ask whether the
+ * flow carrying `pushB` is among the never-picked: a probe reads the result DOCUMENT, and a flow has no name
+ * in it. So each state states what the reading supports and refuses what it does not, which is the whole
+ * difference between a rung and a caveat — a caveat stated beside an unchanged verdict launders it.
+ * ONE SCAN PER TABLE. `flow_wfq_census` is a full weight-computing walk of the frontier and there are 42
+ * FORK_ROW expansions in this file, so the reading is taken ONCE by probes_eval at the top of the table and
+ * every row reads that instant. That is sound because probes_eval is the only caller of these rows (grep:
+ * `fork_row_impl` occurs at its own definition and in the macro, and every `FORK_ROW(js` is inside
+ * probes_eval's body, which is what `js` being its parameter means) and no scheduler step runs between the
+ * two. The generation stamp is what makes the ONE thing that could go wrong — a row reading a struct no table
+ * ever filled — an abort instead of a zeroed struct, and a zeroed struct reads as `members 0, none starved`,
+ * which is the STRONGEST of the three verdicts and exactly the sentence this rung exists to stop.
+ * IT IS THE SAME READING THE @WFQ LINE CARRIES, so the two numbers in these messages are cross-checkable
+ * against `members` and `neverPicked` on the @WFQ line of the SAME sample: solver/result.c takes its own
+ * census while composing the document this table is then evaluated over, and no scheduler step runs between
+ * the two. It is taken from the API rather than parsed back out of those bytes for the reason idlgen reads
+ * the real `.idl` — a reading derived from the artifact cannot drift from a JSON spelling. */
+static WfqCensus g_probe_frontier;
+static unsigned long g_probe_frontier_gen;
+
+/* 0 = the frontier has DRAINED (no member left to run); 1 = live, and some member has never been handed the
+   thread; 2 = live, and every member has been handed it at least once.
+   `vis_max` RIDES ALONG AND IS A DIFFERENT QUESTION FROM THE STATE, which is why it is an out-param rather
+   than folded into the return: the state is about who has been SERVED, and `visits` is about who has
+   FINISHED something (flow.h — "a count of COMPLETED UNITS OF WORK AND NOT A CLOCK"). A frontier can be
+   entirely served and finish nothing, and those take opposite work. */
+static int probe_frontier_state(long *never, long *members, long long *vis_max) {
+    DCHECK(g_probe_frontier_gen != 0,
+           "a probe row asked how much of the frontier has never been handed the thread before any table had "
+           "taken that reading — the answer would be a zeroed struct, which reads as `the frontier drained "
+           "and nobody was starved` and is the strongest of the three verdicts this rung exists to withhold");
+    *never = g_probe_frontier.never_picked;
+    *members = g_probe_frontier.members;
+    *vis_max = (long long)g_probe_frontier.vis_max;
+    if (g_probe_frontier.members == 0) return 0;
+    return g_probe_frontier.never_picked > 0 ? 1 : 2;
+}
+
 static void fork_row_impl(const char *js, int *row, const char **why,
                           const char *url, const char *pname, const char *subject,
                           const char *const *worlds, int nworlds, char *buf, size_t bufsz)
 {
     char q[128];
+    long never = 0, members = 0;
+    long long vis_max = 0;
+    int state = probe_frontier_state(&never, &members, &vis_max);
     int i;
 
     DCHECK(nworlds >= 2, "a fork row was declared with fewer than two worlds — a row naming one world makes no "
@@ -7058,11 +7115,16 @@ static void fork_row_impl(const char *js, int *row, const char **why,
                THE RETURN VALUE IS THE LENGTH THE MESSAGE WANTED, so the assert is about the DECLARATION and
                not about the text: a `subject` too long for fr_why_[] is either a subject to shorten or a
                buffer to raise, and the abort stands at the row that asked. */
+            /* …AND THE SCHEDULE IS NOW MEASURED RATHER THAN INFERRED. The tail of this message used to tell
+               the reader to compare this row against the other multi-world rows and decide by eye whether the
+               run had stopped — an inference over a table, held in a file that cannot check it, when the
+               frontier's own standing is one call away. */
             int k = snprintf(buf, bufsz,
                      "NOT REACHED: there is no %s record at all, so this run did not answer the statement. "
-                     "That is the SCHEDULE and says nothing about %s — read it against the other multi-world "
-                     "rows and against how far this run got: all of them 0 at once is a run that stopped",
-                     url, subject);
+                     "That is the SCHEDULE and says nothing about %s — and the schedule is measured here "
+                     "rather than inferred from the other rows: %ld of this frontier's %ld members have never "
+                     "once been handed the thread",
+                     url, subject, never, members);
 
             DCHECK(k > 0 && (size_t)k < bufsz,
                    "a fork row's NOT-REACHED diagnostic did not fit its buffer and was CUT — the tail of this "
@@ -7078,10 +7140,28 @@ static void fork_row_impl(const char *js, int *row, const char **why,
         *row = 0;
         if (!*why) {
             /* The same assert, for the same reason, over the message whose last clause is the SUBJECT itself:
-               a cut here leaves a row saying a world was lost and no longer saying lost from WHAT. */
-            int k = snprintf(buf, bufsz,
-                     "the statement RAN and %s's `%s` never carried `%s`: THAT WORLD WAS LOST — a sibling "
-                     "reached the sink and this one did not survive %s", url, pname, worlds[i], subject);
+               a cut here leaves a row saying a world was lost and no longer saying lost from WHAT.
+               THREE MESSAGES FOR THE THREE STATES, and the SUBJECT is the object of exactly one of them —
+               see probe_frontier_state for why naming it in the other two was a diagnosis the run could not
+               make. The strongest sentence is the DRAINED one and it is the only one that says LOST. */
+            int k = state == 0
+                ? snprintf(buf, bufsz,
+                     "the statement RAN and %s's `%s` never carried `%s`: THAT WORLD WAS LOST — this frontier "
+                     "has DRAINED, so nothing is left that could still produce it and the sibling ran without "
+                     "surviving %s", url, pname, worlds[i], subject)
+                : state == 1
+                ? snprintf(buf, bufsz,
+                     "the statement RAN and %s's `%s` never carried `%s` — AND THIS RUN CANNOT SAY WHY: %ld of "
+                     "this frontier's %ld members have never once been handed the thread (the furthest member "
+                     "has completed %lld units of work), so the flow carrying that world may be one of them. "
+                     "This is NOT evidence about %s, which is named only where the never-picked count is 0",
+                     url, pname, worlds[i], never, members, vis_max, subject)
+                : snprintf(buf, bufsz,
+                     "the statement RAN and %s's `%s` never carried `%s` — and this frontier is STILL LIVE: "
+                     "each of its %ld members has been handed the thread at least once, so nothing is starved, "
+                     "but the furthest of them has completed only %lld units of work, so the arm carrying that "
+                     "world may be short of its own sink. It becomes a statement about %s when the frontier "
+                     "drains", url, pname, worlds[i], members, vis_max, subject);
 
             DCHECK(k > 0 && (size_t)k < bufsz,
                    "a fork row's LOST-WORLD diagnostic did not fit its buffer and was CUT — the `subject` is "
@@ -7094,7 +7174,7 @@ static void fork_row_impl(const char *js, int *row, const char **why,
 #define FORK_ROW(js_, row_, why_, url_, pname_, subject_, ...)                                          \
     do {                                                                                                \
         static const char *const fr_worlds_[] = { __VA_ARGS__ };                                        \
-        static char fr_why_[448];                                                                       \
+        static char fr_why_[800];                                                                       \
         fork_row_impl((js_), (row_), (why_), (url_), (pname_), (subject_), fr_worlds_,                  \
                       (int)(sizeof fr_worlds_ / sizeof fr_worlds_[0]), fr_why_, sizeof fr_why_);        \
     } while (0)
@@ -7430,6 +7510,12 @@ static int s_poc(const char *js, const char *sink, const char *src, const char *
 /* Fill `out` with the rows this invocation carries and answer how many. Every row's `ok` is computed here, so
    the mid-run report and the final one are the same function of the same bytes. */
 static int probes_eval(const char *js, Probe *out, int cap) {
+    /* THE FRONTIER'S STANDING AT THE INSTANT THIS TABLE IS COMPOSED, taken ONCE and read by every row that
+       needs it — see probe_frontier_state for what the three states are, why a multi-world row's 0 has three
+       readings and not two, and why one scan per table rather than one per row. It is taken FIRST so that no
+       row can be composed against a reading of a different instant. */
+    flow_wfq_census(&g_probe_frontier);
+    g_probe_frontier_gen++;
     /* THE HEADLINE @H CLAIM, WHICH THREE UNSCOPED CLAUSES WERE ASSERTING AS THREE UNRELATED EXISTENCES. The
        statement is `fetch('/api/u?uid=' + state.id)`, so what this row is about is ONE param of ONE endpoint
        carrying ONE value: `uid` on `/api/u` is `{state}.id`. What it ASKED was whether `/api/u` appears, and
@@ -7562,6 +7648,62 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        one the helpers above already exist for: scope the claim to the RECORD and the PARAM it is about. */
     int role_admin  = param_value_is(js, "/api/data", "role", "admin");
     int role_public = param_value_is(js, "/api/data", "role", "public");
+    /* …AND THE RUNG THE OLDEST FAMILY IN THIS DOCUMENT NEVER HAD, WHICH IS THE SAME ONE EVERY `*fork` ROW GOT
+       ABOVE. `role-public` is §Boot's own claim — "boot's own `if(__FLAGS.admin)` FORKS a true-arm sibling in
+       the same run" — so a 0 here is the headline capability not working, and it was a BARE 0 with nothing
+       under it: unreachable statement, unforked branch, unscheduled sibling and lost delta all printed as one
+       digit and no sentence. It is spelled as this ladder rather than as a FORK_ROW because the two ints are
+       ALSO clauses of the three DOM ladders below, which need them separately; the states and their wording
+       are the same, and probe_frontier_state is the one place either of them reads the frontier.
+       THE SECOND CLAUSE IS `role_admin` AND IT IS NOT REDUNDANT WITH THE FIRST, which is what makes this a
+       ladder rather than a restatement: `/api/data` existing says a flow reached the statement, and the ADMIN
+       value on it says WHICH arm did — so `record present, admin absent` is a run whose primary took the else
+       arm, and reading its `role-public` 0 as a lost sibling would have the two arms exactly backwards. */
+    const char *role_public_why = NULL;
+    static char role_public_buf[512];
+    if (!role_public) {
+        long never = 0, members = 0;
+        long long vis_max = 0;
+        int state = probe_frontier_state(&never, &members, &vis_max);
+
+        if (!strstr(js, "\"/api/data\""))
+            role_public_why = "NOT REACHED: there is no /api/data record at all, so neither arm of "
+                              "`if(cfg.admin)` has emitted and this run did not answer the statement — that "
+                              "is the SCHEDULE, and it says nothing about whether boot forked";
+        else if (!role_admin)
+            role_public_why = "the /api/data record exists and carries NEITHER `admin` NOR `public` — the "
+                              "statement was reached and its `role` came out as something else, so this is "
+                              "the concolic having been lost between `cfg.admin` and the param, not a "
+                              "sibling that did not run";
+        else if (state == 1) {
+            int k = snprintf(role_public_buf, sizeof role_public_buf,
+                     "the admin arm emitted and the public arm has not — AND THIS RUN CANNOT SAY WHY: %ld of "
+                     "this frontier's %ld members have never once been handed the thread and the furthest of "
+                     "them has completed %lld units of work, so the else-arm sibling may simply be one of "
+                     "them. Read as a fork that never happened or a delta that was lost, this 0 is a claim "
+                     "the run has not made", never, members, vis_max);
+            DCHECK(k > 0 && (size_t)k < sizeof role_public_buf,
+                   "the role-public schedule diagnostic did not fit its buffer and was CUT — its tail is the "
+                   "sentence that withholds the two readings the numbers do not support, so what survived "
+                   "would be the two numbers and the readings back again");
+            role_public_why = role_public_buf;
+        } else if (state == 2) {
+            int k = snprintf(role_public_buf, sizeof role_public_buf,
+                     "the admin arm emitted and the public arm has not, and this frontier is STILL LIVE: each "
+                     "of its %ld members has been handed the thread at least once, so nothing is starved, but "
+                     "the furthest of them has completed only %lld units of work and the else arm may be short "
+                     "of its own fetch. It becomes a statement about the boot fork when the frontier drains",
+                     members, vis_max);
+            DCHECK(k > 0 && (size_t)k < sizeof role_public_buf,
+                   "the role-public live-frontier diagnostic did not fit its buffer and was CUT — its tail is "
+                   "what says the row is not yet about the boot fork, which is the whole of the clause");
+            role_public_why = role_public_buf;
+        } else
+            role_public_why = "the admin arm emitted, the public arm did not, and this frontier has DRAINED: "
+                              "nothing is left that could still produce it. §Boot's own sentence — boot's "
+                              "`if(__FLAGS.admin)` FORKS a true-arm sibling in the same run — is what this "
+                              "row asserts, so the else arm either never forked or forked and lost its delta";
+    }
     int data_count = 0; for (const char *p = js; (p = strstr(p, "\"/api/data\"")); p++) data_count++;
     /* AND THE MERGE, WHICH ONE RECORD ALONE DOES NOT PROVE. `data_count == 1` is what a merge across two flows
        produces AND what a SINGLE arm produces, so the row whose whole claim is the merge was satisfied by
@@ -7737,30 +7879,63 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        seven paraphrases of it would be seven lines for one finding; probes_report prefixes each line with the
        row's own name, so nothing is anonymous. */
     long orphans_driven = 0, orphans_asked = 0;
-    static char orphan_why_[512];
+    long orph_never = 0, orph_members = 0;
+    long long orph_vis_max = 0;
+    static char orphan_why_[900];
     const char *orphan_why;
+    int orphan_k;
     engine_orphan_census(&orphans_driven, &orphans_asked);
+    (void)probe_frontier_state(&orph_never, &orph_members, &orph_vis_max);
     if (orphans_asked == 0)
-        snprintf(orphan_why_, sizeof orphan_why_,
+        /* …AND WHERE THE FRONTIER STOOD WHEN IT DID NOT ASK, WHICH THIS SENTENCE PREDICTED AND DID NOT
+           MEASURE. It ended "stay so until some flow finishes its own work" — a condition with no reading
+           beside it, in a table whose whole subject is that a stated cause must be checkable. The frontier's
+           own census carries the numbers that bound it, and they are the SAME numbers every multi-world row
+           above now prints, so a reader meets one vocabulary rather than two for one fact.
+           `visits` IS THE WEAKER CONDITION AND THE MESSAGE SAYS SO: engine_orphan_seed wants a flow with
+           NOTHING left, while a completed unit of work is any program, job, delivery or lifecycle stage that
+           ended (flow.h). So `vis_max` is an UPPER BOUND on how close this run came to the ask — at 0 no
+           member has finished anything at all and the ask is unreachable by arithmetic, and above 0 it was
+           reachable and not reached, which are different findings taking different work. */
+        orphan_k = snprintf(orphan_why_, sizeof orphan_why_,
                  "NOT ASKED: no flow of this run has run out of work yet, so the frontier has never reached the "
                  "question orphan-invoke answers (engine_orphan_census: asked=0, driven=0). That is the "
                  "SCHEDULE — engine_orphan_seed is reached only where a flow has no program, job, lifecycle "
                  "event, timer, frame, reply or close request left — and it says nothing about "
-                 "the take, the drive or this endpoint. The seven orphan rows are 0 together for this one "
-                 "reason and stay so until some flow finishes its own work");
+                 "the take, the drive or this endpoint. WHERE THE FRONTIER STANDS: %ld members, %ld of them "
+                 "never once handed the thread, and the furthest member has completed %lld units of work — a "
+                 "WEAKER condition than running out of work, so that last number is an UPPER BOUND on how "
+                 "close this run came to the ask. The seven orphan rows are 0 together for this one reason",
+                 orph_members, orph_never, orph_vis_max);
     else if (orphans_driven == 0)
-        snprintf(orphan_why_, sizeof orphan_why_,
+        orphan_k = snprintf(orphan_why_, sizeof orphan_why_,
                  "ASKED %ld TIMES AND DROVE NOTHING: a flow did run out of work and no walk found an untaken "
                  "body, while this document declares seven functions nothing calls. That is the TAKE — "
                  "JS_OrphanTakeOne's `entered`/`is_program`/bytecode filter, or the orphan-generation memo "
                  "answering for a heap that has moved — and not the schedule and not this endpoint",
                  orphans_asked);
     else
-        snprintf(orphan_why_, sizeof orphan_why_,
+        /* THE FOURTH STATE engine.h NAMES AND NEITHER OF US CAN REACH, quoted here at the strength it is owed
+           rather than restated as a fact: "a drive NEVER GIVEN THE THREAD is a pick-order problem (a weight),
+           and one PICKED AND CUT SHORT before it reached its call is a dwell or preemption-granularity
+           problem", and the field that would separate them must be one a FORK DOES NOT COPY. The frontier
+           numbers below do not separate them either — they are about the whole frontier and not this drive —
+           so they are printed as CONTEXT and the sentence keeps saying it does not know which. */
+        orphan_k = snprintf(orphan_why_, sizeof orphan_why_,
                  "%ld bodies WERE driven (asked %ld times) and this statement's endpoint is not on the surface: "
                  "either this drive is seeded and has not been picked, or it ran and emitted nothing. This "
-                 "clause is about THIS row — orphan-invoke itself is answered by whichever of the seven are 1",
-                 orphans_driven, orphans_asked);
+                 "clause is about THIS row — orphan-invoke itself is answered by whichever of the seven are 1. "
+                 "CONTEXT, about the frontier and not about this drive: %ld members, %ld never once handed the "
+                 "thread, furthest member %lld completed units of work",
+                 orphans_driven, orphans_asked, orph_members, orph_never, orph_vis_max);
+    /* THE CUT THIS DIAGNOSTIC HAD NO ASSERT AGAINST, and its tail is the same load-bearing half that
+       fork_row_impl's two asserts protect: whichever branch composes it, the LAST clause is what says which
+       of the states the seven zeros are in. A silent cut leaves seven rows naming an endpoint and no longer
+       naming the state, which is the folded answer this whole clause exists to refuse. */
+    DCHECK(orphan_k > 0 && (size_t)orphan_k < sizeof orphan_why_,
+           "the shared orphan diagnostic did not fit its buffer and was CUT — the tail of every one of its "
+           "three branches is what separates the schedule from the take from this endpoint, so what survived "
+           "is seven rows at 0 with the distinction between them deleted; raise orphan_why_[] here");
     orphan_why = orphan_why_;
     /* FETCH-AWAIT-RESULT: `await fetch('/api/config')` delivered the reply and §6.4.3 json() parsed it,
        whose .region flowed into /api/user?region=us-west-2 as a CONCRETE example — a safe GET's result driving
@@ -10090,9 +10265,9 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     const char *bsmin_why = NULL; int bsmin_tt = 1;
     fold_row(&bsmin_tt, &bsmin_why, bs_reach, bs_reach_why);
     FORK_ROW(js, &bsmin_tt, &bsmin_why, "/api/bsmin", "w",
-             /* SHORT ENOUGH THAT NEITHER OF fork_row_impl's TWO MESSAGES IS CUT — the assert there is what
+             /* SHORT ENOUGH THAT NONE OF fork_row_impl's FOUR MESSAGES IS CUT — the assert there is what
                 says so, and the fuller statement of the claim is the comment above rather than a longer
-                subject, because this string is the TAIL of both messages and a tail is what a bounded
+                subject, because this string is the TAIL of every one of them and a tail is what a bounded
                 `snprintf` drops first. */
              "Streams §4.5.3's read over an unknown `min`: step 4's TypeError, steps 5.1/6.1's RangeError and "
              "the pull-into that survives both are three worlds of ONE read",
@@ -10252,7 +10427,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "path-param", path_param, "/v1/users/", SESS_EXPLORE, path_param_why },
         { "body-param", body_param, "firstPost", SESS_EXPLORE, body_param_why },
         { "path-example", path_example, "/v1/vis/", SESS_EXPLORE, path_example_why },
-        { "role-public", role_public, "/api/data?role=", SESS_EXPLORE },
+        { "role-public", role_public, "/api/data?role=", SESS_EXPLORE, role_public_why },
         { "merged", merged, "/api/data?role=", SESS_EXPLORE },
         { "pinned", pinned, "/api/region/", SESS_EXPLORE },
         /* THE KEY IS THE STATEMENT THAT REACHES THE ENDPOINT, WHICH IS NOT ALWAYS THE ENDPOINT. This row reads
