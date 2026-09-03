@@ -194,12 +194,16 @@ double viewport_scrolling_area_height(JSContext *ctx);
    that a member "said to call another method or attribute" must invoke rather than the page-visible member (so
    a page overriding `window.scroll` cannot change what `el.scrollTop = 10` on the root element does).
    `x`/`y` are the REQUESTED position, with §3.2's normalize-non-finite already applied by the caller whose IDL
-   type carries it. The steps clamp that request into the viewport's scrolling area and abort at step 11 when
-   the clamped position is the one the viewport already has. That WAS every request, while the scrolling area
-   was the ICB; the area is now §2's real extreme, so a document taller than its viewport clamps to somewhere
-   else and step 11 does not abort — which viewport.c asserts rather than assumes, and which is the crash that
-   names §3.1's perform a scroll as the next thing to write. The write is still not ignored: it is RUN, and the
-   spec's own clamp is what decides it.
+   type carries it. Steps 7 and 8 clamp that request into the viewport's scrolling area — one step per axis,
+   each a two-armed switch on §2's OVERFLOW DIRECTIONS, and BOTH arms are written — and step 10 aborts when the
+   clamped position is the one the viewport already has. That WAS every request, while the scrolling area was
+   the ICB; the area is now §2's real extreme, so a document taller than its viewport clamps to somewhere else
+   and step 10 does not abort — which viewport.c asserts rather than assumes, and which is the crash that names
+   §3.1's perform a scroll as the next thing to write. The write is still not ignored: it is RUN, and the spec's
+   own clamp is what decides it.
+   THESE NUMBERS ARE THE THIRTEEN TOP-LEVEL STEPS of the edition engine/specindex/cssomview.json is keyed to.
+   They stood one lower from step 4 onward, because §4's clamp is TWO steps each holding a two-armed
+   `<dl class="switch">` and a flat count of the arms reads that pair as four.
    IT IS NOT `window.scroll` — that member is a separate question, and INSTALLING IT WOULD NOT CHANGE ANYTHING
    THIS FILE DOES. §4's three Window members are §4's argument questions plus a call to this algorithm, so a
    build with them scrolls exactly as far as a build without them: nowhere. That is worth stating because six

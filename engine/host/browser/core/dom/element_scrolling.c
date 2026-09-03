@@ -137,28 +137,28 @@ static void es_box_of_viewport(lxb_dom_node_t *doc, JSContext *dctx, EsBox *b)
     }
 }
 
-/* §6.1's CLAMP, which is FOUR ROWS OVER ONE FACT and is written once for both kinds of box. Scroll an element
- * to x,y states it for an element's box:
- *     "If box has rightward overflow direction — let x be max(0, min(x, element scrolling area width -
- *      element padding edge width)). If box has leftward overflow direction — let x be min(0, max(x, element
- *      padding edge width - element scrolling area width))"
- * and the two vertical rows are the same sentence on the other axis. §4's `scroll()` on a Window states the
- * viewport's rightward/downward pair identically over "the viewport's scrolling area width" and "the width of
- * the viewport", and §2 gives a scrolling box of A VIEWPORT OR ELEMENT the same two overflow directions — so
- * one function over `EsBox` is the spec's own generality rather than this file merging two rules.
- * THE COMPARISON RUNS ON THE EXAMPLE, which is the layering core/css/css_length.h states and which
- * core/dom/element_view.c's own overflow test already takes: both operands may be functions of the initial
- * containing block, so which is larger is a question the environment could answer either way, and it is decided
- * on the modelled viewport exactly as CSS 2.1 §10.3.3's slack test is. */
+/* §6.1's CLAMP, which is FOUR ROWS OVER ONE FACT and is written once for EVERY kind of scrolling box — see
+ * element_scrolling.h for the two algorithms that state those rows and for why the operands are `double`.
+ * IT IS NOT A FUNCTION OF `EsBox` any more, and that is what makes the claim above literally true rather than
+ * nearly so: core/frame/viewport.c's §4 scroll() reaches its clamp with no `EsBox` in hand and used to write
+ * the rightward/downward row again, guarded by an assert that the viewport's scrolling area equalled the
+ * viewport. The assert was the two-sided half and it fired the day §2's viewport row was built, so the rows
+ * moved to the ONE signature both callers can reach and the second copy went with it. */
 static double es_clamp(const EsBox *b, int axis, double v)
 {
-    double slack = b->area[axis].px - b->extent[axis].px;
+    return element_scrolling_clamp_position(v, b->area[axis].px, b->extent[axis].px, b->ending_at_hi[axis]);
+}
+
+double element_scrolling_clamp_position(double v, double area_extent, double box_extent,
+                                        bool ending_edge_at_higher_coordinate)
+{
+    double slack = area_extent - box_extent;
 
     DCHECK(slack >= 0.0,
            "CSSOM VIEW §2's scrolling area came out SMALLER than the box it belongs to, so §6.1's clamp has an "
            "empty range. §2's table takes the ending edge as an extreme OVER the beginning edge's own box, so "
            "the area contains that box on both axes by construction");
-    if (b->ending_at_hi[axis]) return fmax(0.0, fmin(v, slack));
+    if (ending_edge_at_higher_coordinate) return fmax(0.0, fmin(v, slack));
     return fmin(0.0, fmax(v, -slack));
 }
 
@@ -182,10 +182,11 @@ static bool es_perform_scroll(const EsBox *b, const double position[2], const ch
        what keeps that derivation true. */
     if (position[ES_X] == b->cur[ES_X] && position[ES_Y] == b->cur[ES_Y]) return true;
     if (b->el == NULL) {
-        /* §4's `scroll()` on the viewport, as the INTERNAL algorithm (§2 Terminology) — it re-runs the same
-           clamp over the same two operands and asserts, at the step that decides, that the result is the
-           position the viewport already has. Reaching this line therefore means the viewport's scrolling area
-           has stopped being the initial containing block, and that assert is where it says so. */
+        /* §4's `scroll()` on the viewport, as the INTERNAL algorithm (§2 Terminology) — it re-runs the SAME
+           clamp (`element_scrolling_clamp_position` above) over the same three operands, so the two algorithms
+           cannot disagree about where a request lands, and asserts at its step 10 that the result is the
+           position the viewport already has. Reaching this line means the clamped position is NOT that one, so
+           that assert is the one that fires and §3.1's perform a scroll is what it names. */
         viewport_scroll(b->dctx, position[ES_X], position[ES_Y]);
         return true;
     }
@@ -463,12 +464,13 @@ bool element_scrolling_box_can_move(JSContext *ctx)
            "CSSOM VIEW §3.1's perform-a-scroll capability was asked without a realm — the viewport half is a "
            "fact about the viewport THIS realm's document is presented in, and core/frame/viewport.h answers "
            "for the realm it is passed and never for a remembered one");
-    /* THE VIEWPORT HALF, derived from §4's clamp's own operands. `viewport_scroll` clamps a request to
-       max(0, min(x, area - viewport)) on each axis, so the clamp can land anywhere but the origin exactly
-       when the scrolling area is larger than the viewport. `viewport_exists` is not asked here: where there is
-       no viewport, core/frame/viewport.h answers both extents from the same modelled geometry and the
-       comparison is false, which is the right answer — a document no navigable is presenting has no box for
-       §3.1 to move. */
+    /* THE VIEWPORT HALF, derived from §4's clamp's own operands — see element_scrolling.h for why it needs no
+       overflow direction of its own: each of §4's steps 7 and 8 has two arms and BOTH of them collapse onto the
+       origin exactly when the slack is zero, so "the clamp can land somewhere else" is the one comparison
+       below whichever arm the document's principal writing mode selects. `viewport_exists` is not asked here:
+       where there is no viewport, core/frame/viewport.h answers both extents from the same modelled geometry
+       and the comparison is false, which is the right answer — a document no navigable is presenting has no box
+       for §3.1 to move. */
     if (viewport_scrolling_area_width(ctx)  > viewport_width(ctx))  return true;
     if (viewport_scrolling_area_height(ctx) > viewport_height(ctx)) return true;
     /* THE ELEMENT HALF, derived from the crash in `es_perform_scroll` above: an element that reached a real

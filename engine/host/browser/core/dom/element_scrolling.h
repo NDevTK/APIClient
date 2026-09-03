@@ -25,9 +25,14 @@
  * return `void`, and their caller answers the page with a RESOLVED promise — which is honest for exactly one
  * reason: every path through them either performs no scroll at all, or CRASHES. §3.1 "Scrolling"'s perform a
  * scroll is what returns a promise that settles later, and there is exactly one route to it for an element in
- * this engine and it is the DFAIL below. The viewport's route runs for real and lands where it already is
- * (core/frame/viewport.h derives the viewport's scrolling area as the initial containing block, so it has one
- * valid scroll position), so its promise is resolved when it is created. `scroll a target into view`'s own last
+ * this engine and it is the DFAIL below. The viewport's route runs for real and CRASHES the same way: §4's
+ * scroll() step 10 is a two-sided assert that the clamped position is the one the viewport already has, and
+ * with §2's viewport row built that clamp CAN land elsewhere, so the viewport's route is now the second of the
+ * two crashes rather than the no-op it used to be. WHAT STOOD HERE said it LANDS WHERE IT ALREADY IS, because
+ * core/frame/viewport.h derived the viewport's scrolling area as the initial containing block and an area equal
+ * to its box has one valid position; the diff that built §2's viewport row retired that premise. (Retired prose
+ * is restated in CAPITALS and never in quotation marks — a quoted sentence beside a section number is a SPEC
+ * quotation, and citegen.mjs reads it as one.) `scroll a target into view`'s own last
  * step — "resolve scrollPromise when all Promises in ancestorPromises have settled" — is therefore a resolved
  * promise over a set of resolved promises. The day an element can hold a scroll position, this file grows a
  * promise-returning shape and its callers stop minting one; the crash is what makes that a change nobody can
@@ -71,6 +76,30 @@ typedef enum {
 extern const char *const SCROLL_LOGICAL_POSITIONS[];
 ScrollLogicalPosition element_scrolling_logical_position(const char *keyword);
 
+/* §6.1's CLAMP, WHICH IS ALSO §4's — the four rows that TWO algorithms state over ONE fact, written once.
+   `v` is the requested position on this axis; `area_extent` is CSSOM VIEW §2 "Terminology"'s SCROLLING AREA
+   extent on it; `box_extent` is the scrolling box's own (an element's padding edge, a viewport's initial
+   containing block); and `ending_edge_at_higher_coordinate` is §2's OVERFLOW DIRECTION for that axis, which is
+   core/layout/scrolling_area.h's one derivation and never a second one — a second would be free to disagree
+   about `direction: rtl` in exactly the document where it matters.
+
+   IT IS EXPORTED BECAUSE §6.1 IS NOT ITS ONLY READER, and that is the SPEC's own generality rather than this
+   component merging two rules. §6.1's scroll an element to x,y states it over an element's box — "If box has
+   rightward overflow direction / Let x be max(0, min(x, element scrolling area width - element padding edge
+   width)). If box has leftward overflow direction / Let x be min(0, max(x, element padding edge width - element
+   scrolling area width))" — and CSSOM VIEW §4 "Extensions to the Window Interface"' scroll() steps 7 and 8
+   state the same two switches over the VIEWPORT's box: "Let x be max(0, min(x, viewport scrolling area width -
+   viewport width))" against "Let x be min(0, max(x, viewport width - viewport scrolling area width))". §2 gives
+   a scrolling box of A VIEWPORT OR ELEMENT the same two overflow directions, so those are one rule with two
+   statements of it, and core/frame/viewport.c reads this rather than writing the rows again.
+
+   THE ARITHMETIC RUNS ON THE EXAMPLE, which is why every operand is a `double` and not a `CssPx`: both extents
+   may be functions of the initial containing block (core/css/css_length.h), so which is larger is a question
+   the environment could answer either way, and it is decided on the modelled viewport exactly as CSS 2.1
+   §10.3.3 "Computing widths and margins"' slack test is. */
+double element_scrolling_clamp_position(double v, double area_extent, double box_extent,
+                                        bool ending_edge_at_higher_coordinate);
+
 /* §6.1's "To SCROLL AN ELEMENT (or pseudo-element) element to x,y optionally with a scroll behavior behavior".
    `x` and `y` are the requested position in CSS pixels, before §6.1's own clamp. `behavior` is §4's
    ScrollBehavior keyword the caller's dictionary carried; it is consumed by §3.1's perform a scroll.
@@ -106,9 +135,12 @@ void element_scrolling_scroll_target_into_view(lxb_dom_element_t *target, const 
  * WHY IT IS NOT `realm_awaits(ctx, "scrollTo", …)`, WHICH IS WHAT THOSE READERS ASKED. A [[HasProperty]] on the
  * global answers whether a MEMBER IS INSTALLED, and no member is this capability — the two are not even
  * correlated. `Element.prototype.scrollTo` IS installed in this build (core/dom/element_view.c) and moves
- * nothing; CSSOM VIEW §4's `scroll`/`scrollTo`/`scrollBy` on the Window would move nothing either, because
- * their whole body is §4's argument questions and a call to `viewport_scroll`, whose clamp lands on the
- * position the viewport already has. So the name test was neither necessary nor sufficient, and its failure was
+ * nothing; CSSOM VIEW §4's `scroll`/`scrollTo`/`scrollBy` on the Window move nothing either, because their
+ * whole body is §4's argument questions and a call to `viewport_scroll`, which cannot MOVE a viewport at all —
+ * its steps 12-13 are unwritten and its step 10 crashes rather than pretending. (That clause used to read
+ * "whose clamp lands on the position the viewport already has", which was the same conclusion resting on the
+ * scrolling area being the initial containing block; the area is §2's real extreme now, so the reason is the
+ * missing §3.1 and no longer the collapsed clamp.) So the name test was neither necessary nor sufficient, and its failure was
  * PRE-LOADED rather than latent: installing §4's three members satisfies it, so the readers would have fired
  * announcing a capability that had not arrived — a probe that reports a capability as PRESENT is worse than no
  * probe, because the next reader builds on it. core/timing/hr_time.c records the identical defect over
@@ -117,11 +149,15 @@ void element_scrolling_scroll_target_into_view(lxb_dom_element_t *target, const 
  * is the wrong instrument for it by construction — core/realm.h says so at the mechanism.
  *
  * THE ANSWER IS DERIVED ON BOTH HALVES AND NEITHER HALF IS A STORED FLAG.
- *   THE VIEWPORT half is derived LIVE, from the clamp's own two operands: §4's `scroll()` clamps a request into
- *   §2's scrolling area of the viewport, which core/frame/viewport.h derives as CSS 2.1 §10.1's initial
- *   containing block — and the ICB IS the viewport, so the clamp has nowhere to land but the position the
- *   viewport already has. The comparison below reads those same two functions, so the day a layout extends the
- *   area past the ICB this answers true with nobody having to remember it.
+ *   THE VIEWPORT half is derived LIVE, from the clamp's own two operands: §4's `scroll()` steps 7 and 8 clamp a
+ *   request into §2's scrolling area of the viewport, and whichever of each step's two arms the OVERFLOW
+ *   DIRECTION selects, the range the clamp has to land in is empty exactly when that area equals the viewport —
+ *   max(0, min(v, slack)) and min(0, max(v, -slack)) are both the origin at slack 0 and both reach past it at
+ *   any larger slack. So the comparison below is the direction-independent half of the clamp and needs no
+ *   direction of its own. It reads the clamp's own two functions, so a layout that extends the area past the
+ *   initial containing block makes this answer true with nobody having to remember it — which is what happened:
+ *   this used to argue that THE ICB IS THE VIEWPORT, SO THE CLAMP HAS NOWHERE TO LAND BUT THE POSITION THE
+ *   VIEWPORT ALREADY HAS, and §2's viewport row retired that premise.
  *   THE ELEMENT half is derived FROM THE CRASH. §6.1's perform-a-scroll step in element_scrolling.c is the one
  *   site for "an element cannot hold a scroll position" and it DFAILs rather than moving one, so no element in
  *   this engine has ever been anywhere but the origin core/dom/element_view.c's `scrollTop` getter step 8

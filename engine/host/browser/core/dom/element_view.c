@@ -440,20 +440,25 @@ static void ev_scroll_the_element_or_terminate(const EvTarget *t, double x, doub
     element_scrolling_scroll_element(lxb_dom_interface_element(t->node), x, y, behavior);
 }
 
-/* THE SETTER — the same algorithm, and it RUNS rather than dropping the write. What makes the write a no-op is
-   §4's scroll() clamping the requested position into a scrolling area that is exactly the viewport, which is
-   the spec deciding and not this engine ignoring; viewport_scroll asserts it at the step that decides. */
+/* THE SETTER — the same algorithm, and it RUNS rather than dropping the write. What decides the write is §4's
+   scroll() clamping the requested position into §2's scrolling area of the viewport, which is the spec
+   deciding and not this engine ignoring; viewport_scroll asserts at the step that decides. THAT USED TO SAY THE
+   AREA IS EXACTLY THE VIEWPORT, which was true while the area was the initial containing block and is not now —
+   the clamp can land somewhere else, and where it does §4's step 10 crashes naming §3.1's perform a scroll
+   rather than pretending the write did nothing. */
 static JSValue js_ev_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
     bool vertical = (magic == EV_SCROLL_TOP);
-    /* UNKNOWN EXTERNAL INPUT REQUESTING A SCROLL POSITION IS NOT A FORK, and it is not read either. §4's
-       scroll() clamps the request to max(0, min(x, scrolling area - viewport)), and with the scrolling area
-       equal to the viewport that is the origin for EVERY value of the domain — so the algorithm's whole
-       observable result (the viewport stays put, no scroll is performed, no scroll event is queued) is the same
-       for the example as for every other value this could take, and there is no arm to explore. What the clamp
-       would produce is the position the viewport already has, and that is what is passed on. viewport_scroll's
-       own assert is what keeps that true: the day the clamp can land somewhere else, this value MATTERS and
-       this branch has to fork. */
+    /* UNKNOWN EXTERNAL INPUT REQUESTING A SCROLL POSITION IS NOT A FORK, and it is not read either — for the
+       reason the ELEMENT arm below states and no longer for the one that used to stand here. WHAT STOOD HERE
+       argued that §4's clamp LANDS EVERY VALUE OF THE DOMAIN ON THE POSITION THE VIEWPORT ALREADY HAS, which
+       held while the scrolling area equalled the viewport; §2's viewport row retired it, and a document taller
+       than its viewport now has a domain whose members clamp to DIFFERENT positions. The reason the arm is
+       still not explored is that §4's step 10 CRASHES for any of them (§3.1's perform a scroll is unwritten),
+       so there is nothing on the other side of the fork to run — the algorithm crashes rather than picking,
+       exactly as §6.1's does for an element. THE DIFF THAT WRITES §3.1 OWES THIS SITE A FORK: the value then
+       decides an observable position, and passing the current one in its place would be this engine picking an
+       arm. */
     bool unknown = concolic_is(val);
     EvTarget t;
     double v = 0.0;
