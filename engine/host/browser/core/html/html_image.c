@@ -1067,6 +1067,26 @@ static JSValue js_img_current_src(JSContext *ctx, JSValueConst this_val, int mag
  * the width and height are set only WHEN GIVEN: `new Image()` produces an element with no `width` attribute at
  * all, where a defaulted 0 would put `width="0"` in the serialized markup.
  *
+ * STEPS 3 AND 4 ARE "IF GIVEN", AND `argc` DOES NOT ANSWER THAT. §4.8.3's IDL is
+ * `LegacyFactoryFunction=Image(optional unsigned long width, optional unsigned long height)` — both positions
+ * OPTIONAL and neither declared with a default — so Web IDL §3.6 "Overload resolution algorithm" step 15.4.2
+ * ("Otherwise, append to values the special value “missing”") is the arm a page that passes `undefined` there
+ * takes, exactly as step 16.2 is the arm for a page that stops short. `new Image()`, `new Image(undefined)` and
+ * `new Image(undefined, undefined)` are THE SAME CALL and none of them sets an attribute.
+ *
+ * THIS FILE READ THE COUNT AND SO GOT ALL THREE WRONG. `argc >= 1` asks how far the page REACHED, while the
+ * standard is asking which of the two kinds of entry §3.6 step 9 puts in `values` sits at that position — and
+ * the count says "given" for exactly the call the standard says is not. Because §3.6 step 15.4 PLACES rather
+ * than converts, the slot still held the raw `undefined` — no `unsigned long` conversion ever ran over it — so
+ * DOM §4.9 "Interface Element"'s set an attribute value stringified it and `new Image(undefined).outerHTML`
+ * was `<img width="undefined">` where `new Image().outerHTML` is `<img>`. The wrong instrument is named here
+ * rather than merely removed, because a reader who re-derives it will reach for it again.
+ *
+ * WHAT ASKS IT NOW is core/idl_args.h's idl_arg_given, which is that rule as one named question and covers
+ * both of §3.6's arms. NO idl_arg_default FOLLOWS THE DECLARATION BELOW, and that is the declaration matching
+ * the IDL rather than an omission: §4.8.3 writes no `= …` at either position, so declaring one would make
+ * every call give a width — the value the declaration invented — and steps 3 and 4 would never be skipped.
+ *
  * DOM §4.9 "Interface Element"'s CREATE AN ELEMENT rather than §4.5 "Interface Document"'s createElement is
  * also what makes step 2 run no page code — there is no custom element definition for `img` to look up, and
  * the internal creation is the half that has none. */
@@ -1094,8 +1114,8 @@ static JSValue js_image_factory(JSContext *ctx, JSValueConst this_val, int argc,
        passes an argument the page computed, and where that is unknown external input the attribute must keep
        its provenance rather than be stamped with whatever number a coercion invented. element_attr_set_value
        is the accessor that carries the whole triple into §@S's (element, name) shadow. */
-    if (argc >= 1) element_attr_set_value(ctx, img, "width", argv[0]);
-    if (argc >= 2) element_attr_set_value(ctx, img, "height", argv[1]);
+    if (idl_arg_given(argc, argv, 0)) element_attr_set_value(ctx, img, "width", argv[0]);
+    if (idl_arg_given(argc, argv, 1)) element_attr_set_value(ctx, img, "height", argv[1]);
     return img;                                                        /* step 5 */
 }
 
@@ -1121,7 +1141,11 @@ void html_image_declare(JSContext *ctx)
     g_id_set_dimension[1] = idl_setter_id(ctx, IDL_UNSIGNED_LONG, false, js_img_dimension_set, 1);
     g_id_factory = idl_method_id(ctx, FACTORY_ARGS, 2, js_image_factory, 0);
     /* `Image(optional unsigned long width, optional unsigned long height)` — BOTH optional, which is what
-       makes the function object's `length` 0 (Web IDL §3.7.2: "the length of the shortest argument list"). */
+       makes the function object's `length` 0 (Web IDL §3.7.2 "Legacy factory functions": "the length of the
+       shortest argument list"). NO idl_arg_default FOLLOWS, and that is the declaration matching the IDL
+       rather than an omission: §4.8.3 writes no `= …` at either position, so Web IDL §3.6 "Overload
+       resolution algorithm" step 15.4.2's "missing" is the arm an omitted argument takes and js_image_factory
+       reads it through idl_arg_given. Declaring a default would make every call give a width. */
     idl_optional_from(0);
     g_task_stepid = JS_RegisterStepDef(rt, &img_task_def);
     g_ready = 1;

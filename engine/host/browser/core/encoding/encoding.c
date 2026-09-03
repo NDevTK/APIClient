@@ -809,7 +809,12 @@ JSValue enc_decoder_decode(JSContext *ctx, EncDecoder *d, const uint8_t *p, size
     return r;
 }
 
-/* §7.1's decode(): the arguments, then the operation above. */
+/* §7.2's decode(): the arguments, then the operation above. Step 3 is the one "IF GIVEN" in this component —
+   "If input is given, then push a copy of input to this's I/O queue" — and `input` is the one position here
+   declared optional with NO default, so Web IDL §3.6 "Overload resolution algorithm" step 15.4.2's "missing"
+   is reachable at it and `decode()` and `decode(undefined)` are the same call. idl_arg_given is that question;
+   the `argc`-and-`JS_IsUndefined` pair that stood here restated §3.6's ENCODING at the site instead of asking
+   it, which is the copy that drifts the day "missing" stops being an `undefined` in the vector. */
 static JSValue js_decoder_decode(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     EncDecoder *d = JS_GetOpaque(this_val, g_dec_class);
@@ -820,9 +825,15 @@ static JSValue js_decoder_decode(JSContext *ctx, JSValueConst this_val, int argc
 
     (void)magic;
     if (!d) return JS_ThrowTypeError(ctx, "not a TextDecoder");
-    if (argc > 0 && !JS_IsUndefined(argv[0]) && enc_buffer_source(ctx, argv[0], &p, &len, &buf) < 0)
+    /* Position 1 is a DICTIONARY, and the machine converts one for every call whatever the page passed, so
+       this member's count is its full declared width and `options` is always there to read. */
+    DCHECK(argc == 2,
+           "§7.2's decode declares two positions and the second is a dictionary, which Web IDL §3.2.17 "
+           "converts for every call however few arguments the page passed — so the machine hands this body "
+           "exactly two, and a different count means encoding_init's argument list changed under it");
+    if (idl_arg_given(argc, argv, 0) && enc_buffer_source(ctx, argv[0], &p, &len, &buf) < 0)
         return JS_EXCEPTION;
-    stream = idl_dict_bool(ctx, argc > 1 ? argv[1] : JS_UNDEFINED, "stream");
+    stream = idl_dict_bool(ctx, argv[1], "stream");
     r = enc_decoder_decode(ctx, d, p, len, stream);
     JS_FreeValue(ctx, buf);
     return r;
@@ -1043,15 +1054,21 @@ bool encoding_is_scalar_value_string(const char *p, size_t n)
     return r == 0;
 }
 
-/* §7.1's constructor. `label` resolving to `replacement` is a RangeError as much as an unknown label is — the
+/* §7.2's constructor. `label` resolving to `replacement` is a RangeError as much as an unknown label is — the
    replacement encoding exists to make a hostile label decode to one error rather than to something scriptable,
-   and the standard refuses to let a page name it. */
-/* WHERE THIS MACHINE RESTS. §7.1's constructor is five steps and none of them can run the page's code — the
+   and the standard refuses to let a page name it.
+   IT IS §7.2 "Interface TextDecoder" AND NOT §7.1, which is "Interface mixin TextDecoderCommon" — the mixin
+   holds the associated state and the `encoding`/`fatal`/`ignoreBOM` getters and declares no constructor at
+   all. This file's own later statements of the same fact already say §7.2 (the prototype pair at the end of
+   this file, and the detached-buffer paragraph above), so the two numbers stood side by side in one component;
+   §7.1 is a LIVE section about something else, which is the failure mode a wrong number has and a missing one
+   does not. The sites still reading §7.1 for the decoder's `decode()` are named in this diff's report. */
+/* WHERE THIS MACHINE RESTS. §7.2's constructor is five steps and none of them can run the page's code — the
    declaration has converted `label` to a DOMString and the options dictionary to booleans before this is
    entered — so the machine has one stage and never returns to it. */
 #define DEC_CTOR_STAGES(X) \
     X(DEC_CTOR_BUILD = IDL_STEP_FIRST, \
-      "Encoding §7.1 new TextDecoder(label, options) steps 1-5 (get an encoding from label, the RangeError a " \
+      "Encoding §7.2 new TextDecoder(label, options) steps 1-5 (get an encoding from label, the RangeError a " \
       "failure or `replacement` is, then this's encoding, error mode and ignore BOM)")
 enum { DEC_CTOR_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const DEC_CTOR_STEPS[] = { DEC_CTOR_STAGES(JS_STEP_STAGE_LABEL) NULL };
@@ -1063,24 +1080,35 @@ static void js_dec_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)
 static int js_dec_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                             JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
-    JSValueConst options = argc > 1 ? argv[1] : JS_UNDEFINED;
-    const char *label = "utf-8";
-    size_t label_len = 5;
+    JSValueConst options;
+    const char *label;
+    size_t label_len;
     int id;
     EncDecoder *d;
     JSValue obj;
 
     (void)st; (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
-    DCHECK(hdr->stage == DEC_CTOR_BUILD, "the TextDecoder constructor resumed at a stage §7.1 does not have");
+    DCHECK(hdr->stage == DEC_CTOR_BUILD, "the TextDecoder constructor resumed at a stage §7.2 does not have");
+    /* §7.2 declares `constructor(optional DOMString label = "utf-8", optional TextDecoderOptions options = {})`
+       — BOTH positions carry a declared default, so Web IDL §3.6 "Overload resolution algorithm" steps 15.4.1
+       and 16.1 fill both for every call and §3.6 never appends "missing" at either. The `"utf-8"` this body
+       used to substitute for itself was the IDL's OWN declaration re-derived in a consumer, which is what
+       core/idl_args.h's idl_arg_default exists to end: with only "absent" to say, every member declared that
+       way re-derives its default again with nothing keeping the copies equal. The declaration states it now —
+       see encoding_init — and the count is fixed at the member's full width for the same reason. */
+    DCHECK(argc == 2,
+           "§7.2's TextDecoder constructor declares two positions, one with a `= \"utf-8\"` default and one a "
+           "dictionary, so Web IDL §3.6 steps 15.4.1 and 16.1 fill both for every call and this body is handed "
+           "exactly two arguments — a different count means encoding_init lost its idl_arg_default or its "
+           "argument list, and the label read below would be off the end");
     if (JS_IsUndefined(hdr->this_val))
         return JS_ThrowTypeError(ctx, "constructor TextDecoder requires 'new'"), -1;
-    if (argc > 0 && !JS_IsUndefined(argv[0])) {
-        label = JS_ToCStringLen(ctx, &label_len, argv[0]);
-        if (!label) return -1;
-    }
+    options = argv[1];
+    label = JS_ToCStringLen(ctx, &label_len, argv[0]);
+    if (!label) return -1;
     id = encoding_get(label, label_len);
-    if (argc > 0 && !JS_IsUndefined(argv[0])) JS_FreeCString(ctx, label);
+    JS_FreeCString(ctx, label);
     if (id < 0 || id == ENC_REPLACEMENT)
         return JS_ThrowRangeError(ctx, "the label does not name a usable encoding"), -1;
 
@@ -1100,7 +1128,7 @@ static int js_dec_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
 
 static const IdlStepDecl js_dec_ctor_decl = {
     js_dec_ctor_step, sizeof(JSDecoderCtorState), js_dec_ctor_visit, NULL,
-    "Encoding §7.1 new TextDecoder(label, options)", DEC_CTOR_STEPS
+    "Encoding §7.2 new TextDecoder(label, options)", DEC_CTOR_STEPS
 };
 
 /* ---- §7.4 Interface TextEncoder ---------------------------------------------------------------------------
@@ -1127,6 +1155,17 @@ static JSValue js_encoder_encode(JSContext *ctx, JSValueConst this_val, int argc
     (void)magic;
     if (JS_GetOpaque(this_val, g_enc_class) == NULL && !JS_IsObject(this_val))
         return JS_ThrowTypeError(ctx, "not a TextEncoder");
+    /* §7.4's `encode(input)` STEPS HAVE NO "IF GIVEN" IN THEM — step 1 is "Convert input to an I/O queue of
+       scalar values" unconditionally — and the IDL is what makes that total: `optional USVString input = ""`
+       declares a DEFAULT, so Web IDL §3.6 "Overload resolution algorithm" step 15.4.1 (the page reached the
+       position and passed `undefined`) and step 16.1 (it stopped short) both append THAT value and §3.6 never
+       appends "missing" here. The declaration states it — see encoding_init's idl_arg_default — so position 0
+       always holds an IDL value and this body has no absence to test for. */
+    DCHECK(argc == 1,
+           "§7.4's `encode(optional USVString input = \"\")` declares ONE position and declares it with a "
+           "default, so Web IDL §3.6 steps 15.4.1 and 16.1 fill it for every call and the machine hands this "
+           "body exactly one argument — a different count means the declaration in encoding_init lost either "
+           "its argument list or its idl_arg_default, and the reads below would be off the end");
     /* AN UNKNOWN INPUT MAKES THIS AN OPERATOR, and §7.4's IDL is what says so: `[NewObject] Uint8Array
        encode(optional USVString input = "")` — the page OBSERVES the result, so the answer is this operation's
        own derived unknown and never a conversion. The Web IDL declaration passes unknown external input
@@ -1140,7 +1179,7 @@ static JSValue js_encoder_encode(JSContext *ctx, JSValueConst this_val, int argc
        THE EXAMPLE IS THE REAL ENCODER RUN ON THE OPERAND'S OWN EXAMPLE, never a predicted one — §Solver-half's
        rule that the example propagates because the engine RUNS the real op. An operand with no example yields
        a derived unknown with none either, which is honest: this flow has no concrete bytes to show. */
-    if (argc > 0 && concolic_is(argv[0])) {
+    if (concolic_is(argv[0])) {
         JSValue ex = concolic_example(ctx, argv[0]), real = JS_UNDEFINED;
         DCHECK(!concolic_is(ex),
                "a concolic's EXAMPLE is itself unknown — the example is the concrete member of the triple, and "
@@ -1158,10 +1197,15 @@ static JSValue js_encoder_encode(JSContext *ctx, JSValueConst this_val, int argc
         return concolic_builtin_hook(ctx, argv[0], "TextEncoder.encode", real);
     }
     /* The declaration already ran the USVString conversion, so lone surrogates are U+FFFD and this is the
-       string's UTF-8 — which is exactly what §7.4's encode(input) steps say to answer with. */
-    s = argc > 0 && !JS_IsUndefined(argv[0]) ? JS_ToCStringLen(ctx, &len, argv[0]) : NULL;
-    r = JS_NewUint8ArrayCopy(ctx, (const uint8_t *)(s ? s : ""), s ? len : 0);
-    if (s) JS_FreeCString(ctx, s);
+       string's UTF-8 — which is exactly what §7.4's encode(input) steps say to answer with. The `s ? s : ""`
+       that stood here was doing TWO jobs and the second was a swallow: it stood in for the absent argument the
+       declaration now supplies, AND it turned a failed conversion into an empty Uint8Array with the throw
+       still pending. Only the second reader is left, and dropping a pending exception is what §Offensive
+       programming forbids — so the failure propagates. */
+    s = JS_ToCStringLen(ctx, &len, argv[0]);
+    if (!s) return JS_EXCEPTION;
+    r = JS_NewUint8ArrayCopy(ctx, (const uint8_t *)s, len);
+    JS_FreeCString(ctx, s);
     return r;
 }
 
@@ -1408,9 +1452,23 @@ void encoding_init(JSContext *ctx)
     g_id_decode = idl_method_id_dict(ctx, DECODE_ARGS, 2, DECODE_OPTIONS,
                                      (int)(sizeof DECODE_OPTIONS / sizeof DECODE_OPTIONS[0]),
                                      js_decoder_decode, 0);
-    idl_optional_from(0);   /* §7.1: `decode(optional BufferSource input, optional TextDecodeOptions options)` */
+    /* §7.2 "Interface TextDecoder":
+       `USVString decode(optional AllowSharedBufferSource input, optional TextDecodeOptions options = {})`.
+       Position 0 carries NO default, which is what makes §7.2's own step 3 read "If input is given, then push
+       a copy of input to this's I/O queue" — the one arm of this component where Web IDL §3.6 step 15.4.2's
+       "missing" is reachable, and js_decoder_decode is what asks it. Position 1's `= {}` needs no
+       idl_arg_default: a DICTIONARY position is converted for every call whatever the page passed, which is
+       what §3.2.17 makes converting `undefined` to a dictionary produce. */
+    idl_optional_from(0);
     g_id_encode = idl_method_id(ctx, ENCODE_ARGS, 1, js_encoder_encode, 0);
-    idl_optional_from(0);   /* §7.4: `encode(optional USVString input = "")` */
+    /* §7.4 "Interface TextEncoder": `[NewObject] Uint8Array encode(optional USVString input = "")`. THE
+       DEFAULT IS DECLARED, so Web IDL §3.6 step 15.4.1 (`encode(undefined)`) and step 16.1 (`encode()`) both
+       append the empty string and neither reaches 15.4.2's "missing" — which is what makes §7.4's step 1,
+       "Convert input to an I/O queue of scalar values", total. It was omitted here and js_encoder_encode
+       substituted the empty string for itself; the IDL's own declaration re-derived in a consumer is the
+       shape idl_arg_default exists to end. */
+    idl_optional_from(0);
+    idl_arg_default(0, IDL_DEFAULT_STRING, "");
     g_id_encode_into = idl_method_id(ctx, ENCODE_INTO_ARGS, 2, js_encoder_encode_into, 0);
     /* §7.4: `encodeInto(USVString source, [AllowShared] Uint8Array destination)` — Web IDL §3.2.26 Buffer
        source types step 1's T, and the ONE §3.3 attribute that IDL writes. [AllowShared] switches step 3's
@@ -1424,7 +1482,13 @@ void encoding_init(JSContext *ctx)
     g_dec_ctor_stepid = idl_method_id_step(ctx, DEC_CTOR_ARGS, 2, DECODER_OPTIONS,
                                            (int)(sizeof DECODER_OPTIONS / sizeof DECODER_OPTIONS[0]),
                                            &js_dec_ctor_decl, 0);
-    idl_optional_from(0);   /* §7.1: `constructor(optional DOMString label = "utf-8", optional options = {})` */
+    /* §7.2 "Interface TextDecoder":
+       `constructor(optional DOMString label = "utf-8", optional TextDecoderOptions options = {})`. THE LABEL'S
+       DEFAULT IS DECLARED, so Web IDL §3.6 steps 15.4.1 and 16.1 place "utf-8" and js_dec_ctor_step reads a
+       string at position 0 for every call — it used to read `undefined` and substitute the same five bytes
+       itself. `options`'s `= {}` needs no declaration for the reason `decode`'s does not. */
+    idl_optional_from(0);
+    idl_arg_default(0, IDL_DEFAULT_STRING, "utf-8");
     g_enc_ctor_stepid = idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_enc_ctor_decl, 0);
     realm_declare_intrinsic(encoding_install_protos);
 }
