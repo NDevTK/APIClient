@@ -73,10 +73,16 @@
  *                    Beside it, the value a producer DOES answer that an exhaustive construct omits, and the
  *                    producer that never declared what it can answer at all.
  *   DECIDED PLATFORM a receiver whose OWN DECLARATION names a Web IDL type — `new URL(x)`, `await fetch(u)`,
- *                    an unshadowed `document`, the `Event` a callback the platform calls is handed. The
- *                    platform is its producer and idlgen.mjs is its auditor, so it is out of THIS gate's
- *                    subject. Printed in full with the interface that decided it: a decided negative nobody
- *                    can see is the concealment this file exists to report, performed on its own output.
+ *                    an unshadowed `document`, the `Event` a callback the platform calls is handed, the
+ *                    binding a `for … of` over a platform object declares. The platform is its producer and
+ *                    idlgen.mjs is its auditor, so it is out of THIS gate's subject. Printed in full with the
+ *                    interface that decided it: a decided negative nobody can see is the concealment this file
+ *                    exists to report, performed on its own output.
+ *                      AND THE BAND ASKS ONE QUESTION, NOT TWO — see §the TWO QUESTIONS A BASE ANSWERS. WHOSE
+ *                    contract a receiver is on is decided by the construct alone; WHICH interface it is needs
+ *                    the read set as well, and a read set that fits eleven of a subtree's interfaces equally
+ *                    answers the second and not the first. A row whose narrowing stayed open is still decided
+ *                    here and says so on its own line.
  *   DECIDED FOREIGN  a receiver a module OUTSIDE this corpus hands to a callback — the callee is a binding this
  *                    file imported from a BARE specifier, so the party that supplies the record is a package or
  *                    a `node:` builtin. Same sentence as DECIDED PLATFORM with the module system as the
@@ -93,7 +99,9 @@
  *   OFF-INTERFACE    that same object, read for a name the spec does not declare on it AND that no producer in
  *                    the corpus writes either. The interface's member list is the whole member list, so this
  *                    is READ-NO-WRITER landing on a platform object — the one defect the decided negative
- *                    could otherwise have swallowed.
+ *                    could otherwise have swallowed. Where the narrowing stayed open the accusation is made
+ *                    against EVERY candidate in the subtree at once — a name no candidate declares is off the
+ *                    object whichever candidate it turns out to be — and never against the base alone.
  *   AMBIGUOUS        a receiver whose record identity this cannot decide. Counted, never resolved either way.
  *   REFUSED          a construct this scan cannot read. Counted and named with file:line, never guessed past.
  *
@@ -2412,6 +2420,7 @@ function functionScopes(struct, code) {
      one remaining head — `engine/route.mjs`'s `const r = JSON.parse(e.str('qjs_result'))` was told it iterated
      `reads.values()` — which is a wrong answer where the binder now gives none. */
   const iterOf = (name, off) => {
+    identOnly("iterOf", name);
     const RE = new RegExp(`\\bfor\\s*(?:await\\s+)?\\(\\s*(const|let|var)\\s+${name}\\s+of\\s+`, "g");
     const here = binderOf(name, off);
     const hits = new Set();
@@ -2451,6 +2460,7 @@ function functionScopes(struct, code) {
      receivers losing a correct DECIDED FOREIGN and one of them landing in READ-WITH-NO-WRITER over a field
      `webidl2` emits. The offset is the fix; the extent only exposed which caller was already asking wrongly. */
   const pushArgsOf = (name, off) => {
+    identOnly("pushArgsOf", name);
     const RE = new RegExp(`(^|[^\\w$.])${name}\\s*\\.\\s*push\\s*\\(`, "g");
     const here = binderOf(name, off);
     const out = [];
@@ -3852,10 +3862,31 @@ const oneFieldWhy = (shared, unwritten) =>
  * AN IDL RETURN TYPE IS AN UPPER BOUND, WHICH IS WHY THE INTERFACE IS THEN NARROWED. `getElementById` returns
  * `Element?` and the object is an HTMLSelectElement; a strict member diff against Element would report
  * `selectedIndex` as a member the platform does not have, which is a finding manufactured out of the spec being
- * read too literally. So the construct fixes a BASE and the read set picks among that base and its descendants
- * — exactly one, after collapsing a chain to its most general matching member. Here the name set is doing work
- * it is entitled to do, because the construct has already cut the fifteen hundred candidates down to one
- * inheritance subtree.
+ * read too literally. So the construct fixes a BASE and the read set picks among that base and its descendants,
+ * collapsing an inheritance chain to its most general matching member. Here the name set is doing work it is
+ * entitled to do, because the construct has already cut the fifteen hundred candidates down to one inheritance
+ * subtree.
+ *
+ * §THE TWO QUESTIONS A BASE ANSWERS, AND WHY THE NARROWING MAY ONLY DECIDE ONE OF THEM. The pick above
+ * frequently does NOT land on one candidate — `{value, classList}` fits eleven of Element's descendants
+ * equally, because `classList` is Element's own and `value` is declared by every form control separately — and
+ * the refusal to guess between them is right. What was wrong is what the refusal was allowed to take with it.
+ * A base answers TWO questions: WHOSE contract this receiver is on, which the CONSTRUCT decides by itself
+ * (`getElementById` is declared to return `Element?`, so whatever the object is, the platform made it), and
+ * WHICH interface it is, which needs the read set too. §Architecture: "a predicate that answers two questions is
+ * decided by the stricter one, and the cost lands silently on the other". Here the stricter question was WHICH,
+ * one `null` carried both answers away, and the receiver fell through to an anchor decided by NAME COLLISION —
+ * which is the failure the platform arm is asked FIRST to prevent, reached through the arm itself.
+ * MEASURED AT cb454cff, before the split: 72 receivers had a base a construct decided and a narrowing that
+ * refused. SIX of them reached AMBIGUOUS, printed under a reason about an engine emission — a wrong statement
+ * of what was undecided, since which record it is was never open. The other SIXTY-SIX reached the shape anchor,
+ * scored under two of an emission's names, and were printed in NO band at all: not audited, not decided, not
+ * counted — a removal nobody can see, which is the concealment this file exists to report performed on its own
+ * output. None of the 66 scored TWO, so the name-collision anchor is a HAZARD this closes and not a wrong
+ * answer it was measured making; what was measured is the silence.
+ * So the two questions are two predicates over the ONE fact: the base decides the band, and the narrowing
+ * decides only what may be said about members — which keeps them from ever disagreeing, because there is still
+ * exactly one bit underneath.
  *
  * AND A NAME NO CANDIDATE DECLARES IS THE OTHER HALF OF THE DIFF, not a decided negative: the construct says
  * the object is a platform object and the spec says the object has no such member. That is reported, with the
@@ -3975,6 +4006,32 @@ function memberIface(iface, name, kind) {
   memberTypeCache.set(k, out);
   return out;
 }
+/* §valueIteratorType — WHAT A `for … of` OVER A PLATFORM OBJECT BINDS, read off the interface's OWN iteration
+   declaration and off nothing else. Web IDL §2.5.9 Iterable declarations: "If a single type parameter is given,
+   then the interface has a value iterator and provides values of the specified type. If two type parameters are
+   given, then the interface has a pair iterator and provides value pairs with the given types." A pair iterator
+   binds an ARRAY and names no interface, which is the answer given here — and the two set-ish declarations are
+   decided by the same fact one section apart: §3.7.12.2 %Symbol.iterator% makes a setlike's default iterator
+   "the function object that is the value of the values property", its one declared type, while §3.7.11.2
+   %Symbol.iterator% makes a maplike's "the value of the entries property", which is pairs again.
+   AN `async_iterable` IS REFUSED OUTRIGHT. §3.7.10 gives it %Symbol.asyncIterator% and no %Symbol.iterator%, so
+   a plain `for … of` over one reaches nothing at all — and `iterOf` matches `for await (` and `for (` with one
+   regex and hands back no way to tell them apart, so answering either way would be a guess about which
+   construct was written. Under-crediting, which is the direction this file takes everywhere.
+   READ THROUGH `flatten`, because the declaration is INHERITED: RadioNodeList declares no iteration of its own
+   and iterating one yields NodeList's `Node`.
+   THE ANSWER IS AN UPPER BOUND like every other IDL type here — `NodeList` is `iterable<Node>` and the element
+   a popup reads `.value` off is an HTMLInputElement — so it is a BASE, narrowed by the read set at
+   §narrowIdentity exactly as `getElementById`'s `Element?` is, and decided-platform either way. */
+function valueIteratorType(iface) {
+  for (const m of idl.flatten(iface)) {
+    if (m.type === "maplike" || m.type === "async_iterable") return null;
+    if (m.type === "iterable" || m.type === "setlike")
+      return Array.isArray(m.idlType) && m.idlType.length === 1 ? ifaceOfType(m.idlType[0]) : null;
+  }
+  return null;
+}
+
 /* A BARE GLOBAL NAME IS A VALUE, so only Window's ATTRIBUTES put an object there — `document`, `location`,
    `navigator`, `history`. Window's OPERATIONS put function objects there, and `fetch` is not a Response. */
 for (const m of idl.flatten("Window"))
@@ -4091,11 +4148,45 @@ function ifaceOfExpr(text, off, scan, seen) {
   return null;
 }
 
-/* WHAT A BARE NAME'S OWN BINDING SAYS IT IS — its declarations (every write that names it, which must agree),
-   the global, the IDL-typed callback parameter, the local parameter typed by its call sites. Every arm is a construct at the DECLARATION; none of them is a fact
+/* §bindingDecl — WHICH CONSTRUCT DECLARES A BINDING, IN ONE ORDER, ASKED BY BOTH WALKS. Two walks here start
+   from a bare name — `ifaceOfExpr` asking WHICH INTERFACE it is, `originOfExpr` asking WHOSE VALUE it is — and
+   both must first answer the same prior question, which is which construct in the file states what the name
+   holds. That question has ONE answer and it is ECMAScript's, so it is stated once here rather than twice:
+   a second copy of an ordering rule is the shape §AN-AUDITOR-DERIVES-THE-RULE warns about, and the one that
+   drifts is the copy nobody runs against reality.
+   THE ORDER, AND WHY IT IS THIS ORDER. A `const` `for … of` head is taken FIRST because it is the only
+   construct that declares its binding at all and because §14.7.5.7 ForIn/OfBodyEvaluation ( lhs, stmt,
+   iteratorRecord, iterationKind, lhsKind, labelSet [ , iteratorKind ] ) makes a fresh declarative environment
+   per iteration whose `const` binding §9.1.1.1.5 SetMutableBinding ( name, value, strict ) forbids assigning —
+   so a `name = …` the assignment scan attributes to it CANNOT be a write to it and must be another binding's.
+   The WRITES come next, every one of them a declaration of the one identity. A `let`/`var` head is not
+   authoritative in that way and is reached only where the writes said nothing. */
+function bindingDecl(scan, name, off) {
+  const head = scan.iterOf(name, off);
+  if (head && head.konst) return { iter: head };
+  const writes = scan.initOf(name, off);
+  if (writes) return { writes };
+  return head ? { iter: head } : null;
+}
+
+/* WHAT A BARE NAME'S OWN BINDING SAYS IT IS — its declarations (every write that names it, which must agree, and
+   the `for … of` head that is a declaration no write can be), the global, the IDL-typed callback parameter, the
+   local parameter typed by its call sites. Every arm is a construct at the DECLARATION; none of them is a fact
    about the point of use, which is why the caller can fall through to a guard when they all answer nothing. The
    cycle guard is the caller's, because it is the caller that keys it. */
 function identityOfBinding(t, off, scan, s) {
+  const decl = bindingDecl(scan, t, off);
+  /* A `for … of` HEAD DECLARES ITS BINDING AS AN ELEMENT OF WHAT THE HEAD ITERATES, and where that expression
+     is a platform object the ELEMENT TYPE is declared too — by the interface's own iteration declaration, read
+     at §valueIteratorType. `originOfExpr` has read this construct since it was written, to name a foreign
+     array's producer; the interface question is the same construct asked for the other authority, and asking it
+     here is why `for (const inp of document.querySelectorAll(…))` stopped being a binding no arm could see.
+     The head's own offset is used, never the reader's: a name inside the header is bound in the scope that
+     wrote the header. */
+  if (decl && decl.iter) {
+    const on = ifaceOfExpr(decl.iter.text, decl.iter.at, scan, new Set(s));
+    return on && !on.startsWith(CTOR) ? valueIteratorType(on) : null;
+  }
   /* EVERY DECLARATION OF THE BINDING MUST ANSWER, AND ALL OF THEM MUST AGREE — the standard the parameter arm
      below already applies to a call's arguments, asked here of a binding's writes. A `null`/`undefined` write is
      the nullable half of the same declaration and names no interface, so it is skipped rather than counted as a
@@ -4103,10 +4194,9 @@ function identityOfBinding(t, off, scan, s) {
      under-crediting direction this file takes everywhere. EACH WRITE GETS ITS OWN COPY OF THE CYCLE GUARD, for
      the reason §localParamSlot records: two writes of the SAME identifier are not a cycle, and a shared set
      would read the second as one and answer the whole question `null`. */
-  const decls = scan.initOf(t, off);
-  if (decls) {
+  if (decl) {
     let one = null;
-    for (const d of decls) {
+    for (const d of decl.writes) {
       if (!d || d === "null" || d === "undefined") continue;
       const got = ifaceOfExpr(d, off, scan, new Set(s));
       if (!got || (one !== null && one !== got)) return null;
@@ -4261,6 +4351,21 @@ function originHead(t) {
   }
   return s;
 }
+/* §identOnly — THE NAME THESE ASK ABOUT IS A BARE IDENTIFIER, AND UNTIL THERE WERE TWO CALLERS NOTHING SAID SO.
+   `iterOf` and `pushArgsOf` INTERPOLATE the name into a RegExp, so a receiver text this file normalizes
+   perfectly well — `ordSeries[i-1]` — turns `[i-1]` into a CHARACTER CLASS and `new RegExp` throws "Range out
+   of order in character class" from inside the helper, naming neither the caller nor the contract. The call
+   sites each guard with `/^[A-Za-z_$][\w$]*$/` and are correct; what was missing was the statement at the
+   ORIGIN, which is what the next caller would otherwise discover the expensive way. It was discovered that way
+   once already, while §bindingDecl was being measured: one probe asked these about a RECEIVER instead of a
+   BINDING and the whole gate aborted three frames from the mistake with a message about regular expressions. */
+function identOnly(fn, name) {
+  if (!/^[A-Za-z_$][\w$]*$/.test(name))
+    throw new Error(`${fn}: \`${name}\` is not a bare identifier. This builds a RegExp out of the name, so it ` +
+                    `may only ever be asked about a BINDING — a receiver EXPRESSION reaching it is a caller ` +
+                    `that skipped the identifier test its neighbours make.`);
+}
+
 /* Is `at` at bracket depth zero in `s`? A `||` inside a call's arguments is not this expression's alternative. */
 function splitTopText(s, at) {
   let d = 0;
@@ -4399,27 +4504,16 @@ function originOfExpr(t0, off, scan, st, mode) {
   if (/^[A-Za-z_$][\w$]*$/.test(t)) {
     const spec = scan.importOf.get(t);
     if (spec && !/^[./]/.test(spec)) return bytes ? null : originName(spec);
-    /* A `for (const … of …)` HEAD IS ASKED BEFORE THE ASSIGNMENT SCAN, and the reason is ECMAScript rather
-     * than preference. The head DECLARES the binding and nothing else can: §14.7.5.7 ForIn/OfBodyEvaluation
-     * ( lhs, stmt, iteratorRecord, iterationKind, lhsKind, labelSet [ , iteratorKind ] ) asserts `lhsKind is
-     * lexical-binding` and then does "Let iterationEnv be NewDeclarativeEnvironment ( oldEnv )" before
-     * instantiating the ForDeclaration in it — a fresh binding per iteration. `const` makes that binding
-     * immutable (§9.1.1.1.3 CreateImmutableBinding ( name, strict )), and §9.1.1.1.5 SetMutableBinding ( name,
-     * value, strict ) says "If the binding is an immutable binding, a TypeError is thrown if strict is true".
-     * So a `name = …` the assignment scan attributes to a `const` loop variable CANNOT be a write to
-     * it: it is another binding's. §the LEXICAL EXTENT now files each head under its own loop, so `inits` reads
-     * writes inside THAT extent rather than everywhere in the enclosing function — which removes the merge this
-     * paragraph was written against and leaves the ORDER standing on its own reason, the head being the only
-     * construct that declares the binding at all.
-     * Measured before that fix: `for (const n of declarations)` in one module read as declared by `n = name` and
-     * `n = dictInheritanceOf.get(n)` — the `for (let n = name; …)` of a nested arrow two helpers down. Taking
-     * `inits` first therefore did not leave the binding undecided, it answered it with another binding's
-     * declarations, which is worse. `let`/`var` heads are NOT authoritative in the same way and fall through
-     * to the writes, where the two must agree like any other pair of declarations. */
-    const head = scan.iterOf(t, off);
-    if (head && head.konst) return elem || bytes ? null : originOfExpr(head.text, head.at, scan, st, "elem");
-    const decls = scan.initOf(t, off);
-    if (decls) {
+    /* WHICH CONSTRUCT DECLARES THE BINDING IS §bindingDecl'S QUESTION, and the order it answers in — a `const`
+       `for … of` head, then the writes, then a `let`/`var` head — is ECMAScript's rather than this walk's, which
+       is why it is stated once there and read twice rather than spelled here and there.
+       A `for … of` BINDING IS AN ELEMENT of what the header iterates, so the VALUE question about the binding is
+       the ELEMENT question about the header, and there is no arm for the elements OF a loop variable. */
+    const decl = bindingDecl(scan, t, off);
+    if (decl && decl.iter)
+      return elem || bytes ? null : originOfExpr(decl.iter.text, decl.iter.at, scan, st, "elem");
+    if (decl) {
+      const decls = decl.writes;
       const answers = decls.filter((d) => d && d !== "null" && d !== "undefined")
                            .map((d) => originOfExpr(d, off, scan, st, mode));
       const one = agreeOrigin(answers);
@@ -4434,11 +4528,6 @@ function originOfExpr(t0, off, scan, st, mode) {
       }
       return null;
     }
-    /* A `for … of` BINDING IS AN ELEMENT of what the header iterates — so the VALUE question about the binding
-       is the ELEMENT question about the header, and there is no arm for the elements OF a loop variable. A
-       `const` head was already taken above; this is the `let`/`var` one, reached only where the writes said
-       nothing. */
-    if (head) return elem || bytes ? null : originOfExpr(head.text, head.at, scan, st, "elem");
     const ps = scan.paramSlot(t, off);
     if (ps && mode === "value" && ps.param === 0) {
       const cm2 = memberSplit(ps.callee);
@@ -4490,10 +4579,20 @@ function literalProp(lit, name) {
   return null;
 }
 
-/* WHICH INTERFACE IN `base`'s SUBTREE THE READ SET FITS. An IDL return type is an upper bound — `getElementById`
-   answers `Element?` and the object is an HTMLSelectElement — so the construct fixes the subtree and the names
-   pick within it: the candidate covering the MOST of them wins, an inheritance chain collapses to its most
-   general matching member, and a tie between unrelated candidates is undecided like every other tie here. */
+/* WHICH INTERFACE IN `base`'s SUBTREE THE READ SET FITS, AND WHAT IS STILL TRUE WHEN IT FITS SEVERAL. An IDL
+   return type is an upper bound — `getElementById` answers `Element?` and the object is an HTMLSelectElement —
+   so the construct fixes the subtree and the names pick within it: the candidate covering the MOST of them
+   wins, and an inheritance chain collapses to its most general matching member.
+   IT NEVER ANSWERS "NOTHING", because there are two questions here and only one of them can go unanswered —
+   §THE TWO QUESTIONS A BASE ANSWERS. `narrowed` is false where the read set fits several unrelated candidates,
+   and `iface` is then the BASE the construct named, which is the whole of the answer to WHOSE record this is.
+   `fit` is how many candidates tied, so the row can say on its own line how open it stayed.
+   AND THE MEMBER DIFF FOLLOWS THE SAME SPLIT. Narrowed, a name is off the interface when that one interface
+   does not declare it. Open, it is off the object only when NO CANDIDATE IN THE SUBTREE declares it — which is
+   sound whichever candidate the object turns out to be, and is the weakest test available, which is the
+   direction this file takes everywhere. Accusing against the base alone would report `value` on every Element
+   the popup reads, which is the finding manufactured out of the spec being read too literally that the
+   paragraph above exists to stop. */
 function narrowIdentity(base, names) {
   const cands = base.startsWith(CTOR) ? [base] : subtreeOf(base);
   let bestN = -1;
@@ -4507,18 +4606,18 @@ function narrowIdentity(base, names) {
   const hits = cands.filter((i) => { const ms = identityMembers(i); if (!ms) return false; let h = 0; for (const n of names) if (ms.has(n)) h++; return h === bestN; });
   const set = new Set(hits);
   const general = hits.filter((h) => { for (let x = idl.inheritanceOf.get(h); x; x = idl.inheritanceOf.get(x)) if (set.has(x)) return false; return true; });
-  if (general.length !== 1) return null;
-  const iface = general[0];
-  const ms = identityMembers(iface);
+  const only = general.length === 1 ? general[0] : null;
   /* AN EXPANDO IS NOT AN OFF-INTERFACE READ, and telling them apart is the difference between this category and
      a listing of every property the extension installs on a page. `window.apiclientsink` is not in any IDL and
      never will be — it is the PoC's own fire marker, written by intercept.js on the line above — so the read
      has a producer and the seam it belongs to is the one this gate already audits. A name off the interface
      with NO producer anywhere in the corpus is the other thing entirely: nobody writes it and the spec denies
      it, which is this gate's own defect class landing on a platform object. */
-  const outside = [...names].filter((n) => !ms.has(n));
-  const unwritten = outside.filter((n) => !(fields.get(n)?.writes.length));
-  return unwritten.length ? { iface, missing: unwritten } : { iface };
+  const declares = only ? (n) => identityMembers(only).has(n)
+                        : (n) => cands.some((c) => identityMembers(c)?.has(n));
+  const unwritten = [...names].filter((n) => !declares(n) && !(fields.get(n)?.writes.length));
+  return { iface: only || base, narrowed: !!only, fit: general.length,
+           ...(unwritten.length ? { missing: unwritten } : {}) };
 }
 
 /* The C matcher literals, anchored now that both producer sides — the C emissions and the JS record
@@ -4568,14 +4667,17 @@ for (const s of jsScans) {
                             `${[...names].map((n) => `\`${n}\``).join(", ")} across both` });
       continue;
     }
+    /* THE BASE DECIDES THE BAND AND THE NARROWING DECIDES ONLY WHAT MAY BE SAID ABOUT MEMBERS — §THE TWO
+       QUESTIONS A BASE ANSWERS. There is no `if (narrowed)` here any more, and its absence is the fix: a
+       construct that names a Web IDL type has already answered the only question this band asks, and letting
+       an open narrowing carry that answer away sent the receiver on to an anchor decided by name collision. */
     if (base) {
       const narrowed = narrowIdentity(base, names);
-      if (narrowed) {
-        const site = { ...s.site(rs[0].off), recv, iface: narrowed.iface, base, names: [...names] };
-        if (narrowed.missing) offInterface.push({ ...site, missing: narrowed.missing });
-        else platformDecided.push(site);
-        continue;
-      }
+      const site = { ...s.site(rs[0].off), recv, iface: narrowed.iface, base, names: [...names],
+                     open: narrowed.narrowed ? 0 : narrowed.fit };
+      if (narrowed.missing) offInterface.push({ ...site, missing: narrowed.missing });
+      else platformDecided.push(site);
+      continue;
     }
     /* ASKED AFTER THE IDL AND BEFORE THE SHAPE, in that order for one reason each: a receiver Web IDL can name
        is named by it, and a receiver it cannot must not be handed to an anchor that decides by name collision. */
@@ -5119,14 +5221,20 @@ if (assertedDecided.length) {
 if (platformDecided.length) {
   const byIface = new Map();
   for (const p of platformDecided) byIface.set(p.iface, (byIface.get(p.iface) || 0) + 1);
+  const openN = platformDecided.filter((p) => p.open).length;
   log(`── DECIDED PLATFORM — ${platformDecided.length} receiver(s) whose own declaration names a Web IDL type. ` +
       `The platform is their producer and idlgen.mjs is their auditor; this gate's subject is the serialized ` +
-      `seam, so they are out of it — decided, not passed ──`);
+      `seam, so they are out of it — decided, not passed. THE CONSTRUCT DECIDES THE BAND AND THE READ SET ` +
+      `DECIDES ONLY THE INTERFACE: ${openN} of these rows read a name set that fits several of the base's ` +
+      `subtree equally, so WHICH object it is stays open while WHOSE it is does not, and each such row says so ──`);
   for (const p of platformDecided.slice(0, 20))
-    log(`  ${place(p)}  \`${p.recv}\` is ${anIface(p.iface)}${p.base === p.iface ? "" : ` (${anIface(p.base)}, narrowed)`} — ` +
+    log(`  ${place(p)}  \`${p.recv}\` is ${anIface(p.iface)}${
+        p.open ? `, UNNARROWED — ${p.open} interfaces in its subtree fit these names equally`
+               : p.base === p.iface ? "" : ` (${anIface(p.base)}, narrowed)`} — ` +
         `${p.names.slice(0, 6).map((n) => `\`${n}\``).join(", ")}${p.names.length > 6 ? " …" : ""}`);
   if (platformDecided.length > 20) log(`  … and ${platformDecided.length - 20} more`);
-  log(`  by interface: ${[...byIface].sort((a, b) => b[1] - a[1]).map(([i, n]) => `${ifaceLabel(i)}×${n}`).join(", ")}`);
+  log(`  by interface: ${[...byIface].sort((a, b) => b[1] - a[1]).map(([i, n]) => `${ifaceLabel(i)}×${n}`).join(", ")}` +
+      `${openN ? ` — the interface named for an UNNARROWED row is the BASE the construct gave, not a pick` : ""}`);
 }
 
 /* PRINTED IN FULL FOR THE REASON THE TWO ABOVE ARE, and with the margin that decided each row, because this
@@ -5173,8 +5281,9 @@ if (offInterface.length) {
       `receiver's own declaration says it is. Web IDL is the whole member list, so an expando on a platform ` +
       `object is a name whose only producer is the line that wrote it ──`);
   for (const o of offInterface.slice(0, 20))
-    log(`  ${place(o)}  \`${o.recv}\` is ${anIface(o.iface)}, and ${o.missing.map((n) => `\`${n}\``).join(", ")} ` +
-        `${o.missing.length > 1 ? "are members it does not declare" : "is a member it does not declare"}`);
+    log(`  ${place(o)}  \`${o.recv}\` is ${anIface(o.iface)}${o.open ? ` or one of ${o.open - 1} other interfaces in its subtree` : ""}, ` +
+        `and ${o.missing.map((n) => `\`${n}\``).join(", ")} ` +
+        `${o.missing.length > 1 ? "are members" : "is a member"} ${o.open ? "no candidate among them declares" : "it does not declare"}`);
   if (offInterface.length > 20) log(`  … and ${offInterface.length - 20} more`);
 }
 
