@@ -292,13 +292,36 @@ const answersFor = (token) => {
   return answers.get(token);
 };
 /* Every `/closed` the ASKING page fetched — `a`'s own report of what `w.closed` answered, collected apart from
-   `got` because it is a different measurement: `got` counts what crossed INTO `b`, this counts what came BACK. */
+   `got` because it is a different measurement: `got` counts what crossed INTO `b`, this counts what came BACK.
+   EACH ENTRY CARRIES THE SESSION THAT FETCHED IT, AND THAT IS NOT BOOKKEEPING — it is the whole of a defect
+   this list had. Three readers below say "the RESUMED instance" about it and one of them is a LOOP EXIT, so a
+   list that spans sessions is a stale read at the point the resumed session has not been stepped once.
+   THE ARGUMENT THAT MADE THE TAG UNNECESSARY IS RETIRED AND IS WRITTEN DOWN RATHER THAN DELETED, because it
+   re-derives from the fixture in one reading and the next person to re-derive it would take the tag back out.
+   It was: `a`'s only `/closed` sits in the `.then` of `/resume`, `/resume` is answered in phase 3, and reads
+   are WITHHELD from that point on — so no `/closed` could exist before the park and every entry was the
+   resumed session's by construction. Its middle premise is what went: a drive of a function the bundle
+   shipped and never called reaches that `.then` body with the reply still owed (solver/engine.c's
+   engine_orphan_seed, §What-the-tool-produces' headline surface), so the callback runs in phase 1, reads
+   `w.closed` off the peer for real, and puts two entries in this list before phase 3 is reached. Nothing about
+   those entries is wrong; they are simply not the session the readers below are about. */
 const closedReports = [];
-/* `/resume` IS DEFERRED, WHICH IS HOW THIS DRIVER ORDERS TWO INSTANCES WITHOUT A CLOCK. `a`'s read of
-   `w.closed` has to happen AFTER `b` has closed itself, and the only thing that orders one instance's flow
-   against another's here is an owed reply: `a` parks on this fetch, `b` is routed its messages and closes, and
-   phase 3 answers it. A `setTimeout` would order nothing — both engines advance only when this loop steps
-   them. */
+/* …AND THE ONE QUESTION THOSE READERS ASK OF IT. Scoped by the ASKING SESSION's tag and never by `docId`: a
+   resumed document is the SAME document and a DIFFERENT session, which is the distinction `tag` exists for
+   (see `instanceSerial`) and is exactly the one being drawn here. */
+const closedBy = (tag) => closedReports.filter((r) => r.asker === tag);
+/* `/resume` IS DEFERRED, WHICH IS HOW THIS DRIVER ORDERS TWO INSTANCES WITHOUT A CLOCK: `a` parks on this
+   fetch, `b` is routed its messages and closes, and phase 3 answers it. A `setTimeout` would order nothing —
+   both engines advance only when this loop steps them.
+   WHAT IT ORDERS IS THE PHASE AND NOT THE CALLBACK, and the stronger claim that stood here is retired. It said
+   the read "has to happen AFTER `b` has closed itself, and the only thing that orders one instance's flow
+   against another's here is an owed reply" — which read the deferral as a guarantee that `a`'s `.then` body
+   cannot run early. It cannot be one: a flow that has run out of the work the page ARRANGED for it drives a
+   function the bundle shipped and never called, and this `.then` callback is one until the reply lands, so the
+   body runs in phase 1 with `/resume` still owed. That is the mechanism working, and this fixture's ordering
+   survives it because what phase 3 actually needs is a read taken while `withholdReads` is set — which the
+   answered `/resume` still produces, on the flow that was genuinely awaiting it. An early drive adds a real
+   read of a real peer; it does not remove the one phase 4 parks on. */
 let resumeOwed = true;
 /* WHILE THIS IS SET, A CROSS-AGENT READ IS ASKED OF THE PEER AND ITS COMPLETION IS NOT RELAYED — the asking
    flow stays suspended at the read with its snapshot intact, which is the state phase 4 parks it in. The peer
@@ -401,7 +424,8 @@ async function service(e) {
     if (u.includes('/hold')) continue;
     if (u.includes('/resume') && resumeOwed) continue;
     if (u.includes('/got')) { got.push(u); console.log(`  [${e.docId}] DELIVERED: ${u}`); }
-    if (u.includes('/closed')) { closedReports.push(u); console.log(`  [${e.docId}] READ BACK: ${u}`); }
+    if (u.includes('/closed')) { closedReports.push({ asker: e.tag, url: u });
+                                 console.log(`  [${e.tag}] READ BACK: ${u}`); }
     /* THE ONE REPLY RECORD every host of this engine delivers, crossing as JSON so it carries its type. This
        zone follows no redirect, so Fetch §4.1 gives the response a clone of the REQUEST's URL list — one item,
        RESOLVED against this document's address because a URL list holds URLs and `response.url` serializes the
@@ -908,14 +932,22 @@ parked.M.ccall('qjs_teardown', 'void', [], []);
 const orphanCompletions = [...answers.keys()];
 withholdReads = false;
 engines[0] = await makeEngine(HTML_A, 'https://a.test/', 'd1', '', 'https://a.test/', residue, '', '');
-console.log(`phase 4: resumed as [${engines[0].tag}] from the residue; [${engines[1].tag}] never left memory`);
+const resumedTag = engines[0].tag;
+console.log(`phase 4: resumed as [${resumedTag}] from the residue; [${engines[1].tag}] never left memory`);
 /* THE RESUMED SESSION, PUMPED WITH ITS OWN ROUTING INTERLEAVED — which is why this is not a `pumpUntil`: the
    posts the replayed flows emit have to be routed to `b` between rounds, and pumpUntil steps one engine. The
-   three exits are the same three, spelled out because each is a different thing to say about the resume. */
+   three exits are the same three, spelled out because each is a different thing to say about the resume.
+   THE SUCCESS EXIT IS THE RESUMED SESSION'S OWN REPORT AND WAS THE WHOLE LIST, which is a stale read of shared
+   state rather than a terminator: an entry another session left behind is already there when this loop is
+   entered, so the loop broke on its FIRST test and the resumed instance was never stepped once. It presented
+   as the park having lost a flow — `[d1/s3] flows=15 switches=0` and every assertion below reading an engine
+   that had not run — which is a diagnosis pointing at the cold tier for a driver's own bookkeeping. This is
+   also the ONLY place that presence is asserted; the `if (!closedReports.length)` that used to stand after the
+   loop was unreachable in both shapes, since `fail` exits, so its sentence lives here where it fires. */
 for (;;) {
-  if (closedReports.length) break;
+  if (closedBy(resumedTag).length) break;
   const { step, paid } = await service(engines[0]);
-  if (closedReports.length) break;
+  if (closedBy(resumedTag).length) break;
   if (step === STEP_DONE)
     fail('the RESUMED instance drained its frontier without the replayed flow ever reading `w.closed` back — ' +
          'a recipe is a replay (solver/cold.h), so a session that finishes without re-issuing the read did ' +
@@ -982,6 +1014,20 @@ for (const e of engines) {
   }
   delivered += r._routedDelivered;
   refused += r._routedRefused;
+  /* AND WHETHER THE HEADLINE SURFACE RAN IN THIS INSTANCE, printed and asserted of NOTHING. This driver is the
+     only place in the tree where a drive of an uncalled function is visible beside the seam it perturbs — `b`'s
+     `message` listener is one until a record is routed, and its drive is what puts `{orphan….arg0}` in a `/got`
+     — so a reader comparing this against the smoke's own `_orphansAsked` has the two halves of the same
+     question in front of them. NOT A CHECK: solver/engine.h says `asked == 0` separates "this bundle ships no
+     uncalled code" from "no flow ever reached the end of its own work", and a driver that asserted a number
+     over that would be storing an expected copy of a scheduling result. NOT DEFAULTED either, for the reason
+     the pair above it is not: a `|| 0` would print the number a healthy run also prints for a producer that
+     had stopped emitting the field. */
+  for (const k of ['_orphansDriven', '_orphansAsked'])
+    if (typeof r[k] !== 'number')
+      fail(`[${e.tag}] the result document carries no \`${k}\` — solver/result.c emits the pair from ` +
+           'engine_orphan_census unconditionally, so an absent one is a producer that moved under this reader');
+  console.log(`[${e.tag}] orphans driven=${r._orphansDriven} asked=${r._orphansAsked}`);
   console.log(`[${e.tag}] worldSegments held=${r._worldSegmentsHeld} made=${r._worldSegmentsMade} ` +
               `forkedFromAncestor=${r._worldSegmentsForked} flows=${r._flows} switches=${r._switches} ` +
               `routedDelivered=${r._routedDelivered} routedRefused=${r._routedRefused}`);
@@ -1139,17 +1185,15 @@ if (unheldReads.size)
    forks an arm — so the count is a property of how much both documents forked, which is exactly the kind of
    number §Testing says a gate may not store an expected copy of. What is checkable is the VALUE and the
    PRESENCE, and both of those are what a wrong answer gets wrong. */
-if (!closedReports.length)
-  fail('the asking page never read `w.closed` back — every report here is produced by the RESUMED instance, ' +
-       'since the answer was withheld from the session that parked, so a zero is a flow that did not come back ' +
-       'from the cold tier');
-/* THE TYPE, ON EVERY ONE OF THEM. `typeof` rides the report for the reason it rides the delivery — an answer
-   that arrived as text and stayed text satisfies `v ? …` and is not a boolean, and §7.2.2 The Window object
-   declares `closed` as one. */
-const notBool = closedReports.filter((u) => !u.includes('v=boolean:'));
+/* THE TYPE, ON EVERY ONE OF THEM — EVERY SESSION'S, deliberately, and this is the one reader here that is not
+   scoped. A `closed` that came back as text is a fidelity bug about the MEMBER wherever it was read, so
+   narrowing this to the resumed session would stop asking it of the reads a drive took in phase 1. `typeof`
+   rides the report for the reason it rides the delivery — an answer that arrived as text and stayed text
+   satisfies `v ? …` and is not a boolean, and §7.2.2 The Window object declares `closed` as one. */
+const notBool = closedReports.filter((r) => !r.url.includes('v=boolean:'));
 if (notBool.length)
   fail(`${notBool.length} of ${closedReports.length} reads of \`w.closed\` came back under a type §7.2.2 The ` +
-       `Window object does not declare for it — it is a boolean: ${notBool.join(' ; ')}`);
+       `Window object does not declare for it — it is a boolean: ${notBool.map((r) => r.url).join(' ; ')}`);
 /* AND THE ONE A WRONG ANSWER PASSES. Every check above fails by a NUMBER staying zero — a record that did not
    cross, a segment that was not forked, a completion that never came — and none of them would have moved if
    `w.closed` had been answered out of `a`'s own byte, because a local answer is instant and plausible. So this
@@ -1164,12 +1208,23 @@ if (notBool.length)
    and its own copy of that record is never written, so `w.closed` was false for ever about a window that had
    closed itself — a plausible value instead of a missing one, which is the only kind of cross-instance defect
    that no counter can see. */
-if (!closedReports.some((u) => u.includes('v=boolean:true')))
-  fail(`no read of \`w.closed\` came back true, across ${closedReports.length}: ${closedReports.join(' ; ')}. ` +
+/* AND IT IS THE RESUMED SESSION'S READS, which is a STRENGTHENING and not a scoping detail. The claim this
+   check makes is about a value that survives a park: the flow re-issued the read, the peer answered out of the
+   timeline that ran close(), and the answer came back true. Read over every session, a `true` taken in phase 1
+   — which a drive of an uncalled listener now produces, because `b`'s listener closes `b` on one arm of an
+   opaque comparison — satisfies it without the resumed session having answered anything, and the one
+   cross-instance defect no counter can see would be certified by a report from the session that parked. */
+if (!closedBy(resumedTag).some((r) => r.url.includes('v=boolean:true')))
+  fail(`no read of \`w.closed\` came back true in the RESUMED session, across ` +
+       `${closedBy(resumedTag).length}: ${closedBy(resumedTag).map((r) => r.url).join(' ; ')}. ` +
        'The OTHER instance ran window.close(), and HTML §7.2.2.1 "Opening and closing windows" makes the ' +
        "getter's answer the OR of a null browsing context and the top-level traversable's `is closing`, which " +
        "close() sets in the agent that RUNS it — so an answer read out of this agent's own copy of that record " +
-       'is false about a window that has closed itself');
+       'is false about a window that has closed itself. AND READ THE COUNT ABOVE BEFORE ACTING ON THIS: `a` ' +
+       'reads the member once per ARM, so a healthy resume reports one URL per timeline and the loop above ' +
+       'exits on the first ROUND that reports any of them. A count of 1 here is therefore the second reading ' +
+       'and not this one — the arms landed in different rounds and this check saw one of them — while a count ' +
+       'above 1 with no `true` among them is the defect this check is named for.');
 
 /* ── THE PARK, WHICH IS THE PART OF THIS SEAM NOTHING HAD EVER EXERCISED ──────────────────────────────────
    The checks above are all about two instances that were both resident for the whole run. These four are about
@@ -1231,7 +1286,7 @@ console.log(`world deaths announced: ${worldDeaths.length} — ${worldDeaths.joi
 console.log(`[route] OK — two instances, ${posts.length} record(s) routed into ${delivered} delivery(ies) ` +
             `across the receiver's timelines (${refused} refused as not-this-timeline) with one listener run ` +
             'each, ancestry-forked segments: ' + forked +
-            `, cross-agent reads answered: ${readsAnswered}, w.closed read back: ${closedReports[0]}` +
+            `, cross-agent reads answered: ${readsAnswered}, w.closed read back: ${closedBy(resumedTag)[0].url}` +
             `, parked and resumed across ${residue.length} bytes of residue`);
 
 /* ── VARIANT A: PARK THE ANSWERING INSTANCE, AS A PROBE AND NOT A GATE ──────────────────────────────────────
