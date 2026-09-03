@@ -2284,6 +2284,23 @@ void solve_observe_substitution(Flow *f) {
           "solve: an @S substitution was performed for a search this session has no entry for — a candidate "
           "exists only because detection opened one and a cold-resumed one re-registers before it runs an "
           "opcode, so an absent entry is a search dropped under a live flow");
+    /* …AND THE LINK BENEATH IT, WHICH IS THE ONE RUNG OF THE LADDER NOTHING ASKED FOR. The chain this file
+       already asserts runs DOWNWARD from the top — breakout_arrived and filter_survived each demand
+       `substituted > 0`, learn_witness demands `turns > 0` — so every link is guarded except the one between
+       those two, and that is exactly the link a report reading `tried:N,turns:0,substituted:0` stands on. A
+       substitution is performed by a candidate flow AT ITS OWN SOURCE READ, and a flow reaches a source read
+       only while it HOLDS THE THREAD, which is the switch-in solve_flow_begin counts; so `substituted:D` over
+       `turns:0` is not a search that ran unscheduled, it is `turns` counting something other than the flows
+       that do this search's work — and the whole reading of `turns:0` as WFQ starvation rests on it not being
+       that. Unasserted, the two states are one number, which is the tell §@S names.
+       IT IS learn_witness's INVARIANT TWO RUNGS LOWER AND IS WRITTEN OUT RATHER THAN SHARED WITH IT: a DCHECK
+       stamps the line it is written at, so one helper for both would report one line for two different events
+       and its remedy would name an action with no object. */
+    DCHECK(e->turns > 0,
+           "an @S candidate performed its substitution for a search the scheduler reports it has never given "
+           "a turn to — solve_flow_begin raises `turns` at every switch-in of a candidate flow, and a flow "
+           "reaches its own source read only while it holds the thread, so `turns` is not counting the flows "
+           "that do this search's work and `turns:0` would be read as WFQ starvation for a search that ran");
     e->substituted++;
 }
 
@@ -2309,6 +2326,17 @@ void solve_flow_begin(Flow *f) {
                "a candidate flow was switched in for a sink search this session has no entry for — a candidate "
                "exists only because detection opened one, and a cold-resumed one re-registers before it runs "
                "(solve_resume_candidate), so an absent entry means the search was dropped under a live flow");
+        /* …AND THE LINK BENEATH THIS RUNG, for the reason solve_observe_substitution states about the one
+           beneath IT. Both doors raise `tried` before the flow can ever be picked — solve_seed_candidates at
+           the creation itself, solve_resume_candidate during the cold rebuild and before the flow runs an
+           opcode — so a switch-in standing over `tried:0` is a THIRD door, and the card would report turns
+           with no seeded candidate behind them. It is the pair `s-*-seeded` and `s-*-ran` are read as, stated
+           where the second of them is written. */
+        DCHECK(!e || e->tried > 0,
+               "an @S candidate flow was switched in for a search that reports no candidate seeded — both "
+               "doors into a candidate raise `tried` before the flow is reachable by the pick, so a turn "
+               "standing over `tried:0` is a candidate assembled outside them and the parked card is about "
+               "to report turns with nothing behind them");
         if (e) e->turns++;
     }
 }
