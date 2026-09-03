@@ -10677,6 +10677,50 @@ static int probes_report(const char *js, bool final, char *unanswered, size_t ca
        it would put that back. A row with no `why` prints nothing: it already names itself. */
     for (i = 0; i < n; i++)
         if (!rows[i].ok && rows[i].why) printf("@H   %s: %s\n", rows[i].name, rows[i].why);
+    /* HOW FAR THIS RUN HAD GOT WHEN THE TABLE BELOW WAS COMPOSED — the one fact that decides which of a 0
+       row's TWO READINGS the WHOLE table has, and it was on no line of this stream.
+       A row's 0 is "a statement this run answered wrongly" or "one it never reached", and those send a reader
+       to opposite places — the mechanism the row names, or the budget. Per-row the split is what a `why`'s
+       first clause and a ladder's lowest rung are for. WHOLE-TABLE it is one number, and this is it: a table
+       composed at `workDone` 0 is the table `run_scheduler` renders at the TOP of its loop, before
+       `engine_sched_step` has run once, so every 0 in it is a statement never reached; a table composed at
+       tens of thousands is a run that did the work and answered as it did.
+       THE QUANTITY IS THIS TABLE'S OWN CADENCE AND WAS PRINTED NOWHERE. `fixture_have_answers` gates on
+       `engine_work_done()` and `run_scheduler` gates its five censuses on the same call, and no line carries
+       it — so the number that decides WHEN every measurement of this run is taken was not itself a
+       measurement. The consumer INFERRED one bit of it instead, from the number of @H samples, and an
+       inference about `run_scheduler`'s loop order held in a file that cannot check it is the claim-by-
+       reference this project already pays for elsewhere.
+       AND THE THREE SIBLINGS ARE HERE FOR THE REASON @SCENSUS's FOUR ARE — see that line's own paragraph. The
+       only reader `_switches`, `_flows` and `_jobsRun` have is `result_json`, which this host prints after
+       run_scheduler RETURNS; a run that aborts at an assertion or is killed at its budget never gets there, so
+       on exactly the runs whose standing is in question those three are composed and never printed. They are
+       spelled the way the document spells them, which is that paragraph's other half: one namespace, one
+       spelling, and a reader who learns these names off the document reads them off this line.
+       THE FOURTH TERM IS DELIBERATELY ABSENT. `engine_work_done` is forks + flows + jobs + switches, and the
+       forks term is already `forks` on @COLD — restating it here would be a second spelling of a number that
+       has one, which is a second contract and the half that goes quietly wrong. So the identity a reader
+       checks this line by spans two lines on purpose: workDone == @COLD's `forks` + _flows + _jobsRun +
+       _switches.
+       EVERY ONE OF THE FOUR IS A LIFETIME COUNTER, monotone over the process — engine.c says so where it
+       refuses to reset them at a session boundary — so two samples of this line MAY be differenced, which is
+       the one thing a reader is not entitled to do to a gauge. The assert below is what states that kind at
+       the point of emission rather than in a comment no consumer reads, and it is free: a lifetime counter
+       cannot decrease, so the series itself is the check. */
+    {
+        static long last_work = -1;
+        long work = engine_work_done();
+
+        DCHECK(work >= last_work,
+               "the run's own progress clock went BACKWARD between two @H tables — `engine_work_done` is the "
+               "sum of four counters engine.c refuses to reset at a session boundary, so it is a LIFETIME "
+               "counter and cannot decrease. Either one of the four was reset under a host that runs more "
+               "than one session in a process, or this line is reading a gauge; both make every difference "
+               "taken across two samples of this stream arithmetic about nothing");
+        last_work = work;
+        printf("@HWORK {\"workDone\":%ld,\"_switches\":%d,\"_flows\":%ld,\"_jobsRun\":%ld}\n",
+               work, engine_switch_count(), flow_created_count(), engine_jobs_run());
+    }
     printf("@H ");
     for (i = 0; i < n; i++) {
         ok = ok && rows[i].ok;
