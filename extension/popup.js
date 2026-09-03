@@ -2079,7 +2079,40 @@ function getStatusBadge(status) {
 
 let currentReplayRequest = null;
 
+/* THE REPLAY LOOKUP'S KEY IS ASSERTED, NOT CONVERTED — on BOTH sides of the comparison.
+   `String(r.id) === String(reqId)` stood here, and the two conversions were the whole defect. Neither
+   operand is ever a non-string while the contract holds: offscreen-brain.js's `_pushGlobalLog` asserts
+   `entry.id` as a non-empty string before an entry reaches the global log, and lib/popup-reqlog.js renders
+   that id into a `data-id` attribute, which reads back as text. So the `String()` pair did no work at all
+   on any input the producers can state — EXCEPT the one input it must not survive. ECMAScript §7.1.19
+   ToString ( argument ) answers the String value `"undefined"` for `undefined`, so an entry filed without
+   an id and a card rendered without one convert to the SAME token and COMPARE EQUAL, and `.find` returns
+   the FIRST such entry: the Send panel is then loaded with a request the operator did not click, wearing
+   the identity of one they did. That is a wrong answer with the same shape as a right one, which is why
+   CLAUDE.md rates the conversion as concealment rather than as a defaulted read — there is no `||` in the
+   line for a grep to find, and the absence is not passed through, it is MINTED into a matching value.
+   Both values are this codebase's OWN: the engine states neither, and no server states either, so the
+   answer to a missing one is a should-never-happen and not a refusal. */
+function _replayIdMatches(r, reqId) {
+  DCHECK(typeof r.id === "string" && r.id !== "",
+         "a request-log entry reached the popup's click-to-replay lookup with no id — " +
+         "offscreen-brain.js's _pushGlobalLog DCHECKs id/url/method/service/timestamp/status on every " +
+         "entry it files, so an entry without one has reached the global log around that mint, and this " +
+         "search would match it for ANY card whose own id is equally absent rather than for the card " +
+         "the operator clicked");
+  return r.id === reqId;
+}
+
 async function replayRequest(reqId, sourceTabId) {
+  /* The popup's own bytes, round-tripped through its own DOM: lib/popup-reqlog.js stamps `data-id` on every
+     `.request-card` it renders and attaches the click handler to those cards alone, so a card arriving here
+     without one is this document disagreeing with itself. Asserted at the ENTRY rather than at the two
+     reads below, because that is where the value is born for this function and the two searches share it. */
+  DCHECK(typeof reqId === "string" && reqId !== "",
+         "click-to-replay was invoked with no request id — lib/popup-reqlog.js writes data-id on every " +
+         "request card out of the entry's own id and hangs the handler on those cards, so an absent one is " +
+         "a card this popup rendered without the identity its own click handler reads back");
+
   // Clear previous send result
   lastSendResult = null;
   const sendResp = document.getElementById("send-response");
@@ -2088,7 +2121,7 @@ async function replayRequest(reqId, sourceTabId) {
   // Search the correct log source
   let req;
   if (sourceTabId && allTabsData && allTabsData[sourceTabId]) {
-    req = allTabsData[sourceTabId].requestLog.find((r) => String(r.id) === String(reqId));
+    req = allTabsData[sourceTabId].requestLog.find((r) => _replayIdMatches(r, reqId));
   }
   if (!req && allTabsData) {
     // The request log is GLOBAL — search every loaded tab's slice rather than
@@ -2096,7 +2129,7 @@ async function replayRequest(reqId, sourceTabId) {
     // migration). With the scope-fixed loadRequestLog, allTabsData is populated
     // for every scope including "active", so the entry is here.
     for (const data of Object.values(allTabsData)) {
-      req = data.requestLog.find((r) => String(r.id) === String(reqId));
+      req = data.requestLog.find((r) => _replayIdMatches(r, reqId));
       if (req) break;
     }
   }
