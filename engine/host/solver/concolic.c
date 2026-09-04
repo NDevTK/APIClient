@@ -4230,16 +4230,16 @@ static int concolic_exotic_delete(JSContext *ctx, JSValueConst obj, JSAtom prop)
  * world a real session is standing in. The completions had been enumerated from the branch of the text rather
  * than from what the page can observe. js_instanceof_step declares three.
  *
- * THE THIRD DOOR IS §10.4.7.2, reached from JS_SetPrototypeInternal, and it is NOT answered here. Its step 2
- * SameValue is a pointer test between two Objects, so a derived unknown as `current` can never satisfy it and
- * `Object.setPrototypeOf` over an unknown answers `false` — or, in the throwing form, a TypeError.
- * NAMED RESIDUAL. WHAT IS NOT COVERED: that comparison, which §10.4.7.2 makes undecidable over an unknown
- * exactly as step 6.c is. WHAT THE NEXT DIFF BUILDS: the same two-completion ask at that site — it is
- * step 6.c's question with nothing else attached, so it is one ask and not a walk. HOW ITS ABSENCE SHOWS: a
- * page that calls `Object.setPrototypeOf(rec, Base.prototype)` on a server-injected record and then reads a
- * member of `Base.prototype` off it takes the arm in which the write was refused, and reports the member as
- * absent at a line real Chrome does not refuse at. It is NOT reached from a plain `instanceof` and it is not
- * on the path this entry's own fixture exercises, which is why it is a residual and not a second half.
+ * THE THIRD DOOR IS §10.4.7.2, reached from JS_SetPrototypeInternal, AND IT CRASHES RATHER THAN ANSWERING.
+ * Its step 2 SameValue is a pointer test between two Objects, so a derived unknown as `current` can never
+ * satisfy it: `Object.setPrototypeOf` over an unknown would report the write as refused, and its throwing
+ * form would raise a TypeError, at a line real Chrome does not refuse at. It is NOT a named residual, and the
+ * distinction is this file's own mechanical test rather than a preference — a residual is for code that is
+ * CORRECT and narrower, and there is no case that door handles correctly today, so the answer beneath it is
+ * WRONG and the rule is that wrong code crashes. Giving this entry an answer is what MADE it wrong: before,
+ * the door aborted here on the way past, and a diff that fixes a fabrication must not quietly convert someone
+ * else's abort into a plausible answer. The DCHECK now stands at that site, naming the ask to build — the
+ * same two-completion question step 6.c asks, with nothing else attached, so it is one ask and not a walk.
  *
  * IT RUNS NONE OF THE PAGE'S CODE, which the entry's contract requires rather than suggests: it is reached
  * from JS_GetPrototype, whose C callers have no flow base to suspend into. The mint is an allocation and a
