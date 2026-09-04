@@ -29,7 +29,7 @@
 #include "core/loader/text_document.h"
 #include "core/loader/xml_document.h"
 #include "core/mime/mime_type.h"
-#include "solver/flow.h"
+#include "solver/quantum.h"
 #include "check.h"
 
 /* THE ARM AND THE ARM'S OWN LOAD, and nothing else. The three §7.5 subsections hold entirely different state
@@ -209,27 +209,56 @@ lxb_status_t document_load(lxb_html_document_t *document, DomParseRootKind root_
     DocumentLoad *load;
 
     /* THE ONE THING THAT MAKES A COMPLETING DRIVE LEGAL: THERE IS NOBODY TO YIELD TO. A document parse is
-       O(document), so driving one to completion inside a flow's slice is exactly the drive-to-completion
-       CLAUDE.md §scheduler forbids — a higher-value sibling cannot preempt it, the cooperative quantum cannot
-       take the thread back during it, and it cannot be parked to the IDB cold tier half-parsed. It is not
-       forbidden where there is no scheduler yet: the production ABI's `qjs_init` parses before the first flow
-       is seeded (it must return the document identity synchronously, which is why the frontier key is a
-       Lexbor `<script>` scan and not something boot computes), and the WPT runner's top-level document is the
-       same shape.
-       WHAT FIRES HERE IS THE CHILD NAVIGABLE, and that is the point rather than a casualty:
-       core/frame/navigable.c's create-a-new-child-navigable load is already a step machine
-       (`js_nav_load_step`), so it HAS a driver to park in and its parse is the one that is stealing a running
-       flow's thread today. BUILD THE STAGE: give that machine a stage that calls document_load_begin, one
-       that calls document_load_step and returns JS_STEP_YIELD while document_load_ended is false, and one that
-       calls document_load_finish — the seam is here, every item is O(1), and the whole of the load's state is
-       in the handle rather than on the C stack.
-       AND IT IS LEGAL FOR EITHER DECLARATION, WHICH IT WAS NOT WHEN THIS ASSERT WAS WRITTEN. A
-       DOM_PARSE_ROOT_PRIVATE parse is trivially safe to leave open — the half-built tree is the flow's own and
-       no sibling can reach it — and a DOM_PARSE_ROOT_SHARED one is safe too now that §13.2.6 ANNOUNCES the
-       nodes it makes through solver/dom_cow.h's fifth tree-construction member: the creation record is what
-       destroys them when a discarded flow's delta goes, which is the half a capture alone never had. So the
-       child navigable is where this fires, and it is not the only place the seam serves. */
-    DCHECK(flow_running() == NULL,
+       O(document), so driving one to completion while a flow holds the thread is exactly the
+       drive-to-completion CLAUDE.md §scheduler forbids — a higher-value sibling cannot preempt it, the
+       cooperative quantum cannot take the thread back during it, and it cannot be parked to the IDB cold tier
+       half-parsed. It is not forbidden on the HOST'S OWN TIME, and every caller of this entry is there: the
+       production ABI's `qjs_init`, which parses before the first flow is seeded (it must return the document
+       identity synchronously, which is why the frontier key is a Lexbor `<script>` scan and not something boot
+       computes); the same ABI's `qjs_join`, which the trusted zone calls BETWEEN two `qjs_step` returns; and
+       the WPT runner's top-level document, which drives flows under its own preempt policy with no frontier to
+       be fair between.
+       AND "HOST TIME" HAS EXACTLY ONE SPELLING IN THIS ENGINE, WHICH IS WHY THIS ASKS ABOUT THE SLICE AND NOT
+       ABOUT THE FLOW STAMP. `flow_running() == NULL` stood here, and that register does not answer this
+       question: solver/engine.c's engine_sched_step returns the cooperative-quantum yield WITHOUT switching the
+       running flow out — §scheduler requires that flow to resume byte-identically on the frontier it left — and
+       the stamp is deliberately left UP across the ABI boundary, because a yielded flow's COW delta is still
+       APPLIED to the heap and putting the stamp down would be a claim about that heap which is not true.
+       `qjs_step` puts the three marks down that CAN come down and asserts each on every exit (the slice, the
+       flow generation, the capture route); `g_running` is not among them by design. So between two steps the
+       stamp NAMES WHICHEVER FLOW WAS LAST SWITCHED IN, and an assert resting on it is false exactly when the
+       engine is working.
+       AND THE NARROWER PREDICATE IS SAFE RATHER THAN MERELY DEFENSIBLE, WHICH IS THE HALF THAT DECIDES THIS.
+       The register a parse could actually be hurt by is not the stamp: it is the CAPTURE ROUTE, because a
+       DOM_PARSE_ROOT_SHARED parse creates a whole tree, and a tree created into a yielded flow's COW head is
+       DELETED by that flow's next unapply — a joined document with a realm and an empty tree, refcounts
+       intact, nothing to say what happened. solver/engine.c's engine_sched_step suspends and restores all
+       three marks around the slice, so on the host's own time the stamp is 0, `g_dom_capture` is 0 and
+       `cow_set_current(NULL)` has taken the route down; only `g_running` is left up, and it is left up
+       precisely because it is the one that would be a LIE about the heap. So the three registers that decide
+       whether this parse can corrupt a flow are all down at every caller of this entry, and the one this
+       assert used to read is the one that says nothing about that. `qjs_step` asserts the other two at the
+       boundary; a tree that comes back empty with neither of them firing is those asserts being wrong, not
+       this one.
+       MEASURED, AND WHAT IT COSTS IS THE LEVEL-1 SCHEDULER RATHER THAN ONE DOCUMENT. `qjs_join` is host time
+       by construction and hit this on 2 of 13 navigations of one real site. One hit is not one lost parse:
+       extension/bridge.js latches `_hostDead` on the abort and never clears it, so every LATER document is
+       answered by a refused kick — 12 of 15 rows in one measured batch were about a loop that was already
+       dead. This is the same defect solver/engine.c records at engine_enqueue_job, one register and one file
+       over, and the same shape: a SECOND spelling of host time disagreeing with the settled one, so continuous
+       browsing survives exactly one navigation into a busy instance.
+       WHAT THE ASSERT STILL FORCES IS UNCHANGED, which is why this is a truer predicate and not a deleted one.
+       solver/quantum.h's slice is open exactly while the engine is EXECUTING — solver/engine.c's preempt_hook
+       asserts the converse at the one point the scheduling policy is consulted — so a route that reaches this
+       entry from inside a flow's slice crashes here and names the seam to build. The seam is not hypothetical
+       and it is not this component's to hold: core/frame/navigable.c's create-a-new-child-navigable opens the
+       load in `child_document`, steps it in `nav_create_step` and closes it in `nav_create_finish`, and this
+       assert is what catches that regressing to a completing call.
+       IT IS AN ASSERTION AND NEVER A BRANCH. solver/quantum.h says so at the predicate itself: a caller that
+       BRANCHES on the slice is choosing between a scheduled path and an unscheduled one, which is the fallback
+       CLAUDE.md §C-stack bans. Each caller statically calls one entry or the other — the step machine calls
+       document_load_begin, the ABI calls this — and nothing anywhere selects between them. */
+    DCHECK(!quantum_slice_open(),
            "HTML §7.4.5's load-a-document was driven to completion while a flow held the thread — a document "
            "parse is O(document) and this drive cannot be preempted, cannot give the thread back for a "
            "cooperative quantum and cannot be parked to the cold tier half-parsed, which is the "
@@ -239,8 +268,8 @@ lxb_status_t document_load(lxb_html_document_t *document, DomParseRootKind root_
            "response), with every byte of the load's state in the handle and none of it "
            "on the C stack. DRIVE IT FROM THE STEP MACHINE THIS CALL IS ALREADY INSIDE — a stage that opens "
            "the load, a stage that steps it and returns JS_STEP_YIELD while it has not ended, and a stage that "
-           "finishes it — rather than from this loop, which exists for the two callers that run before the "
-           "frontier has a member and have no driver to park in");
+           "finishes it — rather than from this entry, which exists for the ABI's own callers and reaches its "
+           "parse on the host's own time, with no slice open and no driver to park in");
 
     load = document_load_begin(document, root_kind, scripting, type, encoding, text, size);
     if (load == NULL)

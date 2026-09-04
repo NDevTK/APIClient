@@ -125,12 +125,24 @@ lxb_status_t document_load_finish(DocumentLoad *load);
    parse, and a loader that emptied it would be deciding a consequence that is not its own. */
 void document_load_abort(DocumentLoad *load);
 
-/* THE COMPLETE LOAD — begin, step to the end, finish — FOR A CALLER WITH NO FLOW TO YIELD TO, and the DCHECK
-   inside it is what holds that to being true. HTML §7.4.5's load-a-document reaches this engine from three
-   places and two of them run before the frontier has a member: the production ABI's `qjs_init`, which must
-   return the document identity synchronously, and the WPT runner's top-level document. The third —
-   core/frame/navigable.c's child navigable — runs INSIDE a step machine, so it has a driver to park in and
-   this entry crashes for it by name.
+/* THE COMPLETE LOAD — begin, step to the end, finish — FOR A CALLER ON THE HOST'S OWN TIME, and the DCHECK
+   inside it is what holds that to being true. Its callers are the ABI's own, and "no flow to yield to" is
+   what is true of all three rather than "the frontier has no member": the production ABI's `qjs_init`, which
+   parses before the first flow is seeded because it must return the document identity synchronously; that
+   same ABI's `qjs_join`, which parses a SECOND document of a LIVE agent — its own asserts require the
+   frontier to be seeded already — between two `qjs_step` returns; and the WPT runner's top-level document,
+   which drives flows under its own preempt policy with no frontier to be fair between.
+   THE CHILD NAVIGABLE IS NOT ONE OF THEM. core/frame/navigable.c's create-a-new-child-navigable is a step
+   machine that uses the pull seam directly — it opens the load in `child_document`, steps it in
+   `nav_create_step` and closes it in `nav_create_finish` — so it has a driver to park in and never reaches
+   this entry at all.
+   AND WHAT THE DCHECK ASKS IS THE SLICE, NOT THE FLOW STAMP, because those are two questions and only one of
+   them is "is the engine executing". `flow_running()` names whichever flow was last switched in and stays up
+   across the whole of the host's time by design (a yielded flow's COW delta is still applied to the heap), so
+   an assert on it is false exactly when the engine is working; solver/quantum.h's `quantum_slice_open` is
+   this engine's one spelling of host time, asserted from both sides — by solver/engine.c's preempt_hook,
+   which may only be reached inside a slice, and by `qjs_step`, which may never return holding one. The .c
+   states the cost of getting that wrong.
    RETURNS non-OK for an arm this build has no loader for, having already crashed by name in a dev build. Both
    halves are load-bearing and they are for different builds: the `DFAIL` names the §7.5 subsection to BUILD,
    which is the dev forcing function, and it compiles out in release — where the status is what stops a
