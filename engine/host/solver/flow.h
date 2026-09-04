@@ -615,7 +615,15 @@ typedef struct Flow {
        every document of this agent §4.12.1's order rather than the order its replies happen to land in. The
        row is this flow's own (engine.c's DYN_SCRIPT_SRC), holding the address until the reply replaces it with
        the program; one host fetch still answers every flow parked on that address, because engine_provide
-       fills every register that names it. */
+       fills every register that names it.
+       STOPPING AT A ROW IS NOT WHAT STARTS ITS FETCH, AND READING IT AS THOUGH IT WERE COST THIS ENGINE THE
+       WHOLE OF A DOCUMENT'S PARALLELISM. HTML §4.12.1.1 "Processing model" step 33 fetches when the element is
+       PREPARED and step 35 — the async set, the in-order list, the when-parsed list, the pending
+       parsing-blocking script — only decides where the result EXECUTES. This engine performed the two as one
+       step for as long as the park stood at the cursor, so a document's second `<script src>` was not
+       requested until its first had been fetched AND run, and `defer` and `async` were byte-identical on the
+       wire to a parser-blocking script. Every row of this sequence owes its request from the moment it is
+       created (engine.c's engine_queue_into); what the cursor still decides is only which program RUNS. */
     /* THE HIGHEST SCRIPT INDEX THIS FLOW HAS COMPILED, so that compiling one twice can be caught. A flow runs
        each program in its sequence ONCE; a preempted flow RESUMES its suspended frame and never re-enters
        JS_FlowNew for a program it already started. Re-compiling is a REPLAY, which this engine does not do — a

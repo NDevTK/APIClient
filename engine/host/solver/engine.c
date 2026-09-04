@@ -424,57 +424,6 @@ void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, JSValueCons
     JS_FreeValue(ctx, e);
 }
 
-/* PARK ON AN EXTERNAL DOCUMENT SCRIPT. Registered at most once per flow per slot — the flow is asked again on
-   every scheduler pass while it waits, and a second registration would make the host owe the same URL twice. */
-void engine_pending_docscript(JSContext *ctx, const char *url, int script_i) {
-    Flow *f = flow_running();
-    /* HTML §8.1.4.2 Fetching scripts, "fetch a classic script", creates a potential-CORS request and never sets
-       a method, so it is Fetch §2.2.5 Requests' `GET`. STATED, because the seam is keyed on the pair and a
-       park that does not say is a park the join cannot list.
-       …AND THE DESTINATION THAT SAME ALGORITHM SETS, which is the field this park was missing and the reason a
-       shipped extension compiled cross-origin data. "Fetch a classic script" is "Let request be the result of
-       creating a potential-CORS request given url, `script`, and corsSetting", and HTML §2.5.1 Terminology's
-       create-a-potential-CORS request returns "a new request whose URL is url, destination is destination" —
-       so the destination is `script` and this reply is CODE. The trusted zone reads it here; it used to read a
-       list only the module loader wrote, which named dynamic imports and never this. */
-    FetchRequest req = { "GET", url, PENDING_DESTINATION_SCRIPT, NULL, NULL, 0,
-                         /* placed below, off the element */ { NULL, 0, NULL, 0, CSP_PARSER_METADATA_UNPLACED } };
-    /* …AND §4.12.1.1's THREE METADATA MEMBERS, READ OFF THE ROW'S OWN ELEMENT. A document's external script has
-       one — engine_queue_docscript_url and the seed's address arm both take it, and flow_deliver_one_reply
-       asserts it again on the failure path — and `script_i` is exactly which row this park is for. */
-    ScriptCspMeta meta;
-    JSValue e;
-    DCHECK(f != NULL, "an external document script was awaited outside a running flow");
-    DCHECK(script_i >= 0 && script_i < f->dyn_n,
-           "an external document script parked for a sequence position this flow does not have — the caller "
-           "names the row it is standing at, and this park reads that row's NAME and its element from the "
-           "column at that position");
-    DCHECK(url != NULL && *url, "an external document script entry carries no URL");
-    /* WHICH ROW THIS PARK IS FOR, BY NAME — the dedup and the entry ask the same question of the same value,
-       and it is the row's `dyn_id` rather than its position because a position is a fact about the row only
-       while the set is fixed (solver/flow.h). `script_i` is the caller's way of naming the row it is standing
-       at, which is the right vocabulary AT the cursor and the wrong one on a register that outlives an
-       interposition and a destroy. */
-    uint64_t rowid = f->dyn_id[script_i];
-    for (int i = 0, n = pending_count(f->pending); i < n; i++) {
-        JSValue p = pending_entry(f->pending, i);
-        int dup = pending_get_int(p, PEND_KIND) == FLOW_PENDING_DOCSCRIPT &&
-                  (uint64_t)pending_get_int(p, PEND_SCRIPT_ROW) == rowid;
-        JS_FreeValue(ctx, p);
-        if (dup) return;
-    }
-    meta = script_csp_meta(ctx, f->dyn_el[script_i]);
-    req.metadata = meta.m;
-    e = pending_push(&f->pending, FLOW_PENDING_DOCSCRIPT, flow_path_forced(f));
-    pending_set_int(e, PEND_SCRIPT_ROW, (int64_t)rowid);
-    /* AND §4.3 Scheme fetch WITH THE ADDRESS. A document's own `<script src="data:text/javascript,…">` is
-       answered here and the flow's next step delivers it into this slot — see the caller in flow_step, which
-       reports host-owed only when this door left the entry outstanding. */
-    pending_park_request(ctx, e, &req);
-    script_csp_meta_free(ctx, &meta);
-    JS_FreeValue(ctx, e);
-}
-
 /* PARK ON AN INJECTED SCRIPT. `document.body.appendChild(s)` with `s.src` set is the other way a page loads code
    conditionally, and it has no promise for the reply to settle — the reply IS more program. The flow parks on
    the URL exactly as a fetch does (same register, same dedup, same stall accounting) and the delivery queues the
@@ -5504,6 +5453,99 @@ static int engine_close_request_fork(JSContext *ctx, Flow *f) {
 }
 
 
+/* HTML §4.12.1.1 "Processing model" STEP 33 — AN EXTERNAL SCRIPT'S FETCH BEGINS WHEN THE ELEMENT IS PREPARED,
+   NOT WHEN ITS POSITION IS REACHED. Step 33 is "If el has a src content attribute:", and its `classic` arm is
+   "Fetch a classic script given url, settings object, options, classic script CORS setting, encoding, and
+   onComplete." — inside `prepare the script element`. Step 35, "If el's type is `classic` and el has a src
+   attribute, or el's type is `module`:", comes AFTER it and decides only WHERE the result executes: the `set of
+   scripts that will execute as soon as possible`, the in-order list, the `list of scripts that will execute
+   when the document has finished parsing`, or the parser's pending parsing-blocking script.
+   FETCH-WHEN-PREPARED AND EXECUTE-IN-ORDER ARE TWO STEPS OF ONE ALGORITHM AND THIS ENGINE PERFORMED THEM AS
+   ONE. The park stood at the cursor in flow_step, so a document's second `<script src>` was not requested
+   until its first had been fetched AND RUN — one request in flight where a browser has the whole markup's
+   worth. Measured on real bundles: a page shipping 26 scripts paid 26 serial round trips, and `defer` and
+   `async` produced byte-identical wire behaviour to a parser-blocking script, because the attribute only ever
+   reached step 35 and step 33 was never separate from it.
+   THE ROW'S CREATION IS THIS ENGINE'S PREPARE, AND THAT IS A FACT ABOUT THIS ENGINE'S PARSE RATHER THAN A
+   CHOICE. A document reaches the engine fully parsed — lexbor runs to completion before any program does — so
+   every markup `<script>` has been reached by the parser before the sequence exists, and every one of them is
+   therefore prepared before the first of them executes. engine_queue_into is the ONE site that turns an
+   element into a row, so it is the one site at which step 33 can be owed exactly once per element.
+   §4.12.1's ORDER IS UNTOUCHED, WHICH IS THE POINT: the row keeps the position it was queued at, flow_step
+   still stops at it until its OWN bytes arrive, and document_exec_scripts still lays the rows down in
+   §13.2.7's milestone order. Only the moment the request is ISSUED moves.
+   THE REALM IS THE ROW'S DOCUMENT'S, WHICH IS STEP 32 — "Let settings object be el's node document's relevant
+   settings object." — and step 33 hands THAT to the fetch. It used to be flow_step's ambient ctx, which is the
+   session's, so a child navigable's script was checked against another document's policy container.
+   NO DEDUP, BECAUSE THERE IS NOTHING LEFT TO DEDUP AGAINST. The row's name is minted one statement before this
+   call and never reused (solver/flow.h's `dyn_id`), so no entry of this register can already name it. The loop
+   that stood here existed only because the park was re-asked on every scheduler pass while the flow waited at
+   the cursor, and that pass is gone.
+   NAMED RESIDUAL — WHAT IS NOT COVERED: the ELEMENT reads this park makes are answered by whichever
+   timeline's DOM delta is applied at the moment the row is created, and for a row seeded onto a NEW flow that
+   is not always that flow's own. The session's first flow and every cold-resumed one ARE created at baseline
+   (engine_open_session says so at both calls), and every row engine_queue_docscript_url adds belongs to the
+   flow that is running — but an @S candidate flow is created at the scheduler's PICK with the outgoing flow
+   still switched in, and engine_join_document's boot flow is created by the flow that built the navigable. The
+   POLICY half is unaffected either way: a Document's policy container is written once at its creation and is
+   not COW-captured, so fetch_main_blocked answers the same under any delta. What can differ is script_csp_meta
+   — §2.5.6's nonce slot and the `integrity` attribute, both read through the DOM — and Fetch §4.3's `blob:`
+   store lookup. WHAT THE NEXT DIFF BUILDS: creation-at-baseline for those two flow-creating sites, the way the
+   session's own seeding and cold_resume already have it. HOW ITS ABSENCE SHOWS: a page that writes
+   `s.integrity` or `s.nonce` onto a markup `<script src>` and then reaches a detected sink — the @S candidate
+   seeded off that flow builds its copy of the request from the WRITING timeline's attribute, so the script is
+   admitted or refused on a value the candidate's own baseline run never had, and the verdict is about a
+   document no timeline ever held. */
+static void engine_pending_docscript(Flow *f, int at) {
+    /* HTML §8.1.4.2 Fetching scripts, "fetch a classic script", creates a potential-CORS request and never sets
+       a method, so it is Fetch §2.2.5 Requests' `GET`. STATED, because the seam is keyed on the pair and a
+       park that does not say is a park the join cannot list.
+       …AND THE DESTINATION THAT SAME ALGORITHM SETS, which is the field this park was missing and the reason a
+       shipped extension compiled cross-origin data. "Fetch a classic script" is "Let request be the result of
+       creating a potential-CORS request given url, `script`, and corsSetting", and HTML §2.5.1 Terminology's
+       create-a-potential-CORS request returns "a new request whose URL is url, destination is destination" —
+       so the destination is `script` and this reply is CODE. The trusted zone reads it here; it used to read a
+       list only the module loader wrote, which named dynamic imports and never this. */
+    JSContext *ctx = doc_realm(f->dyn_doc[at]);
+    /* THE ROW'S BODY IS ITS ADDRESS UNTIL THE REPLY TAKES IT ACROSS (solver/flow.h), and this is now the FIRST
+       read that treats it as a NUL-terminated string, so the pair is asserted here as well as at the delivery
+       that makes the same read. An address is one: it came out of script_src_absolute, which serializes a URL
+       record (URL §4.5 "URL serializing"), and every component of one has been through a percent-encode set
+       built on URL §1.3 "Percent-encoded bytes"' C0 control percent-encode set — "C0 controls and all code
+       points greater than U+007E" — so a NUL is `%00` and never the byte. */
+    const char *url = dyn_body_text(f->dyn[at]);
+    FetchRequest req = { "GET", url, PENDING_DESTINATION_SCRIPT, NULL, NULL, 0,
+                         /* placed below, off the element */ { NULL, 0, NULL, 0, CSP_PARSER_METADATA_UNPLACED } };
+    /* …AND §4.12.1.1's THREE METADATA MEMBERS, READ OFF THE ROW'S OWN ELEMENT. A document's external script has
+       one — engine_queue_docscript_url and the seed's address arm both take it, and flow_deliver_one_reply
+       asserts it again on the failure path. NULL is a stated answer here and not a hole: a host driving a
+       SYNTHESIZED program list has rows no `<script>` produced, and script_csp_meta answers the empty string
+       for one. */
+    ScriptCspMeta meta;
+    JSValue e;
+
+    DCHECK(url != NULL && *url, "an external document script entry carries no URL");
+    DCHECK(strlen(url) == dyn_body_len(f->dyn[at]),
+           "an external document script's row holds an address with a U+0000 in it — the row's body IS its URL "
+           "until the reply takes it across, and this park reads it as a NUL-terminated string, so the request "
+           "the host is shown would be a PREFIX of the address the element names");
+    meta = script_csp_meta(ctx, f->dyn_el[at]);
+    req.metadata = meta.m;
+    e = pending_push(&f->pending, FLOW_PENDING_DOCSCRIPT, flow_path_forced(f));
+    /* WHICH ROW THIS PARK IS FOR, BY NAME — it is the row's `dyn_id` rather than its position because a
+       position is a fact about the row only while the set is fixed (solver/flow.h), and this entry outlives
+       both §4.12.1.1's "immediately execute the script element" interposition and §7.5.10's removal. */
+    pending_set_int(e, PEND_SCRIPT_ROW, (int64_t)f->dyn_id[at]);
+    /* AND §4.3 Scheme fetch WITH THE ADDRESS. A document's own `<script src="data:text/javascript,…">` is
+       answered inside this agent at the park, so the entry can already carry its reply when this returns and
+       the flow's next step takes the networking task source's arm above the sequence and delivers it — the
+       same door a host-answered entry leaves by, which is why the flow's own arm at the row no longer has a
+       scheme-answered exit of its own. */
+    pending_park_request(ctx, e, &req);
+    script_csp_meta_free(ctx, &meta);
+    JS_FreeValue(ctx, e);
+}
+
 /* `doc` IS WHICH DOCUMENT'S PROGRAM THIS IS, and it is a parameter at every entry rather than a fact the
    scheduler assumes about itself. It used to be assumed: every program a flow ran was compiled with the
    SESSION's ctx, with one `? :` for the cross-agent operation — so a document of this agent that is not the
@@ -5734,6 +5776,16 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
        program and §8.1.4.4's checkpoint is owed only once that program's stack has emptied. */
     f->dyn_pos[at] = (unsigned char)pos;
     f->dyn_n++;
+    /* AND §4.12.1.1 "Processing model" STEP 33 IS OWED HERE, WHICH IS THE ONE PLACE IT CAN BE OWED ONCE PER
+       ELEMENT. A row holding an ADDRESS is an element whose `src` branch has just been entered, and that
+       branch FETCHES — see engine_pending_docscript, which states why the fetch and the execution slot are two
+       steps of one algorithm and what performing them as one cost. It is AFTER the row is complete because the
+       park reads the row: its document (the realm), its element (the metadata), its body (the address) and its
+       name (`dyn_id`), all of which the lines above have just written.
+       IT IS A ROUTE AND NOT A FALLBACK: the kind decides which one thing happens to this row, there is no
+       second implementation to choose between, and a kind that grows an address later reaches this line by
+       being that kind rather than by a caller remembering to ask. */
+    if (kind == DYN_SCRIPT_SRC) engine_pending_docscript(f, at);
 }
 
 /* THE ROW A CALLER HOLDS ALREADY-DECODED BYTES FOR. `body` is the shared text and this entry does NOT take it
@@ -7246,6 +7298,11 @@ static int flow_step(JSContext *ctx, Flow *f) {
                        its own — so the flow WAITS here: §4.12.1 fixes this script's position against the scripts
                        written around it, and running what comes after a bundle before the bundle is a different
                        program. The reply REPLACES this entry and the next pass compiles it.
+                       WHAT THIS ARM NO LONGER DOES IS ISSUE THE FETCH. HTML §4.12.1.1 "Processing model" step
+                       33 fetches when the element is PREPARED and step 35 only decides where the result runs,
+                       so the request went out when the row was created (engine_queue_into) and this arm is now
+                       purely §4.12.1's ORDER: every external script of this document is already on the wire,
+                       and the flow stops here because THIS row's bytes have not come back.
                        A REPLY THAT HAD ALREADY ARRIVED WAS DELIVERED BEFORE THIS ROW WAS EVEN READ, so the
                        second delivery that stood here is gone rather than moved. It existed because this arm
                        was one of only two places a reply could be taken, and it guarded against parking for
@@ -7272,23 +7329,33 @@ static int flow_step(JSContext *ctx, Flow *f) {
                                "entry standing here means that arm's guard and this row's have stopped being "
                                "the same question, and this flow is about to report itself owed a reply the "
                                "host has already paid");
+                        /* AND THE REQUEST §4.12.1.1 STEP 33 OWED FOR THIS ROW IS OUTSTANDING, WHICH IS THE
+                           WHOLE OF WHAT PREPARE-TIME FETCHING BUYS AND THE ONE THING THIS ARM CAN STILL CHECK.
+                           The park is made at the row's creation and the entry names the row by `dyn_id`, so a
+                           flow standing here with no entry naming this row is a flow that will report itself
+                           HOST-OWED over a request no join can list and no host will ever be shown — the
+                           §7.5.10 removal walk taking an entry without its row, or a row reaching this
+                           sequence by some route that is not engine_queue_into. It is a walk and it is dev
+                           only, for the reason the read above is. */
+                        int parked = 0;
+                        for (int j = 0, m = pending_count(f->pending); j < m; j++) {
+                            JSValue pe = pending_entry(f->pending, j);
+                            if (pending_get_int(pe, PEND_KIND) == FLOW_PENDING_DOCSCRIPT &&
+                                (uint64_t)pending_get_int(pe, PEND_SCRIPT_ROW) == f->dyn_id[f->script_i])
+                                parked = 1;
+                            JS_FreeValue(ctx, pe);
+                            if (parked) break;
+                        }
+                        DCHECK(parked,
+                               "a flow is standing on an external script row that owes no request — HTML "
+                               "§4.12.1.1 step 33 issues the fetch when the row is created and the entry names "
+                               "the row by `dyn_id`, so a row with no entry left is one whose park was removed "
+                               "without it, and this flow is about to wait for the rest of the session on a "
+                               "reply the host is never asked for");
                     }
 #endif
-                    engine_pending_docscript(ctx, body, f->script_i);
-                    /* …AND THE PARK MAY HAVE ANSWERED ITSELF. Fetch §4.3 Scheme fetch runs at the park, and
-                       for `data:`, `blob:` and `about:` the response is built inside this agent — so the entry
-                       this line just created can already carry its reply, and reporting HOST-OWED over it
-                       would be a claim about the host that is false: a marked flow leaves the pick until a
-                       HOST EVENT clears it, and no host event is coming for a request the host was never
-                       shown. The scheduler asserts exactly that at the mark (`pending_outstanding`), which is
-                       why this is a re-read of the register and not an `if` on which scheme it was. Progress
-                       instead, and the next pass takes the networking task source's arm ABOVE THE SEQUENCE
-                       and delivers — which is the same arm that would have taken a reply the host answered
-                       between two slices, so a scheme-answered entry and a host-answered one leave through
-                       one door. */
-                    if (flow_pending_ready(f)) { g_step_unit = STEP_UNIT_SCHEME_FETCH; return 0; }
-                    /* …AND THE RECORD THE HOST REALLY DOES OWE NAMES ITSELF TOO. This return performs no work,
-                       so it used to leave the PREVIOUS arm's name standing and the step was attributed to
+                    /* AND THE RECORD THE HOST REALLY DOES OWE NAMES ITSELF. This return performs no work, so
+                       it used to leave the PREVIOUS arm's name standing and the step was attributed to
                        whatever this flow last did — the census then reported a member parked on a fetch under
                        `run-a-task` or `microtask-checkpoint`, which is the one attribution an instrument
                        separating waiting from working must not get wrong. */
@@ -7506,7 +7573,11 @@ static int flow_step(JSContext *ctx, Flow *f) {
              *   - A `<script src>` DOES delay it, both the document's own (DOCSCRIPT, which the sequence arm
              *     far above already holds the flow at) and one a script INJECTED (SCRIPT) — §4.12.1.1
              *     "Processing model": "Whenever a script element el's delaying the load event is true, the
-             *     user agent must delay the load event of el's preparation-time document."
+             *     user agent must delay the load event of el's preparation-time document." The DOCSCRIPT
+             *     conjunct is now the standard's flag rather than a proxy for it: step 33 says "Set el's
+             *     delaying the load event to true." in the same breath as it fetches, and the entry this
+             *     reads is created at exactly that moment (engine_queue_into), so the two are set and
+             *     cleared together instead of the entry appearing only once the cursor had walked to the row.
              *   - A HOSTREQ is not a delay source at all and is a stronger thing — the flow is SUSPENDED
              *     mid-expression — so it is not this condition's business: the arm directly above answers it
              *     for this arm and for every arm below, which is why flow_blocked no longer appears here.

@@ -169,9 +169,12 @@ void engine_queue_script_immediate(uint32_t doc, const char *body, size_t body_n
 /* ITS SOURCE IS NONE, AND THE REASON IS THAT THIS ROW IS A POSITION RATHER THAN A TASK. §4.12.1 fixes where an
    external script runs among the scripts written around it, and this entry is that place being held; the
    NETWORKING task the response eventually queues is a different work item, and the register it lands on is
-   what serves it (engine_pending_docscript, and flow_deliver_one_reply's arm above the sequence). Calling the
-   held slot a networking task would put one source on two carriers by naming, which is the thing this value
-   exists to make visible. */
+   what serves it (flow_deliver_one_reply's arm above the sequence). Calling the held slot a networking task
+   would put one source on two carriers by naming, which is the thing this value exists to make visible.
+   THE REQUEST ITSELF IS ISSUED BY THIS CALL AND NOT BY THE FLOW REACHING THE SLOT — HTML §4.12.1.1
+   "Processing model" step 33 fetches when the element is prepared and step 35 only decides where the result
+   executes, so an entry queued here is on the wire from this moment while the position it holds is still
+   §4.12.1's. solver/engine.c states the whole argument at the park it routes to. */
 void engine_queue_docscript_url(uint32_t doc, const char *url, ScriptType stype, lxb_dom_element_t *el);
 /* An @S CANDIDATE, queued as the program it would be if it fired. Same queue, one difference: it is ALLOWED not
    to compile, because most breakouts do not fit most sink contexts and a candidate that does not parse simply
@@ -243,12 +246,6 @@ void engine_queue_javascript_url(uint32_t doc, const char *body, size_t body_n);
    LOST: the flow leaves the insertion steps with the node in hand and comes back to a URL and a reply, so the
    element rides the register (solver/pending.h's `scriptEl`) and the drain puts it on the row. */
 void engine_pending_script_url(JSContext *ctx, const char *url, ScriptType stype, lxb_dom_element_t *el);
-/* Park the running flow on a document's OWN external <script src> at sequence position `script_i`: the scripts
-   §4.12.1 orders run in that order, so the flow waits there and the reply fills the slot. THE SLOT IS ALWAYS
-   THIS FLOW'S OWN DYN_SCRIPT_SRC ROW — the session document's scripts are seeded as rows of the same table as
-   every other document's, so there is no shared half left to be in. One host fetch still answers every flow
-   parked on that address: engine_provide fills every register naming it and un-marks each of those flows. */
-void engine_pending_docscript(JSContext *ctx, const char *url, int script_i);
 /* THE DOCUMENT'S LOAD LIFECYCLE, owned by the browser layer and asked by the scheduler. Called once per stage
    per flow when that flow has run everything the document gave it: stage 0 fires DOMContentLoaded, stage 1
    fires load. Returns how many listener tasks it scheduled. Registered by the host that owns a Document; a

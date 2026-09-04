@@ -67,7 +67,13 @@
     X(CROSS_AGENT_OP,     "cross-agent-operation")                                \
     X(MICROTASK,          "microtask-checkpoint")                                 \
     X(DELIVER_REPLY,      "deliver-one-reply")                                    \
-    X(SCHEME_FETCH,       "scheme-fetch-answered")                                \
+    /* NO `scheme-fetch-answered` ROW, AND ITS ABSENCE IS A STATEMENT. It named */ \
+    /* the exit a flow took when the park it made AT ITS OWN CURSOR answered    */ \
+    /* itself — Fetch §4.3 Scheme fetch building a `data:` script's response    */ \
+    /* inside the agent. HTML §4.12.1.1 "Processing model" step 33 fetches when */ \
+    /* the element is PREPARED, so the park is made at the row's creation now   */ \
+    /* and a scheme-answered entry is taken by `deliver-one-reply` like every   */ \
+    /* other answered one. There is no exit left to name.                       */ \
     X(RUN_TASK,           "run-a-task")                                           \
     X(LIFECYCLE,          "document-lifecycle-stage")                             \
     X(RENDERING,          "queue-rendering-opportunity")                          \

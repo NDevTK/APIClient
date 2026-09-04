@@ -145,7 +145,8 @@ long pending_index_node_answered(const PendIndexNode *n);
  *
  * THAT PAIRING IS NOT HYPOTHETICAL AND IT IS WHY THIS PAIR WAS BUILT. Measured on the wasm smoke at 74eb1d62
  * (build-full.log, 13 censuses, 5857 steps, the run killed at its CPU budget): `deliver-one-reply` NEVER RAN,
- * and neither did `await-fetch-record`, `await-owed-reply` or `scheme-fetch-answered`. Every reply-dependent
+ * and neither did `await-fetch-record`, `await-owed-reply` or the `scheme-fetch-answered` row that build still
+ * had (it is retired — solver/step_unit.h says why). Every reply-dependent
  * probe row read 0 — `fetch then-chain clone-body body-bytes body-iso`, the surface entire. The census said
  * `blocked 0`, `owed 0`, `payment: 0/0 asks paid` and `299306 owed repl(ies)`, and every one of those four
  * numbers was TRUE and none of them was about this door: the first three are the SYNCHRONOUS door's, and the
