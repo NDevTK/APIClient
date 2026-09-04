@@ -515,6 +515,21 @@ static Document *doc_rec(const lxb_dom_document_t *dom)
     return dom ? (Document *)dom->user : NULL;
 }
 
+/* DOES THIS VALUE IMPLEMENT `Document` — Web IDL §3.7 Interfaces' implementation-check step 3, "If object does
+   not implement interface, then throw a TypeError.", as the PREDICATE core/idl_args' idl_this_iface takes.
+   §3.7.7 Operations' create an operation function asks it BEFORE it computes the effective overload set, so a
+   member that states it at its DECLARATION refuses a foreign receiver before §3.6 Overload resolution algorithm
+   converts an argument — which is the order a page can see, since a conversion runs the page's own `toString`.
+   A body cannot ask it that early, which is why the members below state it and do not test it.
+   ONE ANSWER TO ONE QUESTION: doc_receiver's own refusal is this predicate, so a member reached through either
+   route agrees with the other by construction rather than by two tests being kept in step. */
+static bool document_is(JSValueConst v)
+{
+    const lxb_dom_node_t *n = node_of(v);
+
+    return n != NULL && n->type == LXB_DOM_NODE_TYPE_DOCUMENT;
+}
+
 /* THE RECORD FOR THE DOCUMENT A MEMBER WAS CALLED ON. Every §4.5 member is `Document.prototype`'s, so its
    receiver names WHICH document it is about — `foreignDoc.createElement` must build its element in foreignDoc,
    and reading the realm's active document instead is the defect a second Document makes visible. */
@@ -529,7 +544,7 @@ static Document *doc_receiver(JSContext *ctx, JSValueConst this_val)
        null)` is a thing the corpus does deliberately. It is NOT an engine invariant and so NOT a DCHECK:
        asserting it would
        turn a test that asks for the throw into an abort that takes the whole file with it. */
-    if (!n || n->type != LXB_DOM_NODE_TYPE_DOCUMENT) {
+    if (!document_is(this_val)) {
         JS_ThrowTypeError(ctx, "this is not a Document");
         return NULL;
     }
@@ -730,7 +745,9 @@ static JSValue js_doc_create_fragment(JSContext *ctx, JSValueConst this_val, int
     lxb_dom_document_fragment_t *frag;
 
     (void)argc; (void)argv; (void)magic;
-    DCHECK(n != NULL, "createDocumentFragment ran on something that is not the document");
+    DCHECK(n != NULL, "createDocumentFragment ran on a receiver that is not a Document — the declaration states "
+                      "Web IDL §3.7 Interfaces' implementation check, so reaching the body means "
+                      "idl_implementation_check did not run for it");
     frag = lxb_dom_document_fragment_interface_create(n->owner_document);
     CHECK(frag != NULL, "createDocumentFragment: the Lexbor fragment allocation failed");
     /* THIS FLOW MADE IT, exactly as its five siblings on this interface say of theirs. A fragment is detached
@@ -2974,7 +2991,9 @@ static JSValue js_doc_create_traverser(JSContext *ctx, JSValueConst this_val, in
     JSValueConst root = argc > 0 ? argv[0] : JS_UNDEFINED, filter = JS_NULL;
     uint32_t what = 0xFFFFFFFFu;
 
-    DCHECK(node_of(this_val) != NULL, "a traverser factory ran on something that is not a document");
+    DCHECK(document_is(this_val), "a traverser factory ran on a receiver that is not a Document — the "
+                                  "declaration states Web IDL §3.7 Interfaces' implementation check, so "
+                                  "reaching the body means idl_implementation_check did not run for it");
     if (!node_of(root))
         return JS_ThrowTypeError(ctx, "createNodeIterator/createTreeWalker requires a Node root");
     /* The IDL's defaults. An absent optional argument arrives as undefined, which is what §3.6 means by
@@ -2993,7 +3012,9 @@ static JSValue js_doc_create_range(JSContext *ctx, JSValueConst this_val, int ar
                                    int magic)
 {
     (void)argc; (void)argv; (void)magic;
-    DCHECK(node_of(this_val) != NULL, "createRange ran on something that is not a document");
+    DCHECK(document_is(this_val), "createRange ran on a receiver that is not a Document — the declaration "
+                                  "states Web IDL §3.7 Interfaces' implementation check, so reaching the body "
+                                  "means idl_implementation_check did not run for it");
     return range_new_at(ctx, this_val);
 }
 
@@ -3091,6 +3112,7 @@ static void document_declare_members(JSContext *ctx)
        which it was not, and `new Document()` is how a page gets an XML document without DOMImplementation. */
     g_id_doc_ctor = idl_method_id(ctx, NULL, 0, js_doc_ctor, 0);
     g_id_create_fragment = idl_method_id(ctx, NULL, 0, js_doc_create_fragment, 0);
+    idl_this_iface(document_is, "Document");
     g_id_create_element_ns = idl_method_id(ctx, IDL_NSSTR_STR, 2, js_doc_create_element_ns, 0);
     {
         /* §4.5: `(Node root, optional unsigned long whatToShow = 0xFFFFFFFF, optional NodeFilter? filter =
@@ -3100,11 +3122,14 @@ static void document_declare_members(JSContext *ctx)
         g_id_create_iterator = idl_method_id(ctx, TRAVERSER, 3, js_doc_create_traverser, 0);
         idl_iface_brand(node_class_id());
         idl_optional_from(1);
+        idl_this_iface(document_is, "Document");
         g_id_create_walker = idl_method_id(ctx, TRAVERSER, 3, js_doc_create_traverser, 1);
         idl_iface_brand(node_class_id());
         idl_optional_from(1);
+        idl_this_iface(document_is, "Document");
     }
     g_id_create_range = idl_method_id(ctx, NULL, 0, js_doc_create_range, 0);
+    idl_this_iface(document_is, "Document");
     g_id_create_event = idl_method_id(ctx, IDL_1STR, 1, js_doc_create_event, 0);
     {
         /* §4.5's `[CEReactions] Node adoptNode(Node node)`. The argument is an INTERFACE type, so the
