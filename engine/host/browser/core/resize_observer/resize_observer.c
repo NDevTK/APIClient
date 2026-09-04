@@ -892,6 +892,19 @@ void resize_observer_init(JSContext *ctx)
     JSClassDef d = { "ResizeObserver" };
 
     if (g_ready) return;   /* one AGENT, one class */
+    /* THE ENUMERATION AND ITS KEYWORD LIST ARE TWO SPELLINGS OF ONE FACT, and this is the assert that keeps
+       them one. `RoBoxOption` is the index every table in this component is written over — the dictionary's
+       value list here, §3.4.8's switch, and §3.4.4's per-box array — so a keyword added to the list without an
+       enumerator, or an enumerator added without a keyword, would silently re-aim all three. Both operands are
+       in scope at this line, which is what makes it a check rather than a restatement of a literal. */
+    DCHECK((int)COUNTOF(RO_BOX_VALUES) - 1 == RO_BOX_COUNT,
+           "§2.1's `enum ResizeObserverBoxOptions` and this file's keyword list have different lengths — the "
+           "enumerator IS the index into that list and into §3.4.4's per-box array, so one of the three is now "
+           "reading a keyword that belongs to another box");
+    DCHECK(strcmp(RO_BOX_VALUES[RO_BOX_CONTENT], "content-box") == 0,
+           "§2.1's keyword list is not in the order `RoBoxOption` declares — the dictionary's `= \"content-box\"` "
+           "default names the keyword and the enumerator names the index, and this is the one pair that can be "
+           "checked without re-listing the enumeration");
     JS_NewClassID(JS_GetRuntime(ctx), &g_class);
     JS_NewClass(JS_GetRuntime(ctx), g_class, &d);
     resize_observer_entry_init(ctx);
