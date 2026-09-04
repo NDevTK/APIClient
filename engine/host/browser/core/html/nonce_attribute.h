@@ -65,4 +65,25 @@ void nonce_attribute_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const c
    the same reason §4.12.1's cloning steps beside it tolerate one. */
 void nonce_attribute_cloned(JSContext *ctx, lxb_dom_node_t *src, lxb_dom_node_t *copy);
 
+/* §2.5.6's [[CryptographicNonce]], READ BY A COMPONENT RATHER THAN BY THE MEMBER — "the current value of el's
+ * [[CryptographicNonce]] internal slot", which is exactly what HTML §4.2.4.4 "Processing `Link` headers"'
+ * create link options from element takes for its options' cryptographic nonce metadata, and which §4.2.4.3
+ * "Fetching and processing a resource from a link element"'s create a link request then places on the request
+ * itself. The two algorithms are one step apart and live in different sections, which reads like an editorial
+ * accident and is the document's; a citation that puts them both under one number is wrong about a section a
+ * reader can open.
+ *
+ * IT IS NOT THE `nonce` CONTENT ATTRIBUTE AND THAT IS THE WHOLE REASON IT EXISTS. The two stop agreeing the
+ * moment §2.5.6's hiding step blanks the attribute or a page does `el.nonce = v`, and a request built from the
+ * attribute would then carry bytes the element no longer has — under a `script-src 'nonce-…'` policy that is
+ * the difference between a subresource CSP admits and one it refuses. A caller reaching for
+ * lxb_dom_element_get_attribute here is reading the wrong half of §2.5.6.
+ *
+ * OWNED, and it may be a CONCOLIC rather than a string: the slot deliberately holds a JS value so that
+ * `el.nonce = location.hash.slice(1)` survives as a source. A caller that needs BYTES therefore has to decide
+ * what an unknown nonce means for its own algorithm before it coerces one. `el` may be any element; one that
+ * does not include HTMLOrSVGOrMathMLElement has no slot and answers the empty string §2.5.6 gives an element
+ * nothing has written. */
+JSValue nonce_attribute_current(JSContext *ctx, lxb_dom_element_t *el);
+
 #endif

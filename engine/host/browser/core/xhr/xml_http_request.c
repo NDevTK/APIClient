@@ -1825,6 +1825,15 @@ static bool xhr_main_fetch_local(JSContext *ctx, XhrData *d)
     if (parsed &&
         (fetch_block_bad_port(&rec) == FETCH_PORT_BLOCKED ||
          policy_should_block_request(document_policy(ctx), &rec, /*destination*/ "",
+                                     /* FETCH §2.2.5's TWO METADATA FIELDS, UNSTATED, and here the claim is the
+                                        strongest of the four this engine makes: the words `nonce` and
+                                        `integrity` do not occur ANYWHERE in the XMLHttpRequest Standard.
+                                        §3.5.6 "The send() method" builds its request from §3.5.1 The open()
+                                        method's stored method and URL and this object's own state, and there
+                                        is no element behind it for Fetch §2.2.5's note — "generally populated
+                                        from attributes and flags on the HTML element responsible for creating
+                                        a request" — to draw from. Both fields are the initial empty string. */
+                                     csp_request_metadata_unstated(),
                                      /*redirect count*/ 0) == CSP_REQUEST_BLOCKED)) {
         url_record_free(&rec);
         JS_FreeCString(ctx, u);

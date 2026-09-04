@@ -106,23 +106,36 @@ bool csp_element_is_nonceable(const lxb_dom_element_t *element);
 CspMatch csp_element_match_source_list(const CspDirective *directive, const lxb_dom_element_t *element,
                                        CspInlineType type, const char *source, size_t source_len);
 
-/* §6.7.2.3 "Does nonce match source list?" AND §6.7.2.4 "Does integrity metadata match source list?", ASKED OF
- * THE LIST ALONE — the half of each algorithm that is settled before the request is looked at.
+/* §6.7.2.3 "Does nonce match source list?" AND §6.7.2.4 "Does integrity metadata match source list?" — each
+ * WHOLE, over a REQUEST's own field and a source list.
  *
- * NEITHER IS THE WHOLE ALGORITHM AND NEITHER STANDS IN FOR ONE. §6.7.2.3's step 3 iterates the list looking
- * for an expression that "matches the nonce-source grammar", and its step 4 is "Return Does Not Match" —
- * so a list carrying no nonce-source answers "Does Not Match" for EVERY nonce, and the request's cryptographic
- * nonce metadata cannot change it. §6.7.2.4 says the same thing one step earlier and out loud: its step 2 is
- * "Let integrity expressions be the set of source expressions in source list that match the hash-source
- * grammar" and its step 3 is "If integrity expressions is empty, return Does Not Match".
+ * WHAT STOOD HERE, AND WHY IT IS DELETED RATHER THAN KEPT BESIDE THESE. This header used to expose only the
+ * half of each algorithm that the LIST settles on its own — has a nonce-source, has a hash-source — and said
+ * that neither was the whole algorithm and neither stood in for one. That was true and it was a statement
+ * about an engine that did not carry Fetch §2.2.5 "Requests"' cryptographic nonce metadata or integrity
+ * metadata to a pre-request check: the only question those two predicates answered was whether a step was
+ * settled without a request field the engine did not hold, and it was asked by a crash. The fields are carried now
+ * (core/frame/policy_container.h's CspRequestMetadata), so that question cannot be asked, and a predicate
+ * whose only caller was the crash it fed goes out with it.
  *
- * THEY ARE FACTS ABOUT THE LIST, AND THE CALLER ASKS ITS OWN QUESTION OF THEM. What a pre-request check asks
- * here is "is this step's answer settled without a request field I do not carry"; where the answer is `true`
- * the field is REQUIRED and the caller must have it. That is why the bit is exposed rather than a ready-made
- * verdict: a `csp_nonce_matches(list, "")` would take an empty string nobody computed and hand back a
- * plausible "Does Not Match" for exactly the policy whose answer depends on bytes the request never carried. */
-bool csp_source_list_has_nonce_source(const CspDirective *directive);
-bool csp_source_list_has_hash_source(const CspDirective *directive);
+ * THE REQUEST'S FIELD IS NEVER NULL, AND ITS EMPTINESS IS AN ANSWER RATHER THAN A HOLE. Fetch §2.2.5 gives
+ * every request both fields and states their initial value — "A request has associated cryptographic nonce
+ * metadata (a string). Unless stated otherwise, it is the empty string." — so a request that carries neither
+ * is a request whose fields are two empty strings, and each algorithm reads that POSITIVELY: §6.7.2.3's step 2
+ * is "If nonce is the empty string" and answers Does Not Match on it, and §6.7.2.4 reaches the same answer at
+ * its step 5 because SRI §3.3.2 "Parse metadata" over an empty string yields no expressions. Both are
+ * BORROWED.
+ *
+ * `directive` IS NON-NULL, for the reason csp_source_list_match_url gives: a policy carrying no governing
+ * directive says NOTHING about the request, which §6.8.4 decides at the CALLER and which is not the same
+ * answer as a list that matches nothing. Each algorithm's own step 1 asserts the list is not null.
+ *
+ * THE REQUEST'S FIELD ARRIVES AS BYTES AND A LENGTH, not as a NUL-terminated string, for the reason
+ * csp_element_match_source_list's `source` does: the producers are a DOM attribute value and a slice of a
+ * record, and neither owes this file a terminator. A caller with no bytes states a zero length. */
+CspMatch csp_nonce_match_source_list(const CspDirective *directive, const char *nonce, size_t nonce_len);
+CspMatch csp_integrity_match_source_list(const CspDirective *directive, const char *integrity,
+                                         size_t integrity_len);
 
 /* §6.7.2.7 "does url match source list in origin with redirect count?" — the whole of what decides whether a
  * REQUEST may be made, and the algorithm every fetch directive's pre-request check ends in.

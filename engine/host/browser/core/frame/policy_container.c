@@ -518,16 +518,21 @@ bool policy_allows_string_compilation(const PolicyContainer *p)
  * would never use. Every other name §6.8.1 can return — connect-src, manifest-src, object-src, frame-src,
  * media-src, font-src, img-src, and §6.2.2.1's worker-src — is §6.7.2.5 alone.
  *
- * WHAT OF THOSE TWO IS ANSWERED HERE, AND WHAT CRASHES. Each preliminary step is settled by the SOURCE LIST
- * before the request is looked at: §6.7.2.3 step 3 loops over the list's nonce-source expressions, §6.7.2.4
- * steps 2-3 say a list with no hash-source is "Does Not Match" outright, and step 1.3's 'strict-dynamic' arm
- * does not exist unless the keyword is in the list. A policy carrying none of the three therefore reaches
- * §6.7.2.5 BY THE ALGORITHM and not by an approximation of it — which is the shape most real policies are
- * written in, and is why `script-src 'self' 'unsafe-inline' <hosts>` is answered here rather than refused. A
- * policy that DOES carry one needs a field of Fetch §2.2.5's request record that this engine does not carry to
- * the check, and each arm crashes naming its own field. */
+ * WHAT OF THOSE TWO IS ANSWERED HERE, AND WHAT STILL CRASHES. Three of the four preliminary steps are now
+ * ANSWERED, because the request's own fields reach this walk: §6.7.1.1 step 1.1 and §6.1.14.1 step 3 run
+ * §6.7.2.3 over the request's cryptographic nonce metadata, and step 1.2 runs §6.7.2.4 over its integrity
+ * metadata and SRI §3.3.2 "Parse metadata" beneath that. What remains is step 1.3, which needs Fetch §2.2.5's
+ * PARSER METADATA — a field no producer states yet — and which crashes naming it.
+ *
+ * THE ORDER OF THOSE STEPS IS WHAT MAKES THE MODERN STRICT POLICY ANSWERABLE, and it is worth saying because
+ * it looks like an accident. §6.7.1.1 runs the nonce at 1.1 and 'strict-dynamic' at 1.3, so
+ * `script-src 'nonce-x' 'strict-dynamic'` — which is the shape CSP's own §8.5 "Strict CSP" recommends and the
+ * shape most nonce-bearing pages are written in — RETURNS AT 1.1 for a nonce that matches and never reaches
+ * the unbuilt step at all. Reordering these two arms would turn the commonest policy on the modern web from an
+ * answer into an abort. */
 static bool policy_blocks_request(const CspPolicy *policy, const UrlRecord *url, const char *effective,
-                                  const char *destination, const Origin *self_origin, int redirect_count)
+                                  const char *destination, CspRequestMetadata metadata,
+                                  const Origin *self_origin, int redirect_count)
 {
     const CspDirective *d = csp_policy_governing_directive(policy, effective);
 
@@ -546,22 +551,12 @@ static bool policy_blocks_request(const CspPolicy *policy, const UrlRecord *url,
            is a question the two halves of one program answer differently. */
         if (!fetch_is_script_like(destination))
             return false;
-        DCHECK(!csp_source_list_has_nonce_source(d),
-               "§6.7.1.1 step 1.1 asks §6.7.2.3 whether the REQUEST's cryptographic nonce metadata matches this "
-               "source list, and the list carries a nonce-source, so §6.7.2.3's own step 3 does not settle it — "
-               "the answer is the request's to give and this engine does not carry it to the check. Fetch "
-               "§2.2.5 gives every request a cryptographic nonce metadata and HTML §4.2.4.3's create a link "
-               "request sets it (\"set request's cryptographic nonce metadata to options's cryptographic nonce "
-               "metadata\"); carry that field into policy_should_block_request and run §6.7.2.3 here. Matching "
-               "the source list alone reports a `<script nonce=x>` under `script-src 'nonce-x'` — one of the "
-               "two shapes modern CSP is written in — as blocked, which is a script every browser LOADS");
-        DCHECK(!csp_source_list_has_hash_source(d),
-               "§6.7.1.1 step 1.2 asks §6.7.2.4 whether the REQUEST's integrity metadata matches this source "
-               "list, and the list carries a hash-source, so §6.7.2.4's step 3 does not settle it — the answer "
-               "needs the request's integrity metadata and SRI's parse metadata over it. HTML §4.2.4.3's create "
-               "a link request sets that field from the element's `integrity`; carry it into "
-               "policy_should_block_request and run §6.7.2.4 here. Matching the source list alone reports a "
-               "subresource a browser LOADS as blocked");
+        /* STEP 1.1 — §6.7.2.3 over the request's cryptographic nonce metadata. */
+        if (csp_nonce_match_source_list(d, metadata.nonce, metadata.nonce_len) == CSP_MATCHES)
+            return false;
+        /* STEP 1.2 — §6.7.2.4 over the request's integrity metadata. */
+        if (csp_integrity_match_source_list(d, metadata.integrity, metadata.integrity_len) == CSP_MATCHES)
+            return false;
         DCHECK(!csp_source_list_contains(d, "'strict-dynamic'"),
                "§6.7.1.1 step 1.3 decides this request by the REQUEST's parser metadata ALONE once the list "
                "carries 'strict-dynamic' — Blocked when it is \"parser-inserted\", Allowed otherwise, with the "
@@ -573,14 +568,11 @@ static bool policy_blocks_request(const CspPolicy *policy, const UrlRecord *url,
                "permits");
         /* Step 1.4 is the §6.7.2.5 below, which is §6.7.2.7 over the request's current URL. */
     } else if (!strcmp(effective, "style-src-elem")) {
-        DCHECK(!csp_source_list_has_nonce_source(d),
-               "§6.1.14.1 \"style-src-elem Pre-request Check\" step 3 asks §6.7.2.3 whether the REQUEST's "
-               "cryptographic nonce metadata matches this source list, and the list carries a nonce-source, so "
-               "the answer is the request's to give and this engine does not carry it to the check. It is the "
-               "SAME field §6.7.1.1 step 1.1 needs, and it is the ONLY preliminary step a style directive has: "
-               "§6.1.13.1 and §6.1.14.1 have no integrity arm and no 'strict-dynamic' arm, so carrying the nonce "
-               "finishes this directive's check outright. Matching the source list alone reports a `<link "
-               "rel=stylesheet nonce=x>` under `style-src 'nonce-x'` as blocked");
+        /* §6.1.14.1 "style-src-elem Pre-request Check" STEP 3 — the same §6.7.2.3 over the same field, and the
+           ONLY preliminary step a style directive has: §6.1.13.1 and §6.1.14.1 carry no integrity arm and no
+           'strict-dynamic' arm, so this finishes the directive's check outright. */
+        if (csp_nonce_match_source_list(d, metadata.nonce, metadata.nonce_len) == CSP_MATCHES)
+            return false;
         /* Step 4 is the §6.7.2.5 below. */
     }
     if (csp_source_list_match_url(d, url, self_origin, redirect_count) == CSP_MATCHES)
@@ -599,11 +591,48 @@ static bool policy_blocks_request(const CspPolicy *policy, const UrlRecord *url,
     return true;
 }
 
+CspRequestMetadata csp_request_metadata(const char *nonce, size_t nonce_len,
+                                        const char *integrity, size_t integrity_len)
+{
+    CspRequestMetadata m;
+
+    DCHECK(nonce != NULL && integrity != NULL,
+           "a request's CSP metadata was stated with a NULL field. Fetch §2.2.5 gives every request both a "
+           "cryptographic nonce metadata and an integrity metadata and makes the empty string their initial "
+           "value, so a caller with nothing to carry states an empty string with a zero length — and a caller "
+           "whose OPERATION sets neither field says so with csp_request_metadata_unstated, which is a "
+           "different claim about a named algorithm and reads as one");
+    m.nonce = nonce;
+    m.nonce_len = nonce_len;
+    m.integrity = integrity;
+    m.integrity_len = integrity_len;
+    return m;
+}
+
+CspRequestMetadata csp_request_metadata_unstated(void)
+{
+    /* §2.2.5's "Unless stated otherwise, it is the empty string", for both fields, written out rather than
+       zero-filled — a struct nobody assigned is exactly what the abort below exists to catch. */
+    return csp_request_metadata("", 0, "", 0);
+}
+
 CspRequestVerdict policy_should_block_request(const PolicyContainer *p, const UrlRecord *url,
-                                              const char *destination, int redirect_count)
+                                              const char *destination, CspRequestMetadata metadata,
+                                              int redirect_count)
 {
     const char *effective;
     size_t i;
+
+    /* THE ONE STATE A CONSTRUCTOR CANNOT PREVENT. Both spellings of CspRequestMetadata place two non-NULL
+       pointers, so a NULL field here is a struct some caller built with a designated initializer or a memset
+       — the zero-fill the type's own header forbids — and it is caught HERE rather than deeper because this is
+       the boundary the value crosses. It is a DCHECK and not a CHECK because the value is one THIS codebase
+       composed: no byte of it comes from a server, so it is an invariant of the engine's own logic. */
+    DCHECK(metadata.nonce != NULL && metadata.integrity != NULL,
+           "§4.1.2 was entered with a CSP request metadata whose fields were never placed — Fetch §2.2.5 makes "
+           "both of them strings with the empty string as their initial value, so a NULL is not a request "
+           "state at all. Build the value with csp_request_metadata or csp_request_metadata_unstated; a "
+           "designated initializer zero-fills what it does not name and is what this catches");
 
     /* §4.1.2 step 1 reads the request's policy container's CSP list, and a document with no container has no
        policies — the overwhelmingly common case, and §4.1.2's own "let result be Allowed" for it. */
@@ -619,8 +648,8 @@ CspRequestVerdict policy_should_block_request(const PolicyContainer *p, const Ur
        THE QUANTIFIER IS THE SAME ONE `policy_allows_inline` RUNS, from the other end: §4.1.2 sets result to Blocked
        if ANY policy is violated, which is "allowed only if EVERY policy permits it". */
     for (i = 0; i < p->csp.n_policies; i++)
-        if (policy_blocks_request(&p->csp.policies[i], url, effective, destination, p->csp.self_origin,
-                                  redirect_count))
+        if (policy_blocks_request(&p->csp.policies[i], url, effective, destination, metadata,
+                                  p->csp.self_origin, redirect_count))
             return CSP_REQUEST_BLOCKED;
     return CSP_REQUEST_ALLOWED;
 }

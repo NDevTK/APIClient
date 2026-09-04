@@ -1679,6 +1679,14 @@ const OTHER_SPECS = [
      answers FSA's numbers out of the File System Standard — a wrong answer manufactured by adding a right one.
      A foreign row is what refuses that: an `other:` anchor is never judged at all. */
   "fsa",
+  /* SUBRESOURCE INTEGRITY, AND ITS ABBREVIATION, WHICH IS THE ONE THIS TREE ACTUALLY WRITES. It arrived with
+     CSP §6.7.2.4, whose step 4 hands a request's integrity metadata to SRI §3.3.2 "Parse metadata" and cites
+     [SRI] for it — so a component reading that grammar cites a standard this audit does not index, and an
+     unanchored `§3.3.2` in a CSP-dominant file is judged out of CSP, whose §3.3.2 does not exist. That is the
+     `file system access` failure exactly: a real number, the wrong document. A foreign row REFUSES to decide
+     rather than deciding wrongly, which is the honest state for a standard whose text this audit does not
+     hold; an index row would be better and is a fetch away. */
+  "sri", "subresource integrity",
   /* THE COMPATIBILITY STANDARD, AND IT IS HERE FOR THE FSA REASON WITH THE VOTE POINTING SOMEWHERE ELSE. This
      tree writes `CSS Compatibility §3.1` — the number WITH its standard, which is what CLAUDE.md asks for —
      and the tail regex ends on a word neither this list nor ANCHOR_TO_KEY held, so every one of those sites

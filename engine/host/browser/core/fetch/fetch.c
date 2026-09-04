@@ -731,6 +731,23 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, const RequestRecord 
     const char *u;
     /* §5.4 step 2'S PARSED URL, kept for the host below. See where it is filled. */
     char *abs = NULL;
+    /* FETCH §2.2.5's TWO METADATA FIELDS OF THIS REQUEST, composed HERE because the block below declares a
+       `UrlRecord rec` that shadows this function's request record — and read off the RECORD rather than
+       written as constants, for the reason `req.destination` two screens down is read off it: §5.4 is the one
+       application of RequestInit and a second copy of any of its members drifts from it.
+       THE INTEGRITY METADATA IS A REAL FIELD A PAGE CAN SET. §5.4 "Request class"'s constructor states it —
+       "If init[\"integrity\"] exists, then set request's integrity metadata to it" — so `fetch(u, {integrity:
+       \"sha256-…\"})` carries a digest that CSP §6.7.2.4 is entitled to see. It does not change THIS call's
+       verdict today and that is the algorithm's doing rather than a shortcut: §6.8.1 gives a `fetch()` the
+       empty destination, whose effective directive is `connect-src`, and §6.1.2.1 "connect-src Pre-request
+       check" has no integrity arm — only the script directives reach §6.7.1.1. Carrying the field anyway is
+       what keeps the request's state a fact about the REQUEST rather than about the check that happens to
+       read it, so the day §6.8.1 routes one of these to a script directive nothing here has to change.
+       THE CRYPTOGRAPHIC NONCE METADATA IS UNSTATED, and that is §5.4's answer and not this file's: the
+       constructor sets no nonce on any path, and there is no element behind a `fetch()` for §2.2.5's note —
+       "generally populated from attributes and flags on the HTML element responsible for creating a request" —
+       to draw one from. Its value is the initial empty string. */
+    CspRequestMetadata csp_meta;
 
     promise = JS_NewPromiseCapability(ctx, resolving);
     if (JS_IsException(promise))
@@ -754,6 +771,16 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, const RequestRecord 
     } else {
         u = JS_ToCString(ctx, url);
     }
+    /* ALWAYS FATAL, and it is an OOM rather than a design invariant: `init_str` builds every member of the
+       record with `js_strdup`, whose failure is the one way this field is absent, and the same allocation
+       failure is a CHECK inside `init_str` itself. It is not a DCHECK because the `strlen` below is a RELEASE
+       dereference of this pointer. */
+    CHECK(rec != NULL && rec->integrity != NULL,
+          "fetch() reached the host edge with a request record carrying no integrity metadata — Fetch §5.4 "
+          "step 23 fills it on every path and §2.2.5 makes the empty string its initial value, so an absent "
+          "one is an allocation that failed inside request_init_apply");
+    csp_meta = csp_request_metadata(/*cryptographic nonce metadata*/ "", 0,
+                                    rec->integrity, strlen(rec->integrity));
     if (u) {
         /* §4.3 SCHEME FETCH: "Switch on request's current URL's scheme". The scheme is what the URL PARSER
            says it is and not what the string starts with, so the URL is parsed ONCE here and every arm below
@@ -792,7 +819,7 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, const RequestRecord 
            matched against a URL, and a shape is not the URL the request will go to. */
         if (url_is_real &&
             (fetch_block_bad_port(&rec) == FETCH_PORT_BLOCKED ||
-             policy_should_block_request(document_policy(ctx), &rec, /*destination*/ "",
+             policy_should_block_request(document_policy(ctx), &rec, /*destination*/ "", csp_meta,
                                          /*redirect count*/ 0) == CSP_REQUEST_BLOCKED)) {
             JSValue value;
 

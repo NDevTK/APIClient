@@ -657,6 +657,16 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
     if (url_parse(&rec, abs, strlen(abs), NULL) &&
         (fetch_block_bad_port(&rec) == FETCH_PORT_BLOCKED ||
          policy_should_block_request(document_policy(ctx), &rec, /*destination*/ "image",
+                                     /* FETCH §2.2.5's TWO METADATA FIELDS, UNSTATED — and that is a claim
+                                        about §4.8.4.3.5, not a gap. This algorithm builds its request with
+                                        "creating a potential-CORS request given urlString, `image`, and the
+                                        current state of the element's crossorigin content attribute" and sets
+                                        nothing else on it: neither `nonce` nor `integrity` appears anywhere in
+                                        §4.8.4 "Images", and an `img` element carries no such content attribute
+                                        for one to be read from. So both fields are §2.2.5's initial empty
+                                        string, which CSP reads as an ANSWER — §6.7.2.3 step 2 refuses an empty
+                                        nonce — rather than as a value this call site failed to plumb. */
+                                     csp_request_metadata_unstated(),
                                      /*redirect count*/ 0) == CSP_REQUEST_BLOCKED)) {
         /* A blocked request is a NETWORK ERROR, which is "no data could be obtained" — §4.8.4.3's own gloss on
            the broken state — so it takes the same arm the delivery does, without ever owing the host a reply. */

@@ -29,6 +29,8 @@
 #include "solver/flow.h"         /* §4.2.4.3 ends in a FETCH, and a fetch parks on a flow — see link_trigger */
 #include "solver/engine.h"       /* …so the PARSER's own elements are served as a work item — see below */
 #include "core/mime/mime_type.h"    /* §4.6.8.20's "a string type matches a preload destination" */
+#include "solver/concolic.h"        /* §2.5.6's slot holds a JS value, so a nonce can be unknown input */
+#include "core/html/nonce_attribute.h" /* §4.2.4.3 takes the request's nonce from [[CryptographicNonce]] */
 #include "core/html/html_link.h"
 
 static int      g_ready;
@@ -659,29 +661,79 @@ static void link_preload(JSContext *ctx, lxb_dom_element_t *el)
         JS_FreeValue(ctx, uv);
     }
 
-    /* Fetch §4.1 "Main fetch" step 7 — "If should request be blocked due to a bad port … or should request be
-       blocked by Content Security Policy returns blocked, then set response to a network error". It runs HERE,
-       in the engine, because a policy is the DOCUMENT's; the destination computed above is what CSP §6.8.1
-       "Get the effective directive for request" switches on, so `as=script` is governed by `script-src` and
-       `as=style` by `style-src`. IT IS THE TRANSLATED VALUE and that matters at one member: `as=fetch` reaches
-       §6.8.1 as the EMPTY string and is governed by its FIRST row, `connect-src`. Passing the keyword got the
-       same directive out of §6.8.1's trailing "Return connect-src" for an unlisted destination — the right
-       answer for the wrong reason, which is a coincidence rather than a rule and would have moved the day
-       §2.2.5 or §6.8.1 gained a row. A blocked request is a network error, and §4.6.8.20's processResponse fires
-       `error` for one — so the page's handler runs, and the `<script>` it would have injected is not created,
-       which is exactly what a browser does under that policy. */
-    url_record_init(&rec);
-    if (url_parse(&rec, abs, strlen(abs), NULL) &&
-        (fetch_block_bad_port(&rec) == FETCH_PORT_BLOCKED ||
-         policy_should_block_request(document_policy(ctx), &rec, destination,
-                                     /*redirect count*/ 0) == CSP_REQUEST_BLOCKED)) {
+    {
+        /* §4.2.4.3's create a link request STEPS 6-7 — "Set request's integrity metadata to options's
+           integrity" and "Set request's cryptographic nonce metadata to options's cryptographic nonce
+           metadata" — over the two members that §4.2.4.4 "Processing `Link` headers"' create link options
+           from element fills from THIS element: its `integrity` content attribute, and "the current value of
+           el's [[CryptographicNonce]] internal slot". The options algorithm lives in §4.2.4.4 rather than
+           beside the request one, which reads like an editorial accident and is the document's, so a citation
+           of it that follows the request's number is wrong about a section a reader can open. This is the ONE
+           request-creating algorithm in this engine that states either field, which is why the other three say
+           so with csp_request_metadata_unstated and this one does not.
+           THE NONCE IS THE SLOT AND NOT THE ATTRIBUTE. HTML §2.5.6 "Nonce attributes" makes those two diverge
+           on purpose — after its hiding step the attribute is blank while the slot holds the nonce, and after
+           any `el.nonce = v` the slot holds v while the attribute holds the markup's — so reading the
+           attribute here would hand CSP bytes the element no longer has, which under `style-src 'nonce-…'` is
+           the difference between a stylesheet the policy admits and one it refuses. */
+        JSValue nonce_slot = nonce_attribute_current(ctx, el);
+        size_t integrity_n = 0;
+        const char *integrity = link_attr(el, "integrity", &integrity_n);
+        const char *nonce;
+        CspRequestMetadata metadata;
+        bool blocked;
+
+        /* AN UNKNOWN NONCE IS AN UNDECIDED PREDICATE AND HAS NO ANSWER HERE. §2.5.6's slot deliberately holds a
+           JS value so that `el.nonce = location.hash.slice(1)` survives as a source, and CSP §6.7.2.3 step 3.1
+           then asks whether that value is identical to a policy's base64-value — a comparison an unconstrained
+           domain answers NEITHER way. The arm must FORK: one flow in which the nonce matches and this request
+           is allowed, one in which it does not and §6.7.2.5 decides it, with the domain narrowed on each side.
+           Coercing the concolic instead picks one of those worlds by whichever example the value happens to
+           carry and reports its verdict for both — and the verdict is what §@S attaches to every breakout it
+           measures against this document's policy. */
+        DCHECK(!concolic_is(nonce_slot),
+               "a `<link>` element's [[CryptographicNonce]] is an unknown external value, and CSP §6.7.2.3 "
+               "step 3.1 compares it against this policy's nonce-source expressions for identity — which an "
+               "unconstrained domain does not answer. Fork the request here into the matching and "
+               "non-matching arms and let each carry the narrowed domain, the way an opaque operand forks "
+               "every other predicate; a coerced example reports ONE arm's verdict as though it were both");
+        nonce = JS_ToCString(ctx, nonce_slot);
+        CHECK(nonce != NULL, "§4.2.4.3: OOM reading a link element's cryptographic nonce metadata");
+        metadata = csp_request_metadata(nonce, strlen(nonce),
+                                        /* An element with no `integrity` attribute has Fetch §2.2.5's initial
+                                           empty string, which is §4.2.4.4's own answer: its create link
+                                           options from element sets the member only "If el has an integrity
+                                           attribute". */
+                                        integrity ? integrity : "", integrity_n);
+
+        /* Fetch §4.1 "Main fetch" step 7 — "If should request be blocked due to a bad port … or should request
+           be blocked by Content Security Policy returns blocked, then set response to a network error". It runs
+           HERE, in the engine, because a policy is the DOCUMENT's; the destination computed above is what CSP
+           §6.8.1 "Get the effective directive for request" switches on, so `as=script` is governed by
+           `script-src` and `as=style` by `style-src`. IT IS THE TRANSLATED VALUE and that matters at one
+           member: `as=fetch` reaches §6.8.1 as the EMPTY string and is governed by its FIRST row,
+           `connect-src`. Passing the keyword got the same directive out of §6.8.1's trailing "Return
+           connect-src" for an unlisted destination — the right answer for the wrong reason, which is a
+           coincidence rather than a rule and would have moved the day §2.2.5 or §6.8.1 gained a row. A blocked
+           request is a network error, and §4.6.8.20's processResponse fires `error` for one — so the page's
+           handler runs, and the `<script>` it would have injected is not created, which is exactly what a
+           browser does under that policy. */
+        url_record_init(&rec);
+        blocked = url_parse(&rec, abs, strlen(abs), NULL) &&
+                  (fetch_block_bad_port(&rec) == FETCH_PORT_BLOCKED ||
+                   policy_should_block_request(document_policy(ctx), &rec, destination, metadata,
+                                               /*redirect count*/ 0) == CSP_REQUEST_BLOCKED);
         url_record_free(&rec);
-        link_queue_fire(ctx, wrap, "error");
-        JS_FreeValue(ctx, wrap);
-        free(abs);
-        return;
+        /* The metadata's bytes are the slot's and the element's, so nothing may outlive this. */
+        JS_FreeCString(ctx, nonce);
+        JS_FreeValue(ctx, nonce_slot);
+        if (blocked) {
+            link_queue_fire(ctx, wrap, "error");
+            JS_FreeValue(ctx, wrap);
+            free(abs);
+            return;
+        }
     }
-    url_record_free(&rec);
 
     {
         JSValueConst data[1];

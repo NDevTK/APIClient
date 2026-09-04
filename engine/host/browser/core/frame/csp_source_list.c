@@ -44,6 +44,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/crypto/secure_hash.h"
+#include "core/fetch/subresource_integrity.h"
 #include "core/frame/csp_source_list.h"
 
 static bool csp_base64_char(char c)
@@ -87,12 +88,27 @@ static bool csp_quoted_base64_tail(CspToken t, size_t k)
     return csp_base64_value(t.p + k, t.n - k - 1);
 }
 
-bool csp_source_is_nonce(CspToken expression)
+/* THE WHOLE DECOMPOSITION OF A nonce-source, produced once — does the token match the grammar, and where its
+   base64-value part is. Two algorithms need that span and each used to compute it from the literal 7 and 8 at
+   its own site: §6.7.3.3 step 2's arm, which compares it against an ELEMENT's `nonce` attribute, and §6.7.2.3,
+   which compares it against a REQUEST's cryptographic nonce metadata. Two readings of one offset is the
+   second-reading defect in miniature, and the day `'nonce-` changed length only one of them would have moved. */
+static bool csp_nonce_source_parse(CspToken expression, const char **pvalue, size_t *pvalue_len)
 {
     static const char PREFIX[] = "'nonce-";
+    const size_t k = sizeof PREFIX - 1;
 
     if (!csp_prefix_ci(expression, PREFIX)) return false;
-    return csp_quoted_base64_tail(expression, sizeof PREFIX - 1);
+    if (!csp_quoted_base64_tail(expression, k)) return false;
+    /* The base64-value part: everything between the opening literal and the closing U+0027. */
+    if (pvalue) *pvalue = expression.p + k;
+    if (pvalue_len) *pvalue_len = expression.n - k - 1;
+    return true;
+}
+
+bool csp_source_is_nonce(CspToken expression)
+{
+    return csp_nonce_source_parse(expression, NULL, NULL);
 }
 
 /* §2.3.1's hash-algorithm, and §6.7.3.3 step 5.2.2's mapping from it to a digest, in ONE table. The production
@@ -111,7 +127,15 @@ static const struct { const char *opener; SecureHashAlgorithm alg; } CSP_HASH_AL
 /* THE WHOLE DECOMPOSITION OF A hash-source, produced once: does the token match the grammar, which digest its
    hash-algorithm part names, and where its base64-value part is. §6.7.3.3 step 5.2.2 needs all three and
    §6.7.3.2 needs only the first, which is what csp_source_is_hash asks for. */
+/* THE hash-algorithm PART IS A SPAN AND NOT ONLY AN ENUM, and the reason is a comparison across two standards.
+   §6.7.3.3 step 5.2.2 asks which DIGEST an expression names, which is what SecureHashAlgorithm answers.
+   §6.7.2.4 step 6.1 asks something else — whether the expression's hash-algorithm "is an ASCII
+   case-insensitive match for source's hash-algorithm", where `source` came out of SRI §3.3.2 "Parse metadata"
+   and is a token of ANOTHER document's set. Answering that by mapping SRI's token to this enum and comparing
+   enums would make each standard's answer depend on the other's edition; comparing the two STRINGS is what the
+   step says and is what stays right the day one document names an algorithm the other does not. */
 static bool csp_hash_source_parse(CspToken expression, SecureHashAlgorithm *palg,
+                                  const char **pname, size_t *pname_len,
                                   const char **pvalue, size_t *pvalue_len)
 {
     int i;
@@ -122,6 +146,10 @@ static bool csp_hash_source_parse(CspToken expression, SecureHashAlgorithm *palg
         if (!csp_prefix_ci(expression, CSP_HASH_ALGORITHMS[i].opener)) continue;
         if (!csp_quoted_base64_tail(expression, k)) return false;
         if (palg) *palg = CSP_HASH_ALGORITHMS[i].alg;
+        /* The hash-algorithm part: the opener without its leading U+0027 and its trailing U+002D. It is taken
+           from the TOKEN and not from the table, so it carries the author's own case for step 6.1 to fold. */
+        if (pname) *pname = expression.p + 1;
+        if (pname_len) *pname_len = k - 2;
         /* The base64-value part: everything between the opening literal and the closing U+0027. */
         if (pvalue) *pvalue = expression.p + k;
         if (pvalue_len) *pvalue_len = expression.n - k - 1;
@@ -132,7 +160,7 @@ static bool csp_hash_source_parse(CspToken expression, SecureHashAlgorithm *palg
 
 bool csp_source_is_hash(CspToken expression)
 {
-    return csp_hash_source_parse(expression, NULL, NULL, NULL);
+    return csp_hash_source_parse(expression, NULL, NULL, NULL, NULL, NULL);
 }
 
 /* §6.7.3.3 step 5.2.2's `expected`: "expression's base64-value part, with all '-' characters replaced with
@@ -169,33 +197,155 @@ bool csp_source_list_contains(const CspDirective *directive, const char *keyword
     return false;
 }
 
-bool csp_source_list_has_nonce_source(const CspDirective *directive)
+/* §6.7.2.3 "Does nonce match source list?", WHOLE.
+ *
+ *   1. Assert: source list is not null.
+ *   2. If nonce is the empty string, return "Does Not Match".
+ *   3. For each expression of source list:
+ *      3.1. If expression matches the nonce-source grammar, and nonce is identical to expression's
+ *           base64-value part, return "Matches".
+ *   4. Return "Does Not Match".
+ *
+ * STEP 2 IS WHAT MAKES AN ABSENT NONCE AN ANSWER RATHER THAN A HOLE. Fetch §2.2.5 makes the empty string the
+ * initial value of every request's cryptographic nonce metadata, so the overwhelming majority of requests
+ * arrive here with one, and the standard's own first act is to refuse them. A caller therefore never has to
+ * decide whether its request "has" a nonce — it states the field, and the field's emptiness is the decision.
+ *
+ * STEP 3.1's COMPARISON IS `identical`, WHICH IS BYTES AND NOT A FOLD. §2.3.1's own note says why: "Nonces,
+ * however, are strict string matches: we use the base64-value grammar to limit the characters available, and
+ * reduce the complexity for the server-side operator (encodings, etc), but the user agent doesn't actually
+ * care about any underlying value, nor does it do any decoding of the nonce-source value." The GRAMMAR's
+ * literal is matched case-insensitively (RFC 5234 §2.3 makes ABNF string literals so, which is what admits
+ * `'NONCE-abc'`) and the VALUE is not — the two are different questions about one token, and
+ * csp_nonce_source_parse answers both in one place. */
+CspMatch csp_nonce_match_source_list(const CspDirective *directive, const char *nonce, size_t nonce_len)
 {
     size_t i;
 
-    DCHECK(directive != NULL, "§6.7.2.3's source list was searched for its nonce-source expressions through a "
-                              "directive that does not exist — its step 1 asserts the list is not null, and a "
-                              "policy carrying no governing directive says NOTHING about the check, which is "
-                              "the CALLER's answer to give");
-    /* §6.7.2.3 step 3's loop, asked only whether it has a candidate at all: the comparison inside it is
-       against the request's nonce, which is not this function's to hold. */
-    for (i = 0; i < directive->n_value; i++)
-        if (csp_source_is_nonce(directive->value[i])) return true;
-    return false;
+    /* STEP 1. */
+    DCHECK(directive != NULL, "§6.7.2.3 step 1 asserts its source list is not null, and it was asked about a "
+                              "directive that does not exist — a policy carrying no governing directive says "
+                              "NOTHING about the check, which §6.8.4 decides at the CALLER and which is not "
+                              "the same answer as a list that matches nothing");
+    DCHECK(nonce != NULL || nonce_len == 0,
+           "§6.7.2.3 was given a length with no nonce bytes — the field it reads is Fetch §2.2.5's "
+           "cryptographic nonce metadata of some request, and a caller that has none states a zero length");
+    /* STEP 2 — and this is where the overwhelming majority of requests leave, because §2.2.5 makes the empty
+       string the field's initial value and most requests never have one set. */
+    if (nonce_len == 0)
+        return CSP_DOES_NOT_MATCH;
+    /* STEP 3. */
+    for (i = 0; i < directive->n_value; i++) {
+        const char *b64 = NULL;
+        size_t b64_len = 0;
+
+        if (!csp_nonce_source_parse(directive->value[i], &b64, &b64_len)) continue;
+        if (b64_len == nonce_len && memcmp(b64, nonce, nonce_len) == 0)
+            return CSP_MATCHES;
+    }
+    /* STEP 4. */
+    return CSP_DOES_NOT_MATCH;
 }
 
-bool csp_source_list_has_hash_source(const CspDirective *directive)
+/* §6.7.2.4 steps 2-3's `integrity expressions`, reduced to the question step 3 asks of it: "If integrity
+   expressions is empty, return Does Not Match". It is a fact about the LIST alone, which is why it can be
+   answered before the request's field is parsed at all. */
+static bool csp_list_has_hash_source(const CspDirective *directive)
 {
     size_t i;
 
-    DCHECK(directive != NULL, "§6.7.2.4's source list was searched for its hash-source expressions through a "
-                              "directive that does not exist — its step 1 asserts the list is not null, and a "
-                              "policy carrying no governing directive says NOTHING about the check, which is "
-                              "the CALLER's answer to give");
-    /* §6.7.2.4 step 2's `integrity expressions`, reduced to step 3's question about it. */
     for (i = 0; i < directive->n_value; i++)
         if (csp_source_is_hash(directive->value[i])) return true;
     return false;
+}
+
+/* §6.7.2.4 step 6.1, over ONE parsed integrity source: does this list hold a hash-source "whose hash-algorithm
+   is an ASCII case-insensitive match for source's hash-algorithm, and whose base64-value is identical to
+   source's base64-value"?
+   THE VALUE COMPARISON IS `identical` AND IS NOT THE ONE §6.7.3.3 MAKES. That step normalises base64url into
+   base64 before comparing, in its own words, and this one does not — the difference is the standard's, and
+   csp_hash_value_equal above is deliberately not reached from here. Reusing it would make an `integrity` value
+   written in base64url match a policy written in base64, which §6.7.2.4 does not say. */
+static bool csp_list_holds_integrity_source(const CspDirective *directive, const SriHashExpression *src)
+{
+    size_t i, k;
+
+    for (i = 0; i < directive->n_value; i++) {
+        const char *name = NULL, *b64 = NULL;
+        size_t name_len = 0, b64_len = 0;
+
+        if (!csp_hash_source_parse(directive->value[i], NULL, &name, &name_len, &b64, &b64_len)) continue;
+        if (name_len != src->alg_len || b64_len != src->val_len) continue;
+        for (k = 0; k < name_len; k++) {
+            char a = name[k], b = src->alg[k];
+
+            if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+            if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
+            if (a != b) break;
+        }
+        if (k != name_len) continue;
+        /* The lengths are equal by the guard above, so a zero-length compare is the two empty values — which
+           a hash-source cannot have, since §2.3.1's base64-value needs at least one character. A bare
+           `sha256` in an `integrity` attribute therefore matches nothing, which is §6.7.2.4 step 6.1 refusing
+           it. */
+        if (memcmp(b64, src->val, b64_len) == 0) return true;
+    }
+    return false;
+}
+
+/* §6.7.2.4 "Does integrity metadata match source list?", WHOLE.
+ *
+ *   1. Assert: source list is not null.
+ *   2. Let integrity expressions be the set of source expressions in source list that match the hash-source
+ *      grammar.
+ *   3. If integrity expressions is empty, return "Does Not Match".
+ *   4. Let integrity sources be the result of parsing metadata given integrity metadata. [SRI]
+ *   5. If integrity sources is "no metadata" or an empty set, return "Does Not Match".
+ *   6. For each source of integrity sources:
+ *      6.1. If integrity expressions does not contain a source expression whose hash-algorithm is an ASCII
+ *           case-insensitive match for source's hash-algorithm, and whose base64-value is identical to
+ *           source's base64-value, return "Does Not Match".
+ *   7. Return "Matches".
+ *
+ * THE QUANTIFIER IS UNIVERSAL AND IT IS THE ONE THING HERE THAT IS EASY TO READ BACKWARDS. Step 6.1 refuses
+ * the moment ONE of the request's integrity sources is unlisted, so `integrity="sha256-A sha384-B"` under a
+ * policy naming only `'sha256-A'` is Does Not Match. The standard's own note says what that buys: "Here, we
+ * verify only whether the integrity metadata is a non-empty subset of the hash-source sources in source list."
+ *
+ * STEP 5's `no metadata` ARM CANNOT BE REACHED AGAINST THE EDITION OF SRI THIS ENGINE READS, and that is a
+ * fact about the two documents rather than a narrowing here: SRI §3.3.2 "Parse metadata" returns a SET on
+ * every input — its step 1 is "Let result be the empty set" and its step 3 returns it — so the only half of
+ * step 5 that can fire is the empty one, which is also what an empty integrity metadata yields. Both halves
+ * are the same answer, so nothing is lost by the arm being unreachable; it is written down because a reader
+ * who greps for it would otherwise find one condition where the standard states two. */
+CspMatch csp_integrity_match_source_list(const CspDirective *directive, const char *integrity,
+                                         size_t integrity_len)
+{
+    SriMetadataParse parse;
+    SriHashExpression src;
+
+    /* STEP 1. */
+    DCHECK(directive != NULL, "§6.7.2.4 step 1 asserts its source list is not null, and it was asked about a "
+                              "directive that does not exist — a policy carrying no governing directive says "
+                              "NOTHING about the check, which §6.8.4 decides at the CALLER");
+    DCHECK(integrity != NULL || integrity_len == 0,
+           "§6.7.2.4 was given a length with no integrity bytes — the field it reads is Fetch §2.2.5's "
+           "integrity metadata of some request, and a caller that has none states a zero length");
+    /* STEPS 2-3. */
+    if (!csp_list_has_hash_source(directive))
+        return CSP_DOES_NOT_MATCH;
+    /* STEP 4. */
+    sri_parse_metadata(&parse, integrity, integrity_len);
+    /* STEP 5 — the empty set, asked by advancing the parse once. */
+    if (!sri_parse_metadata_next(&parse, &src))
+        return CSP_DOES_NOT_MATCH;
+    /* STEP 6. */
+    do {
+        if (!csp_list_holds_integrity_source(directive, &src))
+            return CSP_DOES_NOT_MATCH;
+    } while (sri_parse_metadata_next(&parse, &src));
+    /* STEP 7. */
+    return CSP_MATCHES;
 }
 
 bool csp_source_list_allows_all_inline(const CspDirective *directive, CspInlineType type)
@@ -325,14 +475,14 @@ CspMatch csp_element_match_source_list(const CspDirective *directive, const lxb_
                                                                 (const lxb_char_t *)"nonce", 5, &nlen);
 
         for (i = 0; i < directive->n_value; i++) {
-            CspToken e = directive->value[i];
+            const char *b64 = NULL;
+            size_t b64_len = 0;
 
-            if (!csp_source_is_nonce(e)) continue;
-            /* The base64-value part: everything between the opening `'nonce-` (7 bytes, matched ASCII
-               case-insensitively above) and the closing quote. §6.7.2.3 compares nonces AS STRINGS and never
-               decodes them, and this comparison is CASE-SENSITIVE — a base64 value is data, not a keyword,
-               and folding it would let `'nonce-ABC'` admit an element carrying `abc`. */
-            if (nonce && e.n - 8 == nlen && memcmp(e.p + 7, nonce, nlen) == 0)
+            if (!csp_nonce_source_parse(directive->value[i], &b64, &b64_len)) continue;
+            /* "element has a nonce attribute whose value is expression's base64-value part". The comparison is
+               CASE-SENSITIVE and the value is never decoded — a base64 value is data, not a keyword, and
+               folding it would let `'nonce-ABC'` admit an element carrying `abc`. */
+            if (nonce && b64_len == nlen && memcmp(b64, nonce, nlen) == 0)
                 return CSP_MATCHES;
         }
     }
@@ -389,7 +539,7 @@ CspMatch csp_element_match_source_list(const CspDirective *directive, const lxb_
                 const char *b64 = NULL;
                 size_t b64_len = 0;
 
-                if (csp_hash_source_parse(e, &alg, &b64, &b64_len)) {
+                if (csp_hash_source_parse(e, &alg, NULL, NULL, &b64, &b64_len)) {
                     uint8_t digest[SECURE_HASH_MAX_DIGEST];
                     /* RFC 4648 §4 turns the largest digest FIPS 180-4 Figure 1 lists (64 bytes) into 88
                        characters; the assert below is what keeps that arithmetic and this array one fact. */

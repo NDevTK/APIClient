@@ -3972,7 +3972,8 @@ static void csp_url_matching_selftest(void)
             url_record_init(&u);
             CHECK(url_parse(&u, LISTS[k].url, strlen(LISTS[k].url), NULL),
                   "the §4.1.2 fixture named a URL its own parser refuses");
-            CHECK(policy_should_block_request(p, &u, "", 0) == LISTS[k].want, LISTS[k].why);
+            CHECK(policy_should_block_request(p, &u, "", csp_request_metadata_unstated(), 0) == LISTS[k].want,
+                  LISTS[k].why);
             url_record_free(&u);
             policy_container_free(p);
         }
@@ -3987,18 +3988,96 @@ static void csp_url_matching_selftest(void)
 
         url_record_init(&u);
         CHECK(url_parse(&u, "https://anywhere.test/a", 23, NULL), "the no-policy fixture's URL would not parse");
-        CHECK(policy_should_block_request(none, &u, "", 0) == CSP_REQUEST_ALLOWED,
+        CHECK(policy_should_block_request(none, &u, "", csp_request_metadata_unstated(), 0) ==
+              CSP_REQUEST_ALLOWED,
               "a document with no Content-Security-Policy must permit every request");
         /* And §6.8.1's "report" destination is governed by no fetch directive even under `default-src 'none'`,
            which is what stops a report to a blocked endpoint from being blocked and never sent. */
         policy_container_free(none);
         none = policy_container_new("default-src 'none'", https_self, NULL, serialized_embedder_policy_new());
-        CHECK(policy_should_block_request(none, &u, "report", 0) == CSP_REQUEST_ALLOWED,
+        CHECK(policy_should_block_request(none, &u, "report", csp_request_metadata_unstated(), 0) ==
+              CSP_REQUEST_ALLOWED,
               "§6.8.1 returns null for the report destination, so no fetch directive governs it");
-        CHECK(policy_should_block_request(none, &u, "", 0) == CSP_REQUEST_BLOCKED,
+        CHECK(policy_should_block_request(none, &u, "", csp_request_metadata_unstated(), 0) ==
+              CSP_REQUEST_BLOCKED,
               "while the same policy blocks an ordinary fetch — the two lines differ in the destination alone");
         url_record_free(&u);
         policy_container_free(none);
+    }
+
+    /* §6.7.1.1 "Script directives pre-request check" STEPS 1.1-1.2 AND §6.1.14.1 "style-src-elem Pre-request
+       Check" STEP 3 — the two preliminary steps that read the REQUEST rather than the URL, driven through
+       §4.1.2 so that §6.8.1's destination dispatch is part of what is asserted. Every row here was an ABORT
+       before the request's own fields reached the check: a policy carrying a nonce-source or a hash-source
+       could not be answered at all, and those are the two shapes CSP §8.5 "Strict CSP" tells authors to write.
+       THE URL IS CROSS-ORIGIN AND MATCHES NO EXPRESSION IN ANY OF THESE LISTS, deliberately: it makes
+       §6.7.2.5 answer "Does Not Match" for every row, so an ALLOWED verdict can only have come from the
+       preliminary step under test and never from the source list underneath it. */
+    {
+        static const struct {
+            const char *policy, *destination, *nonce, *integrity;
+            CspRequestVerdict want;
+            const char *why;
+        } REQ[] = {
+            { "script-src 'nonce-abc'", "script", "abc", "", CSP_REQUEST_ALLOWED,
+              "§6.7.1.1 step 1.1: a script whose cryptographic nonce metadata matches the list is Allowed "
+              "before the source list is consulted at all" },
+            { "script-src 'nonce-abc'", "script", "", "", CSP_REQUEST_BLOCKED,
+              "§6.7.2.3 step 2: the empty string is every request's initial nonce and matches nothing" },
+            { "script-src 'nonce-abc'", "script", "ABC", "", CSP_REQUEST_BLOCKED,
+              "§6.7.2.3 step 3.1 compares nonces for IDENTITY — §2.3.1's note says the user agent does no "
+              "decoding, so a case fold would admit an element the policy never named" },
+            { "script-src 'nonce-abc' 'strict-dynamic'", "script", "abc", "", CSP_REQUEST_ALLOWED,
+              "§6.7.1.1 runs the nonce at step 1.1 and 'strict-dynamic' at step 1.3, so the policy shape §8.5 "
+              "recommends returns before it reaches the parser-metadata arm this engine has not built — swap "
+              "those two arms and the commonest strict policy on the web aborts instead of answering" },
+            { "default-src 'nonce-abc'", "image", "abc", "", CSP_REQUEST_BLOCKED,
+              "§6.8.1 routes an image to img-src, whose §6.1.6.1 pre-request check has NO nonce arm — the "
+              "nonce that allows the script one row up must not travel to a destination the standard does not "
+              "give it, and §6.1.3.1 dispatches on the effective directive NAME rather than on default-src" },
+            { "style-src 'nonce-abc'", "style", "abc", "", CSP_REQUEST_ALLOWED,
+              "§6.1.14.1 step 3: the same field, reached through style-src-elem's fallback to style-src" },
+            { "style-src 'nonce-abc'", "style", "xyz", "", CSP_REQUEST_BLOCKED,
+              "and a style whose nonce is not the one the policy names falls to §6.7.2.5" },
+            { "script-src 'sha256-abc123'", "script", "", "sha256-abc123", CSP_REQUEST_ALLOWED,
+              "§6.7.1.1 step 1.2 into §6.7.2.4: the request's integrity metadata names the digest the policy "
+              "lists, which is CSP §8.4 \"Allowing external JavaScript via hashes\"" },
+            { "script-src 'sha256-abc123'", "script", "", "sha384-abc123", CSP_REQUEST_BLOCKED,
+              "§6.7.2.4 step 6.1 matches the hash-algorithm as well as the value" },
+            { "script-src 'sha256-abc123'", "script", "", "  sha256-abc123  ", CSP_REQUEST_ALLOWED,
+              "SRI §3.3.2 step 2 strictly splits on U+0020, so the empty items around the value are items "
+              "whose algorithm its step 2.6 refuses rather than a parse this has to trim" },
+            { "script-src 'sha256-abc123'", "script", "", "sha256-abc123?opt", CSP_REQUEST_ALLOWED,
+              "SRI §3.3.2 step 2.1 splits the options off before the algorithm is read" },
+            { "script-src 'sha256-abc123' 'sha384-def456'", "script", "",
+              "sha256-abc123 sha384-def456", CSP_REQUEST_ALLOWED,
+              "every one of the request's integrity sources is listed, which is §6.7.2.4 step 7" },
+            { "script-src 'sha256-abc123'", "script", "", "sha256-abc123 sha384-def456", CSP_REQUEST_BLOCKED,
+              "§6.7.2.4 step 6.1's quantifier is UNIVERSAL — ONE unlisted source refuses the whole request, "
+              "which is the note's \"non-empty subset\" read from the other end" },
+            { "script-src 'self'", "script", "", "sha256-abc123", CSP_REQUEST_BLOCKED,
+              "§6.7.2.4 steps 2-3: a list holding no hash-source answers Does Not Match whatever the request "
+              "carries, so the check falls through to §6.7.2.5 and a cross-origin URL is not 'self'" },
+            { "script-src 'sha256-abc123'", "script", "", "", CSP_REQUEST_BLOCKED,
+              "and §6.7.2.4 step 5: a request naming no digest is the empty set, which is the state EVERY "
+              "request Fetch §2.2.5 does not state one for is in" },
+        };
+        size_t k;
+
+        for (k = 0; k < sizeof REQ / sizeof *REQ; k++) {
+            PolicyContainer *p = policy_container_new(REQ[k].policy, https_self, NULL,
+                                                      serialized_embedder_policy_new());
+            CspRequestMetadata m = csp_request_metadata(REQ[k].nonce, strlen(REQ[k].nonce),
+                                                        REQ[k].integrity, strlen(REQ[k].integrity));
+            UrlRecord u;
+
+            url_record_init(&u);
+            CHECK(url_parse(&u, "https://other.test/a.js", 23, NULL),
+                  "the §6.7.1.1 fixture named a URL its own parser refuses");
+            CHECK(policy_should_block_request(p, &u, REQ[k].destination, m, 0) == REQ[k].want, REQ[k].why);
+            url_record_free(&u);
+            policy_container_free(p);
+        }
     }
 }
 

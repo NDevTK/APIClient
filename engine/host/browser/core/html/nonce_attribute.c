@@ -102,6 +102,16 @@ static JSValue js_nonce_set(JSContext *ctx, JSValueConst this_val, JSValueConst 
     return JS_UNDEFINED;
 }
 
+JSValue nonce_attribute_current(JSContext *ctx, lxb_dom_element_t *el)
+{
+    DCHECK(el != NULL, "§2.5.6's [[CryptographicNonce]] was read off no element — a slot is an element's, and "
+                       "a caller with no element has no nonce to ask about rather than an empty one");
+    /* An element outside the mixin has no slot to hold one, so it reads back as the same empty string §2.5.6
+       gives an element nothing has written — the absent-entry default in nonce_get_slot, reached by the same
+       road and not by a branch of its own. */
+    return nonce_get_slot(ctx, el);
+}
+
 void nonce_attribute_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local)
 {
     JSValue wrap, value;

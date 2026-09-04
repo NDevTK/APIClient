@@ -308,13 +308,64 @@ bool policy_allows_string_compilation(const PolicyContainer *p);
  * `destination` IS FETCH §2.2.5's DESTINATION STRING, passed through to §6.8.1 — see
  * csp_effective_directive_for_request for why it is that string and not an enum. `redirect_count` is the
  * request's; a request that has not been redirected has 0 and is the only kind this engine makes.
- * `url` is the request's CURRENT URL, parsed, because every relation §6.7.2 states reads a component of it. */
+ * `url` is the request's CURRENT URL, parsed, because every relation §6.7.2 states reads a component of it.
+ * `metadata` is the rest of the §2.2.5 request the walk reads — see CspRequestMetadata below. */
 typedef enum {
     CSP_REQUEST_ALLOWED = 0,
     CSP_REQUEST_BLOCKED = 1,
 } CspRequestVerdict;
+
+/* THE FIELDS OF FETCH §2.2.5 "Requests"' REQUEST THAT A PRE-REQUEST CHECK READS OFF THE REQUEST ITSELF, rather
+ * than off its URL — carried as ONE VALUE for the reason SerializedPolicyContainer above is one value: a seam
+ * that spells them as separate arguments carries whichever of them its author remembered, and the field added
+ * NEXT is the one nobody adds to the seam. The one added next is named: Fetch §2.2.5's PARSER METADATA, which
+ * §6.7.1.1 step 1.3 decides a 'strict-dynamic' request by, and whose absence policy_container.c still crashes
+ * on. When it lands here every producer stops compiling until it states one, which is the whole point.
+ *
+ * THE OTHER TWO §2.2.5 FIELDS THE WALK READS ARE STILL ARGUMENTS AND THAT IS DELIBERATE, not an oversight this
+ * type half-fixed. The DESTINATION and the REDIRECT COUNT are already stated by every caller and are read by
+ * different algorithms (§6.8.1 and §6.7.2.8), so folding them in would be churn that closes no gap; this type
+ * exists for the fields that were NOT carried at all, and it grows with the next of those.
+ *
+ * BOTH ARE STRINGS AND NEITHER IS EVER NULL. §2.2.5: "A request has associated integrity metadata (a string).
+ * Unless stated otherwise, it is the empty string." — and the same sentence for the cryptographic nonce
+ * metadata. So the EMPTY STRING is a request's real, initial, spec-stated value, which CSP reads as a positive
+ * answer (§6.7.2.3 step 2 refuses an empty nonce outright), and NULL is not a state a request can be in.
+ * Each carries its own LENGTH and is not required to be NUL-terminated, because the producers are a DOM
+ * attribute value and a slice of a request record and neither owes this type a terminator.
+ *
+ * WHY THERE IS NO CONSTRUCTOR MEANING "I DO NOT KNOW". The two facts a caller can have — "the algorithm that
+ * creates this request sets neither field" and "nobody has plumbed these yet" — are DIFFERENT, and a type that
+ * let them be written the same way would make the second invisible. So there are exactly two spellings and
+ * each is a claim about a named algorithm: csp_request_metadata states values, and
+ * csp_request_metadata_unstated says that the request-creating algorithm states neither, which is §2.2.5's
+ * "Unless stated otherwise" read literally. A caller reaching for the second owes the reader the name of that
+ * algorithm at its own site, and a reader can check it. Nothing may construct this struct any other way — a
+ * designated initializer would zero-fill the field it does not name, which is the shape the aborts in
+ * policy_should_block_request catch. */
+typedef struct {
+    const char *nonce;        /* Fetch §2.2.5's cryptographic nonce metadata. Borrowed. */
+    size_t      nonce_len;
+    const char *integrity;    /* Fetch §2.2.5's integrity metadata. Borrowed. */
+    size_t      integrity_len;
+} CspRequestMetadata;
+
+/* Both fields STATED. Neither pointer may be NULL — a request that carries no nonce or no digest states the
+   empty string with a zero length, which is §2.2.5's own initial value and not an absence anything has to
+   interpret, and the non-NULL rule is what makes a zero-filled struct distinguishable from that. */
+CspRequestMetadata csp_request_metadata(const char *nonce, size_t nonce_len,
+                                        const char *integrity, size_t integrity_len);
+
+/* §2.2.5's INITIAL VALUES, for a request whose creating algorithm sets neither field — "A request's
+   cryptographic nonce metadata and parser metadata are generally populated from attributes and flags on the
+   HTML element responsible for creating a request", and there are requests with no such element and elements
+   carrying no such attribute. It is spelled differently from the constructor above so that no caller reaches
+   it by passing NULL, and a caller that uses it NAMES the algorithm it is making that claim about. */
+CspRequestMetadata csp_request_metadata_unstated(void);
+
 CspRequestVerdict policy_should_block_request(const PolicyContainer *p, const UrlRecord *url,
-                                              const char *destination, int redirect_count);
+                                              const char *destination, CspRequestMetadata metadata,
+                                              int redirect_count);
 
 /* §7.1.5's CSP-DERIVED SANDBOXING FLAGS for a CSP list, which is the ONE thing a policy container contributes
  * to a Document's active sandboxing flag set. §7.4.5 builds navigationParams's final sandboxing flag set as
