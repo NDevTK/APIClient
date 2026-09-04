@@ -104,8 +104,21 @@ async function oneRun(browser, pg, url, budgetMs) {
   const schedBefore = await scheduler(pg);
   const base = (await engineRows(pg)).length;
 
+  /* EACH REQUEST CARRIES WHEN IT WENT OUT, because "one script was issued" has two readings that call
+     for opposite work and the count cannot tell them apart. If load 0 goes out at t≈1s and the wire is
+     SILENT for the rest of the window, the chain stalled inside script 0 — that is a fact about
+     execution. If loads march out one after another, each starting only as the previous finishes, that
+     is HTML §4.12.1.1's fetch (step 33, at prepare) having been performed at the execution slot (step
+     35) instead, which is a fact about the loader and a different fix entirely. Measured without this
+     column, both render as the same integer.
+     RELATIVE TO THE NAVIGATION, not a wall clock date: the question is only ever ordering and gaps
+     within one window, and an absolute timestamp invites comparison across runs that §Testing's
+     loaded-machine rule says nothing supports. */
   const issued = [];
-  const onReq = (r) => { try { issued.push(r.method() + " " + r.url()); } catch (e) {} };
+  let t0req = Date.now();
+  const onReq = (r) => {
+    try { issued.push({ at: Date.now() - t0req, line: r.method() + " " + r.url() }); } catch (e) {}
+  };
   pg.on("request", onReq);
 
   const pages = await browser.pages();
@@ -119,6 +132,7 @@ async function oneRun(browser, pg, url, budgetMs) {
      issuing nothing. */
   try { await page.goto("about:blank", { waitUntil: "domcontentloaded", timeout: 15000 }); } catch (e) {}
   const t0 = Date.now();
+  t0req = t0;                       // every `at` below is measured from the navigation, not from connect
   let nav = null;
   try {
     const resp = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
@@ -139,10 +153,11 @@ async function oneRun(browser, pg, url, budgetMs) {
   const schedAfter = await scheduler(pg);
   const rows = (await engineRows(pg)).slice(base);
 
-  const net = issued.filter((r) => !isInternal(r.split(" ")[1]));
-  const probes = net.filter((r) => isProbe(r.split(" ")[1]));
-  const loads = net.filter((r) => !isProbe(r.split(" ")[1]));
-  const loadUrls = new Set(loads.map((r) => r.split(" ")[1]));
+  const urlOf = (e) => e.line.split(" ")[1];
+  const net = issued.filter((e) => !isInternal(urlOf(e)));
+  const probes = net.filter((e) => isProbe(urlOf(e)));
+  const loads = net.filter((e) => !isProbe(urlOf(e)));
+  const loadUrls = new Set(loads.map(urlOf));
 
   /* THE HEADLINE. An issued markup script is matched by its exact resolved URL; nothing is normalised
      away, because a near-match is not a load. */
@@ -165,7 +180,11 @@ async function oneRun(browser, pg, url, budgetMs) {
     issued: { total: issued.length, internal: issued.length - net.length,
               probes: probes.length, loads: loads.length },
     markupIssued, markupMissed,
-    loadSample: loads.slice(0, 30),
+    loadSample: loads.slice(0, 30).map((e) => e.at + "ms  " + e.line),
+    /* THE SILENCE AT THE END OF THE WINDOW, which is the single number that says "stalled" rather than
+       "serial": how long the wire was quiet between the last load that went out and the window closing. */
+    lastLoadAtMs: loads.length ? loads[loads.length - 1].at : null,
+    quietTailMs: loads.length ? (budgetMs - loads[loads.length - 1].at) : null,
     crashSites: rows.filter((r) => r.err).map((r) => {
       const m = /"at":"([^"]+)"/.exec(r.err) || /(engine\/host\/[\w/]+\.c:\d+)/.exec(r.err) ||
                 /(engine\/qjs\/quickjs\.c:\d+)/.exec(r.err);
