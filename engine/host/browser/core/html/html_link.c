@@ -676,8 +676,17 @@ static void link_preload(JSContext *ctx, lxb_dom_element_t *el)
            el's [[CryptographicNonce]] internal slot". The options algorithm lives in §4.2.4.4 rather than
            beside the request one, which reads like an editorial accident and is the document's, so a citation
            of it that follows the request's number is wrong about a section a reader can open. This is the ONE
-           request-creating algorithm in this engine that states either field, which is why the other three say
-           so with csp_request_metadata_unstated and this one does not.
+           request-creating algorithm in this engine that states either field FROM AN ELEMENT'S OWN
+           ATTRIBUTES — solver/engine.c's script parks state theirs from §4.12.1.1's, and the other two
+           say so with csp_request_metadata_unstated.
+           AND ITS PARSER METADATA IS UNSTATED, which is the same algorithm read for what it does NOT do.
+           §4.2.4.3's steps are: the potential-CORS request, then the policy container, the integrity, the
+           cryptographic nonce, the referrer policy, the client and the priority — and Fetch §2.2.5's
+           parser metadata is not among them, so a `<link>` request carries that field's initial empty
+           string whether the element came from the markup or from `document.createElement`. It matters at
+           exactly one shape: `<link rel=preload as=script>` reaches CSP §6.8.1 as `script-src-elem` and
+           therefore reaches §6.7.1.1, whose step 1.3 would otherwise be answered from a fact the
+           request-creating algorithm never gave the request.
            THE NONCE IS THE SLOT AND NOT THE ATTRIBUTE. HTML §2.5.6 "Nonce attributes" makes those two diverge
            on purpose — after its hiding step the attribute is blank while the slot holds the nonce, and after
            any `el.nonce = v` the slot holds v while the attribute holds the markup's — so reading the
@@ -710,7 +719,8 @@ static void link_preload(JSContext *ctx, lxb_dom_element_t *el)
                                            empty string, which is §4.2.4.4's own answer: its create link
                                            options from element sets the member only "If el has an integrity
                                            attribute". */
-                                        integrity ? integrity : "", integrity_n);
+                                        integrity ? integrity : "", integrity_n,
+                                        /*§4.2.4.3 sets none*/ CSP_PARSER_METADATA_EMPTY);
 
         /* Fetch §4.1 "Main fetch" step 7 — "If should request be blocked due to a bad port … or should request
            be blocked by Content Security Policy returns blocked, then set response to a network error". It runs

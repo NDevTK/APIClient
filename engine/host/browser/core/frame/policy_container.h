@@ -318,21 +318,32 @@ typedef enum {
 /* THE FIELDS OF FETCH §2.2.5 "Requests"' REQUEST THAT A PRE-REQUEST CHECK READS OFF THE REQUEST ITSELF, rather
  * than off its URL — carried as ONE VALUE for the reason SerializedPolicyContainer above is one value: a seam
  * that spells them as separate arguments carries whichever of them its author remembered, and the field added
- * NEXT is the one nobody adds to the seam. The one added next is named: Fetch §2.2.5's PARSER METADATA, which
- * §6.7.1.1 step 1.3 decides a 'strict-dynamic' request by, and whose absence policy_container.c still crashes
- * on. When it lands here every producer stops compiling until it states one, which is the whole point.
+ * NEXT is the one nobody adds to the seam. THAT MECHANISM HAS NOW BEEN EXERCISED ONCE, which is the only way
+ * to know it works: Fetch §2.2.5's PARSER METADATA was the field named here as next, and adding it stopped
+ * every producer in this tree — the four request-creating algorithms below, the three script parks and the
+ * fixture — until each stated where its answer comes from.
  *
  * THE OTHER TWO §2.2.5 FIELDS THE WALK READS ARE STILL ARGUMENTS AND THAT IS DELIBERATE, not an oversight this
  * type half-fixed. The DESTINATION and the REDIRECT COUNT are already stated by every caller and are read by
  * different algorithms (§6.8.1 and §6.7.2.8), so folding them in would be churn that closes no gap; this type
  * exists for the fields that were NOT carried at all, and it grows with the next of those.
  *
- * BOTH ARE STRINGS AND NEITHER IS EVER NULL. §2.2.5: "A request has associated integrity metadata (a string).
+ * TWO ARE STRINGS AND NEITHER IS EVER NULL. §2.2.5: "A request has associated integrity metadata (a string).
  * Unless stated otherwise, it is the empty string." — and the same sentence for the cryptographic nonce
  * metadata. So the EMPTY STRING is a request's real, initial, spec-stated value, which CSP reads as a positive
  * answer (§6.7.2.3 step 2 refuses an empty nonce outright), and NULL is not a state a request can be in.
  * Each carries its own LENGTH and is not required to be NUL-terminated, because the producers are a DOM
  * attribute value and a slice of a request record and neither owes this type a terminator.
+ *
+ * THE THIRD IS AN ENUM AND NOT A STRING, WHICH IS THE ONE PLACE THIS TYPE DIVERGES FROM ITS NEIGHBOURS' SHAPE.
+ * §2.2.5 gives parser metadata a CLOSED three-member domain — "A request has associated parser metadata which
+ * is the empty string, "parser-inserted", or "not-parser-inserted"" — and the one comparison anything makes of
+ * it is §6.7.1.1 step 1.3.1's identity against "parser-inserted". A `const char *` would put that literal in
+ * every producer, where a misspelling is not a compile error and takes the ALLOWED arm in silence; the two
+ * fields above are strings because their contents are arbitrary bytes a page wrote, and this one's are not.
+ * It is also NOT the `destination` string's case, which core/fetch/fetch.h keeps as text precisely because
+ * that enumeration MOVES and is shared across the ABI with the trusted zone — this field crosses no boundary
+ * (its only reader is §4.1 step 7, inside this engine) and has not moved.
  *
  * WHY THERE IS NO CONSTRUCTOR MEANING "I DO NOT KNOW". The two facts a caller can have — "the algorithm that
  * creates this request sets neither field" and "nobody has plumbed these yet" — are DIFFERENT, and a type that
@@ -343,20 +354,39 @@ typedef enum {
  * algorithm at its own site, and a reader can check it. Nothing may construct this struct any other way — a
  * designated initializer would zero-fill the field it does not name, which is the shape the aborts in
  * policy_should_block_request catch. */
+/* FETCH §2.2.5's PARSER METADATA, as its own domain. The three members are the standard's three values, and
+   the fourth is not one of them: `_UNPLACED` is what a zero-fill leaves, and it exists for exactly the reason
+   the two pointers above may not be NULL — it is what makes a struct nobody assigned distinguishable from
+   every legal value, which is the property this type's own header paragraph rests on. It is never a request
+   state and policy_should_block_request aborts on it. */
+typedef enum {
+    CSP_PARSER_METADATA_UNPLACED = 0,
+    /* §2.2.5's initial value: "Unless otherwise stated, it is the empty string." The request-creating
+       algorithm stated no parser metadata — which is a DIFFERENT claim from "not-parser-inserted", even
+       though §6.7.1.1 step 1.3.1 answers both the same way, and keeping them apart is what lets a producer
+       that has not been told say so instead of asserting a fact about an element. */
+    CSP_PARSER_METADATA_EMPTY,
+    CSP_PARSER_METADATA_PARSER_INSERTED,
+    CSP_PARSER_METADATA_NOT_PARSER_INSERTED,
+} CspParserMetadata;
+
 typedef struct {
     const char *nonce;        /* Fetch §2.2.5's cryptographic nonce metadata. Borrowed. */
     size_t      nonce_len;
     const char *integrity;    /* Fetch §2.2.5's integrity metadata. Borrowed. */
     size_t      integrity_len;
+    CspParserMetadata parser; /* Fetch §2.2.5's parser metadata. */
 } CspRequestMetadata;
 
-/* Both fields STATED. Neither pointer may be NULL — a request that carries no nonce or no digest states the
-   empty string with a zero length, which is §2.2.5's own initial value and not an absence anything has to
-   interpret, and the non-NULL rule is what makes a zero-filled struct distinguishable from that. */
+/* All three fields STATED. Neither pointer may be NULL — a request that carries no nonce or no digest states
+   the empty string with a zero length, which is §2.2.5's own initial value and not an absence anything has to
+   interpret, and the non-NULL rule is what makes a zero-filled struct distinguishable from that. `parser` may
+   not be `_UNPLACED`, which is the same rule for the member that has no pointer to be NULL. */
 CspRequestMetadata csp_request_metadata(const char *nonce, size_t nonce_len,
-                                        const char *integrity, size_t integrity_len);
+                                        const char *integrity, size_t integrity_len,
+                                        CspParserMetadata parser);
 
-/* §2.2.5's INITIAL VALUES, for a request whose creating algorithm sets neither field — "A request's
+/* §2.2.5's INITIAL VALUES, for a request whose creating algorithm sets NONE of the three fields — "A request's
    cryptographic nonce metadata and parser metadata are generally populated from attributes and flags on the
    HTML element responsible for creating a request", and there are requests with no such element and elements
    carrying no such attribute. It is spelled differently from the constructor above so that no caller reaches

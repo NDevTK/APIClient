@@ -4005,60 +4005,102 @@ static void csp_url_matching_selftest(void)
         policy_container_free(none);
     }
 
-    /* §6.7.1.1 "Script directives pre-request check" STEPS 1.1-1.2 AND §6.1.14.1 "style-src-elem Pre-request
-       Check" STEP 3 — the two preliminary steps that read the REQUEST rather than the URL, driven through
-       §4.1.2 so that §6.8.1's destination dispatch is part of what is asserted. Every row here was an ABORT
-       before the request's own fields reached the check: a policy carrying a nonce-source or a hash-source
-       could not be answered at all, and those are the two shapes CSP §8.5 "Strict CSP" tells authors to write.
-       THE URL IS CROSS-ORIGIN AND MATCHES NO EXPRESSION IN ANY OF THESE LISTS, deliberately: it makes
-       §6.7.2.5 answer "Does Not Match" for every row, so an ALLOWED verdict can only have come from the
-       preliminary step under test and never from the source list underneath it. */
+    /* §6.7.1.1 "Script directives pre-request check" STEPS 1.1, 1.2 AND 1.3, AND §6.1.14.1 "style-src-elem
+       Pre-request Check" STEP 3 — every step of a pre-request check that reads the REQUEST rather than the
+       URL, driven through §4.1.2 so that §6.8.1's destination dispatch is part of what is asserted. Every
+       row here was an ABORT before the request's own fields reached the check: a policy carrying a
+       nonce-source, a hash-source or 'strict-dynamic' could not be answered at all, and those are the two
+       shapes CSP §8.5 "Strict CSP" tells authors to write.
+       THE URL IS CROSS-ORIGIN AND MATCHES NO EXPRESSION IN THESE LISTS — with ONE deliberate exception,
+       named at its own row. For every other row §6.7.2.5 answers "Does Not Match", so an ALLOWED verdict
+       can only have come from the preliminary step under test and never from the source list underneath it;
+       the exception runs the opposite experiment, listing a host source the URL DOES match so that a step
+       1.3 which fell through to §6.7.2.5 would answer Allowed where the standard answers Blocked. A fixture
+       in which every list refuses the URL cannot tell a RETURN from a fall-through. */
     {
         static const struct {
             const char *policy, *destination, *nonce, *integrity;
+            CspParserMetadata parser;
             CspRequestVerdict want;
             const char *why;
         } REQ[] = {
-            { "script-src 'nonce-abc'", "script", "abc", "", CSP_REQUEST_ALLOWED,
+            { "script-src 'nonce-abc'", "script", "abc", "", CSP_PARSER_METADATA_EMPTY, CSP_REQUEST_ALLOWED,
               "§6.7.1.1 step 1.1: a script whose cryptographic nonce metadata matches the list is Allowed "
               "before the source list is consulted at all" },
-            { "script-src 'nonce-abc'", "script", "", "", CSP_REQUEST_BLOCKED,
+            { "script-src 'nonce-abc'", "script", "", "", CSP_PARSER_METADATA_EMPTY, CSP_REQUEST_BLOCKED,
               "§6.7.2.3 step 2: the empty string is every request's initial nonce and matches nothing" },
-            { "script-src 'nonce-abc'", "script", "ABC", "", CSP_REQUEST_BLOCKED,
+            { "script-src 'nonce-abc'", "script", "ABC", "", CSP_PARSER_METADATA_EMPTY, CSP_REQUEST_BLOCKED,
               "§6.7.2.3 step 3.1 compares nonces for IDENTITY — §2.3.1's note says the user agent does no "
               "decoding, so a case fold would admit an element the policy never named" },
-            { "script-src 'nonce-abc' 'strict-dynamic'", "script", "abc", "", CSP_REQUEST_ALLOWED,
+            { "script-src 'nonce-abc' 'strict-dynamic'", "script", "abc", "",
+              CSP_PARSER_METADATA_PARSER_INSERTED, CSP_REQUEST_ALLOWED,
               "§6.7.1.1 runs the nonce at step 1.1 and 'strict-dynamic' at step 1.3, so the policy shape §8.5 "
-              "recommends returns before it reaches the parser-metadata arm this engine has not built — swap "
-              "those two arms and the commonest strict policy on the web aborts instead of answering" },
-            { "default-src 'nonce-abc'", "image", "abc", "", CSP_REQUEST_BLOCKED,
+              "\"Strict CSP\" recommends returns before the parser-metadata arm is reached at all — which is why "
+              "this row states the metadata step 1.3 would BLOCK on and expects Allowed anyway. Swap those two "
+              "arms and every parser-inserted `<script src>` on such a page is refused, which is all of them" },
+            /* §6.7.1.1 STEP 1.3, BOTH ARMS AND BOTH DIRECTIONS, AND EACH ROW SET AGAINST THE SOURCE LIST
+               RATHER THAN BESIDE IT. The BLOCKED row lists `https://other.test`, which §6.7.2.8 MATCHES for
+               this fixture's URL — scheme-part `https`, host-part `other.test`, no port-part and no
+               path-part — so a step 1.3 that fell through to §6.7.2.5 would answer Allowed there; the
+               ALLOWED row lists no host source at all, so a fall-through would answer Blocked. Each row
+               therefore fails in the direction of the defect it is about, which a fixture whose lists all
+               refuse the URL cannot do: it could not tell a RETURN from a fall-through. */
+            { "script-src 'strict-dynamic' https://other.test", "script", "", "",
+              CSP_PARSER_METADATA_PARSER_INSERTED, CSP_REQUEST_BLOCKED,
+              "§6.7.1.1 step 1.3.1: \"If the request's parser metadata is \"parser-inserted\", return "
+              "\"Blocked\".\" — and the host source that WOULD have matched at step 1.4 is never consulted, "
+              "which is 'strict-dynamic' overriding a host list rather than adding to it" },
+            { "script-src 'strict-dynamic'", "script", "", "",
+              CSP_PARSER_METADATA_NOT_PARSER_INSERTED, CSP_REQUEST_ALLOWED,
+              "step 1.3.1's \"Otherwise, return \"Allowed\".\" — a script-inserted load a list holding no "
+              "host source at all would refuse at §6.7.2.5. This is the direction the keyword exists for and "
+              "the one a fall-through to the source list inverts" },
+            { "script-src 'strict-dynamic'", "script", "", "", CSP_PARSER_METADATA_EMPTY, CSP_REQUEST_ALLOWED,
+              "§2.2.5's initial empty string is not \"parser-inserted\", so step 1.3.1 takes its Otherwise arm "
+              "for it too — a request whose creating algorithm states no parser metadata is Allowed, which is "
+              "the same answer as not-parser-inserted and a different claim" },
+            { "style-src 'strict-dynamic'", "style", "", "", CSP_PARSER_METADATA_PARSER_INSERTED,
+              CSP_REQUEST_BLOCKED,
+              "§6.1.14.1 \"style-src-elem Pre-request Check\" has no 'strict-dynamic' arm — its steps are the "
+              "nonce and then §6.7.2.5 — so a style request is decided by the source list whatever its parser "
+              "metadata says, and 'strict-dynamic' is not a host source" },
+            { "img-src 'strict-dynamic'", "image", "", "", CSP_PARSER_METADATA_PARSER_INSERTED,
+              CSP_REQUEST_BLOCKED,
+              "and §6.7.1.1 step 1 gates the whole algorithm on a SCRIPT-LIKE destination, so an image never "
+              "reaches step 1.3 through §6.8.1's img-src at all" },
+            { "default-src 'nonce-abc'", "image", "abc", "", CSP_PARSER_METADATA_EMPTY, CSP_REQUEST_BLOCKED,
               "§6.8.1 routes an image to img-src, whose §6.1.6.1 pre-request check has NO nonce arm — the "
               "nonce that allows the script one row up must not travel to a destination the standard does not "
               "give it, and §6.1.3.1 dispatches on the effective directive NAME rather than on default-src" },
-            { "style-src 'nonce-abc'", "style", "abc", "", CSP_REQUEST_ALLOWED,
+            { "style-src 'nonce-abc'", "style", "abc", "", CSP_PARSER_METADATA_EMPTY, CSP_REQUEST_ALLOWED,
               "§6.1.14.1 step 3: the same field, reached through style-src-elem's fallback to style-src" },
-            { "style-src 'nonce-abc'", "style", "xyz", "", CSP_REQUEST_BLOCKED,
+            { "style-src 'nonce-abc'", "style", "xyz", "", CSP_PARSER_METADATA_EMPTY, CSP_REQUEST_BLOCKED,
               "and a style whose nonce is not the one the policy names falls to §6.7.2.5" },
-            { "script-src 'sha256-abc123'", "script", "", "sha256-abc123", CSP_REQUEST_ALLOWED,
+            { "script-src 'sha256-abc123'", "script", "", "sha256-abc123", CSP_PARSER_METADATA_EMPTY,
+              CSP_REQUEST_ALLOWED,
               "§6.7.1.1 step 1.2 into §6.7.2.4: the request's integrity metadata names the digest the policy "
               "lists, which is CSP §8.4 \"Allowing external JavaScript via hashes\"" },
-            { "script-src 'sha256-abc123'", "script", "", "sha384-abc123", CSP_REQUEST_BLOCKED,
+            { "script-src 'sha256-abc123'", "script", "", "sha384-abc123", CSP_PARSER_METADATA_EMPTY,
+              CSP_REQUEST_BLOCKED,
               "§6.7.2.4 step 6.1 matches the hash-algorithm as well as the value" },
-            { "script-src 'sha256-abc123'", "script", "", "  sha256-abc123  ", CSP_REQUEST_ALLOWED,
+            { "script-src 'sha256-abc123'", "script", "", "  sha256-abc123  ", CSP_PARSER_METADATA_EMPTY,
+              CSP_REQUEST_ALLOWED,
               "SRI §3.3.2 step 2 strictly splits on U+0020, so the empty items around the value are items "
               "whose algorithm its step 2.6 refuses rather than a parse this has to trim" },
-            { "script-src 'sha256-abc123'", "script", "", "sha256-abc123?opt", CSP_REQUEST_ALLOWED,
+            { "script-src 'sha256-abc123'", "script", "", "sha256-abc123?opt", CSP_PARSER_METADATA_EMPTY,
+              CSP_REQUEST_ALLOWED,
               "SRI §3.3.2 step 2.1 splits the options off before the algorithm is read" },
             { "script-src 'sha256-abc123' 'sha384-def456'", "script", "",
-              "sha256-abc123 sha384-def456", CSP_REQUEST_ALLOWED,
+              "sha256-abc123 sha384-def456", CSP_PARSER_METADATA_EMPTY, CSP_REQUEST_ALLOWED,
               "every one of the request's integrity sources is listed, which is §6.7.2.4 step 7" },
-            { "script-src 'sha256-abc123'", "script", "", "sha256-abc123 sha384-def456", CSP_REQUEST_BLOCKED,
+            { "script-src 'sha256-abc123'", "script", "", "sha256-abc123 sha384-def456",
+              CSP_PARSER_METADATA_EMPTY, CSP_REQUEST_BLOCKED,
               "§6.7.2.4 step 6.1's quantifier is UNIVERSAL — ONE unlisted source refuses the whole request, "
               "which is the note's \"non-empty subset\" read from the other end" },
-            { "script-src 'self'", "script", "", "sha256-abc123", CSP_REQUEST_BLOCKED,
+            { "script-src 'self'", "script", "", "sha256-abc123", CSP_PARSER_METADATA_EMPTY, CSP_REQUEST_BLOCKED,
               "§6.7.2.4 steps 2-3: a list holding no hash-source answers Does Not Match whatever the request "
               "carries, so the check falls through to §6.7.2.5 and a cross-origin URL is not 'self'" },
-            { "script-src 'sha256-abc123'", "script", "", "", CSP_REQUEST_BLOCKED,
+            { "script-src 'sha256-abc123'", "script", "", "", CSP_PARSER_METADATA_EMPTY, CSP_REQUEST_BLOCKED,
               "and §6.7.2.4 step 5: a request naming no digest is the empty set, which is the state EVERY "
               "request Fetch §2.2.5 does not state one for is in" },
         };
@@ -4068,7 +4110,8 @@ static void csp_url_matching_selftest(void)
             PolicyContainer *p = policy_container_new(REQ[k].policy, https_self, NULL,
                                                       serialized_embedder_policy_new());
             CspRequestMetadata m = csp_request_metadata(REQ[k].nonce, strlen(REQ[k].nonce),
-                                                        REQ[k].integrity, strlen(REQ[k].integrity));
+                                                        REQ[k].integrity, strlen(REQ[k].integrity),
+                                                        REQ[k].parser);
             UrlRecord u;
 
             url_record_init(&u);

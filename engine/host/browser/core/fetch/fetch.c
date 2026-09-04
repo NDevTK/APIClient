@@ -770,10 +770,12 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, const RequestRecord 
        check" has no integrity arm — only the script directives reach §6.7.1.1. Carrying the field anyway is
        what keeps the request's state a fact about the REQUEST rather than about the check that happens to
        read it, so the day §6.8.1 routes one of these to a script directive nothing here has to change.
-       THE CRYPTOGRAPHIC NONCE METADATA IS UNSTATED, and that is §5.4's answer and not this file's: the
-       constructor sets no nonce on any path, and there is no element behind a `fetch()` for §2.2.5's note —
-       "generally populated from attributes and flags on the HTML element responsible for creating a request" —
-       to draw one from. Its value is the initial empty string. */
+       THE CRYPTOGRAPHIC NONCE METADATA AND THE PARSER METADATA ARE BOTH UNSTATED, and that is §5.4's answer
+       and not this file's: the constructor sets neither on any path, and there is no element behind a
+       `fetch()` for §2.2.5's note — "generally populated from attributes and flags on the HTML element
+       responsible for creating a request" — to draw either from. Each holds its initial empty string. They
+       are written out rather than left to csp_request_metadata_unstated because the INTEGRITY beside them is
+       stated, and this record's three fields do not all come from one claim. */
     CspRequestMetadata csp_meta;
 
     promise = JS_NewPromiseCapability(ctx, resolving);
@@ -807,7 +809,8 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, const RequestRecord 
           "step 23 fills it on every path and §2.2.5 makes the empty string its initial value, so an absent "
           "one is an allocation that failed inside request_init_apply");
     csp_meta = csp_request_metadata(/*cryptographic nonce metadata*/ "", 0,
-                                    rec->integrity, strlen(rec->integrity));
+                                    rec->integrity, strlen(rec->integrity),
+                                    /*parser metadata*/ CSP_PARSER_METADATA_EMPTY);
     if (u) {
         /* §4.3 SCHEME FETCH: "Switch on request's current URL's scheme". The scheme is what the URL PARSER
            says it is and not what the string starts with, so the URL is parsed ONCE here and every arm below

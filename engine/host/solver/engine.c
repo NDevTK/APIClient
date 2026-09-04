@@ -105,9 +105,9 @@ void engine_set_wrap_stats(void (*fn)(long *n, long *cap))
    declared here because §8.1.6.7.3's descendant script fetch options need it at the module park. */
 static lxb_dom_element_t *flow_dyn_el(const Flow *f);
 
-/* HTML §4.12.1.1 "Processing model"'S TWO METADATA MEMBERS FOR A `script` ELEMENT, borrowed from the element
- * and released by the caller — the ONE place this engine reads them, because all three script-owed parks want
- * the same two facts about the same kind of element.
+/* HTML §4.12.1.1 "Processing model"'S THREE METADATA MEMBERS FOR A `script` ELEMENT, borrowed from the
+ * element and released by the caller — the ONE place this engine reads them, because all three script-owed
+ * parks want the same three facts about the same kind of element.
  *
  * §4.12.1.1's `prepare the script element` states both, in its own words: "Let cryptographic nonce be el's
  * [[CryptographicNonce]] internal slot's value" and "If el has an integrity attribute, then let integrity
@@ -138,6 +138,9 @@ static ScriptCspMeta script_csp_meta(JSContext *ctx, lxb_dom_element_t *el)
     ScriptCspMeta h;
     size_t integrity_n = 0;
     const lxb_char_t *integrity = NULL;
+    /* UNPLACED until the switch below states one — the sentinel core/frame/policy_container.h keeps for
+       exactly this, so an enumerator nobody mapped is an abort rather than whichever value zero means. */
+    CspParserMetadata parser = CSP_PARSER_METADATA_UNPLACED;
 
     h.nonce_slot = JS_UNDEFINED;
     h.nonce = NULL;
@@ -158,8 +161,45 @@ static ScriptCspMeta script_csp_meta(JSContext *ctx, lxb_dom_element_t *el)
         CHECK(h.nonce != NULL, "§4.12.1.1: OOM reading a script element's cryptographic nonce metadata");
         integrity = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"integrity", 9, &integrity_n);
     }
+    /* …AND FETCH §2.2.5's PARSER METADATA, WHICH §4.12.1.1 COMPUTES FROM THIS ELEMENT: "Let parser metadata be
+       "parser-inserted" if el is parser-inserted, and "not-parser-inserted" otherwise". CSP §6.7.1.1 step 1.3
+       decides a 'strict-dynamic' request by this field ALONE — Blocked for "parser-inserted", Allowed
+       otherwise, with the host list never consulted — so it is the one member of this record whose absence
+       inverts a directive rather than narrowing it.
+       IT IS READ OFF THE ELEMENT AND NOT TAKEN AS A PARAMETER, because two of this file's three script parks
+       have no caller that knows: `engine_pending_docscript` runs from `flow_step` against a ROW, and a
+       dynamic `import()`'s metadata is the IMPORTING script's (§8.1.4.2's get-the-descendant-script-fetch-
+       options step 1, "Let newOptions be a copy of originalOptions", which copies this member exactly as it
+       copies the nonce). The element is the one thing all three still hold.
+
+       NAMED RESIDUAL — WHAT IS NOT COVERED: a Document this engine LOADS never runs §4.12.1.1 over its own
+       markup `<script>` elements at all (core/html/html_script.h's `html_script_parser_inserted` residual
+       says why: the parse happens before the Document has a realm, so the parser's own door returns and
+       core/loader/document_scripts.c's inventory runs those rows instead). Those elements therefore answer
+       UNSTATED, and this states §2.2.5's own initial value for them — "Unless otherwise stated, it is the
+       empty string" — which is a true statement about the request THIS engine built and a narrower one than
+       the request a browser builds, where the same element is "parser-inserted".
+       WHAT THE NEXT DIFF BUILDS: the Document and realm ordering html_script.h already names — HTML §7.5.1
+       "Shared document creation infrastructure" step 9's Document and step 7.5's realm existing BEFORE §7.5.2
+       "Loading HTML documents" step 3 creates the parser — after which that door prepares the markup's own
+       scripts and this read answers PARSER_INSERTED for them with nothing here to change.
+       HOW ITS ABSENCE SHOWS: a loaded document's markup `<script src>` whose policy carries 'strict-dynamic'
+       and whose element matches neither a nonce-source (§6.7.1.1 step 1.1) nor a listed digest (step 1.2)
+       LOADS here and is refused by a browser — so an @S breakout measured against that document reports a
+       sink reachable through a script the real page never runs. An INJECTED `<script>` is unaffected, which
+       is the population 'strict-dynamic' exists for and the one @S constructs: it reaches this file through
+       §4.12.1.1, so it answers NOT_PARSER_INSERTED and is Allowed exactly as a browser allows it. */
+    switch (html_script_parser_metadata(el)) {
+    case HTML_SCRIPT_PARSER_METADATA_PARSER_INSERTED:     parser = CSP_PARSER_METADATA_PARSER_INSERTED; break;
+    case HTML_SCRIPT_PARSER_METADATA_NOT_PARSER_INSERTED: parser = CSP_PARSER_METADATA_NOT_PARSER_INSERTED; break;
+    case HTML_SCRIPT_PARSER_METADATA_UNSTATED:            parser = CSP_PARSER_METADATA_EMPTY; break;
+    }
+    DCHECK(parser != CSP_PARSER_METADATA_UNPLACED,
+           "core/html/html_script.h's parser-metadata answer gained a member this mapping does not state — "
+           "Fetch §2.2.5 gives the request field three values and each of them has a row above, so a fourth "
+           "answer is an enumerator added on one side of the seam and not the other");
     h.m = csp_request_metadata(h.nonce ? h.nonce : "", h.nonce ? strlen(h.nonce) : 0,
-                               integrity ? (const char *)integrity : "", integrity ? integrity_n : 0);
+                               integrity ? (const char *)integrity : "", integrity ? integrity_n : 0, parser);
     return h;
 }
 
@@ -340,7 +380,8 @@ void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, JSValueCons
        beside it: a side list one producer fills answers for that producer and is silently absent for every
        other, which is how a document's own `<script src>` reached the trusted zone with no load class at all.
        The METHOD is `GET`: a chunk load states its own. */
-    FetchRequest req = { "GET", url, PENDING_DESTINATION_SCRIPT, NULL, NULL, 0, { NULL, 0, NULL, 0 } };
+    FetchRequest req = { "GET", url, PENDING_DESTINATION_SCRIPT, NULL, NULL, 0,
+                         /* placed below, off the element */ { NULL, 0, NULL, 0, CSP_PARSER_METADATA_UNPLACED } };
     /* …AND FETCH §2.2.5's METADATA, WHICH FOR A DYNAMIC IMPORT IS THE REFERRER'S. HTML §8.1.6.7.3
        HostLoadImportedModule: "Let fetchOptions be the result of getting the descendant script fetch options
        given originalFetchOptions, url, and settingsObject" — and THAT ALGORITHM IS §8.1.4.2 "Fetching
@@ -395,8 +436,9 @@ void engine_pending_docscript(JSContext *ctx, const char *url, int script_i) {
        create-a-potential-CORS request returns "a new request whose URL is url, destination is destination" —
        so the destination is `script` and this reply is CODE. The trusted zone reads it here; it used to read a
        list only the module loader wrote, which named dynamic imports and never this. */
-    FetchRequest req = { "GET", url, PENDING_DESTINATION_SCRIPT, NULL, NULL, 0, { NULL, 0, NULL, 0 } };
-    /* …AND §4.12.1.1's TWO METADATA MEMBERS, READ OFF THE ROW'S OWN ELEMENT. A document's external script has
+    FetchRequest req = { "GET", url, PENDING_DESTINATION_SCRIPT, NULL, NULL, 0,
+                         /* placed below, off the element */ { NULL, 0, NULL, 0, CSP_PARSER_METADATA_UNPLACED } };
+    /* …AND §4.12.1.1's THREE METADATA MEMBERS, READ OFF THE ROW'S OWN ELEMENT. A document's external script has
        one — engine_queue_docscript_url and the seed's address arm both take it, and flow_deliver_one_reply
        asserts it again on the failure path — and `script_i` is exactly which row this park is for. */
     ScriptCspMeta meta;
@@ -455,8 +497,9 @@ void engine_pending_script_url(JSContext *ctx, const char *url, ScriptType stype
        single module script with the destination `script` too.
        So the type decides the DECODE and the evaluation entry, and it does not decide this: either way the
        reply becomes a program, which is precisely what CORB exists to keep cross-origin data out of. */
-    FetchRequest req = { "GET", url, PENDING_DESTINATION_SCRIPT, NULL, NULL, 0, { NULL, 0, NULL, 0 } };
-    /* …AND §4.12.1.1's TWO METADATA MEMBERS, off the element this park already carries. This is the entry the
+    FetchRequest req = { "GET", url, PENDING_DESTINATION_SCRIPT, NULL, NULL, 0,
+                         /* placed below, off the element */ { NULL, 0, NULL, 0, CSP_PARSER_METADATA_UNPLACED } };
+    /* …AND §4.12.1.1's THREE METADATA MEMBERS, off the element this park already carries. This is the entry the
        whole convergence was built for: `<script nonce=x src=…>` under `script-src 'nonce-x'` is the shape
        modern CSP is written in, and until step 7 was asked at the park no `<script src>` in this engine was
        checked against a policy at all. */

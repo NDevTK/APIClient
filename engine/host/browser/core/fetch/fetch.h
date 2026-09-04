@@ -46,20 +46,21 @@ void fetch_free(JSRuntime *rt);
    state one cannot be classified, and a body that is not classified as code and then compiled is the hole this
    field closes: a cross-origin HTML or JSON body ingested as data and handed to the compiler.
    BORROWED like `method` and `url` — the park copies it into the flow's register (solver/pending.h). */
-/* …AND FETCH §2.2.5's TWO METADATA FIELDS, WHICH RIDE THE REQUEST FOR THE DESTINATION'S REASON EXACTLY. Their
-   reader is Fetch §4.1 "Main fetch" step 7's CSP check, and the party that can state them is the algorithm
-   that CREATES the request — a `<script>`'s [[CryptographicNonce]] and `integrity` attribute are facts about
-   an element that is long off the stack by the time a park runs. Carried here, a component that builds a
-   request states them once beside its method and its destination; carried as a seam parameter they would be
-   stated by whichever seam its author remembered.
+/* …AND FETCH §2.2.5's THREE METADATA FIELDS, WHICH RIDE THE REQUEST FOR THE DESTINATION'S REASON EXACTLY.
+   Their reader is Fetch §4.1 "Main fetch" step 7's CSP check, and the party that can state them is the
+   algorithm that CREATES the request — a `<script>`'s [[CryptographicNonce]], its `integrity` attribute and
+   whether the parser inserted it are facts about an element that is long off the stack by the time a park
+   runs. Carried here, a component that builds a request states them once beside its method and its
+   destination; carried as a seam parameter they would be stated by whichever seam its author remembered.
    THERE IS NO "I DO NOT KNOW" VALUE, and that is core/frame/policy_container.h's design rather than this
    field's: two spellings, each a claim about a named algorithm. A producer writes csp_request_metadata when
    the algorithm sets values and csp_request_metadata_unstated when the algorithm sets neither, and it owes
    the reader the name of that algorithm at its own site.
    ZERO-INITIALISE THE RECORD (`FetchRequest req = {0};`) SO A FORGOTTEN FIELD IS AN ABORT AND NOT GARBAGE.
-   Both pointers are non-NULL in every legal value, so a zero-filled struct is DISTINGUISHABLE from every one
-   of them and policy_should_block_request's own asserts name it — while an uninitialised automatic would hand
-   the CSP walk a stack address to compare bytes at. */
+   Both pointers are non-NULL in every legal value and the parser metadata's zero is its own not-a-value
+   member, so a zero-filled struct is DISTINGUISHABLE from every legal one and policy_should_block_request's
+   own asserts name it — while an uninitialised automatic would hand the CSP walk a stack address to compare
+   bytes at. */
 typedef struct {
     const char   *method;
     const char   *url;

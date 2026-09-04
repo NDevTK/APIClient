@@ -1841,7 +1841,8 @@ static bool xhr_main_fetch_local(JSContext *ctx, XhrData *d)
                               builds its request from §3.5.1 The open() method's stored method and URL and
                               this object's own state, and there is no element behind it for Fetch §2.2.5's
                               note — "generally populated from attributes and flags on the HTML element
-                              responsible for creating a request" — to draw from. Both fields are the initial
+                              responsible for creating a request" — to draw from. Nor does it set a parser
+                              metadata, which is that same note's other field. All three are the initial
                               empty string. */
                            csp_request_metadata_unstated())) {
         url_record_free(&rec);

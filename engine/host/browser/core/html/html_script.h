@@ -31,14 +31,30 @@
  * node_wrap_peek answers for it without minting anything. The other flag's initial value is the other one, and
  * its reader answers absent accordingly; see below.
  *
- * WHAT IS NOT HERE, AND WHY IT IS A PARAMETER INSTEAD. `parser document` (and with it `parser-inserted`) is the
- * OTHER half of §13.2.6.4.4's stamp, and it is not a third slot on the wrapper: it has exactly two readers —
- * the script HTML element post-connection steps' step 1 ("if insertedNode is parser-inserted, then return") and
- * §13.2.6.4.8's `</script>` handling — and each of them KNOWS the answer without asking, because each IS one of
- * the two ways an element can get here. A slot would be a fact written at one moment and read at another when
- * there is no moment in between that could change it, and a slot only ever written true by tree construction is
- * a slot whose reader could have asked its own caller. So `html_script_prepare` takes it, and the two entries
- * below are where §13.2.6 states it. It was a hardcoded `false` while the parser half did not exist.
+ * `parser document` IS A SLOT NOW, AND IT IS A PARAMETER AS WELL — the two are not alternatives and the reason
+ * is the one that used to argue against the slot. It said the fact has exactly two readers, the script HTML
+ * element post-connection steps' step 1 ("if insertedNode is parser-inserted, then return") and §13.2.6.4.8's
+ * `</script>` handling, and that each of them KNOWS the answer without asking because each IS one of the two
+ * ways an element can get here — so a slot would be a fact written at one moment and read at another with no
+ * moment in between that could change it. That argument was about the readers that existed. A THIRD reader
+ * arrived and cannot ask its caller: Fetch §2.2.5's request PARSER METADATA, which HTML §4.12.1.1 computes
+ * from this fact ("Let parser metadata be "parser-inserted" if el is parser-inserted, and "not-parser-inserted"
+ * otherwise") and which CSP §6.7.1.1 step 1.3 then reads at the moment the request is CHECKED — which in this
+ * engine is a park, arbitrarily later, with the preparation long off the stack; and a dynamic `import()` reads
+ * it off the IMPORTING script's options (HTML §8.1.4.2's get-the-descendant-script-fetch-options step 1, "Let
+ * newOptions be a copy of originalOptions", which copies parser metadata like every other member it does not
+ * overwrite), which is an element from a different moment entirely. So the CALLER still states it — it is
+ * either §13.2.6 tree construction, which is the thing that sets it, or page code, which cannot — and
+ * `html_script_prepare` WRITES what it was told, so that a request built out of this element long afterwards
+ * can be told the same thing. It was a hardcoded `false` while the parser half did not exist.
+ *
+ * ITS ABSENCE IS NOT ITS FALSE, WHICH IS WHY THE READER ANSWERS THREE THINGS AND NOT TWO. §4.12.1 makes a
+ * `parser document` "initially null", so an element nothing has written is genuinely not parser-inserted for
+ * the questions asked of the ELEMENT — but a REQUEST's parser metadata is set by §4.12.1.1, and an element
+ * `html_script_prepare` never ran over has had that algorithm run over it never. Those two are different
+ * claims and Fetch §2.2.5 spells them differently ("" against "not-parser-inserted"), so the reader below
+ * reports UNSTATED rather than collapsing them; core/frame/policy_container.h says what each answers at the
+ * check.
  *
  * `force async` IS HERE NOW, AND IT IS THE SECOND FLAG BECAUSE IT GAINED THE TWO READERS THE OTHER STILL LACKS.
  * §4.12.1.1: "A script element has a force async boolean, INITIALLY TRUE. It is set to false by the HTML parser
@@ -208,16 +224,40 @@ int html_script_exec_run(JSContext *ctx, ScriptExec *x, JSValue in, JSValue **ou
    and from §4.12.1.1's post-connection and attribute change steps. `el` is any inserted element; one that is
    not a `script` returns having done nothing, because the caller is a walk over every node of an inserted
    subtree and the tag test is that walk's filter rather than a step of the algorithm.
-   `parser_inserted` IS STEP 2's `parser document` BEING NON-NULL, stated by the CALLER. The field itself is not
-   kept on the element (see what this file says above about it having had no reader), and the caller is the only
-   party that can answer: it is either §13.2.6 tree construction, which is the thing that sets it, or page code,
-   which cannot. It decides steps 4 and 14's `force async` round trip and, through it, which of §4.12.1's five
-   destinations the element takes — so it was not a formality while it was hardcoded false, it was a parsed
-   `<script src>` being filed in a list it does not belong to.
+   `parser_inserted` IS STEP 2's `parser document` BEING NON-NULL, stated by the CALLER, and RECORDED on the
+   element here (see above): the caller is the only party that can answer — it is either §13.2.6 tree
+   construction, which is the thing that sets it, or page code, which cannot — and the recording is what lets a
+   request this element causes be judged after the caller's frame is gone. It decides steps 4 and 14's `force
+   async` round trip and, through it, which of §4.12.1's five destinations the element takes — so it was not a
+   formality while it was hardcoded false, it was a parsed `<script src>` being filed in a list it does not
+   belong to.
    `imm` IS STEP 36'S ANSWER AND IT IS MANDATORY — see the record below. It is written on EVERY path and is
    empty on all but one, so no caller can forget to look and no caller can decide for itself what to do with
    the one destination §4.12.1.1 has that is not a position in a sequence. */
 void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inserted, ScriptImmediate *imm);
+
+/* HTML §4.12.1.1 "Processing model"'s PARSER METADATA FOR THIS ELEMENT — "Let parser metadata be
+ * "parser-inserted" if el is parser-inserted, and "not-parser-inserted" otherwise" — as the request field
+ * Fetch §2.2.5 "Requests" makes it, read back from what `html_script_prepare` was told.
+ *
+ * THREE ANSWERS, BECAUSE UNSTATED IS NOT NOT-PARSER-INSERTED. §4.12.1 makes `parser document` "initially
+ * null", so an element nothing marked answers §4.12.1's own ELEMENT question "not parser-inserted"; but the
+ * REQUEST field is a thing §4.12.1.1 sets, and an element that algorithm never ran over has no answer of its
+ * own to report. §2.2.5's empty string is exactly that state, and the caller is what turns UNSTATED into it —
+ * see core/frame/policy_container.h's CspParserMetadata, which spells the same three.
+ *
+ * NO REALM PARAMETER, for `html_script_parser_inserted`'s reason: the slot is an own property of the element's
+ * wrapper and any realm that can reach the node will do, so this asks the element's node document rather than
+ * making every caller carry one. A node no realm has ever reached has no wrapper and therefore no slot, which
+ * is UNSTATED and not a branch of its own.
+ * `el` may be NULL — a program no `<script>` produced (a lazy chunk, an @S candidate, a `javascript:` URL) is
+ * a real caller and its answer is UNSTATED, which is why no assert stands here. */
+typedef enum {
+    HTML_SCRIPT_PARSER_METADATA_UNSTATED = 0,
+    HTML_SCRIPT_PARSER_METADATA_PARSER_INSERTED,
+    HTML_SCRIPT_PARSER_METADATA_NOT_PARSER_INSERTED,
+} HtmlScriptParserMetadata;
+HtmlScriptParserMetadata html_script_parser_metadata(const lxb_dom_element_t *el);
 
 /* A PARSER REACHED A `script` ELEMENT'S END TAG — the one action TWO sections state, which is why this is one
  * body with two callers rather than two bodies that must not disagree.

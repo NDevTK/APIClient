@@ -504,18 +504,28 @@ CspMatch csp_element_match_source_list(const CspDirective *directive, const lxb_
             CspToken e = directive->value[i];
 
             /* STEP 5.2.1 — 'strict-dynamic' matches for "script" alone, and only for an element that is NOT
-               parser-inserted. This engine has no parser-inserted association at all: core/html/html_script.h
-               says so by name, and its `parser document` is the half that would carry it. So this arm cannot
-               be ANSWERED for a script element, and answering it "Does Not Match" would report a script real
-               Chrome runs as blocked. Every other type falls through, which is the standard's answer and not
-               a gap — 'strict-dynamic' does not apply to style. */
+               parser-inserted: "If type is \"script\", and element is not parser-inserted, return
+               \"Matches\"". Every other type falls through, which is the standard's answer and not a gap —
+               'strict-dynamic' does not apply to style.
+               THE ELEMENT'S `parser document` EXISTS NOW AND THIS ALGORITHM STILL CANNOT ASK FOR IT, which is
+               a different absence from the one that used to stand here and is why the crash is kept rather
+               than deleted. core/html/html_script.h records the flag for every element §4.12.1.1 prepared and
+               core/frame/policy_container.h reads it into a REQUEST's Fetch §2.2.5 parser metadata for
+               §6.7.1.1 step 1.3 — but §6.7.3.3 is asked about an ELEMENT through policy_allows_inline, whose
+               three callers are a `<style>`, an event-handler attribute and an @S breakout with no element,
+               so none of them is this arm's subject and none of them can state its answer. Answering "Does
+               Not Match" instead would report a script real Chrome runs as blocked, in the one direction
+               'strict-dynamic' exists to invert. */
             if (csp_token_is(e, "'strict-dynamic'")) {
                 DCHECK(!(type == CSP_INLINE_SCRIPT && element != NULL),
                        "§6.7.3.3 step 5.2.1 reached a real script element under 'strict-dynamic' and this "
-                       "engine cannot say whether that element is PARSER-INSERTED — HTML §4.12.1.1 processing "
-                       "model's `parser document` is not built (core/html/html_script.h names it as the "
-                       "missing half of §13.2.6.4.4's stamp). Build it there, then answer Matches for an "
-                       "element whose parser document is null");
+                       "algorithm was given no way to say whether that element is PARSER-INSERTED. The flag "
+                       "itself is recorded (core/html/html_script.h's html_script_parser_metadata); what is "
+                       "missing is the caller — this engine runs CSP §4.2.3 over a `<style>` element and over "
+                       "an event-handler attribute and over NO inline `<script>` element at all, so the "
+                       "§4.12.1.1 caller that would reach this arm does not exist yet. Build that caller and "
+                       "let it carry the element's answer down, then return Matches for a null parser "
+                       "document");
                 continue;
             }
             /* STEP 5.2.2 — the DIGEST:

@@ -34,6 +34,11 @@ static JSAtom  g_atom_started = JS_ATOM_NULL;
    bare boolean the standard writes independently, and a record would be a third thing to keep consistent. */
 static JSValue g_force_async_key = JS_UNDEFINED;
 static JSAtom  g_atom_force_async = JS_ATOM_NULL;
+/* …and §4.12.1's `parser document`, as the boolean §4.12.1 reads off it ("script elements with non-null parser
+   documents are known as parser-inserted"). A third key rather than a member of a record beside the two above,
+   for the reason they are two: each is written independently by a different step. */
+static JSValue g_parser_doc_key = JS_UNDEFINED;
+static JSAtom  g_atom_parser_doc = JS_ATOM_NULL;
 static int     g_id_set_async = -1;   /* the `async` setter's pool id — declared per AGENT, installed per REALM */
 /* §4.12.1.1's error arm, as a machine — registered per RUNTIME, like every other host step def. */
 static int     g_err_stepid = -1;
@@ -179,6 +184,10 @@ void html_script_init(JSContext *ctx)
     CHECK(!JS_IsException(g_force_async_key), "the script force-async slot key allocation failed");
     g_atom_force_async = JS_ValueToAtom(ctx, g_force_async_key);
     CHECK(g_atom_force_async != JS_ATOM_NULL, "the script force-async slot key could not be interned");
+    g_parser_doc_key = JS_NewSymbol(ctx, "scriptParserDocument", false);
+    CHECK(!JS_IsException(g_parser_doc_key), "the script parser-document slot key allocation failed");
+    g_atom_parser_doc = JS_ValueToAtom(ctx, g_parser_doc_key);
+    CHECK(g_atom_parser_doc != JS_ATOM_NULL, "the script parser-document slot key could not be interned");
     g_id_set_async = idl_setter_id(ctx, IDL_BOOLEAN, false, js_script_set_async, 0);
     /* HTML §4.12.1.1 "Processing model"'s children changed steps FOR `script` ELEMENTS — the family is DOM
        §4.2.3 "Mutation algorithms"'s and this standard states this element's — the third of the three doors
@@ -202,6 +211,10 @@ void html_script_free(JSRuntime *rt)
     g_atom_force_async = JS_ATOM_NULL;
     JS_FreeValueRT(rt, g_force_async_key);
     g_force_async_key = JS_UNDEFINED;
+    JS_FreeAtomRT(rt, g_atom_parser_doc);
+    g_atom_parser_doc = JS_ATOM_NULL;
+    JS_FreeValueRT(rt, g_parser_doc_key);
+    g_parser_doc_key = JS_UNDEFINED;
     g_id_set_async = -1;
     /* GIVEN BACK WITH THE RUNTIME THAT ISSUED IT. The id is only meaningful against that runtime's table, and
        a corpus host takes one down and brings another up per file — a stale id would have the next agent's
@@ -300,6 +313,58 @@ static void script_set_force_async(JSContext *ctx, lxb_dom_node_t *n, bool on)
                              "so losing a write would silently unorder the page's own lazy chunks");
     JS_DefinePropertyValue(ctx, wrap, g_atom_force_async, JS_NewBool(ctx, on), SCRIPT_SLOT_FLAGS);
     JS_FreeValue(ctx, wrap);
+}
+
+/* §4.12.1's `parser document`, recorded as the boolean the standard reads off it — "script elements with
+   non-null parser documents are known as parser-inserted". WRITTEN ON EVERY PREPARATION AND IN BOTH
+   DIRECTIONS, which is what makes its ABSENCE mean that §4.12.1.1 has not run over this element at all,
+   rather than that it ran and found no parser document: those are two different facts and html_script.h
+   says why the reader must keep them apart. */
+static void script_set_parser_document(JSContext *ctx, lxb_dom_node_t *n, bool parser_inserted)
+{
+    JSValue wrap;
+
+    DCHECK(g_atom_parser_doc != JS_ATOM_NULL,
+           "a script's `parser document` was written before html_script_init minted its slot key");
+    DCHECK(html_script_is(n), "`parser document` was written onto a node that is not an HTML `script` element");
+    wrap = node_wrap(ctx, n);
+    CHECK(JS_IsObject(wrap), "a script element could not be wrapped to carry its `parser document` — HTML "
+                             "§4.12.1.1 computes Fetch §2.2.5's parser metadata from this flag and CSP "
+                             "§6.7.1.1 step 1.3 decides a 'strict-dynamic' request by that metadata alone, so "
+                             "losing the write would answer a policy about an element nobody can describe");
+    JS_DefinePropertyValue(ctx, wrap, g_atom_parser_doc, JS_NewBool(ctx, parser_inserted), SCRIPT_SLOT_FLAGS);
+    JS_FreeValue(ctx, wrap);
+}
+
+HtmlScriptParserMetadata html_script_parser_metadata(const lxb_dom_element_t *el)
+{
+    const lxb_dom_node_t *n;
+    JSValueConst wrap;
+    JSContext *ctx;
+    JSValue v;
+    int r;
+
+    /* A PROGRAM NO `<script>` PRODUCED — see the header. It is a stated answer and not a hole. */
+    if (!el) return HTML_SCRIPT_PARSER_METADATA_UNSTATED;
+    n = lxb_dom_interface_node((lxb_dom_element_t *)el);
+    if (!html_script_is(n)) return HTML_SCRIPT_PARSER_METADATA_UNSTATED;
+    DCHECK(g_atom_parser_doc != JS_ATOM_NULL,
+           "a script's `parser document` was read before html_script_init minted its slot key");
+    /* THE REALM IS THE ELEMENT'S NODE DOCUMENT'S, exactly as html_script_parser_inserted derives its own: the
+       slot is an own property of the node's wrapper, so any realm that can reach the node reads the same
+       property, and a document no realm has ever reached has no wrapper for a slot to be in. */
+    ctx = document_realm_of((lxb_dom_node_t *)n);
+    if (!ctx) return HTML_SCRIPT_PARSER_METADATA_UNSTATED;
+    wrap = node_wrap_peek(n);
+    if (!JS_IsObject(wrap)) return HTML_SCRIPT_PARSER_METADATA_UNSTATED;
+    r = JS_GetOwnSlot(ctx, &v, wrap, g_atom_parser_doc);
+    if (r <= 0) return HTML_SCRIPT_PARSER_METADATA_UNSTATED;
+    DCHECK(JS_IsBool(v), "a script's `parser document` slot holds something that is not a boolean — the slot "
+                         "is written by html_script.c and by nothing else");
+    r = JS_ToBool(ctx, v);
+    JS_FreeValue(ctx, v);
+    return r ? HTML_SCRIPT_PARSER_METADATA_PARSER_INSERTED
+             : HTML_SCRIPT_PARSER_METADATA_NOT_PARSER_INSERTED;
 }
 
 /* THE RECEIVER, for the two members below. Web IDL §3.7.6's brand check: `async` reached on something that is
@@ -577,6 +642,13 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
                         "a caller that would silently drop the page's own code");
     imm->text = NULL; imm->text_n = 0; imm->el = NULL;
     if (!html_script_is(n)) return;
+    /* §4.12.1's `parser document`, RECORDED BEFORE STEP 1 AND THEREFORE ON EVERY PATH THROUGH THESE STEPS.
+       The caller states it and this is the only place it is written. It goes ahead of step 1 rather than
+       beside the later step that reads it into script fetch options, because it is not an OUTPUT of this
+       algorithm at all: §13.2.6.4.4 'The "in head" insertion mode' set the parser document when the element
+       was created, so the fact is equally true at every one of this algorithm's returns, and an element
+       that leaves at step 1 has it for exactly the same reason as one that reaches the bottom. */
+    script_set_parser_document(ctx, n, parser_inserted);
     /* STEP 1: "If el's already started is true, then return." This is the whole of what makes §13.4's fragment
        parse inert — the parsed script is in the tree, is queryable, serialises back out, and does not run. */
     if (script_already_started(ctx, n)) return;

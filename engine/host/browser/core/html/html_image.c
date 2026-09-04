@@ -657,10 +657,11 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
     /* FETCH §2.2.5's TWO METADATA FIELDS, UNSTATED — and that is a claim about §4.8.4.3.5, not a gap. This
        algorithm builds its request with "creating a potential-CORS request given urlString, `image`, and the
        current state of the element's crossorigin content attribute" and sets nothing else on it: neither
-       `nonce` nor `integrity` appears anywhere in §4.8.4 "Images", and an `img` element carries no such
-       content attribute for one to be read from. So both fields are §2.2.5's initial empty string, which CSP
-       reads as an ANSWER — §6.7.2.3 step 2 refuses an empty nonce — rather than as a value this call site
-       failed to plumb.
+       `nonce`, `integrity` nor `parser metadata` appears anywhere in §4.8.4 "Images", and an `img` element
+       carries no such content attribute for one to be read from. So all three fields are §2.2.5's initial
+       empty string, which CSP reads as an ANSWER — §6.7.2.3 step 2 refuses an empty nonce — rather than as a
+       value this call site failed to plumb. §6.7.1.1's parser-metadata arm is unreachable from here either
+       way: its step 1 gates the whole algorithm on a SCRIPT-LIKE destination, and `image` is not one.
        THE DISJUNCTION AND THE URL PARSE ARE NO LONGER WRITTEN HERE: they were one of FOUR hand-written copies
        of §4.1 step 7, and core/fetch/fetch.h's fetch_main_blocked is the one component they collapsed into.
        What this site still states is what only it knows — the destination §4.8.4.3.5 creates the request with,

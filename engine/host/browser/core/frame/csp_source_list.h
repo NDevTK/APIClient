@@ -27,13 +27,15 @@
  *
  * AND §6.7.3.3 IS HERE BECAUSE THE ENGINE STOPPED ASKING ONLY THE ATTACKER'S QUESTION. This file used to
  * carry, in place of this paragraph, an argument that §6.7.3.3's remaining arms were unreachable: its nonce
- * arm needs an element carrying a `nonce` the page's own policy lists, its hash arms need the source to hash
- * to a listed digest, and its 'strict-dynamic' arm needs an element that is not parser-inserted — none of
- * which INJECTED content can have. Every word of that is still true and it answered the wrong question the
- * moment a BROWSER component asked. HTML §4.2.6's update a style block runs §4.2.3 upon the page's OWN
- * `<style>` element with its own child text content, and `<style nonce=…>` under `style-src 'nonce-…'` is one
- * of the two shapes modern CSP is actually written in — so answering it from §6.7.3.2 alone refuses a sheet
- * every browser applies, and the whole cascade below it resolves from a document real Chrome does not have.
+ * arm needs an element carrying a `nonce` the page's own policy lists and its hash arms need the source to
+ * hash to a listed digest — neither of which INJECTED content can have. (Its 'strict-dynamic' arm was in
+ * that list and does not belong there: an injected element is precisely the NOT-parser-inserted one that arm
+ * returns Matches for, which is the whole purpose of the keyword.) The rest of it is still true and it
+ * answered the wrong question the moment a BROWSER component asked. HTML §4.2.6's update a style block runs
+ * §4.2.3 upon the page's OWN `<style>` element with its own child text content, and `<style nonce=…>` under
+ * `style-src 'nonce-…'` is one of the two shapes modern CSP is actually written in — so answering it from
+ * §6.7.3.2 alone refuses a sheet every browser applies, and the whole cascade below it resolves from a
+ * document real Chrome does not have.
  * §6.7.3.2 is therefore no longer the answer; it is §6.7.3.3's FIRST STEP, and the caller decides nothing.
  *
  * AND STEP 5.2.2 IS ANSWERED RATHER THAN CRASHED. It needs SHA-256/384/512 over the source, which this engine

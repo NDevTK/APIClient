@@ -518,18 +518,17 @@ bool policy_allows_string_compilation(const PolicyContainer *p)
  * would never use. Every other name §6.8.1 can return — connect-src, manifest-src, object-src, frame-src,
  * media-src, font-src, img-src, and §6.2.2.1's worker-src — is §6.7.2.5 alone.
  *
- * WHAT OF THOSE TWO IS ANSWERED HERE, AND WHAT STILL CRASHES. Three of the four preliminary steps are now
- * ANSWERED, because the request's own fields reach this walk: §6.7.1.1 step 1.1 and §6.1.14.1 step 3 run
- * §6.7.2.3 over the request's cryptographic nonce metadata, and step 1.2 runs §6.7.2.4 over its integrity
- * metadata and SRI §3.3.2 "Parse metadata" beneath that. What remains is step 1.3, which needs Fetch §2.2.5's
- * PARSER METADATA — a field no producer states yet — and which crashes naming it.
+ * ALL FOUR PRELIMINARY STEPS ARE ANSWERED HERE, because the request's own fields reach this walk: §6.7.1.1
+ * step 1.1 and §6.1.14.1 step 3 run §6.7.2.3 over the request's cryptographic nonce metadata, step 1.2 runs
+ * §6.7.2.4 over its integrity metadata and SRI §3.3.2 "Parse metadata" beneath that, and step 1.3 reads Fetch
+ * §2.2.5's parser metadata off the same value.
  *
- * THE ORDER OF THOSE STEPS IS WHAT MAKES THE MODERN STRICT POLICY ANSWERABLE, and it is worth saying because
- * it looks like an accident. §6.7.1.1 runs the nonce at 1.1 and 'strict-dynamic' at 1.3, so
+ * THE ORDER OF THOSE STEPS IS WHAT MAKES THE MODERN STRICT POLICY BEHAVE, and it is worth saying because it
+ * looks like an accident. §6.7.1.1 runs the nonce at 1.1 and 'strict-dynamic' at 1.3, so
  * `script-src 'nonce-x' 'strict-dynamic'` — which is the shape CSP's own §8.5 "Strict CSP" recommends and the
  * shape most nonce-bearing pages are written in — RETURNS AT 1.1 for a nonce that matches and never reaches
- * the unbuilt step at all. Reordering these two arms would turn the commonest policy on the modern web from an
- * answer into an abort. */
+ * step 1.3 at all. Reordering these two arms would BLOCK every parser-inserted `<script src>` on such a page,
+ * which is every one of them, since step 1.3 decides outright and never consults the host list beside it. */
 static bool policy_blocks_request(const CspPolicy *policy, const UrlRecord *url, const char *effective,
                                   const char *destination, CspRequestMetadata metadata,
                                   const Origin *self_origin, int redirect_count)
@@ -557,15 +556,19 @@ static bool policy_blocks_request(const CspPolicy *policy, const UrlRecord *url,
         /* STEP 1.2 — §6.7.2.4 over the request's integrity metadata. */
         if (csp_integrity_match_source_list(d, metadata.integrity, metadata.integrity_len) == CSP_MATCHES)
             return false;
-        DCHECK(!csp_source_list_contains(d, "'strict-dynamic'"),
-               "§6.7.1.1 step 1.3 decides this request by the REQUEST's parser metadata ALONE once the list "
-               "carries 'strict-dynamic' — Blocked when it is \"parser-inserted\", Allowed otherwise, with the "
-               "source list never consulted either way. This engine does not carry Fetch §2.2.5's parser "
-               "metadata to the check; HTML sets it \"parser-inserted\" for an element the tokenizer created and "
-               "\"not-parser-inserted\" for one a script inserted. Carry it and answer step 1.3 here. Falling "
-               "through to the source list INVERTS the directive: 'strict-dynamic' exists precisely to allow "
-               "the script-inserted loads a host list refuses, and to block the parser-inserted ones it "
-               "permits");
+        /* STEP 1.3 — 'strict-dynamic', which is the one arm of this algorithm that DECIDES the request
+           outright and never reaches the source list. Its condition is "If directive's value contains a
+           source expression that is an ASCII case-insensitive match for the "'strict-dynamic'"
+           keyword-source", and its whole body is step 1.3.1: "If the request's parser metadata is
+           "parser-inserted", return "Blocked"." followed by "Otherwise, return "Allowed"." — so both outcomes
+           are RETURNS and step 1.4 below is unreachable for a list carrying it.
+           THAT IS THE DIRECTIVE'S ENTIRE POINT AND IT INVERTS A HOST LIST. 'strict-dynamic' exists to ALLOW
+           the script-inserted loads a host list refuses and to BLOCK the parser-inserted ones it permits, so
+           falling through to §6.7.2.5 here does not approximate the answer — it returns the opposite one for
+           both populations at once. CSP §8.5 "Strict CSP" recommends `'nonce-…' 'strict-dynamic'`, which is
+           why §6.7.1.1 step 1.1 above answers most real pages before this arm is reached. */
+        if (csp_source_list_contains(d, "'strict-dynamic'"))
+            return metadata.parser == CSP_PARSER_METADATA_PARSER_INSERTED;
         /* Step 1.4 is the §6.7.2.5 below, which is §6.7.2.7 over the request's current URL. */
     } else if (!strcmp(effective, "style-src-elem")) {
         /* §6.1.14.1 "style-src-elem Pre-request Check" STEP 3 — the same §6.7.2.3 over the same field, and the
@@ -592,7 +595,8 @@ static bool policy_blocks_request(const CspPolicy *policy, const UrlRecord *url,
 }
 
 CspRequestMetadata csp_request_metadata(const char *nonce, size_t nonce_len,
-                                        const char *integrity, size_t integrity_len)
+                                        const char *integrity, size_t integrity_len,
+                                        CspParserMetadata parser)
 {
     CspRequestMetadata m;
 
@@ -602,18 +606,27 @@ CspRequestMetadata csp_request_metadata(const char *nonce, size_t nonce_len,
            "value, so a caller with nothing to carry states an empty string with a zero length — and a caller "
            "whose OPERATION sets neither field says so with csp_request_metadata_unstated, which is a "
            "different claim about a named algorithm and reads as one");
+    DCHECK(parser == CSP_PARSER_METADATA_EMPTY || parser == CSP_PARSER_METADATA_PARSER_INSERTED ||
+           parser == CSP_PARSER_METADATA_NOT_PARSER_INSERTED,
+           "a request's CSP metadata was stated with a parser metadata outside Fetch §2.2.5's domain — \"A "
+           "request has associated parser metadata which is the empty string, \"parser-inserted\", or "
+           "\"not-parser-inserted\".\" and nothing else, so a fourth value is a zero-filled or miscast "
+           "struct rather than a request state");
     m.nonce = nonce;
     m.nonce_len = nonce_len;
     m.integrity = integrity;
     m.integrity_len = integrity_len;
+    m.parser = parser;
     return m;
 }
 
 CspRequestMetadata csp_request_metadata_unstated(void)
 {
-    /* §2.2.5's "Unless stated otherwise, it is the empty string", for both fields, written out rather than
-       zero-filled — a struct nobody assigned is exactly what the abort below exists to catch. */
-    return csp_request_metadata("", 0, "", 0);
+    /* §2.2.5's initial values for all three fields — "Unless stated otherwise, it is the empty string" for the
+       two strings and "Unless otherwise stated, it is the empty string" for the parser metadata — written out
+       rather than zero-filled, since a struct nobody assigned is exactly what the abort below exists to
+       catch. */
+    return csp_request_metadata("", 0, "", 0, CSP_PARSER_METADATA_EMPTY);
 }
 
 CspRequestVerdict policy_should_block_request(const PolicyContainer *p, const UrlRecord *url,
@@ -628,11 +641,14 @@ CspRequestVerdict policy_should_block_request(const PolicyContainer *p, const Ur
        — the zero-fill the type's own header forbids — and it is caught HERE rather than deeper because this is
        the boundary the value crosses. It is a DCHECK and not a CHECK because the value is one THIS codebase
        composed: no byte of it comes from a server, so it is an invariant of the engine's own logic. */
-    DCHECK(metadata.nonce != NULL && metadata.integrity != NULL,
+    DCHECK(metadata.nonce != NULL && metadata.integrity != NULL &&
+           metadata.parser != CSP_PARSER_METADATA_UNPLACED,
            "§4.1.2 was entered with a CSP request metadata whose fields were never placed — Fetch §2.2.5 makes "
-           "both of them strings with the empty string as their initial value, so a NULL is not a request "
-           "state at all. Build the value with csp_request_metadata or csp_request_metadata_unstated; a "
-           "designated initializer zero-fills what it does not name and is what this catches");
+           "the two metadata strings, with the empty string as their initial value, and gives parser metadata "
+           "a three-member domain the empty string is the initial member of, so a NULL and an UNPLACED are "
+           "neither of them a request state. Build the value with csp_request_metadata or "
+           "csp_request_metadata_unstated; a designated initializer zero-fills what it does not name and is "
+           "what this catches");
 
     /* §4.1.2 step 1 reads the request's policy container's CSP list, and a document with no container has no
        policies — the overwhelmingly common case, and §4.1.2's own "let result be Allowed" for it. */
