@@ -4277,6 +4277,18 @@ static JSConcolicHooks g_hooks = {
     .key_name = concolic_key_name_hook,
     .builtin = concolic_builtin_hook,
     .example = concolic_example,
+    /* §10.1.11 "[[OwnPropertyKeys]] ( )" ASKED, WITHOUT WHICH THE ARM THAT ANSWERS IT IS INERT. The record
+       class hands its enumeration to decide_value_arm and the engine's step_ownkeys_run asks this on the
+       BRANCH seam; with the member NULL nothing is asked, decide_value_arm answers -1 for ever, and
+       concolic_exotic_own_names crashes naming a consumer that in fact exists. That is a producer with no
+       consumer wearing the shape of an unbuilt capability, which is the one thing a reader cannot tell apart
+       from the real absence — so the line is the mechanism, not its installation.
+       ITS OWN MEMBER AND NOT `.builtin`, deliberately: this predicate composes
+       concolic_ident_compose("[[OwnPropertyKeys]]", {operand}, 1) while the builtin hook composes
+       ("b", {operand, op}, 2), so routing through it would file one question under a SECOND key — the
+       second-name defect concolic.h warns about — and `.builtin` also carries src/root, which the header
+       says this predicate must not. */
+    .own_keys_pred = concolic_own_keys_pred,
     .lead = concolic_lead_hook };
 
 /* Concolic VALUE propagation stays installed across scheduling AND verification, because taint must flow
