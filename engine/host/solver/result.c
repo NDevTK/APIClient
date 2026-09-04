@@ -597,6 +597,23 @@ char *result_wfq_json(void) {
            "continue than starved dispatches altogether — these are raised under one condition at one line in "
            "flow_pick, the second behind a further predicate, so the subset has acquired a writer that is not "
            "that line and `starvedPicks - starvedPicksIdle` is about to be published as a negative population");
+    /* AND THE IDENTITY THAT MAKES THE FRACTION A FRACTION OF ANYTHING, which is the one this row spent a
+       session without. `starvedPicks` is read as a share of `picksLifetime`, and that quotient means nothing
+       unless the two count the SAME EVENT — which they did not: the raise was per FLOW_SCAN_NEXT *scan* while
+       `picksLifetime` advances per *switch*, and engine.c retains the incumbent on any weight that is not
+       STRICTLY better. On a frontier standing at one weight the retained incumbent is most scans, it always
+       has `picks > 0`, and a never-picked member is always level with it, so the row counted the value-yield
+       working as if it were starvation. It was caught by arithmetic that cost nothing: a real page reported
+       964 against at most 353 re-dispatches, and a count that cannot be true is a count whose denominator
+       names another event. flow_pick now raises it only where `best != seed` — the same displacement engine.c
+       credits `flow_credit_pick` for — so the containment below is by construction and the quotient is a share
+       of dispatches, which is what every site that reads it always claimed it was. */
+    DCHECK(flow_starved_picks() <= w.picks_lifetime,
+           "the scheduler reports MORE dispatches that passed over a never-run member than dispatches — "
+           "flow_pick raises the starved count only where the pick DISPLACES the incumbent, which is exactly "
+           "the branch engine.c credits flow_credit_pick in, so this cannot exceed unless one of the two has "
+           "acquired a second writer; `starvedPicks / picksLifetime` is about to be published as a share "
+           "above 1, which is the reading that says the two rows are counting different events again");
     /* AN EMPTY FRONTIER SAYS SO AND SAYS NOTHING ELSE — result.h states why the term rows are absent rather
        than zero. This is the shape `qjs_result` composes, because a session answers DONE by draining or by
        parking and both leave no members standing. */

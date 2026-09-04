@@ -3551,8 +3551,27 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        engine.c's whole boundary rather than its per-member half. How its absence shows: `starvedPicksIdle`
        tracking `starvedPicks` on a document whose flows park heavily inside continuations while `unitsDone`
        stays flat — an idle count that cannot fall below the park rate, on a run in which nothing finished.
-       ONLY THE SCHEDULER'S OWN PICK. FLOW_SCAN_NEXT is engine.c's `flow_next_to_run(cur, FLOW_SCAN_NEXT)`, the
-       one call whose answer becomes a dispatch; the rival scan, the host's best-weight read, the pager's tail
+       ONLY THE SCHEDULER'S OWN PICK, AND ONLY WHERE THAT PICK DISPLACES THE INCUMBENT — `best != seed` IS
+       LOAD-BEARING AND ITS ABSENCE IS WHAT MADE THIS ROW UNREADABLE. This comment used to say FLOW_SCAN_NEXT
+       is "the one call whose answer becomes a dispatch", and that is FALSE of the answer `cur` itself:
+       engine.c credits `flow_credit_pick` inside `if (best != cur)`, so a scan that RETURNS THE INCUMBENT
+       advances no dispatch at all. The incumbent seeds this scan and necessarily has `picks > 0`, and
+       engine.c displaces it only on a STRICTLY better weight — so on a frontier standing at one weight, which
+       §Testing measured on a real page (every account at zero reward, `neverPickedGap` 0.000 at every
+       sample, 73-93% of members tied at the top), the incumbent is RETAINED on nearly every scan and this
+       row fired on each one. It was therefore dominated by the one event the paragraph above calls
+       legitimate in its own words, counting the DESIGN as the defect it exists to find.
+       THE TELL WAS ARITHMETIC AND IT WAS FREE: `starvedPicks` read 964 where the re-dispatches it claims to
+       be a subset of — `picksLifetime` minus the members ever picked — could not exceed 353. A count that
+       cannot be true is a count read against the wrong denominator, and here the two quantities were not
+       even of the same event: this one was raised per SCAN and `picksLifetime` advances per SWITCH. With the
+       displacement clause they are the same event, `starvedPicks <= picksLifetime` holds by construction,
+       and result.c asserts it where both are in one hand.
+       WHAT IS NO LONGER COUNTED ANYWHERE, AND IS A DIFFERENT QUESTION RATHER THAN A LOSS: how often the
+       incumbent kept the thread while a never-run member stood level with it. That is §Attention's
+       value-yield doing exactly what it is specified to do — "a top-ranked flow runs on at ~zero switch
+       cost" — so it belongs to a reading about PLATEAU DEPTH and never to one about starvation, and
+       folding the two into one row is what cost this one its meaning; the rival scan, the host's best-weight read, the pager's tail
        and the census ask other questions and a count over them would be a number about the instrument.
        EXACT `==` AND NO EPSILON, this file's idiom: two members standing at one another read one value twice,
        and a tolerance would count members the pick can already tell apart.
@@ -3563,7 +3582,7 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        under one condition, so no reading can be a comparison of two moments: the subset is decided by the same
        `best` the superset was, in the same evaluation, and `idle <= starved` is true by construction rather
        than by two writers agreeing. */
-    if (why == FLOW_SCAN_NEXT && best && best->picks > 0 && never && never_w == bw) {
+    if (why == FLOW_SCAN_NEXT && best && best != seed && best->picks > 0 && never && never_w == bw) {
         g_starved_picks++;
         if (flow_between_units(best)) g_starved_picks_idle++;
     }
