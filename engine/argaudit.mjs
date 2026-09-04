@@ -171,6 +171,27 @@ function preCrossingRewrite(idlArgsCPath) {
     const names = [...src.slice(guard, m.index).matchAll(/t\s*==\s*(IDL_[A-Z0-9_]+)/g)].map((g) => g[1]);
     for (const n of names) if (n !== m[1] && !map.has(n)) map.set(n, m[3]);
   }
+  /* THE SECOND PRE-CROSSING REWRITE, AND IT IS NOT A TERNARY — Web IDL §3.6 Overload resolution algorithm
+     steps 3-4 remove the shorter overload entry from the ARGUMENT COUNT alone, and the conversion performs
+     that as `if (step4_only_longer) t = idl_split_longer_type(t);`, also above the crossing test. The regex
+     above cannot see it, so a length-splitting union read as its DECLARED type answers whatever rule that row
+     carries, when what a body at the longer arity actually receives is the longer entry's own type: a
+     concolic at `postMessage(m, x, [])` reaches the USVString, which CROSSES, and one at `el.scrollTo(x, y)`
+     reaches the unrestricted double, which crosses too.
+     IT IS READ FROM THE FUNCTION THAT OWNS THE ANSWER rather than listed here — that function is a total
+     switch over the split rows and crashes for anything else, so a row added to it is a row this audit learns
+     about on the day it lands, and a hand list here would be the second copy this file exists to catch. The
+     rewrite is CONDITIONAL on arity where the nullable collapse is conditional on the value, so joining it
+     unconditionally is the over-reporting direction: a body IS reachable with the crossed value at the longer
+     arity, and a fork at the shorter one can place the unknown as itself too. */
+  {
+    const fn = src.match(/idl_split_longer_type\(IdlArgType t\)\s*\{([\s\S]*?)\n\}/);
+    if (!fn) throw new Error("idl_args.c no longer defines idl_split_longer_type — that function IS the "
+      + "statement of which type §3.6 steps 3-4 leave standing at a length-differing split, so without it "
+      + "this audit cannot say what a body at the longer arity receives");
+    for (const m of fn[1].matchAll(/case\s+(IDL_[A-Z0-9_]+)\s*:\s*return\s+(IDL_[A-Z0-9_]+)\s*;/g))
+      map.set(m[1], m[2]);
+  }
   if (!map.size) throw new Error("idl_args.c's argument conversion no longer rewrites any declared type above "
     + "its crossing test — that rewrite is what makes a nullable interface answer IDL_INTERFACE's rule, so if "
     + "it is gone the join below is measuring a conversion this tree no longer performs");
