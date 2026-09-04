@@ -40,11 +40,53 @@
  * it, which is a negative, while the record arm below rests on a POSITIVE fact (the engine granted the
  * container's extent to the document's own bytes). The population that escapes both vocabularies is every
  * other host's globals and every library's own store — `process`, `QObject`, `setImmediate`,
- * `__core-js_shared__`, `_sentryDebugIds` — and at the instant of the read this file holds NOTHING that tells
- * one of those from a `window.__FLAGS` the server would have written for a logged-in visitor: both are "not a
- * standard's name, never written by anything, missed on the global". Erring toward the fork is the correct
- * side to be wrong on (§solver: a concrete `undefined` buries the admin code, and the WFQ starves an arm that
- * emits nothing), so this arm stays as it is until something can DECIDE it rather than default it.
+ * `__core-js_shared__`, `_sentryDebugIds`, `webpackJsonp` — and at the instant of the read this file holds
+ * NOTHING that tells one of those from a `window.__FLAGS` the server would have written for a logged-in
+ * visitor: both are "not a standard's name, never written by anything, missed on the global". Erring toward
+ * the fork is STILL the correct side to be wrong on — a concrete `undefined` buries the admin code, which is
+ * the loss this file exists to prevent — so this arm stays as it is until something can DECIDE it rather than
+ * default it.
+ *
+ * WHAT IS DELETED FROM THAT SENTENCE IS ITS SECOND HALF, WHICH PRICED THE DEFAULT BY CITING THE WFQ: "the WFQ
+ * starves an arm that emits nothing". That is a primitive cited as precedent with none of its preconditions
+ * named — the move §CONCRETIZE-ON-PIN carries its own annotation for, arriving here over a different
+ * primitive — and the precondition this one needs is one this arm denies BY CONSTRUCTION.
+ *
+ * THE MECHANISM CITED STARVES A RUNNER AND WHAT IT WAS CITED AGAINST IS A POPULATION, AND THOSE ARE NOT THE
+ * SAME OBJECT. Aging charges the thread a MEMBER actually burned, and a fork COPIES that charge onto the arm
+ * — `cpu` with its `cpu_gen`, and `visits` with it — because §ONE-WFQ requires a fork to be RANK-NEUTRAL. So
+ * the flow that keeps holding the thread does sink below the siblings it left behind, and that is why the two
+ * per-position chains making this same citation — the unknown `length` and the unknown own-key set, each
+ * asking "is there one beyond n?" — are RIGHT to make it: each is LINEAR, one continuing flow per position,
+ * so the runner is exactly the object aging reaches. A BRANCHING world is not that object. Its N members
+ * share the charge accrued by whichever ONE of them held the thread, so what the arm owes as a whole does not
+ * grow with N — and its non-branching sibling, which never runs, sits frozen at the identical charge it was
+ * born with. The reward term cannot break the tie either, and not because it is small: it is held per
+ * ACCOUNT, so on the one-family frontier a document actually has (flow.h: "`families: 1` is the identity and
+ * the term is structurally an offset") it is a common offset that cancels out of every comparison INSIDE the
+ * document — which is precisely the comparison the deleted clause claimed it decided. Every separating term
+ * is therefore common to the two sides of this branch, and "outranked" names no relation between them.
+ *
+ * MEASURED, AND THE SHAPE RATHER THAN THE TOTALS IS WHAT TRAVELS (one 91s budget, gitlab.com/explore, at the
+ * artifact built from 2fd95568 — an ancestor of this commit, so re-derive before quoting): 29351 of 29388
+ * frontier members stood at ONE program cursor, and ALL SIXTY-FOUR predicate rows of that run's `_forkAt`
+ * decoded to derivations of ONE name missed on the global — `webpackJsonp`, read as the right-hand side of
+ * webpack's own `this.webpackJsonp = this.webpackJsonp || []` in the first program the page runs. Six
+ * structurally different predicates over derivations of that one name, composing multiplicatively inside the
+ * callback the truthy world hands an unknown to. The individual chains were starved exactly as promised
+ * (`LengthOfArrayLike>0` 2761 hits, `>1` 28, `>2` absent). Their PRODUCT was not, and no term reads a
+ * product. The document emitted four endpoints in ninety-one seconds.
+ *
+ * SO THE HONEST STATEMENT OF WHAT WOULD HAVE TO EXIST IS ABOUT THE ACCOUNTING UNIT AND NOT ABOUT A WEIGHT,
+ * AND THIS FILE IS NOT THE PLACE IT WOULD BE BUILT. flow.h's own T/P row says of exactly this reading — the
+ * thread reaching a fresh member nearly every time — that "no term of flow_weight reaches it, and a weight
+ * change made against this reading fixes nothing and can only make the order worse", and §ONE-WFQ's
+ * fork-neutrality is what forbids the obvious candidates: any term that told the two sides of THIS branch
+ * apart is a term a fork does not carry. What must exist afterward is a frontier on which the two sides of an
+ * example-free branch are COMPARABLE AT ALL, which is a question about what mints an ACCOUNT and not about
+ * what a weight reads. Its absence shows exactly as measured: a document whose whole frontier descends from
+ * one absent name, spending its whole budget, while every term that could order it stays common to both
+ * sides of the branch that made it.
  *
  * AND THE THING THIS PARAGRAPH USED TO NOMINATE AS THAT DECIDER IS UNSOUND — IT IS WRITTEN OUT HERE BECAUSE IT
  * WAS LANDED AS AN INSTRUCTION AND A LANE WOULD HAVE BUILT IT. It said the classification is decidable from a
