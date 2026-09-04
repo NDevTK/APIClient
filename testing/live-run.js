@@ -74,6 +74,36 @@ function snapshot(pg) {
   }));
 }
 
+/* IS THE ONE LEVEL-1 LOOP STILL ALIVE — a fact no counter in the row above can answer, and the one that
+   decides whether a row is a measurement of the site named on it.
+   bridge.js sets `_hostDead` ONCE and never clears it, and every document arriving afterwards is answered by
+   `_hostKicksRefused++` and nothing else. So the FIRST crash that takes the scheduler down makes every later
+   run in that browser produce no engine row at all — and this driver printed those under
+   `budget-elapsed(no-row)`, whose own comment says it means "a document that was admitted and never
+   provisioned an engine, which is NOT the same as an engine that ran and found nothing". That token was
+   therefore carrying a THIRD nothing it does not name: a browser that died in an earlier run and was never
+   asked about this site. §MEASURE-WHAT-THE-SHIPPED-PATH-WRITES: an absent count and a zero count are
+   different facts, and so are these.
+   MEASURED, which is why this column exists: five runs across three app pages, artifact head 82c1a924. Run 0
+   crashed all three sites, the third crash killed the scheduler, and the remaining TWELVE rows read
+   `budget-elapsed(no-row)` — twelve rows about a dead loop, printed in the same column and the same shape as
+   a finding about the engine. The driver takes a RUN COUNT precisely because one run is not a measurement,
+   and it was silently returning one sample per site out of five.
+   READ THROUGH `rendererPoolProbe` BECAUSE THAT IS THE ONLY SURFACE — `_hostDead`, `_hostDriving` and
+   `_hostKicksRefused` are module-scoped bindings in bridge.js, not properties of `self`. The probe runs its
+   own DCHECKs, so a throw is reported under its OWN token rather than folded into `alive`: a probe that could
+   not answer and a scheduler that is answering are different facts, and defaulting one into the other is the
+   exact shape this column was added to stop. */
+function scheduler(pg) {
+  return pg.evaluate(() => {
+    try {
+      const p = self.rendererPoolProbe();
+      return { alive: p.scheduler.alive, driving: p.scheduler.driving,
+               kicksRefused: p.scheduler.kicksRefused, diedOf: p.scheduler.diedOf };
+    } catch (e) { return { PROBE_THREW: String((e && e.message) || e) }; }
+  });
+}
+
 /* WHAT THE RUN COST, AND — the last four — WHAT ITS WORK MET. bridge.js forwards the @S arrival census onto
    every run record for the reason solver/result.c emits it: an empty `securitySinks` array has four readings
    that take opposite actions, and a probe that reports only `sinks: 0` cannot tell "no attacker source was
@@ -93,6 +123,9 @@ const COUNTERS = ["switches", "flows", "candidates", "jobsQueued", "jobsRun", "u
 async function oneRun(browser, pg, url, budgetMs) {
   const before = await snapshot(pg);
   const baseRows = before.rows.length;
+  /* READ BEFORE THE NAVIGATION, because "the scheduler was already dead when this URL arrived" is the only
+     reading under which this row is not about this URL at all. */
+  const schedBefore = await scheduler(pg);
 
   let page;
   const pages = await browser.pages();
@@ -141,6 +174,9 @@ async function oneRun(browser, pg, url, budgetMs) {
     }
   }
   page.off("pageerror", onErr);
+  /* READ AFTER THE POLL LOOP for the reason testing/live-why.js states at its own probe read: a scheduler
+     that died mid-run must be seen dead, not seen alive one poll before it died. */
+  const schedAfter = await scheduler(pg);
   const elapsed = Date.now() - t0;
   const mine = (terminal || last.rows.slice(baseRows));
 
@@ -152,9 +188,21 @@ async function oneRun(browser, pg, url, budgetMs) {
     /* THE VERDICT NAMES WHICH OF THE THREE NOTHINGS THIS IS. A run with no engine row is only a finding
        about the ENGINE when a document actually arrived for it to run on; when the navigation itself
        produced nothing, the run measured the browser, not the engine, and says so. */
-    verdict: typeof nav !== "number" ? "no-navigation"
+    /* THE FOURTH NOTHING IS NAMED FIRST, because it is the one that makes the row not a row about this site:
+       a scheduler already dead when this URL arrived was never asked about it, so `budget-elapsed(no-row)`
+       would be reporting an engine that was never offered the document as an engine that produced nothing. */
+    verdict: schedBefore.alive === false && !mine.length
+             ? "scheduler-dead-before-this-run(NOT a sample of this site)"
+           : typeof nav !== "number" ? "no-navigation"
            : terminal ? "terminal"
            : (mine.length ? "budget-elapsed(partial)" : "budget-elapsed(no-row)"),
+    /* CARRIED ON EVERY ROW, not only the refused ones: a run whose scheduler was alive before and dead after
+       is where the death happened, and that is a fact about THIS site. `kicksRefusedDelta` is how many
+       documents were answered by nothing while this row was being taken. */
+    scheduler: { before: schedBefore, after: schedAfter,
+                 kicksRefusedDelta:
+                   (typeof schedBefore.kicksRefused === "number" && typeof schedAfter.kicksRefused === "number")
+                     ? schedAfter.kicksRefused - schedBefore.kicksRefused : null },
     rows: mine.length,
     outcomes: mine.map((r) => r.run),
     counters: mine.map((r) => {
@@ -202,11 +250,24 @@ async function main() {
     // Interleave the runs rather than repeating one site N times back to back: a site's
     // own run-to-run drift and a monotone drift in the browser (a growing moat, a warm
     // code cache) are otherwise indistinguishable in the spread.
+    /* SAID ONCE, LOUDLY, AT THE INSTANT THE RUN COUNT STOPS MEANING ANYTHING. A driver that takes a RUN COUNT
+       does so because §Testing says one run is not a measurement — so the moment the scheduler dies, every
+       remaining run is a refused document and the count in the header is a promise this driver can no longer
+       keep. Per-row tokens say it too, but they say it once per row in a stream the reader scrolls; this says
+       it where the reader is still deciding what the run means. The run is NOT aborted: the remaining rows are
+       what a wedged browser does, which is itself worth seeing, and stopping would hide the shape. */
+    let announcedDead = false;
     for (let i = 0; i < runs; i++) {
       for (const url of urls) {
         const r = await oneRun(browser, pg, url, budgetMs);
         bySite.get(url).push(r);
         console.log(JSON.stringify(Object.assign({ runIndex: i }, r)));
+        if (!announcedDead && r.scheduler.after.alive === false) {
+          announcedDead = true;
+          console.log("# ── SCHEDULER DEAD from run " + i + " of " + url + ". bridge.js sets `_hostDead` once " +
+                      "and never clears it, so every run after this one is a REFUSED document, not a sample of " +
+                      "the site on its row. Restart the browser between runs to get independent samples.");
+        }
       }
     }
     console.log("\n# ── spread across " + runs + " run(s); a range, never a mean ──");
@@ -217,6 +278,10 @@ async function main() {
       };
       console.log(JSON.stringify({
         url,
+        /* THE DENOMINATOR OF EVERY SPREAD ON THIS LINE. §a-coverage-figure-states-what-it-is-a-fraction-of:
+           a range across five runs of which four were refused is a range across ONE, and the reader cannot
+           see that from the range. */
+        runsThatWereSamples: rs.filter((r) => r.scheduler.before.alive !== false).length + "/" + rs.length,
         verdicts: rs.map((r) => r.verdict + ":" + (r.outcomes.join("+") || "no-row")),
         endpoints: spread(rs, first("endpoints")),
         sinks: spread(rs, first("sinks")),
