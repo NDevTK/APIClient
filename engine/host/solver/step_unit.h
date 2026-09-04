@@ -148,6 +148,29 @@
     X(END_FRAME,          "resume-ended-its-frame")                               \
     X(REPORT_EXCEPTION,   "report-an-exception")                                  \
     X(DETACH_PROGRAM,     "program-detached-its-base")                            \
+    /* AND THE THREE A START REACHES, which are the same three outcomes over  */ \
+    /* the OTHER entry of HTML §8.1.4.4 "Calling scripts" and not shades of   */ \
+    /* the rows above. `start-a-classic-program` spanned all four of a        */ \
+    /* start's outcomes because both re-naming sites are guarded on          */ \
+    /* `!started_here`, so the frame-cleared population was a sum of whole    */ \
+    /* rows PLUS PART OF ONE and nothing said which part. That was carried    */ \
+    /* as a named residual at the end site, and its predicted symptom has     */ \
+    /* since been measured on a real page: mass in `start-a-classic-program`  */ \
+    /* beside `finished: 0`, with no row able to say whether those starts     */ \
+    /* ENDED. A reader took it for "one program was started" — which it       */ \
+    /* never meant, because the completion arms overwrite it.                 */ \
+    /* THE SPLIT IS THE SAME PREDICATE AT THE SAME TWO LINES, so the rows     */ \
+    /* partition by construction rather than by two writers agreeing:         */ \
+    /* START_PROGRAM now means a start that returned with its frame LIVE,     */ \
+    /* and these three are its frame-clearing outcomes. The detach one is     */ \
+    /* unreachable today — a module that starts returns at EVALUATE_MODULE    */ \
+    /* and never reaches that line — and is named anyway for the reason the   */ \
+    /* predicate there is written as a predicate: the day a started frame     */ \
+    /* detaches, an unconditional assignment would silently take that step    */ \
+    /* out of the row §4.12.1 position advances are counted in.               */ \
+    X(START_ENDED_FRAME,  "start-ended-its-frame")                               \
+    X(START_REPORTED,     "start-reported-an-exception")                         \
+    X(START_DETACHED,     "start-detached-its-base")                             \
     /* …and the arms that perform NO work: three flavours of waiting, and done */ \
     X(AWAIT_FETCH_RECORD, "await-fetch-record")                                   \
     X(HOST_BLOCKED,       "host-blocked")                                         \

@@ -8331,13 +8331,17 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    whole of what the row is read for: every job, delivery, task, lifecycle and retirement arm
                    of flow_step is under `frame == NULL`, so a step that leaves the frame gone is a step that
                    made that ladder reachable and a step that leaves it live is not.
-                   `started_here` GUARDS IT for the reason the completion below carries the residual: a START
-                   is forward progress by construction on either outcome, so it keeps its own row. A module
-                   that starts returns at EVALUATE_MODULE above and never reaches this line, so the predicate
-                   is false here today and this reads as an unconditional assignment; it is written as the
-                   predicate anyway, because the day a started frame detaches, an unconditional one silently
-                   takes that step out of the row §4.12.1 position advances are counted in. */
-                if (!started_here) g_step_unit = STEP_UNIT_DETACH_PROGRAM;
+                   `started_here` SELECTS THE ARM rather than skipping the assignment, which is the half of
+                   this that was a residual until now. A START is forward progress by construction on either
+                   outcome, so it may not be filed under a resume's row — but leaving it at
+                   `start-a-classic-program` filed it under a row that also holds starts whose frame is still
+                   LIVE, and those two are opposite answers to the one predicate the rest of the ladder is
+                   gated on. It has its own row now. A module that starts returns at EVALUATE_MODULE above and
+                   never reaches this line, so this arm is unreachable today and is named anyway for the
+                   reason the predicate was written as a predicate: the day a started frame detaches, the
+                   alternative silently takes that step out of the row §4.12.1 position advances are counted
+                   in. */
+                g_step_unit = started_here ? STEP_UNIT_START_DETACHED : STEP_UNIT_DETACH_PROGRAM;
                 f->frame = NULL;
                 return 0;
             }
@@ -8372,19 +8376,20 @@ static int flow_step(JSContext *ctx, Flow *f) {
                in the population that can reach the ladder, which is the single thing this split exists to
                count; named as a resume it would put an ended program in the row of programs that did not end.
                It is its own arm because it is its own answer.
-               NAMED RESIDUAL — WHAT IS NOT COVERED: a step that COMPILED a program and then reached this line
-               keeps `start-a-classic-program`, so that one row still spans all four outcomes while
-               `resume-program` no longer does. It is not the same defect: step_unit.h states a START
-               "advanced this flow's §4.12.1 position and is forward progress by construction", which is true
-               of it whichever way the frame went, and that is exactly the property the resume arm lacked.
-               WHAT THE NEXT DIFF BUILDS: rows splitting `start-a-classic-program` on this same predicate at
-               this same line, so the frame-cleared population is a sum of whole rows rather than a sum of
-               rows plus part of one. HOW ITS ABSENCE WOULD SHOW: a census whose mass is in
-               `start-a-classic-program` beside `finished: 0` cannot say whether those starts ENDED, and
-               `resume-ended-its-frame` is silent about them by construction — so the frame-cleared count
-               reads low by exactly the starts that finished, and nothing in the histogram says by how much. */
-            if (!started_here)
-                g_step_unit = report ? STEP_UNIT_REPORT_EXCEPTION : STEP_UNIT_END_FRAME;
+               AND THE START ARM IS THE SAME SPLIT, BUILT HERE RATHER THAN NAMED. This carried a residual
+               saying `start-a-classic-program` still spanned all four of a start's outcomes because the
+               re-naming was guarded on `!started_here`, and that the frame-cleared population was therefore a
+               sum of whole rows PLUS PART OF ONE. Its stated symptom was then MEASURED on a real page — census
+               mass in `start-a-classic-program` beside `finished: 0`, with nothing able to say whether those
+               starts had ended — and a reader took the row for "one program was started", which it never meant,
+               because these completion arms overwrite it. So the predicate now SELECTS a start's arm instead of
+               skipping the assignment: `start-a-classic-program` means a start that returned with its frame
+               LIVE, and `start-ended-its-frame` / `start-reported-an-exception` are its frame-clearing
+               outcomes. The rows partition by construction, because it is the one predicate evaluated once at
+               this one line — the same property that makes the resume pair trustworthy one arm over. */
+            g_step_unit = started_here
+                ? (report ? STEP_UNIT_START_REPORTED : STEP_UNIT_START_ENDED_FRAME)
+                : (report ? STEP_UNIT_REPORT_EXCEPTION : STEP_UNIT_END_FRAME);
             /* §4.12.1.1's CLASSIC arm, step 4: "Set document's currentScript attribute to oldCurrentScript."
                THIS is the other end of the bracket the compile opened, and it is placed at the ONE line a
                program's own completion is the fact in hand — the same line `g_completed` is written at, and for
