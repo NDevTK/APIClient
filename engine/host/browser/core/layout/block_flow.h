@@ -172,6 +172,35 @@ typedef enum {
 
 BlockFlowChildKind block_flow_child_kind(lxb_dom_element_t *parent, lxb_dom_node_t *child);
 
+/* ---- CSS 2.2 §9.2.1.1 "Anonymous block boxes"' BOX LIST, IN CONTENT ORDER --------------------------------
+   A block container's box list is not a partition of its child nodes and the section says so outright: an
+   inline box holding an in-flow block-level box "is broken around the block-level box …, splitting the inline
+   box into two boxes (even if either side is empty)", and "the block-level box becomes a sibling of those
+   anonymous boxes" — so ONE child node can yield THREE boxes on §9.4.1's stack. Its own worked example spells
+   them: "a block box representing the BODY, containing an anonymous block box around C1, the SPAN block box,
+   and another anonymous block box around C2".
+   SO THE LIST IS ENUMERATED OVER THE CONTAINER'S CONTENT: its descendants in document order, with an in-flow
+   INLINE BOX transparent — §9.2.2 "Inline-level elements and inline boxes"' own distinction, since "a
+   non-replaced element with a 'display' value of 'inline' generates an inline box" while an ATOMIC
+   inline-level box "participate[s] in [its] inline formatting context as a single opaque box" and keeps its
+   block-level children to itself. The two entries below are the whole enumeration: the BLOCK-LEVEL boxes in
+   order, and the step between content positions. Everything strictly between two consecutive block-level
+   boxes is one ANONYMOUS BLOCK BOX, and the range before the first and after the last are the same shape.
+   THE STEP DESCENDS ONLY INTO AN INLINE BOX THAT BREAKS, which is an equivalence and not an optimisation: the
+   walk exists to find the positions at which the box LIST changes, and an inline box with no in-flow
+   block-level box inside it changes it nowhere. A consumer that must reach the CONTENT of such a box descends
+   on its own — what it must not do is delimit on its own, which is the one document with two box trees this
+   header keeps warning about. That step is therefore NOT exported: a caller holding it would be holding half
+   a delimitation, and the one entry below is the whole of what a box list is.
+   THE NEXT BLOCK-LEVEL BOX STRICTLY AFTER `after`, or NULL when there is none; `after == NULL` starts at the
+   beginning of `el`'s content. Seeding each call with the box the last one returned enumerates §9.2.1.1's
+   block-level boxes in order, and everything strictly between two consecutive answers — plus the range before
+   the first and the one after the last — is one ANONYMOUS BLOCK BOX. `after` is EXCLUSIVE so that the loop
+   cannot stand still, and NULL means the start of the content rather than "no constraint": the two would
+   differ for a container whose very first content position is a block-level box. Each call scans only
+   forward, so the whole enumeration costs one pass over the content however many boxes it yields. */
+lxb_dom_node_t *block_flow_next_block_box(lxb_dom_element_t *el, lxb_dom_node_t *after);
+
 /* CSS 2.2 §9.2.1.1 "Anonymous block boxes"' RUN DELIMITATION: one past the LAST child of the maximal run of
    inline-level children that starts at `first`, EXCLUSIVE, in the (first, end) form core/layout/line_box.h
    takes. `first` must itself be `BLOCK_FLOW_CHILD_INLINE` — §9.2.1.1 generates a box only "around 'Some text'",

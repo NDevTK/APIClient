@@ -735,11 +735,96 @@ static void bf_anon_record(BfAnonSink *s, lxb_dom_node_t *first, lxb_dom_node_t 
     s->n++;
 }
 
+/* ---- CSS 2.2 §9.2.1.1's BOX LIST, ENUMERATED IN CONTENT ORDER -------------------------------------------
+   A block container's box list is NOT a partition of its child nodes, and §9.2.1.1's own worked example is
+   where that stops being a technicality: with `p { display: inline }` and `span { display: block }`, "the
+   resulting boxes would be a block box representing the BODY, containing an anonymous block box around C1, the
+   SPAN block box, and another anonymous block box around C2" — THREE boxes out of ONE child node, because the
+   inline box "is broken around the block-level box … splitting the inline box into two boxes (even if either
+   side is empty)" and "the block-level box becomes a sibling of those anonymous boxes".
+   SO THE ENUMERATION IS OVER POSITIONS IN THE CONTAINER'S CONTENT, and CONTENT is the container's descendants
+   in document order with an in-flow INLINE BOX transparent — its children spliced in at its own position. That
+   is §9.2.2 "Inline-level elements and inline boxes"' distinction and not a choice: "A non-replaced element
+   with a 'display' value of 'inline' generates an inline box", while an `inline-block`, an `inline-table` or a
+   replaced inline-level element is an ATOMIC inline-level box that "participate[s] in their inline formatting
+   context as a single opaque box" and keeps its own block-level children.
+   THE STEP DESCENDS ONLY INTO AN INLINE BOX THAT BREAKS, and that is an equivalence rather than an
+   optimisation: this walk exists to find the positions at which the box list CHANGES, and an inline box with
+   no in-flow block-level box inside it changes it nowhere — every position inside it is in the same box as
+   every other. A consumer that must reach the CONTENT of such a box (a measurement, a fill) descends on its
+   own; what it may not do is delimit on its own, which is why this is here and not there. */
+static bool bf_content_child_is_breaking_inline_box(lxb_dom_node_t *n)
+{
+    lxb_dom_element_t *parent;
+
+    DCHECK(n != NULL, "CSS 2.2 §9.2.1.1's content order was stepped from no node");
+    if (n->parent == NULL || n->parent->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
+    parent = lxb_dom_interface_element(n->parent);
+    if (block_flow_child_kind(parent, n) != BLOCK_FLOW_CHILD_INLINE) return false;
+    return bf_node_is_breaking_inline_box(parent, n);
+}
+
+static lxb_dom_node_t *bf_content_next(lxb_dom_element_t *el, lxb_dom_node_t *n)
+{
+    lxb_dom_node_t *root;
+
+    DCHECK(el != NULL && n != NULL, "CSS 2.2 §9.2.1.1's content order was stepped with no container or no node");
+    root = lxb_dom_interface_node(el);
+    DCHECK(n != root,
+           "CSS 2.2 §9.2.1.1's content order was stepped from the CONTAINER itself, which is not a position in "
+           "its own content — the container brackets this sequence, it is not a member of it");
+    if (bf_content_child_is_breaking_inline_box(n) && n->first_child != NULL) return n->first_child;
+    for (; n != root; n = n->parent)
+        if (n->next != NULL) return n->next;
+    return NULL;
+}
+
+static lxb_dom_node_t *bf_block_box_at(lxb_dom_element_t *el, lxb_dom_node_t *at)
+{
+    lxb_dom_node_t *n;
+
+    for (n = at; n != NULL; n = bf_content_next(el, n)) {
+        DCHECK(n->parent != NULL && n->parent->type == LXB_DOM_NODE_TYPE_ELEMENT,
+               "CSS 2.2 §9.2.1.1's content order reached a node whose parent is not an element, so §9.2's box "
+               "generation cannot be asked about it — every position in a container's content is a child of "
+               "the container or of an inline box inside it");
+        switch (block_flow_child_kind(lxb_dom_interface_element(n->parent), n)) {
+        /* §9.2.1.1's "an in-flow block-level box", whether it is a child of the container or was reached
+           through an inline box it breaks. Either way it is a box on §9.4.1's stack: the section says so of
+           the second case in as many words ("becomes a sibling of those anonymous boxes"), and of the first by
+           forcing the container "to have only block-level boxes inside it". */
+        case BLOCK_FLOW_CHILD_BLOCK:
+            return n;
+        case BLOCK_FLOW_CHILD_NO_BOX:
+        case BLOCK_FLOW_CHILD_INLINE:
+        case BLOCK_FLOW_CHILD_FLOAT:
+            break;
+        /* NO `default` ARM, DELIBERATELY: `-Wswitch` is the forcing function, and it is this enumeration's to
+           hold rather than each consumer's now that the box list is produced in one place. A fifth
+           `BlockFlowChildKind` is a fifth kind of box in every container's list, and a member this walk cannot
+           classify is a member every reader would silently drop — so the day one is added the answer must be a
+           COMPILE failure here and not a wrong maximum somewhere else. */
+        }
+    }
+    return NULL;
+}
+
+lxb_dom_node_t *block_flow_next_block_box(lxb_dom_element_t *el, lxb_dom_node_t *after)
+{
+    DCHECK(el != NULL, "CSS 2.2 §9.2.1.1's box list was enumerated with no container");
+    /* STRICTLY AFTER, WHICH IS WHAT MAKES THE ENUMERATION A LOOP RATHER THAN A SEARCH THAT CAN STAND STILL: a
+       consumer seeds each call with the box the last one returned, so the two answers cannot be the same node
+       and the walk cannot revisit a position. A NULL `after` is the start of the content and not "no
+       constraint" — the two would differ for a container whose FIRST content position is a block-level box. */
+    if (after == NULL) return bf_block_box_at(el, lxb_dom_interface_node(el)->first_child);
+    return bf_block_box_at(el, bf_content_next(el, after));
+}
+
 /* §9.2.1.1's RUN, DELIMITED AND NOTHING ELSE — see block_flow.h for the contract and for why the delimitation
    is exported while `block_flow_anonymous_boxes` may not be reached from an intrinsic pass. */
 lxb_dom_node_t *block_flow_anonymous_box_end(lxb_dom_element_t *el, lxb_dom_node_t *first)
 {
-    lxb_dom_node_t *c, *end;
+    lxb_dom_node_t *brk, *c, *end;
     char nbuf[160];
 
     DCHECK(el != NULL && first != NULL, "CSS 2.2 §9.2.1.1's run was delimited with no container or no child");
@@ -749,63 +834,53 @@ lxb_dom_node_t *block_flow_anonymous_box_end(lxb_dom_element_t *el, lxb_dom_node
            "anonymous block box around 'Some text'\" — so this box would be EMPTY, and every caller would then "
            "hold a box the element tree never asked for: §9.4.1's stack would take a height from it and "
            "css-sizing-3 §5.2's maximum would take a width");
+    /* THE ONE DERIVATION, READ AS A SIBLING. Where this run ends is `block_flow_next_block_box`'s answer and
+       is not re-derived here; what this entry adds is the SHAPE its callers can take, and the two are not the
+       same question. §9.4.1's placement walks children and hands core/layout/line_box.h a half-open range of
+       them, so it can express a boundary that is a SIBLING of `first` and no other. */
+    brk = bf_block_box_at(el, first);
+    if (brk != NULL && brk->parent != lxb_dom_interface_node(el))
+        DFAILF("CSS 2.2 §9.2.1.1 \"Anonymous block boxes\"' BLOCK-IN-INLINE, MET AT THE PLACEMENT'S OWN "
+               "DELIMITATION: the in-flow BLOCK-LEVEL box that ends this run sits INSIDE an inline box, so the "
+               "run's boundary is a position inside a child rather than a sibling of one, and this entry's "
+               "return type cannot name it. \"When an inline box contains an in-flow block-level box, the "
+               "inline box (and its inline ancestors within the same line box) is broken around the "
+               "block-level box (and any block-level siblings that are consecutive or separated only by "
+               "collapsible whitespace and/or out-of-flow elements), splitting the inline box into two boxes "
+               "(even if either side is empty), one on each side of the block-level box(es). The line boxes "
+               "before the break and after the break are enclosed in anonymous block boxes, and the "
+               "block-level box becomes a sibling of those anonymous boxes.\" ONE child node therefore yields "
+               "THREE boxes on this container's stack, which is the section's own worked example: \"a block "
+               "box representing the BODY, containing an anonymous block box around C1, the SPAN block box, "
+               "and another anonymous block box around C2\". "
+               "THE BOX LIST IS BUILT AND THIS READING IS WHAT IS NOT: `block_flow_next_block_box` above "
+               "enumerates it in CONTENT order, and "
+               "core/layout/intrinsic_size.c's §9.4.1 arm already maximises over exactly that enumeration, "
+               "including a run that starts or ends inside an inline box. WHAT IS MISSING IS THE FILL: "
+               "core/layout/line_box.h takes a run as a half-open range of SIBLINGS and walks it with "
+               "`->next`, so `bf_anon_box` cannot hand it a fragment of an inline box, and §9.2.1.1's own next "
+               "sentence is the rule that fill then owes — \"if a border had been set on the P element in the "
+               "above example, the border would be drawn around C1 (open at the end of the line) and C2 (open "
+               "at the start of the line)\", so a fragment emits its leading edge only where the run does not "
+               "start inside it and its trailing edge only where the run does not end inside it. BUILD THAT "
+               "FILL over the content-order range, and this reading and its refusal both go. "
+               "RETURNING A SIBLING ANYWAY IS THE ONE ANSWER THAT MUST NOT BE GIVEN: the box list would then "
+               "omit the block-level box entirely, so §9.4.1's stack would place a `<div>` on a line box — a "
+               "WRONG placement for a real document rather than an absent one. %s",
+               box_subject_node(brk, nbuf, sizeof nbuf));
     end = first->next;
-    for (c = first; c != NULL; c = c->next) {
-        BlockFlowChildKind kind = block_flow_child_kind(el, c);
-
-        /* The run ends at the block-level box §9.2.1.1 makes the anonymous box's SIBLING rather than its
-           content. Everything after the last inline-level child and before it generates no box at all, or is
-           out of flow, so it is left outside: the boundary is drawn where an in-flow box is, which is the only
+    /* `brk == NULL` IS THE RUN THAT REACHES THE END OF THE CHILD LIST, so the bound is a CONJUNCTION and not
+       just the break: a loop written `c != brk` alone dereferences NULL at the end of every last run in the
+       document. It is also what makes this correct in RELEASE, where the refusal above is compiled out and a
+       break inside an inline box is never equal to any child — the scan then covers the whole list exactly as
+       it did before that refusal existed. */
+    for (c = first; c != NULL && c != brk; c = c->next) {
+        /* Everything after the last inline-level child and before the break generates no box at all, or is out
+           of flow, so it is left outside: the boundary is drawn where an in-flow box is, which is the only
            place it is observable. A FLOAT inside the run is carried along by the same reading — §9.2.1.1's own
            splitting paragraph steps over "collapsible whitespace and/or out-of-flow elements" — and it is the
            MEASUREMENT of the run, not this delimitation, that then has to answer for it. */
-        if (kind == BLOCK_FLOW_CHILD_BLOCK) break;
-        if (kind != BLOCK_FLOW_CHILD_INLINE) continue;
-        /* §9.2.1.1's SECOND PARAGRAPH, MET AT THE ONE PLACE THAT CANNOT EXPRESS IT — the crash below carries
-           the argument, because the reader who needs it is the one this refusal stops. What belongs here is
-           only the shape: the boundary of this run is a position INSIDE this child, and this function's return
-           type is a SIBLING. */
-        if (bf_node_is_breaking_inline_box(el, c))
-            DFAILF("CSS 2.2 §9.2.1.1 \"Anonymous block boxes\"' BLOCK-IN-INLINE: this child is an INLINE BOX "
-                   "holding an in-flow BLOCK-LEVEL box, so the run being delimited ENDS INSIDE IT and its "
-                   "boundary is not a sibling of it at all. \"When an inline box contains an in-flow "
-                   "block-level box, the inline box (and its inline ancestors within the same line box) is "
-                   "broken around the block-level box (and any block-level siblings that are consecutive or "
-                   "separated only by collapsible whitespace and/or out-of-flow elements), splitting the "
-                   "inline box into two boxes (even if either side is empty), one on each side of the "
-                   "block-level box(es). The line boxes before the break and after the break are enclosed in "
-                   "anonymous block boxes, and the block-level box becomes a sibling of those anonymous "
-                   "boxes.\" ONE child node therefore yields THREE boxes on this container's stack, which is "
-                   "the section's own worked example: \"a block box representing the BODY, containing an "
-                   "anonymous block box around C1, the SPAN block box, and another anonymous block box around "
-                   "C2\". "
-                   "WHAT IS MISSING IS THE POSITION AND NOT A CASE IN THIS LOOP. A run boundary must be a node "
-                   "in this container's CONTENT ORDER — its descendants in document order, descended into "
-                   "through inline boxes and through nothing else, which is §9.2.2 \"Inline-level elements and "
-                   "inline boxes\"' own test (\"A non-replaced element with a 'display' value of 'inline' "
-                   "generates an inline box\") and is `bf_generates_inline_box` above — where today it is a "
-                   "`->next` sibling and every reader steps it with `->next`. BUILD THAT: return the in-flow "
-                   "block-level box that ENDS the run (NULL for the container's last run), and give the two "
-                   "readers a content-order step — core/layout/intrinsic_size.c's "
-                   "`intrinsic_inline_run_sizes`, whose walk then enters a PARTIAL inline box and emits its "
-                   "css-sizing-3 §2.2 \"Intrinsic Size Contributions\" edges once across the whole split "
-                   "rather than once per fragment, which is §9.2.1.1's own next sentence (\"if a border had "
-                   "been set on the P element in the above example, the border would be drawn around C1 (open "
-                   "at the end of the line) and C2 (open at the start of the line)\"), and this file's own "
-                   "`bf_anon_box`/`bf_anon_run_end`, whose `want` search must be over that same order. "
-                   "core/layout/line_box.c names the identical absence from the other end — it meets the "
-                   "block-level box while FILLING a line and says to build the split \"where the runs are "
-                   "delimited\", which is this line. "
-                   "RETURNING `c->next` AND LETTING THE WALKS COPE IS THE ONE ANSWER THAT MUST NOT BE GIVEN: "
-                   "that box list omits the block-level box entirely, so §9.4.1's stack would place a `<div>` "
-                   "on a line box and css-sizing-3 §5.2 \"Intrinsic Contributions\"' maximum would take its "
-                   "width as a term in a SUM along one — a WRONG width for a real document rather than an "
-                   "absent one, which is why this is a crash and not a residual. "
-                   "THE CLASSIFICATION ABOVE ALREADY RUNS THIS FORCING (`bf_content_kind`), so a container "
-                   "reaching here has been sent down §9.4.1's stack correctly and it is the box LIST alone "
-                   "that is unbuilt. %s",
-                   box_subject_node(c, nbuf, sizeof nbuf));
-        end = c->next;
+        if (block_flow_child_kind(el, c) == BLOCK_FLOW_CHILD_INLINE) end = c->next;
     }
     return end;
 }

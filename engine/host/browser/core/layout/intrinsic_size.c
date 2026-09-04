@@ -280,27 +280,47 @@ static void is_atomic_replaced(TextRunMeasure *m, lxb_dom_element_t *el)
    block boxes"' dispatch had classified — from a child of a `display: inline` box this walk descended into,
    about which that dispatch said nothing, so that a BLOCK-LEVEL child could be refused as §9.2.1.1's
    block-in-inline in the second case and as a came-apart classification in the first. THAT ASYMMETRY IS
-   RETIRED: core/layout/block_flow.c's `bf_content_kind` now runs §9.2.1.1's forcing THROUGH inline boxes, so a
-   container holding one takes §9.4.1's stack, and its run delimitation refuses a run that would end inside an
-   inline box. A block-level box is therefore unreachable from BOTH origins for the SAME reason, and one
-   assertion states it once. */
-static void is_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_t *n);
+   RETIRED: core/layout/block_flow.h enumerates §9.2.1.1's box list in CONTENT order, so a block-level box
+   reached through an inline box is a box on §9.4.1's stack exactly like a direct child, and the run this walk
+   measures ENDS at it either way. A block-level box is therefore unreachable from both origins for the same
+   reason, and one assertion states it once. */
 
-static void is_walk(TextRunMeasure *m, lxb_dom_element_t *el)
+/* ONE RUN BEING MEASURED, WHICH IS MORE THAN THE ACCUMULATOR: the run's END is a node the walk may meet at ANY
+   DEPTH, because §9.2.1.1 breaks an inline box around a block-level box inside it, so `end` cannot be tested
+   by the child loop that started the walk. `past_end` is what carries that answer back OUT of the descent —
+   and it is read as well as written, because §9.2.1.1's next sentence makes the difference observable: "if a
+   border had been set on the P element in the above example, the border would be drawn around C1 (open at the
+   end of the line) and C2 (open at the start of the line)". An inline box the run ends INSIDE is open at the
+   end, so its TRAILING edge is not emitted — which is exactly the `past_end` test after the descent. */
+typedef struct {
+    TextRunMeasure *m;
+    lxb_dom_node_t *end;   /* EXCLUSIVE, and reachable at any depth; NULL runs to the end of the content */
+    bool past_end;
+} IsRun;
+
+static void is_child(IsRun *r, lxb_dom_element_t *parent, lxb_dom_node_t *n);
+
+static void is_walk(IsRun *r, lxb_dom_element_t *el)
 {
     lxb_dom_node_t *n = lxb_dom_interface_node(el), *c;
 
     /* THE ONLY CALLER IS THE INLINE-BOX DESCENT BELOW, so every child this reaches is inside one. */
-    for (c = n->first_child; c != NULL; c = c->next) is_child(m, el, c);
+    for (c = n->first_child; c != NULL && !r->past_end; c = c->next) is_child(r, el, c);
 }
 
-static void is_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_t *n)
+static void is_child(IsRun *r, lxb_dom_element_t *parent, lxb_dom_node_t *n)
 {
     lxb_dom_element_t *el;
     char *d;
     bool inline_box;
     char nbuf[160];
 
+    /* THE RUN'S END, TESTED AT EVERY DEPTH AND BEFORE ANYTHING ELSE. It is CSS 2.2 §9.2.1.1's block-level box
+       — the one that "becomes a sibling of those anonymous boxes" — so it is not content of this run at any
+       depth, and the walk stops rather than returning: every node after it in content order belongs to a
+       LATER box on §9.4.1's stack. */
+    if (r->past_end) return;
+    if (n == r->end) { r->past_end = true; return; }
     switch (n->type) {
     case LXB_DOM_NODE_TYPE_TEXT:
         /* CSS 2.2 §9.2.2.1 "Anonymous inline boxes" first: a run of white space this element's `white-space`
@@ -308,7 +328,7 @@ static void is_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_
            nothing. core/layout/block_flow.h answers that for every walk over a block container's children, and
            asking it here rather than re-deriving it is what keeps this walk and §9.4.1's agreeing about what a
            document's white space is. */
-        if (block_flow_text_child_generates_box(parent, n)) text_run_measure_add_text(m, parent, n);
+        if (block_flow_text_child_generates_box(parent, n)) text_run_measure_add_text(r->m, parent, n);
         return;
     case LXB_DOM_NODE_TYPE_COMMENT:
     case LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION:
@@ -364,7 +384,7 @@ static void is_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_
            same question, which is what keeps the two from disagreeing about how many lines a run has. */
         switch (phrasing_break_of(el)) {
         case PHRASING_BREAK_FORCED:
-            text_run_measure_add_forced_break(m, el);
+            text_run_measure_add_forced_break(r->m, el);
             return;
         case PHRASING_BREAK_OPPORTUNITY:
             DFAIL("HTML §15.3.4 \"Phrasing content\" gives `wbr` the UA declaration `display-outside: "
@@ -388,7 +408,7 @@ static void is_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_
         /* CSS 2.2 §9.2.2 makes a REPLACED element an ATOMIC inline-level box wherever its `display` puts it,
            so the `inline` above does not settle which of the two this is. It is asked before the descent
            because an atomic inline has no text of this run inside it to descend to. */
-        if (replaced_element_of(el).replaced) { is_atomic_replaced(m, el); return; }
+        if (replaced_element_of(el).replaced) { is_atomic_replaced(r->m, el); return; }
         /* §5.5: "inline box boundaries do not introduce a forced line break or soft wrap opportunity in the
            flow", and css-text-3 §4.1.1's collapsing crosses the boundary too ("even one outside the boundary
            of the inline containing that space, provided both spaces are within the same inline formatting
@@ -401,9 +421,14 @@ static void is_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_
            run's own break-position mapping is what then puts each on the line its fragment is on. They are
            emitted even when both are ZERO, because an edge occupies a POSITION and that position is what says
            which line an otherwise-empty inline box sits on. */
-        text_run_measure_add_box_edge(m, el, is_intrinsic_edge_px(el, false));
-        is_walk(m, el);
-        text_run_measure_add_box_edge(m, el, is_intrinsic_edge_px(el, true));
+        text_run_measure_add_box_edge(r->m, el, is_intrinsic_edge_px(el, false));
+        is_walk(r, el);
+        /* §9.2.1.1's "open at the end of the line": the run ended INSIDE this inline box, so this fragment
+           has no closing edge and the next anonymous block box's fragment of the same box has no opening
+           one. The leading edge above was emitted because the run did NOT start inside it — the entry that
+           resumes a run mid-tree never calls this arm for an already-open ancestor. */
+        if (r->past_end) return;
+        text_run_measure_add_box_edge(r->m, el, is_intrinsic_edge_px(el, true));
         return;
     }
     /* THE LEVEL OF EVERY CHILD THIS WALK REACHES, ASSERTED ONCE FOR BOTH ORIGINS. Two different sections
@@ -460,23 +485,48 @@ static void is_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_
            box_subject_node(n, nbuf, sizeof nbuf));
 }
 
-/* CSS 2.2 §9.4.2's INLINE FORMATTING CONTEXT, MEASURED, over the RUN `[first, end)` of `el`'s children — the
-   (first, end) form core/layout/line_box.h takes, and for the same reason it takes it: §9.4.2's context has TWO
-   shapes and only one of them has an element to name it. `first == el`'s first child with `end == NULL` is the
-   shape §9.2.1's dispatch reaches, where the run IS the whole child list; any other run is one of §9.2.1.1's
-   ANONYMOUS BLOCK BOXES, whose style is `el`'s because "the properties of anonymous boxes are inherited from
-   the enclosing non-anonymous box". ONE function and not two, because the measurement does not differ — an
-   anonymous block box establishes an inline formatting context by construction, so the walk over its run is
-   the same walk with a different pair of bounds. */
-IntrinsicInlineSizes intrinsic_inline_run_sizes(lxb_dom_element_t *el, lxb_dom_node_t *first,
-                                                lxb_dom_node_t *end)
+/* CSS 2.2 §9.4.2's INLINE FORMATTING CONTEXT, MEASURED, over ONE RUN of `el`'s CONTENT. The run is given as
+   the inline box that is OPEN where it starts, the first node inside that box to measure, and the node it ends
+   BEFORE — and it is a private shape because the two exported entries below name its start in two different
+   ways, for two different sections, neither of which can express the other's.
+   THE RUN CLOSES ITS OPEN ANCESTORS ON THE WAY OUT, WHICH IS §9.2.1.1's OWN SENTENCE: "if a border had been
+   set on the P element in the above example, the border would be drawn around C1 (open at the end of the line)
+   and C2 (open at the start of the line)". A fragment the run STARTS inside is open at the start — no leading
+   edge, and this loop never calls `is_child` on the ancestor itself, which is what withholds it — and it is
+   closed here when the walk leaves it. A fragment the run ENDS inside is open at the end, which `is_child`
+   answers with `past_end` at its own site.
+   THE STEP OUT IS TO THE ANCESTOR'S NEXT SIBLING AND NEVER TO THE ANCESTOR, which sounds like a detail and is
+   the defect this loop was first written with: resuming at the ancestor re-enters the whole fragment that was
+   just closed, so a container's LAST run walked its own content a second time and its maximum came back at
+   nearly twice the width. `at` is allowed to be NULL — an ancestor with nothing after it inside its own parent
+   still has a closing edge to emit, which is exactly the "even if either side is empty" half of the split. */
+static IntrinsicInlineSizes is_run_sizes(lxb_dom_element_t *el, lxb_dom_element_t *open, lxb_dom_node_t *at,
+                                         lxb_dom_node_t *end)
 {
     TextRunMeasure m;
+    IsRun r;
     IntrinsicInlineSizes out;
-    lxb_dom_node_t *c;
+    lxb_dom_node_t *root = lxb_dom_interface_node(el);
 
     text_run_measure_init(&m);
-    for (c = first; c != end; c = c->next) is_child(&m, el, c);
+    r.m = &m;
+    r.end = end;
+    r.past_end = false;
+    for (;;) {
+        lxb_dom_node_t *c, *box;
+
+        for (c = at; c != NULL && !r.past_end; c = c->next) is_child(&r, open, c);
+        if (r.past_end) break;
+        box = lxb_dom_interface_node(open);
+        if (box == root) break;
+        text_run_measure_add_box_edge(&m, open, is_intrinsic_edge_px(open, true));
+        DCHECK(box->parent != NULL && box->parent->type == LXB_DOM_NODE_TYPE_ELEMENT,
+               "CSS 2.2 §9.2.1.1's run was inside a box whose parent is not an element, so the walk cannot "
+               "leave it — the ancestors of every position in a container's content are inline boxes up to "
+               "the container itself, and this chain does not reach it");
+        at = box->next;
+        open = lxb_dom_interface_element(box->parent);
+    }
     /* THE MEASUREMENT DOES NOT EXIST UNTIL THIS RUNS, and that is [UAX14]'s doing rather than a lifecycle
        anybody chose: its rules read forward past the boundary they decide (LB25's `PO × OP IS NU` by three
        characters) and LB9 puts an unbounded run of combining marks between the two, so no per-character state
@@ -490,6 +540,31 @@ IntrinsicInlineSizes intrinsic_inline_run_sizes(lxb_dom_element_t *el, lxb_dom_n
        component asks §9.4.2 nothing, and a caller of it holds no items to be handed. */
     text_run_measure_release(&m);
     return out;
+}
+
+IntrinsicInlineSizes intrinsic_inline_run_sizes(lxb_dom_element_t *el, lxb_dom_node_t *first,
+                                                lxb_dom_node_t *end)
+{
+    DCHECK(el != NULL, "CSS 2.2 §9.4.2's context was measured with no block container to style it");
+    DCHECK(first == NULL || first->parent == lxb_dom_interface_node(el),
+           "CSS 2.2 §9.4.2's context was measured over a run that begins at a node which is not a CHILD of the "
+           "container. This entry's run is a SIBLING range — css-flexbox-1 §4 \"Flex Items\"' child text "
+           "sequence is delimited that way and can hold no inline box at all — so a run that begins deeper is "
+           "one CSS 2.2 §9.2.1.1's break produced, and it must come through the entry below or its open "
+           "ancestors are silently dropped from the measurement");
+    return is_run_sizes(el, el, first, end);
+}
+
+IntrinsicInlineSizes intrinsic_inline_run_sizes_after(lxb_dom_element_t *el, lxb_dom_node_t *after,
+                                                      lxb_dom_node_t *end)
+{
+    DCHECK(el != NULL, "CSS 2.2 §9.2.1.1's anonymous block box was measured with no block container");
+    if (after == NULL) return is_run_sizes(el, el, lxb_dom_interface_node(el)->first_child, end);
+    DCHECK(after->parent != NULL && after->parent->type == LXB_DOM_NODE_TYPE_ELEMENT,
+           "CSS 2.2 §9.2.1.1's run was started after a node with no element parent, so there is no box for it "
+           "to be a fragment of — every break this entry is seeded with is a child of the container or of an "
+           "inline box the break itself split");
+    return is_run_sizes(el, lxb_dom_interface_element(after->parent), after->next, end);
 }
 
 /* css-sizing-3 §5.2's CONTRIBUTION OF ONE BOX ON THE STACK, out of the box's own two INNER sizes and its two
@@ -591,95 +666,65 @@ static void is_require_intrinsic_inline_size(lxb_dom_element_t *ch, const char *
    contribution / max-content contribution in each axis is the size of the content box of a hypothetical
    auto-sized float that contains only that box" — must be as wide as the WIDEST of them and no wider. That is
    the whole of the difference from §9.4.2's walk above, and it is why the two share no step.
-   THE LIST IS NOT THE CHILD NODES AND THAT IS §9.2.1.1's DOING: "if a block container box (such as that
-   generated for the DIV above) has a block-level box inside it (such as the P above), then we force it to have
-   only block-level boxes inside it", so §9.4.1's stack holds the block-level children PLUS one ANONYMOUS BLOCK
-   BOX per maximal run of inline-level children. Both halves of that enumeration are core/layout/block_flow.h's
-   and neither is re-derived here: one classification and one run delimitation, shared with the walk that PLACES
-   the same boxes, because two answers to "is this child block-level" is one document with two box trees.
+   THE LIST IS NEITHER THE CHILD NODES NOR A PARTITION OF THEM, AND THAT IS §9.2.1.1's DOING TWICE OVER. Its
+   first paragraph forces a mixed container "to have only block-level boxes inside it", so each maximal run of
+   inline-level content becomes one ANONYMOUS BLOCK BOX; its second breaks an inline box around an in-flow
+   block-level box inside it, so ONE child node can yield THREE boxes — "a block box representing the BODY,
+   containing an anonymous block box around C1, the SPAN block box, and another anonymous block box around C2".
+   BOTH are core/layout/block_flow.h's enumeration and neither is re-derived here, because two answers to "what
+   boxes does this container have" is one document with two box trees.
+   THE ENUMERATION IS A LOOP OVER BREAKS AND NOT A SWITCH OVER CHILDREN, and what that retires is worth
+   naming: this walk used to classify each child itself and carry an arm for each `BlockFlowChildKind`. §9.5's
+   FLOAT was one of those arms, and its refusal is not lost — a float is inside some run now, and the run walk
+   crashes on it naming BOTH consequences in one message (the sum along a line and the maximum over the stack,
+   since §9.4.2's "line boxes may vary in width if available horizontal space is reduced due to floats" is what
+   makes a float change its NEIGHBOURS' operands rather than contribute one). The `-Wswitch` forcing function
+   moved with the classification, into the enumeration behind `block_flow_next_block_box`, which is now the
+   one place a fifth kind of box would have to be answered for.
    THE ANONYMOUS BOX'S EDGES ARE ZERO AND THAT IS A DERIVATION, not an omission. §9.2.1.1: "the properties of
    anonymous boxes are inherited from the enclosing non-anonymous box …. Non-inherited properties have their
    initial value … the margins will be 0", so its margin box, its border box and its content box are one
    rectangle and §2.2's outer size is its inner size unchanged. Its STYLE for the run inside it is `el`'s, by
    the same sentence.
-   THE EMPTY CHILD LIST IS A REAL ANSWER AND NOT A FLOOR: a maximum over no boxes is zero, which is the same
-   number §9.4.2's walk returns for the same document, so routing CSS 2.2 §9.2.1's third state — a block
-   container with no in-flow child at all — to this arm rather than to that one costs nothing and keeps the
-   dispatch a single question. An empty `<td>` is the common shape and core/layout/table_column_width.c asks for
-   one on every table. */
+   AN EMPTY RUN IS A REAL ANSWER AND NOT A CASE TO SKIP: a maximum over no boxes is zero, which is the same
+   number §9.4.2's walk returns for the same document, so the range before the first block-level box and the
+   one after the last are measured like any other and contribute nothing when they hold nothing. That is also
+   why routing CSS 2.2 §9.2.1's third state — a block container with no in-flow child at all — to this arm
+   rather than to that one costs nothing and keeps the dispatch a single question. An empty `<td>` is the
+   common shape and core/layout/table_column_width.c asks for one on every table. */
 static IntrinsicInlineSizes is_block_context(lxb_dom_element_t *el)
 {
-    lxb_dom_node_t *c = lxb_dom_interface_node(el)->first_child;
+    lxb_dom_node_t *prev = NULL;
     IntrinsicInlineSizes out;
-    char nbuf[160];
 
     out.min_content = css_px(0.0);
     out.max_content = css_px(0.0);
-    while (c != NULL) {
+    for (;;) {
+        lxb_dom_node_t *brk = block_flow_next_block_box(el, prev);
         IntrinsicInlineSizes one;
-        lxb_dom_element_t *ch;
 
-        switch (block_flow_child_kind(el, c)) {
-        /* §9.2's non-generating nodes and §9.3.1's out-of-flow box in ONE answer, because §5.2's hypothetical
-           float "contains only that box" and neither is inside it. Asked through the component that answers
-           the same question for §9.4.1's own stack, so a child one walk skipped and the other did not cannot
-           exist. */
-        case BLOCK_FLOW_CHILD_NO_BOX:
-            c = c->next;
-            continue;
-        case BLOCK_FLOW_CHILD_FLOAT:
-            DFAILF("CSS 2.2 §9.5 \"Floats\" takes this child off §9.4.1's stack and css-sizing-3 §5.2 "
-                   "\"Intrinsic Contributions\" still counts it, and the reason is what a float does to the "
-                   "OTHER operands rather than what it contributes itself. §9.5's own sentence has both "
-                   "halves: \"since a float is not in the flow, non-positioned block boxes created before and "
-                   "after the float box flow vertically as if the float did not exist. However, the current "
-                   "and subsequent line boxes created next to the float are shortened as necessary to make "
-                   "room for the margin box of the float.\" So every anonymous block box beside this float is "
-                   "measured at a REDUCED available width, which is not a number any maximum over sibling "
-                   "contributions can express — a maximum takes each operand as it stands, and this one "
-                   "changes what its neighbours' operands ARE. §9.4.2 \"Inline formatting contexts\" states "
-                   "the same fact as a property of the line: line boxes \"may vary in width if available "
-                   "horizontal space is reduced due to floats\". THAT IS THIS SECTION'S REASON AND NOT "
-                   "§9.4.1's CLEARANCE, which is what core/layout/block_flow.c's own stack says at its own "
-                   "line for the same child — one absent capability, two callers, two consequences. BUILD "
-                   "§9.5.1 \"Positioning the float: the 'float' property\"'s placement, which "
-                   "core/layout/line_box.c and core/layout/flow_position.c both name as the same absent "
-                   "capability. %s",
-                   box_subject_node(c, nbuf, sizeof nbuf));
-            c = c->next;
-            continue;
-        case BLOCK_FLOW_CHILD_INLINE: {
-            /* §9.2.1.1's ANONYMOUS BLOCK BOX. The run is delimited by the component that delimits it for
-               §9.4.1's placement; measuring it is this file's §9.4.2 walk over those same bounds. */
-            lxb_dom_node_t *end = block_flow_anonymous_box_end(el, c);
+        /* §9.2.1.1's ANONYMOUS BLOCK BOX: everything strictly between the previous break and this one. */
+        one = intrinsic_outer_contribution(NULL, intrinsic_inline_run_sizes_after(el, prev, brk));
+        out.min_content = css_px_max(out.min_content, one.min_content);
+        out.max_content = css_px_max(out.max_content, one.max_content);
+        if (brk == NULL) return out;
+        {
+            lxb_dom_element_t *ch = lxb_dom_interface_element(brk);
 
-            DCHECK(end != c,
-                   "CSS 2.2 §9.2.1.1's run ended where it began, so this walk would generate the same "
-                   "anonymous block box for ever. The run starts at a child that generates an inline-level "
-                   "box and therefore always contains at least that one");
-            one = intrinsic_outer_contribution(NULL, intrinsic_inline_run_sizes(el, c, end));
-            c = end;
-            break;
-        }
-        case BLOCK_FLOW_CHILD_BLOCK:
-            ch = lxb_dom_interface_element(c);
             /* THE CHILD'S OWN DECLARATIONS FIRST, because a `width` this walk cannot apply makes the number
                below the wrong operand rather than an imprecise one. */
             is_require_intrinsic_inline_size(ch, "width", "auto");
             is_require_intrinsic_inline_size(ch, "max-width", "none");
             is_require_intrinsic_inline_size(ch, "min-width", "auto");
             one = intrinsic_outer_contribution(ch, intrinsic_inline_sizes(ch));
-            c = c->next;
-            break;
-        /* NO `default` ARM, DELIBERATELY: `-Wswitch` is the forcing function here and a default would switch it
-           off. A fifth `BlockFlowChildKind` is a fifth kind of box in every container's child list, and §5.2's
-           maximum is over a LIST — a member this walk cannot classify is a member it would silently drop, so
-           the day one is added the answer must be a COMPILE failure at every caller and not a crash at one. */
         }
         out.min_content = css_px_max(out.min_content, one.min_content);
         out.max_content = css_px_max(out.max_content, one.max_content);
+        /* STRICTLY FORWARD, which is what makes this terminate: the enumeration is seeded with the box it just
+           returned and is exclusive of it, so no content position is visited twice and the whole loop costs
+           one pass over the content however many boxes §9.2.1.1 produced. */
+        prev = brk;
     }
-    return out;
 }
 
 IntrinsicInlineSizes intrinsic_inline_sizes(lxb_dom_element_t *el)

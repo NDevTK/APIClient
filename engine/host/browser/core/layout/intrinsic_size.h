@@ -116,18 +116,38 @@ IntrinsicInlineSizes intrinsic_inline_sizes(lxb_dom_element_t *el);
    half-open form core/layout/line_box.h takes, with a NULL `end` running to the end of the child list — as
    CONTENT-box inline sizes in CSS pixels. The run's boxes are styled by `el`, which is what an ANONYMOUS box
    around them inherits from.
-   IT IS EXPORTED BECAUSE TWO SECTIONS GENERATE AN ANONYMOUS BOX AROUND A RUN OF ONE BOX'S CHILDREN AND BOTH
-   NEED THE SAME MEASUREMENT. CSS 2.2 §9.2.1.1 "Anonymous block boxes" wraps a maximal run of INLINE-LEVEL
-   children and is this file's own §9.4.1 arm; css-flexbox-1 §4 "Flex Items" wraps a CHILD TEXT SEQUENCE in an
-   anonymous block container flex item. The two RUNS are delimited by different sentences and the two
-   delimiters are therefore two functions, but what is inside either of them is one inline formatting context
-   and one walk — a second copy of it would be one document with two ideas of how wide its text is.
+   `first` IS A CHILD OF `el` AND THE ASSERT SAYS SO, because css-flexbox-1 §4 "Flex Items"' CHILD TEXT
+   SEQUENCE is the run this entry is for and that sequence is a sibling range by construction: "each in-flow
+   child of a flex container becomes a flex item, and each child text sequence is wrapped in an anonymous block
+   container flex item", and §4 goes on to BLOCKIFY every one of them ("if the computed display value of
+   an element's nearest ancestor element (skipping display:contents ancestors) is flex or inline-flex, the
+   element's own display value is blockified"), so a flex container has no inline box among its children for a
+   run to begin inside. CSS 2.2
+   §9.2.1.1's runs CAN begin inside one, which is why they come through the entry below and not this one.
    THE RUN'S OWN EDGES ARE NOT ADDED, and for both callers that is a derivation rather than an omission: an
    anonymous box takes its non-inherited properties' initial values (§9.2.1.1: "the margins will be 0"), and
    css-flexbox-1 §4 says the same of its own ("the anonymous item's box is unstyleable"), so css-sizing-3 §2.2
    "Intrinsic Size Contributions"' outer size of such a box is its inner size unchanged. */
 IntrinsicInlineSizes intrinsic_inline_run_sizes(lxb_dom_element_t *el, lxb_dom_node_t *first,
                                                 lxb_dom_node_t *end);
+
+/* THE SAME MEASUREMENT OVER CSS 2.2 §9.2.1.1 "Anonymous block boxes"' RUN, whose start is named by the BREAK
+   IT FOLLOWS rather than by its first node — `after` EXCLUSIVE, NULL for the start of `el`'s content, and
+   `end` the next break, NULL for the end of it. Both bounds come from `block_flow_next_block_box`.
+   IT IS A SECOND ENTRY BECAUSE THE TWO STARTS ARE NOT INTERCHANGEABLE, AND THE ASYMMETRY IS THE SECTION'S:
+   §9.2.1.1 splits an inline box "into two boxes (EVEN IF EITHER SIDE IS EMPTY)", so the run after a break can
+   begin with a fragment that contains NOTHING — `<div><a>text<div>x</div></a>tail</div>` gives the `<a>` a
+   second fragment with no content at all, which still carries its closing border, margin and padding under the
+   section's own "the border would be drawn around C1 (open at the end of the line) and C2 (open at the start
+   of the line)". There is no NODE at that position, so an inclusive first-node start cannot name it and would
+   silently drop the edge; naming the break names it exactly. A run given this way also carries its OPEN
+   ANCESTORS, whose leading edges belong to an earlier box and are withheld here.
+   THE TWO COULD BE ONE the day css-flexbox-1 §4's caller states its run the same way — its `first` is always a
+   child, so `first`'s previous sibling is the identical position — and that is a one-line change in
+   core/layout/flex_intrinsic_size.c, which this component does not own. Until then two entries share one walk
+   and neither re-derives the other. */
+IntrinsicInlineSizes intrinsic_inline_run_sizes_after(lxb_dom_element_t *el, lxb_dom_node_t *after,
+                                                      lxb_dom_node_t *end);
 
 /* THE OUTER SIZE OF `el`'s BOX over INNER sizes the CALLER computed. css-sizing-3 §2 "Terminology" is where
    the term is defined — an outer size is "the margin-box size of a box", against an inner size, "the
