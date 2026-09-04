@@ -449,11 +449,15 @@ static void is_child(IsRun *r, lxb_dom_element_t *parent, lxb_dom_node_t *n)
        WHAT THIS LINE USED TO SAY, AND WHY THE CHANGE IS NOT A NARROWING: a `DFAILF` stood on the block-level
        arm telling its reader to build §9.2.1.1's breaking, and it named the right file and the right function
        for HALF the work — the classification, which descends now. Its second half said "this file's §9.4.1 arm
-       below maximises over the three boxes it produced, with no arm needed here at all", and that is true only
-       of a box list this component cannot yet be handed: §9.2.1.1 makes ONE child node yield THREE boxes, and
-       `block_flow_anonymous_box_end` returns a SIBLING, so there is no run for `is_block_context` to maximise
-       over until that boundary becomes a position in content order. The absence is named at that boundary now,
-       once, instead of here and in core/layout/line_box.c under two different halves of one sentence. */
+       below maximises over the three boxes it produced, with no arm needed here at all", AND THAT HALF IS NOW
+       SIMPLY TRUE: the box list is enumerated over the container's CONTENT, so §9.2.1.1's ONE child node
+       yielding THREE boxes is a run, a break and a run in `block_flow_next_block_box`'s own sequence, and
+       `is_block_context` below maximises over exactly that.
+       THE ARGUMENT THIS PARAGRAPH USED TO CARRY IS RETIRED AND IS REWRITTEN RATHER THAN DELETED, because it
+       is the one a reader re-deriving this walk would reach for again: it said there is "no run for
+       `is_block_context` to maximise over until that boundary becomes a position in content order", naming a
+       sibling-stepping entry that RETURNED A SIBLING. The boundary is such a position now and that entry is
+       gone; the enumeration is `block_flow_next_block_box`, and both of its consumers take the run whole. */
     DCHECK(block_flow_child_kind(parent, n) == BLOCK_FLOW_CHILD_INLINE,
            "a child of a box whose inline formatting context is being measured is not INLINE-LEVEL after this "
            "walk's own tests for a non-generating node, for §9.3.1's out-of-flow box and for §9.5's float have "
@@ -462,7 +466,7 @@ static void is_child(IsRun *r, lxb_dom_element_t *parent, lxb_dom_node_t *n)
            "CSS 2.2 §9.2.1.1 \"Anonymous block boxes\" puts a block-level box on the CONTAINER's stack, as a "
            "sibling of the anonymous boxes, whether it is a direct child or is reached through an inline box "
            "it breaks — so no run this walk is ever handed may contain one, and whichever of "
-           "`bf_content_kind` and `block_flow_anonymous_box_end` stopped agreeing with the other is the fix");
+           "`bf_content_kind` and `block_flow_next_block_box` stopped agreeing with the other is the fix");
     DFAILF("CSS 2.2 §9.2.2 \"Inline-level elements and inline boxes\"' ATOMIC INLINE-LEVEL BOX THAT IS NOT "
            "REPLACED — an `inline-block`, an `inline-flex`, an `inline-grid` or an `inline-table`, and the list "
            "is closed rather than illustrative. §9.2.1's dispatch has already established that the measured box "
