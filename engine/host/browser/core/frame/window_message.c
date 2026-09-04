@@ -126,9 +126,10 @@ static bool origin_matches(const char *want, const Origin *have)
     return origin_is_serialized_tuple(have, want);
 }
 
-/* §9.3.3's QUEUED TASK, AS A MACHINE. The window post message steps queue ONE global task on the posted
- * message task source and its LAST step is "fire an event named message at targetWindow" — synchronous, in the
- * task the origin check and the deserialize happened in. So the dispatch is event_target_fire_run, the request
+/* HTML §9.3.3 Posting messages' QUEUED TASK, AS A MACHINE. The window post message steps queue ONE global
+ * task on the posted message task source and its LAST step, 8.7, is "Fire an event named message at
+ * targetWindow" — synchronous, in the task the origin check and the deserialize happened in. So the dispatch
+ * is event_target_fire_run, the request
  * reach into §2.9, and not a second enqueue: enqueued again, a `message` listener ran behind every task already
  * standing, so `frame.postMessage(x, "*"); setTimeout(f, 0)` ran `f` first. A plain C callee had no other
  * option, because a fire it cannot park on is a fire it must queue. */
@@ -175,9 +176,10 @@ static int js_window_deliver_step(JSContext *ctx, void *st, JSValue cb_result, J
     JSContext *tctx;
     int r;
 
-    /* §7.5.10 STEP 7 FROM THE OTHER SIDE — "remove any tasks whose document is document from any task queue
-       (without running those tasks)". This task's document is the TARGET's, and whether that walk reaches it
-       depends on WHICH HALF OF THIS FILE ENQUEUED IT, which is why the same fact has to be stated here as well:
+    /* HTML §7.5.10 Destroying documents STEP 7 FROM THE OTHER SIDE — "Remove any tasks whose document is
+       document from any task queue (without running those tasks)". This task's document is the TARGET's, and
+       whether that walk reaches it depends on WHICH HALF OF THIS FILE ENQUEUED IT, which is why the same
+       fact has to be stated here as well:
        the walk is keyed on the realm that ENQUEUED the job (JS_DropJobsForContext / engine.c's
        engine_drop_jobs), a LOCAL post is enqueued by the POSTER — so a destroyed target does not reach it at
        all — and a ROUTED one is enqueued by engine.c's flow_deliver in the RECEIVING document's realm, which is
@@ -509,9 +511,13 @@ void window_message_deliver_remote(JSContext *ctx, const char *sender_doc, const
      * `if (e.origin !== TRUSTED) return;` prune the arm every real postMessage XSS lives on.
      *
      * `origin_is_serialized_tuple` IS THE COMPARISON AND NOT A strcmp, for the reason origin_matches states one
-     * screen up: §7.1.1's opaque origin "has no serialization it can be recreated from", so an opaque agent is
-     * same origin with nothing — including another "null" — and the tuple test is the only side of this that
-     * can be asked with one operand still in bytes. */
+     * screen up: HTML §7.1.1 Origins defines an opaque origin as "An internal value, with no serialization it
+     * can be recreated from (it is serialized as "null" per serialization of an origin), for which the only
+     * meaningful operation is testing for equality" — BOTH halves of which this comparison rests on, and the
+     * second was cut off here for as long as the first was mis-transcribed as "has no". Equality-only is why
+     * an opaque agent is same origin with nothing, another "null" included; un-recreatable-from-its-
+     * serialization is why the tuple test is the only side of this that can be asked with one operand still in
+     * bytes. */
     if (origin_is_serialized_tuple(origin_agent(), sender_origin)) {
         JS_SetPropertyUint32(ctx, entry, PQ_SENDER_ORIGIN, JS_NewString(ctx, sender_origin));
     } else {
@@ -601,17 +607,49 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
 
     (void)magic;
     DCHECK(!JS_IsUndefined(target), "postMessage ran before this window's WindowProxy existed");
-    /* UNKNOWN EXTERNAL INPUT CROSSES A DECLARED POSITION AS ITSELF, which means §3.6 chose NO overload for it
-       and there is no arm to read back. It is not a wrong value to route past — the target origin decides
-       §9.3.3 step 8.1's same-origin check, so a concolic one makes BOTH deliveries feasible and the post is a
-       FORK rather than one queue entry. That mechanism does not exist, and the alternative every earlier
-       version of this line took was to fall into the dictionary arm and read `targetOrigin` off the attacker's
-       own value, which manufactures a plausible datum out of a measurement nobody made. */
+    /* AN UNKNOWN AT THIS POSITION IS TWO DIFFERENT MISSING MECHANISMS AND THE ARITY IS WHAT TELLS THEM APART,
+       so it is two crashes. One crash naming one remedy for both is the shape that reads as complete and
+       cannot be obeyed: it stated a fact about §9.3.3's origin comparison, which is exactly right for the
+       longer call and answers nothing at all for the shorter one, where what is unknown is not the origin but
+       WHICH OVERLOAD THIS IS. Web IDL §3.6 Overload resolution algorithm decides the two entries in two
+       different ways and the argument count is what selects between them — step 4 removes an entry from the
+       count alone, and step 12's clause chain reads the VALUE only where step 4 removed neither.
+       THE `argc` THIS BODY SEES IS NOT THE COUNT §3.6 ASKED, and the two agreeing here is a fact to check
+       rather than one to assume. Step 4 is decided from the CALL's count, while a body is handed the number
+       of positions the conversion CONVERTED — which the argument machine extends past the call to
+       materialize a trailing dictionary, since `optional WindowPostMessageOptions options = {}` is a value
+       and not an absent argument. For this declaration the extension stops at position 1, the only
+       dictionary type in the list, so a one- and a two-argument call both arrive at 2 and only a call that
+       really passed a third arrives at 3 — so for this member, and only because of that, `argc > 2` here is
+       the same predicate as step 4 having removed the options entry. It would not be for a member whose
+       dictionary sits later, and the assert below is the other side of it: at this arity the conversion owed
+       a USVString, so a second argument that is neither a string nor caught above means the two counts have
+       come apart. */
+    if (concolic_is(second) && argc > 2)
+        DFAIL("postMessage was given a CONCOLIC target origin. The ARM here is settled and is not what is "
+              "missing: Web IDL §3.6 Overload resolution algorithm step 4 removed the options entry from the "
+              "argument count alone, so this position is the USVString the surviving entry declares and the "
+              "unknown crossed it as itself. What is missing is downstream — HTML §9.3.3 Posting messages step "
+              "5 parses this string and its step 8.1 compares the result against the target document's "
+              "origin, so both the delivered and the dropped world stay feasible and the strcmp and url_parse "
+              "below would decide between them from bytes nobody measured. Fork the post: queue the entry "
+              "under each arm of that comparison, the way a branch on unknown external input forks anywhere "
+              "else. Do NOT reach for the conversion-side arm fork the shorter call's crash names — it "
+              "answers a question this arity has already answered");
     if (concolic_is(second))
-        DFAIL("postMessage was given a CONCOLIC target origin — §9.3.3 step 5 parses it and step 8.1 compares "
-              "it against the target document's origin, so an unpinned one leaves both the delivered and the "
-              "dropped arm feasible. Fork the post: queue the entry under each arm of the origin comparison, "
-              "the way a branch on unknown external input forks anywhere else, rather than deciding it here");
+        DFAIL("postMessage's second argument is UNKNOWN EXTERNAL INPUT at an arity where Web IDL §3.6 "
+              "Overload resolution algorithm step 4 removes NEITHER entry, so what is unknown is the ARM and "
+              "not the target origin — step 12.11 sends any Object down `WindowPostMessageOptions` and step "
+              "12.15 sends everything else to the USVString. The two differ in what the CONVERSION PERFORMS: "
+              "the dictionary runs Web IDL §3.2.17 Dictionary types' member walk and the string arm runs no "
+              "walk at all, so no single placed value stands for both and crossing merely moves the choice "
+              "into whichever JS_IsString the body reaches first — which decides it from the SOLVER's value "
+              "class rather than from the page's value. THE FORK BELONGS AT THE CONVERSION AND NOT IN THIS "
+              "BODY, because by the time this body runs the arm is the one thing that can no longer be "
+              "asked: IDL_USVSTRING_OR_DICT must answer idl_concolic_rule IDL_CONCOLIC_FORKS and fork at its "
+              "own resolution site, with the dictionary as outcome 0, exactly as the same union one row over "
+              "(IDL_STRING_OR_DICT) already does. Fixing §9.3.3's origin comparison instead — which the "
+              "three-argument crash above names — would leave this arity exactly as it is");
     /* THE OVERLOAD, READ BACK OFF THE CONVERTED VALUE. A STRING is §3.6's longer entry — the legacy
        `(message, targetOrigin, transfer)` — and an OBJECT is the options dictionary the declaration built.
        THERE IS NO THIRD STATE, and that is the declaration's doing rather than this body's: `optional
@@ -626,8 +664,9 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
            "IDL_USVSTRING_OR_DICT resolves to one of those two, and an OMITTED one is the `= {}` dictionary "
            "rather than an absent argument");
     DCHECK(JS_IsString(second) || argc <= 2,
-           "postMessage was called with three arguments and a second that is not a string — §3.6 step 4 "
-           "removes the options entry at that arity, so the conversion owed a USVString here");
+           "postMessage was called with three arguments and a second that is not a string — Web IDL §3.6 "
+           "Overload resolution algorithm step 4 removes the options entry at that arity, so the conversion "
+           "owed a USVString here");
     if (JS_IsString(second)) {
         tov = JS_DupValue(ctx, second);
         transfer = argc > 2 ? JS_DupValue(ctx, argv[2]) : JS_UNDEFINED;
@@ -750,9 +789,14 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
     JS_SetPropertyUint32(ctx, entry, PQ_TARGET_ORIGIN, want);
     /* §9.3.3 step 8.3's source, read HERE where the caller's realm is the one running. */
     JS_SetPropertyUint32(ctx, entry, PQ_SOURCE, JS_DupValue(ctx, win_proxy(ctx)));
-    /* §9.1 "The MessageEvent interface" declares `origin` a USVString — "the serialization of the origin of
-       the incumbent settings object" — so this is one of the places a serialization is the ANSWER rather than
-       a lost identity. */
+    /* TWO SECTIONS, AND THE SENTENCE HERE USED TO BE ONE QUOTATION SPLICED OUT OF BOTH — "the serialization
+       of the origin of the incumbent settings object" is in neither of them, and it read as HTML §9.1's
+       because that is the number it stood beside. WHERE THE VALUE COMES FROM is HTML §9.3.3 Posting messages
+       step 8.2, "Let origin be incumbentSettings's origin". WHAT IS STORED is HTML §9.1 The MessageEvent
+       interface's `readonly attribute USVString origin`, whose getter steps are "If this's origin is an
+       origin, then return the serialization of this's origin". So the serialization happens on the way OUT in
+       the standard and on the way IN here, which is sound only because this is one of the places a
+       serialization is the ANSWER rather than a lost identity — the event exposes no other view of it. */
     JS_SetPropertyUint32(ctx, entry, PQ_SENDER_ORIGIN, JS_NewString(ctx, origin_serialized(origin_agent())));
     /* A POST MADE BY A SCRIPT OF THIS AGENT — written here, where the entry is built, rather than left absent
        for the delivery to read as false: an absent slot and a false one are the same bytes to a `JS_ToBool` and

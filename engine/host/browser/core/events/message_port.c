@@ -55,10 +55,16 @@ typedef struct {
          - The collector owns the bytes, so there is no second ownership contract to get wrong. */
     JSValue queue;
     uint32_t head;
-    /* §9.4.4's RELEVANT REALM — the realm this port was created in. §9.4.4's delivery creates its
-       MessageEvent "in the relevant realm of the port", and the delivery task's callee is ONE function object
-       for the agent, so the ctx it runs under is whichever realm minted that callee and never the port's. A
-       port handed to a child document delivered every message as an event belonging to the parent.
+    /* HTML §9.4.4 Message ports' RELEVANT REALM — the realm this port was created in (§9.4.2's constructor
+       steps are "Set this's port 1 to a new MessagePort in this's relevant realm"). The delivery task's step
+       7.3 is "Let targetRealm be finalTargetPort's relevant realm", and finalTargetPort is NOT a synonym for
+       the port posted to — step 7.1 defines it as "the MessagePort in whose port message queue the task now
+       finds itself", which step's own note says "can be different from targetPort, if targetPort itself was
+       transferred and thus all its tasks moved along with it". That is why the realm is read off the port the
+       task arrives at rather than remembered at the post, and this file has transfer steps, so the difference
+       is reachable here. The delivery task's callee is ONE function object for the agent, so the ctx it runs
+       under is whichever realm minted that callee and never the port's. A port handed to a child document
+       delivered every message as an event belonging to the parent.
        BORROWED: the agent owns its realms and releases them with itself, exactly as a WindowProxy's is. */
     JSContext *realm;
     uint8_t enabled;     /* §9.4.4: the queue starts DISABLED */
@@ -69,10 +75,10 @@ static JSClassID g_port_class;
 /* §9.4.2's MessageChannel HOLDS ITS TWO PORTS, which is the whole of its state: the constructor's steps are
    "Set this's port 1 to a new MessagePort", the same for port 2, and entangle them, and the `port1` getter
    steps are "return this's port 1". They are INTERNAL SLOTS, so they live in the class's record.
-   THE COMMENT HERE SAID THE CLASS "holds nothing in it" AND THAT A MessageChannel "has no state beyond the
-   pair" — the pair IS the state, and with nowhere to keep it the ports could only be own DATA properties of
-   the channel, which is Web IDL §3.7.6 wrong twice over: an attribute is an ACCESSOR, and a regular attribute
-   of an interface that is not [Global] lives on the INTERFACE PROTOTYPE OBJECT rather than on the instance.
+   THIS CLASS HELD NO RECORD AT ALL, on the reasoning that a channel is only its two ports — and the pair IS
+   the state, so with nowhere to keep it the ports could only be own DATA properties of the channel, which is
+   Web IDL §3.7.6 wrong twice over: an attribute is an ACCESSOR, and a regular attribute of an interface that
+   is not [Global] lives on the INTERFACE PROTOTYPE OBJECT rather than on the instance.
    Both are page-observable, and the enumerability is the one to state carefully: at flags 0 the own property
    was NOT enumerable, and `Object.keys(new MessageChannel())` is `[]` in a browser too — because the members
    are on the PROTOTYPE, not because they are hidden. What differs is `for (const k in chan)`, which walks the
@@ -157,9 +163,10 @@ bool message_port_is(JSValueConst v)
  * is a record the collector owns, so the entry is removed where the record is destroyed and the list is
  * therefore bounded by LIVE ports rather than by every port the run ever had.
  *
- * IT EXISTS BECAUSE §7.5.10 ASKS A QUESTION NOTHING COULD ANSWER. Destroying a Document must disentangle "the
- * MessagePorts whose relevant global object's associated Document is document", and a port's realm is on the
- * port — but there was no way to reach the ports at all, so the step could not even be attempted. This is the
+ * IT EXISTS BECAUSE HTML §7.5.10 Destroying documents ASKS A QUESTION NOTHING COULD ANSWER. Its step 4 is
+ * "Let ports be the list of MessagePorts whose relevant global object's associated Document is document" and
+ * step 5 disentangles each of them. A port's realm is on the port — but there was no way to reach the ports
+ * at all, so the step could not even be attempted. This is the
  * enumeration half of it; the disentangle half is not built here, because a disentangle is a WRITE and a write
  * belongs to the flow that made it. A list of borrowed pointers is agent-global and cannot tell whose port it
  * is looking at, so destroying a document while any port of its realm is live STOPS at the DCHECK in
@@ -482,18 +489,34 @@ static JSValue js_port_post(JSContext *ctx, JSValueConst this_val, int argc, JSV
     if (!d)
         return JS_ThrowTypeError(ctx, "not a MessagePort");
     /* UNKNOWN EXTERNAL INPUT CROSSES A DECLARED POSITION AS ITSELF, which means §3.6 chose NO overload for it
-       and there is no arm to read back. Both arms stay FEASIBLE: an unknown that is an iterable is a transfer
-       list, and an unknown that is not is an options bag — and the two differ in what gets DETACHED, so
-       deciding it here would either detach objects the page still holds or silently transfer nothing. What
-       every earlier version of this body did instead was fall to the dictionary arm and read `transfer` off
-       the attacker's own value, which manufactures a plausible datum out of a measurement nobody made.
-       js_window_post names the same missing mechanism at its own §3.6 split for the same reason. */
+       and there is no arm to read back. What every earlier version of this body did instead was fall to the
+       dictionary arm and read `transfer` off the attacker's own value, which manufactures a plausible datum
+       out of a measurement nobody made. js_window_post names a missing mechanism at its own §3.6 split, and
+       the two are NOT the same one: that member's entries differ in LENGTH, so its shorter call is the only
+       arity where the arm is in question, while both entries here are two long and step 4 removes neither at
+       any arity this member can be called at. Which is why this is one crash and that is two.
+       AND THE FEASIBLE SET HERE IS THREE, NOT TWO — the count matters, because a fork built to the shape
+       stated below is a fork that will be built with the arms it names. */
     if (concolic_is(second))
-        DFAIL("MessagePort.postMessage was given a CONCOLIC second argument — §3.6 step 12 decides its two "
-              "overloads by `? GetMethod(V, %Symbol.iterator%)`, so an unpinned one leaves the transfer-list "
-              "arm and the options arm both feasible. Fork the post: convert and run the member under each "
-              "arm, the way a branch on unknown external input forks anywhere else, rather than choosing one "
-              "here");
+        DFAIL("MessagePort.postMessage was given a CONCOLIC second argument. Web IDL §3.6 Overload resolution "
+              "algorithm step 4 removes neither entry here — both type lists are two long — so the whole "
+              "decision is step 12's clause chain reading the VALUE, and over an unknown THREE of its clauses "
+              "stay feasible, not two: step 12.10 takes the `sequence<object>` entry for an Object whose "
+              "`Let method be ? GetMethod(V, %Symbol.iterator%)` is not undefined, step 12.11 takes "
+              "`StructuredSerializeOptions` for any other Object, and step 12.20's `Otherwise: throw a "
+              "TypeError` is where an unknown standing for a string or a number lands — `port.postMessage(m, "
+              "\"x\")` throws where the same call on a Window names a target origin. THE THROW ARM IS THE ONE "
+              "A TWO-ARMED FORK WOULD SILENTLY DROP, because unknown external input wears an ordinary Object "
+              "in this engine and the TypeError branch at the resolution site is guarded by !JS_IsObject, so "
+              "nothing there can ever reach it for a concolic. THE FORK BELONGS AT THE CONVERSION AND NOT IN "
+              "THIS BODY: the arm decides which conversion RUNS — §3.2.21 Sequences' iterator protocol against "
+              "§3.2.17 Dictionary types' member walk — so by the time this body holds a value the choice has "
+              "already been made and only its consequences are left. IDL_SEQUENCE_OBJECT_OR_DICT must answer "
+              "idl_concolic_rule IDL_CONCOLIC_FORKS and fork over those three outcomes at its own resolution "
+              "site, with the dictionary as outcome 0 (a run with no forking policy then answers exactly as "
+              "it does now). The sequence arm will then meet the §3.2.21-over-unknown gap this body's OTHER "
+              "DFAIL names — that is what the sequence world costs, and it is not a reason to leave the arm "
+              "undecided, because the dictionary and throw worlds do not depend on it");
     /* §9.4.4 STEP 1 of `postMessage`: targetPort is the port this one is entangled with, TAKEN NOW. */
     target = JS_DupValue(ctx, d->entangled);
 
@@ -633,11 +656,14 @@ static JSValue js_port_start(JSContext *ctx, JSValueConst this_val, int argc, JS
  * end's `onclose` and its `close` listeners. §2.9 is SYNCHRONOUS, so the fire is the REQUEST reach
  * (event_target_fire_run) from a machine that can park, and never a C call into the page's code.
  *
- * ONLY THE OTHER PORT IS TOLD, WHICH IS THE SPEC'S OWN NOTE AND NOT AN OPTIMISATION: "we only dispatch the
- * event on otherPort because initiatorPort explicitly triggered the close, its Document no longer exists, or
- * it was already garbage collected". The three cases §9.4.4 lists for the event — close() was called, the
- * Document was destroyed, the port was garbage collected — are three CALLERS of these steps; this is the
- * first, and the other two reach the same disentangle rather than a second copy of it.
+ * ONLY THE OTHER PORT IS TOLD, WHICH IS THE SPEC'S OWN NOTE AND NOT AN OPTIMISATION. The note belongs to
+ * HTML §9.4.4 Message ports and is written there in these words: "We only dispatch the event on otherPort
+ * because initiatorPort explicitly triggered the close, its Document no longer exists, or it was already
+ * garbage collected, as described above". It is quoted with §9.4.4 standing nearest it deliberately — the
+ * number that used to stand nearest was DOM §2.9's, two lines up, which does not contain this sentence and
+ * is not where a reader checking it should be sent. The three cases §9.4.4 lists for the event — close() was
+ * called, the Document was destroyed, the port was garbage collected — are three CALLERS of these steps;
+ * this is the first, and the other two reach the same disentangle rather than a second copy of it.
  *
  * THE PAIR IS DISENTANGLED BEFORE THE FIRE, in the order the steps are written: a listener that reads
  * `otherPort` during its own `close` event must already see a port entangled with nothing, and a listener that
@@ -764,8 +790,12 @@ static void port_handler_set(JSContext *ctx, JSValueConst target, const char *na
  *
  * THE REMOTE IS DISENTANGLED HERE AND RE-ENTANGLED AT THE RECEIVE, which is the standard's own order and the
  * reason it works: between the two steps the remote is entangled with nothing, so a message posted into it in
- * that window is queued on it and delivered when the new port arrives — which is exactly what the corpus's
- * "outgoing messages sent at each transfer step are received in order" asserts. */
+ * that window is queued on it and delivered when the new port arrives — which is the invariant
+ * wpt/webmessaging/Channel_postMessage_with_transfer_outgoing_messages.any.js asserts: that outgoing messages
+ * sent at each transfer step are received in order BY THE ENTANGLED PORT. That trailing clause is the half
+ * this paragraph rests on and was cut off when the sentence stood here in quotation marks, where, owning no
+ * standard and sitting beside a § number, it read as a standard's words. No standard states it; the test
+ * does, and the test is the thing to go and read. */
 
 enum { TH_QUEUE = 0, TH_HEAD, TH_REMOTE, TH_N };
 
