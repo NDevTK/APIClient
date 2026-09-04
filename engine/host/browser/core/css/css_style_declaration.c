@@ -2252,12 +2252,32 @@ static void cssd_decls_set(CssDecls *d, const char *name, char *value, bool impo
     cssd_decls_append(d, cssd_strdup(name), value, important);
 }
 
-/* §6.6.1's setProperty over the declarations, from its step 6 on: parse the value, and "if property is a
-   shorthand property, then for each longhand property longhand that property maps to, IN CANONICAL ORDER, set
-   the CSS declaration longhand with the appropriate value(s) from component value list". A shorthand therefore
+/* THE DECLARATIONS ONE WRITE DECIDED, reported back by name. §6.6.1's setProperty step 8 expands a SHORTHAND
+   into its longhands, so ONE call sets N declarations and none of them is named `property` — and the caller
+   that has to say something ABOUT each of them (below: which unknown the page's value left in it) cannot
+   recover that list from the arguments it passed. The names are the CALLER'S OWN and the longhand table's, both
+   of which outlive the call; the VALUES are read back out of the list afterwards, because `cssd_decls_set` may
+   grow it and a pointer taken during the walk would dangle. */
+typedef struct { const char *name[CSS_SHORTHAND_MAX_LONGHANDS]; unsigned n; } CssdSetNames;
+
+static void cssd_set_names_add(CssdSetNames *set, const char *name)
+{
+    if (!set) return;
+    CHECK(set->n < CSS_SHORTHAND_MAX_LONGHANDS,
+          "cssom: a write set more declarations than a shorthand has longhands — the array §6.6.1's setProperty "
+          "step 8 expands through is sized from that list");
+    set->name[set->n++] = name;
+}
+
+/* §6.6.1's setProperty over the declarations, from its step 5 on: "Let component value list be the result of
+   parsing value for property property", step 6's "If component value list is null, then return", and step 8's
+   "If property is a shorthand property, then for each longhand property longhand that property maps to, in
+   canonical order, follow these substeps" — whose 8.1 is "set the CSS declaration longhand with the appropriate
+   value(s) from component value list". A shorthand therefore
    sets its longhands and never itself — which is the same expansion the read path does, run through the same
    two functions, so a block cannot hold a property one of them would have expanded. */
-static void cssd_decls_set_property(CssDecls *d, const char *name, const char *value, bool important)
+static void cssd_decls_set_property(CssDecls *d, const char *name, const char *value, bool important,
+                                    CssdSetNames *set)
 {
     const char *const *lh;
     char *values[CSS_SHORTHAND_MAX_LONGHANDS];
@@ -2272,7 +2292,7 @@ static void cssd_decls_set_property(CssDecls *d, const char *name, const char *v
                                                          : parsed;
 
         if (v != parsed) free(parsed);
-        if (v) cssd_decls_set(d, name, v, important);
+        if (v) { cssd_decls_set(d, name, v, important); cssd_set_names_add(set, name); }
         return;
     }
     CHECK(n <= CSS_SHORTHAND_MAX_LONGHANDS,
@@ -2286,12 +2306,14 @@ static void cssd_decls_set_property(CssDecls *d, const char *name, const char *v
         while (i > 0) free(values[--i]);
         return;
     }
-    for (i = 0; i < n; i++) cssd_decls_set(d, lh[i], values[i], important);
+    for (i = 0; i < n; i++) { cssd_decls_set(d, lh[i], values[i], important); cssd_set_names_add(set, lh[i]); }
 }
 
-/* §6.6.1's removeProperty, steps 4 and 5: "if property is a shorthand property, for each longhand property
-   longhand that property maps to ... remove that CSS declaration", otherwise remove the one named. The
-   shorthand's OWN name needs no removal step, because a block never holds one. */
+/* §6.6.1's removeProperty, steps 5 and 6: "If property is a shorthand property, for each longhand property
+   longhand that property maps to" [… step 5.2 …] "Remove that CSS declaration and let removed be true", and
+   step 6's "Otherwise, if property is a case-sensitive match for a property name of a CSS declaration in the
+   declarations, remove that CSS declaration". The shorthand's OWN name needs no removal step, because a block
+   never holds one. */
 static void cssd_decls_remove_property(CssDecls *d, const char *name)
 {
     const char *const *lh;
@@ -2308,6 +2330,195 @@ static void cssd_decls_remove_property(CssDecls *d, const char *name)
     if (at >= 0) cssd_decls_remove_at(d, (unsigned)at);
 }
 
+/* ---- THE UNKNOWN A DECLARATION'S VALUE CARRIES, which the declarations themselves cannot -----------------
+ *
+ * §6.6's DECLARATIONS ARE TEXT — the element's `style` attribute, or the rule's own block text — so a value the
+ * page supplied that is UNKNOWN EXTERNAL INPUT has nowhere in them to be. Web IDL crosses one of those into a
+ * `CSSOMString` argument AS ITSELF (core/idl_args.h's `idl_concolic_rule` answers IDL_CONCOLIC_CROSSES for
+ * every coercing type, so opacity survives the conversion and the BODY is what owes the handling), and the body
+ * that then asked C for bytes aborted at the ToString boundary. This is the side map that answers instead, and
+ * it is the same decision core/dom/element.c makes one component over for an ATTRIBUTE value: Lexbor stores the
+ * ToString'd bytes and the provenance is gone, so the WRITE records the unknown and the READ recovers it.
+ *
+ * THE BYTES ARE THE VALUE'S OWN EXAMPLE AND ARE NOT INVENTED. A concolic carries the concrete value this engine
+ * COMPUTED by running the real operators on real operands (`window.innerWidth - document.documentElement.
+ * clientWidth` is a real subtraction of two numbers this engine derived from CSS 2.1 §10.1 "Definition of
+ * 'containing block'"'s initial containing block), so §6.6.1's step 5 parse runs on bytes the run produced
+ * rather than on a placeholder — and the declaration that lands is byte-identical to the one a browser lands.
+ * What would be invented is a value for an unknown with NO example, and that case does not reach here.
+ *
+ * THE RECORD IS KEYED BY PROPERTY NAME AND VALIDATED BY THE DECLARATION'S OWN BYTES, which is what keeps it
+ * from going stale in a way no writer could be made to notice. Every entry's concolic carries, as its EXAMPLE,
+ * exactly the bytes that write stored — that is how it is built below — so a read that finds the block no
+ * longer declaring those bytes has found a record about a declaration that is gone, and answers the text. A
+ * wholesale replacement through `cssText`, through `setAttribute('style', …)` or through the rule's own text
+ * therefore needs no invalidation call anywhere: there is no write that can leave a WRONG answer behind, only
+ * one that leaves a silent entry. The residual is the other direction and it is SOUND: a concrete write of the
+ * very same bytes through a path that does not clear (a `style` attribute rewritten to the identical string)
+ * keeps an unknown alive over a value the page has since spelled out, which over-explores and never drops an
+ * arm — which is the side §Solver-half's feasible-refinement rule says to err on.
+ *
+ * WHAT IT COVERS IS THE BLOCK THE PAGE WROTE THROUGH, AND THE CASCADE IS A NAMED RESIDUAL. §7.2's computed
+ * block is a DIFFERENT block over a DIFFERENT question: its declarations are not stored anywhere, they are the
+ * resolved value of every longhand, and the path to one runs `css_resolved_value` -> the computed value -> the
+ * CASCADE, every step of which answers `char *`. So `el.style.setProperty('--w', w + 'px')` followed by
+ * `getComputedStyle(el).getPropertyValue('--w')` answers the bytes with the domain dropped, while the same
+ * read through `el.style` answers the unknown. THE NEXT DIFF makes the cascade's winning declaration able to
+ * SAY it came from a block that recorded an unknown for it — `cssom_cascaded_value` reports which origin won
+ * (core/css/css_cascade.h already sorts them), and the element-attached arm asks this record — after which
+ * `css_resolved_value`'s "any other property" arm can derive from it exactly as its box-model arms already
+ * derive from a `CssPx`'s environment facts. ITS ABSENCE SHOWS as a page whose `getComputedStyle` read of a
+ * custom property it set from a viewport measurement takes one arm of a comparison where the `el.style` read
+ * of the same property forks both.
+ *
+ * IT IS A JS OBJECT ON THE BLOCK'S OWN RECORD, so it is per-flow, snapshot-able and parkable for free: an
+ * ordinary property write is what the COW delta captures, and the block itself already belongs to the flow that
+ * first asked for it (both creators say so). A malloc'd C map beside it would be state the delta does not swap.
+ * The record has a NULL prototype (core/idl_slots.h), which is what makes a CSS property name safe to use as a
+ * key: `setProperty('__proto__', v)` would otherwise write through Object.prototype's accessor instead of
+ * creating an own property. */
+#define CSSD_TAINT_FIELD "declarationTaint"
+/* The spec algorithm the stored bytes came out of, which solver/concolic.h requires a derivation to
+   name; the LONGHAND it produced them for is appended, because one write can produce several. */
+#define CSSD_TAINT_OP    "parse-a-css-value:"
+
+static JSValue cssd_taint_record(JSContext *ctx, JSValueConst block, bool create)
+{
+    JSValue rec = JS_GetPropertyStr(ctx, block, CSSD_TAINT_FIELD);
+
+    if (JS_IsObject(rec) || !create) return rec;
+    JS_FreeValue(ctx, rec);
+    rec = idl_slots_new(ctx);
+    CHECK(JS_IsObject(rec), "cssom: the declaration block's unknown-value record could not be allocated — a "
+                            "dropped one would read as a declaration whose provenance the page never supplied");
+    JS_SetPropertyStr(ctx, block, CSSD_TAINT_FIELD, JS_DupValue(ctx, rec));
+    return rec;
+}
+
+/* Record `v` as the unknown behind the declaration named `name`, or CLEAR the entry when `v` is JS_UNDEFINED —
+   which is what a CONCRETE write says: this declaration is no longer an unknown's. */
+static void cssd_taint_write(JSContext *ctx, JSValueConst block, const char *name, JSValueConst v)
+{
+    JSValue rec;
+    JSAtom k;
+
+    if (JS_IsUndefined(v)) {
+        rec = cssd_taint_record(ctx, block, false);
+        if (!JS_IsObject(rec)) { JS_FreeValue(ctx, rec); return; }
+    } else {
+        DCHECK(concolic_is(v),
+               "a declaration's unknown was recorded with a value that is not one — this record answers "
+               "§6.6.1's reads INSTEAD of the block's text, so a real string in it would be a second, "
+               "unvalidated copy of a declaration the text already holds");
+        rec = cssd_taint_record(ctx, block, true);
+    }
+    k = JS_NewAtom(ctx, name);
+    CHECK(k != JS_ATOM_NULL, "cssom: a property name could not be interned for the block's unknown record");
+    if (JS_IsUndefined(v)) JS_DeleteProperty(ctx, rec, k, 0);
+    else                   JS_SetProperty(ctx, rec, k, JS_DupValue(ctx, v));
+    JS_FreeAtom(ctx, k);
+    JS_FreeValue(ctx, rec);
+}
+
+/* The unknown behind the declaration `name` currently declares, or JS_UNDEFINED when there is none. `declared`
+   is what the BLOCK'S TEXT says that property's value is, read by the caller through its own §6.6.1 step — the
+   record answers only for a declaration whose bytes are still the ones it was written about. OWNED. */
+static JSValue cssd_taint_read(JSContext *ctx, JSValueConst block, const char *name, const char *declared)
+{
+    JSValue rec = cssd_taint_record(ctx, block, false), held, example;
+    const char *ex;
+    bool same;
+
+    if (!JS_IsObject(rec) || !declared) { JS_FreeValue(ctx, rec); return JS_UNDEFINED; }
+    held = JS_GetPropertyStr(ctx, rec, name);
+    JS_FreeValue(ctx, rec);
+    if (!concolic_is(held)) { JS_FreeValue(ctx, held); return JS_UNDEFINED; }
+    example = concolic_example(ctx, held);
+    DCHECK(JS_IsString(example),
+           "a declaration's recorded unknown carries no string example, and its example is what this record "
+           "IS: the write stores the example's own bytes as the declaration and files the unknown under them, "
+           "so an entry without one names no declaration and could never be matched to the block again");
+    ex = JS_IsString(example) ? JS_ToCString(ctx, example) : NULL;
+    JS_FreeValue(ctx, example);
+    same = ex != NULL && strcmp(ex, declared) == 0;
+    if (ex) JS_FreeCString(ctx, ex);
+    if (same) return held;
+    JS_FreeValue(ctx, held);
+    return JS_UNDEFINED;
+}
+
+/* §6.6.1's cssText setter step 2, "Empty the declarations", applied to this record — every entry it holds is
+   about a declaration that no longer exists. The reads above would already answer nothing for them; this is
+   the step the spec states, run where it is stated, rather than left to the validation to absorb. */
+static void cssd_taint_empty(JSContext *ctx, JSValueConst block)
+{
+    JSValue rec = cssd_taint_record(ctx, block, false);
+
+    if (!JS_IsObject(rec)) { JS_FreeValue(ctx, rec); return; }
+    JS_FreeValue(ctx, rec);
+    JS_SetPropertyStr(ctx, block, CSSD_TAINT_FIELD, JS_UNDEFINED);
+}
+
+/* THE BYTES AND THE UNKNOWN A DECLARATION'S VALUE WRITES, which is ONE decision resolved in ONE place because
+   §6.6.1's `setProperty`, its per-property IDL attributes and CSS Fonts 5 §9.1's descriptor attributes are
+   three spellings of it — a second copy is a second answer to "what does a declaration store for a value the
+   page could not spell". `owned` is the JS_ToCString to free. */
+typedef struct { const char *bytes; JSValueConst taint; const char *owned; } CssdValue;
+
+static bool cssd_value(JSContext *ctx, JSValueConst value, CssdValue *out)
+{
+    /* EVERY FIELD BEFORE THE FIRST THING THAT CAN FAIL, because the failure path is the caller's `_free`, which
+       frees exactly what this struct holds and nothing else — the same rule quickjs-step.h's step states owe. */
+    out->bytes = NULL;
+    out->owned = NULL;
+    out->taint = JS_UNDEFINED;
+    if (concolic_is(value)) {
+        JSValue example = concolic_example(ctx, value);
+
+        /* AN UNKNOWN WITH NO EXAMPLE HAS NO BYTES AT ALL, and §6.6.1 step 5's "parsing value for property
+           property" is over bytes. Its outcome then decides step 6's "If component value list is null, then
+           return" — so the block either gains this declaration or is left exactly as it was, and BOTH worlds
+           are feasible. Neither may be picked: picking the first writes a declaration whose value this engine
+           invented, and picking the second silently discards a write the page made. */
+        if (JS_IsUndefined(example)) {
+            const char *shape = concolic_shape_c(value);
+
+            JS_FreeValue(ctx, example);
+            DFAILF("CSSOM §6.6.1 The CSSStyleDeclaration Interface's setProperty step 5 was asked to parse "
+                   "a value that is UNKNOWN EXTERNAL INPUT WITH NO EXAMPLE (`%s`), so there are no bytes to "
+                   "parse and no way to decide step 6's \"If component value list is null, then return\". BOTH "
+                   "OUTCOMES ARE FEASIBLE and neither may be picked: the block gains this declaration, or it is "
+                   "left exactly as it was. WHAT IS MISSING is the OUTCOME FORK at this member's own seam — the "
+                   "three value writes here are plain C bodies, so building it means making them step machines "
+                   "and asking quickjs-step.h's step_fork_run which of its own completions the parse reached, "
+                   "the way core/idl_args.h's IDL_CONCOLIC_FORKS types already do at their resolution site. "
+                   "This is NOT the crash for an unknown that HAS an example: that one parses its own computed "
+                   "bytes and keeps its domain in the block's unknown record above.", shape ? shape : "{}");
+            return false;   /* release: no capability to add, so step 6's own answer — the call is abandoned */
+        }
+        DCHECK(!JS_IsObject(example),
+               "a declaration value's unknown carries an OBJECT as its concrete example — an example is the "
+               "value this engine COMPUTED, so it is a primitive, and §7.1.19 ToString over an object one runs "
+               "the PAGE's toString from a C activation with no flow base under it");
+        out->owned = JS_ToCString(ctx, example);   /* a PRIMITIVE: §7.1.19 ToString here runs no page code */
+        JS_FreeValue(ctx, example);
+        if (!out->owned) return false;
+        out->bytes = out->owned;
+        out->taint = value;
+        return true;
+    }
+    out->owned = JS_ToCString(ctx, value);
+    DCHECK(out->owned != NULL,
+           "a declaration value reached the write unconverted — its IDL declaration is what converts it, and "
+           "running the page's toString from here is the drive-to-completion the flow machinery exists to "
+           "avoid");
+    if (!out->owned) return false;
+    out->bytes = out->owned;
+    return true;
+}
+
+static void cssd_value_free(JSContext *ctx, CssdValue *v) { if (v->owned) JS_FreeCString(ctx, v->owned); }
+
 /* The whole of a member's write: read the declarations, edit them, put them back — where "put them back" is
    §6.6's UPDATE STYLE ATTRIBUTE, whose step is "set an attribute value for owner node using 'style' and the
    result of SERIALIZING declaration block", generalized to the backing the block actually has.
@@ -2318,17 +2529,67 @@ static void cssd_decls_remove_property(CssDecls *d, const char *name)
    declarations ARE longhands: `margin: 2px 1px 1px` parses back to exactly the four the serializer consolidated,
    so the round trip is the identity on the block's declarations, and what a page reads out of
    `getAttribute('style')` is the string a browser writes there. */
+/* `taint` IS THE UNKNOWN THE PAGE'S VALUE WAS, or JS_UNDEFINED when the value was a real string — and a
+   CONCRETE write is a positive statement that this declaration is nobody's unknown any more, which is why it
+   clears rather than leaving the last one standing.
+   EACH DECLARATION THIS WRITE DECIDED GETS ITS OWN DERIVATION AND NOT A SHARED POINTER TO THE PAGE'S VALUE.
+   Step 8 expands `margin` into four longhands, and `concolic_ident_c` is what a per-flow path constraint is
+   keyed by — so four declarations sharing one identity would make a branch on `marginTop` decide `marginLeft`,
+   which is solver/concolic.h's own worked defect. The derivation names the algorithm that produced the bytes
+   (§6.6.1 step 5's parse, and step 8's component extraction for a shorthand) TOGETHER WITH the longhand it
+   produced them for, and its EXAMPLE is exactly the bytes stored — which is the record's whole validation rule
+   above, so it is asserted here rather than assumed. */
 static void cssd_write_declaration(JSContext *ctx, JSValueConst block, const char *name, const char *value,
-                                   bool important)
+                                   bool important, JSValueConst taint)
 {
     size_t len = 0;
     char *text = cssd_declarations_text(ctx, block, &len);
     CssDecls d = { 0 };
+    CssdSetNames set = { { NULL }, 0 };
     char *next;
+    unsigned i;
 
     cssd_decls_from_text(text, len, &d);
-    if (value) cssd_decls_set_property(&d, name, value, important);
+    if (value) cssd_decls_set_property(&d, name, value, important, &set);
     else       cssd_decls_remove_property(&d, name);
+    for (i = 0; i < set.n; i++) {
+        int at = cssd_decls_index(&d, set.name[i]);
+        JSValue derived = JS_UNDEFINED;
+
+        DCHECK(at >= 0 && d.v[at].value != NULL,
+               "a write reported setting a declaration the list does not hold — the two are one step, and a "
+               "name reported without a value is a report composed somewhere other than at the set");
+        if (at < 0 || !d.v[at].value) continue;
+        if (concolic_is(taint)) {
+            /* MEASURED AND NOT CAPPED, because the operation name is HALF THE DERIVATION'S IDENTITY: a custom
+               property's name is whatever the page wrote, so a fixed buffer would truncate two long names to
+               one string and file two declarations under one constraint key. */
+            size_t n = sizeof CSSD_TAINT_OP - 1 + strlen(set.name[i]) + 1;
+            char *op = malloc(n);
+
+            CHECK(op != NULL, "cssom: OOM naming the derivation behind an unknown declaration value");
+            memcpy(op, CSSD_TAINT_OP, sizeof CSSD_TAINT_OP - 1);
+            memcpy(op + sizeof CSSD_TAINT_OP - 1, set.name[i], strlen(set.name[i]) + 1);
+            derived = concolic_builtin_hook(ctx, taint, op, JS_NewString(ctx, d.v[at].value));
+            free(op);
+            DCHECK(concolic_is(derived),
+                   "a derivation over an unknown declaration value came back as something other than an "
+                   "unknown — solver/concolic.h answers JS_UNINITIALIZED only for an operand that is not one, "
+                   "and this one was tested directly above");
+        }
+        cssd_taint_write(ctx, block, set.name[i], derived);
+        JS_FreeValue(ctx, derived);
+    }
+    /* §6.6.1's removeProperty steps 5 and 6 take the declaration away, so every record about it is about a
+       declaration that is gone. The shorthand walk is the same one the removal made, asked of the same entry. */
+    if (!value) {
+        const char *const *lh;
+        unsigned n;
+
+        lh = css_shorthand_longhands(name, &n);
+        if (lh) for (i = 0; i < n; i++) cssd_taint_write(ctx, block, lh[i], JS_UNDEFINED);
+        else    cssd_taint_write(ctx, block, name, JS_UNDEFINED);
+    }
     next = cssd_serialize_decls(&d);
     cssd_decls_free(&d);
 
@@ -2364,23 +2625,42 @@ static JSValue js_cssd_prop_op(JSContext *ctx, JSValueConst this_val, int argc, 
     }
     DCHECK(argc >= 1, "a §6.6.1 property member reached its body with no property name — its IDL argument is "
                       "required, so the declaration's own argument-count check should have refused the call");
-    name = JS_ToCString(ctx, argv[0]);   /* a real string by now: the declaration converted it */
+    /* THE NAME, WHICH CAN BE UNKNOWN EXTERNAL INPUT. Web IDL §3.2 JavaScript type mapping crosses one into a
+       `CSSOMString` argument AS ITSELF — CSSOM §3 CSSOMString makes that type "either USVString or DOMString",
+       and core/idl_args.h's idl_concolic_rule answers IDL_CONCOLIC_CROSSES for every type whose conversion
+       merely COERCES — so the body is what has to answer, and an unknown NAME denotes its
+       own display SHAPE — a real string, stable per source. THAT IS THE HONEST ANSWER AND NOT A LUCKY ONE: all
+       three members here are stated over the block's own declarations, and a shape matches no property name in
+       them, so getPropertyValue reaches its last step ("Return the empty string"), getPropertyPriority reaches
+       its own, and removeProperty removes nothing — which is what a browser answers for any other string that
+       names no declaration. An unknown name is a question about a property this block does not have; it is not
+       a question this engine failed to answer. */
+    name = concolic_name_cstr(ctx, argv[0]);
     if (!name) { JS_FreeValue(ctx, block); return JS_EXCEPTION; }
     if (magic == 1) {
-        /* §6.6.1's removeProperty: "let value be the return value of invoking getPropertyValue()" — read
-           BEFORE the removal, because that value is what it returns. */
+        /* §6.6.1's removeProperty step 3: "Let value be the return value of invoking getPropertyValue() with
+           property as argument" — read BEFORE the removal, because step 8's "Return value" returns it. */
         size_t len = 0;
         char *text = cssd_declarations_text(ctx, block, &len);
         char *old = cssd_property_value(text, len, name);
+        /* The declaration's own unknown, read BEFORE the removal clears it — the value this member returns is
+           the value it had, and if that value was an unknown then so is what step 8 returns. */
+        JSValue unknown = cssd_taint_read(ctx, block, name, old);
 
         free(text);
-        /* §6.6.1's step 4 — "if property is a shorthand property, for each longhand property longhand that
-           property maps to, invoke removeProperty() with longhand as argument" — is one edit of the
-           declarations, made where every other edit is. The extra removal of the SHORTHAND'S OWN NAME that
-           used to be here is gone with the thing that made it necessary: the block held the author's spelling,
-           and now it holds the longhands §6.6 says it holds. */
-        cssd_write_declaration(ctx, block, name, NULL, false);
-        r = old ? JS_NewString(ctx, old) : JS_NewStringLen(ctx, "", 0);
+        /* §6.6.1's step 5 — "If property is a shorthand property, for each longhand property longhand that
+           property maps to" — is one edit of the declarations, made where every other edit is. The extra
+           removal of the SHORTHAND'S OWN NAME that used to be here is gone with the thing that made it
+           necessary: the block held the author's spelling, and now it holds the longhands §6.6 says it holds.
+           THE NUMBER 4 STOOD HERE AND SO DID A TAIL READING `invoke removeProperty with longhand as argument`,
+           which is a RETIRED EDITION'S WORDING — step 4 is "Let removed be false", and this step's own substeps
+           now read "If longhand is not a property name of a CSS declaration in the declarations, continue" and
+           "Remove that CSS declaration and let removed be true". A quotation is the half of a citation a reader
+           trusts most and opens the spec for least, so one carrying words the standard no longer has is worse
+           than no quotation at all. */
+        cssd_write_declaration(ctx, block, name, NULL, false, JS_UNDEFINED);
+        r = !JS_IsUndefined(unknown) ? unknown
+          : old ? JS_NewString(ctx, old) : JS_NewStringLen(ctx, "", 0);
         free(old);
     } else if (magic == 2) {
         /* §6.6.1's getPropertyPriority. A COMPUTED block's declarations are resolved values and carry no
@@ -2406,9 +2686,22 @@ static JSValue js_cssd_prop_op(JSContext *ctx, JSValueConst this_val, int argc, 
         size_t len = 0;
         char *text = cssd_declarations_text(ctx, block, &len);
         char *v = cssd_property_value(text, len, name);
+        /* The declaration's own unknown, when the value the page wrote was one — see the record above. It is
+           asked with the bytes the block CURRENTLY declares, which is what ties the record to this declaration
+           rather than to a property name that has since been written by somebody else.
+           A SHORTHAND ASKED FOR BY NAME IS NOT COVERED AND THAT IS A RESIDUAL, NOT A HOLE: the block holds
+           LONGHANDS (§6.6.1 step 8 expands), so each of them carries its own unknown and the shorthand `v`
+           above is the four of them SERIALIZED — a value whose domain is the union of four. THE NEXT DIFF
+           builds that join with solver/concolic.h's `concolic_new_derived` over the tainted longhands' values
+           in canonical order, named for §6.7.2's serialize-a-CSS-value and given the assembled string as its
+           example; it is the same joint the `border-spacing` arm of core/css/css_computed_value.c names from
+           the read side. ITS ABSENCE SHOWS as `el.style.margin` answering a plain string while
+           `el.style.marginTop` answers an unknown, on one block, after one `style.margin = w + 'px'`. */
+        JSValue unknown = cssd_taint_read(ctx, block, name, v);
 
         free(text);
-        r = v ? JS_NewString(ctx, v) : JS_NewStringLen(ctx, "", 0);
+        r = !JS_IsUndefined(unknown) ? unknown
+          : v ? JS_NewString(ctx, v) : JS_NewStringLen(ctx, "", 0);
         free(v);
     }
     JS_FreeCString(ctx, name);
@@ -2419,7 +2712,8 @@ static JSValue js_cssd_prop_op(JSContext *ctx, JSValueConst this_val, int argc, 
 static JSValue js_cssd_set_property(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     JSValue block = cssd_block(ctx, this_val);
-    const char *name, *value, *priority;
+    const char *name, *priority;
+    CssdValue v;
     bool important;
 
     (void)magic;
@@ -2431,8 +2725,15 @@ static JSValue js_cssd_set_property(JSContext *ctx, JSValueConst this_val, int a
     DCHECK(argc >= 2, "§6.6.1's setProperty reached its body without the two arguments its IDL requires — the "
                       "declaration's own Web IDL §3.6 Overload resolution algorithm step 5 count is what "
                       "should have refused the call");
-    name = JS_ToCString(ctx, argv[0]);
-    value = JS_ToCString(ctx, argv[1]);
+    /* THE NAME denotes its SHAPE when it is unknown, exactly as it does at the three members above and for the
+       same reason; the VALUE is the one argument whose unknown has somewhere to GO, and cssd_value decides
+       what it stores and what it leaves behind. */
+    name = concolic_name_cstr(ctx, argv[0]);
+    if (!cssd_value(ctx, argv[1], &v)) {
+        if (name) JS_FreeCString(ctx, name);
+        JS_FreeValue(ctx, block);
+        return JS_HasException(ctx) ? JS_EXCEPTION : JS_UNDEFINED;
+    }
     /* Web IDL §3.6 Overload resolution algorithm's ABSENT OPTIONAL ARGUMENT, in both of its spellings: a call
        that stopped short of the position arrives with a shorter argc (step 16, whose 16.2 appends "the special
        value 'missing'"), and one that reached it with `undefined` arrives with undefined in the slot (step
@@ -2445,10 +2746,28 @@ static JSValue js_cssd_set_property(JSContext *ctx, JSValueConst this_val, int a
        `optional CSSOMString priority = ""`, so absent IS the empty string, which is a POSITIVE statement that
        the page named no priority rather than a hole. Converting either would produce the four characters
        "undefined" and abandon the call at step 4 below. */
+    /* AND THE PRIORITY IS NEITHER OF THOSE TWO ANSWERS, WHICH IS WHY IT CRASHES WHERE THE VALUE DOES NOT. It is
+       not a NAME — nothing is looked up by it — and it is not a value with a home: what step 4 produces is the
+       IMPORTANT FLAG, one bit on a declaration, and a bit has nowhere to carry a domain. The value's unknown is
+       taken concretely BECAUSE the record above keeps its domain; taking this one concretely would decide a
+       gate off an example with nothing anywhere recording that the other world was never explored, which is
+       the silent loss §Offensive-programming says must crash instead. It crashes for an unknown that HAS an
+       example as much as for one that has not, and that is the same rule and not a stricter one. */
+    if (argc >= 3 && concolic_is(argv[2]))
+        DFAILF("CSSOM §6.6.1 The CSSStyleDeclaration Interface's setProperty step 4 tests its PRIORITY argument "
+               "against the string \"important\", and this one is UNKNOWN EXTERNAL INPUT (`%s`). The two "
+               "outcomes are two worlds — the declaration is written IMPORTANT, or step 4 returns and the block "
+               "is left exactly as it was — and the answer decides a BIT, which has nowhere to keep the domain "
+               "the way a declaration's value does. WHAT IS MISSING is the same OUTCOME FORK the no-example "
+               "value arm above names: this member as a step machine, asking quickjs-step.h's step_fork_run "
+               "which completion the ASCII case-insensitive match reached. ITS ABSENCE WOULD SHOW as a page "
+               "that reads its priority out of injected state (`el.style.setProperty('color', c, "
+               "cfg.emphasis)`) exploring neither arm.",
+               concolic_shape_c(argv[2]) ? concolic_shape_c(argv[2]) : "{}");
     priority = (argc >= 3 && !JS_IsUndefined(argv[2])) ? JS_ToCString(ctx, argv[2]) : NULL;
-    if (!name || !value || (argc >= 3 && !JS_IsUndefined(argv[2]) && !priority)) {
+    if (!name || (argc >= 3 && !JS_IsUndefined(argv[2]) && !priority)) {
         if (name) JS_FreeCString(ctx, name);
-        if (value) JS_FreeCString(ctx, value);
+        cssd_value_free(ctx, &v);
         if (priority) JS_FreeCString(ctx, priority);
         JS_FreeValue(ctx, block);
         return JS_EXCEPTION;
@@ -2466,16 +2785,24 @@ static JSValue js_cssd_set_property(JSContext *ctx, JSValueConst this_val, int a
             if ((char)tolower((unsigned char)priority[i]) != IMPORTANT[i]) break;
         if (i != sizeof(IMPORTANT)) {
             JS_FreeCString(ctx, name);
-            JS_FreeCString(ctx, value);
+            cssd_value_free(ctx, &v);
             JS_FreeCString(ctx, priority);
             JS_FreeValue(ctx, block);
             return JS_UNDEFINED;
         }
     }
-    /* §6.6.1's step 3: setting the empty string invokes removeProperty and returns. */
-    cssd_write_declaration(ctx, block, name, *value ? value : NULL, important);
+    /* §6.6.1's step 3: setting the empty string invokes removeProperty and returns.
+       IT IS ASKED OF THE EXAMPLE WHEN THE VALUE IS AN UNKNOWN, AND THAT IS A NAMED RESIDUAL. The example is the
+       value THIS FLOW computed by running the real operators on real operands, so the arm it selects is the arm
+       a real session takes — right for this flow, and NARROWER than the spec, which has two feasible worlds
+       here exactly as step 4 does. THE NEXT DIFF is the one the two DFAILs above name and is the same one for
+       all three tests: this member as a step machine, so step 3's emptiness test, step 4's priority match and
+       step 5's parse each ask quickjs-step.h's step_fork_run and both completions run. ITS ABSENCE SHOWS as a
+       block that never loses a declaration to an unknown whose example happens to be "" — the sibling world in
+       which the same write is a removeProperty is not explored, and nothing in the emitted surface says so. */
+    cssd_write_declaration(ctx, block, name, *v.bytes ? v.bytes : NULL, important, v.taint);
     JS_FreeCString(ctx, name);
-    JS_FreeCString(ctx, value);
+    cssd_value_free(ctx, &v);
     JS_FreeCString(ctx, priority);
     JS_FreeValue(ctx, block);
     return JS_UNDEFINED;
@@ -2499,9 +2826,11 @@ static JSValue js_cssd_property_get(JSContext *ctx, JSValueConst this_val, int m
         size_t len = 0;
         char *text = cssd_declarations_text(ctx, block, &len);
         char *v = cssd_property_value(text, len, (const char *)e->name);
+        JSValue unknown = cssd_taint_read(ctx, block, (const char *)e->name, v);
 
         free(text);
-        r = v ? JS_NewString(ctx, v) : JS_NewStringLen(ctx, "", 0);
+        r = !JS_IsUndefined(unknown) ? unknown
+          : v ? JS_NewString(ctx, v) : JS_NewStringLen(ctx, "", 0);
         free(v);
     }
     JS_FreeValue(ctx, block);
@@ -2512,7 +2841,7 @@ static JSValue js_cssd_property_set(JSContext *ctx, JSValueConst this_val, JSVal
 {
     const lxb_css_entry_data_t *e = lxb_css_property_by_id((uintptr_t)magic);
     JSValue block = cssd_block(ctx, this_val);
-    const char *v;
+    CssdValue v;
 
     DCHECK(e != NULL, "a CSS attribute was declared with a property id the registry does not have");
     if (JS_IsException(block)) return block;
@@ -2520,10 +2849,12 @@ static JSValue js_cssd_property_set(JSContext *ctx, JSValueConst this_val, JSVal
         JS_FreeValue(ctx, block);
         return cssd_readonly_throw(ctx);
     }
-    v = JS_ToCString(ctx, val);   /* a real string by now: the declaration converted it */
-    if (!v) { JS_FreeValue(ctx, block); return JS_EXCEPTION; }
-    cssd_write_declaration(ctx, block, (const char *)e->name, *v ? v : NULL, false);
-    JS_FreeCString(ctx, v);
+    if (!cssd_value(ctx, val, &v)) {
+        JS_FreeValue(ctx, block);
+        return JS_HasException(ctx) ? JS_EXCEPTION : JS_UNDEFINED;
+    }
+    cssd_write_declaration(ctx, block, (const char *)e->name, *v.bytes ? v.bytes : NULL, false, v.taint);
+    cssd_value_free(ctx, &v);
     JS_FreeValue(ctx, block);
     return JS_UNDEFINED;
 }
@@ -2803,7 +3134,7 @@ static const char *cssd_descriptor(int magic)
 static JSValue js_cssd_descriptor_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
     const char *name = cssd_descriptor(magic);
-    JSValue block = cssd_block(ctx, this_val), r;
+    JSValue block = cssd_block(ctx, this_val), r, unknown;
     size_t len = 0;
     char *text, *v;
 
@@ -2815,8 +3146,10 @@ static JSValue js_cssd_descriptor_get(JSContext *ctx, JSValueConst this_val, int
            "attribute for this member to have been reached through");
     text = cssd_declarations_text(ctx, block, &len);
     v = cssd_property_value(text, len, name);
+    unknown = cssd_taint_read(ctx, block, name, v);
     free(text);
-    r = v ? JS_NewString(ctx, v) : JS_NewStringLen(ctx, "", 0);
+    r = !JS_IsUndefined(unknown) ? unknown
+      : v ? JS_NewString(ctx, v) : JS_NewStringLen(ctx, "", 0);
     free(v);
     JS_FreeValue(ctx, block);
     return r;
@@ -2826,17 +3159,20 @@ static JSValue js_cssd_descriptor_set(JSContext *ctx, JSValueConst this_val, JSV
 {
     const char *name = cssd_descriptor(magic);
     JSValue block = cssd_block(ctx, this_val);
-    const char *v;
+    CssdValue v;
 
     if (JS_IsException(block)) return block;
     if (cssd_flag(ctx, block, "readOnly")) {
         JS_FreeValue(ctx, block);
         return cssd_readonly_throw(ctx);
     }
-    v = JS_ToCString(ctx, val);   /* a real string by now, and null is "" — the IDL says [LegacyNullToEmptyString] */
-    if (!v) { JS_FreeValue(ctx, block); return JS_EXCEPTION; }
-    cssd_write_declaration(ctx, block, name, *v ? v : NULL, false);
-    JS_FreeCString(ctx, v);
+    /* null is "" — the IDL says [LegacyNullToEmptyString] — and an unknown is what cssd_value decides. */
+    if (!cssd_value(ctx, val, &v)) {
+        JS_FreeValue(ctx, block);
+        return JS_HasException(ctx) ? JS_EXCEPTION : JS_UNDEFINED;
+    }
+    cssd_write_declaration(ctx, block, name, *v.bytes ? v.bytes : NULL, false, v.taint);
+    cssd_value_free(ctx, &v);
     JS_FreeValue(ctx, block);
     return JS_UNDEFINED;
 }
@@ -2883,9 +3219,29 @@ static JSValue js_cssd_set_css_text(JSContext *ctx, JSValueConst this_val, JSVal
         JS_FreeValue(ctx, block);
         return cssd_readonly_throw(ctx);
     }
+    /* AN UNKNOWN cssText IS A WHOLE DECLARATION LIST AND NOT A VALUE, so it does not reach cssd_value: what
+       step 3 parses out of it is N declarations, and each of them would need its own derivation over this one
+       string, named for the declaration it produced. The three VALUE writes above already do exactly that per
+       longhand; what is missing here is the enumeration that turns one unknown into that per-declaration list. */
+    if (concolic_is(val))
+        DFAILF("CSSOM §6.6.1 The CSSStyleDeclaration Interface's cssText setter was given UNKNOWN EXTERNAL "
+               "INPUT (`%s`), and its step 3 is \"Parse the given value and, if the return value is not the "
+               "empty list, insert the items in the list into the declarations, in specified order\" — a whole "
+               "DECLARATION LIST, so there is no one property for the block's unknown record to file it under. "
+               "WHAT THE NEXT DIFF BUILDS: serialize this value's own EXAMPLE the way the concrete arm below "
+               "does, enumerate the declarations it produced with cssd_decls_from_text, and record for each a "
+               "derivation over this string named for THAT declaration — the same composition "
+               "cssd_write_declaration makes per longhand, one level up, so `margin` and `color` set by one "
+               "cssText do not share a constraint key. ITS ABSENCE WOULD SHOW as this abort, and after it is "
+               "built, as `el.style.cssText = '--w:' + w + 'px'` leaving `getPropertyValue('--w')` a plain "
+               "string where the same write through setProperty leaves an unknown.",
+               concolic_shape_c(val) ? concolic_shape_c(val) : "{}");
     v = JS_ToCString(ctx, val);
     if (!v) { JS_FreeValue(ctx, block); return JS_EXCEPTION; }
     out = cssd_serialize_text(v, strlen(v));
+    /* §6.6.1's cssText setter step 2, "Empty the declarations" — every unknown the block recorded was about a
+       declaration this write has just taken away. */
+    cssd_taint_empty(ctx, block);
     cssd_declarations_write(ctx, block, out ? out : "", out ? strlen(out) : 0);
     free(out);
     JS_FreeCString(ctx, v);
