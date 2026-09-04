@@ -187,7 +187,29 @@ const COUNTERS = ["switches", "flows", "candidates", "jobsQueued", "jobsRun", "u
    rather than `{}` — an empty object is a census that was taken and found nothing, which is a finding. */
 const CENSUS_LIFETIME = ["stepUnitRuns"];
 const CENSUS_GAUGE = ["stepUnits", "programCursors"];
-const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered"];
+const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered",
+  /* AND THE REPLAY TRIPLE, WHICH IS THE COUNTER THE `forkAt` ROWS ABOVE HAVE TO BE READ AGAINST AND THE ONE
+     THING THIS DRIVER DID NOT CARRY. solver/decide.c's `fork_site_name` states a NAMED RESIDUAL — a fork over
+     an operand with no spellable identity "records no constraint, claims no replay slot, and re-forks every
+     time the flow reaches it" — and it names exactly ONE way its absence would show: "a `~` row climbing
+     across a session while the flow that owns it consumes no recorded arms — g_replay_hits flat against a
+     growing site row". This driver already carried the `~` rows, because `forkAt` crosses whole; it did not
+     carry the counter they have to be divided by, so the residual's own falsifier was the single reading a
+     live run could not make. That is §MEASURE-WHAT-THE-SHIPPED-PATH-WRITES pointed the other way — not a
+     harness print production never emits, but a production field already sitting on this row that no harness
+     read — and it is the same instrument gap this file's `census()` comment records for `forkAt` and `cold`.
+     MEASURED, WHICH IS WHY THEY ARE HERE: five fresh-browser runs of play.grafana.org at artifact 00754e96,
+     one row each. Four stood with 89-91% of the whole frontier inside the document's FIRST program and their
+     `~` site rows summed 2122, 2964, 3546, 3868 — one key,
+     `~{}[{__core-js_shared__}.wks.iterator]`, the largest row in every one of them. Reading that against the
+     replay counter is the whole diagnosis and it took a side probe against the offscreen document to get a
+     number this row was already carrying.
+     THE UNITS ARE NOT ALIKE, AND THE BANNER NAMES THEM BECAUSE result.c CALLS THAT "the thing a reader must
+     carry": `replayHits` and `replayLeftArms` are ARMS (decision-vector slots) and `replayLeft` is EVENTS
+     (one per divergence, whatever it abandoned). Three lifetime counts in two units under one banner is the
+     kind-stated/unit-unstated half of §A-GAUGE-AND-A-LIFETIME-COUNTER, and a reader who divides one by the
+     other gets a ratio of two things. */
+  "replayHits", "replayLeft", "replayLeftArms"];
 
 /* WHERE THE FRONTIER STOOD, WHAT ITS STEPS DID, AND WHAT GREW IT — read off the row bridge.js wrote, never
    recomputed. `forkAt` is taken WHOLE and is not truncated to its heaviest rows: it is already a Space-Saving
@@ -353,6 +375,7 @@ async function main() {
      you cannot name FROM ITS OUTPUT is one you are not entitled to do arithmetic on, and the names do not say. */
   console.log("# frontier.* — LIFETIME (may be differenced): " +
               CENSUS_LIFETIME.concat(COLD_COUNTERS).join(",") + ", and every `forkAt` row" +
+              " | UNITS: replayHits+replayLeftArms are ARMS (decision-vector slots), replayLeft is EVENTS" +
               " | GAUGES (may FALL; never difference): " + CENSUS_GAUGE.join(","));
 
   const { browser, extId } = await connect();
