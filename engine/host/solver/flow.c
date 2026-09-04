@@ -111,11 +111,13 @@ typedef struct FlowAcct {
        WHAT THE ORDER IS THEN MADE OF, AT TWO SCOPES, WHICH IS THE POINT AND NOT A SIDE EFFECT. WITHIN a family
        this term is a common offset and cancels, so members are ordered by the optimism bonus and their OWN
        silence — both bounded, and NEITHER of them reset by the emitting MEMBER, which is the correction this
-       sentence carries. It used to read "both reset by their own emission", and by the time it did neither
-       half was: the own silence is forgiven for the whole ACCOUNT at any arm's emission (`emit_gen` below),
-       and the optimism bonus is not moved by an emission at all (flow_credit_emit says why the per-member zero
-       that used to move it was one credit presented twice). So what orders a family's members is fewest
-       completed units first and least own burn first — fair queueing over the arms and
+       sentence carries and which took two diffs to become true of both halves. The optimism bonus is not moved
+       by an emission at all (flow_credit_emit says why the per-member zero that used to move it was one credit
+       presented twice). The own silence is forgiven for every arm of the ACCOUNT at any arm's emission
+       (`emit_gen` below) EXCEPT the emitter, which carries its burn across the bump for that same reason: the
+       credit is the family's and the debit is the member's, so erasing the second with the first is one credit
+       presented twice, and it erased the only within-family ordering signal there is. So what orders a
+       family's members is fewest completed units first and least own burn first — fair queueing over the arms and
        §scheduler's BFS. BETWEEN families it is the whole bandit ordering, charged once against a silence
        charged once, so a family that emitted V holds the thread for V seconds of ITS OWN silence and is then
        passed. Neither scope can do the other's job, which is the same sentence flow_silence_notch already
@@ -678,6 +680,7 @@ Flow *flow_running(void) { return g_running; }
    (endpoint.c / solve.c) when they record something NEW — this is what makes the WFQ value-of-information
    ordered rather than merely breadth-first by visit count. The frontier gen bumps so the value-yield re-ranks. */
 void flow_credit_emit(double v) {
+    int64_t own_us;   /* the emitter's own burn over the window this emission closes — see the bump below */
     /* ONE EMISSION IS ONE POINT, and the aging term's exchange rate is stated against exactly that. A credit of
        zero or less would leave a flow's rank unchanged while resetting its aging, which is the one way a
        monopolizer could refresh its lead without producing anything — so the reward's sign is asserted where it
@@ -772,20 +775,58 @@ void flow_credit_emit(double v) {
        not, so it sinks at FLOW_AGE_QUANTUM per quantum against every arm of its own family — which is exactly
        the within-family comparison the own half exists to make, and now it is a comparison the losing side can
        win back by waiting rather than a debt only a dispatch could clear. */
+    /* WHAT THE EMITTER ITSELF HAS BURNED OVER THE WINDOW THAT IS ABOUT TO CLOSE — read THROUGH
+       flow_own_silence and BEFORE the bump, because the raw `Flow.cpu` is that quantity only while its mark is
+       current: a flow that emits twice with no charge in between holds a previous window's arithmetic in the
+       field, and every reader is already answering ZERO for it. Reading the field would resurrect it. */
+    own_us = flow_own_silence(g_running);
     g_running->family->emit_gen++;
-    /* …AND THE FAMILY'S AGING WITH IT, which is the forgiveness that actually moves a rank now. The reward this
-       emission raises is the FAMILY's — it is credited to the family's own account above — so the aging it is
-       weighed against has to be forgiven at the same granularity, or an arm that emits carries the silence of
-       every sibling that did not and the credit buys it nothing. §scheduler prices this term against "a
-       monopolizer that burns CPU WITHOUT EMITTING", and a family one of whose arms just emitted is not one.
-       IT RAISES EVERY MEMBER OF THE FAMILY AT ONCE, and that is the same statement as the reward's, read the
-       other way: the family is one accounting unit or it is not one at all. The gen bump below is what makes
-       the frontier re-rank on it, and it is why the value yield's own assertion snapshots the family notch
-       (engine.c) rather than this flow's alone. */
-    g_running->family->fam_us = 0;
-    /* BOTH HALVES ARE NOW ZERO FOR EVERY ARM OF THIS FAMILY, which is the strongest form the relation takes and
-       the transition the old code broke: the family half was zeroed here while a sibling's own half was left
-       holding a previous window's burn, because `cpu` is written only for the flow that holds the thread. */
+    /* …AND THE EMITTER CARRIES ITS OWN BURN ACROSS THE BUMP, WHICH IS THE ONE THING THIS FORGIVENESS MAY NOT
+       DO FOR THE MEMBER THAT EARNED IT. The bump forgives the own half for every arm of the family at once,
+       and that is right for every arm EXCEPT the one holding the thread: CLAUDE.md's rule is that the credit
+       and the debit live at the same accounting unit or neither term means anything, and here the credit is
+       the FAMILY's (`earned`, read by every arm through one pointer) while the debit erased is the MEMBER's
+       (`cpu`, charged to one flow). One credit, two beneficiaries — the family through the ledger, and again,
+       privately, whichever member happened to be holding the thread.
+       THIS FUNCTION ALREADY MADE THAT EXACT ARGUMENT ONE TERM OVER AND DID NOT CARRY IT HERE. `g_running->
+       visits = 0` stood a few lines above and was deleted for it, in these words: "One credit minted once was
+       presented twice: to the family through `val`, and again to whichever member happened to be holding the
+       thread." The optimism term's zero went; the silence term's did not, and the silence term is the ONLY
+       within-family ordering signal left once the reward and the family half have cancelled as the common
+       offsets they are.
+       WHAT IT COST, DERIVED RATHER THAN GUESSED. flow.h's `never_picked` block names the two writers that end
+       an incumbent's hold: flow_credit_visit, which asserts `frame == NULL` and so cannot fire for a member
+       inside a program (a fork copies `visits`, so a chain of framed arms reads one bonus for all of them),
+       and this charge. With both inoperative, every member of a one-family frontier reads ONE weight, the
+       pick's STRICT comparison leaves the thread where it is, and the never-dispatched tail stands at exactly
+       the front for ever. MEASURED, at two revisions and on seven runs: `neverPickedAtTop == neverPicked`
+       EXACTLY at every zero-gap sample, at 46, 259, 269, 285 and 570 members.
+       SO THE WINDOW CLOSES FOR THE FAMILY AND NOT FOR THE ARM THAT SPENT IT. `fam_us` becomes what its members
+       still owe, which after the bump is the emitter's burn and nothing else, so the relation the aging's two
+       halves owe each other holds with EQUALITY at this transition rather than at zero.
+       NAMED RESIDUAL. Not covered: an arm that burned the thread earlier in this window and did NOT emit still
+       has its own half forgiven here, because the bump reaches it and nothing holds it in hand. That is
+       narrower than fair queueing over the arms, which would remember every arm's service and not just the
+       emitter's; it is CORRECT for what it does — the emitter is by construction the arm that must hand over
+       next, so this is the one retention that changes which flow runs — and it is a one-emission memory rather
+       than a ledger. What the next diff builds, if the sweep still stalls: the own half kept per arm across
+       the bump, which needs a per-member window mark that a bump cannot reach in O(1) and is therefore a
+       change to how `emit_gen` forgives, not another line here. How its absence shows: `picksMax` staying at
+       the mean sweep depth between two emissions (flow.h's `top_forgiven` reading) while `neverPicked` climbs
+       with `members` — a sweep that restarts rather than one that stalls.
+       AND IT NARROWS flow_pick's `unrun` POPULATION, WHICH A GUARD THAT FIRES LESS MUST SAY AS PLAINLY AS ONE
+       THAT FIRES MORE. That set needs every non-reward term at zero, and `fam_us` is now non-zero immediately
+       after an emission rather than zero — so within one quantum of a finding the two ordering guards there
+       short-circuit where they used to be live, but ONLY when the emitter burned a whole cooperative quantum
+       between two findings, since a `fam_us` below FLOW_SERVICE_US still floors to a notch of zero. */
+    g_running->cpu             = own_us;
+    g_running->cpu_gen         = g_running->family->emit_gen;
+    g_running->family->fam_us  = own_us;
+    /* THE TWO HALVES ARE EQUAL FOR THE EMITTER AND ZERO FOR EVERY OTHER ARM, which is the relation stated at
+       its strongest: the family's burn over the new window IS the emitter's, because the emitter is the only
+       arm whose burn survived the bump. The transition the old code broke was the mirror of this one — the
+       family half zeroed while a sibling's own half held a previous window's burn — and it is still caught,
+       because the macro is expanded at every transition that can move either half. */
     DCHECK_AGING_ONE_WINDOW(g_running, "an emission forgave this family's window");
     /* THE RANK CHANGE IS RAISED BY frontier_vt_serve ABOVE AND NOT A SECOND TIME HERE, which is a correction
        and not a saving. An emission is ONE event and `g_rank_changes` is a LIFETIME COUNTER of how many times
