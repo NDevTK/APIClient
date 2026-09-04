@@ -697,7 +697,14 @@ static IntrinsicInlineSizes is_block_context(lxb_dom_element_t *el)
 
             run.after = prev;
             run.end = brk;
-            one = intrinsic_outer_contribution(NULL, intrinsic_inline_run_sizes(el, run));
+            /* §9.2.1.1's ANONYMOUS BLOCK BOX, WHERE THE SECTION GENERATES ONE. A run holding no inline-level
+               content is not a box — "we assume that there is an anonymous block box around 'Some text'" — and
+               `<div><p></p></div>` has ONE box on its stack, not three. A maximum would not notice the empty
+               ones, which is exactly why the test is here: skipping them by the SAME predicate §9.4.1's
+               placement skips them by is what keeps the two walking one box list rather than two that agree
+               only by arithmetic. */
+            if (!block_flow_run_generates_box(el, run)) one = out;
+            else one = intrinsic_outer_contribution(NULL, intrinsic_inline_run_sizes(el, run));
         }
         out.min_content = css_px_max(out.min_content, one.min_content);
         out.max_content = css_px_max(out.max_content, one.max_content);

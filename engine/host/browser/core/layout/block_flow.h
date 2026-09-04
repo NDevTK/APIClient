@@ -201,6 +201,7 @@ BlockFlowChildKind block_flow_child_kind(lxb_dom_element_t *parent, lxb_dom_node
    forward, so the whole enumeration costs one pass over the content however many boxes it yields. */
 lxb_dom_node_t *block_flow_next_block_box(lxb_dom_element_t *el, lxb_dom_node_t *after);
 
+
 /* ONE OF §9.2.1.1's ANONYMOUS BLOCK BOXES, AS A RANGE OF ITS CONTAINER'S CONTENT — the two consecutive answers
    of the enumeration above that bracket it, either of which may be NULL for the start or the end of the
    content. It is a TYPE and not two arguments for one reason: every entry that measures, fills or places such
@@ -221,32 +222,28 @@ typedef struct {
     lxb_dom_node_t *end;     /* the one it ENDS BEFORE; NULL is the end of the content */
 } BlockFlowRun;
 
-/* CSS 2.2 §9.2.1.1 "Anonymous block boxes"' RUN DELIMITATION: one past the LAST child of the maximal run of
-   inline-level children that starts at `first`, EXCLUSIVE, in the (first, end) form core/layout/line_box.h
-   takes. `first` must itself be `BLOCK_FLOW_CHILD_INLINE` — §9.2.1.1 generates a box only "around 'Some text'",
-   so a run that starts anywhere else would be an EMPTY anonymous box.
-   THE RUN ENDS AT A BLOCK-LEVEL CHILD AND AT NOTHING ELSE. §9.2.1.1 makes that child the anonymous box's
-   SIBLING rather than its content, and everything else is carried along inside the run because there is nothing
-   of it to carry: a boxless child is §9.2.2.1's collapsed white space, and an out-of-flow child is one
-   §9.2.1.1's own splitting paragraph steps over by name when it treats block-level siblings "that are
-   consecutive or separated only by collapsible whitespace and/or out-of-flow elements" as one break.
-   THE RUN THAT ENDS INSIDE AN INLINE BOX IS REFUSED, and that is §9.2.1.1's SECOND paragraph rather than a
-   limit of this entry's taste: "when an inline box contains an in-flow block-level box, the inline box (and
-   its inline ancestors within the same line box) is broken around the block-level box …, splitting the inline
-   box into two boxes (even if either side is empty)", and "the block-level box becomes a sibling of those
-   anonymous boxes" — so ONE child node yields THREE boxes and the boundary between two of them is a position
-   INSIDE that child, which a sibling pointer cannot name. The classification above already RUNS that forcing,
-   so such a container is correctly sent down §9.4.1's stack; it is this delimitation that crashes, naming the
-   content-order boundary to build. A caller therefore never receives a run whose measurement would have to
-   split an inline box, and never has to test for one.
-   IT IS EXPORTED AND `block_flow_anonymous_boxes` IS NOT WHAT AN INTRINSIC PASS MAY CALL, which is a CYCLE and
-   not a layering preference. That entry answers each run's `content_y` and `height`, and a run's height is
-   core/layout/line_box.h's over the CONTAINER'S USED CONTENT WIDTH — which for a float or an `inline-block`,
-   the only two boxes that ask for an intrinsic size at all, is core/layout/used_value.h's shrink-to-fit over
-   `intrinsic_inline_sizes`, the number such a caller is being run to produce. So the two entries are the same
-   §9.2.1.1 split at the place the cycle is: this one DELIMITS and measures nothing, and a caller that needs the
-   boxes PLACED is a caller whose container's width is already decided. */
-lxb_dom_node_t *block_flow_anonymous_box_end(lxb_dom_element_t *el, lxb_dom_node_t *first);
+/* §9.2.1.1's PRECONDITION about ONE CHILD: is it an INLINE BOX that the section BREAKS — "when an inline box
+   contains an in-flow block-level box, the inline box (and its inline ancestors within the same line box) is
+   broken around the block-level box"? A child that is not an element, or is not §9.2.2's inline box (a
+   non-replaced `display: inline` element), or holds no in-flow block-level box at any inline depth, is FALSE.
+   IT IS EXPORTED FOR THE ONE QUESTION THE ENUMERATION ABOVE CANNOT ANSWER: which BOX a caller is asking about
+   when a child is in SEVERAL of them. The runs partition the container's content, not its child list, so a
+   broken child sits in two or more of them and a lookup keyed by the child is ambiguous exactly here — a
+   consumer that keys by one crashes on a TRUE rather than answering with whichever run it saw last. */
+bool block_flow_child_breaks_inline_box(lxb_dom_element_t *parent, lxb_dom_node_t *child);
+
+/* DOES §9.2.1.1 GENERATE AN ANONYMOUS BLOCK BOX FOR THIS RUN? The section generates one only to wrap
+   inline-level content — "we assume that there is an anonymous block box around 'Some text'" — so a run
+   holding none is not a box at all, and `<div><p></p></div>` has ONE box on its stack rather than three.
+   A RUN THAT OPENS OR CLOSES INSIDE AN INLINE BOX IS ALWAYS ONE, even with no node in it, because the split
+   itself makes a box: "splitting the inline box into two boxes (even if either side is empty)". So
+   `<div><a>text<div>x</div></a></div>` has three, the last of them holding nothing but the `<a>`'s closing
+   edge.
+   BOTH CONSUMERS ASK IT, which is why it is exported rather than each deciding for itself: §9.4.1's placement
+   must not put an empty box on its stack, and css-sizing-3 §5.2's maximum would not notice one — so a walk
+   that skipped the question there would be a second box list that happens to agree, and is free to stop. */
+bool block_flow_run_generates_box(lxb_dom_element_t *el, BlockFlowRun run);
+
 
 /* CSS 2.2 §9.4.2's OWN CONDITION over `el`'s WHOLE CONTENT: "an inline formatting context is established by
    a block container box that contains no block-level boxes."
@@ -337,8 +334,7 @@ bool block_flow_first_line_box_baseline(lxb_dom_element_t *el, CssPx *baseline);
    container's two CONTENT edges, and CSS 2 §8.1 "Box dimensions" nests those inside the padding edge every
    caller of this entry has already folded. A number for them would be one an extreme cannot see. */
 typedef struct {
-    lxb_dom_node_t *first;   /* the run's first child, INCLUSIVE — core/layout/line_box.h's `first` */
-    lxb_dom_node_t *end;     /* one past its last, EXCLUSIVE; NULL is "to the end of the child list" */
+    BlockFlowRun run;        /* the content this box wraps — core/layout/line_box.h takes exactly this */
     CssPx content_x;         /* its content box origin as an OFFSET from the container's own content box
                                 origin — zero on the inline axis, by the derivation above */
     CssPx content_y;         /* … and on the block axis, which is where §9.4.1's stack put it */

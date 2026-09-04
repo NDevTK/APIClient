@@ -247,25 +247,27 @@ static CssPx sa_inline_box_edge(lxb_dom_element_t *d, bool vertical, bool ending
    of its lines the content grows from and `el`'s decides which end of the SCROLLING AREA is the ending one:
    a `rtl` block inside a `ltr` scroller overflows toward the LOWER coordinate, which is `el`'s BEGINNING edge.
    §2's two rows are then one expression rather than a case per combination. */
-static CssPx sa_fold_span(lxb_dom_element_t *style, lxb_dom_node_t *first, lxb_dom_node_t *end, CssPx origin,
+static CssPx sa_fold_span(lxb_dom_element_t *style, BlockFlowRun run, CssPx origin,
                           bool vertical, bool ending_at_hi, CssPx best)
 {
     char sbuf[160], fbuf[160], ebuf[160];
     CssPx lo, hi;
 
-    line_box_content_span(style, first, end, vertical, &lo, &hi);
+    line_box_content_span(style, run, vertical, &lo, &hi);
     /* THE ESTABLISHING BOX AND THE RUN'S TWO DELIMITERS ARE THE SUBJECT, AND THE TWO COORDINATES ARE THE FACT.
        Which of this function's two callers reached it is already in a frame list — they are distinct functions
-       — so the address that is missing is the RUN: `first` and `end` are §9.2.1.1's own delimiters and are as
-       often text nodes as elements, and an inverted pair says nothing about whether it is a sign error or two
+       — so the address that is missing is the RUN: its two bounds are §9.2.1.1's own block-level boxes, either
+       of which may be absent (the start or the end of the container's content) or may sit INSIDE an inline box
+       the section breaks around it, and an inverted pair says nothing about whether it is a sign error or two
        different lines until the two numbers are beside it. */
     DCHECKF(css_px_sub(hi, lo).px >= 0.0,
-           "establishing box %s, run [%s, %s), %s axis, span [%g, %g]: "
+           "establishing box %s, run after %s and before %s, %s axis, span [%g, %g]: "
            "CSS 2.2 §9.4.2's line boxes reported a span whose ENDING edge is before its BEGINNING edge. The "
            "two are a maximum and a minimum over the same set of boxes seeded at the same corner, so an "
            "inverted pair is the two edges having been derived from different lines",
-           box_subject(style, sbuf, sizeof sbuf), box_subject_node(first, fbuf, sizeof fbuf),
-           end == NULL ? "end of the child list" : box_subject_node(end, ebuf, sizeof ebuf),
+           box_subject(style, sbuf, sizeof sbuf),
+           run.after == NULL ? "the start of the content" : box_subject_node(run.after, fbuf, sizeof fbuf),
+           run.end == NULL ? "the end of the content" : box_subject_node(run.end, ebuf, sizeof ebuf),
            vertical ? "block" : "inline", lo.px, hi.px);
     if (ending_at_hi) return css_px_max(best, css_px_add(origin, hi));
     return css_px_min(best, css_px_add(origin, lo));
@@ -274,8 +276,16 @@ static CssPx sa_fold_span(lxb_dom_element_t *style, lxb_dom_node_t *first, lxb_d
 static CssPx sa_inline_context_extreme(lxb_dom_element_t *b, bool vertical, bool ending_at_hi, CssPx best)
 {
     if (!block_flow_establishes_inline_context(b)) return best;
-    return sa_fold_span(b, lxb_dom_interface_node(b)->first_child, NULL, sa_content_origin(b, vertical),
-                        vertical, ending_at_hi, best);
+    {
+        BlockFlowRun whole;
+
+        /* §9.4.2's context with an ELEMENT to name it is the WHOLE of this container's content — the run with
+           no break on either side of it, which is the shape core/layout/block_flow.h's enumeration yields for
+           a container that holds no block-level box. */
+        whole.after = NULL;
+        whole.end = NULL;
+        return sa_fold_span(b, whole, sa_content_origin(b, vertical), vertical, ending_at_hi, best);
+    }
 }
 
 /* §9.2.1.1's ANONYMOUS BLOCK BOXES of one block container, folded in. This is the OTHER shape of §9.4.2's
@@ -309,7 +319,7 @@ static CssPx sa_anon_block_boxes_extreme(lxb_dom_element_t *b, bool vertical, bo
     for (i = 0; i < n; i++) {
         CssPx origin = css_px_add(content, vertical ? v[i].content_y : v[i].content_x);
 
-        best = sa_fold_span(b, v[i].first, v[i].end, origin, vertical, ending_at_hi, best);
+        best = sa_fold_span(b, v[i].run, origin, vertical, ending_at_hi, best);
         if (!vertical) continue;
         if (ending_at_hi) best = css_px_max(best, css_px_add(origin, v[i].height));
         else              best = css_px_min(best, origin);

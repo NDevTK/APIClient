@@ -75,15 +75,20 @@
 #include <lexbor/dom/dom.h>
 
 #include "core/css/css_length.h"
+#include "core/layout/block_flow.h"
 
 /* CSS 2.2 §10.6.3's FIRST BULLET for the block container box that establishes ONE inline formatting context —
    "the distance from its top content edge to the bottom edge of the last line box" — in CSS pixels.
-   THE FORMATTING CONTEXT IS THE HALF-OPEN RUN `[first, end)` OF `style`'s CHILDREN, AND `style` IS WHOSE
-   PROPERTIES THE BOX HAS. Those are two arguments and not one because §9.2.1.1's anonymous block box has no
-   element: a mixed container generates one box per run of inline-level children, and each of them "inherit[s]
-   from the enclosing non-anonymous box" — the DIV, not itself — while the content it holds is only its own
-   run. For a container with no block-level box at all the run IS the whole child list, so `first` is its first
-   child and `end` is NULL; `end` is exclusive and NULL means "to the end of the list".
+   THE FORMATTING CONTEXT IS ONE OF §9.2.1.1's RUNS OF `style`'s CONTENT, AND `style` IS WHOSE PROPERTIES THE
+   BOX HAS. Those are two arguments and not one because §9.2.1.1's anonymous block box has no element: a mixed
+   container generates one box per run, and each of them "inherit[s] from the enclosing non-anonymous box" —
+   the DIV, not itself — while the content it holds is only its own run. A `BlockFlowRun` names that run by the
+   two block-level boxes that bracket it (core/layout/block_flow.h), either of which is NULL at the start or
+   the end of the content — so a container with no block-level box at all is the run with both NULL.
+   THE RUN IS NOT A SIBLING RANGE AND THE TYPE IS WHAT SAYS SO. §9.2.1.1's second paragraph breaks an inline
+   box around an in-flow block-level box inside it, so a run can BEGIN and END part-way through one; the fill
+   re-enters the open ancestors and withholds their opening edges, which is the section's own "the border
+   would be drawn around C1 (open at the end of the line) and C2 (open at the start of the line)".
    `*any_line_box` RECEIVES §9.4.2's OTHER ANSWER: false when every line box in this formatting context is one
    the section says "must be treated as NOT EXISTING for any other purpose", which is a different fact from a
    height of zero and is what §8.3.1's collapse-through note asks for. It is written on every path, so a caller
@@ -115,7 +120,7 @@
    block-level boxes — because deciding it requires classifying every child, which core/layout/block_flow.c
    does once, both to choose between the two formatting contexts and to delimit §9.2.1.1's runs. A block-level
    box reaching this walk is those two classifications having come apart, and it crashes here saying so. */
-CssPx line_box_content_height(lxb_dom_element_t *style, lxb_dom_node_t *first, lxb_dom_node_t *end,
+CssPx line_box_content_height(lxb_dom_element_t *style, BlockFlowRun run,
                               bool *any_line_box, CssPx *first_baseline, CssPx *last_baseline);
 
 /* WHERE THE BOXES ON THIS FORMATTING CONTEXT'S LINE BOXES REACH on ONE PHYSICAL AXIS — `*lo` and `*hi` receive
@@ -174,7 +179,7 @@ CssPx line_box_content_height(lxb_dom_element_t *style, lxb_dom_node_t *first, l
  * leaving either output unwritten. That corner is inside the padding box on both axes (CSS 2 §8.1 nests them
  * and a padding is non-negative), so it is invisible to CSSOM VIEW §2's extreme — the same property that makes
  * the fitting-line answer above harmless, stated once for the degenerate case too. */
-void line_box_content_span(lxb_dom_element_t *style, lxb_dom_node_t *first, lxb_dom_node_t *end,
+void line_box_content_span(lxb_dom_element_t *style, BlockFlowRun run,
                            bool vertical, CssPx *lo, CssPx *hi);
 
 /* ONE BOX FRAGMENT of an inline box — CSSOM VIEW §6 "Extensions to the Element Interface"'s getClientRects()
