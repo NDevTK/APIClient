@@ -275,7 +275,20 @@ typedef enum {
        its own leaves), so the pool computes it when the member declares itself and sizes the state for it —
        page data nesting deeper does not make the conversion deeper.
        The dictionary arm is named beside the member (IdlDictMember::dict), which is the other half of what this
-       type states, exactly as idl_iface_brand's class is for an interface arm. */
+       type states, exactly as idl_iface_brand's class is for an interface arm.
+       THIS ROW ANSWERS CROSSES WHILE ITS ELEMENT TYPE FORKS, AND THAT IS TWO POSITIONS AND NOT TWO ANSWERS TO
+       ONE QUESTION — a distinction worth stating here, because the element IS the `(DOMString or D)` union
+       IDL_STRING_OR_DICT declares and a reader who notices that will reach for the rule table. What the rule
+       table is keyed by is the type AT A POSITION, and the value at THIS position is the ITERABLE: its
+       conversion is §3.2.21, which names no arm at all, so there is nothing here for a fork to be over. What
+       an unknown ITERABLE lacks is a LENGTH — §3.2.21.1 Creating a sequence from an iterable repeats until
+       step 3.2's `done`, and over an unknown there is no arm set the spec writes down, only an unknown number
+       of worlds — which is a different missing capability from an undecided arm and is named as one where it
+       is met.
+       THE ELEMENT'S OWN ARM IS FORKED, one level in, at the point §3.2.21.1 step 3.3 converts the value the
+       cursor just pulled: `{elements: [location.hash]}` has a real Array, a real length and one unknown
+       ELEMENT, and that element's union is decided exactly as an argument position's is. See idl_conv_seq_run,
+       which is where that ask lives. */
     IDL_SEQUENCE_STRING_OR_DICT,
     /* `(DOMString or D)` where D is a DICTIONARY — §3.2.25 over the union HTML §8.6.2's seven name-taking
        modifiers take (`allowElement(SanitizerElementWithAttributes)` and its six siblings), and the union the
@@ -296,7 +309,9 @@ typedef enum {
        and every number from step 4 onward drifts — which is also why sampling the first number of a cluster
        proves nothing, the drift starting one step AFTER the first nesting rather than at it.
        AND ITS ARM IS FORKED FOR UNKNOWN EXTERNAL INPUT — see idl_concolic_rule, which is where the reason
-       lives, and idl_args.c's resolution site, which is where the fork is asked. */
+       lives, and idl_args.c's TWO resolution sites, which is where the fork is asked: the ARGUMENT position,
+       and §3.2.21.1 step 3.3's ELEMENT conversion inside IDL_SEQUENCE_STRING_OR_DICT, whose element type is
+       this union. One type, one rule, and every site that resolves it asks the same fork. */
     IDL_STRING_OR_DICT,
     /* THE POSITION AT WHICH TWO OVERLOADS SPLIT, one of them ending here and the other continuing — §3.6's
        resolution algorithm rather than §3.2.25's union, and the difference between the two is why this is its

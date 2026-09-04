@@ -814,7 +814,11 @@ static JSValue idl_default_value(JSContext *ctx, const IdlDictMember *dm)
  * so the frame's shape is part of what an embedder has to be able to size. The frames live in whichever state
  * block hosts the walk, because a deep fork BYTE-COPIES the state and re-takes only what `visit` names: a
  * malloc'd list would be one allocation two flows both free. */
-enum { IDL_CONV_PULL = 0, IDL_CONV_STRING, IDL_CONV_MEMBERS };
+/* IDL_CONV_ARM IS A PARK POINT AND NOT A STEP OF THE ALGORITHM: §3.2.25's arm over an UNKNOWN element is
+   asked of the fork seam, and a fork's resume lands back ON THE ASK. The pull cannot be that resume point —
+   a cursor answers ONE value per successful run and re-running it pulls the NEXT element — so the element
+   already in hand needs a phase of its own to come back to. */
+enum { IDL_CONV_PULL = 0, IDL_CONV_STRING, IDL_CONV_MEMBERS, IDL_CONV_ARM };
 
 typedef struct {
     JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
@@ -1725,21 +1729,76 @@ static int idl_conv_seq_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *w, IdlC
             }
             return 0;
         }
-        /* UNKNOWN EXTERNAL INPUT CROSSES AS ITSELF, before the union is asked anything: a concolic IS an
-           object, so resolving the arm first would read a dictionary's members off it and de-taint what
-           the solver has to keep forking on. Same boundary rule every declared type follows. */
+        /* §3.2.25 over `(DOMString or D)`, in the union algorithm's own ORDER: null and undefined take the
+           dictionary arm (step 4 "If V is null or undefined"), any Object takes it (step 11 "If V is an
+           Object", whose 11.4 names the dictionary — step 10's callback clause names no entry, since this
+           union declares no callback type), and everything else falls through to step 15 "If types includes
+           a string type, then return the result of converting V to that type".
+           THE NUMBERS HERE WERE 4, 10 AND 12, AND THE LAST TWO WERE WRONG — step 10 is "If IsCallable(V) is
+           true" and step 12 is "If V is a Boolean", so each clause was cited as a neighbour that does
+           something else. That exact pair was found and repaired at the ARGUMENT resolution site and in the
+           declaration, and this THIRD copy of the same sentence was left standing: a spec sentence written at
+           several sites is diffed against its siblings before any of them is diffed against the spec, because
+           a repair made in one copy is invisible from the others. §3.2.25's steps 4 through 14 each hold a
+           nested list, so a flat item count of that algorithm drifts from step 4 onward.
+           AND FOR AN UNKNOWN ELEMENT THE ARM IS FORKED RATHER THAN CROSSED, which is the same answer the same
+           union gets at an argument position and was NOT the answer here. Crossing placed the unknown in the
+           list and every consumer of that list asks `JS_IsString`, which a concolic fails BY CONSTRUCTION —
+           so `{elements: [location.hash]}` was read as a SanitizerElementNamespaceWithAttributes and had its
+           `name` fetched off the unknown, the arm decided by a fact about this engine's value class rather
+           than by the page's value. Step 11.4 runs §3.2.17's member WALK and step 15 runs none, so the two
+           arms differ in what the conversion PERFORMS and no single placed value is on both.
+           OUTCOME 0 IS THE DICTIONARY ARM, per step_fork_run's rule that outcome 0 is what a run with no
+           forking policy takes: it is the arm §3.2.25 gives the Object an unknown is represented BY, and the
+           arm every consumer of the crossed value already reached. */
         if (concolic_is(f->cur.value)) {
-            JS_SetPropertyUint32(ctx, f->list, f->n++, JS_DupValue(ctx, f->cur.value));
-            return 0;
-        }
-        /* §3.2.25 over `(DOMString or D)`: null and undefined take the dictionary arm (step 4) and so does
-           any Object (step 10); everything else reaches step 12's string arm. */
-        if (JS_IsObject(f->cur.value) || JS_IsNull(f->cur.value) || JS_IsUndefined(f->cur.value)) {
+            f->phase = IDL_CONV_ARM;   /* the ASK is the resume point — the pull cannot be, it advances */
+        } else if (JS_IsObject(f->cur.value) || JS_IsNull(f->cur.value) || JS_IsUndefined(f->cur.value)) {
             if (idl_level_start_decl(ctx, &f->lvl, f->cur.value, f->d) < 0) return -1;
             f->phase = IDL_CONV_MEMBERS;
             return 0;
+        } else {
+            f->phase = IDL_CONV_STRING;
+            return 0;
         }
-        f->phase = IDL_CONV_STRING;
+    }
+    if (f->phase == IDL_CONV_ARM) {
+        JSValue ex;
+        int arm = 0, real;
+
+        DCHECK(concolic_is(f->cur.value),
+               "a sequence element reached §3.2.25's fork holding a value the page determined — the arm is "
+               "forked only where it cannot be tested, and a known value is decided by the clause chain "
+               "above");
+        DCHECK(idl_concolic_rule(IDL_STRING_OR_DICT) == IDL_CONCOLIC_FORKS,
+               "this conversion forked §3.2.25's arm for an element type idl_args.h does not declare as one "
+               "it forks — the SITE and the rule are the two halves of one statement, and the element type "
+               "here is the same `(DOMString or D)` an argument position declares");
+        ex = concolic_example(ctx, f->cur.value);
+        DCHECK(!JS_IsObject(ex),
+               "a `(DOMString or D)` element's unknown carries an OBJECT as its concrete example — an example "
+               "is the value this engine COMPUTED, so it is a primitive, and §3.2.25 over an object one would "
+               "name the dictionary arm from a value no run ever produced");
+        /* Step 4 and step 11 are one arm here: the example is what the page's value WAS on this flow's own
+           reading, so null takes the dictionary exactly as a real null does. */
+        real = JS_IsUndefined(ex) ? JS_OUTCOME_REAL_UNSTATED : (JS_IsNull(ex) ? 0 : 1);
+        JS_FreeValue(ctx, ex);
+        r = step_fork_run(ctx, hdr, f->cur.value, "§3.2.25 (DOMString or dictionary) element arm", 2, real,
+                          &arm);
+        if (r > 0) return r;   /* the sibling's snapshot is taken HERE, at this element and this depth */
+        if (r < 0) return -1;
+        if (arm != 0) {
+            /* STEP 15'S ARM FOR AN UNKNOWN: §3.2.10 DOMString's conversion is one this boundary does not
+               perform on unknown external input (idl_concolic_rule answers CROSSES for it), so the element is
+               PLACED as itself and the body reads its bytes through the shape and the example. Taking the
+               IDL_CONV_STRING phase instead would hand step_tostring_run a concolic, which the C boundary
+               asserts against. */
+            JS_SetPropertyUint32(ctx, f->list, f->n++, JS_DupValue(ctx, f->cur.value));
+            f->phase = IDL_CONV_PULL;
+            return 0;
+        }
+        if (idl_level_start_decl(ctx, &f->lvl, f->cur.value, f->d) < 0) return -1;
+        f->phase = IDL_CONV_MEMBERS;
         return 0;
     }
     DCHECK(f->phase == IDL_CONV_STRING, "a sequence frame resumed at a phase it never parks in");
