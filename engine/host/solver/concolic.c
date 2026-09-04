@@ -516,6 +516,17 @@ static char *literal_ident(JSContext *ctx, JSValueConst v)
            would name one object, so iteration 1's constraint would refine 2 and 3 and ARMS WOULD BE LOST
            rather than duplicated.
 
+           AND THE POPULATION THAT NEEDS IT IS NOT HYPOTHETICAL — IT IS WHAT `G = G || {}` LEAVES BEHIND, which
+           is the ordinary spelling of every shared-store and hydration shim a real minified bundle ships, and
+           it is the SAME line §Solver-half names as the counterexample refuting the banned retire-the-symbolic-
+           arm fix. Read for what each arm HOLDS rather than for which arm survives: where the global is absent
+           — the arm this engine must keep — the store is a freshly created `{}` belonging to the page, so an
+           INTRINSIC namer cannot reach it however complete it is, and every later `store[wks]` read off it is
+           unnamed. That is the exact shape that makes the site-plus-ordinal half load-bearing rather than a
+           tidy completion, and it is why naming intrinsics does not by itself settle whether a given heavy row
+           is in scope: one real bundle carries both populations at once, computed keys landing on DOM class
+           prototypes (which this half names) and on that page-created store (which it does not).
+
            AND WHAT A NAME BUYS IS THE COLLAPSE OF A REPEAT, NEVER OF A BREADTH — which decides how the fork
            census is read after this lands, and reading it the other way makes a working namer look broken. A
            named branch over an unknown value STILL FORKS: naming is what lets concolic_branch_decided refine
