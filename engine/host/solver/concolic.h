@@ -75,9 +75,10 @@ const char *concolic_root_c(JSValueConst v);
  * forbids: `x`, `x*2`, `x < 700` and `x < 300` shared a provenance, so a flow's record of any of them DECIDED
  * the rest and feasible-refinement pruned arms nothing contradicts. A pruned arm emits nothing, so no gate
  * could ever see it.
- * NULL means this engine cannot spell the value exactly (an operand that is a plain object or a symbol, a
- * property name that would not convert). That is a POSITIVE statement — never decide from it, keep both arms —
- * and it is why absence is safe here while a wrong identity is not. */
+ * NULL means this engine cannot spell the value exactly (a PAGE-CREATED object or symbol — an intrinsic is
+ * named by the realm slot it occupies, see literal_ident — or a property name that would not convert). That is
+ * a POSITIVE statement — never decide from it, keep both arms — and it is why absence is safe here while a
+ * wrong identity is not. */
 const char *concolic_ident_c(JSValueConst v);
 
 /* THE PREDICATE A BRANCH OVER THIS VALUE IS ASKING ABOUT — a SECOND name, and a different question from the

@@ -350,7 +350,10 @@ static ConcolicLit operand_kind(JSValueConst v)
     if (JS_IsNull(v))      return CONCOLIC_LIT_NULL;
     if (JS_IsUndefined(v)) return CONCOLIC_LIT_UNDEFINED;
     if (JS_IsBigInt(v))    return CONCOLIC_LIT_BIGINT;
-    return CONCOLIC_LIT_NONE;   /* an Object or a Symbol — unspellable, see above */
+    /* AN OBJECT OR A SYMBOL — no ConcolicLit spelling, see above. That is a statement about the VALUE and
+       not about whether the thing can be NAMED: an intrinsic is named by its realm slot, which literal_ident
+       reaches through a different question entirely. */
+    return CONCOLIC_LIT_NONE;
 }
 
 /* THE KIND'S ONE-LETTER FIELD IN A COMPOSED IDENTITY — one speller, because the identity a page's own
@@ -440,17 +443,81 @@ static char *literal_tok(JSContext *ctx, JSValueConst v)
     return r;
 }
 
+/* AN INTRINSIC'S NAME, OWNED BY THE CALLER — the ONE speller of it, for the reason lit_tag is one: this name
+   is spent TWICE, once as an operand's IDENTITY and once as its DISPLAY SHAPE, and a second speller cannot be
+   wrong about a prototype and right about a constructor.
+   THE REGISTRY IS QUICKJS'S AND NOT THIS FILE'S (JS_IntrinsicName): a realm's class_proto/class_ctor arrays,
+   its global object, and the well-known symbols below JS_ATOM_END. Each of those is fixed at its own
+   definition, which is the one condition under which a POSITION may name anything, and it is what makes the
+   name reproducible by the replay a resumed flow performs — the actual requirement, rather than
+   uniqueness-in-a-heap, since `js_malloc`/`js_free_rt` REUSE addresses and no park carries one.
+   NULL WHERE THE VALUE NAMES NO INTRINSIC, which is the answer every Object and Symbol gave unconditionally
+   before this and is still the answer for a PAGE-created one — a page-created object is named by its creation
+   site plus the creating flow's count of prior creations there, which is a fact about the executed prefix and
+   is NOT built yet; see the named residual at literal_ident below. */
+static char *intrinsic_name(JSContext *ctx, JSValueConst v)
+{
+    char buf[JS_INTRINSIC_NAME_MAX];
+    int n = JS_IntrinsicName(ctx, v, buf, sizeof buf);
+    char *r;
+
+    if (n < 0) return NULL;
+    DCHECK(n < (int)sizeof buf,
+           "an intrinsic's name did not fit the buffer quickjs.h's own bound sizes for it — the two are tied "
+           "by a _Static_assert there, so this fires only if that bound was widened past this buffer, and a "
+           "TRUNCATED name is two intrinsics under one constraint key and one property atom");
+    r = strdup(buf);
+    CHECK(r, "concolic: OOM copying an intrinsic's name");
+    return r;
+}
+
 /* A CONCRETE OPERAND'S IDENTITY IS ITS VALUE, AND ITS TYPE IS PART OF THAT — `x === 5` and `x === "5"` are two
-   predicates and their operands print the same. An OBJECT or a SYMBOL has no identity this engine can spell
-   (an object's is its address, which does not survive the park a resumed flow replays through, and coercing it
-   would run the page's own `toString` from C), so it answers absent and both arms of the branch stay. */
+   predicates and their operands print the same.
+   AN OBJECT OR A SYMBOL HAS NO IDENTITY IN THAT SENSE — its address does not survive the park a resumed flow
+   replays through, and coercing it would run the page's own `toString` from C — AND THAT ARGUMENT IS ABOUT THE
+   VALUE, WHICH IS NOT THE ONLY THING THAT CAN NAME ONE. A value has as many name sources as it has kinds of
+   CREATOR, and an INTRINSIC is named by the slot it occupies rather than by anything about its bytes, so the
+   arm below answers for one and this paragraph keeps its force for every other object: unnamed, absent
+   identity, and both arms of the branch stay. */
 static char *literal_ident(JSContext *ctx, JSValueConst v)
 {
     ConcolicLit kind = operand_kind(v);
     const char *f[2];
     char *tok, *r;
 
-    if (kind == CONCOLIC_LIT_NONE) return NULL;
+    if (kind == CONCOLIC_LIT_NONE) {
+        /* …UNLESS IT IS AN INTRINSIC, WHICH IS A SINGLETON OF ITS REALM AND SO IS NAMED BY THE SLOT IT
+           OCCUPIES. The paragraph above is about a value whose only name would be its ADDRESS; an intrinsic
+           has a second name source that is not an address at all, and refusing it made
+           `while (n !== Object.prototype)` — the shape every prototype walk in every library ends on — a
+           branch with NO identity, which decide.c files as a bare site row that "records no constraint, claims
+           no replay slot, and re-forks every time the flow reaches it".
+           THE TAG IS ITS OWN AND NOT `k`, because an intrinsic is not a spelled VALUE: `k` composes a
+           ConcolicLit kind with a §7.1.19 ToString, and this composes a registry slot. Two namespaces under
+           one tag would let a page's string `"%Array%"` and %Array% itself share a constraint key.
+           NO PIN FOLLOWS FROM IT, and that is not an omission: literal_tok still answers NULL here, so
+           concolic_cmp_hook mints no token, and §7.2.14 IsStrictlyEqual step 1 is why — SameType(x, y) is
+           false for every string this solver could substitute, so there is nothing an object operand could
+           pin the unknown TO. The predicate is named; the value is not determined.
+           NAMED RESIDUAL — A PAGE-CREATED OBJECT IS STILL UNNAMED, so `var o = {}; o[k]` keeps both arms and
+           its bare site row. What the next diff builds is the OTHER name source: the object's creation site
+           (which quickjs already composes for a function body at JS_OrphanHash) PLUS THE CREATING FLOW'S OWN
+           COUNT OF PRIOR CREATIONS AT THAT SITE, because a site is 1:N with the objects made there and one
+           `{}` in a loop is one site and a thousand objects — a fact about the EXECUTED PREFIX, so a replay
+           reproduces it by reproducing the prefix and a fork carries it as it carries every other prefix
+           quantity. ITS ABSENCE SHOWS as a `~` site row over a `{}`-shaped subject that climbs across a
+           session while `replayHits` stays flat; the intrinsic half is done when the rows over %-named
+           subjects have left that column, and only that half has left it today. Building the site half
+           WITHOUT the ordinal is worse than leaving it: three iterations of one loop would name one object,
+           so iteration 1's constraint would refine 2 and 3 and ARMS WOULD BE LOST rather than duplicated. */
+        char *nm = intrinsic_name(ctx, v);
+        const char *nf[1];
+        if (!nm) return NULL;
+        nf[0] = nm;
+        r = concolic_ident_compose("i", nf, 1);
+        free(nm);
+        return r;
+    }
     tok = literal_tok(ctx, v);
     if (!tok) return NULL;
     f[0] = lit_tag(kind); f[1] = tok;
@@ -498,8 +565,10 @@ static char *shape_quote(const char *s)
 
 /* ONE OPERAND'S DISPLAY — THE SHAPE TWIN OF ident_of_operand ABOVE, AND IT LIVES HERE BECAUSE THE TWO ARE ONE
    RULE. An unknown renders as its own hole shape and a concrete one as the LITERAL the page wrote; an operand
-   this engine may not spell at all (an Object or a Symbol — operand_kind's own last line) renders "?", and it
-   has already made the whole IDENTITY absent through concolic_ident_compose's unspellable-member rule.
+   this engine may not spell at all — a PAGE-CREATED Object or Symbol, operand_kind's own last line — renders
+   "?", and it has already made the whole IDENTITY absent through concolic_ident_compose's unspellable-member
+   rule. An INTRINSIC renders as its %-name, because literal_ident composes one for it and this pair moves
+   together or the assert at keyname_record catches the half that did not.
    THE RULE THE PAIR ENFORCES, and it is an invariant rather than a preference: A SHAPE MUST SEPARATE EVERY
    PAIR OF OPERANDS ITS IDENTITY SEPARATES. keyname_record spends a display shape to buy a property atom, so a
    shape coarser than the identity beside it makes two distinct unknowns ONE slot on the page's own object —
@@ -520,7 +589,17 @@ static char *derived_operand_shape(JSContext *ctx, JSValueConst v)
     }
     kind = operand_kind(v);
     tok = literal_tok(ctx, v);
-    if (!tok) return shapef("?");
+    /* AN INTRINSIC RENDERS AS ITS OWN NAME, AND IT IS THE SAME NAME literal_ident COMPOSED ITS IDENTITY FROM —
+       which is this pair's whole invariant restated for one more kind of operand. Naming the identity without
+       moving the display would put two intrinsics under ONE shape and two identities, and keyname_record's
+       assert is exactly the thing that catches it; so the two arms landed together or neither would have.
+       ECMAScript's own §6.1.7.4 Well-Known Intrinsic Objects notation is the spelling (`%Array.prototype%`),
+       which is a name a reader of the fork census can act on — the reason this is text and not a hash. */
+    if (!tok) {
+        char *nm = intrinsic_name(ctx, v);
+        if (nm) { r = shapef("%s", nm); free(nm); return r; }
+        return shapef("?");
+    }
     switch (kind) {
     case CONCOLIC_LIT_STRING: r = shape_quote(tok); break;
     /* §6.1.6.2 The BigInt Type spells 5n as "5", which is the Number's spelling — the same collision one type
@@ -2801,15 +2880,22 @@ int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq, JSConcolicEqOp op
        which costs work but is sound; the ordering is what makes the sound answer also the cheap one. */
     iu = ident_of_operand(ctx, opq);
     io = ident_of_operand(ctx, other);
-    /* THE TWO SPELLINGS OF ONE OPERAND AGREE, asserted where they meet. A token with no identity beside it is a
-       flow that PINS its source to a value no predicate key mentions — the pin outlives the branch and every
-       later read of that source computes it — while an identity with no token is the arm that was silently
-       dropped when the classifications diverged. Only a CONCRETE other operand is spelled at all; a concolic
-       one carries its own identity and pins nothing. */
-    DCHECK(concolic_is(other) ? tok == NULL : (tok != NULL) == (io != NULL),
-           "an equality's other operand was spelled as a pin token and as a predicate identity and the two "
-           "disagreed about whether it can be spelled at all — one of them is reading a value the other says "
-           "this engine cannot name");
+    /* THE TWO SPELLINGS OF ONE OPERAND AGREE IN THE ONE DIRECTION THEY STILL MUST, asserted where they meet.
+       Only a CONCRETE other operand is spelled at all; a concolic one carries its own identity and pins
+       nothing. A TOKEN WITH NO IDENTITY is the defect it always was: a flow that PINS its source to a value no
+       predicate key mentions, where the pin outlives the branch and every later read of that source computes
+       it.
+       IT IS AN IMPLICATION AND NOT A BICONDITIONAL, AND NAMING INTRINSICS IS WHAT RETIRED THE OTHER HALF. AN
+       IDENTITY WITH NO TOKEN read as "the arm that was silently dropped when the classifications diverged"
+       only while literal_ident composed its answer OUT OF the token; it now has a second name source — an
+       intrinsic's registry slot, which is not a spelled VALUE — so `n !== Object.prototype` legitimately names
+       its predicate and pins nothing. §7.2.14 IsStrictlyEqual step 1 is why the absent pin is correct rather
+       than lost: SameType(x, y) is false for every string this solver could substitute, so no object operand
+       ever had anything to pin the unknown TO. */
+    DCHECK(concolic_is(other) ? tok == NULL : (tok == NULL || io != NULL),
+           "an equality's other operand was spelled as a pin token with NO predicate identity beside it — the "
+           "two come from one classification, so a token the identity speller cannot name is a pin filed under "
+           "a key no branch over that source will ever look up");
     if (ca && cb && iu && io && strcmp(iu, io) > 0) { char *t = iu; iu = io; io = t; }
     /* THE HOLE THE REPORT WILL PRINT FOR THIS OPERAND — taken from the SHAPE and not from `src`, which for
        every derived value is the braced shape itself and would be looked up under a name the emission never

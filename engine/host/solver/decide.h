@@ -166,12 +166,15 @@ int  decide_cursor(void);
    AND THE THIRD POPULATION IS EVERY FORK THAT ASKED NOTHING THIS ENGINE COULD SPELL, WHICH USED TO BE ONE ROW.
    BOTH key spellers answer NULL for a value whose identity concolic.c cannot spell — decide_key at a bytecode
    branch and outcome_key at a native operation's completion — and every route to that NULL bottoms out in one
-   classification: an Object or a Symbol operand, whose identity is its ADDRESS — a name
-   that does not survive the park a resumed flow replays through — after which concolic_ident_compose makes
-   everything derived from it unspellable too. Such a branch, and such an outcome walk, keeps BOTH arms,
-   records no constraint and claims
-   no replay slot, and it had exactly ONE hand-written row for all of it. That is a row naming an action with
-   no object, in the one table whose whole job is to say WHERE, and it can be the largest thing in the object.
+   classification: an Object or a Symbol operand THAT NO REGISTRY NAMES, whose only name would be its ADDRESS —
+   which does not survive the park a resumed flow replays through — after which concolic_ident_compose makes
+   everything derived from it unspellable too. An INTRINSIC is not in that population: it is a singleton of its
+   realm, so JS_IntrinsicName names it by the slot it occupies and a branch over it composes a real key. What
+   is left here is the PAGE-CREATED object, which needs its creation site AND the creating flow's count of
+   prior creations there. Such a branch, and such an outcome walk, keeps BOTH arms, records no constraint and
+   claims no replay slot, and it had exactly ONE hand-written row for all of it. That is a row naming an
+   action with no object, in the one table whose whole job is to say WHERE, and it can be the largest thing
+   in the object.
    ITS KEY IS THE VALUE'S OWN DISPLAY SHAPE AND IT ANSWERS "WHERE", NEVER "WHAT". A shape is always present
    (the mint copies `{}` for a value handed none), it is composed from PROGRAM FACTS and carries no address —
    so it names the same thing on the flow that minted it, on the flow that resumes it from the cold tier and in
