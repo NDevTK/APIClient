@@ -120,6 +120,74 @@ const COUNTERS = ["switches", "flows", "candidates", "jobsQueued", "jobsRun", "u
                   "orphansDriven", "orphansAsked",
                   "endpoints", "sinks", "park", "resumed"];
 
+/* …AND THE CENSUS ROWS THE ENGINE-LOG ROW ALREADY CARRIES AND THIS DRIVER DROPPED, which is a different
+   question from every column above and is the one a reader asks the moment those columns disagree. The list
+   above is what the run COST and what its work MET; none of its members can say WHERE the frontier is
+   standing, WHICH arm
+   its steps took, or WHICH predicate grew it — so a run reporting `flows: 18670, endpoints: 0` was a
+   contradiction this driver could state and not resolve.
+   IT IS THE SHIPPED PATH AND IT WAS ALREADY HERE. extension/bridge.js puts `forkAt` and `cold` on every
+   engine-log row and says in its own words why: "Until they rode this document they were printed only by the
+   smoke driver's loop, so every one of these numbers had been quoted about one fixture and never once about a
+   real page." They still had not — `snapshot` copies the whole row, so these fields have been sitting one
+   property access away from this output the entire time, and answering the question they answer took an
+   ad-hoc script written against the offscreen document by hand. That is an instrument gap of exactly the kind
+   §MEASURE-WHAT-THE-SHIPPED-PATH-WRITES is about, pointed the other way: not a harness print that production
+   never emits, but a production field no harness reads.
+   WHAT IS TAKEN AND WHAT IS NOT. `forkAt` WHOLE, and from `cold` its three step/cursor histograms plus the
+   four host/reply counters — not `heap`, not `swap`, and not the rest of `cold`, which answer what the
+   allocator and a context switch cost rather than where the frontier is. A driver that took everything would
+   be a second copy of the popup, and the columns that decided the question below are these.
+   MEASURED, WHICH IS WHY IT IS THESE AND NOT THE WHOLE CENSUS. On play.grafana.org at head 64b09d1e, three
+   runs each in a FRESH browser (§ONE-RUN-IS-NOT-A-MEASUREMENT, and the spread is quoted rather than a mean),
+   the cost columns read `flows 18283-19583, endpoints 0` — and `jobsQueued` read 0, 832, 779, which is by
+   itself the reason a single run of this driver could not settle anything. Those columns cannot distinguish
+   "the engine never reached a request" from "it reached one and the emission did not fire". The census rows
+   settle it and are STABLE across all three where the cost columns are not: `replyAsked/replyAnswered` read
+   `6/6` every time, and that document ships EXACTLY SIX `<script src>` elements — so the request door opened
+   for the bundle and for nothing else, which is what says no page `fetch()`, XHR or dynamic `import()` was
+   ever reached. `programCursors` puts 88-97% of every run's members inside the document's FIRST program, with
+   the deepest cursor reached being 1 or 2 of its ten script rows, and `forkAt`'s heaviest NAMED row is a
+   branch on the same absent polyfill global in all three.
+   `hostAsked`/`hostAnswered` IS THE OTHER DOOR AND IS NOT THAT PAIR — solver/result.c says so where it emits
+   them, and records that `hostAsked: 0` "has already been relayed as 'nothing is ever asked of the host' for
+   a document holding hundreds of thousands of records". They are minted at engine.c's `mint_req` and count
+   CROSS-INSTANCE RENDEZVOUS only, so a document that makes no cross-document read reads 0/0 for ever and is
+   right to. Both pairs are carried here for exactly that reason: each names its own door, and the one that
+   answers "did this run ever ask for a resource" is the REPLY pair.
+   READ `programCursors` WITH `stepUnitRuns.finished`, NEVER ALONE: the cursor row is a GAUGE over the members
+   standing now, so it is a statement about the whole population only while nothing has retired, and `finished`
+   is the row that says whether anything has.
+   AND `start-a-classic-program` IS NOT THE STATEMENT IT READS AS, which cost one wrong sentence here before
+   it was caught: solver/engine.c assigns it before `JS_FlowResume` and the completion arms OVERWRITE it, so a
+   program that starts and ends in one step is filed under `resume-ended-its-frame`. The row counts starts that
+   were PREEMPTED mid-program. Read the assignment, not the name.
+   THE KINDS ARE NOT ALIKE AND THE HEADER SAYS SO. `stepUnitRuns` (solver/step_unit.h) and `forkAt`
+   (solver/decide.h) are LIFETIME COUNTS and may be differenced; `stepUnits` and `programCursors` are GAUGES
+   over the members standing NOW and CAN FALL. `hostAsked`/`hostAnswered`/`replyAsked`/`replyAnswered` are
+   counters and are named separately from the histograms because neither door's rate is derivable from any of
+   them — a frontier that never reached a request and one whose requests were all answered stand in the same
+   arms and read identically in the three objects above.
+   ABSENT AND ZERO STAY DIFFERENT FACTS: a crashed row carries no census at all, and each field is `null` there
+   rather than `{}` — an empty object is a census that was taken and found nothing, which is a finding. */
+const CENSUS_LIFETIME = ["stepUnitRuns"];
+const CENSUS_GAUGE = ["stepUnits", "programCursors"];
+const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered"];
+
+/* WHERE THE FRONTIER STOOD, WHAT ITS STEPS DID, AND WHAT GREW IT — read off the row bridge.js wrote, never
+   recomputed. `forkAt` is taken WHOLE and is not truncated to its heaviest rows: it is already a Space-Saving
+   table with a bounded row count and it publishes its own understatement bound as a member, so a driver
+   re-truncating it would hide rows AND drop the bound that says how far the survivors understate. */
+function census(r) {
+  const o = {};
+  o.forkAt = ("forkAt" in r) ? r.forkAt : null;
+  const c = ("cold" in r) ? r.cold : null;
+  for (const k of CENSUS_LIFETIME) o[k] = c && (k in c) ? c[k] : null;
+  for (const k of CENSUS_GAUGE) o[k] = c && (k in c) ? c[k] : null;
+  for (const k of COLD_COUNTERS) o[k] = c && (k in c) ? c[k] : null;
+  return o;
+}
+
 async function oneRun(browser, pg, url, budgetMs) {
   const before = await snapshot(pg);
   const baseRows = before.rows.length;
@@ -215,6 +283,11 @@ async function oneRun(browser, pg, url, budgetMs) {
       if (r.run === "crashed") o.err = r.err;
       return o;
     }),
+    /* A SEPARATE ARRAY AND NOT MORE KEYS ON THE ROW ABOVE, aligned with it index for index. Every member of
+       `counters` is a TOTAL over the run; every member of this is a census, and two of its four are gauges. A
+       reader compares WITHIN a kind and never across, and one object holding both invites exactly the
+       comparison neither supports — the same reason bridge.js keeps the four censuses as four objects. */
+    frontier: mine.map(census),
     storeEndpointsDelta: (last.endpoints === null || before.endpoints === null)
       ? null : last.endpoints - before.endpoints,
     storeFindingsDelta: (last.findings === null || before.findings === null)
@@ -241,6 +314,11 @@ async function main() {
   const stamp = artifactStamp();
   console.log("# artifact " + JSON.stringify(stamp));
   console.log("# runs=" + runs + " budgetMs=" + budgetMs + " (budget is a BACKSTOP, not the verdict)");
+  /* THE KIND OF EVERY CENSUS ROW, STATED WHERE THE ROWS ARE FILED UNDER IT — §Testing: a quantity whose kind
+     you cannot name FROM ITS OUTPUT is one you are not entitled to do arithmetic on, and the names do not say. */
+  console.log("# frontier.* — LIFETIME (may be differenced): " +
+              CENSUS_LIFETIME.concat(COLD_COUNTERS).join(",") + ", and every `forkAt` row" +
+              " | GAUGES (may FALL; never difference): " + CENSUS_GAUGE.join(","));
 
   const { browser, extId } = await connect();
   try {
