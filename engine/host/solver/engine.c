@@ -109,9 +109,10 @@ static lxb_dom_element_t *flow_dyn_el(const Flow *f);
  * element and released by the caller — the ONE place this engine reads them, because all three script-owed
  * parks want the same three facts about the same kind of element.
  *
- * §4.12.1.1's `prepare the script element` states both, in its own words: "Let cryptographic nonce be el's
- * [[CryptographicNonce]] internal slot's value" and "If el has an integrity attribute, then let integrity
- * metadata be that attribute's value" / "Otherwise, let integrity metadata be the empty string". So a
+ * §4.12.1.1's `prepare the script element` states all three, in its own words: "Let cryptographic nonce be
+ * el's [[CryptographicNonce]] internal slot's value"; "If el has an integrity attribute, then let integrity
+ * metadata be that attribute's value" / "Otherwise, let integrity metadata be the empty string"; and "Let
+ * parser metadata be "parser-inserted" if el is parser-inserted, and "not-parser-inserted" otherwise". So a
  * `<script>` is a STATING producer and never csp_request_metadata_unstated's — which matters at the one shape
  * modern CSP is actually written in: `<script nonce=x>` under `script-src 'nonce-x'` must not report blocked.
  *
