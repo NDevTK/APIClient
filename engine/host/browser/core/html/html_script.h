@@ -341,11 +341,22 @@ char *script_src_absolute(JSContext *ctx, const char *src, size_t src_len);
 /* HTML §4.12.1.1 "Processing model"'s ERROR ARM — "queue an element task on the DOM manipulation task source
  * given el to fire an event named error at el". The standard writes that sentence three times inside its `src`
  * branch (a `src` on an `importmap`/`speculationrules` element, a `src` that is the empty string, a `url` that
- * is failure) and once more out of "execute the script element" step 4, whose "if el's result is null" is what
- * a FAILED FETCH leaves behind: §4.12.1.1's `onComplete` is "mark as ready el given result", and marking with
- * null (its own words: "null (representing an error)") is how a load failure reaches that step.
+ * is failure).
  *
- * SO THIS IS ALSO THE ARM A REFUSED LOAD OWES, and it is exported for that reason rather than kept static.
+ * IT IS NOT THE FORM STEP 4 USES, AND THIS SENTENCE USED TO SAY IT WAS — a wrong claim about the standard,
+ * sitting exactly where a reader would go to decide how a FAILED FETCH reports. "Execute the script element"
+ * step 4 is a BARE fire: "If el's result is null, then fire an event named error at el, and return" — no task,
+ * because `onComplete` already runs from the networking task that completed the fetch. The chain that reaches
+ * it is real and is the only part that survives: §4.12.1.1's fetch `onComplete` is "Mark as ready el given
+ * result", one of the five possibilities §4.12.1.1 lists for that `result` is "null (representing an error)",
+ * and a load that did not happen marks it that.
+ *
+ * SO THIS IS STILL THE ARM A REFUSED OR FAILED LOAD OWES, and it is exported for that reason rather than kept
+ * static — but it is this ENGINE's expression of step 4 and not a quotation of it, which is a difference the
+ * caller states at its own site rather than one this file may hide. A bare fire is impossible from a C seam
+ * here: the listener list is the PAGE's, so the dispatch runs the page's code and must have a flow base under
+ * it, and a queued task is how a C seam gets one. The cost is one task hop of ORDER; solver/engine.c's
+ * sequence arm carries the residual that names it and what would remove it.
  * The three sites above are `prepare`'s own and are called from this file; the fourth is a reply that never
  * came — a network error, or the trusted zone declining to make the request at all — and the party holding
  * that fact is the flow's pending register, not this file. What such a delivery must NOT do is settle the park
@@ -354,12 +365,17 @@ char *script_src_absolute(JSContext *ctx, const char *src, size_t src_len);
  * has this.
  *
  * IT IS NOT THE ARM A DYNAMIC `import()` OWES, WHICH IS A DIFFERENT ALGORITHM AND MUST NOT BE ROUTED HERE.
- * `import()` has no element to fire at: HTML §8.1.6.7.3 HostLoadImportedModule ends in "fetch a single
- * imported module script … and onSingleFetchComplete as defined below", whose first two steps are "let
- * completion be null" and "if moduleScript is null, then set completion to ThrowCompletion(a new TypeError)",
- * and the completion goes to FinishLoadingImportedModule — which for a dynamic import REJECTS the promise
- * `import()` returned. An engine that answered a failed chunk load with this arm would fire an `error` event
- * at nothing and leave the importing flow parked for ever. */
+ * `import()` has no element to fire at: HTML §8.1.6.7.3 "HostLoadImportedModule(referrer, moduleRequest,
+ * loadState, payload)" ends in "Fetch a single imported module script given url, fetchClient, destination,
+ * fetchOptions, settingsObject, fetchReferrer, moduleRequest, and onSingleFetchComplete as defined below",
+ * whose first two steps are "Let completion be null." and "If moduleScript is null, then set completion to
+ * ThrowCompletion(a new TypeError)." — the two sentences this paragraph used to quote with their initial
+ * letters lowered, which is the cheapest tell that a quotation was written from memory rather than pasted.
+ * The completion goes to ECMAScript §16.2.1.11 "FinishLoadingImportedModule ( referrer, moduleRequest,
+ * payload, result )", whose dynamic-import arm is §13.3.10.3 "ContinueDynamicImport ( promiseCapability,
+ * moduleCompletion )": "If moduleCompletion is an abrupt completion", "Perform ! Call(promiseCapability.
+ * [[Reject]], undefined, « moduleCompletion.[[Value]] »)". An engine that answered a failed chunk load with
+ * this arm would fire an `error` event at nothing and leave the importing flow parked for ever. */
 void html_script_queue_error(JSContext *ctx, lxb_dom_element_t *el);
 
 #endif

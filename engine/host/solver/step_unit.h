@@ -102,6 +102,15 @@
     X(START_PROGRAM,      "start-a-classic-program")                              \
     X(EVALUATE_MODULE,    "evaluate-a-module-program")                            \
     X(NO_COMPILE,         "program-did-not-compile")                              \
+    /* AND THE ROW THAT NEVER HAD A PROGRAM TO COMPILE, which is a different  */ \
+    /* event and not a shade of the one above: `program-did-not-compile` is a */ \
+    /* PARSER verdict on bytes that arrived, and this is HTML §4.12.1.1       */ \
+    /* "Processing model"'s "execute the script element" step 4 — an element  */ \
+    /* whose result is null because its load failed or was refused. Filed     */ \
+    /* under NO_COMPILE it would report a page's 404'd chunk as a syntax      */ \
+    /* error, and the work each names is at opposite ends of the engine: one  */ \
+    /* is at the compile and one is at the network.                           */ \
+    X(SCRIPT_LOAD_FAILED, "script-load-failed")                                   \
     X(RESUME_PROGRAM,     "resume-program")                                       \
     /* AND THE RESUME HAS FOUR OUTCOMES AND HAD ONE NAME, which is the SAME   */ \
     /* defect as the block above and one rung lower down. A resume ends in    */ \

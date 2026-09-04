@@ -3250,8 +3250,20 @@ int engine_decline(JSContext *ctx, const char *method, const char *url, const ch
    written after — HTML §13.2.6.4.8 'The "text" insertion mode' blocks the tokenizer and spins the event loop
    until that script is `ready to be parser-executed` — and two ordered externals ran in whichever order the
    network answered. Both were named aborts. What they were missing is a POSITION, and a queue entry IS one. */
+/* AND A SCRIPT ELEMENT WHOSE RESULT IS NULL — the sixth kind, and the only one that RUNS NOTHING. HTML
+   §4.12.1.1 "Processing model" gives the element a `result`, of which one of the five listed possibilities is
+   "null (representing an error)", and a load that did not happen is how it becomes that: the fetch's
+   `onComplete` is "Mark as ready el given result", and "execute the script element" step 4 is then "If el's
+   result is null, then fire an event named error at el, and return".
+   IT IS A ROW AND NOT AN EVENT QUEUED AT THE DELIVERY, because step 4 is a step of EXECUTE and this engine
+   executes a script element when the cursor reaches its position. Firing at the delivery would order the
+   `error` by when the reply landed rather than by where the element stands, which is exactly the ordering
+   §4.12.1 fixes between the scripts of one document — a page whose first of two chunks 404s would see its
+   `onerror` run against the second chunk's execution in whichever order the network answered.
+   THE ROW KEEPS ITS ADDRESS AS ITS BODY and takes no address column: a row that runs nothing has no §8.1.4.2
+   created-script base URL, and the address is the account a reader gets of which load failed. */
 typedef enum { DYN_PAGE_SCRIPT = 0, DYN_CANDIDATE, DYN_JAVASCRIPT_URL, DYN_CROSS_AGENT_OP,
-               DYN_SCRIPT_SRC } DynKind;
+               DYN_SCRIPT_SRC, DYN_SCRIPT_FAILED } DynKind;
 
 /* Deliver ONE of this flow's answered pending entries (the network completed) — see flow_deliver_one_reply. */
 /* Is any of this flow's pending fetches deliverable? A flow with only host-owed entries has no work — it stalls
@@ -3454,6 +3466,109 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
         pending_remove(&f->pending, i);
         kind = (int)pending_get_int(p, PEND_KIND);
         pv = pending_get(p, PEND_VALUE);
+        /* §4.12.1.1's NULL RESULT, WHICH IS THE ONE ANSWER A PROGRAM PARK HAS NO PROGRAM FOR. Fetch §5.6
+           "Fetch methods"' network error crosses as JS_NULL (core/fetch/fetch.h), and so does an answer the
+           trusted zone REFUSED to ask for (flow_decline_fork). §4.12.1.1's fetch `onComplete` is "Mark as
+           ready el given result", the result is null, and "execute the script element" step 4 is "If el's
+           result is null, then fire an event named error at el, and return" — so the element runs NOTHING and
+           the page is told. This arm makes that a ROW; the sequence arm in flow_step is where step 4 runs.
+           IT IS ASKED HERE RATHER THAN INSIDE EACH KIND because the three PROGRAM kinds share exactly one
+           thing and it is this: none of them can be answered with bytes that did not arrive.
+           WHAT IT REPLACED WAS NOT A CRASH, WHICH IS WHY THIS IS THE ROOT AND NOT THE DECLINE. `reply_source_
+           text` reads its bytes through fetch_reply_body, whose network-error arm answers the EMPTY byte
+           sequence — so a `<script src>` whose fetch failed decoded to an empty source text, COMPILED as an
+           empty program and RAN, with no `error` fired at the element and §4.12.1.1's step 8 `load` owed to
+           it instead. A page's `s.onerror = () => loadFrom(FALLBACK_CDN)` could not run, and nothing said so:
+           the failure arrived as a plausible datum (a script that "ran" and defined nothing) rather than as
+           an absence. The decline is the same value through a different door and is answered by this line. */
+        if (kind != FLOW_PENDING_RESOLVE && JS_IsNull(pv)) {
+            DCHECK(kind == FLOW_PENDING_SCRIPT || kind == FLOW_PENDING_DOCSCRIPT ||
+                   kind == FLOW_PENDING_MODULE,
+                   "a null answer reached the program kinds' failure arm for a kind that is not one of them — "
+                   "the synchronous kind is skipped above and the fetch kind is excluded by this condition, "
+                   "so a fourth answer means a park of some new kind is being delivered with no arm of its own");
+            if (kind == FLOW_PENDING_MODULE) {
+                /* AND THE ONE PROGRAM KIND WITH NO ELEMENT TO FIRE AT, WHICH IS A DIFFERENT ALGORITHM AND
+                   CRASHES RATHER THAN TAKING THIS ONE. HTML §8.1.6.7.3 "HostLoadImportedModule(referrer,
+                   moduleRequest, loadState, payload)" ends in `onSingleFetchComplete`, whose first steps are
+                   "Let completion be null." and "If moduleScript is null, then set completion to
+                   ThrowCompletion(a new TypeError)", and its step 5 performs FinishLoadingImportedModule with
+                   that completion — ECMAScript §16.2.1.11 "FinishLoadingImportedModule ( referrer,
+                   moduleRequest, payload, result )", whose dynamic-import arm is §13.3.10.3
+                   "ContinueDynamicImport ( promiseCapability, moduleCompletion )": "If moduleCompletion is an
+                   abrupt completion", "Perform ! Call(promiseCapability.[[Reject]], undefined, «
+                   moduleCompletion.[[Value]] »)". There is no element in a dynamic import, so firing `error`
+                   at one would fire at nothing and leave the importing flow parked for ever; and settling `resolve` with the empty source text — which is what the
+                   line below this block did and still does in release — compiles and evaluates an EMPTY
+                   MODULE, so `import(u).catch(h)` runs `h` never and the page's fallback chunk is never
+                   loaded. BUILD the rejection: engine_pending_module_url mints JS_NewPromiseCapability's
+                   `resolving[1]` and frees it unused, so this record must carry that capability (a PEND_REJECT
+                   field) and this arm must call it with a TypeError. */
+                DFAIL("a dynamic import()'s module load answered with §5.6's network error and this delivery "
+                      "has no rejection arm for it. HTML §8.1.6.7.3 HostLoadImportedModule's "
+                      "onSingleFetchComplete makes a null moduleScript ThrowCompletion(a new TypeError), "
+                      "which ECMAScript §13.3.10.3 ContinueDynamicImport hands to the promise's [[Reject]]; "
+                      "this engine settles `resolve` with the empty source text instead, which evaluates an "
+                      "empty module and runs "
+                      "no `catch`. Carry the reject capability on the record and call it here");
+            } else {
+                if (kind == FLOW_PENDING_DOCSCRIPT) {
+                    /* THE ROW IS ALREADY THERE AND IT IS CONVERTED IN PLACE, NEVER REMOVED. A row's index is
+                       an ABSOLUTE position other records name — engine_pending_docscript writes `scriptI` onto
+                       the register and engine_queue_into asserts against shifting one while such a record is
+                       outstanding — so removing this row would rename every row after it and deliver some
+                       other document script's bytes into the wrong position. Converting keeps every index. */
+                    int di = (int)pending_get_int(p, PEND_SCRIPT_I);
+
+                    DCHECK(di >= 0 && di < f->dyn_n,
+                           "an external document script's failure named a sequence position this flow does "
+                           "not have — the entry was queued on one flow and is being delivered into another");
+                    DCHECK(f->dyn_cand[di] == DYN_SCRIPT_SRC,
+                           "an external document script's failure named a row that is not awaiting a program "
+                           "— the row already holds one, so this is a second answer to one request");
+                    DCHECK(f->dyn_el[di] != NULL,
+                           "an external document script's row carries no element — §4.12.1.1's `execute the "
+                           "script element` is a switch on EL and its step 4 fires `error` AT el, so a row "
+                           "without one was queued by something that is not engine_queue_docscript_url or the "
+                           "seed's address arm, both of which take the element that owns the address");
+                    f->dyn_cand[di] = DYN_SCRIPT_FAILED;
+                } else {
+                    /* AN INJECTED `<script src>` HAS NO ROW YET — its reply is what CREATES one (the branch
+                       below queues the program), so its failure creates the row that runs nothing. It takes
+                       the tail exactly as the program would: §4.12.1's `list of scripts that will execute in
+                       order as soon as possible` holds these elements' places against one another, and a
+                       failed member still EXECUTES (step 4) at its place. The body is the address, which is
+                       the only account of the row there is; the address COLUMN stays null because a row that
+                       runs nothing has no §8.1.4.2 created-script base URL. */
+                    JSValue ev = pending_get(p, PEND_SCRIPT_EL);
+                    JSValue uv = pending_get(p, PEND_URL);
+                    lxb_dom_node_t *en = node_of(ev);
+                    const char *u;
+                    lxb_dom_element_t *el;
+
+                    DCHECK(en != NULL && en->type == LXB_DOM_NODE_TYPE_ELEMENT,
+                           "an injected <script src> failed for a park carrying no element — the park writes "
+                           "the element's wrapper and §4.12.1.1's step 4 fires `error` AT it, so a record "
+                           "without one is a record something that is not that park pushed");
+                    DCHECK(JS_IsString(uv),
+                           "an injected <script src> failed for a park with no address — the park writes the "
+                           "resolved URL and the reply is matched on it, so a record without one names no "
+                           "script and the row below would hold no account of what did not load");
+                    el = lxb_dom_interface_element(en);
+                    u = JS_ToCString(ctx, uv);
+                    CHECK(u != NULL, "engine: OOM reading a failed injected script's address off its park");
+                    engine_queue_el((uint32_t)pending_get_int(p, PEND_DOC), u, strlen(u), DYN_SCRIPT_FAILED,
+                                    (ScriptType)pending_get_int(p, PEND_SCRIPT_TYPE), NULL,
+                                    TASK_SOURCE_NETWORKING, DYN_POS_APPEND, el);
+                    JS_FreeCString(ctx, u);
+                    JS_FreeValue(ctx, uv);
+                    JS_FreeValue(ctx, ev);
+                }
+                JS_FreeValue(ctx, pv);
+                JS_FreeValue(ctx, p);
+                return;
+            }
+        }
         if (kind == FLOW_PENDING_DOCSCRIPT) {
             /* AN EXTERNAL SCRIPT OF SOME DOCUMENT OF THIS AGENT, AT ITS POSITION IN THIS FLOW'S SEQUENCE
                (DYN_SCRIPT_SRC). ONE branch, where there were two: the session document's own external scripts
@@ -4454,11 +4569,15 @@ static int flow_answer_fork(JSContext *ctx, Flow *f) {
  * the same flow; and BEFORE the flow resumes its frame, because the frame is what the arm is a clone OF.
  * ONE ARM PER STEP, like every other branch of flow_step — the scheduler re-ranks between each.
  *
- * ONLY A `fetch()` PARK HAS A FAILURE ARM TO BUILD TODAY, and the others crash rather than pick the nearest
- * wrong answer. A network error crosses as JS_NULL and FLOW_PENDING_RESOLVE is the kind whose delivery already
- * knows how to reject with one. The three PROGRAM kinds do not: HTML §4.12.1.1 "Processing model"'s failure is
- * an `error` event fired at the element with the row running nothing, and answering one with JS_NULL would
- * reach reply_source_text with no response to read bytes out of. */
+ * EVERY KIND WITH AN ELEMENT TAKES THE SAME ANSWER, AND THERE IS ONLY ONE ANSWER TO GIVE. §5.6's network
+ * error crosses as JS_NULL, and flow_deliver_one_reply is where a JS_NULL becomes each kind's own failure:
+ * FLOW_PENDING_RESOLVE rejects the page's promise with it, and the two `<script src>` kinds become HTML
+ * §4.12.1.1 "Processing model"'s element whose result is null, whose "execute the script element" step 4
+ * fires `error` at the element and runs nothing. So this fork writes the SAME value for all three and holds
+ * no per-kind knowledge at all — which is what makes the refusal and a real network failure one path rather
+ * than two, and it is why the arm was built at the delivery and not here.
+ * THE ONE KIND LEFT CRASHES rather than picking the nearest wrong answer: a dynamic `import()` has no element,
+ * and §8.1.6.7.3 HostLoadImportedModule's rejection needs a capability the record does not carry yet. */
 static int flow_decline_fork(JSContext *ctx, Flow *f) {
     int n = pending_count(f->pending), i;
 
@@ -4486,23 +4605,42 @@ static int flow_decline_fork(JSContext *ctx, Flow *f) {
                "delivery and the flow would run its failure path over a body it already has");
         kind = (int)pending_get_int(e, PEND_KIND);
         reason = pending_get(e, PEND_DECLINED);
-        if (kind != FLOW_PENDING_RESOLVE) {
+        /* A SYNCHRONOUS REQUEST CANNOT BE HERE, AND IT IS THE STRUCTURE THAT SAYS SO RATHER THAN A KIND TEST.
+           pending_push TRACKS every kind but FLOW_PENDING_HOSTREQ into the pair index (solver/pending.c), a
+           refusal reaches a record only through pending_index_find, and this loop only ever sees records some
+           refusal marked. So the synchronous kind is unreachable by construction — which is worth asserting
+           because the arm below now answers EVERY kind it can see, and a HOSTREQ arriving would be answered
+           with a network error through a machine that parked expecting a rendezvous. */
+        DCHECK(kind != FLOW_PENDING_HOSTREQ,
+               "a SYNCHRONOUS host request carries a refusal — those records are never keyed into the pair "
+               "index, so engine_decline cannot reach one, and the answer below would settle a rendezvous "
+               "the asking machine consumes with engine_host_take");
+        if (kind == FLOW_PENDING_MODULE) {
             const char *why = JS_ToCString(ctx, reason);
-            DFAILF("a park owing a PROGRAM was DECLINED by the trusted zone and this fork has no failure arm "
-                   "for it. Fetch §5.6 \"Fetch methods\"' network error crosses as JS_NULL and the fetch "
-                   "delivery rejects with it; a `<script src>`, an injected script and a module load are owed "
-                   "BYTES, and HTML §4.12.1.1 \"Processing model\" makes their failure an `error` event fired "
-                   "at the element with the row running NOTHING — a different arm, in the delivery, which does "
-                   "not exist. Answering one with JS_NULL instead would reach reply_source_text with no "
-                   "response to read a body out of. BUILD §4.12.1.1's error arm; until then this crashes "
-                   "rather than picking the nearest wrong answer. kind=%d refusal=%s", kind,
-                   why ? why : "(unreadable)");
+            /* THE ONE PARK WITH NO ELEMENT TO FIRE AT. §4.12.1.1's error arm is built and the two `<script
+               src>` kinds take it below (their answer is §5.6's network error and flow_deliver_one_reply
+               turns that into an element whose result is null); a dynamic `import()` is a DIFFERENT algorithm
+               — HTML §8.1.6.7.3 "HostLoadImportedModule ( referrer, moduleRequest, loadState, payload )"'s
+               `onSingleFetchComplete` makes a null moduleScript "ThrowCompletion(a new TypeError)", which
+               ECMAScript §13.3.10.3 "ContinueDynamicImport ( promiseCapability, moduleCompletion )" hands to
+               the promise's [[Reject]]. Routing it to the element arm would fire at nothing and leave the
+               importing flow parked for ever. The rejection needs a capability this record does not carry: engine_pending_module_url mints
+               JS_NewPromiseCapability's `resolving[1]` and frees it unused, so the next diff puts that
+               capability on the record and calls it — here and at the delivery's own null arm, which DFAILs
+               for the same missing thing. */
+            DFAILF("a dynamic import() was DECLINED by the trusted zone and this fork has no failure arm for "
+                   "it. The two `<script src>` kinds are answered with Fetch §5.6 \"Fetch methods\"' network "
+                   "error and §4.12.1.1 \"Processing model\" step 4 fires `error` at their element; an "
+                   "import() has NO element, and HTML §8.1.6.7.3 HostLoadImportedModule's onSingleFetchComplete "
+                   "makes a null moduleScript ThrowCompletion(a new TypeError), which ECMAScript §13.3.10.3 "
+                   "ContinueDynamicImport hands to the promise's [[Reject]]. BUILD that: carry "
+                   "JS_NewPromiseCapability's reject capability on the record (engine_pending_module_url "
+                   "frees it unused today) and call it here. "
+                   "refusal=%s", why ? why : "(unreadable)");
             if (why) JS_FreeCString(ctx, why);
-            /* AND IN RELEASE, WHERE THAT ABORT IS COMPILED OUT, THE PARK IS WHAT IT ALREADY WAS. Falling
-               through would answer a program park with JS_NULL and reach reply_source_text with no response
-               to read bytes out of; leaving the record untaken leaves the flow parked at the line that asked,
-               which is the state this seam has always had for a refused script load. Nothing is invented and
-               nothing is lost — the arm is missing, not the wait. */
+            /* AND IN RELEASE, WHERE THAT ABORT IS COMPILED OUT, THE PARK IS WHAT IT ALREADY WAS — the flow
+               stays parked at the `import()` that asked, which is the state this seam has always had for a
+               refused module load. Nothing is invented and nothing is lost: the arm is missing, not the wait. */
             JS_FreeValue(ctx, reason);
             JS_FreeValue(ctx, e);
             continue;
@@ -4516,6 +4654,10 @@ static int flow_decline_fork(JSContext *ctx, Flow *f) {
            continuation is the promise reaction the delivery will enqueue rather than an activation anybody is
            standing in. engine_sibling_assemble takes exactly that (`clone != NULL || parent->frame == NULL`),
            and a frameless arm resumes its scheduler step where its parent was.
+           THE TWO SCRIPT KINDS ARRIVE AT BOTH SHAPES AND NEITHER IS SPECIAL, which is why widening this fork
+           to them added nothing here: an injected `<script src>` parks from INSIDE the program that inserted
+           the element, so it holds a frame, while a document's own external script parks at its sequence row
+           with no frame at all — and those are exactly the two cases the pair below already reads.
            WHAT IS STILL REFUSED IS BOTH AT ONCE, because then the arm would carry one live suspension and
            silently abandon the other. */
         in_program = f->frame != NULL;
@@ -4558,9 +4700,10 @@ static int flow_decline_fork(JSContext *ctx, Flow *f) {
                "over a reply nobody sent and an unrefused copy would be re-listed to the host and re-declined");
         JS_FreeValue(ctx, se);
         /* …AND THIS FLOW'S, ANSWERED WITH §5.6's NETWORK ERROR. JS_NULL is what core/fetch/fetch.h documents a
-           network error as and what the delivery machine already rejects with, so the page's `catch` runs
-           through its own ordinary path — there is no second delivery here and no reply record invented to
-           carry it. */
+           network error as, and flow_deliver_one_reply is the one place that knows what each kind does with
+           one — a `fetch()`'s `catch` runs through its own ordinary path, and a `<script src>` becomes
+           §4.12.1.1's element whose result is null. There is no second delivery here, no reply record invented
+           to carry it, and no kind test: this line states the OUTCOME and the delivery owns the algorithm. */
         pe = pending_unshare(f->pending, i);
         pending_set_int(pe, PEND_DECLINE_TAKEN, 1);
         pending_set(pe, PEND_VALUE, JS_NULL);
@@ -6942,13 +7085,52 @@ static int flow_step(JSContext *ctx, Flow *f) {
                     g_step_unit = STEP_UNIT_AWAIT_FETCH_RECORD;
                     return FLOW_STEP_OWED;
                 }
-                /* AND A ROW THAT REACHES THE COMPILE HOLDS A PROGRAM, not an address. The branch above is what
-                   makes that true and this is what says so, because the two are one row apart and a body that
-                   is still a URL would be compiled as one. */
+                /* HTML §4.12.1.1 "Processing model", "execute the script element" STEP 4 — "If el's result is
+                   null, then fire an event named error at el, and return". This row IS an element whose result
+                   is null (flow_deliver_one_reply's null arm made it one), and reaching it is this engine's
+                   "execute the script element" for that element's position: the cursor advances, the switch on
+                   el's type in step 6 is never reached, and NOTHING RUNS. §4.12.1's order is kept because the
+                   position is kept — an element that failed to load still holds its place against the scripts
+                   written around it, which is the whole reason the failure is a row.
+                   THE FIRE IS A QUEUED ELEMENT TASK AND THE STANDARD'S STEP 4 IS A BARE SYNCHRONOUS FIRE, AND
+                   THAT DIFFERENCE IS NAMED RATHER THAN HIDDEN. §4.12.1.1 queues an element task on the DOM
+                   manipulation task source at its three `src`-branch sites and NOT here — step 4 fires
+                   directly, because `onComplete` already runs from the networking task. This engine cannot
+                   fire directly from a C seam: the listener list is the PAGE's, so the dispatch runs the
+                   page's code and must have a flow base under it (core/html/html_script.h), and a task is how
+                   a C seam gets one. WHAT IS NOT COVERED is therefore the ORDER between this `error` and
+                   anything else queued in the same turn: the standard delivers it inside this execution and
+                   this delivers it as the next task. WHAT THE NEXT DIFF BUILDS is a step-machine entry to
+                   `execute the script element` that flow_step DRIVES at the row rather than queues, so step 4
+                   and step 8's `load` are both bare fires of the machine that is executing — which is the same
+                   thing §4.12.1.1's step 8 already needs and this engine does not have either. HOW ITS ABSENCE
+                   SHOWS: a page that queues a task from the same turn the load failed in — `setTimeout(f,0)`
+                   beside a failing `<script src>` — observes `f` before `onerror` where a browser runs
+                   `onerror` first. */
+                if (kind == DYN_SCRIPT_FAILED) {
+                    DCHECK(f->dyn_el[f->script_i] != NULL,
+                           "a failed-load row carries no element — the row is created only by the null arm of "
+                           "flow_deliver_one_reply, which asserts the element on both of its two paths, and "
+                           "§4.12.1.1's step 4 fires `error` AT el");
+                    /* THE ELEMENT'S OWN DOCUMENT'S REALM, never the flow's ambient one. The task's callee is a
+                       C function and a C function runs in the realm that DEFINED it, so a task minted in the
+                       wrong realm fires this document's `error` against another document's global — and an
+                       instance is an ORIGIN-KEYED AGENT CLUSTER, so a child navigable's script element is an
+                       ordinary row of this same sequence. */
+                    html_script_queue_error(doc_realm(f->dyn_doc[f->script_i]), f->dyn_el[f->script_i]);
+                    g_step_unit = STEP_UNIT_SCRIPT_LOAD_FAILED;
+                    f->script_i++;
+                    return 0;
+                }
+                /* AND A ROW THAT REACHES THE COMPILE HOLDS A PROGRAM, not an address. TWO branches above are
+                   what make that true and this is what says so, because a body that is still a URL would be
+                   compiled as one: a DYN_SCRIPT_SRC row holds the flow until its reply arrives, and a
+                   DYN_SCRIPT_FAILED row — whose body is that same address, kept as the account of what did not
+                   load — takes §4.12.1.1's step 4 and never reaches a compile at all. */
                 DCHECK(body != NULL,
                        "a row of this flow's sequence reached the compile with no body — a row is created with "
-                       "one (engine_queue_into asserts it) and only a DYN_SCRIPT_SRC row is ever without a "
-                       "program, which the branch above holds the flow at until its reply arrives");
+                       "one (engine_queue_into asserts it) and the two kinds whose body is an ADDRESS rather "
+                       "than a program are both taken by the branches directly above this line");
             }
             else if (flow_job_pending(f) > 0) {
                 /* WHAT IS LEFT ON THE QUEUE HERE IS A TASK — HTML §8.1.7.3 "Processing model" step 2, whose
