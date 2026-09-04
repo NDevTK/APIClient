@@ -21,6 +21,7 @@
 #include "core/css/media_query_list.h"
 #include "core/css/top_layer.h"
 #include "core/dom/page_visibility.h"
+#include "core/dom/scroll_events.h"
 #include "core/intersection_observer/intersection_observer.h"
 #include "core/rendering/animation_frame.h"
 #include "core/rendering/page_reveal.h"
@@ -77,11 +78,18 @@ static int    g_ready;
    "Unnecessary rendering" step "should be modified to add an additional requirement for skipping the rendering
    update — the document does NOT HAVE PENDING INITIAL IntersectionObserver TARGETS". Without it a document
    whose only pending work is an observation is removed here, no frame is ever queued for it, and step 19 is
-   written and UNREACHABLE — which is what CSSOM VIEW §4.2's own term one line up already exists to prevent. */
+   written and UNREACHABLE — which is what CSSOM VIEW §4.2's own term one line up already exists to prevent.
+   CSSOM VIEW §13.2's TERM IS HERE FOR EXACTLY THAT REASON AND THE STANDARD DOES NOT SPELL IT. §13.2 gives a
+   Document a list of pending scroll events and step 9 below is its only drain, so a document whose only
+   pending work is a queued `scroll` is removed by this step, no frame is ever queued for it, and the page's
+   `scroll` listener never runs — the same shape as the observer term above, arrived at from the same place.
+   It is a VISIBLE EFFECT in the step's own words: a scrolled document that has not been re-rendered is the
+   canonical one. */
 static bool doc_has_rendering_work(JSContext *docctx)
 {
     return page_reveal_pending(docctx) || animation_frame_pending(docctx)
-        || media_query_list_pending(docctx) || intersection_observer_pending(docctx);
+        || media_query_list_pending(docctx) || intersection_observer_pending(docctx)
+        || scroll_events_pending(docctx);
 }
 
 /* Steps 2-5, as ONE walk, and the fusion is the spec's rather than a shortcut: step 2 collects the fully
@@ -143,6 +151,10 @@ static JSValue rendering_collect_docs(JSContext *ctx)
                  "§13.1 fires `resize` at the Window when doc's viewport has had its width or height changed "  \
                  "since the last run, and at the VisualViewport when its scale, width or height has), one "     \
                  "target per rest")                                                                            \
+    X(UR_SCROLL, "HTML §8.1.7.3 update the rendering step 9 (for each doc: run the SCROLL STEPS — CSSOM VIEW " \
+                 "§13.2 appends a `scrollend` for each scrolling box that was scrolled, then fires each "     \
+                 "(target, type) pair of doc's PENDING SCROLL EVENTS in the order they were added, then "     \
+                 "empties the list), one pair per rest")                                                      \
     X(UR_MEDIA,  "HTML §8.1.7.3 update the rendering step 10 (for each doc: evaluate media queries and report " \
                  "changes — CSSOM VIEW §4.2 fires `change` at each MediaQueryList whose matches state has "     \
                  "changed, in the order they were created, oldest first), one MediaQueryList per rest")         \
@@ -180,6 +192,10 @@ typedef struct JSUpdateRendering {
     uint32_t  ndocs, i;     /* the cursor every "for each doc of docs" step shares */
     uint32_t  nframe, k;    /* §8.12 Animation frames step 2's key snapshot for the current doc, and step 3's cursor */
     uint32_t  nmedia, m;    /* §4.2's collection snapshot for the current doc, and its cursor */
+    /* §13.2's step 2 EXTENT for the current doc, and its cursor. The extent is measured once per document,
+       by step 1, because a `scroll` listener that scrolls again APPENDS — and an append cannot move a pair
+       already in the list, so an index below the extent names one pair for the whole walk. */
+    uint32_t  nsev, sv;
     uint32_t  nobs, ob;     /* §3.2.10 step 1's observer list for the current doc, and step 2's cursor */
     uint8_t   obsnapped;    /* that list has been counted for docs[i] */
     uint8_t   fphase;       /* the fire request steps 6, 8 and 10 park on */
@@ -193,6 +209,7 @@ typedef struct JSUpdateRendering {
     uint8_t   cphase;
     uint8_t   snapped;      /* §8.12 Animation frames step 2 has been taken for docs[i] */
     uint8_t   msnapped;     /* §4.2's collection snapshot has been taken for docs[i] */
+    uint8_t   ssnapped;     /* §13.2's step 1 has run and its step 2's extent has been taken for docs[i] */
     bool      not_canceled;
     /* §8.1.4.6's REPORT AN EXCEPTION, for a callback that threw. The work record is THIS machine's, the way
        abort.h's AbortSignalWork and the dispatch machine's own are their callers' — reporting fires an `error`
@@ -256,30 +273,19 @@ static JSContext *doc_realm(JSContext *ctx, JSUpdateRendering *s)
    `visual_viewport_resize_changed` are the two halves, each latching in the component that owns the geometry,
    because a viewport this file remembered for itself would be a second answer to the one fact.
 
-   Step 9, still asserted at the place the algorithm runs it — but NOT against a name on the global any more.
-   It asked `realm_awaits(docctx, "scrollTo", …)`, and this step's producer is not a member: CSSOM VIEW §13.2
+   STEP 9 IS WRITTEN TOO — it is UR_SCROLL, below, and its assertion is GONE rather than relaxed, which is
+   this mechanism working for the fourth time in this file. It asked `realm_awaits(docctx, "scrollTo", …)`
+   first and that was the wrong instrument: this step's producer is not a member, because CSSOM VIEW §13.2
    "Scrolling" fills doc's list when a viewport or an element GETS SCROLLED, which is §3.1's perform a scroll
-   and is an INTERNAL ALGORITHM with no name on any global to probe for. The proxy was pre-loaded to fire on a
-   false premise: installing §4's three Window members satisfies a [[HasProperty]] without making a single box
-   movable, so this step would have announced a producer that did not exist. THE SECOND HALF OF THAT ARGUMENT
-   IS ITSELF RETIRED NOW AND IS RESTATED IN CAPITALS SO NOBODY RE-DERIVES IT: §4's WINDOW MEMBERS ARE §4's
-   ARGUMENT QUESTIONS PLUS A CALL TO `viewport_scroll`, WHOSE CLAMP LANDS ON THE POSITION THE VIEWPORT ALREADY
-   HAS, SO THEY MOVE NOTHING. §2's viewport row retired the clamp half and core/dom/perform_scroll.c retired the
-   rest — a viewport in this engine MOVES, and those members would move it. What survives is the shape of the
-   mistake and not its arithmetic: A MEMBER IS NOT A CAPABILITY. The capability is asked of the component that
-   owns it; core/dom/element_scrolling.h states the derivation on both halves and core/timing/hr_time.c records
-   what the name test cost the last time. */
-static void step_9(JSContext *docctx)
-{
-    DCHECK(!element_scrolling_box_can_move(docctx),
-           "HTML §8.1.7.3 \"Processing model\" update-the-rendering step 9 — \"for each doc of docs, run the "
-           "scroll steps for doc\" — runs CSSOM VIEW §13.2 \"Scrolling\"'s SCROLL STEPS over doc's PENDING "
-           "SCROLL EVENTS, the per-Document list \"which stores pairs of (EventTarget, DOMString), initially "
-           "empty\", firing scroll/scrollend/scrollsnapchange in the order they were added. A scrolling box in "
-           "this document can now be at a position other than the one this engine derives, so that list has a "
-           "producer: give the Document the list, append to it at the three places §13.2 says a viewport, an "
-           "element or a visual viewport gets scrolled, and write step 9 as the drain it is");
-}
+   and is an INTERNAL ALGORITHM with no name on any global to probe for. Asked instead of the component that
+   owns the scrolling box, the assert fired the day §2's viewport row gave the clamp somewhere to land, and
+   the step it named is now built: core/dom/scroll_events.c is §13.2 and UR_SCROLL is its drain.
+   THE ARGUMENT THAT MADE THE NAME TEST LOOK SOUND IS RETIRED AND IS RESTATED IN CAPITALS SO NOBODY
+   RE-DERIVES IT: §4's WINDOW MEMBERS ARE §4's ARGUMENT QUESTIONS PLUS A CALL TO `viewport_scroll`, WHOSE
+   CLAMP LANDS ON THE POSITION THE VIEWPORT ALREADY HAS, SO THEY MOVE NOTHING. §2's viewport row retired the
+   clamp half and core/dom/perform_scroll.c retired the rest. What survives is the shape of the mistake and
+   not its arithmetic: A MEMBER IS NOT A CAPABILITY, and core/timing/hr_time.c records what the name test cost
+   the last time. */
 
 /* STEP 10 IS WRITTEN — it is UR_MEDIA, below. Its assert is gone rather than relaxed, which is the whole point
    of the mechanism: the producer (`matchMedia`) arrived, the DCHECK fired at this exact place in the order, and
@@ -412,6 +418,16 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
                these steps were RUN", and they ran — so the same size never fires twice and the walk moves to
                the other half of the step rather than re-asking. */
             if (++s->rhalf > 1) { s->rhalf = 0; s->i++; }
+        } else if (s->hdr.stage == UR_SCROLL) {
+            s->fphase = 0;
+            JS_FreeValue(ctx, s->ev);
+            JS_FreeValue(ctx, s->target);
+            s->ev = s->target = JS_UNDEFINED;
+            /* §13.2's step 2 walks the list ONCE and step 3 empties it, so a pair whose fire completed
+               abruptly is spent either way — the walk moves to the next pair rather than re-firing one the
+               page has already been given. The list is emptied at the end of this document's walk exactly as
+               it would have been. */
+            s->sv++;
         } else if (s->hdr.stage == UR_FRAMES) {
             s->cphase = 0;
             JS_FreeValue(ctx, s->fn);
@@ -473,7 +489,8 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
         report_exception_work_start(&s->rep);
         s->reporting = 0;
         s->i = s->ndocs = s->nframe = s->k = s->nmedia = s->m = s->nobs = s->ob = 0;
-        s->fphase = s->cphase = s->snapped = s->msnapped = s->obsnapped = 0;
+        s->nsev = s->sv = 0;
+        s->fphase = s->cphase = s->snapped = s->msnapped = s->obsnapped = s->ssnapped = 0;
         STEP_GOTO(s->hdr.stage, UR_REVEAL, &s->cphase, &s->fphase, NULL);
         /* STEP 1: frameTimestamp is the event loop's LAST RENDER OPPORTUNITY TIME — the moment the in-parallel
            loop recorded when it decided there was one, not the moment this task happens to run. */
@@ -570,11 +587,9 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
            and a page's resize handler is characteristically the most expensive one it has. */
         for (;;) {
             if (s->i >= s->ndocs) {
-                for (s->i = 0; s->i < s->ndocs; s->i++)
-                    step_9(doc_realm(ctx, s));
                 s->i = 0;
-                s->msnapped = 0;
-                STEP_GOTO(s->hdr.stage, UR_MEDIA, &s->cphase, &s->fphase, NULL);
+                s->ssnapped = 0;
+                STEP_GOTO(s->hdr.stage, UR_SCROLL, &s->cphase, &s->fphase, NULL);
                 break;
             }
             docctx = doc_realm(ctx, s);
@@ -604,6 +619,57 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
             JS_FreeValue(docctx, s->target);
             s->ev = s->target = JS_UNDEFINED;
             if (++s->rhalf > 1) { s->rhalf = 0; s->i++; }
+        }
+    }
+
+    if (s->hdr.stage == UR_SCROLL) {
+        /* STEP 9: "For each doc of docs: run the SCROLL STEPS for doc." CSSOM VIEW §13.2 "Scrolling" is those
+           steps, and they are three: step 1 turns each scrolling box that was scrolled into a (target,
+           `scrollend`) pair, step 2 fires every pair of doc's pending scroll events IN THE ORDER THEY WERE
+           ADDED, and step 3 empties the list.
+           NONE OF THAT IS DECIDED HERE. The list, the appends and step 2's four branches over a pair belong to
+           core/dom/scroll_events.c, which is where §13.2 is; what this machine owns is the FIRING, because a
+           fire runs the page's `scroll` listeners and therefore parks. So this is a stage with ONE PAIR PER
+           REST, on the same terms as step 8 above and for the same reason.
+           STEPS 1 AND 3 ARE THE WALK'S TWO ENDS FOR EACH DOCUMENT, and `ssnapped` is what keeps them there: a
+           resume landing mid-drain must not re-run step 1 (which would append a second `scrollend`) and must
+           not re-measure step 2's extent. */
+        for (;;) {
+            if (s->i >= s->ndocs) {
+                s->i = 0;
+                s->msnapped = 0;
+                STEP_GOTO(s->hdr.stage, UR_MEDIA, &s->cphase, &s->fphase, NULL);
+                break;
+            }
+            docctx = doc_realm(ctx, s);
+            if (!s->ssnapped) {
+                s->nsev = scroll_events_scroll_steps_begin(docctx);   /* step 1, and step 2's extent */
+                s->sv = 0;
+                s->ssnapped = 1;
+            }
+            if (s->sv >= s->nsev) {
+                scroll_events_scroll_steps_end(docctx);               /* step 3 */
+                s->ssnapped = 0;
+                s->i++;
+                continue;
+            }
+            if (s->fphase == 0 && JS_IsUndefined(s->ev)) {
+                /* THE TARGET IS HELD ACROSS THE FIRE for step 10's reason one stage down: the pair names it,
+                   and the fire parks between naming it and dispatching at it. */
+                scroll_events_item(docctx, s->sv, &s->target, &s->ev);
+                DCHECK(JS_IsObject(s->target),
+                       "§13.2's scroll steps step 2 produced a pair whose target is not an object — every "
+                       "append in core/dom/scroll_events.c places an `EventTarget`, which is what §13.2 says "
+                       "the pair's first half is");
+            }
+            r = event_target_fire_run(docctx, &s->fphase, STEP_CB(s->cb), s->target, s->ev, JS_UNDEFINED,
+                                      cb_result, &s->not_canceled, out_cb, out_argc);
+            if (r > 0) return r;                     /* parked on the page's `scroll` listeners */
+            cb_result = JS_UNDEFINED;
+            JS_FreeValue(docctx, s->ev);
+            JS_FreeValue(docctx, s->target);
+            s->ev = s->target = JS_UNDEFINED;
+            s->sv++;
         }
     }
 

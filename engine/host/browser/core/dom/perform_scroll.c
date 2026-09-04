@@ -10,6 +10,7 @@
 #include "quickjs.h"
 #include "core/css/css_computed_value.h"
 #include "core/dom/perform_scroll.h"
+#include "core/dom/scroll_events.h"
 #include "core/frame/viewport.h"
 
 /* §3.1 STEP 5's FIRST CONJUNCT, WHICH IS ABOUT THE USER AGENT AND NOT ABOUT THE REQUEST: "If the user agent
@@ -111,25 +112,20 @@ void perform_scroll(JSContext *ctx, lxb_dom_element_t *box, double x, double y,
        the one this call is resolving and nothing else can have. Its substep 7.2 resolves it, which is what the
        caller's resolved promise IS; its substep 7.1 is the line below. */
     if (changed) {
+        /* CSSOM VIEW §13.2 "Scrolling"'s own producer, which is a DIFFERENT algorithm from the step below and
+           runs first: "Whenever a viewport gets scrolled (whether in response to user interaction or by an
+           API), the user agent must run these steps", ending in "Append (doc, \"scroll\") to doc's pending
+           scroll events." A scroll that changed the position IS a viewport getting scrolled, which is why it
+           is run HERE and not at §3.1's own step 7.1.
+           IT IS ONLY EVER THE VIEWPORT, because `ps_instant_scroll` above aborts for an element's box — so
+           §13.2's element-gets-scrolled steps have no caller and its visual-viewport ones have none either
+           (nothing in this engine scrolls a VisualViewport: core/frame/visual_viewport.h derives a scale
+           factor of 1, at which it covers the layout viewport and has no pan of its own). */
+        scroll_events_viewport_scrolled(ctx);
         /* STEP 7.1 — "If the scroll position changed as a result of this call, emit the scrollend event." —
-           and, one algorithm out, CSSOM VIEW §13.2 "Scrolling"'s own producer: "Whenever a viewport gets
-           scrolled (whether in response to user interaction or by an API), the user agent must run these
-           steps", which end in "Append (doc, \"scroll\") to doc's pending scroll events."
-           THE TWO ARE ONE ABSENCE AND ARE NAMED TOGETHER, because §13.2's list is what both of them append to
-           and a diff that built one without the other would leave a queue with only a writer or only a
-           reader. */
-        DFAIL("CSSOM VIEW §3.1 \"Scrolling\"'s perform a scroll CHANGED a scrolling box's position, which is "
-              "step 7.1's own condition (\"If the scroll position changed as a result of this call, emit the "
-              "scrollend event.\") and is also what §13.2 \"Scrolling\" calls a viewport GETTING SCROLLED — and "
-              "neither event has anywhere to go. BUILD §13.2: give each Document the \"associated list of "
-              "pending scroll events, which stores pairs of (`EventTarget`, `DOMString`), initially empty\" as "
-              "a JS Array on a per-realm record (a malloc'd list would not park with the flow that queued it); "
-              "run §13.2's viewport-gets-scrolled steps HERE, whose step 3 makes the append idempotent per "
-              "frame (\"If (doc, \\\"scroll\\\") is already in doc's pending scroll events, abort these "
-              "steps.\"); append (doc, \"scrollend\") from §13.2's scroll steps step 1, which is where step 7.1 "
-              "above lands; and write HTML §8.1.7.3 \"Processing model\" update-the-rendering step 9 as the "
-              "DRAIN — core/rendering/rendering.c's step_9 asserts against exactly this arriving, and a fire "
-              "runs the page's listeners, so it is a STAGE of that machine with one target per rest, on the "
-              "terms its step 8 already uses");
+           which for §13.2 means making this box one that WAS SCROLLED; the scroll steps' own step 1 is what
+           turns that into a pair, one rendering opportunity later. core/dom/scroll_events.h states why the
+           two are not collapsed even though an instant scroll puts them in the same frame. */
+        scroll_events_viewport_scrollend(ctx);
     }
 }

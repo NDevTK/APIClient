@@ -15,6 +15,7 @@
 #include "core/dom/document.h"
 #include "core/dom/element.h"
 #include "core/dom/observable.h"
+#include "core/dom/scroll_events.h"
 #include "core/encoding/encoding.h"
 #include "core/encoding/text_stream.h"
 #include "core/events/broadcast_channel.h"
@@ -224,6 +225,7 @@ static void d_animation_frame(JSContext *c, const PlatformAgent *a) { (void)a; a
 static void d_page_reveal(JSContext *c, const PlatformAgent *a) { (void)a; page_reveal_init(c); }
 static void d_viewport(JSContext *c, const PlatformAgent *a) { (void)a; viewport_init(c); }
 static void d_visual_viewport(JSContext *c, const PlatformAgent *a) { (void)a; visual_viewport_init(c); }
+static void d_scroll_events(JSContext *c, const PlatformAgent *a) { (void)a; scroll_events_init(c); }
 static void d_media_query_list(JSContext *c, const PlatformAgent *a) { (void)a; media_query_list_init(c); }
 static void d_rendering(JSContext *c, const PlatformAgent *a) { (void)a; rendering_init(c); }
 static void d_fetch(JSContext *c, const PlatformAgent *a) { (void)a; fetch_init(c); }
@@ -431,6 +433,10 @@ static void r_history(JSRuntime *rt) { (void)rt; history_free(); }
    reverse declaration order is what decides it here instead of three authors agreeing. */
 static void r_viewport(JSRuntime *rt) { (void)rt; viewport_free(); }
 static void r_visual_viewport(JSRuntime *rt) { (void)rt; visual_viewport_free(); }
+/* CSSOM VIEW §13.2 Scrolling's pending scroll events, released after the two above for the same reverse
+   declaration order: it holds no geometry of its own, but §3.1's perform a scroll fills it from the
+   viewport's position, so it is the dependent of the pair. */
+static void r_scroll_events(JSRuntime *rt) { (void)rt; scroll_events_free(); }
 /* DOM §2.2 Interface Event AND THE THIRTEEN SUBCLASSES core/events/event.c DECLARES BESIDE IT, which was the
    last hand-copied `event_free(ctx);` in each of the three hosts' teardowns — written, like every other line
    on those lists, AFTER platform_agent_free had already run this whole column. The three did not agree on
@@ -906,6 +912,11 @@ static const PlatformComponent PLATFORM[] = {
     { "page_reveal",         d_page_reveal,         i_page_reveal, r_page_reveal },
     { "viewport",            d_viewport,            NULL,        r_viewport },
     { "visual_viewport",     d_visual_viewport,     NULL,        r_visual_viewport },
+    /* CSSOM VIEW §13.2 Scrolling's pending scroll events, BEFORE the `rendering` row: update-the-rendering
+       step 9 is the DRAIN of the list this row declares, and step 4's unnecessary-rendering test asks this
+       component whether a document has one queued — so a row after `rendering` would hand that step a slot
+       that had not been declared. It is also after `event`, far above, because its step 2 fires one. */
+    { "scroll_events",       d_scroll_events,       NULL,        r_scroll_events },
     { "media_query_list",    d_media_query_list,    i_media_query_list, r_media_query_list },
     /* AFTER the three whose algorithms update-the-rendering's steps 8 and 10 are. */
     { "rendering",           d_rendering,           NULL,        r_rendering },

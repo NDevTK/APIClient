@@ -269,6 +269,12 @@ JSValue viewport_env_value(JSContext *ctx, const char *member, JSValue computed)
  * in a static would be ONE answer for every timeline, and a malloc'd record would need a capture at every
  * accessor.
  *
+ * IT COSTS NOTHING PER FLOW UNTIL A FLOW SCROLLS, and that is worth stating because the arithmetic reads the
+ * other way at a glance. The record is built WITH the realm, which is before any page script runs, so it is
+ * part of the COW BASELINE that every flow shares — a frontier of hundreds of members holds ONE of these, not
+ * one each. A delta entry appears only where a flow WRITES, and the only writer is §3.1's perform a scroll, so
+ * a flow that never scrolled carries nothing about the scroll position at all.
+ *
  * WHAT THIS RETIRES, RESTATED IN CAPITALS SO NOBODY RE-DERIVES IT. Three arguments stood here and each was the
  * reason `scrollX` answered zero. THE FIRST: THIS ENGINE GENERATES NO BOXES. THE SECOND: THE ONLY BOX WITH
  * GEOMETRY IS THE ICB, SO NO DESCENDANT'S MARGIN EDGE EXTENDS §2's SCROLLING AREA PAST IT, AND A SCROLLING BOX

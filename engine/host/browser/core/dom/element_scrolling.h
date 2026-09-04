@@ -32,8 +32,9 @@
  * (Retired prose is restated in CAPITALS and never in quotation marks — a quoted sentence beside a section
  * number is a SPEC quotation, and citegen.mjs reads it as one.) §6.1's scroll a target into view's own last
  * step, its STEP 5 — "Resolve scrollPromise when all Promises in ancestorPromises have settled." — is
- * therefore a resolved promise over a set of resolved promises. The day a scroll can take TIME this file grows a promise-returning
- * shape and its callers stop minting one; that day is the smooth scroll's, not an element's.
+ * therefore a resolved promise over a set of resolved promises. The day a scroll can take TIME this file grows
+ * a promise-returning shape and its callers stop minting one; that day is the smooth scroll's, not an
+ * element's.
  *
  * A SMOOTH SCROLL IS NEVER ONGOING, AND THAT TOO IS DERIVED — from the same sentence and no longer from the
  * absence of a caller. Three of §6.1's steps read "or box has an ongoing smooth scroll" as a second disjunct
@@ -121,23 +122,27 @@ void element_scrolling_scroll_target_into_view(lxb_dom_element_t *target, const 
  * box, to a given position position"), asked as the CAPABILITY it is and answered by the component that owns
  * the algorithm.
  *
- * WHAT ASKS IT, AND WHY THE QUESTION IS WORTH EXPORTING. CSSOM VIEW §13.2 "Scrolling" gives every Document "an
- * associated list of pending scroll events, which stores pairs of (EventTarget, DOMString), initially empty",
- * and the ONLY thing that appends to it is a viewport or an element that "gets scrolled". Steps in two other
- * standards drain or carry what that append produces, and each has to know whether a box in this build can move
- * at all: HTML §8.1.7.3 "Processing model" update-the-rendering step 9 ("for each doc of docs, run the scroll
- * steps for doc"), and HTML §7.4.6.5 "Persisted history entry state"'s scroll position data. One fact, two
- * readers, one derivation.
+ * WHAT ASKS IT, AND WHY THE QUESTION IS WORTH EXPORTING. Steps in other standards carry or restore what a
+ * scroll produces, and each has to know whether a box in this build can be anywhere but the origin: HTML
+ * §6.6.6 "Focus management APIs"' `focus()` step 4, which scrolls its target into view, and HTML §7.4.6.5
+ * "Persisted history entry state"'s scroll position data. One fact, two readers, one derivation.
+ * A THIRD READER IS GONE BECAUSE ITS STEP WAS BUILT, which is this question doing its job rather than losing
+ * a caller: HTML §8.1.7.3 "Processing model" update-the-rendering step 9 asked it while CSSOM VIEW §13.2
+ * "Scrolling"'s list had no drain, the assert fired, and core/dom/scroll_events.c plus that step are what it
+ * named. A reader that BUILDS what the crash asked for and then stops asking is the mechanism working; a
+ * reader that stops asking without building is the failure it exists to prevent.
  *
  * WHY IT IS NOT `realm_awaits(ctx, "scrollTo", …)`, WHICH IS WHAT THOSE READERS ASKED. A [[HasProperty]] on the
  * global answers whether a MEMBER IS INSTALLED, and no member is this capability — the two are not even
- * correlated. `Element.prototype.scrollTo` IS installed in this build (core/dom/element_view.c) and moves
- * nothing; CSSOM VIEW §4's `scroll`/`scrollTo`/`scrollBy` on the Window move nothing either, because their
- * whole body is §4's argument questions and a call to `viewport_scroll`, which cannot MOVE a viewport at all —
- * its steps 12-13 are unwritten and its step 10 crashes rather than pretending. (That clause used to read
- * "whose clamp lands on the position the viewport already has", which was the same conclusion resting on the
- * scrolling area being the initial containing block; the area is §2's real extreme now, so the reason is the
- * missing §3.1 and no longer the collapsed clamp.) So the name test was neither necessary nor sufficient, and its failure was
+ * correlated. `Element.prototype.scrollTo` WAS installed in this build (core/dom/element_view.c) while it
+ * could move nothing; CSSOM VIEW §4's `scroll`/`scrollTo`/`scrollBy` on the Window would have moved nothing
+ * either at the time the probe was written, because their whole body is §4's argument questions and a call to
+ * `viewport_scroll`, which could not MOVE a viewport at all. THAT CLAUSE HAS BEEN WRONG TWICE AND BOTH
+ * RETIREMENTS ARE RESTATED IN CAPITALS: first ITS CLAMP LANDS ON THE POSITION THE VIEWPORT ALREADY HAS (which
+ * §2's viewport row retired), then ITS STEPS 12-13 ARE UNWRITTEN AND ITS STEP 10 CRASHES RATHER THAN
+ * PRETENDING (which §3.1 did). §4's Window members would move the viewport if they were installed; they are
+ * still not the capability, because the capability is the ALGORITHM and a member is a spelling of a caller.
+ * So the name test was neither necessary nor sufficient, and its failure was
  * PRE-LOADED rather than latent: installing §4's three members satisfies it, so the readers would have fired
  * announcing a capability that had not arrived — a probe that reports a capability as PRESENT is worse than no
  * probe, because the next reader builds on it. core/timing/hr_time.c records the identical defect over
