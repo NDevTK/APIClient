@@ -1441,23 +1441,35 @@ typedef struct {
      * A candidate that has held the thread has been charged for it (engine.c charges after every step), so
      * this is how many have never had it, exactly, at the instant it is asked.
      *
-     * `cand_dec_max` IS HOW FAR THE BEST OF THEM HAS GOT — the length of the decision vector it stands on,
-     * which is how many gates it has replayed and therefore how deep into the program it is. A candidate
-     * re-runs from the BASELINE, so arriving at a sink is a distance problem before it is anything else, and
-     * §@S requires the search to be DISTANCE-DIRECTED: "a fitness of {filter-survived, sink-reached,
-     * context-escaped, handler-fires} the WFQ reads". flow_weight reads the PRE-FIRE rungs of that list
-     * (flow_distance), and this row exists because the runway BELOW them was once unmeasured entirely: every
-     * rung §@S names reports at a SINK, so a candidate 800 gates into its replay ranked exactly like one 3
-     * gates in for the whole of the runway itself.
-     * THE LADDER NOW STARTS ONE SITE EARLIER — at the DELIVERY, the source read that puts this flow's bytes in
-     * the program — so the first thing a candidate does on the runway is measured and this row is no longer
-     * the only witness to the approach. It is still the row that says how much runway there IS, which the
-     * ladder cannot: the rung says the bytes are in, this says how many gates the replay crossed to get there,
-     * and a candidate stuck at rung 0 with a growing `cand_dec_max` is one whose replay is diverging before
-     * its own source read rather than one nobody is serving. It separates three states that look identical
-     * from outside: served and
-     * progressing (distance — build the fitness), never served (starvation — the ordering), and served while
-     * pinned at zero (a candidate being RESTARTED rather than resumed, which no amount of thread time fixes). */
+     * `cand_dec_max` IS THE RUNWAY'S LENGTH AND NOT A DISTANCE ALONG IT — THE DENOMINATOR, REPORTED FOR YEARS
+     * AS THE NUMERATOR. It said it was "how far the best of them has GOT ... how many gates it has replayed",
+     * and it cannot be: it is fed from decide_blob_stats, which returns `seg->below + seg->n` — the CHAIN'S
+     * LENGTH — and never reads the blob's cursor. An @S candidate is seeded with the detecting flow's ENTIRE
+     * chain under a cursor of ZERO (decide_blob_new), so for a candidate this number is FIXED FROM THE INSTANT
+     * IT IS SEEDED and reads identical at every sample of its life. decide.c says so at that accessor, in its
+     * own words — "a caller that wants a DISTANCE TRAVELLED must not take this number: it is the denominator,
+     * it is fixed from the instant the blob is built" — so the two files disagreed and THIS one was wrong.
+     * WHAT THAT COST IS EVERY READING BUILT ON IT, and each is retired here rather than softened. "A candidate
+     * stuck at rung 0 with a GROWING `cand_dec_max`" names a state that cannot occur, because the row cannot
+     * grow for a candidate. "The RATIO is how far through the gates the best candidate has got" is a ratio of
+     * a length to a length. And the three states it claimed to separate — served-and-progressing, never
+     * served, served-but-restarted — it separates NONE of: the first two differ in `cand_unrun` and
+     * `never_picked`, and nothing in this struct can see the third at all.
+     * WHY IT IS STILL PRINTED. It IS the runway's length, exactly, and that is the denominator any distance
+     * along the runway has to be read against — §@S's fitness is "a fraction" and a fraction needs one. Read
+     * with `dec_max` beside it (the deepest vector of ANY member) it says how much of the document's gate
+     * sequence a candidate's recorded path covers, which is a fact about the SEARCH's reach and not about one
+     * candidate's progress.
+     * NAMED RESIDUAL — THE NUMERATOR DOES NOT EXIST YET, AND THAT IS WHY §@S's DISTANCE IS BLIND ON THE
+     * RUNWAY. Not covered: how far along its recorded path a candidate has actually replayed. What the next
+     * diff builds: `decide_blob_cursor(const void *blob)` returning `DecideBlob.c` — the value decide.c ALREADY
+     * asserts in range at that same accessor (`b->c >= 0 && b->c <= n`) — plus a per-flow reading of it
+     * maintained while the flow is RUNNING, since `dec_blob` is NULL exactly then and a term that reads zero
+     * for the incumbent and a cursor for everyone else is not a comparator. Both live outside this file:
+     * the accessor is decide.c's and the running-side writer is at the replay, which is why this is named here
+     * rather than half-built. How its absence shows: identically to today — `substituted: 0` on every sink
+     * whose source read sits deep in a document, with `cand_members` large, `cand_unrun` small, and every
+     * candidate reading a fitness distance of exactly 0.0 for the whole of its runway. */
     long cand_members;    /* members carrying a payload substitution — a candidate session OR A FORK OF ONE,
                              because engine.c copies the substitution to the sibling: a candidate that branches
                              is two candidates. So this is the SEARCH's whole live population, and @PROGRESS's
@@ -1468,16 +1480,15 @@ typedef struct {
                              depths. Measured once at 144 against 9 roots and a depth of 4 — 9 * 2^4 exactly. */
     long cand_unrun;      /* …of those, how many have NEVER been charged for the thread */
     int64_t cand_svc_max; /* …and the most service any one of them has consumed */
-    /* THE DEEPEST DECISION VECTOR AMONG THEM — AND IT COUNTS GATES, NOT STATEMENTS, which is a correction to
-       what this row said when it was added. It claimed to be "how many gates it has replayed and therefore how
-       deep into the program it is", and the second half does not follow from the first: a flow records a slot
-       only at a branch it had not already decided, so a candidate can execute eight hundred statements and
-       stand on four decisions, or four statements and stand on four. Read alone the number is uninterpretable
-       in the exact way that matters — `cand_dec_max: 4` against a runway of 866 statements reads as "the
-       floor" and as "four of the five gates on the path" with the same digit, and those take opposite actions.
-       `dec_max` below is the denominator that makes it a reading: an exploring flow that runs the document to
-       its end stands on the whole gate sequence, so the RATIO is how far through the gates the best candidate
-       has got. Neither number is worth printing without the other. */
+    /* THE LONGEST RECORDED PATH AMONG THEM — AND IT COUNTS GATES, NOT STATEMENTS, which was the FIRST
+       correction this row needed and not the last. A flow records a slot only at a branch it had not already
+       decided, so a candidate can execute eight hundred statements and stand on four decisions, or four
+       statements and stand on four; `cand_dec_max: 4` against a runway of 866 statements reads as "the floor"
+       and as "four of the five gates on the path" with the same digit. That correction was right and it left
+       the larger one unmade — the number is not a position at all, it is a LENGTH, and the block above says
+       why and what would have to be built for a position to exist. Read against `dec_max` below it says how
+       much of the document's gate sequence the search's recorded paths cover; it does not say, and cannot say,
+       how far along one a candidate stands. Neither number is worth printing without the other. */
     long cand_dec_max;
     long dec_max;         /* the deepest decision vector of ANY member — the gate sequence's own length, which
                              is what the row above is a fraction of */
