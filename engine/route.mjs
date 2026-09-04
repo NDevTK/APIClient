@@ -260,6 +260,14 @@ const engines = [];
 const holderOf = (doc) => engines.find((e) => e.docId === doc) ?? null;
 
 const posts = [];   /* routed records, in emission order, held until their target is free to receive one */
+/* HOW MANY RECORDS EACH TARGET DOCUMENT WAS HANDED, because the aggregate cannot answer the question the
+   delivery check asks. A record is admitted or lost by ONE receiving document, so a receiver that admits a
+   record in several of its timelines contributes several deliveries to a sum in which another receiver's
+   losses then disappear. Keyed on the document name and not on an instance, because the instance holding a
+   document is replaced across the park while the name is what a record is routed on. Filled explicitly rather
+   than with a `??  0`: a histogram this file builds is a producer this file owns, and the one number that must
+   not be silently invented here is a count of records nobody routed. */
+const routedTo = new Map();
 /* THE DISTINCT `/got` REQUESTS THIS ZONE WAS SHOWN, WHICH IS NOT A COUNT OF LISTENER INVOCATIONS AND WAS READ
    AS ONE. `qjs_pending` is a SET keyed on the (method, URL) pair — engine_pending_fetches dedups it there,
    deliberately, because several flows park on one request and a second listing would make this zone provide
@@ -858,6 +866,8 @@ async function routePending() {
     const target = holderOf(p.doc);
     if (!target) { routeFailures.push(`post ${p.world} -> ${p.doc}`); continue; }
     console.log(`routing world ${p.world} -> [${target.tag}] as origin ${p.origin}`);
+    if (!routedTo.has(p.doc)) routedTo.set(p.doc, 0);
+    routedTo.set(p.doc, routedTo.get(p.doc) + 1);
     target.M.ccall('qjs_route', 'void', ['number','number'], [target.cs(p.record), target.cs(p.origin)]);
     const before = got.length;
     /* THE STALL IS WHAT ENDS THIS WAIT WHEN THE RECORD DOES NOT ARRIVE, and it names the difference from a
@@ -975,6 +985,27 @@ for (;;) {
          'the read is answered by relaying the peer\'s completion, so a stall here is that relay not happening');
   await routePending();
 }
+/* EVERY RECEIVER IS DRAINED BEFORE ANYTHING IS COUNTED, and that is not tidiness — it is what makes the
+   delivery count a COUNT rather than a sample. `_routedDelivered` and `_routedRefused` are raised where a
+   receiving timeline CONSUMES an attachment (solver/engine.c's flow_deliver), so a record attached to a flow
+   the scheduler has not picked since is neither, and the pair read at an arbitrary stopping point splits a
+   record's fate three ways while reporting two: delivered, refused by every timeline, and STILL QUEUED. The
+   check below is a pigeonhole over the first two and is simply invalid while the third is non-empty.
+   THE STOPPING POINT WAS ARBITRARY. The phase-4 loop above breaks the instant the resumed sender reports
+   `w.closed`, which is a fact about the ASKER and says nothing about what the receivers have got through.
+   Draining here makes the third state empty by construction instead of by luck — measured at 22605dc4 and
+   332a0c50, every receiver answered STALLED on its FIRST step here and not one delivery count moved, which is
+   the good outcome and is exactly what may not be assumed. `pumpUntil` with a predicate that never holds is
+   the drain the file already owns: it returns on DONE or on a stall that this zone will not pay, and it
+   carries no round count, because a cap here would be the bound §NO BOUNDS forbids standing in the one place
+   that decides whether a loss is real.
+   THE SENDER IS NOT STEPPED. engines[0] is `a`; a step of it emits posts that nothing after this line routes,
+   which would inflate the routed count against a delivery count that could not move. */
+for (const e of engines.slice(1)) {
+  const why = await pumpUntil(e, () => false);
+  console.log(`drained [${e.tag}] before the census: ${why}`);
+}
+
 const resumedReads = [...reads.values()].filter((r) => r.asker === engines[0].tag);
 /* EVERY WORLD NAME THE RESUMED SESSION PUT ON THE WIRE, against every name the session that ended had already
    put there. A name in both sets is one `b` keyed a segment on for a flow that no longer exists. */
@@ -1008,6 +1039,8 @@ let forked = 0;
    about, read off the instances rather than counted here, because only an engine knows how many of its
    TIMELINES a record was offered to and how many of them it belonged to. */
 let delivered = 0, refused = 0;
+/* AND THE SAME PAIR PER RECEIVING DOCUMENT, which is the granularity the loss question actually has. */
+const deliveredTo = new Map();
 /* …AND WHAT BECAME OF THE TASKS THOSE DELIVERIES QUEUED, which is the half this file used to INFER and could
    not. §9.3.3 step 8's task has four ends and only one of them runs a listener; solver/engine.h declares them,
    core/frame/window_message.c reports the end a task RUNS to, and solver/flow.c reports the one §7.5.10 step
@@ -1035,6 +1068,8 @@ for (const e of engines) {
   }
   delivered += r._routedDelivered;
   refused += r._routedRefused;
+  if (!deliveredTo.has(e.docId)) deliveredTo.set(e.docId, 0);
+  deliveredTo.set(e.docId, deliveredTo.get(e.docId) + r._routedDelivered);
   /* AND WHETHER THE HEADLINE SURFACE RAN IN THIS INSTANCE, printed and asserted of NOTHING. This driver is the
      only place in the tree where a drive of an uncalled function is visible beside the seam it perturbs — `b`'s
      `message` listener is one until a record is routed, and its drive is what puts `{orphan….arg0}` in a `/got`
@@ -1124,10 +1159,59 @@ if (!posts.length) fail('the sender emitted no cross-instance post');
  * core/frame/window_message.c records the task's end once per task. `got` is kept for what it does witness,
  * which is not a count at all: that the receiving page's own code RAN and issued the request its listener was
  * written to issue. */
-if (delivered < posts.length)
-  fail(`${posts.length} record(s) were routed and the receiving instances delivered ${delivered} — a record ` +
-       'that no timeline of the target document admits is a peer\'s message the page never receives and ' +
-       `cannot know it did not (refused as not-this-timeline: ${refused})`);
+/* AND THE SUM OVER INSTANCES COULD NOT ASK IT, WHICH IS THE THIRD TIME THIS ASSERTION SLOT HAS HELD A CLAIM
+ * ABOUT THE SCHEDULER. `delivered < posts.length` compared a total of deliveries across EVERY receiver against
+ * a total of records this zone routed to all of them, and a record is admitted or lost by exactly ONE
+ * receiving document — so a receiver that admits one record in twenty of its timelines contributes twenty to a
+ * sum in which another receiver's twenty losses are invisible. The per-document form below is strictly
+ * sharper and is the same pigeonhole made where it is valid.
+ *
+ * MEASURED, AND IT IS WHY THIS IS NOT A TIGHTENING OF A WORKING CHECK. The two sides of that aggregate are not
+ * merely incomparable, they are UNCORRELATED. Across runs of the artifacts at 22605dc4 and 332a0c50 — one
+ * program, one fixture, nothing changed but the machine's load — the sender's record count moved 84 -> 449
+ * into one receiver (64 -> 429 distinct sending worlds) and that receiver's `_routedDelivered` was 193 BOTH
+ * TIMES, to the digit, with its refusals scaling 5685 -> 33485. The aggregate went 154 routed / 445 delivered
+ * (OK) and 519 routed / 445 delivered (FAILED) out of one binary. The receiver's admitted count is fixed by
+ * its own timeline structure; the routed count is fixed by how far the RESUMED sender got through its replay
+ * before the peer answered `w.closed`, which this host decides with a WALL-DENOMINATED quantum (§Testing: no
+ * CPU clock here, `sliceMs 12`). 24 runs, 12 per artifact, on a quiet machine: 22605dc4 failed 12/12 and
+ * 332a0c50 failed 10/12, with both passes in the fast mode (~26 s, ~150 posts) against the slow one (~38 s,
+ * 519 posts). THE BUILD AT 22605dc4 REPORTED THIS STAGE `PASS`, and the same command on the same artifact
+ * fails every time it is run alone, so this stage's OK has never been a fact about a revision.
+ *
+ * IT FIRES IN ONE DIRECTION ONLY, AND SAYING SO IS PART OF THE CHECK. Firing establishes a loss: the
+ * receivers are drained above, so every attachment has been consumed, and more records than deliveries means
+ * some record was admitted by no timeline at all. SILENCE ESTABLISHES NOTHING — one record admitted by N
+ * timelines pays for N-1 records admitted by none — so an OK here is not a statement that no message was lost,
+ * and a reader who takes it for one has read a coverage figure without its denominator.
+ *
+ * WHAT WOULD MAKE THE REAL CHECK POSSIBLE IS ONE COUNTER, AND IT BELONGS TO THE PARTY THAT HOLDS THE FACT.
+ * The question is per RECORD ("was this record admitted by at least one timeline") and every number crossing
+ * this seam is per (record, timeline) attachment, so no arithmetic here can recover it. solver/engine.c raises
+ * `g_routed_delivered` at the enqueue and `g_routed_refused` at the refusal; what it does not have is a tally
+ * of records whose LAST attachment was consumed with zero deliveries. Emit that beside the pair
+ * (`_routedZeroDelivery`) and this becomes an equality against zero that no multiplicity can pay for and no
+ * schedule can move. Its absence would show exactly as it shows today: a gate that is red on a quiet machine,
+ * green on a loaded one, and unable to name which record went missing. */
+for (const [doc, n] of routedTo) {
+  /* NOT DEFAULTED, for the reason the census fields above are not: a document this zone routed to and that no
+     engine reported a delivery census for is a receiver that vanished between the routing and the count, and
+     reading that as zero would report it as the loss this check is about. */
+  if (!deliveredTo.has(doc))
+    fail(`${n} record(s) were routed to \`${doc}\` and no instance in the final census holds that document — ` +
+         'the holder was provisioned, took the records, and is not among the engines this drive is counting, ' +
+         'so its deliveries are unmeasured rather than absent');
+  const d = deliveredTo.get(doc);
+  if (d < n)
+    fail(`${n} record(s) were routed to \`${doc}\` and its timelines admitted ${d} of them — every receiver ` +
+         'was drained before this count, so the remaining attachments were consumed as refusals and at least ' +
+         `${n - d} record(s) were admitted by NO timeline of that document. That is a peer's message the page ` +
+         'never receives and cannot know it did not (this document refused as not-this-timeline: ' +
+         `${refused} across all receivers; routed in total: ${posts.length}, delivered in total: ` +
+         `${delivered}). The direction matters: this fires only on a shortfall, so it names a loss when it ` +
+         'speaks and proves nothing when it is silent — see the block above for the one counter that would ' +
+         'turn it into a statement about every record');
+}
 const endsTotal = ENDS.reduce((n, k) => n + ends[k], 0);
 /* `<` AND NOT `!==`, AND THE SLACK IS A MECHANISM RATHER THAN TOLERANCE: a fork gives the arm its own Array
    naming the parent's job RECORDS (solver/flow.c's flow_job_fork), so a timeline that branches between the
@@ -1304,9 +1388,16 @@ if (!worldDeaths.length)
        'and with neither, every segment `b` materialized is a foreign flow\'s state it holds for the rest of ' +
        'its process, and `b` can never park while it does (solver/cold.c refuses it)');
 console.log(`world deaths announced: ${worldDeaths.length} — ${worldDeaths.join(' ')}`);
+/* AND THE OK SAYS WHAT IT DID NOT ESTABLISH. The delivery check above is one-sided: it names a loss when it
+   fires and is silent when a receiver's timeline multiplicity has paid for one, so a line that read "N routed
+   into M deliveries" and stopped invited exactly the reading the block above spends a paragraph refusing. The
+   per-document shortfall is printed as the number it is — zero on this run — beside the counter that would
+   make it a statement about every record rather than about the sum. */
 console.log(`[route] OK — two instances, ${posts.length} record(s) routed into ${delivered} delivery(ies) ` +
             `across the receiver's timelines (${refused} refused as not-this-timeline) with one listener run ` +
-            'each, ancestry-forked segments: ' + forked +
+            'each; no receiving document admitted fewer records than it was handed, which does NOT establish ' +
+            'that every record was admitted (solver/engine.c emits no per-record delivery tally, so a record ' +
+            'admitted by several timelines still pays for one admitted by none), ancestry-forked segments: ' + forked +
             `, cross-agent reads answered: ${readsAnswered}, w.closed read back: ${closedBy(resumedTag)[0].url}` +
             `, parked and resumed across ${residue.length} bytes of residue`);
 
