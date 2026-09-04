@@ -43,7 +43,7 @@
    dedup and the stall accounting are identical either way, and only the delivery differs. */
 #define FLOW_PENDING_RESOLVE   0   /* fetch(): call `resolve` with the reply RECORD, which becomes a Response */
 #define FLOW_PENDING_SCRIPT    1   /* injected <script src>: queue the reply as this flow's next program */
-#define FLOW_PENDING_DOCSCRIPT 2   /* the document's OWN <script src>: the reply fills script slot `scriptI` */
+#define FLOW_PENDING_DOCSCRIPT 2   /* the document's OWN <script src>: the reply fills the row named `scriptRow` */
 /* A SYNCHRONOUS REQUEST ONLY THE HOST CAN ANSWER, and the one kind the flow cannot proceed past. A
    cross-document read (`iframe.contentWindow.document.body`) must answer at its own call site, and across
    instances the answer is not available in this turn — so the flow SUSPENDS there exactly as it suspends at an
@@ -262,7 +262,7 @@ int pending_prov_compose(int kind, int path_forced);
     /* what this request is evidence of, composed from the kind and the pusher's path */ \
     X(PROV,       "prov",      PEND_SHARE,                                             \
       JS_NewInt32(pend_ctx(), pending_prov_compose(kind, path_forced)))                \
-    X(SCRIPT_I,   "scriptI",   PEND_SHARE,  JS_NewInt32(pend_ctx(), -1))               \
+    X(SCRIPT_ROW, "scriptRow", PEND_SHARE,  JS_NewInt64(pend_ctx(), 0))                \
     /* §4.12.1.1's NULL type: a park owing a PROGRAM with no type crashes at the delivery */ \
     X(SCRIPT_TYPE, "scriptType", PEND_SHARE, JS_NewInt32(pend_ctx(), SCRIPT_TYPE_NONE))  \
     X(REQ,        "req",       PEND_SHARE,  JS_NewInt64(pend_ctx(), 0))                \
@@ -451,7 +451,7 @@ int  pending_outstanding_kind(JSValueConst reg, int kind);
    one entry when it asks. */
 int  pending_entry_declined(JSValueConst e);
 
-/* APPEND an entry of `kind` with every field present at its default (no URL, no answer, scriptI -1, req 0).
+/* APPEND an entry of `kind` with every field present at its default (no URL, no answer, scriptRow 0, req 0).
    Creates the register if this is the flow's first. Returns the new entry, OWNED by the caller.
    `path_forced` IS THE PUSHING FLOW'S OWN (flow_path_forced), and it is a PARAMETER rather than a lookup for
    two reasons that both matter: this file is below flow.c and must not reach up into it, and the provenance is

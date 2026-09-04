@@ -668,9 +668,28 @@ typedef struct Flow {
        there was a `perform_doc` beside the token on the flow saying the same thing, and this is the field that
        already said it. Parallel to `dyn` for the reason
        `dyn_cand` is — a field added to the queue is an obligation at every clone, free and finish site, and the
-       seven arrays are allocated, copied and freed together so one that got a field the others did not cannot
+       eight arrays are allocated, copied and freed together so one that got a field the others did not cannot
        stay unnoticed. */
     uint32_t *dyn_doc;
+    /* AND WHAT EACH ROW IS CALLED — the one fact about a row that a SHIFT cannot change. Every structure
+       outside this table that named a row named it by ABSOLUTE POSITION, and a position is a fact about the
+       row only while the set is FIXED: §4.12.1.1 "Processing model"'s "immediately execute the script
+       element" interposes a row below the cursor and §7.5.10's destroy removes one, so an entry holding a
+       position silently renames its referent while staying perfectly in range. That is the defect CLAUDE.md
+       calls an index naming a thing only while the set is fixed, and it had TWO aborts standing in for it
+       here — one refusing the interposition, one refusing the removal — because neither could be answered
+       while the name was a number that other people's edits move.
+       MINTED GLOBALLY AND NEVER REUSED, so one id names one row for the life of the instance. A per-flow
+       counter is enough for a lone timeline and wrong for two: sibling arms mint independently, so both
+       would call their next row by the same name — and a register entry a fork SHARES (solver/pending.h:
+       one record is one member however many flows name it) would then resolve to a DIFFERENT row in each
+       arm, which is the exact renaming this column exists to make impossible.
+       A FORK COPIES IT like every other column: an arm is its parent's timeline continued over the same
+       rows, so a row it inherited IS the same row and answers to the same name. That is what lets one
+       shared register entry be delivered correctly into either arm.
+       IT IS NOT PARKED. The cold tier stores a recipe and replays the document from its first script, so a
+       resumed flow's rows are rebuilt and take fresh names — the same reason `dyn_el` may never be parked. */
+    uint64_t *dyn_id;
     /* AND THE RENDEZVOUS TOKEN OF THE PEER PARKED ON IT, for the one kind of row that OWES AN ANSWER. A
        cross-agent operation's answer IS its program's completion, so the question and the program are one thing
        and the token is a fact about the ROW. Held beside the flow instead it was a single slot, and both halves
@@ -712,7 +731,7 @@ typedef struct Flow {
        bundle served from `/assets/app.js` resolves to `/assets/chunk.js`, and for a MODULE the address is
        additionally the module map KEY, so two `<script type=module src>` of one document named by their
        document rather than by themselves are ONE module and the second evaluates nothing. Parallel to
-       `dyn_cand` for the reason stated there — the seven arrays are allocated, copied and freed together. */
+       `dyn_cand` for the reason stated there — the eight arrays are allocated, copied and freed together. */
     char **dyn_url;
     /* AND THE `script` ELEMENT THE ROW IS THE PROGRAM OF, or NULL for a row no element put there.
        HTML §4.12.1.1 "Processing model"'s "execute the script element" is a switch on EL, and its "classic" arm
@@ -741,7 +760,7 @@ typedef struct Flow {
        row is a task and the checkpoint falls BEFORE it. Position alone cannot say which: an immediate row and
        an appended one both land at the cursor when the queue was empty, so without this column the two are the
        same row and one of the two orderings is silently wrong. Parallel to `dyn_cand` for the reason stated
-       there — the seven arrays are allocated, copied and freed together. */
+       there — the eight arrays are allocated, copied and freed together. */
     unsigned char *dyn_pos;
     void *delta;           /* this flow's isolated HEAP COW delta (CowDelta*), applied while running */
     void *dom; int dom_n, dom_cap;   /* this flow's isolated DOM COW delta HEAD buffer (dom_cow), swapped with the
@@ -2150,13 +2169,28 @@ int   flow_programs_unstarted_for_document(const Flow *f, uint32_t doc);
  * destruction is per timeline, and a sibling arm that has not destroyed this document is running a document
  * that is still there. Taking its rows would destroy something in a timeline that never asked.
  *
- * IT ALSO REPAIRS EVERY INDEX INTO THE SEQUENCE, which is the half a caller must not try to help with: the
- * pending register's `scriptI` and the flow's own `imm_at`/`imm_next` are absolute positions, and a compaction
- * that moved rows without them would deliver one document's script text into another document's row. `script_i`
- * and `last_compiled` are provably unaffected — see the note at the end of the body.
+ * IT ALSO REPAIRS THE ABSOLUTE POSITIONS THAT ARE LEFT, which is the half a caller must not try to help
+ * with: the flow's own `imm_at`/`imm_next` are absolute, and a compaction that moved rows without them would
+ * order a later interposition against a run that is no longer where it was. `script_i` and `last_compiled`
+ * are provably unaffected — see the note at the end of the body.
+ * THE PENDING REGISTER NEEDS NO REPAIR AND THAT IS WHY THIS FUNCTION NO LONGER ABORTS. An entry names its
+ * row by `dyn_id`, not by position, so a surviving row keeps its name across the compaction however far it
+ * moves; what the walk still owes is to DROP the entries whose rows are going, which is HTML §7.5.11
+ * "Aborting a document load" step 2's "Cancel any instances of the fetch algorithm in the context of
+ * document". The abort that stood there refused a removal below an outstanding external script because the
+ * entry's position could not be corrected — the record is SHARED with every forked arm and only this arm
+ * destroyed the document, so one field would have had to hold two positions at once. A name is the same in
+ * both arms, so there is nothing left to correct.
  *
  * NOT PURE: it frees rows and mutates the register, so unlike the two counts above it may NOT be asked from
  * inside a collection and may not stand in a DCHECK. */
 int   flow_programs_remove_for_document(Flow *f, uint32_t doc);
+
+/* WHICH ROW OF `f`'s SEQUENCE IS CALLED `id`, or -1 when this flow holds none — see `dyn_id`.
+ * PURE, so it may stand inside a DCHECK, and it ASSERTS NOTHING ITSELF: three call sites reach it (the two
+ * halves of a document script's delivery and §7.5.10's removal walk) and a should-never-happen checked here
+ * would report THIS line for all three, which CLAUDE.md names as an assert whose remedy has no site. Each
+ * caller tests the answer and says what its own -1 would mean. */
+int   flow_dyn_row_by_id(const Flow *f, uint64_t id);
 
 #endif

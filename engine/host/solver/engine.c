@@ -446,20 +446,27 @@ void engine_pending_docscript(JSContext *ctx, const char *url, int script_i) {
     JSValue e;
     DCHECK(f != NULL, "an external document script was awaited outside a running flow");
     DCHECK(script_i >= 0 && script_i < f->dyn_n,
-           "an external document script parked for a sequence position this flow does not have — the position "
-           "is what the reply is delivered into and what its element is read from");
+           "an external document script parked for a sequence position this flow does not have — the caller "
+           "names the row it is standing at, and this park reads that row's NAME and its element from the "
+           "column at that position");
     DCHECK(url != NULL && *url, "an external document script entry carries no URL");
+    /* WHICH ROW THIS PARK IS FOR, BY NAME — the dedup and the entry ask the same question of the same value,
+       and it is the row's `dyn_id` rather than its position because a position is a fact about the row only
+       while the set is fixed (solver/flow.h). `script_i` is the caller's way of naming the row it is standing
+       at, which is the right vocabulary AT the cursor and the wrong one on a register that outlives an
+       interposition and a destroy. */
+    uint64_t rowid = f->dyn_id[script_i];
     for (int i = 0, n = pending_count(f->pending); i < n; i++) {
         JSValue p = pending_entry(f->pending, i);
         int dup = pending_get_int(p, PEND_KIND) == FLOW_PENDING_DOCSCRIPT &&
-                  pending_get_int(p, PEND_SCRIPT_I) == script_i;
+                  (uint64_t)pending_get_int(p, PEND_SCRIPT_ROW) == rowid;
         JS_FreeValue(ctx, p);
         if (dup) return;
     }
     meta = script_csp_meta(ctx, f->dyn_el[script_i]);
     req.metadata = meta.m;
     e = pending_push(&f->pending, FLOW_PENDING_DOCSCRIPT, flow_path_forced(f));
-    pending_set_int(e, PEND_SCRIPT_I, script_i);
+    pending_set_int(e, PEND_SCRIPT_ROW, (int64_t)rowid);
     /* AND §4.3 Scheme fetch WITH THE ADDRESS. A document's own `<script src="data:text/javascript,…">` is
        answered here and the flow's next step delivers it into this slot — see the caller in flow_step, which
        reports host-owed only when this door left the entry outstanding. */
@@ -684,6 +691,11 @@ typedef struct RootScript {
     lxb_dom_element_t *el;
 } RootScript;
 static RootScript *g_root_scripts;
+/* THE NAME THE NEXT ROW OF ANY FLOW'S SEQUENCE TAKES — see solver/flow.h's `dyn_id`. ONE counter for the
+   instance and not one per flow: sibling arms mint independently, so per-flow counters would give two
+   different rows the same name, and a register entry a fork SHARES would then resolve to a different row in
+   each arm. It starts at 1 so that 0 — the register field's own default — is a name no row can answer to. */
+static uint64_t g_dyn_row_id = 1;
 static int g_root_n;
 static Flow *g_sess_cur;
 static int g_sess_live;
@@ -3724,16 +3736,18 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                 JS_FreeValue(ctx, rej);
             } else {
                 if (kind == FLOW_PENDING_DOCSCRIPT) {
-                    /* THE ROW IS ALREADY THERE AND IT IS CONVERTED IN PLACE, NEVER REMOVED. A row's index is
-                       an ABSOLUTE position other records name — engine_pending_docscript writes `scriptI` onto
-                       the register and engine_queue_into asserts against shifting one while such a record is
-                       outstanding — so removing this row would rename every row after it and deliver some
-                       other document script's bytes into the wrong position. Converting keeps every index. */
-                    int di = (int)pending_get_int(p, PEND_SCRIPT_I);
+                    /* THE ROW IS ALREADY THERE AND IT IS CONVERTED IN PLACE, NEVER REMOVED — and the reason
+                       is now §4.12.1's ORDER rather than anybody's bookkeeping. A failed load still holds its
+                       element's position against the scripts written around it (see the DYN_SCRIPT_FAILED arm
+                       in flow_step, which is this engine's "execute the script element" for it), so the row
+                       has to stay. It used to have to stay for a second reason as well — other records named
+                       it by absolute position — and that one is gone: the register names it by `dyn_id`. */
+                    int di = flow_dyn_row_by_id(f, (uint64_t)pending_get_int(p, PEND_SCRIPT_ROW));
 
-                    DCHECK(di >= 0 && di < f->dyn_n,
-                           "an external document script's failure named a sequence position this flow does "
-                           "not have — the entry was queued on one flow and is being delivered into another");
+                    DCHECK(di >= 0,
+                           "an external document script's failure named a row this flow does not hold — the "
+                           "entry was queued on one flow and is being delivered into another, or its row was "
+                           "taken by a destroy that did not take the entry with it");
                     DCHECK(f->dyn_cand[di] == DYN_SCRIPT_SRC,
                            "an external document script's failure named a row that is not awaiting a program "
                            "— the row already holds one, so this is a second answer to one request");
@@ -3791,12 +3805,13 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                this flow's own table now, so this reply fills THIS timeline's row — and the sharing that branch
                provided is already provided one layer down: engine_provide fills every flow whose register names
                the address and un-marks each of them, so one host fetch still answers every waiting member. */
-            int di = (int)pending_get_int(p, PEND_SCRIPT_I);
+            int di = flow_dyn_row_by_id(f, (uint64_t)pending_get_int(p, PEND_SCRIPT_ROW));
             size_t src_n = 0;
             char *src;
-            DCHECK(di >= 0 && di < f->dyn_n,
-                   "an external document script replied for a sequence position this flow does not have — the "
-                   "entry was queued on one flow and the reply is being delivered into another");
+            DCHECK(di >= 0,
+                   "an external document script replied for a row this flow does not hold — the entry was "
+                   "queued on one flow and the reply is being delivered into another, or its row was taken by "
+                   "a destroy that did not take the entry with it");
             DCHECK(f->dyn_cand[di] == DYN_SCRIPT_SRC,
                    "an external document script replied for a sequence position that is not awaiting one — the "
                    "slot holds a program already, so this reply is a second answer to one request and the "
@@ -4431,6 +4446,13 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
            document's globals on the creator's Window. */
         sib->dyn_doc = malloc((size_t)parent->dyn_n * sizeof(uint32_t));
         CHECK(sib->dyn_doc, "engine: OOM fork dyn documents");
+        /* AND WHAT EACH ROW IS CALLED, by a sentence the others do not make: the arm is the parent's timeline
+           continued over the SAME rows, so an inherited row is the same row and must answer to the same name.
+           A register entry outstanding at the fork is SHARED by both arms (solver/pending.h), and it names its
+           row — so an arm that minted fresh names here would leave that entry resolving to nothing in one arm
+           and to the right row in the other, from one reply. Copied, never re-minted. */
+        sib->dyn_id = malloc((size_t)parent->dyn_n * sizeof(uint64_t));
+        CHECK(sib->dyn_id, "engine: OOM fork dyn row names");
         /* AND THE RENDEZVOUS TOKEN OF ANY ROW THAT STILL OWES AN ANSWER, by the same sentence and for the
            reason above: the arm is the operation's program continued, so it answers the same peer under the
            same token. An arm that inherited the row without it would run a peer's operation and tell nobody. */
@@ -4450,12 +4472,12 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
            a state this file makes impossible; now the arm CRASHES where that state would be born instead of
            compiling a candidate as a page script, or an ADDRESS (DYN_SCRIPT_SRC) as a program. */
         DCHECK(parent->dyn_cand != NULL && parent->dyn_type != NULL && parent->dyn_url != NULL &&
-               parent->dyn_el != NULL && parent->dyn_doc != NULL && parent->dyn_token != NULL &&
-               parent->dyn_pos != NULL,
-               "a flow holds queued programs with no kind, script type, address, document, token or position "
-               "column — the seven arrays are one table and are allocated together, so the arm would inherit "
-               "bodies whose kind, evaluation algorithm, resolution base, realm, waiting peer or place against "
-               "the microtask checkpoint are lost");
+               parent->dyn_el != NULL && parent->dyn_doc != NULL && parent->dyn_id != NULL &&
+               parent->dyn_token != NULL && parent->dyn_pos != NULL,
+               "a flow holds queued programs with no kind, script type, address, document, name, token or "
+               "position column — the eight arrays are one table and are allocated together, so the arm would "
+               "inherit bodies whose kind, evaluation algorithm, resolution base, realm, identity, waiting "
+               "peer or place against the microtask checkpoint are lost");
         for (int i = 0; i < parent->dyn_n; i++) {
             /* THE PROGRAM TEXT IS REFERENCED, NOT COPIED — a program's bytes are the same on every timeline
                that holds it and no flow can write them (solver/dyn_body.h), so the arm's whole sequence costs
@@ -4469,6 +4491,7 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
             sib->dyn_type[i] = parent->dyn_type[i];
             sib->dyn_el[i] = parent->dyn_el[i];
             sib->dyn_doc[i] = parent->dyn_doc[i];
+            sib->dyn_id[i] = parent->dyn_id[i];
             sib->dyn_pos[i] = parent->dyn_pos[i];
             sib->dyn_url[i] = NULL;
             if (parent->dyn_url[i]) {
@@ -5615,10 +5638,11 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
         f->dyn_url = realloc(f->dyn_url, (size_t)f->dyn_cap * sizeof(char *));
         f->dyn_el = realloc(f->dyn_el, (size_t)f->dyn_cap * sizeof(lxb_dom_element_t *));
         f->dyn_doc = realloc(f->dyn_doc, (size_t)f->dyn_cap * sizeof(uint32_t));
+        f->dyn_id = realloc(f->dyn_id, (size_t)f->dyn_cap * sizeof(uint64_t));
         f->dyn_token = realloc(f->dyn_token, (size_t)f->dyn_cap * sizeof(char *));
         f->dyn_pos = realloc(f->dyn_pos, (size_t)f->dyn_cap);
-        CHECK(f->dyn && f->dyn_cand && f->dyn_type && f->dyn_url && f->dyn_el && f->dyn_doc && f->dyn_token &&
-              f->dyn_pos,
+        CHECK(f->dyn && f->dyn_cand && f->dyn_type && f->dyn_url && f->dyn_el && f->dyn_doc && f->dyn_id &&
+              f->dyn_token && f->dyn_pos,
               "engine: OOM dynamic-script queue");
     }
     at = f->dyn_n;
@@ -5668,17 +5692,15 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
               "a program's IMMEDIATE slot is past the end of the flow's own queue — the cursor names the row "
               "the flow is at, so the slot after it is at most one past the last row, and a larger index "
               "means the cursor and the queue disagree about how many programs this flow has");
-        /* A ROW THAT SHIFTS IS A ROW SOMEBODY MAY BE HOLDING THE INDEX OF. engine_pending_docscript records an
-           ABSOLUTE sequence position on the register and flow_deliver_one_reply writes the fetched source into
-           `f->dyn[scriptI]`, so an interposition below an outstanding one would deliver a document's
-           script text into the wrong row — a program silently replaced by another document's bytes. It cannot
-           happen (a flow parks on one of those with NO frame and cannot leave that slot until the reply fills
-           it, and `frame` is the same predicate the position above is derived from), which is exactly why it is
-           asserted rather than handled. */
-        DCHECK(at == f->dyn_n || pending_count_kind(f->pending, FLOW_PENDING_DOCSCRIPT) == 0,
-               "a program was interposed into a flow that is still owed an external document script — that "
-               "reply names its slot by ABSOLUTE index, so the shift would deliver the fetched source into "
-               "whichever row moved into that position");
+        /* A ROW THAT SHIFTS USED TO BE A ROW SOMEBODY WAS HOLDING THE INDEX OF, AND AN ABORT STOOD HERE. The
+           register held the row's absolute POSITION, so an interposition below an outstanding external script
+           would have delivered that script's bytes into whichever row moved into the slot — a program silently
+           replaced by another document's. It was asserted rather than handled because it could not happen: a
+           flow parks on such a row with NO frame and cannot leave the slot until the reply fills it. The
+           register names the row by `dyn_id` now (solver/flow.h), and a name survives every shift, so the
+           interposition below is free to move rows under an outstanding reply and the assert has nothing left
+           to say. This is the half of the pair §7.5.10's removal walk in flow.c names as its twin; both went
+           in the diff that built row identity. */
     }
     if (at < f->dyn_n) {
         size_t tail = (size_t)(f->dyn_n - at);
@@ -5688,6 +5710,7 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
         memmove(&f->dyn_url[at + 1],   &f->dyn_url[at],   tail * sizeof(char *));
         memmove(&f->dyn_el[at + 1],    &f->dyn_el[at],    tail * sizeof(lxb_dom_element_t *));
         memmove(&f->dyn_doc[at + 1],   &f->dyn_doc[at],   tail * sizeof(uint32_t));
+        memmove(&f->dyn_id[at + 1],    &f->dyn_id[at],    tail * sizeof(uint64_t));
         memmove(&f->dyn_token[at + 1], &f->dyn_token[at], tail * sizeof(char *));
         memmove(&f->dyn_pos[at + 1],   &f->dyn_pos[at],   tail);
     }
@@ -5702,6 +5725,9 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
     /* THE ELEMENT IS BORROWED AND NOT COPIED — there is no second element to make, and nothing to fail. */
     f->dyn_el[at] = el;
     f->dyn_doc[at] = doc;
+    /* THE ROW IS NAMED AT ITS CREATION AND NEVER AGAIN — the shift above moved the names of every row it
+       moved, so no live row's name changes here and this mint is the only writer of a fresh one. */
+    f->dyn_id[at] = g_dyn_row_id++;
     f->dyn_token[at] = token;   /* MOVED: one allocation from engine_perform to flow_answer_perform */
     /* THE POSITION IS KEPT, NOT CONSUMED. `at` says where the row went; this says WHY, and the microtask
        checkpoint reads it (flow_checkpoint_due) because §4.12.1.1's immediate program ran inside the causing

@@ -1563,6 +1563,7 @@ void flow_release(JSContext *ctx, Flow *f) {
        holds; leaking one is impossible because there is nothing to leak. */
     free(f->dyn_el); f->dyn_el = NULL;
     free(f->dyn_doc); f->dyn_doc = NULL;
+    free(f->dyn_id); f->dyn_id = NULL;
     free(f->dyn_token); f->dyn_token = NULL;
     free(f->dyn_pos); f->dyn_pos = NULL;
     f->dyn_n = f->dyn_cap = 0;
@@ -4206,7 +4207,7 @@ void flow_remove(JSContext *ctx, Flow *f) {
            "frees that Array and every [vector, taken] pair it names, so a flow reaching here with one was "
            "removed without being released");
     DCHECK(f->dyn == NULL && f->dyn_cand == NULL && f->dyn_type == NULL && f->dyn_url == NULL &&
-           f->dyn_el == NULL && f->dyn_doc == NULL && f->dyn_token == NULL &&
+           f->dyn_el == NULL && f->dyn_doc == NULL && f->dyn_id == NULL && f->dyn_token == NULL &&
            f->dyn_pos == NULL && f->dec_blob == NULL && f->pin_blob == NULL,
            "a flow was removed with its lazily-loaded chunk bodies or its suspended decision/pin blobs still "
            "attached — the flow's own allocations, freed by nothing else");
@@ -4262,6 +4263,20 @@ int flow_programs_for_document(uint32_t doc) {
     return n;
 }
 
+/* WHICH ROW OF `f`'s SEQUENCE IS CALLED `id` — see flow.h's declaration for why it asserts nothing.
+   A LINEAR WALK IS THE RIGHT SHAPE HERE AND NOT A CONCESSION. It is asked once per external script REPLY and
+   once per entry of a destroy walk, against a column whose length is the number of programs one document
+   shipped; an index beside it would be a second structure holding row identity, which is the thing that had to
+   be got right in ONE place for the register to stop holding positions at all.
+   ZERO IS NO ROW, never row zero: `dyn_id` is minted from a counter that starts at 1, so the register's own
+   default (solver/pending.h) is a name that cannot resolve, and an entry nobody wrote a row onto answers -1
+   here instead of silently naming the sequence's first program. */
+int flow_dyn_row_by_id(const Flow *f, uint64_t id) {
+    DCHECK(f != NULL, "a flow's script sequence was searched for a row name with no flow to search");
+    for (int k = 0; k < f->dyn_n; k++) if (f->dyn_id[k] == id) return k;
+    return -1;
+}
+
 /* IS ROW `k` ONE HTML §7.5.10 "Destroying documents"' STEP 7 TAKES — the criterion, in ONE place, because the
    count below and the removal below THAT are one question asked twice. A second copy of it is the shape where
    the assert that FIRES and the mechanism that ANSWERS it disagree about which rows they are about, and that
@@ -4307,7 +4322,7 @@ int flow_programs_unstarted_for_document(const Flow *f, uint32_t doc) {
 }
 
 /* See flow.h. HTML §7.5.10 STEP 7 PERFORMED ON THE ONE TASK QUEUE `JS_DropJobsForContext` CANNOT REACH — this
-   flow's own program sequence. The rows go, the eight columns shrink together, and every index anything still
+   flow's own program sequence. The rows go, the nine columns shrink together, and every index anything still
    holds into the sequence is brought down with them.
  *
  * THE ORDER IS FORCED AND IT IS NOT THE OBVIOUS ONE: the register is walked BEFORE the columns move, because
@@ -4359,9 +4374,9 @@ int flow_programs_remove_for_document(Flow *f, uint32_t doc) {
            "anywhere to say so. If the criterion is meant to reach these rows, the cursor pair has to be "
            "brought down with them here, exactly as `imm_at`/`imm_next` are below");
 
-    /* THE ENTRIES THAT NAME A ROW, FIRST. engine_pending_docscript records the row's ABSOLUTE position on the
-       register (PEND_SCRIPT_I) and flow_deliver_one_reply writes the fetched source into `f->dyn[scriptI]`, so
-       the register is the one structure outside this column that holds an index into it.
+    /* THE ENTRIES THAT NAME A ROW, FIRST. engine_pending_docscript records the row's NAME on the register
+       (PEND_SCRIPT_ROW) and flow_deliver_one_reply finds the row by it, so the register is the one structure
+       outside this column that names a row at all.
        AN ENTRY WHOSE ROW IS GOING LEAVES WITH IT, and that is what §7.5.10 step 2's "Abort document." reaches
        — HTML §7.5.11 "Aborting a document load", whose own step 2 is "Cancel any instances of the fetch
        algorithm in the context of document, discarding any tasks queued for them, and discarding any further
@@ -4370,35 +4385,31 @@ int flow_programs_remove_for_document(Flow *f, uint32_t doc) {
        context is null, which is the exact thing step 7 exists to prevent. Walked BACKWARDS because
        pending_remove is a swap-remove: it moves the LAST entry into the hole, and descending means that entry
        has already been visited.
-       AN ENTRY WHOSE ROW SURVIVES BUT SHIFTS CANNOT BE FIXED HERE, AND THE ABORT IS THE HONEST ANSWER RATHER
-       THAN A GAP. Bringing its slot down is a WRITE to a record a forked sibling shares (pending.h: a fork
-       shares records, and solver/pending_index.h states it outright: one record is one member however many
-       flows name it), and that sibling has not destroyed this document and has not moved a row: the same field
-       would have to hold two different positions at once. `pending_unshare` is not the way out either — its own
-       contract admits a copy only when no reply is coming for the original, and an outstanding document script
-       is precisely a record a reply IS coming for. The engine already refuses the OTHER shifting operation for
-       the same reason one screen into engine_queue_into's IMMEDIATE arm, and this is that assert's twin. */
+       AN ENTRY WHOSE ROW SURVIVES BUT SHIFTS NEEDS NOTHING DOING TO IT, AND AN ABORT USED TO STAND HERE
+       BECAUSE IT DID. While the entry held the row's absolute POSITION, a removal below it renamed its
+       referent, and the position could not be corrected: bringing it down is a WRITE to a record a forked
+       sibling shares (pending.h: a fork shares records, and solver/pending_index.h states it outright — one
+       record is one member however many flows name it), and that sibling has not destroyed this document and
+       has not moved a row, so the one field would have had to hold two different positions at once.
+       `pending_unshare` was no way out either: its contract admits a copy only when no reply is coming for the
+       original, and an outstanding document script is precisely a record a reply IS coming for. The entry names
+       the row by `dyn_id` now — the same name in every arm, unchanged by any shift — so the compaction below
+       carries it and there is nothing left to correct or to refuse. */
     for (int k = pending_count(f->pending) - 1; k >= 0; k--) {
         JSValue e = pending_entry(f->pending, k);
         int docscript = (int)pending_get_int(e, PEND_KIND) == FLOW_PENDING_DOCSCRIPT;
-        int slot = (int)pending_get_int(e, PEND_SCRIPT_I);
+        uint64_t rowid = (uint64_t)pending_get_int(e, PEND_SCRIPT_ROW);
+        int slot;
 
         JS_FreeValue(pending_ctx(), e);
         if (!docscript) continue;
-        DCHECK(slot >= 0 && slot < f->dyn_n,
-               "an external document script's park names a sequence position this flow does not have — the "
-               "entry is pushed with the slot it was queued at and nothing but this removal moves one, so the "
-               "park and the column have come apart");
+        slot = flow_dyn_row_by_id(f, rowid);
+        DCHECK(slot >= 0,
+               "an external document script's park names a row this flow does not hold — a name is minted at "
+               "the row's creation, copied by a fork and carried by this compaction, and only a removal HERE "
+               "retires one, so an entry that resolves to nothing outlived its row without this walk taking "
+               "it: the park and the column have come apart");
         if (prog_row_removed_by_destroy(f, slot, doc)) { pending_remove(&f->pending, k); continue; }
-        DCHECK(slot < lowest,
-               "§7.5.10 step 7 is removing a destroyed Document's programs from under an OUTSTANDING external "
-               "script of a DIFFERENT document — that park names its row by ABSOLUTE position, the row is "
-               "about to move down, and the position cannot be corrected because the record is SHARED with "
-               "every forked arm and only this arm destroyed the document. BUILD ROW IDENTITY: give each row "
-               "of the sequence a per-flow id that a fork copies and a removal does not reuse, have "
-               "engine_pending_docscript record THAT instead of the position, and have flow_deliver_one_reply "
-               "find the row by it — then no arm's removal can rename another arm's row, and this abort and "
-               "engine_queue_into's interposition twin both go");
     }
 
     /* THE INTERPOSITION WITNESS IS THIS FLOW'S OWN AND IS SHARED WITH NOBODY, so it is ARITHMETIC where the
@@ -4445,6 +4456,9 @@ int flow_programs_remove_for_document(Flow *f, uint32_t doc) {
             f->dyn_url[w]   = f->dyn_url[k];
             f->dyn_el[w]    = f->dyn_el[k];
             f->dyn_doc[w]   = f->dyn_doc[k];
+            /* THE NAME TRAVELS WITH THE ROW, which is the whole of why this walk no longer aborts: the row
+               moves, its `dyn_id` does not change, and every register entry naming it is still naming it. */
+            f->dyn_id[w]    = f->dyn_id[k];
             f->dyn_token[w] = f->dyn_token[k];
             f->dyn_pos[w]   = f->dyn_pos[k];
         }
@@ -4453,7 +4467,7 @@ int flow_programs_remove_for_document(Flow *f, uint32_t doc) {
     DCHECK(w == f->dyn_n - removed,
            "§7.5.10 step 7's compaction kept a different number of rows than the count said it would take — "
            "the count and the walk ask one predicate over one column, so a disagreement means the sequence "
-           "was written between them and the eight columns no longer describe one queue");
+           "was written between them and the nine columns no longer describe one queue");
     f->dyn_n = w;
     /* `script_i` AND `last_compiled` ARE DELIBERATELY UNTOUCHED — the proof is the `lowest` assert above, which
        is where it is checkable: there the columns still hold the positions the claim is about. */
