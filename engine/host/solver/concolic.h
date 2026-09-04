@@ -583,6 +583,36 @@ JSValue     concolic_tobool_hook(JSContext *ctx, JSValueConst v, int negate);
 JSValue     concolic_key_read_hook(JSContext *ctx, JSValueConst obj, JSValueConst key);
 /* JSConcolicHooks.key_name — the real string an unknown key denotes (its shape), stable per source. */
 JSValue     concolic_key_name_hook(JSContext *ctx, JSValueConst key);
+/* JSConcolicHooks.key_value — that trade UNDONE, where a property NAME is handed back to the program as a
+ * VALUE. `key_name` spends an unknown's provenance and domain to buy an atom, which is the honest price of
+ * ECMAScript §6.1.7 The Object Type's "A property key is either a String or a Symbol." — an atom cannot carry
+ * an unknown. It is the right price at every site that wanted BYTES (a lookup, a `@WHY`'s display form,
+ * concolic_name_cstr's selector), and a LOSS at an ENUMERATION, which is the one site that wanted a VALUE:
+ * `for (k in o)` and `Object.keys(o)` hand the composed bytes to the page, so `k === "admin"` is decided by
+ * comparing two concrete strings and PRUNES an arm nothing contradicts, and `fetch("/api/" + k)` emits a
+ * concrete path segment no run computed — §@H's wrong report rather than a partial one, one step worse than
+ * the case it names, because nothing marks these bytes as a shape at all. §solver bans this shape by name in
+ * the JSON.stringify case: taint is preserved, never a de-tainting placeholder.
+ * Answers JS_UNINITIALIZED for every string this file did not mint for an unknown key, which is every atom the
+ * parser, the bytecode and the engine's own vocabulary produce.
+ *
+ * NAMED RESIDUAL — NOT COVERED: four other conversions of a property name to a value the program observes.
+ * §10.5.11 [[OwnPropertyKeys]] ( )'s CreateArrayFromList over a validated `ownKeys` trap result; the same
+ * List built for a non-Proxy (`Object.getOwnPropertyNames`, `Reflect.ownKeys`); the `prop` ARGUMENT a Proxy
+ * handler is called with; and §25.5.4 JSON.stringify ( value [ , replacer [ , space ] ] )'s key argument to a
+ * replacer. Each still takes JS_AtomToValue, so each delivers the composed bytes. This entry is CORRECT for
+ * what it covers and narrower than the rule, because the three §7.3.23 EnumerableOwnProperties ( obj, kind )
+ * and §14.7.5.10.2.1 %ForInIteratorPrototype%.next ( ) seams hand their result straight to the page while the
+ * ownKeys List re-enters §10.5.11 steps 7-22's own invariant checks, which read it back as keys — so routing it is a
+ * question about that machine and not one line.
+ * WHAT THE NEXT DIFF BUILDS: those four sites take quickjs.c's `js_enum_key_value` — the one speller the three
+ * covered seams already route through — with §10.5.11's List asserted to survive its own re-read as the same
+ * atom, since a restored unknown must spell the name it was minted from or the invariant check is comparing
+ * two vocabularies.
+ * HOW ITS ABSENCE SHOWS: `o[location.hash] = 1; Object.getOwnPropertyNames(o).forEach(k => fetch("/a/" + k))`
+ * emits a concrete `@H` path segment carrying the shape text, where the same program written with
+ * `Object.keys` emits a domain-annotated one. */
+JSValue     concolic_key_value_hook(JSContext *ctx, JSValueConst name);
 JSValue     concolic_builtin_hook(JSContext *ctx, JSValueConst v, const char *op, JSValue example);
 /* …AND THE SAME DERIVATION OVER SEVERAL OPERANDS AT ONCE — the VALUE twin of concolic_new_rel, for a component
  * whose own algorithm COMPUTES a result from more than one operand and cannot say which of them decided it.

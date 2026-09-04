@@ -3374,13 +3374,165 @@ const char *concolic_name_cstr(JSContext *ctx, JSValueConst v) {
     return JS_ToCString(ctx, v);
 }
 
+/* THE NAMES THIS FILE HAS SPENT AN UNKNOWN ON — what makes the inverse below possible, and the reason one has
+   to exist at all.
+   `concolic_key_name_hook` buys an ATOM with a value's PROVENANCE and its DOMAIN, and ECMAScript prices that
+   correctly: §6.1.7 The Object Type says "A property key is either a String or a Symbol.", so a key IS bytes
+   and an unknown cannot be one. The purchase is FINAL and CORRECT at every site that wanted bytes — a lookup,
+   an atom a builtin consumes, a `@WHY` message's display form. It is a LOSS at the one shape of site that
+   wanted a VALUE: an ENUMERATION hands the name back to the page, and a value that was unknown and is now a
+   real string forks nothing (`k === "admin"` compares two concrete strings and prunes an arm no constraint
+   contradicts) and reports itself as computed — §@H one step worse than the case it names, because nothing
+   marks these bytes as a shape at all.
+   SO THE MINT WRITES DOWN WHAT IT SPENT. FOUR STRINGS AND NO JSValue, deliberately: a table of live values
+   would be a GC root whose lifetime this component does not own, and §State-isolation's rule about platform
+   data a flow queues is about exactly this shape — a global holding heap pointers reverts nothing at a context
+   switch and parks as nothing. The four are what `concolic_alloc` takes, so the restore is a RE-MINT through
+   the one derivation door rather than a second constructor.
+   IT IS NOT PER-FLOW STATE AND MUST NOT BE CAPTURED. The map from a value to its shape is a pure function of
+   the value, so two flows minting one unknown record ONE entry and neither can disagree with the other. What
+   is per-flow is the SLOT the name goes on, and that is an ordinary property write the COW delta already
+   carries. It is AGENT state, released with the sources and the paths at concolic_free. */
+typedef struct { char *shape, *src, *root, *ident; } KeyName;
+static KeyName *g_keynames; static int g_keynames_n, g_keynames_cap;
+static int *g_keynames_hash; static int g_keynames_hash_cap;   /* the index (shape -> idx+1) */
+
+static int keyname_find(const char *shape) {
+    uint32_t m, h;
+    if (!g_keynames_hash) return -1;
+    m = (uint32_t)g_keynames_hash_cap - 1; h = cons_hash(shape) & m;
+    while (g_keynames_hash[h]) {
+        if (!strcmp(g_keynames[g_keynames_hash[h] - 1].shape, shape)) return g_keynames_hash[h] - 1;
+        h = (h + 1) & m;
+    }
+    return -1;
+}
+static void keyname_hash_put(int idx) {   /* caller guarantees room */
+    uint32_t m = (uint32_t)g_keynames_hash_cap - 1, h = cons_hash(g_keynames[idx].shape) & m;
+    while (g_keynames_hash[h]) h = (h + 1) & m;
+    g_keynames_hash[h] = idx + 1;
+}
+static void keyname_hash_rebuild(void) {
+    int i, nc = 16;
+    int *nh;
+    /* SIZED IN A LOCAL AND PUBLISHED AFTER — cons_hash_rebuild's rule, for its reason: the allocation can sell
+       a flow (solver/reclaim.h), and a `cap` advertising the new size over the old table is an out-of-bounds
+       read for anything that looks a name up while the sale runs. */
+    while (nc < g_keynames_n * 2) nc *= 2;
+    nh = reclaim_realloc(g_keynames_hash, (size_t)nc * sizeof(int));
+    CHECK(nh, "concolic: OOM indexing the names spent on unknown keys");
+    g_keynames_hash = nh; g_keynames_hash_cap = nc;
+    memset(g_keynames_hash, 0, (size_t)g_keynames_hash_cap * sizeof(int));
+    for (i = 0; i < g_keynames_n; i++) keyname_hash_put(i);
+}
+/* ABSENT ON BOTH SIDES IS ONE FACT AND NOT A MISS: `src` and `root` are NULL together for a value with no
+   provenance, and `ident` is NULL for one this engine cannot spell, so a comparison that treated NULL as
+   unequal-to-everything would report ONE value as two and the assertion below would fire on agreement.
+   COMPILED WITH ITS ONE READER, which is why the `#if` is here and around the assert below rather than being
+   left to the macro: a release DCHECK is `(void)sizeof(cond)` — type-checked and never evaluated — so the name
+   must still RESOLVE in a build that emits no call to it, and a static function in that state is exactly what
+   -Wunneeded-internal-declaration reports. The pair is dev-only together or neither is. */
+#if APICLIENT_DEV
+static int keyname_str_same(const char *a, const char *b) { return a ? (b && !strcmp(a, b)) : !b; }
+#endif
+
+static void keyname_record(const char *shape, const char *src, const char *root, const char *ident)
+{
+    KeyName *e;
+    int i = keyname_find(shape);
+
+    if (i >= 0) {
+        /* ONE SHAPE, ONE VALUE — the claim this engine's whole slot model rests on, asserted at the one place
+           a second value can arrive under a name the first already holds. quickjs.h states it in prose at
+           .key_name ("two writes through the same unknown source land in the SAME slot, two different sources
+           in different ones"), concolic.h repeats it and concolic_name_cstr repeats it again, and until this
+           line nothing checked any of them.
+           IT IS AN INVARIANT AND NOT A PREFERENCE, because the restore below is a FUNCTION OF THE SHAPE: two
+           values under one name make it answer one of them for a key that was the other, which does not
+           de-taint a value — it MIS-ATTRIBUTES one, so a sink reached through the second source is reported
+           against the first and its @S candidate is solved at an address that never fed it. Two concrete
+           strings would be the smaller error.
+           WHERE THE FIX GOES IF IT FIRES, which is never here: concolic_new_derived composes a shape out of
+           its operands' SHAPES while composing an identity out of their IDENTS, so two derivations that differ
+           only in an operand's identity spell one shape by construction. The shape has to carry what the
+           identity carries before a value spelled that way can be a key. */
+#if APICLIENT_DEV
+        DCHECK(keyname_str_same(g_keynames[i].src, src) &&
+               keyname_str_same(g_keynames[i].root, root) &&
+               keyname_str_same(g_keynames[i].ident, ident),
+               "two different unknowns denote ONE property name — a display shape is what this engine spends "
+               "to buy an atom, so two values that spell one shape land in one slot and the name->value "
+               "restore answers one of them for a key that was the other. The repair is in the SPELLER: make "
+               "the shape carry what the identity carries (concolic_new_derived), before a value spelled that "
+               "way is used as a key");
+#endif
+        return;
+    }
+    if (g_keynames_n == g_keynames_cap) {
+        int nc = g_keynames_cap ? g_keynames_cap * 2 : 16;
+        KeyName *nv = reclaim_realloc(g_keynames, (size_t)nc * sizeof *nv);
+        CHECK(nv, "concolic: OOM recording the name spent on an unknown key");
+        g_keynames = nv; g_keynames_cap = nc;
+    }
+    e = &g_keynames[g_keynames_n];
+    e->shape = strdup(shape);
+    CHECK(e->shape, "concolic: OOM copying an unknown key's name");
+    e->src   = src   ? strdup(src)   : NULL;
+    CHECK(!src   || e->src,   "concolic: OOM copying an unknown key's provenance");
+    e->root  = root  ? strdup(root)  : NULL;
+    CHECK(!root  || e->root,  "concolic: OOM copying an unknown key's delivery root");
+    e->ident = ident ? strdup(ident) : NULL;
+    CHECK(!ident || e->ident, "concolic: OOM copying an unknown key's identity");
+    g_keynames_n++;
+    if (g_keynames_hash_cap < g_keynames_n * 2) keyname_hash_rebuild();
+    else keyname_hash_put(g_keynames_n - 1);
+}
+
 /* THE NAME an unknown key denotes: its own SHAPE, as a real string. Stable per source, so every key-taking
    operation agrees with every other — see the contract at JS_ToPropertyKeyInternal. */
 JSValue concolic_key_name_hook(JSContext *ctx, JSValueConst key) {
     const char *sh;
     if (!concolic_is(key)) return JS_UNINITIALIZED;
     sh = concolic_shape_c(key);
+    /* WHAT THIS TRADE COSTS IS WRITTEN DOWN AS IT IS SPENT — see the table above. The atom is bytes, the
+       value was an unknown, and the only place that trade can be undone is the one place it is made. */
+    keyname_record(sh ? sh : "{}", concolic_src_c(key), concolic_root_c(key), concolic_ident_c(key));
     return JS_NewString(ctx, sh ? sh : "{}");
+}
+
+/* JSConcolicHooks.key_value — the trade above, UNDONE where a property name is handed back to the program as a
+   VALUE. See that member for why the engine asks, and the table above for what is recorded. */
+JSValue concolic_key_value_hook(JSContext *ctx, JSValueConst name)
+{
+    const char *s;
+    char *ident;
+    int i;
+
+    if (!JS_IsString(name)) return JS_UNINITIALIZED;
+    s = JS_ToCString(ctx, name);
+    /* ASSERTED AND NOT TAKEN FOR A MISS. A NULL here is an allocation failure inside the conversion of a value
+       that already IS a string, and it renders identically to "no unknown was ever minted under this name" —
+       so the one arrival this lookup cannot distinguish from its ordinary answer is the one that silently
+       de-taints a key. It is the same reason concolic_deliver asserts its payload rather than defaulting it. */
+    CHECK(s != NULL,
+          "concolic: the bytes of a delivered property name could not be read — a name this file minted for "
+          "an unknown key would then answer as an ordinary string and the key's provenance and domain would "
+          "be gone with nothing anywhere to say so");
+    i = keyname_find(s);
+    JS_FreeCString(ctx, s);
+    if (i < 0) return JS_UNINITIALIZED;
+    ident = g_keynames[i].ident ? strdup(g_keynames[i].ident) : NULL;
+    CHECK(!g_keynames[i].ident || ident, "concolic: OOM re-minting an unknown key's identity");
+    /* THROUGH concolic_derived AND NOT concolic_alloc, which is what makes a restored key reach an @S
+       candidate: that entry is the one door every mint goes through ("Minting is the one place every source
+       goes through, whichever way it is reached"), so a name restored while a substitution is installed for
+       its source delivers the attacker's payload exactly as the original read did, and a name restored with
+       none re-mints the value the original read produced.
+       EXAMPLE-FREE, which is a positive statement and not a dropped field: which property the attacker names
+       is exactly what is not known, so §@H has nothing to carry here — the same rule concolic_key_read_hook
+       states about the value such a key reads. */
+    return concolic_derived(ctx, g_keynames[i].shape, g_keynames[i].src, g_keynames[i].root, ident,
+                            JS_UNDEFINED);
 }
 
 /* `obj[x]` WITH AN UNKNOWN KEY. Not a coercion of the operand: nothing about x says WHICH slot was meant, so
@@ -3910,6 +4062,7 @@ void concolic_init(JSContext *ctx) {
  * array is a use-after-free at the next lookup rather than a leak. */
 void concolic_free(void)
 {
+    int i;
 #if APICLIENT_DEV
     if (g_srcs_n != 0)
         DFAILF("%s did not give back the attacker SOURCE `%s` before the solver's agent state was released. "
@@ -3934,6 +4087,18 @@ void concolic_free(void)
        concolic_candidate_delivered asserts exactly that they cannot come apart. It is the running flow's live
        copy, so nothing else releases it — the parked copies went with their blobs. */
     g_cand_delivered = 0;
+    /* AND THE NAMES SPENT ON UNKNOWN KEYS, for the reason the SOURCE ROWS above are given back here rather
+       than for the candidate pair's. Each row describes a value of a document that is gone, and the shapes it
+       is keyed by are composed out of sources the next agent declares afresh — so a row left standing would
+       answer the NEXT document's enumeration with the last one's provenance, which is the mis-attribution
+       keyname_record's own collision assert exists to prevent, arriving across an agent boundary instead of
+       within one. */
+    for (i = 0; i < g_keynames_n; i++) {
+        free(g_keynames[i].shape); free(g_keynames[i].src);
+        free(g_keynames[i].root);  free(g_keynames[i].ident);
+    }
+    free(g_keynames);      g_keynames = NULL;      g_keynames_n = g_keynames_cap = 0;
+    free(g_keynames_hash); g_keynames_hash = NULL; g_keynames_hash_cap = 0;
     /* AND THE PUBLISHED-NAMESPACE PATHS, for the same reason the source rows above are given back here: a path
        names a record of a document that is gone, and the addresses it is keyed by are about to be reused. */
     absent_free();
@@ -4372,6 +4537,12 @@ static JSConcolicHooks g_hooks = {
     .to_bool = concolic_tobool_hook,
     .key_read = concolic_key_read_hook,
     .key_name = concolic_key_name_hook,
+    /* …AND THE INVERSE, WHICH IS NOT OPTIONAL BESIDE IT. `key_name` is the only mechanism that turns an
+       unknown into bytes, so a host that installs it and not this one has an enumeration that hands a page a
+       real string where its own model says an unknown stands — a de-tainting placeholder, which §solver bans
+       by name in the JSON.stringify case for the reason it is banned here: the taint is what makes the sink
+       behind it visible at all. */
+    .key_value = concolic_key_value_hook,
     .builtin = concolic_builtin_hook,
     .example = concolic_example,
     /* §10.1.11 "[[OwnPropertyKeys]] ( )" ASKED, WITHOUT WHICH THE ARM THAT ANSWERS IT IS INERT. The record
