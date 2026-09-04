@@ -139,12 +139,15 @@ static int g_running = 0;
  * the table filled, which is how the census can call a count exact and mean it.
  *
  * AND THE THIRD IS A PAGE'S TOO AND IS NOT A PREDICATE — IT IS WHERE A FORK HAPPENED THAT ASKED NOTHING THIS
- * ENGINE CAN NAME. decide_key answers NULL for a value whose identity concolic.c cannot spell, and every route
- * to that NULL bottoms out in one place: `operand_kind` classifies an Object or a Symbol as unspellable
- * (literal_ident's own note says why — an object's identity is its ADDRESS, which does not survive the park a
- * resumed flow replays through, and coercing it would run the page's `toString` from C), and
- * concolic_ident_compose then makes every value derived from one unspellable too. So the branch keeps both
- * arms, records no constraint, and had exactly ONE row for all of it: a single hand-written mechanism name
+ * ENGINE CAN NAME. BOTH key spellers answer NULL for a value whose identity concolic.c cannot spell —
+ * decide_key at a bytecode branch and outcome_key at a native operation's completion — and this said only the
+ * first for as long as the outcome seam ASSERTED its key instead of deciding on it, which made a sentence
+ * about one population read as a sentence about the mechanism. Every route to that NULL bottoms out in one
+ * place: `operand_kind` classifies an Object or a Symbol as unspellable (literal_ident's own note says why —
+ * an object's identity is its ADDRESS, which does not survive the park a resumed flow replays through, and
+ * coercing it would run the page's `toString` from C), and concolic_ident_compose then makes every value
+ * derived from one unspellable too. So the branch AND the outcome walk alike keep both arms,
+ * record no constraint, and had exactly ONE row for all of it: a single hand-written mechanism name
  * standing in for whatever share of a document's forks reach a value this engine declines to name.
  * THAT IS §AN-ASSERT-THAT-NAMES-A-REMEDY-BUT-NOT-A-SITE PERFORMED BY AN INSTRUMENT INSTEAD OF BY AN ASSERT.
  * The row states an action — "this is where the frontier is growing" — with no object, in the one table whose
@@ -2314,13 +2317,16 @@ static void outcome_settle(JSValueConst over, const char *op, int n, int c) {
         int want = (d == c), had;
 
         /* NO KEY MEANS NOTHING IS RECORDED, WHICH IS THE SOUND ANSWER AND NOT A FALLBACK — and it carries no
-           assert of its own because the walk above already made it. `n >= 2` means the loop ran at least once
-           and DCHECKed its key, over this same operand and this same tag, so a NULL here has already aborted
-           in dev one screen up; a second copy would be the same should-never-happen at a worse address. In
-           release the walk keeps both arms for such a value (decide_arm ignores a NULL key), and the settle's
-           analogue of keeping both arms is recording neither. It is a `return` and not a `continue` because
-           the operand and the tag are the same at every d and only the completion differs, so a compose that
-           failed once fails for all of them. */
+           assert of its own because there is no should-never-happen here to assert. This comment used to rest
+           on a DIFFERENT argument: that the walk above had already DCHECKed the key, so a NULL arriving here
+           had aborted one screen up and a second copy would be the same crash at a worse address. That assert
+           is gone — it was guarding an expectation over a value this engine declines to spell, and the walk
+           now decides such a value exactly as decide_branch does — so the argument it rested on is retired
+           with it, and what stands in its place is the simpler one it was standing in front of: an operand
+           with no identity has nothing to file a fact UNDER, and the settle's analogue of the walk keeping
+           both arms is recording neither. It is a `return` and not a `continue` because the operand and the
+           tag are the same at every d and only the completion differs, so a compose that failed once fails
+           for all of them. */
         if (!key) return;
         had = concolic_branch_decided(key);
         DCHECKF(had < 0 || had == want,
@@ -2389,9 +2395,40 @@ int solver_outcome(JSContext *ctx, JSValueConst over, const char *op, int n, int
                "be a permutation of the completions, and a repeat leaves one of them with no question and one "
                "flow standing on a completion nothing eliminated");
         key = outcome_key(over, op, c);
-        DCHECK(key != NULL, "an operand whose identity this engine cannot spell reached the outcome seam — "
-                            "with no key its completions are re-forked at every ask rather than replayed, "
-                            "which is sound and is not what a machine declaring a fork expects");
+        /* A NULL KEY IS UNCERTAINTY AND IS DECIDED EXACTLY AS decide_branch DECIDES IT — no assert, because
+           there is nothing here that is not also true one screen up. This site used to abort on it, and the
+           abort's own text conceded the case was "sound"; an assert whose message says the behaviour beneath
+           it is correct is guarding an EXPECTATION, and this file's other seam over the same `decide_arm`
+           never had one. decide_branch composes `decide_key`, hands the result straight to decide_arm and
+           frees it, and its key is NULL for precisely the values this one's is — so two seams asked one
+           question and only one of them crashed, which is §A-FIX-OF-THE-FORM-"X-IS-NOT-HOW-TO-ASK-Q" with the
+           two answers in one file.
+           IT IS NOT A CASE THIS ENGINE FAILED TO SPELL, IT IS ONE IT DECLINES TO, AND THE ROUTE IS A PROOF
+           RATHER THAN A SURVEY. concolic_new composes a source read's identity out of its `src`, so a source
+           has one whenever it has provenance; every derivation composes through ident_of_operand, which
+           answers NULL only for an operand `operand_kind` classifies CONCOLIC_LIT_NONE — an Object or a
+           Symbol, whose identity would be its ADDRESS — or for a concolic that already has none; and
+           concolic_ident_compose makes one absent member absent the whole composition. So an absent identity
+           bottoms out at an Object or a Symbol EVERY TIME, which is the classification literal_ident and
+           concolic_key_read_hook both declare correct in their own words ("the composition is ABSENT there
+           and every branch over the result keeps both arms"). outcome_key's own contract says it returns NULL
+           for one, and outcome_settle below reads that NULL as the sound answer — the PRODUCER and the other
+           CONSUMER agreed, and this line was the one site that did not.
+           WHAT IT COSTS IS FORKS AND NEVER THE ARM, which is the trade concolic.c prices in one line beside
+           the field itself: "Absence costs forks; a wrong identity costs the arm." Both completions stay, no
+           constraint is recorded, no replay slot is claimed, and dec_fork_here files the sibling under the
+           SITE row (FORK_ROW_SITE) that exists for exactly this population.
+           RESIDUAL — NARROWER THAN THE REPLAY THE REST OF THE SEAM GETS, AND CORRECT AS IT STANDS. NOT
+           COVERED: a second ask about the same operand and operation re-forks instead of being refined by the
+           first, because feasible refinement is keyed by an identity this operand has none of; the immediate
+           sibling still replays, since dec_key_hash answers 0 for a NULL key and the recorded slot carries
+           that 0 at the same cursor. WHAT THE NEXT DIFF BUILDS: a spellable identity for an ordinary object —
+           one composed from PROGRAM FACTS rather than from a heap address, so it means the same thing on the
+           flow that minted it and on the flow that resumes it from the cold tier; no such mechanism exists in
+           this tree, which is why the composition is absent rather than merely unused. HOW ITS ABSENCE WOULD
+           SHOW: the `_forkAt` census's SITE rows carry the operand's display shape, so a document whose
+           frontier grows at an unspellable outcome shows a large FORK_ROW_SITE row with no predicate row
+           beside it — the row saying WHERE with no key saying WHAT. */
         /* NOT RESTARTABLE, AND THAT IS A STATEMENT ABOUT THE MACHINE RATHER THAN A DEFAULT. An outcome ask
            comes from a C body that is mid-algorithm: re-running the flow's scheduler step would not re-reach
            it, so its sibling's resume point can only be the step driver's snapshot of the machine.

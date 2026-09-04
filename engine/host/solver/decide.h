@@ -164,10 +164,12 @@ int  decide_cursor(void);
    argmax reading inverted rather than approximated.
 
    AND THE THIRD POPULATION IS EVERY FORK THAT ASKED NOTHING THIS ENGINE COULD SPELL, WHICH USED TO BE ONE ROW.
-   decide_key answers NULL for a value whose identity concolic.c cannot spell, and every route to that NULL
-   bottoms out in one classification: an Object or a Symbol operand, whose identity is its ADDRESS — a name
+   BOTH key spellers answer NULL for a value whose identity concolic.c cannot spell — decide_key at a bytecode
+   branch and outcome_key at a native operation's completion — and every route to that NULL bottoms out in one
+   classification: an Object or a Symbol operand, whose identity is its ADDRESS — a name
    that does not survive the park a resumed flow replays through — after which concolic_ident_compose makes
-   everything derived from it unspellable too. Such a branch keeps BOTH arms, records no constraint and claims
+   everything derived from it unspellable too. Such a branch, and such an outcome walk, keeps BOTH arms,
+   records no constraint and claims
    no replay slot, and it had exactly ONE hand-written row for all of it. That is a row naming an action with
    no object, in the one table whose whole job is to say WHERE, and it can be the largest thing in the object.
    ITS KEY IS THE VALUE'S OWN DISPLAY SHAPE AND IT ANSWERS "WHERE", NEVER "WHAT". A shape is always present
