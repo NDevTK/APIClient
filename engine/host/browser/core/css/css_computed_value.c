@@ -975,8 +975,25 @@ bool css_computed_models_length(const char *name)
        the element itself"; §4.2.3's percentages "refer to the USED VALUE of line-height", and a used value is
        not one any cascade step holds — it is what CSS 2 §10.8's own line-box calculation produces. Resolving
        one here would be this engine answering with a number no step of it has computed. */
+    /* `flex-basis` IS THE THIRD PROPERTY IN THAT POSITION and is here for `baseline-shift`'s exact reason.
+       css-flexbox-1 §7.2.3 "The flex-basis property" gives it a `Computed value:` line of "specified keyword
+       or a computed <length-percentage> value" — the same three arms `computed_length` already runs, word for
+       word — so it needs no rule of its own; and it is NOT in the list above because that list's second
+       sentence is about the ten physical box-model lengths and the four sizing limits, which
+       core/layout/used_value.c reads for CSS 2.1 §10.4's clamp. A flex basis is not one of those: §9.9.3 "Flex
+       Item Intrinsic Size Contributions" clamps a contribution "by the item's min/max MAIN size", which is a
+       different pair of properties from this one, so putting `flex-basis` in the group would make a true
+       sentence about the group false of a member.
+       ITS KEYWORD ARM IS WIDER THAN `width`'s BY EXACTLY ONE, which is why the grammar lives in
+       core/css/css_shorthand.c beside the shorthand that writes it rather than being read off `width`: §7.2.3's
+       `Value:` line is `content | <'width'>`, and css-sizing-3 §3.2 "Sizing Values: the
+       <length-percentage [0,∞]>, auto | none, stretch, min-content, max-content, and fit-content values" adds
+       the rest by reference — "The flex-basis property hereby also gains these new keywords, as its values are
+       defined by reference to <'width'>". Every one of those is a keyword `computed_length` carries unchanged, which is what makes
+       this one entry enough for all of them. */
     return css_models_length(name) || css_border_side_of(name, "width") >= 0 ||
-           strcmp(name, "font-size") == 0 || strcmp(name, "baseline-shift") == 0;
+           strcmp(name, "font-size") == 0 || strcmp(name, "baseline-shift") == 0 ||
+           strcmp(name, "flex-basis") == 0;
 }
 
 bool css_computed_models(const char *name)
@@ -1003,6 +1020,24 @@ bool css_computed_models(const char *name)
               is single-line or multi-line (§5.2, whose two arms §6 "Flex Lines" names). See the as-specified
               arm below for why neither has a defensible default. */
            strcmp(name, "flex-direction") == 0 || strcmp(name, "flex-wrap") == 0 ||
+           /* css-flexbox-1 §7.2.1 "The flex-grow property" (`Computed value: specified number`) and §7.2.2
+              "The flex-shrink property" (`Computed value: specified value`), over a `Value:` line that is
+              `<number [0,∞]>` and nothing else. A `<number>` is the one shape the TEXT entry carries with
+              NOTHING LOST — it has no unit, no percentage and no environment fact behind it, which is the
+              whole of why `css_computed_length` exists for the properties that do — so the as-specified arm
+              is the whole of both rules. THEIR CONSUMER CONVERTS: §9.9.3 "Flex Item Intrinsic Size
+              Contributions" asks whether an item is growable and whether it is shrinkable, which are the two
+              questions `== 0` answers, and a string comparison against "0" would answer them wrong for the
+              `0.0` and `0e0` a page may write. The third longhand, §7.2.3's `flex-basis`, is length-shaped
+              and leaves through css_computed_models_length above. */
+           strcmp(name, "flex-grow") == 0 || strcmp(name, "flex-shrink") == 0 ||
+           /* css-display-3 §4 "Invisibility: the visibility property" (`visible | hidden | collapse`),
+              `Computed value: as specified` over a keyword-only `Value:` line. It is here because
+              css-flexbox-1 §4.4 "Collapsed Items" is stated over ONE of its three keywords — "Specifying
+              visibility:collapse on a flex item causes it to become a collapsed flex item" — and §9.9.1.2 and
+              §9.9.1.3 both state their operand as the NON-COLLAPSED flex items, so a flex container's
+              intrinsic main size cannot be summed without asking this property of every item. */
+           strcmp(name, "visibility") == 0 ||
            css_computed_models_length(name) ||
            css_border_side_of(name, "style") >= 0;
 }
@@ -1431,13 +1466,32 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name)
        "A single-line flex container (i.e. one with flex-wrap: nowrap) lays out all of its children in a single
        line, even if that would cause its contents to overflow." Neither question has a defensible default:
        reading `flex-direction`'s initial `row` off a box that declared `column` answers the wrong SECTION, not
-       a wrong number, and nothing downstream could tell. */
+       a wrong number, and nothing downstream could tell.
+       §7.2.1 "The flex-grow property" and §7.2.2 "The flex-shrink property" say `Computed value: specified
+       number` and `Computed value: specified value` over a `Value:` line of `<number [0,∞]>`, which is the
+       as-specified rule under two spellings — a `<number>` has no unit, no percentage and no environment fact,
+       so nothing about it is resolved between the specified value and the computed one. THEY ARE HERE BECAUSE
+       §9.9.3 "Flex Item Intrinsic Size Contributions" READS BOTH BY NAME and could read neither: its
+       contribution "is capped by the item's flex base size if the item is not growable, floored by the item's
+       flex base size if the item is not shrinkable", and those two adjectives are these two properties at
+       zero. Their declarations reach the cascade through §7.1's `flex` on almost every page that uses flexbox
+       at all, which is core/css/css_shorthand.c's row and the reason this one means anything.
+       css-display-3 §4 "Invisibility: the visibility property" says `Computed value: as specified` over
+       `visible | hidden | collapse`, so the arm is the whole of its rule as well. IT IS HERE FOR §9.9.1's
+       SAKE and reaches further than that: css-flexbox-1 §4.4 "Collapsed Items" hangs an entire layout effect
+       off one of the three keywords — "the collapsed flex item is removed from rendering entirely, but leaves
+       behind a “strut” that keeps the flex line's cross-size stable" — which is why §9.9.1.2 and §9.9.1.3
+       sum over the "non-collapsed" items while §9.9.2 does not, and neither question can be asked of a box
+       whose `visibility` has no computed value. It is the one property in this arm that is `Inherited: yes`,
+       and core/css/css_defaulting.c already records it there. */
     DCHECK(strcmp(name, "float") == 0 || strcmp(name, "position") == 0 || strcmp(name, "box-sizing") == 0 ||
                strcmp(name, "white-space") == 0 || strcmp(name, "direction") == 0 ||
                strcmp(name, "writing-mode") == 0 || strcmp(name, "alignment-baseline") == 0 ||
                strcmp(name, "baseline-source") == 0 || strcmp(name, "caption-side") == 0 ||
                strcmp(name, "table-layout") == 0 || strcmp(name, "border-collapse") == 0 ||
                strcmp(name, "flex-direction") == 0 || strcmp(name, "flex-wrap") == 0 ||
+               strcmp(name, "flex-grow") == 0 || strcmp(name, "flex-shrink") == 0 ||
+               strcmp(name, "visibility") == 0 ||
                css_border_side_of(name, "style") >= 0,
            "a property this component claims to model reached the as-specified arm without a `Computed value: "
            "as specified` line to justify it — css_computed_models and this switch are one list and have come "

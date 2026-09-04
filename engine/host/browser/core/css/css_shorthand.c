@@ -87,6 +87,33 @@ static const char *css_sh_keyword(const char *const *set, unsigned n, const char
     return NULL;
 }
 
+bool css_shorthand_number(const char *w, size_t n, double *out)
+{
+    char buf[64];
+    char *end = NULL;
+    size_t i;
+
+    DCHECK(w != NULL && out != NULL,
+           "css-values-4 §5.3's `<number>` production was asked about a NULL span, or with nowhere to report "
+           "the value — a component value is a span inside the declaration it was split out of, and an absent "
+           "pointer is a caller that lost it");
+    /* §5.3's OWN SPELLING IS THE FILTER, and it runs BEFORE the conversion rather than after it: `strtod` is a
+       C production, so it accepts `0x10`, `inf` and `nan` — three spans §5.3 does not admit and each of which
+       would otherwise reach a property's `Value:` line as a number nobody wrote. What §5.3 permits is decimal
+       digits, ONE dot, an `e`/`E` exponent and a leading sign, and the whole-span conversion below is what
+       refuses the malformed arrangements of those characters (`1e`, `1.2.3`, `+`). */
+    if (n == 0 || n >= sizeof buf) return false;
+    for (i = 0; i < n; i++) {
+        char c = w[i];
+
+        if (!(c >= '0' && c <= '9') && c != '.' && c != 'e' && c != 'E' && c != '+' && c != '-') return false;
+    }
+    memcpy(buf, w, n);
+    buf[n] = '\0';
+    *out = strtod(buf, &end);
+    return end != NULL && *end == '\0';
+}
+
 /* css-overflow §3.1's value grammar for `overflow-x`/`overflow-y`, plus the LEGACY ALIAS the same section
    requires ("User agents must also support the overlay keyword as a legacy value alias of auto"). The alias is
    a SPECIFIED value in its own right and is mapped where the section's other value-to-value rule lives — the
@@ -527,7 +554,10 @@ static char *border_four_side_component(const char *value, int side, CssBorderPa
 /* css-flexbox-1 §5.3 "Flex Direction and Wrap: the flex-flow shorthand"' EXPANSION — `Value: <'flex-direction'>
    || <'flex-wrap'>`, so at most two words, each of which must be a keyword of one of the two disjoint sets
    above, and each longhand not named takes its own `Initial:` line (§5.1's `row`, §5.2's `nowrap`). A repeated
-   term is a value the `||` does not admit: `||` is "one or more of these, in any order", one OF EACH.
+   term is a value the `||` does not admit — css-values-4 §2.2 "Component Value Combinators" separates OPTIONS
+   and not occurrences ("A double bar (||) separates two or more options: one or more of them must occur, in
+   any order"), and neither §5.3 nor §2.3 "Component Value Multipliers" gives either term a multiplier, so a
+   term may appear at most once.
    IT VALIDATES AS WELL AS SPLITS, for the reason `border-style`'s does: §5.3's own `Value:` line is the only
    thing standing between a `flex-flow: nope` and a computed value carrying a keyword no grammar admits, and
    CSS Syntax drops an invalid declaration whole — which for a shorthand means it sets NEITHER longhand. */
@@ -549,6 +579,187 @@ static char *flex_flow_component(const char *value, const char *longhand)
     if (strcmp(longhand, "flex-direction") == 0) return css_sh_strdup(dir != NULL ? dir : "row");
     if (strcmp(longhand, "flex-wrap") == 0) return css_sh_strdup(wrap != NULL ? wrap : "nowrap");
     return NULL;
+}
+
+/* css-flexbox-1 §7.1 "The flex Shorthand"'s THREE LONGHANDS in its `Value:` line's own order, and beside each
+   the value §7.1 gives it WHEN THE SHORTHAND OMITS IT. THAT SECOND LIST IS NOT THE `Initial:` LINES and is the
+   whole reason `flex` is a kind of its own rather than a CSS_SH_ALL_OF row — §7.1's own note says so outright:
+   "The initial values of the flex longhands are equivalent to flex: 0 1 auto. This differs from their defaults
+   when omitted in the flex shorthand (effectively 1 1 0px) so that the flex shorthand can better accommodate
+   the most common cases." The three sentences it is read off are §7.1's component definitions: "When omitted,
+   it is set to 1" for the `<'flex-grow'>` component, the same sentence for `<'flex-shrink'>`, and "When
+   omitted from the flex shorthand, its specified value is 0" for `<'flex-basis'>`.
+   SO THE ROW CARRIES NO `initial` LIST. That field is documented as each longhand's own `Initial:` line and is
+   read by CSS_SH_ALL_OF's serialization to decide which terms can be dropped; filling it with THESE three
+   would be one field answering two questions, and the omission rule would then drop a `flex-grow: 0` — the
+   longhand's initial — and re-read it as the 1 §7.1 substitutes. */
+static const char *const LH_FLEX[] = { "flex-grow", "flex-shrink", "flex-basis" };
+static const char *const FLEX_OMITTED[] = { "1", "1", "0" };
+
+/* §7.2.3 "The flex-basis property"' `Value:` line, `content | <'width'>`, with §7.2.3's own keyword first and
+   `<'width'>` spelled out after it. `<'width'>` is css-sizing-3 §3.1.1 "Preferred Size Properties: the width
+   and height properties"' `auto | <box-size>`, and §3.2 "Sizing Values: the <length-percentage [0,∞]>, auto |
+   none, stretch, min-content, max-content, and fit-content values" is where `<box-size>` is defined: "Values
+   other than auto and none are grouped under the <box-size> production:
+   <box-size> = <length-percentage> | stretch | min-content | max-content | fit-content". THE LEVEL-3 KEYWORDS
+   ARE `flex-basis`'s BY REFERENCE AND NOT BY ANALOGY, which §3.2 states in a note of its own — "The flex-basis
+   property hereby also gains these new keywords, as its values are defined by reference to <'width'>" — so a
+   set that stopped at CSS 2.1's `auto` would drop three keywords a page may legitimately write.
+   `none` IS NOT HERE. §3.1.1's `Value:` line is `auto | <box-size>` and the `none` in §3.2's TITLE belongs to
+   the MAXIMUM size properties (§3.1.3), whose line is `none | <box-size>` — so reading the title as a value
+   set would give `flex-basis` a keyword `width` itself does not have. */
+static const char *const FLEX_BASIS_KEYWORDS[] = {
+    "content", "auto", "stretch", "min-content", "max-content", "fit-content",
+};
+
+/* Which of css-flexbox-1 §7.1 "The flex Shorthand"'s three longhands `longhand` is, or -1. Read off the list above so the index the expansion
+   writes and the index the table's canonical order names are ONE. */
+static int flex_longhand_index(const char *longhand)
+{
+    unsigned i;
+
+    for (i = 0; i < CSS_SH_N(LH_FLEX); i++)
+        if (strcmp(LH_FLEX[i], longhand) == 0) return (int)i;
+    return -1;
+}
+
+/* One of css-flexbox-1 §7.1 "The flex Shorthand"'s three specified values, as a span into the declaration or at one of the literals above. */
+typedef struct { const char *p; size_t n; } CssShSpan;
+
+static void flex_span(CssShSpan *o, const char *p, size_t n) { o->p = p; o->n = n; }
+
+/* Is this component value a `<'flex-grow'>` / `<'flex-shrink'>` — §7.2.1 "The flex-grow property" and §7.2.2
+   "The flex-shrink property" both give `<number [0,∞]>`, and both say "Negative values are not allowed." */
+static bool flex_is_factor(const char *w, size_t n)
+{
+    double v;
+
+    return css_shorthand_number(w, n, &v) && v >= 0.0;
+}
+
+/* Take this component value as the `<'flex-basis'>`, canonicalizing a keyword the way `overflow`'s expansion
+   does. FALSE for a value outside §7.2.3's grammar, which drops the whole declaration.
+   `zero_ok` IS §7.1's OWN DISAMBIGUATION RULE AND NOT A TOLERANCE: "A unitless zero that is not already
+   preceded by two flex factors must be interpreted as a flex factor. To avoid misinterpretation or invalid
+   declarations, authors must specify a zero <'flex-basis'> component with a unit or precede it by two flex
+   factors." So a bare number reaching this entry is a `<'flex-basis'>` in exactly one arrangement — third,
+   after both factors — and is a zero even there. It is asked HERE rather than at the arrangement because the
+   arrangement is what knows how many factors precede it, and the value is what knows whether it is a zero.
+   IT MUST BE ASKED BEFORE THE `<length-percentage>` TEST, because css_length_is_length_percentage answers TRUE
+   for a unitless NON-ZERO as well — css-values-4 §6 "Distance Units: the <length> type" permits the unit to be
+   omitted only for zero, and that entry leaves the refusal to the parse that later asserts it. Asking it in
+   the other order would make `flex: 1 1 5` a declaration whose `flex-basis` computed value crashes the length
+   parser rather than one the cascade drops. */
+static bool flex_take_basis(CssShSpan *o, const char *w, size_t n, bool zero_ok)
+{
+    const char *kw = css_sh_keyword(FLEX_BASIS_KEYWORDS, CSS_SH_N(FLEX_BASIS_KEYWORDS), w, n);
+    char probe[64];
+    double v;
+
+    if (kw != NULL) { flex_span(o, kw, strlen(kw)); return true; }
+    if (css_shorthand_number(w, n, &v)) {
+        if (!zero_ok || v != 0.0) return false;
+        flex_span(o, w, n);
+        return true;
+    }
+    /* css-sizing-3 §3.2's `<length-percentage [0,∞]>`: "Negative values are invalid." The test is the LITERAL
+       sign and not the value, exactly as `border-<part>`'s is one grammar up: a `calc(1rem - 2rem)` is a VALID
+       declaration whose used value is clamped, so refusing it here would drop a declaration CSS admits. */
+    if (n == 0 || w[0] == '-') return false;
+    /* AND WHAT REMAINS MUST BEGIN LIKE A DIMENSION OR BE A FUNCTION, which css-values-4 §5.4 "Numbers with
+       Units: dimension values" states outright: "When written literally, a dimension is a number immediately
+       followed by a unit identifier, which is an identifier." So a literal `<length-percentage>` starts with
+       §5.3's `<number>`, and the only other spelling the production admits is a math function — a name and a
+       `(`, which the entry below type-checks through core/css/css_math.h.
+       IT IS ASKED HERE BECAUSE `css_length_is_length_percentage` IS DELIBERATELY WIDER THAN §6, and its own
+       comment says so: it hands the span to `strtod`, a C production, and leaves the refusal of what CSS does
+       not admit to the parse that later ASSERTS it. That is the right split for a value lexbor has already
+       typed and the wrong one where this grammar is the only check there is — `inf` and `nan` are spans
+       `strtod` reads as numbers and CSS reads as plain identifiers, so admitting one would turn a page's own
+       invalid declaration into a `flex-basis` whose computed value ABORTS the length parser, which is this
+       engine's assertion mechanism fired by a stranger's bytes rather than by its own logic. */
+    if (!(w[0] >= '0' && w[0] <= '9') && w[0] != '.' && w[0] != '+' && memchr(w, '(', n) == NULL) return false;
+    if (n >= sizeof probe) return false;
+    memcpy(probe, w, n);
+    probe[n] = '\0';
+    if (!css_length_is_length_percentage(probe)) return false;
+    flex_span(o, w, n);
+    return true;
+}
+
+/* css-flexbox-1 §7.1 "The flex Shorthand"'s EXPANSION, answered once for all three longhands:
+   `none | [ <'flex-grow'> <'flex-shrink'>? || <'flex-basis'> ]`, with each omitted component at its
+   FLEX_OMITTED default. FALSE for a value outside the grammar, which is an invalid declaration and sets no
+   longhand at all.
+   THE `||` HAS AN ORDERED PAIR INSIDE IT, which is what makes this a different algorithm from `flex-flow`'s
+   one-word-at-a-time assignment and from `border-<side>`'s any-order triple. css-values-4 §2.2 "Component
+   Value Combinators" gives the combinator — "A double bar (||) separates two or more options: one or more of
+   them must occur, in any order" — so its two terms give four arrangements: the factors alone, the basis
+   alone, and each order of the two. The factors WITHIN their term are positional: grow first, shrink second,
+   never reversed.
+   EACH ARRANGEMENT IS TRIED WITH THE FACTORS ASSIGNED GREEDILY AND THAT IS §7.1's RULE RATHER THAN A
+   PREFERENCE. A bare `<number>` is not a `<'flex-basis'>` at all (css-values-4 §6 "Distance Units: the
+   <length> type" admits a unitless length only for zero), so the only span the two terms can both claim is a
+   literal zero — and §7.1's own sentence
+   awards it to the factor unless two factors already precede it. Trying the factor arrangement first IS that
+   sentence, which is why an arrangement that fails afterwards is not retried the other way round: a span the
+   factor arm claimed is one the basis arm is forbidden to take. */
+static bool flex_triple(const char *value, CssShSpan out[3])
+{
+    const char *w[3];
+    size_t wl[3];
+    int n = css_words(value, w, wl, 3);
+    unsigned i;
+
+    for (i = 0; i < CSS_SH_N(FLEX_OMITTED); i++)
+        flex_span(&out[i], FLEX_OMITTED[i], strlen(FLEX_OMITTED[i]));
+    if (n < 1) return false;   /* -1 is a value carrying more components than the grammar admits */
+    /* css-flexbox-1 §7.1 "The flex Shorthand"'s OTHER TOP-LEVEL ARM, ahead of the bracketed one it is an
+       alternative to: "The keyword none expands to 0 0 auto." It is written as the three values rather than
+       kept as a keyword because css-flexbox-1 §7.1 "The flex Shorthand"'s `Computed value:` line is "see
+       individual properties", so what the cascade carries is each longhand's own value and `none` is not one
+       of them. */
+    if (n == 1 && css_word_is(w[0], wl[0], "none")) {
+        flex_span(&out[0], "0", 1);
+        flex_span(&out[1], "0", 1);
+        flex_span(&out[2], "auto", 4);
+        return true;
+    }
+    switch (n) {
+    case 1:
+        if (flex_is_factor(w[0], wl[0])) { flex_span(&out[0], w[0], wl[0]); return true; }
+        return flex_take_basis(&out[2], w[0], wl[0], false);
+    case 2:
+        if (flex_is_factor(w[0], wl[0]) && flex_is_factor(w[1], wl[1])) {
+            flex_span(&out[0], w[0], wl[0]);
+            flex_span(&out[1], w[1], wl[1]);
+            return true;
+        }
+        if (flex_is_factor(w[0], wl[0])) {
+            flex_span(&out[0], w[0], wl[0]);
+            return flex_take_basis(&out[2], w[1], wl[1], false);
+        }
+        if (flex_is_factor(w[1], wl[1])) {
+            flex_span(&out[0], w[1], wl[1]);
+            return flex_take_basis(&out[2], w[0], wl[0], false);
+        }
+        return false;
+    default:
+        DCHECK(n == 3, "css_words answered a component count outside the 1..3 its own `max` argument permits");
+        if (flex_is_factor(w[0], wl[0]) && flex_is_factor(w[1], wl[1])) {
+            flex_span(&out[0], w[0], wl[0]);
+            flex_span(&out[1], w[1], wl[1]);
+            /* THE ONE PLACE A UNITLESS ZERO IS A BASIS — two flex factors precede it, which is §7.1's own
+               condition and the arrangement its "or precede it by two flex factors" instructs authors to use. */
+            return flex_take_basis(&out[2], w[2], wl[2], true);
+        }
+        if (flex_is_factor(w[1], wl[1]) && flex_is_factor(w[2], wl[2])) {
+            flex_span(&out[0], w[1], wl[1]);
+            flex_span(&out[1], w[2], wl[2]);
+            return flex_take_basis(&out[2], w[0], wl[0], false);
+        }
+        return false;
+    }
 }
 
 char *css_shorthand_component(const char *shorthand, const char *value, const char *longhand)
@@ -703,6 +914,21 @@ char *css_shorthand_component(const char *shorthand, const char *value, const ch
         if (strcmp(longhand, "flex-direction") != 0 && strcmp(longhand, "flex-wrap") != 0) return NULL;
         if (css_wide_keyword(value)) return css_sh_strdup(value);
         return flex_flow_component(value, longhand);
+    }
+    /* ---- css-flexbox-1 §7.1 "The flex Shorthand"'s `flex` --------------------------------------------------
+       csscascade-5 §3 "Shorthand Properties"' CSS-wide keyword arm again, and it matters more here than for
+       most: §7.1's own grammar has a `none` in it, so a reader could take `initial` for one more keyword of the
+       same kind. It is not — a CSS-wide keyword is the ENTIRE value for every property in CSS and sets all
+       three longhands to itself, where `none` is one production of this property's own `Value:` line and
+       expands to three DIFFERENT values. */
+    if (strcmp(shorthand, "flex") == 0) {
+        CssShSpan t[3];
+        int term = flex_longhand_index(longhand);
+
+        if (term < 0) return NULL;
+        if (css_wide_keyword(value)) return css_sh_strdup(value);
+        if (!flex_triple(value, t)) return NULL;
+        return css_sh_dupn(t[term].p, t[term].n);
     }
 
     if (strcmp(shorthand, "overflow") != 0) return NULL;
@@ -870,15 +1096,21 @@ char *css_shorthand_longhand_value(const char *longhand, const char *value)
  *
  * WHAT IS DELIBERATELY NOT IN THE TABLE AT ALL: every CSS shorthand this engine has no grammar for.
  * css_shorthand_is_shorthand answers FALSE for each, and the block serialization then emits their longhands
- * separately. `flex-flow` USED TO BE NAMED HERE AND IS NOW A ROW, and the difference is what a row costs: its
- * grammar is `<'flex-direction'> || <'flex-wrap'>` over two DISJOINT keyword sets, which is one word-to-term
- * assignment with no ordering and no backtracking. css-flexbox-1 §7.1 "The flex Shorthand"'s `flex` is not,
- * and the reason is a shape, not an amount of work: `none | [ <'flex-grow'> <'flex-shrink'>? || <'flex-basis'> ]`
- * puts an ORDERED PAIR inside the `||`, and §7.1 gives its omitted components defaults that are NOT their
+ * separately — css-fonts-4 §6.11 "Overall shorthand for font rendering: the font-variant property" is one such,
+ * and css_shorthand_complete_for records the seven longhands it leaves incomplete rather than claiming them.
+ *
+ * AND A ROW'S COST IS ITS GRAMMAR'S SHAPE, WHICH IS WHY THE TWO FLEX SHORTHANDS ARE TWO KINDS. css-flexbox-1
+ * §5.3's `flex-flow` is `<'flex-direction'> || <'flex-wrap'>` over two DISJOINT keyword sets, which is one
+ * word-to-term assignment with no ordering and no backtracking — CSS_SH_ALL_OF's rule exactly. §7.1 "The flex
+ * Shorthand"'s `flex` is `none | [ <'flex-grow'> <'flex-shrink'>? || <'flex-basis'> ]`, which is not: it puts
+ * an ORDERED PAIR inside the `||`, and §7.1 gives its omitted components defaults that are NOT their
  * longhands' `Initial:` lines — "When omitted, it is set to 1" for both factors against a `flex-grow` initial
  * of 0, and "When omitted from the flex shorthand, its specified value is 0" for the basis against an initial
  * of `auto`. So neither direction of CSS_SH_ALL_OF is its rule: the expansion cannot fill an omitted term from
- * this table's `initial` list, and the serialization cannot omit a term for holding one.
+ * this table's `initial` list, and the serialization cannot omit a term for holding one. CSS_SH_FLEX is that
+ * pair of rules and nothing else; the reason it is a KIND rather than a wider CSS_SH_ALL_OF is that widening
+ * one would make the `initial` field mean two things at once, and the field a row states its `Initial:` lines
+ * in is the field the omission rule reads.
  *
  * AND TWO ROWS' GRAMMARS ARE NOT HERE. css-fonts-4 §2.7's `font` is a positional SEQUENCE with an unordered
  * optional prefix, an infix `/` and a trailing comma-list, over six component grammars nothing else in this
@@ -901,6 +1133,8 @@ typedef enum {
                            spelled TRIPLE while every row of it had three terms; css-flexbox-1 §5.3's
                            `flex-flow` is the same rule over TWO, and the row already carries its own `n`, so
                            the count is read from the row rather than written into the kind's name. */
+    CSS_SH_FLEX,        /* css-flexbox-1 §7.1's `flex`: an ordered factor pair inside a `||`, whose omitted
+                           components take §7.1's own defaults rather than their longhands' `Initial:` lines */
     CSS_SH_BORDER,      /* §3.4's `border`: one triple common to all four sides, over an untouched border-image */
     CSS_SH_FONT,        /* css-fonts-4 §2.7's `font`, whose grammar is core/css/css_font_shorthand.h's */
     CSS_SH_TEXT_ALIGN,  /* css-text-4 §7.1's one keyword redistributed over two longhands, plus its two pairs */
@@ -993,6 +1227,16 @@ static const CssShorthandRow SHORTHANDS[] = {
     { "border-style",  LH_BORDER_STYLE,   4, CSS_SH_FOUR_SIDE, "solid", NULL, NULL },
     { "border-top",    LH_BORDER_TOP,     3, CSS_SH_ALL_OF,    "1px solid red", BORDER_PART_INITIAL, NULL },
     { "border-width",  LH_BORDER_WIDTH,   4, CSS_SH_FOUR_SIDE, "1px", NULL, NULL },
+    /* css-flexbox-1 §7.1. The fixture names ALL THREE components with each away from its own OMITTED default
+       — 2 against a default grow of 1, 3 against a default shrink of 1, `10px` against a default basis of 0 —
+       which is the condition under which every one of them is written out, so the round trip exercises the
+       whole `||` in the one arrangement that shows all of it. The arrangements one fixture cannot reach (the
+       basis BEFORE the factors, `none`, and §7.1's unitless-zero rule) are asserted separately by
+       css_shorthand_init, because each of them is a DIFFERENT sentence of §7.1 rather than another value of
+       the same one. THE FIXTURE IS NOT `0 1 auto`: that is §7.1's `Initial:` line, and it is the one triple
+       whose every component is at its LONGHAND's initial rather than at its omitted default, so a round trip
+       over it would exercise the omission rule at none of its three terms. */
+    { "flex",          LH_FLEX,           3, CSS_SH_FLEX,      "2 3 10px", NULL, NULL },
     /* css-flexbox-1 §5.3. The fixture names BOTH terms of the `||`, each away from its own initial, so the
        round trip exercises the whole partition — the assignment of a word to the term whose keyword set
        contains it, and the omission rule over two initials rather than three. */
@@ -1278,6 +1522,59 @@ static char *css_sh_all_of_value(const char *const *v, const char *const *initia
     return css_sh_join(parts, n);
 }
 
+/* css-flexbox-1 §7.1's `Value:` line RUN BACKWARDS under CSSOM §6.7.2's two rules — the canonical order is the
+   grammar's, which is this row's own longhand order, and a component is omitted when it "can be omitted or
+   replaced with a shorter representation without changing the meaning of the value".
+   WHAT DECIDES THAT HERE IS §7.1's OMITTED DEFAULTS AND NOT THE LONGHANDS' `Initial:` LINES, which is the same
+   sentence that makes this a kind of its own: writing `flex: 0 1 auto` as the empty string would MEAN
+   `1 1 0`, and dropping a `flex-shrink: 1` is meaning-preserving precisely because 1 is what §7.1 substitutes
+   for an absent shrink.
+   THE GRAMMAR CONSTRAINS THE OMISSIONS AS WELL AS THE VALUES, in two ways a per-term test alone would miss.
+   The factors are an ORDERED PAIR — `<'flex-grow'> <'flex-shrink'>?` — so a shrink that is written needs the
+   grow written before it; and the whole value must be SOMETHING, so an all-default triple keeps its grow (a
+   `flex` of `1 1 0` is written `1`, never the empty string, which matches no production).
+   AND §7.1's UNITLESS-ZERO RULE IS THE THIRD CONSTRAINT, on the basis rather than on the factors. A basis that
+   is a literal `<number>` re-reads as a flex factor unless two factors precede it, so a NON-ZERO one is a
+   triple no `flex` declaration could have produced at all — §6.7.2's "cannot exactly represent the values of
+   all the properties in list", reported by NULL, the way `border`'s disagreeing sides are — and a zero one
+   forces both factors to be written even where each holds its own default. `0` itself never reaches either
+   case, because it IS the basis's omitted default and is dropped one line up. */
+static char *css_sh_flex_value(const char *const *v)
+{
+    const char *parts[3];
+    unsigned n = 0;
+    bool show_basis = strcmp(v[2], FLEX_OMITTED[2]) != 0;
+    bool show_shrink = strcmp(v[1], FLEX_OMITTED[1]) != 0;
+    bool show_grow;
+
+    if (show_basis) {
+        size_t bn = strlen(v[2]);
+        CssShSpan probe;
+        double num;
+        /* §7.1's unitless-zero rule decides the ARRANGEMENT before it decides the value: a `<number>` basis is
+           only ever grammatical after two flex factors, so writing one commits both. */
+        bool numeric = css_shorthand_number(v[2], bn, &num);
+
+        if (numeric) show_shrink = true;
+        /* AND THE GRAMMAR IS ASKED RATHER THAN RESTATED, which is what stops the two directions parting: the
+           question "would a `flex` declaration carrying these bytes read them back as this basis" is the
+           EXPANSION'S OWN predicate, run in the arrangement the line below is about to write. A `flex-basis`
+           the longhand carries and no `flex` value could produce — a negative length, a non-zero bare number,
+           a keyword outside §7.2.3's set — is CSSOM §6.7.2's "cannot exactly represent the values of all the
+           properties in list", reported by NULL exactly as `border`'s disagreeing sides are. */
+        if (!flex_take_basis(&probe, v[2], bn, numeric)) return NULL;
+    }
+    show_grow = show_shrink || !show_basis || strcmp(v[0], FLEX_OMITTED[0]) != 0;
+    if (show_grow) parts[n++] = v[0];
+    if (show_shrink) parts[n++] = v[1];
+    if (show_basis) parts[n++] = v[2];
+    DCHECK(n >= 1,
+           "css-flexbox-1 §7.1's serialization omitted every component, and the empty string matches no "
+           "production of its `Value:` line. The grow term is what stands when the other two are at their "
+           "omitted defaults, so reaching this means that rule was dropped rather than that a value was");
+    return css_sh_join(parts, n);
+}
+
 /* §3.4's `border`, which "cannot set different values on the four borders": a list whose four widths, four
    styles or four colors disagree is one no `border` declaration could have produced. And the five
    `border-image` longhands it resets must still hold what it reset them to — a `border-image` set afterwards
@@ -1347,6 +1644,7 @@ char *css_shorthand_serialize_value(const char *shorthand, const char *const *va
     case CSS_SH_FOUR_SIDE: return css_sh_four_side_value(values);
     case CSS_SH_TWO_AXIS:  return css_sh_two_axis_value(values);
     case CSS_SH_ALL_OF:    return css_sh_all_of_value(values, row->initial, row->n, row->whole_initial);
+    case CSS_SH_FLEX:      return css_sh_flex_value(values);
     case CSS_SH_FONT:      return css_font_shorthand_value(values);
     case CSS_SH_TEXT_ALIGN: return css_sh_text_align_value(values);
     case CSS_SH_BACKGROUND: return css_background_shorthand_value(values);
@@ -1433,6 +1731,134 @@ void css_shorthand_init(void)
         free(back);
         for (j = 0; j < row->n; j++) free(values[j]);
     }
+    /* css-flexbox-1 §7.1's ARRANGEMENTS AND SENTENCES ONE FIXTURE CANNOT REACH. The row's round trip exercises
+       the grammar in the arrangement where every component is written; each case below is a DIFFERENT sentence
+       of §7.1, and each of them fails SILENTLY — the declaration is not dropped, it sets a wrong `flex-basis`
+       or a wrong factor on a page that will simply lay out at the wrong width. That is the one failure mode a
+       crash cannot find later, so it is pinned here.
+       THE EXPECTED TRIPLES ARE READ OFF §7.1's OWN TEXT and not off this implementation: `none` "expands to
+       0 0 auto"; a value of one `<number>` is a flex factor with the other two components omitted, so §7.1.1
+       "Basic Values of flex" states `flex: <number [1,∞]>` as "Equivalent to flex: <number [1,∞]> 1 0"; the
+       `||` admits the basis before the factors as well as after; and "A unitless zero that is not already
+       preceded by two flex factors must be interpreted as a flex factor", which makes `1 1 0` a basis of 0 and
+       `0 1 1` a declaration no arrangement matches. */
+    {
+        static const struct { const char *value; const char *want[3]; } FLEX_CASES[] = {
+            /* §7.1's `none` arm, whose three values are its own sentence rather than the omitted defaults. */
+            { "none",       { "0", "0", "auto" } },
+            /* §7.1.1's `flex: <number>`, and the omitted-default pair that is not the longhands' initials. */
+            { "2",          { "2", "1", "0" } },
+            /* §7.1's `Initial:` line, which IS each longhand's own initial — the one triple where the two
+               lists agree, and the reason a reader can mistake them for one list. */
+            { "0 1 auto",   { "0", "1", "auto" } },
+            /* The `||` in the other order: a `<'flex-basis'>` ahead of the ordered factor pair, with one
+               factor and with both. The factors stay grow-then-shrink inside their own term. */
+            { "10px 2",     { "2", "1", "10px" } },
+            { "10px 2 3",   { "2", "3", "10px" } },
+            /* The unitless zero AS A BASIS, which is only ever the third component of three — and a zero
+               written any other way, which the serialization has to keep both factors in front of. */
+            { "1 1 0",      { "1", "1", "0" } },
+            { "1 1 0.0",    { "1", "1", "0.0" } },
+            /* And as a FACTOR everywhere else — including where a basis would have been grammatical. */
+            { "0 auto",     { "0", "1", "auto" } },
+            { "1 0",        { "1", "0", "0" } },
+            /* A zero WITH A UNIT is the spelling §7.1 tells authors to write, and it is a basis anywhere. */
+            { "0px",        { "1", "1", "0px" } },
+            /* A keyword `<'flex-basis'>` is answered in its canonical spelling, as every keyword here is,
+               and css-sizing-3 §3.2's level-3 additions are in the set by reference from §7.2.3. */
+            { "MIN-CONTENT", { "1", "1", "min-content" } },
+            { "stretch",    { "1", "1", "stretch" } },
+            /* A math function is ONE component value however many spaces its arguments carry. */
+            { "calc(10px + 2em)", { "1", "1", "calc(10px + 2em)" } },
+        };
+        /* Triples the three LONGHANDS can each hold and no `flex` declaration produces — CSSOM §6.7.2's
+           "cannot exactly represent the values of all the properties in list", which the block serialization
+           reads as the empty string and answers by moving on. Each is a `<'flex-basis'>` the grammar would
+           read back as something other than a basis, which is the one way this shorthand reaches that arm. */
+        static const char *const FLEX_UNREPRESENTABLE[][3] = {
+            { "1", "1", "5" },        /* a bare non-zero re-reads as a flex factor */
+            { "1", "1", "-3px" },     /* css-sizing-3 §3.2: "Negative values are invalid" */
+            { "2", "3", "inf" },      /* a C number that is not a CSS one */
+        };
+        /* Values §7.1's grammar does not admit. Each is a DROPPED declaration setting no longhand at all, and
+           each is one this file would have got wrong in a different way: a unitless non-zero basis (which
+           css_length_is_length_percentage answers TRUE for), a third flex factor, a negative factor, a
+           negative length, and a fourth component. */
+        static const char *const FLEX_INVALID[] = {
+            "0 1 1", "1 1 1", "1 2 3 4", "-1 auto", "1 -1", "1 1 -10px", "1 1 5", "nope", "1 nope", "none 1",
+            /* AND THE THREE SPANS `strtod` READS AS NUMBERS AND CSS DOES NOT, which are the reason
+               css_shorthand_number filters the span and flex_take_basis asks css-values-4 §5.4's first
+               character. Each of them would otherwise reach a computed value as a `<number>` or a
+               `<length>` that no production of either grammar admits. */
+            "0x10 auto", "inf", "nan auto",
+        };
+
+        for (i = 0; i < CSS_SH_N(FLEX_CASES); i++) {
+            char *back;
+            char *got[3];
+
+            for (j = 0; j < CSS_SH_N(got); j++) {
+                got[j] = css_shorthand_component("flex", FLEX_CASES[i].value, LH_FLEX[j]);
+                DCHECKF(got[j] != NULL && strcmp(got[j], FLEX_CASES[i].want[j]) == 0,
+                        "css-flexbox-1 §7.1's expansion of `flex: %s` gave `%s` the value `%s` where the "
+                        "section states `%s`. This is the failure that does not crash: the declaration is "
+                        "ACCEPTED and one of its three longhands carries a value the page never wrote, so "
+                        "every flex item under it is laid out at a size §9.9.3's cap and floor derive from a "
+                        "number nobody chose",
+                        FLEX_CASES[i].value, LH_FLEX[j], got[j] ? got[j] : "(dropped)",
+                        FLEX_CASES[i].want[j]);
+            }
+            /* AND THE SERIALIZATION AGREES WITH THE EXPANSION ON EVERY ONE OF THEM, which is a stronger
+               statement than the row's own round trip: that one starts from a value already in the omitted
+               form, and these start from values §6.7.2 must SHORTEN. Re-expanding the shortened form is what
+               says the shortening preserved the meaning, which is the whole of §6.7.2's condition. */
+            back = css_shorthand_serialize_value("flex", (const char *const *)got);
+            DCHECKF(back != NULL,
+                    "css-flexbox-1 §7.1's serialization reported that `flex: %s`'s own three longhand values "
+                    "cannot be written as a `flex` declaration — but they came OUT of one, so §6.7.2's "
+                    "\"cannot exactly represent\" arm has claimed a triple this grammar produces",
+                    FLEX_CASES[i].value);
+            for (j = 0; j < CSS_SH_N(got); j++) {
+                char *again = back ? css_shorthand_component("flex", back, LH_FLEX[j]) : NULL;
+
+                DCHECKF(again != NULL && strcmp(again, FLEX_CASES[i].want[j]) == 0,
+                        "css-flexbox-1 §7.1's serialization shortened `flex: %s` to `%s`, and re-expanding "
+                        "that gives `%s` the value `%s` rather than `%s`. CSSOM §6.7.2 permits an omission "
+                        "only \"without changing the meaning of the value\", so a component was dropped that "
+                        "the grammar reads back as something else — §7.1's unitless-zero rule is where that "
+                        "happens",
+                        FLEX_CASES[i].value, back ? back : "(nothing)", LH_FLEX[j],
+                        again ? again : "(dropped)", FLEX_CASES[i].want[j]);
+                free(again);
+            }
+            free(back);
+            for (j = 0; j < CSS_SH_N(got); j++) free(got[j]);
+        }
+        for (i = 0; i < CSS_SH_N(FLEX_UNREPRESENTABLE); i++) {
+            char *back = css_shorthand_serialize_value("flex", FLEX_UNREPRESENTABLE[i]);
+
+            DCHECKF(back == NULL,
+                    "css-flexbox-1 §7.1's serialization wrote `%s` for a `flex-basis` of `%s`, and no `flex` "
+                    "declaration carrying those bytes reads them back as that basis. CSSOM §6.7.2 permits a "
+                    "shortening only \"without changing the meaning of the value\", so this is the "
+                    "\"cannot exactly represent\" arm being skipped — and the visible symptom is a `cssText` "
+                    "the page never wrote and this engine cannot re-parse",
+                    back ? back : "(nothing)", FLEX_UNREPRESENTABLE[i][2]);
+            free(back);
+        }
+        for (i = 0; i < CSS_SH_N(FLEX_INVALID); i++)
+            for (j = 0; j < CSS_SH_N(LH_FLEX); j++) {
+                char *got = css_shorthand_component("flex", FLEX_INVALID[i], LH_FLEX[j]);
+
+                DCHECKF(got == NULL,
+                        "css-flexbox-1 §7.1's expansion accepted `flex: %s` and gave `%s` the value `%s`. CSS "
+                        "Syntax drops a declaration outside a property's grammar WHOLE, so a value this "
+                        "section does not admit must set none of the three longhands — accepting one is a "
+                        "number on the page that no declaration of it could have produced",
+                        FLEX_INVALID[i], LH_FLEX[j], got);
+                free(got);
+            }
+    }
     /* css-inline-3 §4.2's THREE TERM SETS ARE DISJOINT, which is the property that lets its `||` be split by
        the component value alone. Asserted by asking the partition itself about every keyword of every set: a
        word that answered a term other than its own would be one the header's claim is false of, and the
@@ -1505,9 +1931,34 @@ bool css_shorthand_complete_for(const char *longhand)
            has none, and css-sizing adds none: `flex` sets `flex-basis`, not `width`, and `aspect-ratio` is a
            longhand of its own;
          color — NO shorthand sets it;
+         visibility — NO shorthand in CSS sets it. css-display-3 §4 "Invisibility: the visibility property"
+           declares it as a standalone property with its own `Value:` line (`visible | hidden | collapse`) and
+           its own `Computed value:` line, and the module states no shorthand over it: §2's `display` decides
+           whether a box is GENERATED and is a different property, which §4's own parenthesis says outright
+           ("Set the display property to none to suppress box generation altogether"). It shares a keyword
+           with `overflow` (`hidden`) and a name with nothing;
          flex-direction, flex-wrap — `flex-flow` is the only shorthand that sets either (css-flexbox-1 §5.3,
            whose `Value:` line is exactly those two longhands), and it is in the table above. §7.1's `flex`
-           sets the three flexibility longhands and neither of these two;
+           sets the three flexibility longhands and neither of these two.
+           THIS PARAGRAPH STOOD FOR A WHILE WITH NEITHER NAME IN THE LIST BELOW, which is the quietest shape
+           this defect has and is worth recording rather than tidying away: the ARGUMENT was written and the
+           two entries were not, so the reasoning read as done while the predicate answered FALSE — and
+           css_computed_value.c asserts this predicate before it derives anything, so every read of either
+           property aborted at a message about an UNEXPANDED SHORTHAND for a shorthand that was in fact
+           expanded. A list a paragraph argues for is a list a reader will believe without checking;
+         flex-grow, flex-shrink, flex-basis — css-flexbox-1 §7.1 "The flex Shorthand"'s `flex` is the ONLY
+           shorthand in CSS that sets any of the three, and it is in the table above. §7.1's `Value:` line is
+           `none | [ <'flex-grow'> <'flex-shrink'>? || <'flex-basis'> ]`, which is exactly these three and
+           nothing else, while §7.2.1, §7.2.2 and §7.2.3 declare each as a standalone longhand with its own
+           `Value:`, `Initial:` and `Computed value:` lines. No module states a second container over them:
+           §5.3's `flex-flow` sets `flex-direction` and `flex-wrap` and none of these, §5.4's `order` is a
+           sibling property about painting and ordering rather than about flexibility, and CSS Box Alignment 3's
+           `place-*` shorthands are over `align-*`/`justify-*`, which are different properties again. All three
+           ARE in lexbor's property registry, so — like `text-align` and unlike the border longhands — their own
+           declarations were typed and validated all along and it was the SHORTHAND that set nothing: a
+           `flex: 1` reached the cascade as a declaration of a property no consumer reads, and §9.9.3 "Flex Item
+           Intrinsic Size Contributions"' cap and floor would have read a `flex-grow` of 0 and a `flex-shrink`
+           of 1 off every item on every page that writes the shorthand;
          THE EIGHT css-backgrounds-3 §2.10 NAMES — `background` is the ONLY shorthand in CSS that sets any of
            them, and it is in the table above. §2.10 states the whole of the relation in its own words ("given
            a valid declaration, for each layer the shorthand first sets the corresponding value of each of
@@ -1608,7 +2059,8 @@ bool css_shorthand_complete_for(const char *longhand)
        table above) and a declaration reaching the cascade has been through one. */
     static const char *const RECORDED[] = {
         "overflow-x", "overflow-y", "display", "float", "position", "box-sizing", "color", "white-space",
-        "direction", "writing-mode", "transform",
+        "direction", "writing-mode", "transform", "visibility",
+        "flex-direction", "flex-wrap", "flex-grow", "flex-shrink", "flex-basis",
         "background-image", "background-position", "background-size", "background-repeat",
         "background-attachment", "background-origin", "background-clip", "background-color",
         "baseline-source", "alignment-baseline", "baseline-shift",

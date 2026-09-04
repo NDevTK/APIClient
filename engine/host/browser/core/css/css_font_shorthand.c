@@ -9,6 +9,7 @@
 #include "core/css/css_defaulting.h"
 #include "core/css/css_font_shorthand.h"
 #include "core/css/css_length.h"
+#include "core/css/css_shorthand.h"
 #include "core/css/css_style_declaration.h"
 #include "core/css/font_size_functions.h"
 
@@ -129,20 +130,12 @@ static const char *const FONT_SYSTEM_FAMILY[] = {
    the slant. */
 static const char *const FONT_ANGLE_UNITS[] = { "deg", "grad", "rad", "turn" };
 
-/* A `<number>` — css-values-4 §5.3 "Real Numbers: the `<number>` type"'s production, answered by whether the whole span is one. `*out` receives the
-   value so the range checks the two numeric grammars carry (`<number [1,1000]>` for a weight,
-   `<number [0,∞]>` for a line-height) are made by their own callers rather than here. */
-static bool font_number(const char *w, size_t n, double *out)
-{
-    char buf[64];
-    char *end = NULL;
-
-    if (n == 0 || n >= sizeof buf) return false;
-    memcpy(buf, w, n);
-    buf[n] = '\0';
-    *out = strtod(buf, &end);
-    return end != NULL && *end == '\0';
-}
+/* css-values-4 §5.3 "Real Numbers: the <number> type"'s production is core/css/css_shorthand.h's — ONE
+   spelling of one sentence, for every grammar in this engine that admits a bare number. It used to be a
+   second copy here, and the copy was WIDER than §5.3: it handed the span straight to `strtod`, which is a C
+   production and accepts `0x10`, `inf` and `nan`, so a `font: 12px/0x2 serif` was a valid `<'line-height'>`.
+   The range restrictions stay with the callers below, because each is a different grammar's — `<number
+   [1,1000]>` for §2.2's weight, `<number [0,∞]>` for css-inline-3 §5.1's line-height. */
 
 /* A `<dimension>` whose unit is one of `set` — the shape both the angle test and the percentage-free half of
    the `<length-percentage>` test need. */
@@ -185,7 +178,7 @@ static bool font_length_percentage_nonneg(const char *w, size_t len)
     if (len > 1 && w[len - 1] == '%') {
         double n;
 
-        return font_number(w, len - 1, &n);
+        return css_shorthand_number(w, len - 1, &n);
     }
     probe = font_dupn(w, len);
     /* §2.5's own production is `<length-percentage [0,∞]>`, so the entry asked is the one that answers BOTH
@@ -200,7 +193,7 @@ static bool font_length_percentage_nonneg(const char *w, size_t len)
     if (ok) {
         double n;
 
-        if (font_number(w, len, &n)) ok = (n == 0.0);
+        if (css_shorthand_number(w, len, &n)) ok = (n == 0.0);
     }
     free(probe);
     return ok;
@@ -222,7 +215,7 @@ static bool font_line_height_valid(const char *w, size_t len)
     double n;
 
     if (font_word_is(w, len, "normal")) return true;
-    if (font_number(w, len, &n)) return n >= 0.0;
+    if (css_shorthand_number(w, len, &n)) return n >= 0.0;
     return font_length_percentage_nonneg(w, len);
 }
 
@@ -389,7 +382,7 @@ static int font_prefix_slot(const FontWord *w, int n, int i, const bool *filled,
     if (!filled[FONT_SLOT_WEIGHT]) {
         if (font_keyword(FONT_WEIGHT_KEYWORDS, FONT_N(FONT_WEIGHT_KEYWORDS), word, len))
             return FONT_SLOT_WEIGHT;
-        if (font_number(word, len, &num) && num >= 1.0 && num <= 1000.0)
+        if (css_shorthand_number(word, len, &num) && num >= 1.0 && num <= 1000.0)
             return FONT_SLOT_WEIGHT;
     }
     return -1;

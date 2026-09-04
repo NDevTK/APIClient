@@ -27,6 +27,7 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_SHORTHAND_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_SHORTHAND_H
 #include <stdbool.h>
+#include <stddef.h>
 
 /* The SPECIFIED value that the declaration `shorthand: value` gives to `longhand`. NULL when `shorthand` is not
    one this component expands, when it does not set `longhand`, or when `value` does not match the shorthand's
@@ -46,6 +47,21 @@ bool css_shorthand_validates_longhand(const char *longhand);
    match — an INVALID declaration, which the cascade drops. Only ever called for a name the predicate above
    answers TRUE for, and it asserts that. OWNED: the caller frees. */
 char *css_shorthand_longhand_value(const char *longhand, const char *value);
+
+/* css-values-4 §5.3 "Real Numbers: the <number> type"'s PRODUCTION over one component value's span — TRUE when
+   the whole span is a literal number, with `*out` receiving its value so each grammar's own range restriction
+   (`<number [0,∞]>` for a flex factor, `<number [1,1000]>` for a font weight) is checked by the caller that
+   states it rather than here.
+   IT IS ONE PRODUCTION AND NOT ONE PER SHORTHAND, which is why it is declared rather than repeated: §5.3's
+   sentence is the same one for every property that admits a bare number, and two spellings of it are two ideas
+   of what `0x10` is. THE SPAN IS FILTERED BEFORE `strtod` SEES IT, because `strtod` is a C production and not a
+   CSS one — it accepts `0x10`, `inf` and `nan`, none of which §5.3 admits: "When written literally, a number is
+   either an integer, or zero or more decimal digits followed by a dot (.) followed by one or more decimal
+   digits; optionally, it can be concluded by the letter “e” or “E” followed by an integer indicating the
+   base-ten exponent in scientific notation" — the spec's own curly marks kept, because the straight ones would
+   close this quotation three words early. §5.3's next sentence adds the sign ("the first character of a number
+   may be immediately preceded by - or + to indicate the number's sign"), which the filter admits too. */
+bool css_shorthand_number(const char *w, size_t n, double *out);
 
 /* Is the set of shorthands that can set `longhand` recorded here IN FULL, AND does the expansion above answer
    for every one of them? A consumer that derives a longhand's COMPUTED value asserts this before it trusts the
@@ -81,11 +97,11 @@ void css_shorthand_init(void);
 const char *const *css_shorthand_longhands(const char *shorthand, unsigned *pn);
 
 /* Is `name` recorded above as a shorthand? A REAL CSS shorthand this component does not record answers FALSE,
-   and a caller then treats it as a property in its own right — which is what the block serialization does
-   today for `flex`, whose three longhands lexbor's registry carries and whose
-   `<'flex-grow'> <'flex-shrink'>? || <'flex-basis'>` this table has no row for. That is why the predicate is
-   named for the TABLE and not for CSS: a reader who takes it as "is a CSS shorthand" gets a wrong answer for
-   every shorthand outside it. */
+   and a caller then treats it as a property in its own right — which is what the block serialization does for
+   css-fonts-4 §6.11 "Overall shorthand for font rendering: the font-variant property"'s `font-variant`, whose
+   seven `font-variant-*` longhands this table has no row for. That is why the predicate is named for the TABLE
+   and not for CSS: a reader who takes it as "is a CSS shorthand" gets a wrong answer for every shorthand
+   outside it. */
 bool css_shorthand_is_shorthand(const char *name);
 
 /* THE SHORTHANDS THAT SET `longhand`, written into `out` in CSSOM §6.6's own PREFERRED ORDER — "order
