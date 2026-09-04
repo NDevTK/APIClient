@@ -11,6 +11,7 @@
 #include "core/agent_state.h"
 #include "core/dom/document.h"
 #include "core/dom/element_scrolling.h"
+#include "core/dom/perform_scroll.h"
 #include "core/frame/screen.h"
 #include "core/frame/viewport.h"
 #include "core/frame/window_proxy.h"
@@ -253,70 +254,103 @@ JSValue viewport_env_value(JSContext *ctx, const char *member, JSValue computed)
     return concolic_source_wrap(ctx, hole, src, computed);
 }
 
-/* CSSOM VIEW §4: "the x-coordinate, RELATIVE TO THE INITIAL CONTAINING BLOCK ORIGIN, of the left of the
- * viewport". So the question is where the viewport sits over its own scrolling area, and this engine can
- * COMPUTE that rather than guess it.
+/* ---- CSSOM VIEW §4's `scrollX`/`scrollY`, WHICH ARE NOW A READ OF REAL PER-FLOW STATE ---------------------- */
+
+/* §4: "the x-coordinate, RELATIVE TO THE INITIAL CONTAINING BLOCK ORIGIN, of the left of the viewport". So the
+ * question is where the viewport sits over its own scrolling area, and the answer is STORED rather than
+ * derived: CSSOM VIEW §3.1 "Scrolling"'s perform a scroll (core/dom/perform_scroll.h) writes the record below
+ * and nothing else may, so this is the read of what §3.1 wrote.
  *
- * §2 defines a VIEWPORT's scrolling area as the initial containing block extended by the margin edges of ALL of
- * the viewport's DESCENDANTS' BOXES — with no exclusion clause, unlike the ELEMENT column of the same table.
- * THAT ROW IS BUILT (core/layout/scrolling_area.h answers both of §2's columns), SO THE AREA IS NO LONGER THE
- * ICB AND THIS IS NO LONGER A DERIVATION FROM IT. Two paragraphs stood here and each was a claim about this
- * tree that outlived the day it was true: first "this engine generates no boxes", then "this engine gives
- * GEOMETRY to exactly one box — the ICB — so no descendant has a margin edge to extend it by". The second was
- * corrected into a named residual — the area is the ICB, which is WRONG for any document taller than the
- * viewport — and this diff is the build that residual named. What it makes wrong is now nothing; what it makes
- * TRUE is that `document.documentElement.scrollHeight` answers 1400 on a page whose content is 1400 CSS pixels
- * tall, which is the single most common way a bundle asks whether its own page scrolls.
+ * IT IS PER-FLOW STATE AND THAT IS WHY IT IS A RECORD AND NOT A `double`. Two flows that scrolled one document
+ * differently must read back different numbers — a flow exploring the world in which a sticky header collapsed
+ * is standing somewhere the flow beside it is not — so the position rides the per-flow COW delta. It rides it
+ * for free because the record is an ordinary heap object and each write below is an ordinary property write,
+ * which is the same shape as §13.1's resize latch at the bottom of this file, and the same reason: a `double`
+ * in a static would be ONE answer for every timeline, and a malloc'd record would need a capture at every
+ * accessor.
  *
- * SO THE ZERO BELOW RESTS ON ITS SECOND REASON ALONE, AND THAT IS THE WHOLE OF WHAT THIS DIFF LEAVES STANDING.
- * A scrolling box whose scrolling area is its own size has one valid scroll position, its origin — that
- * argument is GONE, because the area can now be larger. `scrollX`/`scrollY` stay zero for the other reason: a
- * scroll position moves only when CSSOM VIEW §3.1 "Scrolling"'s perform a scroll runs, and nothing in this
- * engine reaches one (core/dom/element_scrolling.h states both halves). That is not a second derivation kept as
- * a fallback — it is the only one there ever was that did not depend on the area, and every site that DID
- * depend on the area now crashes by name instead of agreeing with it: §4's clamp below stops collapsing, so its
- * steps-7-8 and step-10 asserts fire, and core/dom/element_scrolling.h's perform-a-scroll capability answers
- * TRUE for the first time, which fires update-the-rendering step 9, `focus()` step 4 and save-persisted-state.
- * Those five are this diff's forcing function and each names its own next build.
+ * WHAT THIS RETIRES, RESTATED IN CAPITALS SO NOBODY RE-DERIVES IT. Three arguments stood here and each was the
+ * reason `scrollX` answered zero. THE FIRST: THIS ENGINE GENERATES NO BOXES. THE SECOND: THE ONLY BOX WITH
+ * GEOMETRY IS THE ICB, SO NO DESCENDANT'S MARGIN EDGE EXTENDS §2's SCROLLING AREA PAST IT, AND A SCROLLING BOX
+ * WHOSE SCROLLING AREA IS ITS OWN SIZE HAS ONE VALID POSITION. The diff that built §2's viewport row retired
+ * those two. THE THIRD SURVIVED THEM AND IS WHAT THIS DIFF RETIRES: A SCROLL POSITION MOVES ONLY WHEN §3.1's
+ * PERFORM A SCROLL RUNS, AND NOTHING IN THIS ENGINE REACHES ONE. §3.1 is written; the position moves; the zero
+ * below is now just the value a document starts at. All three corrections are one defect — a sentence about
+ * what this engine cannot do, outliving the day it could not do it, and read by everyone downstream as the
+ * reason not to look.
  *
- * THE FIRST OF THOSE TWO WAS A CLAIM ABOUT BOX EXISTENCE and was the wrong half: a user agent generates a box
- * for the root element of a document it is presenting, this engine presents every document it holds, and
- * core/html/focus.c's §6.6.2 row 1 had already committed to the opposite answer (a connected element that is
- * not `hidden` IS being rendered). One fact with two answers — so the box model is stated in ONE place,
- * core/dom/element_view.h, which owns the predicate both files ask. All three corrections are the same defect:
- * a sentence about what this engine cannot do, outliving the day it could not do it, and read by everyone
- * downstream as the reason not to look.
- *
- * §3.1 IS NOW THE ONLY THING BETWEEN THIS AND A REAL POSITION. When perform a scroll is written this stops
- * being a derivation at all: the position becomes real per-flow state and this becomes the read of what §3.1
- * wrote. The two-sided assertions for that already exist and are in the right places, and with the area built
- * they are LIVE rather than waiting — update-the-rendering step 9 (CSSOM VIEW §13.2 "Scrolling"'s SCROLL STEPS)
- * asks core/dom/element_scrolling.h whether a box in the document can be at a position other than the one this
- * engine derives, so the step that must drain doc's pending scroll events names itself first. §6's
- * `scrollTop`/`scrollLeft` setter reaches `viewport_scroll` below, whose clamp no longer collapses on a
- * document taller than its viewport — which is what its own step-10 assert says. SO DO §6's `scroll()`,
- * `scrollTo()` and `scrollBy()` ON AN ELEMENT, at their steps 8 and 9 — a root element and a quirks-mode body
- * route to this viewport algorithm by name.
- * THAT ASSERTION USED TO BE A [[HasProperty]] FOR `scrollTo` ON THE GLOBAL, and the paragraph that stood here
- * defended the choice: the WINDOW member was said to be the one whose arrival means the viewport can be moved,
- * with the ELEMENT member of the same name reaching this clamp exactly as the setter does. Both halves of that
- * are true and the conclusion does not follow — an installed member is not a moved box, and §4's Window members
- * are this same clamp with §4's argument questions in front of them, so installing them would have fired six
- * assertions across five files while no scroll in this engine could move anything. (That last clause used to
- * call every scroll the NO-OP ITS OWN CLAMP DECIDES, which held while the scrolling area was the initial
- * containing block. It is §3.1 that is missing now, not a clamp that collapses — the clamp below writes both
- * of §4's arms over §2's real area. Retired prose is restated in CAPITALS and never in quotation marks: a
- * quoted sentence beside a section number is a SPEC quotation, and citegen.mjs reads it as one.) */
+ * WHAT IS STILL MISSING IS NOT IN THIS FILE. §3.1 changes the position and then CRASHES, because CSSOM VIEW
+ * §13.2 "Scrolling" has no list for the `scroll` and `scrollend` a moved viewport owes and HTML §8.1.7.3
+ * "Processing model" update-the-rendering step 9 has no drain — perform_scroll.c names both at the site. So a
+ * dev build reaches a non-zero position and aborts there; nothing here is waiting on anything. */
+
+/* The record's two fields are the position, and they are the ONLY writable state this component holds about
+   the viewport. `viewport_install` builds it with the realm, so every realm has one before any member of §4
+   can be read. */
+#define VP_POS_X "x"
+#define VP_POS_Y "y"
+
+static int g_scroll_slot = -1;
+
+static double vp_scroll_axis(JSContext *ctx, const char *field)
+{
+    JSValue rec = realm_value_get(ctx, g_scroll_slot);
+    JSValue v = JS_GetPropertyStr(ctx, rec, field);
+    double d = 0.0;
+
+    DCHECK(JS_IsNumber(v),
+           "the viewport's scroll-position record holds an axis that is not a number — CSSOM VIEW §3.1's "
+           "perform a scroll is the only writer and it writes a clamped `double` on both axes, so this is a "
+           "write from outside that algorithm");
+    JS_ToFloat64(ctx, &d, v);
+    JS_FreeValue(ctx, v);
+    JS_FreeValue(ctx, rec);
+    return d;
+}
+
 double viewport_scroll_x(JSContext *ctx)
 {
-    (void)ctx;
-    return 0.0;
+    return vp_scroll_axis(ctx, VP_POS_X);
 }
 
 double viewport_scroll_y(JSContext *ctx)
 {
-    (void)ctx;
-    return 0.0;
+    return vp_scroll_axis(ctx, VP_POS_Y);
+}
+
+/* §3.1's INSTANT SCROLL OF THIS REALM'S VIEWPORT — the one writer, and see viewport.h for why the position is
+   this component's to hold rather than §3.1's.
+   THE CLAMP IS THE CALLER'S AND IS NOT RE-MADE HERE. §4's steps 7-8 and §6.1's own two rows are the same four
+   rows over one fact (core/dom/element_scrolling.h), so a second clamp at the write would be a third statement
+   of them, free to disagree with the one that decided the position. What IS asserted is that the position the
+   caller arrived at is one the box can actually have — that is the clamp's own postcondition, and asserting it
+   is what makes a caller that skipped the clamp crash here instead of silently placing the viewport outside
+   its scrolling area. */
+void viewport_set_scroll_position(JSContext *ctx, double x, double y)
+{
+    JSValue rec;
+
+    DCHECK(viewport_exists(ctx),
+           "the viewport's scroll position was written in a realm that is presenting no document — §3.1's "
+           "perform a scroll asserts the same thing one frame up, and a position without a viewport is a "
+           "number about a rectangle that is not there");
+    DCHECK(isfinite(x) && isfinite(y),
+           "the viewport's scroll position was written non-finite — CSSOM VIEW §3.2 \"WebIDL values\"' "
+           "normalize non-finite values runs at the member and §6.1's clamp is total, so a non-finite here is "
+           "one of those two having been skipped");
+    DCHECK(fabs(x) <= viewport_scrolling_area_width(ctx) - viewport_width(ctx) &&
+           fabs(y) <= viewport_scrolling_area_height(ctx) - viewport_height(ctx),
+           "the viewport was moved to a position outside §2's scrolling area of a viewport. Every route to "
+           "this writer runs §4's steps 7-8 or §6.1's identical rows first — one derivation, "
+           "core/dom/element_scrolling.h — so a position beyond the SLACK between the area and the box is a "
+           "route that skipped them. It is stated as a MAGNITUDE and not as a second call to the clamp for "
+           "the reason above: max(0, min(v, slack)) lands in [0, slack] and min(0, max(v, -slack)) lands in "
+           "[-slack, 0], so this one comparison holds whichever of §2's two overflow directions the document "
+           "has, and it needs no direction of its own to state");
+    rec = realm_value_get(ctx, g_scroll_slot);
+    JS_SetPropertyStr(ctx, rec, VP_POS_X, JS_NewFloat64(ctx, x));
+    JS_SetPropertyStr(ctx, rec, VP_POS_Y, JS_NewFloat64(ctx, y));
+    JS_FreeValue(ctx, rec);
 }
 
 /* THE ATTRIBUTE, as opposed to the derivation above — see viewport.h for why the two are separate and why the
@@ -379,7 +413,7 @@ double viewport_scrolling_area_height(JSContext *ctx) { return vp_scrolling_area
    four steps and everything after it drifts. The drift began AT the clamp and not before it, which is why
    "step 3" and "steps 4-5" read as plausible while being wrong, and why the only safe way to check a cluster
    of these is from its LAST member backwards. */
-void viewport_scroll(JSContext *ctx, double x, double y)
+void viewport_scroll(JSContext *ctx, double x, double y, const char *behavior)
 {
     lxb_dom_node_t *doc;
     double vw, vh;
@@ -423,16 +457,33 @@ void viewport_scroll(JSContext *ctx, double x, double y)
        viewport row anchors the scrolling area's beginning edges on the initial containing block's own edges and
        core/layout/flow_position.h places every box in that same space, so a scrolling-area coordinate IS a
        scroll position and `position` is (x, y).
-       CSSOM VIEW §4 step 10: "If position is the same as the viewport's current scroll position, and the
-       viewport does not have an ongoing smooth scroll, return a resolved Promise and abort the remaining
-       steps." The assert is the two-sided half: the moment a clamped request is somewhere else, steps 12-13
-       must be written. */
-    DCHECK(x == viewport_scroll_x(ctx) && y == viewport_scroll_y(ctx),
-           "CSSOM VIEW §4 scroll() step 10 no longer aborts: the clamped position differs from the viewport's "
-           "current one, so steps 12-13 must PERFORM A SCROLL (§3.1) — make the viewport's scroll position "
-           "per-flow state in the COW delta, queue the scroll event on the Document's pending scroll event "
-           "targets, and write update-the-rendering step 9's SCROLL STEPS, which rendering.c asserts against "
-           "the arrival of a way to move a scrolling box");
+       §4's STEP 10 — "If position is the same as the viewport's current scroll position, and the viewport does
+       not have an ongoing smooth scroll, return a resolved `Promise` and abort the remaining steps." The second
+       conjunct is FALSE for every box in this engine, derived rather than skipped: §3.1 step 5's smooth arm is
+       the only thing that starts one and this user agent never takes it (core/dom/perform_scroll.h states the
+       derivation and asserts it). THIS USED TO BE A TWO-SIDED DCHECK saying steps 12-13 had to be written; they
+       are written, below, which is what retired it. */
+    if (x == viewport_scroll_x(ctx) && y == viewport_scroll_y(ctx)) return;
+    /* Step 11 — "Let document be the viewport's associated `Document`." — is `doc` above, and step 12's
+       "document's root element as the associated element, if there is one, or null otherwise" is the element
+       `vp_document_node` reached that document THROUGH, so it is taken from the same read rather than from a
+       second one that could answer differently.
+       STEP 12 — "Perform a scroll of the viewport to position, document's root element as the associated
+       element, if there is one, or null otherwise, and the scroll behavior being the value of the `behavior`
+       dictionary member of options."
+       IT IS §3.1's SCROLLING-BOX ALGORITHM AND NOT ITS COORDINATED VIEWPORT ONE, and that is the standard's own
+       permission rather than a shortcut: the note §4 prints directly under this step reads "User agents do not
+       agree whether this uses the (coordinated) viewport perform a scroll or the scrolling box perform a scroll
+       on the layout viewport's scrolling box." The two also COINCIDE in this model, which is why the choice costs
+       nothing to make: the coordinated algorithm's visual deltas are min(maxX, max(0, visual x + dx)) - visual
+       x, and core/frame/visual_viewport.h derives a scale factor of 1 — at which the visual viewport covers the
+       layout viewport, so maxX and maxY are zero, both visual deltas are zero and the whole of the request is
+       the layout delta this line performs. A scale factor that is not 1 is what would separate them, and it is
+       visual_viewport.c that would then own the second half. */
+    perform_scroll(ctx, NULL, x, y, lxb_dom_interface_element(document_root_node(ctx)), behavior);
+    /* Step 13 — "Return scrollPromise." This entry returns `void` and its callers mint a RESOLVED promise: §3.1
+       resolves the promise it minted before it returns, because every scroll this user agent performs is an
+       INSTANT one (core/dom/perform_scroll.h). */
 }
 
 /* The client window's size, in CSS pixels, and its position relative to §2.3's Web-exposed screen area origin.
@@ -665,10 +716,15 @@ static JSValue js_vp_get(JSContext *ctx, JSValueConst this_val, int magic)
                                        : vp_long(ctx, 0.0);
     /* "The scrollX attribute must return the x-coordinate, relative to the initial containing block origin, of
        the left of the viewport, or zero if there is no viewport." An `unrestricted double`, not a `long`.
-       CONCRETE: the derivation below leaves one valid scroll position, and the layout that would give it a
-       range would also give it a WRITER — see viewport.h. The member is `viewport_window_scroll`, which is this
-       sentence WHOLE — the derivation and the no-viewport zero — because §10's `pageX` and §6's scroll members
-       invoke this attribute by name and must get the same two halves. */
+       CONCRETE, AND FOR A REASON THAT HAS CHANGED. IT USED TO BE THAT THE DERIVATION LEFT ONE VALID SCROLL
+       POSITION AND THAT THE LAYOUT WHICH GAVE IT A RANGE WOULD ALSO GIVE IT A WRITER. The writer arrived
+       (CSSOM VIEW §3.1's perform a scroll), and this stays concrete because what it reads is a number THIS
+       ENGINE STORED — element_view.h's rule is that a fact the model derives or records stays concrete, and a
+       scroll position is not an environment the model PICKED. What would make it a concolic is a page writing
+       an UNKNOWN position, and core/dom/element_view.c's setter crashes naming that build rather than reaching
+       this member with a `double` it invented. The member is `viewport_window_scroll`, which is this sentence
+       WHOLE — the read and the no-viewport zero — because §10's `pageX` and §6's scroll members invoke this
+       attribute by name and must get the same two halves. */
     case VP_SCROLL_X: return JS_NewFloat64(ctx, viewport_window_scroll(ctx, /*vertical*/ false));
     case VP_SCROLL_Y: return JS_NewFloat64(ctx, viewport_window_scroll(ctx, /*vertical*/ true));
     /* "The screenX and screenLeft attributes must return the x-coordinate, relative to the origin of the
@@ -764,6 +820,17 @@ static void viewport_install(JSContext *ctx)
     JS_SetPropertyStr(ctx, rec, VP_RESIZE_H, JS_NewFloat64(ctx, 0.0));
     realm_value_set(ctx, g_resize_slot, rec);
 
+    /* THE SCROLL POSITION, built WITH the realm for the same reason and seeded at the origin — which is where
+       a document that has not been scrolled is, and is a real starting VALUE rather than the derivation this
+       component used to answer with. It is built eagerly rather than on the first read because a record minted
+       inside whichever flow happened to touch it first would make that flow's object everyone's baseline —
+       core/realm.h states the rule at the mechanism. */
+    rec = JS_NewObjectProto(ctx, JS_NULL);
+    CHECK(!JS_IsException(rec), "viewport: OOM building a realm's CSSOM VIEW §3.1 scroll-position record");
+    JS_SetPropertyStr(ctx, rec, VP_POS_X, JS_NewFloat64(ctx, 0.0));
+    JS_SetPropertyStr(ctx, rec, VP_POS_Y, JS_NewFloat64(ctx, 0.0));
+    realm_value_set(ctx, g_scroll_slot, rec);
+
     /* Web IDL §3.7.3: Window is [Global], so its members are own properties of the GLOBAL OBJECT rather than of
        Window.prototype — see window.c, which states the same rule for the browsing-context half. */
     global = JS_GetGlobalObject(ctx);
@@ -776,18 +843,23 @@ void viewport_init(JSContext *ctx)
 {
     DCHECK(g_resize_slot < 0, "viewport_init ran twice — the §13.1 record's slot is declared once per AGENT");
     g_resize_slot = realm_value_declare(ctx, "CSSOM VIEW §13.1 the viewport as the resize steps last saw it");
+    g_scroll_slot = realm_value_declare(ctx, "CSSOM VIEW §3.1 the viewport's current scroll position");
     /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. It is the slot this init's own
        latch consults, so a release that kept it would hand a second agent a component reporting itself
        declared and holding a realm-value id from a runtime that no longer exists. */
     agent_state_id("viewport", &g_resize_slot,
                    "CSSOM VIEW §13.1 Resizing viewports' realm-value slot for the viewport as the resize steps "
                    "last saw it, and this component's declaration latch");
+    agent_state_id("viewport", &g_scroll_slot,
+                   "CSSOM VIEW §3.1 Scrolling's realm-value slot for the viewport's current scroll position — "
+                   "the state §3.1's perform a scroll writes and §4's `scrollX`/`scrollY` read");
     realm_declare_intrinsic(viewport_install);
 }
 
 void viewport_free(void)
 {
-    /* The records are the REALMS' — each is released with its context. What the agent holds is the slot, and a
+    /* The records are the REALMS' — each is released with its context. What the agent holds is the slots, and a
        slot id is a class id in a runtime that is going away with it. */
     g_resize_slot = -1;
+    g_scroll_slot = -1;
 }

@@ -1098,20 +1098,24 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
                both are answered rather than deferred:
                  step 3's "indicate focus" is the focus ring — a user-agent presentation with no scriptable
                    result, which is the one shape §NO STUBS permits as a documented no-effect;
-                 step 4's "scroll a target into view" needs a scrolling box that can be at a position other than
-                   the one this engine derives, and no box in this build can be — asserted below, the way
-                   rendering.c asserts its own unwritten steps, so the day CSSOM VIEW §3.1 "Scrolling"'s perform
-                   a scroll arrives this fires and names the step to write.
+                 step 4's "scroll a target into view" needs a scrolling box that can be somewhere other than
+                   the origin, and whether one CAN is a question about SLACK — asserted below, the way
+                   rendering.c asserts its own unwritten steps. THE SENTENCE THAT STOOD HERE SAID NO BOX IN
+                   THIS BUILD CAN BE, AND THAT THE DAY CSSOM VIEW §3.1 "Scrolling"'s PERFORM A SCROLL ARRIVES
+                   THIS FIRES. §3.1 has arrived (core/dom/perform_scroll.h) and it did NOT make the assert
+                   below fire: the predicate was never about §3.1's existence but about whether §2's scrolling
+                   area exceeds the box, which is what decides whether any clamp in this standard has anywhere
+                   to land. Where it does not, step 4 provably moves nothing and not running it is right; where
+                   it does, step 4 is missing and the assert says so.
                STEP 4's ASSERT ASKED FOR THE NAME `scrollTo` ON THE GLOBAL, with its own [[GetOwnProperty]]
-                   rather than `realm_awaits`, and the name was never the capability. `Element.prototype
-                   .scrollTo` is installed in this build and moves nothing; installing CSSOM VIEW §4's
-                   `scrollTo` on the Window would have satisfied the test and moved nothing either, so the
-                   DCHECK would have fired announcing a scrolling box that could still only be at its origin —
-                   a probe reporting a capability as PRESENT, which is worse than no probe. The question now
-                   goes to the component that owns §3.1 (core/dom/element_scrolling.h), and it is asked of THIS'S
-                   NODE DOCUMENT rather than of the running realm, for the same reason step 1's allow focus
-                   steps are: §6.1's scroll a target into view walks out of the element to ITS document's
-                   viewport. That is why it sits below the `doc` resolution rather than above it. */
+                   rather than `realm_awaits`, and the name was never the capability: a member is not a
+                   capability, and installing §4's `scrollTo` on the Window would have satisfied the test while
+                   the engine could still only put a box at its origin — a probe reporting a capability as
+                   PRESENT, which is worse than no probe. The question now goes to the component that owns §3.1
+                   (core/dom/element_scrolling.h), and it is asked of THIS'S NODE DOCUMENT rather than of the
+                   running realm, for the same reason step 1's allow focus steps are: §6.1's scroll a target
+                   into view walks out of the element to ITS document's viewport. That is why it sits below the
+                   `doc` resolution rather than above it. */
             /* Step 1's allow focus steps are given THIS'S NODE DOCUMENT, not the running realm's — an element
                adopted into another same-origin document is focused under that document's policy. A document
                with no browsing context has neither the feature nor an activation, so its elements are not
@@ -1122,8 +1126,10 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
                    idl_dict_bool(ctx, argc > 0 ? argv[0] : JS_UNDEFINED, "preventScroll"),
                    "HTML §6.6.6 \"Focus management APIs\" focus() step 4 — \"if options[\"preventScroll\"] is "
                    "false, then scroll a target into view given this, \"auto\", \"center\", and \"center\"\" — "
-                   "must be written here: a scrolling box in this element's document can now be at a position "
-                   "other than the one this engine derives. The algorithm step 4 calls is already exported "
+                   "must be written here: §2's scrolling area of a box in this element's document EXCEEDS that "
+                   "box, so CSSOM VIEW §3.1 \"Scrolling\"'s perform a scroll — which is built "
+                   "(core/dom/perform_scroll.h) — has somewhere to put it. The algorithm step 4 calls is "
+                   "already exported "
                    "(core/dom/element_scrolling.h's element_scrolling_scroll_target_into_view), so what is "
                    "missing is a stage of this machine AFTER §6.6.4's focusing steps, with `scrollIntoView`'s "
                    "own step 7 — the target has an associated box — asked first");

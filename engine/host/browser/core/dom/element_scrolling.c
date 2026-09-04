@@ -15,6 +15,7 @@
 #include "core/dom/element.h"
 #include "core/dom/element_scrolling.h"
 #include "core/dom/element_view.h"
+#include "core/dom/perform_scroll.h"
 #include "core/dom/shadow_root.h"
 #include "core/frame/viewport.h"
 #include "core/frame/window_proxy.h"
@@ -60,11 +61,17 @@ ScrollLogicalPosition element_scrolling_logical_position(const char *keyword)
  *
  * WHY A POSITION IS A `double` WHILE AN EDGE IS A `CssPx`. An edge is a LAYOUT length whose chain bottoms out in
  * the initial containing block, so it carries that environment fact (core/css/css_length.h) and the arithmetic
- * below propagates it. A SCROLL POSITION is not that kind of value: element_view.h's own rule is that a fact the
- * model DERIVES stays concrete, and every scroll position in this engine is derived — the viewport has one valid
- * position and no element has ever been scrolled. It is also the type the two things that consume it speak
- * (`viewport_scroll`, `element_view_scroll_position`), so converting at this boundary rather than at three
- * call sites is what keeps one answer. */
+ * below propagates it. A SCROLL POSITION is not that kind of value: it is a number this engine STORES and reads
+ * back (core/frame/viewport.h holds the viewport's on a per-flow record), not a length derived from the
+ * environment, so it carries no `CssEnvFact` to lose. IT IS ALSO THE TYPE EVERY CONSUMER SPEAKS —
+ * `perform_scroll`, `viewport_window_scroll`, `element_view_scroll_position` — so converting at this boundary
+ * rather than at three call sites is what keeps one answer.
+ * WHAT THIS PARAGRAPH USED TO SAY IS RETIRED AND IS RESTATED IN CAPITALS SO NOBODY RE-DERIVES IT: EVERY SCROLL
+ * POSITION IN THIS ENGINE IS DERIVED — THE VIEWPORT HAS ONE VALID POSITION AND NO ELEMENT HAS EVER BEEN
+ * SCROLLED. The viewport's half of that is gone; the element's half is not, and it is the crash in
+ * core/dom/perform_scroll.c rather than anything here that keeps it true. A REQUESTED position that is UNKNOWN
+ * EXTERNAL INPUT is the one thing this `double` cannot carry, and core/dom/element_view.c's setter crashes
+ * naming it rather than substituting a number. */
 typedef struct {
     lxb_dom_element_t *el;    /* the scroll container, or NULL when this box is the VIEWPORT */
     JSContext *dctx;          /* the realm whose ACTIVE document this box belongs to */
@@ -162,56 +169,55 @@ double element_scrolling_clamp_position(double v, double area_extent, double box
     return fmin(0.0, fmax(v, -slack));
 }
 
-/* §6.1's PERFORM-A-SCROLL STEP, for either kind of box — the last two steps of scroll an element to x,y ("if
- * position is the same as box's current scroll position, and box does not have an ongoing smooth scroll, return
- * a resolved Promise and abort the remaining steps" / "perform a scroll of box to position") and, word for
- * word, scroll a target into view's own step 2.3 ("if position is not the same as scrolling box's current
- * scroll position, or scrolling box has an ongoing smooth scroll" / "perform a scroll of the element's
- * scrolling box to position").
- * ONE SITE FOR ONE ABSENCE. §6's `scrollTop` setter, its three scroll members and its `scrollIntoView` all end
- * here, and the crash below is the ONLY description in this engine of "an element cannot hold a scroll
- * position". A second copy of it would be a second description of one absence, and the one nobody deletes is
- * the one that goes on naming work that is already done.
- * `position` is already clamped. Returns true when the position is the one the box already has, which is
- * §6.1's own resolved-promise exit and is the answer for every box this engine can reach. */
-static bool es_perform_scroll(const EsBox *b, const double position[2], const char *behavior)
+/* §6.1's PERFORM-A-SCROLL STEP, for either kind of box — the last two steps of scroll an element to x,y ("If
+ * position is the same as box's current scroll position, and box does not have an ongoing smooth scroll,
+ * return a resolved `Promise` and abort the remaining steps." / "Perform a scroll of box to position, element
+ * as the associated element and behavior as the scroll behavior.") and, word for word, scroll a target into
+ * view's own step 2.3 ("If position is not the same as scrolling box's current scroll position, or scrolling
+ * box has an ongoing smooth scroll") with its step 2.3.1.
+ * STEP 2.3.1 IS ONE STEP AND NOT TWO, and this used to cite a SECOND sub-step beside it that §6.1 does not
+ * have (the number is deliberately not spelled again: citegen.mjs reads a step number out of prose whether or
+ * not it is quoted, and a retirement note that repeats the wrong one manufactures the finding it is retiring).
+ * Step 2.3 holds an `<ol>` with a SINGLE `<li>`, and that item is a two-armed
+ * `<dl class="switch">` — so a flat count of the arms reads one step as two, which is the same hazard §4's
+ * clamp carries at viewport.c and the reason a cluster of sub-numbers is checked from its last member
+ * backwards.
+ * ITS TWO ARMS ARE WHAT DECIDES THE ASSOCIATED ELEMENT, and they are not the same answer. The element arm
+ * passes "the element as the associated element" — the ancestor whose box this is, never the target. The
+ * viewport arm runs three substeps of its own, of which the first two are "Let document be the viewport's
+ * associated `Document`." and "Let root element be document's root element, if there is one, or null
+ * otherwise." So the argument §3.1 step 5 reads is the ROOT ELEMENT there and the SCROLL CONTAINER here, and
+ * one answer for both would be wrong on whichever side it was not written for.
+ * `position` is already clamped. THE CRASH THAT USED TO LIVE HERE — AN ELEMENT CANNOT HOLD A SCROLL POSITION —
+ * HAS MOVED TO THE COMPONENT THAT OWNS §3.1 (core/dom/perform_scroll.c), which is where the position store
+ * belongs and therefore where its absence belongs: one site for one absence, and now the site that the diff
+ * building the store will be editing anyway. */
+static void es_perform_scroll(const EsBox *b, const double position[2], const char *behavior)
 {
     /* "…AND BOX DOES NOT HAVE AN ONGOING SMOOTH SCROLL" is answered FALSE for every box, derived rather than
-       skipped: §3.1's perform a scroll is the only thing that starts one, the element route below crashes and
-       the viewport route never changes a position, so no box in this engine has ever had one. The DFAIL is
-       what keeps that derivation true. */
-    if (position[ES_X] == b->cur[ES_X] && position[ES_Y] == b->cur[ES_Y]) return true;
+       skipped — and the derivation has CHANGED HANDS rather than gone away. IT USED TO BE THAT NOTHING IN THIS
+       ENGINE HAD EVER REACHED §3.1 AT ALL; §3.1 is written now, and what keeps the disjunct false is its own
+       step 5: a smooth scroll is started only by the arm this user agent never takes, because it does not
+       honor css-overflow-3 §4.1's `scroll-behavior` property. core/dom/perform_scroll.h states it once and
+       asserts it once. */
+    if (position[ES_X] == b->cur[ES_X] && position[ES_Y] == b->cur[ES_Y]) return;
     if (b->el == NULL) {
-        /* §4's `scroll()` on the viewport, as the INTERNAL algorithm (§2 Terminology) — it re-runs the SAME
-           clamp (`element_scrolling_clamp_position` above) over the same three operands, so the two algorithms
-           cannot disagree about where a request lands, and asserts at its step 10 that the result is the
-           position the viewport already has. Reaching this line means the clamped position is NOT that one, so
-           that assert is the one that fires and §3.1's perform a scroll is what it names. */
-        viewport_scroll(b->dctx, position[ES_X], position[ES_Y]);
-        return true;
+        /* THE VIEWPORT ARM of step 2.3.1, with its own three substeps: the document is the one this box was
+           built over and the associated element is that document's root element, or null where there is none.
+           IT IS §3.1's SCROLLING-BOX ALGORITHM AND NOT ITS COORDINATED VIEWPORT ONE, for the reason
+           core/dom/perform_scroll.h gives once for both of §3.1's callers — at this model's scale factor the
+           two coincide, and the standard's own note under §4's step 12 records that user agents disagree about
+           which of them a viewport scroll is.
+           IT NO LONGER GOES THROUGH `viewport_scroll`, which is §4's THIRTEEN STEPS: routing §6.1 through them
+           re-ran §4's own clamp over a position §6.1 had already clamped, so one request was clamped twice by
+           two algorithms — idempotent, and still two statements of one decision. §6.1 says "perform a scroll",
+           and that is now a thing this engine has. */
+        perform_scroll(b->dctx, NULL, position[ES_X], position[ES_Y],
+                       lxb_dom_interface_element(document_root_node(b->dctx)), behavior);
+        return;
     }
-    (void)behavior;
-    DFAIL("CSSOM VIEW §6.1 \"Element Scrolling Members\" reached a real PERFORM A SCROLL of an ELEMENT's "
-          "scrolling box — the position §6.1's clamp landed on is not the one the box has, so this is a scroll "
-          "that must actually happen. TWO THINGS ARE MISSING AND NEITHER IS THE SCROLLING BOX ANY MORE: "
-          "css-overflow-3 §3.1's scroll container is derived (core/layout/scroll_container.h) and §2's scrolling "
-          "area is derived (core/layout/scrolling_area.h), which is what let this algorithm run at all. (1) THE "
-          "SCROLL POSITION ITSELF, which an element must HOLD: it is per-flow state, because two flows that "
-          "scrolled one element differently must read back different values, so it belongs in the COW delta with "
-          "solver/dom_cow.h's capture at its accessor exactly as a browser component's own C record does — and "
-          "core/dom/element_view.c's `scrollTop` getter step 8 reads it, so building one without the other "
-          "would hand every flow the same number. (2) §3.1 \"Scrolling\"'s PERFORM A SCROLL, which is where the "
-          "Promise these members answer with stops being a resolved one: its step 3 creates a promise that "
-          "settles when the position has finished updating, its step 5 branches on the `behavior` argument this "
-          "function already carries (`smooth` against `instant`, with `auto` deferring to the computed "
-          "`scroll-behavior` of css-overflow-3 §4.1 \"Smooth Scrolling: the scroll-behavior Property\"), and "
-          "its step 7.1 emits `scrollend`. BUILD the per-flow position first — the getter and this setter are "
-          "one fact — then §3.1 over it. AND THE DIFF THAT DELETES THIS CRASH OWES ONE MORE THING: "
-          "`element_scrolling_box_can_move` below derives its ELEMENT half FROM this crash, and three steps "
-          "that drain or carry what a scroll produces read it (HTML §8.1.7.3 update-the-rendering step 9, HTML "
-          "§7.4.6.5's scroll position data, and CSSOM VIEW §13.2's pending scroll events), so that half stops "
-          "being a derivation the moment an element can hold a position and becomes a read of the real one");
-    return true;
+    /* THE ELEMENT ARM — "with the element as the associated element". */
+    perform_scroll(b->dctx, b->el, position[ES_X], position[ES_Y], b->el, behavior);
 }
 
 /* §6.1's DETERMINE THE SCROLL-INTO-VIEW POSITION, ON ONE AXIS. §6.1 writes the block half and the inline half
@@ -347,7 +353,7 @@ static void es_visit(lxb_dom_element_t *target, const EsBox *b, const char *beha
        check has a false arm is the step OUT of a document, and that is where the walk asks it — a cross-origin
        parent's container element belongs to another instance and is not reachable at all. */
     es_determine_position(target, block, inline_pos, b, position);   /* step 2.2 */
-    es_perform_scroll(b, position, behavior);                        /* steps 2.3.1 and 2.3.2 */
+    es_perform_scroll(b, position, behavior);                        /* step 2.3 and its 2.3.1 */
 }
 
 /* Step 2.4's STOP CONDITION — "if container is not null and either scrolling box is a shadow-including
@@ -464,18 +470,22 @@ bool element_scrolling_box_can_move(JSContext *ctx)
            "CSSOM VIEW §3.1's perform-a-scroll capability was asked without a realm — the viewport half is a "
            "fact about the viewport THIS realm's document is presented in, and core/frame/viewport.h answers "
            "for the realm it is passed and never for a remembered one");
-    /* THE VIEWPORT HALF, derived from §4's clamp's own operands — see element_scrolling.h for why it needs no
-       overflow direction of its own: each of §4's steps 7 and 8 has two arms and BOTH of them collapse onto the
-       origin exactly when the slack is zero, so "the clamp can land somewhere else" is the one comparison
-       below whichever arm the document's principal writing mode selects. `viewport_exists` is not asked here:
-       where there is no viewport, core/frame/viewport.h answers both extents from the same modelled geometry
-       and the comparison is false, which is the right answer — a document no navigable is presenting has no box
-       for §3.1 to move. */
+    /* THE VIEWPORT HALF, and §3.1's ARRIVAL DID NOT RETIRE IT — it made it LOAD-BEARING, which is the opposite
+       and is worth stating because the reverse reads as obvious. This comparison is about SLACK and never about
+       whether a perform-a-scroll exists: each of §4's steps 7 and 8 has two arms and BOTH collapse onto the
+       origin exactly when the slack is zero, so where the scrolling area equals the viewport no algorithm
+       whatever can put a box anywhere else, and where it does not, §3.1 now can. It used to be the OUTER of two
+       reasons, with NOTHING IN THIS ENGINE REACHES §3.1 standing behind it; that reason is gone and this one is
+       the whole answer. See element_scrolling.h for why it needs no overflow direction of its own.
+       `viewport_exists` is not asked here: where there is no viewport, core/frame/viewport.h answers both
+       extents from the same modelled geometry and the comparison is false, which is the right answer — a
+       document no navigable is presenting has no box for §3.1 to move. */
     if (viewport_scrolling_area_width(ctx)  > viewport_width(ctx))  return true;
     if (viewport_scrolling_area_height(ctx) > viewport_height(ctx)) return true;
-    /* THE ELEMENT HALF, derived from the crash in `es_perform_scroll` above: an element that reached a real
-       perform-a-scroll aborts there rather than moving, so every element in this engine is at the origin
-       core/dom/element_view.c's `scrollTop` getter step 8 derives, and there is nothing for §13.2's list to
-       have been appended for. */
+    /* THE ELEMENT HALF, derived from the crash in core/dom/perform_scroll.c's instant scroll — which is where
+       it moved when §3.1 was written, and it is the SAME crash rather than a new one: an element that reaches a
+       real perform-a-scroll aborts for want of a place to put the position, so every element in this engine is
+       at the origin core/dom/element_view.c's `scrollTop` getter step 8 derives. The diff that gives an element
+       a scroll position is the diff that turns this line into a walk of the document's scroll containers. */
     return false;
 }

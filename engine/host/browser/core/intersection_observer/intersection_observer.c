@@ -552,7 +552,9 @@ static IoRect io_intersect(IoRect a, IoRect b)
    so an unclipped chain is a real derivation and not a shrug.
    STEPS 4 AND 6 ARE IDENTITIES IN THIS MODEL and are written as the derivation rather than omitted: every
    rectangle in this file is already in CLIENT COORDINATES (core/dom/element_view.c reports the border area
-   there, subtracting the viewport's one valid scroll position), and the mapping between two boxes' spaces is
+   there, subtracting the viewport's CURRENT scroll position — which CSSOM VIEW §3.1's perform a scroll can now
+   move, so this is a live subtraction and no longer the derived zero it once was), and the mapping between two
+   boxes' spaces is
    the translation a TRANSFORM would carry — which element_view.c crashes for by name before any rectangle with
    a box in it reaches here. */
 static IoRect io_compute_intersection(JSContext *ctx, lxb_dom_node_t *target, JSValueConst state, IoRect root)

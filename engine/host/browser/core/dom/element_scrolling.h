@@ -21,29 +21,26 @@
  * multi-document walk inside a file whose every other function opens with the same four questions about one
  * element's node document.
  *
- * WHAT THIS ENGINE CAN ANSWER, AND WHY THE ANSWER IS A DERIVATION RATHER THAN A SHRUG. Both entries below
- * return `void`, and their caller answers the page with a RESOLVED promise — which is honest for exactly one
- * reason: every path through them either performs no scroll at all, or CRASHES. §3.1 "Scrolling"'s perform a
- * scroll is what returns a promise that settles later, and there is exactly one route to it for an element in
- * this engine and it is the DFAIL below. The viewport's route runs for real and CRASHES the same way: §4's
- * scroll() step 10 is a two-sided assert that the clamped position is the one the viewport already has, and
- * with §2's viewport row built that clamp CAN land elsewhere, so the viewport's route is now the second of the
- * two crashes rather than the no-op it used to be. WHAT STOOD HERE said it LANDS WHERE IT ALREADY IS, because
- * core/frame/viewport.h derived the viewport's scrolling area as the initial containing block and an area equal
- * to its box has one valid position; the diff that built §2's viewport row retired that premise. (Retired prose
- * is restated in CAPITALS and never in quotation marks — a quoted sentence beside a section number is a SPEC
- * quotation, and citegen.mjs reads it as one.) `scroll a target into view`'s own last
- * step — "resolve scrollPromise when all Promises in ancestorPromises have settled" — is therefore a resolved
- * promise over a set of resolved promises. The day an element can hold a scroll position, this file grows a
- * promise-returning shape and its callers stop minting one; the crash is what makes that a change nobody can
- * forget to make.
+ * WHY BOTH ENTRIES RETURN `void` WHILE §6.1 RETURNS A PROMISE, AND WHY THAT IS NOW A DIFFERENT ARGUMENT. The
+ * caller answers the page with a RESOLVED promise, and that is honest because EVERY SCROLL THIS USER AGENT
+ * PERFORMS IS AN INSTANT ONE: §3.1 step 5's smooth arm is gated on the user agent honoring css-overflow-3
+ * §4.1's `scroll-behavior` property, this cascade declares no such property, and an instant scroll has finished
+ * updating by the time §3.1 returns — so step 7.2 resolves the promise before the algorithm ends.
+ * core/dom/perform_scroll.h states that derivation once and asserts it once. WHAT STOOD HERE INSTEAD WAS THAT
+ * EVERY PATH THROUGH THESE ENTRIES EITHER PERFORMS NO SCROLL AT ALL OR CRASHES, WITH §3.1 BEING THE THING
+ * NOTHING IN THIS ENGINE REACHED; §3.1 is written and the viewport route runs it for real, which retires that.
+ * (Retired prose is restated in CAPITALS and never in quotation marks — a quoted sentence beside a section
+ * number is a SPEC quotation, and citegen.mjs reads it as one.) §6.1's scroll a target into view's own last
+ * step, its STEP 5 — "Resolve scrollPromise when all Promises in ancestorPromises have settled." — is
+ * therefore a resolved promise over a set of resolved promises. The day a scroll can take TIME this file grows a promise-returning
+ * shape and its callers stop minting one; that day is the smooth scroll's, not an element's.
  *
- * A SMOOTH SCROLL IS NEVER ONGOING, AND THAT TOO IS DERIVED. Three of §6.1's steps read "or box has an ongoing
- * smooth scroll" as a second disjunct beside "position is not the same as the current scroll position", and
- * this engine answers the disjunct FALSE for every box — not because smooth scrolling is unimplemented but
- * because §3.1's perform a scroll is the ONLY thing that starts one, and no box in this engine has ever reached
- * it: the element route crashes and the viewport route never changes a position, which §3.1's own step 7.1
- * makes the condition for emitting `scrollend` too. The DFAIL is what keeps that true. */
+ * A SMOOTH SCROLL IS NEVER ONGOING, AND THAT TOO IS DERIVED — from the same sentence and no longer from the
+ * absence of a caller. Three of §6.1's steps read "or box has an ongoing smooth scroll" as a second disjunct
+ * beside "position is not the same as the current scroll position", and this engine answers the disjunct FALSE
+ * for every box because §3.1's step 5 is the only thing that starts one and its smooth arm is unreachable here.
+ * THE REASON THAT STOOD HERE WAS THAT NO BOX HAD EVER REACHED §3.1 AT ALL, which is exactly what this file's
+ * viewport route now does. */
 #ifndef ENGINE_HOST_BROWSER_CORE_DOM_ELEMENT_SCROLLING_H
 #define ENGINE_HOST_BROWSER_CORE_DOM_ELEMENT_SCROLLING_H
 
@@ -157,12 +154,22 @@ void element_scrolling_scroll_target_into_view(lxb_dom_element_t *target, const 
  *   direction of its own. It reads the clamp's own two functions, so a layout that extends the area past the
  *   initial containing block makes this answer true with nobody having to remember it — which is what happened:
  *   this used to argue that THE ICB IS THE VIEWPORT, SO THE CLAMP HAS NOWHERE TO LAND BUT THE POSITION THE
- *   VIEWPORT ALREADY HAS, and §2's viewport row retired that premise.
- *   THE ELEMENT half is derived FROM THE CRASH. §6.1's perform-a-scroll step in element_scrolling.c is the one
- *   site for "an element cannot hold a scroll position" and it DFAILs rather than moving one, so no element in
- *   this engine has ever been anywhere but the origin core/dom/element_view.c's `scrollTop` getter step 8
- *   derives. That DFAIL names this function, so the diff that deletes it is the diff that turns this half into
- *   a read of real state. */
+ *   VIEWPORT ALREADY HAS, and §2's viewport row retired that premise. It is an UPPER BOUND and is meant to be:
+ *   it says a box in this document COULD be somewhere other than the origin, not that one IS, which is what
+ *   makes each reader's assert fire at the arrival of the possibility rather than at the first page that
+ *   happens to exercise it.
+ *   THE ELEMENT half is derived FROM THE CRASH, which has MOVED rather than gone: core/dom/perform_scroll.c's
+ *   instant scroll is the one site for AN ELEMENT CANNOT HOLD A SCROLL POSITION and it DFAILs rather than
+ *   moving one, so no element in this engine has ever been anywhere but the origin core/dom/element_view.c's
+ *   `scrollTop` getter step 8 derives. That DFAIL names this function, so the diff that deletes it is the diff
+ *   that turns this half into a walk of the document's scroll containers.
+ *
+ * §3.1's ARRIVAL DID NOT RETIRE THIS QUESTION, AND IT READS AS THOUGH IT SHOULD HAVE — which is why the point
+ * is made here rather than left to be re-derived. CAN A BOX BE SOMEWHERE ELSE is not DOES A PERFORM-A-SCROLL
+ * EXIST: the viewport half above is a comparison of two EXTENTS, and where they are equal every arm of every
+ * clamp in this standard lands on the origin, so no algorithm can move a box in that document. §3.1 changed
+ * which of the two reasons is doing the work — the comparison used to sit in front of AND NOTHING REACHES §3.1
+ * ANYWAY and is now the whole answer — and a question that becomes load-bearing has not been retired. */
 bool element_scrolling_box_can_move(JSContext *ctx);
 
 #endif

@@ -86,30 +86,30 @@
  * ONE function rather than a private static in the focus model. What survives of the first is the part that was
  * really about GEOMETRY and not about existence: no box in this model had a margin edge, so nothing extended the
  * ICB, and viewport.c's scrolling area was exactly the ICB.
- * THAT SECOND HALF IS NOW NARROWER THAN IT READS, AND THE NARROWING IS NAMED HERE RATHER THAN ASSUMED AWAY.
- * core/layout/flow_position.h places the ROOT ELEMENT's border box, and core/layout/used_value.h measures it,
- * so ONE box in this model now has a margin edge — and `html { height: 2000px }` puts that edge below the ICB's
- * bottom, which is exactly CSSOM VIEW §2's condition for the viewport's SCROLLING AREA to be taller than the
- * ICB ("the bottom-most edge of the bottom edge of the initial containing block and the bottom margin edge of
- * all of the viewport's descendants' boxes"). viewport.c still derives the two as equal, and with them the
- * viewport's one valid scroll position that every scroll member here reads. It is not wrong today, because
- * nothing else in this engine can measure the box either — `scrollHeight` on the root reaches viewport.h before
- * it reaches a layout — but it is a fact with a NEW writer, and the place to fix it is viewport.c's derivation,
- * over this component's predicate and that one's placement, the moment the root's used height is computable
- * for a page that did not declare one.
+ * THAT SECOND HALF IS GONE, AND THE TWO STEPS THAT REMOVED IT ARE NAMED HERE RATHER THAN LEFT TO BE
+ * RE-DERIVED. core/layout/flow_position.h places the ROOT ELEMENT's border box and core/layout/used_value.h
+ * measures it, so a box in this model has a margin edge — and `html { height: 2000px }` puts that edge below
+ * the ICB's bottom, which is exactly CSSOM VIEW §2's condition for the viewport's SCROLLING AREA to be taller
+ * than the ICB ("the bottom-most edge of the bottom edge of the initial containing block and the bottom margin
+ * edge of all of the viewport's descendants' boxes"). §2's viewport row is built over that placement, so
+ * viewport.c no longer derives the two as equal; and THE SENTENCE THAT FOLLOWED FROM IT — THE VIEWPORT'S ONE
+ * VALID SCROLL POSITION THAT EVERY SCROLL MEMBER HERE READS — WENT WITH IT.
  *
- * SO THE VIEWPORT HAS ONE VALID SCROLL POSITION AND SO DOES EVERY ELEMENT. viewport.h derives the first: the
- * viewport's scrolling area is the ICB, and a scrolling box whose scrolling area is its own size can only sit
- * at its origin. The second is derived rather than assumed: the origin of a scrolling area is defined AT the
- * element's default scroll position, a scroll position moves only when §3.1's PERFORM A SCROLL runs, and every
- * route to that for an element ends at ONE crash — the four §6 members that can reach it (the
- * `scrollTop`/`scrollLeft` setter, `scroll()`/`scrollTo()`/`scrollBy()`, and `scrollIntoView()`) all converge on
- * core/dom/element_scrolling.c's one perform-a-scroll. So "no element has been scrolled" is true BY
- * CONSTRUCTION, which is what makes the getters' final step a derivation and not a shrug, and the DFAIL is what
- * keeps it true. IT MUST STAY ONE SITE: a second copy of that crash is a second description of one absence,
- * and the one nobody deletes is the one that goes on naming work that is already done. The crash MOVED OUT of
- * this file when `scrollIntoView` arrived, for exactly that rule: §6.1's algorithms are three and the absence
- * is one, so it lives with the step that performs a scroll rather than with any member that reaches it.
+ * SO THE VIEWPORT NO LONGER HAS ONE VALID SCROLL POSITION, AND EVERY ELEMENT STILL DOES. The two halves came
+ * apart, which is why they are now stated apart. THE VIEWPORT's position is real per-flow state that CSSOM VIEW
+ * §3.1 "Scrolling"'s perform a scroll writes and core/frame/viewport.h holds, so the members here that route to
+ * the window (the `scrollTop` getter's steps 5 and 6, and the setter's steps 8 and 9) report and move a number
+ * that changes. AN ELEMENT's is still derived rather than assumed: the origin of a scrolling area is defined AT
+ * the element's default scroll position, a scroll position moves only when §3.1 runs, and every route to that
+ * for an element ends at ONE crash — the four §6 members that can reach it (the `scrollTop`/`scrollLeft`
+ * setter, `scroll()`/`scrollTo()`/`scrollBy()`, and `scrollIntoView()`) all converge on §6.1's one
+ * perform-a-scroll step, which hands §3.1 an element box and aborts there for want of a store. So "no element
+ * has been scrolled" is true BY CONSTRUCTION, which is what makes the getter's step 8 a derivation and not a
+ * shrug, and the DFAIL is what keeps it true. IT MUST STAY ONE SITE: a second copy of that crash is a second
+ * description of one absence, and the one nobody deletes is the one that goes on naming work that is already
+ * done. It has MOVED TWICE for exactly that rule — out of this file when `scrollIntoView` arrived, and out of
+ * core/dom/element_scrolling.c into core/dom/perform_scroll.c when §3.1 was written, which is where the
+ * position store belongs and therefore where its absence does.
  *
  * THE CONCOLIC POLICY IS INHERITED, NOT RE-DECIDED. A member that reports the viewport's size reports a UA
  * CHOICE, so it carries the modelled geometry as the EXAMPLE of a concolic minted through viewport.h's one seam

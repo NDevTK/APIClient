@@ -260,11 +260,15 @@ static JSContext *doc_realm(JSContext *ctx, JSUpdateRendering *s)
    It asked `realm_awaits(docctx, "scrollTo", …)`, and this step's producer is not a member: CSSOM VIEW §13.2
    "Scrolling" fills doc's list when a viewport or an element GETS SCROLLED, which is §3.1's perform a scroll
    and is an INTERNAL ALGORITHM with no name on any global to probe for. The proxy was pre-loaded to fire on a
-   false premise — CSSOM VIEW §4's `scroll`/`scrollTo`/`scrollBy` on the Window are §4's argument questions plus
-   a call to `viewport_scroll`, whose clamp lands on the position the viewport already has, so installing them
-   satisfies a [[HasProperty]] and moves nothing, and this step would have announced a producer that did not
-   exist. The capability is asked of the component that owns it; core/dom/element_scrolling.h states the
-   derivation on both halves and core/timing/hr_time.c records what the name test cost the last time. */
+   false premise: installing §4's three Window members satisfies a [[HasProperty]] without making a single box
+   movable, so this step would have announced a producer that did not exist. THE SECOND HALF OF THAT ARGUMENT
+   IS ITSELF RETIRED NOW AND IS RESTATED IN CAPITALS SO NOBODY RE-DERIVES IT: §4's WINDOW MEMBERS ARE §4's
+   ARGUMENT QUESTIONS PLUS A CALL TO `viewport_scroll`, WHOSE CLAMP LANDS ON THE POSITION THE VIEWPORT ALREADY
+   HAS, SO THEY MOVE NOTHING. §2's viewport row retired the clamp half and core/dom/perform_scroll.c retired the
+   rest — a viewport in this engine MOVES, and those members would move it. What survives is the shape of the
+   mistake and not its arithmetic: A MEMBER IS NOT A CAPABILITY. The capability is asked of the component that
+   owns it; core/dom/element_scrolling.h states the derivation on both halves and core/timing/hr_time.c records
+   what the name test cost the last time. */
 static void step_9(JSContext *docctx)
 {
     DCHECK(!element_scrolling_box_can_move(docctx),

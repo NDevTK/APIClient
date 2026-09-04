@@ -695,22 +695,25 @@ static void sh_apply_free(JSContext *ctx, SessionHistoryApply *a)
  * Both are entirely about state a RENDERING holds: "set the scroll position data of entry to contain the scroll
  * positions for all of entry's document's restorable scrollable regions", and then an OPTIONAL clause for "any
  * state that the user agent wishes to persist, such as the values of form fields".
- * THIS USER AGENT HAS NO SCROLL POSITION TO SAVE — core/frame/viewport.c DERIVES scrollX/scrollY rather than
- * holding them, because with no layout the scrolling area is the viewport and the only position it can have is
- * (0,0) — so the scroll position data of every entry is that one point and restoring it moves nothing. The
- * optional clause is optional. Asserted against the CAPABILITY rather than written down as a claim — and the
- * capability is asked of the component that owns CSSOM VIEW §3.1 "Scrolling"'s perform a scroll
- * (core/dom/element_scrolling.h), not of a name on the global. This asked `realm_awaits(ctx, "scrollTo", …)`,
- * and a [[HasProperty]] answers whether a MEMBER is installed: `Element.prototype.scrollTo` is installed here
- * and moves nothing, and CSSOM VIEW §4's `scrollTo` on the Window would move nothing either, so the probe was
- * pre-loaded to fire on a scroll position that is still the one derivation this file relies on. */
+ * THE ARGUMENT THAT USED TO MAKE THAT A NO-OP IS RETIRED AND IS RESTATED IN CAPITALS SO NOBODY RE-DERIVES IT:
+ * THIS USER AGENT HAS NO SCROLL POSITION TO SAVE — core/frame/viewport.c DERIVES scrollX/scrollY RATHER THAN
+ * HOLDING THEM, BECAUSE WITH NO LAYOUT THE SCROLLING AREA IS THE VIEWPORT AND THE ONLY POSITION IT CAN HAVE IS
+ * (0,0). Both halves of that are gone: §2's viewport row made the scrolling area a real extreme, and CSSOM
+ * VIEW §3.1 "Scrolling"'s perform a scroll (core/dom/perform_scroll.h) made the position real per-flow state
+ * that a page can move. The optional clause is still optional.
+ * ASSERTED AGAINST THE CAPABILITY rather than written down as a claim, and the capability is asked of the
+ * component that owns the scrolling box (core/dom/element_scrolling.h) rather than of a name on the global.
+ * This asked `realm_awaits(ctx, "scrollTo", …)`, and a [[HasProperty]] answers whether a MEMBER is installed,
+ * which is a different question from whether a box can hold a position — so the probe was pre-loaded to fire on
+ * an installation this file does not care about. */
 static void sh_persisted_state(JSContext *ctx)
 {
     DCHECK(!element_scrolling_box_can_move(ctx),
            "HTML §7.4.6.5 \"Persisted history entry state\"'s save persisted state — \"set the scroll position "
            "data of entry to contain the scroll positions for all of entry's document's restorable scrollable "
-           "regions\" — carries a session history entry's SCROLL POSITION DATA across a traversal, and a "
-           "scrolling box in this document can now be at a position other than the one this engine derives. So "
+           "regions\" — carries a session history entry's SCROLL POSITION DATA across a traversal, and §2's "
+           "scrolling area of a box in this document EXCEEDS that box, so §3.1's perform a scroll has somewhere "
+           "to put it and the position a traversal would drop is a real one. So "
            "an entry gains a scroll position data field, activate-history-entry writes the outgoing entry's "
            "from the document's restorable scrollable regions, and §7.4.6.2 \"Updating the document\"'s update "
            "document for history step application restores the incoming entry's where it says \"Restore "

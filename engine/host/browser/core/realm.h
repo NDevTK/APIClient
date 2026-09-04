@@ -90,9 +90,9 @@ JSValue realm_value_get(JSContext *ctx, int slot);              /* OWNED: the ca
  * §13.2's pending scroll events, and HTML §7.4.6.4 "Scrolling to a fragment" is what sets a Document's target
  * element, and neither is reachable from a global by any path. SIX SITES IN FIVE FILES ASKED FOR `scrollTo`
  * ANYWAY, as the nearest member-shaped name to those two, and the proxy was wrong in BOTH directions at once:
- * `Element.prototype.scrollTo` is installed in this build and moves nothing, so installing CSSOM VIEW §4's
- * three Window members would have fired all six on a capability that had not arrived — a probe REPORTING A
- * CAPABILITY AS PRESENT, which is worse than an absent probe because the next reader builds on it — while
+ * `Element.prototype.scrollTo` was installed in this build and could move nothing, so installing CSSOM VIEW
+ * §4's three Window members would have fired all six on a capability that had not arrived — a probe REPORTING
+ * A CAPABILITY AS PRESENT, which is worse than an absent probe because the next reader builds on it — while
  * building §7.4.6.4's three non-scrolling effects would have left every one of them silent. So the rule is
  * mechanical: **if the producer is not a member a page could name, this is the wrong instrument.** Ask the
  * component that owns the capability instead — core/dom/element_scrolling.h answers the first of those two and

@@ -342,19 +342,25 @@ static bool ev_box_is_inline(const EvTarget *t)
 
 /* ---- §6's `scrollTop` and `scrollLeft` ------------------------------------------------------------------- */
 
-/* THE GETTER, IN THE SPEC'S OWN STEP ORDER. Every terminal it can reach in this engine is the ORIGIN, and each
-   is a derivation rather than a stand-in:
+/* THE GETTER, IN THE SPEC'S OWN STEP ORDER. Every terminal it can reach is either the spec's own zero, the
+   VIEWPORT's stored position, or an element's — and each is a real answer rather than a stand-in. IT USED TO
+   READ THAT EVERY TERMINAL IS THE ORIGIN, which CSSOM VIEW §3.1's arrival retired for the two window terminals
+   and left standing for the element one:
      step 2 and step 3 are the spec's own zero for a document that is not being presented;
-     step 5 hands the root element the WINDOW's scroll position, which viewport.h derives as the ICB origin —
-       the viewport's scrolling area IS the ICB, so there is one valid scroll position;
+     step 5 hands the root element the WINDOW's scroll position, which is REAL PER-FLOW STATE now
+       (core/frame/viewport.h) rather than the ICB origin this used to derive — so this terminal is not the
+       origin at all once a page has scrolled, and the sentence at the head of this comment is narrower than it
+       reads for exactly that step and step 6;
      step 6 hands a quirks-mode BODY the same window scroll position when it is not potentially scrollable in
        at least one axis — a condition this file could not decide until there was a computed-value entry to
        read the body's and its parent's `overflow-x`/`overflow-y` through;
      step 7 is the spec's own zero for an element with no associated box;
-     step 8 is the element's OWN current scroll position, which is the origin because nothing has scrolled it:
-       a scroll position moves only when §3.1 Scrolling's perform a scroll runs, and EVERY §6 member that
-       could reach it — the setter below and `scroll()`/`scrollTo()`/`scrollBy()` — ends at the one DFAIL
-       instead (ev_scroll_the_element_or_terminate, and element_view.h for why that must stay one site). */
+     step 8 is the element's OWN current scroll position, which is STILL the origin because nothing has
+       scrolled it: a scroll position moves only when §3.1 Scrolling's perform a scroll runs, and every §6
+       member that could reach it for an ELEMENT — the setter below, `scroll()`/`scrollTo()`/`scrollBy()` and
+       `scrollIntoView()` — converges on §6.1's one perform-a-scroll step, which hands §3.1 an element box and
+       aborts there for want of a store (core/dom/perform_scroll.c, and element_view.h for why that must stay
+       one site). */
 static double ev_scroll_position_px(const EvTarget *t, bool vertical)
 {
     /* steps 2-3 */
@@ -441,24 +447,54 @@ static void ev_scroll_the_element_or_terminate(const EvTarget *t, double x, doub
 }
 
 /* THE SETTER — the same algorithm, and it RUNS rather than dropping the write. What decides the write is §4's
-   scroll() clamping the requested position into §2's scrolling area of the viewport, which is the spec
-   deciding and not this engine ignoring; viewport_scroll asserts at the step that decides. THAT USED TO SAY THE
-   AREA IS EXACTLY THE VIEWPORT, which was true while the area was the initial containing block and is not now —
-   the clamp can land somewhere else, and where it does §4's step 10 crashes naming §3.1's perform a scroll
-   rather than pretending the write did nothing. */
+   scroll() clamping the requested position into §2's scrolling area of the viewport, which is the spec deciding
+   and not this engine ignoring. TWO SENTENCES HAVE BEEN RETIRED HERE IN TURN and are restated in capitals so
+   neither is re-derived: THE AREA IS EXACTLY THE VIEWPORT, SO THE CLAMP LANDS EVERY REQUEST WHERE IT ALREADY IS
+   (true while the area was the initial containing block), and then WHERE THE CLAMP LANDS SOMEWHERE ELSE §4's
+   STEP 10 CRASHES NAMING §3.1's PERFORM A SCROLL. §3.1 is written; step 10 aborts or the viewport MOVES. */
+
+/* §6's setter step 1's REQUESTED POSITION, and the one place this member decides what to do with an UNKNOWN
+   one. It is a crash and not a substitution, and that is what §3.1's arrival changed.
+   THE SUBSTITUTION WAS DEFENSIBLE UNTIL IT WAS NOT. Passing the box's CURRENT position in place of an unknown
+   request made the write a no-op, which was the only outcome available while no box could move — so it decided
+   nothing. A box can move now, so the same line decides that the page's scroll request had no effect, over a
+   domain most of whose members land somewhere else. That is this engine picking an arm, and §RUN-DON'T-MATCH's
+   rule against inventing a value cuts the same way against inventing the absence of one.
+   WHAT TO BUILD IS A CONCOLIC POSITION AND NOT A FORK, and the distinction is the whole of the design. A fork
+   asks a question with N answers; a scroll position is a VALUE with a domain, so the honest result of
+   `documentElement.scrollTop = h` for an opaque `h` is a position that is opaque-for-control-flow and carries
+   the clamped example — after which `if (scrollY > 100)` forks at the BRANCH, which is where CLAUDE.md's solver
+   half puts a fork, and a page that never branches on it needs none. THE OBSTACLE IS THE `double`: §4's steps
+   7-8 and §6.1's identical rows are C arithmetic (`element_scrolling_clamp_position`), and `viewport_scroll_x`
+   answers a `double`, so clamping an unknown means running max/min as the REAL OPS on the value and letting the
+   per-realm record — which already holds a JSValue — carry the result. Its readers are what that seam changes:
+   §4's `scrollX`/`scrollY`, VisualViewport's `pageLeft`/`pageTop`, and §6.1's `EsBox.cur`.
+   (A PREDECESSOR RECORDED THIS OBLIGATION AS A FORK. It is written down as a correction rather than silently
+   replaced, because the next reader to re-derive "the setter owes a fork" will reach for the primitive that
+   cannot serve here: a plain C body has no machine state for a sibling to be snapshotted at, so a fork from one
+   crashes at the seam naming the operation — solver/decide.h says so at `solver_outcome` — and the answer to
+   that is `JS_CFUNC_STEP_DEF`, which is a large conversion bought for a question this site does not have.) */
+static double ev_requested_scroll_px(bool unknown, double v)
+{
+    if (unknown)
+        DFAIL("CSSOM VIEW §6's `scrollTop`/`scrollLeft` setter was handed a requested position that is UNKNOWN "
+              "EXTERNAL INPUT, and CSSOM VIEW §3.1 \"Scrolling\"'s perform a scroll can now MOVE the box it "
+              "lands on — so substituting the box's current position would be this engine deciding that the "
+              "page's write had no effect, over a domain whose other members land elsewhere. BUILD THE CONCOLIC "
+              "SCROLL POSITION: run §4's steps 7-8 (and §6.1's identical rows) as the real max/min OPS on the "
+              "value instead of as `double` arithmetic, store what they produce on the per-realm record "
+              "core/frame/viewport.c already holds as a JSValue, and widen `viewport_scroll_x`/`_y` from "
+              "`double` to that value — its readers are §4's `scrollX`/`scrollY`, "
+              "core/frame/visual_viewport.c's `pageLeft`/`pageTop` and core/dom/element_scrolling.c's box "
+              "constructor. IT IS NOT A FORK: a position is a VALUE with a domain, and the fork belongs at the "
+              "page's own branch over it");
+    return v;
+}
 static JSValue js_ev_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
     bool vertical = (magic == EV_SCROLL_TOP);
-    /* UNKNOWN EXTERNAL INPUT REQUESTING A SCROLL POSITION IS NOT A FORK, and it is not read either — for the
-       reason the ELEMENT arm below states and no longer for the one that used to stand here. WHAT STOOD HERE
-       argued that §4's clamp LANDS EVERY VALUE OF THE DOMAIN ON THE POSITION THE VIEWPORT ALREADY HAS, which
-       held while the scrolling area equalled the viewport; §2's viewport row retired it, and a document taller
-       than its viewport now has a domain whose members clamp to DIFFERENT positions. The reason the arm is
-       still not explored is that §4's step 10 CRASHES for any of them (§3.1's perform a scroll is unwritten),
-       so there is nothing on the other side of the fork to run — the algorithm crashes rather than picking,
-       exactly as §6.1's does for an element. THE DIFF THAT WRITES §3.1 OWES THIS SITE A FORK: the value then
-       decides an observable position, and passing the current one in its place would be this engine picking an
-       arm. */
+    /* UNKNOWN EXTERNAL INPUT REQUESTING A SCROLL POSITION — see `ev_requested_scroll_px` above for what this
+       flag now reaches and why it is a crash rather than the substitution it used to be. */
     bool unknown = concolic_is(val);
     EvTarget t;
     double v = 0.0;
@@ -486,22 +522,24 @@ static JSValue js_ev_set(JSContext *ctx, JSValueConst this_val, JSValueConst val
        scrolls the window, step 10 terminates), and the condition between them is now decided rather than
        approximated by the body's box existence, which is only the first of the definition's three conditions. */
     if (t.is_root || (t.is_body && t.quirks && ev_not_potentially_scrollable_in_some_axis(&t))) {
-        double req = unknown ? viewport_window_scroll(t.dctx, vertical) : v;
+        double req = ev_requested_scroll_px(unknown, v);
         double x = vertical ? viewport_window_scroll(t.dctx, false) : req;
         double y = vertical ? req : viewport_window_scroll(t.dctx, true);
 
-        viewport_scroll(t.dctx, x, y);
+        /* §6 gives the setter's steps 8 and 9 no options dictionary to carry a `ScrollBehavior`, so §4's step
+           12 hands §3.1 the `auto` its own declaration defaults to. */
+        viewport_scroll(t.dctx, x, y, "auto");
         return JS_UNDEFINED;
     }
     /* STEPS 10 AND 11, which are the same two the scroll members below reach — stated once. Step 11 is
        "scroll the element to scrollLeft,y" for the `scrollTop` setter and "to x,scrollTop" for `scrollLeft`'s:
        the axis this setter does NOT write comes from the element's own current position through §2's
        internal-API rule, exactly as the root-element arm above takes the window's other coordinate.
-       AN UNKNOWN REQUESTED POSITION IS THE CURRENT ONE HERE TOO, for the reason stated at `unknown` above —
-       §6.1's clamp lands every value of the domain on the position the scrolling box already has while its
-       scrolling area equals its padding box, and where it does not the algorithm crashes rather than picking. */
+       AN UNKNOWN REQUESTED POSITION CRASHES HERE TOO, through the same one site — the element route's own
+       reason (no element can hold a position) is a different absence from the viewport route's, but the
+       decision this member would be making about the page's write is the same one. */
     {
-        double req = unknown ? ev_scroll_position_px(&t, vertical) : v;
+        double req = ev_requested_scroll_px(unknown, v);
 
         ev_scroll_the_element_or_terminate(&t, vertical ? ev_scroll_position_px(&t, false) : req,
                                            vertical ? req : ev_scroll_position_px(&t, true), "auto");
@@ -593,11 +631,12 @@ static double ev_scroll_axis(JSContext *ctx, const EvTarget *t, JSValueConst mem
  * and a body seeing one is seeing the dictionary the declaration built — including for `el.scrollTo()`, whose
  * `optional ScrollToOptions options = {}` the machine materializes with every member at its default.
  *
- * WHAT THIS ENGINE ACTUALLY DOES WITH THE REQUEST is §4's clamp and not a dropped write: the root element and a
- * quirks-mode body route to the VIEWPORT's scroll() (steps 8 and 9), which runs, clamps into a scrolling area
- * that is exactly the viewport, and lands on the position it already has — the spec deciding rather than this
- * engine ignoring, asserted at the step that decides (core/frame/viewport.c). Every other element reaches step
- * 10's termination or the crash step 11 names. */
+ * WHAT THIS ENGINE ACTUALLY DOES WITH THE REQUEST is §4's clamp and then a real scroll: the root element and a
+ * quirks-mode body route to the VIEWPORT's scroll() (steps 8 and 9), which clamps into §2's scrolling area and
+ * MOVES the viewport unless step 10 aborts (core/frame/viewport.c, and core/dom/perform_scroll.h for §3.1).
+ * THAT USED TO END AT THE POSITION IT ALREADY HAS, BECAUSE THE SCROLLING AREA WAS EXACTLY THE VIEWPORT — §2's
+ * viewport row retired the premise and §3.1 retired the conclusion. Every other element reaches step 10's
+ * termination or the crash step 11 names. */
 static JSValue js_ev_scroll(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     bool relative = (magic == EV_SCROLL_RELATIVE);
@@ -657,7 +696,7 @@ static JSValue js_ev_scroll(JSContext *ctx, JSValueConst this_val, int argc, JSV
        or an attribute is said to call another method or attribute, the user agent must invoke its INTERNAL API
        for that attribute", so a page overriding `window.scroll` cannot change what this does. */
     if (t.is_root) {
-        viewport_scroll(t.dctx, viewport_window_scroll(t.dctx, /*vertical*/ false), y);
+        viewport_scroll(t.dctx, viewport_window_scroll(t.dctx, /*vertical*/ false), y, behavior);
         goto resolved;
     }
     /* STEP 9 — "if the element is the body element, document is in quirks mode, and the element is not
@@ -671,7 +710,7 @@ static JSValue js_ev_scroll(JSContext *ctx, JSValueConst this_val, int argc, JSV
        scrollable in either axis" here and "not potentially scrollable in at least one axis" at the setter's
        step 9, and a body potentially scrollable in exactly one axis is on opposite sides of the two. */
     if (t.is_body && t.quirks && ev_not_potentially_scrollable_in_either_axis(&t)) {
-        viewport_scroll(t.dctx, x, y);
+        viewport_scroll(t.dctx, x, y, behavior);
         goto resolved;
     }
     /* Steps 10 and 11, which are the setter's own last two — stated once. An element that terminates at step
@@ -753,11 +792,18 @@ static char *ev_scroll_keyword(JSContext *ctx, JSValueConst v, const char *membe
  * OPTIONAL in the spec's own word and there is no user to attend, which is a headless answer the spec licenses
  * rather than a stub: nothing is elided, because the sentence permits doing nothing.
  *
- * THE PROMISE IS RESOLVED FOR core/dom/element_scrolling.h's REASON, which is a derivation over the whole
- * ancestor walk and not a shrug: every path through scroll a target into view either performs no scroll — the
- * viewport has one valid position, and an element whose scrolling area equals its padding box has one too — or
- * CRASHES at §3.1's perform a scroll. So `ancestorPromises` holds only resolved promises and step 4's "resolve
- * scrollPromise when all Promises in ancestorPromises have settled" is satisfied at creation. */
+ * THE PROMISE IS RESOLVED FOR core/dom/element_scrolling.h's REASON, which is a derivation and not a shrug —
+ * and it is a DIFFERENT derivation now. Every scroll this user agent performs is an INSTANT one, because §3.1
+ * step 5's smooth arm is gated on honoring css-overflow-3 §4.1's `scroll-behavior` and this cascade declares no
+ * such property, so each perform-a-scroll in the ancestor walk has resolved its own promise before it returns.
+ * WHAT STOOD HERE WAS THAT EVERY PATH EITHER PERFORMS NO SCROLL — THE VIEWPORT HAVING ONE VALID POSITION AND AN
+ * ELEMENT WHOSE SCROLLING AREA EQUALS ITS PADDING BOX HAVING ONE TOO — OR CRASHES; the viewport half of that is
+ * retired. So `ancestorPromises` holds only resolved promises and §6.1's scroll a target into view STEP 5 —
+ * "Resolve scrollPromise when all Promises in ancestorPromises have settled." — is satisfied at creation.
+ * IT WAS CITED HERE AS STEP 4, WHICH IS OFF BY ONE: that algorithm's steps are the ancestorPromises set, the
+ * ancestor loop, the new promise, the return-and-run-in-parallel, and the resolve — five, with the resolve
+ * last. The neighbouring step 4 is the one that RETURNS scrollPromise, so the wrong number named the step that
+ * hands the promise out rather than the one that settles it. */
 static JSValue js_ev_scroll_into_view(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                       int magic)
 {
@@ -978,9 +1024,11 @@ static JSValue ev_client_edge(JSContext *ctx, const EvTarget *t, bool vertical)
    ORIGIN OF THE VIEWPORT", §11.1 says the same of `getBoxQuads` ("expressed relative to the layout viewport",
    "similar to getClientRects()"), and §4's `scrollX` is "the x-coordinate, RELATIVE TO THE INITIAL CONTAINING
    BLOCK ORIGIN, of the left of the viewport" — so the conversion is one subtraction and it belongs to the
-   member, not to the layout. Today it subtracts a derived zero (viewport.h: the viewport's scrolling area IS
-   the ICB, so there is one valid scroll position), and it is written as the subtraction rather than skipped
-   because the day a scrolling area outgrows the ICB this line is already right.
+   member, not to the layout. It subtracts the viewport's REAL stored scroll position (core/frame/viewport.h),
+   which is what makes a client rectangle move as a page scrolls. IT USED TO SUBTRACT A DERIVED ZERO, on the
+   argument that THE VIEWPORT'S SCROLLING AREA IS THE ICB SO THERE IS ONE VALID SCROLL POSITION, and was written
+   as the subtraction rather than skipped precisely so that the day the area outgrew the ICB this line would
+   already be right. It did, and it was.
    THE MINT IS viewport.h's ONE SEAM, for the reason element_view.h states: a coordinate whose containing-block
    chain bottoms out in the ICB carries the viewport's domain, and `rect.top < 600` is the same environment gate
    `innerHeight < 600` is. CONSUMES nothing; the caller owns the returned value. */
