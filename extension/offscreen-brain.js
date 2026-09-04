@@ -476,6 +476,53 @@ function _emptyDocView() {
   };
 }
 
+/* THE ENGINE'S OWN PAGE ERRORS ONTO A DOCUMENT, AND THE ONE RULE THAT DECIDES HOW THEY LAND. A page's throw
+   is the forcing function that names an unbuilt capability — HTML §8.1.4.4 "Calling scripts" step 8 REPORTS
+   the exception rather than propagating it, so each one ends a program and the engine goes on — and
+   solver/result.c records the message so that name can be READ. This is where it reaches a document, and it
+   is one function because two relays deliver it and a rule written twice is a rule that disagrees with itself.
+
+   AN ANALYSIS THAT CARRIES AN ENGINE DOCUMENT SUPERSEDES. result.c composes `pageErrors` as the run's WHOLE
+   accumulated set, deduped one row per distinct message, so every delivery RESTATES what the earlier ones
+   said. That is the same shape `_astResults` is superseded for and the same reason: the incremental relay
+   delivers a growing set every 750 ms, so appending would render one message once per snapshot it survived,
+   and a page that threw early would report its first error hundreds of times.
+
+   AN ANALYSIS WITH NO DOCUMENT APPENDS, AND THAT ASYMMETRY IS THE WHOLE POINT OF ASKING. bridge.js's crash arm
+   builds `resolverErrors` out of the HOST's own rows alone — the `@E engine-crash` line and the ROOT `@WHY` —
+   because a crashed instance produced no @RESULT to read `pageErrors` out of. Superseding on it would erase
+   every message the engine recorded before it died, which is precisely the run whose diagnosis is worth most:
+   the crash names where the engine stopped, and the errors name what the page had been asking for all the way
+   there. The predicate is `analysisHasDocument`, which every other consumer of an analysis already asks, so
+   the two states cannot quietly become three. */
+function _recordEnginePageErrors(doc, analysis) {
+  DCHECK(Array.isArray(analysis.resolverErrors),
+         "the engine result carried no resolverErrors array — bridge.js builds it from the engine's own " +
+         "pageErrors on every result, so its absence is that relay broken and every error the engine " +
+         "recorded while running this page is being dropped silently");
+  for (var _i = 0; _i < analysis.resolverErrors.length; _i++) {
+    var _re = analysis.resolverErrors[_i];
+    DCHECK(_re && typeof _re.context === "string" && typeof _re.message === "string",
+           "an engine page-error row carried no context/message pair — bridge.js writes both as strings on " +
+           "every row it builds, so a row missing one is that relay broken and the popup's diagnostic view " +
+           "would print an undefined attribution beside a real error");
+    console.debug("[AST:page-error] %s: %s", _re.context, _re.message);
+  }
+  if (analysisHasDocument(analysis)) {
+    /* ABSENT AND EMPTY STAY DIFFERENT FACTS. lib/serialize.js reads an absent `_resolverErrors` as "the
+       engine recorded no page error for this document", so a document that has never had one is not handed
+       an empty array to make it look like a measurement that was taken. A document that HAS one is restated
+       even when the new set is empty, because then the restatement is the engine's own answer. */
+    if (analysis.resolverErrors.length || Array.isArray(doc._resolverErrors))
+      doc._resolverErrors = analysis.resolverErrors.slice();
+    return;
+  }
+  if (!analysis.resolverErrors.length) return;
+  if (!Array.isArray(doc._resolverErrors)) doc._resolverErrors = [];
+  for (var _j = 0; _j < analysis.resolverErrors.length; _j++)
+    doc._resolverErrors.push(analysis.resolverErrors[_j]);
+}
+
 /* Merge ONE engine advance — a mid-run snapshot of a live document, or the whole output of an engine with no
    live caller (a child navigable the engine announced, a rehydrated cold recipe) — into the moat AND into the
    documents it belongs to.
@@ -544,7 +591,16 @@ function _mergeFrontierResult(sourceUrl, documentIds, result, epoch) {
       console.debug("[frontier] advance discarded — the run produced no engine document (_run=%s)", result._run);
       return;
     }
-    if (!result.fetchCallSites.length && !result.securitySinks.length) return;   // legitimately empty (nothing learned yet) — not an invariant break
+    /* AND THE THIRD SURFACE, WHICH IS THE ONLY ONE A PAGE THAT LEARNED NOTHING HAS. The two lengths are what
+       the run FOUND; `resolverErrors` is what it could NOT do, and a gate that asks only the first two
+       discards the whole advance for exactly the document whose sole output is the diagnosis — a bundle
+       whose programs keep throwing emits no endpoint and no sink, so the messages saying why went nowhere
+       for as long as the run stayed alive, and the terminal record that would have carried them is the one
+       a run which never drains its frontier never reaches. It is the repair the comment above records for
+       `securitySinks`, owed at the sibling and not made: a fix of the form "this is not how to ask whether
+       there is anything to report" is not finished at the first surface somebody asked it about. */
+    if (!result.fetchCallSites.length && !result.securitySinks.length &&
+        !result.resolverErrors.length) return;   // legitimately empty (nothing learned yet) — not an invariant break
     /* TWO NAMES FOR ONE FACT, ASKED TO AGREE INSTEAD OF ONE OVERWRITING THE OTHER. `result.sourceUrl =
        sourceUrl || result.sourceUrl || ""` stood here: a three-rung ladder in which the argument won, the
        record's own statement was the consolation, and `""` was what both absences collapsed to. Neither
@@ -583,6 +639,12 @@ function _mergeFrontierResult(sourceUrl, documentIds, result, epoch) {
          complete snapshot this run has produced, which is what makes it a real answer for a run that later
          dies. The terminal record only replaces it when it carries a document of its own. */
       doc._astResults = [result];
+      /* AND THE ERRORS, WHICH `mergeASTResultsIntoVDD` DOES NOT CARRY AND NEVER DID. The two holes concealed
+         each other exactly as CLAUDE.md describes: the gate above meant no advance from a page with nothing
+         else to report ever reached this line, and nothing downstream missed a field that was never
+         delivered, so neither half was falsifiable while the other stood. Repairing the gate alone would
+         have widened a path that still drops them. */
+      _recordEnginePageErrors(doc, result);
       mergeASTResultsIntoVDD(doc, [result]);
       mergeToGlobal(doc);
     }
@@ -1028,22 +1090,14 @@ async function _dispatchDocument(docKey) {
      renderer read it, and the `replyExample` beside it was dropped here without anybody noticing, which is what
      a hand-copied projection of a record does. Both fields are deleted at the producer; a row that reached here
      with more than the pair would now be carried instead of silently trimmed. */
-  DCHECK(Array.isArray(analysis.resolverErrors),
-         "the engine result carried no resolverErrors array — bridge.js builds it from the engine's own " +
-         "pageErrors on every result, so its absence is that relay broken and every error the engine " +
-         "recorded while running this page is being dropped silently");
-  if (analysis.resolverErrors.length) {
-    if (!Array.isArray(tab._resolverErrors)) tab._resolverErrors = [];
-    for (var _rei = 0; _rei < analysis.resolverErrors.length; _rei++) {
-      var _re = analysis.resolverErrors[_rei];
-      DCHECK(_re && typeof _re.context === "string" && typeof _re.message === "string",
-             "an engine page-error row carried no context/message pair — bridge.js writes both as strings on " +
-             "every row it builds, so a row missing one is that relay broken and the popup's diagnostic view " +
-             "would print an undefined attribution beside a real error");
-      console.debug("[AST:page-error] %s: %s", _re.context, _re.message);
-      tab._resolverErrors.push(_re);
-    }
-  }
+  /* THROUGH THE ONE RULE, because this is no longer the only delivery. An unconditional append was correct
+     while the terminal record was the sole arrival — it lands once, so appending and restating are the same
+     operation — and it silently stops being correct the moment the incremental relay also delivers: the
+     terminal record then restates a set this document already holds and every message is rendered twice.
+     `_recordEnginePageErrors` owns which of the two a delivery is, and it answers by asking whether the
+     analysis carries an engine document, which is what tells this arm from the crash arm that carries only
+     the host's own `@E`/`@WHY` rows. */
+  _recordEnginePageErrors(tab, analysis);
 
   /* WHETHER THIS RUN PRODUCED A DOCUMENT AT ALL, ASKED ONCE AND USED THREE TIMES BELOW. It is a fact about
      the RECORD, not a length: bridge.js writes the two finding arrays exactly where the engine handed it an

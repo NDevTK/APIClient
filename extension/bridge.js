@@ -5361,7 +5361,21 @@ const _hostOps = {
            "an incremental snapshot carried no engine document — it is parsed from the @RESULT line this " +
            "function just found, so its absence is that parse having produced something else entirely and " +
            "every finding in the snapshot is about to be read off a record that has none");
-    const hasWork = partial.fetchCallSites.length || partial.securitySinks.length;
+    /* AND THE THIRD SURFACE, WHICH IS THE ONLY ONE A PAGE THAT LEARNED NOTHING HAS. The two lengths above are
+       what the run FOUND; the engine's page errors are what it could NOT do — HTML §8.1.4.4 "Calling scripts"
+       step 8 REPORTS an uncaught exception rather than propagating it, so each one ENDS a program and names a
+       capability the page reached for. A snapshot gated on the finding arrays alone is therefore discarded
+       for exactly the document whose only output is that diagnosis, and the terminal record which would
+       otherwise carry it is the one a run that never drains its frontier never reaches. It is the same
+       repair the comment above records for `securitySinks`, owed at the sibling and not made.
+       ASSERTED, NOT DEFAULTED: `linesToAnalysis` builds this array on BOTH its arms, so an absent one is that
+       producer changed under this reader and a `||`-past would read it as a page with nothing to say. */
+    DCHECK(Array.isArray(partial.resolverErrors),
+           "an incremental snapshot carried no resolverErrors array — linesToAnalysis builds one on every " +
+           "arm it has, so its absence is that composition changed under this reader and every uncaught " +
+           "throw the engine recorded for this page would be discarded with the snapshot that carries it");
+    const hasWork = partial.fetchCallSites.length || partial.securitySinks.length ||
+                    partial.resolverErrors.length;
     if (!hasWork) return;
     /* THE MERGE CALLBACK IS THE OTHER HALF OF THIS EDGE. `typeof … === "function"` guarding the call meant a
        zone that had not installed it dropped every incremental finding silently; offscreen-brain.js installs
