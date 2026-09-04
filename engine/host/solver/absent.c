@@ -452,8 +452,8 @@ JSValue absent_read_hook(JSContext *ctx, JSValueConst obj, JSAtom name)
            ABOUT WHICH VOCABULARY OWNS A NAME. The channel's key rule admits array indices because a server's
            state tree is records inside LISTS and the walk reaches an element by its index —
            `__STATE__.users[0]` — and THE GLOBAL IS NOT A LIST. An integer key on it is HTML §7.2.2.2 Indexed
-           access on the Window object, which says of it that "indexed access to document tree child
-           navigables is defined through the [[GetOwnProperty]] internal method of the WindowProxy object": the
+           access on the Window object, which says of it that "Indexed access to document-tree child navigables
+           is defined through the [[GetOwnProperty]] internal method of the WindowProxy object": the
            extent is the INTERFACE'S, exactly as Web IDL §3.8 Platform objects implementing interfaces makes a
            platform object's member list the interface's rather than the document's. THIS ENGINE OWNS THE
            NAVIGABLE TREE, so an index past the child-navigable count has a real answer that this run computed
