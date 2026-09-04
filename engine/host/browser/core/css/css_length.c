@@ -819,7 +819,13 @@ CssPx css_length_resolve_pct(CssLength len, CssPx basis)
        arm's single expression is right: css-values-4 §5.5 "Percentages: the <percentage> type" is a bare
        `<percentage>` with no second term to state, and `css_length_parse` writes it over a zeroed pair.
        css-values-4 §10.10.1 "Simplification" is NOT the authority here, and reading it as one is the mistake
-       that stood at this line — under a PARAPHRASE IN QUOTATION MARKS, which is a claim no reader could check.
+       that stood at this line. ONLY THE AIM WAS WRONG, AND THE REPAIR SAID OTHERWISE: it called the quotation
+       that stood here a paraphrase whose words occur nowhere in §10.10.1, and they are that section's own Note,
+       verbatim — "zero-valued terms cannot be simply removed from a Sum; they can only be combined with other
+       values that have identical units" — which engine/citegen.mjs resolved by the stated title and VERIFIED
+       against the section's text. A quotation check answers about SEVEN WORDS and never about the paragraph
+       they were put in, so a comment caught arguing the wrong section is not thereby a comment that invented
+       its sentence; the two are independent, and only the aim was ever wrong here.
        §10.10.1's Sum rule is "for each set of root's children that are numeric values with identical units,
        remove those children and replace them with a single numeric value containing the sum of the removed
        nodes and with the same unit", and it governs a MATH FUNCTION'S residue: a math function reaching this

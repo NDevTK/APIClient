@@ -218,6 +218,24 @@
  * the divergence evidence is what a reader triages on; and it says NOTHING about whether the sentence is
  * TRUE of the tree or whether the claim it supports is right — a correctly-pasted sentence supporting a
  * spec-wrong conclusion is invisible to it, exactly as it is to every other check here.
+ * AND THE READING THAT COSTS THIS CHECK ITS CREDIT IS `VERIFIED, THEREFORE THE COMMENT IS RIGHT` — MEASURED,
+ * ON A SITE REPAIRED FOR THE OPPOSITE REASON. A comment argued a length component's invariant from
+ * css-values-4 §10.10.1 "Simplification" and quoted it; the repair that followed called the quotation a
+ * PARAPHRASE IN QUOTATION MARKS whose words "occur nowhere in that section", and called this tool blind to it
+ * because the bare §10.10.1 sat in the file-voted NOT-CHECKED bucket. BOTH HALVES WERE FALSE AND EACH WAS ONE
+ * COMMAND FROM BEING CHECKED. The words are §10.10.1's own Note verbatim — "…they can only be combined with
+ * other values that have identical units" — the stated title RESOLVED the citation (a title is evidence and
+ * outranks the vote, which is why that rule exists), and this check COMPARED it and answered VERIFIED. The
+ * mistake was real and it was the AIM: §10.10.1 governs a math function's residue, and the kind the assert
+ * below it is about cannot reach that section at all.
+ * SO THE ONE THING THIS CHECK CANNOT SEE IS THE ONE THING THAT WAS WRONG, and it says so two paragraphs up —
+ * "it says NOTHING about whether the sentence is TRUE of the tree or whether the claim it supports is right".
+ * A VERIFIED is a fact about SEVEN WORDS and never about the paragraph they were put in. The reflex worth
+ * naming, because it arrived from a careful reader: a comment found to be arguing the wrong thing FEELS like a
+ * comment whose quotation must also be invented, and the two are INDEPENDENT — a mis-aimed citation under a
+ * perfectly pasted sentence is the commonest shape there is, and calling it a fabrication publishes a claim
+ * about a standard that the standard refutes. Read the section before writing that a sentence is not in it.
+ *
  * AND ONE MORE, WHICH IS A RESIDUAL RATHER THAN A LIMIT OF THE EVIDENCE: a quotation that is REAL BUT CUT is
  * VERIFIED, because every fragment it carries does occur, contiguously, exactly where it says. That is the
  * right answer to the question this check asks and the wrong answer to the one a reader has, whenever the cut
@@ -233,6 +251,28 @@
  * a period the document does not contain, and a boundary token inside the compared stream would report every
  * such quotation as diverging — the normalizer manufacturing the finding, which the STEP_MARKER paragraph
  * below already records as this checker's one unacceptable failure.
+ *
+ * AND THE QUOTATIONS IT REFUSES ARE A CATEGORY WITH SITES IN IT, NOT A CLAUSE IN A CENSUS SENTENCE. The check
+ * above judges a quotation only where the citation over it resolved on its OWN evidence, so a quotation under a
+ * BARE §N — the largest citation shape in this tree — is counted and never asked about. Counted-and-unchecked is
+ * the silent zero CLAUDE.md names in the same breath as an unindexed standard, and one level down it was true
+ * here: the census said HOW MANY and never WHICH, so a reader standing in the file could not learn that a
+ * quotation two lines away was unaskable. UNJUDGEABLE QUOTATION names them, one line each, on every run.
+ *   — IT IS NOT A FINDING, and its first sentence says so, because the failure of getting that wrong is every
+ *     correct site in it reported as a defect: this file's own subject, committed by this file. A site there may
+ *     be quoting its standard perfectly. UNVERIFIABLE and WRONG are two states.
+ *   — THE PROBE IS EVIDENCE AND NOT A RESOLUTION. A bare §N is genuinely ambiguous and only its AUTHOR can say
+ *     what it meant, so the tool states a fact and adopts nothing: whether ANY indexed standard numbers that
+ *     section AND holds those words there. Adopting the answer instead would let a quotation VERIFY ITSELF — the
+ *     standard would have been chosen BECAUSE it holds the words — and would silently absorb a citation whose
+ *     real standard this tool does not index, which is the confirmation channel the paragraph above refuses
+ *     arriving from the other direction. So CORROBORATED-ELSEWHERE names the standard for the author to write,
+ *     and UNCORROBORATED says no indexed document has these words at that number, which is where a fabrication
+ *     under a bare number would sit and is therefore the head of the queue.
+ * WHAT DRAINING IT DOES TO THE NUMBERS IS THE REASON THE DENOMINATOR IS PRINTED BESIDE IT: writing a standard at
+ * one of these sites moves the quotation into the COMPARED population, where it is judged for the first time, so
+ * a repair can RAISE the finding total. A finding count is only ever read against the population it was drawn
+ * from, which is the rule the closing census already states for the tree and this states for one channel.
  *
  * AND A STEP IS A NUMBER NEITHER ARTIFACT ABOVE CAN SEE, WHICH IS WHY IT IS A THIRD. The section index holds
  * HEADINGS and the text corpus holds WORDS with the markup flattened out of them by design — that flattening is
@@ -2913,6 +2953,14 @@ function audit(argv, opts = {}) {
   const undecided = [];
   const mentions = [];
   const quotes = [];
+  /* THE QUOTATIONS THIS CHECK REFUSED TO ASK ABOUT, HELD AS SITES AND NOT ONLY AS A NUMBER. A count with no
+   * list behind it is the silent-zero shape CLAUDE.md names for exactly this state — "a standard with no
+   * committed index is COUNTED and never CHECKED, which is a silent zero rather than a clean bill" — and this
+   * channel had it in the one population a SITE EDIT drains: a quotation whose citation names no standard.
+   * The census sentence below said how MANY and never WHICH, so nobody could drain one while they were already
+   * standing in the file. Only the two site-drainable states are collected; FOREIGN is not, because no edit at
+   * that site can fix it, and NO-SECTION is a citation this run already reports as wrong somewhere else. */
+  const unjudgedQuotes = [];
   /* Every refusal field below carries a `<name>Crash` twin, and `refuse` in PASS 4 throws if a name arrives
    * without one — so a state added here cannot silently lose the who-pays axis that orders the queue. */
   /* `single*` are not a refusal state and take no `Crash` twin from `refuse`: they say which MARK carried a
@@ -3026,6 +3074,44 @@ function audit(argv, opts = {}) {
    * asserting an error it cannot demonstrate, which is exactly the failure it exists to catch. A SIBLING
    * (§7.4.5 for a term defined at §7.4.1.2) is a different matter and stays a finding. */
   const contains = (ancestor, sec) => sec.length > ancestor.length && sec.startsWith(ancestor + ".");
+
+  /* A SECTION AND ITS DESCENDANTS, AS ONE RULE WITH ONE OWNER. The quotation check reads a cited §N as the
+   * text of that section PLUS everything numbered under it — the join `contains` above exists for — and that
+   * rule was written out at three sites: the verification, the same-comment confirmation, and (below) the
+   * probe that says whether ANY indexed standard holds a quotation at the number a bare citation wrote. Three
+   * copies of one rule is the shape CLAUDE.md refuses in an auditor: the copy that drifts is the one nobody
+   * runs against reality, and here the drifting copy would be the one deciding whether a site is CORROBORATED.
+   * The PREFIX set is what makes the probe affordable — it answers "could this standard have that number at
+   * all" in one lookup, so the forty-standard sweep touches only the standards that actually number it. */
+  const secOrder = new Map(), secPrefix = new Map(), ownCache = new Map();
+  const ownSections = (key, no) => {
+    if (!secOrder.has(key)) {
+      const ks = Object.keys(txt.get(key).sections).sort(cmpNo);
+      secOrder.set(key, ks);
+      const pre = new Set();
+      for (const n of ks) { pre.add(n); let i = n.lastIndexOf("."); while (i > 0) { pre.add(n.slice(0, i)); i = n.lastIndexOf(".", i - 1); } }
+      secPrefix.set(key, pre);
+    }
+    if (!secPrefix.get(key).has(no)) return [];
+    const ck = key + "\u0000" + no;
+    let v = ownCache.get(ck);
+    if (v === undefined) { v = secOrder.get(key).filter((n) => n === no || contains(no, n)); ownCache.set(ck, v); }
+    return v;
+  };
+  /* AND THE JOIN THAT FOLLOWS IT, CACHED FOR THE SAME REASON THE DIVERGENCE PROBE CACHES `wholeOf`: the
+   * probe below asks the same (standard, number) pair once per quotation that cites it, and rebuilding a
+   * section subtree's text per question makes a sweep quadratic in its own population. */
+  const ownTextCache = new Map();
+  const ownText = (key, no) => {
+    const ck = key + "\u0000" + no;
+    let v = ownTextCache.get(ck);
+    if (v === undefined) {
+      const sx = txt.get(key).sections;
+      v = ownSections(key, no).map((n) => sx[n]).join(" ");
+      ownTextCache.set(ck, v);
+    }
+    return v;
+  };
 
   /* WHAT MAKES AN UNQUOTED PHRASE A TITLE CLAIM RATHER THAN THE START OF A SENTENCE: THE AUTHOR ENDED IT THERE.
    * Quoting a title states its extent explicitly, and that is the whole reason check (4) could trust a quote
@@ -4037,17 +4123,17 @@ function audit(argv, opts = {}) {
             if (rec.crash) qstat[why + "Crash"]++;
           };
           if (c.foreign) { refuse("foreign"); continue; }
-          if (!c.spec) { refuse("unresolved"); continue; }
-          if (c.how === "file") { refuse("voted"); continue; }
+          if (!c.spec) { refuse("unresolved"); unjudgedQuotes.push({ ...rec, why: "unresolved", frags: f }); continue; }
+          if (c.how === "file") { refuse("voted"); unjudgedQuotes.push({ ...rec, why: "voted", frags: f }); continue; }
           if (!txt.has(c.spec)) { refuse("noCorpus"); noCorpusBy.set(c.spec, (noCorpusBy.get(c.spec) || 0) + 1); continue; }
           const tx = txt.get(c.spec).sections;
           /* A SECTION CONTAINS ITS SUBSECTIONS — the same rule check (3) applies to a term, applied to text,
            * and it is the join that keeps the corpus free of duplication. The slices are contiguous in the
            * document, so numeric order reproduces the original stream. */
-          const own = Object.keys(tx).filter((n) => n === c.no || contains(c.no, n)).sort(cmpNo);
+          const own = ownSections(c.spec, c.no);
           if (!own.length) { refuse("noSection"); continue; }
           qstat.checked++;
-          if (containsAnyForm(own.map((n) => tx[n]).join(" "), f)) { qstat.verified++; gapHist.push([q.at, 1]); continue; }
+          if (containsAnyForm(ownText(c.spec, c.no), f)) { qstat.verified++; gapHist.push([q.at, 1]); continue; }
           gapHist.push([q.at, 0]);
           /* NOT IN THE CITED SECTION — and the next two questions are what separate a WRONG NUMBER from a
            * WRONG STANDARD from a sentence nobody wrote. Naming where the words DO live is the difference
@@ -4065,9 +4151,7 @@ function audit(argv, opts = {}) {
            * it can prove. */
           const near = (byUnit.get(proseUnitKey(src, spans, c.at)) || []).find((o) => {
             if (o === c || !o.spec || o.how === "file" || !txt.has(o.spec)) return false;
-            const ox = txt.get(o.spec).sections;
-            const ext = Object.keys(ox).filter((n) => n === o.no || contains(o.no, n)).sort(cmpNo);
-            return ext.length && containsAnyForm(ext.map((n) => ox[n]).join(" "), f);
+            return ownSections(o.spec, o.no).length && containsAnyForm(ownText(o.spec, o.no), f);
           });
           /* HOW MUCH OF THIS CHANNEL THE WIDENING IS CARRYING, reported rather than known, because a
            * confirmation channel that silently absorbs findings is the silent zero this file refuses
@@ -4695,14 +4779,21 @@ function audit(argv, opts = {}) {
    * the one thing this report has never said out loud. */
   const named = new Set();
   const head = (all, cap) => { const s = all.slice(0, cap); for (const f of s) named.add(f.file); return s; };
-  const elided = (all, cap, what) => {
+  /* THE ROLL IS BOUNDED WHERE THE RESIDUE IS BIG ENOUGH THAT ITS TAIL ANSWERS NOTHING. The roll exists so a
+   * reader can see WHERE a residue lives; four hundred entries of `=1` on one line do not answer that, they
+   * bury the report — the muting this file is written against, arriving through the line that reports the
+   * elision. `rollCap` is opt-in and unset everywhere it was unset before, so every channel that had a
+   * complete roll still has one, and only a band big enough to need the cap carries it. */
+  const elided = (all, cap, what, rollCap = Infinity) => {
     const rest = all.slice(cap);
     if (!rest.length) return;
     const by = new Map();
     for (const f of rest) by.set(f.file, (by.get(f.file) || 0) + 1);
+    const roll = [...by].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1));
     console.log(`  … ${rest.length} more ${what} NOT PRINTED — the head above is in file order, not a sample. ` +
-      `They stand in ${by.size} file(s): ` +
-      [...by].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).map(([k, v]) => `${k}=${v}`).join(" "));
+      `They stand in ${by.size} file(s)${roll.length > rollCap ? `, the ${rollCap} carrying most of them` : ``}: ` +
+      roll.slice(0, rollCap).map(([k, v]) => `${k}=${v}`).join(" ") +
+      (roll.length > rollCap ? ` … and ${roll.length - rollCap} more file(s) carrying ${roll.slice(rollCap).reduce((a, r) => a + r[1], 0)} between them` : ``));
     console.log(`      (--all prints them; \`node engine/citegen.mjs <path>\` audits one path and prints every finding in it)`);
   };
 
@@ -4781,6 +4872,10 @@ function audit(argv, opts = {}) {
       `; ${qstat.foreign} name a standard this tool indexes no text for${cr(qstat.foreignCrash)}, which no edit at the site can fix — that repair is an index` +
       `; ${qstat.noSection} cite a §N the standard does not have${cr(qstat.noSectionCrash)} (the corpus holds text for every section its index has, so this is the UNKNOWN-SECTION population above)` +
       `; a further ${qstat.tooShort} quoted run(s) are shorter than ${MIN_COMPARED_WORDS} words or carry no fragment of ${MIN_FRAGMENT_WORDS} and are not quotations this check can falsify`);
+    /* AND THE TWO SITE-DRAINABLE STATES IN THAT SENTENCE NOW HAVE A LIST BEHIND THEM. A count with no list is a
+     * population nobody can act on one member at a time, which is the only way a queue this size is ever
+     * drained — and this file already says so about --unanchored's population one channel over. */
+    console.log(`    the ${qstat.voted} + ${qstat.unresolved} site-drainable refusals are NAMED below under UNJUDGEABLE QUOTATION, one line each, so one can be drained by whoever is already editing that file`);
     if (argv.includes("--gaps")) {
       const b = new Map();
       for (const [g, ok] of gapHist) { const k = Math.min(9, Math.floor(g / 60)); const r = b.get(k) || [0, 0]; r[ok]++; b.set(k, r); }
@@ -4828,6 +4923,76 @@ function audit(argv, opts = {}) {
         console.log(`      "${q.quote.length > 150 ? q.quote.slice(0, 150) + "…" : q.quote}"`);
       }
       elided(ord, qlimit, label);
+    }
+
+    /* THE QUOTATIONS THIS CHECK REFUSED, AS A CATEGORY WITH SITES IN IT RATHER THAN A CLAUSE IN A SENTENCE.
+     * The census line above has counted this population all along, and counting is what CLAUDE.md calls the
+     * silent zero: "a standard with no committed index is COUNTED and never CHECKED, which is a silent zero
+     * rather than a clean bill". The same sentence is true one level down, of a quotation whose CITATION names
+     * no standard — and it was true here, in the one state a SITE EDIT drains. A reader standing in the file
+     * could not find out that a quotation two lines away was unaskable, because no line named it.
+     *
+     * IT IS NOT A FINDING AND THE HEADER SAYS SO IN ITS FIRST SENTENCE, because the failure mode of getting
+     * that wrong is 3538 correct sites reported as defects — this file's own subject, committed by this file.
+     * A site here may be quoting its standard perfectly; nothing has read it. UNVERIFIABLE and WRONG are two
+     * states, and a category that blurs them teaches a reader to skim it, which costs every real finding
+     * beside it.
+     *
+     * THE PROBE IS EVIDENCE AND IT IS NOT A RESOLUTION, and that line is the whole design. A bare §N is
+     * genuinely ambiguous — nothing at the site says which document it means — so the tool may not adopt an
+     * answer for it: adopting one would make a quotation VERIFY ITSELF, since the standard would have been
+     * chosen BECAUSE it holds these words, and a citation whose true standard this tool does not index would
+     * be silently absorbed by whichever indexed standard happened to number that section. That is the
+     * confirmation channel this file's header already refused once, arriving from a different direction. What
+     * it may do instead is state a fact that carries its own proof, the form the header endorses ("no indexed
+     * standard defines `about base url` at §7.4"):
+     *   — CORROBORATED-ELSEWHERE: some indexed standard numbers §N and its own words hold this quotation. The
+     *     audit NAMES it and does not adopt it. Writing that name at the site is one edit, and the NEXT run
+     *     judges the quotation for real, against a standard an author asserted rather than one a tool guessed.
+     *   — UNCORROBORATED: NO indexed standard holds these words at that number. That is a true statement about
+     *     every document this tool has, and it is where a fabricated sentence under a bare number would sit —
+     *     beside a perfectly good citation of a standard nothing here indexes, which is why it is still not a
+     *     finding. It is the head of the queue because it is the band where reading one costs something.
+     * The two bands are counted apart for the reason every band here is: a search cannot be directed toward a
+     * gap it reports with the same number as another. */
+    {
+      const probe = (u) => {
+        const hits = [];
+        for (const [k] of txt) if (ownSections(k, u.no).length && containsAnyForm(ownText(k, u.no), u.frags)) hits.push(k);
+        return hits;
+      };
+      for (const u of unjudgedQuotes) u.where = probe(u);
+      const un = unjudgedQuotes.filter((u) => !u.where.length), corr = unjudgedQuotes.filter((u) => u.where.length);
+      const nCrash = (g) => g.filter((u) => u.crash).length;
+      const byWhy = (g, w) => g.filter((u) => u.why === w).length;
+      console.log(`\nUNJUDGEABLE QUOTATION: ${unjudgedQuotes.length} of the ${qstat.seen} quotation(s) this check saw` +
+        ` — NOT findings. The citation over each names no standard, so there is no document to compare it against;` +
+        ` a site here may be quoting its standard perfectly and nothing here has read it.`);
+      console.log(`  ${byWhy(unjudgedQuotes, "voted")} sit under a citation a FILE VOTE placed (the audit's inference, never the citation's claim) and` +
+        ` ${byWhy(unjudgedQuotes, "unresolved")} under one nothing placed at all; ${nCrash(unjudgedQuotes)} are printed by a CRASH, which is read with no file open.`);
+      console.log(`  THE REPAIR IS ONE EDIT AT THE SITE: write the standard's name in front of the number. That moves the quotation into` +
+        ` the ${qstat.checked} compared above, where the next run judges it — so draining this queue can RAISE the finding count, and that is the` +
+        ` repair working. The ${qstat.foreign} FOREIGN and ${qstat.noSection} NO-SECTION refusals in the census line are NOT here: no edit at those sites drains them.`);
+      const ucap = argv.includes("--all") ? Infinity : 25;
+      for (const [label, g, why] of [
+        [`UNJUDGEABLE / UNCORROBORATED`, un,
+          ` — no indexed standard numbers §N AND holds these words there. That is true of every document this tool holds, and it is` +
+          ` consistent with THREE different things: a fabricated sentence, a correct citation of a standard nothing here indexes, and a run of` +
+          ` THIS TREE'S OWN prose in quotation marks (measured — \`"OWNED: the caller frees. Never NULL"\` sits here). Nothing mechanical` +
+          ` separates those, which is why this is a queue and not a finding; reading one is what separates them`],
+        [`UNJUDGEABLE / CORROBORATED-ELSEWHERE`, corr,
+          ` — some indexed standard numbers §N and its own words hold this quotation. The audit names it and does NOT adopt it: a standard` +
+          ` the citation never named cannot become the standard it is judged against. Writing that name at the site is the whole repair`]]) {
+        console.log(`\n${label}: ${g.length} (${nCrash(g)} in a crash message)${why}`);
+        const ord = [...g].sort((a, b) => rank(a) - rank(b));
+        for (const u of head(ord, ucap)) {
+          console.log(`  ${u.file}:${u.line}  §${u.no}${u.crash ? "  [in a crash message]" : ""}` +
+            (u.why === "voted" ? `  — placed by a FILE VOTE at ${u.spec}, which is this audit's inference and not the citation's claim` : `  — nothing placed this citation`) +
+            (u.where.length ? `; these words ARE ${u.where.slice(0, 3).join(", ")} §${u.no}'s` : ``));
+          console.log(`      "${u.quote.length > 150 ? u.quote.slice(0, 150) + "…" : u.quote}"`);
+        }
+        elided(ord, ucap, label, 30);
+      }
     }
   }
 
@@ -5041,8 +5206,8 @@ function audit(argv, opts = {}) {
    * THE SECOND HALF IS THE FILE FIGURE, AND IT WAS A RATIO OF TWO DIFFERENT POPULATIONS. `allFiles` was built
    * from findings+suspects+quotations — the step channel was in NO denominator anywhere, so 3 files carrying
    * only a step finding appeared in no count on this line. `named` is filled by every printed head, INCLUDING
-   * the three lists that are deliberately not findings (MENTION-NOT-CLAIM, TITLE-STATED-AND-UNPLACED,
-   * STEP-NOT-IN-THIS-SECTION), so "standing in N file(s) of which M are named above" asserted M ⊆ N while 13
+   * the four lists that are deliberately not findings (MENTION-NOT-CLAIM, TITLE-STATED-AND-UNPLACED,
+   * STEP-NOT-IN-THIS-SECTION, UNJUDGEABLE QUOTATION), so "standing in N file(s) of which M are named above" asserted M ⊆ N while 13
    * of the 164 were in no part of the 345. A containment claim whose two sides are gathered from different
    * sets is the same defect as the headline, one clause along: both sides are real counts and the sentence
    * joining them is not true of anything. So the denominator is the union of the three FINDING channels, and
