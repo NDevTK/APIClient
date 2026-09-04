@@ -1347,10 +1347,58 @@ static JSValue san_new_object(JSContext *ctx, JSValue config)
    built-in safe default configuration", which is canonical and valid by construction. */
 static JSValue san_preset_config(JSContext *ctx, JSValueConst spec)
 {
-    const char *s = JS_ToCString(ctx, spec);
-    bool is_default = s && strcmp(s, "default") == 0;
+    /* THE PRESET NAME CAN NOW BE UNKNOWN EXTERNAL INPUT, AND THAT IS THE DECLARATION SAYING SO RATHER THAN A
+       VALUE LEAKING THROUGH. `(SanitizerConfig or SanitizerPresets)` is IDL_STRING_OR_DICT, whose arm Web IDL
+       §3.2.25 Union types decides by asking whether V is an Object — a question a concolic answers `true` to
+       for a reason that is about this engine's value class and not about the page's value — so core/idl_args.h
+       FORKS that arm and both worlds run. What arrives here on the string world is the unknown ITSELF: §3.2.10
+       DOMString's conversion is not performed on unknown external input (idl_concolic_rule answers CROSSES),
+       so there is nothing to strcmp and the bytes are asked of the value.
+       Before the fork this call was unreachable for an unknown and the OTHER arm was taken for every one of
+       them, silently: `new Sanitizer(cfg.preset)` was canonicalized as a nine-member CONFIGURATION, and in a
+       dev build it aborted inside that canonicalization naming the unknown-COLLECTION remedy — a crash that
+       was reproducible, authoritative, and about a question nobody had asked. */
+    JSValue ex = concolic_is(spec) ? concolic_example(ctx, spec) : JS_UNDEFINED;
+    const char *s;
+    bool is_default;
+
+    /* AN UNKNOWN WITH NO EXAMPLE CANNOT BE ASKED §3.2.18's QUESTION AT ALL, and both of its answers are
+       feasible worlds §8.6.2's own steps tell apart. */
+    if (concolic_is(spec) && JS_IsUndefined(ex)) {
+        const char *shape = concolic_shape_c(spec);
+
+        JS_FreeValue(ctx, ex);
+        DFAILF("HTML §8.6.2 The Sanitizer interface's constructor was given a PRESET that is UNKNOWN EXTERNAL "
+               "INPUT WITH NO EXAMPLE (`%s`), and Web IDL §3.2.18 Enumeration types' check against "
+               "`SanitizerPresets` is a question about its BYTES. Both answers are feasible and they are two "
+               "different objects: the bytes are \"default\", and this is the built-in safe configuration; or "
+               "they are not, and §3.2.18 step 2 throws a TypeError. WHAT IS MISSING is the OUTCOME FORK at "
+               "this member's own seam — js_san_ctor is a plain C body, so building it means declaring the "
+               "constructor with idl_method_id_step instead of idl_method_id_dict and asking "
+               "quickjs-step.h's step_fork_run which completion the enumeration check reached. ITS ABSENCE "
+               "WOULD SHOW as a page building its sanitizer from injected state "
+               "(`new Sanitizer(__CFG.preset)`) exploring neither world, so every element the safe preset "
+               "would have allowed goes unvisited and the TypeError world goes unreached.", shape ? shape : "{}");
+        /* A RELEASE BUILD CANNOT ADD THE FORK, so the unanswerable enumeration check is the page's TypeError
+           — the same answer §3.2.18 step 2 gives every name that is not the one value, chosen because this
+           engine cannot establish that these bytes ARE that value. */
+        return JS_ThrowTypeError(ctx, "the SanitizerPresets value is unknown external input this engine cannot "
+                                      "resolve against the enumeration");
+    }
+    DCHECK(!JS_IsObject(ex),
+           "a preset's unknown carries an OBJECT as its concrete example — an example is the value this engine "
+           "COMPUTED, so it is a primitive, and §7.1.19 ToString over an object one runs the PAGE's toString "
+           "from a C activation with no flow base under it");
+    /* THE EXAMPLE IS THIS FLOW'S OWN ANSWER TO §3.2.18, AND THAT IS A NAMED RESIDUAL. It is the value the run
+       computed by running the real operators on real operands, so the arm it selects is the arm a real session
+       takes — right for this flow, NARROWER than the spec, and the sibling world is what the fork above
+       builds. ITS ABSENCE SHOWS as a page whose computed preset happens not to be "default" never exploring
+       the world in which it is. */
+    s = JS_ToCString(ctx, JS_IsUndefined(ex) ? spec : (JSValueConst)ex);
+    is_default = s && strcmp(s, "default") == 0;
 
     if (s) JS_FreeCString(ctx, s);
+    JS_FreeValue(ctx, ex);
     if (!is_default)
         return JS_ThrowTypeError(ctx, "the sanitizer is not the SanitizerPresets value \"default\"");
     return san_default_config(ctx);
@@ -1408,10 +1456,23 @@ JSValue sanitizer_config_from_options(JSContext *ctx, JSValueConst options, bool
 }
 
 /* §8.6.2's constructor: `new Sanitizer(optional (SanitizerConfig or SanitizerPresets) configuration =
-   "default")`. The union's arm was resolved by the DECLARATION — §3.2.25 sends null, undefined and every
-   Object down the dictionary arm and everything else to the string one — so what arrives here is either a
-   DOMString or the converted SanitizerConfig, and this body performs step 1's preset resolution and step 2's
-   `configure`. Nothing it does can reach the page's code: the conversion already did all of that. */
+   "default")`. The union's arm was resolved by the DECLARATION — Web IDL §3.2.25 Union types sends null,
+   undefined and every Object down the dictionary arm (steps 4 and 11) and everything else to the string one
+   (step 15) — so what arrives here is either a DOMString or the converted SanitizerConfig, and this body
+   performs step 1's preset resolution and step 2's `configure`. Nothing it does can reach the page's code: the
+   conversion already did all of that.
+   AND FOR UNKNOWN EXTERNAL INPUT THE DECLARATION FORKED THE ARM RATHER THAN TESTING IT, which is what makes
+   the third case below a POSITIVE STATEMENT OF WHICH ARM WAS TAKEN and not a repair of a tag test. §3.2.25's
+   arm question is "is V an Object", and a concolic wears an ordinary Object for a reason that is about this
+   engine's value class rather than about the page's value — so core/idl_args.h answers IDL_CONCOLIC_FORKS for
+   this type and both worlds run. On the DICTIONARY world the conversion's §3.2.17 walk builds a real object
+   and nothing unknown reaches this line; on the STRING world the value is PLACED as itself, since §3.2.10's
+   conversion is not performed on unknown input. A CONCOLIC IN THIS SLOT THEREFORE MEANS THE STRING ARM AND
+   NOTHING ELSE, which is why the test reads it as one rather than asking a second question about the value.
+   WHAT IT WAS: `JS_IsString(argv[0])` alone, which a concolic fails BY CONSTRUCTION, so every unknown fell to
+   `configure` and was canonicalized as a nine-member configuration — the arm chosen for a reason that is not
+   about the page's value at all, and in a dev build reported as an unknown-COLLECTION crash rather than as the
+   preset question it is. */
 static JSValue js_san_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     JSValue cfg;
@@ -1423,7 +1484,8 @@ static JSValue js_san_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSVa
        1.2 turns it into the built-in safe default configuration — a Sanitizer built with no argument is the
        safe one, and `sanitize` is what removes unsafe on top of it when a SAFE member asked for it. */
     if (argc == 0 || JS_IsUndefined(argv[0]))  cfg = san_default_config(ctx);
-    else if (JS_IsString(argv[0]))             cfg = san_preset_config(ctx, argv[0]);
+    else if (JS_IsString(argv[0]) ||
+             concolic_is(argv[0]))             cfg = san_preset_config(ctx, argv[0]);
     /* `configure` with allowCommentsPIsAndDataAttributes TRUE, which the constructor states outright: a
        configuration a page writes from scratch keeps comments and processing instructions unless it says
        otherwise, and it is `setHTML`'s own safe path that removes what is unsafe on top. */
@@ -2319,7 +2381,9 @@ void sanitizer_init(JSContext *ctx)
     JS_NewClass(JS_GetRuntime(ctx), g_class, &d);
     /* `(SanitizerConfig or SanitizerPresets)`, DECLARED: §3.2.25 sends null, undefined and every Object down
        the dictionary arm — whose nine members, and the sequences and dictionaries inside them, the args machine
-       converts before this file's body runs — and everything else to the enumeration's string. */
+       converts before this file's body runs — and everything else to the enumeration's string. Unknown
+       external input is neither: idl_concolic_rule FORKS this union's arm, so the constructor runs once per
+       world and js_san_ctor reads which one it is on. */
     g_id_ctor = idl_method_id_dict(ctx, ONE_UNION, 1, SAN_CONFIG_DICT.members, SAN_CONFIG_DICT.n,
                                    js_san_ctor, 0);
     idl_optional_from(0);

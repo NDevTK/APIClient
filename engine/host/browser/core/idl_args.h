@@ -281,11 +281,22 @@ typedef enum {
        modifiers take (`allowElement(SanitizerElementWithAttributes)` and its six siblings), and the union the
        Sanitizer constructor's `(SanitizerConfig or SanitizerPresets)` is. Its rule is the union algorithm's own
        ORDER, and the order is observable: null and undefined take the DICTIONARY arm (step 4, which then throws
-       for a `required` member the page did not write), ANY Object takes it too (step 10 — a function and a
-       String object included, since these unions name no callback type), and everything else falls through to
-       step 12's string arm. Reading it as "an object is the dictionary, a string is the string" agrees on the
-       two ordinary cases and disagrees on `allowElement(null)`, which must be a TypeError from the missing
-       `name` rather than the four characters "null". The dictionary is named beside the member. */
+       for a `required` member the page did not write), ANY Object takes it too (step 11 — a function and a
+       String object included, since these unions name no callback type and step 10's callback clause therefore
+       names no entry), and everything else falls through to step 15's string arm. Reading it as "an object is
+       the dictionary, a string is the string" agrees on the two ordinary cases and disagrees on
+       `allowElement(null)`, which must be a TypeError from the missing `name` rather than the four characters
+       "null". The dictionary is named beside the member.
+       THE TWO NUMBERS IN THAT SENTENCE WERE 10 AND 12 AND BOTH WERE WRONG, EACH BY A DIFFERENT AMOUNT — step
+       10 is "If IsCallable(V) is true" and step 12 is "If V is a Boolean", so the Object clause and the string
+       clause were each cited as a neighbour that does something else. It read as authoritative in the one file
+       whose whole job is to state a conversion once, and the same pair had been copied into the resolution
+       site in idl_args.c. What finds it is counting the algorithm once with LIST DEPTH TRACKED: every one of
+       §3.2.25's steps 4 through 14 holds a nested list, so a flat item count promotes their sub-items to peers
+       and every number from step 4 onward drifts — which is also why sampling the first number of a cluster
+       proves nothing, the drift starting one step AFTER the first nesting rather than at it.
+       AND ITS ARM IS FORKED FOR UNKNOWN EXTERNAL INPUT — see idl_concolic_rule, which is where the reason
+       lives, and idl_args.c's resolution site, which is where the fork is asked. */
     IDL_STRING_OR_DICT,
     /* THE POSITION AT WHICH TWO OVERLOADS SPLIT, one of them ending here and the other continuing — §3.6's
        resolution algorithm rather than §3.2.25's union, and the difference between the two is why this is its
@@ -470,8 +481,8 @@ typedef enum {
        same shape as the two above with a broader test: any Object crosses as itself, and EVERYTHING else —
        null and undefined included — is the DOMString arm.
        IT IS NOT IDL_STRING_OR_DICT AND THE DIFFERENCE IS OBSERVABLE. That type's union names a dictionary, so
-       §3.2.26's step for null/undefined sends them to the dictionary and a missing `required` member is a
-       TypeError; this union names none, so `digest(null, b)` becomes the four characters "null", which
+       §3.2.25 step 4's clause for null/undefined sends them to the dictionary and a missing `required` member
+       is a TypeError; this union names none, so `digest(null, b)` becomes the four characters "null", which
        normalizing an algorithm then reports as a "NotSupportedError" — a different exception, arriving through
        a rejected promise rather than a throw. The dictionary conversion this type does NOT perform is
        §18.4.4's, run by the member's own algorithm at the step the standard numbers it, which is what keeps a
@@ -601,6 +612,21 @@ typedef enum {
            against step 12 "If V is a Boolean" and step 18 "If types includes boolean". No `if` a page writes
            asks that, so it is the machine asking which of its OWN completions it reaches: the OUTCOME seam,
            quickjs-step.h's step_fork_run, numbered by that site.
+           AND NOT EVERY UNION WHOSE ARM TESTS THE VALUE IS ONE, WHICH IS THE HALF THIS SENTENCE DID NOT SAY
+           AND WHICH A READER APPLIED AS WRITTEN. Taken literally it also covers `(DOMString or Function)`,
+           `(Node or DOMString)` and `(object or DOMString)`, and those three are deliberately CROSSES with a
+           paragraph each saying so — a criterion that does not separate the rows it governs from the rows it
+           does not is a criterion nobody can check. THE DISCRIMINATOR IS WHETHER ONE PLACED VALUE CAN STAND
+           FOR BOTH ARMS. Those three place the value ITSELF whichever arm is taken, so crossing an unknown
+           loses nothing that was ever going to be computed here and the member's own algorithm still decides
+           what to make of it — which is a fact about the member and not about the value, and is why the body
+           is the only place that can. A union with a DICTIONARY arm cannot be crossed on those terms: step
+           11.4 "If types includes a dictionary type, then return the result of converting V to that
+           dictionary type" runs §3.2.17 Dictionary types' member WALK, and step 15 "If types includes a
+           string type, then return the result of converting V to that type" runs no walk at all — so the two
+           arms differ in what the conversion PERFORMS, and a value placed in the slot is already on exactly
+           one of them. Cross it and the arm is still decided, just later and by whichever `JS_IsString` the
+           body reaches first, from the SOLVER's value class rather than from the page's value.
          - Web IDL §3.2.3 boolean ITSELF, whose one step is ToBoolean and whose answer for a concolic is
            decided by ECMAScript §7.1.2 ToBoolean ( arg )'s last step ("Return true") rather than by anything
            about the page's value. That is the SAME PREDICATE `if (p)` asks, so it is the BRANCH seam —
@@ -640,6 +666,29 @@ static inline IdlConcolicRule idl_concolic_rule(IdlArgType t)
        leaves it at "start", and those are two different scroll positions rather than two spellings of one, so
        neither arm may be picked for a value nothing is known about. */
     case IDL_BOOL_OR_DICT:
+    /* `(DOMString or D)` where D is a DICTIONARY — the same union one arm over, and it sat under `default:`
+       at CROSSES for exactly as long as the row above did and for the same reason. §3.2.25 step 11 "If V is
+       an Object" sends every Object down the dictionary arm and step 15 sends everything else to the string
+       one; a concolic wears an ordinary Object, so the arm was DECIDED for every unknown external input by a
+       fact about this engine's own value class.
+       CROSSING IS NOT THE CURE HERE, WHICH IS WHAT SEPARATES THIS UNION FROM THE THREE THAT STAY AT CROSSES:
+       the dictionary arm RUNS §3.2.17's member walk and the string arm does not, so the placed value is on
+       one arm whatever a body asks of it next. What crossing actually bought was a concolic in the slot that
+       every body of this type tests with `JS_IsString`, and a concolic fails that test by construction — so
+       `new Sanitizer(cfg.preset)` reached HTML §8.6.2 The Sanitizer interface's `configure` and was
+       canonicalized as a CONFIGURATION, and `document.createElement("div", cfg.opts)` reached DOM §4.5
+       Interface Document's create-element step 3 as an options dictionary. Neither is a wrong test in its
+       body; both are the arm being chosen where the arm is not knowable.
+       BOTH ARMS ARE FEASIBLE AND THE ALGORITHMS TELL THEM APART: a preset name is Web IDL §3.2.18
+       Enumeration types' check against `SanitizerPresets` and a configuration is a nine-member walk, and
+       §4.5's `is` is read on one arm and not on the other. So neither may be picked for a value nothing is
+       known about.
+       OUTCOME 0 IS THE DICTIONARY ARM, per step_fork_run's one rule on the numbering — outcome 0 is what a
+       run with no forking policy takes, and it is also the arm §3.2.25 gives the Object an unknown is
+       represented BY, so a no-policy run answers exactly as it did and the STRING world is the one the fork
+       adds. §3.2.25 step 4 "If V is null or undefined" is not part of the fork: null and undefined are real
+       values a concolic is not, and they take the dictionary arm as they always did. */
+    case IDL_STRING_OR_DICT:
     /* Web IDL §3.2.3 boolean — the type whose CONVERSION is the fork, where the two rows above are unions
        whose ARM is. ECMAScript §7.1.2 ToBoolean ( arg )'s last step is "Return true" and a concolic wears an
        ordinary Object, so a crossing
