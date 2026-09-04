@@ -3540,10 +3540,32 @@ void flow_wfq_census(WfqCensus *out) {
            same split cold.c's census makes, because there is only one place each can be. Asked of EVERY
            member and not only the candidates, because the candidates' figure is meaningless without it. */
         long dec = 0;
+        /* …AND THE POSITION ALONG IT, WHICH IS A DIFFERENT NUMBER AND WAS THE ONE `cand_dec_max` CLAIMED TO
+           BE. `dec` is the chain's LENGTH — decide.c's own accessor says "a caller that wants a DISTANCE
+           TRAVELLED must not take this number: it is the denominator" — and an @S candidate is seeded with the
+           whole detecting chain under a cursor of ZERO, so for a candidate the length is fixed from seeding
+           and the cursor is the only half that moves.
+           BOTH HALVES OF ONE QUANTITY, TAKEN FROM THE TWO PLACES IT LIVES. `Flow.dec_blob` is NULL exactly
+           while a flow is RUNNING (engine.c frees it at the switch-in), so a reading sourced from the blob
+           alone would report a real position for every parked member and ZERO for the incumbent — and that is
+           wrong in the direction that LOOKS LIKE A FIX WORKING, because a number that under-reads whoever
+           holds the thread makes the waiting tail appear to overtake it. The running flow's cursor is
+           decide_cursor(); the same split this loop already makes one line up for the length. */
+        long cur = 0;
 
-        if (f->dec_blob) decide_blob_stats(f->dec_blob, &dec, NULL);
-        else if (f == g_running) decide_live_stats(&dec, NULL);
+        if (f->dec_blob) { decide_blob_stats(f->dec_blob, &dec, NULL); cur = decide_blob_cursor(f->dec_blob); }
+        else if (f == g_running) { decide_live_stats(&dec, NULL); cur = decide_cursor(); }
         if (dec > out->dec_max) out->dec_max = dec;
+        /* A POSITION CANNOT LIE OUTSIDE THE PATH IT IS A POSITION ON, asserted where the two are in one hand
+           for the first time. Each source checks its own half — decide_blob_cursor against its blob's chain,
+           decide_live_stats and decide_cursor against the live vector — and neither can see the pair this loop
+           has just composed out of two calls, which is precisely where a future edit that takes the length
+           from one member and the cursor from another would land. */
+        DCHECK(cur >= 0 && cur <= dec,
+               "the WFQ census composed a replay position outside the recorded path it is a position on — the "
+               "length and the cursor were taken from one member by two calls, so this is those two calls "
+               "having come to be about different flows, and every fraction built from the pair would exceed "
+               "one or go negative");
 
         /* THE REWARD ROWS READ THE TERM THE ORDER IS MADE OF, which is the FAMILY's — a census denominated in
            a quantity the pick does not read is the shape flow.h's own paragraph describes, where a spread was
@@ -3742,7 +3764,11 @@ void flow_wfq_census(WfqCensus *out) {
             out->cand_members++;
             if (flow_own_silence(f) == 0) out->cand_unrun++;   /* the order's quantity, as the row above */
             if (s > out->cand_svc_max) out->cand_svc_max = s;
-            if (dec > out->cand_dec_max) out->cand_dec_max = dec;
+            /* THE CURSOR AND NOT THE LENGTH — the correction this row waited for. Fed from `dec` it was the
+               DENOMINATOR reported as the numerator: constant from the instant a candidate was seeded, so
+               "how far the best of them has GOT" was a number that could not move, and the readings built on
+               it named states that cannot occur. See flow.h for the three that were retired. */
+            if (cur > out->cand_dec_max) out->cand_dec_max = cur;
         }
     }
     /* THE CONSERVATION IDENTITY THE PICK ROWS ARE DEFINED BY, ASSERTED RATHER THAN LEFT TO A READER. CLAUDE.md:

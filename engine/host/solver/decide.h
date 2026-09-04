@@ -385,6 +385,23 @@ void       *decide_blob_new(void *seg);
    O(n) per flow and O(n^2) over the frontier — describes the flat per-flow vector this file's shared chain
    replaced, and it is deleted rather than corrected because the cost it names is the one the chain removed. */
 void decide_blob_stats(const void *blob, long *entries, long *bytes);
+
+/* HOW FAR ALONG ITS OWN RECORDED PATH A PARKED FLOW HAS REPLAYED — the blob's CURSOR, which is the number the
+ * accessor above deliberately is not and which nothing could reach until now.
+ * WHY IT IS A SEPARATE ENTRY AND NOT A THIRD OUT-PARAMETER ON THAT ONE. The two answer questions of different
+ * KIND over one structure, and a call site that took both from one accessor would be free to read either into
+ * a variable named for the other — which is exactly what happened for the whole life of solver/flow.h's
+ * `cand_dec_max`, a row fed from the LENGTH while its own contract called it "how far the best of them has
+ * GOT". The length is a DENOMINATOR fixed from the instant the blob is built; this is a POSITION that moves as
+ * the flow replays. Separate entries make the mistake a different call rather than a different argument.
+ * IT IS THE PARKED HALF OF ONE QUANTITY AND decide_cursor IS THE LIVE HALF, which a caller ranking MEMBERS has
+ * to know: `Flow.dec_blob` is NULL exactly while a flow is RUNNING (engine.c frees it at the switch-in), so a
+ * term sourced from this alone reads a real position for every rival and ZERO for the incumbent. That failure
+ * is not merely wrong, it is wrong in the direction that LOOKS LIKE A FIX WORKING — a comparator that
+ * systematically under-reads whoever holds the thread makes the waiting tail appear to overtake it, which is
+ * the outcome anyone building a distance term is hoping to see. A per-member reading therefore takes this for
+ * a parked flow and decide_cursor for the running one, or it is a comparator over two different questions. */
+int decide_blob_cursor(const void *blob);
 void decide_live_stats(long *entries, long *bytes);
 
 /* WHAT THE FROZEN DECISION CHAIN IS HOLDING — the fourth of the four chains built on cow.c's refcounted

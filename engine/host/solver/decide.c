@@ -1097,6 +1097,30 @@ void decide_blob_stats(const void *blob, long *entries, long *bytes) {
     if (entries) *entries = n;
     if (bytes) *bytes = (long)sizeof *b;
 }
+/* …AND THE NUMBER decide_blob_stats IS NOT — see decide.h. It exists because the paragraph above told every
+   caller which of the blob's two numbers it must not take for a distance, and then offered no way to take the
+   other one: solver/flow.h's `cand_dec_max` claimed to be "how far the best of them has GOT" while being fed
+   from the LENGTH, for the whole life of that row, because the length was the only thing reachable.
+   THE RANGE IS ASSERTED HERE AND NOT ONLY AT ITS NEIGHBOUR, and that is not a duplicated check: the two
+   accessors are reached by different callers at different moments (the census walks every parked blob; a
+   resume installs one), and an invariant checked at one reader is an invariant the other reader is trusting
+   rather than asserting. The condition is the same one because the fact is the same one. */
+int decide_blob_cursor(const void *blob) {
+    const DecideBlob *b = blob;
+    long n;
+
+    CHECK(b != NULL,
+          "decide: the replay cursor of a flow with no parked decision state was asked for — a running flow's "
+          "cursor is live (decide_cursor answers that one) and a parked flow's is its blob, so a NULL here is "
+          "a caller reading neither and about to record a flow that has replayed nothing as one at slot zero");
+    n = b->seg ? b->seg->below + b->seg->n : 0;
+    DCHECK(b->c >= 0 && b->c <= n,
+           "a parked flow's decision cursor is outside its own chain — the cursor names the slot the flow "
+           "replays next and the chain is every slot it has, so a reading outside it is a distance along a "
+           "path this flow does not stand on, and the fraction built from it would exceed one or go negative");
+    return b->c;
+}
+
 void decide_live_stats(long *entries, long *bytes) {
     if (entries) *entries = dec_total();
     if (bytes) *bytes = (long)((size_t)g_dec_cap * DEC_SLOT_BYTES);   /* both head buffers; one capacity governs them */
