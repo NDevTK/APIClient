@@ -275,25 +275,26 @@ static void is_atomic_replaced(TextRunMeasure *m, lxb_dom_element_t *el)
 /* ONE CHILD NODE of the box whose intrinsic sizes are being measured. The shape mirrors core/layout/
    line_box.c's own child walk deliberately: both are iterating the SAME inline formatting context, and the two
    answering differently about which children are in it would be one classification with two copies. */
-/* `in_inline_box` IS THE ORIGIN OF THE CHILD AND IT IS THREADED FROM THE CALLER, never re-derived here: FALSE
-   is a child of the box being measured, whose whole child list CSS 2.2 §9.2.1 "Block-level elements and block
-   boxes"' dispatch has already classified ("A block container box either contains only block-level boxes or
-   establishes an inline formatting context and thus contains only inline-level boxes"), and TRUE is a child of
-   a `display: inline` box this walk descended into, about which that dispatch said NOTHING — it was asked over
-   the measured box's list, and an inline box's own children were not in it. The two crashes at the tail of
-   this function are two DIFFERENT missing capabilities and the flag is the only thing that tells them apart,
-   which is why it is a parameter and not a test. */
-static void is_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_t *n, bool in_inline_box);
+/* THE ORIGIN OF THE CHILD USED TO BE A PARAMETER, and it is gone with the second crash it existed to name.
+   It distinguished a child of the MEASURED box — whose whole list CSS 2.2 §9.2.1 "Block-level elements and
+   block boxes"' dispatch had classified — from a child of a `display: inline` box this walk descended into,
+   about which that dispatch said nothing, so that a BLOCK-LEVEL child could be refused as §9.2.1.1's
+   block-in-inline in the second case and as a came-apart classification in the first. THAT ASYMMETRY IS
+   RETIRED: core/layout/block_flow.c's `bf_content_kind` now runs §9.2.1.1's forcing THROUGH inline boxes, so a
+   container holding one takes §9.4.1's stack, and its run delimitation refuses a run that would end inside an
+   inline box. A block-level box is therefore unreachable from BOTH origins for the SAME reason, and one
+   assertion states it once. */
+static void is_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_t *n);
 
 static void is_walk(TextRunMeasure *m, lxb_dom_element_t *el)
 {
     lxb_dom_node_t *n = lxb_dom_interface_node(el), *c;
 
     /* THE ONLY CALLER IS THE INLINE-BOX DESCENT BELOW, so every child this reaches is inside one. */
-    for (c = n->first_child; c != NULL; c = c->next) is_child(m, el, c, true);
+    for (c = n->first_child; c != NULL; c = c->next) is_child(m, el, c);
 }
 
-static void is_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_t *n, bool in_inline_box)
+static void is_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_t *n)
 {
     lxb_dom_element_t *el;
     char *d;
@@ -405,46 +406,45 @@ static void is_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_
         text_run_measure_add_box_edge(m, el, is_intrinsic_edge_px(el, true));
         return;
     }
-    /* THE CHILD OF A `display: inline` BOX THIS WALK DESCENDED INTO, WHOSE LEVEL §9.2.1's DISPATCH NEVER
-       ASKED — that question was asked over the MEASURED box's child list and an inline box's own children were
-       not in it. IT IS SPLIT ON THE ANSWER NOW AND USED TO BE ONE CRASH SAYING IT COULD NOT BE: the level is
-       core/layout/block_flow.h's, over one child node, so the two arms below are two different absences with
-       two different things to build rather than one refusal covering both.
-       THE OTHER TWO KINDS CANNOT REACH THIS LINE. §9.2's non-generating nodes and §9.3.1's out-of-flow box each
-       returned above, and §9.5's float crashed above under §9.4.2's own reason; the assert is what keeps that
-       derivation honest if either of those tests is ever moved. */
-    if (in_inline_box) {
-        BlockFlowChildKind kind = block_flow_child_kind(parent, n);
-
-        DCHECK(kind == BLOCK_FLOW_CHILD_BLOCK || kind == BLOCK_FLOW_CHILD_INLINE,
-               "a child inside an inline box was classified as generating no box, or as a float, AFTER this "
-               "walk's own tests for both had let it through — so the two classifications have come apart and "
-               "this run holds a box core/layout/block_flow.h says is not in it");
-        if (kind == BLOCK_FLOW_CHILD_BLOCK)
-            DFAILF("CSS 2.2 §9.2.1.1 \"Anonymous block boxes\"' BLOCK-IN-INLINE: this child is BLOCK-LEVEL and "
-                   "it sits inside a `display: inline` box, so the algorithm is §9.2.1.1's breaking, which "
-                   "rebuilds the BOX TREE rather than adding a term to a sum — \"When an inline box contains "
-                   "an in-flow block-level box, the inline box (and its inline ancestors within the same line "
-                   "box) is broken around the block-level box\", and \"The line boxes before the break and "
-                   "after the break are enclosed in anonymous block boxes, and the block-level box becomes a "
-                   "sibling of those anonymous boxes\". So the measured box STOPS establishing one inline "
-                   "formatting context and becomes §9.4.1 \"Block formatting contexts\"' stack of three, which "
-                   "means §9.2.1's dispatch chose the wrong arm for this document before either walk ran. "
-                   "BUILD THE BREAKING WHERE THAT DISPATCH IS: core/layout/block_flow.c's `bf_content_kind` "
-                   "answers over a container's DIRECT children and this box is one level deeper, so what is "
-                   "missing is that §9.2.1.1's forcing descends through an inline box — and then this file's "
-                   "§9.4.1 arm below maximises over the three boxes it produced, with no arm needed here at "
-                   "all. %s",
-                   box_subject_node(n, nbuf, sizeof nbuf));
-        /* INLINE-LEVEL: an atomic inline nested one box deeper, which is the same missing thing the direct
-           child below names — the item pair — and not a box-tree question at all. */
-    }
+    /* THE LEVEL OF EVERY CHILD THIS WALK REACHES, ASSERTED ONCE FOR BOTH ORIGINS. Two different sections
+       guarantee it and they now guarantee the same thing. For a child of the MEASURED box it is CSS 2.2 §9.2.1
+       "Block-level elements and block boxes"' dispatch, asked over the whole list before this walk ran ("A
+       block container box either contains only block-level boxes or establishes an inline formatting context
+       and thus contains only inline-level boxes"), plus §9.2.1.1's run delimitation, which ends a run AT a
+       block-level box rather than inside it. For a child of a `display: inline` box this walk descended into
+       it is §9.2.1.1's SECOND paragraph, RUN: an inline box containing an in-flow block-level box is broken
+       around it and the block-level box "becomes a sibling of those anonymous boxes", so a container holding
+       one is not §9.4.2's context at all and core/layout/block_flow.c's classification sends it down §9.4.1's
+       stack — where the run delimitation refuses the split it cannot yet express, one call before this walk
+       would meet it.
+       THE OTHER TWO KINDS CANNOT REACH THIS LINE EITHER, and by this function's own tests rather than by
+       anyone else's: §9.2's non-generating nodes and §9.3.1's out-of-flow box each returned above, and §9.5's
+       float crashed above under §9.4.2's own reason. The assert is what keeps all four derivations honest if
+       any of those tests is ever moved.
+       WHAT THIS LINE USED TO SAY, AND WHY THE CHANGE IS NOT A NARROWING: a `DFAILF` stood on the block-level
+       arm telling its reader to build §9.2.1.1's breaking, and it named the right file and the right function
+       for HALF the work — the classification, which descends now. Its second half said "this file's §9.4.1 arm
+       below maximises over the three boxes it produced, with no arm needed here at all", and that is true only
+       of a box list this component cannot yet be handed: §9.2.1.1 makes ONE child node yield THREE boxes, and
+       `block_flow_anonymous_box_end` returns a SIBLING, so there is no run for `is_block_context` to maximise
+       over until that boundary becomes a position in content order. The absence is named at that boundary now,
+       once, instead of here and in core/layout/line_box.c under two different halves of one sentence. */
+    DCHECK(block_flow_child_kind(parent, n) == BLOCK_FLOW_CHILD_INLINE,
+           "a child of a box whose inline formatting context is being measured is not INLINE-LEVEL after this "
+           "walk's own tests for a non-generating node, for §9.3.1's out-of-flow box and for §9.5's float have "
+           "all let it through — so this run holds a box core/layout/block_flow.h says is not in it, and the "
+           "two classifications have come apart. A BLOCK-LEVEL answer here is the sharpest form of that: "
+           "CSS 2.2 §9.2.1.1 \"Anonymous block boxes\" puts a block-level box on the CONTAINER's stack, as a "
+           "sibling of the anonymous boxes, whether it is a direct child or is reached through an inline box "
+           "it breaks — so no run this walk is ever handed may contain one, and whichever of "
+           "`bf_content_kind` and `block_flow_anonymous_box_end` stopped agreeing with the other is the fix");
     DFAILF("CSS 2.2 §9.2.2 \"Inline-level elements and inline boxes\"' ATOMIC INLINE-LEVEL BOX THAT IS NOT "
            "REPLACED — an `inline-block`, an `inline-flex`, an `inline-grid` or an `inline-table`, and the list "
            "is closed rather than illustrative. §9.2.1's dispatch has already established that the measured box "
            "\"either contains only block-level boxes or establishes an inline formatting context and thus "
-           "contains only inline-level boxes\" and that it is the second, so a DIRECT child reaching here is "
-           "inline-level; it failed the `display: inline` test above and `replaced_element_of` says it is not "
+           "contains only inline-level boxes\" and that it is the second, and the assert directly above "
+           "establishes the same of a child reached THROUGH an inline box, so this child is inline-level "
+           "either way. It failed the `display: inline` test above and `replaced_element_of` says it is not "
            "replaced, which leaves exactly those four. ITS ITEM IS THE ONE `is_atomic_replaced` ALREADY EMITS "
            "and its size is `intrinsic_inline_sizes` one level down under css-sizing-3 §2.2 \"Intrinsic Size "
            "Contributions\"' outer size (\"Intrinsic size contributions are based on the outer size of the box; "
@@ -476,7 +476,7 @@ IntrinsicInlineSizes intrinsic_inline_run_sizes(lxb_dom_element_t *el, lxb_dom_n
     lxb_dom_node_t *c;
 
     text_run_measure_init(&m);
-    for (c = first; c != end; c = c->next) is_child(&m, el, c, false);
+    for (c = first; c != end; c = c->next) is_child(&m, el, c);
     /* THE MEASUREMENT DOES NOT EXIST UNTIL THIS RUNS, and that is [UAX14]'s doing rather than a lifecycle
        anybody chose: its rules read forward past the boundary they decide (LB25's `PO × OP IS NU` by three
        characters) and LB9 puts an unbounded run of combining marks between the two, so no per-character state

@@ -181,6 +181,15 @@ BlockFlowChildKind block_flow_child_kind(lxb_dom_element_t *parent, lxb_dom_node
    of it to carry: a boxless child is §9.2.2.1's collapsed white space, and an out-of-flow child is one
    §9.2.1.1's own splitting paragraph steps over by name when it treats block-level siblings "that are
    consecutive or separated only by collapsible whitespace and/or out-of-flow elements" as one break.
+   THE RUN THAT ENDS INSIDE AN INLINE BOX IS REFUSED, and that is §9.2.1.1's SECOND paragraph rather than a
+   limit of this entry's taste: "when an inline box contains an in-flow block-level box, the inline box (and
+   its inline ancestors within the same line box) is broken around the block-level box …, splitting the inline
+   box into two boxes (even if either side is empty)", and "the block-level box becomes a sibling of those
+   anonymous boxes" — so ONE child node yields THREE boxes and the boundary between two of them is a position
+   INSIDE that child, which a sibling pointer cannot name. The classification above already RUNS that forcing,
+   so such a container is correctly sent down §9.4.1's stack; it is this delimitation that crashes, naming the
+   content-order boundary to build. A caller therefore never receives a run whose measurement would have to
+   split an inline box, and never has to test for one.
    IT IS EXPORTED AND `block_flow_anonymous_boxes` IS NOT WHAT AN INTRINSIC PASS MAY CALL, which is a CYCLE and
    not a layering preference. That entry answers each run's `content_y` and `height`, and a run's height is
    core/layout/line_box.h's over the CONTAINER'S USED CONTENT WIDTH — which for a float or an `inline-block`,
@@ -190,7 +199,7 @@ BlockFlowChildKind block_flow_child_kind(lxb_dom_element_t *parent, lxb_dom_node
    boxes PLACED is a caller whose container's width is already decided. */
 lxb_dom_node_t *block_flow_anonymous_box_end(lxb_dom_element_t *el, lxb_dom_node_t *first);
 
-/* CSS 2.2 §9.4.2's OWN CONDITION over `el`'s WHOLE CHILD LIST: "an inline formatting context is established by
+/* CSS 2.2 §9.4.2's OWN CONDITION over `el`'s WHOLE CONTENT: "an inline formatting context is established by
    a block container box that contains no block-level boxes."
    IT IS THE QUESTION "IS THIS ELEMENT WHERE core/layout/line_box.h's RUN IS THE WHOLE CHILD LIST", which is the
    one shape of §9.4.2's context that has an ELEMENT to name it. §9.2.1.1's anonymous block box is the other,
@@ -201,7 +210,12 @@ lxb_dom_node_t *block_flow_anonymous_box_end(lxb_dom_element_t *el, lxb_dom_node
    §2's scrolling area needs the boxes on this context's line boxes PLACED, and reaching them means knowing
    which element establishes the context they are on — the same classification this file's own walk makes to
    choose between §9.4.1 and §9.4.2, and a second copy of it would be one document with two box trees, free to
-   disagree about whether a run of white space is content (§9.2.2.1, the predicate above). */
+   disagree about whether a run of white space is content (§9.2.2.1, the predicate above).
+   A CONTAINER WHOSE INLINE BOX HOLDS AN IN-FLOW BLOCK-LEVEL BOX ANSWERS FALSE, and §9.2.1.1's second
+   paragraph is why: that block-level box "becomes a sibling of those anonymous boxes", so it is one of THIS
+   container's boxes and §9.4.2's "contains no block-level boxes" is not satisfied — whatever the child LIST
+   looks like. The question is therefore asked over the container's CONTENT and not over its children, which
+   is the one thing a caller re-deriving this predicate from `display` and a child walk would get wrong. */
 bool block_flow_establishes_inline_context(lxb_dom_element_t *el);
 
 /* CSS 2.2 §10.8.1 "Leading and half-leading"'s `inline-block` BASELINE, as the DISTANCE §9.4.1's OWN STACK
