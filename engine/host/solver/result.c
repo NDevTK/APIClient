@@ -1708,7 +1708,7 @@ char *result_json(JSContext *ctx) {
            together and why a host's own routed count is not comparable to a page's handler invocations. It
            rides the result document for the reason the four above it do: a zone reading this from a log would
            be reading a stream the renderer deliberately does not tee. */
-        long routedDelivered = 0, routedRefused = 0;
+        long routedDelivered = 0, routedRefused = 0, routedZeroDelivery = 0;
         /* AND WHETHER THE HEADLINE SURFACE RAN AT ALL — solver/engine.h's orphan census, which is the ORPHAN
            side of the four numbers above it. `_orphansDriven` existed and reached only the heap/progress line,
            which §Testing says nobody can read; `_orphansAsked` is what tells "this bundle ships no uncalled
@@ -1723,7 +1723,7 @@ char *result_json(JSContext *ctx) {
         long routedEnds[ROUTED_TASK_END_N];
         world_segment_stats(&made, &segf);
         solve_arrival_census(&sinkReached, &sinkTainted, &sinkSuppressed);
-        engine_routed_census(&routedDelivered, &routedRefused);
+        engine_routed_census(&routedDelivered, &routedRefused, &routedZeroDelivery);
         engine_orphan_census(&orphansDriven, &orphansAsked);
         engine_routed_task_census(routedEnds);
         out = composef("{\"fetchCallSites\":%s,\"securitySinks\":%s,\"pageErrors\":%s,"
@@ -1743,6 +1743,17 @@ char *result_json(JSContext *ctx) {
                              "\"_worldSegmentsHeld\":%d,\"_worldSegmentsMade\":%d,"
                              "\"_worldSegmentsForked\":%d,"
                              "\"_routedDelivered\":%ld,\"_routedRefused\":%ld,"
+                             /* AND THE ONE OF THE THREE THAT IS ABOUT A RECORD RATHER THAN AN ATTACHMENT —
+                                see solver/engine.h. It is emitted with them and never without them: the pair
+                                alone lets a host compare its own routed count against a sum of attachments,
+                                which is a claim that the receiver has exactly one timeline.
+                                IT IS A GAUGE AND ITS TWO NEIGHBOURS ARE NOT, which is why it is called out
+                                here rather than left to the grouping paragraph below — that paragraph names
+                                `_worldSegmentsHeld` as the one exception among these siblings, and this is
+                                the second. It RISES on arrival and FALLS when some timeline admits the
+                                record, so it is a backlog until the receiver is drained to a stall and a LOSS
+                                only after that; differencing two samples of it is arithmetic on nothing. */
+                             "\"_routedZeroDelivery\":%ld,"
                              "\"_routedTasksFired\":%ld,\"_routedTasksTargetOrigin\":%ld,"
                              "\"_routedTasksTargetGone\":%ld,\"_routedTasksThrew\":%ld,"
                              "\"_sourceReads\":%ld,\"_sinkReached\":%ld,\"_sinkTainted\":%ld,"
@@ -1773,9 +1784,11 @@ char *result_json(JSContext *ctx) {
                                 SO THE RULE FOR THIS BLOCK, STATED AS A GROUPING RATHER THAN AS A PROMISE:
                                 every `_`-prefixed sibling above is a LIFETIME COUNT OF EVENTS — monotone
                                 within one document's session and differenceable across two samples of it —
-                                EXCEPT `_worldSegmentsHeld`, which is a GAUGE and may fall. Its pair is
-                                `_worldSegmentsMade` beside it, which is the lifetime half and the one to
-                                difference. AND "LIFETIME" MEANS THIS SESSION'S: `_candidates`, `_sourceReads`
+                                EXCEPT `_worldSegmentsHeld` and `_routedZeroDelivery`, which are GAUGES
+                                and may fall. `_worldSegmentsHeld`'s pair is `_worldSegmentsMade` beside it,
+                                which is the lifetime half and the one to difference; `_routedZeroDelivery`
+                                has no lifetime half at all and is read at a drained receiver or not read.
+                                AND "LIFETIME" MEANS THIS SESSION'S: `_candidates`, `_sourceReads`
                                 and the three `_sink*` rows are zeroed by solve_init/concolic_init,
                                 `_orphansDriven`/`_orphansAsked` at the agent's release, and
                                 `_worldSegmentsMade`/`_worldSegmentsForked` with the world registry — so on a
@@ -1809,7 +1822,7 @@ char *result_json(JSContext *ctx) {
                      eps, sinks, errs, errsRetracted, errsExplored,
                      engine_switch_count(), flow_created_count(), solve_candidate_count(),
                      engine_jobs_queued(), engine_jobs_run(), engine_units_done(), held, made, segf,
-                     routedDelivered, routedRefused,
+                     routedDelivered, routedRefused, routedZeroDelivery,
                      routedEnds[ROUTED_TASK_FIRED], routedEnds[ROUTED_TASK_TARGET_ORIGIN],
                      routedEnds[ROUTED_TASK_TARGET_GONE], routedEnds[ROUTED_TASK_THREW],
                      srcReads, sinkReached, sinkTainted, sinkSuppressed,

@@ -1292,8 +1292,23 @@ size_t engine_c_alloc_arena(void);
    record and correctly declined it rather than never having been offered it.
    `delivered` IS NOT A HANDLER-INVOCATION COUNT AND THIS LINE USED TO SAY IT WAS. A queued task has FOUR ends
    and only one of them runs a listener — see engine_routed_task_census below, which is the half that was
-   missing and which a host had no choice but to guess at. */
-void engine_routed_census(long *delivered, long *refused);
+   missing and which a host had no choice but to guess at.
+   AND NEITHER OF THEM IS ABOUT A RECORD, WHICH IS THE THIRD NUMBER AND THE REASON THE PAIR BECAME A TRIPLE.
+   Both counts above are per (record, TIMELINE) attachment; "was this record admitted by any timeline at all"
+   is per RECORD, so no arithmetic over the pair recovers it — one record admitted by N timelines pays for N-1
+   records admitted by none, and a shortfall of `delivered` below a host's own routed count therefore names a
+   loss when it fires and establishes nothing when it does not. `zero_delivery` is that question answered where
+   the fact lives: how many routed records NO timeline of this instance has admitted.
+   IT IS A GAUGE AND THE OTHER TWO ARE LIFETIME COUNTS, so it may FALL and they may not — a record still in
+   flight is indistinguishable here from a record that is lost, and only a receiver DRAINED to a stall makes
+   this number a loss rather than a backlog. A host that reads it says that it drained; a host that differences
+   two samples of it is doing arithmetic on nothing. The raise site states how it is keyed and what the one
+   named residual is.
+   ALL THREE OR NONE, for engine_routed_task_census's reason exactly: a delivery count with no refusal count
+   cannot tell "the frontier declined this" from "the frontier never saw it", and neither of them with no
+   zero-delivery count beside it can tell either of those from "no timeline of this document ever received it",
+   which is the one a page cannot distinguish from a message that was never sent. */
+void engine_routed_census(long *delivered, long *refused, long *zero_delivery);
 
 /* THE ORPHAN SURFACE'S CENSUS — how many drives of a function the page shipped and never called this session
  * SEEDED, and how many times a flow got as far as asking for one.

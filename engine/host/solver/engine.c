@@ -1798,11 +1798,31 @@ static int deliver_admits(JSContext *ctx, const Flow *f, const char *vec)
             if (rel == WORLD_REL_CONTRADICT) {
                 /* AND THE ARM THAT SHOULD TAKE IT EXISTS — asserted HERE because this is the one line that
                    knows the record is being refused, and a refusal with no arm is a peer's message that no
-                   timeline of this document ever receives. That arm was minted at the delivery of `c` itself,
-                   or at the delivery of an earlier world on the same branch when this timeline had already
-                   taken its side there (deliver_committed_at). Either way it exists exactly when `c` came
-                   through a BRANCH, so `c` naming a fork point is the necessary condition and the vector's own
-                   shape is the whole of the test.
+                   timeline of this document ever receives.
+                   THIS CONDITION IS SUFFICIENT NOW, AND IT WAS ONLY NECESSARY BEFORE — the change is not to
+                   the test, it is to the SECOND reason the arm could have been absent, which is gone. This
+                   paragraph used to read "that arm was minted at the delivery of `c` itself, OR at the
+                   delivery of an earlier world on the same branch when this timeline had already taken its
+                   side there (deliver_committed_at)", and that second clause was a whole population of
+                   refusals whose arm had never been minted at all: the suppression fired on a fact about this
+                   receiver's own commitments and left the branch uncovered, so the record was refused here
+                   with nothing anywhere to take it. deliver_commit_implied says what that cost and how it was
+                   measured. With the suppression retired there is exactly ONE reason an arm is not minted
+                   (`world_vec_fork_point` answering NULL) and exactly one reason a RECEIVED row is not pushed
+                   (the same predicate), so the arm and the row are minted together and this row's EXISTENCE
+                   is the arm's existence — for every `c` whose vector names an ancestor.
+                   AND THE ARM STILL HOLDS THIS RECORD, which is the other half of "an arm exists" and is what
+                   makes the assert about a delivery rather than about a flow. The arm inherited this flow's
+                   delivery queue at the instant `c` was consumed (flow_deliver_fork), and a queue is FIFO, so
+                   every record this flow consumes after `c` — this one included — is one the arm was handed
+                   or is handed by engine_route's attach-to-every-live-flow. It cannot have been dropped in
+                   between: flow.c's release asserts that no flow leaves the frontier holding a routed
+                   delivery unless its recipe was written to the cold tier.
+                   `strchr(c, ',')` IS `world_vec_fork_point(c) != NULL`, spelled side-effect-free because a
+                   DCHECK's condition must be (fork_point allocates): world_vector_write writes the comma only
+                   as the head/ancestry separator and world_parse splits on nothing else, so within the one
+                   grammar those two readers share, a comma is exactly "this vector names an ancestor" — the
+                   question fork_point answers by parsing.
                    A vector that names none is a ROOT world — a flow its instance created from the baseline —
                    and the sending document has two of those the moment the cold tier rebuilds one beside the
                    boot flow: park_flow_add passes WORLD_NONE, so a resumed timeline is a fresh root rather
@@ -1830,32 +1850,95 @@ static int deliver_admits(JSContext *ctx, const Flow *f, const char *vec)
     return admits;
 }
 
-/* HAS THIS TIMELINE ALREADY TAKEN A SIDE AT `fork_vec`? — the one thing that stops the fork below from minting
- * an arm that is no timeline at all.
+/* IS A COMMITMENT TO RECEIVING `vec` ALREADY IMPLIED BY THIS TIMELINE'S RECORD? — one predicate with two
+ * callers below, and they are two uses of ONE fact rather than two questions: the arm this delivery forecloses
+ * and the commitment it records are minted TOGETHER or not at all, so a single answer is what keeps them from
+ * disagreeing about whether this delivery is new to this timeline.
  *
- * A fork mints a child for EXACTLY TWO arms and retires the point it branched at, so a receiver that has
- * already committed at a branch has foreclosed the only other side there is; forking again there would produce
- * an arm that rejects both, which no sender was ever in. STRICT DESCENT is the test: a commitment BELOW the
- * fork point is a side taken at it, while a commitment ON it is the sender's own pre-branch world — received
- * by both arms, and by definition not a choice between them. */
-static int deliver_committed_at(JSContext *ctx, const Flow *f, const char *fork_vec)
+ * A world's ancestors are totally ordered, so a set of pairwise-comparable RECEIVED worlds is a chain, and a
+ * commitment this world is at-or-above refuses everything this world would refuse — which makes the row
+ * redundant and makes the arm ¬`vec` redundant with the arm minted for that deeper commitment, since ¬(deeper)
+ * forecloses a SUBTREE containing `vec`. FORECLOSED rows are not read here: they are the other side of a
+ * branch this timeline is not on, and being on the far side of some branch says nothing about whether this
+ * delivery is the first this timeline has had from `vec`.
+ *
+ * IT REPLACES `deliver_committed_at`, WHICH WAS A WRONG NARROWING AND COST 97% OF EVERY MESSAGE A FORKING PEER
+ * SENT. That predicate asked whether this timeline held ANY commitment strictly below the vector's nearest
+ * named ancestor, and refused to mint the arm if it did — on the premise, written at it, that "a fork mints a
+ * child for EXACTLY TWO arms and retires the point it branched at, so a receiver that has already committed at
+ * a branch has foreclosed the only other side there is". That premise is true of the sender's real world
+ * FOREST and false of the WIRE VECTOR, which is the only thing a receiver has: world_ancestry FILTERS the
+ * chain to worlds that have themselves crossed as a head (`if (!g_minted[w.serial - 1].sent) continue;`), so
+ * the nearest ancestor a vector names is not a fork point at all — it is the nearest ancestor that SENT, and
+ * every sending world below it names it, however many binary forks lie between. Twenty siblings naming one
+ * ancestor is the ordinary shape of a peer whose boot flow forks, not a corner.
+ * SO THE ARM WAS RETIRED ON AN OBSERVATION THAT FALSIFIED NOTHING. §CLAUDE's test for an arm-retirement is
+ * which observation falsified the premise of the arm being retired; the premise here is "the sender has a
+ * timeline that received neither of these", the observation was a fact about the RECEIVER's own commitments,
+ * and a fact merely CONSISTENT with an arm's premise is not evidence — so the retirement was the wrong pin one
+ * level up, and §Solver-half's rule that uncertainty KEEPS the arm decides it.
+ * MEASURED, at 22605dc4 and 332a0c50, one fixture, both frozen artifacts: 449 records routed to one receiving
+ * document over 429 distinct sending worlds, 193 admitted, 33485 refused — and the admitted count did not move
+ * when the record count moved 5.3x, because it is not a function of the traffic at all. Re-running
+ * deliver_admits / deliver_fork_arm / deliver_commit_taken over that exact routed world sequence reproduces it
+ * to the digit at five receiving timelines (delivered 195, refused 33410, flows 80 against a measured 80) and
+ * says what the number is: EXACTLY TWO worlds per named ancestor reach a timeline — the first by the flow that
+ * takes it and the second by the arm that flow minted — and the third onward reach none, cascading, since a
+ * world nobody admitted mints no arm for its own children. 13 of 429 sending worlds were admitted. The same
+ * simulation with this predicate in place admits 429 of 429, and admits them identically at both extremes of
+ * the schedule (every record pumped to a stall before the next, and every record attached before any is
+ * consumed), which is what says the loss was structural and not a starved timeline.
+ *
+ * NAMED RESIDUAL — THE ARM SET IS A SUPERSET OF THE SENDER'S TIMELINES, AND ITS SIZE IS THE COST OF THE
+ * VECTOR'S POVERTY RATHER THAN OF THIS PREDICATE.
+ *   WHAT IS NOT COVERED: with the nearest NAMED ancestor standing in for a fork point, k mutually-contradicting
+ *   worlds under one of them produce an ELIMINATION CHAIN of k+1 arms where the sender's real binary forest has
+ *   k leaves — so one of those arms received nothing at all and is a timeline no sender was in. It is minted
+ *   because nothing in the vector can rule it out, and §Solver-half's rule is that uncertainty keeps the arm:
+ *   the alternative that ruled it out is the one this predicate replaces, and it dropped 97% of the traffic.
+ *   WHAT THE NEXT DIFF BUILDS: a vector that names the fork point a receiver actually needs — which is NOT
+ *   "stop filtering". world.h gives the reason for the filter and it is a real one: unfiltered, the chain grows
+ *   with the number of BRANCHES a flow has taken rather than with its fork DEPTH, which is unbounded on any
+ *   page whose boot flow forks in a loop. What a receiver needs is narrower than the whole chain and wider than
+ *   the sent-only one: a retired fork point belongs in the vector exactly when its OTHER subtree has sent
+ *   something, because that is the pair a receiver has to be able to tell apart. With those named,
+ *   world_vec_fork_point answers about a real branch, "has this timeline already taken a side at it" becomes a
+ *   sound narrowing, and the chain collapses to the sender's own leaves.
+ *   HOW ITS ABSENCE WOULD SHOW: the receiving instance's live flow count tracking the PEER'S distinct sent
+ *   worlds rather than its own forking, and its refusal count growing as the product of the two — because
+ *   engine_route attaches every record to every live flow. On the fixture measured above, simulated: flows 80
+ *   -> 18945 and refusals 33485 -> ~4M for the same 449 records. That is the ceiling this makes visible, and
+ *   naming it here is what stops the next reader reading it as this predicate being wrong. */
+static int deliver_commit_implied(JSContext *ctx, const Flow *f, const char *vec)
 {
-    int n = flow_world_commits(f), i, committed = 0;
+    int n = flow_world_commits(f), i, implied = 0;
 
-    for (i = 0; !committed && i < n; i++) {
+    for (i = 0; !implied && i < n; i++) {
         JSValue e = flow_world_commit_at(f, i);
         JSValue cv = JS_GetPropertyUint32(ctx, e, 0);
+        JSValue tv = JS_GetPropertyUint32(ctx, e, 1);
         const char *c = JS_ToCString(ctx, cv);
+        WorldRel rel;
 
-        CHECK(c != NULL, "engine: OOM reading a receiving timeline's commitment while deciding whether it has "
-                         "already taken a side at a sender's branch");
-        if (world_vec_relate(fork_vec, c) == WORLD_REL_ANCESTOR) committed = 1;
+        CHECK(c != NULL, "engine: OOM reading a receiving timeline's commitment while deciding whether a "
+                         "routed delivery is the first this timeline has had from that sending world");
+        DCHECK(JS_VALUE_GET_TAG(tv) == JS_TAG_INT,
+               "a delivery-world commitment carried no small-integer RECEIVED/FORECLOSED flag — a FORECLOSED "
+               "row read as RECEIVED here would suppress the arm for a world this timeline has never heard "
+               "from, which is the message that then reaches no timeline at all");
+        rel = world_vec_relate(vec, c);
+        if (JS_VALUE_GET_INT(tv) && (rel == WORLD_REL_SAME || rel == WORLD_REL_ANCESTOR)) implied = 1;
         JS_FreeCString(ctx, c);
         JS_FreeValue(ctx, cv);
+        JS_FreeValue(ctx, tv);
         JS_FreeValue(ctx, e);
     }
-    return committed;
+    return implied;
 }
+
+/* THE PER-RECORD HALF OF THE DELIVERY CENSUS, declared here because the arrival is registered by
+   engine_route below and the ledger itself lives beside the two counters it cannot be derived from. */
+static void routed_rec_arrived(const char *record);
 
 /* THE INBOUND HALF OF THE ONE-WAY LINE — a record the trusted zone routed to THIS instance because it holds the
    document the record names. It is the exact text the sending instance emitted as a notice, plus the SENDER's
@@ -1992,6 +2075,10 @@ void engine_route(JSContext *ctx, const char *record, const char *sender_origin)
        Attached rather than delivered here: this runs between scheduler steps, so the flow the record belongs to
        is not the one switched in. Each flow makes its own delivery when it next steps, under its own delta,
        and the task that produces lands on its own queue — which is the whole reason the job queue is per-flow. */
+    /* REGISTERED BEFORE IT IS ATTACHED, so a record whose attach loop aborts is still on the ledger as one no
+       timeline admitted — the alternative counts it nowhere, which is the shape that reports a loss as a
+       clean run. */
+    routed_rec_arrived(record);
     n = flow_count();
     DCHECK(n > 0, "a message was routed to a document whose every timeline had already finished — a document "
                   "that can still receive is not done, so the receiving flows must stay live while a peer holds "
@@ -2195,8 +2282,17 @@ static void deliver_fork_arm(JSContext *ctx, Flow *f, const char *vec)
     Flow *sib;
 
     if (fork_point == NULL) return;                    /* a ROOT world: no branch, so no other side to be on */
-    if (deliver_committed_at(ctx, f, fork_point)) { free(fork_point); return; }   /* a side already taken */
     free(fork_point);
+    /* …AND THIS TIMELINE HAS NOT ALREADY MINTED IT. The arm for a given (flow, world) pair is minted at that
+       flow's FIRST delivery from that world, together with the commitment that records it — one predicate for
+       both, so the arm cannot exist without the row or the row without the arm, which is exactly what the
+       refusal in deliver_admits reads the row as proof of. A world whose commitment is IMPLIED by a deeper one
+       already on this timeline is covered by that one's arm, whose foreclosure is a SUBTREE containing this
+       world.
+       WHAT IS NOT ASKED HERE ANY MORE IS WHETHER THIS TIMELINE HAS TAKEN A SIDE AT THE VECTOR'S NEAREST NAMED
+       ANCESTOR — see deliver_commit_implied for why that question had no sound answer to give and for the
+       measurement of what it cost. */
+    if (deliver_commit_implied(ctx, f, vec)) return;
     DCHECK(f->frame == NULL,
            "a delivery-time fork was taken by a flow INSIDE a program — a delivery is made between programs "
            "(flow_step reaches it only with no frame), so a parent holding one means this ran somewhere else "
@@ -2227,24 +2323,12 @@ static void deliver_fork_arm(JSContext *ctx, Flow *f, const char *vec)
    be a mutation of an Array whose entries the arms of this flow share. */
 static void deliver_commit_taken(JSContext *ctx, Flow *f, const char *vec)
 {
-    int n = flow_world_commits(f), i, subsumed = 0;
-
-    for (i = 0; !subsumed && i < n; i++) {
-        JSValue e = flow_world_commit_at(f, i);
-        JSValue cv = JS_GetPropertyUint32(ctx, e, 0);
-        JSValue tv = JS_GetPropertyUint32(ctx, e, 1);
-        const char *c = JS_ToCString(ctx, cv);
-        WorldRel rel;
-
-        CHECK(c != NULL, "engine: OOM reading a receiving timeline's commitments while recording a new one");
-        rel = world_vec_relate(vec, c);
-        if (JS_VALUE_GET_INT(tv) && (rel == WORLD_REL_SAME || rel == WORLD_REL_ANCESTOR)) subsumed = 1;
-        JS_FreeCString(ctx, c);
-        JS_FreeValue(ctx, cv);
-        JS_FreeValue(ctx, tv);
-        JS_FreeValue(ctx, e);
-    }
-    if (!subsumed) flow_world_commit_push(ctx, f, vec, 1);
+    /* THE SAME PREDICATE THE ARM ABOVE IS MINTED ON, and that is the point of it having one name: this row and
+       that arm are the two halves of "this timeline has heard from `vec`", so a walk written twice could drift
+       into recording a commitment whose arm was never minted — which is precisely the state deliver_admits'
+       refusal reads this row as ruling out. The subsumption argument (a chain of comparable RECEIVED worlds,
+       the deepest deciding every test) is stated once, at the predicate. */
+    if (!deliver_commit_implied(ctx, f, vec)) flow_world_commit_push(ctx, f, vec, 1);
 }
 
 /* THE DELIVERY ITSELF, made by the receiving flow's own step — so it runs with that flow switched in, under its
@@ -2256,12 +2340,101 @@ static void deliver_commit_taken(JSContext *ctx, Flow *f, const char *vec)
    below that ARE those outcomes, so the pair cannot drift from the branch it describes. */
 static long g_routed_delivered, g_routed_refused;
 
-void engine_routed_census(long *delivered, long *refused) {
-    DCHECK(delivered != NULL && refused != NULL,
-           "the routed-delivery census was asked for one of its two numbers — a delivery count with no refusal "
-           "count beside it cannot say whether the rest of the frontier declined the record or never saw it, "
-           "which is the whole of what the pair is for");
+/* AND THE ONE FACT NEITHER OF THEM IS ABOUT: WAS *THIS RECORD* ADMITTED BY ANY TIMELINE AT ALL.
+ *
+ * BOTH COUNTERS ABOVE ARE PER (RECORD, TIMELINE) ATTACHMENT, AND THE QUESTION IS PER RECORD, so no arithmetic
+ * over them recovers it — one record admitted by N timelines pays for N-1 records admitted by none, and a host
+ * comparing its own routed count against `delivered` is reading a coverage figure with the wrong denominator.
+ * That is not a hypothetical reading: engine/route.mjs made exactly that comparison, three times, in three
+ * different shapes, and each one was a claim about the SCHEDULER rather than about a lost message. This is the
+ * number that makes it an equality against zero that no multiplicity can pay for and no schedule can move.
+ *
+ * IT IS A GAUGE AND NOT A LIFETIME COUNT, which is the one thing a reader must know before differencing it.
+ * It is "records this instance has been handed that NO timeline of it has admitted YET", so it RISES on every
+ * arrival and FALLS the moment some timeline admits one — a record in flight is indistinguishable here from a
+ * record that is lost, and only a DRAINED receiver makes the number a loss. A host that reads it must drain
+ * first and say that it did; a host that differences two samples of it is doing arithmetic on nothing. (Its
+ * two neighbours are lifetime counts and may be differenced. §CLAUDE: a gauge and a lifetime counter printed
+ * side by side under one key vocabulary will be summed, so the kind is stated where the number is emitted.)
+ *
+ * KEYED ON THE RECORD TEXT, AND THE ARGUMENT FOR THAT IS THAT IDENTICAL RECORDS SHARE A FATE. Two posts
+ * carrying the same op, the same target document, the same world vector and the same payload are the same
+ * bytes, and deliver_admits reads nothing else: a timeline that admits the first admits the second (its own
+ * commitment from the first relates SAME to the second, which is not CONTRADICT), and one that refuses the
+ * first refuses the second. So "how many timelines admitted this text" answers for every record carrying it,
+ * and the count below multiplies by how many times the text was routed. THE RESIDUAL, NAMED: this is exact
+ * while the flows that admitted a text are still live, and it UNDER-reports if every one of them left the
+ * frontier between two arrivals of that text — the second copy would then be lost while the ledger still says
+ * the text was admitted. What the next diff builds is the per-attachment ticket that would close it: an id
+ * minted per ROUTED RECORD, carried as a third element of the [record, senderOrigin] entry, refcounted at
+ * flow_deliver_fork and retired at the consume that takes the last one. It is not built here because it is a
+ * change to the delivery entry's shape in solver/flow.c, and its absence would show as this number reading
+ * zero on a run whose receiver finished a timeline between two identical posts.
+ *
+ * PROCESS-LIFETIME, LIKE `g_genforks` BESIDE IT: there is no engine teardown these statics are released in,
+ * and the table is one row per DISTINCT record text this instance was ever handed. */
+typedef struct { char *record; long routed, admitted; } RoutedRec;
+static RoutedRec *g_routed_recs; static int g_routed_recs_n, g_routed_recs_cap;
+
+static RoutedRec *routed_rec_find(const char *record) {
+    int i;
+    for (i = 0; i < g_routed_recs_n; i++)
+        if (!strcmp(g_routed_recs[i].record, record)) return &g_routed_recs[i];
+    return NULL;
+}
+
+/* A RECORD THIS INSTANCE WAS HANDED — raised at engine_route, once per record, BEFORE the attach loop, so a
+   record that aborts inside the loop is still counted as one nobody admitted rather than vanishing. */
+static void routed_rec_arrived(const char *record) {
+    RoutedRec *r = routed_rec_find(record);
+
+    if (r == NULL) {
+        if (g_routed_recs_n == g_routed_recs_cap) {
+            int cap = g_routed_recs_cap ? g_routed_recs_cap * 2 : 16;
+            RoutedRec *g = realloc(g_routed_recs, (size_t)cap * sizeof *g);
+            CHECK(g != NULL, "engine: OOM recording that a peer's message arrived — the ledger this feeds is "
+                             "the only statement that every routed record reached a timeline, so a record "
+                             "missing from it is a loss that reports as a clean run");
+            g_routed_recs = g; g_routed_recs_cap = cap;
+        }
+        r = &g_routed_recs[g_routed_recs_n++];
+        r->record = strdup(record);
+        CHECK(r->record != NULL, "engine: OOM naming a routed record in the delivery ledger");
+        r->routed = r->admitted = 0;
+    }
+    r->routed++;
+}
+
+/* …AND ONE A TIMELINE ADMITTED — raised at the delivery, beside `g_routed_delivered`, which is the one line
+   that knows a record became §9.3.3 step 8's task. */
+static void routed_rec_admitted(const char *record) {
+    RoutedRec *r = routed_rec_find(record);
+
+    DCHECK(r != NULL,
+           "a routed record was DELIVERED that this instance has no arrival for, so the ledger beside it "
+           "under-reports every loss by exactly the population this fired on. Three causes and they are "
+           "different repairs: the delivery queue was rebuilt from the COLD TIER without replaying the "
+           "arrival (build the inbound half of the cross-instance park, which engine_route names by DCHECK); "
+           "something pushes onto a delivery queue OUTSIDE engine_route, which is a second inbound path; or "
+           "the record did not survive its round trip through the queue's JS string, in which case this key "
+           "is the wrong key and the per-attachment ticket the ledger names as its residual is the repair "
+           "rather than a different comparison");
+    if (r != NULL) r->admitted++;
+}
+
+void engine_routed_census(long *delivered, long *refused, long *zero_delivery) {
+    int i;
+
+    DCHECK(delivered != NULL && refused != NULL && zero_delivery != NULL,
+           "the routed-delivery census was asked for some of its three numbers — a delivery count with no "
+           "refusal count beside it cannot say whether the rest of the frontier declined the record or never "
+           "saw it, and neither of them can say whether any ONE record reached a timeline, which is the only "
+           "form of the question a lost message has an answer to. ALL THREE OR NONE, for the reason "
+           "engine_routed_task_census gives for its four");
     *delivered = g_routed_delivered; *refused = g_routed_refused;
+    *zero_delivery = 0;
+    for (i = 0; i < g_routed_recs_n; i++)
+        if (g_routed_recs[i].admitted == 0) *zero_delivery += g_routed_recs[i].routed;
 }
 
 /* WHAT BECAME OF THE TASKS THOSE DELIVERIES QUEUED — see engine.h for why one number could not say. Counted
@@ -2443,6 +2616,10 @@ static void flow_deliver(JSContext *ctx, Flow *f)
            invocation, which is the only quantity a host may compare its own routed count's CONSEQUENCES
            against (engine.h). */
         g_routed_delivered++;
+        /* …AND THE RECORD IS MARKED AS ONE SOME TIMELINE OF THIS DOCUMENT HEARD, which is a different fact
+           from the count above it and the only one a lost message has an answer to. `record` here is the exact
+           text engine_route registered — the queue holds it whole and this function splits a COPY (`dup`). */
+        routed_rec_admitted(record);
     }
     free(dup);
     JS_FreeCString(ctx, record);
@@ -10177,6 +10354,40 @@ static int engine_sched_slice(void) {
                "one outcome that is a defect: find the queue it is standing on and why that flow was never "
                "picked");
         (void)sum;
+    }
+    /* …AND THE CONSERVATION LAW ONE LEVEL UP, WHICH IS ABOUT RECORDS AND NOT ABOUT TASKS. Everything above is
+       per (record, TIMELINE) attachment: the four asserts are each about one queue, and the inequality beside
+       them compares two counts of attachments. NONE of them can say whether some ONE record was admitted by no
+       timeline at all — one record admitted by N timelines pays for N-1 records admitted by none, so a
+       shortfall in any of those sums names a loss when it fires and establishes nothing when it does not.
+       THIS IS THE LINE THAT CAN, AND ONLY THIS LINE. `zero_delivery` is a GAUGE: while the frontier is live it
+       counts records still in flight as indistinguishable from records that are lost, and it FALLS as
+       timelines admit them. Three lines above, every live flow has been asserted to hold no pending delivery
+       and every finished flow asserted the same at flow_finish — so at THIS instant every attachment this
+       instance ever made has been consumed, the gauge cannot fall again, and its value is the number of
+       peers' messages this document never received. That is the one number a page cannot distinguish from a
+       message that was never sent, which is why it is asserted rather than reported: a count that names a loss
+       and lets the session close is the concealment §Offensive-programming forbids, not the measurement.
+       WHAT FIRES HERE IS A REFUSAL WITH NO ARM BEHIND IT, and deliver_admits asserts the CONTRADICT half of
+       that at the refusal itself, where the reader is standing at the decision. This is the FORECLOSED half's
+       only witness and the backstop for both: an arm that was minted and then never picked, a record attached
+       to a flow that left the frontier through a path flow_finish does not cover, or a refusal whose covering
+       timeline exists and refuses it for a second reason of its own. */
+    {
+        long d = 0, r = 0, zero = 0;
+
+        engine_routed_census(&d, &r, &zero);
+        DCHECK(zero == 0,
+               "the frontier was declared exhausted holding routed records that NO TIMELINE of this document "
+               "ever admitted — every attachment has been consumed (the walk above asserts no live flow holds "
+               "one and flow_finish asserts it of every flow that ended), so each of these was refused by "
+               "every timeline it was offered to and the peer's message is simply gone, which the page cannot "
+               "tell from a message that was never sent. Each refusal happened at deliver_admits: either a "
+               "RECEIVED world CONTRADICTS it and the arm that should take it was never minted, or a "
+               "FORECLOSED world covers it and the parent that took that world refused it for a reason of its "
+               "own. Find which by re-running the routed world vectors through deliver_admits — the answer is "
+               "a property of the vectors alone, not of the schedule");
+        (void)zero;
     }
     engine_session_close();
     return ENGINE_STEP_DONE;
