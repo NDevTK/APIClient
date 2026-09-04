@@ -3023,7 +3023,24 @@ function audit(argv, opts = {}) {
     files = walk(join(HERE, "host"));
     for (const extra of ["qjs/quickjs.c", "qjs/quickjs.h"]) {
       const p = join(HERE, extra);
+      /* AND AN ABSENT ONE IS ANNOUNCED, BECAUSE THIS GUARD SILENTLY DROPPED THE LARGEST BODY OF CITATIONS
+       * THIS GATE HAS. `engine/qjs` is a SUBMODULE, and a submodule is TRACKED BUT NOT POPULATED: a
+       * `git clone --shared` — which is the frozen-snapshot procedure CLAUDE.md prescribes for every
+       * instrument that reads this tree — leaves that directory EMPTY unless the snapshot's author copies it
+       * in. `existsSync` then answers false, the file is skipped, and the run prints a resolved-of-total that
+       * is a fraction of a population missing the file whose own comment above says it carries more
+       * ECMAScript citations than the whole of engine/host.
+       * MEASURED: a lane froze a snapshot exactly as prescribed, audited it, and reported the fork's
+       * §27.5.1.3 cluster as "outside the auditor entirely, before and after" — it was outside THAT RUN, and
+       * the reason was an empty directory rather than a policy. Nothing in the output said so.
+       * ABSENT AND ZERO ARE DIFFERENT FACTS. A skipped file is not a clean file, so it is named here rather
+       * than banded with the findings: a reader who sees no line assumes the default set was read, and this
+       * is the one line that can tell them the snapshot they measured is not the tree they think it is. */
       if (existsSync(p)) files.push(p);
+      else console.log(`[citegen] NOT READ — ${extra} is absent from this checkout, so every citation it ` +
+                       `carries is UNAUDITED and the totals below are a fraction of a population without ` +
+                       `it. engine/qjs is a submodule: a plain clone does not populate it. This is an ` +
+                       `ABSENCE, not a clean result.`);
     }
     /* AND THE TWO DOCUMENTS THE TREE DEFERS TO. CLAUDE.md states the rule this closes — a `.md` a C file cites
      * by name is CODE, because a claim about this tree travels by reference and nothing mechanical reports
