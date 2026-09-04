@@ -5618,16 +5618,35 @@ const cats = [
    offInterface.length],
   ["reads OFF the record a receiver anchors to, that an UNRELATED record in the corpus writes", offRecord.length],
   [`field names emitted through ${C_RAW} — ${C_KEY} is the only entry that may declare one`, rawKeys.length],
+].filter(([, n]) => n);
+/* TWO VERDICTS, BECAUSE "I FOUND A DEFECT" AND "I CANNOT SEE THIS CONSTRUCT" TAKE OPPOSITE WORK AND ONE EXIT
+   CODE CANNOT CARRY BOTH. Summing them is how a gate becomes furniture: red on every build, so the change that
+   is the signal never comes, so nobody opens the body — and the body is where the categories are. MEASURED, on
+   this gate: it reported FAILED on every build of an entire session, and when it was finally read, every
+   category naming an actual broken contract read ZERO and had read zero throughout. Its red was its own
+   BLINDNESS, and an instrument that cannot see something has not found anything.
+   THE EXIT CODE CARRIES THE FINDINGS, and the blind spots get their own line on EVERY run — including the clean
+   day, because a line that appears only on the bad day is one nobody learns to look for. Blindness is not
+   thereby forgiven: it is stated as UNAUDITED, which is what it is, rather than as a defect, which it is not. */
+const blind = [
   ["receivers whose record identity is AMBIGUOUS — unanswerable, so unaudited", ambiguous.length],
   ["constructs REFUSED — unreadable, so unaudited", refusals.length],
 ].filter(([, n]) => n);
+const blindN = ambiguous.length + refusals.length;
+for (const [k, n] of blind) log(`  ${String(n).padStart(5)}  ${k}`);
+log(`  ── UNAUDITED: ${blindN} construct(s) this scan cannot read. Zero is the armed state — each is a place a ` +
+    `field name could be hiding, and a scan that guessed past one would report a plausible answer. This is a ` +
+    `SEPARATE verdict from the findings below and the exit code does not carry it.`);
 if (!cats.length) {
-  log("  PASS — every record field a consumer names has a producer, every field a producer emits has a reader, " +
-      "no consumer defaults a producer's field, and every construct resolved.");
+  log("  PASS (findings) — every record field a consumer names has a producer, every field a producer emits has " +
+      "a reader, no consumer defaults a producer's field. Every construct this scan COULD read, it resolved.");
+  if (blindN) console.error(`[field-gate] PASS with ${blindN} UNAUDITED construct(s) — no finding in any ` +
+                            `category, and that verdict covers only what this scan can read.`);
   process.exit(0);
 }
 for (const [k, n] of cats) log(`  ${String(n).padStart(5)}  ${k}`);
-console.error(`[field-gate] FAILED — ${cats.length} category(ies) above. A read with no writer is a wrong number ` +
+console.error(`[field-gate] FAILED — ${cats.length} FINDING category(ies) above (${blindN} unaudited construct(s) ` +
+              `reported separately and not counted here). A read with no writer is a wrong number ` +
               `already being reported; a write with no reader is a measurement nobody sees; a defaulted read is ` +
               `what stops either from being a crash, and a CONVERTED one stops it from even looking empty. ` +
               `Fix at the ROOT, and WHOSE BYTES STATE THE VALUE decides which root: where this codebase ` +
