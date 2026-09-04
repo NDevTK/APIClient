@@ -2196,17 +2196,21 @@ static int idl_level_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *walk, IdlC
            types because the third world is decided one question earlier and by a different question. */
         if (mt != IDL_ANY && concolic_is(w->mv) && idl_concolic_rule(mt) != IDL_CONCOLIC_FORKS)
             mt = IDL_ANY;
-        /* AND THE ONLY FORK THIS LOOP PERFORMS IS §3.2.3's, ASSERTED WHERE THE UNCROSSING HAPPENS. The
-           §3.2.25 unions that also answer FORKS — the two `(dictionary or boolean)` rows and
-           `(DOMString or D)` — resolve their arm at an ARGUMENT position, where the value is a position's and
-           not a member's; a member declared one would fall past every arm below and be PLACED UNCONVERTED,
-           which is silent both ways it can go wrong (crossed, it is placed unconverted too). The condition
-           above is what makes this reachable at all, so the two are one statement. */
+        /* AND THE ONLY FORK THIS LOOP PERFORMS IS §3.2.3's, ASSERTED WHERE THE UNCROSSING HAPPENS. Every OTHER
+           type that answers FORKS resolves at an ARGUMENT position, where the value is a position's and not a
+           member's — the §3.2.25 unions (the two `(dictionary or boolean)` rows and `(DOMString or D)`) and
+           the §3.6 overload splits (the USVString one and the `sequence<object>` one, whose entries are
+           chosen between at an argument INDEX a member does not have at all). A member declared any of them
+           would fall past every arm below and be PLACED UNCONVERTED, which is silent both ways it can go
+           wrong (crossed, it is placed unconverted too). The condition above is what makes this reachable at
+           all, so the two are one statement. AND THE LIST IN THIS SENTENCE IS NOT WHAT THE ASSERT READS: it
+           asks idl_concolic_rule, so a row added to that function is a row this assert covers on the day it
+           lands, and the enumeration here is a reader's map rather than a second copy. */
         DCHECK(!concolic_is(w->mv) || idl_concolic_rule(mt) != IDL_CONCOLIC_FORKS ||
                mt == IDL_BOOLEAN || mt == IDL_BOOLEAN_NO_DEFAULT,
                "a dictionary member declared a type whose conversion FORKS over unknown external input, and "
-               "this member loop has an arm for exactly one of those — Web IDL §3.2.3 boolean. The §3.2.25 "
-               "unions that answer FORKS are resolved at an argument position by the conversion above, not "
+               "this member loop has an arm for exactly one of those — Web IDL §3.2.3 boolean. Every other "
+               "type that answers FORKS is resolved at an ARGUMENT position by the conversion above, not "
                "here, so a member declared one reaches no arm and is placed unconverted. Give the type its "
                "arm in this loop, beside the boolean's");
         /* §3.2.25 over `(DOMString or sequence<DOMString>)` ON A DICTIONARY MEMBER — the same union the
@@ -3869,7 +3873,91 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         if (t == IDL_SEQUENCE_OBJECT_OR_DICT) {
             DCHECK(m->dict_n > 0, "a member declared a `sequence<object>`-or-dictionary overload split with no "
                                   "dictionary members — the dictionary is half of what that type states");
-            if (JS_IsNull(a) || JS_IsUndefined(a)) {
+            /* AND OVER UNKNOWN EXTERNAL INPUT THE FEASIBLE SET IS THREE, NOT TWO — which is what separates this
+               row's fork from the two above it, where the value that is not the dictionary is a string the
+               union names and the chain therefore always has a clause left. Neither entry here declares a
+               string, numeric, boolean, bigint or `any` type at this position, so no clause between step
+               12.11's and the end of the chain names an entry and step 12.20's "Otherwise: throw a TypeError"
+               is a REAL WORLD the standard reaches: `port.postMessage(m, "x")` throws where the same call on a
+               Window names a target origin. IT IS THE WORLD A TWO-ARMED FORK WOULD SILENTLY DROP, because
+               unknown external input wears an ordinary Object in this engine and every test below is written
+               over that Object — so nothing here could ever reach the throw for a concolic, and the drop would
+               look exactly like a conversion that succeeded.
+               THE OUTCOMES ARE (0) THE DICTIONARY ENTRY, (1) THE `sequence<object>` ENTRY, (2) STEP 12.20'S
+               TypeError. Outcome 0 is the dictionary per step_fork_run's rule that outcome 0 is what a run
+               with no forking policy takes: `JS_IsArray` of a crossed concolic is false, so every body of this
+               shape already read one as an options bag, and a no-policy run answers exactly as it did.
+               `real` is §3.6 step 12 run on the operand's own EXAMPLE, which this machine can compute because
+               an example is a value this engine COMPUTED by running the real operators on real operands: an
+               example that is null takes step 12.3's dictionary clause exactly as a real null does, and every
+               other example is a primitive that no clause between 12.4 and 12.19 names, so it reaches step
+               12.20. The SEQUENCE world is therefore never what an example names — a materialized sequence
+               needs an Object and an example is a primitive — which is a fact about examples and not a reason
+               to drop the arm: both siblings still run and neither is marked forced.
+               IT IS ASKED ONLY WHILE NO WALK IS IN FLIGHT, for the reason the two forks above give: the ask
+               RELEASES this machine's outstanding request answer, so re-asking it on a RESUME would destroy
+               the answer a parked member read is waiting for. */
+            if (concolic_is(a) && s->dw.started) {
+                /* A WALK IN FLIGHT IS OUTCOME 0 AND THE ONLY THING THAT PARKS HERE, so the arm is re-derived
+                   rather than re-asked. The two forks above leave this to the tests that follow them, which
+                   answer IDL_DICT for a concolic; the tests below do NOT — a concolic falls past both of them
+                   into the arm resolver, which would read `%Symbol.iterator%` off the page's own unknown on
+                   every resume. */
+                t = IDL_DICT;
+            } else if (concolic_is(a)) {
+                JSValue ex = concolic_example(ctx, a);
+                int arm = 0, real;
+
+                DCHECK(idl_concolic_rule(t) == IDL_CONCOLIC_FORKS,
+                       "this conversion forked §3.6's surviving overload entry for a type idl_args.h does not "
+                       "declare as one it forks — the SITE and the rule are the two halves of one statement, "
+                       "and a type that loses its FORKS rule while this ask stands would fork an entry the "
+                       "pass-through above had already crossed the value at");
+                DCHECK(!JS_IsObject(ex),
+                       "a `(sequence<object>, dictionary)` overload split's unknown carries an OBJECT as its "
+                       "concrete example — an example is the value this engine COMPUTED, so it is a "
+                       "primitive, and §3.6 step 12 over an object one would name an entry from a value no "
+                       "run ever produced");
+                real = JS_IsUndefined(ex) ? JS_OUTCOME_REAL_UNSTATED : (JS_IsNull(ex) ? 0 : 2);
+                JS_FreeValue(ctx, ex);
+                /* `cb_result` is this machine's outstanding answer and step_fork_run takes no `in` to hand it
+                   to, so it is released HERE — the sibling's snapshot is taken at this return and nothing of
+                   the caller's may be live across it. */
+                JS_FreeValue(ctx, cb_result);
+                cb_result = JS_UNDEFINED;
+                r = step_fork_run(ctx, &s->hdr, a, "§3.6 (sequence, dictionary) overload entry", 3, real,
+                                  &arm);
+                if (r) return r;
+                if (arm == 2) {
+                    /* STEP 12.20 ITSELF, and it is the page's own TypeError rather than an assert: the
+                       standard reaches this for a real string too, so nothing about this engine's logic is
+                       wrong when a flow stands here. */
+                    JS_ThrowTypeError(ctx, "argument %d is neither a sequence nor a dictionary", s->i + 1);
+                    return JS_STEP_ABRUPT;
+                }
+                if (arm == 1) {
+                    /* THE SEQUENCE WORLD, AND WHAT IT COSTS. §3.2.21 Sequences — sequence<T> step 2 is "Let
+                       method be ? GetMethod(V, %Symbol.iterator%)", which over an unknown is another unknown,
+                       and §3.2.21.1 Creating a sequence from an iterable repeats to an unknown length — so
+                       there is no arm set the spec writes down and the honest statement is that the
+                       conversion has no answer over unknown input yet. Rewriting `t` to IDL_SEQUENCE_OBJECT
+                       would run the protocol over the page's own unknown, which is the array-like walk this
+                       machine exists to replace, over a value that is not even an array.
+                       THE OTHER TWO WORLDS DO NOT DEPEND ON IT, which is why the arm is asked rather than
+                       dropped: outcome 0 and outcome 2 are complete, and this crash names the one capability
+                       that is not. */
+                    DFAIL("§3.6 step 12.10 selected the `sequence<object>` entry for UNKNOWN EXTERNAL INPUT "
+                          "and Web IDL §3.2.21 Sequences — sequence<T> has no answer over one: its step 2 "
+                          "GetMethod is another unknown and §3.2.21.1 Creating a sequence from an iterable "
+                          "repeats to an unknown length. Build §3.2.21 over unknown input AT THIS "
+                          "CONVERSION — the element cursor already parks, so what is missing is what the "
+                          "protocol answers when the ITERABLE is unknown. Until it exists this world is the "
+                          "page's TypeError, which is what a release build answers");
+                    JS_ThrowTypeError(ctx, "a sequence cannot yet be built from unknown external input");
+                    return JS_STEP_ABRUPT;
+                }
+                t = IDL_DICT;
+            } else if (JS_IsNull(a) || JS_IsUndefined(a)) {
                 /* Step 12's FIRST clause ("V is undefined, and there is an entry whose list of optionality
                    values has 'optional' at index i") and its SECOND ("V is null or undefined, and there is an
                    entry that has … a dictionary type") both name the dictionary entry here, so the two land

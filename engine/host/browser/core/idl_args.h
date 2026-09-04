@@ -323,7 +323,11 @@ typedef enum {
        string clause. `postMessage(m, 123)` is therefore the target origin "123", which is a SyntaxError, and
        not an options dictionary with no members.
        The string arm is a USVString (§3.2.12's scalar value conversion), which is what §7.2.2's IDL writes and
-       what every other member of the URL surface takes. The dictionary is named beside the member. */
+       what every other member of the URL surface takes. The dictionary is named beside the member.
+       AND AT THE ARITY WHERE BOTH ENTRIES STAND, THE SURVIVING ENTRY IS FORKED FOR UNKNOWN EXTERNAL INPUT —
+       see idl_concolic_rule, which is where the reason lives, and idl_args.c's resolution site, which is where
+       the fork is asked. At the LONGER arity there is nothing to fork: steps 3-4 rewrote this position to the
+       USVString before any rule was consulted. */
     IDL_USVSTRING_OR_DICT,
     /* THE SAME §3.6 LENGTH-DIFFERING SPLIT WHERE THE LONGER ENTRY'S TYPE AT THIS POSITION IS A NUMBER — and
        where, unlike the row above, THE TWO ENTRIES NEVER COEXIST AT ONE ARITY, so no value is ever looked at.
@@ -377,7 +381,11 @@ typedef enum {
            THROWS where `window.postMessage(m, "x")` names a target origin. That asymmetry is the whole reason
            this is its own row: an implementation that reuses the string-arm union here invents a transfer list
            out of a value the standard refuses.
-       The dictionary is named beside the member, as it is for every row of this shape. */
+       The dictionary is named beside the member, as it is for every row of this shape.
+       AND FOR UNKNOWN EXTERNAL INPUT ALL THREE OF THOSE OUTCOMES ARE FORKED — the two entries AND step 12.20's
+       TypeError, which is the world a two-armed fork would drop because a concolic wears an ordinary Object
+       and every test at the resolution site is written over that Object. See idl_concolic_rule for the reason
+       and idl_args.c's resolution site for the ask. */
     IDL_SEQUENCE_OBJECT_OR_DICT,
     /* A DICTIONARY. Web IDL converts one by READING each declared member IN ORDER and converting each by ITS
        OWN type — so a dictionary is that member list plus this very machine, not a second kind of thing. A read
@@ -708,6 +716,18 @@ static inline IdlConcolicRule idl_concolic_rule(IdlArgType t)
        policy takes — it is the entry step 12.11 gives the Object an unknown is represented BY, so a no-policy
        run answers exactly as it did and the USVString world is the one the fork ADDS. */
     case IDL_USVSTRING_OR_DICT:
+    /* THE §3.6 SPLIT WHOSE TWO ENTRIES ARE THE SAME LENGTH, so step 4 removes neither at any arity and the
+       whole decision is step 12's clause chain reading the value. It is the row above's answer over a THIRD
+       feasible world: neither entry declares a string, numeric, boolean, bigint or `any` type at the split
+       position, so no clause between step 12.11's dictionary and the end of the chain names an entry and step
+       12.20's "Otherwise: throw a TypeError" is a world the standard reaches — `port.postMessage(m, "x")`
+       throws where the same call on a Window names a target origin.
+       THE THROW IS THE WORLD A TWO-ARMED FORK DROPS SILENTLY, because unknown external input wears an ordinary
+       Object in this engine and every test at the resolution site is written over that Object. Its outcomes are
+       (0) the dictionary entry, (1) the `sequence<object>` entry, (2) step 12.20's TypeError — see the site,
+       which is where the ask is, and which is what makes the sequence world's own §3.2.21-over-unknown gap a
+       named crash rather than an arm nobody chose. */
+    case IDL_SEQUENCE_OBJECT_OR_DICT:
     /* Web IDL §3.2.3 boolean — the type whose CONVERSION is the fork, where the two rows above are unions
        whose ARM is. ECMAScript §7.1.2 ToBoolean ( arg )'s last step is "Return true" and a concolic wears an
        ordinary Object, so a crossing

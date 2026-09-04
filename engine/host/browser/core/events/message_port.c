@@ -488,35 +488,6 @@ static JSValue js_port_post(JSContext *ctx, JSValueConst this_val, int argc, JSV
     (void)magic;
     if (!d)
         return JS_ThrowTypeError(ctx, "not a MessagePort");
-    /* UNKNOWN EXTERNAL INPUT CROSSES A DECLARED POSITION AS ITSELF, which means §3.6 chose NO overload for it
-       and there is no arm to read back. What every earlier version of this body did instead was fall to the
-       dictionary arm and read `transfer` off the attacker's own value, which manufactures a plausible datum
-       out of a measurement nobody made. js_window_post names a missing mechanism at its own §3.6 split, and
-       the two are NOT the same one: that member's entries differ in LENGTH, so its shorter call is the only
-       arity where the arm is in question, while both entries here are two long and step 4 removes neither at
-       any arity this member can be called at. Which is why this is one crash and that is two.
-       AND THE FEASIBLE SET HERE IS THREE, NOT TWO — the count matters, because a fork built to the shape
-       stated below is a fork that will be built with the arms it names. */
-    if (concolic_is(second))
-        DFAIL("MessagePort.postMessage was given a CONCOLIC second argument. Web IDL §3.6 Overload resolution "
-              "algorithm step 4 removes neither entry here — both type lists are two long — so the whole "
-              "decision is step 12's clause chain reading the VALUE, and over an unknown THREE of its clauses "
-              "stay feasible, not two: step 12.10 takes the `sequence<object>` entry for an Object whose "
-              "`Let method be ? GetMethod(V, %Symbol.iterator%)` is not undefined, step 12.11 takes "
-              "`StructuredSerializeOptions` for any other Object, and step 12.20's `Otherwise: throw a "
-              "TypeError` is where an unknown standing for a string or a number lands — `port.postMessage(m, "
-              "\"x\")` throws where the same call on a Window names a target origin. THE THROW ARM IS THE ONE "
-              "A TWO-ARMED FORK WOULD SILENTLY DROP, because unknown external input wears an ordinary Object "
-              "in this engine and the TypeError branch at the resolution site is guarded by !JS_IsObject, so "
-              "nothing there can ever reach it for a concolic. THE FORK BELONGS AT THE CONVERSION AND NOT IN "
-              "THIS BODY: the arm decides which conversion RUNS — §3.2.21 Sequences' iterator protocol against "
-              "§3.2.17 Dictionary types' member walk — so by the time this body holds a value the choice has "
-              "already been made and only its consequences are left. IDL_SEQUENCE_OBJECT_OR_DICT must answer "
-              "idl_concolic_rule IDL_CONCOLIC_FORKS and fork over those three outcomes at its own resolution "
-              "site, with the dictionary as outcome 0 (a run with no forking policy then answers exactly as "
-              "it does now). The sequence arm will then meet the §3.2.21-over-unknown gap this body's OTHER "
-              "DFAIL names — that is what the sequence world costs, and it is not a reason to leave the arm "
-              "undecided, because the dictionary and throw worlds do not depend on it");
     /* §9.4.4 STEP 1 of `postMessage`: targetPort is the port this one is entangled with, TAKEN NOW. */
     target = JS_DupValue(ctx, d->entangled);
 
@@ -529,7 +500,22 @@ static JSValue js_port_post(JSContext *ctx, JSValueConst this_val, int argc, JSV
        is one of exactly two ENGINE-BUILT values: §3.2.21's materialized Array, or the converted
        StructuredSerializeOptions. Asking which is reading an arm off a value this engine made.
        IT IS MATERIALIZED ONCE for the reason it always was: the three questions below and §2.7.7's two loops
-       are five walks of one list, and a page-supplied one can answer each of them differently. */
+       are five walks of one list, and a page-supplied one can answer each of them differently.
+       AND UNKNOWN EXTERNAL INPUT DOES NOT CROSS THIS POSITION, WHICH IS WHY THERE IS NO THIRD STATE TO READ
+       BACK AND NO CRASH HERE SAYING SO. Step 4 removes neither entry, so the whole decision is step 12's
+       clause chain reading the VALUE, and over an unknown THREE of its clauses stay feasible: step 12.10
+       takes the `sequence<object>` entry for an Object whose `Let method be ? GetMethod(V,
+       %Symbol.iterator%)` is not undefined, step 12.11 takes `StructuredSerializeOptions` for any other
+       Object, and step 12.20's "Otherwise: throw a TypeError" is where an unknown standing for a string or a
+       number lands — `port.postMessage(m, "x")` throws where the same call on a Window names a target origin.
+       IDL_SEQUENCE_OBJECT_OR_DICT answers idl_concolic_rule IDL_CONCOLIC_FORKS and forks over exactly those
+       three at its own resolution site (core/idl_args.c), with the dictionary as outcome 0 — so a run with no
+       forking policy reaches this body holding what it always did, the TypeError world is the page's own
+       throw, and the sequence world crashes AT THE CONVERSION naming §3.2.21 over unknown input. None of the
+       three delivers a concolic here.
+       THE MEMBER ROAD BELOW IS A DIFFERENT QUESTION AND IS STILL OPEN:
+       `port.postMessage(m, {transfer: location.hash})` is a real Object whose unknown is one member inside
+       it. */
     DCHECK(JS_IsObject(second),
            "postMessage's second argument reached the body as neither a materialized sequence nor a "
            "dictionary — IDL_SEQUENCE_OBJECT_OR_DICT resolves to exactly those two, and an OMITTED one is the "
