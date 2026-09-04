@@ -9,6 +9,8 @@
 #include "quickjs.h"
 #include "solver/attr_shadow.h"   /* the per-flow named-slot map [[CryptographicNonce]] lives in */
 #include "solver/dom_cow.h"       /* and the write that captures it into the running flow's delta */
+/* DOM §4.9 Interface Element's own key — the (null, `nonce`) attribute these steps are defined over. */
+#include "core/dom/attr_list.h"
 #include "core/dom/node.h"
 #include "core/dom/element.h"
 #include "core/idl_args.h"
@@ -34,17 +36,73 @@ static bool includes_mixin(const lxb_dom_node_t *n)
     return n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT && n->ns == LXB_NS_HTML;
 }
 
-/* THE SLOT, READ. "Unless otherwise specified, the slot's value is the empty string" — so an element nothing
-   has written answers with those zero bytes rather than with a hole a caller has to interpret. OWNED.
-   A CONCOLIC COMES BACK AS ITSELF, which is the whole reason the slot holds a JSValue: `s.nonce =
-   location.hash.slice(1)` is a source stashed in element state, and §@S has to see it at the `<script>` the
-   flow then injects, not a stringified copy of its example. */
+/* THE SLOT, READ — AND THE CONTENT ATTRIBUTE WHERE NOTHING HAS WRITTEN ONE, WHICH IS NOT A DEFAULT THIS FILE
+ * INVENTED BUT THE VALUE §2.5.6'S OWN STEPS PUT THERE IN A BROWSER.
+ *
+ * OWNED. A CONCOLIC COMES BACK AS ITSELF, which is the whole reason the slot holds a JSValue: `s.nonce =
+ * location.hash.slice(1)` is a source stashed in element state, and §@S has to see it at the `<script>` the
+ * flow then injects, not a stringified copy of its example. The attribute arm carries the same triple, out of
+ * §@S's (element, name) shadow, for the same reason.
+ *
+ * AN ABSENT ENTRY IS THE POSITIVE STATEMENT "NOTHING HAS OVERRIDDEN THE ATTRIBUTE YET", and it used to answer
+ * the empty string instead — which is the standard's sentence for an element that never had a nonce ("Unless
+ * otherwise specified, the slot's value is the empty string") read as though it were the sentence for an
+ * element whose markup plainly carries one. For that element the standard HAS specified otherwise, one
+ * algorithm away: DOM §4.9 "Interface Element"'s append an attribute step 4 is "Handle attribute changes for
+ * attribute with element, null, and attribute's value", whose own step 3 is "Run the attribute change steps
+ * with element, attribute's local name, oldValue, newValue, and attribute's namespace" — and HTML §13.2.6.1
+ * "Creating and inserting nodes"' create an element for a token step 11 is "Append each attribute in the given
+ * token to element." So in a browser `<script nonce=abc>` reaches step 4 of the attribute change steps below
+ * before the element is ever inserted, and the slot holds `abc`.
+ *
+ * IT REACHES NEITHER IN THIS ENGINE, AND THAT IS A FACT ABOUT THE PARSER RATHER THAN ABOUT THIS COMPONENT.
+ * HTML tree construction writes its attributes through Lexbor's own primitives, which reach that document's
+ * `lxb_dom_document_attr_mutation_cb_t` and never solver/dom_cow.h's mutation chokepoint — so
+ * core/dom/element.c's element_attr_changed, where the steps below are registered beside every other
+ * standard's, does not fire for one single attribute the parser sets. Every component that needs §4.9's steps
+ * on the parsed tree has answered that for itself, and the two answers are not equally good: six of them run a
+ * hand-written post-parse walk of their own, and a component added without one gets nothing with nothing to
+ * say so. THIS is the other answer, and it is the one core/html/html_option.h already argues for `selected` —
+ * the read consults the attribute, so the value is right for EVERY road at once (the parser's, HTML §13.4's
+ * fragment parse, HTML §8.4.3 document.write()'s write, a clone) instead of for the list of roads somebody
+ * remembered.
+ *
+ * AND IT STAYS RIGHT ONCE §2.5.6'S HIDING STEP EXISTS, which is the one algorithm that deliberately makes the
+ * slot and the attribute disagree. Its steps are "Let nonce be element's [[CryptographicNonce]]", "Set an
+ * attribute value for element using "nonce" and the empty string", and "Set element's [[CryptographicNonce]]
+ * to nonce", under the note "If element's [[CryptographicNonce]] were not restored it would be the empty
+ * string at this point." That restore is a WRITE, so after the hiding step the entry is PRESENT and this
+ * function returns before it can read the blanked attribute. The note is the standard saying why: the blanking
+ * runs the change steps, which is exactly the road that makes the entry present.
+ *
+ * READ AT DOM §4.9 Interface Element'S OWN KEY — (namespace, local name) — AND NEVER AT A QUALIFIED NAME.
+ * What forces that is HTML §2.5.6 Nonce attributes' own step 2, "If localName is not nonce or namespace is not
+ * null, then return": an attribute a page made with `setAttributeNS(ns, "nonce", v)` is one these steps refuse,
+ * so it must not be read here either — and `getAttribute`, which resolves a QUALIFIED name, matches exactly
+ * that attribute. §2.5.6's step 1 is asked for the same reason: an element outside HTMLOrSVGOrMathMLElement has
+ * no slot for those steps to write, so its `nonce` content attribute is an ordinary attribute and not a nonce. */
 static JSValue nonce_get_slot(JSContext *ctx, lxb_dom_element_t *el)
 {
     int i = attr_shadow_find(el, ATTR_SLOT_PROPERTY, NULL, NONCE_SLOT);
+    lxb_dom_attr_t *a;
+    JSValue taint;
+    const lxb_char_t *v;
+    size_t vl = 0;
 
-    if (i < 0) return JS_NewStringLen(ctx, "", 0);
-    return JS_DupValue(ctx, attr_shadow_opaque(i));
+    if (i >= 0) return JS_DupValue(ctx, attr_shadow_opaque(i));
+    if (!includes_mixin(lxb_dom_interface_node(el))) return JS_NewStringLen(ctx, "", 0);
+    a = dom_attr_get_ns(el, NULL, "nonce");
+    /* NOW the standard's own sentence applies, and it is the only place it does: an element with no
+       null-namespace `nonce` attribute and nothing written into the slot is an element nothing has specified
+       otherwise for. */
+    if (a == NULL) return JS_NewStringLen(ctx, "", 0);
+    taint = dom_cow_attr_taint_ns(el, NULL, "nonce");   /* BORROWED */
+    if (!JS_IsUndefined(taint)) return JS_DupValue(ctx, taint);
+    v = lxb_dom_attr_value(a, &vl);
+    /* DOM §4.9 Interface Element: an attribute's value is a string, and `<script nonce>` with no `=` has the
+       EMPTY one rather than none — which is what step 4 of the steps below would have copied, and is not
+       step 3's null. */
+    return JS_NewStringLen(ctx, v ? (const char *)v : "", v ? vl : 0);
 }
 
 /* THE SLOT, WRITTEN — through the COW write, so a nonce one arm of a fork assigned is that arm's alone and its
@@ -107,8 +165,9 @@ JSValue nonce_attribute_current(JSContext *ctx, lxb_dom_element_t *el)
     DCHECK(el != NULL, "§2.5.6's [[CryptographicNonce]] was read off no element — a slot is an element's, and "
                        "a caller with no element has no nonce to ask about rather than an empty one");
     /* An element outside the mixin has no slot to hold one, so it reads back as the same empty string §2.5.6
-       gives an element nothing has written — the absent-entry default in nonce_get_slot, reached by the same
-       road and not by a branch of its own. */
+       gives an element nothing has written. That is nonce_get_slot's own step 1 test and not a second one
+       here: the mixin decides whether a `nonce` content attribute is a nonce at all, so the question has to be
+       asked wherever the attribute is read, which is there. */
     return nonce_get_slot(ctx, el);
 }
 

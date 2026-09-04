@@ -47,14 +47,23 @@ void nonce_attribute_free(void);
    [[CryptographicNonce]] to the empty string. Otherwise, set element's [[CryptographicNonce]] to value."
    Registered on core/dom/element.c's element_attr_changed beside html_script_attr_changed, and there rather
    than in the member's own setter for the reason every one of its neighbours is: a content attribute has more
-   than one spelling (`setAttribute('nonce', n)`, `attributes.nonce.value = n`, the parser's own write) and an
-   IDL setter answers for exactly one of them — and here for NONE of them, because §2.5.6's setter deliberately
-   does not touch the attribute at all. These steps are the ONLY road from the markup to the slot. */
+   than one spelling (`setAttribute('nonce', n)`, `attributes.nonce.value = n`) and an IDL setter answers for
+   exactly one of them — and here for NONE of them, because §2.5.6's setter deliberately does not touch the
+   attribute at all.
+   THEY ARE NOT THE ROAD FROM THE MARKUP, AND THIS SENTENCE USED TO SAY THEY WERE THE ONLY ONE. It listed "the
+   parser's own write" among the spellings that reach here, and no parsed attribute has ever reached here:
+   HTML tree construction writes through Lexbor's own primitives, which reach a document's
+   `lxb_dom_document_attr_mutation_cb_t` and never solver/dom_cow.h's mutation chokepoint, so element_attr_changed
+   does not fire for one attribute the parser sets. The claim was load-bearing in the worst way — it is why the
+   gap was invisible, since a reader checking whether markup reached the slot found a file saying it did. The
+   markup's value is answered at the READ instead (nonce_attribute.c's nonce_get_slot states the whole
+   argument), which is right for every road at once rather than for the ones a walk remembers; these steps stay
+   because they are what a WRITE runs, and because §2.5.6's hiding step is defined in terms of them. */
 void nonce_attribute_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local);
 
 /* §2.5.6's CLONING STEPS — "The cloning steps for elements that include HTMLOrSVGOrMathMLElement given node,
    copy, and subtree are to set copy's [[CryptographicNonce]] to node's [[CryptographicNonce]]." Run from DOM
-   §4.4 clone a node's step 3, beside html_script_cloned, which is where every node of a clone passes.
+   DOM §4.4 clone a node's step 3, beside html_script_cloned, which is where every node of a clone passes.
    THEY ARE NOT REDUNDANT WITH THE ATTRIBUTE COPY. A clone copies the content attribute, so the change steps
    above would give the copy the ATTRIBUTE's bytes — and the whole point of §2.5.6 is that those two stop
    agreeing: after the hiding step the attribute is the empty string while the slot holds the nonce, and after
