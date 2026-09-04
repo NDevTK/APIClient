@@ -177,6 +177,40 @@ long concolic_source_reads(void);
 void concolic_slots_only_begin(void);
 void concolic_slots_only_end(void);
 
+/* THE PREDICATE AN ENUMERATION OF AN UNKNOWN KEY SET FORKS ON — one question, one speller, asked by the
+ * CONSUMER because this class's own internal method cannot ask it and cannot answer it either.
+ *
+ * WHY THE FORK IS NOT AT [[OwnPropertyKeys]], WHICH IS A FACT ABOUT THE RETURN TYPE AND NOT A GAP IN THIS
+ * FILE. ECMAScript §10.1.11 [[OwnPropertyKeys]] ( ) "takes no arguments and returns a normal completion
+ * containing a List of property keys", and §6.1.7 The Object Type says what may be in that List: "A property
+ * key is either a String or a Symbol." §6.1.7.3 Invariants of the Essential Internal Methods states the same
+ * thing as a requirement on this method's own answer — "Each element of the returned List must be a property
+ * key". A member whose NAME is unknown is therefore not expressible in the returned List AT ALL, in any
+ * arrangement of it. So the arm "the record holds a member" has no representation at the internal method, and
+ * an implementation that tried to build the fork there would have nothing to hand back on the arm it forked
+ * for. Where an unknown name IS expressible is at the CONSUMERS, because there a key is a VALUE: §14.7.5.9
+ * EnumerateObjectProperties ( obj ) yields one key per iteration and §14.7.5.10.2.1
+ * %ForInIteratorPrototype%.next ( ) is where that key becomes a value, and §20.1.2.19 Object.keys ( obj ) hands
+ * back an Array whose elements are ordinary values.
+ *
+ * THE TWO ARMS, AND WHY NEITHER OF THEM IS A DEFAULT. Arm 0 is the world in which the record holds no own
+ * member this run can name — the empty List, which is a real world (the payload was `{}`) and is the world a
+ * program branching on `Object.keys(x).length === 0` needs to have run. Arm 1 is the world in which it holds
+ * one, whose name is unknown and whose VALUE the consumer mints. The empty List is a wrong answer only when it
+ * is stated as a FACT; as an arm this flow decided and recorded, it is the honest half of a fork.
+ *
+ * SO THE CONSUMER ASKS AND THIS CLASS READS THE ANSWER BACK, over ONE key. Returns a predicate value to hand
+ * to the seam that has a resume point — a step machine's `step_tobool_run` (quickjs-step.h), which is the
+ * BRANCH seam and therefore keys by this value's own identity, which is the key `decide_value_arm` reads back
+ * here; never the OUTCOME seam, which keys by (operand, operation, completion) and would file the same
+ * question under a second name. JS_UNINITIALIZED when this enumeration has no question in it — an ordinary
+ * object, or a record whose EXAMPLE holds the answer, whose own key set is an observation and not an unknown.
+ * It carries no
+ * `src` and no `root` for concolic_new_conj's reason exactly: it is a boolean this engine COMPUTED and it pins
+ * nothing. It carries no EXAMPLE either, which is the same positive statement — nothing this run observed says
+ * which arm is real, so both are explored and neither is marked forced. */
+JSValue concolic_own_keys_pred(JSContext *ctx, JSValueConst record);
+
 /* THE ONE SEAM a browser component hands a computed value through to become an attacker SOURCE. Returns
    `computed` unchanged where no source overlay is installed, and a concolic carrying it as the EXAMPLE where
    one is. `computed` is consumed either way. */

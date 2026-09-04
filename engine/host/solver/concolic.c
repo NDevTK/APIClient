@@ -3,6 +3,7 @@
 #include "solver/concolic.h"
 #include "solver/absent.h"
 #include "solver/flow.h"
+#include "solver/decide.h"    /* the ONE speller of a constraint key — see concolic_exotic_own_names' read */
 #include "solver/solve.h"     /* …and the SEARCH is told a substitution happened — see concolic_deliver */
 #include "solver/reclaim.h"   /* the engine's own allocations ask for a flow back before they fail */
 #include "check.h"
@@ -3539,6 +3540,40 @@ static int concolic_exotic_get_own(JSContext *ctx, JSPropertyDescriptor *desc, J
     return 1;
 }
 
+/* THE ENUMERATION'S QUESTION, MINTED ONCE — see concolic.h for what it is and why the fork cannot live at the
+   internal method below. The identity is the record's own, under §10.1.11's name, so two consumers asking
+   about ONE record ask ONE question and a flow's record of it decides that question and no neighbour's. A
+   record this engine cannot spell composes no identity, which is the same positive statement `ident` makes
+   everywhere else — no key, nothing decided from it — and the internal method says so at its own site rather
+   than being handed a predicate that silently answers -1 forever. */
+static JSValue own_keys_pred(JSContext *ctx, const Concolic *c)
+{
+    const char *f[1];
+    char *ident;
+
+    f[0] = c->ident;
+    ident = concolic_ident_compose("[[OwnPropertyKeys]]", f, 1);
+    if (!ident)
+        return JS_UNINITIALIZED;
+    /* NOT a source read (concolic_alloc, never concolic_derived): this is a boolean about the record, so an @S
+       candidate substituted into it would answer a question with a payload. */
+    return concolic_alloc(ctx, "{cmp}", NULL, NULL, ident, JS_UNDEFINED);
+}
+
+JSValue concolic_own_keys_pred(JSContext *ctx, JSValueConst record)
+{
+    Concolic *c = g_concolic_class ? JS_GetOpaque(record, g_concolic_class) : NULL;
+
+    /* THE ONE ANSWER, REACHED TWO WAYS, AND IT IS ONE FACT: this enumeration has no question in it. An
+       ordinary object's key set is its shape; a record whose EXAMPLE is present has the example's, which is an
+       OBSERVATION about the payload this visitor was served and is answered by the internal method below. Only
+       an example-free record has an unknown key set, and the condition here is written the same way the method
+       below writes it so the asker and the reader cannot disagree about which records carry the question. */
+    if (!c || !JS_IsUndefined(c->example))
+        return JS_UNINITIALIZED;
+    return own_keys_pred(ctx, c);
+}
+
 /* §10.1.11 [[OwnPropertyKeys]] ( ) over the record. quickjs MERGES what this returns with the object's
    ordinary keys and dedups neither, so the two lists must be DISJOINT — §6.1.7.3 Invariants of the Essential
    Internal Methods states "The returned List must not contain any duplicate entries". That is maintained by
@@ -3555,16 +3590,56 @@ static int concolic_exotic_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint
     if (!c)
         return 0;
     if (JS_IsUndefined(c->example)) {
-        /* NO EXAMPLE IS NOT AN EMPTY RECORD, and answering the empty List makes them one. An empty example is
-           the positive statement "the payload this visitor was served holds no members"; no example at all is
-           unknown input, whose key set is unknown — and the empty List says the first about the second, which
-           is the defaulted-read defect one layer out: `Object.keys(x).length === 0` is then DECIDED for a
-           program branching on a record the run never saw. §Attacker-sources already names what belongs here —
-           "Iterating an opaque collection FORKS unbounded (each iteration a parkable flow)" — and an
-           enumeration of an unknown key set is that fork with no observed key to seed it from. Build it. */
-        DFAIL("an unknown with NO EXAMPLE was asked to enumerate itself — the empty List would state that the "
-              "record holds nothing, which is a fact this run never observed; build the forking enumeration of "
-              "an unknown key set");
+        /* NO EXAMPLE IS NOT AN EMPTY RECORD, and answering the empty List AS A FACT makes them one. An empty
+           example is the positive statement "the payload this visitor was served holds no members"; no example
+           at all is unknown input, whose key set is unknown — and the empty List says the first about the
+           second, which is the defaulted-read defect one layer out: `Object.keys(x).length === 0` is then
+           DECIDED for a program branching on a record the run never saw.
+           SO IT IS ANSWERED AS AN ARM AND NEVER AS A FACT, and the arm is the FLOW'S OWN. The question is
+           concolic.h's `concolic_own_keys_pred`, asked by the CONSUMER — which is where it can be asked,
+           because a fork needs a resume point and this internal method is reached from inside a C activation
+           that has none — and this is where the recorded answer is read back. CONCRETIZE ON THE DECISION, the
+           same rule a browser component's C read follows where the page's own `if` over the same unknown is a
+           fork: take the arm this flow committed to rather than answering with something the sibling arm
+           contradicts.
+           THE READ HANDS OVER THE VALUE AND NEVER REBUILDS THE KEY. solver/decide.h states why at
+           decide_value_arm: the constraint key's FORMAT lives in one file, and a component that spelled its
+           own would file this question under a second name that no consumer's fork could ever answer. */
+        JSValue pred = own_keys_pred(ctx, c);
+        int arm = decide_value_arm(pred);
+
+        JS_FreeValue(ctx, pred);
+        if (arm == 0)
+            return 0;   /* THIS FLOW'S decided world: the record holds no own member this run can name. */
+        if (arm == 1) {
+            /* §6.1.7.3 Invariants of the Essential Internal Methods: "Each element of the returned List must
+               be a property key", and §6.1.7 The Object Type: "A property key is either a String or a Symbol."
+               The flow has decided the record holds a member whose NAME this run never observed, and there is
+               no arrangement of the returned List that carries one — so the consumer that asked the question
+               must answer this arm ITSELF, in a vocabulary where a key is a VALUE, and must not then come back
+               here for a List it cannot be given. */
+            DFAIL("an unknown record's enumeration reached §10.1.11 [[OwnPropertyKeys]] ( ) on the arm where "
+                  "the record HOLDS an own member — that member's name is unknown, and §6.1.7.3 Invariants of "
+                  "the Essential Internal Methods requires every element of the returned List to be a property "
+                  "key, which §6.1.7 The Object Type defines as a String or a Symbol. The consumer that forked "
+                  "on concolic_own_keys_pred must answer this arm in the two places a key IS a value: the "
+                  "per-iteration key §14.7.5.9 EnumerateObjectProperties ( obj ) yields, which §14.7.5.10.2.1 "
+                  "%ForInIteratorPrototype%.next ( ) hands back, and the Array §20.1.2.19 Object.keys ( obj ) "
+                  "builds. It must not then ask this internal method for a List that cannot hold one");
+        } else {
+            /* -1 is "this flow has not been asked", which is a fact about the CONSUMER and not about the
+               record: whichever spelling reached this internal method did so without first forking on the
+               record's key set, so there is no arm to answer with and the empty List would be the fabricated
+               fact again. It also covers a record with no identity to key the question by, which is the same
+               unbuilt consumer one step earlier — the ask must not be reachable for a record this engine
+               cannot spell. */
+            DFAIL("an unknown with NO EXAMPLE was asked to enumerate itself and its enumeration had not been "
+                  "FORKED — the empty List would state that the record holds nothing, which is a fact this run "
+                  "never observed. §Attacker-sources' \"Iterating an opaque collection FORKS unbounded (each "
+                  "iteration a parkable flow)\" is what belongs here, and it belongs at the CONSUMER: ask "
+                  "concolic_own_keys_pred over the record and fork on it before requesting "
+                  "§10.1.11 [[OwnPropertyKeys]] ( ), so that this line answers the arm the flow decided");
+        }
         return 0;
     }
     if (JS_IsString(c->example)) {
