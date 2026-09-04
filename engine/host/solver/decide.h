@@ -184,6 +184,13 @@ int  decide_cursor(void);
    another flow's `b[x]`, and concolic.c prices that in one line beside the field itself: "Absence costs
    forks; a wrong identity costs the arm." So the reporting address exists and the replay slot stays absent, which is the honest pair rather
    than a compromise between them.
+   AND "STAYS ABSENT" IS A CHECKED FACT AND NOT A DESCRIPTION, WHICH IT HAD TO BECOME BECAUSE IT WAS FALSE.
+   These two sentences said a branch in this population claims no replay slot; decide.c's fork recorded one
+   anyway, under the hash's REFUSAL value, and every such slot therefore agreed with every other — so the
+   replay over exactly this population was positional, a diverged resume consumed another branch's arm, and
+   the replay ledger below scored that as a HIT. The contract was right and the code was not, and the contract
+   is what stopped anyone looking. dec_append asserts it now: a slot may not carry the refusal, so a fork with
+   no spellable question records nothing and hands its sibling the arm as a one-shot on the blob instead.
    READING IT: these rows are floors on their own admitted table, with their own overflow row and their own
    bound, because Space-Saving's guarantee is about the table that did the evicting and one number over two
    tables would answer each table's question with the other's fact. A large site row is a statement about which
@@ -261,6 +268,14 @@ long  decide_fork_total(void);
  * every one of them published `resumed`/`resumedSegs`/`resumedFlows`/`resumedCands` IDENTICAL to a session that
  * replayed every arm. Those four say what the DOCUMENT HELD; these three say what the REPLAY DID WITH IT.
  *
+ * SCOPE: every slot a replay consumes carries a question a later run can re-ask — decide.c's dec_append
+ * refuses dec_key_hash's refusal value, and a branch with no spellable question records no slot at all — so
+ * `hits` is a count over ONE population and the claim above holds of all of it. It used to hold of the spelled
+ * slots only: an unspellable branch recorded a slot under the refusal, every such slot agreed with every
+ * other, and a diverged replay consuming one was counted HERE as agreement while `left` reported nothing. A
+ * reader quoting these three against a resume was quoting a number whose blind spot was the size of the
+ * `_forkAt` census's SITE rows. That is what the scope sentence is for: it is the one property of this ledger
+ * that cannot be checked off the emitted numbers.
  * KIND: all three are LIFETIME COUNTS over the SESSION, released with it (decide_free), monotone within one,
  * and therefore differenceable between two samples of ONE session — unlike the `stepUnits` GAUGE beside them
  * in the same census, which states who is standing in an arm at the instant it is taken.
