@@ -35,6 +35,7 @@
 #include "core/events/message_event.h"
 #include "core/url/origin.h"
 #include "core/events/broadcast_channel.h"
+#include "solver/concolic.h"   /* an unknown NAME denotes its SHAPE — see concolic_name_cstr */
 #include "solver/cow.h"
 
 /* THE NAME IS AN ATOM, WHICH IS THE IDENTITY §9.5 MATCHES ON. It was a JSValue string compared by POINTER,
@@ -275,13 +276,20 @@ static JSValue js_chan_close(JSContext *ctx, JSValueConst this_val, int argc, JS
 typedef struct { uint8_t unused; } JSBcCtorState;
 static void js_bc_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
 
-/* WHERE THIS MACHINE RESTS. §9.5's constructor is three steps — the name, the origin and adding the channel
-   to the registry — and none of them reaches the page's code, because the declaration converted the name
-   before the body ran. One stage, never returned to. */
+/* WHERE THIS MACHINE RESTS. §9.5's constructor is TWO steps — "Set this's channel name to name" and "Set
+   this's closed flag to false" — and neither reaches the page's code, because the declaration converted the
+   name before the body ran. One stage, never returned to.
+   IT SAID THREE, AND THE THIRD NAMED AN ORIGIN THIS RECORD HAS NEVER HELD. §9.5's object "has a channel name
+   and a closed flag" and nothing else; the origin is read at POST time — postMessage step 4, "Let sourceOrigin
+   be this's relevant settings object's origin" — which is where this file reads it. Appending to the registry
+   is likewise not a constructor step: it materializes postMessage step 6's "list of BroadcastChannel objects"
+   and step 8's creation-order sort, which is the reason the list is appended to and never reordered. A
+   citation naming steps its section does not have is the failure CLAUDE.md §Browser half rates worse than
+   none — it reads as authoritative and sends the next reader looking for an origin field to maintain. */
 #define BC_CTOR_STAGES(X) \
     X(BC_CTOR_BUILD = IDL_STEP_FIRST, \
-      "HTML §9.5 new BroadcastChannel(name) steps 1-3 (this's channel name and origin, then this is added to " \
-      "the list of BroadcastChannel objects — creation order IS delivery order)")
+      "HTML §9.5 new BroadcastChannel(name) steps 1-2 (this's channel name, then its closed flag; the " \
+      "registry append serves postMessage steps 6 and 8, where creation order IS delivery order)")
 enum { BC_CTOR_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const BC_CTOR_STEPS[] = { BC_CTOR_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -311,20 +319,44 @@ static int js_bc_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
     if (JS_IsException(obj)) return -1;
     c = calloc(1, sizeof *c);
     CHECK(c != NULL, "broadcast channel: OOM building a BroadcastChannel");
-    /* THE DECLARATION ALREADY CONVERTED IT, and this asserts that rather than trusting it. §9.5 declares
-       `constructor(DOMString name)`, so the args machine ran §3.2's ToString — as a FLOW, which is the only
-       place a page's `toString` may run — and what arrives here is a string however the page spelled it.
-       Reaching for the characters from a C activation instead runs that `toString` from C, which the
-       interpreter refuses: it surfaced as JS_ToPrimitiveFree aborting a popup test, three frames below this
-       line, with nothing naming the contract that had been broken. A claim in a comment is not a check. */
-    DCHECK(JS_IsString(argv[0]),
-           "BroadcastChannel's name reached its body unconverted — §9.5 declares it DOMString and the args "
-           "machine converts a declared member's arguments before the body runs, so an object here means "
-           "this member's declaration is not the one that was invoked");
-    /* INTERNED STRAIGHT FROM THE CONVERTED STRING — no C string in between, which is also what keeps a name
-       containing a NUL or a lone surrogate the name the page gave rather than a truncation of it. */
     c->realm = ctx;   /* §9.5's relevant realm, taken where the channel is constructed */
-    c->name = JS_ValueToAtom(ctx, argv[0]);
+    /* STEP 1, "Set this's channel name to name" — AND AN UNKNOWN NAME IS A KEY QUESTION, NEVER A COERCION.
+       `DOMString` is core/idl_args.h's idl_concolic_rule DEFAULT, IDL_CONCOLIC_CROSSES, so unknown external
+       input reaches this body still wearing the Object solver/concolic.c gives it, on purpose. The assert that
+       stood here was `JS_IsString(argv[0])` and it ABORTED THE WHOLE DOCUMENT on
+       `new BroadcastChannel(cfg.name)`: a DCHECK may only ever stand on a value THIS codebase computed, and
+       asserting on a stranger's bytes hands a remote party an abort switch for the trusted zone.
+       NOR IS THE REPAIR A `|| concolic_is(argv[0])` DISJUNCT, which is what the sibling sites of this defect
+       were each given one at a time. Here it would be actively worse than the crash: it lets the unknown
+       through to JS_ValueToAtom, whose ToString runs the page's own `toString` FROM A C ACTIVATION — which the
+       interpreter refuses, and which surfaced as JS_ToPrimitiveFree aborting a popup test three frames below
+       this line, with nothing naming the contract that had been broken. The disjunct only moves the abort out
+       of reach of its own explanation. A disjunct is right where the body needs the value's KIND and something
+       downstream owns its bytes; it is a lie where the body needs the BYTES, and this body does.
+       SO THE UNKNOWN DENOTES ITS SHAPE — concolic_name_cstr, which is what every member needing the TEXT of a
+       name already asks, and which is the RIGHT answer here and not merely a tolerable one. §9.5's entire use
+       of the name is the destination filter's "Their channel name is this's channel name" (postMessage step 6),
+       which is the atom EQUALITY js_chan_post performs below; a shape is a real string, stable per source, so
+       two channels opened over ONE unknown share a bus and two over different unknowns never collide — the
+       identity semantics §9.5 needs, arrived at without inventing a byte. NOTHING FORKS: §9.5's two
+       constructor steps hold no throw and no branch on the name, so a fork here would manufacture worlds the
+       standard does not distinguish.
+       THE KNOWN ARM STILL INTERNS STRAIGHT FROM THE CONVERTED STRING — no C string in between, which is what
+       keeps a name carrying a NUL or a lone surrogate the name the page gave rather than a truncation of it. A
+       shape carries neither, so the unknown arm can afford the C string the known arm cannot. */
+    if (concolic_is(argv[0])) {
+        const char *shape = concolic_name_cstr(ctx, argv[0]);
+        if (!shape) { free(c); JS_FreeValue(ctx, obj); return -1; }
+        c->name = JS_NewAtom(ctx, shape);
+        JS_FreeCString(ctx, shape);
+    } else {
+        DCHECK(JS_IsString(argv[0]),
+               "BroadcastChannel's name reached its body as neither a string nor unknown external input — "
+               "§9.5 declares it `DOMString`, so core/idl_args.h's declaration for this member converts every "
+               "other value a page can write before the body runs; a third shape means this member was "
+               "installed from a mint that never ran that declaration");
+        c->name = JS_ValueToAtom(ctx, argv[0]);
+    }
     if (c->name == JS_ATOM_NULL) { free(c); JS_FreeValue(ctx, obj); return -1; }
     JS_SetOpaque(obj, c);
     /* CREATION ORDER is the delivery order §9.5 states, so the registry is appended to and never reordered. */
