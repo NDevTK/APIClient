@@ -335,6 +335,10 @@ static int64_t flow_own_silence(const Flow *f) {
    ordering itself is stated once, further down beside the terms it is made of. */
 static double flow_queue_weight(const Flow *f);
 
+/* …AND THE REWARD ALONE, forward-declared because the clock's writer samples THAT and not the queue weight —
+   see frontier_vt_serve for why the server's own aging may not enter the coordinate a newcomer arrives at. */
+static double acct_family_val(const Flow *f);
+
 /* …AND THE ONE STATEMENT THAT SAYS THE ORDER MOVED, forward-declared because the clock's writer below raises
    it and the raise is defined with the registry it belongs to. */
 static void frontier_rank_changed(void);
@@ -395,6 +399,18 @@ static double frontier_vt(void) {
 /* …AND THE ONE WRITER OF IT. `f` is the item whose tag the clock is now a reading of: the flow just dispatched,
    or the flow in service whose own tag an emission has just raised. Called with the flow ALREADY installed as
    `g_running`, so the coordinate it reads is the one every other member is about to be compared against. */
+/* DOES THE CLOCK STILL LEAD EVERY ACCOUNT — the definition of `g_vt` asked as a question, for the assertion in
+   the writer below. Walked over the MEMBERS because an account is reached through its arms, exactly as the
+   census counts families; a family reached twice answers the same value twice, so no marking is needed for a
+   maximum. Mentioned only inside a DCHECK condition, so release neither calls it nor emits it — the shape
+   flow_is_min_weight already establishes in this file. */
+static int acct_vt_leads(void) {
+    int i;
+    for (i = 0; i < g_flows_n; i++)
+        if (g_flows[i]->family && acct_family_val(g_flows[i]) > g_vt) return 0;
+    return 1;
+}
+
 static void frontier_vt_serve(const Flow *f) {
     double v;
     DCHECK(f != NULL && f->family != NULL,
@@ -405,39 +421,57 @@ static void frontier_vt_serve(const Flow *f) {
            "the frontier's clock was asked to follow an account that is still reading the clock — the two "
            "would define each other, so this is a dispatch that installed a flow without stamping its account "
            "first (see flow_set_running, which does both in one operation and in that order)");
-    v = flow_queue_weight(f);
+    /* THE REWARD AND NOT THE QUEUE WEIGHT, WHICH IS THE WHOLE OF WHAT THIS SAMPLE IS. It read
+       flow_queue_weight, and that carries the server's own AGING — negative, and grown by the whole FAMILY's
+       thread time — so the coordinate every newcomer arrived at was the leader's earnings MINUS the leader's
+       debt. That is not a statement anybody can act on: a newcomer owes nothing (FlowAcct's `placed`: "a
+       member that has been given nothing owes nothing"), so charging it for the leader's silence is the
+       unforgivable-debt shape this file already removed from the arrival door in the aging term, arriving
+       through the clock instead. MEASURED: with the dispatch write gone, the monotonicity assert that stood
+       here fired on the emission caller alone, which leaves the aging as the only term in the sample that can
+       fall. The coordinate a newcomer arrives at is a statement about what the frontier has EARNED. */
+    v = acct_family_val(f);
     v = v > 0.0 ? v : 0.0;      /* the clock's origin: no member has ever entered below the busy period's start */
-    /* AND IT IS A TIME, SO IT MAY NOT RUN BACKWARDS — the one property that makes this a CLOCK rather than a
-       sample of whoever was last served, and the property FlowAcct's `placed` is written about: "a member the
-       order has never reached does not fall behind the clock". An unplaced account's REWARD is this value read
-       live (acct_family_val), so a dip lowers the whole unplaced tail at once — a deficit no member of it
-       incurred, repayable only by the dispatch it forecloses, which is the same shape `emit_gen` removed from
-       the aging term arriving through the arrival door instead, and §scheduler's razor calls it STARVES.
-       IT IS AN ASSERT AND NOT A CLAMP, and the arithmetic says how it can be violated rather than leaving that
-       to be discovered. The value sampled is `base + earned + queue_nonreward`, and the last term is the AGING:
-       negative, and grown by the whole FAMILY's thread time. One finding is worth 1.0 and one quantum of family
-       silence costs FLOW_AGE_QUANTUM, so an emission arriving after more than `1 / FLOW_AGE_QUANTUM` quanta of
-       family burn samples a coordinate BELOW the previous one. An `if (v > g_vt)` here would be a `?:` past a
-       broken invariant hiding exactly the stretch in which the frontier's clock stopped tracking production.
-       NAMED RESIDUAL. Not covered: the aging entering the clock at all. What the next diff builds, IF THIS
-       FIRES: a serve that samples `acct_family_val(f)` rather than `flow_queue_weight(f)` — the coordinate a
-       newcomer arrives at is a statement about what the frontier has EARNED, and the server's own debt is not
-       part of it — which then has to be reconciled with flow_arrive_at_virtual_time's equality, since that
-       equality is written over the queue weight and both sides would have to name the same half. How its
-       absence would show: `vt` and `valMin` on one @WFQ line falling across consecutive censuses while
-       `valMax` rises, with every ordering assertion in this file silent. */
-    DCHECK(v >= g_vt,
-           "the frontier's virtual time ran BACKWARDS — an unplaced account's reward is this value read live, "
-           "so every member the order has never reached has just fallen behind by a debt none of them incurred "
-           "and only a dispatch could repay, which is precisely the starvation the arrival door exists to "
-           "prevent; the clock is sampling the server's own AGING as well as what the frontier has earned");
-    g_vt = v;
+    /* AND IT IS THE MAXIMUM OVER ACCOUNTS, TAKEN INCREMENTALLY — WHICH IS SFQ'S OWN `max(v(t), F)` COMPUTED
+       ONCE HERE RATHER THAN AT EVERY ARRIVAL, AND IT IS NOT THE CLAMP THIS FUNCTION REFUSED ONE DIFF AGO.
+       The difference is what the quantity DOES. `flow_queue_weight` genuinely falls — the aging is a real
+       decrease of a real quantity — so a maximum over IT would have discarded a measurement, which is a `?:`
+       past a broken invariant and was refused as one. `acct_family_val` is `base + earned` with `base` frozen
+       at placement and `earned` a ledger nothing decreases, so NO ACCOUNT'S COORDINATE EVER FALLS. A lower
+       sample here is therefore never a decrease of anything; it is a DIFFERENT, lesser account emitting, and
+       the maximum is the only reading that answers the question the clock is asked — where does the FRONT of
+       the order stand — rather than the question of who emitted last.
+       AND THE INCREMENTAL FORM IS EXACT, NOT AN APPROXIMATION, which is what makes it a definition. Every
+       increase of any account's `acct_family_val` passes through one of exactly three sites and this covers
+       all three: an EMISSION (`earned += v`, which calls this function); a PLACEMENT (flow_set_running writes
+       `base = frontier_vt()` and asserts `earned == 0`, so the value equals `g_vt` and cannot exceed it); and
+       a cold-tier RESTORE (flow_restore_reward writes a parked coordinate that CAN lead, which is why it now
+       calls this function too). An UNPLACED account reads `frontier_vt() + earned` with `earned == 0` forced
+       by acct_family_val's own assertion, so it stands exactly at `g_vt`. There is no fourth writer, and the
+       assertion below is what makes that a checked claim rather than this paragraph. */
+    if (v > g_vt) g_vt = v;
+    /* THE DEFINITION, ASSERTED — `g_vt` IS THE MAXIMUM COORDINATE ANY ACCOUNT STANDS AT. This replaces the
+       monotonicity assert that stood here, and it is strictly stronger: a clock that only never decreases can
+       still sit BELOW the leading account, at which point a newcomer arrives underneath a member it has every
+       right to tie, `valMin` pins at a coordinate the frontier has left behind, and nothing says so. What it
+       catches is a FOURTH writer of a reward — the one thing the paragraph above claims does not exist — and
+       that is exactly the edit this is here for, because such a writer is invisible in every other row: the
+       account leads the order, the clock does not know, and the two disagree silently for the rest of the
+       session. O(members) and DEV-ONLY, in the shape flow_is_min_weight establishes in this file, and paid
+       once per EMISSION rather than per pick — a finding is not a hot path, and the pick beside it already
+       walks the frontier. */
+    DCHECK(acct_vt_leads(), "an account stands at a reward ABOVE the frontier's clock — the clock is the "
+           "coordinate every newcomer and every unplaced account is ranked at, so a leader the clock does not "
+           "know about means arrivals are entering BELOW a member they are entitled to tie, permanently and "
+           "with no row saying so. A reward was written by a site that did not serve the clock");
     /* AND MOVING THE CLOCK IS A RANK CHANGE, RAISED AT THE WRITER AND NOT AT THE CALLER. This value is a term
        of every unplaced account's weight, so a write to it re-ranks all of them at once; the preempt hook's
        rival cache is correct only if every such move arrives through the frontier generation, which is what
        engine.c means by "the eligible set the hook ranks against is the same one the pick used". Raised HERE
        so a second caller cannot be added without it — which is exactly how the dispatch caller came to move
-       this clock silently, and the whole of the defect this file just removed. */
+       this clock silently, and the whole of the defect this file removed one diff ago. It is raised on every
+       call and not only where the maximum moved: a caller reaching this function has just written a reward,
+       and an account's own coordinate changing re-ranks that account whether or not it took the lead. */
     frontier_rank_changed();
 }
 
@@ -525,6 +559,20 @@ void flow_restore_reward(Flow *f, double val) {
        the arrival copy left, one session removed. */
     f->family->base   = val;
     f->family->placed = 1;
+    /* …AND THE CLOCK LEARNS ABOUT IT, WHICH IS THE THIRD AND LAST WRITER OF A REWARD. §Time-travel has "a
+       high-value flow suspended last week resumes ahead of a low-value fresh one today", and a coordinate that
+       leads the frontier is precisely one the frontier's clock has to know: `g_vt` is what every UNPLACED
+       account and every newcomer is ranked at, so a restored leader the clock did not learn about leaves
+       arrivals entering BELOW a member they are entitled to tie — for the rest of the session, with `valMin`
+       pinned at a coordinate the frontier has left behind and no row saying so. That is the arrival-copy
+       defect one session removed, and it is the SAME signature the residual above describes for the other
+       half of this entry.
+       IT IS ALSO WHAT MAKES frontier_vt_serve's INCREMENTAL MAXIMUM EXACT rather than approximate: that
+       function's claim is that every increase of any account's `acct_family_val` passes through it, and this
+       line is one of the three sites the claim enumerates. Without it the assertion there fires, which is the
+       correct outcome and the reason the two landed together. The serve also raises the frontier generation,
+       which a rebuild owes for its own sake: a member coming back at a tag of its own has changed the order. */
+    frontier_vt_serve(f);
 }
 
 /* THE RANKING CHANGED, SO THE RUNNING FLOW'S CLAIM ON THE THREAD MAY HAVE. §scheduler's VALUE YIELD fires "the
