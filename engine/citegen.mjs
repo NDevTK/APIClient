@@ -2106,7 +2106,41 @@ function precedingProse(src, spans, at) {
  *     candidate reading confirms it, so no reading can be accused;
  *   — a list reached through a <ul> or a <dl> is admitted as sub-steps of the enclosing <li>.
  * Each widens what EXISTS, so each can only remove a finding. */
-const STEP_NO = "[1-9][0-9]*(?:\\.[1-9][0-9]*)*";
+/* A COMPONENT OF A STEP PATH IS NOT ALWAYS A NUMBER, AND THIS PATTERN SAID IT WAS. Digits and dots only means
+ * `step 2.i` MATCHES ON ITS NUMERIC PREFIX and is then checked as `step 2` — so a lettered sub-step citation
+ * was validated against the TOP-LEVEL count and reported clean whatever it named. Measured on the compiled
+ * pattern: `step 2.i` captured `2`, `step 2.z` captured `2`, `step 13.a.iv` captured `13`. `step 2.z` of a
+ * section whose step 2 holds thirteen sub-items passed, and so did every letter after `m`. That is the
+ * SILENTLY-PERMISSIVE direction CLAUDE.md rates worse than no checker at all: the tool did not report that it
+ * could not read the number, it reported that the citation was fine.
+ *
+ * WHICH GLYPH A STANDARD PRINTS IS THE STANDARD’S DECISION AND NOTHING HERE HOLDS A TABLE OF IT. ECMAScript’s
+ * emu-alg stylesheet cycles decimal / lower-alpha / lower-roman by depth — and SHIFTS that cycle with its
+ * `nested-once`…`nested-lots` classes — so §27.5.1.3’s step 2 prints its thirteen sub-items `a`…`m`; the
+ * WHATWG standards override no list-style at all, so every depth prints decimal and their sub-steps are cited
+ * `2.3.2`; a CSSWG draft writes `type="i"` on the one list it wants roman. The step corpus records ITEM
+ * POSITIONS and never markers, so nothing committed here can say which convention a given section renders
+ * under — and a per-standard table of it would be the hand-kept second copy §AN-AUDITOR-DERIVES-THE-RULE-IT-
+ * CHECKS-FROM-THE-CODE-THAT-OWNS-IT refuses, derived from one spec and applied to all.
+ *
+ * SO THE GLYPH IS READ AND THE CONVENTION IS NOT. A component names a POSITION, and a written component
+ * admits every position its own spelling can denote: a digit run denotes one, `z` denotes the 26th under the
+ * alphabetic reading and nothing under the roman one, and `i` denotes the 9th OR the 1st because it is a
+ * letter and a numeral both. Every admitted reading is carried and a path fails only where NO reading of it
+ * reaches an item — the same over-approximation the paragraph above builds the rest of this check out of, so
+ * it too can only remove a finding. The two populations that buys are COUNTED AND PRINTED rather than passed
+ * off as verified: a path whose readings DISAGREE is NOT DECIDED (`letterSplit`), and a component whose
+ * spelling denotes no position under either reading is UNCHECKED (`unreadable`).
+ *
+ * THE LEADING COMPONENT STAYS NUMERIC, which is a decision about ENGLISH and not about any standard: `steps?
+ * \s+` followed by a bare letter matches `step a`, `step or`, `step is`, and the population that would enter
+ * this channel is prose rather than citations. Every citation form this tree writes numbers its top level.
+ * A LETTER ARM ALSO MAY NOT BE FOLLOWED BY A WORD CHARACTER, or the alternation truncates exactly as the old
+ * pattern did: without it `xiii` matches the two-letter arm as `xi` and leaves `ii` behind — the same silent
+ * prefix read, one alternative down. The numeric arm carries no such lookahead, so a numeric path is matched
+ * byte-identically to before. */
+const STEP_COMP = "(?:[1-9][0-9]*|(?:[ivxlcdm]{3,8}|[a-z]{1,2})(?![0-9a-z]))";
+const STEP_NO = `[1-9][0-9]*(?:\\.${STEP_COMP})*`;
 /* A STEP IS WRITTEN `step N` AND A SECTION IS WRITTEN `§N` — the convention CLAUDE.md fixes and the one the
  * bare-number reader already leans on from the other side, where a number the word `step` introduces is
  * excluded from being read as a section. This reads the same population that exclusion creates. The trailing
@@ -2116,7 +2150,11 @@ const STEP_NO = "[1-9][0-9]*(?:\\.[1-9][0-9]*)*";
  * decided it. */
 const STEP_REF = new RegExp(
   `(?:^|[^\\w])steps?\\s+(${STEP_NO})((?:\\s*(?:,|&|and|or|to|through|[-‐‑‒–—―])\\s*${STEP_NO})*)`, "gi");
-const STEP_MORE = new RegExp(STEP_NO, "g");
+/* CASE-INSENSITIVE LIKE THE READER IT RE-SCANS: STEP_REF matches under `i`, so a joined run it captured may
+ * hold `2.J` and a case-sensitive re-scan of that run would find the `2` and drop the component. */
+const STEP_MORE = new RegExp(STEP_NO, "gi");
+/* See stepRefs: the run operand that is a SECTION because the word `step` follows it. */
+const SEC_TRAIL = /^(?:['’]s)?\s*steps?\b/i;
 
 /* THE OWNER OF A STEP NUMBER IS A FACT A SITE CAN STATE, AND NEAREST-PRECEDING IS WHAT YOU FALL BACK ON WHEN
  * IT DOES NOT. The fallback is wrong in exactly one shape and it produced BOTH of this channel's accusations at
@@ -2136,6 +2174,14 @@ const STEP_MORE = new RegExp(STEP_NO, "g");
  * declaration map in PASS 5 for what each one cost. */
 const ADJ_STEP = new RegExp(
   `^(?:['’]s|s['’])?\\s*(?:"[^"]{0,80}"\\s*)?(?:\\([^)]{0,80}\\)\\s*)?[-,:–—]?\\s*(?:the\\s+)?steps?\\s+(${STEP_NO})`, "i");
+
+/* THE OWNER WRITTEN WITH NO §, WHICH IS THE ONE SHAPE ADJ_STEP CANNOT REACH. ADJ_STEP reads the step out of a
+ * CITATION’s own noun phrase and so is anchored at a citation; this reads the same noun phrase from the other
+ * end — a dotted number immediately before `step K`, whether or not the bare-number reader admitted it. The
+ * spellings are ADJ_STEP’s, so the two agree about what a noun phrase is; only the anchor differs. */
+const OWN_LEAD = new RegExp(
+  `(?<![\\w.§])([1-9][0-9]?(?:\\.[1-9][0-9]*){1,4})(?:['’]s)?\\s*(?:"[^"]{0,80}"\\s*)?` +
+  `(?:\\([^)]{0,80}\\)\\s*)?[-,:–—]?\\s*(?:the\\s+)?steps?\\s+$`, "i");
 
 /* THE SECOND QUESTION ABOUT A STEP, AND THE ONE THE PARAGRAPH ABOVE SAYS IT CANNOT ANSWER: not whether the
  * number can exist, but whether the step it names SAYS what the citation says it says. A number that exists
@@ -2222,16 +2268,67 @@ function mdHeadingLevel(text) {
   return m ? m[1].length : 0;
 }
 
+/* A WRITTEN COMPONENT’S POSITIONS — see STEP_NO for why there can be more than one and why no table decides
+ * between them. The roman reading is CANONICAL-ONLY: `iiii` is not four in any renderer’s output, so admitting
+ * it would widen the candidate set with a position nothing prints, which is the one direction this widening
+ * may not go. A component that denotes NOTHING under either reading returns the empty set, and the pass
+ * refuses to judge it rather than reading past it. */
+const ROMAN_OK = /^m{0,3}(?:cm|cd|d?c{0,3})(?:xc|xl|l?x{0,3})(?:ix|iv|v?i{0,3})$/;
+const ROMAN_V = { i: 1, v: 5, x: 10, l: 50, c: 100, d: 500, m: 1000 };
+function romanValue(s) {
+  if (!s || !ROMAN_OK.test(s)) return 0;
+  let v = 0;
+  for (let i = 0; i < s.length; i++) {
+    const a = ROMAN_V[s[i]], b = ROMAN_V[s[i + 1]];
+    v += b > a ? -a : a;
+  }
+  return v;
+}
+/* `a`=1 … `z`=26, `aa`=27 — the bijective base-26 a `lower-alpha` list emits past its alphabet. */
+function alphaValue(s) {
+  let v = 0;
+  for (let i = 0; i < s.length; i++) v = v * 26 + (s.charCodeAt(i) - 96);
+  return v;
+}
+function stepPositions(part) {
+  if (/^[0-9]+$/.test(part)) return [Number(part)];
+  const out = [];
+  if (/^[a-z]{1,2}$/.test(part)) out.push(alphaValue(part));
+  const r = romanValue(part);
+  if (r && !out.includes(r)) out.push(r);
+  return out;
+}
+
+/* A REFERENCE CARRIES BOTH ITS SPELLING AND ITS READINGS, and the two are used for different questions. `parts`
+ * is what the author WROTE, so it is what a declaration elsewhere in the file is matched against and what a
+ * finding names back to them; `path` is the positions each component may denote, which is the only thing the
+ * corpus can be asked about. Writing one and deriving the other at each use would be the second copy. */
 function stepRefs(prose) {
   const out = [];
+  const mk = (raw, at) => {
+    const parts = raw.toLowerCase().split(".");
+    return { parts, path: parts.map(stepPositions), raw, at };
+  };
   STEP_REF.lastIndex = 0;
   for (let m; (m = STEP_REF.exec(prose)); ) {
     const at = m.index + m[0].indexOf(m[1]);
-    out.push({ path: m[1].split(".").map(Number), raw: m[1], at });
+    out.push(mk(m[1], at));
     if (!m[2]) continue;
     STEP_MORE.lastIndex = 0;
-    for (let t; (t = STEP_MORE.exec(m[2])); )
-      out.push({ path: t[0].split(".").map(Number), raw: t[0], at: at + m[1].length + t.index });
+    for (let t; (t = STEP_MORE.exec(m[2])); ) {
+      const tAt = at + m[1].length + t.index;
+      /* A NUMBER THE WORD `step` FOLLOWS IS A SECTION AND NOT ANOTHER OPERAND OF THE RUN — the mirror of
+       * STEP_LEAD, which keeps a number the word `step` PRECEDES from being read as a section, and it is the
+       * same convention read from the other end. It costs nothing while sub-components are digits, because a
+       * `.` then stops the head operand and the run never reaches the next clause; the moment a LETTERED
+       * component is readable the head runs on and the `and` joining two CLAUSES reads as the `and` joining
+       * two STEPS. Measured, on the first run after that widening: `10.1.9.2 step 2.a and 10.1.7 step 3` put
+       * `10.1.7` in front of the checker as a step of §10.1.9.2, which has eight. It landed in the band this
+       * channel lists and never accuses, so it cost no red — and the same shape over a section whose step N
+       * exists would have been an accusation, which is the reason it is closed here rather than noted. */
+      if (SEC_TRAIL.test(prose.slice(tAt + t[0].length, tAt + t[0].length + 12))) continue;
+      out.push(mk(t[0], tAt));
+    }
   }
   return out;
 }
@@ -2245,19 +2342,39 @@ const listKids = (l, i) => (Array.isArray(l) && Object.hasOwn(l[1], i) ? l[1][i]
  * a predicate plus a diagnostic because two would be two statements of the same rule, and the one that drifts is
  * the one the findings are not decided by: the frontier it descends is EXACTLY the set of lists a true prefix
  * reaches, so "returns null" and "the path exists" are the same sentence rather than two that agree today. */
+/* A COMPONENT IS A SET OF POSITIONS AND THE DESCENT CARRIES ALL OF THEM — the same widening the header
+ * defends for LISTS, applied to READINGS. `2.i` descends into the 9th sub-item and into the 1st, and the path
+ * fails only where no reading of a component reaches any list at that depth. A purely numeric path is a chain
+ * of one-element sets, so it walks the identical frontier this walked before. */
 function stepFail(lists, path) {
   let cur = lists;
   for (let k = 0; k < path.length; k++) {
     let best = 0;
     for (const l of cur) if (listN(l) > best) best = listN(l);
-    if (path[k] > best) return { depth: k, largest: best, sub: false };
+    const fit = path[k].filter((v) => v <= best);
+    if (!fit.length) return { depth: k, largest: best, sub: false };
     if (k === path.length - 1) return null;
     const next = [];
-    for (const l of cur) if (path[k] <= listN(l)) { const ch = listKids(l, path[k]); if (ch) next.push(...ch); }
+    for (const l of cur) for (const v of fit) if (v <= listN(l)) { const ch = listKids(l, v); if (ch) next.push(...ch); }
     if (!next.length) return { depth: k, largest: best, sub: true };
     cur = next;
   }
   return null;
+}
+
+/* EVERY SINGLE-READING PATH A SPELLING ADMITS, which is what separates a step this tool has DECIDED from one
+ * it has merely failed to refute. `stepFail` answers about the union; where the union admits a path and some
+ * individual reading does not, the alphabetic/roman convention would have to be settled before anyone could
+ * say which step the author named — and the corpus does not record it. That population is NOT DECIDED and is
+ * printed as such rather than counted with the paths every reading confirms. The product is bounded by the
+ * spelling: only a one-or-two letter run that is also a canonical numeral has two readings at all. */
+function stepReadings(path) {
+  let acc = [[]];
+  for (const cands of path) {
+    if (acc.length * cands.length > 16) return null;
+    acc = acc.flatMap((a) => cands.map((v) => [...a, [v]]));
+  }
+  return acc;
 }
 
 /* THE TWO FAILURES ARE ONE INDEX APART AND SAYING SO WRONG SENDS THE READER TO THE WRONG STEP. `sub` means the
@@ -2265,12 +2382,14 @@ function stepFail(lists, path) {
  * path[0..depth] and the missing one is path[0..depth+1]; the other means the index AT `depth` overflowed, so
  * the last existing step is path[0..depth-1]. Written as one expression they differ by exactly one slice
  * boundary, which is why they are written apart. */
-function stepMsg(f, path, no, spec) {
-  const held = path.slice(0, f.depth + (f.sub ? 1 : 0)).join(".");
-  const missing = path.slice(0, f.depth + (f.sub ? 2 : 1)).join(".");
+function stepMsg(f, parts, no, spec) {
+  /* THE SPELLING THE AUTHOR WROTE, never the position it resolved to — a reader sent to `step 2.9` for a
+   * comment that says `step 2.i` has been sent to a step the comment does not name. */
+  const held = parts.slice(0, f.depth + (f.sub ? 1 : 0)).join(".");
+  const missing = parts.slice(0, f.depth + (f.sub ? 2 : 1)).join(".");
   if (f.sub) return `${spec} §${no} has a step ${held} and no list under it, so there is no step ${missing}`;
   return f.depth === 0
-    ? `no list anywhere under ${spec} §${no} reaches step ${path[0]} — the longest has ${f.largest} item(s)`
+    ? `no list anywhere under ${spec} §${no} reaches step ${parts[0]} — the longest has ${f.largest} item(s)`
     : `${spec} §${no}'s step ${held} holds at most ${f.largest} sub-step(s), so there is no step ${missing}`;
 }
 
@@ -2981,7 +3100,12 @@ function audit(argv, opts = {}) {
    * `depth` counts the sub-numbered references apart from the plain ones because they are the population
    * CLAUDE.md says the drift lives in — a promoted nested list renumbers sub-steps and leaves top-level ones
    * untouched. */
-  const sstat = { seen: 0, sub: 0, checked: 0, exists: 0, okNearby: 0, okDeclared: 0, reworded: 0, out: 0, away: 0,
+  /* THE LETTERED POPULATION IS COUNTED APART BECAUSE IT IS THE ONE THIS CHECK USED TO READ PAST — see
+     STEP_NO. `lettered` is how much of the corpus writes a glyph rather than a digit; `letterSplit` is the
+     part of it whose readings disagree, which this channel DOES NOT DECIDE and must never be read as
+     confirmed; `unreadable` is a spelling that denotes no position at all and is not judged either. */
+  const sstat = { seen: 0, sub: 0, lettered: 0, letterSplit: 0, unreadable: 0,
+                  checked: 0, exists: 0, okLead: 0, okNearby: 0, okDeclared: 0, reworded: 0, out: 0, away: 0,
                   noCorpus: 0, staleCorpus: 0, noSection: 0, noList: 0, voted: 0, foreign: 0, unresolved: 0, citeFlagged: 0,
                   /* The content channel's own partition, kept apart from the existence channel's for the reason
                      the existence census gives: a step whose corpus carries no positions, one whose phrase is
@@ -4274,9 +4398,14 @@ function audit(argv, opts = {}) {
         if (!o.spec || o.how === "file" || o.foreign) continue;
         const m = ADJ_STEP.exec(governedProse(src, spans, o.at, o.len,
                                               i + 1 < admitted.length ? admitted[i + 1].at : null));
-        if (!m || m[1].split(".").length < DECLARED_DEPTH) continue;
-        if (!declared.has(m[1])) declared.set(m[1], []);
-        declared.get(m[1]).push(o);
+        /* THE KEY IS THE SPELLING AND NOT THE POSITION, folded to one case. A declaration is the author
+         * saying which list THIS path indexes into, so `2.i` is declared by `2.i` and not by `2.9` — two
+         * spellings that may denote one item still say different things at a site. */
+        if (!m) continue;
+        const dk = m[1].toLowerCase();
+        if (dk.split(".").length < DECLARED_DEPTH) continue;
+        if (!declared.has(dk)) declared.set(dk, []);
+        declared.get(dk).push(o);
       }
       /* THE HEADING A STEP REFERENCE STANDS UNDER, for a design note — see mdHeadingLevel. Built once per file
        * as [blockStart, blockEnd, citation, declaredPath], so the lookup below is a scan of the few headings
@@ -4299,14 +4428,14 @@ function audit(argv, opts = {}) {
             const m = ADJ_STEP.exec(governedProse(src, spans, o.at, o.len,
                                                   k + 1 < admitted.length ? admitted[k + 1].at : null));
             if (!m) continue;
-            headingDecl.push({ from: h.at, to: stop, cite: o, path: m[1].split(".").map(Number) });
+            headingDecl.push({ from: h.at, to: stop, cite: o, parts: m[1].toLowerCase().split(".") });
             break;
           }
         }
       }
-      const headingOwnerOf = (at, path) => headingDecl.find((h) =>
-        at >= h.from && at < h.to && h.path.length <= path.length &&
-        h.path.every((v, i) => v === path[i]))?.cite || null;
+      const headingOwnerOf = (at, parts) => headingDecl.find((h) =>
+        at >= h.from && at < h.to && h.parts.length <= parts.length &&
+        h.parts.every((v, i) => v === parts[i]))?.cite || null;
       /* The lists a citation's own section and its subsections hold, joined — the same containment JOIN the
        * quotation check performs on text, for the same reason: the corpus stores each section's OWN slice. */
       /* EVERY LIST IN THE REGION IS A CANDIDATE ROOT, WHICH IS THE CONVENTION HALF OF THIS CHECK AND THE HALF
@@ -4392,6 +4521,9 @@ function audit(argv, opts = {}) {
        * algorithm, and picking one would be the invented-citation defect. The consequences of that are
        * asymmetric here and both are wanted — ONE reading that admits the claim silences it, and a finding
        * needs one reading that demonstrates it. */
+      /* A READING IS PART OF WHAT A SITE IS — see STEP_NO. `2.i` resolves to a DIFFERENT item under the
+       * alphabetic and the roman reading, so a site carries the position it reached; without that the content
+       * check would test one list against the other reading’s item. */
       const stepSites = (spec, no, path) => {
         const sites = [];
         const last = path[path.length - 1];
@@ -4399,10 +4531,10 @@ function audit(argv, opts = {}) {
           let cur = [l];
           for (let k = 0; k < path.length - 1 && cur.length; k++) {
             const nx = [];
-            for (const c of cur) { const kids = listKids(c, path[k]); if (kids) nx.push(...kids); }
+            for (const c of cur) for (const v of path[k]) { const kids = listKids(c, v); if (kids) nx.push(...kids); }
             cur = nx;
           }
-          for (const c of cur) if (itemSpan(c, last)) sites.push({ sec, list: c });
+          for (const c of cur) for (const v of last) if (itemSpan(c, v)) sites.push({ sec, list: c, item: v });
         }
         return sites;
       };
@@ -4413,6 +4545,11 @@ function audit(argv, opts = {}) {
         for (const s of stepRefs(prose)) {
           sstat.seen++;
           if (s.path.length > 1) sstat.sub++;
+          if (s.parts.some((t) => !/^[0-9]+$/.test(t))) sstat.lettered++;
+          /* A COMPONENT THAT DENOTES NO POSITION IS NOT A STEP THIS CHECK MAY ACCUSE OR CONFIRM. It is asked
+           * FIRST, ahead of every corpus question, because it is a fact about the SPELLING and attributing it
+           * to a missing index would file it under somebody else’s gap. */
+          if (s.path.some((cands) => !cands.length)) { sstat.unreadable++; continue; }
           /* THREE SILENCES, KEPT APART, because merging them is the defect CLAUDE.md names and because two of
            * them are not the same KIND of silence at all. A citation that NAMES a standard nothing here indexes
            * is unchecked and stays unchecked — but it is also the population that has been measured being
@@ -4444,6 +4581,13 @@ function audit(argv, opts = {}) {
           const fail = stepFail(lists, s.path);
           if (!fail) {
             sstat.exists++;
+            /* ADMITTED BY THE UNION IS NOT ADMITTED BY EVERY READING — see stepReadings. Where the two
+               readings of a letter disagree, the citation stands on a convention the corpus does not record,
+               and saying so is the whole difference between an absent check and a clean one. */
+            if (s.path.some((cands) => cands.length > 1)) {
+              const rd = stepReadings(s.path);
+              if (!rd || rd.some((r) => stepFail(lists, r))) sstat.letterSplit++;
+            }
             /* THE STEP EXISTS — SO ASK THE SECOND QUESTION. See STEP_CLAIM: only a POSSESSIVE is read as a
              * claim about the step's content, and only the standard's own words answer it.
              *
@@ -4487,7 +4631,6 @@ function audit(argv, opts = {}) {
             }
             if (!ev && pt.length === 1 && vocabOf(c.spec).has(pt[0]) && dfOf(c.spec, pt[0]) < DF_CAP) ev = pt[0];
             if (!ev) { sstat.claimNotTerm++; continue; }
-            const last = s.path[s.path.length - 1];
             const tok = " " + ev + " ";
             let best = null, admitted = false, readable = 0;
             for (const site of stepSites(c.spec, c.no, s.path)) {
@@ -4498,7 +4641,7 @@ function audit(argv, opts = {}) {
               readable++;
               const textAt = (i) => { const sp = itemSpan(site.list, i); return sp ? " " + w.slice(sp[0], sp[1]).join(" ") + " " : ""; };
               const hits = items.filter((i) => textAt(i).includes(tok));
-              if (hits.includes(last)) { admitted = true; break; }
+              if (hits.includes(site.item)) { admitted = true; break; }
               if (hits.length && hits.length <= NAME_CAP && (!best || hits.length < best.hits.length))
                 best = { hits, sec: site.sec };
             }
@@ -4526,8 +4669,11 @@ function audit(argv, opts = {}) {
               file: relative(ROOT, file), line: lineOf(c.at), no: c.no, spec: c.spec, how: c.how,
               step: s.raw, depth: s.path.length, word: ev, crash: inCrashMessage(src, spans, c.at),
               msg: `${c.spec} §${c.no} step ${s.raw} does not use \`${ev}\` — ${where} ` +
-                   (readable === 1 ? `the one list under it that reaches that step ${verb}`
-                                   : `one of the ${readable} lists under it that reach a step ${s.raw} ${verb}, and which list the citation means is not stated`) +
+                   /* A MULTIPLICITY IS NOT ALWAYS SEVERAL LISTS — since a lettered component is read under
+                      every position its spelling denotes (see STEP_NO), one list can reach `2.i` at two items,
+                      and calling that "2 lists" would be the tool describing a state it is not in. */
+                   (readable === 1 ? `the one step under it that \`${s.raw}\` can name ${verb}`
+                                   : `one of the ${readable} steps under it that \`${s.raw}\` can name ${verb}, and which of them the citation means is not stated`) +
                    (best.sec === c.no ? "" : ` (that list stands in §${best.sec})`),
               text: prose.slice(Math.max(0, s.at - 60), s.at + 60).trim() };
             if (readable === 1) { sstat.claimOut++; stepsSays.push(rec); }
@@ -4555,6 +4701,23 @@ function audit(argv, opts = {}) {
           const admitsPath = (key, no) =>
             stp.has(key) && idx.get(key).sections[no] &&
             (() => { const ol = listsFor(key, no); return ol.length && !stepFail(ol, s.path); })();
+          /* AND THE NUMBER STANDING IMMEDIATELY BEFORE THE STEP IS THE OWNER THE AUTHOR NAMED, admitted as a
+           * citation or not. OK-NEARBY below quantifies over the CITATIONS in this prose unit, so it cannot see
+           * a bare number PASS 3 declined for want of group evidence — and `27.5.1.3 step 2.f`, written with no
+           * §, is exactly that number. Reading it as the owner is the same asymmetry stated at OK-NEARBY: a
+           * resolution a finding may not REST on may still WITHHOLD one, and the evidence here is stronger than
+           * a neighbourhood, because the author put the number and the step in one noun phrase.
+           * THIS WAS MEASURED AS A FALSE-ACCUSATION SOURCE THE MOMENT LETTERED COMPONENTS BECAME READABLE: three
+           * sites write `27.5.1.3 step 2.f` for the `then` read, and nearest-preceding charged that step to
+           * whatever § the paragraph had cited first (§27.5.4.7, Web IDL §3.7.10.2, Streams §4.9.5) — not one of
+           * which has a list reaching that sub-step, so each accusation was sound about the section it named
+           * and wrong about whose step it was. (That clause is written without the step's own spelling on
+           * purpose: this channel has no use-versus-mention gate, so a worked example spelled out after a §
+           * becomes a finding against the file that documents it — the convention this tool already states, and
+           * obeying it here is cheaper than widening a detector until it swallows what it protects.) It cannot silence a citation about its OWN number: `lead !== c.no` is what keeps
+           * `§N step K` in front of the checker. */
+          const lead = OWN_LEAD.exec(prose.slice(0, s.at));
+          if (lead && lead[1] !== c.no && [...idx.keys()].some((k) => admitsPath(k, lead[1]))) { sstat.okLead++; continue; }
           const near = (byUnit.get(proseUnitKey(src, spans, c.at)) || []).find((o) => {
             if (o === c) return false;
             if (o.spec && idx.has(o.spec) && idx.get(o.spec).sections[o.no]) return admitsPath(o.spec, o.no);
@@ -4568,7 +4731,7 @@ function audit(argv, opts = {}) {
            * others: a dispatch walk whose comment credits the get-the-parent section for a term while the
            * number it writes belongs to the algorithm named two lines up, and a custom-element reaction
            * comment naming a sub-step the same file declares eight times beside the section that defines it. */
-          const declOwner = [s.path.join("."), s.path.slice(0, -1).join(".")]
+          const declOwner = [s.parts.join("."), s.parts.slice(0, -1).join(".")]
             .filter((k) => k && k.split(".").length >= DECLARED_DEPTH)
             .flatMap((k) => declared.get(k) || [])
             .find((o) => !(o.spec === c.spec && o.no === c.no) && admitsPath(o.spec, o.no));
@@ -4582,7 +4745,7 @@ function audit(argv, opts = {}) {
            * is out of range under BOTH, so nothing about the verdict changes and everything about where the
            * reader is sent does. Measured over every step reference in every design note: one row is reworded,
            * none change band, and no row that existed becomes a finding. */
-          const hOwner = headingOwnerOf(c.at, s.path);
+          const hOwner = headingOwnerOf(c.at, s.parts);
           let owner = c, ofail = fail;
           if (hOwner && !(hOwner.spec === c.spec && hOwner.no === c.no) && stp.has(hOwner.spec) &&
               idx.get(hOwner.spec) && idx.get(hOwner.spec).sections[hOwner.no]) {
@@ -4620,7 +4783,7 @@ function audit(argv, opts = {}) {
           const rec = { file: relative(ROOT, file), line: lineOf(c.at), no: owner.no, spec: owner.spec, how: owner.how,
                         step: s.raw, depth: s.path.length, gap: s.at,
                         crash: inCrashMessage(src, spans, c.at),
-                        msg: stepMsg(ofail, s.path, owner.no, owner.spec) +
+                        msg: stepMsg(ofail, s.parts, owner.no, owner.spec) +
                              (owner === c ? "" : ` (the paragraph's own citation is ${c.spec} §${c.no}; the block's heading declares the owner)`),
                         text: prose.slice(Math.max(0, s.at - 60), s.at + 60).trim() };
           if (ofail.depth > 0 || ofail.sub) { sstat.out++; stepsOut.push(rec); }
@@ -5009,7 +5172,10 @@ function audit(argv, opts = {}) {
     console.log(`   them. What it can falsify is a number no reading of the section admits — which is what the drift`);
     console.log(`   CLAUDE.md describes produces once it runs past the end of a list.)`);
     console.log(`  ${sstat.seen} step reference(s) stand in prose a citation governs (${sstat.sub} of them sub-numbered); ${sstat.checked} were compared against a section's own lists`);
+    console.log(`    ${sstat.lettered} write a LETTERED component (\`2.i\`, \`13.a.iv\`), read as every position that spelling can denote and never as a convention this file holds a table of — see STEP_NO` +
+      `; of those, ${sstat.letterSplit} EXIST under one reading and not another, so which step the author named turns on the alphabetic/roman convention the corpus does not record: NOT DECIDED, counted here and never reported as confirmed`);
     console.log(`    EXISTS ${sstat.exists}  CONFIRMED-BY-A-NUMBER-THE-SAME-COMMENT-CITES ${sstat.okNearby}` +
+      `  CONFIRMED-BY-THE-NUMBER-WRITTEN-BESIDE-IT ${sstat.okLead}` +
       `  CONFIRMED-BY-THE-OWNER-THE-FILE-DECLARES ${sstat.okDeclared}  OUT-OF-RANGE ${sstat.out}` +
       `  NOT-IN-THIS-SECTION ${sstat.away} (listed, never accused — see --steps)`);
     /* WHAT THE LAST NUMBER IS A FRACTION OF, said in the same line as the number: a reworded finding is one
@@ -5017,7 +5183,8 @@ function audit(argv, opts = {}) {
      * not a suppressed one — the verdict is the same and the address is different. */
     console.log(`    ${sstat.reworded} of those finding(s) name the section a design note's own HEADING declares` +
       ` rather than the citation standing nearest, and say so in the message`);
-    console.log(`  NOT CHECKED, and why: ${sstat.noCorpus} cite a standard with no committed step corpus` +
+    console.log(`  NOT CHECKED, and why: ${sstat.unreadable} write a component whose spelling denotes no position under either the alphabetic or the roman reading` +
+      `; ${sstat.noCorpus} cite a standard with no committed step corpus` +
       (stepNoCorpusBy.size ? ` (${[...stepNoCorpusBy].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}=${v}`).join(" ")})` : "") +
       `; ${sstat.staleCorpus} cite one whose corpus is a different edition from its section index` +
       `; ${sstat.foreign} name a standard this tool does not index` +

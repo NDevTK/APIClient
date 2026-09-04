@@ -3324,7 +3324,7 @@ static const char *HTML =
        none of them is reached by any other statement in this document. */
     "<script id=stk>"
 
-    /* (1) A `for await` HEAD THAT REJECTS. ECMAScript §14.7.5.7 ForIn/OfBodyEvaluation steps 3.a-3.d are `?`
+    /* (1) A `for await` HEAD THAT REJECTS. ECMAScript §14.7.5.7 ForIn/OfBodyEvaluation steps 8.a-8.d are `?`
        and not a try region, so the head runs under a catch offset of its own whose handler drops the enum_rec
        and rethrows. A CATCH OFFSET'S SLOT IS ITS HANDLER'S OPERAND DEPTH — the unwind pops down to the offset,
        consumes it, and pushes the exception into the slot it vacated — so anything that MOVES the offset after
