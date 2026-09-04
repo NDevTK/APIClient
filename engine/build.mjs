@@ -1130,12 +1130,28 @@ function wfqReading(out) {
     : w.candUnrun === w.cands
       ? `every one of the ${w.cands} candidates is STARVED — not one has ever been charged for the thread, ` +
         `so the ordering is what is costing this search`
-      : w.candDecMax === 0 && w.candSvcMax > 0
-        ? `candidates have been served (${w.candSvcMax} notches at the most) and the deepest still stands on ` +
-          `ZERO gates — they are being RESTARTED from the baseline rather than resumed, which no amount of ` +
-          `thread time fixes`
-        : `candidates are being served (${w.candSvcMax} notches at the most) and are progressing — the ` +
-          `deepest stands on ${w.candDecMax} gates, so what limits this search is DISTANCE rather than turns`;
+      : `candidates have been served (${w.candSvcMax} notches at the most); how far along its runway any of ` +
+        `them got is NOT REPORTED — see below, and do not read \`candDecMax\` (${w.candDecMax}) as an answer`;
+  /* THIS READER USED TO STATE A CAUSE HERE FROM `candDecMax` AND THE NUMBER CANNOT CARRY ONE. It read
+     "the deepest stands on N gates, so what limits this search is DISTANCE rather than turns", and one arm up
+     it read a zero as "they are being RESTARTED from the baseline rather than resumed". Both are the
+     instrument backwards. solver/decide.c's `decide_blob_stats` sets `*entries = b->seg->below + b->seg->n` —
+     the LENGTH OF THE CHAIN — and never reads `b->c`, which is the cursor saying how much of it has been
+     replayed. An @S candidate is seeded with the DETECTING flow's entire chain under a cursor of 0, so this
+     row reports the full path the candidate was HANDED, from the instant of seeding, constant across the
+     replay's whole life. It is the denominator, printed where a reader wants the numerator, and the two are
+     furthest apart exactly where the question is about progress.
+     SO THE ARM IS DELETED RATHER THAN REWORDED, and the sentence says the measurement is ABSENT. A diagnosis
+     nobody can act on is better than a confident wrong one: §A-FIELD-A-CONSUMER-DEFAULTS is about a hole
+     rendered as a plausible datum, and "what limits this search is DISTANCE" is that defect performed in
+     prose — it names a cause, in the popup, out of a number that says only how long the recorded path was.
+     WHAT WOULD SUPPLY IT, so this is a named absence and not a shrug: `decide.c` exposing the cursor
+     (`b->c`) as its own accessor, and solver/flow.c feeding `cand_dec_max` from THAT while `dec_max` keeps
+     the chain length. Then a candidate stuck at rung 0 with a GROWING cursor is one whose replay is diverging
+     before its own source read, and one with a flat cursor is one nobody is serving — which is the
+     three-state separation solver/flow.h already claims this row makes and which it cannot make today.
+     ITS ABSENCE SHOWS as this line: the day the row means what flow.h says, this paragraph and the sentence
+     above it are what must be rewritten, and the arm that states a cause can come back. */
   /* WHAT THE ORDER IS COSTING THE JOB QUEUE, WHICH IS A QUESTION ABOUT ONE THIRD OF IT. Two of the three
      classes are not the WFQ's to move — an OWED job waits on a reply the host has not sent, and a FRAMED one
      is forbidden to run by HTML §8.1.4.4 "Calling scripts"' clean up after running script step 3 while the
