@@ -95,7 +95,13 @@ static const char *const RT_NAME[] = { "", "arraybuffer", "blob", "document", "j
 typedef struct {
     /* §3's associated values. Every one a flow can write is a JSValue, for the reason the file comment gives. */
     JSValue upload;            /* the XMLHttpRequestUpload object (owned) */
-    JSValue method;            /* request method — a JS string, JS_NULL before open() */
+    /* §3's REQUEST METHOD — a JS string, UNKNOWN EXTERNAL INPUT, or JS_NULL before open().
+       The unknown is not a hole: XHR §3.5.1 The open() method step 11.2 sets this to the method its
+       step 4 normalized, and over an argument the declaration crossed unconverted that normalization is
+       a DERIVATION whose result is unknown in every world (see OPEN_METHOD_OP). Every reader below
+       therefore states what it does with one; a reader that assumed a String defaulted it, and a method
+       nobody computed reported as `GET` is the wrong report rather than a partial one. */
+    JSValue method;
     JSValue url;               /* request URL, serialized — a JS string, JS_NULL before open() */
     /* THE URL AS THE PAGE COMPUTED IT, which the serialization above cannot be. XHR §3.5.1 The open() method
        step 11.3 is "Set this's request URL to parsedURL", so `url` is a `url_serialize` result of that record
@@ -629,6 +635,79 @@ static JSValueConst xhr_idl_arg(int argc, JSValueConst *argv, int i)
     return i < argc ? argv[i] : JS_UNDEFINED;
 }
 
+/* §3.5.1 STEPS 2-4 OVER A METHOD NOBODY KNOWS — the three worlds the algorithm has, and why they are three.
+ *
+ * Web IDL declares `method` a ByteString, and core/idl_args.h's IDL_CONCOLIC_CROSSES passes unknown external
+ * input through that conversion UNCONVERTED on purpose, so that opacity survives it. That is why this arm has
+ * to exist rather than being an exotic case: an orphan drive of any XHR wrapper reaches open() with an
+ * ARGUMENT of a function the bundle shipped and never called, and `unfetch` — `request.open(options.method ||
+ * 'get', url, true)` — is the shape, one arm of that `||` being the unknown itself.
+ *
+ * READING BYTES OFF IT WAS THE DEFECT, AND SO IS SUBSTITUTING ITS DISPLAY SHAPE. ECMAScript §7.1.19 ToString (
+ * arg ) steps 9-12 hand an Object to §7.1.1 ToPrimitive ( input [ , preferredType ] ), which over an unknown
+ * is the identity, so the byte consumer owed C a JSString it could not have and ended the document. Asking for
+ * the SHAPE instead — the projection this file already takes for `url` — would not abort and would be worse:
+ * `{orphan.f3.arg1}.method` is not a token, so step 2 would throw a "SyntaxError" DOMException and delete the
+ * request, which is the endpoint this tool exists to emit. A predicate decided by running it over a string no
+ * run ever computed is inventing 6 for `x > 5`, spent on a BRANCH rather than on a report.
+ *
+ * SO THE ALGORITHM DECLARES ITS COMPLETIONS AND THE SOLVER PICKS ONE PER FLOW. That is not this member's own
+ * answer: core/idl_args.c's idl_number_of already writes the same one down for the same shape one IDL type
+ * over, where an unknown's EXAMPLE lands on a conversion's throw arm while its domain still permits the
+ * success arm — both arms must run, asked of solver_outcome over the value, exactly as JSON.parse forks its
+ * SyntaxError arm.
+ *
+ * THEY ARE ENUMERATED AS OBSERVABLE OUTCOMES AND NOT AS BRANCHES OF THE PROSE. What the page can see is that
+ * open() returned, or that it threw one of two named DOMExceptions; there is no fourth, because the operand is
+ * a value rather than an algorithm that could settle nothing. The two refusals are disjoint by Fetch §2.2.1
+ * Methods, whose "A forbidden method is a method that is a byte-case-insensitive match for `CONNECT`, `TRACE`,
+ * or `TRACK`" makes a forbidden method a method — so step 2 and step 3 partition the domain rather than
+ * overlapping, and the same section's "A method is a byte sequence that matches the method token production"
+ * is the whole of what step 2 asks.
+ *
+ * OUTCOME 0 IS THE ORDINARY COMPLETION, which is quickjs-step.h's one numbering rule: a run with no forking
+ * policy takes it, and an @S candidate re-fire replaying one concrete path must not be diverted down an
+ * exceptional arm on its way to a sink. */
+enum { OPEN_M_OK = 0, OPEN_M_NOT_A_METHOD, OPEN_M_FORBIDDEN, OPEN_M_OUTCOMES };
+#define OPEN_METHOD_OP "XHR §3.5.1 open() steps 2-4 over the method"
+
+/* WHICH OF THOSE THREE THE STEPS REACH WHEN RUN ON THE UNKNOWN'S OWN EXAMPLE — step_fork_run's `real`, and a
+   DIFFERENT declaration from the numbering above: not "which completion does a run with no forking policy
+   take" but "which one does this operation reach on the concrete value the run already carries". Stating it is
+   what marks the ordinary completion PRIMARY and the other two FORCED, so a request built on this arm reaches
+   solver/engine.h's provenance as what it is. JS_OUTCOME_REAL_UNSTATED is the POSITIVE answer for an unknown
+   carrying no example — the fork still happens, both arms still run, and neither is marked forced.
+   `*pnorm` is Fetch §2.2.1 Methods' "normalize a method" RUN on that example (the caller js_free's it), and it
+   is NULL for every outcome but OPEN_M_OK — which is what drops the example on an arm that contradicts it.
+   THE EXAMPLE MUST ALREADY BE A STRING AND THIS DOES NOT COERCE ONE: §7.1.19 ToString over an object would run
+   the page's own valueOf from a C activation with no flow base under it, so an example of any other type is
+   reported as NO example rather than converted. */
+static int xhr_open_method_real(JSContext *ctx, JSValueConst mv, char **pnorm)
+{
+    JSValue ex = concolic_example(ctx, mv);
+    const char *mc;
+    int real = JS_OUTCOME_REAL_UNSTATED;
+
+    DCHECK(pnorm != NULL, "§3.5.1 steps 2-4's example arm was asked with nowhere to put the normalized "
+                          "method — the example and the completion it reaches are one answer in two halves");
+    *pnorm = NULL;
+    if (!JS_IsString(ex)) { JS_FreeValue(ctx, ex); return real; }
+    mc = JS_ToCString(ctx, ex);
+    if (mc) {
+        *pnorm = request_method_check(ctx, mc);
+        if (*pnorm) {
+            real = OPEN_M_OK;
+        } else {
+            JSValue exc = JS_GetException(ctx);   /* the shared operation's TypeError is not this member's */
+            JS_FreeValue(ctx, exc);
+            real = request_method_is_token(mc) ? OPEN_M_FORBIDDEN : OPEN_M_NOT_A_METHOD;
+        }
+        JS_FreeCString(ctx, mc);
+    }
+    JS_FreeValue(ctx, ex);
+    return real;
+}
+
 static int js_xhr_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                             JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
@@ -637,8 +716,8 @@ static int js_xhr_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     int r;
 
     if (hdr->stage == OPEN_STEPS) {
-        const char *m, *u;
-        char *norm;
+        const char *u;
+        JSValue mval;   /* step 4's NORMALIZED METHOD — owned, placed by steps 2-4 below and consumed at 11.2 */
         UrlRecord rec;
         bool ok;
         bool async = true;
@@ -672,30 +751,70 @@ static int js_xhr_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         if (!document_fully_active(ctx))
             return JS_ThrowDOMException(ctx, "InvalidStateError",
                                         "open() on an XMLHttpRequest whose document is not fully active"), -1;
-        m = JS_ToCString(ctx, xhr_idl_arg(argc, argv, 0));
-        if (!m) return JS_STEP_ABRUPT;
-        /* Steps 2-4 as ONE operation, through the implementation Fetch §5.3 step 25 already uses: not a method
-           is a SyntaxError here where Fetch throws a TypeError, and a forbidden one is a SecurityError — so the
-           shared operation answers and this member names its own errors. */
-        norm = request_method_check(ctx, m);
-        if (!norm) {
-            JSValue exc = JS_GetException(ctx);   /* the shared operation's TypeError is not this member's */
-            JS_FreeValue(ctx, exc);
-            r = request_method_is_token(m)
-              ? (JS_ThrowDOMException(ctx, "SecurityError", "open() with a forbidden method"), -1)
-              : (JS_ThrowDOMException(ctx, "SyntaxError", "open() with a method that is not a token"), -1);
-            JS_FreeCString(ctx, m);
-            return r;
+        {
+            JSValueConst mv = xhr_idl_arg(argc, argv, 0);
+            char *norm;
+
+            if (concolic_is(mv)) {
+                int arm = 0, real = xhr_open_method_real(ctx, mv, &norm);
+
+                /* NOTHING OF THIS MACHINE'S IS HELD ACROSS THE ASK, which quickjs-step.h requires because the
+                   SIBLING'S SNAPSHOT IS TAKEN AT THE JS_STEP_FORK. The answer lands back on this same call:
+                   the driver re-enters at this stage, everything above is a re-read of values the declaration
+                   already converted, and step_fork_run's own phase hands the arm back rather than re-asking. */
+                r = step_fork_run(ctx, hdr, mv, OPEN_METHOD_OP, OPEN_M_OUTCOMES, real, &arm);
+                if (r > 0) { js_free(ctx, norm); return r; }
+                DCHECK(arm >= 0 && arm < OPEN_M_OUTCOMES,
+                       "XHR §3.5.1 steps 2-4's fork answered with a completion this member never declared");
+                if (arm != OPEN_M_OK) {
+                    js_free(ctx, norm);
+                    return arm == OPEN_M_FORBIDDEN
+                         ? (JS_ThrowDOMException(ctx, "SecurityError", "open() with a forbidden method"), -1)
+                         : (JS_ThrowDOMException(ctx, "SyntaxError",
+                                                 "open() with a method that is not a token"), -1);
+                }
+                /* STEP 4 OVER AN UNKNOWN IS A DERIVATION AND NEVER A DECISION. Fetch §2.2.1 Methods — "To
+                   normalize a method, if it is a byte-case-insensitive match for `DELETE`, `GET`, `HEAD`,
+                   `OPTIONS`, `POST`, or `PUT`, byte-uppercase it" — answers an unknown with an unknown in
+                   BOTH of its worlds, so there is nothing here to fork over and only a new value to name. The
+                   example is the real operation run on the operand's own example, and is absent on the two
+                   arms that example contradicts: a forced sibling drops it. */
+                mval = concolic_new_derived(ctx, "normalize a method", &mv, 1,
+                                            norm ? JS_NewString(ctx, norm) : JS_UNDEFINED);
+                js_free(ctx, norm);
+                DCHECK(!JS_IsUninitialized(mval),
+                       "§3.5.1 step 4's derivation answered that no operand was unknown — this arm is reached "
+                       "only where concolic_is says one is, so a refusal here means the two disagree");
+            } else {
+                const char *m = JS_ToCString(ctx, mv);
+
+                if (!m) return JS_STEP_ABRUPT;
+                /* Steps 2-4 as ONE operation, through the implementation Fetch §5.3 step 25 already uses: not
+                   a method is a SyntaxError here where Fetch throws a TypeError, and a forbidden one is a
+                   SecurityError — so the shared operation answers and this member names its own errors. */
+                norm = request_method_check(ctx, m);
+                if (!norm) {
+                    JSValue exc = JS_GetException(ctx);   /* the shared operation's TypeError is not this member's */
+                    JS_FreeValue(ctx, exc);
+                    r = request_method_is_token(m)
+                      ? (JS_ThrowDOMException(ctx, "SecurityError", "open() with a forbidden method"), -1)
+                      : (JS_ThrowDOMException(ctx, "SyntaxError", "open() with a method that is not a token"), -1);
+                    JS_FreeCString(ctx, m);
+                    return r;
+                }
+                JS_FreeCString(ctx, m);
+                mval = JS_NewString(ctx, norm);
+                js_free(ctx, norm);
+            }
         }
-        JS_FreeCString(ctx, m);
         /* Steps 5-6: encoding-parse the URL against the relevant settings object's API base URL. */
         u = xhr_arg_cstring(ctx, xhr_idl_arg(argc, argv, 1), NULL);
-        if (!u) { js_free(ctx, norm); return JS_STEP_ABRUPT; }
+        if (!u) { JS_FreeValue(ctx, mval); return JS_STEP_ABRUPT; }
         url_record_init(&rec);
         ok = fetch_parse_url(ctx, &rec, u, strlen(u));
         JS_FreeCString(ctx, u);
         if (!ok) {
-            js_free(ctx, norm);
+            JS_FreeValue(ctx, mval);
             url_record_free(&rec);
             return JS_ThrowDOMException(ctx, "SyntaxError", "open() with a URL that cannot be parsed"), -1;
         }
@@ -720,7 +839,7 @@ static int js_xhr_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         }
         /* Step 9: a synchronous request on a Window may carry neither a timeout nor a response type. */
         if (!async && xhr_global_is_window(ctx) && (d->timeout != 0 || d->response_type != RT_EMPTY)) {
-            js_free(ctx, norm);
+            JS_FreeValue(ctx, mval);
             url_record_free(&rec);
             return JS_ThrowDOMException(ctx, "InvalidAccessError",
                                         "a synchronous open() with a timeout or a responseType set"), -1;
@@ -741,8 +860,7 @@ static int js_xhr_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
            zone's own reply lands and is refused by engine_host_answer as naming no register. */
         /* Step 11. */
         xhr_reset_request(ctx, d);
-        xhr_set(ctx, d, &d->method, JS_NewString(ctx, norm));
-        js_free(ctx, norm);
+        xhr_set(ctx, d, &d->method, mval);
         {
             char *ser = url_serialize(&rec, false);
             xhr_set(ctx, d, &d->url, JS_NewString(ctx, ser ? ser : ""));
@@ -1656,12 +1774,27 @@ static char *xhr_request_op(JSContext *ctx, XhrData *d)
 {
     JsonBuf b = { 0 };
     uint32_t n = hl_len(ctx, d->author_headers), i;
-    const char *m = JS_ToCString(ctx, d->method), *u = JS_ToCString(ctx, d->url);
+    const char *m, *u;
+
+    /* THE ONE KIND OF REQUEST THIS OP CANNOT STATE. The trusted zone hands `method` to a real `fetch()`, so a
+       value the run never computed may not reach it — and one never does, because xhr_main_fetch_local
+       answers an unknown method itself and this op is composed only for what it hands on. Defaulting the
+       field instead is what the assert exists to stop: a fabricated `GET` is indistinguishable at the
+       chokepoint from a `GET` the bundle really built. */
+    DCHECK(!concolic_is(d->method),
+           "an XMLHttpRequest whose method is UNKNOWN EXTERNAL INPUT reached the trusted zone's request op — "
+           "Fetch §4.1 main fetch answers that request inside this agent precisely because there are no bytes "
+           "to put in this field, so an arrival here is a route that skipped it");
+    m = JS_ToCString(ctx, d->method);
+    u = JS_ToCString(ctx, d->url);
+    CHECK(m != NULL && u != NULL,
+          "XMLHttpRequest: OOM composing §3.5.6's request op — a method or URL this engine cannot read back "
+          "is a request the trusted zone would perform against an address nobody derived");
 
     json_buf_raw(&b, "xhr.send\t{"); json_buf_key(&b, "method");
-    json_buf_str(&b, m ? m : "GET");
+    json_buf_str(&b, m);
     json_buf_raw(&b, ","); json_buf_key(&b, "url");
-    json_buf_str(&b, u ? u : "");
+    json_buf_str(&b, u);
     json_buf_raw(&b, ","); json_buf_key(&b, "credentials");
     json_buf_str(&b, d->cross_origin_credentials ? "include" : "same-origin");
     json_buf_raw(&b, ","); json_buf_key(&b, "provenance");
@@ -1690,8 +1823,8 @@ static char *xhr_request_op(JSContext *ctx, XhrData *d)
         if (body) JS_FreeCString(ctx, body);
     }
     json_buf_raw(&b, "}");
-    if (m) JS_FreeCString(ctx, m);
-    if (u) JS_FreeCString(ctx, u);
+    JS_FreeCString(ctx, m);
+    JS_FreeCString(ctx, u);
     return json_buf_take(&b);
 }
 
@@ -1724,7 +1857,7 @@ static void xhr_record_endpoint(JSContext *ctx, XhrData *d)
     const char **owned = NULL;   /* the 2n cstrings borrowed for the call, freed together after it */
     EndpointBody eb;
     const EndpointBody *ebp = NULL;
-    const char *mc = NULL, *method = "GET";
+    const char *method;
     char *body_ct = NULL;
     const char *body = NULL;
     size_t body_len = 0;
@@ -1732,10 +1865,20 @@ static void xhr_record_endpoint(JSContext *ctx, XhrData *d)
     DCHECK(!JS_IsNull(d->url), "an XMLHttpRequest reached §3.5.6's request record with no URL — send() runs "
                                "only on an `opened` object and XHR §3.5.1 The open() method step 12.1, Set "
                                "this's state to opened, is what opens one");
-    if (JS_IsString(d->method)) {
-        mc = JS_ToCString(ctx, d->method);
-        if (mc) method = mc;
-    }
+    /* THE METHOD AS THE PAGE COMPUTED IT — the shape where §3.5.1 step 4's normalization derived one over
+       unknown external input, the bytes otherwise. It was `"GET"` for anything that was not a String, which is
+       the defaulted-field defect in the one column an endpoint is read by: a method no run ever computed
+       reported as the safest one there is, indistinguishable from a `GET` the bundle really builds. §@H's line
+       is that an equality-pinned or run-computed value is concrete and everything else is a domain-annotated
+       SHAPE, and concolic_name_cstr is the one speller of that projection. */
+    DCHECK(JS_IsString(d->method) || concolic_is(d->method),
+           "an XMLHttpRequest reached §3.5.6's request record with a method that is neither bytes nor unknown "
+           "external input — XHR §3.5.1 The open() method step 11.2 sets it from its own step 4 and send() "
+           "runs only on an `opened` object, so a third kind here is this component storing something §3.5.1 "
+           "never produced");
+    method = concolic_name_cstr(ctx, d->method);
+    CHECK(method != NULL, "XMLHttpRequest: OOM projecting the request method onto the @H surface — a dropped "
+                          "endpoint is a hole in the frontier");
     if (n) {
         eh = js_malloc(ctx, sizeof(*eh) * (size_t)n);
         owned = js_malloc(ctx, sizeof(*owned) * (size_t)n * 2);
@@ -1768,7 +1911,7 @@ static void xhr_record_endpoint(JSContext *ctx, XhrData *d)
         js_free(ctx, owned);
     }
     js_free(ctx, eh);
-    if (mc) JS_FreeCString(ctx, mc);
+    JS_FreeCString(ctx, method);
 }
 
 /* Fetch §4.1 MAIN FETCH, for the request §3.5.6 sends, as far as it is answered inside this agent. Returns true
@@ -1794,13 +1937,40 @@ static void xhr_record_endpoint(JSContext *ctx, XhrData *d)
  * arm added there is answered here at the same instant, which is the whole reason it is one component. */
 static bool xhr_main_fetch_local(JSContext *ctx, XhrData *d)
 {
-    const char *u = JS_ToCString(ctx, d->url);
+    const char *u;
     const char *m;
     UrlRecord rec;
     FetchRequest req = {0};
     JSValue reply = JS_UNDEFINED;
     bool parsed, local;
 
+    /* A METHOD THIS AGENT CANNOT SPELL, AND WHY REFUSING IT HERE IS NOT A NETWORK POLICY.
+       An unknown method has no bytes, and both consumers below owe real ones: Fetch §4.3 Scheme fetch's `blob`
+       arm READS the method, and the trusted zone hands it to an actual `fetch()`. Neither may be given a value
+       no run computed — a defaulted `GET` there is the wrong report rather than a partial one, and the request
+       that went out would be one no page ever made.
+       WHAT IS DECIDED HERE IS NOT WHETHER TO SEND IT BUT WHETHER IT CAN BE COMPOSED AT ALL, which is a fact
+       about this engine's own state and not a claim about the world. The policy stays at safe-fetch.js, which
+       never sees this request because there is nothing to state to it. CLAUDE.md's
+       §A-REQUEST-CARRIES-THE-PROVENANCE arrives at the same place from the other side: an XMLHttpRequest is
+       credentialed by construction, a method not established to be in RFC 9110 §9.2.1 Safe Methods' safe set
+       is not established to leave the server's state alone, and this one came off a forced arm — the one
+       combination that is never a setting. Its correct output is what that rule names: derive it in full,
+       report it, do not send it. §3.5.6 step 5's endpoint record one frame up is where the report happened.
+       IT IS THE SAME SHAPE AS THE BLOCK BELOW AND NOT A SECOND MECHANISM: §3's response IS a network error
+       already, so this is nothing written and everything not done — the lifecycle machine's "handle errors"
+       fires the request error steps on the way out, which for §3.5.6 is an `error` event.
+       NAMED RESIDUAL — NOT COVERED: the world in which the real method IS one §9.2.1 calls safe, where a
+       browser would have made the request and the reply would have been learned. WHAT THE NEXT DIFF BUILDS:
+       one more ask over the same operand this member already forks at OPEN_METHOD_OP — whether this method is
+       in that safe set — so the flow standing on its true arm composes and fires while the flow standing on
+       the remainder does not, instead of one answer covering both. HOW ITS ABSENCE SHOWS: a bundle whose only
+       request is built from an uncalled function's argument emits its endpoint and never a reply, so that @H
+       record carries no server-learned example values while the sibling arm that took a literal method does. */
+    if (concolic_is(d->method))
+        return true;
+
+    u = JS_ToCString(ctx, d->url);
     CHECK(u != NULL, "XMLHttpRequest: OOM reading the request URL back to switch on its scheme");
     url_record_init(&rec);
     /* XHR §3.5.1 The open() method step 5 parsed this URL and step 11.3 stored the record, which this
@@ -1857,10 +2027,11 @@ static bool xhr_main_fetch_local(JSContext *ctx, XhrData *d)
        component states what it has rather than letting the switch read a field nobody filled. §5.4's captured
        blob URL entry is JS_UNDEFINED: XHR §3.5.1 parses a URL STRING and has no Request object to have
        captured with, so §4.3 reads the entry off the store as the URL's own. */
-    m = JS_IsString(d->method) ? JS_ToCString(ctx, d->method) : NULL;
+    m = JS_ToCString(ctx, d->method);
     CHECK(m != NULL, "XMLHttpRequest: the request reached §4.1 main fetch with no method — XHR §3.5.1 The "
                      "open() method step 4 normalizes one and its step 11.2 sets it on the object before the "
-                     "state is `opened`, and §4.3's `blob` arm reads it");
+                     "state is `opened`, and §4.3's `blob` arm reads it. An UNKNOWN one is answered above and "
+                     "never arrives here, so this is a String or the object holds what §3.5.1 never wrote");
     memset(&req, 0, sizeof req);
     req.method = m;
     req.url = u;   /* the two fields §4.3 Scheme fetch reads; a §4.3 answer never reaches the host, so it owes it nothing */
@@ -2257,6 +2428,39 @@ static bool xhr_body_is_interface_arm(JSValueConst v)
     return false;
 }
 
+/* §3.5.6 STEP 3 OVER A METHOD NOBODY KNOWS — "If this's request method is `GET` or `HEAD`, then set body to
+ * null." §3.5.1's steps 2-4 leave an unknown method narrowed to a method that is not a forbidden one, and
+ * nothing in that narrowing says which method it is, so this predicate has both its worlds and the algorithm
+ * declares them rather than reading bytes that do not exist.
+ *
+ * OUTCOME 0 IS THE ONE THAT KEEPS THE BODY, which is quickjs-step.h's numbering rule applied to a predicate
+ * whose arms are not success and failure. What a run with no forking policy takes must be the arm an @S
+ * candidate re-fire can reach a sink through, and the other arm DELETES the request body — the @H payload and
+ * the bytes a sink is reached with. The two arms are otherwise symmetric, so the rule is decided by which one
+ * loses something. */
+enum { SEND_M_BODY_RIDES = 0, SEND_M_BODYLESS, SEND_M_OUTCOMES };
+#define SEND_METHOD_OP "XHR §3.5.6 send() step 3 over the request method"
+
+/* WHICH OF THE TWO STEP 3 REACHES ON THE UNKNOWN'S OWN EXAMPLE — step_fork_run's `real`, exactly as
+   xhr_open_method_real answers it for §3.5.1, and JS_OUTCOME_REAL_UNSTATED where the method carries no example
+   or carries one that is not already a String (coercing one here would run the page's valueOf from a C
+   activation with no flow base under it). */
+static int xhr_send_method_real(JSContext *ctx, JSValueConst mv)
+{
+    JSValue ex = concolic_example(ctx, mv);
+    const char *mc;
+    int real = JS_OUTCOME_REAL_UNSTATED;
+
+    if (!JS_IsString(ex)) { JS_FreeValue(ctx, ex); return real; }
+    mc = JS_ToCString(ctx, ex);
+    if (mc) {
+        real = (!strcmp(mc, "GET") || !strcmp(mc, "HEAD")) ? SEND_M_BODYLESS : SEND_M_BODY_RIDES;
+        JS_FreeCString(ctx, mc);
+    }
+    JS_FreeValue(ctx, ex);
+    return real;
+}
+
 static int js_xhr_send_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                             JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
@@ -2272,7 +2476,6 @@ static int js_xhr_send_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
            vector the declaration exists to produce, and the two happen to be the same VALUE only for as long
            as the declared type stays `any` — a silence that would end the day SEND_ARGS names a real type. */
         JSValueConst body = xhr_idl_arg(argc, argv, 0);
-        const char *m;
         JS_FreeValue(ctx, in);
         in = JS_UNDEFINED;
         s->ev = s->body = s->fn = JS_UNDEFINED;
@@ -2282,9 +2485,26 @@ static int js_xhr_send_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
             return JS_ThrowDOMException(ctx, "InvalidStateError", "send() before open()"), -1;
         if (d->send_invoked)
             return JS_ThrowDOMException(ctx, "InvalidStateError", "send() while a request is in flight"), -1;
-        m = JS_ToCString(ctx, d->method);
-        if (m && (!strcmp(m, "GET") || !strcmp(m, "HEAD"))) body = JS_NULL;   /* step 3 */
-        if (m) JS_FreeCString(ctx, m);
+        if (concolic_is(d->method)) {
+            /* Step 3 as a declared fork — see SEND_METHOD_OP. NOTHING OF THIS MACHINE'S IS HELD AT THE ASK:
+               `s->body` is not dup'd until below, and everything above is a re-read of the object's own state
+               that the re-entry repeats harmlessly (send() invoked is not set until SEND_FLAGS). */
+            int arm = 0;
+
+            r = step_fork_run(ctx, hdr, d->method, SEND_METHOD_OP, SEND_M_OUTCOMES,
+                              xhr_send_method_real(ctx, d->method), &arm);
+            if (r > 0) return r;
+            DCHECK(arm == SEND_M_BODY_RIDES || arm == SEND_M_BODYLESS,
+                   "XHR §3.5.6 step 3's fork answered with a completion this member never declared");
+            if (arm == SEND_M_BODYLESS) body = JS_NULL;   /* step 3 */
+        } else {
+            const char *m = JS_ToCString(ctx, d->method);
+
+            CHECK(m != NULL, "XMLHttpRequest: OOM reading the request method back for §3.5.6 step 3 — a "
+                             "method this engine cannot read is one step 3's predicate has no answer for");
+            if (!strcmp(m, "GET") || !strcmp(m, "HEAD")) body = JS_NULL;   /* step 3 */
+            JS_FreeCString(ctx, m);
+        }
         s->body = JS_DupValue(ctx, body);
         STEP_GOTO(hdr->stage, SEND_BODY_STR, &s->phase, &hdr->get_phase, NULL);
     }
