@@ -99,6 +99,12 @@ const INTERFACES = {
   IntersectionObserverEntry: "core/intersection_observer/intersection_observer_entry.c",
   MutationObserver:     "core/dom/mutation_observer.c",
   ResizeObserver:       "core/resize_observer/resize_observer.c",
+  /* RESIZE OBSERVER §2.3's TWO RECORD INTERFACES, each its own component in the same directory, for the reason
+     IntersectionObserverEntry's row above gives: each is its own interface with its own members, and what
+     they are records OF belongs to other standards again — a rectangle to Geometry Interfaces §3, and each box
+     size to the second of these two. */
+  ResizeObserverEntry:  "core/resize_observer/resize_observer_entry.c",
+  ResizeObserverSize:   "core/resize_observer/resize_observer_size.c",
   PerformanceObserver:  "core/timing/performance_observer.c",
   /* An interface that includes the BODY mixin has its readers and `bodyUsed` installed by the shared
      component, so body.c is where the audit finds them — naming only the interface's own file reported six
@@ -714,7 +720,12 @@ const UNBUILT = {
      place in-flow block-level boxes, CSSOM VIEW §6's get-the-bounding-box is written in
      core/dom/element_view.c, and every branch that still lacks a layout crashes there naming its own section.
      What was left to build was the DELIVERY seam, not the geometry. */
-  ResizeObserver:       "no layout, so no box to observe — rendering.c's realm_awaits names it",
+  /* ResizeObserver's row is GONE, and its reason was the same stale-DFAIL failure IntersectionObserver's was:
+     it said "no layout, so no box to observe", which was true about the spec and false about this tree.
+     core/layout/used_value.c answers a box's border-edge and content-box extents on either axis and every case
+     CSS 2.1 §10 defines and this engine does not compute crashes there naming its own section, so §3.4.8
+     "Calculate box size, given target and observed box" had everything it needed. What was left to build was
+     §3.4's DELIVERY seam and HTML §8.1.7.3 update the rendering's step 16 loop over it, not the geometry. */
   PerformanceObserver:  "no performance timeline to observe — rendering.c's realm_awaits names it",
   Notification:         "no notification surface; nothing in the tree constructs one",
   /* HTML §7.2.6.10's REMAINING neighbours. §7.2.6.10.1's NavigateEvent and §7.2.6.10.3's NavigationDestination

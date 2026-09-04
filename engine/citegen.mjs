@@ -1775,6 +1775,16 @@ const OTHER_SPECS = [
      listing it would be an entry with no reader. `state token api` is the longest tail the tokenizer can
      actually produce, and it is what the citation is recognized by. */
   "local network access", "state token api",
+  /* RESIZE OBSERVER, and it is the `compatibility` case above with a WORSE vote behind it. This tree spells
+     its citations `RESIZE OBSERVER §3.4.5`, and the tail word `observer` is on no list — so every one of them
+     fell to its file's dominant anchor, and core/resize_observer/ is a component that legitimately cites HTML,
+     Web IDL, CSS 2.2, css-sizing and css-writing-modes beside its own standard. The vote read them as DOM,
+     whose §2.1 is "Introduction to \"DOM Events\"" and whose §4.3.1 is "Interface MutationObserver" — real
+     numbers of a document that observer never names, and the second one plausible enough that a reader would
+     have believed it. Not indexed, so the sites are counted and never checked, which is the honest state for
+     a standard whose text this audit does not hold; an index row would be better and is a fetch away
+     (drafts.csswg.org/resize-observer-1/, a bikeshed document). */
+  "resize observer",
   /* CSS modules, as this tree spells them when it does not use the levelled shortname */
   "css", "selectors", "cascade", "view", "values", "sizing", "fonts", "backgrounds", "text",
   "display", "position", "overflow", "images", "color", "transforms", "writing", "box", "inline",
