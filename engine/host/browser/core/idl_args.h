@@ -102,10 +102,25 @@ typedef enum {
        member that is absent must NOT be rejected, and every body that wrote that test by hand is a body that
        can get it wrong once. */
     IDL_CALLBACK,
-    /* AN ENUMERATION — §3.2.18. ToString, and then the result must be one of the values the IDL lists or it is
-       a TypeError: `new Blob([], {endings: "bogus"})` throws, and an unrecognised value is never silently the
-       default. The values are declared beside the POSITION (idl_arg_enum) or beside the dictionary MEMBER
-       (IdlDictMember::values), because they are part of the type and a member's IDL may write two. */
+    /* AN ENUMERATION — Web IDL §3.2.18 Enumeration types. ToString, and then the result must be one of the
+       values the IDL lists or it is a TypeError: `new Blob([], {endings: "bogus"})` throws, and an unrecognised
+       value is never silently the default. The values are declared beside the POSITION (idl_arg_enum) or beside
+       the dictionary MEMBER (IdlDictMember::values), because they are part of the type and a member's IDL may
+       write two.
+       OVER UNKNOWN EXTERNAL INPUT IT IS A FORK, WHICH IS WHY IT IS NOT A CROSSING TYPE — the same answer
+       §3.2.3 boolean gets one type up, for the same reason and by a different arithmetic. The type's DOMAIN IS
+       FINITE and the declaration states it: Web IDL §3.2.18 Enumeration types is "If S is not one of E's
+       enumeration values, then throw a TypeError" followed by "Return the enumeration value of type E that is
+       equal to S", so every world this conversion can complete in is either one of the N strings the IDL wrote
+       or that one refusal. Crossing an
+       unknown here does not defer the choice, it MOVES it: the placed concolic reaches a body that wanted a
+       string and either aborts on it or answers from the SOLVER's value class — which is the collapse the
+       pass-through exists to prevent, arriving at a type whose every world a `char *` already carries.
+       AND THE WORLDS ARE ONES THE ALGORITHMS BEHIND THIS BOUNDARY OBSERVE APART. Fetch's `credentials` is
+       "omit" / "same-origin" / "include", and which of them a request carries is whether it carries the
+       person's cookies; `redirect` is "follow" / "error" / "manual"; `cache` names six. Picking any of them
+       for a value nothing is known about deletes the rest. See idl_concolic_rule, which is where the reason
+       lives, and idl_enum_fork, which is the one statement of the ask both boundaries make. */
     IDL_ENUM,
     /* A NULLABLE ENUMERATION — `NavigationType? navigationType = null`, and the difference from IDL_ENUM is
        the whole reason it exists. §3.2.18's conversion is ToString-then-membership, and null ToStrings to the
@@ -113,7 +128,20 @@ typedef enum {
        IDL's OWN default value a TypeError. The alternative was IDL_ANY plus the rule written out in the body,
        which is the shape the declared types exist to replace and which here would run ToString on the page's
        value from a plain C body: the getter this engine aborts on, in the one place a page controls. So null
-       and undefined are the IDL null and cross as null; anything else is §3.2.18's conversion exactly. */
+       and undefined are the IDL null and cross as null; anything else is §3.2.18's conversion exactly.
+       NAMED RESIDUAL — THIS TYPE STILL CROSSES AN UNKNOWN AND IDL_ENUM NO LONGER DOES. What is not covered:
+       a `T?` position handed unknown external input, whose feasible worlds are the N members §3.2.18 lists,
+       §3.2.18's own TypeError, AND THE IDL NULL — Web IDL §3.2.20 Nullable types puts that third world ahead
+       of the inner type's conversion ("Otherwise, if V is null or undefined, then return the IDL nullable type
+       T? value null"), and the test that reaches it is a test of the VALUE, so for a concolic — which wears an
+       ordinary Object — it answers `false` from this engine's own value class rather than from the page's
+       value. That is one world more than IDL_ENUM has and it is not the same ask, which is why this row is
+       stated rather than folded into that one. What the next diff builds: an ask of N+2 completions at the two
+       boundaries IDL_ENUM's arm already stands at, with §3.2.20's null as a completion of its own and the
+       inner type's N+1 behind it. How its absence would show: `new NavigateEvent(t, {navigationType: cfg.k})`
+       places the concolic unconverted where an IDL_ENUM member of the same dictionary now places one of four
+       real strings, so one dictionary answers two ways about the same unknown — which is exactly the split
+       IDL_BOOLEAN_NO_DEFAULT was in while IDL_BOOLEAN forked, recorded at that row. */
     IDL_ENUM_NULLABLE,
     /* A `(DOMString or Function)` union, which is TimerHandler and nothing else so far: callable crosses as
        itself, anything else is a DOMString. Named for the rule rather than for the member, because the rule is
@@ -773,6 +801,37 @@ static inline IdlConcolicRule idl_concolic_rule(IdlArgType t)
        being pinned by. */
     case IDL_BOOLEAN:
     case IDL_BOOLEAN_NO_DEFAULT:
+    /* Web IDL §3.2.18 Enumeration types — the SECOND type whose own conversion is the fork, and it is here for
+       the boolean's reason reached by a different route. §3.2.3 forks because ToBoolean has two completions and
+       a representation decides them; Web IDL §3.2.18 Enumeration types forks because its DOMAIN IS FINITE AND
+       DECLARED: "If S is not one of E's enumeration values, then throw a TypeError" is the whole of what a
+       value may be, so the worlds an unknown stands for are the N strings the IDL wrote plus that one refusal —
+       N+1 completions, enumerable from the declaration alone.
+       CROSSING IS NOT THE CURE, AND THAT IS WHAT MOVED THIS ROW. A crossed DOMSTRING reaches a body that asks
+       it for its bytes and carries the taint to a sink; a crossed ENUMERATION reaches a body that was promised
+       one of N strings and got an ordinary Object, so it either aborts on it or answers from this engine's
+       value class — the collapse merely relocated, exactly as it was for the boolean. This type sat under
+       `default:` at CROSSES for as long as that reading of the row above it stood, and the reading was that
+       FORKS is about a union whose ARM is a test of the value: an enumeration has no arms in that sense, so
+       nothing here named it.
+       THE ARMS ARE ITS MEMBERS AS THE PAGE CAN TELL THEM APART, PLUS THE REFUSAL — never one per non-member
+       string. §3.2.18 has ONE throw, and the strings that reach it differ in nothing the algorithm behind this
+       boundary observes; two arms a page cannot tell apart are one world twice. The members themselves ARE told
+       apart, and by the part of this project that most depends on it: Fetch's `credentials` is
+       "omit" / "same-origin" / "include", and picking one for an unknown decides whether a request carries the
+       person's cookies. OUTCOME 0 IS THE FIRST VALUE THE DECLARATION LISTS, per step_fork_run's one rule on the
+       numbering — it is an ORDINARY completion of §3.2.18 rather than its throw, which is what that rule is
+       about, and WHICH member it is comes from the IDL's own list order and from no ranking made here. An
+       algorithm that then refuses the string it got (Fetch §5.4 step 17 refuses a "navigate" mode) is that
+       algorithm's step and not this conversion's exceptional arm.
+       BOTH BOUNDARIES ANSWER IT AND THEY ANSWER IT AT THE SAME SEAM, exactly as §3.2.3's two do — an ARGUMENT
+       position and a §3.2.17 dictionary MEMBER, one statement in idl_enum_fork. It is the OUTCOME seam and not
+       the branch seam: which of the conversion's OWN completions this position reaches is not a predicate any
+       `if` the page writes asks, which is the discriminator quickjs-step.h states at both.
+       ITS NULLABLE TWIN IS NOT HERE, and that is a stated residual rather than an oversight: `E?` has one world
+       more (§3.2.20's null) and therefore a different ask — see IDL_ENUM_NULLABLE, which names what its absence
+       shows. */
+    case IDL_ENUM:
         return IDL_CONCOLIC_FORKS;
     default:
         return IDL_CONCOLIC_CROSSES;
@@ -1160,21 +1219,24 @@ typedef struct {
     IdlDictLevel lvl;
     uint8_t    conv_sp;   /* how many IdlConvFrame frames are live; 0 = level zero is the one in flight */
     uint8_t    started;   /* the walk has a `src` and an `out`; 0 = nothing in flight, so a resume may start it */
-    /* THE NAME OF THE FORK THIS WALK IS ASKING — step_fork_run's `op` for §3.2.17 step 4.1.4's PRESENCE
-       question over a member minted off an unknown source, and step_tobool_run's for a §3.2.3 boolean member
-       over unknown external input. It is HERE and not a C local because the driver reads `JSStepHdr::fork_op`
-       AFTER the machine has returned JS_STEP_FORK, by which time a local of the member loop is gone; and it
-       is the WALK's rather than the header's shared `len_op` because that buffer belongs to the length probe
-       and two mechanisms sharing one scratch space is how one overwrites the other's outstanding question.
-       ONE BUFFER IS ENOUGH FOR THE TWO ASKS BECAUSE ONE FORK IS IN FLIGHT: step_fork_ask refuses a second ask
-       while the first one's operands are still on the header, and the two are sequential on one member — the
-       presence question is settled at `mphase` 3 before the boolean arm at `mphase` 1 is reached. WHAT KEEPS
-       THEM APART IS NOT THIS BUFFER BUT THE NAME EACH COMPOSES INTO IT: JSStepHdr::fork_ask_key is a content
-       hash of the string, so the two ask strings begin with different spec steps and neither one's answer can
-       be consumed at the other's call site. It is SCRATCH and carries nothing across a park — each ask is
-       re-composed from the declaration on every entry, and the key is what survives to match the answer to
-       the question, so a byte-copied clone that never reads this buffer's stale contents is correct by
-       construction. */
+    /* THE NAME OF THE FORK THIS CONVERSION IS ASKING — step_fork_run's `op` for §3.2.17 step 4.1.4's PRESENCE
+       question over a member minted off an unknown source, step_tobool_run's for a §3.2.3 boolean member over
+       unknown external input, and step_fork_run's again for a §3.2.18 enumeration over one. It is HERE and not
+       a C local because the driver reads `JSStepHdr::fork_op` AFTER the machine has returned JS_STEP_FORK, by
+       which time a local of the member loop is gone; and it is this struct's rather than the header's shared
+       `len_op` because that buffer belongs to the length probe and two mechanisms sharing one scratch space is
+       how one overwrites the other's outstanding question.
+       ONE BUFFER IS ENOUGH FOR THE THREE ASKS BECAUSE ONE FORK IS IN FLIGHT: step_fork_ask refuses a second ask
+       while the first one's operands are still on the header, and they are sequential — the presence question
+       is settled at `mphase` 3 before the boolean arm at `mphase` 1 is reached, and an ARGUMENT position's
+       enumeration ask cannot overlap a member's at all, because Web IDL converts arguments strictly left to
+       right and this walk lives inside the argument machine's own state (which is why `seq` and `uni_phase` are
+       shared the same way, and for the same reason). WHAT KEEPS THEM APART IS NOT THIS BUFFER BUT THE NAME EACH
+       COMPOSES INTO IT: JSStepHdr::fork_ask_key is a content hash of the string, so the ask strings begin with
+       different spec steps and name the member or the position they stand at, and no one answer can be consumed
+       at another's call site. It is SCRATCH and carries nothing across a park — each ask is re-composed from the
+       declaration on every entry, and the key is what survives to match the answer to the question, so a
+       byte-copied clone that never reads this buffer's stale contents is correct by construction. */
     char       ask[160];
 } IdlDictWalk;
 

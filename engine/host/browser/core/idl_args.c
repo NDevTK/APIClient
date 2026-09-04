@@ -250,6 +250,80 @@ static int idl_enum_check(JSContext *ctx, JSValueConst v, const char *const *val
     return -1;
 }
 
+/* WEB IDL §3.2.18 ENUMERATION TYPES OVER UNKNOWN EXTERNAL INPUT — the same section as the check above, asked of
+ * a value whose bytes this flow does not know, and the reason it is a FORK rather than a coercion is that the
+ * type's domain is FINITE AND DECLARED. Web IDL §3.2.18 Enumeration types is "If S is not one of E's
+ * enumeration values, then throw a TypeError" followed by "Return the enumeration value of type E that is equal
+ * to S", so the worlds the conversion can complete in are the N strings `values` lists and that one refusal —
+ * every one of them a real String this engine mints here, which is what makes an enumeration answerable where a
+ * `DOMString` is not.
+ * See idl_args.h's idl_concolic_rule for why crossing is not the cure and for the numbering.
+ *
+ * N+1 AND NOT N, AND NOT ONE PER NON-MEMBER STRING. The refusal is a world the page reaches — the conversion
+ * throws before the member's algorithm runs at all — so dropping it would delete a world nothing contradicted;
+ * and the strings that reach it differ in nothing behind this boundary observes, so one arm is all of them.
+ *
+ * `real` IS STATED ONLY WHERE THE OPERAND CARRIES A STRING EXAMPLE, and JS_OUTCOME_REAL_UNSTATED otherwise —
+ * which is a positive statement and not a shrug: both arms still run and neither is marked forced. The example
+ * is compared, never coerced. Running §3.2.18 step 1's ToString on an example that is not already a String
+ * would be the page's `toString`, which is a REQUEST and cannot be issued from inside a fork declaration, so
+ * this asks the one question it can answer with no code of the page's running.
+ *
+ * `op` IS THE CALLER'S AND NAMES THE SITE, because one machine makes many of these asks: a dictionary declaring
+ * two enumeration members, or a member declaring two enumeration arguments, would otherwise give them one
+ * fork_ask_key and a resume would consume one ask's answer at the other's call site. `subject` names what the
+ * §3.2.18 refusal is about, for the same reason — the TypeError a page catches says which member or which
+ * argument, exactly as idl_enum_check's does for a value the page determined.
+ *
+ * `over` is BORROWED for the length of the request, so the caller holds it where the SIBLING'S SNAPSHOT carries
+ * it. Returns JS_STEP_FORK (the caller returns it), 0 once *pout is the chosen enumeration value (owned by the
+ * caller), or -1 with §3.2.18 step 2's TypeError pending. */
+static int idl_enum_fork(JSContext *ctx, JSStepHdr *hdr, JSValueConst over, const char *op,
+                         const char *const *values, const char *subject, JSValue *pout)
+{
+    int n = 0, real = JS_OUTCOME_REAL_UNSTATED, arm = 0, r;
+    JSValue ex;
+
+    DCHECK(values != NULL, "an IDL_ENUM member or position was declared with no value list — the list IS the "
+                           "type, and over unknown external input it is also the set of worlds to fork over");
+    DCHECK(concolic_is(over), "§3.2.18's fork was asked over a value this flow determined — that value takes "
+                              "step 1's ToString and step 2's membership check, which run here as they always "
+                              "did; only an unknown has worlds to enumerate");
+    while (values[n]) n++;
+    DCHECK(n > 0, "an enumeration declared an EMPTY value list — §3.2.18 step 2 would then refuse every string "
+                  "there is, so the type names no world the conversion can complete in");
+
+    /* WHICH ARM A REAL SESSION TAKES, from the example the value already carries — §3.2.18's own membership
+       test, run on a String this flow holds rather than on the unknown. An example that is not a String says
+       nothing here (step 1 would have to run the page's code to make one), and neither does no example. */
+    ex = concolic_example(ctx, over);
+    if (JS_IsString(ex)) {
+        const char *c = JS_ToCString(ctx, ex);
+        CHECK(c != NULL, "OOM reading the string example of a value §3.2.18 is about to fork over");
+        for (real = 0; real < n && strcmp(c, values[real]) != 0; real++)
+            ;
+        JS_FreeCString(ctx, c);   /* real == n is the refusal arm, which is the arm that example takes */
+    }
+    JS_FreeValue(ctx, ex);
+
+    r = step_fork_run(ctx, hdr, over, op, n + 1, real, &arm);
+    if (r) return r;
+    DCHECK(arm >= 0 && arm <= n,
+           "§3.2.18's fork came back standing at an arm the enumeration does not have — the completions are "
+           "the declared values and step 2's one TypeError, and there is no world outside them");
+    if (arm == n) {
+        /* Web IDL §3.2.18 Enumeration types step 2 — "If S is not one of E's enumeration values, then throw
+           a TypeError". The string is not spellable on this arm, so the message names the SUBJECT where
+           idl_enum_check names the value; what a page catches is the same TypeError from the same step at the
+           same point in the algorithm. */
+        JS_ThrowTypeError(ctx, "the value of %s is not one of the enumeration's values", subject);
+        return -1;
+    }
+    *pout = JS_NewString(ctx, values[arm]);
+    if (JS_IsException(*pout)) { *pout = JS_UNDEFINED; return -1; }
+    return 0;
+}
+
 /* THE POOL IS CHUNKED, AND HAS NO CEILING. It was one fixed array sized "for the whole platform surface", which
    is a number nobody can know: every reflected content attribute is a declaration and HTML's per-tag interfaces
    contribute about 190 between them, so the surface grows with every component built — and the ceiling was
@@ -2255,9 +2329,9 @@ static int idl_level_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *walk, IdlC
            types because the third world is decided one question earlier and by a different question. */
         if (mt != IDL_ANY && concolic_is(w->mv) && idl_concolic_rule(mt) != IDL_CONCOLIC_FORKS)
             mt = IDL_ANY;
-        /* AND THE ONLY FORK THIS LOOP PERFORMS IS §3.2.3's, ASSERTED WHERE THE UNCROSSING HAPPENS. Every OTHER
-           type that answers FORKS resolves at an ARGUMENT position, where the value is a position's and not a
-           member's — the §3.2.25 unions (the two `(dictionary or boolean)` rows and `(DOMString or D)`) and
+        /* AND THE ONLY FORKS THIS LOOP PERFORMS ARE §3.2.3's AND §3.2.18's, ASSERTED WHERE THE UNCROSSING
+           HAPPENS. Every OTHER type that answers FORKS resolves at an ARGUMENT position, where the value is a
+           position's and not a member's — the §3.2.25 unions (the two `(dictionary or boolean)` rows and `(DOMString or D)`) and
            the §3.6 overload splits (the USVString one and the `sequence<object>` one, whose entries are
            chosen between at an argument INDEX a member does not have at all). A member declared any of them
            would fall past every arm below and be PLACED UNCONVERTED, which is silent both ways it can go
@@ -2266,12 +2340,12 @@ static int idl_level_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *walk, IdlC
            asks idl_concolic_rule, so a row added to that function is a row this assert covers on the day it
            lands, and the enumeration here is a reader's map rather than a second copy. */
         DCHECK(!concolic_is(w->mv) || idl_concolic_rule(mt) != IDL_CONCOLIC_FORKS ||
-               mt == IDL_BOOLEAN || mt == IDL_BOOLEAN_NO_DEFAULT,
+               mt == IDL_BOOLEAN || mt == IDL_BOOLEAN_NO_DEFAULT || mt == IDL_ENUM,
                "a dictionary member declared a type whose conversion FORKS over unknown external input, and "
-               "this member loop has an arm for exactly one of those — Web IDL §3.2.3 boolean. Every other "
-               "type that answers FORKS is resolved at an ARGUMENT position by the conversion above, not "
-               "here, so a member declared one reaches no arm and is placed unconverted. Give the type its "
-               "arm in this loop, beside the boolean's");
+               "this member loop has an arm for two of those — Web IDL §3.2.3 boolean and §3.2.18's "
+               "enumeration. Every other type that answers FORKS is resolved at an ARGUMENT position by the "
+               "conversion above, not here, so a member declared one reaches no arm and is placed "
+               "unconverted. Give the type its arm in this loop, beside those two");
         /* §3.2.25 over `(DOMString or sequence<DOMString>)` ON A DICTIONARY MEMBER — the same union the
            argument path resolves, resolved here so the arm's @@iterator read parks on the MEMBER it is
            on. It rewrites `mt` and the arms below convert what it chose; step 2's null is placed
@@ -2634,6 +2708,52 @@ static int idl_level_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *walk, IdlC
             if (JS_IsException(w->mv)) {   /* §3.2.7's restricted double refused the value */
                 w->mv = JS_UNDEFINED;
                 return -1;
+            }
+        }
+        else if (mt == IDL_ENUM && concolic_is(w->mv)) {
+            /* WEB IDL §3.2.18 ENUMERATION TYPES ON A DICTIONARY MEMBER WHOSE VALUE IS UNKNOWN EXTERNAL INPUT —
+               the dictionary half of the answer the argument boundary gives, exactly as §3.2.3's two arms are
+               one answer at two boundaries. The arm below is the SAME section for a value this flow determined:
+               step 1's ToString is a request there and step 2's membership is decided after it, and neither is
+               performable over an unknown — step_tostring_run has no String to produce for one, which is why
+               this is a separate arm and not a predicate inside that one.
+               IT IS ROUTING AND NOT A FALLBACK SELECTOR. Delete idl_enum_fork and the arm below still has to
+               run §3.2.18 for every determined value; delete that arm and this one still has to enumerate the
+               worlds an unknown stands for. Two questions, two implementations, and the value class is what
+               tells them apart rather than a narrowing anybody chose.
+               `in` IS RELEASED BEFORE THE ASK, for the reason the boolean arm above states: the request takes
+               no `in` to hand it to, and the sibling's snapshot is taken at this return, so nothing of the
+               caller's may be live across it. `w->mv` is the LEVEL's own slot, which idl_level_visit names,
+               which is where a borrowed fork operand has to live.
+               THE ASK NAMES THE MEMBER because one machine makes many of them — the member's identifier, its
+               inheritance LEVEL and the dictionary it is declared on, which is what tells an inherited member
+               from a re-declared one and is fixed at the declaration rather than being a position in anything
+               the page moves. RequestInit declares EIGHT enumeration members, so a single constant here would
+               give all eight one fork_ask_key and a resume from the fourth would be read as the answer to the
+               first. Only the TOP level can be standing here: every level below it is parked at `mphase` 1 on
+               the member that pushed it, and a member whose type pushes a level is a dictionary or a sequence
+               and never an enumeration. */
+            DCHECK(idl_concolic_rule(mt) == IDL_CONCOLIC_FORKS,
+                   "§3.2.17's enumeration member asks §3.2.18's completions at the outcome seam for unknown "
+                   "input while idl_args.h no longer declares IDL_ENUM as a type that forks — the crossing "
+                   "above would then rewrite the member to IDL_ANY, this arm would never be reached for an "
+                   "unknown, and the member would be placed unconverted for a body that was promised one of "
+                   "the enumeration's strings");
+            JS_FreeValue(ctx, in);
+            in = JS_UNDEFINED;
+            snprintf(walk->ask, sizeof walk->ask,
+                     "Web IDL §3.2.18 enumeration member `%s` (level %u) of %s",
+                     dm->name, (unsigned)dm->level, idl_dict_where(w));
+            {
+                JSValue chosen = JS_UNDEFINED;
+                char subj[128];
+
+                snprintf(subj, sizeof subj, "member `%s` of %s", dm->name, idl_dict_where(w));
+                r = idl_enum_fork(ctx, hdr, w->mv, walk->ask, dm->values, subj, &chosen);
+                if (r > 0) return r;   /* parked ON THIS MEMBER's own conversion, or forked at it */
+                if (r < 0) return -1;  /* §3.2.18 step 2's TypeError, on the refusal arm */
+                JS_FreeValue(ctx, w->mv);
+                w->mv = chosen;
             }
         }
         else if (mt == IDL_DOMSTRING || mt == IDL_DOMSTRING_NULLABLE || mt == IDL_BYTESTRING ||
@@ -4671,6 +4791,42 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                 return JS_STEP_ABRUPT;
             }
             *slot = JS_DupValue(ctx, a);
+            goto placed;
+        }
+        if (t == IDL_ENUM && concolic_is(a)) {
+            /* WEB IDL §3.2.18 ENUMERATION TYPES AT AN ARGUMENT POSITION HANDED UNKNOWN EXTERNAL INPUT — the
+               position half of the answer the dictionary member loop gives, and it is HERE, below the
+               pass-through, because the pass-through no longer crosses this type: idl_concolic_rule answers
+               FORKS for it, so a concolic reaches the tail and the ToString below has no String to produce for
+               one. Without this arm it would return JS_STEP_UNKNOWN and the position would be PLACED
+               UNCONVERTED, which is the silent shape rather than the loud one — the same thing that happens
+               today, one line lower and with nothing to say so.
+               ITS WORLDS ARE THE DECLARATION'S, WHICH IS WHY THIS IS THE ONE PLACE THE FACT CAN BE ACTED ON:
+               `E` is stated per POSITION by idl_arg_enum, so the forty-odd bodies that read an enumeration
+               argument hold the string and not the list. `history.scrollRestoration = cfg.mode` is the
+               ordinary spelling — "auto" and "manual" are two documents' worth of behaviour, and picking one
+               for a value nothing is known about deletes the other.
+               THE ASK NAMES THE POSITION AND THE MEMBER, for the reason the dictionary arm's does: one machine
+               makes many of these, so a member declaring two enumeration arguments would otherwise give both
+               one fork_ask_key and a resume would consume one ask's answer at the other's call site. It is
+               composed into the conversion's own scratch buffer, which is where an outstanding fork's `op` has
+               to live — see IdlDictWalk::ask, and see it for why one buffer serves all three asks. */
+            JSValue chosen = JS_UNDEFINED;
+            char subj[96];
+
+            JS_FreeValue(ctx, cb_result);
+            cb_result = JS_UNDEFINED;
+            DCHECK(idl_arg_enum_values(m, ti) != NULL,
+                   "an argument declared Web IDL §3.2.18's enumeration with no value list — the list IS the "
+                   "type, and over unknown external input it is also the set of worlds to fork over; "
+                   "idl_arg_enum is where a position states it");
+            snprintf(s->dw.ask, sizeof s->dw.ask,
+                     "Web IDL §3.2.18 enumeration argument %d of %s", s->i + 1, m->name);
+            snprintf(subj, sizeof subj, "argument %d", s->i + 1);
+            r = idl_enum_fork(ctx, &s->hdr, a, s->dw.ask, idl_arg_enum_values(m, ti), subj, &chosen);
+            if (r > 0) return r;   /* parked ON THIS ARGUMENT, or forked at it */
+            if (r < 0) return JS_STEP_ABRUPT;   /* §3.2.18 step 2's TypeError, on the refusal arm */
+            *slot = chosen;
             goto placed;
         }
         DCHECK(t == IDL_DOMSTRING || t == IDL_BYTESTRING || t == IDL_USVSTRING || t == IDL_ENUM,
