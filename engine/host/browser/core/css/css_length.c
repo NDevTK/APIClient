@@ -815,10 +815,19 @@ CssPx css_length_resolve_pct(CssLength len, CssPx basis)
            "two kinds that carry one are the whole of what a basis means, and an absolute length resolved "
            "against a containing block would be scaled by a measure it does not depend on — so this is a "
            "caller that dispatched on something other than the kind");
-    /* §10.10.1 "Simplification": a Sum's children are combined only "with other values that have IDENTICAL
-       units", so a `<percentage>` residue holds NO length term at all — and this arm's single expression is
-       only right if the pair's unused half is the additive identity WITH AN EMPTY FACT SET. A length term left
-       there by a producer would be added silently; an environment fact left there would be UNIONED into the
+    /* A `CSS_LENGTH_PERCENTAGE` COMES FROM ONE PRODUCTION AND NEVER FROM A MATH FUNCTION, which is why this
+       arm's single expression is right: css-values-4 §5.5 "Percentages: the <percentage> type" is a bare
+       `<percentage>` with no second term to state, and `css_length_parse` writes it over a zeroed pair.
+       css-values-4 §10.10.1 "Simplification" is NOT the authority here, and reading it as one is the mistake
+       that stood at this line — under a PARAPHRASE IN QUOTATION MARKS, which is a claim no reader could check.
+       §10.10.1's Sum rule is "for each set of root's children that are numeric values with identical units,
+       remove those children and replace them with a single numeric value containing the sum of the removed
+       nodes and with the same unit", and it governs a MATH FUNCTION'S residue: a math function reaching this
+       component is `CSS_LENGTH_CALCULATED` or `CSS_LENGTH_ABSOLUTE`, so the kind the assert below is about is
+       unreachable through §10.10.1 altogether. What that assert is really about is a PRODUCER writing both
+       halves of a pair only one of which this kind declares: this
+       expression is only right if the unused half is the additive identity WITH AN EMPTY FACT SET. A length
+       term left there would be added silently; an environment fact left there would be UNIONED into the
        result's domain and fork a world the value does not depend on. */
     DCHECK(len.kind != CSS_LENGTH_PERCENTAGE || (len.px.px == 0.0 && len.px.env == CSS_ENV_NONE),
            "a `<percentage>` computed value carries a LENGTH term. css_length_parse writes the percentage arm "

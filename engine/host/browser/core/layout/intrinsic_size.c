@@ -106,7 +106,7 @@ static CssPx is_intrinsic_edge_px(lxb_dom_element_t *el, bool trailing)
     const char *const *side = IS_EDGE[trailing ? 1 : 0];
     CssLength margin = css_computed_length(el, side[IS_EDGE_MARGIN]);
     CssLength padding = css_computed_length(el, side[IS_EDGE_PADDING]);
-    CssPx sum;
+    CssPx sum, pad;
 
     /* §2.2's own sentence, which CSS 2.1 §10.3.1 "Inline, non-replaced elements" states again for the used
        value ("A computed value of 'auto' for 'margin-left' or 'margin-right' becomes a used value of '0'"). It
@@ -118,24 +118,39 @@ static CssPx is_intrinsic_edge_px(lxb_dom_element_t *el, bool trailing)
                 "lexbor's own validation should have dropped",
                 side[IS_EDGE_MARGIN], margin.keyword);
         sum = css_px(0.0);
+    } else if (margin.kind == CSS_LENGTH_ABSOLUTE) {
+        /* AN ABSOLUTE LENGTH IS ALREADY §5.2.1's ANSWER AND HAS NO BASIS IN IT. §5.2.1's rule is stated of "a
+           cyclic percentage", so a value carrying none is not a thing the section resolves — the computed
+           length IS the contribution, at this basis and at every other. It is a separate arm and not a zero
+           handed to the resolution entry because `css_length_resolve_pct` is css-values-4 §10.11 "Computed
+           Value"'s USED-VALUE-TIME SIMPLIFICATION, whose subject is the two kinds that carry a percentage:
+           routing an absolute length through it asks a percentage question of a value that has none, which is
+           the dispatch its own assert refuses. core/layout/used_value.c and core/layout/table_width.c split
+           the identical three-shape grammar the same way at every one of their sites. */
+        sum = margin.px;
     } else {
-        DCHECKF(margin.kind == CSS_LENGTH_ABSOLUTE || margin.kind == CSS_LENGTH_PERCENTAGE ||
-                    margin.kind == CSS_LENGTH_CALCULATED,
+        DCHECKF(margin.kind == CSS_LENGTH_PERCENTAGE || margin.kind == CSS_LENGTH_CALCULATED,
                 "`%s` computed to none of the three shapes CSS 2.1 §8.3 \"Margin properties\" admits",
                 side[IS_EDGE_MARGIN]);
         /* §5.2.1 resolves the PERCENTAGE against zero and not the whole value, which is the contrast the same
            section draws one paragraph up: a cyclic max or preferred size on a non-replaced box is "treated …
            as that property's initial value", while a margin's cyclic percentage "is resolved against zero". So
-           `margin-left: calc(10px + 50%)` contributes 10px, and one basis handles both shapes in one step
-           because css-values-4 §10.11 "Computed Value" left the percentage inside the math function. */
+           `margin-left: calc(10px + 50%)` contributes 10px, and ONE BASIS COVERS THE TWO KINDS THAT CARRY A
+           PERCENTAGE — not the three the grammar admits — because css-values-4 §10.11 "Computed Value" left
+           the percentage inside the math function and §5.6 "Mixing Percentages and Dimensions" adds the pair's
+           two terms in one step. */
         sum = css_length_resolve_pct(margin, css_px(0.0));
     }
-    /* §8.4's <padding-width> has no `auto` and no keyword at all. */
-    DCHECKF(padding.kind == CSS_LENGTH_ABSOLUTE || padding.kind == CSS_LENGTH_PERCENTAGE ||
-                padding.kind == CSS_LENGTH_CALCULATED,
-            "`%s` computed to a keyword. CSS 2.1 §8.4 \"Padding properties\"' <padding-width> grammar is a "
-            "length or a percentage and nothing else",
-            side[IS_EDGE_PADDING]);
+    /* §8.4's <padding-width> has no `auto` and no keyword at all, so the split is two-way rather than three. */
+    if (padding.kind == CSS_LENGTH_ABSOLUTE) {
+        pad = padding.px;
+    } else {
+        DCHECKF(padding.kind == CSS_LENGTH_PERCENTAGE || padding.kind == CSS_LENGTH_CALCULATED,
+                "`%s` computed to a keyword. CSS 2.1 §8.4 \"Padding properties\"' <padding-width> grammar is a "
+                "length or a percentage and nothing else",
+                side[IS_EDGE_PADDING]);
+        pad = css_length_resolve_pct(padding, css_px(0.0));
+    }
     /* THE FLOOR IS THE PROPERTY'S RANGE AND IT IS REACHED ONLY THROUGH A MATH FUNCTION. CSS 2.1 §8.4 says
        outright that "Unlike margin properties, values for padding values cannot be negative", and §5.1's range
        restriction drops a negative LITERAL — but css-values-4 §9.1 "Numeric Functions" exempts a math function
@@ -143,12 +158,15 @@ static CssPx is_intrinsic_edge_px(lxb_dom_element_t *el, bool trailing)
        a declaration to become invalid", and instead "the value of a numeric function is clamped to the range
        allowed in the context it is used at computed value time if possible, and at used value time otherwise".
        §5.2.1's ZERO BASIS is precisely what makes `calc(50% - 10px)` land out of range HERE and in range at a
-       real width, so this clamp belongs at this resolution and could not have run at the cascade. `css_px_max`
-       and not an `if`, so the clamped-away operand's environment facts stay in the domain —
-       core/layout/used_value.c's own padding arm states that reason in full, and this is the same arithmetic at
-       the other basis. A MARGIN IS NOT CLAMPED, which is §8.3's "negative values for margin properties are
-       allowed". */
-    sum = css_px_add(sum, css_px_max(css_length_resolve_pct(padding, css_px(0.0)), css_px(0.0)));
+       real width, so this clamp belongs at this resolution and could not have run at the cascade. IT IS OVER
+       BOTH ARMS AND NOT OVER THE RESOLUTION ALONE: a math function whose Sum kept no percentage term
+       (`calc(10px - 20px)`) is an ABSOLUTE computed value that §9.1 exempted from §5.1's parse-time check just
+       the same, so the arm that never sees a basis is out of range for the same reason and by the same
+       sentence. `css_px_max` and not an `if`, so the clamped-away operand's environment facts stay in the
+       domain — core/layout/used_value.c's own padding arm states that reason in full, splits its two arms the
+       same way, and clamps their one result exactly here. A MARGIN IS NOT CLAMPED, which is §8.3's "negative
+       values for margin properties are allowed". */
+    sum = css_px_add(sum, css_px_max(pad, css_px(0.0)));
     return css_px_add(sum, is_edge_border_px(el, side[IS_EDGE_BORDER]));
 }
 
