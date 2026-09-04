@@ -151,10 +151,25 @@ const COUNTERS = ["switches", "flows", "candidates", "jobsQueued", "jobsRun", "u
    branch on the same absent polyfill global in all three.
    `hostAsked`/`hostAnswered` IS THE OTHER DOOR AND IS NOT THAT PAIR — solver/result.c says so where it emits
    them, and records that `hostAsked: 0` "has already been relayed as 'nothing is ever asked of the host' for
-   a document holding hundreds of thousands of records". They are minted at engine.c's `mint_req` and count
-   CROSS-INSTANCE RENDEZVOUS only, so a document that makes no cross-document read reads 0/0 for ever and is
-   right to. Both pairs are carried here for exactly that reason: each names its own door, and the one that
-   answers "did this run ever ask for a resource" is the REPLY pair.
+   a document holding hundreds of thousands of records". They are minted at engine.c's `mint_req`, which is
+   reached from `engine_host_request` — and THAT has FIVE production callers, not four: a navigable's
+   cross-instance read, a remote object's, a WindowProxy's, an iframe's, AND `XMLHttpRequest`, which places
+   its request through the same rendezvous because §3.5.6's synchronous arm must BLOCK the flow while the
+   asynchronous arm places the identical request from a task. So `hostAsked > 0` on a single-instance document
+   MEANS AN XHR WAS ISSUED, and that is the one reading a driver of real pages most needs.
+   THIS PARAGRAPH SAID "CROSS-INSTANCE RENDEZVOUS only" AND THAT WAS FALSE BY EXACTLY THE CALLER A LIVE DRIVER
+   CARES ABOUT — CLAUDE.md's under-claim, which costs evidence rather than fabricating it, so nothing catches
+   it: a reader told the row cannot speak about network requests DISCARDS a true reading and never finds out.
+   It is not found by acting on it; it is found by COUNTING, which is one command
+   (`grep -rn "engine_host_request *(" engine/host/`) and is how this one was found.
+   AND IT WAS ALREADY CORRECTED IN solver/result.c AND NOT HERE, WHICH IS THE POINT: a fix that retires an
+   argument falsifies every site where that argument was written down, and its code delta is not its size.
+   `grep -rn "cross-instance rendezvous and NOTHING ELSE" engine/host/` still answers — that site is owed the
+   same repair by whoever owns the engine tree, and it is named by its STRING rather than its line so this
+   sentence cannot rot into a wrong coordinate.
+   Both pairs are carried here because each names its own door: the pair that answers "did this run ever ask
+   for a RESOURCE" is the REPLY pair, and the pair that answers "did this run ever issue an XHR or read across
+   an instance boundary" is this one. A document that does neither reads 0/0 for ever and is right to.
    READ `programCursors` WITH `stepUnitRuns.finished`, NEVER ALONE: the cursor row is a GAUGE over the members
    standing now, so it is a statement about the whole population only while nothing has retired, and `finished`
    is the row that says whether anything has.
