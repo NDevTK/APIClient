@@ -3491,11 +3491,12 @@ void concolic_slots_only_end(void)
     g_slots_only = 0;
 }
 
-#if APICLIENT_DEV
 /* Does `obj` carry a REAL own slot for `atom` — the ordinary layer under this class's own surface? The mode is
    what makes the question answerable at all: with the exotic hook armed, quickjs's [[GetOwnProperty]] answers
-   1 for a shape slot AND for an example member, and the two are exactly what has to be told apart. Its one
-   caller is the disjointness assert below, so it compiles out with that assert. */
+   1 for a shape slot AND for an example member, and the two are exactly what has to be told apart.
+   IT IS NOT DEV-ONLY ANY MORE. It was, when its only caller was the disjointness assert below; the unknown-
+   member materialisation asks the same question to decide whether it has anything to do, and that runs in every
+   build. One speller for one question, rather than an assert's copy and a live copy that can disagree. */
 static int concolic_has_own_slot(JSContext *ctx, JSValueConst obj, JSAtom atom)
 {
     int r;
@@ -3507,7 +3508,6 @@ static int concolic_has_own_slot(JSContext *ctx, JSValueConst obj, JSAtom atom)
                    "shape lookup has no other completion");
     return r > 0;
 }
-#endif
 
 /* §10.1.5 [[GetOwnProperty]] ( propertyKey ) over the record — reached only after quickjs's ordinary lookup
    found no slot, so a member the flow has MATERIALISED (see the define below) never arrives here. */
@@ -3574,6 +3574,100 @@ JSValue concolic_own_keys_pred(JSContext *ctx, JSValueConst record)
     return own_keys_pred(ctx, c);
 }
 
+/* THE NAME OF THE RECORD'S n-TH UNKNOWN OWN MEMBER — see concolic.h. Two spellers and no third: the identity
+   and the display form come from concolic_new_derived, and the conversion from that value to a real property
+   key is the engine's own JS_ValueToAtom, which is where §7.1.21 ToPropertyKey ( arg )'s answer for an unknown
+   key lives (the key's shape, through .key_name). Composing the string here instead would be a second copy of
+   both rules, and the one that drifts is the copy no read goes through.
+   `#n` AND NOT `>n`: the chain's per-position QUESTION is spelled `[[OwnPropertyKeys]]>n` by the engine, and
+   this is a different question about the same position — what the member is CALLED, not whether it exists — so
+   it is a different key by construction rather than by luck.
+   A CANDIDATE RUN LEGITIMATELY ANSWERS A STRING HERE: concolic_new_derived goes through concolic_derived,
+   which substitutes the attacker's payload for a derivation over the source under test, and a member named by
+   that payload is exactly what the re-fire is for. JS_ValueToAtom takes either. */
+static JSAtom own_member_atom(JSContext *ctx, JSValueConst record, int n)
+{
+    char op[40];
+    JSValue key;
+    JSAtom atom;
+    int w = snprintf(op, sizeof op, "[[OwnPropertyKeys]]#%d", n);
+
+    CHECK(w > 0 && (size_t)w < sizeof op,
+          "concolic: an unknown member's name did not fit its operation buffer — a truncated one names two "
+          "positions with one string, so the record would hold one member where the flow decided two");
+    key = concolic_new_derived(ctx, op, &record, 1, JS_UNDEFINED);
+    /* ASSERTED AND NOT BRANCHED PAST: both callers have already established that `record` is one of this
+       class's values, and concolic_new_derived answers JS_UNINITIALIZED for exactly one reason — no operand is
+       unknown — so this cannot hold unless the caller and this file disagree about what the operand is. */
+    DCHECK(!JS_IsUninitialized(key),
+           "an unknown member was named over a value this class does not hold — the callers are the "
+           "enumeration's own-member chain and its own arm-1 assertion, both of which run only for a record "
+           "whose own-key-set predicate this file minted");
+    atom = JS_ValueToAtom(ctx, key);
+    JS_FreeValue(ctx, key);
+    return atom;
+}
+
+int concolic_own_key_mint(JSContext *ctx, JSValueConst record, int n)
+{
+    Concolic *c = g_concolic_class ? JS_GetOpaque(record, g_concolic_class) : NULL;
+    JSAtom atom;
+    JSValue val;
+    int r;
+
+    if (!c)
+        return 0;
+    /* THE SAME CONDITION concolic_own_keys_pred ASKS, written the same way, because the two are one decision:
+       a record whose EXAMPLE is present has a key set this run OBSERVED, so there is no unknown member to name
+       and no question was ever minted for the caller to be standing on. */
+    DCHECK(JS_IsUndefined(c->example),
+           "a record whose example holds its key set was asked to materialise an UNKNOWN member — its key set "
+           "is an observation about the payload this visitor was served, so the caller forked over a question "
+           "concolic_own_keys_pred never minted");
+    DCHECK(n >= 0, "an unknown member was asked for at a negative position — the chain's cursor is a count");
+    atom = own_member_atom(ctx, record, n);
+    if (atom == JS_ATOM_NULL)
+        return -1;
+    /* ALREADY MATERIALISED, WHICH IS THE ORDINARY CASE AND NOT AN ERROR. The name is a function of the record
+       and `n` alone, so a second enumeration in this flow replays the same arms and arrives back at the member
+       this flow already made. Re-defining it would replace a value the page may have written since, and on a
+       record the page has frozen it would be refused outright — a refusal about a member that is already there
+       and already correct.
+       NAMED RESIDUAL — a [[Delete]] of a materialised member is UNDONE by the next enumeration of that record
+       in the same flow. §10.1.10 [[Delete]] ( propertyKey ) removes a configurable slot, and these are
+       configurable (§6.1.7.3 requires it of a data property whose value may differ over time), so the slot goes;
+       the flow's recorded answers do not, and the chain replays them and defines the member again. WHAT THE
+       NEXT DIFF BUILDS: a per-flow record of how many of this record's unknown members this flow has already
+       PERFORMED, so the chain resumes past them instead of replaying from position 0. Where that lives is the
+       work and not a detail — this class keeps no delta-captured C state at all (nothing here calls
+       cow_capture_host_record, and the header's slots-only argument is that the delta records SLOTS), so a
+       plain field on the Concolic would be state a context switch does not swap, and the count has to sit
+       somewhere the delta already carries. HOW ITS ABSENCE SHOWS: `for (k in x) delete x[k]` followed by a
+       second enumeration of `x` lists the deleted member again, and `k in x` answers true after the delete. */
+    if (concolic_has_own_slot(ctx, record, atom)) {
+        JS_FreeAtom(ctx, atom);
+        return 1;
+    }
+    /* THE MEMBER'S VALUE IS THE ONE A READ OF THAT NAME ANSWERS, through the same entry every other read of
+       this record goes through — one derivation and one identity, so `for (k in r) r[k]` and a later
+       `r[<that name>]` are the same value and an @S candidate substituted for the member reaches both. */
+    val = concolic_exotic_get(ctx, record, atom, record);
+    /* JS_PROP_NO_EXOTIC because this IS the class's own materialisation: routing it back through
+       concolic_exotic_define_own would ask this class what it reports about a member it is in the middle of
+       making. The attributes are the ones concolic_exotic_get_own reports for every member of a record, which
+       is what §6.1.7.3 Invariants of the Essential Internal Methods requires of a data property that "may
+       return different values over time". */
+    r = JS_DefinePropertyValue(ctx, record, atom, val, JS_PROP_C_W_E | JS_PROP_NO_EXOTIC);
+    JS_FreeAtom(ctx, atom);
+    if (r < 0)
+        return -1;
+    DCHECK(r == 1,
+           "materialising an unknown member was refused on a record that did not already hold it — the only "
+           "ordinary refusal is a non-extensible object, and this record's own enumeration has just decided a "
+           "member INTO it, so the two answers are about one record and disagree");
+    return 1;
+}
+
 /* §10.1.11 [[OwnPropertyKeys]] ( ) over the record. quickjs MERGES what this returns with the object's
    ordinary keys and dedups neither, so the two lists must be DISJOINT — §6.1.7.3 Invariants of the Essential
    Internal Methods states "The returned List must not contain any duplicate entries". That is maintained by
@@ -3612,20 +3706,23 @@ static int concolic_exotic_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint
         if (arm == 0)
             return 0;   /* THIS FLOW'S decided world: the record holds no own member this run can name. */
         if (arm == 1) {
-            /* §6.1.7.3 Invariants of the Essential Internal Methods: "Each element of the returned List must
-               be a property key", and §6.1.7 The Object Type: "A property key is either a String or a Symbol."
-               The flow has decided the record holds a member whose NAME this run never observed, and there is
-               no arrangement of the returned List that carries one — so the consumer that asked the question
-               must answer this arm ITSELF, in a vocabulary where a key is a VALUE, and must not then come back
-               here for a List it cannot be given. */
-            DFAIL("an unknown record's enumeration reached §10.1.11 [[OwnPropertyKeys]] ( ) on the arm where "
-                  "the record HOLDS an own member — that member's name is unknown, and §6.1.7.3 Invariants of "
-                  "the Essential Internal Methods requires every element of the returned List to be a property "
-                  "key, which §6.1.7 The Object Type defines as a String or a Symbol. The consumer that forked "
-                  "on concolic_own_keys_pred must answer this arm in the two places a key IS a value: the "
-                  "per-iteration key §14.7.5.9 EnumerateObjectProperties ( obj ) yields, which §14.7.5.10.2.1 "
-                  "%ForInIteratorPrototype%.next ( ) hands back, and the Array §20.1.2.19 Object.keys ( obj ) "
-                  "builds. It must not then ask this internal method for a List that cannot hold one");
+            /* THE ARM WHERE THE RECORD HOLDS MEMBERS ANSWERS THE EMPTY EXOTIC LIST TOO, AND THAT IS NOT THE
+               TWO ARMS COLLAPSING. What this hook contributes is the members the EXAMPLE holds, and there is
+               no example; the members the flow decided on are ORDINARY SLOTS on the record by the time this
+               runs, materialised by concolic_own_key_mint, so quickjs's own key walk has already listed them
+               and adding them here would be the duplicate §6.1.7.3 Invariants of the Essential Internal
+               Methods forbids ("The returned List must not contain any duplicate entries"). The two arms
+               differ in what the RECORD holds, which is what the caller sees; they do not differ in what this
+               hook owes on top of it.
+               AND IT IS NOT ASSERTED HERE, WHICH IS A DECISION AND NOT AN OMISSION. The assert a reader
+               reaches for — on this arm the record carries a slot for member 0 — is FALSE OF CORRECT
+               RUNS: the members are configurable, so `delete x[k]` removes one and the record legitimately
+               carries none while this arm still stands. It is also not free, because naming member 0 MINTS a
+               derivation, and concolic_derived is the observation site an @S candidate's delivery is recorded
+               at — an assert that mints would write a ladder rung for a substitution nobody delivered, which
+               is an instrument corrupting the measurement it is watching. What does assert the arm is the
+               engine's own chain, at every position, in every build. */
+            return 0;
         } else {
             /* -1 is "this flow has not been asked", which is a fact about the CONSUMER and not about the
                record: whichever spelling reached this internal method did so without first forking on the
@@ -4289,6 +4386,11 @@ static JSConcolicHooks g_hooks = {
        second-name defect concolic.h warns about — and `.builtin` also carries src/root, which the header
        says this predicate must not. */
     .own_keys_pred = concolic_own_keys_pred,
+    /* …AND ITS TRUE ARM, WHICH IS NOT OPTIONAL BESIDE IT. A host that asks whether the record holds a member
+       and cannot perform the answer has an enumeration that decided one exists and then enumerated nothing —
+       the empty-List fabrication the predicate exists to prevent, arriving one step later and with a decided
+       arm on top of it. The engine says so at its own site rather than trusting the pair. */
+    .own_key_mint = concolic_own_key_mint,
     .lead = concolic_lead_hook };
 
 /* Concolic VALUE propagation stays installed across scheduling AND verification, because taint must flow

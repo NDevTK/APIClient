@@ -185,19 +185,21 @@ void concolic_slots_only_end(void);
  * containing a List of property keys", and §6.1.7 The Object Type says what may be in that List: "A property
  * key is either a String or a Symbol." §6.1.7.3 Invariants of the Essential Internal Methods states the same
  * thing as a requirement on this method's own answer — "Each element of the returned List must be a property
- * key". A member whose NAME is unknown is therefore not expressible in the returned List AT ALL, in any
- * arrangement of it. So the arm "the record holds a member" has no representation at the internal method, and
- * an implementation that tried to build the fork there would have nothing to hand back on the arm it forked
- * for. Where an unknown name IS expressible is at the CONSUMERS, because there a key is a VALUE: §14.7.5.9
- * EnumerateObjectProperties ( obj ) yields one key per iteration and §14.7.5.10.2.1
- * %ForInIteratorPrototype%.next ( ) is where that key becomes a value, and §20.1.2.19 Object.keys ( obj ) hands
- * back an Array whose elements are ordinary values.
+ * key". THE ARM IS STILL EXPRESSIBLE AND THAT IS NOT WHY THE FORK MOVED — an earlier statement of this rule
+ * said a member of unknown NAME had no representation in the returned List in any arrangement of it, and that
+ * was wrong: an unknown key in this engine DENOTES a real String, its own shape (concolic_key_name_hook), which
+ * is what makes `o[x] = 1` then `o[x]` find one slot, so a member named that way is an ordinary String key and
+ * §6.1.7.3 is satisfied outright. What the internal method genuinely cannot do is FORK: it is reached from
+ * inside a C activation with no flow base under it, so there is no resume point to snapshot a sibling at, and a
+ * fork with no resume point is not a fork. That is the whole of why the question is asked at the CONSUMER —
+ * a step machine's request has a suspension point and this method has none.
  *
  * THE TWO ARMS, AND WHY NEITHER OF THEM IS A DEFAULT. Arm 0 is the world in which the record holds no own
  * member this run can name — the empty List, which is a real world (the payload was `{}`) and is the world a
  * program branching on `Object.keys(x).length === 0` needs to have run. Arm 1 is the world in which it holds
- * one, whose name is unknown and whose VALUE the consumer mints. The empty List is a wrong answer only when it
- * is stated as a FACT; as an arm this flow decided and recorded, it is the honest half of a fork.
+ * one, and it is PERFORMED by concolic_own_key_mint below rather than answered here. The empty List is a wrong
+ * answer only when it is stated as a FACT; as an arm this flow decided and recorded, it is the honest half of a
+ * fork.
  *
  * SO THE CONSUMER ASKS AND THIS CLASS READS THE ANSWER BACK, over ONE key. Returns a predicate value to hand
  * to the seam that has a resume point — a step machine's `step_tobool_run` (quickjs-step.h), which is the
@@ -210,6 +212,29 @@ void concolic_slots_only_end(void);
  * nothing. It carries no EXAMPLE either, which is the same positive statement — nothing this run observed says
  * which arm is real, so both are explored and neither is marked forced. */
 JSValue concolic_own_keys_pred(JSContext *ctx, JSValueConst record);
+
+/* THE PREDICATE'S TRUE ARM, PERFORMED — JSConcolicHooks.own_key_mint, which states the contract. The record's
+ * `n`-th unknown own member becomes an ORDINARY SLOT on it: the name is the shape of a derivation composed over
+ * the record's own identity and `n` through concolic_new_derived — the one derivation speller, so nothing here
+ * invents a name and nothing spells a second one — and the value is what concolic_exotic_get answers for that
+ * name, so the member reads exactly as any other member of the record does and an @S candidate substituted for
+ * it lands through the same door.
+ *
+ * WHY A SLOT AND NOT A KEY HANDED TO THE ENUMERATION. A slot is in the ordinary key walk, so §10.1.11's List
+ * carries it with no consumer changed at all — §20.1.2.11.1 GetOwnPropertyKeys ( value, type )'s String/Symbol
+ * filter classifies it correctly because it IS a String, and the enumerable-key cursor's per-key
+ * [[GetOwnProperty]] re-check finds it rather than dropping it as gone between the snapshot and the read.
+ * A slot is also what makes the arm PER-FLOW: an ordinary property creation is what the COW delta captures, so
+ * the sibling that took the empty arm never sees the member.
+ *
+ * STRING AND NOT SYMBOL IS THE CHANNEL'S OWN RULE, not a coin toss over §6.1.7's two kinds: these records stand
+ * for a server writing a record of fields into the page, and JS_AtomIsPublishedName states that a Symbol is not
+ * on that channel.
+ *
+ * IDEMPOTENT IN `n`: the name is a function of the record and `n` alone, so a second enumeration in the same
+ * flow replays the same answers and re-materialises the same members rather than growing the record. Returns 1
+ * when the member is on the record, 0 when `record` is not one of this class's, -1 having thrown. */
+int concolic_own_key_mint(JSContext *ctx, JSValueConst record, int n);
 
 /* THE ONE SEAM a browser component hands a computed value through to become an attacker SOURCE. Returns
    `computed` unchanged where no source overlay is installed, and a concolic carrying it as the EXAMPLE where
