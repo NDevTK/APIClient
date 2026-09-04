@@ -4,6 +4,7 @@
 #include "quickjs.h"
 #include "core/url/url.h"
 #include "core/fetch/headers.h"
+#include "core/frame/policy_container.h"   /* §2.2.5's two metadata fields ride the request — see below */
 
 /* Install `fetch` on `global`. Every request forced execution reaches funnels one endpoint into the @H
    surface; the network itself is the trusted bridge's, never this sandbox's. */
@@ -45,6 +46,20 @@ void fetch_free(JSRuntime *rt);
    state one cannot be classified, and a body that is not classified as code and then compiled is the hole this
    field closes: a cross-origin HTML or JSON body ingested as data and handed to the compiler.
    BORROWED like `method` and `url` — the park copies it into the flow's register (solver/pending.h). */
+/* …AND FETCH §2.2.5's TWO METADATA FIELDS, WHICH RIDE THE REQUEST FOR THE DESTINATION'S REASON EXACTLY. Their
+   reader is Fetch §4.1 "Main fetch" step 7's CSP check, and the party that can state them is the algorithm
+   that CREATES the request — a `<script>`'s [[CryptographicNonce]] and `integrity` attribute are facts about
+   an element that is long off the stack by the time a park runs. Carried here, a component that builds a
+   request states them once beside its method and its destination; carried as a seam parameter they would be
+   stated by whichever seam its author remembered.
+   THERE IS NO "I DO NOT KNOW" VALUE, and that is core/frame/policy_container.h's design rather than this
+   field's: two spellings, each a claim about a named algorithm. A producer writes csp_request_metadata when
+   the algorithm sets values and csp_request_metadata_unstated when the algorithm sets neither, and it owes
+   the reader the name of that algorithm at its own site.
+   ZERO-INITIALISE THE RECORD (`FetchRequest req = {0};`) SO A FORGOTTEN FIELD IS AN ABORT AND NOT GARBAGE.
+   Both pointers are non-NULL in every legal value, so a zero-filled struct is DISTINGUISHABLE from every one
+   of them and policy_should_block_request's own asserts name it — while an uninitialised automatic would hand
+   the CSP walk a stack address to compare bytes at. */
 typedef struct {
     const char   *method;
     const char   *url;
@@ -52,7 +67,43 @@ typedef struct {
     const HeaderList *headers;
     const char   *body;
     size_t        body_len;
+    CspRequestMetadata metadata;
 } FetchRequest;
+
+/* FETCH §4.1 "Main fetch" STEP 7, AS THE ONE COMPONENT IT IS A STEP OF — "If should request be blocked due to
+ * a bad port, should fetching request be blocked as mixed content, should request be blocked by Content
+ * Security Policy, or should request be blocked by Integrity Policy Policy returns blocked, then set response
+ * to a network error".
+ *
+ * WHAT IS NOT COVERED: the step is FOUR checks and this component runs TWO of them. Mixed content is not
+ * implemented anywhere in this engine, and INTEGRITY POLICY is the disjunct §4.1 gained after the four copies
+ * this replaced were written — every one of them quoted a three-check version of this sentence, and moving the
+ * quotation to a fresh site is what made the auditor say so. WHAT THE NEXT DIFF BUILDS: Integrity Policy's own
+ * "should request be blocked by Integrity Policy Policy", over a policy parsed from the `Integrity-Policy`
+ * response header into the policy container beside the CSP list, called as a third disjunct here. HOW ITS
+ * ABSENCE SHOWS: a document served `Integrity-Policy: blocked-destinations=(script)` loads a `<script src>`
+ * carrying no `integrity` attribute here and is refused it by a browser — so an @S breakout measured against
+ * that document's policy reports a sink the real page cannot reach.
+ *
+ * IT WAS FOUR HAND-WRITTEN COPIES, ONE PER ENTRY, and the fifth entry is what proved that shape wrong: a
+ * `<script src>` ran NO CSP check at all, because §4.12.1.1's fetch is the one nobody remembered to add a copy
+ * to, and nothing anywhere reported it. Each copy also hand-parsed the URL and hand-wrote the disjunction, so
+ * they could drift in three ways rather than one. A question some entries ask and others do not is one
+ * missing capability wearing two names.
+ *
+ * THE CALLER STATES WHAT ONLY THE CALLER KNOWS AND NOTHING ELSE. The DESTINATION is the creating algorithm's
+ * (CSP §6.8.1 "Get the effective directive for request" switches on it, which is what makes `img-src` govern
+ * an image and `script-src` a script) and the METADATA is the creating element's; the URL PARSE, the bad-port
+ * check, the policy container and the redirect count are this component's, because every caller answered them
+ * the same way and one of them answering differently would be a bug rather than a variation.
+ *
+ * A REQUEST WHOSE ADDRESS DOES NOT PARSE IS NOT BLOCKED BY THIS STEP, which is the behaviour all four copies
+ * had and is kept deliberately: every copy guarded its disjunction with `url_parse(...) && (...)`, so a
+ * failure answered ALLOWED and the caller's own algorithm dealt with the unparseable address. §4.1 step 7 is
+ * a question about a request's URL and there is no request to ask it of.
+ *
+ * Answers non-zero for BLOCKED. `url` is the request's serialized current URL. */
+int fetch_main_blocked(JSContext *ctx, const char *url, const char *destination, CspRequestMetadata metadata);
 
 /* IS THIS ONE OF FETCH §2.2.5 "Requests"' DESTINATION TYPES — the enumeration quoted in the paragraph above,
  * as a predicate, in the component whose record carries the field.

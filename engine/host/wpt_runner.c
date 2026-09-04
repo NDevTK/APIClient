@@ -1490,7 +1490,9 @@ static int wpt_issue_pending(void)
     for (p = list; *p; ) {
         char *end = strchr(p, '\n');
         const char *method, *destination, *initiator, *provenance, *url;
-        FetchRequest req;
+        FetchRequest req = {0};   /* §2.2.5 metadata stated as "nothing yet": these are the RUNNER's own
+                                     HTTP client requests and reach no park, so a zero is the named abort a
+                                     future reader gets rather than a stack address it would compare bytes at */
         HeaderList none = { 0 };
         int i, rec = -1;
 
@@ -2145,7 +2147,9 @@ static bool wpt_answer_host_requests(JSContext *ctx)
            number was reaching for, §7.3.1.3 Child navigables' create-a-new-child-navigable, has thirteen steps
            and does not fetch. The fetch is §7.4.5's, verified against the spec text rather than recalled. */
         else if (!strncmp(tab + 1, "document.fetch\t", 15)) {
-            FetchRequest req;
+            FetchRequest req = {0};   /* §2.2.5 metadata stated as "nothing yet": these are the RUNNER's own
+                                     HTTP client requests and reach no park, so a zero is the named abort a
+                                     future reader gets rather than a stack address it would compare bytes at */
             HeaderList none = { 0 };
 
             DCHECK(n < sizeof op, "a document address outgrew this runner's request buffer — truncating it "
@@ -2198,7 +2202,9 @@ static bool wpt_answer_host_requests(JSContext *ctx)
             const char *method, *url, *bodys = NULL;
             size_t blen = 0;
             HeaderList hdrs = { 0 };
-            FetchRequest req;
+            FetchRequest req = {0};   /* §2.2.5 metadata stated as "nothing yet": these are the RUNNER's own
+                                     HTTP client requests and reach no park, so a zero is the named abort a
+                                     future reader gets rather than a stack address it would compare bytes at */
             uint32_t hn = 0, hi;
 
             /* THE REGISTER LISTS THIS UNTIL IT IS ANSWERED — see wpt_issue_pending's own guard. */

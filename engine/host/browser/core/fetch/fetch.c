@@ -131,6 +131,33 @@ bool fetch_is_script_like(const char *destination)
    `<link rel=preload>` of one went to the trusted zone, which can fetch nothing but an HTTP(S) scheme and
    answered a refusal the page cannot tell from a network failure. §4.3 answers it with a 200 out of bytes that
    were already in this address space, and `deliver` is exactly the processResponse steps that answer needs. */
+/* FETCH §4.1 "Main fetch" STEP 7 — see core/fetch/fetch.h for why it is one component and what each caller
+   owes it. The disjunction is written ONCE here; the four hand-written copies that stood at `fetch()`,
+   §4.8.4.3.5, §4.6.8.20 and §3.5.2's send() are calls to it, and the fifth entry that had no copy at all —
+   §4.12.1.1's `<script src>` — is reached through solver/engine.c's park. */
+int fetch_main_blocked(JSContext *ctx, const char *url, const char *destination, CspRequestMetadata metadata)
+{
+    UrlRecord rec;
+    int blocked;
+
+    DCHECK(url != NULL, "§4.1 step 7 was asked about a request with no address — every caller resolved one "
+                        "before it built the request, and there is no URL for §6.7.2's relations to read");
+    DCHECK(destination != NULL,
+           "§4.1 step 7 was asked about a request stating no DESTINATION — CSP §6.8.1 \"Get the effective "
+           "directive for request\" switches on it, so a request without one would be governed by whichever "
+           "directive that switch's trailing row names rather than by the one its algorithm creates it for");
+    /* AN UNPARSEABLE ADDRESS IS NOT BLOCKED BY THIS STEP, which is what all four copies did (each guarded its
+       disjunction with `url_parse(...) && (...)`) and is kept because it is right: §4.1 step 7 asks about a
+       request's URL, and a string that names none is a failure the caller's own algorithm answers. */
+    url_record_init(&rec);
+    blocked = url_parse(&rec, url, strlen(url), NULL) &&
+              (fetch_block_bad_port(&rec) == FETCH_PORT_BLOCKED ||
+               policy_should_block_request(document_policy(ctx), &rec, destination, metadata,
+                                           /*redirect count*/ 0) == CSP_REQUEST_BLOCKED);
+    url_record_free(&rec);
+    return blocked;
+}
+
 void fetch_owe(JSContext *ctx, JSValueConst deliver, const FetchRequest *req)
 {
     DCHECK(g_provider != NULL && g_provider->owe != NULL,
@@ -802,8 +829,9 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, const RequestRecord 
 
         /* §4.1 MAIN FETCH STEP 7, and it runs HERE — before §4.3's scheme fetch, which is step 12 — because
            that is the order the two steps are in. "If should request be blocked due to a bad port, should
-           fetching request be blocked as mixed content, or should request be blocked by Content Security
-           Policy returns blocked, then set response to a network error", and §5.6 step 12's processResponse
+           fetching request be blocked as mixed content, should request be blocked by Content Security Policy,
+           or should request be blocked by Integrity Policy Policy returns blocked, then set response to a
+           network error", and §5.6 step 12's processResponse
            step 3 makes a network error a rejected TypeError. It is the same settle §4.3's two local schemes
            reject through, and it returns before the host is owed anything: a blocked request must never
            become a pending entry, or the flow parks forever on a reply the trusted zone was never asked for.
@@ -817,10 +845,7 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, const RequestRecord 
            predicate is that uncertainty KEEPS the arm. Blocking on the accident that a shape's text carried
            `:25` would delete a real endpoint from the surface. The same sentence covers §4.1.2: a policy is
            matched against a URL, and a shape is not the URL the request will go to. */
-        if (url_is_real &&
-            (fetch_block_bad_port(&rec) == FETCH_PORT_BLOCKED ||
-             policy_should_block_request(document_policy(ctx), &rec, /*destination*/ "", csp_meta,
-                                         /*redirect count*/ 0) == CSP_REQUEST_BLOCKED)) {
+        if (url_is_real && fetch_main_blocked(ctx, u, /*destination*/ "", csp_meta)) {
             JSValue value;
 
             JS_ThrowTypeError(ctx, "Failed to fetch");
@@ -864,7 +889,7 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, const RequestRecord 
         DCHECK(g_deliver_stepid >= 0, "fetch() parked a reply before its delivery machine was declared");
         deliver = JS_NewStepClosure(ctx, g_deliver_stepid, 1, 2, data);
         if (!JS_IsException(deliver)) {
-            FetchRequest req;
+            FetchRequest req = {0};
             /* `GET` IS THE REQUEST'S OWN METHOD, NOT A HOLE FILLED HERE — Fetch §2.2.5 "Requests": "A request has an
                associated method (a method). Unless stated otherwise it is `GET`." The park is keyed on
                (method, url) (solver/engine.h), so a request that reached the seam unnamed would collect another
@@ -875,6 +900,11 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, const RequestRecord 
                    "fills it on every path and §2.2.5 gives a request `GET` unless stated otherwise, so an "
                    "absent one is a record request_init_apply never filled");
             req.method = rec->method;
+            /* AND THE METADATA THE CHECK ABOVE WAS GIVEN, ON THE REQUEST — so the park's own §4.1 step 7 asks
+               the identical question of the identical request. It is the same value and not a second reading
+               of §5.4: `csp_meta` is composed once, above, out of the record's integrity and §5.4's unstated
+               nonce. */
+            req.metadata = csp_meta;
             /* THE PARSED URL WHERE THERE IS ONE. `u` survives as the fallback for the two inputs that have no
                parsed form: a concolic's shape, and a relative reference in a document with no address at all
                (fetch_parse_url is absolute-only then, which is the honest answer for a platform-less build). */

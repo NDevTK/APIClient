@@ -1797,7 +1797,7 @@ static bool xhr_main_fetch_local(JSContext *ctx, XhrData *d)
     const char *u = JS_ToCString(ctx, d->url);
     const char *m;
     UrlRecord rec;
-    FetchRequest req;
+    FetchRequest req = {0};
     JSValue reply = JS_UNDEFINED;
     bool parsed, local;
 
@@ -1811,8 +1811,9 @@ static bool xhr_main_fetch_local(JSContext *ctx, XhrData *d)
                    "step 5 parses the URL and its step 11.3 sets the request URL to that record, whose "
                    "serialization is what this component holds, and every item of that form is absolute");
     /* §4.1 MAIN FETCH STEP 7: "If should request be blocked due to a bad port, should fetching request be
-       blocked as mixed content, or should request be blocked by Content Security Policy returns blocked, then
-       set response to a network error." §3's response IS a network error already, so blocking is nothing
+       blocked as mixed content, should request be blocked by Content Security Policy, or should request be
+       blocked by Integrity Policy Policy returns blocked, then set response to a network error." §3's response
+       IS a network error already, so blocking is nothing
        written and everything not done: the request is never placed, and the lifecycle machine's "handle
        errors" fires the request error steps on the way out — which for §3.5.6 is an `error` event, or a
        NetworkError thrown out of a synchronous send.
@@ -1822,19 +1823,27 @@ static bool xhr_main_fetch_local(JSContext *ctx, XhrData *d)
        identical request written as an XMLHttpRequest: one policy answering differently depending on which
        door the page used. §6.8.1 gives an XHR the EMPTY destination exactly as it gives `fetch()` one, so both
        are governed by `connect-src`, and a request that has not been redirected has a redirect count of 0. */
+    /* THE DISJUNCTION IS NO LONGER WRITTEN HERE — it was one of FOUR hand-written copies of §4.1 step 7, and
+       core/fetch/fetch.h's fetch_main_blocked is the one component they collapsed into. What this site still
+       states is what only it knows: §6.8.1's EMPTY destination for an XHR, and the metadata §3.5.6 sets.
+       AND THIS IS THE SECOND SITE, NOT A FIFTH COPY, WHICH IS A FACT ABOUT THE TRANSPORT AND NOT A CONCESSION.
+       Every other request in this engine reaches solver/engine.c's pending_park_request, which runs step 7 for
+       all of them; an XMLHttpRequest does not — §3.5.6's send() is the one SYNCHRONOUS rendezvous
+       (engine_host_request, the FLOW_PENDING_HOSTREQ kind), which is keyed by a request id rather than by a
+       (method, url) pair and never passes that door. Reshaping it to fit would change what that door means,
+       so this component asks the question itself, of the same component, with its own answers to the two
+       things a caller states. */
     if (parsed &&
-        (fetch_block_bad_port(&rec) == FETCH_PORT_BLOCKED ||
-         policy_should_block_request(document_policy(ctx), &rec, /*destination*/ "",
-                                     /* FETCH §2.2.5's TWO METADATA FIELDS, UNSTATED, and here the claim is the
-                                        strongest of the four this engine makes: the words `nonce` and
-                                        `integrity` do not occur ANYWHERE in the XMLHttpRequest Standard.
-                                        §3.5.6 "The send() method" builds its request from §3.5.1 The open()
-                                        method's stored method and URL and this object's own state, and there
-                                        is no element behind it for Fetch §2.2.5's note — "generally populated
-                                        from attributes and flags on the HTML element responsible for creating
-                                        a request" — to draw from. Both fields are the initial empty string. */
-                                     csp_request_metadata_unstated(),
-                                     /*redirect count*/ 0) == CSP_REQUEST_BLOCKED)) {
+        fetch_main_blocked(ctx, u, /*destination*/ "",
+                           /* FETCH §2.2.5's TWO METADATA FIELDS, UNSTATED, and here the claim is the
+                              strongest of the four this engine makes: the words `nonce` and `integrity` do
+                              not occur ANYWHERE in the XMLHttpRequest Standard. §3.5.6 "The send() method"
+                              builds its request from §3.5.1 The open() method's stored method and URL and
+                              this object's own state, and there is no element behind it for Fetch §2.2.5's
+                              note — "generally populated from attributes and flags on the HTML element
+                              responsible for creating a request" — to draw from. Both fields are the initial
+                              empty string. */
+                           csp_request_metadata_unstated())) {
         url_record_free(&rec);
         JS_FreeCString(ctx, u);
         return true;

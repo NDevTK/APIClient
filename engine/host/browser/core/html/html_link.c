@@ -565,8 +565,15 @@ static void link_preload(JSContext *ctx, lxb_dom_element_t *el)
     size_t href_n = 0;
     const char *href;
     char *abs;
-    UrlRecord rec;
     JSValue wrap;
+    /* §4.2.4.3's TWO METADATA MEMBERS, HELD AT FUNCTION SCOPE BECAUSE THE REQUEST OUTLIVES THE BLOCK THAT
+       COMPOSES THEM. They were composed, spent on this file's own copy of §4.1 step 7 and released three lines
+       later; the request built below now carries the SAME value to the park's step 7, so the bytes they borrow
+       — the element's `integrity` attribute and its [[CryptographicNonce]] slot — must still be alive when
+       fetch_owe returns. */
+    JSValue nonce_slot = JS_UNDEFINED;
+    const char *nonce = NULL;
+    CspRequestMetadata metadata;
 
     /* STEP 3: "Let destination be the result of TRANSLATING the keyword representing the state of el's `as`
        attribute. If destination is null, then return." — TWO values and two algorithms, which is what this
@@ -676,12 +683,11 @@ static void link_preload(JSContext *ctx, lxb_dom_element_t *el)
            any `el.nonce = v` the slot holds v while the attribute holds the markup's — so reading the
            attribute here would hand CSP bytes the element no longer has, which under `style-src 'nonce-…'` is
            the difference between a stylesheet the policy admits and one it refuses. */
-        JSValue nonce_slot = nonce_attribute_current(ctx, el);
         size_t integrity_n = 0;
         const char *integrity = link_attr(el, "integrity", &integrity_n);
-        const char *nonce;
-        CspRequestMetadata metadata;
         bool blocked;
+
+        nonce_slot = nonce_attribute_current(ctx, el);
 
         /* AN UNKNOWN NONCE IS AN UNDECIDED PREDICATE AND HAS NO ANSWER HERE. §2.5.6's slot deliberately holds a
            JS value so that `el.nonce = location.hash.slice(1)` survives as a source, and CSP §6.7.2.3 step 3.1
@@ -718,16 +724,14 @@ static void link_preload(JSContext *ctx, lxb_dom_element_t *el)
            request is a network error, and §4.6.8.20's processResponse fires `error` for one — so the page's
            handler runs, and the `<script>` it would have injected is not created, which is exactly what a
            browser does under that policy. */
-        url_record_init(&rec);
-        blocked = url_parse(&rec, abs, strlen(abs), NULL) &&
-                  (fetch_block_bad_port(&rec) == FETCH_PORT_BLOCKED ||
-                   policy_should_block_request(document_policy(ctx), &rec, destination, metadata,
-                                               /*redirect count*/ 0) == CSP_REQUEST_BLOCKED);
-        url_record_free(&rec);
-        /* The metadata's bytes are the slot's and the element's, so nothing may outlive this. */
-        JS_FreeCString(ctx, nonce);
-        JS_FreeValue(ctx, nonce_slot);
+        /* THE DISJUNCTION AND THE URL PARSE ARE NO LONGER WRITTEN HERE — they were one of FOUR hand-written
+           copies of §4.1 step 7, and core/fetch/fetch.h's fetch_main_blocked is the one component they
+           collapsed into. What this site still states is what only it knows: §4.6.8.20 step 3's TRANSLATED
+           destination and §4.2.4.3's metadata, both computed above. */
+        blocked = fetch_main_blocked(ctx, abs, destination, metadata);
         if (blocked) {
+            JS_FreeCString(ctx, nonce);
+            JS_FreeValue(ctx, nonce_slot);
             link_queue_fire(ctx, wrap, "error");
             JS_FreeValue(ctx, wrap);
             free(abs);
@@ -738,7 +742,7 @@ static void link_preload(JSContext *ctx, lxb_dom_element_t *el)
     {
         JSValueConst data[1];
         JSValue deliver;
-        FetchRequest req;
+        FetchRequest req = {0};
 
         data[0] = wrap;
         deliver = JS_NewCFunctionData(ctx, link_deliver, 1, 0, 1, data);
@@ -759,9 +763,16 @@ static void link_preload(JSContext *ctx, lxb_dom_element_t *el)
         req.headers = NULL;
         req.body = NULL;
         req.body_len = 0;
+        /* THE SAME VALUE §4.1 STEP 7 WAS ASKED WITH, on the request — so the park's own step 7 asks the
+           identical question of the identical request rather than re-reading §4.2.4.4's two members. */
+        req.metadata = metadata;
         fetch_owe(ctx, deliver, &req);
         JS_FreeValue(ctx, deliver);
     }
+    /* …AND THE METADATA'S BYTES LAST, because the request above BORROWED them: the park copies what it needs
+       out of the record inside fetch_owe, so this is the first moment nothing is reading them. */
+    JS_FreeCString(ctx, nonce);
+    JS_FreeValue(ctx, nonce_slot);
     JS_FreeValue(ctx, wrap);
     free(abs);
 }

@@ -481,7 +481,7 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
     const char *selected;
     size_t selected_n = 0;
     char *abs = NULL;
-    UrlRecord rec;
+    CspRequestMetadata csp_meta;
     ImageSourceSet ss;
     int i;
 
@@ -644,45 +644,42 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
     /* "Let request be the result of creating a potential-CORS request given urlString, `image`, and the current
        state of the element's crossorigin content attribute" … "Fetch request."
        WHAT THIS ENGINE MAY DECIDE ABOUT THAT REQUEST AND WHAT IT MAY NOT. Fetch §4.1 "Main fetch" step 7 —
-       "If should request be blocked due to a bad port, should fetching request be blocked as mixed content, or
-       should request be blocked by Content Security Policy returns blocked, then set response to a network
-       error" — runs HERE, in the engine, because a policy is the DOCUMENT's. §4.8.4.3.5 creates the request
+       "If should request be blocked due to a bad port, should fetching request be blocked as mixed content,
+       should request be blocked by Content Security Policy, or should request be blocked by Integrity Policy
+       Policy returns blocked, then set response to a network error" — runs HERE, in the engine, because a
+       policy is the DOCUMENT's. §4.8.4.3.5 creates the request
        with the `image` DESTINATION, and CSP §6.8.1 "Get the effective directive for request" is the switch on
        that destination which answers `img-src`, so naming the destination is the whole of what this call site
        has to get right for the right directive to govern the check. The CORS mode is
        NOT decided here: SECURITY.md puts SOP/CORS/credentials behind the trusted zone's `safeFetch`, which is
        the one chokepoint that may see a cross-origin body, so the mode crosses as the request it is and the
        zone answers it. */
-    url_record_init(&rec);
-    if (url_parse(&rec, abs, strlen(abs), NULL) &&
-        (fetch_block_bad_port(&rec) == FETCH_PORT_BLOCKED ||
-         policy_should_block_request(document_policy(ctx), &rec, /*destination*/ "image",
-                                     /* FETCH §2.2.5's TWO METADATA FIELDS, UNSTATED — and that is a claim
-                                        about §4.8.4.3.5, not a gap. This algorithm builds its request with
-                                        "creating a potential-CORS request given urlString, `image`, and the
-                                        current state of the element's crossorigin content attribute" and sets
-                                        nothing else on it: neither `nonce` nor `integrity` appears anywhere in
-                                        §4.8.4 "Images", and an `img` element carries no such content attribute
-                                        for one to be read from. So both fields are §2.2.5's initial empty
-                                        string, which CSP reads as an ANSWER — §6.7.2.3 step 2 refuses an empty
-                                        nonce — rather than as a value this call site failed to plumb. */
-                                     csp_request_metadata_unstated(),
-                                     /*redirect count*/ 0) == CSP_REQUEST_BLOCKED)) {
+    /* FETCH §2.2.5's TWO METADATA FIELDS, UNSTATED — and that is a claim about §4.8.4.3.5, not a gap. This
+       algorithm builds its request with "creating a potential-CORS request given urlString, `image`, and the
+       current state of the element's crossorigin content attribute" and sets nothing else on it: neither
+       `nonce` nor `integrity` appears anywhere in §4.8.4 "Images", and an `img` element carries no such
+       content attribute for one to be read from. So both fields are §2.2.5's initial empty string, which CSP
+       reads as an ANSWER — §6.7.2.3 step 2 refuses an empty nonce — rather than as a value this call site
+       failed to plumb.
+       THE DISJUNCTION AND THE URL PARSE ARE NO LONGER WRITTEN HERE: they were one of FOUR hand-written copies
+       of §4.1 step 7, and core/fetch/fetch.h's fetch_main_blocked is the one component they collapsed into.
+       What this site still states is what only it knows — the destination §4.8.4.3.5 creates the request with,
+       and the metadata that algorithm sets. */
+    csp_meta = csp_request_metadata_unstated();
+    if (fetch_main_blocked(ctx, abs, /*destination*/ "image", csp_meta)) {
         /* A blocked request is a NETWORK ERROR, which is "no data could be obtained" — §4.8.4.3's own gloss on
            the broken state — so it takes the same arm the delivery does, without ever owing the host a reply. */
-        url_record_free(&rec);
         st_set_int(ctx, st, "state", HTML_IMAGE_BROKEN);
         img_queue_fire(ctx, elv, "error");
         free(abs);
         JS_FreeValue(ctx, st);
         return JS_UNDEFINED;
     }
-    url_record_free(&rec);
 
     {
         JSValueConst data[3];
         JSValue deliver, uv, gv;
-        FetchRequest req;
+        FetchRequest req = {0};
 
         uv = JS_NewString(ctx, abs);
         CHECK(!JS_IsException(uv), "§4.8.4.3.5: OOM keeping an image request's address for its reply");
@@ -713,6 +710,9 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
         req.headers = NULL;
         req.body = NULL;
         req.body_len = 0;
+        /* THE SAME VALUE §4.1 STEP 7 WAS ASKED WITH, on the request — so the park's own step 7 asks the
+           identical question of the identical request rather than re-deriving §4.8.4.3.5's answer. */
+        req.metadata = csp_meta;
         fetch_owe(ctx, deliver, &req);
         JS_FreeValue(ctx, deliver);
         JS_FreeValue(ctx, uv);

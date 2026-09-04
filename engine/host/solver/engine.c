@@ -28,6 +28,7 @@
 #include "core/html/html_script.h"   /* §4.12.1.1's encoding-parse of `src` against §8.1.3.2's API base URL (§4.4
                                         stood here and is "Grouping content") — the ONE
                                         statement of it, and the only thing this file needed core/url/url.h for */
+#include "core/html/nonce_attribute.h"   /* §4.12.1.1 reads el's [[CryptographicNonce]] SLOT, not its attribute */
 #include "core/loader/script_fetch.h"   /* HTML §8.1.4.2: where a fetched body becomes a script's source text */
 #include "core/frame/window_message.h"   /* the receiving half of a routed `windowproxy.post` */
 #include "core/frame/remote_op.h"        /* the receiving half of a cross-agent OPERATION: what performs it */
@@ -100,6 +101,76 @@ void engine_set_wrap_stats(void (*fn)(long *n, long *cap))
  * park's provenance belong to the REQUEST rather than to its transport — a `data:` URL script IS a code load —
  * so the record states them whether or not anything outside this agent will ever read them, and a record whose
  * fields depended on who answered it would be two shapes wearing one name. */
+/* §3.1.7's answer for the row this flow is EXECUTING — defined with the other cursor accessors far below and
+   declared here because §8.1.6.7.3's descendant script fetch options need it at the module park. */
+static lxb_dom_element_t *flow_dyn_el(const Flow *f);
+
+/* HTML §4.12.1.1 "Processing model"'S TWO METADATA MEMBERS FOR A `script` ELEMENT, borrowed from the element
+ * and released by the caller — the ONE place this engine reads them, because all three script-owed parks want
+ * the same two facts about the same kind of element.
+ *
+ * §4.12.1.1's `prepare the script element` states both, in its own words: "Let cryptographic nonce be el's
+ * [[CryptographicNonce]] internal slot's value" and "If el has an integrity attribute, then let integrity
+ * metadata be that attribute's value" / "Otherwise, let integrity metadata be the empty string". So a
+ * `<script>` is a STATING producer and never csp_request_metadata_unstated's — which matters at the one shape
+ * modern CSP is actually written in: `<script nonce=x>` under `script-src 'nonce-x'` must not report blocked.
+ *
+ * THE NONCE IS THE SLOT AND NOT THE ATTRIBUTE, for core/html/html_link.c's reason exactly: HTML §2.5.6 "Nonce
+ * attributes" makes the two diverge on purpose — after its hiding step the attribute is blank while the slot
+ * holds the nonce — so reading the attribute would hand CSP bytes the element no longer has, and under
+ * `script-src 'nonce-…'` that is the difference between a script the policy admits and one it refuses.
+ *
+ * NO ELEMENT IS A STATED ANSWER AND NOT A HOLE. A dynamic `import()` has no element; its request's options are
+ * §8.1.6.7.3's "descendant script fetch options given originalFetchOptions, url, and settingsObject", whose
+ * step 1 COPIES the referrer's options — so the nonce is the IMPORTING script's, which is this flow's
+ * executing row's element, and NULL there is a program no `<script>` produced (a lazy chunk, a `javascript:`
+ * URL, an @S candidate) whose options carry the empty string. Its integrity is that algorithm's step 2,
+ * "resolving a module integrity metadata with url and settingsObject", which with no import map in this
+ * engine is the empty string. */
+typedef struct {
+    CspRequestMetadata m;
+    JSValue            nonce_slot;   /* owned by the holder */
+    const char        *nonce;        /* owned by the holder */
+} ScriptCspMeta;
+
+static ScriptCspMeta script_csp_meta(JSContext *ctx, lxb_dom_element_t *el)
+{
+    ScriptCspMeta h;
+    size_t integrity_n = 0;
+    const lxb_char_t *integrity = NULL;
+
+    h.nonce_slot = JS_UNDEFINED;
+    h.nonce = NULL;
+    if (el) {
+        h.nonce_slot = nonce_attribute_current(ctx, el);
+        /* AN UNKNOWN NONCE IS AN UNDECIDED PREDICATE AND HAS NO ANSWER HERE — core/html/html_link.c states the
+           whole argument at its own read and this is the same one: §2.5.6's slot holds a JS value so that
+           `s.nonce = location.hash.slice(1)` survives as a source, and CSP §6.7.2.3 step 3.1 asks whether it is
+           IDENTICAL to a policy's base64-value, which an unconstrained domain answers neither way. The arm must
+           FORK; a coerced example reports one world's verdict as though it were both. */
+        DCHECK(!concolic_is(h.nonce_slot),
+               "a `script` element's [[CryptographicNonce]] is an unknown external value, and CSP §6.7.2.3 "
+               "step 3.1 compares it against this policy's nonce-source expressions for identity — which an "
+               "unconstrained domain does not answer. Fork the request here into the matching and "
+               "non-matching arms and let each carry the narrowed domain, the way an opaque operand forks "
+               "every other predicate; a coerced example reports ONE arm's verdict as though it were both");
+        h.nonce = JS_ToCString(ctx, h.nonce_slot);
+        CHECK(h.nonce != NULL, "§4.12.1.1: OOM reading a script element's cryptographic nonce metadata");
+        integrity = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"integrity", 9, &integrity_n);
+    }
+    h.m = csp_request_metadata(h.nonce ? h.nonce : "", h.nonce ? strlen(h.nonce) : 0,
+                               integrity ? (const char *)integrity : "", integrity ? integrity_n : 0);
+    return h;
+}
+
+static void script_csp_meta_free(JSContext *ctx, ScriptCspMeta *h)
+{
+    if (h->nonce) JS_FreeCString(ctx, h->nonce);
+    JS_FreeValue(ctx, h->nonce_slot);
+    h->nonce = NULL;
+    h->nonce_slot = JS_UNDEFINED;
+}
+
 static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *req)
 {
     JSValue reply = JS_UNDEFINED;
@@ -138,6 +209,37 @@ static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *
     }
     if (req->body) pending_set_bytes(e, PEND_BODY, req->body, req->body_len);
 
+    /* FETCH §4.1 "Main fetch" STEP 7, AND IT IS THE CLOSURE THIS CONVERGENCE IS FOR — asked HERE, at the
+       consumer, and not only at the components that build requests. Step 7 precedes §4.3's scheme fetch (step
+       12), so this is the last line before the last moment a request can be answered without one, and every
+       async request in this engine passes it: a `fetch()`, an `<img>` and a `<link rel=preload>` reach it
+       through fetch_owe's provider edge, and the three PROGRAM parks reach it directly.
+       THAT IS WHY A `<script src>` HAD NO CHECK AND NOTHING SAID SO. Step 7 was FOUR hand-written copies, one
+       per request-creating component, and §4.12.1.1's fetch was simply not one of the four — so CSP §6.7.1.1
+       "Script directives pre-request check", whose principal subject is a script element, was reachable only
+       through `<link rel=preload as=script>`. A copy per entry cannot report the entry that has none; a
+       consumer that refuses to serve an unchecked request can, and a NEW park added later cannot forget.
+       IT IS A SECOND EVALUATION FOR THE REQUESTS THAT CAME THROUGH fetch_owe, AND THAT IS NOT A SECOND POLICY.
+       fetch_main_blocked is a pure function of (this document's policy container, the URL, the destination,
+       the metadata), and the record carries the same metadata its builder was checked with — so the two
+       evaluations cannot disagree, and a component whose own check ALLOWED never reaches a park that blocks.
+       What the second evaluation buys is that no future producer can reach the host without one.
+       A BLOCKED REQUEST IS §5.6's NETWORK ERROR, WHICH IS THE SAME JS_NULL §4.3's own error arm writes four
+       lines below — and for the three PROGRAM kinds that value is HTML §4.12.1.1's "null (representing an
+       error)": flow_deliver_one_reply's null arm marks the element's result null and "execute the script
+       element" step 4 fires `error` at it with the row running NOTHING. So a script a policy refuses reports
+       to the page through the element's own `onerror`, which is what a browser does, and nothing here had to
+       know that — the delivery owns the algorithm and this line states the outcome. */
+    DCHECK(req->metadata.nonce != NULL && req->metadata.integrity != NULL,
+           "a request reached the park stating NO §2.2.5 metadata — both fields are non-NULL in every legal "
+           "value (core/frame/policy_container.h), so a NULL is a zero-filled FetchRequest whose producer "
+           "never said which of the two claims it is making, and §4.1 step 7 below would compare a policy's "
+           "nonce-source expressions against a pointer nobody wrote");
+    if (fetch_main_blocked(ctx, req->url, req->destination, req->metadata)) {
+        pending_set(e, PEND_VALUE, JS_NULL);
+        pending_set(e, PEND_HAVE_VALUE, JS_TRUE);
+        return;
+    }
     /* FETCH §4.3 Scheme fetch. §5.4's CAPTURED blob URL entry is JS_UNDEFINED because no standard but the
        Request constructor has one to have captured, and a Request never reaches a park — it reaches
        `fetch_owe`, which runs §4.3 with its own captured entry and a `deliver` closure before this register is
@@ -238,9 +340,24 @@ void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, JSValueCons
        beside it: a side list one producer fills answers for that producer and is silently absent for every
        other, which is how a document's own `<script src>` reached the trusted zone with no load class at all.
        The METHOD is `GET`: a chunk load states its own. */
-    FetchRequest req = { "GET", url, PENDING_DESTINATION_SCRIPT, NULL, NULL, 0 };
+    FetchRequest req = { "GET", url, PENDING_DESTINATION_SCRIPT, NULL, NULL, 0, { NULL, 0, NULL, 0 } };
+    /* …AND FETCH §2.2.5's METADATA, WHICH FOR A DYNAMIC IMPORT IS THE REFERRER'S. HTML §8.1.6.7.3
+       HostLoadImportedModule: "Let fetchOptions be the result of getting the descendant script fetch options
+       given originalFetchOptions, url, and settingsObject" — and THAT ALGORITHM IS §8.1.4.2 "Fetching
+       scripts"' and not this section's, which is a distinction the citation has to make because the two
+       numbers name two documents' worth of steps: §8.1.4.2's "get the descendant script fetch options" step 1
+       is "Let newOptions be a copy of originalOptions", so the CRYPTOGRAPHIC NONCE is copied unchanged from
+       the script performing the import, which is the element whose program this flow is running. Its step 2 is
+       "Let integrity be the result of resolving a module integrity metadata with url and settingsObject",
+       which reads an IMPORT MAP's integrity map; this engine has no import map, so it resolves to the empty
+       string, and that is a stated answer rather than a field nobody plumbed. flow_dyn_el answers NULL for a
+       program no `<script>` produced — a lazy chunk, an @S candidate, a `javascript:` URL — whose options
+       carry the empty string. */
+    ScriptCspMeta meta;
     JSValue e;
     DCHECK(f != NULL, "a dynamic import was issued outside a running flow");
+    meta = script_csp_meta(ctx, flow_dyn_el(f));
+    req.metadata = meta.m;
     DCHECK(url != NULL && *url, "a dynamic import parked with no module URL for the host to fetch");
     e = pending_push(&f->pending, FLOW_PENDING_MODULE, flow_path_forced(f));
     pending_set(e, PEND_RESOLVE, JS_DupValue(ctx, resolve));
@@ -261,6 +378,7 @@ void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, JSValueCons
        answers out of the specifier's own bytes, and the promise this park settles is the one
        JS_ModuleLoadPending is about to be handed. */
     pending_park_request(ctx, e, &req);
+    script_csp_meta_free(ctx, &meta);
     JS_FreeValue(ctx, e);
 }
 
@@ -277,9 +395,16 @@ void engine_pending_docscript(JSContext *ctx, const char *url, int script_i) {
        create-a-potential-CORS request returns "a new request whose URL is url, destination is destination" —
        so the destination is `script` and this reply is CODE. The trusted zone reads it here; it used to read a
        list only the module loader wrote, which named dynamic imports and never this. */
-    FetchRequest req = { "GET", url, PENDING_DESTINATION_SCRIPT, NULL, NULL, 0 };
+    FetchRequest req = { "GET", url, PENDING_DESTINATION_SCRIPT, NULL, NULL, 0, { NULL, 0, NULL, 0 } };
+    /* …AND §4.12.1.1's TWO METADATA MEMBERS, READ OFF THE ROW'S OWN ELEMENT. A document's external script has
+       one — engine_queue_docscript_url and the seed's address arm both take it, and flow_deliver_one_reply
+       asserts it again on the failure path — and `script_i` is exactly which row this park is for. */
+    ScriptCspMeta meta;
     JSValue e;
     DCHECK(f != NULL, "an external document script was awaited outside a running flow");
+    DCHECK(script_i >= 0 && script_i < f->dyn_n,
+           "an external document script parked for a sequence position this flow does not have — the position "
+           "is what the reply is delivered into and what its element is read from");
     DCHECK(url != NULL && *url, "an external document script entry carries no URL");
     for (int i = 0, n = pending_count(f->pending); i < n; i++) {
         JSValue p = pending_entry(f->pending, i);
@@ -288,12 +413,15 @@ void engine_pending_docscript(JSContext *ctx, const char *url, int script_i) {
         JS_FreeValue(ctx, p);
         if (dup) return;
     }
+    meta = script_csp_meta(ctx, f->dyn_el[script_i]);
+    req.metadata = meta.m;
     e = pending_push(&f->pending, FLOW_PENDING_DOCSCRIPT, flow_path_forced(f));
     pending_set_int(e, PEND_SCRIPT_I, script_i);
     /* AND §4.3 Scheme fetch WITH THE ADDRESS. A document's own `<script src="data:text/javascript,…">` is
        answered here and the flow's next step delivers it into this slot — see the caller in flow_step, which
        reports host-owed only when this door left the entry outstanding. */
     pending_park_request(ctx, e, &req);
+    script_csp_meta_free(ctx, &meta);
     JS_FreeValue(ctx, e);
 }
 
@@ -327,7 +455,12 @@ void engine_pending_script_url(JSContext *ctx, const char *url, ScriptType stype
        single module script with the destination `script` too.
        So the type decides the DECODE and the evaluation entry, and it does not decide this: either way the
        reply becomes a program, which is precisely what CORB exists to keep cross-origin data out of. */
-    FetchRequest req = { "GET", url, PENDING_DESTINATION_SCRIPT, NULL, NULL, 0 };
+    FetchRequest req = { "GET", url, PENDING_DESTINATION_SCRIPT, NULL, NULL, 0, { NULL, 0, NULL, 0 } };
+    /* …AND §4.12.1.1's TWO METADATA MEMBERS, off the element this park already carries. This is the entry the
+       whole convergence was built for: `<script nonce=x src=…>` under `script-src 'nonce-x'` is the shape
+       modern CSP is written in, and until step 7 was asked at the park no `<script src>` in this engine was
+       checked against a policy at all. */
+    ScriptCspMeta meta;
     JSValue e;
     DCHECK(f != NULL, "a <script src> was parked on outside a running flow");
     DCHECK(url != NULL && *url, "a <script src> was parked on with no URL");
@@ -335,6 +468,8 @@ void engine_pending_script_url(JSContext *ctx, const char *url, ScriptType stype
            "a <script src> was parked on for an element whose type executes nothing — §4.12.1.1 fires an error "
            "event at an `importmap` or `speculationrules` element with a `src` and returns without fetching, "
            "so no such element ever reaches a park");
+    meta = script_csp_meta(ctx, el);
+    req.metadata = meta.m;
     e = pending_push(&f->pending, FLOW_PENDING_SCRIPT, flow_path_forced(f));
     pending_set_int(e, PEND_SCRIPT_TYPE, (int)stype);
     /* AND WHICH DOCUMENT'S PROGRAM THE REPLY WILL BE. The element was inserted into a tree, and the realm this
@@ -352,6 +487,7 @@ void engine_pending_script_url(JSContext *ctx, const char *url, ScriptType stype
        `<script src="data:text/javascript,…">` that §4.3 answers on this line is delivered into a record that
        already knows its type, its document and its element. */
     pending_park_request(ctx, e, &req);
+    script_csp_meta_free(ctx, &meta);
     JS_FreeValue(ctx, e);
 }
 
