@@ -607,67 +607,41 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
 
     (void)magic;
     DCHECK(!JS_IsUndefined(target), "postMessage ran before this window's WindowProxy existed");
-    /* AN UNKNOWN AT THIS POSITION IS TWO DIFFERENT MISSING MECHANISMS AND THE ARITY IS WHAT TELLS THEM APART,
-       so it is two crashes. One crash naming one remedy for both is the shape that reads as complete and
-       cannot be obeyed: it stated a fact about §9.3.3's origin comparison, which is exactly right for the
-       longer call and answers nothing at all for the shorter one, where what is unknown is not the origin but
-       WHICH OVERLOAD THIS IS. Web IDL §3.6 Overload resolution algorithm decides the two entries in two
-       different ways and the argument count is what selects between them — step 4 removes an entry from the
-       count alone, and step 12's clause chain reads the VALUE only where step 4 removed neither.
-       THE `argc` THIS BODY SEES IS NOT THE COUNT §3.6 ASKED, and the two agreeing here is a fact to check
-       rather than one to assume. Step 4 is decided from the CALL's count, while a body is handed the number
-       of positions the conversion CONVERTED — which the argument machine extends past the call to
-       materialize a trailing dictionary, since `optional WindowPostMessageOptions options = {}` is a value
-       and not an absent argument. For this declaration the extension stops at position 1, the only
-       dictionary type in the list, so a one- and a two-argument call both arrive at 2 and only a call that
-       really passed a third arrives at 3 — so for this member, and only because of that, `argc > 2` here is
-       the same predicate as step 4 having removed the options entry. It would not be for a member whose
-       dictionary sits later, and the assert below is the other side of it: at this arity the conversion owed
-       a USVString, so a second argument that is neither a string nor caught above means the two counts have
-       come apart. */
-    if (concolic_is(second) && argc > 2)
-        DFAIL("postMessage was given a CONCOLIC target origin. The ARM here is settled and is not what is "
-              "missing: Web IDL §3.6 Overload resolution algorithm step 4 removed the options entry from the "
-              "argument count alone, so this position is the USVString the surviving entry declares and the "
-              "unknown crossed it as itself. What is missing is downstream — HTML §9.3.3 Posting messages step "
-              "5 parses this string and its step 8.1 compares the result against the target document's "
-              "origin, so both the delivered and the dropped world stay feasible and the strcmp and url_parse "
-              "below would decide between them from bytes nobody measured. Fork the post: queue the entry "
-              "under each arm of that comparison, the way a branch on unknown external input forks anywhere "
-              "else. Do NOT reach for the conversion-side arm fork the shorter call's crash names — it "
-              "answers a question this arity has already answered");
-    if (concolic_is(second))
-        DFAIL("postMessage's second argument is UNKNOWN EXTERNAL INPUT at an arity where Web IDL §3.6 "
-              "Overload resolution algorithm step 4 removes NEITHER entry, so what is unknown is the ARM and "
-              "not the target origin — step 12.11 sends any Object down `WindowPostMessageOptions` and step "
-              "12.15 sends everything else to the USVString. The two differ in what the CONVERSION PERFORMS: "
-              "the dictionary runs Web IDL §3.2.17 Dictionary types' member walk and the string arm runs no "
-              "walk at all, so no single placed value stands for both and crossing merely moves the choice "
-              "into whichever JS_IsString the body reaches first — which decides it from the SOLVER's value "
-              "class rather than from the page's value. THE FORK BELONGS AT THE CONVERSION AND NOT IN THIS "
-              "BODY, because by the time this body runs the arm is the one thing that can no longer be "
-              "asked: IDL_USVSTRING_OR_DICT must answer idl_concolic_rule IDL_CONCOLIC_FORKS and fork at its "
-              "own resolution site, with the dictionary as outcome 0, exactly as the same union one row over "
-              "(IDL_STRING_OR_DICT) already does. Fixing §9.3.3's origin comparison instead — which the "
-              "three-argument crash above names — would leave this arity exactly as it is");
     /* THE OVERLOAD, READ BACK OFF THE CONVERTED VALUE. A STRING is §3.6's longer entry — the legacy
-       `(message, targetOrigin, transfer)` — and an OBJECT is the options dictionary the declaration built.
-       THERE IS NO THIRD STATE, and that is the declaration's doing rather than this body's: `optional
-       WindowPostMessageOptions options = {}` means an omitted second argument IS a dictionary carrying every
-       member's default, which the argument machine now materializes (core/idl_args.c,
+       `(message, targetOrigin, transfer)` — and an ENGINE-BUILT OBJECT is the options dictionary the
+       declaration built. An OMITTED second argument is that dictionary too, and that is the declaration's
+       doing rather than this body's: `optional WindowPostMessageOptions options = {}` means an absent one IS a
+       dictionary carrying every member's default, which the argument machine materializes (core/idl_args.c,
        idl_type_is_dictionary). The sentence that used to stand here said `undefined` reached this body and
        that idl_dict_get answered the defaults for it — it does not: it answers UNDEFINED, so
-       `window.postMessage(msg)` read an undefined target origin where §9.3.3 reads the IDL's "/". The assert
-       is what keeps that from coming back silently. */
+       `window.postMessage(msg)` read an undefined target origin where §9.3.3 reads the IDL's "/".
+       AND A CONCOLIC IS THE USVString ENTRY, WHICH IS WHY THE TEST MAY NOT ASK `JS_IsString` ALONE. Web IDL
+       §3.6 Overload resolution algorithm answers the overload in two ways and the argument count selects
+       between them: step 4 removes the options entry from the count alone at three arguments, and where it
+       removes neither, step 12's clause chain reads the VALUE. Over an unknown that chain was decided by a
+       fact about this engine's value class — a concolic wears an ordinary Object and step 12.11 names the
+       dictionary entry for any Object — so IDL_USVSTRING_OR_DICT answers idl_concolic_rule
+       IDL_CONCOLIC_FORKS and forks at its own resolution site with the dictionary as outcome 0. Both worlds
+       then run, and neither can present a concolic HERE except step 12.15's USVString world: the dictionary
+       entry builds an engine object out of the members it converted, and §3.2.12's scalar value conversion is
+       not performed on unknown external input, so the USVString entry places the unknown itself — at the
+       forked arity and at the arity step 4 already decided alike. `JS_IsString` alone is the test a concolic
+       fails BY CONSTRUCTION, which is how every unknown used to be read as an options dictionary and have
+       `targetOrigin` fetched off it.
+       WHAT IS STILL MISSING IS DOWNSTREAM AND IT IS ONE MECHANISM, so it is stated ONCE, at the value it is
+       about: `concolic_is(tov)` below. All three roads end at HTML §9.3.3 Posting messages step 8.1's origin
+       comparison, so a second crash up here would be a second copy of that one claim. */
     DCHECK(JS_IsString(second) || JS_IsObject(second),
-           "postMessage's second argument reached the body as neither a string nor a dictionary — "
-           "IDL_USVSTRING_OR_DICT resolves to one of those two, and an OMITTED one is the `= {}` dictionary "
-           "rather than an absent argument");
-    DCHECK(JS_IsString(second) || argc <= 2,
-           "postMessage was called with three arguments and a second that is not a string — Web IDL §3.6 "
-           "Overload resolution algorithm step 4 removes the options entry at that arity, so the conversion "
-           "owed a USVString here");
-    if (JS_IsString(second)) {
+           "postMessage's second argument reached the body as neither a string nor an object — "
+           "IDL_USVSTRING_OR_DICT places a string for §3.6 step 12.15's entry, an engine-built dictionary for "
+           "step 12.11's, and unknown external input as itself on the forked USVString world; an OMITTED "
+           "argument is the `= {}` dictionary rather than an absent one");
+    DCHECK(JS_IsString(second) || concolic_is(second) || argc <= 2,
+           "postMessage was called with three arguments and a second that is neither a string nor unknown "
+           "external input — Web IDL §3.6 Overload resolution algorithm step 4 removes the options entry at "
+           "that arity, so the conversion owed a USVString here, and §3.2.12's scalar value conversion is one "
+           "it does not perform on an unknown");
+    if (JS_IsString(second) || concolic_is(second)) {
         tov = JS_DupValue(ctx, second);
         transfer = argc > 2 ? JS_DupValue(ctx, argv[2]) : JS_UNDEFINED;
     } else {
@@ -676,25 +650,28 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
     }
     if (JS_IsUndefined(tov)) tov = JS_NewString(ctx, POST_TARGET_ORIGIN_DEFAULT);
     if (JS_IsException(tov)) { JS_FreeValue(ctx, transfer); return JS_EXCEPTION; }
-    /* THE SAME MISSING FORK THE ARGUMENT ARM ABOVE NAMES, ONE ROAD OVER — and this is the road that bypassed
-       it. The DFAIL at the top of this body fires when the SECOND ARGUMENT is unknown, which is §3.6 having
-       no overload to choose; it says nothing about `postMessage(msg, {targetOrigin: location.hash})`, where
-       the argument is a real Object, the dictionary arm is correctly chosen, and the UNKNOWN is one member
-       inside it. Web IDL §3.2.17 Dictionary types' member loop crosses that member as itself, so it arrives
-       here wearing an Object and the shape assert below answered "the declaration lost its default" — a
-       report about the conversion, for a value the conversion handled exactly as designed.
+    /* THE ONE PLACE THE MISSING FORK IS NAMED, AND EVERY ROAD REACHES IT. `postMessage(msg,
+       {targetOrigin: location.hash})` arrives with a real Object, the dictionary entry correctly chosen, and
+       the UNKNOWN one member inside it — Web IDL §3.2.17 Dictionary types' member loop crosses that member as
+       itself, so it lands here exactly as the USVString entry's own unknown does. The shape assert below once
+       answered "the declaration lost its default" for it: a report about the conversion, for a value the
+       conversion handled exactly as designed.
        IT IS A CONTROL-FLOW VALUE AND NOT A CARRIED ONE, which is what makes crossing insufficient here where
        it is sufficient for a DOMString a body merely stores. This string decides §9.3.3 step 8.1's
        same-origin comparison, so an unknown leaves BOTH the delivered and the dropped world feasible, and
        everything below coerces it to bytes and compares them. */
     if (concolic_is(tov))
-        DFAIL("postMessage's `targetOrigin` MEMBER is UNKNOWN EXTERNAL INPUT — the same unpinned target "
-              "origin this body's second-argument DFAIL names, reached through the options dictionary "
-              "instead of through §3.6. §9.3.3 step 5 parses it and step 8.1 compares it against the target "
-              "document's origin, so both the delivered and the dropped arm stay feasible and the strcmp and "
-              "url_parse below would decide it from bytes nobody measured. Fork the post: queue the entry "
-              "under each arm of the origin comparison, the way a branch on unknown external input forks "
-              "anywhere else. ONE mechanism answers both roads, because both end at the same comparison");
+        DFAIL("postMessage's TARGET ORIGIN is UNKNOWN EXTERNAL INPUT. The OVERLOAD is not what is missing — "
+              "Web IDL §3.6 Overload resolution algorithm answers it at every arity, by step 4's count where "
+              "the entries differ in length and by IDL_USVSTRING_OR_DICT's own fork where they do not — and "
+              "all three roads arrive here: the `targetOrigin` member of an options dictionary, the USVString "
+              "the count already chose at three arguments, and the USVString world that fork ADDS. What is "
+              "missing is HTML §9.3.3 Posting messages: its step 5 parses this string and its step 8.1 "
+              "compares the result against the target document's origin, so both the delivered and the "
+              "dropped world stay feasible and the strcmp and url_parse below would decide between them from "
+              "bytes nobody measured. Fork the post: queue the entry under each arm of that comparison, the "
+              "way a branch on unknown external input forks anywhere else. ONE mechanism answers all three "
+              "roads, because all three end at the same comparison");
     DCHECK(JS_IsString(tov), "postMessage's target origin is not a string — the declaration converts it as a "
                              "USVString and places the IDL's own default when the page wrote none");
     /* §9.4.4's `= []`: no `transfer` member is a transfer list of nothing. That is the IDL's own default and

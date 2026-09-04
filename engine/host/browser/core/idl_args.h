@@ -689,6 +689,25 @@ static inline IdlConcolicRule idl_concolic_rule(IdlArgType t)
        adds. §3.2.25 step 4 "If V is null or undefined" is not part of the fork: null and undefined are real
        values a concolic is not, and they take the dictionary arm as they always did. */
     case IDL_STRING_OR_DICT:
+    /* THE §3.6 SPLIT ONE ROW OVER, at the arity where step 4 removed NEITHER entry — the same two conversions
+       the union above chooses between, chosen by a different algorithm. Web IDL §3.6 Overload resolution
+       algorithm step 12.11 ("Otherwise: if V is an Object and there is an entry in S that has one of the
+       following types at position i of its type list, a callback interface type a dictionary type a record
+       type object … then remove from S all other entries") names the dictionary entry for ANY Object and step
+       12.15 sends everything else to the string one, so a concolic — which wears an ordinary Object in this
+       engine — had the entry chosen for it by a fact about the SOLVER's value class.
+       IT IS THE SAME DISCRIMINATOR AND NOT A SECOND POLICY: the surviving entry decides which conversion RUNS
+       — §3.2.17 Dictionary types' member walk against §3.2.12 USVString's scalar value conversion — so no
+       single placed value is on both, and crossing merely moved the choice into whichever `JS_IsString` the
+       body reached first. THE ARITY IS WHAT SCOPES IT. Where the longer entry SURVIVED, §3.6 steps 3-4 have
+       already rewritten this position to that entry's USVString before any rule is asked (see
+       idl_split_longer_type), so this row describes only the arity at which both entries stand and the value
+       is what tells them apart — which is exactly the arity IDL_UNRESTRICTED_DOUBLE_OR_DICT never has, and
+       why that row is UNASKED where this one forks.
+       OUTCOME 0 IS THE DICTIONARY ENTRY, per step_fork_run's rule that outcome 0 is what a run with no forking
+       policy takes — it is the entry step 12.11 gives the Object an unknown is represented BY, so a no-policy
+       run answers exactly as it did and the USVString world is the one the fork ADDS. */
+    case IDL_USVSTRING_OR_DICT:
     /* Web IDL §3.2.3 boolean — the type whose CONVERSION is the fork, where the two rows above are unions
        whose ARM is. ECMAScript §7.1.2 ToBoolean ( arg )'s last step is "Return true" and a concolic wears an
        ordinary Object, so a crossing

@@ -3744,7 +3744,74 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         if (t == IDL_USVSTRING_OR_DICT) {
             DCHECK(m->dict_n > 0, "a member declared an overload splitting at a dictionary argument with no "
                                   "dictionary members — the dictionary is half of what that type states");
-            t = (JS_IsObject(a) || JS_IsNull(a) || JS_IsUndefined(a)) ? IDL_DICT : IDL_USVSTRING;
+            /* AND FOR UNKNOWN EXTERNAL INPUT THE ENTRY IS FORKED RATHER THAN TESTED, for the reason the union
+               one block up is: step 12.11 names the dictionary entry for ANY Object, a concolic wears an
+               ordinary Object, and the entry was therefore chosen from what the SOLVER's value class is rather
+               than from what the page's value is. Crossing did not avoid that choice, it MOVED it — the placed
+               concolic then failed the `JS_IsString` the body asks and the dictionary arm was taken anyway,
+               with nothing anywhere saying an entry had been chosen.
+               THIS BLOCK IS REACHED ONLY AT THE ARITY WHERE STEP 4 REMOVED NEITHER ENTRY: where the longer one
+               survived, `step4_only_longer` above already rewrote this position to its USVString, whose rule is
+               CROSSES, so the unknown passed straight through and this fork is not asked about a question the
+               argument count has already answered.
+               OUTCOME 0 IS THE DICTIONARY ENTRY, per step_fork_run's rule that outcome 0 is what a run with no
+               forking policy takes — which is the entry step 12.11 gives the Object an unknown is represented
+               BY, so a no-policy run answers exactly as it did and the USVString world is the one the fork
+               ADDS. `real` is §3.6 step 12 run on the operand's own EXAMPLE, which this machine can compute
+               because an example is a value this engine COMPUTED by running the real operators on real
+               operands: an example that is null takes step 12.3's dictionary clause exactly as a real null
+               does, and every other example is a primitive no clause between 12.4 and 12.14 names, so it
+               reaches step 12.15's string entry. An unknown carrying NO example states
+               JS_OUTCOME_REAL_UNSTATED — the same convention the union above uses, and a positive statement
+               rather than a fallback, since both worlds still run and neither is marked forced.
+               IT IS ASKED ONLY WHILE NO WALK IS IN FLIGHT, for the reason the union above gives at length: the
+               ask RELEASES this machine's outstanding request answer, so re-asking it on a RESUME would
+               destroy the answer a parked member read is waiting for. On the dictionary entry the walk is what
+               parks, so `started` says the entry is already behind us and the test below re-derives it —
+               `JS_IsObject` of a concolic is the dictionary, which is outcome 0, so the two agree. On the
+               USVString entry nothing parks: the value is PLACED and this position is done. */
+            if (concolic_is(a) && !s->dw.started) {
+                JSValue ex = concolic_example(ctx, a);
+                int arm = 0, real;
+
+                DCHECK(idl_concolic_rule(t) == IDL_CONCOLIC_FORKS,
+                       "this conversion forked §3.6's surviving overload entry for a type idl_args.h does not "
+                       "declare as one it forks — the SITE and the rule are the two halves of one statement, "
+                       "and a type that loses its FORKS rule while this ask stands would fork an entry the "
+                       "pass-through above had already crossed the value at");
+                DCHECK(!JS_IsObject(ex),
+                       "a `(USVString, dictionary)` overload split's unknown carries an OBJECT as its concrete "
+                       "example — an example is the value this engine COMPUTED, so it is a primitive, and "
+                       "§3.6 step 12 over an object one would name the dictionary entry from a value no run "
+                       "ever produced");
+                real = JS_IsUndefined(ex) ? JS_OUTCOME_REAL_UNSTATED : (JS_IsNull(ex) ? 0 : 1);
+                JS_FreeValue(ctx, ex);
+                /* `cb_result` is this machine's outstanding answer and step_fork_run takes no `in` to hand it
+                   to, so it is released HERE — the sibling's snapshot is taken at this return and nothing of
+                   the caller's may be live across it. */
+                JS_FreeValue(ctx, cb_result);
+                cb_result = JS_UNDEFINED;
+                r = step_fork_run(ctx, &s->hdr, a, "§3.6 (USVString, dictionary) overload entry", 2, real,
+                                  &arm);
+                if (r) return r;
+                if (arm != 0) {
+                    /* STEP 12.15'S ENTRY FOR AN UNKNOWN: §3.2.12 USVString's scalar value conversion is one
+                       this boundary does not perform on unknown external input (idl_concolic_rule answers
+                       CROSSES for it), so the value is PLACED as itself and the body reads its bytes through
+                       the shape and the example, exactly as it does at a plain USVString position. Rewriting
+                       `t` to IDL_USVSTRING instead would hand ToString a concolic below, which the C boundary
+                       asserts against. A CONCOLIC IN THE SLOT THEREFORE MEANS THIS ENTRY AND NOTHING ELSE:
+                       the dictionary entry builds an engine object, so a body reads the entry back off the
+                       converted value with `JS_IsString(v) || concolic_is(v)` rather than with `JS_IsString`
+                       alone, which a concolic fails by construction. */
+                    JS_FreeValue(ctx, *slot);
+                    *slot = JS_DupValue(ctx, a);
+                    goto placed;
+                }
+                t = IDL_DICT;
+            } else {
+                t = (JS_IsObject(a) || JS_IsNull(a) || JS_IsUndefined(a)) ? IDL_DICT : IDL_USVSTRING;
+            }
         }
         /* §3.6 AT THE ARITY WHERE ONLY THE DICTIONARY ENTRY IS LEFT, and there is no step 12 to run: the row
            above needs one because BOTH its entries are still standing at arity 2, while this one's three
