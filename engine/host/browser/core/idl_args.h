@@ -193,14 +193,15 @@ typedef enum {
        afterwards. (Intersection Observer §3.2.1 step 6's own RangeError for a value outside [0, 1] is that
        ALGORITHM's and stays there — a different error for a different question.) */
     IDL_SEQUENCE_DOUBLE,
-    /* `(DOMString or sequence<DOMString>)` — §3.2.25's union, and the FIRST declared type whose ARM IS CHOSEN
-       BY THE PAGE'S OWN CODE. Every other union in this list is decided by a brand test or by `JS_IsObject`,
-       neither of which reads anything; this one's step 11.2 is `? GetMethod(V, %Symbol.iterator%)` — one
-       accessor or one Proxy `get` trap away from being a page loop — so the position PARKS on that read exactly
-       as it parks on a `toString`, and which arm it resolved to is a resume point of its own.
-       THE ORDER IS THE ALGORITHM'S AND IT IS OBSERVABLE. Steps 4 through 11 name no arm this union has (no
+    /* `(DOMString or sequence<DOMString>)` — Web IDL §3.2.25 Union types' union, and the FIRST declared type
+       whose ARM IS CHOSEN BY THE PAGE'S OWN CODE. Every other union in this list is decided by a brand test or
+       by `JS_IsObject`, neither of which reads anything; this one's step 11.2 is
+       `? GetMethod(V, %Symbol.iterator%)` — one accessor or one Proxy `get` trap away from being a page loop —
+       so the position PARKS on that read exactly as it parks on a `toString`, and which arm it resolved to is a
+       resume point of its own.
+       THE ORDER IS THE ALGORITHM'S AND IT IS OBSERVABLE. Steps 4 through 10 name no arm this union has (no
        dictionary, no interface type, no `object`, no buffer source, no callback function), so the whole
-       decision is step 12.2 against step 16: an Object whose @@iterator is callable takes the SEQUENCE, and
+       decision is step 11.2 against step 15: an Object whose @@iterator is callable takes the SEQUENCE, and
        EVERYTHING else takes the string arm and is ToString'd — an Object with no @@iterator included, and null,
        and a number. `db.transaction({})` is therefore the store name "[object Object]" and a "NotFoundError",
        which is what a browser answers; reading the union as "an object is the sequence" gets that one wrong in
@@ -223,9 +224,12 @@ typedef enum {
        `threshold`
        declares, and its arm is chosen by exactly the read the two rows above are chosen by: §3.2.25 step 11.2's
        `? GetMethod(V, %Symbol.iterator%)`. Nothing in this union names a dictionary, an interface, an `object`,
-       a buffer source or a callback, so steps 4 through 11 pass it straight to step 12.2 against step 14 — an
+       a buffer source or a callback, so steps 4 through 10 pass it straight to step 11.2 against step 17 — an
        Object with a CALLABLE @@iterator takes the sequence, and EVERYTHING else takes the numeric arm and is
-       ToNumber'd. An Object with no @@iterator included, and null, and a string: `{threshold: null}` is
+       ToNumber'd — a Number being answered one clause earlier, by step 13.1's "If types includes a numeric
+       type, then return the result of converting V to that numeric type", which is the same type step 17
+       names. An Object with no @@iterator included, and null, and a string:
+       `{threshold: null}` is
        therefore the number 0 (ToNumber(null)) and passes §3.2.1's range check, while `{threshold: "x"}` is NaN
        and §3.2.7's restricted `double` refuses it as a TypeError.
        IT SHARES THE ARM RESOLVER WITH THE STRING UNION rather than restating step 11.2, because the step is the
@@ -332,11 +336,12 @@ typedef enum {
        optionality values of the REMAINING entry") belongs to the entry that SURVIVED step 4, never to the
        declaration as a whole.
        Only once the longer entry is gone does step 12 choose between the two remaining ones, and there the
-       rule is IDL_STRING_OR_DICT's own order: null and undefined take the dictionary (step 12.2 — and step
-       12.1 before it, since the dictionary entry is the one declaring this position optional), ANY Object
-       takes it (the callback-interface/dictionary/record clause), and everything else falls through to the
-       string clause. `postMessage(m, 123)` is therefore the target origin "123", which is a SyntaxError, and
-       not an options dictionary with no members.
+       rule is IDL_STRING_OR_DICT's own order: null and undefined take the dictionary (step 12.3, whose list of
+       qualifying types names "a dictionary type" — and step 12.2 before it for `undefined` alone, since the
+       dictionary entry is the one declaring this position optional; step 12.1 is "Let V be args[i]" and
+       decides nothing), ANY Object takes it (step 12.11's callback-interface/dictionary/record/object clause),
+       and everything else falls through to step 12.15's string clause. `postMessage(m, 123)` is therefore the
+       target origin "123", which is a SyntaxError, and not an options dictionary with no members.
        The string arm is a USVString (§3.2.12's scalar value conversion), which is what §7.2.2's IDL writes and
        what every other member of the URL surface takes. The dictionary is named beside the member.
        AND AT THE ARITY WHERE BOTH ENTRIES STAND, THE SURVIVING ENTRY IS FORKED FOR UNKNOWN EXTERNAL INPUT —

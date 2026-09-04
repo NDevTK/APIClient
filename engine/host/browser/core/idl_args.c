@@ -3895,7 +3895,12 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         /* §3.2.25 over `(DOMString or sequence<DOMString>)`, whose arm is decided by a READ of the page's value
            and is therefore the only union here that can park. Step 2 first — the nullable spelling makes null
            and undefined the IDL null before anything is looked at — and then the arm, which for everything but
-           an Object with a callable @@iterator is step 16's string. Resolved AFTER the concolic pass-through
+           an Object with a callable @@iterator is step 15's string. THE NUMBER HERE WAS 16, WHICH IS "If types
+           includes a numeric type and bigint, then return the result of converting V to either that numeric
+           type or bigint" — a clause this union names no entry for. Its sibling copy in
+           this file (idl_union_seq_arm's own banner) had step 11.2 against "the flat clause below it" and was
+           right; two statements of one sentence are diffed against each other before either is diffed against
+           the spec. Resolved AFTER the concolic pass-through
            above for the same reason the two unions before it are: unknown external input IS an object, and
            asking it for @@iterator would read a property off an attacker's value. */
         if (t == IDL_DOMSTRING_OR_SEQUENCE || t == IDL_DOMSTRING_OR_SEQUENCE_NULLABLE) {
