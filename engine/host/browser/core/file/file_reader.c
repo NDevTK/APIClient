@@ -772,9 +772,9 @@ static JSValue js_fr_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSV
    what Web IDL §3.7.5 Constants says a constant is, and what `reader.EMPTY` and `FileReader.LOADING` both read
    (wpt/FileAPI/reading-data-section/FileReader-multiple-reads.any.js uses each spelling). */
 static const JSCFunctionListEntry FR_CONSTANTS[] = {
-    JS_PROP_INT32_DEF("EMPTY", FR_EMPTY, JS_PROP_ENUMERABLE),
-    JS_PROP_INT32_DEF("LOADING", FR_LOADING, JS_PROP_ENUMERABLE),
-    JS_PROP_INT32_DEF("DONE", FR_DONE, JS_PROP_ENUMERABLE),
+    JS_PROP_INT32_DEF("EMPTY", FR_EMPTY, IDL_CONSTANT_PROP_FLAGS),
+    JS_PROP_INT32_DEF("LOADING", FR_LOADING, IDL_CONSTANT_PROP_FLAGS),
+    JS_PROP_INT32_DEF("DONE", FR_DONE, IDL_CONSTANT_PROP_FLAGS),
 };
 
 /* Indexed by FileReadType, so a slot's declaration names the member it belongs to rather than a number. */

@@ -182,30 +182,36 @@ int node_filter_run(JSContext *ctx, JSStepHdr *hdr, JSValueConst owner, Traverse
 }
 
 /* §6.3's CONSTANTS. Web IDL §3.11.1 Legacy callback interface object: a callback interface on which constants
-   are defined has an object of that name on the global carrying them, and §3.7.5 Constants makes each
-   non-writable, non-enumerable and non-configurable — which is what the corpus reads. The citation here read
-   §3.7.2, which is Legacy factory functions and says nothing about any of this. */
+   are defined has an object of that name on the global carrying them, and Web IDL §3.7.5 Constants states each
+   one's descriptor — see IDL_CONSTANT_PROP_FLAGS, which every row below names. The citation here read §3.7.2,
+   which is Legacy factory functions and says nothing about any of this.
+   WHAT STOOD HERE WAS SPEC-WRONG AND THE ROWS OBEYED IT: it read "non-writable, non-enumerable and
+   non-configurable — which is what the corpus reads", and §3.7.5's [[Enumerable]] is TRUE. The middle term was
+   the one this file could not check, because a NON-enumerable constant answers `NodeFilter.SHOW_ELEMENT`
+   correctly and differs only in whether a page can ENUMERATE it; the corpus assertions this comment appealed to
+   read each constant's VALUE, so every one of them passed either way and the sentence was never under test.
+   That is why it stood: a claim about an attribute, defended by an oracle that reads values. */
 static const JSCFunctionListEntry js_node_filter_consts[] = {
-    JS_PROP_INT32_DEF("FILTER_ACCEPT", NODE_FILTER_ACCEPT, 0),
-    JS_PROP_INT32_DEF("FILTER_REJECT", NODE_FILTER_REJECT, 0),
-    JS_PROP_INT32_DEF("FILTER_SKIP",   NODE_FILTER_SKIP,   0),
+    JS_PROP_INT32_DEF("FILTER_ACCEPT", NODE_FILTER_ACCEPT, IDL_CONSTANT_PROP_FLAGS),
+    JS_PROP_INT32_DEF("FILTER_REJECT", NODE_FILTER_REJECT, IDL_CONSTANT_PROP_FLAGS),
+    JS_PROP_INT32_DEF("FILTER_SKIP",   NODE_FILTER_SKIP,   IDL_CONSTANT_PROP_FLAGS),
     /* SHOW_ALL is 0xFFFFFFFF, which is not an int32 — it is an `unsigned long` constant and the page compares
        it against a number. JS_PROP_INT64_DEF is what carries it without wrapping to −1. */
-    JS_PROP_INT64_DEF("SHOW_ALL",                    0xFFFFFFFF, 0),
-    JS_PROP_INT32_DEF("SHOW_ELEMENT",                0x001, 0),
-    JS_PROP_INT32_DEF("SHOW_ATTRIBUTE",              0x002, 0),
-    JS_PROP_INT32_DEF("SHOW_TEXT",                   0x004, 0),
-    JS_PROP_INT32_DEF("SHOW_CDATA_SECTION",          0x008, 0),
+    JS_PROP_INT64_DEF("SHOW_ALL",                    0xFFFFFFFF, IDL_CONSTANT_PROP_FLAGS),
+    JS_PROP_INT32_DEF("SHOW_ELEMENT",                0x001, IDL_CONSTANT_PROP_FLAGS),
+    JS_PROP_INT32_DEF("SHOW_ATTRIBUTE",              0x002, IDL_CONSTANT_PROP_FLAGS),
+    JS_PROP_INT32_DEF("SHOW_TEXT",                   0x004, IDL_CONSTANT_PROP_FLAGS),
+    JS_PROP_INT32_DEF("SHOW_CDATA_SECTION",          0x008, IDL_CONSTANT_PROP_FLAGS),
     /* The three §6.3 marks "legacy" are still in the IDL and still on the object: a page that ORs them into a
        whatToShow gets a number, not a TypeError, and the corpus asserts each one's value. */
-    JS_PROP_INT32_DEF("SHOW_ENTITY_REFERENCE",       0x010, 0),
-    JS_PROP_INT32_DEF("SHOW_ENTITY",                 0x020, 0),
-    JS_PROP_INT32_DEF("SHOW_PROCESSING_INSTRUCTION", 0x040, 0),
-    JS_PROP_INT32_DEF("SHOW_COMMENT",                0x080, 0),
-    JS_PROP_INT32_DEF("SHOW_DOCUMENT",               0x100, 0),
-    JS_PROP_INT32_DEF("SHOW_DOCUMENT_TYPE",          0x200, 0),
-    JS_PROP_INT32_DEF("SHOW_DOCUMENT_FRAGMENT",      0x400, 0),
-    JS_PROP_INT32_DEF("SHOW_NOTATION",               0x800, 0),
+    JS_PROP_INT32_DEF("SHOW_ENTITY_REFERENCE",       0x010, IDL_CONSTANT_PROP_FLAGS),
+    JS_PROP_INT32_DEF("SHOW_ENTITY",                 0x020, IDL_CONSTANT_PROP_FLAGS),
+    JS_PROP_INT32_DEF("SHOW_PROCESSING_INSTRUCTION", 0x040, IDL_CONSTANT_PROP_FLAGS),
+    JS_PROP_INT32_DEF("SHOW_COMMENT",                0x080, IDL_CONSTANT_PROP_FLAGS),
+    JS_PROP_INT32_DEF("SHOW_DOCUMENT",               0x100, IDL_CONSTANT_PROP_FLAGS),
+    JS_PROP_INT32_DEF("SHOW_DOCUMENT_TYPE",          0x200, IDL_CONSTANT_PROP_FLAGS),
+    JS_PROP_INT32_DEF("SHOW_DOCUMENT_FRAGMENT",      0x400, IDL_CONSTANT_PROP_FLAGS),
+    JS_PROP_INT32_DEF("SHOW_NOTATION",               0x800, IDL_CONSTANT_PROP_FLAGS),
 };
 
 void node_filter_install(JSContext *ctx, JSValueConst global)

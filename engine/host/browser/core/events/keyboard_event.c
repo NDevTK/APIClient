@@ -376,10 +376,10 @@ static const JSCFunctionListEntry js_ke_proto[] = {
 /* §3.5.1's KeyLocationCode constants. Web IDL puts a `const` on the interface PROTOTYPE object AND on the
    interface object, so one table installs both — reached by name, the way event.c installs Event's phases. */
 static const JSCFunctionListEntry js_ke_consts[] = {
-    JS_PROP_INT32_DEF("DOM_KEY_LOCATION_STANDARD", 0x00, 0),
-    JS_PROP_INT32_DEF("DOM_KEY_LOCATION_LEFT", 0x01, 0),
-    JS_PROP_INT32_DEF("DOM_KEY_LOCATION_RIGHT", 0x02, 0),
-    JS_PROP_INT32_DEF("DOM_KEY_LOCATION_NUMPAD", 0x03, 0),
+    JS_PROP_INT32_DEF("DOM_KEY_LOCATION_STANDARD", 0x00, IDL_CONSTANT_PROP_FLAGS),
+    JS_PROP_INT32_DEF("DOM_KEY_LOCATION_LEFT", 0x01, IDL_CONSTANT_PROP_FLAGS),
+    JS_PROP_INT32_DEF("DOM_KEY_LOCATION_RIGHT", 0x02, IDL_CONSTANT_PROP_FLAGS),
+    JS_PROP_INT32_DEF("DOM_KEY_LOCATION_NUMPAD", 0x03, IDL_CONSTANT_PROP_FLAGS),
 };
 
 void keyboard_event_init(JSContext *ctx)

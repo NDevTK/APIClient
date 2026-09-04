@@ -1980,6 +1980,39 @@ typedef JSValue (*IdlGetter)(JSContext *ctx, JSValueConst this_val, int magic);
 /* §3.7.1's INTERFACE OBJECT for an interface that declares NO constructor: a function object whose `prototype`
    is `proto` and whose call and construct both throw a TypeError. The one way to build one — a NULL C function
    pointer is not "no constructor", it is a crash where the spec says TypeError. */
+/* WEB IDL §3.7.5 Constants' DESCRIPTOR, stated ONCE and named by every constant this engine installs.
+   Web IDL §3.7.5 says where a constant goes — "Constants are exposed on interface objects, legacy callback
+   interface objects, interface prototype objects, and on the single object that implements the interface when
+   an interface is declared with the [Global] extended attribute" — and then states the descriptor with no
+   condition on it anywhere, Web IDL §3.7.5 again: "Let desc be the PropertyDescriptor{[[Writable]]: false,
+   [[Enumerable]]: true, [[Configurable]]: false, [[Value]]: value}."
+   THE THREE BITS ARE DERIVED FROM THAT SENTENCE AND FROM NOTHING ELSE. quickjs spells a JSCFunctionListEntry's
+   attributes as the bits that are PRESENT, so [[Enumerable]] true is JS_PROP_ENUMERABLE, and [[Writable]] false
+   and [[Configurable]] false are JS_PROP_WRITABLE and JS_PROP_CONFIGURABLE being ABSENT. A constant is the one
+   IDL member whose descriptor has no parameter in it: §3.7.6's attributes compute [[Configurable]] from
+   [LegacyUnforgeable], and §3.7.5 computes nothing, so there is one answer and this is it.
+   IT IS A NAMED DECLARATION RATHER THAN A NUMBER AT EACH ROW BECAUSE THE NUMBER WAS WRONG EVERYWHERE. Every
+   constant in this engine was installed with a prop_flags of `0` — non-writable and non-configurable, which
+   §3.7.5 does want, and NON-ENUMERABLE, which it does not — so `Node.ELEMENT_NODE` and every one of its
+   siblings was invisible to `for...in`, to `Object.keys` and to `JSON.stringify` of the interface object, on
+   the interface object and on the prototype alike. Two components had reached the right answer independently
+   and spelled it out by hand, which is the drift this ends: one right answer written twice is two places for
+   the next constant to be added wrongly, and it was added wrongly at every other site for the life of the tree.
+   NO SITE SPELLS THESE BITS. A row names this, so the day §3.7.5's descriptor is re-read there is one line to
+   re-read it at — and a constant added with a bare `0` is then visibly a row that did not ask.
+   RESIDUAL — THIS STATES THE DESCRIPTOR AND NOT THE TARGETS.
+   NOT COVERED: §3.7.5's first sentence obliges a constant onto the interface OBJECT as well as the interface
+   prototype object, and that is two install calls a component makes by hand; nothing here can see that a
+   component made only one. It is a residual and not a DFAIL because the flags are now right wherever a call
+   was made — the code is correct for what it does and narrower than §3.7.5.
+   WHAT THE NEXT DIFF BUILDS: a dev-only check that walks a constants table against a target and asserts each
+   name is an own data property whose three attributes are exactly this — called at each install site, so a
+   missing second target and a hand-rolled descriptor both fire at the origin instead of being read off a page.
+   HOW ITS ABSENCE WOULD SHOW: `Node.ELEMENT_NODE` answering 1 while `Node.prototype.ELEMENT_NODE` is undefined
+   (or the reverse), which a page reads and no instrument in this tree currently asks about — engine/idlgen.mjs
+   audits which members EXIST and nothing about the attributes they are installed with. */
+#define IDL_CONSTANT_PROP_FLAGS  JS_PROP_ENUMERABLE
+
 /* §3.7.6 computes ONE field from §3.4.10's [LegacyUnforgeable]: "Let configurable be false if attr is
    unforgeable and true otherwise". Nothing else about an attribute differs, so the extended attribute is this
    one argument rather than a second install function. */
