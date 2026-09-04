@@ -1065,9 +1065,19 @@ char *result_swap_json(void) {
    different files to open. See solver/cold.h.
 
    `replyAsked`/`replyAnswered` ARE THE OTHER DOOR'S PAIR AND THEY ARE NOT `hostAsked`/`hostAnswered`. Those
-   two are minted at engine.c's `mint_req`, whose only callers push FLOW_PENDING_HOSTREQ, so they count
-   CROSS-INSTANCE RENDEZVOUS and nothing else — a document that makes no cross-document read reads `0/0` for
-   ever and is right to. The reply door — a fetch, an injected `<script src>`, the document's own script slots,
+   two are minted at engine.c's `mint_req`, whose callers push FLOW_PENDING_HOSTREQ — the four cross-instance
+   reads (a navigable's, a remote object's, a WindowProxy's, an iframe's) AND `XMLHttpRequest`, which places
+   its request through the same rendezvous because §3.5.6's synchronous arm must BLOCK the flow and the
+   asynchronous arm places the identical request from a task. That component states it in its own header: ONE
+   network edge and not two, the only difference between the modes being who waits on it.
+   THIS PARAGRAPH SAID "CROSS-INSTANCE RENDEZVOUS AND NOTHING ELSE", AND THAT IS FALSE BY EXACTLY THE CALLER
+   A READER OF THIS FILE MOST NEEDS TO KNOW ABOUT. It was wrong in the direction that costs evidence rather
+   than the direction that fabricates it, which is why nothing caught it: it under-claims, so a reader who
+   believes it DISCARDS a true reading instead of publishing a false one. Measured — a lane investigating why
+   a real bundle emitted nothing read `hostAsked: 0`, was told by this sentence that the row could not speak
+   about network requests, and set aside what was in fact independent evidence for the conclusion it went on
+   to reach by another route: no XHR had been issued either. A document that makes no cross-document read and
+   no XHR reads `0/0` and is right to; a document that XHRs does not. The reply door — a fetch, an injected `<script src>`, the document's own script slots,
    a dynamic `import()` — had no rate here at all, only the three levels `pend`, `owed` and `blocked`, which is
    exactly the gap engine.c argues the synchronous pair out of ("Starvation is a RATE"). It is the door
    §Learning-from-replies calls the POINT, and an absent number on a report is read off whichever plausible
