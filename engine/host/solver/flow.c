@@ -3814,9 +3814,13 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        PARKED CONTINUATION and nothing else. engine.c's unit boundary has a third clause for it and asks it of
        the RUNTIME, because the running flow's park queue is moved there for the duration of its turn and
        stored back on `Flow::parked` only at switch-out — so from here the same question has two spellings
-       depending on who holds the thread, and flow_between_units asks neither. Since the incumbent seeds this
-       scan and is who `best` usually is, the uncovered population is exactly the incumbent-with-a-park, and it
-       is counted as idle when it is not. What the next diff builds: one accessor answering "does this member
+       depending on who holds the thread, and flow_between_units asks neither. THE POPULATION THAT LEAVES
+       UNCOVERED IS THE NON-INCUMBENT, WHICH IS THE OPPOSITE OF WHAT THIS SENTENCE SAID: it read "since the
+       incumbent seeds this scan and is who `best` usually is, the uncovered population is exactly the
+       incumbent-with-a-park", and the condition three paragraphs down requires `best != seed`, so the
+       incumbent is the ONE member this row can never count. The uncovered set is a NON-running member holding
+       a park — its queue is on `Flow::parked` rather than in the runtime, which is exactly why the runtime
+       clause cannot be asked of it from here — and it is counted as idle when it is not. What the next diff builds: one accessor answering "does this member
        hold a parked continuation" for every member including the running one, so the boundary here is
        engine.c's whole boundary rather than its per-member half. How its absence shows: `starvedPicksIdle`
        tracking `starvedPicks` on a document whose flows park heavily inside continuations while `unitsDone`

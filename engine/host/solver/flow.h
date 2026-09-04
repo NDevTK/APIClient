@@ -1381,6 +1381,38 @@ typedef struct {
          picks_max ≈ T                ONE member is holding the thread and the switches are it and a single
                                       rival trading. That is a MONOPOLIZER the aging term is failing to sink —
                                       §scheduler's own sentence, and a third repair again.
+       AND THE SECOND ROW IS NOT DECIDABLE FROM `T/P` AND `picks_max`, WHICH IS A CORRECTION TO THIS TABLE
+       RATHER THAN A CAVEAT ON IT. `flow_starved_picks` below already says why in as many words — "`picks_live
+       / (members - never_picked)` sums re-dispatches that CONTINUE a program, which are necessary, with
+       re-dispatches that pass over a starved member, which are the defect" — and that sentence is about THIS
+       ratio, written one screen down from the table that goes on offering it as the discriminator. Two sites
+       in one file describing one question and disagreeing; the one that CONSUMES the quantity is right, and
+       this is the site a reader reaches first, because it is the row the census prints.
+       SO THE SECOND ROW IS READ OFF `starved_picks_idle` AND NEVER OFF `T/P`. A framed member re-picked to
+       finish the program it is inside, while an arm it forked stands at its exact weight, raises `T/P` and is
+       the strict comparison doing its job; only the IDLE subset is the order returning a member that has
+       FINISHED its trial ahead of one that has never had a turn. `T/P` well above 1 with that subset near zero
+       is the FIRST row of this table wearing the second row's number, and the repair the second row licenses
+       would then be made against a frontier whose order is returning nobody early.
+       MEASURED, AND THE TWO READINGS DISAGREE BY THREE ORDERS OF MAGNITUDE ON ONE DOCUMENT AT ONE REVISION.
+       Artifact 22605dc4, solvergate `stream`, a fixture of two nested opaque-bounded loops inside a `load`
+       handler — chosen because every live member stands with no row left (`outOfPrograms == members`) and
+       `departures` is 0 at every snapshot of every run, which is the forking shape this table is read on.
+       THREE runs, terminal snapshot of each, in run order:
+         members             4978 / 4600 / 4635     picks_lifetime      9511 / 6957 / 8817
+         T/P                 2.21 / 1.65 / 2.11     picks_max              7 /    5 /    7
+         starved_picks          - /  706 /  612     starved_picks_idle     - /    4 /    4
+       `T/P` at 2.11 reads as "a reachable cohort swept repeatedly while the tail waits". The pair beneath it
+       says the tie-break decided against a never-served member on 612 of 8817 dispatches, and that on 608 of
+       those 612 the member it returned was INSIDE a program — so the residual, and it is an UPPER bound (see
+       the residual at `flow_starved_picks_idle`), is 4 in 8817. The three rows of this table are not shades of
+       one state and `T/P` cannot tell the first two apart.
+       AND `never_picked_at_top` CANNOT CARRY THE CLAIM ALONE AT THIS SPREAD: the same three runs read it
+       656 / 0 / 431, on ONE revision, ONE document and ONE schedule — a gauge whose run-to-run range covers
+       its own population, which is what a gauge does on a frontier being swept while it grows.
+       EVERY NUMBER HERE IS ONE THE BOX MOVES: this host has no CPU clock and the quantum is wall-denominated
+       (solver/quantum.h), so what three runs support is the ORDER of the two readings and not their values,
+       and nothing here is a threshold.
        AND THE ROW ABOVE IS A GAUGE THAT MOVES, WHICH IS WHAT MAKES THESE NECESSARY RATHER THAN MERELY FULLER.
        `never_picked` counts the members standing NOW that have never been chosen, and a member that is chosen
        leaves that population while every member born since joins it — so the number falls as well as rises, and
@@ -2071,10 +2103,17 @@ long flow_starved_picks(void);
    THE FRACTION IS OF `picks_lifetime`, exactly as the superset's is, and the two are raised under one
    condition at one line so `idle <= starved` holds by construction and neither is a reading of a second
    moment. A LIFETIME COUNTER and one of the few kinds a reader may difference.
-   WHAT IT CANNOT SEE IS ONE CLAUSE OF THE BOUNDARY, stated at the counter in flow.c: a parked continuation is
-   asked of the runtime for the flow holding the thread and of `parked` for every other member, so this
-   over-reports by exactly the incumbent-with-a-park. It is an upper bound on the defect and a much tighter
-   one than the row above. */
+   WHAT IT CANNOT SEE IS ONE CLAUSE OF THE BOUNDARY, stated at the counter in flow.c: engine.c's unit boundary
+   is `!frame && !JS_HasParkedFlow(runtime) && !flow_job_microtask`, and `flow_between_units` asks the first
+   and the third. So a member with no frame, no microtask owed and a PARKED CONTINUATION reads between-units
+   here and is not, which makes this an UPPER BOUND on the defect and a much tighter one than the row above.
+   THE POPULATION THAT BOUND IS OVER IS THE NON-INCUMBENT, WHICH IS THE OPPOSITE OF WHAT THIS SENTENCE SAID.
+   It read "over-reports by exactly the incumbent-with-a-park", and the raise in flow.c requires `best !=
+   seed` — the incumbent SEEDS that scan and can never be the member counted — so the incumbent is the one
+   member this row structurally excludes. The uncovered set is a non-running member holding a park, whose
+   queue is on `Flow::parked` rather than in the runtime, which is precisely why the runtime clause cannot be
+   asked of it from here. Corrected at both sites in one diff; the SUBSTANCE (one clause of three is unasked)
+   is unchanged and it is flow.c's residual that says what closes it. */
 long flow_starved_picks_idle(void);
 
 /* The highest-priority flow in the frontier, or NULL if empty — EVERY member, whether or not it can currently
