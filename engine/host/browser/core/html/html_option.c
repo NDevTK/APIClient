@@ -357,7 +357,7 @@ void html_option_install_global(JSContext *ctx, JSValueConst global, JSValueCons
        constructor, and `Option.prototype.constructor` must stay `HTMLOptionElement`. Flags 0 is exactly
        {[[Writable]]: false, [[Enumerable]]: false, [[Configurable]]: false}. */
     JS_DefinePropertyValueStr(ctx, factory, "prototype", JS_DupValue(ctx, proto), 0);
-    JS_SetPropertyStr(ctx, (JSValue)global, "Option", factory);
+    idl_define_global_property_reference(ctx, global, "Option", factory);
 }
 
 void html_option_free(JSRuntime *rt)

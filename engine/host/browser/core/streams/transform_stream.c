@@ -1565,7 +1565,7 @@ void transform_stream_install(JSContext *ctx, JSValueConst global)
         JS_SetConstructor(ctx, ctor, proto);
         JS_FreeValue(ctx, proto);
     }
-    JS_SetPropertyStr(ctx, (JSValue)global, "TransformStream", ctor);
+    idl_define_global_property_reference(ctx, global, "TransformStream", ctor);
 
     ctor = JS_NewCFunction2(ctx, js_illegal_ctor, "TransformStreamDefaultController", 0,
                             JS_CFUNC_constructor, 0);
@@ -1576,7 +1576,7 @@ void transform_stream_install(JSContext *ctx, JSValueConst global)
         JS_SetConstructor(ctx, ctor, proto);
         JS_FreeValue(ctx, proto);
     }
-    JS_SetPropertyStr(ctx, (JSValue)global, "TransformStreamDefaultController", ctor);
+    idl_define_global_property_reference(ctx, global, "TransformStreamDefaultController", ctor);
 }
 
 void transform_stream_free(JSContext *ctx)

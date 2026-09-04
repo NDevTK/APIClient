@@ -508,7 +508,7 @@ void media_query_list_install(JSContext *ctx, JSValueConst global)
     ctor = idl_interface_object(ctx, "MediaQueryList", proto);
     CHECK(!JS_IsException(ctor), "the MediaQueryList interface object could not be allocated");
     JS_FreeValue(ctx, proto);
-    JS_SetPropertyStr(ctx, (JSValue)global, "MediaQueryList", ctor);
+    idl_define_global_property_reference(ctx, global, "MediaQueryList", ctor);
 
     ctor = idl_step_constructor(ctx, "MediaQueryListEvent", g_id_ev_ctor);
     CHECK(!JS_IsException(ctor), "the MediaQueryListEvent interface object could not be allocated");
@@ -516,7 +516,7 @@ void media_query_list_install(JSContext *ctx, JSValueConst global)
     DCHECK(!JS_IsNull(proto), "MediaQueryListEvent was installed in a realm with no prototype for it");
     JS_SetConstructor(ctx, ctor, proto);
     JS_FreeValue(ctx, proto);
-    JS_SetPropertyStr(ctx, (JSValue)global, "MediaQueryListEvent", ctor);
+    idl_define_global_property_reference(ctx, global, "MediaQueryListEvent", ctor);
 }
 
 /* THE AGENT'S HALF, UNDONE — a row on core/platform.h's release column, and it takes the RUNTIME because that

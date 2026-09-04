@@ -1566,7 +1566,7 @@ void encoding_install(JSContext *ctx, JSValueConst global)
         JS_SetConstructor(ctx, ctor, proto);
         JS_FreeValue(ctx, proto);
     }
-    JS_SetPropertyStr(ctx, (JSValue)global, "TextDecoder", ctor);
+    idl_define_global_property_reference(ctx, global, "TextDecoder", ctor);
 
     ctor = idl_step_constructor(ctx, "TextEncoder", g_enc_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the TextEncoder interface object could not be allocated");
@@ -1576,7 +1576,7 @@ void encoding_install(JSContext *ctx, JSValueConst global)
         JS_SetConstructor(ctx, ctor, proto);
         JS_FreeValue(ctx, proto);
     }
-    JS_SetPropertyStr(ctx, (JSValue)global, "TextEncoder", ctor);
+    idl_define_global_property_reference(ctx, global, "TextEncoder", ctor);
 }
 
 void encoding_free(JSContext *ctx)

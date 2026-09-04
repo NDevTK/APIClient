@@ -401,8 +401,8 @@ void abstract_range_install(JSContext *ctx, JSValueConst global)
     JSValue proto = abstract_range_proto(ctx), sctor;
 
     /* §5.3 declares no constructor: the interface object exists to be what `instanceof` names. */
-    JS_SetPropertyStr(ctx, (JSValue)global, "AbstractRange",
-                      idl_interface_object(ctx, "AbstractRange", proto));
+    idl_define_global_property_reference(ctx, global, "AbstractRange",
+                                         idl_interface_object(ctx, "AbstractRange", proto));
     JS_FreeValue(ctx, proto);
 
     proto = JS_GetClassProto(ctx, g_static_class);
@@ -410,7 +410,7 @@ void abstract_range_install(JSContext *ctx, JSValueConst global)
     sctor = idl_step_constructor(ctx, "StaticRange", g_id_static_ctor);
     JS_SetConstructor(ctx, sctor, proto);
     JS_FreeValue(ctx, proto);
-    JS_SetPropertyStr(ctx, (JSValue)global, "StaticRange", sctor);
+    idl_define_global_property_reference(ctx, global, "StaticRange", sctor);
 }
 
 void abstract_range_free(JSRuntime *rt)

@@ -151,8 +151,8 @@ void mutation_record_install(JSContext *ctx, JSValueConst global)
 
     DCHECK(!JS_IsNull(proto), "MutationRecord was installed in a realm that never ran its prototype install");
     /* §4.3.3 declares NO constructor, so the interface object's call and construct both throw. */
-    JS_SetPropertyStr(ctx, (JSValue)global, "MutationRecord",
-                      idl_interface_object(ctx, "MutationRecord", proto));
+    idl_define_global_property_reference(ctx, global, "MutationRecord",
+                                         idl_interface_object(ctx, "MutationRecord", proto));
     JS_FreeValue(ctx, proto);
 }
 

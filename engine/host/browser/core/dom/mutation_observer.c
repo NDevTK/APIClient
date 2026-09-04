@@ -1105,7 +1105,7 @@ void mutation_observer_install(JSContext *ctx, JSValueConst global)
     DCHECK(!JS_IsNull(proto), "MutationObserver was installed in a realm that never ran its prototype install");
     JS_SetConstructor(ctx, ctor, proto);
     JS_FreeValue(ctx, proto);
-    JS_SetPropertyStr(ctx, (JSValue)global, "MutationObserver", ctor);
+    idl_define_global_property_reference(ctx, global, "MutationObserver", ctor);
 }
 
 void mutation_observer_free(JSRuntime *rt)

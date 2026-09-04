@@ -854,7 +854,7 @@ void css_style_sheet_install(JSContext *ctx, JSValueConst global)
            "the style-sheet interfaces were installed in a realm that never ran their prototype install");
     /* §6.1.1 declares NO constructor — StyleSheet is "an abstract, base style sheet" and nothing instantiates
        one — so its interface object exists to be what `instanceof` names and nothing else. */
-    JS_SetPropertyStr(ctx, (JSValue)global, "StyleSheet", idl_interface_object(ctx, "StyleSheet", base));
+    idl_define_global_property_reference(ctx, global, "StyleSheet", idl_interface_object(ctx, "StyleSheet", base));
     /* §6.1.2's `constructor(optional CSSStyleSheetInit options = {})`, whose steps are §6.1's create a
        constructed CSSStyleSheet. Web IDL §3.7.1 Interface object's [[Construct]] is the DECLARATION's, minted
        here, so `new CSSStyleSheet()` no longer takes the shared "Illegal constructor" TypeError. */
@@ -862,7 +862,7 @@ void css_style_sheet_install(JSContext *ctx, JSValueConst global)
     ctor = idl_step_constructor(ctx, "CSSStyleSheet", g_id_ctor);
     CHECK(!JS_IsException(ctor), "the CSSStyleSheet interface object could not be allocated");
     JS_SetConstructor(ctx, ctor, proto);
-    JS_SetPropertyStr(ctx, (JSValue)global, "CSSStyleSheet", ctor);
+    idl_define_global_property_reference(ctx, global, "CSSStyleSheet", ctor);
     JS_FreeValue(ctx, base);
     JS_FreeValue(ctx, proto);
 }

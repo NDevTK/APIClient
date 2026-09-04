@@ -962,7 +962,7 @@ void selection_install(JSContext *ctx, JSValueConst global)
 
     DCHECK(!JS_IsNull(proto), "Selection was installed in a realm that never ran its prototype install");
     /* §3 declares no constructor: the interface object exists to be what `instanceof` names. */
-    JS_SetPropertyStr(ctx, (JSValue)global, "Selection", idl_interface_object(ctx, "Selection", proto));
+    idl_define_global_property_reference(ctx, global, "Selection", idl_interface_object(ctx, "Selection", proto));
     JS_FreeValue(ctx, proto);
 }
 

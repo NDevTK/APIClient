@@ -4258,7 +4258,7 @@ void readable_stream_install(JSContext *ctx, JSValueConst global)
     }
     /* §4.2's `from` is STATIC, so it lives on the interface object rather than the prototype. */
     idl_install_method(ctx, ctor, "from", g_from_ctor_stepid);
-    JS_SetPropertyStr(ctx, (JSValue)global, "ReadableStream", ctor);
+    idl_define_global_property_reference(ctx, global, "ReadableStream", ctor);
 
     ctor = idl_step_constructor(ctx, "ReadableStreamDefaultReader", g_reader_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the reader interface object could not be allocated");
@@ -4268,7 +4268,7 @@ void readable_stream_install(JSContext *ctx, JSValueConst global)
         JS_SetConstructor(ctx, ctor, proto);
         JS_FreeValue(ctx, proto);
     }
-    JS_SetPropertyStr(ctx, (JSValue)global, "ReadableStreamDefaultReader", ctor);
+    idl_define_global_property_reference(ctx, global, "ReadableStreamDefaultReader", ctor);
 
     ctor = idl_step_constructor(ctx, "ReadableStreamBYOBReader", g_byob_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the BYOB reader interface object could not be allocated");
@@ -4278,7 +4278,7 @@ void readable_stream_install(JSContext *ctx, JSValueConst global)
         JS_SetConstructor(ctx, ctor, proto);
         JS_FreeValue(ctx, proto);
     }
-    JS_SetPropertyStr(ctx, (JSValue)global, "ReadableStreamBYOBReader", ctor);
+    idl_define_global_property_reference(ctx, global, "ReadableStreamBYOBReader", ctor);
 
     ctor = JS_NewCFunction2(ctx, js_illegal_ctor, "ReadableStreamDefaultController", 0,
                             JS_CFUNC_constructor, 0);
@@ -4289,7 +4289,7 @@ void readable_stream_install(JSContext *ctx, JSValueConst global)
         JS_SetConstructor(ctx, ctor, proto);
         JS_FreeValue(ctx, proto);
     }   /* .prototype and .constructor, both directions */
-    JS_SetPropertyStr(ctx, (JSValue)global, "ReadableStreamDefaultController", ctor);
+    idl_define_global_property_reference(ctx, global, "ReadableStreamDefaultController", ctor);
 
     /* §4.7's and §4.8's interface objects are their component's. */
     readable_byte_stream_install(ctx, global);

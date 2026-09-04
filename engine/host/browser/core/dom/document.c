@@ -4919,7 +4919,7 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
         JS_SetPrototype(ctx, xctor, base);
         JS_FreeValue(ctx, base);
         JS_FreeValue(ctx, xdp);
-        JS_SetPropertyStr(ctx, (JSValue)global, "XMLDocument", xctor);
+        idl_define_global_property_reference(ctx, global, "XMLDocument", xctor);
     }
     /* §4.8.5 FOR THE TREE THE PARSER BUILT. Insertion steps run during tree construction in a browser, so an
        <iframe> the page's own markup contains has a child navigable before the first script runs — and no

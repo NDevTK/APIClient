@@ -128,7 +128,7 @@ void html_audio_install_global(JSContext *ctx, JSValueConst global, JSValueConst
        constructor, and `Audio.prototype.constructor` must stay `HTMLAudioElement`. Flags 0 is exactly
        {[[Writable]]: false, [[Enumerable]]: false, [[Configurable]]: false}. */
     JS_DefinePropertyValueStr(ctx, factory, "prototype", JS_DupValue(ctx, proto), 0);
-    JS_SetPropertyStr(ctx, (JSValue)global, "Audio", factory);
+    idl_define_global_property_reference(ctx, global, "Audio", factory);
 }
 
 void html_audio_free(JSRuntime *rt)

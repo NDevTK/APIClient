@@ -2121,7 +2121,7 @@ void writable_stream_install(JSContext *ctx, JSValueConst global)
         JS_SetConstructor(ctx, ctor, proto);
         JS_FreeValue(ctx, proto);
     }
-    JS_SetPropertyStr(ctx, (JSValue)global, "WritableStream", ctor);
+    idl_define_global_property_reference(ctx, global, "WritableStream", ctor);
 
     ctor = idl_step_constructor(ctx, "WritableStreamDefaultWriter", g_wr_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the writer interface object could not be allocated");
@@ -2131,7 +2131,7 @@ void writable_stream_install(JSContext *ctx, JSValueConst global)
         JS_SetConstructor(ctx, ctor, proto);
         JS_FreeValue(ctx, proto);
     }
-    JS_SetPropertyStr(ctx, (JSValue)global, "WritableStreamDefaultWriter", ctor);
+    idl_define_global_property_reference(ctx, global, "WritableStreamDefaultWriter", ctor);
 
     ctor = JS_NewCFunction2(ctx, js_illegal_ctor, "WritableStreamDefaultController", 0,
                             JS_CFUNC_constructor, 0);
@@ -2142,7 +2142,7 @@ void writable_stream_install(JSContext *ctx, JSValueConst global)
         JS_SetConstructor(ctx, ctor, proto);
         JS_FreeValue(ctx, proto);
     }
-    JS_SetPropertyStr(ctx, (JSValue)global, "WritableStreamDefaultController", ctor);
+    idl_define_global_property_reference(ctx, global, "WritableStreamDefaultController", ctor);
 }
 
 void writable_stream_free(JSContext *ctx)

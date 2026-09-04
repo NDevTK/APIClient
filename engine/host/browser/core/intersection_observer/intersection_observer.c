@@ -1649,7 +1649,7 @@ void intersection_observer_install(JSContext *ctx, JSValueConst global)
            "IntersectionObserver was installed in a realm that never ran its prototype install");
     JS_SetConstructor(ctx, ctor, proto);
     JS_FreeValue(ctx, proto);
-    JS_SetPropertyStr(ctx, (JSValue)global, "IntersectionObserver", ctor);
+    idl_define_global_property_reference(ctx, global, "IntersectionObserver", ctor);
 }
 
 /* NEITHER OF THIS COMPONENT'S CLASSES HAS A FINALIZER OR A gc_mark, WHICH IS WHY RESETTING THE CLASS IDS BELOW

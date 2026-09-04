@@ -2119,14 +2119,14 @@ void media_element_install(JSContext *ctx, JSValueConst global)
     JS_SetPropertyFunctionList(ctx, ctor, ERROR_CONSTS,
                                (int)(sizeof(ERROR_CONSTS) / sizeof(ERROR_CONSTS[0])));
     JS_FreeValue(ctx, proto);
-    JS_SetPropertyStr(ctx, (JSValue)global, "MediaError", ctor);
+    idl_define_global_property_reference(ctx, global, "MediaError", ctor);
 
     proto = JS_GetClassProto(ctx, g_ranges_class);
     DCHECK(!JS_IsNull(proto), "TimeRanges was installed in a realm with no prototype for it");
     ctor = idl_interface_object(ctx, "TimeRanges", proto);
     CHECK(!JS_IsException(ctor), "the TimeRanges interface object could not be allocated");
     JS_FreeValue(ctx, proto);
-    JS_SetPropertyStr(ctx, (JSValue)global, "TimeRanges", ctor);
+    idl_define_global_property_reference(ctx, global, "TimeRanges", ctor);
 }
 
 void media_element_free(JSRuntime *rt)

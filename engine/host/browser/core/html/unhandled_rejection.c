@@ -701,7 +701,7 @@ void unhandled_rejection_install(JSContext *ctx, JSValueConst global)
         JS_SetConstructor(ctx, ctor, proto);
         JS_FreeValue(ctx, proto);
     }
-    JS_SetPropertyStr(ctx, (JSValue)global, "PromiseRejectionEvent", ctor);
+    idl_define_global_property_reference(ctx, global, "PromiseRejectionEvent", ctor);
 }
 
 /* THE RUNTIME, NOT A REALM, and it is the platform's release column that calls it — see core/platform.h. What

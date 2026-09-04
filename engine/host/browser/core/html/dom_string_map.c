@@ -370,7 +370,7 @@ void dom_string_map_install(JSContext *ctx, JSValueConst global)
         ctor = idl_interface_object(ctx, "DOMStringMap", proto);
         JS_FreeValue(ctx, proto);
     }
-    JS_SetPropertyStr(ctx, (JSValue)global, "DOMStringMap", ctor);
+    idl_define_global_property_reference(ctx, global, "DOMStringMap", ctor);
 }
 
 void dom_string_map_free(JSRuntime *rt)

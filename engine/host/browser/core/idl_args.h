@@ -2013,6 +2013,36 @@ typedef JSValue (*IdlGetter)(JSContext *ctx, JSValueConst this_val, int magic);
    audits which members EXIST and nothing about the attributes they are installed with. */
 #define IDL_CONSTANT_PROP_FLAGS  JS_PROP_ENUMERABLE
 
+/* WEB IDL §3.8 Platform objects implementing interfaces' DESCRIPTOR FOR THE PROPERTY AN INTERFACE PUTS ON A
+   GLOBAL, stated ONCE and named by every site that puts one there.
+   WHERE THE DESCRIPTOR ACTUALLY IS, because it is not where a reader looks first. Web IDL §3.7 Interfaces says
+   only WHICH property exists — "The name of the property is the identifier of the interface, and its value is
+   an object called the interface object" — and states no attributes at all; an edition that did state them
+   inline is what `idlharness.js` still quotes in its own comment, and quoting a retired edition is not a
+   citation. The current text states them in §3.8's `define the global property references`, which for an
+   interface says "Perform DefineMethodProperty(target, id, interfaceObject, false)." — and ECMAScript §10.2.8
+   DefineMethodProperty ( homeObj, name, closure, enumerable ) is where the descriptor is written down: "Let
+   propertyDesc be the PropertyDescriptor { [[Value]]: closure, [[Writable]]: true, [[Enumerable]]: enumerable,
+   [[Configurable]]: true }." With §3.8's `false` substituted for `enumerable` that is {writable, configurable},
+   and NOT enumerable — which is the whole of the defect this ends.
+   THE THREE BITS ARE DERIVED FROM THOSE TWO SENTENCES AND FROM NOTHING ELSE. quickjs spells a property's
+   attributes as the bits that are PRESENT, so [[Writable]] true is JS_PROP_WRITABLE, [[Configurable]] true is
+   JS_PROP_CONFIGURABLE, and [[Enumerable]] false is JS_PROP_ENUMERABLE being ABSENT.
+   §3.8 REACHES FOUR KINDS OF OBJECT WITH THE IDENTICAL CALL and they are therefore ONE band, which is not
+   obvious from the local variable a site happens to hold: an interface object, a [LegacyWindowAlias] of one, a
+   legacy factory function ("Perform DefineMethodProperty(target, id, legacyFactoryFunction, false)"), a §3.11.1
+   legacy callback interface object, and a §3.13.1 namespace object. `Image`, `NodeFilter` and `NamedNodeMap`
+   are three different Web IDL constructs answering to one descriptor.
+   IT IS A NAMED DECLARATION RATHER THAN A NUMBER AT EACH SITE BECAUSE THERE WAS NO NUMBER AT ALL. Every one of
+   these properties was installed with JS_SetPropertyStr, which is an ordinary [[Set]] — §10.1.9.2 OrdinarySetWithOwnDescriptor
+   creates the missing property through CreateDataProperty, whose descriptor is writable AND ENUMERABLE AND
+   configurable. Two of the three bits were what §3.8 asks for and the middle one was not, so `URL`, `Node`,
+   `Event` and every other interface name showed up in `for (var k in globalThis)`, in `Object.keys(globalThis)`
+   and in a `JSON.stringify` of the global, in a way no browser does.
+   NO SITE SPELLS THESE BITS: a site names idl_define_global_property_reference, and an interface installed with
+   a bare JS_SetPropertyStr is then visibly a site that did not ask. */
+#define IDL_INTERFACE_OBJECT_PROP_FLAGS  (JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE)
+
 /* §3.7.6 computes ONE field from §3.4.10's [LegacyUnforgeable]: "Let configurable be false if attr is
    unforgeable and true otherwise". Nothing else about an attribute differs, so the extended attribute is this
    one argument rather than a second install function. */
@@ -2034,6 +2064,19 @@ void idl_install_value_attribute(JSContext *ctx, JSValueConst target, const char
                                  IdlAttrForge forge);
 
 JSValue idl_interface_object(JSContext *ctx, const char *name, JSValueConst proto);
+
+/* WEB IDL §3.8's `define the global property references`, as the ONE door an interface's name reaches the
+   global through — see IDL_INTERFACE_OBJECT_PROP_FLAGS above for the descriptor and where it is stated.
+   IT TAKES AN OBJECT RATHER THAN MINTING ONE, which is why it is not folded into
+   idl_install_interface_object_exposed: that entry mints over idl_illegal_ctor, so it is §3.7.1's object for an
+   interface that declares NO constructor, and an interface that DOES declare one would have `new X()` replaced
+   by a TypeError if it were routed there. §3.8 does not care which of its four kinds the object is — it names
+   `interfaceObject`, `legacyFactoryFunction` and a namespace object in three steps whose only difference is
+   which mint produced the argument — so the mint stays at the component that knows its interface and the
+   DEFINE is here.
+   TAKES OWNERSHIP of `object`, exactly as the JS_SetPropertyStr every site used to call did, so a conversion is
+   the call and nothing else. `global` is BORROWED. */
+void idl_define_global_property_reference(JSContext *ctx, JSValueConst global, const char *id, JSValue object);
 /* §3.11.1's LEGACY CALLBACK INTERFACE OBJECT — what a callback interface on which constants are defined puts
    on the global. It is a BUILT-IN FUNCTION OBJECT ("Let F be CreateBuiltinFunction(steps, 0, id, « », realm)"
    over steps that throw a TypeError), which is why the spec's own note says `typeof` answers "function"; an

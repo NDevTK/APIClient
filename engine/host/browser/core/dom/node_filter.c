@@ -223,5 +223,5 @@ void node_filter_install(JSContext *ctx, JSValueConst global)
 
     JS_SetPropertyFunctionList(ctx, obj, js_node_filter_consts,
                                (int)(sizeof(js_node_filter_consts) / sizeof(js_node_filter_consts[0])));
-    JS_SetPropertyStr(ctx, (JSValue)global, "NodeFilter", obj);
+    idl_define_global_property_reference(ctx, global, "NodeFilter", obj);
 }

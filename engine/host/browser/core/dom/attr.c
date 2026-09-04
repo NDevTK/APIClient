@@ -734,7 +734,7 @@ void attr_install(JSContext *ctx, JSValueConst global)
         JSValue attr_p = node_type_proto(ctx, LXB_DOM_NODE_TYPE_ATTRIBUTE), nnm_p = named_node_map_proto(ctx);
         JSValue nnm = idl_interface_object(ctx, "NamedNodeMap", nnm_p);
         node_install_interface(ctx, global, "Attr", attr_p);
-        JS_SetPropertyStr(ctx, (JSValue)global, "NamedNodeMap", nnm);
+        idl_define_global_property_reference(ctx, global, "NamedNodeMap", nnm);
         JS_FreeValue(ctx, attr_p);
         JS_FreeValue(ctx, nnm_p);
     }

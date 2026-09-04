@@ -101,7 +101,7 @@ void document_fragment_install(JSContext *ctx, JSValueConst global)
         JS_SetConstructor(ctx, ctor, proto);
         JS_FreeValue(ctx, proto);
     }
-    JS_SetPropertyStr(ctx, (JSValue)global, "DocumentFragment", ctor);
+    idl_define_global_property_reference(ctx, global, "DocumentFragment", ctor);
 }
 
 JSValue document_fragment_proto(JSContext *ctx)

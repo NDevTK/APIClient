@@ -849,7 +849,7 @@ void text_stream_install(JSContext *ctx, JSValueConst global)
         JS_SetConstructor(ctx, ctor, proto);
         JS_FreeValue(ctx, proto);
     }
-    JS_SetPropertyStr(ctx, (JSValue)global, "TextDecoderStream", ctor);
+    idl_define_global_property_reference(ctx, global, "TextDecoderStream", ctor);
 
     ctor = idl_step_constructor(ctx, "TextEncoderStream", g_tes_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the TextEncoderStream interface object could not be allocated");
@@ -859,7 +859,7 @@ void text_stream_install(JSContext *ctx, JSValueConst global)
         JS_SetConstructor(ctx, ctor, proto);
         JS_FreeValue(ctx, proto);
     }
-    JS_SetPropertyStr(ctx, (JSValue)global, "TextEncoderStream", ctor);
+    idl_define_global_property_reference(ctx, global, "TextEncoderStream", ctor);
 }
 
 void text_stream_free(JSContext *ctx)

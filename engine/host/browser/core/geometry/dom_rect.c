@@ -504,8 +504,8 @@ void dom_rect_install(JSContext *ctx, JSValueConst global)
     JS_SetPrototype(ctx, ctor, ro_ctor);
     JS_FreeValue(ctx, proto);
 
-    JS_SetPropertyStr(ctx, (JSValue)global, "DOMRectReadOnly", ro_ctor);
-    JS_SetPropertyStr(ctx, (JSValue)global, "DOMRect", ctor);
+    idl_define_global_property_reference(ctx, global, "DOMRectReadOnly", ro_ctor);
+    idl_define_global_property_reference(ctx, global, "DOMRect", ctor);
 }
 
 void dom_rect_free(void)

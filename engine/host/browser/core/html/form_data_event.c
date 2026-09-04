@@ -190,7 +190,7 @@ void form_data_event_install(JSContext *ctx, JSValueConst global)
     proto = fde_proto(ctx);
     JS_SetConstructor(ctx, ctor, proto);
     JS_FreeValue(ctx, proto);
-    JS_SetPropertyStr(ctx, (JSValue)global, "FormDataEvent", ctor);
+    idl_define_global_property_reference(ctx, global, "FormDataEvent", ctor);
 }
 
 void form_data_event_free(JSRuntime *rt)

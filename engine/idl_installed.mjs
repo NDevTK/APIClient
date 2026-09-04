@@ -787,10 +787,17 @@ const CALL_FORMS = new Map(Object.entries({
   JS_DefinePropertyGetSet:       { target: 1, name: 2, fn: 3, kind: "accessor" },
   /* Web IDL §3.7 "Interfaces" — "a corresponding property exists on the realm's global object. The name of
      the property is the identifier of the interface, and its value is an object called the interface object",
-     whose characteristics §3.7.1 "Interface object" describes. A DATA property on the global — Web IDL states
-     no descriptor for it, so no attribute triple is quoted here. These two are core/dom/node.c's shared
+     whose characteristics §3.7.1 "Interface object" describes. A DATA property on the global. This comment used
+     to say Web IDL states no descriptor for it, which was a claim about where the descriptor is rather than
+     about whether there is one, and it is retired: §3.7 states none INLINE, and Web IDL §3.8 "Platform objects
+     implementing interfaces" states it in `define the global property references` — "Perform
+     DefineMethodProperty(target, id, interfaceObject, false)." — whose triple ECMAScript §10.2.8
+     "DefineMethodProperty ( homeObj, name, closure, enumerable )" writes out. This audit still quotes no triple
+     because it reads which members EXIST and what KIND of property each is, and never their attributes; the
+     descriptor is stated once in core/idl_args.h and installed through the form below.
+     These two are core/dom/node.c's shared
      install helpers for one, and they are HERE for the reason every other shared helper is: the helper's own
-     `JS_SetPropertyStr(ctx, global, name, ctor)` takes the name from a PARAMETER, so it is the one line that
+     forwarding install takes the name from a PARAMETER, so it is the one line that
      cannot resolve by construction. Unregistered, that line was reported UNRESOLVED against every interface
      whose row names node.c — a defect count with no root fix behind it, since no change to the C could have
      made the forwarding line name a member — while the CALL SITES that do name one (`"HTMLElement"`,
@@ -798,6 +805,21 @@ const CALL_FORMS = new Map(Object.entries({
      forwarding line is skipped by the shared-helper rule and each caller is audited where its literal is. */
   node_install_interface:        { target: 1, name: 2, kind: "data" },
   node_install_interface_ctor:   { target: 1, name: 2, kind: "data" },
+  /* §3.8's `define the global property references`, as the engine spells it — the ONE door an interface object,
+     a legacy factory function, a §3.11.1 legacy callback interface object or a §3.13.1 namespace object reaches
+     the global through. It is NOT `ambiguous`: JS_SetPropertyStr and JS_DefinePropertyValueStr carry that mark
+     because they are also how any ordinary object is built, and this form has exactly one meaning.
+     IT IS HERE BECAUSE THE DIFF THAT INTRODUCED IT WOULD OTHERWISE HAVE MADE THIS AUDIT BLIND WHERE IT USED TO
+     SEE: sixty-nine installs moved off JS_SetPropertyStr in one change, and a form this map does not know is a
+     form it does not read. MEASURED rather than argued, by running installedMembers over the same tree with and
+     without this row: `records` 2504 without against 2507 with, and `offInstaller` 1781 against 1778 — so three
+     members that JS_SetPropertyStr had resolved would have moved to "installed on an object no interface
+     declaration reaches", which is the false-absent direction this file's own header forbids, with the total
+     still reading clean. THREE AND NOT SIXTY-NINE, because most of these installs put an interface OBJECT on
+     the global rather than a MEMBER on an interface, and this audit counts members — the number is small and
+     the direction is the one that matters. A new install spelling is a row here, in the same diff that writes
+     it. */
+  idl_define_global_property_reference: { target: 1, name: 2, kind: "data" },
   /* Both write a DATA property, which is what makes them the two forms that can be an §3.7.6 violation: an
      IDL attribute is an accessor and nothing else. */
   JS_SetPropertyStr:             { target: 1, name: 2, fn: 3, ambiguous: true, kind: "data" },

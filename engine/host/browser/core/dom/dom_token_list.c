@@ -908,7 +908,7 @@ void dom_token_list_install(JSContext *ctx, JSValueConst global)
         ctor = idl_interface_object(ctx, "DOMTokenList", proto);
         JS_FreeValue(ctx, proto);
     }
-    JS_SetPropertyStr(ctx, (JSValue)global, "DOMTokenList", ctor);
+    idl_define_global_property_reference(ctx, global, "DOMTokenList", ctor);
 }
 
 /* EVERY TOKEN-LIST REFLECTION Element ITSELF DECLARES — which is two, from two standards, and they are one

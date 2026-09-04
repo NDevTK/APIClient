@@ -1207,7 +1207,7 @@ void html_image_install_global(JSContext *ctx, JSValueConst global, JSValueConst
        constructor, and `Image.prototype.constructor` must stay `HTMLImageElement`. Flags 0 is exactly
        {[[Writable]]: false, [[Enumerable]]: false, [[Configurable]]: false}. */
     JS_DefinePropertyValueStr(ctx, factory, "prototype", JS_DupValue(ctx, proto), 0);
-    JS_SetPropertyStr(ctx, (JSValue)global, "Image", factory);
+    idl_define_global_property_reference(ctx, global, "Image", factory);
 }
 
 void html_image_free(JSRuntime *rt)

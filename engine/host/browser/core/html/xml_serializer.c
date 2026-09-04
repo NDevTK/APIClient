@@ -204,5 +204,5 @@ void xml_serializer_install(JSContext *ctx, JSValueConst global)
     ctor = idl_step_constructor(ctx, "XMLSerializer", g_id_ctor);
     JS_SetConstructor(ctx, ctor, proto);
     JS_FreeValue(ctx, proto);
-    JS_SetPropertyStr(ctx, (JSValue)global, "XMLSerializer", ctor);
+    idl_define_global_property_reference(ctx, global, "XMLSerializer", ctor);
 }

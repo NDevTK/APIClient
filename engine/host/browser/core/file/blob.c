@@ -1018,7 +1018,7 @@ void blob_install(JSContext *ctx, JSValueConst global)
         JS_SetConstructor(ctx, ctor, proto);
         JS_FreeValue(ctx, proto);
     }
-    JS_SetPropertyStr(ctx, (JSValue)global, "Blob", ctor);
+    idl_define_global_property_reference(ctx, global, "Blob", ctor);
 
     ctor = idl_step_constructor(ctx, "File", g_file_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the File interface object could not be allocated");
@@ -1028,7 +1028,7 @@ void blob_install(JSContext *ctx, JSValueConst global)
         JS_SetConstructor(ctx, ctor, proto);
         JS_FreeValue(ctx, proto);
     }
-    JS_SetPropertyStr(ctx, (JSValue)global, "File", ctor);
+    idl_define_global_property_reference(ctx, global, "File", ctor);
 }
 
 void blob_free(JSContext *ctx)

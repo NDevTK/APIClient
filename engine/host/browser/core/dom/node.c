@@ -4615,7 +4615,7 @@ void node_install_interface_ctor(JSContext *ctx, JSValueConst global, const char
             JS_FreeValue(ctx, base);
         }
     }
-    JS_SetPropertyStr(ctx, (JSValue)global, name, ctor);
+    idl_define_global_property_reference(ctx, global, name, ctor);
 }
 
 void node_install_interfaces(JSContext *ctx, JSValueConst global)

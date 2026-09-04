@@ -471,7 +471,8 @@ void node_iterator_install(JSContext *ctx, JSValueConst global)
     JSValue proto = JS_GetClassProto(ctx, g_iter_class);
 
     DCHECK(!JS_IsNull(proto), "NodeIterator was installed in a realm that never ran its prototype install");
-    JS_SetPropertyStr(ctx, (JSValue)global, "NodeIterator", idl_interface_object(ctx, "NodeIterator", proto));
+    idl_define_global_property_reference(ctx, global, "NodeIterator",
+                                         idl_interface_object(ctx, "NodeIterator", proto));
     JS_FreeValue(ctx, proto);
 }
 

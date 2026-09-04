@@ -1167,7 +1167,7 @@ void element_internals_install(JSContext *ctx, JSValueConst global)
 
         DCHECK(!JS_IsNull(proto), "an §4.13.7 interface object was installed in a realm that never ran its "
                                   "prototype install");
-        JS_SetPropertyStr(ctx, (JSValue)global, NAMES[i], idl_interface_object(ctx, NAMES[i], proto));
+        idl_define_global_property_reference(ctx, global, NAMES[i], idl_interface_object(ctx, NAMES[i], proto));
         JS_FreeValue(ctx, proto);
     }
 }

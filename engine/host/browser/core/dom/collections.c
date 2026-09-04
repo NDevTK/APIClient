@@ -787,8 +787,8 @@ void collections_install(JSContext *ctx, JSValueConst global)
         JS_FreeValue(ctx, nlp);
         JS_FreeValue(ctx, hcp);
     }
-    JS_SetPropertyStr(ctx, (JSValue)global, "NodeList", nl);
-    JS_SetPropertyStr(ctx, (JSValue)global, "HTMLCollection", hc);
+    idl_define_global_property_reference(ctx, global, "NodeList", nl);
+    idl_define_global_property_reference(ctx, global, "HTMLCollection", hc);
 }
 
 void collections_free(JSRuntime *rt)

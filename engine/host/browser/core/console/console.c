@@ -1022,12 +1022,10 @@ static void console_install_realm(JSContext *ctx)
 
     /* §3.13: "For every namespace that is exposed in a given realm, a corresponding property exists on the
        realm's global object." Web IDL §3.13's own step performs DefineMethodProperty(target, id,
-       namespaceObject, false) — writable, NOT enumerable, configurable — which JS_DefinePropertyValueStr with
-       those flags is, and which JS_SetPropertyStr is not (it would make `console` enumerable and a page's
-       `for (const k in window)` would list it). §1: "For historical reasons, console is lowercased." */
-    CHECK(JS_DefinePropertyValueStr(ctx, global, "console", ns,
-                                    JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) >= 0,
-          "console: the namespace object could not be defined on the global");
+       namespaceObject, false), which is Web IDL §3.8's descriptor — stated once for every name a realm's
+       global carries, rather than by these bits being written out here and in css_namespace.c and nowhere
+       else. §1: "For historical reasons, console is lowercased." */
+    idl_define_global_property_reference(ctx, global, "console", ns);
     JS_FreeValue(ctx, global);
 }
 

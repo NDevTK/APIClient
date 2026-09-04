@@ -218,7 +218,7 @@ void css_rule_list_install(JSContext *ctx, JSValueConst global)
 
     DCHECK(!JS_IsNull(proto), "CSSRuleList was installed in a realm that never ran its prototype install");
     /* §6.4.1 declares no constructor, so the interface object's call and construct both throw. */
-    JS_SetPropertyStr(ctx, (JSValue)global, "CSSRuleList", idl_interface_object(ctx, "CSSRuleList", proto));
+    idl_define_global_property_reference(ctx, global, "CSSRuleList", idl_interface_object(ctx, "CSSRuleList", proto));
     JS_FreeValue(ctx, proto);
 }
 

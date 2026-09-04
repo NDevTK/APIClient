@@ -213,8 +213,7 @@ void dom_rect_list_install(JSContext *ctx, JSValueConst global)
 
     DCHECK(!JS_IsNull(proto), "DOMRectList was installed in a realm that never ran its prototype install");
     /* §4 declares no constructor, so the interface object's call and construct both throw. */
-    JS_SetPropertyStr(ctx, (JSValue)global, "DOMRectList",
-                      idl_interface_object(ctx, "DOMRectList", proto));
+    idl_define_global_property_reference(ctx, global, "DOMRectList", idl_interface_object(ctx, "DOMRectList", proto));
     JS_FreeValue(ctx, proto);
 }
 

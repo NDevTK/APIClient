@@ -2543,14 +2543,14 @@ void readable_byte_stream_install(JSContext *ctx, JSValueConst global)
     ctor = idl_interface_object(ctx, "ReadableByteStreamController", proto);
     JS_FreeValue(ctx, proto);
     CHECK(!JS_IsException(ctor), "the byte controller interface object could not be allocated");
-    JS_SetPropertyStr(ctx, (JSValue)global, "ReadableByteStreamController", ctor);
+    idl_define_global_property_reference(ctx, global, "ReadableByteStreamController", ctor);
 
     proto = JS_GetClassProto(ctx, g_byobreq_class);
     DCHECK(!JS_IsNull(proto), "ReadableStreamBYOBRequest was installed into a realm with no proto build");
     ctor = idl_interface_object(ctx, "ReadableStreamBYOBRequest", proto);
     JS_FreeValue(ctx, proto);
     CHECK(!JS_IsException(ctor), "the BYOB request interface object could not be allocated");
-    JS_SetPropertyStr(ctx, (JSValue)global, "ReadableStreamBYOBRequest", ctor);
+    idl_define_global_property_reference(ctx, global, "ReadableStreamBYOBRequest", ctor);
 }
 
 void readable_byte_stream_free(void)

@@ -6718,7 +6718,37 @@ void idl_install_interface_object_exposed(JSContext *ctx, JSValueConst target, c
                                   "global's property after the interface, and there is nothing else to key it "
                                   "by");
     if (!idl_exposed(ctx, exposure)) return;   /* §3.3.13: "there will be no \"X\" property on Window" */
-    JS_SetPropertyStr(ctx, (JSValue)target, name, idl_interface_object(ctx, name, proto));
+    idl_define_global_property_reference(ctx, target, name, idl_interface_object(ctx, name, proto));
+}
+
+/* WEB IDL §3.8's `define the global property references`, for ONE identifier. See idl_args.h's
+   IDL_INTERFACE_OBJECT_PROP_FLAGS for the descriptor and the two sentences it is derived from.
+   THE WHOLE OF THIS ENTRY IS THAT IT IS A DEFINE AND NOT A SET, which is why it looks like it does nothing.
+   §3.8 says DefineMethodProperty, and JS_SetPropertyStr is [[Set]] — the two agree on `value` and disagree on
+   [[Enumerable]], so eighty-odd interface names were enumerable properties of the global in this engine and are
+   not in any browser. A [[Set]] cannot express the difference at all: its create half hardcodes JS_PROP_C_W_E,
+   so there is no argument a caller could have passed to get this right.
+   IT ASSERTS THE OBJECT AND NOT ITS KIND. §3.8 reaches this call from five steps whose arguments are an
+   interface object, a [LegacyWindowAlias] of one, a legacy factory function, a §3.11.1 legacy callback
+   interface object and a §3.13.1 namespace object — four of which are function objects and the last of which is
+   an ordinary one — so `is a function` would be an invariant this codebase's own callers legitimately violate,
+   which is §Offensive-programming's assert-that-concedes-the-case. What every step DOES share is that the
+   argument is an object, and that is what is checked. */
+void idl_define_global_property_reference(JSContext *ctx, JSValueConst global, const char *id, JSValue object)
+{
+    int defined;
+
+    DCHECK(id != NULL && *id, "a global property reference was defined with no identifier — §3.8 keys it by "
+                              "the interface's identifier and there is nothing else to name it by");
+    DCHECK(JS_IsObject(global), "a global property reference was defined on something that is not an object");
+    DCHECK(JS_IsObject(object), "§3.8 defines the global's property over an interface object, a legacy factory "
+                                "function, a legacy callback interface object or a namespace object, and every "
+                                "one of those is an object — this was not one");
+    defined = JS_DefinePropertyValueStr(ctx, global, id, object, IDL_INTERFACE_OBJECT_PROP_FLAGS);
+    /* CHECK rather than DCHECK: the define consumes `object` on every path, so a release build that carried on
+       past a failure would leave the interface UNREACHABLE under a name a page feature-detects, and the only
+       way this fails on a fresh global is allocation. */
+    CHECK(defined >= 0, "an interface's property could not be defined on the global");
 }
 
 /* WEB IDL §3.11.1 "Legacy callback interface object". "For every callback interface that is exposed in a given

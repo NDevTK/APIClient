@@ -258,8 +258,8 @@ void dom_string_list_install(JSContext *ctx, JSValueConst global)
 
     DCHECK(!JS_IsNull(proto), "DOMStringList was installed in a realm that never ran its prototype install");
     /* §2.6.5 declares no constructor, so the interface object's call and construct both throw. */
-    JS_SetPropertyStr(ctx, (JSValue)global, "DOMStringList",
-                      idl_interface_object(ctx, "DOMStringList", proto));
+    idl_define_global_property_reference(ctx, global, "DOMStringList",
+                                         idl_interface_object(ctx, "DOMStringList", proto));
     JS_FreeValue(ctx, proto);
 }
 

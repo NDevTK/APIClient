@@ -711,7 +711,7 @@ void usp_install(JSContext *ctx, JSValueConst global)
         JS_SetConstructor(ctx, ctor, proto);
         JS_FreeValue(ctx, proto);
     }
-    JS_SetPropertyStr(ctx, (JSValue)global, "URLSearchParams", ctor);
+    idl_define_global_property_reference(ctx, global, "URLSearchParams", ctor);
 }
 
 void usp_free(JSContext *ctx)

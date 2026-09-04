@@ -1240,7 +1240,7 @@ void abort_install(JSContext *ctx, JSValueConst global)
         JS_SetConstructor(ctx, ctrl, cp);   /* .prototype and .constructor, both directions */
         JS_FreeValue(ctx, cp);
     }
-    JS_SetPropertyStr(ctx, (JSValue)global, "AbortController", ctrl);
+    idl_define_global_property_reference(ctx, global, "AbortController", ctrl);
 
     sigctor = JS_NewCFunction2(ctx, js_abort_signal_ctor, "AbortSignal", 0, JS_CFUNC_constructor, 0);
     CHECK(!JS_IsException(sigctor), "the AbortSignal interface object allocation failed");
@@ -1257,5 +1257,5 @@ void abort_install(JSContext *ctx, JSValueConst global)
         JS_SetConstructor(ctx, sigctor, sp);
         JS_FreeValue(ctx, sp);
     }
-    JS_SetPropertyStr(ctx, (JSValue)global, "AbortSignal", sigctor);
+    idl_define_global_property_reference(ctx, global, "AbortSignal", sigctor);
 }

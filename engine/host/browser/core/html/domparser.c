@@ -486,5 +486,5 @@ void domparser_install(JSContext *ctx, JSValueConst global)
     ctor = idl_step_constructor(ctx, "DOMParser", g_id_ctor);
     JS_SetConstructor(ctx, ctor, proto);
     JS_FreeValue(ctx, proto);
-    JS_SetPropertyStr(ctx, (JSValue)global, "DOMParser", ctor);
+    idl_define_global_property_reference(ctx, global, "DOMParser", ctor);
 }

@@ -3808,7 +3808,7 @@ void custom_elements_install(JSContext *ctx, JSValueConst global)
                                   "build");
         JS_SetConstructor(ctx, ctor, proto);
         JS_FreeValue(ctx, proto);
-        JS_SetPropertyStr(ctx, (JSValue)global, "CustomElementRegistry", ctor);
+        idl_define_global_property_reference(ctx, global, "CustomElementRegistry", ctor);
     }
 }
 

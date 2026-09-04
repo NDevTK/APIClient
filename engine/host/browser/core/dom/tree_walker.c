@@ -676,7 +676,7 @@ void tree_walker_install(JSContext *ctx, JSValueConst global)
     JSValue proto = JS_GetClassProto(ctx, g_walker_class);
 
     DCHECK(!JS_IsNull(proto), "TreeWalker was installed in a realm that never ran its prototype install");
-    JS_SetPropertyStr(ctx, (JSValue)global, "TreeWalker", idl_interface_object(ctx, "TreeWalker", proto));
+    idl_define_global_property_reference(ctx, global, "TreeWalker", idl_interface_object(ctx, "TreeWalker", proto));
     JS_FreeValue(ctx, proto);
 }
 

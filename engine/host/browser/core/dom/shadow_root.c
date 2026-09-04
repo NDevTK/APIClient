@@ -857,7 +857,7 @@ void shadow_root_install(JSContext *ctx, JSValueConst global)
     DCHECK(!JS_IsNull(proto), "ShadowRoot's interface object was installed in a realm that never ran its "
                               "prototype install");
     /* §4.8 declares no constructor: the interface object exists to be what `instanceof` names. */
-    JS_SetPropertyStr(ctx, (JSValue)global, "ShadowRoot", idl_interface_object(ctx, "ShadowRoot", proto));
+    idl_define_global_property_reference(ctx, global, "ShadowRoot", idl_interface_object(ctx, "ShadowRoot", proto));
     JS_FreeValue(ctx, proto);
 }
 

@@ -869,7 +869,7 @@ void file_reader_install(JSContext *ctx, JSValueConst global)
     DCHECK(!JS_IsNull(proto), "FileReader was installed into a realm that never ran its proto build");
     JS_SetConstructor(ctx, ctor, proto);
     JS_FreeValue(ctx, proto);
-    JS_SetPropertyStr(ctx, (JSValue)global, "FileReader", ctor);
+    idl_define_global_property_reference(ctx, global, "FileReader", ctor);
 }
 
 void file_reader_free(JSRuntime *rt)

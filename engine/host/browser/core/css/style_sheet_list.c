@@ -482,8 +482,8 @@ void style_sheet_list_install(JSContext *ctx, JSValueConst global)
 
     DCHECK(!JS_IsNull(proto), "StyleSheetList was installed in a realm that never ran its prototype install");
     /* §6.2.2 declares no constructor, so the interface object's call and construct both throw. */
-    JS_SetPropertyStr(ctx, (JSValue)global, "StyleSheetList",
-                      idl_interface_object(ctx, "StyleSheetList", proto));
+    idl_define_global_property_reference(ctx, global, "StyleSheetList",
+                                         idl_interface_object(ctx, "StyleSheetList", proto));
     JS_FreeValue(ctx, proto);
 }
 

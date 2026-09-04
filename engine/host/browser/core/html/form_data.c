@@ -959,7 +959,7 @@ void form_data_install(JSContext *ctx, JSValueConst global)
         JS_SetConstructor(ctx, ctor, proto);
         JS_FreeValue(ctx, proto);
     }
-    JS_SetPropertyStr(ctx, (JSValue)global, "FormData", ctor);
+    idl_define_global_property_reference(ctx, global, "FormData", ctor);
 }
 
 void form_data_free(JSContext *ctx)

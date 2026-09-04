@@ -335,12 +335,13 @@ static void css_namespace_install_realm(JSContext *ctx)
     for (i = 0; i < CSS_UNIT_FN_N; i++)
         idl_install_method(ctx, ns, CSS_UNIT_FN[i], g_unit_fn_id[i]);
     /* Web IDL §3.13 Namespaces: "For every namespace that is exposed in a given realm, a corresponding
-       property exists on the realm's global object." Its own step is DefineMethodProperty(target, id,
-       namespaceObject, false) — writable, NOT enumerable, configurable — which JS_SetPropertyStr is not: that
-       would make `CSS` turn up in a page's `for (const k in window)`. */
-    CHECK(JS_DefinePropertyValueStr(ctx, global, "CSS", ns,
-                                    JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) >= 0,
-          "cssom: the CSS namespace object could not be defined on the global");
+       property exists on the realm's global object." A namespace object is one of the five things §3.8's
+       `define the global property references` reaches with DefineMethodProperty(target, id, x, false), so it
+       takes §3.8's descriptor and this states it in the one place every interface name states it — the bits
+       were spelled out by hand here and in console.c and NOWHERE ELSE, which is one right answer written twice
+       beside the wrong one written eighty-odd times, and two hand-spellings are two places for the next one to
+       drift. */
+    idl_define_global_property_reference(ctx, global, "CSS", ns);
     JS_FreeValue(ctx, global);
 }
 

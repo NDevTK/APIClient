@@ -478,7 +478,7 @@ void media_list_install(JSContext *ctx, JSValueConst global)
 
     DCHECK(!JS_IsNull(proto), "MediaList was installed in a realm that never ran its prototype install");
     /* §4.4 declares no constructor, so the interface object's call and construct both throw. */
-    JS_SetPropertyStr(ctx, (JSValue)global, "MediaList", idl_interface_object(ctx, "MediaList", proto));
+    idl_define_global_property_reference(ctx, global, "MediaList", idl_interface_object(ctx, "MediaList", proto));
     JS_FreeValue(ctx, proto);
 }
 

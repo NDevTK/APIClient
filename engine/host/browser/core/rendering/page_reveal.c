@@ -307,7 +307,7 @@ void page_reveal_install(JSContext *ctx, JSValueConst global)
         JS_SetConstructor(ctx, ctor, proto);
         JS_FreeValue(ctx, proto);
     }
-    JS_SetPropertyStr(ctx, (JSValue)global, "PageRevealEvent", ctor);
+    idl_define_global_property_reference(ctx, global, "PageRevealEvent", ctor);
 }
 
 /* THE AGENT'S HALF, UNDONE — a row on core/platform.h's release column, and it takes the RUNTIME because that

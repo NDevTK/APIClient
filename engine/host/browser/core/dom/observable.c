@@ -1647,7 +1647,7 @@ void observable_install(JSContext *ctx, JSValueConst global)
     /* §2.3.1's `static Observable from(any value)` lives on the interface object. */
     JS_SetPropertyStr(ctx, ctor, "from",
                       JS_NewCFunction2(ctx, NULL, "from", 1, JS_CFUNC_step, g_op_stepid[OP_FROM]));
-    JS_SetPropertyStr(ctx, (JSValue)global, "Observable", ctor);
+    idl_define_global_property_reference(ctx, global, "Observable", ctor);
 
     ctor = JS_NewCFunction2(ctx, js_illegal_ctor, "Subscriber", 0, JS_CFUNC_constructor, 0);
     CHECK(!JS_IsException(ctor), "the Subscriber interface object could not be allocated");
@@ -1655,7 +1655,7 @@ void observable_install(JSContext *ctx, JSValueConst global)
     DCHECK(!JS_IsNull(proto), "Subscriber was installed into a realm with no proto build");
     JS_SetConstructor(ctx, ctor, proto);
     JS_FreeValue(ctx, proto);
-    JS_SetPropertyStr(ctx, (JSValue)global, "Subscriber", ctor);
+    idl_define_global_property_reference(ctx, global, "Subscriber", ctor);
 }
 
 void observable_free(JSContext *ctx)
