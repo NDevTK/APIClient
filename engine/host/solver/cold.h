@@ -128,6 +128,17 @@ typedef struct {
        the top bucket with `deepest 10`, i.e. every program the document has, against a run reporting zero
        orphan asks. Those two together are the second reading and say which of the four to open; either one
        alone is the first.
+       AND THIS ROW IS A GAUGE OVER LIVE MEMBERS, SO ITS ZERO HAS A THIRD READING THE PAIRING ABOVE DOES NOT
+       NAME: the walk that raises it visits the frontier's standing members, so a census taken when `live` is 0
+       reports 0 whatever every member did before it left — which is INDISTINGUISHABLE, in this number alone,
+       from a frontier none of whose members ever ran out. It is `deepest`/`completed`'s hazard one row over:
+       those two are high-water marks and cannot go backwards, and this one can, because it is not a history.
+       So the row is evidence only where `live` is nonzero, and `live` is on the same line — read them
+       together. MEASURED, both halves in one session: on a real bundle this row stood at ~1 live member in 10
+       from the FIRST census through the 129th while orphan asks stayed 0, which is the second reading and says
+       the other four rungs are what hold them; on a draining fixture the terminal census read this row 0 and
+       `program_cursors` `{0: 0}` with `live` 0, having asked 1536 orphans on the way — the same 0, and the
+       opposite fact. A reader who took either number alone had a coherent, confident, wrong answer available.
        A REPORT AND NEVER A BOUND (§NO BOUNDS), for `program_cursors`' reason exactly: nothing in the engine
        reads it, no arm of any verdict branches on it, and "how many members have run out of programs" is
        precisely the shape a drain check would be built from. */
