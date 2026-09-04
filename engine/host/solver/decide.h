@@ -369,10 +369,21 @@ void        decide_seg_set_park_id(const void *seg, long id);
    normally the moment the cursor reaches the end of what the recipe knew. */
 void       *decide_blob_new(void *seg);
 
-/* HOW BIG ONE FLOW'S DECISION STATE IS — the slots in it and the bytes it holds. The cold tier asks because the
-   vector is PER FLOW and a fork COPIES the parent's prefix into it, so a chain of forks at one predicate costs
-   O(n) per flow and O(n^2) over the frontier. A number nobody could read is how that stayed invisible. `blob`
-   is a parked flow's (NULL for the running one, whose state is live here — decide_live_stats answers that). */
+/* HOW BIG ONE FLOW'S DECISION STATE IS — the slots in it and the bytes it holds. `blob` is a parked flow's; the
+   running flow's state is live in decide.c and decide_live_stats answers for that one, so neither takes NULL.
+   IT IS A SIZE AND NEVER A DISTANCE, and that is the whole of what a caller has to carry. `entries` is the
+   length of the CHAIN — the whole recorded path, shared by pointer with every ancestor — so it is fixed from
+   the instant a blob is built and is the DENOMINATOR of any question about progress. The blob's other number,
+   its CURSOR, is where the flow standing on that chain has actually got to, and the two are furthest apart in
+   exactly the case a reader most wants to ask about: decide_blob_new installs a whole recorded path under a
+   cursor of 0, so a flow that has executed nothing reports the same `entries` as one that has replayed the
+   path to its end. A row built out of this number and named for a distance therefore reads the same at every
+   sample of a replay and cannot separate a flow the ordering is serving from one it has stopped reaching.
+   THE PAIR IS THE POINT WHEREVER IT IS A SIZE THAT IS WANTED: `entries` is a property of the chain and `bytes`
+   is what this flow itself owns, which is the blob and nothing else, so the two together are what says the
+   sharing is real. The sentence that used to stand here — that a fork COPIES the parent's prefix, costing
+   O(n) per flow and O(n^2) over the frontier — describes the flat per-flow vector this file's shared chain
+   replaced, and it is deleted rather than corrected because the cost it names is the one the chain removed. */
 void decide_blob_stats(const void *blob, long *entries, long *bytes);
 void decide_live_stats(long *entries, long *bytes);
 

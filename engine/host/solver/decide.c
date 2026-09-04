@@ -1058,11 +1058,44 @@ void *decide_blob_new(void *seg) {
 
 /* See decide.h. `entries` is how many decisions the flow stands on, which is a property of the CHAIN and is
    therefore SHARED with every ancestor; `bytes` is what the flow itself owns, which is now the blob and nothing
-   else. Reporting both is the point — the pair is what says the sharing is real. */
+   else. Reporting both is the point — the pair is what says the sharing is real.
+   AND THE BLOB CARRIES A SECOND NUMBER THIS ONE IS NOT: the CURSOR. The chain's length is where the recorded
+   path ENDS and the cursor is where the flow standing on it has GOT TO, and for a flow installed by
+   decide_blob_new the two are as far apart as they can be — a whole recorded path under a cursor of 0, before
+   the flow has executed one opcode. So a caller that wants a DISTANCE TRAVELLED must not take this number: it
+   is the denominator, it is fixed from the instant the blob is built, and a replaying flow reads it identical
+   at every sample from its creation to its last. That is the §svcMax defect in the shape a size/position pair
+   makes it available in — a quantity read in the unit its variable's NAME suggests instead of the one this
+   accessor computes — and it is stated here because this is the line that computes it.
+   THE PARKED CURSOR IS ASSERTED HERE AND NOT ONLY AT THE RESUME THAT CONSUMES IT. decide_resume checks
+   `g_c <= dec_total()` when it installs a blob, which is one switch-in later than the earliest moment a
+   corrupted one can be seen: the frontier's census walks every PARKED blob per sample, so this is where a
+   cursor that has come apart from its own chain is caught while the member that holds it can still be named.
+   The two reads are the same invariant at the two ends of a park, which is what makes either one able to fire
+   without the other having been wrong. */
 void decide_blob_stats(const void *blob, long *entries, long *bytes) {
     const DecideBlob *b = blob;
-    if (entries) *entries = (b && b->seg) ? b->seg->below + b->seg->n : 0;
-    if (bytes) *bytes = b ? (long)sizeof *b : 0;
+    long n;
+
+    /* AN ABSENT BLOB AND A FLOW STANDING ON NOTHING ARE DIFFERENT FACTS AND THE `?:` HERE AVERAGED THEM. A
+       fresh flow legitimately stands on zero decisions, so 0 is a real answer and the most ordinary one — which
+       is exactly what made the default invisible: a caller that reached here with no decision state at all got
+       back a number indistinguishable from the commonest true one, and the census that summed it described a
+       frontier whose members it had never read. `CHECK` and not `DCHECK` because the dereference below is in
+       every build: with the guard gone this pointer is load-bearing in release, which check.h's own rule makes
+       the promotion rather than a choice made here. */
+    CHECK(b != NULL,
+          "decide: the decision state of a flow that has none parked was asked for — a running flow's state is "
+          "live (decide_live_stats answers that one) and a parked flow's is its blob, so a NULL here is a "
+          "caller reading neither and about to record the answer as a flow standing on zero decisions");
+    n = b->seg ? b->seg->below + b->seg->n : 0;
+    DCHECK(b->c >= 0 && b->c <= n,
+           "a parked flow's decision cursor is outside its own chain — the cursor names the slot the flow "
+           "replays next and the chain is every slot it has, so on the resume this blob feeds decide_resume "
+           "would install a position with no arm under it and the next branch would read a slot nothing "
+           "recorded, or step over arms this flow really did take");
+    if (entries) *entries = n;
+    if (bytes) *bytes = (long)sizeof *b;
 }
 void decide_live_stats(long *entries, long *bytes) {
     if (entries) *entries = dec_total();
