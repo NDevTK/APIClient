@@ -47,9 +47,14 @@
  * schedule-invariance failure in solvergate's own terms — the finding set stops being a function of the
  * document. It FAILED until close_var_refs_for_fork gave a forked sibling's captured local storage of its
  * own; it is a REGRESSION test now, and a `closure-undefined` here means that detach has stopped happening.
- * What it does NOT cover is a captured ARGUMENT, which is addressed both through its cell and directly
- * through arg_buf, so detaching is not semantics-neutral there and that arm DFAILs instead: this document's
- * bindings are all `var` locals and d(n)'s parameter is not captured, so it exercises the detach arm only.
+ * A captured ARGUMENT used to be the arm this did NOT cover — addressed both through its cell and directly
+ * through arg_buf, so detaching was not semantics-neutral there and that arm DFAILed. It is covered now: the
+ * argument opcodes ask the same `is_captured` the compiler reads, and the fused index-in-opcode short forms
+ * are refused for a captured parameter at the one point every short-form emission passes through. This
+ * document's bindings are all `var` locals and d(n)'s parameter is not captured, so it still exercises the
+ * DETACH arm only — the argument arm's own reproducer is a four-line document, and §10.4.4's aliasing (a
+ * mapped `arguments` and its parameter reading and writing one storage, in both directions) is a separate
+ * fixture. A `closure-undefined` here still means the detach stopped happening.
  *
  * THE DEPTH IS NOT THE MECHANISM. This reproduces with TWO flows. The real bundle needed roughly 39k only
  * because a larger frontier makes the interleaving that loses the write near-certain, which is the same
