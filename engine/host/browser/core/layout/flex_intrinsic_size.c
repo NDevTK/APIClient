@@ -84,8 +84,20 @@ static IntrinsicInlineSizes fis_item_cross_contribution(lxb_dom_element_t *conta
            contexts" over the sequence, which is core/layout/intrinsic_size.h's run entry, and its edges are
            zero because §4 makes the box unstyleable — the NULL that entry reads as an anonymous box. */
         lxb_dom_node_t *end = flex_item_text_sequence_end(container, child);
-        IntrinsicInlineSizes run = intrinsic_inline_run_sizes(container, child, end);
+        /* §4's SEQUENCE IS A SIBLING RANGE AND `BlockFlowRun` IS HOW THAT IS SAID. The pair is read as
+           `after`'s next sibling inside `after`'s parent, so `{ child->prev, end }` is exactly the half-open
+           `[child, end)` — including when `child` is the container's first child, where a NULL `after` means
+           the start of its content and that IS `child`. It cannot be anything else here: §4 blockifies every
+           flex item ("if the computed display value of an element's nearest ancestor element (skipping
+           display:contents ancestors) is flex or inline-flex, the element's own display value is blockified"),
+           so a flex container has no inline box among its children for a run to begin inside — which is the
+           whole of why CSS 2.2 §9.2.1.1's runs and these can share one entry. */
+        BlockFlowRun seq;
+        IntrinsicInlineSizes run;
 
+        seq.after = child->prev;
+        seq.end = end;
+        run = intrinsic_inline_run_sizes(container, seq);
         *next = end;
         return intrinsic_outer_contribution(NULL, run);
     }

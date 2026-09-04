@@ -487,8 +487,10 @@ static void is_child(IsRun *r, lxb_dom_element_t *parent, lxb_dom_node_t *n)
 
 /* CSS 2.2 §9.4.2's INLINE FORMATTING CONTEXT, MEASURED, over ONE RUN of `el`'s CONTENT. The run is given as
    the inline box that is OPEN where it starts, the first node inside that box to measure, and the node it ends
-   BEFORE — and it is a private shape because the two exported entries below name its start in two different
-   ways, for two different sections, neither of which can express the other's.
+   BEFORE — a shape the ENTRY below composes out of core/layout/block_flow.h's `BlockFlowRun`, which names a
+   run by the two breaks that bracket it. It is private because those three are not independent: the open box
+   and the first node are derived from one break, and a caller free to pair them itself could open a fragment
+   the run does not start in.
    THE RUN CLOSES ITS OPEN ANCESTORS ON THE WAY OUT, WHICH IS §9.2.1.1's OWN SENTENCE: "if a border had been
    set on the P element in the above example, the border would be drawn around C1 (open at the end of the line)
    and C2 (open at the start of the line)". A fragment the run STARTS inside is open at the start — no leading
@@ -542,29 +544,15 @@ static IntrinsicInlineSizes is_run_sizes(lxb_dom_element_t *el, lxb_dom_element_
     return out;
 }
 
-IntrinsicInlineSizes intrinsic_inline_run_sizes(lxb_dom_element_t *el, lxb_dom_node_t *first,
-                                                lxb_dom_node_t *end)
+IntrinsicInlineSizes intrinsic_inline_run_sizes(lxb_dom_element_t *el, BlockFlowRun run)
 {
     DCHECK(el != NULL, "CSS 2.2 §9.4.2's context was measured with no block container to style it");
-    DCHECK(first == NULL || first->parent == lxb_dom_interface_node(el),
-           "CSS 2.2 §9.4.2's context was measured over a run that begins at a node which is not a CHILD of the "
-           "container. This entry's run is a SIBLING range — css-flexbox-1 §4 \"Flex Items\"' child text "
-           "sequence is delimited that way and can hold no inline box at all — so a run that begins deeper is "
-           "one CSS 2.2 §9.2.1.1's break produced, and it must come through the entry below or its open "
-           "ancestors are silently dropped from the measurement");
-    return is_run_sizes(el, el, first, end);
-}
-
-IntrinsicInlineSizes intrinsic_inline_run_sizes_after(lxb_dom_element_t *el, lxb_dom_node_t *after,
-                                                      lxb_dom_node_t *end)
-{
-    DCHECK(el != NULL, "CSS 2.2 §9.2.1.1's anonymous block box was measured with no block container");
-    if (after == NULL) return is_run_sizes(el, el, lxb_dom_interface_node(el)->first_child, end);
-    DCHECK(after->parent != NULL && after->parent->type == LXB_DOM_NODE_TYPE_ELEMENT,
+    if (run.after == NULL) return is_run_sizes(el, el, lxb_dom_interface_node(el)->first_child, run.end);
+    DCHECK(run.after->parent != NULL && run.after->parent->type == LXB_DOM_NODE_TYPE_ELEMENT,
            "CSS 2.2 §9.2.1.1's run was started after a node with no element parent, so there is no box for it "
-           "to be a fragment of — every break this entry is seeded with is a child of the container or of an "
-           "inline box the break itself split");
-    return is_run_sizes(el, lxb_dom_interface_element(after->parent), after->next, end);
+           "to be a fragment of — the node a run follows is a child of the container or of an inline box the "
+           "break itself split, and either way its parent is an element whose style the fragment carries");
+    return is_run_sizes(el, lxb_dom_interface_element(run.after->parent), run.after->next, run.end);
 }
 
 /* css-sizing-3 §5.2's CONTRIBUTION OF ONE BOX ON THE STACK, out of the box's own two INNER sizes and its two
@@ -704,7 +692,13 @@ static IntrinsicInlineSizes is_block_context(lxb_dom_element_t *el)
         IntrinsicInlineSizes one;
 
         /* §9.2.1.1's ANONYMOUS BLOCK BOX: everything strictly between the previous break and this one. */
-        one = intrinsic_outer_contribution(NULL, intrinsic_inline_run_sizes_after(el, prev, brk));
+        {
+            BlockFlowRun run;
+
+            run.after = prev;
+            run.end = brk;
+            one = intrinsic_outer_contribution(NULL, intrinsic_inline_run_sizes(el, run));
+        }
         out.min_content = css_px_max(out.min_content, one.min_content);
         out.max_content = css_px_max(out.max_content, one.max_content);
         if (brk == NULL) return out;
@@ -817,10 +811,18 @@ IntrinsicInlineSizes intrinsic_inline_sizes(lxb_dom_element_t *el)
        size's, so a reader arriving from a shrink-to-fit width was handed the wrong half of one absence. The
        classification now reports the float as a FACT and each caller states its own section's consequence at
        its own line — this file's is in `is_block_context`, over §9.4.2's shortened line box. */
-    if (block_flow_establishes_inline_context(el))
-        out = intrinsic_inline_run_sizes(el, lxb_dom_interface_node(el)->first_child, NULL);
-    else
+    if (block_flow_establishes_inline_context(el)) {
+        BlockFlowRun whole;
+
+        /* §9.4.2's context with an ELEMENT to name it is the WHOLE of `el`'s content, which is the run with no
+           break on either side of it — the same shape `is_block_context` would reach for a container with no
+           block-level box at all, stated here rather than discovered. */
+        whole.after = NULL;
+        whole.end = NULL;
+        out = intrinsic_inline_run_sizes(el, whole);
+    } else {
         out = is_block_context(el);
+    }
     /* THE TWO ARE NON-NEGATIVE because every advance summed into them is, and a negative intrinsic size would
        make CSS 2.2 §10.3.5's formula produce a negative used width for a box with content in it — which
        css-sizing-3 §3.3's "as the content width and height cannot be negative, this computation is floored at

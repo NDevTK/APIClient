@@ -201,6 +201,26 @@ BlockFlowChildKind block_flow_child_kind(lxb_dom_element_t *parent, lxb_dom_node
    forward, so the whole enumeration costs one pass over the content however many boxes it yields. */
 lxb_dom_node_t *block_flow_next_block_box(lxb_dom_element_t *el, lxb_dom_node_t *after);
 
+/* ONE OF §9.2.1.1's ANONYMOUS BLOCK BOXES, AS A RANGE OF ITS CONTAINER'S CONTENT — the two consecutive answers
+   of the enumeration above that bracket it, either of which may be NULL for the start or the end of the
+   content. It is a TYPE and not two arguments for one reason: every entry that measures, fills or places such
+   a box takes exactly this pair, so a caller that hands one of them a SIBLING range — which is what every one
+   of them used to take — must fail to COMPILE rather than start one node late and answer a plausible number.
+   `after` IS EXCLUSIVE AND IS NOT "the run's first node", and the difference is §9.2.1.1's own "even if either
+   side is empty". A run that follows a break inside an inline box may contain NOTHING — `<div><a>t<div>x</div>
+   </a>tail</div>` gives the `<a>` a second fragment with no content — and that fragment still carries the
+   box's closing edge, under "the border would be drawn around C1 (open at the end of the line) and C2 (open at
+   the start of the line)". There is no node at that position, so only the break can name it. Naming the break
+   also names the OPEN ANCESTORS the run inherits, whose opening edges belong to an earlier box.
+   A SIBLING RANGE IS THE DEGENERATE CASE AND NEEDS NO SECOND SHAPE: `{ first->prev, end }` is exactly the
+   half-open sibling range `[first, end)` whenever `first` is a child of the container, because this pair is
+   read as `after`'s next sibling inside `after`'s parent. css-flexbox-1 §4 "Flex Items"' child text
+   sequence is delimited that way and is expressed like that at its own call site. */
+typedef struct {
+    lxb_dom_node_t *after;   /* the in-flow block-level box this run FOLLOWS; NULL is the start of the content */
+    lxb_dom_node_t *end;     /* the one it ENDS BEFORE; NULL is the end of the content */
+} BlockFlowRun;
+
 /* CSS 2.2 §9.2.1.1 "Anonymous block boxes"' RUN DELIMITATION: one past the LAST child of the maximal run of
    inline-level children that starts at `first`, EXCLUSIVE, in the (first, end) form core/layout/line_box.h
    takes. `first` must itself be `BLOCK_FLOW_CHILD_INLINE` — §9.2.1.1 generates a box only "around 'Some text'",
