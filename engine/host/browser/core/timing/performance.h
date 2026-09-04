@@ -32,14 +32,21 @@
  * in it: give the instance a record as its class opaque so the member reads its environment off `this`.
  *
  * WHAT IS HONESTLY ABSENT HERE. §7's IDL is three members and all three are built. Every other member a page
- * finds on `performance` in a browser comes from a PARTIAL in another standard — Performance Timeline's
- * getEntries/getEntriesByType/getEntriesByName, User Timing's mark/measure/clearMarks/clearMeasures, Navigation
- * Timing's legacy `timing` and `navigation`, Resource Timing's buffer members — and every one of them needs a
- * PERFORMANCE TIMELINE, which this engine does not have (core/rendering/rendering.c's realm_awaits over
- * `PerformanceObserver` is the assertion that says so, and it names the two update-the-rendering steps that
- * would queue entries onto one). They are ABSENT rather than shaped, so `performance.getEntriesByType("navigation")`
- * is a TypeError naming the operation, which is the forcing function; a `[]` would be the plausible datum that
- * makes a page conclude there was no navigation to time. */
+ * finds on `performance` in a browser comes from a PARTIAL in another standard, and those divide in two.
+ *
+ * USER TIMING §2.1.1's `mark()` IS BUILT AND LIVES IN core/timing/user_timing.c, which is where a partial's
+ * member belongs — the interface is §7's and the member is that standard's, so folding it in here would make
+ * this file a bag with five standards in it. It reaches this component through `performance_proto` and
+ * `performance_now_value` below, and through nothing else.
+ *
+ * THE REST ARE ABSENT AND NEED A PERFORMANCE TIMELINE, WHICH THIS ENGINE DOES NOT HAVE — Performance
+ * Timeline's getEntries/getEntriesByType/getEntriesByName and its PerformanceObserver, User Timing's
+ * measure/clearMarks/clearMeasures, Navigation Timing's legacy `timing` and `navigation`, Resource Timing's
+ * buffer members. core/timing/performance_entry.h is where that absence is now stated, beside the interface
+ * every one of them would hand out, and it names what the next diff builds. They are ABSENT rather than
+ * shaped, so `performance.getEntriesByType("navigation")` is a TypeError naming the operation, which is the
+ * forcing function; a `[]` would be the plausible datum that makes a page conclude there was no navigation to
+ * time. */
 #ifndef ENGINE_HOST_BROWSER_CORE_TIMING_PERFORMANCE_H
 #define ENGINE_HOST_BROWSER_CORE_TIMING_PERFORMANCE_H
 
@@ -56,5 +63,19 @@ void performance_free(void);
    then throw a TypeError" — for §7's two OPERATIONS, which state it at their declaration
    (idl_args.h: idl_this_iface) so it is asked before §3.6 Overload resolution converts anything. */
 bool performance_is(JSValueConst v);
+
+/* THIS REALM'S `Performance.prototype` — the target a PARTIAL interface in another standard installs its
+   member onto. Web IDL §3.7.3 Interface prototype object is what makes it a PER-REALM object, which is why it
+   is handed over rather than left to be reached through a class id: a partial that fetched one for itself
+   would have to know which realm it was in. The caller is a realm intrinsic declared AFTER this component's,
+   which core/realm.h states is what the declaration order guarantees. OWNED by the caller — free it. */
+JSValue performance_proto(JSContext *ctx);
+
+/* THE VALUE §7.1's now() WOULD RETURN, for an algorithm in another standard that says so in those words — USER
+   TIMING §2.2.1 step 5.2 is "Otherwise, set it to the value that would be returned by the Performance object's
+   now() method". It is this file's answer and not a second read of the clock, so a mark's startTime and a
+   `performance.now()` in the same turn agree by construction rather than by two call sites happening to reach
+   the same operation. */
+JSValue performance_now_value(JSContext *ctx);
 
 #endif

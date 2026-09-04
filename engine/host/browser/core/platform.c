@@ -98,6 +98,8 @@
 #include "core/timing/event_loop.h"
 #include "core/timing/hr_time.h"
 #include "core/timing/performance.h"
+#include "core/timing/performance_entry.h"
+#include "core/timing/user_timing.h"
 #include "core/timing/timer.h"
 #include "core/url/origin.h"
 #include "core/url/url.h"
@@ -197,6 +199,8 @@ static void d_idb_vce(JSContext *c, const PlatformAgent *a) { (void)a; idb_versi
 static void d_idb_open(JSContext *c, const PlatformAgent *a) { (void)a; idb_open_init(c); }
 static void d_hr_time(JSContext *c, const PlatformAgent *a) { (void)a; hr_time_init(c); }
 static void d_performance(JSContext *c, const PlatformAgent *a) { (void)a; performance_init(c); }
+static void d_performance_entry(JSContext *c, const PlatformAgent *a) { (void)a; performance_entry_init(c); }
+static void d_user_timing(JSContext *c, const PlatformAgent *a) { (void)a; user_timing_init(c); }
 static void d_input_device_capabilities(JSContext *c, const PlatformAgent *a)
 { (void)a; input_device_capabilities_init(c); }
 static void d_event(JSContext *c, const PlatformAgent *a) { (void)a; event_init(c); }
@@ -258,6 +262,8 @@ static void r_css_math_value(JSRuntime *rt) { css_math_value_free(rt); }
 static void r_css_unit_value(JSRuntime *rt) { (void)rt; css_unit_value_free(); }
 static void r_hr_time(JSRuntime *rt) { (void)rt; hr_time_free(); }
 static void r_performance(JSRuntime *rt) { (void)rt; performance_free(); }
+static void r_performance_entry(JSRuntime *rt) { (void)rt; performance_entry_free(); }
+static void r_user_timing(JSRuntime *rt) { (void)rt; user_timing_free(); }
 static void r_cookie_jar(JSRuntime *rt) { (void)rt; cookie_jar_free(); }
 static void r_navigate_event_fire(JSRuntime *rt) { (void)rt; navigate_event_fire_free(); }
 /* §8.1.3.3's about-to-be-notified rejected promises list is a live Array a C static holds for the agent, so it is
@@ -723,6 +729,15 @@ static const PlatformComponent PLATFORM[] = {
        through this component's own realm intrinsic, so a child navigable gets its own Performance object over
        its own time origin, which is the whole reason the two members are per realm. */
     { "performance",         d_performance,         NULL,        r_performance },
+    /* PERFORMANCE TIMELINE §3's PerformanceEntry, and USER TIMING §2 over it. BOTH POSITIONS ARE FIXED FROM
+       BOTH SIDES. §3's own prototype chains to %Object.prototype% and it depends on no row above it, but
+       USER TIMING §2.2's `interface PerformanceMark : PerformanceEntry` chains to §3's — so `user_timing`
+       must follow `performance_entry`; and §2.1.1's mark() is a PARTIAL member installed onto HIGH
+       RESOLUTION TIME §7's prototype, so it must follow `performance` as well. core/realm.h states that the
+       realm-intrinsic order IS this declaration order, which is what makes both dependencies hold for a
+       child navigable's realm and not only for the first one built. */
+    { "performance_entry",   d_performance_entry,   NULL,        r_performance_entry },
+    { "user_timing",         d_user_timing,         NULL,        r_user_timing },
     /* HTML §7.2.6.5's NavigationHistoryEntry, whose prototype chains to §2.7's and whose CLASS is what
        §7.2.7.1's `required NavigationHistoryEntry from` brands against — so it is declared before `event`,
        which is where every Event subclass including that one is declared. */
@@ -1076,6 +1091,12 @@ static const struct { const char *name, *component; IdlExposure exposure; } PLAT
        throw one frame away but a whole arm of the program that no run takes, with nothing to say so. */
     { "Performance",           "performance" },
     { "performance",           "performance" },
+    /* §3.7.1's interface objects for the two interfaces above. Neither IDL carries an exposure condition, so
+       both rows assert the unconditional case — and the ABSENT direction is what earns them: a realm whose
+       install did not run has no `PerformanceMark`, which is precisely the state in which
+       `performance.mark(...)` is the TypeError this pair was built to stop a page meeting. */
+    { "PerformanceEntry",      "performance_entry" },
+    { "PerformanceMark",       "user_timing" },
     { "postMessage",           "window_message" },
     { "structuredClone",       "structured_clone" },
     { "requestAnimationFrame", "animation_frame" },

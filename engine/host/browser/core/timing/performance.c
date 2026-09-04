@@ -147,6 +147,26 @@ static JSValue js_perf_tojson(JSContext *ctx, JSValueConst this_val, int argc, J
     return out;
 }
 
+/* THIS REALM'S `Performance.prototype`, and HIGH RESOLUTION TIME §7.1's answer, for the PARTIALS in other
+   standards — see performance.h for why both are handed over rather than reached for. The assert is not
+   ceremony: a partial installed onto a NULL would define nothing and the member would simply not be there,
+   which is the silent half of the absence this whole component exists to stop lying about. */
+JSValue performance_proto(JSContext *ctx)
+{
+    JSValue proto = JS_GetClassProto(ctx, g_perf_class);
+
+    DCHECK(!JS_IsNull(proto), "Performance.prototype was asked for in a realm that never ran performance_"
+                              "install — a partial interface's member would be installed on nothing and would "
+                              "be absent from that document with nothing to say so. The order is core/"
+                              "platform.c's row order, which core/realm.h states IS the declaration order");
+    return proto;
+}
+
+JSValue performance_now_value(JSContext *ctx)
+{
+    return hr_time_current(ctx);
+}
+
 /* §8.1 The performance attribute — `[Replaceable] readonly attribute Performance performance` on the
    WindowOrWorkerGlobalScope mixin, which "allows access to performance related attributes and methods from the
    global object". One object per realm, so this hands back the realm's rather than minting one per read: a page

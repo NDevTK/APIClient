@@ -1,0 +1,280 @@
+{
+ "spec": "Performance Timeline",
+ "key": "perftimeline",
+ "base": "https://w3c.github.io/performance-timeline/",
+ "specUpdated": "24 March 2026",
+ "fetched": "2026-09-04",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "introduction"
+  },
+  "2": {
+   "title": "Performance Timeline",
+   "page": "",
+   "id": "dfn-performance-timeline"
+  },
+  "3": {
+   "title": "The PerformanceEntry interface",
+   "page": "",
+   "id": "the-performanceentry-interface"
+  },
+  "4": {
+   "title": "The PerformanceObserver interface",
+   "page": "",
+   "id": "the-performanceobserver-interface"
+  },
+  "5": {
+   "title": "Processing",
+   "page": "",
+   "id": "processing"
+  },
+  "6": {
+   "title": "Privacy Considerations",
+   "page": "",
+   "id": "privacy"
+  },
+  "7": {
+   "title": "Security Considerations",
+   "page": "",
+   "id": "security"
+  },
+  "2.1": {
+   "title": "Extensions to the Performance interface",
+   "page": "",
+   "id": "extensions-to-the-performance-interface"
+  },
+  "2.1.1": {
+   "title": "getEntries() method",
+   "page": "",
+   "id": "getentries-method"
+  },
+  "2.1.2": {
+   "title": "getEntriesByType() method",
+   "page": "",
+   "id": "getentriesbytype-method"
+  },
+  "2.1.3": {
+   "title": "getEntriesByName() method",
+   "page": "",
+   "id": "getentriesbyname-method"
+  },
+  "4.1": {
+   "title": "PerformanceObserverCallbackOptions dictionary",
+   "page": "",
+   "id": "performanceobservercallbackoptions-dictionary"
+  },
+  "4.2": {
+   "title": "observe() method",
+   "page": "",
+   "id": "observe-method"
+  },
+  "4.2.1": {
+   "title": "PerformanceObserverInit dictionary",
+   "page": "",
+   "id": "performanceobserverinit-dictionary"
+  },
+  "4.2.2": {
+   "title": "PerformanceObserverEntryList interface",
+   "page": "",
+   "id": "performanceobserverentrylist-interface"
+  },
+  "4.2.2.1": {
+   "title": "getEntries() method",
+   "page": "",
+   "id": "performanceobserverentrylist-getentries-method"
+  },
+  "4.2.2.2": {
+   "title": "getEntriesByType() method",
+   "page": "",
+   "id": "performanceobserverentrylist-getentriesbytype-method"
+  },
+  "4.2.2.3": {
+   "title": "getEntriesByName() method",
+   "page": "",
+   "id": "performanceobserverentrylist-getentriesbyname-method"
+  },
+  "4.3": {
+   "title": "takeRecords() method",
+   "page": "",
+   "id": "takerecords-method"
+  },
+  "4.4": {
+   "title": "disconnect() method",
+   "page": "",
+   "id": "disconnect-method"
+  },
+  "4.5": {
+   "title": "supportedEntryTypes attribute",
+   "page": "",
+   "id": "supportedentrytypes-attribute"
+  },
+  "5.1": {
+   "title": "Queue a PerformanceEntry",
+   "page": "",
+   "id": "queue-a-performanceentry"
+  },
+  "5.2": {
+   "title": "Queue a navigation PerformanceEntry",
+   "page": "",
+   "id": "queue-a-navigation-performanceentry"
+  },
+  "5.3": {
+   "title": "Queue the PerformanceObserver task",
+   "page": "",
+   "id": "queue-the-performanceobserver-task"
+  },
+  "5.4": {
+   "title": "Filter buffer map by name and type",
+   "page": "",
+   "id": "filter-buffer-map-by-name-and-type"
+  },
+  "5.5": {
+   "title": "Filter buffer by name and type",
+   "page": "",
+   "id": "filter-buffer-by-name-and-type"
+  },
+  "5.6": {
+   "title": "Determine if a performance entry buffer is full",
+   "page": "",
+   "id": "determine-if-a-performance-entry-buffer-is-full"
+  },
+  "5.7": {
+   "title": "Generate a Performance Entry id",
+   "page": "",
+   "id": "generate-a-performance-entry-id"
+  }
+ },
+ "dfns": {
+  "determine if a performance entry buffer is full": [
+   "5.6"
+  ],
+  "dropped entries count": [
+   "2"
+  ],
+  "end time": [
+   "3"
+  ],
+  "entry list": [
+   "4.2.2"
+  ],
+  "filter buffer by name and type": [
+   "5.5"
+  ],
+  "filter buffer map by name and type": [
+   "5.4"
+  ],
+  "frozen array of supported entry types": [
+   "4.5"
+  ],
+  "generate an id": [
+   "5.7"
+  ],
+  "getentriesbyname(name type)": [
+   "2.1",
+   "4.2.2"
+  ],
+  "id dom performanceobserver supportedentrytypes supportedentrytypes": [
+   "4"
+  ],
+  "id dom performanceobserverinit entrytypes entrytypes": [
+   "4.2.1"
+  ],
+  "initialize a performanceentry": [
+   "3"
+  ],
+  "last performance entry id": [
+   "2"
+  ],
+  "list of registered performance observer objects": [
+   "2"
+  ],
+  "most recent navigation": [
+   "2"
+  ],
+  "observer buffer": [
+   "4"
+  ],
+  "observer callback": [
+   "4"
+  ],
+  "observer type": [
+   "4"
+  ],
+  "options list": [
+   "4"
+  ],
+  "performance entry buffer": [
+   "2"
+  ],
+  "performance entry buffer map": [
+   "2"
+  ],
+  "performance observer task queued flag": [
+   "2"
+  ],
+  "performance timeline": [
+   "2"
+  ],
+  "performance timeline task source": [
+   "5.3"
+  ],
+  "queue a navigation performanceentry": [
+   "5.2"
+  ],
+  "queue a performanceentry": [
+   "5.1"
+  ],
+  "queue the performanceobserver task": [
+   "5.3"
+  ],
+  "registered performance observer": [
+   "4"
+  ],
+  "relevant performance entry tuple": [
+   "2"
+  ],
+  "requires dropped entries": [
+   "4"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "frozen array of supported entry types": {
+   "4.2": 2
+  },
+  "getentriesbyname(name type)": {
+   "7": 6
+  },
+  "last performance entry id": {
+   "5.7": 5
+  },
+  "list of registered performance observer objects": {
+   "4.2": 4
+  },
+  "observer buffer": {
+   "4.3": 2,
+   "5.3": 2
+  },
+  "observer type": {
+   "4.2": 8
+  },
+  "options list": {
+   "4.2": 6
+  },
+  "performance observer task queued flag": {
+   "5.3": 3
+  },
+  "performance timeline": {
+   "1": 4,
+   "7": 2
+  },
+  "registered performance observer": {
+   "4.2": 4
+  },
+  "requires dropped entries": {
+   "5.3": 2
+  }
+ }
+}

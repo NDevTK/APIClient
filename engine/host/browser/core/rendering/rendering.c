@@ -348,10 +348,25 @@ static void step_18(JSContext *docctx)
    Steps 20 to 23. */
 static void steps_20_to_23(JSContext *docctx)
 {
+    /* THIS SAID "this build now has a performance timeline to queue them on", AND IT NEVER DID. The phrase
+       "performance timeline" occurred exactly ONCE in the whole tree — in this assert, asserting its own
+       premise — while core/timing/performance.h said the opposite of it in prose, so two components stated
+       contradictory facts about the same absent mechanism and only one of them was right. That is the
+       stale-`DFAIL` failure mode running in the direction that is hardest to catch: a crash claiming a
+       capability EXISTS sends its reader looking for something to call, and finding nothing teaches them to
+       distrust the crash rather than the claim.
+       WHAT IS ACTUALLY THERE NOW is PERFORMANCE TIMELINE §3's PerformanceEntry (core/timing/performance_entry.c)
+       and USER TIMING §2.2's PerformanceMark over it — the ENTRY, which is the object these two steps would
+       construct. What is still absent is where an entry GOES: §5.1 Queue a PerformanceEntry, the per-global
+       performance entry buffer map, and §4's PerformanceObserver, which is the interface this probe is named
+       for and the one that would observe what these steps queued. performance_entry.h states that absence
+       where the buffer would live, and states what the next diff builds. */
     realm_awaits(docctx, "PerformanceObserver",
-                "update the rendering steps 20 and 21 RECORD RENDERING TIME and MARK PAINT TIMING, which queue "
-                "performance entries — this build now has a performance timeline to queue them on, so both "
-                "steps must be written");
+                "update the rendering steps 20 and 21 RECORD RENDERING TIME and MARK PAINT TIMING queue "
+                "performance entries, and PERFORMANCE TIMELINE §5.1 Queue a PerformanceEntry — the operation "
+                "that receives one — is not built, nor is the performance entry buffer map it appends to. The "
+                "ENTRY these steps would mint exists (§3's PerformanceEntry); build §5.1 and the buffer, then "
+                "both steps");
     /* STEP 22 — "update the rendering or user interface of doc and its node navigable to reflect the current
        state". THE PAINT, and the only step of the twenty-three with no headless equivalent: everything before
        it computes values that exist whether or not anything is drawn, and this one draws. There is no

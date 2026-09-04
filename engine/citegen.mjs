@@ -547,6 +547,27 @@ const SPECS = [
      the ones the tree actually writes in front of a §. It is bikeshed, so it needs no reader of its own. */
   { key: "hrtime", label: "High Resolution Time", kind: "bikeshed",
     base: "https://w3c.github.io/hr-time/", edition: "maintained", anchors: ["hr-time", "hrtime", "high resolution time"] },
+  /* THE THREE STANDARDS THAT SIT ON TOP OF THE ROW ABOVE, and they are here for the reason that row's own
+     comment gives rather than for their site count: the vocabulary they own COLLIDES with vocabulary an
+     indexed standard also defines, so the resolver has somewhere wrong to go. `performance` is on OTHER_SPECS
+     and `timeline`, `timing` and `entry` are words this tree writes constantly — and classifyAnchor asks the
+     LISTED names longest-first, so a two-word anchor is what keeps `PERFORMANCE TIMELINE §3` from resolving to
+     the foreign `performance` and `USER TIMING §2.1.1` from falling to a file vote that would judge it against
+     HIGH RESOLUTION TIME, whose §2 is a different document's section entirely.
+     ALL THREE ARE BIKESHED and all three carry a `dt-updated`, so none needs a reader of its own.
+     NAVIGATION TIMING IS INDEXED FOR A SECTION IN ITS `Obsolete` CHAPTER — §8.1 The PerformanceTiming
+     interface, whose twenty-one read-only attribute NAMES User Timing §2.2.1 step 1 refuses as mark names.
+     That is a fact about the standard rather than about what this engine exposes, which is exactly the kind of
+     claim that must be checkable: an obsolete section is the one most likely to be renumbered out from under
+     a citation, and the title beside the number is what would survive it. */
+  { key: "usertiming", label: "User Timing", kind: "bikeshed",
+    base: "https://w3c.github.io/user-timing/", edition: "maintained", anchors: ["user timing", "user-timing"] },
+  { key: "perftimeline", label: "Performance Timeline", kind: "bikeshed",
+    base: "https://w3c.github.io/performance-timeline/", edition: "maintained",
+    anchors: ["performance timeline", "performance-timeline"] },
+  { key: "navtiming", label: "Navigation Timing", kind: "bikeshed",
+    base: "https://w3c.github.io/navigation-timing/", edition: "maintained",
+    anchors: ["navigation timing", "navigation-timing"] },
   /* THE FIRST LEVELLED CSS MODULE IN THIS TABLE, AND THE LEVEL IS PART OF THE ANCHOR RATHER THAN NOISE ON IT.
      A CSS module's levels are different documents with different numbering that this tree cites SIDE BY SIDE:
      css-images-3 §2 "Image Values: the <image> type" is `<url> | <gradient>`, and css-images-4 §2 "2D Image

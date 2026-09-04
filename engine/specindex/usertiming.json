@@ -1,0 +1,147 @@
+{
+ "spec": "User Timing",
+ "key": "usertiming",
+ "base": "https://w3c.github.io/user-timing/",
+ "specUpdated": "1 September 2026",
+ "fetched": "2026-09-04",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "introduction"
+  },
+  "2": {
+   "title": "User Timing",
+   "page": "",
+   "id": "user-timing"
+  },
+  "3": {
+   "title": "Processing",
+   "page": "",
+   "id": "processing"
+  },
+  "4": {
+   "title": "Recommended mark names",
+   "page": "",
+   "id": "recommended-mark-names"
+  },
+  "5": {
+   "title": "Privacy and Security",
+   "page": "",
+   "id": "privacy-security"
+  },
+  "2.1": {
+   "title": "Extensions to the Performance interface",
+   "page": "",
+   "id": "extensions-performance-interface"
+  },
+  "2.1.1": {
+   "title": "mark() method",
+   "page": "",
+   "id": "mark-method"
+  },
+  "2.1.1.1": {
+   "title": "PerformanceMarkOptions dictionary",
+   "page": "",
+   "id": "performancemarkoptions-dictionary"
+  },
+  "2.1.2": {
+   "title": "clearMarks() method",
+   "page": "",
+   "id": "clearmarks-method"
+  },
+  "2.1.3": {
+   "title": "measure() method",
+   "page": "",
+   "id": "measure-method"
+  },
+  "2.1.3.1": {
+   "title": "PerformanceMeasureOptions dictionary",
+   "page": "",
+   "id": "performancemeasureoptions-dictionary"
+  },
+  "2.1.4": {
+   "title": "clearMeasures() method",
+   "page": "",
+   "id": "clearmeasures-method"
+  },
+  "2.2": {
+   "title": "The PerformanceMark Interface",
+   "page": "",
+   "id": "the-performancemark-interface"
+  },
+  "2.2.1": {
+   "title": "The PerformanceMark Constructor",
+   "page": "",
+   "id": "the-performancemark-constructor"
+  },
+  "2.3": {
+   "title": "The PerformanceMeasure Interface",
+   "page": "",
+   "id": "the-performancemeasure-interface"
+  },
+  "3.1": {
+   "title": "Convert a mark to a timestamp",
+   "page": "",
+   "id": "convert-mark-to-timestamp"
+  },
+  "3.2": {
+   "title": "Convert a name to a timestamp",
+   "page": "",
+   "id": "convert-name-to-timestamp"
+  }
+ },
+ "dfns": {
+  "constructor(markname markoptions)": [
+   "2.2"
+  ],
+  "convert a mark to a timestamp": [
+   "3.1"
+  ],
+  "convert a name to a timestamp": [
+   "3.2"
+  ],
+  "mark feature usage": [
+   "4"
+  ],
+  "mark fully loaded": [
+   "4"
+  ],
+  "mark fully visible": [
+   "4"
+  ],
+  "mark interactive": [
+   "4"
+  ],
+  "mark(markname markoptions)": [
+   "2.1"
+  ],
+  "measure(measurename startormeasureoptions endmark)": [
+   "2.1"
+  ],
+  "measure(measurename startormeasureoptions)": [
+   "2.1"
+  ],
+  "performancemark constructor": [
+   "2.2.1"
+  ],
+  "performancemark(markname markoptions)": [
+   "2.2"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "convert a mark to a timestamp": {
+   "2.1.3": 8
+  },
+  "mark(markname markoptions)": {
+   "5": 3
+  },
+  "measure(measurename startormeasureoptions endmark)": {
+   "5": 4
+  },
+  "performancemark(markname markoptions)": {
+   "5": 5
+  }
+ }
+}

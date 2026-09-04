@@ -1,0 +1,205 @@
+{
+ "spec": "Navigation Timing",
+ "key": "navtiming",
+ "base": "https://w3c.github.io/navigation-timing/",
+ "specUpdated": "1 September 2026",
+ "fetched": "2026-09-04",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "introduction"
+  },
+  "2": {
+   "title": "Terminology",
+   "page": "",
+   "id": "terminology"
+  },
+  "3": {
+   "title": "Navigation Timing",
+   "page": "",
+   "id": "sec-navigation-timing"
+  },
+  "4": {
+   "title": "Process",
+   "page": "",
+   "id": "process"
+  },
+  "5": {
+   "title": "Creating a navigation timing entry",
+   "page": "",
+   "id": "marking-navigation-timing"
+  },
+  "6": {
+   "title": "Privacy Considerations",
+   "page": "",
+   "id": "privacy"
+  },
+  "7": {
+   "title": "Security Considerations",
+   "page": "",
+   "id": "security"
+  },
+  "8": {
+   "title": "Obsolete",
+   "page": "",
+   "id": "obsolete-heading"
+  },
+  "9": {
+   "title": "Acknowledgments",
+   "page": "",
+   "id": "acknowledgements"
+  },
+  "3.1": {
+   "title": "Relation to the PerformanceEntry interface",
+   "page": "",
+   "id": "performanceentry"
+  },
+  "3.2": {
+   "title": "Relation to the PerformanceResourceTiming interface",
+   "page": "",
+   "id": "PerformanceResourceTiming"
+  },
+  "3.3": {
+   "title": "The PerformanceNavigationTiming interface",
+   "page": "",
+   "id": "sec-PerformanceNavigationTiming"
+  },
+  "3.3.1": {
+   "title": "The NavigationTimingType enum",
+   "page": "",
+   "id": "sec-performance-navigation-types"
+  },
+  "3.3.2": {
+   "title": "The PerformanceTimingConfidence interface",
+   "page": "",
+   "id": "sec-performance-timing-confidence"
+  },
+  "3.3.3": {
+   "title": "The PerformanceTimingConfidenceValue enum",
+   "page": "",
+   "id": "sec-performance-timing-confidence-value"
+  },
+  "4.1": {
+   "title": "Processing Model",
+   "page": "",
+   "id": "processing-model"
+  },
+  "6.1": {
+   "title": "Information disclosure",
+   "page": "",
+   "id": "info_disclosure"
+  },
+  "6.2": {
+   "title": "Cross-directory access",
+   "page": "",
+   "id": "cross-directory"
+  },
+  "7.1": {
+   "title": "Detecting proxy servers",
+   "page": "",
+   "id": "authentication"
+  },
+  "8.1": {
+   "title": "The PerformanceTiming interface",
+   "page": "",
+   "id": "the-performancetiming-interface"
+  },
+  "8.2": {
+   "title": "The PerformanceNavigation interface",
+   "page": "",
+   "id": "the-performancenavigation-interface"
+  },
+  "8.3": {
+   "title": "Extensions to the Performance interface",
+   "page": "",
+   "id": "extensions-to-the-performance-interface"
+  }
+ },
+ "dfns": {
+  "back forward": [
+   "3.3.1"
+  ],
+  "confidence value": [
+   "3.3"
+  ],
+  "create the navigation timing entry": [
+   "5"
+  ],
+  "critical ch restart time": [
+   "3.3"
+  ],
+  "current document": [
+   "2"
+  ],
+  "document load timing": [
+   "3.3"
+  ],
+  "navigation timing entry": [
+   "5"
+  ],
+  "navigation type": [
+   "3.3"
+  ],
+  "not restored reasons": [
+   "3.3"
+  ],
+  "previous document unload timing": [
+   "3.3"
+  ],
+  "queue the navigation timing entry": [
+   "5"
+  ],
+  "randomized trigger rate": [
+   "3.3"
+  ],
+  "redirect count": [
+   "3.3"
+  ],
+  "service worker timing": [
+   "3.3"
+  ],
+  "type back forward": [
+   "8.2"
+  ],
+  "type navigate": [
+   "8.2"
+  ],
+  "type reload": [
+   "8.2"
+  ],
+  "type reserved": [
+   "8.2"
+  ],
+  "underlying confidence value": [
+   "3.3"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "back forward": {
+   "9": 3
+  },
+  "redirect count": {
+   "3.2": 2
+  },
+  "service worker timing": {
+   "3.2": 2
+  },
+  "type back forward": {
+   "9": 3
+  },
+  "type navigate": {
+   "9": 3
+  },
+  "type reload": {
+   "9": 3
+  },
+  "type reserved": {
+   "9": 3
+  },
+  "underlying confidence value": {
+   "3.3.3": 2
+  }
+ }
+}
