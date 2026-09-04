@@ -4999,7 +4999,12 @@ static long g_orphan_asks;
    BOTH OR NEITHER, for solve_arrival_census's reason exactly: `driven == 0` alone is three different findings
    — the bundle ships no uncalled code, no flow ever reached the end of its own work, or the walk ran and the
    heap had none — and only the pair tells the middle one (a scheduling result to act on) from the outer two
-   (facts about the page). */
+   (facts about the page).
+   AND THE FIRST AND THE THIRD ARE NOT THE SAME FINDING EITHER, WHICH THIS COMMENT READS AS THOUGH THEY WERE
+   BY CALLING BOTH "facts about the page". A heap with no untaken body is a fact about the HEAP, and this
+   engine has a measured reason for one to differ from the bundle: see the residual at the take in
+   engine_orphan_seed, and read @COLD's `outOfProgramsAtTheLadder` before reading a zero `asked` as the
+   middle finding. */
 void engine_orphan_census(long *driven, long *asked) {
     DCHECK(driven != NULL && asked != NULL,
            "the orphan census was asked for one of its two numbers — a drive count with no ask count beside it "
@@ -5247,6 +5252,29 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
        to end, in the surface §What-the-tool-produces calls the headline. */
     g_orphan_asks++;
     if (g_orphan_gen_valid && gen == g_orphan_gen_seen) return 0;
+    /* AN EMPTY WALK IS NOT THE SAME CLAIM AS "THIS BUNDLE SHIPS NO UNCALLED CODE", AND THE TAKE IS NARROWER
+       THAN THE SURFACE §What-the-tool-produces NAMES — a NAMED RESIDUAL, because what is here is correct and
+       what it covers is smaller than what the product promises.
+       WHAT IS NOT COVERED: JS_OrphanTakeOne enumerates rt->gc_obj_list filtered to JS_GC_OBJ_TYPE_JS_OBJECT,
+       so what it can find is a live FUNCTION OBJECT whose body has not been entered. A body the bundle
+       shipped whose only closure has already been released is therefore not an orphan this walk can see —
+       and quickjs is refcounted, so a `function` declared at the scope of an IIFE and referenced by nothing
+       that outlives it is gone the instant that frame is popped, before any flow has run out of work. That is
+       the ordinary shape of a minified bundle's inner helpers.
+       WHAT THE NEXT DIFF BUILDS is NOT a second enumeration: JS_GC_OBJ_TYPE_FUNCTION_BYTECODE is a sibling
+       type on the SAME list, and a nested body is held alive by its enclosing body's cpool, so the BODIES are
+       already reachable from the walk that is here. What is missing is the ENVIRONMENT — js_closure takes the
+       enclosing frame's `var_refs`, and those died with the closure — so driving such a body means MINTING an
+       environment nobody observed, which is a concolic question (§Solver: an unknown with no example) and
+       belongs beside engine_orphan_call's argument minting rather than inside the take.
+       HOW ITS ABSENCE SHOWS, and this is measured rather than argued (artifact 9c757178, solvergate `direct`,
+       3 runs a side, identical on every run): two documents differing ONLY in whether the uncalled function's
+       closure outlives its defining frame. Held on a live object -> `asked` 396, `driven` 2, and the two
+       endpoints only those bodies name appear in the finding set carrying `{orphan<locator>.argN}`. Left as
+       a bare declaration inside the IIFE -> `asked` 387, `driven` 0, and both endpoints absent. Same seed,
+       same ladder, same schedule; the difference is entirely whether the heap still held a closure. So a
+       `driven` of 0 beside a large `asked` is this residual until the heap is checked, and NOT the third of
+       the three readings engine_orphan_census names being the same thing as the first. */
     /* THE MEMO IS RECORDED ONLY BY AN EMPTY WALK, and that is what the take taking ONE changes about it. It
        used to be written before the walk, which was right for a call that drained the set: after it, the answer
        to "is there anything at this generation" really was no. A one-at-a-time take leaves the rest of the set

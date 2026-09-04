@@ -135,14 +135,68 @@ typedef struct {
        those two are high-water marks and cannot go backwards, and this one can, because it is not a history.
        So the row is evidence only where `live` is nonzero, and `live` is on the same line — read them
        together. MEASURED, both halves in one session: on a real bundle this row stood at ~1 live member in 10
-       from the FIRST census through the 129th while orphan asks stayed 0, which is the second reading and says
-       the other four rungs are what hold them; on a draining fixture the terminal census read this row 0 and
-       `program_cursors` `{0: 0}` with `live` 0, having asked 1536 orphans on the way — the same 0, and the
-       opposite fact. A reader who took either number alone had a coherent, confident, wrong answer available.
+       from the FIRST census through the 129th while orphan asks stayed 0; on a draining fixture the terminal
+       census read this row 0 and `program_cursors` `{0: 0}` with `live` 0, having asked 1536 orphans on the
+       way — the same 0, and the opposite fact. A reader who took either number alone had a coherent,
+       confident, wrong answer available.
+       AND THE CONCLUSION DRAWN FROM THE FIRST OF THOSE — "which is the second reading and says the other four
+       rungs are what hold them" — WAS WRONG, AND IS RETIRED HERE RATHER THAN DELETED, because it is the
+       inference the next reader re-derives from the pairing above. It skips the two holders that are not
+       rungs, which is why the three rows below exist instead of a sentence.
        A REPORT AND NEVER A BOUND (§NO BOUNDS), for `program_cursors`' reason exactly: nothing in the engine
        reads it, no arm of any verdict branches on it, and "how many members have run out of programs" is
        precisely the shape a drain check would be built from. */
     long  out_of_programs;
+    /* …AND WHICH OF THOSE MEMBERS COULD EVEN HAVE BEEN ASKED THE ORPHAN QUESTION — a PARTITION of
+       `out_of_programs` into three, raised on the same walk and SUMMING to it, which is the identity that says
+       the three arms cover the population. Emitted as `outOfProgramsUnrun`, `outOfProgramsFramed` and
+       `outOfProgramsAtTheLadder`.
+
+       IT EXISTS BECAUSE "SAYS WHICH OF THE FOUR TO OPEN" IS A CLAIM THIS CENSUS COULD NOT SUPPORT, AND THE
+       PAIRING ABOVE MADE IT ANYWAY. Two of the things that hold a member with no row left are not rungs of
+       that ladder at all, and neither is visible in `out_of_programs`:
+         - THE MEMBER WAS NEVER HANDED THE THREAD. Every one of the ladder's conditions is asked INSIDE
+           flow_step, so a member the pick never reaches satisfies none of them and is invisible in all of
+           them. engine.c's own rung says this in as many words and says to ask it FIRST ("the ZEROTH conjunct
+           is not an arm and is the one a reader of this ladder misses"), and the fact is already on this line
+           as `step_units`' `none` row — but `step_units` is over the WHOLE frontier and cannot be attributed
+           to the members that have run out of programs, which is the same defect `framed` has one row up and
+           the reason this block is counts rather than a cross-reference.
+         - THE MEMBER IS SUSPENDED INSIDE A LIVE FRAME. flow_step's whole ladder sits inside `if (!f->frame)`,
+           so a framed member takes the resume arm above it and no rung below is reached. `framed` is on this
+           line too and has exactly the same attribution problem.
+       Only the third population — dispatched, and standing with no frame — is one a rung could be holding at
+       all, so it is the only one about which "which of the four" is even a question. It is not the same as
+       "a rung IS holding these", and the row's own note below says why.
+
+       MEASURED, on a document that FORKS FASTER THAN IT IS SERVED (an opaque-bounded loop inside a `load`
+       handler; solvergate `stream`, artifact 9c757178, 3 runs, 90/297/609 snapshots): every live member stood
+       at `script_i == dyn_n` in every snapshot of every run, and orphan asks FROZE AT 2 in all three while
+       `live` ran to 401, 1568 and 1699. The frontier was never held by a rung.
+       AND THE TWO ARMS TRADED PLACES WITHIN ONE RUN, WHICH IS WHY THIS IS THREE ROWS AND NOT A SENTENCE ABOUT
+       DISPATCH. Early, `framed` tracked `live` to within four and `none` tracked it to within five — a
+       frontier of members born inside a forked call and never handed the thread. Late in the longest run the
+       same 1699 members read `framed` 378 and `none` 375: 1318 of them had been stepped EXACTLY ONCE, through
+       `resume-ended-its-frame`, and stood with no frame and no row left. That third population is the one
+       standing AT the ladder, and `asked` was still 2 — so the answer had moved from "never dispatched" to
+       "dispatched once and not picked again" without the pairing above being able to see either.
+       A LARGE `at_the_ladder` BESIDE A FROZEN `asked` IS A STATEMENT ABOUT THE PICK AND NOT ABOUT A RUNG,
+       which is the reading `out_of_programs` alone has never been able to offer. The control is the same
+       document made to drain (3 runs, identical): the same seed is asked 387 times and answers.
+
+       A GAUGE, LIKE THE ROW ABOVE, so the `live == 0` reading covers all three at once: on an empty frontier
+       every one of them is 0 and the partition holds vacuously, which says nothing about what any member did
+       before it left. And A REPORT AND NEVER A BOUND — a per-member breakdown of "who could have asked" is
+       precisely what a starvation detector would be built out of, and nothing in the engine reads these. */
+    long  out_of_programs_unrun;        /* … and has never been stepped (`step_unit == STEP_UNIT_NONE`) */
+    long  out_of_programs_framed;       /* … stepped, but suspended in a live frame: below `!f->frame` */
+    /* … stepped, no frame, no row: the members whose NEXT dispatch descends the ladder, and therefore the
+       only population of which "which of the four rungs is due" is even a question. It is NOT the population
+       a rung IS holding — a member here may equally be one the pick has not returned to, and this row cannot
+       tell those apart on its own. What tells them apart is the ORPHAN CENSUS beside it: `asked` counts
+       arrivals at the last rung, so a large number here against an `asked` that is not moving says the
+       members are not being PICKED, and the file to open is the scheduler rather than any of the four. */
+    long  out_of_programs_at_the_ladder;
 
     /* PER-FLOW rows — these multiply by the number of parked flows, so they are what a pager pays for. */
     long dec_entries;        /* decision-vector slots the flows STAND ON — a chain total, so this counts the

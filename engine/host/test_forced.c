@@ -8430,8 +8430,10 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         orphan_k = snprintf(orphan_why_, sizeof orphan_why_,
                  "NOT ASKED: no flow of this run has run out of work yet, so the frontier has never reached the "
                  "question orphan-invoke answers (engine_orphan_census: asked=0, driven=0). That is the "
-                 "SCHEDULE — engine_orphan_seed is reached only where a flow has no program, job, lifecycle "
-                 "event, timer, frame, reply or close request left — and it says nothing about "
+                 "SCHEDULE — engine_orphan_seed is reached only by a DISPATCHED, unframed member with no "
+                 "program, job, delivery, checkpoint or lifecycle stage left; a timer, a rendering "
+                 "opportunity, an owed reply and a close request sit BELOW it and cannot hold one back from "
+                 "the ask — and it says nothing about "
                  "the take, the drive or this endpoint. WHERE THE FRONTIER STANDS: %ld members, %ld of them "
                  "never once handed the thread, and the furthest member has completed %lld units of work — a "
                  "WEAKER condition than running out of work, so that last number is an UPPER BOUND on how "
@@ -8442,7 +8444,10 @@ static int probes_eval(const char *js, Probe *out, int cap) {
                  "ASKED %ld TIMES AND DROVE NOTHING: a flow did run out of work and no walk found an untaken "
                  "body, while this document declares seven functions nothing calls. That is the TAKE — "
                  "JS_OrphanTakeOne's `entered`/`is_program`/bytecode filter, or the orphan-generation memo "
-                 "answering for a heap that has moved — and not the schedule and not this endpoint",
+                 "answering for a heap that has moved — and not the schedule and not this endpoint. THE "
+                 "MEASURED FIRST CAUSE IS THE FILTER'S DOMAIN: the walk enumerates live function OBJECTS, so "
+                 "a body whose only closure was already released is invisible to it — see the residual at "
+                 "solver/engine.c's take for the controlled pair that established it",
                  orphans_asked);
     else
         /* THE FOURTH STATE engine.h NAMES AND NEITHER OF US CAN REACH, quoted here at the strength it is owed

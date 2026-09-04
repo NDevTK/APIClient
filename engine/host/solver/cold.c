@@ -85,7 +85,21 @@ void cold_census(ColdCensus *out)
         /* …AND WHETHER THIS MEMBER HAS ANY ROW LEFT AT ALL, which the bucket it lands in cannot say: one
            cursor value holds both "inside the program at this index" and "past the last row of this sequence",
            and `dyn_n` is per-flow and crosses no boundary. See cold.h for what turns on the difference. */
-        if (f->script_i == f->dyn_n) out->out_of_programs++;
+        if (f->script_i == f->dyn_n) {
+            out->out_of_programs++;
+            /* …AND WHICH OF THE THREE THINGS THAT CAN BE HOLDING IT — the partition cold.h declares, in the
+               order that makes it one. NEVER STEPPED is asked FIRST because it is not exclusive of the other
+               two by anything structural: a member forked out of a parent's live call is born WITH a frame and
+               WITHOUT ever having been dispatched, so both arms are true of it and only an order decides which
+               row it lands in. The zeroth conjunct wins, because "was never handed the thread" is the stronger
+               statement — none of flow_step's conditions was asked of this member at all, so nothing about its
+               frame is evidence of anything. Then the frame, which is what flow_step's own `if (!f->frame)`
+               tests; then what is left, which is the only population any rung of that ladder can be holding.
+               THE IDENTITY IS ASSERTED BELOW THE WALK rather than here, where only one member is in hand. */
+            if (f->step_unit == STEP_UNIT_NONE) out->out_of_programs_unrun++;
+            else if (f->frame)                  out->out_of_programs_framed++;
+            else                                out->out_of_programs_at_the_ladder++;
+        }
         if (f->script_i >= out->program_cursor_n) {
             int want = f->script_i + 1;
             long *grown = realloc(out->program_cursors, (size_t)want * sizeof *grown);
@@ -171,6 +185,18 @@ void cold_census(ColdCensus *out)
            values everything else in the heap names. `job_count` above is unchanged and is what the pager
            actually reads. */
     }
+
+    /* THE PARTITION HOLDS — asserted here, where the whole population is in hand and one member was not.
+       cold.h states the three rows sum to `out_of_programs` and that identity is the entire reason a reader
+       may treat them as an answer to "which of the four rungs is holding these members": it says the walk
+       classified every one of them and left none over. The arms above are an if/else chain, so the only way
+       this can fail is a fourth arm added without a row — which is exactly the edit that would make the
+       partition silently a selection. */
+    DCHECK(out->out_of_programs_unrun + out->out_of_programs_framed + out->out_of_programs_at_the_ladder
+               == out->out_of_programs,
+           "the census's out-of-programs breakdown does not sum to the count it partitions — the three rows "
+           "are raised on one if/else chain over the same members, so a disagreement means an arm was added "
+           "without a row and the breakdown is a SELECTION being read as a partition");
 
     /* THE SHARED ROWS, ONCE. A frozen segment is referenced by every flow forked below it, so adding it to each
        flow's own total would report the structural sharing as if it did not exist — which is precisely the

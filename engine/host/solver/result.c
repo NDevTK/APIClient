@@ -949,7 +949,9 @@ char *result_swap_json(void) {
    the four structs this composer fills, so a row added to any of them inherits its kind from the accessor
    rather than from anybody remembering to write it down here.
      From `cold_census` — ONE WALK OF THE LIVE FRONTIER, so every one of these is a GAUGE and may FALL:
-     `live`, `framed`, `blocked`, `stackEmpty`, `canDeliver`, `pend`, `pendReady`, `outOfPrograms`, every
+     `live`, `framed`, `blocked`, `stackEmpty`, `canDeliver`, `pend`, `pendReady`, `outOfPrograms` and the
+     three rows that partition it (`outOfProgramsUnrun`, `outOfProgramsFramed`, `outOfProgramsAtTheLadder`,
+     which are gauges for the same reason and sum to it at every census, empty frontier included), every
      `*Entries`/`*KiB` row, `dynBodies`, `pinSegs`/`decSegs` and their entry counts, and the two histograms
      `stepUnits` and `programCursors`. `owed` is `flow_host_owed_count()`, a second walk of the same frontier
      and a gauge for the same reason. `perFlowKiB` and `sharedKiB` are SUMS OF GAUGES taken in that one walk.
@@ -1125,8 +1127,18 @@ char *result_swap_json(void) {
    over the WHOLE frontier and cannot be attributed to a bucket, and `dyn_n` is per-flow and crosses no
    boundary. What turns on the difference is engine.c's orphan arm, which is reached only where a member has no
    program left — so zero orphan asks reads identically for "nobody has run out of programs" and for "members
-   have and are held by a job, a timer, a lifecycle event, a rendering opportunity or an owed reply", which are
-   different files to open. See solver/cold.h.
+   have and something else is due", which are different files to open.
+   THE SECOND HALF OF THAT SENTENCE USED TO ENUMERATE "a job, a timer, a lifecycle event, a rendering
+   opportunity or an owed reply", AND EVERY ONE OF THE LAST THREE IS NOW BELOW THE ORPHAN ARM — engine.c moved
+   the seed to the last moment before the CLOCK may move, so a timer, a rendering opportunity and an owed
+   reply are reached only after the ask has been made and cannot be what holds a member back from it. A list
+   of rungs written down where the ladder is not is the stale-claim failure with no grep to find it, which is
+   why the enumeration is gone from here rather than corrected: solver/cold.h owns the ladder's own list, and
+   the three `outOfPrograms*` rows beside this one are what answer the question without one.
+   AND THOSE THREE ARE WHY THE PAIRING IS NOT ENOUGH ON ITS OWN. Two of the things that hold a member with no
+   row left are not rungs at all — it was never dispatched, or it is suspended in a live frame and the whole
+   ladder sits below `if (!f->frame)` — so `outOfPrograms` alone names a population of which only one part is
+   even eligible to be held by a rung. See solver/cold.h for the partition and for what it measured.
 
    `replyAsked`/`replyAnswered` ARE THE OTHER DOOR'S PAIR AND THEY ARE NOT `hostAsked`/`hostAnswered`. Those
    two are minted at engine.c's `mint_req`, whose callers push FLOW_PENDING_HOSTREQ — the four cross-instance
@@ -1486,6 +1498,8 @@ char *result_cold_json(void) {
                     quantities rather than two. */
                  "\"steps\":%ld,\"stepUs\":%lld,\"stepUnitRuns\":%s,"
                  "\"outOfPrograms\":%ld,"
+                 "\"outOfProgramsUnrun\":%ld,\"outOfProgramsFramed\":%ld,"
+                 "\"outOfProgramsAtTheLadder\":%ld,"
                  "\"stepUnits\":%s,\"programCursors\":%s}",
                  c.flows, c.framed, c.blocked, flow_host_owed_count(),
                  e.finished, e.finished_flows, e.finished_cands,
@@ -1510,6 +1524,7 @@ char *result_cold_json(void) {
                  (c.seg_bytes + c.dom_seg_bytes + c.pin_seg_bytes + c.dec_seg_bytes + c.dyn_bytes) / 1024,
                  r.steps, (long long)r.step_us, runs,
                  c.out_of_programs,
+                 c.out_of_programs_unrun, c.out_of_programs_framed, c.out_of_programs_at_the_ladder,
                  hist, cursors);
     free(cursors);
     cold_census_release(&c);

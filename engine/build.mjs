@@ -216,11 +216,16 @@ function coldPartition(c, total, parts, where) {
   const sum = parts.reduce((t, p) => t + c[p], 0);
   if (sum !== c[total])
     throw new Error(`[build] the @COLD census's \`${total}\` is ${c[total]} while ${parts.join(" + ")} sums ` +
-                    `to ${sum} — those rows are a PARTITION of it (every member is on exactly one side of ` +
-                    `\`Flow.cand_src\` for the whole of its life), so a difference means the two sides have ` +
-                    `stopped describing one population and no reading composed from either is about the run ` +
-                    `that happened. solver/engine.c asserts the same identity at ${where}; a disagreement ` +
+                    `to ${sum} — those rows are a PARTITION of it, so a difference means the parts have ` +
+                    `stopped describing one population and no reading composed from any of them is about the ` +
+                    `run that happened. The engine asserts the same identity at ${where}; a disagreement ` +
                     `visible here and not there is a row lost between the census and this document.`);
+  /* THE REASON A GIVEN SET PARTITIONS ITS TOTAL BELONGS TO THE CALLER AND NOT TO THIS MESSAGE, AND IT USED TO
+     BE HERE. The text named ONE caller's ground — "every member is on exactly one side of `Flow.cand_src` for
+     the whole of its life" — which is true of `finished`/`sold` and false of the two other callers this
+     helper already had, so a `pagedAsks` disagreement reported a reason about a field that partition does not
+     involve. A shared helper reads as single-purpose at each of its call sites (CLAUDE.md
+     §AN-ASSERT-THAT-NAMES-A-REMEDY), and `where` is the argument that already carries which site this is. */
 }
 /* WHAT RETIRED, AND WHICH POPULATION IT WAS — the reading `finished` alone could never be, and a NAMED
    function for `stepUnitReading`'s reason: a reading that is a sentence spliced into the middle of a composer
@@ -1940,6 +1945,22 @@ function programCursorReading(b) {
      reading. They are in the derived @COLD row set and `censusFields` has already refused a non-numeric
      one by the time this runs; this says so rather than re-checking, because a second check here would
      be the second place a renamed row has to be renamed. */
+  /* AND WHO AMONG THE OUT-OF-PROGRAMS MEMBERS COULD EVEN HAVE ASKED THE ORPHAN QUESTION — solver/cold.h's
+     partition, through the helper the other three go through. `outOfPrograms` on its own has been read as
+     naming the members the orphan ladder's four rungs are holding, and two of the three things that actually
+     hold such a member are not rungs: it was never handed the thread, or it is suspended in a live frame and
+     the whole ladder sits under `if (!f->frame)`.
+     PRESENCE IS NOT RE-CHECKED HERE, for the reason the `deepest`/`completed` note above gives: the three are
+     `%ld` conversions in `result_cold_json`, so the DERIVED @COLD row set already requires them numeric by
+     the time this runs, and a second presence check would be the second place a renamed row has to be
+     renamed. The SUM is a different question and no derivation can make it — it is a claim about the
+     population, which is what `coldPartition` is for.
+     ABOVE THE EMPTY-FRONTIER RETURN, so it is asked on EVERY census and not only the ones that render a
+     bucket. The empty case is where the identity is vacuous, which is exactly the state a broken one would
+     hide in — and this file's own rule is that no verdict is composed from a census that is not internally
+     true, not that it is checked where it happens to be interesting. */
+  coldPartition(b, "outOfPrograms",
+                ["outOfProgramsUnrun", "outOfProgramsFramed", "outOfProgramsAtTheLadder"], "cold_census");
   const at = rows.filter((r) => r[1] > 0);
   /* AN EMPTY FRONTIER IS A SENTENCE AND NOT AN EMPTY LIST, for `stepUnitReading`'s reason exactly: rendering
      nothing there reads as a histogram that failed rather than as a census taken with nobody standing, and
@@ -1961,11 +1982,28 @@ function programCursorReading(b) {
      the cursor that MEANS "finished the deepest program" is spelled out, and solver/result.c asserts the
      identity (top cursor <= deepest + 1) at the composer where both numbers are in one hand. */
   const finishedAll = Number(b.deepest) + 1;
+  const oopReading =
+    b.outOfPrograms === 0
+      ? `no member has run out of its own program sequence, so the orphan ladder's last rung was not standing ` +
+        `under anybody at this instant` +
+        (b.live === 0 ? ` — and \`live\` is 0, so that is a census taken on an empty frontier and says ` +
+                        `nothing about what any member did before it left (solver/cold.h)` : ``)
+      : `${b.outOfPrograms} member${b.outOfPrograms === 1 ? " has" : "s have"} no row left to run, of which ` +
+        `${b.outOfProgramsUnrun} ${b.outOfProgramsUnrun === 1 ? "has" : "have"} never been handed the thread ` +
+        `and ${b.outOfProgramsFramed} ${b.outOfProgramsFramed === 1 ? "is" : "are"} suspended in a live ` +
+        `frame — NEITHER of those is held by a rung, because flow_step asks none of its conditions of them — ` +
+        `leaving ${b.outOfProgramsAtTheLadder} whose NEXT dispatch descends the orphan ladder. ` +
+        (b.outOfProgramsAtTheLadder === 0
+          ? `That is ZERO, so nothing here is standing where any of those rungs could be asked and a zero ` +
+            `orphan-ask count is a fact about where the members are, not about what is due`
+          : `That number is what the orphan census's \`asked\` is to be read against — never ` +
+            `\`outOfPrograms\` — and it does NOT say a rung is holding them: a member here may equally be ` +
+            `one the pick has not returned to. A large count beside an \`asked\` that is not moving is a ` +
+            `statement about the PICK`);
   return `program cursors at the last census (${b.live} live member${b.live === 1 ? "" : "s"} over ` +
          `${rows.length} cursor slot${rows.length === 1 ? "" : "s"} — a CURSOR is one-past-the-program-it-left, ` +
          `so the slots run one wider than the document's programs; ` +
-         `document deepest ${b.deepest} / completed ${b.completed}, and ${b.outOfPrograms} member` +
-         `${b.outOfPrograms === 1 ? " has" : "s have"} no row left to run): ` +
+         `document deepest ${b.deepest} / completed ${b.completed}; ${oopReading}): ` +
          at.map((r) => `${r[1]} at ${r[0]}`).join(", ") +
          ` — largest bucket ${top[1]} of ${b.live} at cursor ${top[0]}, deepest member standing at cursor ` +
          `${standingDeepest}. A mass LOW against \`deepest\` and a mass AT it are opposite diagnoses ` +
@@ -2555,11 +2593,14 @@ function censusReading(out) {
           + `question this reader exists to answer and a single sample cannot answer it`
         : `; over ${run.length} samples asked +${dAsk}, driven +${dDrv}` +
           (last._orphansAsked === 0
-            ? ` — NEVER ASKED. engine_orphan_seed is reached only where a flow has no program, job, lifecycle `
-              + `event, timer, rendering opportunity, outstanding reply or unmodelled close request left, so `
-              + `no flow of this session has `
-              + `run out of its own work yet. That is the SCHEDULE and says nothing whatever about the take, `
-              + `the drive, or whether this bundle ships uncalled code`
+            ? ` — NEVER ASKED. engine_orphan_seed sits at the last moment before the CLOCK may move, so it `
+              + `is reached only by a member that is DISPATCHED, unframed, and has no program, job, delivery, `
+              + `checkpoint or lifecycle stage left. (A timer, a rendering opportunity, an owed reply and a `
+              + `close request are BELOW it and cannot hold a member back from the ask; that list stood here `
+              + `after the rung moved and is corrected.) So no flow of this session has reached the end of `
+              + `its own work. That is the SCHEDULE and says nothing whatever about the take, the drive, or `
+              + `whether this bundle ships uncalled code — and @COLD's \`outOfProgramsAtTheLadder\` is what `
+              + `separates "nobody is standing there" from "they are standing there and are not being picked"`
               + (liveMoved === null
                   ? ` (no @COLD line in this run, so there is no frontier reading to say whether it was moving)`
                   : liveMoved > 0
@@ -2574,7 +2615,11 @@ function censusReading(out) {
                 ? ` — asked ${dAsk} more time(s) and drove NOTHING across the span. That is the TAKE` +
                   (last._orphansDriven === 0
                     ? `: JS_OrphanTakeOne's entered/is_program/bytecode filter, or the orphan-generation memo `
-                      + `answering for a heap that has moved. It is not the schedule — the frontier is asking`
+                      + `answering for a heap that has moved. It is not the schedule — the frontier is asking. `
+                      + `MEASURED FIRST CAUSE: the take walks live function OBJECTS, so a body whose only `
+                      + `closure was already released is invisible to it — two documents differing ONLY in `
+                      + `whether the uncalled function outlived its defining frame gave driven 2 against `
+                      + `driven 0, 3 runs a side (solver/engine.c's residual at the take says how to check it)`
                     : `, and it is the state a final pair cannot report: ${last._orphansDriven} bodies WERE `
                       + `driven earlier in this session and none in the ${run.length} samples since, so the `
                       + `take has stopped rather than never started`)
