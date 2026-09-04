@@ -45,7 +45,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
    than from the names — because the names do not say, and result.c records a wrong relay that was
    caused by exactly that (`svcMax` read as a dispatch count when it is a quotient of thread time by
    one cooperative quantum). Only the COUNTER rows may be differenced across samples. */
-const COUNTERS = ["picksLifetime", "starvedPicks", "workDone", "rankChanges", "topForgiven"];
+/* `arrivals`/`departures` are here and not among the gauges because solver/flow.h states their kind: both
+   are lifetime counts with exactly one writer each, so both may be differenced — which is what turns
+   `arrivals / picksLifetime` (members minted per dispatch) into a RATE over the window this driver samples
+   rather than an average over the session. `members` beside them is a gauge and is not the same question.
+   Printed, never divided here, for the reason the header gives about `starvedPicks / picksLifetime`. */
+const COUNTERS = ["picksLifetime", "starvedPicks", "workDone", "rankChanges", "topForgiven",
+                  "arrivals", "departures"];
 const GAUGES = ["members", "unrun", "neverPicked", "neverPickedGap", "neverPickedAtTop",
                 "picksLive", "picksMax", "families", "jobsReady", "jobsFramed", "jobsOwed",
                 "delivReady", "delivFramed", "delivOwed", "valTop", "valMin", "valMax"];

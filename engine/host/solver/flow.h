@@ -1407,6 +1407,62 @@ typedef struct {
     int64_t picks_live;       /* GAUGE: dispatches held by the members standing now */
     int64_t picks_max;        /* GAUGE: the most any one of them holds */
     int64_t picks_lifetime;   /* LIFETIME: every dispatch this instance has made, departed members included */
+    /* THE FRONTIER'S ARRIVAL AND DEPARTURE PROCESSES — the pair that says whether the ORDER is deciding
+       anything at all, which every other row in this struct presupposes and none of them asks. Each row above
+       describes the SHAPE of an order over the members standing NOW; a comparator is only a scheduler over a
+       set that something CONSUMES, and nothing here says whether this one is being consumed.
+       READ `arrivals / picks_lifetime` — MEMBERS MINTED PER DISPATCH — AND IT DECIDES WHICH OF TWO OPPOSITE
+       DIFFS A `never_picked_at_top` PLATEAU TAKES. Below 1 the frontier drains, the served prefix is most of
+       it, and which member goes first is what flow_weight's terms are for: a plateau is then the ORDER failing
+       to separate members that are actually being reached, and the repair is in the terms. Above 1 it does not
+       drain at any ordering whatever — the served prefix is a vanishing fraction of a set that grows — and a
+       term that separates two members of the untouched remainder has reordered something nothing is
+       consuming. Those are not shades of one state, and this pair is what tells them apart. `never_picked_at_top`
+       one field up says how WIDE the plateau is; this says whether width is the question.
+       IT IS NOT A BOUND AND LICENSES NONE. §NO BOUNDS makes a growing frontier the design working, and
+       nothing here gates, caps, sheds or refuses admission — these are two counters and one identity. What
+       they remove is a reader's ability to attribute a plateau to the comparator without having established
+       that the comparator is what the frontier is waiting on.
+       MEASURED — a 180 s series on ONE fresh instance at artifact c23bfe6a, testing/fixtures/wjp_absent.html,
+       twelve samples at 15 s. `families` 1 and `val_min` = `val_max` = `val_top` = `vt` = 0 at every one, so
+       the reward term was not a common offset on this document but the constant zero; `w_top - w_min` was
+       0.030 or 0.036 at every one, because `svc_min..svc_max` spanned 179..184 and `vis_min..vis_max` spanned
+       5..7 — thirty-four thousand members resolved by six notches and three optimism readings, into four
+       hundredths of a point. `never_picked_at_top` fell 94.6% -> 81.8% with `never_picked_gap` 0.0 throughout,
+       ending at 28072 of 34309 members; `picks_max` was 2, so no member was monopolising and the thread
+       reached a fresh member nearly every time.
+       AND WHY THAT PLATEAU IS NOT BY ITSELF A VERDICT ON THE ORDER, WHICH IS THE READING THIS PAIR EXISTS TO
+       SUPPLY. `members / picks_lifetime` fell 21.0 -> 5.67 monotonically over the same series (12786/609 to
+       34309/6056): the plateau was draining throughout, and the frontier was still holding five to six
+       members for every dispatch the instance had ever made. Left running to 13102 dispatches the same
+       document reported `never_picked_at_top` 43 — 0.1% — at a weight spread of 171. The order separates;
+       what the early samples measure is a frontier still filling.
+       THAT RATIO IS A GAUGE OVER A COUNTER, WHICH IS THE DEFECT THESE TWO ROWS REMOVE. `members` is a gauge,
+       so `members / picks_lifetime` is a HOLDING figure over the whole session: it cannot be differenced into
+       a rate, and read at one instant it is silent about the one fact that decides how the plateau beside it
+       should be read. Read at the SAME `picks_lifetime` it is stable — 14.5, 15.5 and 14.68 across three
+       separate runs at 1299, 1222 and 1294 dispatches — so the entire variance is in WHEN the sample was
+       taken. `arrivals / picks_lifetime` is counter over counter and may be differenced, which is what turns
+       that into a rate over a window; and `arrivals` is not `members`, because a gauge cannot say whether a
+       frontier that is not growing is one nothing arrives at or one whose departures match its arrivals.
+       THE KIND IS IN THIS COMMENT BECAUSE IT IS NOT IN THE NAMES: both are LIFETIME COUNTERS, raised once per
+       event and lowered by nothing, so both may be DIFFERENCED across two samples — which is what turns the
+       ratio above into a RATE over a window rather than an average over a session, and is the one thing the
+       gauges around them cannot give. `members` beside them is a gauge and is neither.
+       AND THEY CARRY THEIR OWN CONSERVATION IDENTITY, WHICH IS WHAT MAKES THEM COUNTERS RATHER THAN NUMBERS:
+       `arrivals - departures == members`, asserted at the end of flow_wfq_census where all three are in one
+       hand, and checkable from outside this process on the published document. Exact, because each has exactly
+       one writer — flow.c's flow_new appends the only member a registry ever gains and flow_remove's
+       swap-remove is the only decrement of the member count that is not the registry coming up.
+       `rank_changes` IS NOT THIS COUNT AND MUST NOT BE READ AS THOUGH IT WERE, which is the reason these
+       exist. frontier_rank_changed has NINE callers and two of them change the membership; the other seven
+       are the clock write, three fitness observations and three host-owed transitions. On a page that emits
+       nothing, fetches nothing and never moves the clock those seven never fire, so `rank_changes` stood
+       exactly SIX above `members` at all twelve samples of the series above (34315 against 34309 at the last)
+       — correct to four figures on the run a reader is most likely to take it from, and a mixture of nine
+       populations on every run that fetches or emits anything. */
+    int64_t arrivals;
+    int64_t departures;
     int64_t svc_max;   /* the largest service notch in the frontier — who is actually consuming the thread */
     /* …AND THE OTHER END OF IT, WHICH IS THE ONLY NUMBER IN THIS STRUCT THAT CAN ANSWER "IS THE AGING TERM
        MEASURING THIS FLOW OR THE WHOLE FRONTIER". `svc_max` alone reads identically for a single monopolizer on
@@ -1911,6 +1967,10 @@ long flow_scan_weights(FlowScan s);
  * registry. Counted at the raise, it is commensurable with the scan rows by construction.
  * IT DECIDES NOTHING, for the scan counters' reason exactly. */
 long flow_rank_changes(void);
+/* THE FRONTIER'S ARRIVAL AND DEPARTURE PROCESSES, for the life of this instance — see the census rows above
+   for the reading, the identity and why `flow_rank_changes` cannot answer this. */
+int64_t flow_arrivals(void);
+int64_t flow_departures(void);
 
 /* HOW MANY DISPATCHES THE TIE-BREAK DECIDED AGAINST A STARVED MEMBER — §scheduler's razor's STARVES, made
    countable at the line that chooses. LIFETIME counter; the only kind a reader may difference, and it is read

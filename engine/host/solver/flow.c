@@ -35,6 +35,65 @@ static unsigned g_gen = 0;   /* bumped whenever the frontier's membership change
    exactly ONE caller and engine.c increments its own `g_switches` on the line beside it, so this must equal
    the result document's `_switches` for the same instance, and a divergence names a second dispatch path. */
 static int64_t g_picks_total = 0;
+/* EVERY MEMBER THIS INSTANCE HAS EVER ADMITTED TO THE FRONTIER, AND EVERY ONE IT HAS EVER LET GO — the two
+   LIFETIME counters that say whether the ORDER is deciding anything at all, which no row in this file could
+   ask and which the one row that looks as though it could is not.
+   WHY `g_rank_changes` IS NOT THIS COUNT, AND WHY THAT IS WORSE THAN IT NOT EXISTING. frontier_rank_changed
+   is called from NINE sites and exactly TWO of them change the membership: the clock write
+   (frontier_vt_serve), three fitness observations (flow_observe_replay/_survival/_rung), three host-owed
+   transitions (flow_set_host_owed, flow_clear_host_owed, flow_clear_host_owed_all), the arrival (flow_new)
+   and the departure (flow_remove). So `rankChanges / picksLifetime` is a numerator raised at nine events over
+   a denominator raised at one — CLAUDE.md's count-offered-as-a-share-of-another, with the population it
+   mostly counts being the order working rather than a defect.
+   AND IT READS AS IF IT WERE THE ARRIVAL COUNT ON EXACTLY THE DOCUMENT ANYBODY MEASURES. On a page that
+   emits nothing, fetches nothing and never moves the clock, seven of the nine sites never fire: measured at
+   artifact c23bfe6a on testing/fixtures/wjp_absent.html, `rankChanges` 34315 against `members` 34309 at the
+   last census of a 180 s series — a difference of SIX, constant at every one of its twelve samples. So the wrong reading is CORRECT
+   to four figures on the run a reader is most likely to take it from, and is a mixture of nine populations on
+   every run that fetches or emits anything. A quantity that agrees with the one you want on the sample you
+   have is the shape that never gets checked.
+   WHAT THE PAIR IS FOR, AND IT IS THE ONE QUESTION THAT DECIDES WHETHER A WEIGHT CHANGE CAN HELP AT ALL.
+   `arrivals / picksLifetime` is HOW MANY MEMBERS ARE MINTED PER DISPATCH. Below 1 the frontier is draining
+   and the ORDER decides who is served first, which is what every term of flow_weight is written to argue
+   about. Above 1 it is not draining at any ordering whatever: the served prefix is a vanishing fraction of a
+   set that grows, and a comparator that separates two members of the untouched remainder has reordered
+   something nothing is consuming. THAT IS NOT A BOUND AND IT LICENSES NONE — §NO BOUNDS makes a growing
+   frontier the design working, and this pair does not gate, cap or shed anything. It says which of two
+   readings a `neverPickedAtTop` plateau has, and those readings take opposite diffs.
+   MEASURED, AND THE RATIO IS NOT MARGINAL — a 180 s series on ONE fresh instance, artifact c23bfe6a on
+   testing/fixtures/wjp_absent.html, twelve samples at 15 s. `families` was 1 and `valMin`/`valMax`/`valTop`/`vt`
+   were 0 at every sample, so the reward term was not a common offset on this document, it was the constant
+   zero. `wTop - wMin` was 0.030 or 0.036 at every sample: the whole order, at 34309 members,
+   resolved into four hundredths of a point, because `svcMin..svcMax` spanned 179..184 and `visMin..visMax`
+   spanned 5..7 — six notches and three optimism readings between them. `neverPickedAtTop` fell 94.6% ->
+   81.8% of the frontier across the series with `neverPickedGap` 0.0 throughout, which flow.h's own worked
+   example prices at six hundred wide; the last sample was 28072.
+   AND THE HOLDING RATIO IS WHY THAT PLATEAU IS NOT A VERDICT ON THE ORDER. `members / picksLifetime` fell
+   21.0 -> 5.67 over the same series (12786/609 to 34309/6056), monotonically at every sample, so the plateau
+   was draining the whole time and the frontier was still holding between five and six members for every
+   dispatch the instance had ever made. On an instance
+   left running to 13102 dispatches the same document reported `neverPickedAtTop` 43 — 0.1% — with a weight
+   spread of 171. The order does separate; what the early samples measure is a frontier still filling.
+   THAT IS A GAUGE OVER A COUNTER AND IT IS THE REASON THESE TWO ROWS EXIST. `members` is a gauge, so
+   `members / picksLifetime` is a HOLDING ratio over the whole session and cannot be differenced into a rate;
+   read at one instant it says nothing about whether the frontier is filling or draining, which is the single
+   fact that decides how the plateau beside it should be read. Read at the SAME `picksLifetime` it is stable —
+   14.5, 15.5 and 14.68 across three separate runs at 1299, 1222 and 1294 dispatches — so the variance is
+   entirely in WHEN the sample was taken, which is exactly what a counter/counter rate removes and a
+   gauge/counter one cannot.
+   A CONSERVATION IDENTITY DEFINES THEM AND IS ASSERTED WHERE BOTH TERMS ARE IN ONE HAND (flow_wfq_census):
+   `arrivals - departures == members`. That is what makes these counters rather than numbers, in the sense
+   `g_picks_total` above already establishes for itself, and it is checkable from OUTSIDE the process on the
+   published document. It is exact and not approximate because each has exactly one writer: flow_new appends
+   the only member this registry ever gains and flow_remove's swap-remove is the only decrement of `g_flows_n`
+   that is not the registry coming up.
+   NOT RESET BY flow_registry_init, for `g_picks_total`'s reason one line up AND without costing the identity:
+   flow_registry_free drains the frontier through flow_release (`while (g_flows_n)`), which is flow_remove's
+   one caller, so every member of a retired registry has DEPARTED and the identity re-reads 0 == 0 at the next
+   init. That is asserted there rather than assumed, and it catches a second registry raised over a live
+   frontier — which is a leak of every flow standing in it and today has nothing else to fire on. */
+static int64_t g_arrivals = 0;
+static int64_t g_departures = 0;
 static Flow *g_running = NULL;   /* the flow currently holding the worker (the scheduler sets it) */
 
 /* THE FORK TREE, which is what the aging term is actually about — and the one thing in this file that is not a
@@ -62,7 +121,41 @@ static Flow *g_running = NULL;   /* the flow currently holding the worker (the s
  * many flows depart below it. */
 typedef struct FlowAcct {
     Flow *owner;              /* the flow this node accounts for; NULL once it has left the frontier */
-    struct FlowAcct *up;      /* the node of the flow this one was FORKED from; NULL for a from-baseline flow */
+    /* THE NODE OF THE FLOW THIS ONE WAS FORKED FROM; NULL for a from-baseline flow.
+       NAMED RESIDUAL — THE ORDER HAS EXACTLY TWO ACCOUNTING SCOPES AND THIS FIELD IS THE ONLY RECORD OF THE
+       LEVELS BETWEEN THEM. Not covered: every quantity flow_weight reads is held either at the FAMILY ROOT
+       (`fam_us`, `base`, `earned`, `emit_gen`, all reached through `Flow.family`, which points past this
+       chain straight at the root) or at the MEMBER (`Flow.cpu`, `Flow.visits`, the fitness rungs). This field
+       records every level in between and is read by acct_unref and acct_compress_dead — both lifetime
+       management — and by three preconditions. Nothing charges through it and nothing ranks by it. So a fork
+       that goes on to become a SUBTREE of N members is not an accounting unit at any scope: its N arms
+       present N separate claims against the single arm on the other side of the same branch, and neither of
+       the two scopes that exist can see that, because within a family the branch is invisible and between
+       families there is only one family on a page whose flows all descend from boot. That is CLAUDE.md's
+       "CPU-aging starves a RUNNER and structurally cannot starve a BRANCHER" stated as a property of this
+       struct rather than of the term: the aging is charged correctly at both scopes it HAS.
+       AND IT IS NOT MERELY UNCHARGED, IT IS UNADDRESSABLE, which is why this is a residual and not a pointer
+       somebody can start reading. acct_compress_dead splices dead intermediate nodes OUT of the chain, so the
+       node standing for one side of a branch is gone the moment the flow that forked it departs — and that
+       compression is correct for what it is for, since a family whose arms depart one at a time would
+       otherwise retain one node per departed arm for as long as any descendant lives. Retention wants the
+       dead spine gone and a subtree charge wants exactly the dead spine; the two are in direct opposition and
+       neither is wrong.
+       WHAT THE NEXT DIFF BUILDS: an OBSERVATION and not a charge — a per-subtree service and membership
+       figure the census can publish, so "the two sides of this branch received X and Y" is a number instead of
+       an argument. That needs a branch node that outlives its owner's departure and a census scope for it;
+       WfqCensus's service rows are `svc_max`/`svc_min` (the member) and `svc_fam_max`/`svc_fam_min` (the
+       family root), with nothing between them, so the row is new rather than a re-read of one that is there.
+       A WEIGHT TERM IS NOT WHAT THIS RESIDUAL ASKS FOR and must not be built off it: a term that separated the
+       two sides of a branch would fail flow_fork_inherit's rank-neutrality equality by construction, which is
+       the one thing about this that is already asserted.
+       HOW ITS ABSENCE SHOWS: it is showing now. A `never_picked_at_top` plateau that no row can attribute —
+       the two sides of every branch in it are worth exactly the same by construction, and nothing anywhere
+       says how much thread time each side went on to receive, so the plateau is equally consistent with an
+       order that has stopped separating members and with an order separating members correctly while one
+       branch mints them faster than the thread can reach them. The `arrivals`/`departures` pair says which of
+       those two the FRONTIER is in; it does not say which BRANCH did it, and that is this field's question. */
+    struct FlowAcct *up;
     int refcount;             /* the owner's reference + every live child's `up` */
     /* THE FAMILY'S SERVICE SINCE ITS LAST EMISSION — the quantity flow_weight's aging term is now made of, and
        MEANINGFUL ONLY ON A ROOT (`up == NULL`). Every flow carries a direct `family` pointer at that root, so
@@ -603,6 +696,19 @@ static void frontier_rank_changed(void) {
 Flow *flow_at(int i) { return (i >= 0 && i < g_flows_n) ? g_flows[i] : NULL; }
 
 void flow_registry_init(const char *doc_name) {
+    /* THE FRONTIER THIS REPLACES HAS TO HAVE GONE, AND THE ARRIVAL PAIR IS WHAT SAYS SO. The assignment below
+       drops `g_flows` on the floor, so a registry raised over a LIVE frontier leaks every flow standing in it
+       — its COW delta, its DOM head, its suspended frame and its queued jobs — and nothing else in this file
+       fires on it, because every other invariant here is about a member and there would be no member left to
+       ask. `g_arrivals - g_departures` is the count of members this instance still holds, and it is checked
+       against `g_flows_n` rather than against zero so the identity being asserted is the SAME one the census
+       publishes rather than a second claim that happens to agree with it here. */
+    DCHECK(g_arrivals - g_departures == (int64_t)g_flows_n,
+           "the flow registry is coming up over a frontier that never departed — every member still standing "
+           "is about to become unreachable with its delta, its DOM head and its suspended frame, and the "
+           "arrival/departure pair is the only thing that can see it because there will be no member left to "
+           "ask. flow_registry_free drains through flow_release, so this is a host that raised a second "
+           "registry without taking the first one down");
     g_flows = NULL; g_flows_n = 0; g_flows_cap = 0; g_gen = 0; g_running = NULL;
     /* THE QUEUE'S CLOCK COMES UP WITH THE QUEUE, at SFQ's v(0) = 0. Left standing from a previous registry it
        would place this frontier's first from-baseline flows at the coordinate a DIFFERENT document's leader
@@ -620,6 +726,12 @@ unsigned flow_frontier_gen(void) { return g_gen; }
 /* HOW MANY TIMES THE ORDER CHANGED, for the life of this instance — the denominator the preempt hook's
    rescan count has and `scanNextRuns` is not. See solver/flow.h. */
 long flow_rank_changes(void) { return g_rank_changes; }
+
+/* HOW MANY MEMBERS THIS INSTANCE HAS ADMITTED, AND HOW MANY IT HAS LET GO — the pair that says whether the
+   frontier is being DRAINED at all, which is the precondition for the order deciding anything. Read as
+   `arrivals / picksLifetime`: members minted per dispatch. See the banner at `g_arrivals`. */
+int64_t flow_arrivals(void) { return g_arrivals; }
+int64_t flow_departures(void) { return g_departures; }
 
 /* HOW MANY TIMES THE SCHEDULER'S OWN PICK RETURNED AN ALREADY-DISPATCHED MEMBER WHILE A NEVER-DISPATCHED ONE
    STOOD AT EXACTLY THE SAME WEIGHT — §scheduler's razor's STARVES, counted at the ONE line that decides which
@@ -1853,6 +1965,11 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
     f->imm_at = -1; f->imm_next = 0;
     f->world = w;
     g_flows[g_flows_n++] = f;
+    /* …AND THE ARRIVAL COUNTED AS AN ARRIVAL. This line is the only place the frontier ever GAINS a member,
+       which is what lets `g_arrivals` be a definition rather than an estimate; the rank change below is
+       raised here too and by eight other sites, so it cannot answer this and must not be read as though it
+       could. See the banner at `g_arrivals`. */
+    g_arrivals++;
     frontier_rank_changed();   /* frontier changed: the newcomer may outrank the flow holding the thread */
     return f;
 }
@@ -4223,6 +4340,26 @@ void flow_wfq_census(WfqCensus *out) {
            "flow_weight has a term this census cannot see, so every reading taken from it (which term is "
            "ordering the frontier, whether the aging is measuring one flow or all of them) is a statement "
            "about an instrument rather than about the run");
+    /* AND WHETHER THE ORDER IS DECIDING ANYTHING AT ALL, WHICH EVERY ROW ABOVE PRESUPPOSES AND NONE OF THEM
+       ASKS. Each of them describes the shape of an order over the members standing NOW; none says how that
+       set is CHANGING, and a comparator is only a scheduler over a set something consumes. These two are
+       LIFETIME counters (the kind is in flow.h's rows, not in these names) and they are the frontier's
+       arrival and departure processes, so `arrivals / picksLifetime` is what the whole census is conditional
+       on. See the banner at `g_arrivals` for why `rankChanges` is not this and for what it reads on the one
+       document a reader is most likely to take it from. */
+    out->arrivals   = g_arrivals;
+    out->departures = g_departures;
+    /* THE IDENTITY THAT DEFINES THEM, ASSERTED AT THE ONE MOMENT ALL THREE TERMS ARE IN ONE HAND — which is
+       what makes them counters rather than numbers, and what makes the pair checkable from OUTSIDE this
+       process on the published document. Each has exactly one writer (flow_new's append, flow_remove's
+       swap-remove), so this is exact rather than approximate, and a second writer of either — a frontier trim,
+       an eviction, a host that reached into `g_flows` — fires HERE instead of leaving a ratio that is quietly
+       about a different population than the members it is divided against. */
+    DCHECK(g_arrivals - g_departures == (int64_t)out->members,
+           "the frontier's arrival and departure counts do not add up to the members standing in it — one of "
+           "the two has acquired a second writer, or a member joined or left `g_flows` without going through "
+           "flow_new or flow_remove, and `arrivals / picksLifetime` is about to be published as the rate at "
+           "which THIS frontier grows when it is a rate about some other population");
 }
 
 /* The four questions, each a seed, a filter or a direction over the one scan above. */
@@ -4343,6 +4480,10 @@ void flow_remove(JSContext *ctx, Flow *f) {
             acct_depart(f);
             free(f);
             g_flows[i] = g_flows[--g_flows_n];   /* swap-remove; order is by weight, not position */
+            /* …AND THE DEPARTURE COUNTED AS ONE, on the line that performs it. This decrement and the
+               registry coming up are the only two ways `g_flows_n` falls, and the second is asserted to
+               happen only on an already-drained frontier, so the pair's conservation identity is exact. */
+            g_departures++;
             frontier_rank_changed();   /* frontier changed */
             return;
         }

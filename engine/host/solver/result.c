@@ -819,6 +819,30 @@ char *result_wfq_json(void) {
                         parked continuation is a per-member fact for every member EXCEPT the one holding the
                         thread, whose park queue lives in the runtime for the duration of its turn. */
                      "\"starvedPicksIdle\":%ld,"
+                     /* AND WHETHER THE ORDER PUBLISHED ABOVE IS DECIDING ANYTHING AT ALL — the frontier's
+                        arrival and departure processes, which every row above presupposes and none of them
+                        asks. Read `arrivals / picksLifetime`: MEMBERS MINTED PER DISPATCH. Below 1 the
+                        frontier drains and a `neverPickedAtTop` plateau is the ORDER failing to separate
+                        members that are being reached, so the repair is in flow_weight's terms; above 1 it
+                        does not drain at any ordering, the served prefix is a vanishing fraction of a set
+                        that grows, and a term separating two members of the untouched remainder has
+                        reordered something nothing consumes. Those take opposite diffs and no other row here
+                        tells them apart.
+                        DO NOT READ `rankChanges` FOR THIS. frontier_rank_changed has NINE callers and two of
+                        them change the membership — the other seven are the clock write, three fitness
+                        observations and three host-owed transitions — so that row is a mixture of nine
+                        populations over a denominator raised at one event. It happens to agree: measured at
+                        artifact c23bfe6a on a fixture that emits nothing and fetches nothing, `rankChanges`
+                        stood exactly SIX above `members` at all twelve samples of a 180 s series, which is
+                        the shape that never gets checked.
+                        BOTH ARE LIFETIME COUNTERS and are the only rows on this line that are, so both may be
+                        DIFFERENCED across two samples — which is what turns the ratio into a RATE over a
+                        window instead of an average over a session. `members` at the head of this record is a
+                        GAUGE and is neither. Their identity is `arrivals - departures == members`, asserted
+                        in flow_wfq_census where all three are in one hand and checkable on this document
+                        from outside the process; a violation means one of them has a second writer and the
+                        ratio is about some other population than the members it is divided against. */
+                     "\"arrivals\":%lld,\"departures\":%lld,"
                      "\"workDone\":%ld,\"rankChanges\":%ld}",
                      w.members, w.val_min, w.val_max, w.val_top, w.vt,
                      w.val_zero, w.val_arrived, w.val_unplaced, w.self_emit, w.unrun,
@@ -838,6 +862,7 @@ char *result_wfq_json(void) {
                      flow_scan_runs(FLOW_SCAN_OTHER), flow_scan_weights(FLOW_SCAN_OTHER),
                      flow_scan_runs(FLOW_SCAN_CENSUS), flow_scan_weights(FLOW_SCAN_CENSUS),
                      flow_starved_picks(), flow_starved_picks_idle(),
+                     (long long)w.arrivals, (long long)w.departures,
                      engine_work_done(), flow_rank_changes());
 }
 
