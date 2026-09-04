@@ -14,13 +14,40 @@
  * the component to write, and handing back a symbol instead would let a flow run past a missing capability and
  * report a surface it never reached.
  *
- * THE DISTINCTION IS WEB IDL'S TO MAKE, NOT A LIST'S. A global name belongs to the platform exactly when the
- * IDL exposes it on Window, and browser/platform_names.h is that set, generated from @webref/idl by
+ * THE DISTINCTION IS THE STANDARD'S TO MAKE, NOT A LIST'S. A global name belongs to the platform exactly when
+ * Web IDL exposes it on Window, and browser/platform_names.h is that set, generated from @webref/idl by
  * engine/idlgen.mjs. It replaced a 22-name list typed into main.c — and the difference is not cosmetic: every
  * interface off that list (Node, Element, Event, DOMException, HTMLElement, and ~1300 more) was mistaken for
  * app state, so a branch on one FORKED instead of throwing. A page touching eight of them multiplied the
  * frontier by 256; a WPT document exhausted 2.8 GB in forty seconds doing it. A hand-maintained allowlist
  * cannot be right about a surface of this size, and the moment it is wrong the error is silent.
+ *
+ * AND THE LESSON RECORDED THERE WAS HALF OF IT, WHICH IS WHY THE SAME DEFECT WAS STILL HERE AFTERWARDS UNDER
+ * A DIFFERENT VOCABULARY. That entry reads as being about where the SET came from — typed versus generated —
+ * and the generation was never the whole of the fix, because the ANSWER SHAPE of this arm is a SUPPRESSION
+ * over a DEFAULT: a name the suppression does not cover is app state, so whatever the suppression is complete
+ * FOR decides nothing about the population that escapes it. platform_names.h is complete for Web IDL and was
+ * EMPTY for ECMAScript, and TWO standards put names on the global object. So every §19 name a build does not
+ * install — which names those are is a fact about the build and never about this file — fell through to "app
+ * state", and a feature-detect on one minted an unknown and FORKED where a real browser answers `undefined`
+ * and where this engine owes a component exactly as it owes an unbuilt interface. The second vocabulary is
+ * browser/language_names.h, derived by engine/esglobalgen.mjs from the §19 subclauses of the ECMAScript
+ * section index this tree already commits for citegen.mjs — the same rule as the first, applied to the other
+ * standard, and derived from that standard's own artifact rather than typed here.
+ *
+ * WHAT THAT DOES NOT FIX, STATED PLAINLY SO THE NEXT READER DOES NOT MISTAKE IT FOR THE WHOLE ANSWER: the
+ * default is still a default. A name is answered as server-injected app state because NO vocabulary claimed
+ * it, which is a negative, while the record arm below rests on a POSITIVE fact (the engine granted the
+ * container's extent to the document's own bytes). The population that escapes both vocabularies is every
+ * other host's globals and every library's own store — `process`, `QObject`, `setImmediate`,
+ * `__core-js_shared__`, `_sentryDebugIds` — and at the instant of the read this file holds NOTHING that tells
+ * one of those from a `window.__FLAGS` the server would have written for a logged-in visitor: both are "not a
+ * standard's name, never written by anything, missed on the global". Erring toward the fork is the correct
+ * side to be wrong on (§solver: a concrete `undefined` buries the admin code, and the WFQ starves an arm that
+ * emits nothing), so this arm stays as it is until something can DECIDE it rather than default it. What would
+ * decide it is a fact that arrives AFTER the read — the program's own later definition of the same global
+ * name, `x || (x = {})` being the canonical shape — which is a classification this engine's primitives can
+ * express and does not yet perform.
  *
  * AND IT IS ASKED OF A PRESENT MEMBER AS WELL AS OF A MISSING ONE, which is the half that decides the case
  * §solver names by name. A server that ships `window.__FLAGS={admin:false}` has WRITTEN the field, so the read
@@ -71,21 +98,52 @@
 #include "check.h"
 #include "solver/absent.h"
 #include "solver/concolic.h"
+#include "browser/language_names.h"
 #include "browser/platform_names.h"
 
 #define PLATFORM_NAMES_N ((int)(sizeof(PLATFORM_NAMES) / sizeof(PLATFORM_NAMES[0])))
+#define LANGUAGE_NAMES_N ((int)(sizeof(LANGUAGE_NAMES) / sizeof(LANGUAGE_NAMES[0])))
 
-/* The generated table is SORTED (idlgen sorts it), so membership is a binary search — a linear scan of 1300
-   names would run on every unresolved global read, of which a forced-exec run does a great many. The sort is
-   the generator's invariant and is asserted here, at the one place that depends on it. */
-int absent_is_platform_name(const char *name)
+/* MEMBERSHIP IN ONE OF THE GENERATED VOCABULARIES — ONE LOOKUP FOR BOTH, because two vocabularies asking one
+   question through two copies of a binary search is two right answers to one question, which is the shape that
+   drifts. Each generated table is SORTED by its generator, so membership is a binary search — a linear scan
+   would run on every unresolved global read, of which a forced-exec run does a great many.
+   AND THE SORT IS NOW ACTUALLY ASSERTED, WHICH THE COMMENT THAT STOOD HERE CLAIMED AND THE CODE DID NOT DO.
+   That claim was the dangerous kind: a check announced where the grep answers empty closes the question, so
+   nobody looks. It is load-bearing rather than tidy, and the direction it fails in is the silent one — a
+   binary search over a disordered table does not report an error, it MISSES, and a miss here answers a name
+   the standard owns as server-injected app state, which is exactly the frontier multiplication this file's
+   header records for the 22-name list, arriving through a generator instead of through a typed list.
+   ONCE PER TABLE AND DEV-ONLY: the scan is O(n) and the answer cannot change within a process, so `checked`
+   is the whole cost after the first call. `which` is the ADDRESS the abort would otherwise lack — this helper
+   is reached from two predicates and stamps its own line for both, so the vocabulary travels with the
+   operation rather than being derived here (CLAUDE.md §AN-ASSERT-THAT-NAMES-A-REMEDY). */
+static int names_has(const char *const *tbl, int n, const char *name, const char *which, int *checked)
 {
-    int lo = 0, hi = PLATFORM_NAMES_N - 1;
+    int lo = 0, hi = n - 1;
 
-    DCHECK(name != NULL, "absent_is_platform_name: no name");
+    DCHECK(name != NULL, "a generated vocabulary was asked about no name at all");
+#if APICLIENT_DEV
+    if (!*checked) {
+        int i;
+
+        *checked = 1;
+        for (i = 1; i < n; i++)
+            DCHECKF(strcmp(tbl[i - 1], tbl[i]) < 0,
+                    "the %s vocabulary is not in strcmp order at entry %d (\"%s\" then \"%s\") — this "
+                    "lookup is a binary search over a table its generator sorts, and a disordered table does "
+                    "not report an error, it MISSES: a name the standard owns is then answered as "
+                    "server-injected app state and a branch on it FORKS instead of naming the component this "
+                    "engine owes",
+                    which, i, tbl[i - 1], tbl[i]);
+    }
+#else
+    (void)which;
+    (void)checked;
+#endif
     while (lo <= hi) {
         int mid = lo + (hi - lo) / 2;
-        int c = strcmp(name, PLATFORM_NAMES[mid]);
+        int c = strcmp(name, tbl[mid]);
         if (c == 0)
             return 1;
         if (c < 0)
@@ -94,6 +152,33 @@ int absent_is_platform_name(const char *name)
             lo = mid + 1;
     }
     return 0;
+}
+
+/* One flag per table; the host is one agent per instance and nothing here is entered from a second thread. */
+static int g_platform_sorted, g_language_sorted;
+
+int absent_is_platform_name(const char *name)
+{
+    return names_has(PLATFORM_NAMES, PLATFORM_NAMES_N, name, "Web IDL [Exposed=Window]", &g_platform_sorted);
+}
+
+/* NAMED RESIDUAL — NOT COVERED: `Intl`. ECMA-402 is a THIRD standard that puts a name on the global object,
+   and it puts exactly one there (§8 The Intl Object); this engine does not build it, `Intl` is in neither
+   generated table, and quickjs-ng declares no intrinsic for it — so a read of it is answered as
+   server-injected app state today, which is the same defect this pair of vocabularies exists to close, one
+   standard further out.
+   WHAT THE NEXT DIFF BUILDS: an `ecma402` entry in engine/specindex committed the way `ecmascript.json` is,
+   and §8's subclauses added to esglobalgen.mjs's derivation so `Intl` arrives in LANGUAGE_NAMES by the same
+   rule as every other name in it rather than by being typed into one — engine/specindex holds no ECMA-402
+   index at all at the revision this was written, so the corpus is the work and the derivation is one clause
+   prefix.
+   HOW ITS ABSENCE SHOWS: `window.Intl` or `Intl.NumberFormat` in any bundle carrying a locale-formatting
+   polyfill mints an unknown with source identity `{Intl}` and its gate forks, where a real browser answers a
+   real namespace and where this engine's honest answer is the ReferenceError naming the component to
+   write. It is visible in a run's `_forkAt` as a row named for that source. */
+int absent_is_language_name(const char *name)
+{
+    return names_has(LANGUAGE_NAMES, LANGUAGE_NAMES_N, name, "ECMAScript §19 global-object", &g_language_sorted);
 }
 
 /* THE PUBLISHED RECORDS AND THE PATHS THEY WERE PUBLISHED AT. Keyed by the record's ADDRESS — see the header
@@ -324,11 +409,13 @@ JSValue absent_read_hook(JSContext *ctx, JSValueConst obj, JSAtom name)
 
     JS_FreeValue(ctx, g);
     if (is_global) {
-        /* A name the platform owns is a component this engine owes; leave the read alone so its throw names
-           it. Asked ONLY of the global, because the platform's names live there: `gon.Node` is a field of an
-           app record that happens to be spelled like an interface, and suppressing it would answer a real
-           unknown with `undefined`. */
-        if (absent_is_platform_name(s))
+        /* A name a STANDARD owns on the global object is a component this engine owes; leave the read alone
+           so its throw names it. Asked ONLY of the global, because those names live there: `gon.Node` is a
+           field of an app record that happens to be spelled like an interface, and suppressing it would
+           answer a real unknown with `undefined`.
+           TWO VOCABULARIES, BECAUSE TWO STANDARDS OWN NAMES HERE AND THIS ARM USED TO ASK ABOUT ONE. See this
+           file's header for what asking about only Web IDL left falling through. */
+        if (absent_is_platform_name(s) || absent_is_language_name(s))
             goto done;
     } else {
         base = ns_path_of(obj);

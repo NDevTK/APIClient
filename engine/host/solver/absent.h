@@ -31,4 +31,11 @@ void absent_free(void);
    [Exposed=Window]), not from anything a component or a person declares — see browser/platform_names.h. */
 int absent_is_platform_name(const char *name);
 
+/* Is this global name one the LANGUAGE owns? The same question for the OTHER standard that puts names on the
+   global object, answered the same way — from a table generated out of ECMAScript §19 The Global Object's own
+   subclauses by engine/esglobalgen.mjs, never from a name a person declared. TWO PREDICATES OVER TWO
+   VOCABULARIES AND NOT ONE OVER A MERGED TABLE: which standard owns a name is a fact a `@WHY` has to be able
+   to state, and a merged table is one bit answering two questions the day the two disagree. */
+int absent_is_language_name(const char *name);
+
 #endif
