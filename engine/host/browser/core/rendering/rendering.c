@@ -1,5 +1,7 @@
 /* "UPDATE THE RENDERING" — HTML §8.1.7.3. See rendering.h for what this is, why it is not §14.3, and why it
    holds no loop of its own. */
+#include <math.h>          /* HUGE_VAL — RESIZE OBSERVER §3.4.5 step 1's ∞, which step 16.2.6.1's assert reads */
+
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
@@ -18,6 +20,7 @@
 #include "core/frame/visual_viewport.h"
 #include "core/html/autofocus.h"
 #include "core/html/focus.h"
+#include "core/css/css_computed_value.h"
 #include "core/css/media_query_list.h"
 #include "core/css/top_layer.h"
 #include "core/dom/page_visibility.h"
@@ -26,6 +29,7 @@
 #include "core/rendering/animation_frame.h"
 #include "core/rendering/page_reveal.h"
 #include "core/rendering/rendering.h"
+#include "core/resize_observer/resize_observer.h"
 #include "core/timing/event_loop.h"
 #include "core/timing/hr_time.h"
 #include "core/timing/timer.h"
@@ -162,6 +166,12 @@ static JSValue rendering_collect_docs(JSContext *ctx)
                  "with the relative high resolution time given frameTimestamp and doc's relevant global "       \
                  "object — HTML §8.12 Animation frames), one callback per "                                                      \
                  "rest")                                                                                       \
+    X(UR_BROADCAST, "HTML §8.1.7.3 update the rendering step 16 (for each doc: step 16.2's `While true` "     \
+                 "loop — recalculate styles and update layout, GATHER ACTIVE RESIZE OBSERVATIONS at "          \
+                 "resizeObserverDepth (RESIZE OBSERVER §3.4.1) and, while doc has active resize observations, " \
+                 "BROADCAST them (§3.4.5), which INVOKES the page's ResizeObserver callbacks and returns the "  \
+                 "shallowest target depth the next gather runs at; then step 16.3 DELIVERS THE RESIZE LOOP "    \
+                 "ERROR (§3.4.6) for a document with skipped observations), one CALLBACK per rest")            \
     X(UR_FOCUS,  "HTML §8.1.7.3 update the rendering step 17, the FOCUS FIXUP RULE (for each doc: if doc's "    \
                  "focused area is no longer a focusable area, run HTML §6.6.4's focusing steps for doc's "      \
                  "viewport — which fires `blur` and `focusout` down the old focus chain and `focus` and "       \
@@ -197,6 +207,18 @@ typedef struct JSUpdateRendering {
        already in the list, so an index below the extent names one pair for the whole walk. */
     uint32_t  nsev, sv;
     uint32_t  nobs, ob;     /* §3.2.10 step 1's observer list for the current doc, and step 2's cursor */
+    /* STEP 16's PER-DOCUMENT STATE. §3.4.5 step 2's observer snapshot for the current TURN of step 16.2's
+       loop and its cursor; the triple step 2.4's invoke is built from, held across that invoke (owned); step
+       16.1's `resizeObserverDepth`, which is step 16.2.5's argument and step 16.2.6.1's assignment; and the
+       §3.4.6 delivery step 16.3 performs, whose record is THIS machine's for report_exception_work's reason —
+       reporting the event runs the page's `error` listeners, so it parks, and what it parks with belongs to
+       whoever is doing the reporting. */
+    uint32_t  nro, ro;
+    JSValue   robc;         /* §3.4.5 step 2.4's [callback, observer, entries] (owned) */
+    int32_t   rodepth;
+    uint8_t   robegun;      /* §3.4.5 step 1 has run for THIS turn of step 16.2's loop */
+    uint8_t   ro16;         /* where docs[i] stands inside step 16 — UR16_* below */
+    ResizeObserverLoopError roerr;
     uint8_t   obsnapped;    /* that list has been counted for docs[i] */
     uint8_t   fphase;       /* the fire request steps 6, 8 and 10 park on */
     /* WHICH OF STEP 8's TWO FIRES docs[i] is on — CSSOM VIEW §13.1 is two ordered conditions over two
@@ -228,6 +250,11 @@ static void js_update_rendering_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->ev);
     v->val(ctx, &s->target);
     v->val(ctx, &s->fn);
+    v->val(ctx, &s->robc);
+    /* Step 16.3's record holds an ErrorEvent and a fire request across the page's `error` listeners, and its
+       references are discharged HERE rather than through a release in fini — exactly as the report's are.
+       A second free in fini would be a double free of the same two things. */
+    resize_observer_loop_error_visit(ctx, &s->roerr, v);
     v->val(ctx, &s->exc);
     v->val(ctx, &s->frame_ts);
     v->val(ctx, &s->layout_start);
@@ -311,16 +338,51 @@ static void steps_11_to_13(JSContext *docctx)
                 "context, so step 13 must be written");
 }
 
-/* Step 16, likewise. */
-static void step_16(JSContext *docctx)
-{
-    realm_awaits(docctx, "ResizeObserver",
-                "update the rendering step 16 is a `while (true)` around recalculate-styles-and-update-layout "
-                "that GATHERS ACTIVE RESIZE OBSERVATIONS at an increasing depth and BROADCASTS them (RESIZE "
-                "OBSERVER §3.4.1/§3.4.5), re-entering style and layout after every author callback, then "
-                "delivers the resize loop error (§3.4.6) for any skipped observation — this build now has "
-                "ResizeObserver, so step 16 must be written, and its loop cannot be one stage");
-}
+/* STEP 16 IS WRITTEN — it is UR_BROADCAST, below, and its assertion is GONE rather than relaxed. It named
+   `ResizeObserver` and said the step "must be written, and its loop cannot be one stage"; the producer landed
+   (core/resize_observer/resize_observer.c is RESIZE OBSERVER §2 and §3), the DCHECK fired at this exact place
+   in the order, and the step it asked for was built. Both halves of what it demanded are honoured: the loop is
+   not one stage, and it rests at every one of the page's callbacks.
+
+   THE TWO HALVES OF THIS DIFF CANNOT BE SPLIT, and this is the site that says why. `realm_awaits` fires when
+   the member IS PRESENT — that is the whole of its two-sidedness — so installing the interface object in
+   core/platform.c while this assertion still stood would have aborted the FIRST update-the-rendering of EVERY
+   page, whether or not it had ever heard of a ResizeObserver. Whole-unlanded and whole-landed are both
+   coherent; the state between them is the one where the product does not run.
+
+   WHAT STEP 16.1 AND STEP 16.2's SUB-STEPS ARE, in HTML §8.1.7.3 "Processing model"'s own words and its own
+   nesting — step 16 is ONE top-level step of the twenty-three, holding ONE `<ol>` at every level, so these
+   sub-numbers name one step each and nothing here has to say which list it counted:
+     16.1     "Let resizeObserverDepth be 0."
+     16.2     "While true:"
+     16.2.1   "Recalculate styles and update layout for doc."
+     16.2.2   "Let hadInitialVisibleContentVisibilityDetermination be false."
+     16.2.3   "For each element element with 'auto' used value of 'content-visibility':" — three sub-steps
+     16.2.4   "If hadInitialVisibleContentVisibilityDetermination is true, then continue."
+     16.2.5   "Gather active resize observations at depth resizeObserverDepth for doc."
+     16.2.6   "If doc has active resize observations:"
+     16.2.6.1 "Set resizeObserverDepth to the result of broadcasting active resize observations given doc."
+     16.2.6.2 "Continue."
+     16.2.7   "Otherwise, break."
+     16.3     "If doc has skipped resize observations, then deliver resize loop error given doc."
+
+   STEP 16.2.1 IS A DERIVATION AND NOT AN ELISION, which is why there is no call for it below. "Recalculate
+   styles and update layout" is a FLUSH, and a flush is only work where there is something cached to be stale:
+   this engine derives every used value AT THE READ (core/layout/used_value.h computes from the cascade and the
+   box tree on each ask, and core/css/css_computed_value.h the same one level up), so the geometry §3.4.1 reads
+   one line later has already been recalculated by the act of reading it. The observable content of the step is
+   that a callback's DOM mutation is visible to the NEXT turn's gather, and it is — the mutation went into the
+   flow's COW delta and the next read walks the mutated tree. The day a layout CACHE lands, this step becomes a
+   call and this paragraph becomes wrong, which is what makes it a claim rather than a shrug. */
+
+/* WHERE docs[i] STANDS INSIDE STEP 16. The step is three parts per document, and they are NOT three stages,
+   because §8.1.7.3 runs all three of them for docs[0] before docs[1]'s 16.1: a stage per part would deliver
+   every document's loop error after every document's loop, which is a different order from the one the
+   standard states and one a page with two frames can observe. */
+enum { UR16_ENTER = 0,   /* 16.1 has not run for this document */
+       UR16_LOOP,        /* inside 16.2's `While true` */
+       UR16_SKIPPED,     /* 16.2 broke; 16.3's condition has not been asked */
+       UR16_DELIVER };   /* 16.3's delivery is in flight */
 
 /* STEP 17 IS WRITTEN — it is UR_FOCUS, below, and its assert is GONE rather than relaxed. §6.6's focus model
    landed, the producer the probe named existed, the DCHECK fired at this exact place in the order, and the step
@@ -448,6 +510,41 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
             JS_FreeValue(ctx, s->fn);
             s->fn = JS_UNDEFINED;
             s->k++;                      /* §8.12 Animation frames removed the callback before invoking it: on to the next */
+        } else if (s->hdr.stage == UR_BROADCAST) {
+            if (s->ro16 == UR16_DELIVER) {
+                /* AN ABRUPT COMPLETION HERE IS THIS ENGINE'S, NOT THE PAGE'S, for UR_FOCUS's reason below.
+                   RESIZE OBSERVER §3.4.6 states three steps and none of them throws, and an `error` listener's
+                   own exception is REPORTED inside §2.9's dispatch, so a listener never reaches this far.
+                   What is left is an allocation failure or a capability of the fire machine that is not built,
+                   and this document's error is then undelivered — the page is not told that its observations
+                   were skipped, which is the one thing §3.4.6 exists to say. */
+                DFAIL("update the rendering step 16.3's DELIVER RESIZE LOOP ERROR completed abruptly — RESIZE "
+                      "OBSERVER §3.4.6 states no step that throws and §2.9 reports an `error` listener's own "
+                      "exception inside the dispatch, so this is the engine's own failure and doc's skipped "
+                      "observations were never reported to the page");
+                resize_observer_loop_error_release(ctx, &s->roerr);
+                resize_observer_loop_error_start(&s->roerr);
+                /* THIS DOCUMENT'S DELIVERY IS SPENT, exactly as UR_AUTO's and UR_FOCUS's are, and here the
+                   walk MUST say so rather than merely may: nothing between here and the next gather clears
+                   [[skippedTargets]], so a walk that re-entered step 16.3 would mint a second ErrorEvent,
+                   fail the same way and never advance — an abrupt completion turned into a spin. */
+                s->ro16 = UR16_ENTER;
+                s->i++;
+            } else {
+                DCHECK(s->ro16 == UR16_LOOP,
+                       "update the rendering step 16 took an abrupt completion at a position inside the step "
+                       "that runs none of the page's code — only step 16.2.6.1's invoke calls it");
+                /* RESIZE OBSERVER §3.4.5 "Broadcast active resize observations" STEP 2.4's OWN SECOND
+                   SENTENCE: "If this throws an exception, report the exception."
+                   So the throw is not this algorithm's completion — step 2.5 still runs, this observer's
+                   [[activeTargets]] is still cleared, and the walk still moves to the next observer rather
+                   than re-invoking a callback the page has already been given. */
+                s->cphase = 0;
+                JS_FreeValue(ctx, s->robc);
+                s->robc = JS_UNDEFINED;
+                resize_observer_broadcast_finish(doc_realm(ctx, s), s->ro);
+                s->ro++;
+            }
         } else if (s->hdr.stage == UR_AUTO) {
             /* AN ABRUPT COMPLETION HERE IS THIS ENGINE'S, NOT THE PAGE'S, for UR_FOCUS's reason one arm down:
                §6.6.7 states no step that throws, and a `focus` listener's own exception is REPORTED inside
@@ -496,13 +593,19 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
     if (s->hdr.stage == UR_DOCS) {
         /* EVERY OWNED FIELD IS ON THE STATE BEFORE ANYTHING THAT CAN FAIL — the failure path tears the machine
            down through fini, which frees exactly what the state holds. */
-        s->docs = s->ev = s->target = s->fn = s->exc = JS_UNDEFINED;
+        s->docs = s->ev = s->target = s->fn = s->exc = s->robc = JS_UNDEFINED;
         s->frame_ts = s->layout_start = JS_UNDEFINED;
         STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
         /* The report's own record, zeroed before anything can throw — a step state arrives with the INTEGER 0
            in every JSValue slot, and the report's teardown frees exactly what it holds. */
         report_exception_work_start(&s->rep);
         s->reporting = 0;
+        /* Step 16.3's record, for the same reason and on the same terms: its ErrorEvent and its fire buffer
+           are on the state before anything that can fail, so a teardown frees exactly what it holds. */
+        resize_observer_loop_error_start(&s->roerr);
+        s->nro = s->ro = 0;
+        s->rodepth = 0;
+        s->robegun = s->ro16 = 0;
         s->i = s->ndocs = s->nframe = s->k = s->nmedia = s->m = s->nobs = s->ob = 0;
         s->nsev = s->sv = 0;
         s->fphase = s->cphase = s->snapped = s->msnapped = s->obsnapped = s->ssnapped = 0;
@@ -754,10 +857,9 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
                        "update the rendering step 15 recorded a style-and-layout start time BEFORE the "
                        "frameTimestamp its task was queued with — both come from the ONE virtual clock, and "
                        "step 20 records the interval between them");
-                for (s->i = 0; s->i < s->ndocs; s->i++)
-                    step_16(doc_realm(ctx, s));
                 s->i = 0;
-                STEP_GOTO(s->hdr.stage, UR_FOCUS, &s->cphase, &s->fphase, NULL);
+                s->ro16 = UR16_ENTER;
+                STEP_GOTO(s->hdr.stage, UR_BROADCAST, &s->cphase, &s->fphase, NULL);
                 break;
             }
             docctx = doc_realm(ctx, s);
@@ -808,6 +910,153 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
             JS_FreeValue(docctx, s->fn);
             s->fn = JS_UNDEFINED;
             s->k++;
+        }
+    }
+
+    if (s->hdr.stage == UR_BROADCAST) {
+        /* STEP 16, whose sub-steps are quoted in full above the UR16_* enumeration.
+           ONE CALLBACK PER REST, and the rest point is step 16.2.6.1's invoke rather than the document or the
+           turn: §3.4.5 step 2.4 INVOKES the page's ResizeObserver callback, which may loop, await, mutate the
+           DOM, fork or park to the cold tier, so a stage that spanned two of them would be a stage the
+           scheduler cannot preempt between and a `While true` around them would be the drive-to-completion
+           this engine aborts on.
+           THIS LOOP IS UNBOUNDED AND THAT IS THE STANDARD'S DESIGN, not an omission. What ends it is
+           §3.4.1's DEPTH NARROWING — each turn gathers only observations DEEPER than everything already
+           broadcast — and an observation the narrowing skips is REPORTED by step 16.3 rather than dropped,
+           which is the opposite of a cap. */
+        for (;;) {
+            if (s->i >= s->ndocs) {
+                s->i = 0;
+                STEP_GOTO(s->hdr.stage, UR_FOCUS, &s->cphase, &s->fphase, &s->roerr.phase, NULL);
+                break;
+            }
+            docctx = doc_realm(ctx, s);
+
+            if (s->ro16 == UR16_ENTER) {
+                s->rodepth = 0;                                  /* STEP 16.1 */
+                s->robegun = 0;
+                s->ro16 = UR16_LOOP;
+                continue;
+            }
+
+            if (s->ro16 == UR16_LOOP) {
+                if (!s->robegun) {
+                    /* STEP 16.2.1 is a derivation — see above; there is nothing to flush.
+                       STEPS 16.2.2 THROUGH 16.2.4 ARE A WORK-SET THAT IS EMPTY BY CONSTRUCTION, asserted
+                       two-sidedly rather than skipped. 16.2.3 walks "each element element with 'auto' used
+                       value of 'content-visibility'", and this engine's cascade carries no such property at
+                       all, so that walk has nothing to visit, `hadInitialVisibleContentVisibilityDetermination`
+                       is still false at 16.2.4 and its `continue` cannot be taken.
+                       IT IS ASKED OF THE CASCADE AND NOT THROUGH `realm_awaits`, and that is core/realm.h's
+                       own rule rather than a preference: the producer here is not a member a page could name.
+                       An element gets that used value from a STYLESHEET as readily as from any IDL attribute,
+                       so a member probe would answer NO for a document that had it, and core/realm.h records
+                       what that mistake cost the last time it was made. `css_computed_models` is this tree's
+                       canonical way to ask the cascade what it carries — seven other files ask it of some
+                       property — and core/dom/element_view.c asks it of THIS one, at the disjunct of
+                       `scrollIntoView` step 7 that wants the very walk 16.2.3 wants. So this ROUTES to the
+                       existing spelling rather than adding a second answer to one question, and the day the
+                       property lands both sites fire together. */
+                    DCHECK(!css_computed_models("content-visibility"),
+                           "css-contain-2's `content-visibility` is in this engine's cascade now, so update "
+                           "the rendering step 16.2.3 has elements to walk: DETERMINE PROXIMITY TO THE "
+                           "VIEWPORT for each element with an 'auto' used value, and step 16.2.4's `continue` "
+                           "then restarts step 16.2's loop before it gathers — which is what makes an initial "
+                           "visibility determination reach the style and layout of the SAME frame. Build the "
+                           "walk and 16.2.2's flag; core/dom/element_view.c's scrollIntoView wants it too");
+                    resize_observer_gather(docctx, s->rodepth);   /* STEP 16.2.5 */
+                    if (!resize_observer_has_active(docctx)) {    /* STEP 16.2.7: "Otherwise, break." */
+                        s->ro16 = UR16_SKIPPED;
+                        continue;
+                    }
+                    /* STEP 16.2.6.1's broadcast — §3.4.5 step 1 and step 2's list, snapshotted. */
+                    s->nro = resize_observer_broadcast_begin(docctx);
+                    s->ro = 0;
+                    s->robegun = 1;
+                }
+                if (s->ro < s->nro) {
+                    /* §3.4.5 step 2 for observer `ro`. The prepare runs steps 2.1 to 2.3 and returns
+                       JS_UNDEFINED for step 2.1's "continue"; it is asked ONCE per observer and held across
+                       the invoke, because asking again on the resume would mint a second set of entries and
+                       overwrite the lastReportedSizes step 2.3.3 has already latched. */
+                    if (s->cphase == 0 && JS_IsUndefined(s->robc)) {
+                        s->robc = resize_observer_broadcast_prepare(docctx, s->ro);
+                        if (JS_IsUndefined(s->robc)) { s->ro++; continue; }   /* step 2.1 */
+                    }
+                    {
+                        /* STEP 2.4: "Invoke observer.[[callback]] with entries as the first argument and
+                           observer as the second argument and callback this value." Three operands, in the
+                           order §3.4.5 names them and the order resize_observer.h states the triple in — the
+                           OBSERVER is both the `this` value and the second argument, which is what lets a
+                           callback written as an arrow function still reach the observer it was given. */
+                        JSValue fn = JS_GetPropertyUint32(docctx, s->robc, 0);
+                        JSValue observer = JS_GetPropertyUint32(docctx, s->robc, 1);
+                        JSValue entries = JS_GetPropertyUint32(docctx, s->robc, 2);
+                        JSValueConst argv[2];
+                        JSValue out;
+
+                        argv[0] = entries;
+                        argv[1] = observer;
+                        r = step_call_run(docctx, &s->cphase, STEP_CB(s->cb), fn, observer, 2, argv,
+                                          cb_result, &out, out_cb, out_argc);
+                        JS_FreeValue(docctx, fn);
+                        JS_FreeValue(docctx, observer);
+                        JS_FreeValue(docctx, entries);
+                        if (r > 0) return r;             /* parked on the page's ResizeObserver callback */
+                        /* §3.4.5 states no use for the callback's return value — a ResizeObserverCallback is
+                           `undefined (...)` in §2.2's IDL — so it is discarded rather than read. */
+                        JS_FreeValue(docctx, out);
+                    }
+                    cb_result = JS_UNDEFINED;
+                    JS_FreeValue(docctx, s->robc);
+                    s->robc = JS_UNDEFINED;
+                    resize_observer_broadcast_finish(docctx, s->ro);          /* step 2.5 */
+                    s->ro++;
+                    continue;
+                }
+                {
+                    /* §3.4.5 step 3's return value, into STEP 16.2.6.1's assignment.
+                       THE DEPTH IS FINITE HERE AND THAT IS WHAT KEEPS THIS LOOP PREEMPTIBLE. §3.4.2's "has
+                       active resize observations" is true exactly when some observer's [[activeTargets]] is
+                       non-empty, and that is exactly the condition step 2.1 does NOT continue past — so a turn
+                       that reached this point invoked at least one callback, which is at least one rest point,
+                       and step 2.3.5 lowered step 1's ∞ to a real node depth. Were both false the `for` above
+                       would spin inside ONE C activation with the interpreter never regaining control, which
+                       is why the invariant is asserted here rather than assumed. */
+                    double shallowest = resize_observer_broadcast_depth(docctx);
+
+                    DCHECK(shallowest < HUGE_VAL,
+                           "RESIZE OBSERVER §3.4.5 step 3 returned ∞ for a document §3.4.2 had just said HAS "
+                           "ACTIVE RESIZE OBSERVATIONS — the two are one condition read from two ends, so "
+                           "this turn of update the rendering step 16.2 broadcast to nobody, rested nowhere "
+                           "and is about to gather at the same depth again");
+                    s->rodepth = (int32_t)shallowest;
+                    s->robegun = 0;                      /* STEP 16.2.6.2: "Continue." */
+                }
+                continue;
+            }
+
+            if (s->ro16 == UR16_SKIPPED) {
+                /* STEP 16.3's condition, asked ONCE per document. Nothing between here and the next gather
+                   clears [[skippedTargets]] — §3.4.1 is what empties it and this document's loop has already
+                   broken — so a condition re-asked after the delivery would answer true for ever and deliver
+                   the same error every time the walk came back. */
+                if (!resize_observer_has_skipped(docctx)) { s->ro16 = UR16_ENTER; s->i++; continue; }
+                resize_observer_loop_error_start(&s->roerr);
+                s->ro16 = UR16_DELIVER;
+                continue;
+            }
+
+            DCHECK(s->ro16 == UR16_DELIVER,
+                   "update the rendering step 16 resumed at a position inside the step that it does not have");
+            /* STEP 16.3: "deliver resize loop error given doc" — RESIZE OBSERVER §3.4.6, whose step 3 REPORTS
+               the event, which runs the page's `error` listeners, which is why it is a request this machine
+               parks on rather than a call. */
+            r = resize_observer_loop_error_run(docctx, &s->roerr, cb_result, out_cb, out_argc);
+            if (r > 0) return r;                         /* parked on the page's `error` listeners */
+            cb_result = JS_UNDEFINED;
+            s->ro16 = UR16_ENTER;
+            s->i++;
         }
     }
 

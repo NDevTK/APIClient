@@ -87,6 +87,7 @@
 #include "core/rendering/animation_frame.h"
 #include "core/rendering/page_reveal.h"
 #include "core/rendering/rendering.h"
+#include "core/resize_observer/resize_observer.h"
 #include "core/storage/storage.h"
 #include "core/storage/storage_shed.h"
 #include "core/storage/window_storage.h"
@@ -240,6 +241,7 @@ static void d_dom_rect_list(JSContext *c, const PlatformAgent *a) { (void)a; dom
 static void d_dom_string_list(JSContext *c, const PlatformAgent *a) { (void)a; dom_string_list_init(c); }
 static void d_element(JSContext *c, const PlatformAgent *a) { (void)a; element_init(c); }
 static void d_intersection_observer(JSContext *c, const PlatformAgent *a) { (void)a; intersection_observer_init(c); }
+static void d_resize_observer(JSContext *c, const PlatformAgent *a) { (void)a; resize_observer_init(c); }
 static void d_iframe(JSContext *c, const PlatformAgent *a) { (void)a; iframe_init(c); }
 static void d_document(JSContext *c, const PlatformAgent *a) { (void)a; document_init(c); }
 static void d_cookie_jar(JSContext *c, const PlatformAgent *a) { (void)a; cookie_jar_init(c); }
@@ -495,6 +497,7 @@ static void r_rendering(JSRuntime *rt) { rendering_free(rt); }
 static void r_document(JSRuntime *rt) { document_agent_free(rt); }
 static void r_element(JSRuntime *rt) { element_free(rt); }
 static void r_intersection_observer(JSRuntime *rt) { intersection_observer_free(rt); }
+static void r_resize_observer(JSRuntime *rt) { resize_observer_free(rt); }
 static void r_iframe(JSRuntime *rt) { iframe_free(rt); }
 static void r_dom_rect_list(JSRuntime *rt) { dom_rect_list_free(rt); }
 static void r_dom_string_list(JSRuntime *rt) { dom_string_list_free(rt); }
@@ -671,6 +674,7 @@ static void i_observable(JSContext *c, JSValueConst g, const PlatformDocument *d
 static void i_dom_rect(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; dom_rect_install(c, g); }
 static void i_dom_rect_list(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; dom_rect_list_install(c, g); }
 static void i_intersection_observer(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; intersection_observer_install(c, g); }
+static void i_resize_observer(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; resize_observer_install(c, g); }
 static void i_dom_string_list(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; dom_string_list_install(c, g); }
 static void i_document(JSContext *c, JSValueConst g, const PlatformDocument *d)
 {
@@ -994,6 +998,20 @@ static const PlatformComponent PLATFORM[] = {
        queues carries three of them, minted in the observed element's own realm. Its own prototype chains to
        Object.prototype, so no earlier row is required for that half. */
     { "intersection_observer", d_intersection_observer, i_intersection_observer, r_intersection_observer },
+    /* RESIZE OBSERVER, AFTER `element` for the row above's first reason and beside it for the rest. Its
+       declaration brands `observe(Element target)` and `unobserve(Element target)` against the Node class,
+       which element_init is what creates (through node_init), and it narrows both to `element_is` — so a row
+       before `element` would hand those two a class id of zero. Everything else this component touches it
+       touches at RUNTIME rather than at declaration: §3.4.4 step 6's contentRect is a DOMRectReadOnly minted
+       while a frame is being broadcast, and §3.4.6's ErrorEvent is minted while a loop error is delivered, so
+       neither `dom_rect` nor `error_event` constrains where this row sits — standing beside
+       `intersection_observer` satisfies the one constraint that is real.
+       ONE ROW FOR THREE INTERFACES. §2.3's ResizeObserverEntry and ResizeObserverSize are declared and
+       installed from this component's own `_init` and `_install`, which is why all three of the witness names
+       below map here: the three are one component's surface and an install that stopped happening would take
+       all three with it. Its per-realm half — ResizeObserver.prototype and §3.2.1's [[resizeObservers]] —
+       goes on through realm_declare_intrinsic, so this list has no per-realm line to remember. */
+    { "resize_observer",     d_resize_observer,     i_resize_observer, r_resize_observer },
     { "html_iframe",         d_iframe,              NULL,        r_iframe },
     /* RFC 6265 §5.3's COOKIE STORE, before the component whose §3.1.4 members read it. It is the first row with
        a RELEASE, and the reason is the reason it is a row at all: the store is the USER AGENT's by the
@@ -1159,6 +1177,15 @@ static const struct { const char *name, *component; IdlExposure exposure; } PLAT
     { "DOMRectList",           "dom_rect_list" },
     { "IntersectionObserver",  "intersection_observer" },
     { "IntersectionObserverEntry", "intersection_observer" },
+    /* RESIZE OBSERVER's three names, all three mapping to the ONE component that declares and installs them.
+       This row matters more than most for the reason the component exists: `ResizeObserver` is on
+       browser/platform_names.h, so the absent-global seam declines to mint a concolic for it and a bundle's
+       `new ResizeObserver(...)` on a realm that never ran the install is a ReferenceError that kills the
+       script and every endpoint behind it — which is the exact defect this install ends, so an install that
+       silently stopped happening would restore it with nothing to say so. */
+    { "ResizeObserver",        "resize_observer" },
+    { "ResizeObserverEntry",   "resize_observer" },
+    { "ResizeObserverSize",    "resize_observer" },
     /* WEB STORAGE's three names. §12.2.1's interface object, and §12.2.2's and §12.2.3's two Window members —
        and those two are the reason this row matters more than most: BOTH are on browser/platform_names.h, so
        the absent-global seam declines to mint a concolic for either, and a `window.localStorage` that resolves
