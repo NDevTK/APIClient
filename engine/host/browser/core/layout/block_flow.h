@@ -122,6 +122,21 @@ bool block_flow_display_is_block_container(const char *display);
    copy of §9.2.2.1 would be one rule with two answers about whether a page's white space is content. */
 bool block_flow_text_child_generates_box(lxb_dom_element_t *parent, const lxb_dom_node_t *text);
 
+/* THE CHARACTER HALF OF THE RULE ABOVE, ON ITS OWN: is every character of this text node one css-text-3 §4
+   "White Space Processing Rules" gives to the `white-space` property — a space, a tab, a line feed or a
+   carriage return — and therefore NOT U+000C FORM FEED, which that section makes a visible glyph and [UAX14]
+   makes a forced break.
+   IT IS SPLIT OUT BECAUSE TWO SECTIONS ASK IT AND ONLY ONE OF THEM READS A DECLARATION. CSS 2.2 §9.2.2.1
+   "Anonymous inline boxes" removes such a run only where the `white-space` property "would subsequently"
+   collapse it away, which is the predicate above; css-flexbox-1 §4 "Flex Items" removes a text sequence made
+   only of these characters UNCONDITIONALLY — "if the entire text sequences contains only document white space
+   characters (i.e. characters that can be affected by the white-space property) it is instead not rendered" —
+   and its parenthesis is a definition of the CHARACTER SET rather than a condition on the property. So the two
+   consumers share the set and disagree about the declaration, which is exactly the shape that must be one
+   function and two callers: a second copy of the set is one document with two ideas of what its white space
+   is, and the FORM FEED line above is the derivation that would drift. */
+bool block_flow_text_is_all_document_white_space(const lxb_dom_node_t *text);
+
 /* ---- ONE CHILD NODE'S BOX, CLASSIFIED --------------------------------------------------------------------
    CSS 2 §9.2 "Controlling box generation" decides whether a child of a block container generates a box at all,
    §9.3.1 "Choosing a positioning scheme: 'position' property" and §9.5 "Floats" decide whether that box is in

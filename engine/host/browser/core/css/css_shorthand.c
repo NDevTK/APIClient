@@ -95,6 +95,15 @@ static const char *const OVERFLOW_KEYWORDS[] = {
     "visible", "hidden", "clip", "scroll", "auto", "overlay"
 };
 
+/* css-flexbox-1 §5.1 "Flex Flow Direction: the flex-direction property" and §5.2 "Flex Line Wrapping: the
+   flex-wrap property", each entire and in its own `Value:` line's order. THE TWO SETS ARE DISJOINT and that is
+   what makes §5.3 "Flex Direction and Wrap: the flex-flow shorthand"'s `||` decidable one word at a time: a
+   word is a `<'flex-direction'>` or a `<'flex-wrap'>` or the declaration is invalid, and no word can be both,
+   so the expansion below needs no backtracking and no ORDER. A `||` whose terms shared a keyword would need
+   both — which is why this is asserted by construction here rather than assumed at the call. */
+static const char *const FLEX_DIRECTION_KEYWORDS[] = { "row", "row-reverse", "column", "column-reverse" };
+static const char *const FLEX_WRAP_KEYWORDS[] = { "nowrap", "wrap", "wrap-reverse" };
+
 /* css-backgrounds-3 §3.2's `<line-style>`, entire and in the spec's own order, and §3.3's three `<line-width>`
    keywords. THESE GRAMMARS HAVE TO BE HERE, unlike `<margin-width>`: lexbor's property registry carries no
    `border-width` and no `border-style` (it has `border`, the four `border-<side>` shorthands and the four
@@ -515,6 +524,33 @@ static char *border_four_side_component(const char *value, int side, CssBorderPa
     return kw ? css_sh_strdup(kw) : css_sh_dupn(w[comp], wl[comp]);
 }
 
+/* css-flexbox-1 §5.3 "Flex Direction and Wrap: the flex-flow shorthand"' EXPANSION — `Value: <'flex-direction'>
+   || <'flex-wrap'>`, so at most two words, each of which must be a keyword of one of the two disjoint sets
+   above, and each longhand not named takes its own `Initial:` line (§5.1's `row`, §5.2's `nowrap`). A repeated
+   term is a value the `||` does not admit: `||` is "one or more of these, in any order", one OF EACH.
+   IT VALIDATES AS WELL AS SPLITS, for the reason `border-style`'s does: §5.3's own `Value:` line is the only
+   thing standing between a `flex-flow: nope` and a computed value carrying a keyword no grammar admits, and
+   CSS Syntax drops an invalid declaration whole — which for a shorthand means it sets NEITHER longhand. */
+static char *flex_flow_component(const char *value, const char *longhand)
+{
+    const char *w[3], *dir = NULL, *wrap = NULL;
+    size_t wl[3];
+    int n = css_words(value, w, wl, 3), i;
+
+    if (n < 1 || n > 2) return NULL;
+    for (i = 0; i < n; i++) {
+        const char *d = css_sh_keyword(FLEX_DIRECTION_KEYWORDS, CSS_SH_N(FLEX_DIRECTION_KEYWORDS), w[i], wl[i]);
+        const char *p = css_sh_keyword(FLEX_WRAP_KEYWORDS, CSS_SH_N(FLEX_WRAP_KEYWORDS), w[i], wl[i]);
+
+        if (d != NULL) { if (dir != NULL) return NULL; dir = d; continue; }
+        if (p != NULL) { if (wrap != NULL) return NULL; wrap = p; continue; }
+        return NULL;
+    }
+    if (strcmp(longhand, "flex-direction") == 0) return css_sh_strdup(dir != NULL ? dir : "row");
+    if (strcmp(longhand, "flex-wrap") == 0) return css_sh_strdup(wrap != NULL ? wrap : "nowrap");
+    return NULL;
+}
+
 char *css_shorthand_component(const char *shorthand, const char *value, const char *longhand)
 {
     const char *w[4], *kw[2];
@@ -659,6 +695,16 @@ char *css_shorthand_component(const char *shorthand, const char *value, const ch
         comp = SIDE_OF[n][side];
         return css_sh_dupn(w[comp], wl[comp]);
     }
+    /* ---- css-flexbox-1 §5.3 "Flex Direction and Wrap: the flex-flow shorthand"'s `flex-flow` -------------- */
+    /* csscascade-5 §3 "Shorthand Properties": "if a shorthand is specified as one of the CSS-wide keywords, it
+       sets all of its sub-properties to that keyword" — the ENTIRE value, so it precedes the shorthand's own
+       grammar, in which `inherit` is no term at all. CSS Cascade §7's DEFAULTING step is what resolves it. */
+    if (strcmp(shorthand, "flex-flow") == 0) {
+        if (strcmp(longhand, "flex-direction") != 0 && strcmp(longhand, "flex-wrap") != 0) return NULL;
+        if (css_wide_keyword(value)) return css_sh_strdup(value);
+        return flex_flow_component(value, longhand);
+    }
+
     if (strcmp(shorthand, "overflow") != 0) return NULL;
     if (strcmp(longhand, "overflow-x") == 0)      axis = 0;
     else if (strcmp(longhand, "overflow-y") == 0) axis = 1;
@@ -822,9 +868,17 @@ char *css_shorthand_longhand_value(const char *longhand, const char *value)
  * production is core/css/css_color.h's — the agent's ONE `<color>`, the same parse the colour well and the
  * canvas go through — so it is ASKED, the row expands like every other, and the flag is deleted.
  *
- * WHAT IS DELIBERATELY NOT IN THE TABLE AT ALL: every CSS shorthand this engine has no grammar for — `flex`,
- * `flex-flow`, `text-decoration`. css_shorthand_is_shorthand answers FALSE for each, and the block
- * serialization then emits their longhands separately.
+ * WHAT IS DELIBERATELY NOT IN THE TABLE AT ALL: every CSS shorthand this engine has no grammar for.
+ * css_shorthand_is_shorthand answers FALSE for each, and the block serialization then emits their longhands
+ * separately. `flex-flow` USED TO BE NAMED HERE AND IS NOW A ROW, and the difference is what a row costs: its
+ * grammar is `<'flex-direction'> || <'flex-wrap'>` over two DISJOINT keyword sets, which is one word-to-term
+ * assignment with no ordering and no backtracking. css-flexbox-1 §7.1 "The flex Shorthand"'s `flex` is not,
+ * and the reason is a shape, not an amount of work: `none | [ <'flex-grow'> <'flex-shrink'>? || <'flex-basis'> ]`
+ * puts an ORDERED PAIR inside the `||`, and §7.1 gives its omitted components defaults that are NOT their
+ * longhands' `Initial:` lines — "When omitted, it is set to 1" for both factors against a `flex-grow` initial
+ * of 0, and "When omitted from the flex shorthand, its specified value is 0" for the basis against an initial
+ * of `auto`. So neither direction of CSS_SH_ALL_OF is its rule: the expansion cannot fill an omitted term from
+ * this table's `initial` list, and the serialization cannot omit a term for holding one.
  *
  * AND TWO ROWS' GRAMMARS ARE NOT HERE. css-fonts-4 §2.7's `font` is a positional SEQUENCE with an unordered
  * optional prefix, an infix `/` and a trailing comma-list, over six component grammars nothing else in this
@@ -843,7 +897,10 @@ char *css_shorthand_longhand_value(const char *longhand, const char *value)
 typedef enum {
     CSS_SH_FOUR_SIDE,   /* CSS 2.1 §8.3's rotation reversed: top/right/bottom/left with the tail dropped */
     CSS_SH_TWO_AXIS,    /* css-overflow §3.1's `{1,2}`: the second omitted when it equals the first */
-    CSS_SH_TRIPLE,      /* a three-term `||`, each term omitted when it is that longhand's initial */
+    CSS_SH_ALL_OF,      /* an n-term `||`, each term omitted when it holds that longhand's initial. It was
+                           spelled TRIPLE while every row of it had three terms; css-flexbox-1 §5.3's
+                           `flex-flow` is the same rule over TWO, and the row already carries its own `n`, so
+                           the count is read from the row rather than written into the kind's name. */
     CSS_SH_BORDER,      /* §3.4's `border`: one triple common to all four sides, over an untouched border-image */
     CSS_SH_FONT,        /* css-fonts-4 §2.7's `font`, whose grammar is core/css/css_font_shorthand.h's */
     CSS_SH_TEXT_ALIGN,  /* css-text-4 §7.1's one keyword redistributed over two longhands, plus its two pairs */
@@ -861,14 +918,14 @@ typedef struct {
        css_shorthand_component answers for every row's every longhand: a row that did not was a shorthand whose
        declarations set NOTHING, and the flag that used to record that is deleted with the row that had it. */
     const char *probe;
-    /* CSS_SH_TRIPLE ONLY — each longhand's own `Initial:` line, in the row's canonical order. §6.7.2's rule is
+    /* CSS_SH_ALL_OF ONLY — each longhand's own `Initial:` line, in the row's canonical order. §6.7.2's rule is
        "If component values can be omitted or replaced with a shorter representation without changing the
        meaning of the value, omit/replace them.", and a
        term holding its initial is exactly one that can be, so this list is the omission's DATA and belongs to
        the row rather than to the algorithm. It is the SAME list the forward expansion fills an omitted term
        from, which is what keeps the two directions one statement. NULL for every other kind, asserted. */
     const char *const *initial;
-    /* CSS_SH_TRIPLE ONLY — the SHORTHAND'S OWN `Initial:` line, for the case where every term is omitted and
+    /* CSS_SH_ALL_OF ONLY — the SHORTHAND'S OWN `Initial:` line, for the case where every term is omitted and
        the omission would leave the empty string, which matches no production of any of these grammars.
        IT IS NULL WHERE THE PROPERTY DEFINITION STATES NONE, and that is the whole of the difference between
        the two rows that reach the case: css-inline-3 §4.2 gives `vertical-align` an `Initial:` line of
@@ -882,6 +939,13 @@ typedef struct {
 static const char *const LH_MARGIN[]  = { "margin-top", "margin-right", "margin-bottom", "margin-left" };
 static const char *const LH_PADDING[] = { "padding-top", "padding-right", "padding-bottom", "padding-left" };
 static const char *const LH_OVERFLOW[] = { "overflow-x", "overflow-y" };
+/* css-flexbox-1 §5.3 "Flex Direction and Wrap: the flex-flow shorthand", in its `Value:` line's own order
+   (`<'flex-direction'> || <'flex-wrap'>`), with each longhand's own `Initial:` line beside it — §5.1's `row`
+   and §5.2's `nowrap`. §5.3's own `Initial:` line is "see individual properties", so it states none for the
+   all-terms-omitted case and CSSOM §6.7.2's "cannot exactly represent the values" arm is the answer, exactly
+   as it is for `border-<side>`. */
+static const char *const LH_FLEX_FLOW[] = { "flex-direction", "flex-wrap" };
+static const char *const FLEX_FLOW_INITIAL[] = { "row", "nowrap" };
 static const char *const LH_BORDER_WIDTH[] = {
     "border-top-width", "border-right-width", "border-bottom-width", "border-left-width"
 };
@@ -922,13 +986,17 @@ static const CssShorthandRow SHORTHANDS[] = {
     { "background",    CSS_BACKGROUND_SHORTHAND_LONGHANDS, CSS_BACKGROUND_SHORTHAND_N, CSS_SH_BACKGROUND,
       "url(chess.png) 40% 50% / 10em auto round fixed border-box gray", NULL, NULL },
     { "border",        LH_BORDER,        17, CSS_SH_BORDER,    "1px solid red", NULL, NULL },
-    { "border-bottom", LH_BORDER_BOTTOM,  3, CSS_SH_TRIPLE,    "1px solid red", BORDER_PART_INITIAL, NULL },
+    { "border-bottom", LH_BORDER_BOTTOM,  3, CSS_SH_ALL_OF,    "1px solid red", BORDER_PART_INITIAL, NULL },
     { "border-color",  LH_BORDER_COLOR,   4, CSS_SH_FOUR_SIDE, "red green", NULL, NULL },
-    { "border-left",   LH_BORDER_LEFT,    3, CSS_SH_TRIPLE,    "1px solid red", BORDER_PART_INITIAL, NULL },
-    { "border-right",  LH_BORDER_RIGHT,   3, CSS_SH_TRIPLE,    "1px solid red", BORDER_PART_INITIAL, NULL },
+    { "border-left",   LH_BORDER_LEFT,    3, CSS_SH_ALL_OF,    "1px solid red", BORDER_PART_INITIAL, NULL },
+    { "border-right",  LH_BORDER_RIGHT,   3, CSS_SH_ALL_OF,    "1px solid red", BORDER_PART_INITIAL, NULL },
     { "border-style",  LH_BORDER_STYLE,   4, CSS_SH_FOUR_SIDE, "solid", NULL, NULL },
-    { "border-top",    LH_BORDER_TOP,     3, CSS_SH_TRIPLE,    "1px solid red", BORDER_PART_INITIAL, NULL },
+    { "border-top",    LH_BORDER_TOP,     3, CSS_SH_ALL_OF,    "1px solid red", BORDER_PART_INITIAL, NULL },
     { "border-width",  LH_BORDER_WIDTH,   4, CSS_SH_FOUR_SIDE, "1px", NULL, NULL },
+    /* css-flexbox-1 §5.3. The fixture names BOTH terms of the `||`, each away from its own initial, so the
+       round trip exercises the whole partition — the assignment of a word to the term whose keyword set
+       contains it, and the omission rule over two initials rather than three. */
+    { "flex-flow",     LH_FLEX_FLOW,      2, CSS_SH_ALL_OF,    "column wrap", FLEX_FLOW_INITIAL, NULL },
     /* §2.7's own longhand list, taken from the component that owns the grammar so the ORDER the serialization
        reads positionally and the order the expansion writes are ONE statement in ONE file. The fixture is the
        shortest value §2.7's grammar admits — its `<'font-size'>` and `<'font-family'>#` are both required and
@@ -946,7 +1014,7 @@ static const CssShorthandRow SHORTHANDS[] = {
     /* css-inline-3 §4.2. The fixture names all three terms, in the grammar's canonical order and none of them
        at its initial, so the round trip exercises every arm of the partition at once — a `[first|last]`, an
        `<'alignment-baseline'>` and an `<'baseline-shift'>` keyword. */
-    { "vertical-align", LH_VERTICAL_ALIGN, 3, CSS_SH_TRIPLE, "first middle super",
+    { "vertical-align", LH_VERTICAL_ALIGN, 3, CSS_SH_ALL_OF, "first middle super",
       VERTICAL_ALIGN_INITIAL, "baseline" },
 };
 
@@ -1194,12 +1262,17 @@ static char *css_sh_two_axis_value(const char *const *v)
    so the answer is the SHORTHAND's own `Initial:` line where its definition states one and §6.7.2's "cannot
    exactly represent the values" arm where it does not. See the row's `whole_initial` for why that is the
    difference between the two rows rather than a preference. */
-static char *css_sh_triple_value(const char *const *v, const char *const *initial, const char *whole_initial)
+static char *css_sh_all_of_value(const char *const *v, const char *const *initial, unsigned terms,
+                                 const char *whole_initial)
 {
-    const char *parts[3];
+    const char *parts[4];
     unsigned n = 0, i;
 
-    for (i = 0; i < 3; i++)
+    DCHECK(terms >= 1 && terms <= CSS_SH_N(parts),
+           "§6.7.2's `||` serialization was asked for a term count this function has no room for. It is a "
+           "FIXED array because every row of this kind is one property definition's own `Value:` line and none "
+           "of them is longer than that — a row that is has a grammar to state here, not a larger buffer");
+    for (i = 0; i < terms; i++)
         if (strcmp(v[i], initial[i]) != 0) parts[n++] = v[i];
     if (n == 0) return whole_initial ? css_sh_strdup(whole_initial) : NULL;
     return css_sh_join(parts, n);
@@ -1225,7 +1298,7 @@ static char *css_sh_border_value(const char *const *v)
            be written as here either. */
         const char *const triple[3] = { v[0], v[4], v[8] };
 
-        return css_sh_triple_value(triple, BORDER_PART_INITIAL, NULL);
+        return css_sh_all_of_value(triple, BORDER_PART_INITIAL, 3, NULL);
     }
 }
 
@@ -1273,7 +1346,7 @@ char *css_shorthand_serialize_value(const char *shorthand, const char *const *va
     switch (row->kind) {
     case CSS_SH_FOUR_SIDE: return css_sh_four_side_value(values);
     case CSS_SH_TWO_AXIS:  return css_sh_two_axis_value(values);
-    case CSS_SH_TRIPLE:    return css_sh_triple_value(values, row->initial, row->whole_initial);
+    case CSS_SH_ALL_OF:    return css_sh_all_of_value(values, row->initial, row->n, row->whole_initial);
     case CSS_SH_FONT:      return css_font_shorthand_value(values);
     case CSS_SH_TEXT_ALIGN: return css_sh_text_align_value(values);
     case CSS_SH_BACKGROUND: return css_background_shorthand_value(values);
@@ -1307,9 +1380,9 @@ void css_shorthand_init(void)
                "a shorthand row carries no fixture value, so nothing exercises its expansion. Every row in this "
                "table is one css_shorthand_component takes apart — a row that is not is a shorthand whose "
                "declarations set no longhand at all, which reads as the property's INITIAL value everywhere");
-        DCHECK((row->kind == CSS_SH_TRIPLE) == (row->initial != NULL),
-               "a shorthand row carries a per-longhand INITIAL list without being the three-term `||` kind that "
-               "reads it, or is that kind and carries none. §6.7.2's omission rule needs exactly that list to "
+        DCHECK((row->kind == CSS_SH_ALL_OF) == (row->initial != NULL),
+               "a shorthand row carries a per-longhand INITIAL list without being the `||` kind that reads it, "
+               "or is that kind and carries none. §6.7.2's omission rule needs exactly that list to "
                "know which terms can be dropped, and a NULL one would be read past the null pointer rather "
                "than reported");
         DCHECK(row->whole_initial == NULL || row->initial != NULL,
@@ -1432,6 +1505,9 @@ bool css_shorthand_complete_for(const char *longhand)
            has none, and css-sizing adds none: `flex` sets `flex-basis`, not `width`, and `aspect-ratio` is a
            longhand of its own;
          color — NO shorthand sets it;
+         flex-direction, flex-wrap — `flex-flow` is the only shorthand that sets either (css-flexbox-1 §5.3,
+           whose `Value:` line is exactly those two longhands), and it is in the table above. §7.1's `flex`
+           sets the three flexibility longhands and neither of these two;
          THE EIGHT css-backgrounds-3 §2.10 NAMES — `background` is the ONLY shorthand in CSS that sets any of
            them, and it is in the table above. §2.10 states the whole of the relation in its own words ("given
            a valid declaration, for each layer the shorthand first sets the corresponding value of each of

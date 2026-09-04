@@ -112,4 +112,53 @@ typedef struct {
    classification core/layout/block_flow.c owns. */
 IntrinsicInlineSizes intrinsic_inline_sizes(lxb_dom_element_t *el);
 
+/* CSS 2.2 §9.4.2 "Inline formatting contexts"' CONTEXT OVER ONE RUN of `el`'s children — [first, end), in the
+   half-open form core/layout/line_box.h takes, with a NULL `end` running to the end of the child list — as
+   CONTENT-box inline sizes in CSS pixels. The run's boxes are styled by `el`, which is what an ANONYMOUS box
+   around them inherits from.
+   IT IS EXPORTED BECAUSE TWO SECTIONS GENERATE AN ANONYMOUS BOX AROUND A RUN OF ONE BOX'S CHILDREN AND BOTH
+   NEED THE SAME MEASUREMENT. CSS 2.2 §9.2.1.1 "Anonymous block boxes" wraps a maximal run of INLINE-LEVEL
+   children and is this file's own §9.4.1 arm; css-flexbox-1 §4 "Flex Items" wraps a CHILD TEXT SEQUENCE in an
+   anonymous block container flex item. The two RUNS are delimited by different sentences and the two
+   delimiters are therefore two functions, but what is inside either of them is one inline formatting context
+   and one walk — a second copy of it would be one document with two ideas of how wide its text is.
+   THE RUN'S OWN EDGES ARE NOT ADDED, and for both callers that is a derivation rather than an omission: an
+   anonymous box takes its non-inherited properties' initial values (§9.2.1.1: "the margins will be 0"), and
+   css-flexbox-1 §4 says the same of its own ("the anonymous item's box is unstyleable"), so css-sizing-3 §2.2
+   "Intrinsic Size Contributions"' outer size of such a box is its inner size unchanged. */
+IntrinsicInlineSizes intrinsic_inline_run_sizes(lxb_dom_element_t *el, lxb_dom_node_t *first,
+                                                lxb_dom_node_t *end);
+
+/* THE OUTER SIZE OF `el`'s BOX over INNER sizes the CALLER computed. css-sizing-3 §2 "Terminology" is where
+   the term is defined — an outer size is "the margin-box size of a box", against an inner size, "the
+   content-box size of a box" — and §2.2 "Intrinsic Size Contributions" is what makes it the operand of every
+   contribution, with its own "for this purpose auto margins are treated as zero". css-sizing-3 §5.2.1
+   "Intrinsic Contributions of Percentage-Sized Boxes"' cyclic percentage is resolved against zero on each of
+   the six edge properties.
+   THE INNER SIZES ARE AN ARGUMENT AND NOT `intrinsic_inline_sizes(el)`, which is the whole reason this entry
+   exists rather than a one-argument one. css-flexbox-1 §9.9.3 "Flex Item Intrinsic Size Contributions" caps,
+   floors and clamps a flex item's MAIN size before the outer conversion is applied, so the number that gets
+   the edges added is not the one this component measured — and the two readings are the same number only
+   because every operand of §9.9.3 is one item's size in one axis and every one of them takes the SAME edge
+   sum, so a maximum, a cap, a floor and a clamp all commute with adding it.
+   §2.2's FLOOR IS APPLIED HERE and is why this returns the PAIR rather than one number: "if the ideal
+   max-content contribution would be smaller than the min-content contribution (e.g. due to the use of
+   negative margins), the effective max-content contribution is floored by the min-content contribution." IT
+   IS ALSO WHY NEITHER INNER SIZE IS ASSERTED — an inverted pair is the case that sentence is written for, so
+   refusing one would crash on a page CSS 2.1 §8.3 "Margin properties" permits.
+   `el` IS NULL FOR AN ANONYMOUS BOX, whose edge sum is ZERO — and that is a DERIVATION rather than a
+   convenience, stated identically by the two sections that generate one: CSS 2.2 §9.2.1.1 "Anonymous block
+   boxes" ("the properties of anonymous boxes are inherited from the enclosing non-anonymous box …
+   Non-inherited properties have their initial value … the margins will be 0") and css-flexbox-1 §4 "Flex
+   Items" ("the anonymous item's box is unstyleable, since there is no element to assign style rules to"). So
+   its margin box, its border box and its content box are one rectangle. Passing NULL rather than reaching for
+   an element that does not exist is what stops a caller substituting the CONTAINER's edges, which are a
+   different box's and would be added twice.
+   THE EDGE ITSELF IS NOT EXPORTED AND MUST NOT BE. §5.2.1 gives one property triple TWO answers — a cyclic
+   percentage resolved against zero for a contribution, and against the containing block's size "when
+   calculating the used sizes and positions of the containing block's contents" — and the zero one is a WRONG
+   number at every used-value site with no assert that could see it. Being reachable only through a function
+   that has already committed to being a contribution is what keeps the two apart. */
+IntrinsicInlineSizes intrinsic_outer_contribution(lxb_dom_element_t *el, IntrinsicInlineSizes inner);
+
 #endif

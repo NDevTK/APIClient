@@ -249,12 +249,18 @@ static bool bf_min_height_is_zero(lxb_dom_element_t *el)
        which css-text-3 §5.5 "Line Breaking Details" makes a FORCED LINE BREAK. Counting it as collapsible
        removed the box silently: the run was classified as generating none, so neither the line box walk nor the
        intrinsic size walk was ever handed the character that would have crashed for it. */
-static bool bf_text_is_all_whitespace(const lxb_dom_node_t *n)
+bool block_flow_text_is_all_document_white_space(const lxb_dom_node_t *n)
 {
     const lxb_dom_character_data_t *cd = (const lxb_dom_character_data_t *)n;
-    const lxb_char_t *d = cd->data.data;
-    size_t len = cd->data.length, i;
+    const lxb_char_t *d;
+    size_t len, i;
 
+    DCHECK(n != NULL && n->type == LXB_DOM_NODE_TYPE_TEXT,
+           "css-text-3 §4's character question was asked about something that is not a TEXT node — the answer "
+           "is a scan of character data, and the cast below reads a node's data pointer through a struct only "
+           "a CharacterData node has");
+    d = cd->data.data;
+    len = cd->data.length;
     if (d == NULL) return true;
     for (i = 0; i < len; i++) {
         char c = (char)d[i];
@@ -289,7 +295,7 @@ bool block_flow_text_child_generates_box(lxb_dom_element_t *parent, const lxb_do
 
     /* A run that is not entirely white space has content §9.2.2.1's sentence says nothing about collapsing
        away, so it generates a box whatever `white-space` says. */
-    if (!bf_text_is_all_whitespace(n)) return true;
+    if (!block_flow_text_is_all_document_white_space(n)) return true;
     ws = bf_computed(parent, "white-space");
     collapses = strcmp(ws, "normal") == 0 || strcmp(ws, "nowrap") == 0;
     free(ws);

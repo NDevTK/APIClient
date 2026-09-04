@@ -996,6 +996,13 @@ bool css_computed_models(const char *name)
               rather than through the text one — the same reason `line-height` is in it. */
            strcmp(name, "caption-side") == 0 || strcmp(name, "table-layout") == 0 ||
            strcmp(name, "border-collapse") == 0 || strcmp(name, "border-spacing") == 0 ||
+           /* css-flexbox-1 §5.1 "Flex Flow Direction: the flex-direction property" and §5.2 "Flex Line
+              Wrapping: the flex-wrap property", each `Computed value: specified keyword` over a keyword-only
+              `Value:` line. The two are one row because ONE algorithm asks for both: css-flexbox-1 §9.9
+              "Intrinsic Sizes" dispatches on which axis is the main axis (§5.1) and on whether the container
+              is single-line or multi-line (§5.2, whose two arms §6 "Flex Lines" names). See the as-specified
+              arm below for why neither has a defensible default. */
+           strcmp(name, "flex-direction") == 0 || strcmp(name, "flex-wrap") == 0 ||
            css_computed_models_length(name) ||
            css_border_side_of(name, "style") >= 0;
 }
@@ -1406,12 +1413,31 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name)
        this one meant anything: core/css/css_shorthand.c owns their `Value:` grammars, as it owns the eight
        border longhands' for the identical reason, and core/css/css_style_declaration.c states their `Initial:`
        values, without which §7.1 had nothing to fall to and the cascade answered NULL for every element that
-       declares none — which is every element on almost every page. */
+       declares none — which is every element on almost every page.
+       css-flexbox-1 §5.1 "Flex Flow Direction: the flex-direction property" (`row | row-reverse | column |
+       column-reverse`) and §5.2 "Flex Line Wrapping: the flex-wrap property" (`nowrap | wrap | wrap-reverse`)
+       both state `Computed value: specified keyword` over a keyword-only `Value:` line, so the as-specified
+       arm is the whole of both rules.
+       THEY ARE HERE BECAUSE ONE ALGORITHM ASKS FOR BOTH AND COULD NOT ASK FOR EITHER. css-flexbox-1 §9.9
+       "Intrinsic Sizes" is a DISPATCH before it is a sum: which of a flex container's two axes is the main
+       axis decides whether the INLINE size it is asked for is §9.9.1 "Flex Container Intrinsic Main Sizes"' or
+       §9.9.2 "Flex Container Intrinsic Cross Sizes"', and §5.1 is the whole of that question — "The flex
+       container's main axis has the same orientation as the inline axis of the current writing mode" for
+       `row`, and the same sentence with "the block axis of the current writing mode" for `column`. The two
+       sections share no operation, so this is a dispatch and not a case: §9.9.1 sums along the main axis and
+       §9.9.2 takes a maximum across the cross one. §5.2 is the second half of it, because §9.9.1.3
+       "Multi-line Min-content Algorithm" and §9.9.2 each state a DIFFERENT operation for a multi-line
+       container than for a single-line one, and §6 "Flex Lines" is what ties the property to those two words:
+       "A single-line flex container (i.e. one with flex-wrap: nowrap) lays out all of its children in a single
+       line, even if that would cause its contents to overflow." Neither question has a defensible default:
+       reading `flex-direction`'s initial `row` off a box that declared `column` answers the wrong SECTION, not
+       a wrong number, and nothing downstream could tell. */
     DCHECK(strcmp(name, "float") == 0 || strcmp(name, "position") == 0 || strcmp(name, "box-sizing") == 0 ||
                strcmp(name, "white-space") == 0 || strcmp(name, "direction") == 0 ||
                strcmp(name, "writing-mode") == 0 || strcmp(name, "alignment-baseline") == 0 ||
                strcmp(name, "baseline-source") == 0 || strcmp(name, "caption-side") == 0 ||
                strcmp(name, "table-layout") == 0 || strcmp(name, "border-collapse") == 0 ||
+               strcmp(name, "flex-direction") == 0 || strcmp(name, "flex-wrap") == 0 ||
                css_border_side_of(name, "style") >= 0,
            "a property this component claims to model reached the as-specified arm without a `Computed value: "
            "as specified` line to justify it — css_computed_models and this switch are one list and have come "

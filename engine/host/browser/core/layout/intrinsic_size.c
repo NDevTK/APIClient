@@ -12,6 +12,8 @@
 #include "core/css/css_length.h"
 #include "core/layout/block_flow.h"
 #include "core/layout/box_subject.h"
+#include "core/layout/flex_intrinsic_size.h"
+#include "core/layout/flex_item.h"
 #include "core/layout/intrinsic_size.h"
 #include "core/layout/phrasing_break.h"
 #include "core/layout/replaced_element.h"
@@ -466,7 +468,8 @@ static void is_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_
    the enclosing non-anonymous box". ONE function and not two, because the measurement does not differ — an
    anonymous block box establishes an inline formatting context by construction, so the walk over its run is
    the same walk with a different pair of bounds. */
-static IntrinsicInlineSizes is_run_sizes(lxb_dom_element_t *el, lxb_dom_node_t *first, lxb_dom_node_t *end)
+IntrinsicInlineSizes intrinsic_inline_run_sizes(lxb_dom_element_t *el, lxb_dom_node_t *first,
+                                                lxb_dom_node_t *end)
 {
     TextRunMeasure m;
     IntrinsicInlineSizes out;
@@ -509,6 +512,26 @@ static IntrinsicInlineSizes is_contribution(IntrinsicInlineSizes inner, CssPx ed
     out.min_content = css_px_add(inner.min_content, edge);
     out.max_content = css_px_max(css_px_add(inner.max_content, edge), out.min_content);
     return out;
+}
+
+IntrinsicInlineSizes intrinsic_outer_contribution(lxb_dom_element_t *el, IntrinsicInlineSizes inner)
+{
+    /* THE INNER PAIR IS NOT ASSERTED IN EITHER DIRECTION, and both refusals were written here and deleted,
+       which is worth keeping because each looked like an invariant this codebase owes. An ORDER between them
+       is exactly what §2.2's own floor exists to repair — "if the ideal max-content contribution would be
+       smaller than the min-content contribution (e.g. due to the use of negative margins), the effective
+       max-content contribution is floored by the min-content contribution" — so asserting it would crash on a
+       page CSS 2.1 §8.3 "Margin properties" permits ("negative values for margin properties are allowed"),
+       which is the reason `is_contribution` states in full at its own site. NON-NEGATIVITY is the same
+       sentence one term earlier: the operand that inverts the pair is a negative margin on a box INSIDE the
+       run, and nothing stops it driving a max-content sum below zero before this floor sees it.
+       WHAT IS ASSERTED IS THE SHAPE, at `intrinsic_inline_sizes`'s own boundary, where the pair leaves the
+       walk that produced it — a value this codebase computed. Here the pair is the CALLER's arithmetic, and
+       §2.2's floor is a rule about it rather than a check on it.
+       NULL is CSS 2.2 §9.2.1.1's and css-flexbox-1 §4's ANONYMOUS box — see intrinsic_size.h — whose edge sum
+       is zero because neither section gives it any declaration to compute one from. */
+    if (el == NULL) return is_contribution(inner, css_px(0.0));
+    return is_contribution(inner, css_px_add(is_intrinsic_edge_px(el, false), is_intrinsic_edge_px(el, true)));
 }
 
 /* css-sizing-3 §5.2.1 "Intrinsic Contributions of Percentage-Sized Boxes"' NON-REPLACED arm, for the two
@@ -634,7 +657,7 @@ static IntrinsicInlineSizes is_block_context(lxb_dom_element_t *el)
                    "CSS 2.2 §9.2.1.1's run ended where it began, so this walk would generate the same "
                    "anonymous block box for ever. The run starts at a child that generates an inline-level "
                    "box and therefore always contains at least that one");
-            one = is_contribution(is_run_sizes(el, c, end), css_px(0.0));
+            one = intrinsic_outer_contribution(NULL, intrinsic_inline_run_sizes(el, c, end));
             c = end;
             break;
         }
@@ -645,8 +668,7 @@ static IntrinsicInlineSizes is_block_context(lxb_dom_element_t *el)
             is_require_intrinsic_inline_size(ch, "width", "auto");
             is_require_intrinsic_inline_size(ch, "max-width", "none");
             is_require_intrinsic_inline_size(ch, "min-width", "auto");
-            one = is_contribution(intrinsic_inline_sizes(ch),
-                                  css_px_add(is_intrinsic_edge_px(ch, false), is_intrinsic_edge_px(ch, true)));
+            one = intrinsic_outer_contribution(ch, intrinsic_inline_sizes(ch));
             c = c->next;
             break;
         /* NO `default` ARM, DELIBERATELY: `-Wswitch` is the forcing function here and a default would switch it
@@ -686,17 +708,30 @@ IntrinsicInlineSizes intrinsic_inline_sizes(lxb_dom_element_t *el)
     {
         char *d = is_computed(el, "display");
         bool container = block_flow_display_is_block_container(d);
+        bool flex = flex_item_display_is_flex_container(d);
 
         free(d);
+        /* css-flexbox-1 §3 "Flex Containers: the flex and inline-flex display values"' box, WHOSE MODULE
+           OWNS IT — the same dispatch this crash below describes, taken rather than described for the one
+           `display` that now has a component. §9.9's answer is the same PAIR in the same box as this
+           function's, so a consumer never learns which module produced its number. */
+        if (flex) return flex_intrinsic_inline_sizes(el);
         if (!container)
             DFAIL("css-sizing-3 §5.1's intrinsic inline sizes were asked of a box that is NOT A BLOCK CONTAINER, "
                   "so neither of CSS 2.2 §9.4's two formatting contexts is what lays its content out and "
                   "neither §9.4.2's line boxes nor §9.4.1's stack is the algorithm. Which module owns it is its "
-                  "own `display`: css-flexbox-1 §9.9 \"Intrinsic Sizes\" derives a flex container's from its "
-                  "flex lines, css-grid-2 §11.5 sizes the TRACKS and the container's intrinsic size follows "
-                  "from them, and CSS 2.2 §17.5.2's automatic table layout derives a table's from its COLUMNS' "
-                  "cell minima and maxima over the box structure §17.2.1 Anonymous table objects generates. "
-                  "THE TABLE ARM IS NO LONGER AN ALGORITHM TO WRITE AND THIS LINE USED TO SAY IT WAS: "
+                  "own `display`, and TWO OF THE THREE ARE NO LONGER AN ALGORITHM TO WRITE HERE. "
+                  "A FLEX CONTAINER LEFT THROUGH THE LINE ABOVE AND THIS SENTENCE USED TO SEND ITS READER TO "
+                  "BUILD FLEX LINE BREAKING FOR IT: it said css-flexbox-1 §9.9 \"Intrinsic Sizes\" derives a "
+                  "flex container's intrinsic sizes from its flex lines, and §9.9 says the opposite for the "
+                  "two arms an INLINE size can reach — §9.9.1 \"Flex Container Intrinsic Main Sizes\" states "
+                  "that \"an implementation is conformant to CSS Flexible Box Layout if it conforms to either "
+                  "the Ideal Algorithm or the Web-compatible Algorithm\", and the second of those is a sum "
+                  "over ITEMS with no line in it. The reader who followed the old sentence would have built "
+                  "the whole of §9.3 \"Main Size Determination\" before writing a single contribution. "
+                  "core/layout/flex_intrinsic_size.h is the component, and what it still refuses it refuses by "
+                  "name. "
+                  "THE TABLE ARM IS NOT ONE EITHER AND THIS LINE USED TO SAY IT WAS: "
                   "§17.2.1's structure is core/layout/table_box.h's, §17.5 Visual layout of table contents' "
                   "grid is core/layout/table_grid.h's, and §17.5.2 itself is core/layout/table_width.h's — a "
                   "reader following the old sentence would have built the whole of it a second time. WHAT IS "
@@ -706,8 +741,16 @@ IntrinsicInlineSizes intrinsic_inline_sizes(lxb_dom_element_t *el)
                   "columns plus cell spacing or borders (MAX)\" — and core/layout/table_width.c computes both "
                   "to reach a USED width without publishing either, over per-column minima and maxima "
                   "core/layout/table_column_width.h already exports. So MAKE §17.5.2.2's MIN and MAX a second "
-                  "producer of `IntrinsicInlineSizes` for a table box; the flex and grid arms each need their "
-                  "own box tree first and none of the three is this walk with a different accumulator");
+                  "producer of `IntrinsicInlineSizes` for a table box. WHAT IS LEFT AS A LAYOUT IS THE GRID, "
+                  "AND ITS SECTION NUMBER USED TO BE WRONG HERE — this line said css-grid-2 §11.5, which is "
+                  "\"Aligning the Grid: the justify-content and align-content properties\" and decides nothing "
+                  "about a size. The sentence that governs is §5.2 \"Sizing Grid Containers\": \"The "
+                  "max-content size (min-content size) of a grid container is the sum of the grid container's "
+                  "track sizes (including gutters) in the appropriate axis, when the grid is sized under a "
+                  "max-content constraint (min-content constraint).\" So the operand is the TRACKS, which is "
+                  "§12.5 \"Resolve Intrinsic Track Sizes\" inside §12.3 \"Track Sizing Algorithm\" — a whole "
+                  "chapter away from where this crash pointed. That arm needs its own box tree and its own "
+                  "track list first and is not this walk with a different accumulator");
     }
     /* CSS 2.2 §9.2.1 "Block-level elements and block boxes"' ALTERNATIVE, ASKED ONCE OVER THE WHOLE CHILD LIST
        AND BEFORE EITHER ALGORITHM RUNS: "A block container box either contains only block-level boxes or
@@ -730,7 +773,7 @@ IntrinsicInlineSizes intrinsic_inline_sizes(lxb_dom_element_t *el)
        classification now reports the float as a FACT and each caller states its own section's consequence at
        its own line — this file's is in `is_block_context`, over §9.4.2's shortened line box. */
     if (block_flow_establishes_inline_context(el))
-        out = is_run_sizes(el, lxb_dom_interface_node(el)->first_child, NULL);
+        out = intrinsic_inline_run_sizes(el, lxb_dom_interface_node(el)->first_child, NULL);
     else
         out = is_block_context(el);
     /* THE TWO ARE NON-NEGATIVE because every advance summed into them is, and a negative intrinsic size would
