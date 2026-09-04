@@ -621,6 +621,12 @@ unsigned flow_frontier_gen(void) { return g_gen; }
    rescan count has and `scanNextRuns` is not. See solver/flow.h. */
 long flow_rank_changes(void) { return g_rank_changes; }
 
+/* HOW MANY TIMES THE SCHEDULER'S OWN PICK RETURNED AN ALREADY-DISPATCHED MEMBER WHILE A NEVER-DISPATCHED ONE
+   STOOD AT EXACTLY THE SAME WEIGHT — §scheduler's razor's STARVES, counted at the ONE line that decides which
+   flow runs, and the reading that three census GAUGES could not make between them. See solver/flow.h. */
+static long g_starved_picks = 0;
+long flow_starved_picks(void) { return g_starved_picks; }
+
 /* A FLOW TAKES OR RELEASES THE THREAD — and a dispatch is where an account's coordinate STOPS being a reading
    of the frontier's clock and becomes a tag of its own. The two statements are ONE operation and in this order,
    because between them the clock would be defined by an account that is defined by the clock.
@@ -3263,6 +3269,13 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        did, and it is stated there rather than left to be re-derived here. */
     const Flow *unrun = NULL;   /* the best-weighted member with EVERY non-reward term of flow_weight at zero */
     double unrun_w = 0.0;
+    /* …AND THE BEST WEIGHT ANY NEVER-DISPATCHED MEMBER OFFERS, WHICH IS A DIFFERENT POPULATION AND A DIFFERENT
+       QUESTION. `unrun` above needs every non-reward term at zero, which flow_credit_emit's forgiveness gives
+       to members that have PRODUCED; `picks == 0` is the population §scheduler's razor is about and the only
+       field in a Flow that nothing resets. Held here rather than derived at the return because the maximum is
+       not known until the scan ends. */
+    const Flow *never = NULL;
+    double never_w = 0.0;
     DCHECK(!(seed && worst), "the eviction tail was asked with an incumbent to defend — the seed states who "
                              "keeps the THREAD, and the flow the pager gives up is not a question about that");
     /* THE SEED IS ELIGIBLE ON THE SAME TERMS AS EVERY CANDIDATE — a member of the frontier, and not one that
@@ -3271,6 +3284,7 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
     if (seed && flow_is_member(seed) && !(runnable_only && flow_host_owed(seed))) {
         best = (Flow *)seed; bw = flow_weight(seed); g_scan_weights[why]++;
         if (seed->visits == 0 && flow_silence_notch(seed) == 0) { unrun = seed; unrun_w = bw; }
+        if (seed->picks == 0) { never = seed; never_w = bw; }
     }
     for (int i = 0; i < g_flows_n; i++) {
         double w;
@@ -3286,6 +3300,7 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
         if (g_flows[i]->visits == 0 && flow_silence_notch(g_flows[i]) == 0 && (!unrun || w > unrun_w)) {
             unrun = g_flows[i]; unrun_w = w;
         }
+        if (g_flows[i]->picks == 0 && (!never || w > never_w)) { never = g_flows[i]; never_w = w; }
         /* THE TAIL IS THIS SCAN READ THE OTHER WAY, which is the whole of why the pager has no ranking of its
            own. The flow the cold tier gives up first must be the flow the WFQ would have run last, or the
            engine would page out a member the scheduler still wanted and keep one it was starving; a size
@@ -3368,6 +3383,33 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        today — a frontier whose census reports members at `turns:0` while `wTop` climbs, with every ordering
        assertion in this file silent, and nothing distinguishing that from a frontier that is being served
        correctly. */
+    /* §scheduler'S RAZOR, COUNTED AT THE LINE THAT DECIDES — "drops, starves, skips, reorders, or forgets ANY
+       flow ... it is a CAP". STARVES is the one of the five with no instrument anywhere, and it is not a
+       question a census can answer: three GAUGES over the frontier (`never_picked`, `never_picked_gap`,
+       `never_picked_at_top`) say a tied tail EXISTS at some instant, and none of them can say whether a PICK
+       ever passed over it. This can, because it is asked where the choice is made and about the choice.
+       WHAT IT COUNTS, EXACTLY: the scheduler's own dispatch pick returned a member that has been dispatched
+       before, while a member that never has stood at the SAME weight. flow_pick's comparison is STRICT and the
+       incumbent is the seed, so that is the tie going to the incumbent — which flow.h is right to say must not
+       be cured by relaxing the comparison (that hands the thread away at every opcode). It is counted rather
+       than asserted for exactly that reason: the state is LEGITIMATE for one pick and is the razor's STARVES
+       only as a rate, and a rate is a thing to measure, never a thing to abort on.
+       AND IT IS THE READING MY OWN THREE CENSUS DISCRIMINATORS COULD NOT MAKE, which is why it exists. On a
+       frontier that GROWS BY FORKING, `never_picked` climbing is arithmetic about the fork factor and not
+       about the order (5786 flows created against 1010 dispatches — no ordering can dispatch what the thread
+       has not reached); `picks_max` cannot fall toward 1 while a framed flow legitimately needs many quanta to
+       finish one program; and `picks_live / P` counts BOTH re-dispatches that CONTINUE a program — necessary
+       work — and re-dispatches that pass over a starved member, which are opposite things. This separates
+       them: only the second is counted here.
+       ONLY THE SCHEDULER'S OWN PICK. FLOW_SCAN_NEXT is engine.c's `flow_next_to_run(cur, FLOW_SCAN_NEXT)`, the
+       one call whose answer becomes a dispatch; the rival scan, the host's best-weight read, the pager's tail
+       and the census ask other questions and a count over them would be a number about the instrument.
+       EXACT `==` AND NO EPSILON, this file's idiom: two members standing at one another read one value twice,
+       and a tolerance would count members the pick can already tell apart.
+       A LIFETIME COUNTER and the only kind a reader may difference — it is off the flows entirely, for
+       `g_picks_total`'s reason, and reset by nothing for `g_rank_changes`'. Read it against `picksLifetime`:
+       the FRACTION is what says whether the tie-break is deciding dispatches or is a rounding event. */
+    if (why == FLOW_SCAN_NEXT && best && best->picks > 0 && never && never_w == bw) g_starved_picks++;
     return best;
 }
 

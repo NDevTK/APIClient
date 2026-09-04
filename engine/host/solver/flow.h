@@ -1833,6 +1833,22 @@ long flow_scan_weights(FlowScan s);
  * IT DECIDES NOTHING, for the scan counters' reason exactly. */
 long flow_rank_changes(void);
 
+/* HOW MANY DISPATCHES THE TIE-BREAK DECIDED AGAINST A STARVED MEMBER — §scheduler's razor's STARVES, made
+   countable at the line that chooses. LIFETIME counter; the only kind a reader may difference, and it is read
+   against `picks_lifetime`, because the FRACTION is the reading and the raw count is not: a handful over a
+   session is the strict comparison doing its job, and a figure on the order of the dispatches themselves is
+   the ORDER having stopped separating members while the pick's registry position decides which one runs.
+   IT IS NOT A FOURTH GAUGE BESIDE `never_picked`, `never_picked_gap` AND `never_picked_at_top`, and the
+   difference is what it is for. Those three are taken over the frontier at an INSTANT and can say only that a
+   tied tail exists; none can say whether a PICK ever passed over one, which is the actual claim the razor
+   makes. Measured, and it is why this exists: a frontier that GROWS BY FORKING makes all three uninformative
+   at once — `never_picked` climbing is arithmetic about the fork factor rather than about the order (a run
+   creating 5786 flows against 1010 dispatches cannot reach them whatever the order says), `picks_max` cannot
+   fall toward one while a framed flow legitimately needs many quanta to finish a program, and
+   `picks_live / (members - never_picked)` sums re-dispatches that CONTINUE a program, which are necessary,
+   with re-dispatches that pass over a starved member, which are the defect. This counts only the second. */
+long flow_starved_picks(void);
+
 /* The highest-priority flow in the frontier, or NULL if empty — EVERY member, whether or not it can currently
    make progress. It answers the host's Level-1 question (this document's best weight) and the census's; the
    scheduler's own pick is flow_next_to_run below. Does not remove it. */
