@@ -57,6 +57,50 @@ function stampReading(b) {
   return "clean(asked, nothing differs)";
 }
 
+/* AND THE HALF OF THE PROGRAM NO BUILD STAMP CAN EVER DESCRIBE, BECAUSE IT IS NOT BUILT.
+   The stamp below reads the builder's cone — `engine/host` and `engine/qjs` — and engine/build.mjs is right
+   to scope it that way: another agent's popup edit is not a reason to distrust a JS-engine number. But a LIVE
+   DRIVER is not measuring the link, it is measuring the PRODUCT, and the product's trusted zone is JavaScript
+   the extension INTERPRETS FROM THE TREE. CLAUDE.md: an edit there is deployed on WRITE, while the engine's C
+   is live only after somebody builds. So for that half the run-time tree is not a distraction from the
+   program — it IS the program, and a build-time answer about it could not exist however carefully it were
+   computed.
+   THE CONSEQUENCE IS THAT `treeAtBuild: clean(asked, nothing differs)` IS SCOPED IN A WAY ITS READER CANNOT
+   SEE. Every row a driver prints is filed under that phrase, and the phrase says nothing whatever about the
+   files that were live at the instant the row was produced. MEASURED: a trusted-zone fix landed mid-session —
+   `engineJoin` had been reading a joined document's bytes off a message whose own entry asserts it carries
+   none, so a navigation died and later ones were refused — and it went live the moment it was written, in the
+   middle of another lane's measurement round, under an artifact line that said `clean`. Rounds on either side
+   of that write are not comparable and nothing in the output said so.
+   THIS IS THE ONE PLACE A GIT COMMAND IS THE RIGHT ANSWER, and the comment below explaining why the stamp
+   must never use one is correct about the compiled half and exactly inverted here: `the working tree advances
+   under a live session` is the REASON to ask, not the reason not to, when the working tree is what executes.
+   IT REPORTS RATHER THAN REFUSING, which is the opposite call from the mislabel check below and is deliberate.
+   A stamp older than its artifact is ALWAYS wrong; a dirty trusted zone is often a peer legitimately working,
+   and refusing there would stop every driver whenever anyone edits the popup. It is not a warning beside the
+   numbers either — it goes INTO the artifact line, which is the one line the reader cannot skip on the way to
+   the rows it qualifies.
+   THREE STATES, the same discipline stampReading uses: an empty list means "asked git, nothing differs", and
+   being unable to ask is a DIFFERENT fact that must never be published as clean. */
+const TRUSTED_ZONE = ["extension"];
+function trustedZoneAtRun(repoRoot) {
+  const root = repoRoot || path.resolve(__dirname, "..");
+  let out;
+  try {
+    out = require("child_process").execFileSync(
+      "git", ["diff", "--name-only", "origin/main", "--"].concat(TRUSTED_ZONE),
+      { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  } catch (e) {
+    return "unasked(git could not be asked about " + TRUSTED_ZONE.join(", ") +
+           " — this is NOT a statement that the live trusted zone matches origin/main)";
+  }
+  const paths = out.split("\n").map(function (x) { return x.trim(); }).filter(Boolean);
+  if (!paths.length) return "clean(asked, matches origin/main)";
+  return "LIVE-EDITS(" + paths.length + " path(s) differ from origin/main: " +
+         paths.slice(0, 4).join(", ") + (paths.length > 4 ? ", …" : "") +
+         ") — these are interpreted from the tree, so they are ALREADY RUNNING and are not in any artifact";
+}
+
 /* THE ARTIFACT IS NAMED IN THE OUTPUT, and this reads the build stamp the builder wrote, NEVER a git
    command — the working tree advances under a live session and the tree's HEAD is not the artifact.
    THROWS rather than returning a hole: a driver whose whole output is filed under a revision cannot report
@@ -92,7 +136,8 @@ function artifactStamp(extDir) {
         "copy the builder's .build.json in beside the wasm it belongs to.");
     }
   }
-  return { head: j.head, qjsHead: j.qjsHead, at: j.at, treeAtBuild: stampReading(j) };
+  return { head: j.head, qjsHead: j.qjsHead, at: j.at, treeAtBuild: stampReading(j),
+           trustedAtRun: trustedZoneAtRun() };
 }
 
-module.exports = { artifactStamp, stampReading };
+module.exports = { artifactStamp, stampReading, trustedZoneAtRun };
