@@ -1633,6 +1633,17 @@ UrlRecord *url_record_of(JSValueConst v)
     return u ? &u->rec : NULL;
 }
 
+/* Web IDL §3.7 Interfaces' implementation-check an object, step 3 — "If object does not implement interface,
+   then throw a TypeError" — for §6.1 URL class, as the predicate a DECLARED member's receiver brand is asked
+   through. It answers the same question url_of does and by the same test, which is what keeps the two from
+   drifting; what it is FOR is the ORDER. idl_args.h states it: a member's body runs after every conversion,
+   so a brand test written in the body lets `URL.prototype.href = {toString(){…}}` run the page's toString and
+   only then throw, where a browser throws with nothing of the page's code having run. */
+static bool url_is(JSValueConst v)
+{
+    return JS_GetOpaque(v, g_url_class) != NULL;
+}
+
 static UrlRecord *url_of(JSContext *ctx, JSValueConst v)
 {
     UrlObj *u = JS_GetOpaque(v, g_url_class);
@@ -2283,19 +2294,29 @@ void url_init(JSContext *ctx)
        says why, "`new URL({toString(){…}})` runs that toString, and running it from C is the
        drive-to-completion this engine aborts on", and `url.href = {toString(){…}}` is the same page code
        reached through the same standard's setter. A raw JS_CGETSET setter coerces from a C activation. */
-    for (i = 0; i < URL_NATTRS; i++)
-        g_url_attr_set[i] = URL_ATTRS[i].readonly
-                                ? -1
-                                : idl_setter_id(ctx, IDL_USVSTRING, false, js_url_set, URL_ATTRS[i].member);
+    for (i = 0; i < URL_NATTRS; i++) {
+        if (URL_ATTRS[i].readonly) { g_url_attr_set[i] = -1; continue; }
+        g_url_attr_set[i] = idl_setter_id(ctx, IDL_USVSTRING, false, js_url_set, URL_ATTRS[i].member);
+        /* §3.7.6's setter checks the RECEIVER before it converts V, and idl_args.h says why that cannot be
+           left to the body: the body runs after every conversion, so `URL.prototype.href = {toString(){…}}`
+           would run the page's toString and only then throw. */
+        idl_this_iface(url_is, "URL");
+    }
     /* §6.1's `USVString toJSON()` and its `stringifier;`. Two members of the interface, so two declarations —
        each mints its own function object and so answers `name` with its own identifier. */
     g_url_tojson   = idl_method_id(ctx, NULL, 0, js_url_tojson, 0);
+    idl_this_iface(url_is, "URL");
     g_url_tostring = idl_method_id(ctx, NULL, 0, js_url_tojson, 0);
+    idl_this_iface(url_is, "URL");
     /* THE STATICS ARE MEMBERS TOO. Their arguments were reaching `JS_ToCStringLen` straight out of a C body,
        which is the constructor's abort one member over, and their arity was a hand-written 1 that the args
        machine derives instead: Web IDL §3.7.7 Operations' create an operation function ends "Let length be
        the length of the shortest argument list in the entries in S", which is min(first optional, declared
-       positions) and is why an install has no length to pass and no length to get wrong. */
+       positions) and is why an install has no length to pass and no length to get wrong.
+       NO RECEIVER BRAND IS DECLARED FOR THEM, and that is §3.7.7's own condition rather than an omission:
+       create an operation function performs the implementation-check only "If target is an interface, and op
+       is not a static operation", so `URL.parse` is reached on the interface object and has no `this` to
+       check. */
     g_url_static_id[URL_STATIC_PARSE] = idl_method_id(ctx, STATIC_ARGS, 2, js_url_static, URL_STATIC_PARSE);
     idl_optional_from(1);
     g_url_static_id[URL_STATIC_CANPARSE] =
