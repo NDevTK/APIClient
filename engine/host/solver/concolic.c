@@ -4002,12 +4002,65 @@ static int concolic_exotic_delete(JSContext *ctx, JSValueConst obj, JSAtom prop)
     return ret;
 }
 
+/* §10.1.1 [[GetPrototypeOf]] ( ) OVER AN UNKNOWN — AND WHY THE ANSWER MAY NOT BE A CONCRETE ONE.
+ *
+ * WHAT THIS CLASS ANSWERED BEFORE THE HOOK EXISTED, AND WHY NOTHING REPORTED IT. A concolic is an ordinary
+ * JSObject minted through JS_NewObjectClass, and this class registers no class_proto — so its objects carry a
+ * NULL [[Prototype]], which JS_GetPrototype reads straight off the shape and hands the page as JS_NULL. That
+ * is a FABRICATION in §Attacker-sources' exact sense: nothing was observed about the value, and `null` is not
+ * "unknown", it is the positive claim that this value HAS NO PROTOTYPE. It is also the one answer that makes
+ * an ordinary prototype-chain walk THROW instead of fork, so it does not merely mislead a report — it kills
+ * the program that would have produced one, and it does so silently, because `null` is a legal answer that no
+ * assert anywhere had a reason to question.
+ *
+ * THE DEFECT SHAPE, which is the part that stays true: an operator with no concolic arm collapses opacity to
+ * whichever concrete answer its ordinary path already held. §Solver states the rule for the coercions —
+ * opacity survives ToNumber, so control flow keeps forking rather than collapsing to NaN — and a chain link is
+ * that same rule one internal method over. `operand_kind` above already records what a prototype walk costs
+ * when it does not fork; this is the walk's other half.
+ *
+ * WHAT THE NEXT DIFF BUILDS, AND IT IS TWO THINGS THAT MUST LAND TOGETHER. (1) This entry answers a DERIVED
+ * unknown — concolic_new_derived(ctx, "[[GetPrototypeOf]]", &obj, 1, JS_UNDEFINED), memoised on the record so
+ * the answer has an IDENTITY the page can compare (a fresh value per call answers `getPrototypeOf(x) ===
+ * getPrototypeOf(x)` false, and defeats §10.4.7.2 SetImmutablePrototype ( obj, proto ), which the contract at
+ * JSClassExoticMethods.get_prototype makes this class's [[SetPrototypeOf]] by declaring one at all), with the
+ * two ownership sites a JSValue on this record obliges — concolic_finalizer frees it and concolic_gc_mark
+ * reports it. (2) A CONCOLIC ARM IN 7.3.21 OrdinaryHasInstance's LINK WALK. Half (1) alone does not merely
+ * leave that walk wrong, it HANGS it: the walk asks O.[[GetPrototypeOf]]() per link and stops on null or on
+ * SameValue(P, O), both decided in C with no fork, so an unknown that answers a fresh unknown per link never
+ * reaches either — and `e instanceof Object` is written by the very libraries this fixes. The fork has to be
+ * the walk's, because the truthful model is not an infinite chain: a real chain is FINITE of unknown length,
+ * which is a question ("is this link the end?") and therefore a concolic bool, not a bound.
+ *
+ * HOW ITS ABSENCE SHOWS, in one line a reader can go and look for: a page that walks a prototype chain over a
+ * server-injected record throws `cannot read property '<x>' of null` at a line real Chrome does not throw at,
+ * and the throw kills the script that would have emitted the endpoints behind it.
+ *
+ * IT RUNS NONE OF THE PAGE'S CODE, which the entry's contract requires rather than suggests: it is reached
+ * from JS_GetPrototype, whose C callers have no flow base to suspend into. Both halves above are allocation
+ * and comparison; neither calls anything of the page's. */
+static JSValue concolic_exotic_get_prototype(JSContext *ctx, JSValueConst obj) {
+    (void)ctx; (void)obj;
+    DFAIL("§10.1.1 [[GetPrototypeOf]] ( ) was asked of the solver's own value class and this engine has no "
+          "answer for it that is not invented: a value nobody has observed has an unknown prototype, and the "
+          "NULL the shape link holds is the positive claim that it has none. Build it as a DERIVATION over the "
+          "receiver, memoised on the record so the answer has an identity, AND in the SAME diff give 7.3.21 "
+          "OrdinaryHasInstance's link walk a forking arm — that walk stops on null or SameValue decided in C, "
+          "so a derived prototype without it does not answer wrongly, it does not terminate");
+    /* RELEASE ANSWERS EXACTLY WHAT THE SHAPE LINK ANSWERED BEFORE THIS ENTRY EXISTED. In release we can neither
+       fix nor add a capability, so the same fabrication stands and this hook is a no-op — what it must not do
+       is invent a DIFFERENT concrete prototype, which would make the two builds disagree about a value the
+       page can compare. */
+    return JS_NULL;
+}
+
 static JSClassExoticMethods g_concolic_exotic = {
     .get_own_property = concolic_exotic_get_own,
     .get_own_property_names = concolic_exotic_own_names,
     .delete_property = concolic_exotic_delete,
     .define_own_property = concolic_exotic_define_own,
     .get_property = concolic_exotic_get,
+    .get_prototype = concolic_exotic_get_prototype,
     .has_property = concolic_exotic_has,
     /* The lookup is a slot read of this value's own example and a derivation composed in this file — no page
        code, by construction, which is what lets the engine's own accessor walk and its COW slot read run it
