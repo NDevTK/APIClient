@@ -195,10 +195,20 @@ static JSValue js_sd_confirm(JSContext *ctx, JSValueConst this_val, int argc, JS
  * user who accepts what the dialog offers returns exactly those bytes, and they are bytes the PAGE computed.
  * That is the line CLAUDE.md §@H draws between a value the code determined and one the solver invented, and it
  * is what lets `fetch("/u/" + prompt("name", "guest"))` carry `/u/guest` instead of a hole.
- *   A DEFAULT THAT IS ITSELF UNKNOWN CARRIES NO EXAMPLE, and that is a positive statement rather than a
- * fallback: there is no concrete string the page determined for the response to be defaulted to, so the
- * response is the unconstrained unknown, which is what core/html/media_element.c mints for a resource nobody
- * has read. Choosing the unknown's own shape text as the example would report a value no run ever computed. */
+ *   A DEFAULT THAT IS ITSELF UNKNOWN AND CARRIES NO EXAMPLE GIVES NONE, and that is a positive statement
+ * rather than a fallback: there is no concrete string the page determined for the response to be defaulted to,
+ * so the response is the unconstrained unknown, which is what core/html/media_element.c mints for a resource
+ * nobody has read. Choosing the unknown's own SHAPE TEXT as the example would report a value no run ever
+ * computed.
+ *   AN UNKNOWN THAT DOES CARRY ONE IS A DIFFERENT CASE AND THE SENTENCE ABOVE USED TO SWALLOW IT. The test
+ * was `JS_IsString(argv[1])`, which unknown external input fails by construction — the position is
+ * `optional DOMString default = ""`, whose conversion crosses an unknown AS ITSELF (core/idl_args.h's
+ * idl_concolic_rule) — so `prompt("name", "guest-" + cfg.tenant)` minted its response EXAMPLE-FREE. But a
+ * concolic is a TRIPLE, and its example is not its shape: it is the value this engine computed by RUNNING the
+ * real `+` on real operands, which is the same thing that makes the plain-string case a value the page
+ * determined rather than one the solver invented. So the example is read off the unknown when it has one, and
+ * `fetch("/u/" + prompt("name", "guest-" + cfg.tenant))` carries `/u/guest-acme` where it carried a hole.
+ * The shape reasoning above is unchanged and is what the no-example arm still rests on. */
 static JSValue js_sd_prompt(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     char *message;
@@ -216,8 +226,13 @@ static JSValue js_sd_prompt(JSContext *ctx, JSValueConst this_val, int argc, JSV
        example below is that value and not a derivation of it. */
     sd_show("prompt", message);                                    /* step 5 */
     free(message);
+    /* STEP 5'S "The response must be defaulted to the value given by default", as this member's EXAMPLE. A
+       real string is those bytes; an unknown default hands over ITS OWN example, which is undefined exactly
+       when the run computed none — so the two arms are one expression and neither invents anything. */
     result = concolic_source_wrap(ctx, SD_PROMPT_SHAPE, SD_PROMPT_SRC,
-                                  JS_IsString(argv[1]) ? JS_DupValue(ctx, argv[1]) : JS_UNDEFINED);
+                                  concolic_is(argv[1]) ? concolic_example(ctx, argv[1])
+                                                       : (JS_IsString(argv[1]) ? JS_DupValue(ctx, argv[1])
+                                                                               : JS_UNDEFINED));
     CHECK(!JS_IsException(result), "simple dialogs: a prompt's response could not be allocated");
     return result;                                                      /* steps 6-11 */
 }

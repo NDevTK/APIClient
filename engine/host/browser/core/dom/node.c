@@ -3212,15 +3212,70 @@ static JSValue js_node_lookup_ns(JSContext *ctx, JSValueConst this_val, int argc
        CString on every `lookupNamespaceURI("")` a page makes. */
     const char *owned = NULL, *arg = NULL;
     size_t arg_len = 0, out_len = 0;
+    JSValue example = JS_UNDEFINED;
     JSValue r;
 
     if (!n) return magic == 2 ? JS_FALSE : JS_NULL;
-    /* The argument is `DOMString?` and the declaration converted it, so this reads a string or the IDL null.
+    /* THE ARGUMENT'S ABSENCE AND ITS IDL NULL ARE THE DECLARATION'S ANSWER AND ARE ASKED AS SUCH — never its
+       TAG. The test here was `JS_IsString(argv[0])`, and unknown external input FAILS that by construction:
+       the position is `DOMString?`, whose conversion crosses an unknown AS ITSELF (core/idl_args.h's
+       idl_concolic_rule answers IDL_CONCOLIC_CROSSES), so `el.lookupNamespaceURI(cfg.ns)` left `arg` NULL and
+       all three members then answered EXACTLY AS IF THE PAGE HAD PASSED `null` — a namespace lookup for the
+       DEFAULT namespace, a `lookupPrefix` returning null at step 1, an `isDefaultNamespace` asking whether
+       this element is in no default namespace. Three different questions, one silent substitution, and no
+       gate here can see it because a real page writes `lookupNamespaceURI(null)` too.
+       `argc` and `JS_IsNull` are sound for exactly the reason a tag test is not: a concolic is neither, and
+       those two ask what the CONVERSION produced rather than what kind of thing the page wrote. Web IDL
+       §3.2.20 Nullable types — T? is what makes the second of them total here: an explicit `null` AND an
+       explicit `undefined` are both the IDL null before any ToString runs, so there is no third spelling of
+       absence left for this test to miss.
        LEN AND NOT strlen: a namespace name is a page-supplied DOMString and may contain a U+0000, which
        `strlen` would truncate at — and a truncated namespace matches a DIFFERENT declaration rather than
        failing to match, which is a wrong answer that looks like a right one. */
-    if (argc > 0 && JS_IsString(argv[0]))
-        owned = arg = JS_ToCStringLen(ctx, &arg_len, argv[0]);
+    if (argc > 0 && !JS_IsNull(argv[0])) {
+        DCHECK(JS_IsString(argv[0]) || concolic_is(argv[0]),
+               "a `DOMString?` argument reached §4.4's namespace lookups as something that is neither a String "
+               "nor unknown external input — the declaration runs Web IDL §3.2.10 DOMString's conversion "
+               "before this body and §3.2.20's null rule was answered one line up, so a third kind is a "
+               "declaration that has come apart from its body");
+        if (concolic_is(argv[0])) {
+            example = concolic_example(ctx, argv[0]);
+            /* AN UNKNOWN WITH NO EXAMPLE CANNOT BE ASKED ANY OF THESE QUESTIONS, and each of them has more
+               than one feasible answer over the same document. */
+            if (JS_IsUndefined(example)) {
+                const char *shape = concolic_shape_c(argv[0]);
+
+                DFAILF("DOM §4.4 Interface Node's namespace lookups were given an argument that is UNKNOWN "
+                       "EXTERNAL INPUT WITH NO EXAMPLE (`%s`, magic %d), and every question the three of them "
+                       "ask is a BYTE COMPARISON against this document's own declarations — locate a "
+                       "namespace matches a prefix against `xmlns:` attribute names, locate a namespace "
+                       "prefix matches a namespace against their values, and isDefaultNamespace compares the "
+                       "argument with the located default. Each has at least two feasible answers for an "
+                       "unpinned string and this member decides none of them. WHAT IS MISSING is the OUTCOME "
+                       "FORK at this member's own seam — js_node_lookup_ns is a plain C body, so building it "
+                       "means declaring these three with idl_method_id_step instead of idl_method_id and "
+                       "asking quickjs-step.h's step_fork_run which completion the lookup reached. ITS "
+                       "ABSENCE WOULD SHOW as a page resolving a namespace out of injected state "
+                       "(`el.lookupNamespaceURI(__CFG.ns)`) exploring neither world — which until now it did "
+                       "not even do THAT, because the tag test above sent every one of them down the `null` "
+                       "arm and reported a real answer to a question nobody asked.",
+                       shape ? shape : "{}", magic);
+            }
+            DCHECK(!JS_IsObject(example),
+                   "a namespace argument's unknown carries an OBJECT as its concrete example — an example is "
+                   "the value this engine COMPUTED, so it is a primitive, and ECMAScript §7.1.19 ToString "
+                   "over an object one runs the PAGE's toString from a C activation with no flow base under "
+                   "it");
+        }
+        /* THE EXAMPLE IS THIS FLOW'S OWN ANSWER, AND THAT IS A NAMED RESIDUAL. It is the value the run
+           computed by running the real operators on real operands, so the namespace this flow resolves is the
+           one a real session resolves — right for this flow, NARROWER than the spec, and the sibling worlds
+           are what the fork above builds. ITS ABSENCE SHOWS as a page whose computed prefix happens to be
+           undeclared never exploring the world in which it is bound. */
+        owned = arg = JS_ToCStringLen(ctx, &arg_len, JS_IsUndefined(example) ? argv[0] : (JSValueConst)example);
+        JS_FreeValue(ctx, example);
+        if (!owned) return JS_EXCEPTION;
+    }
 
     switch (magic) {
     /* "The lookupNamespaceURI(prefix) method steps are: 1. If prefix is the empty string, then set it to null.
