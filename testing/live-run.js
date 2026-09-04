@@ -274,8 +274,28 @@ async function oneRun(browser, pg, url, budgetMs) {
     /* THE FOURTH NOTHING IS NAMED FIRST, because it is the one that makes the row not a row about this site:
        a scheduler already dead when this URL arrived was never asked about it, so `budget-elapsed(no-row)`
        would be reporting an engine that was never offered the document as an engine that produced nothing. */
+    /* AND THE FIFTH, WHICH IS THE FOURTH'S LIVING TWIN AND READ AS A FINDING ABOUT THE ENGINE FOR AS LONG AS
+       IT HAD NO NAME. `_hostKick` returns early while `_hostDriving` is true and re-kicks only when the round
+       in flight COMPLETES, so a document that arrives mid-round is not refused — it is QUEUED, and a round
+       that never completes inside the budget is a round in which this URL is never admitted. The scheduler is
+       alive, `kicksRefused` stays 0, and the row that comes back is `budget-elapsed(no-row)`, whose own
+       comment says it means "a document that was admitted and never provisioned an engine". That is a
+       DIFFERENT nothing, and the difference is the whole reading: one is the engine finding nothing, the other
+       is the engine never being asked.
+       MEASURED, and it is why this arm exists: six interleaved runs of testing/fixtures/wjp_absent.html at
+       artifact 00754e96. Run 0 left the loop driving and never finished inside 90 s; runs 1-5 each reported
+       `budget-elapsed(no-row)` with `alive:true, driving:true, kicksRefused:0` before and after — five rows
+       about a queue, printed in the same column and the same shape as a finding about the site. The spread
+       line called them `runsThatWereSamples: 6/6`, because that denominator asked only whether the scheduler
+       was ALIVE, so a driver that takes a run count precisely because one run is not a measurement was
+       reporting one sample out of six as six.
+       `=== true` AND NOT A TRUTHINESS TEST: `scheduler()` returns `{PROBE_THREW}` when the offscreen is still
+       loading, and an ABSENT `driving` is a third fact — this reader could not ask — which must not be
+       published as either answer. */
     verdict: schedBefore.alive === false && !mine.length
              ? "scheduler-dead-before-this-run(NOT a sample of this site)"
+           : schedBefore.driving === true && !mine.length
+             ? "scheduler-busy-before-this-run(queued behind a round still in flight; NOT a sample of this site)"
            : typeof nav !== "number" ? "no-navigation"
            : terminal ? "terminal"
            : (mine.length ? "budget-elapsed(partial)" : "budget-elapsed(no-row)"),
@@ -374,7 +394,13 @@ async function main() {
         /* THE DENOMINATOR OF EVERY SPREAD ON THIS LINE. §a-coverage-figure-states-what-it-is-a-fraction-of:
            a range across five runs of which four were refused is a range across ONE, and the reader cannot
            see that from the range. */
-        runsThatWereSamples: rs.filter((r) => r.scheduler.before.alive !== false).length + "/" + rs.length,
+        /* ASKED OFF THE VERDICT, NOT OFF `alive`, SO THE TWO CANNOT DISAGREE. This read `alive !== false`,
+           which is the fourth nothing only — it counted a run queued behind a round still in flight as a
+           sample of its site, and that was the commoner of the two on a document whose first run does not
+           finish. Deriving it from the verdict a row already carries means a nothing named up there is a
+           nothing subtracted down here, with nothing to keep in step by hand. */
+        runsThatWereSamples: rs.filter((r) => !/NOT a sample of this site/.test(r.verdict)).length +
+                             "/" + rs.length,
         verdicts: rs.map((r) => r.verdict + ":" + (r.outcomes.join("+") || "no-row")),
         endpoints: spread(rs, first("endpoints")),
         sinks: spread(rs, first("sinks")),
