@@ -748,6 +748,26 @@ char *result_wfq_json(void) {
                         otherwise settle without a clock, and a clock on this host is a fact about the machine.
                         SPELLED THE WAY THE DOCUMENT SPELLS IT, one namespace and one spelling, so a reader who
                         learns the name off @HWORK reads it off here. */
+                     /* …AND THE ONE WORD OF §scheduler'S RAZOR THAT HAD NO INSTRUMENT ANYWHERE. `neverPicked`,
+                        `neverPickedGap` and `neverPickedAtTop` are three gauges over the frontier at an
+                        INSTANT, and between them they can say only that a tied tail EXISTS — none can say
+                        whether a PICK ever passed one over, which is the claim STARVES actually makes. This
+                        counts dispatches where the scan returned an already-dispatched member while a
+                        never-dispatched one stood at exactly the same weight.
+                        A LIFETIME COUNTER — the only kind here that may be differenced — and it is read as a
+                        FRACTION of `picksLifetime`, never raw. A handful over a session is flow_pick's strict
+                        comparison doing its job, since the incumbent seeds the scan and a tie legitimately
+                        goes to it; a figure on the order of the dispatches themselves is the ORDER having
+                        stopped separating members while registry position decides which one runs. Those are
+                        opposite repairs, and nothing else in this document tells them apart.
+                        WHY THE THREE GAUGES COULD NOT: a frontier that GROWS BY FORKING makes all of them
+                        uninformative at once, and this run measured it — 5786 flows against 1010 dispatches,
+                        so `neverPicked` climbing is arithmetic about the fork factor rather than about the
+                        order. `picksMax` cannot fall toward 1 while a framed flow legitimately needs many
+                        quanta to finish one program, and `picksLive/(members-neverPicked)` sums re-dispatches
+                        that CONTINUE a program — necessary — with those that pass over a starved member,
+                        which are the defect. A ratio of both is a reading of neither. */
+                     "\"starvedPicks\":%ld,"
                      "\"workDone\":%ld,\"rankChanges\":%ld}",
                      w.members, w.val_min, w.val_max, w.val_top, w.vt,
                      w.val_zero, w.val_arrived, w.val_unplaced, w.self_emit, w.unrun,
@@ -766,6 +786,7 @@ char *result_wfq_json(void) {
                      flow_scan_runs(FLOW_SCAN_RIVAL), flow_scan_weights(FLOW_SCAN_RIVAL),
                      flow_scan_runs(FLOW_SCAN_OTHER), flow_scan_weights(FLOW_SCAN_OTHER),
                      flow_scan_runs(FLOW_SCAN_CENSUS), flow_scan_weights(FLOW_SCAN_CENSUS),
+                     flow_starved_picks(),
                      engine_work_done(), flow_rank_changes());
 }
 
