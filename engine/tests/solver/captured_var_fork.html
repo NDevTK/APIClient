@@ -33,12 +33,23 @@
  * WHAT IT NAMES. What fails is not "a cell across a fork" but an OPEN cell, whose `pvalue` is a slot in the
  * frame that MINTED it — and which clone_susp_frame / clone_deep_flow share with the sibling (+1 ref) while
  * giving the sibling its own copied buffer. The COW delta isolates the CELL; it does not isolate the FRAME
- * SLOT the cell points into, and a frame is flow-private. See the DCHECK in get_captured_cell.
+ * SLOT the cell points into, and a frame is flow-private. The delta is not the loser here and the framing
+ * that blames it is wrong: cow_capture_varref keys its entry on the CELL POINTER, so after a fork both
+ * flows' deltas name the same cell and the swap is self-consistent about it. What is lost is that the
+ * ISOLATION unit (the cell) and the STORAGE unit (`pvalue`, a slot in the SOURCE flow's buffer) are two
+ * different objects, while the clone's own copied slot at that index is dead.
+ * FIXED by close_var_refs_for_fork, which detaches a frame's own open cells before either clone path
+ * shares them: a detached cell IS its storage, so both arrays naming it agree and ONE delta entry covers
+ * the whole binding — which is the configuration /q/ below had already measured clean.
  *
  * WHAT IT ASKS OF THE GATE. Every arm assigns before it reads, so `typeof` is `"function"` in every world this
  * program has; there is no schedule under which `undefined` is an answer. It is therefore also a
  * schedule-invariance failure in solvergate's own terms — the finding set stops being a function of the
- * document — and it is expected to FAIL until a forked sibling's captured local has storage of its own.
+ * document. It FAILED until close_var_refs_for_fork gave a forked sibling's captured local storage of its
+ * own; it is a REGRESSION test now, and a `closure-undefined` here means that detach has stopped happening.
+ * What it does NOT cover is a captured ARGUMENT, which is addressed both through its cell and directly
+ * through arg_buf, so detaching is not semantics-neutral there and that arm DFAILs instead: this document's
+ * bindings are all `var` locals and d(n)'s parameter is not captured, so it exercises the detach arm only.
  *
  * THE DEPTH IS NOT THE MECHANISM. This reproduces with TWO flows. The real bundle needed roughly 39k only
  * because a larger frontier makes the interleaving that loses the write near-certain, which is the same
