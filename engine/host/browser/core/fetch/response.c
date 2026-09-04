@@ -932,7 +932,7 @@ void response_install(JSContext *ctx, JSValueConst global)
        what `static` means in the IDL and is the only difference from a prototype member. */
     idl_install_method(ctx, ctor, "json", g_json_stepid);
     idl_install_method(ctx, ctor, "redirect", g_redirect_stepid);
-    JS_SetPropertyStr(ctx, (JSValue)global, "Response", ctor);
+    idl_define_global_property_reference(ctx, global, "Response", ctor);
 }
 
 void response_free(JSContext *ctx)

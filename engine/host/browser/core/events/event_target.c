@@ -342,7 +342,7 @@ void event_target_install_interface(JSContext *ctx, JSValueConst global)
         JS_FreeAtom(ctx, a);
     }
     JS_FreeValue(ctx, proto);
-    JS_SetPropertyStr(ctx, (JSValue)global, "EventTarget", ctor);
+    idl_define_global_property_reference(ctx, global, "EventTarget", ctor);
 }
 
 void event_target_set_tree(const EventTargetTree *tree)

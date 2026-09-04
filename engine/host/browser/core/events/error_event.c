@@ -280,7 +280,7 @@ void error_event_install(JSContext *ctx, JSValueConst global)
         JS_SetConstructor(ctx, ctor, proto);
         JS_FreeValue(ctx, proto);
     }
-    JS_SetPropertyStr(ctx, (JSValue)global, "ErrorEvent", ctor);
+    idl_define_global_property_reference(ctx, global, "ErrorEvent", ctor);
 }
 
 JSValue error_event_proto(JSContext *ctx)

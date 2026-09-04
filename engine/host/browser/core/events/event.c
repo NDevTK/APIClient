@@ -861,14 +861,15 @@ static const JSCFunctionListEntry js_event_proto[] = {
     JS_CFUNC_DEF("composedPath", 0, js_event_composed_path),
 };
 
-/* §2.2 the phase constants. Web IDL puts a `const` on the prototype AND the interface object, so one table
-   installs both — reached by NAME rather than by slicing the tail off the member list, which is a silent break
-   the day a member is appended. */
+/* DOM §2.2 Interface Event's phase constants. Web IDL §3.7.5 Constants puts a `const` on the interface
+   prototype object AND the interface object, so one table installs both — reached by NAME rather than by
+   slicing the tail off the member list, which is a silent break the day a member is appended.
+   The descriptor is IDL_CONSTANT_PROP_FLAGS, stated once in idl_args.h with the sentence it derives from. */
 static const JSCFunctionListEntry js_event_consts[] = {
-    JS_PROP_INT32_DEF("NONE", 0, 0),
-    JS_PROP_INT32_DEF("CAPTURING_PHASE", 1, 0),
-    JS_PROP_INT32_DEF("AT_TARGET", 2, 0),
-    JS_PROP_INT32_DEF("BUBBLING_PHASE", 3, 0),
+    JS_PROP_INT32_DEF("NONE", 0, IDL_CONSTANT_PROP_FLAGS),
+    JS_PROP_INT32_DEF("CAPTURING_PHASE", 1, IDL_CONSTANT_PROP_FLAGS),
+    JS_PROP_INT32_DEF("AT_TARGET", 2, IDL_CONSTANT_PROP_FLAGS),
+    JS_PROP_INT32_DEF("BUBBLING_PHASE", 3, IDL_CONSTANT_PROP_FLAGS),
 };
 
 /* THE SUBCLASSES ARE DECLARED HERE, WITH THE INTERFACE THEY EXTEND, and that is not tidying. Each host had its
@@ -1004,7 +1005,7 @@ void event_install(JSContext *ctx, JSValueConst global)
     }
     JS_SetPropertyFunctionList(ctx, ctor, js_event_consts,
                                (int)(sizeof(js_event_consts) / sizeof(js_event_consts[0])));
-    JS_SetPropertyStr(ctx, (JSValue)global, "Event", ctor);
+    idl_define_global_property_reference(ctx, global, "Event", ctor);
 }
 
 static void event_declare_subclasses(JSContext *ctx)

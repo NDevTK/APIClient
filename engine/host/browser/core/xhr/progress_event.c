@@ -214,7 +214,7 @@ void progress_event_install(JSContext *ctx, JSValueConst global)
     proto = progress_event_proto(ctx);
     JS_SetConstructor(ctx, ctor, proto);
     JS_FreeValue(ctx, proto);
-    JS_SetPropertyStr(ctx, (JSValue)global, "ProgressEvent", ctor);
+    idl_define_global_property_reference(ctx, global, "ProgressEvent", ctor);
 }
 
 JSValue progress_event_proto(JSContext *ctx)

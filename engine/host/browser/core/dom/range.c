@@ -1829,13 +1829,16 @@ static JSValue js_range_rects(JSContext *ctx, JSValueConst this_val, int argc, J
 
 /* ---- DECLARATION AND INSTALL ---------------------------------------------------------------------------- */
 
-/* §5.5's four comparison constants, on both the interface object and the prototype — which is where Web IDL
-   §3.7.4 puts an interface's constants. */
+/* DOM §5.5 Interface Range's four comparison constants, on both the interface object and the prototype —
+   which is where Web IDL §3.7.5 Constants puts an interface's constants, and the two targets are why one table
+   is installed twice below. Web IDL §3.7.4 Named properties object is the number that stood here, and it
+   resolves, so nothing reported it: a correct number under no title is the one shape an audit cannot see.
+   The descriptor is IDL_CONSTANT_PROP_FLAGS, stated once in idl_args.h with the sentence it derives from. */
 static const JSCFunctionListEntry js_range_consts[] = {
-    JS_PROP_INT32_DEF("START_TO_START", 0, 0),
-    JS_PROP_INT32_DEF("START_TO_END",   1, 0),
-    JS_PROP_INT32_DEF("END_TO_END",     2, 0),
-    JS_PROP_INT32_DEF("END_TO_START",   3, 0),
+    JS_PROP_INT32_DEF("START_TO_START", 0, IDL_CONSTANT_PROP_FLAGS),
+    JS_PROP_INT32_DEF("START_TO_END",   1, IDL_CONSTANT_PROP_FLAGS),
+    JS_PROP_INT32_DEF("END_TO_END",     2, IDL_CONSTANT_PROP_FLAGS),
+    JS_PROP_INT32_DEF("END_TO_START",   3, IDL_CONSTANT_PROP_FLAGS),
 };
 
 static int g_id[R_MEMBER_N], g_id_to_string = -1, g_id_delete = -1, g_id_extract = -1,
@@ -2031,7 +2034,7 @@ void range_install(JSContext *ctx, JSValueConst global)
                                (int)(sizeof(js_range_consts) / sizeof(js_range_consts[0])));
     JS_SetConstructor(ctx, ctor, proto);
     JS_FreeValue(ctx, proto);
-    JS_SetPropertyStr(ctx, (JSValue)global, "Range", ctor);
+    idl_define_global_property_reference(ctx, global, "Range", ctor);
 }
 
 

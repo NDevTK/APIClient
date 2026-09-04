@@ -1087,12 +1087,12 @@ void message_port_install(JSContext *ctx, JSValueConst global)
     DCHECK(!JS_IsNull(port_p) && !JS_IsNull(chan_p),
            "the messaging interfaces were installed into a realm that never ran their proto build");
     ctor = idl_interface_object(ctx, "MessagePort", port_p);
-    JS_SetPropertyStr(ctx, (JSValue)global, "MessagePort", ctor);
+    idl_define_global_property_reference(ctx, global, "MessagePort", ctor);
 
     ctor = idl_step_constructor(ctx, "MessageChannel", g_chan_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the MessageChannel interface object could not be allocated");
     JS_SetConstructor(ctx, ctor, chan_p);
-    JS_SetPropertyStr(ctx, (JSValue)global, "MessageChannel", ctor);
+    idl_define_global_property_reference(ctx, global, "MessageChannel", ctor);
     JS_FreeValue(ctx, port_p);
     JS_FreeValue(ctx, chan_p);
 }
