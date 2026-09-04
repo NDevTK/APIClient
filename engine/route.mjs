@@ -1000,9 +1000,19 @@ for (;;) {
    carries no round count, because a cap here would be the bound §NO BOUNDS forbids standing in the one place
    that decides whether a loss is real.
    THE SENDER IS NOT STEPPED. engines[0] is `a`; a step of it emits posts that nothing after this line routes,
-   which would inflate the routed count against a delivery count that could not move. */
+   which would inflate the routed count against a delivery count that could not move.
+   AND WHICH INSTANCES REACHED THIS STATE IS RECORDED, because one of the three census numbers may only be read
+   of an instance that did. `_routedZeroDelivery` is a GAUGE (solver/engine.h, and solver/result.c calls it out
+   as one of the two exceptions among its `_`-prefixed siblings): it RISES when a record arrives and FALLS when
+   some timeline admits it, so at a live receiver it counts a record still in flight and a record that is lost
+   as one number, and only a receiver drained to a stall makes it the second. engine.h's words are "a host that
+   reads it says that it drained"; this set is this driver SAYING it, per instance, rather than a claim about
+   the scope of a loop that a later edit could widen without noticing what it widened. The sender is not in it,
+   so its gauge is reported as a question this drive did not ask rather than as a loss. */
+const drainedForCensus = new Set();
 for (const e of engines.slice(1)) {
   const why = await pumpUntil(e, () => false);
+  drainedForCensus.add(e.tag);
   console.log(`drained [${e.tag}] before the census: ${why}`);
 }
 
@@ -1041,6 +1051,14 @@ let forked = 0;
 let delivered = 0, refused = 0;
 /* AND THE SAME PAIR PER RECEIVING DOCUMENT, which is the granularity the loss question actually has. */
 const deliveredTo = new Map();
+/* …AND THE THIRD NUMBER PER RECEIVING INSTANCE, WHICH IS A DIFFERENT GRANULARITY AND NOT A STYLE CHOICE. The
+   pair above is summed per DOCUMENT because the pigeonhole it feeds compares a document's admissions against
+   the records this zone handed that document. `_routedZeroDelivery` is one instance's reading of its OWN
+   ledger (solver/engine.c's `g_routed_recs`, keyed by record text at the arrival), so two instances holding
+   one document name have two ledgers and a sum of their gauges is a number neither of them holds. Split by
+   whether the instance was drained, because that is what decides whether its gauge is a loss or a backlog —
+   they take opposite work and a single list would report them as one thing. */
+const zeroDeliveryRead = [], zeroDeliveryUndrained = [], zeroDeliveryAbsent = [];
 /* …AND WHAT BECAME OF THE TASKS THOSE DELIVERIES QUEUED, which is the half this file used to INFER and could
    not. §9.3.3 step 8's task has four ends and only one of them runs a listener; solver/engine.h declares them,
    core/frame/window_message.c reports the end a task RUNS to, and solver/flow.c reports the one §7.5.10 step
@@ -1056,6 +1074,32 @@ for (const e of engines) {
     fail(`[${e.tag}] the result document carries no routed-delivery census — solver/result.c emits the pair ` +
          'and solver/engine.c counts it at the two lines that ARE the two outcomes, so an absent field is a ' +
          'producer that moved under this reader and every delivery assertion below would be reading a hole');
+  /* AND THE THIRD OF ENGINE.H'S THREE, WHICH IS THE ONLY ONE OF THEM ABOUT A RECORD. Both numbers above are
+     per (record, TIMELINE) attachment; `_routedZeroDelivery` is per RECORD, which is why engine.h says ALL
+     THREE OR NONE and why no arithmetic over the pair could ever have recovered it here.
+     IT IS ITS OWN GUARD AND NOT A THIRD DISJUNCT IN THE PAIR'S, and that is the whole reason this reads as
+     two lines rather than one. The pair's absence holes every delivery assertion after it, so its message is
+     about a producer that moved; THIS one's absence holes exactly one check, so a verdict that read the same
+     for both would sum "I found a lost message" with "I could not look for one", and those take opposite
+     work — CLAUDE.md's separate-verdicts rule, in the one reader written to end the guessing about deliveries.
+     IT IS STILL A RED AND NOT A PASS, AND IT IS THE LAST THING SAID RATHER THAN THE FIRST. A `|| 0` here
+     would answer the equality below with the number a healthy run also produces, which is the defaulted-field
+     defect exactly, and an artifact that cannot be asked the question is not a green gate — so the absence is
+     recorded on this line and VERDICTED at the end, where it costs nothing. `fail` EXITS: failing HERE, inside
+     the per-instance loop and therefore at the FIRST instance, ends the drive before the per-document
+     shortfall, the task-end conservation law and every check after them have run, so an old artifact would
+     report one unasked question INSTEAD of the answers it can still give. Measured while this reader was
+     being built, at the artifact at 332a0c50 (which predates the field): failing in this loop replaced a
+     shortfall verdict — 449 records routed to one document, 193 admitted, at least 256 admitted by no
+     timeline, reproduced to the digit in three consecutive runs — with a line saying only that a counter was
+     missing. */
+  if (typeof r._routedZeroDelivery !== 'number') zeroDeliveryAbsent.push(e.tag);
+  /* AND IT IS TAKEN ONLY WHERE IT MEANS A LOSS. An instance this drive never drained holds a number that is
+     part backlog by construction, so it is carried to the report as an unasked question and never compared. */
+  else if (drainedForCensus.has(e.tag))
+    zeroDeliveryRead.push({ tag: e.tag, doc: e.docId, zero: r._routedZeroDelivery });
+  else if (r._routedZeroDelivery)
+    zeroDeliveryUndrained.push(`[${e.tag}] ${e.docId}: ${r._routedZeroDelivery}`);
   /* AND NOR IS ANY OF THE FOUR, for the same reason and one worse: a missing end reads as ZERO, and the check
      below is that the four SUM to at least the deliveries — so a producer that stopped emitting one of them
      would fail this driver with a message about a lost message. */
@@ -1086,7 +1130,11 @@ for (const e of engines) {
   console.log(`[${e.tag}] orphans driven=${r._orphansDriven} asked=${r._orphansAsked}`);
   console.log(`[${e.tag}] worldSegments held=${r._worldSegmentsHeld} made=${r._worldSegmentsMade} ` +
               `forkedFromAncestor=${r._worldSegmentsForked} flows=${r._flows} switches=${r._switches} ` +
-              `routedDelivered=${r._routedDelivered} routedRefused=${r._routedRefused}`);
+              `routedDelivered=${r._routedDelivered} routedRefused=${r._routedRefused} ` +
+              `routedZeroDelivery=${typeof r._routedZeroDelivery === 'number' ? r._routedZeroDelivery
+                                     : 'ABSENT — this artifact does not emit it, see the UNAUDITED line below'}` +
+              `${typeof r._routedZeroDelivery !== 'number' || drainedForCensus.has(e.tag) ? ''
+                 : ' (NOT DRAINED — a backlog, not read as a loss)'}`);
   console.log(`[${e.tag}] §9.3.3 step 8 task ends: fired=${r._routedTasksFired} ` +
               `declinedByTargetOrigin=${r._routedTasksTargetOrigin} targetDestroyed=${r._routedTasksTargetGone} ` +
               `threw=${r._routedTasksThrew}`);
@@ -1185,14 +1233,40 @@ if (!posts.length) fail('the sender emitted no cross-instance post');
  * timelines pays for N-1 records admitted by none — so an OK here is not a statement that no message was lost,
  * and a reader who takes it for one has read a coverage figure without its denominator.
  *
- * WHAT WOULD MAKE THE REAL CHECK POSSIBLE IS ONE COUNTER, AND IT BELONGS TO THE PARTY THAT HOLDS THE FACT.
- * The question is per RECORD ("was this record admitted by at least one timeline") and every number crossing
- * this seam is per (record, timeline) attachment, so no arithmetic here can recover it. solver/engine.c raises
- * `g_routed_delivered` at the enqueue and `g_routed_refused` at the refusal; what it does not have is a tally
- * of records whose LAST attachment was consumed with zero deliveries. Emit that beside the pair
- * (`_routedZeroDelivery`) and this becomes an equality against zero that no multiplicity can pay for and no
- * schedule can move. Its absence would show exactly as it shows today: a gate that is red on a quiet machine,
- * green on a loaded one, and unable to name which record went missing. */
+ * THAT COUNTER EXISTS NOW AND IS READ BELOW, so this paragraph says what the shortfall above is FOR rather
+ * than what is missing — the sentence it replaces asked for exactly one thing and the request has been met.
+ * The question is per RECORD ("was this record admitted by at least one timeline") and every number this
+ * pigeonhole compares is per (record, timeline) attachment, so no arithmetic HERE recovers it: it is answered
+ * where the fact lives instead. solver/engine.c keys a ledger by the record's own text at the arrival — before
+ * the attach loop, deliberately, so a record whose attach aborts is still on it — raises that row's `admitted`
+ * at the delivery, and `engine_routed_census` sums the arrivals of every row still holding zero. Read at a
+ * receiver this drive DRAINED, that is an equality against zero which no multiplicity can pay for and no
+ * schedule can move.
+ *
+ * THE SHORTFALL IS KEPT BECAUSE IT IS NOT THE SAME QUESTION, and neither of the two subsumes the other. This
+ * one compares THIS ZONE's routed count against the receiver's admissions, so its subject is the transport:
+ * it can speak about a record this driver handed over that the receiving instance's ledger has no row for.
+ * The equality's subject is the receiver's own ledger, so it speaks about every record that ARRIVED and says
+ * nothing about one that did not. Both fire in one direction only, and the OK line at the end says which of
+ * the two it is reporting rather than merging them into a count of things that went right. */
+/* THE BLIND SPOTS FIRST, AND AS `console.log`, BECAUSE EVERY VERDICT BELOW THIS LINE CAN EXIT. A gate states
+   its findings and its blind spots as SEPARATE verdicts; printing an unasked question only when nothing else
+   fails would make it visible in exactly the runs nobody needs it in. Both of these say what was NOT asked
+   and neither claims anything was found. */
+if (zeroDeliveryAbsent.length)
+  console.log(`[route] UNAUDITED — ${zeroDeliveryAbsent.length} of ${engines.length} instance(s) emit no ` +
+              `\`_routedZeroDelivery\` (${zeroDeliveryAbsent.join(' ')}), so the per-record loss question was ` +
+              'NOT ASKED of them and nothing about them was found either way. The artifact this drive loaded ' +
+              'is older than this reader. The verdict for it is at the end, after the checks that can still ' +
+              'be made have been made');
+if (zeroDeliveryUndrained.length)
+  console.log(`[route] UNAUDITED — ${zeroDeliveryUndrained.length} instance(s) were NOT drained before this ` +
+              `census and hold a non-zero \`_routedZeroDelivery\`: ${zeroDeliveryUndrained.join(' ; ')}. The ` +
+              'gauge counts a record still in flight and a record no timeline will ever admit as one number ' +
+              '(solver/engine.h), so at an instance that can still step it is a BACKLOG and this drive did ' +
+              'not ask the loss question of it. Nothing about those instances was found either way. The ' +
+              'sender is the expected member here: stepping it would emit posts that nothing after that line ' +
+              'routes, so the drain above deliberately skips it');
 for (const [doc, n] of routedTo) {
   /* NOT DEFAULTED, for the reason the census fields above are not: a document this zone routed to and that no
      engine reported a delivery census for is a receiver that vanished between the routing and the count, and
@@ -1209,9 +1283,34 @@ for (const [doc, n] of routedTo) {
          'never receives and cannot know it did not (this document refused as not-this-timeline: ' +
          `${refused} across all receivers; routed in total: ${posts.length}, delivered in total: ` +
          `${delivered}). The direction matters: this fires only on a shortfall, so it names a loss when it ` +
-         'speaks and proves nothing when it is silent — see the block above for the one counter that would ' +
-         'turn it into a statement about every record');
+         'speaks and proves nothing when it is silent — the equality below is the statement about every ' +
+         "record that ARRIVED, read off the receiver's own per-record ledger rather than recovered from this " +
+         'sum, and the two are checked separately because they have different subjects');
 }
+/* AND THE ONE THAT IS A LOSS. `zero` is a count of ARRIVALS of records that no timeline admitted, not a count
+   of such records, because a record routed twice arrived twice and both arrivals were lost — engine.c sums
+   `r->routed` over the rows whose `admitted` is 0, which is the number of messages the page never received.
+   ITS SILENCE IS A STATEMENT AND THE SHORTFALL'S IS NOT, which is the entire reason it was worth building
+   and is a claim about what a zero MEANS rather than about when this line fires — both fire only on a loss: a
+   multiplicity of timelines cannot pay for it (a record admitted by twelve timelines lowers its own row to
+   zero and no other row's) and a schedule cannot move it (the receiver is drained, so the gauge cannot fall
+   again) — so its ZERO is a positive statement about every record that arrived, and not a silence. */
+const zeroLost = zeroDeliveryRead.filter((x) => x.zero);
+if (zeroLost.length)
+  fail(`${zeroLost.reduce((n, x) => n + x.zero, 0)} routed record arrival(s) were admitted by NO TIMELINE of ` +
+       `the document they named, at ${zeroLost.length} of ${zeroDeliveryRead.length} drained instance(s): ` +
+       `${zeroLost.map((x) => `[${x.tag}] ${x.doc}: ${x.zero}`).join(' ; ')}. That is a peer's message the ` +
+       'page never receives and cannot tell from one that was never sent. Every receiver was pumped to a ' +
+       'stall before this line, so the gauge cannot fall again and this is a loss rather than a backlog — ' +
+       'AND THE ONE THING THAT WOULD MAKE THAT WRONG IS THE FIRST THING TO CHECK: a stall means every live ' +
+       'flow is host-owed (engine.c asserts exactly that at the stall), and a host-owed flow can still be ' +
+       'holding an unconsumed attachment, which only the frontier reaching DONE rules out. Read the ' +
+       'refusals beside it before reading the flows: solver/engine.c says each of these was refused at ' +
+       'deliver_admits by every timeline it was offered to, either because a RECEIVED world CONTRADICTS the ' +
+       'record and the arm that should take it was never minted, or because a FORECLOSED world covers it and ' +
+       'the parent refused it for a reason of its own — and which of the two is a property of the routed ' +
+       `world vectors alone, not of the schedule (delivered ${delivered}, refused ${refused}, routed by this ` +
+       `zone ${posts.length})`);
 const endsTotal = ENDS.reduce((n, k) => n + ends[k], 0);
 /* `<` AND NOT `!==`, AND THE SLACK IS A MECHANISM RATHER THAN TOLERANCE: a fork gives the arm its own Array
    naming the parent's job RECORDS (solver/flow.c's flow_job_fork), so a timeline that branches between the
@@ -1388,16 +1487,40 @@ if (!worldDeaths.length)
        'and with neither, every segment `b` materialized is a foreign flow\'s state it holds for the rest of ' +
        'its process, and `b` can never park while it does (solver/cold.c refuses it)');
 console.log(`world deaths announced: ${worldDeaths.length} — ${worldDeaths.join(' ')}`);
+/* AND THE BLIND SPOT'S OWN VERDICT, LAST, BECAUSE IT IS THE ONE THAT SILENCES EVERYTHING AFTER IT. Every
+   check above has now spoken, so this exits having cost nothing, and it exits rather than passing for the
+   reason the reader's own comment gives: an artifact that cannot be asked the question is not a green gate,
+   and a `|| 0` in its place would have answered the equality with the number a healthy run also produces.
+   THE SECOND DISJUNCT IS THE ASSERT THAT COULD NOT FIRE. A run in which the equality was asked of NO instance
+   passes it vacuously — the check above reads `zeroLost` off an empty list — and a check whose two sides cannot
+   disagree is not a weak check, it is a non-check reporting as a passing one. It is stated here as what it is
+   rather than left to be read out of an OK line quoting a denominator of zero. */
+if (zeroDeliveryAbsent.length || zeroDeliveryRead.length === 0)
+  fail('UNAUDITED, NOT A FINDING — the per-record delivery equality was NOT ASKED and NOTHING was found by ' +
+       `it. ${zeroDeliveryAbsent.length ? `${zeroDeliveryAbsent.length} of ${engines.length} instance(s) ` +
+       `carry no \`_routedZeroDelivery\` (${zeroDeliveryAbsent.join(' ')}): solver/result.c emits it beside ` +
+       '`_routedDelivered`/`_routedRefused` and solver/engine.h says all three or none, so the artifact this ' +
+       'drive loaded (extension/lib/qjs/qjs.mjs, read off disk) predates that emission or its producer moved ' +
+       'under this reader — rebuild and re-run' : 'no instance reached the drained state the gauge may be ' +
+       'read in, so the equality stood over an empty list and would have passed whatever the receivers held'}` +
+       '. Every check that COULD be made was made first and its verdict is above this line: what is missing ' +
+       'here is the one statement about every record that arrived, not a statement that a record was lost');
 /* AND THE OK SAYS WHAT IT DID NOT ESTABLISH. The delivery check above is one-sided: it names a loss when it
    fires and is silent when a receiver's timeline multiplicity has paid for one, so a line that read "N routed
    into M deliveries" and stopped invited exactly the reading the block above spends a paragraph refusing. The
-   per-document shortfall is printed as the number it is — zero on this run — beside the counter that would
-   make it a statement about every record rather than about the sum. */
+   per-document shortfall is printed as the number it is — zero on this run — beside the per-record equality
+   that IS a statement about every record that arrived, and beside the count of instances that equality could
+   not be asked of, because a check that was not made is not a check that passed. */
 console.log(`[route] OK — two instances, ${posts.length} record(s) routed into ${delivered} delivery(ies) ` +
             `across the receiver's timelines (${refused} refused as not-this-timeline) with one listener run ` +
-            'each; no receiving document admitted fewer records than it was handed, which does NOT establish ' +
-            'that every record was admitted (solver/engine.c emits no per-record delivery tally, so a record ' +
-            'admitted by several timelines still pays for one admitted by none), ancestry-forked segments: ' + forked +
+            'each; no receiving document admitted fewer records than it was handed, which on its own does NOT ' +
+            'establish that every record was admitted (a record admitted by several timelines pays for one ' +
+            `admitted by none) — and, which that sum cannot say, every record that ARRIVED at each of the ` +
+            `${zeroDeliveryRead.length} DRAINED instance(s) was admitted by at least one of its timelines ` +
+            `(\`_routedZeroDelivery\` == 0 at every one of them)` +
+            `${zeroDeliveryUndrained.length ? `, with ${zeroDeliveryUndrained.length} UNDRAINED instance(s) ` +
+              'holding a non-zero gauge that is a backlog and was NOT asked the loss question' : ''}` +
+            ', ancestry-forked segments: ' + forked +
             `, cross-agent reads answered: ${readsAnswered}, w.closed read back: ${closedBy(resumedTag)[0].url}` +
             `, parked and resumed across ${residue.length} bytes of residue`);
 
