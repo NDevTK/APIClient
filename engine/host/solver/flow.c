@@ -627,6 +627,16 @@ long flow_rank_changes(void) { return g_rank_changes; }
 static long g_starved_picks = 0;
 long flow_starved_picks(void) { return g_starved_picks; }
 
+/* …AND THE SUBSET OF THOSE IN WHICH THE RE-DISPATCHED MEMBER HAD NOTHING TO CONTINUE, which is the whole of
+   what the row above could not say and was claimed to. Three sites that DECLARE that counter described it as
+   counting only the defect; a CONSUMER of it said the opposite, and the consumer was right — a member re-picked
+   while INSIDE a unit of work is being handed the thread to FINISH a program, which is necessary work and is
+   not what §scheduler's razor calls STARVES. Both populations were being summed into one figure, and the
+   opposite repairs a reader is supposed to choose between are exactly the two that figure adds together. See
+   solver/flow.h for the reading and flow_between_units for the boundary. */
+static long g_starved_picks_idle = 0;
+long flow_starved_picks_idle(void) { return g_starved_picks_idle; }
+
 /* A FLOW TAKES OR RELEASES THE THREAD — and a dispatch is where an account's coordinate STOPS being a reading
    of the frontier's clock and becomes a tag of its own. The two statements are ONE operation and in this order,
    because between them the clock would be defined by an account that is defined by the clock.
@@ -1088,6 +1098,28 @@ void flow_age_running(int64_t us) {
        there, and FLOW_SILENCE_US here for what a charge the pick cannot see cost, measured. */
 }
 
+/* IS THIS MEMBER BETWEEN UNITS OF WORK — asked of ANY member of the frontier and not only of the one holding
+   the thread, which is the whole reason it is a function here rather than the local engine.c already computes.
+   HTML §8.1.4.4 "Calling scripts", clean up after running script step 3: "If the JavaScript execution context
+   stack is now empty, perform a microtask checkpoint" — so a live frame answers no outright (`Flow::frame` IS
+   that stack, solver/flow.h) and a checkpoint the flow still owes answers no as well, the checkpoint being a
+   step OF the turn that is ending rather than a turn of its own. Those are the two clauses flow_credit_visit
+   asserts below, and they are asserted THROUGH this predicate so the two readings cannot drift: two spellings
+   of one predicate is the drift engine.c's own `unit_ended` local refuses, and this is that refusal extended
+   to the one caller that cannot use the local.
+   IT IS NARROWER THAN engine.c'S `unit_ended` BY EXACTLY ONE CLAUSE, AND THE CLAUSE IS NOT A PER-MEMBER FACT.
+   That local also asks `!JS_HasParkedFlow(JS_GetRuntime(ctx))`, of the RUNTIME rather than of the flow,
+   because the flow it asks about is the one switched IN and its parked-continuation queue has been moved into
+   the runtime for the duration (flow_switch_out's JS_TakeParkedFlows stores it back on `Flow::parked`). A
+   member that is not running therefore answers that half from `parked`, and the running member answers it from
+   a runtime this file holds no handle to — one question with two spellings depending on who holds the thread,
+   which is precisely what a predicate must not be. The residual at the counter below states what that costs.
+   IT DECIDES NOTHING AND IT MOVES NO RANK, for flow_credit_pick's reason: flow_weight does not read it, no
+   fork carries it, and the only consumers are an assert and a census counter. */
+static int flow_between_units(const Flow *f) {
+    return f->frame == NULL && !flow_job_microtask(f);
+}
+
 /* A FLOW COMPLETED A UNIT OF WORK — the OPTIMISM term's quantity, and the one thing in this file that is a count
    rather than a clock. See flow.h's `visits` for what a unit is and why the term may not be thread time.
    IT IS A SEPARATE CALL FROM flow_age_running AND THAT IS THE POINT. The two are charged at the same moment by
@@ -1133,6 +1165,17 @@ void flow_credit_visit(Flow *f) {
            "part of the turn that just ended, so the unit is not over and this credit DEMOTES the flow at the "
            "one instant its queued reactions became eligible to run: it must then out-rank the whole frontier "
            "a second time to run its own checkpoint, which on a forking page never happens");
+    /* AND THE TWO ABOVE READ THROUGH THE PREDICATE A SECOND CONSUMER NOW SHARES, so the boundary cannot gain a
+       clause here without gaining one there or the other way about. The two specific asserts stay because each
+       names its own cause and this one names none; what this adds is that they are the WHOLE of the boundary
+       flow_between_units states, which is the fact the starvation counter leans on and could not otherwise
+       check. Like every derived guard in this file it is an identity under the code as it stands, so it fires
+       only on an edit that breaks it. */
+    DCHECK(flow_between_units(f),
+           "a completed unit of work was credited to a flow that flow_between_units says is INSIDE one, while "
+           "the two asserts directly above passed — the unit boundary has gained a clause in one of the two "
+           "places that state it and not in the other, so the census row that counts a re-dispatch as having "
+           "had nothing to continue is judging a different boundary than the optimism term is credited at");
     f->visits++;
 }
 
@@ -2913,6 +2956,19 @@ static double flow_queue_nonreward(const Flow *f) {
    question at this door is whether two newcomers arriving at two instants read it the same, and copying the
    incumbent's count answered 1/9 for one and 1/14 for the other — a whole range apart, for units NEITHER of
    them completed. Read at zero for both, they do.
+   AND THE FORK IS THE OTHER SIDE OF THAT SPLIT AND STAYS THERE, WHICH IS THE ONE READING OF THIS BLOCK THAT
+   KEEPS BEING RE-DERIVED AND IS WRONG. The hypothesis writes itself: a fork copies the count, so an arm that
+   has never held the thread reads whatever bonus its parent's completed work left, ties with it exactly, and
+   §scheduler's never-starved sentence cannot identify a never-run member — therefore stop copying. It has been
+   tried and MEASURED, and flow_fork_inherit records what it cost: every fork minted a flow at the full 1.0,
+   strictly above every flow that had consumed a quantum, so no flow ever got a second turn. The premise is
+   right and the conclusion inverts because the copy is not a stranger's number — CLAUDE.md's two-instants test
+   asks WHOSE FACT a quantity is, and completed units are a fact about the EXECUTED PREFIX, which an arm IS.
+   Two arms forked either side of a completed unit read differently because their prefixes differ by it, and
+   the reading is monotone DECREASING in that count, so the older arm ranks higher and the queue drains
+   oldest-first. What separates an arm from the parent it tied with is the AGING, whose own half the arm freezes
+   at the fork while the parent goes on burning — not this term, which has no work to do between a flow and its
+   own continuation.
    ITS RANGE IS UNCHANGED AND SO IS flow_weight'S VALUE. This is the same summand it always was, moved from one
    side of the arrival split to the other; flow_nonreward adds it back and FLOW_NONREWARD_MAX still prices it
    at its reading at zero visits. What changed is only which of the two questions it belongs to. */
@@ -3463,8 +3519,38 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        about the order (5786 flows created against 1010 dispatches — no ordering can dispatch what the thread
        has not reached); `picks_max` cannot fall toward 1 while a framed flow legitimately needs many quanta to
        finish one program; and `picks_live / P` counts BOTH re-dispatches that CONTINUE a program — necessary
-       work — and re-dispatches that pass over a starved member, which are opposite things. This separates
-       them: only the second is counted here.
+       work — and re-dispatches that pass over a starved member, which are opposite things.
+       AND THIS ROW ALONE DOES NOT SEPARATE THEM EITHER, WHICH IS WHAT THIS PARAGRAPH USED TO CLAIM IN THE
+       WORDS "This separates them: only the second is counted here". It does not and it never did: the
+       condition below asks whether `best` has been dispatched BEFORE and says nothing whatever about whether
+       it has anything to continue, so a framed flow re-picked to FINISH its program while an arm it forked
+       stands tied — which is the ordinary shape of every quantum of every multi-quantum program on a forking
+       page, since an arm is born at its parent's exact weight (flow_fork_inherit) — is counted here beside a
+       pick that passed over a member with nothing in front of it. Those are the two opposite repairs the row
+       is read to choose between, added together. WHAT FOUND IT WAS A DISAGREEMENT AMONG THE SITES THAT DESCRIBE
+       THIS ROW, and the shape is worth more than the incident: a CONSUMER of it declined to print the quotient
+       on the ground that the row "sums re-dispatches that CONTINUE a framed program … with those that pass
+       over a never-run member", while this comment and flow.h — the two sites that DECLARE it — both said the
+       separation had been made. One site disagreeing with its siblings is either the only correct one or the
+       only wrong one, and the consumer outranked both declarations, because a declaration states an intention
+       and a use states what a caller could actually get out of it.
+       SO THE SEPARATION IS THE SECOND COUNTER AND NOT THIS ONE. `g_starved_picks_idle` is the subset in which
+       the re-dispatched member was BETWEEN units of work — no live frame and no microtask checkpoint owed, the
+       boundary flow_between_units states and flow_credit_visit is credited at — so it had finished its trial
+       and was handed the thread again ahead of a member that has never had one. That subset is the defect; the
+       remainder is a program being finished, which is the necessary work no ordering should interrupt on a
+       tie. Read the SUBSET against `picksLifetime` and the remainder as what a forking frontier costs.
+       NAMED RESIDUAL — THE IDLE SUBSET IS ITSELF AN UPPER BOUND, BY ONE CLAUSE. Not covered: a member holding a
+       PARKED CONTINUATION and nothing else. engine.c's unit boundary has a third clause for it and asks it of
+       the RUNTIME, because the running flow's park queue is moved there for the duration of its turn and
+       stored back on `Flow::parked` only at switch-out — so from here the same question has two spellings
+       depending on who holds the thread, and flow_between_units asks neither. Since the incumbent seeds this
+       scan and is who `best` usually is, the uncovered population is exactly the incumbent-with-a-park, and it
+       is counted as idle when it is not. What the next diff builds: one accessor answering "does this member
+       hold a parked continuation" for every member including the running one, so the boundary here is
+       engine.c's whole boundary rather than its per-member half. How its absence shows: `starvedPicksIdle`
+       tracking `starvedPicks` on a document whose flows park heavily inside continuations while `unitsDone`
+       stays flat — an idle count that cannot fall below the park rate, on a run in which nothing finished.
        ONLY THE SCHEDULER'S OWN PICK. FLOW_SCAN_NEXT is engine.c's `flow_next_to_run(cur, FLOW_SCAN_NEXT)`, the
        one call whose answer becomes a dispatch; the rival scan, the host's best-weight read, the pager's tail
        and the census ask other questions and a count over them would be a number about the instrument.
@@ -3472,8 +3558,15 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        and a tolerance would count members the pick can already tell apart.
        A LIFETIME COUNTER and the only kind a reader may difference — it is off the flows entirely, for
        `g_picks_total`'s reason, and reset by nothing for `g_rank_changes`'. Read it against `picksLifetime`:
-       the FRACTION is what says whether the tie-break is deciding dispatches or is a rounding event. */
-    if (why == FLOW_SCAN_NEXT && best && best->picks > 0 && never && never_w == bw) g_starved_picks++;
+       the FRACTION is what says whether the tie-break is deciding dispatches or is a rounding event — and the
+       IDLE fraction is what says which of the two repairs that reading is asking for. BOTH are raised here,
+       under one condition, so no reading can be a comparison of two moments: the subset is decided by the same
+       `best` the superset was, in the same evaluation, and `idle <= starved` is true by construction rather
+       than by two writers agreeing. */
+    if (why == FLOW_SCAN_NEXT && best && best->picks > 0 && never && never_w == bw) {
+        g_starved_picks++;
+        if (flow_between_units(best)) g_starved_picks_idle++;
+    }
     return best;
 }
 

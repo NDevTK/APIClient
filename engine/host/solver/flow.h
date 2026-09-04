@@ -1925,8 +1925,32 @@ long flow_rank_changes(void);
    creating 5786 flows against 1010 dispatches cannot reach them whatever the order says), `picks_max` cannot
    fall toward one while a framed flow legitimately needs many quanta to finish a program, and
    `picks_live / (members - never_picked)` sums re-dispatches that CONTINUE a program, which are necessary,
-   with re-dispatches that pass over a starved member, which are the defect. This counts only the second. */
+   with re-dispatches that pass over a starved member, which are the defect.
+   AND THIS ROW DOES NOT SEPARATE THOSE TWO EITHER, WHICH THE SENTENCE THAT STOOD HERE CLAIMED IT DID ("This
+   counts only the second"). The condition is `best` having been dispatched before, and being dispatched
+   before says nothing about having anything to continue: a framed flow re-picked to finish its program while
+   an arm it forked stands at its exact weight is counted here, and on a forking page that is the ordinary
+   shape of every quantum of every multi-quantum program, because an arm is born at its parent's weight. The
+   claim was refuted by a CONSUMER of the row, which had declined to print the quotient for exactly this
+   reason while the two sites that declare it said the separation had been made. `flow_starved_picks_idle`
+   below is the separation; this row is the population it is a subset of, and kept because the REMAINDER — what a
+   forking frontier spends finishing programs — is a reading in its own right. */
 long flow_starved_picks(void);
+
+/* …AND THE SUBSET OF THOSE IN WHICH THE MEMBER RE-DISPATCHED HAD NOTHING TO CONTINUE — no live frame and no
+   microtask checkpoint owed, which is the unit boundary HTML §8.1.4.4 "Calling scripts" step 3 of clean up
+   after running script draws and the one `visits` is credited at. A member standing there has FINISHED its
+   trial, so handing it the thread again while a member that has never had one stands at its exact weight is
+   §scheduler's razor's STARVES with no necessity behind it; the remainder of the row above is a program being
+   finished, which a tie must not interrupt.
+   THE FRACTION IS OF `picks_lifetime`, exactly as the superset's is, and the two are raised under one
+   condition at one line so `idle <= starved` holds by construction and neither is a reading of a second
+   moment. A LIFETIME COUNTER and one of the few kinds a reader may difference.
+   WHAT IT CANNOT SEE IS ONE CLAUSE OF THE BOUNDARY, stated at the counter in flow.c: a parked continuation is
+   asked of the runtime for the flow holding the thread and of `parked` for every other member, so this
+   over-reports by exactly the incumbent-with-a-park. It is an upper bound on the defect and a much tighter
+   one than the row above. */
+long flow_starved_picks_idle(void);
 
 /* The highest-priority flow in the frontier, or NULL if empty — EVERY member, whether or not it can currently
    make progress. It answers the host's Level-1 question (this document's best weight) and the census's; the

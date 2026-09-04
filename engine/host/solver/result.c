@@ -585,6 +585,18 @@ char *result_wfq_json(void) {
            "the same straight-line block, so these are one event counted twice and nothing between the two "
            "reads can step the engine. One of them has acquired a writer that is not that block, and `_wfq`'s "
            "`picksLifetime` is about to be published beside a `_switches` it is defined to equal");
+    /* AND THE IDENTITY THAT MAKES `starvedPicksIdle` A SUBSET RATHER THAN A SECOND OPINION, checked at the one
+       moment both are in one hand for the reason directly above. flow_pick raises the two under ONE condition
+       at ONE line, the subset behind a further predicate, so this cannot fail while that stays true — which is
+       exactly why it is worth asserting: the reading these two rows carry is a REMAINDER (`starvedPicks -
+       starvedPicksIdle` is what the frontier spent finishing programs), and a remainder that can go negative
+       is not a population, it is two counters somebody subtracted. A break here is a second writer of one of
+       them, and every reading built on either row is then about dispatches that did not happen. */
+    DCHECK(flow_starved_picks_idle() <= flow_starved_picks(),
+           "the scheduler reports MORE starved dispatches in which the re-dispatched member had nothing to "
+           "continue than starved dispatches altogether — these are raised under one condition at one line in "
+           "flow_pick, the second behind a further predicate, so the subset has acquired a writer that is not "
+           "that line and `starvedPicks - starvedPicksIdle` is about to be published as a negative population");
     /* AN EMPTY FRONTIER SAYS SO AND SAYS NOTHING ELSE — result.h states why the term rows are absent rather
        than zero. This is the shape `qjs_result` composes, because a session answers DONE by draining or by
        parking and both leave no members standing. */
@@ -766,8 +778,30 @@ char *result_wfq_json(void) {
                         order. `picksMax` cannot fall toward 1 while a framed flow legitimately needs many
                         quanta to finish one program, and `picksLive/(members-neverPicked)` sums re-dispatches
                         that CONTINUE a program — necessary — with those that pass over a starved member,
-                        which are the defect. A ratio of both is a reading of neither. */
+                        which are the defect. A ratio of both is a reading of neither.
+                        AND THIS ROW SUMS THEM TOO, WHICH IS THE CORRECTION THIS BLOCK CARRIES. The paragraph
+                        above used to end by offering this row as the thing that tells the two apart, and it
+                        does not: it fires on `best` having been dispatched before, which says nothing about
+                        whether `best` had a program to finish. On a forking page a newborn arm stands at its
+                        parent's exact weight, so every quantum of every multi-quantum program is one of
+                        these. `starvedPicksIdle` beside it is the separation, and the remainder — this minus
+                        that — is what the frontier spends finishing programs. */
                      "\"starvedPicks\":%ld,"
+                     /* …AND THE SUBSET IN WHICH THE RE-DISPATCHED MEMBER HAD NOTHING TO CONTINUE, which is
+                        the one of the two populations §scheduler's razor calls STARVES. A member with no live
+                        frame and no microtask checkpoint owed stands at the unit boundary HTML §8.1.4.4
+                        "Calling scripts" step 3 of clean up after running script draws — it has FINISHED
+                        its trial — so a dispatch handed back to it while a never-dispatched member stands at
+                        its exact weight is a pass-over with nothing necessary in it.
+                        READ THIS AGAINST `picksLifetime` AND NOT `starvedPicks` AGAINST IT. The superset
+                        answers how often the tie-break decided a dispatch; only this one answers how often it
+                        decided one WRONGLY, which is the question the two opposite repairs hang
+                        on. A LIFETIME COUNTER, raised at the same line and under the same condition as the
+                        superset, so `starvedPicksIdle <= starvedPicks` is an identity of one evaluation.
+                        IT IS STILL AN UPPER BOUND, by one clause solver/flow.c states at the counter: a
+                        parked continuation is a per-member fact for every member EXCEPT the one holding the
+                        thread, whose park queue lives in the runtime for the duration of its turn. */
+                     "\"starvedPicksIdle\":%ld,"
                      "\"workDone\":%ld,\"rankChanges\":%ld}",
                      w.members, w.val_min, w.val_max, w.val_top, w.vt,
                      w.val_zero, w.val_arrived, w.val_unplaced, w.self_emit, w.unrun,
@@ -786,7 +820,7 @@ char *result_wfq_json(void) {
                      flow_scan_runs(FLOW_SCAN_RIVAL), flow_scan_weights(FLOW_SCAN_RIVAL),
                      flow_scan_runs(FLOW_SCAN_OTHER), flow_scan_weights(FLOW_SCAN_OTHER),
                      flow_scan_runs(FLOW_SCAN_CENSUS), flow_scan_weights(FLOW_SCAN_CENSUS),
-                     flow_starved_picks(),
+                     flow_starved_picks(), flow_starved_picks_idle(),
                      engine_work_done(), flow_rank_changes());
 }
 
