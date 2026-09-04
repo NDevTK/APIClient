@@ -148,19 +148,43 @@ int  decide_cursor(void);
    answer, a message from one arm of a sender's branch, a drive of a function the page never called are three
    different things and one row for all three describes none of them — and never a fabricated predicate key,
    which would merge with a real one the moment a predicate spelled the same way.
-   THE TWO ARE COUNTED IN SEPARATE TABLES AND RENDERED IN ONE OBJECT, because only one of them is a page's to
-   enlarge: a mechanism row is prose written at a call site in this tree, so that population is enumerable
-   where it is authored and is counted EXACTLY, while a constraint key is the document's and is what a fixed
-   census must choose among. Sharing one table would spend its scarce slots on rows that were never at risk and
-   would let the heaviest mechanism — one that fires on every orphan drive outweighs every individual branch
-   beneath it — evict the predicates the census exists to name. A consumer that wants "which PREDICATE" rather
-   than "which fork site" partitions the object by the same rule fork_key_count asserts: a constraint key opens
-   on concolic_ident_compose's decimal length prefix, a mechanism row on `(`, and the census's own bound member
-   on `_`. THE OVERFLOW ROW IS MATCHED BY NAME BEFORE THAT TEST AND NEVER BY IT — it is prose, so it opens on
-   `(` exactly as a mechanism does, and it is the opposite kind of thing: a mechanism row NAMES a site this
-   tree wrote, the overflow row is the mass of the sites it CANNOT name. Splitting on the byte first and
-   subtracting after files the largest thing in the object under the population that is exact by construction,
-   which is the argmax reading inverted rather than approximated.
+   THE THREE ARE COUNTED IN SEPARATE TABLES AND RENDERED IN ONE OBJECT, because only one of them is not a
+   page's to enlarge: a mechanism row is prose written at a call site in this tree, so that population is
+   enumerable where it is authored and is counted EXACTLY, while a constraint key is the document's and is what
+   a fixed census must choose among. Sharing one table would spend its scarce slots on rows that were never at
+   risk and would let the heaviest mechanism — one that fires on every orphan drive outweighs every individual
+   branch beneath it — evict the predicates the census exists to name. A consumer that wants "which PREDICATE"
+   rather than "which fork site" partitions the object by the same rule fork_key_count asserts: a constraint
+   key opens on concolic_ident_compose's decimal length prefix, a mechanism row on `(`, an UNNAMED FORK SITE on
+   the `~` this file writes in front of it, and the census's own bound members on `_`. THE OVERFLOW ROWS ARE
+   MATCHED BY NAME BEFORE THAT TEST AND NEVER BY IT — they are prose, so they open on `(` exactly as a
+   mechanism does, and they are the opposite kind of thing: a mechanism row NAMES a site this tree wrote, an
+   overflow row is the mass of the sites its table CANNOT name. Splitting on the byte first and subtracting
+   after files the largest thing in the object under the population that is exact by construction, which is the
+   argmax reading inverted rather than approximated.
+
+   AND THE THIRD POPULATION IS EVERY FORK THAT ASKED NOTHING THIS ENGINE COULD SPELL, WHICH USED TO BE ONE ROW.
+   decide_key answers NULL for a value whose identity concolic.c cannot spell, and every route to that NULL
+   bottoms out in one classification: an Object or a Symbol operand, whose identity is its ADDRESS — a name
+   that does not survive the park a resumed flow replays through — after which concolic_ident_compose makes
+   everything derived from it unspellable too. Such a branch keeps BOTH arms, records no constraint and claims
+   no replay slot, and it had exactly ONE hand-written row for all of it. That is a row naming an action with
+   no object, in the one table whose whole job is to say WHERE, and it can be the largest thing in the object.
+   ITS KEY IS THE VALUE'S OWN DISPLAY SHAPE AND IT ANSWERS "WHERE", NEVER "WHAT". A shape is always present
+   (the mint copies `{}` for a value handed none), it is composed from PROGRAM FACTS and carries no address —
+   so it names the same thing on the flow that minted it, on the flow that resumes it from the cold tier and in
+   the next session, which is the property an ordinal over a mutable set and a raw pc both lack — and it
+   renders `?` at exactly the operand whose identity went absent, so a row merges precisely what this engine
+   cannot tell apart. It is NEVER a constraint key: filing a shape there would let one flow's `a[x]` decide
+   another flow's `b[x]`, and concolic.c prices that in one line beside the field itself: "Absence costs
+   forks; a wrong identity costs the arm." So the reporting address exists and the replay slot stays absent, which is the honest pair rather
+   than a compromise between them.
+   READING IT: these rows are floors on their own admitted table, with their own overflow row and their own
+   bound, because Space-Saving's guarantee is about the table that did the evicting and one number over two
+   tables would answer each table's question with the other's fact. A large site row is a statement about which
+   EXPRESSION FORM the frontier is growing at — a dynamic key read on an ordinary object, a derivation over
+   one, a comparison between two — and never about which branch: two textually different branches over the
+   same expression form are ONE row here, by construction and on purpose.
    READ THE COUNTS AS ARRIVALS, NOT AS PRODUCTION. Each row is how many flows REACHED that site, and every
    fork upstream doubles what reaches everything below it, so a program with k independent gates in sequence
    produces rows in a geometric series and the LAST site in program order is always the largest. A biggest row
@@ -212,9 +236,11 @@ int  decide_cursor(void);
    It is keyed by the CONSTRAINT key rather than a file:line because that is what a predicate IS here — two
    forks at one source and operation are one predicate however many call sites spell it, and a chain (a source
    whose operation string carries a position) shows as `distinct` climbing with `total`, which distinguishes
-   the two shapes on its own.
-   THE TABLE RENDERS ITSELF, as one JSON object of key→hits plus the one `_`-named bound member above (caller
-   frees) — see the composer for why the
+   the two shapes on its own. A SITE row is keyed by the shape for the same reason and not a weaker one: a
+   file:line would name a place in THIS TREE, and every fork in that population passes through the same two
+   lines of this file, so it would answer the question with a constant.
+   THE TABLE RENDERS ITSELF, as one JSON object of key→hits plus the two `_`-named bound members above, one per
+   admitted table (caller frees) — see the composer for why the
    escaping belongs here and for why it rides solver/result.c's document as `_forkAt` rather than a host's
    printf. The indexed accessor this replaces had exactly ONE caller, in `run_scheduler`, which the production
    ABI never enters. */

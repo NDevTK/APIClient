@@ -104,14 +104,15 @@ static int g_c = 0;
 static JSValue g_cur_fn = JS_UNDEFINED;   /* borrowed from the running Flow (alive for the run) */
 static int g_running = 0;
 
-/* THE FORK CENSUS'S ROWS — TWO POPULATIONS IN TWO TABLES, and the split is the admission design rather than
+/* THE FORK CENSUS'S ROWS — THREE POPULATIONS IN THREE TABLES, and the split is the admission design rather than
    tidiness. They are declared here rather than beside fork_key_count because decide_free releases them and
    stands above it, and a census whose teardown could not see them would hold one strdup per distinct predicate
    past the session that made them. See fork_key_count for the shared entry and decide.h for what a row means.
  *
  * ONE POPULATION IS THE PAGE'S AND THE OTHER IS THIS TREE'S, so only one of them can ever overflow. A
- * MECHANISM row is prose written by hand at four sites (this file's `(no source identity)` and engine.c's
- * three), so the set is enumerable where it is authored and cannot be enlarged by any document: those rows are
+ * MECHANISM row is prose written by hand at a call site in this tree (every one of them reaches
+ * decide_fork_same_path, which takes the row name from its CALLER), so the set is enumerable where it is
+ * authored and cannot be enlarged by any document: those rows are
  * counted EXACTLY, in a table that simply grows. There is no admission question for a population a page cannot
  * grow, and asking one would spend slots of the scarce table on the rows that were never at risk — while
  * leaving the heaviest of them free to evict the predicates the census exists to name, since a mechanism that
@@ -135,9 +136,54 @@ static int g_running = 0;
  * them — two states behind one number, which is the exact defect this table exists to end, reintroduced by the
  * fix for it. Its per-row error is also ONE global bound shared by every row, so no row is ever exact and no
  * two rows can be told apart by it; Space-Saving's `err` is per row and is zero for every row admitted before
- * the table filled, which is how the census can call a count exact and mean it. */
+ * the table filled, which is how the census can call a count exact and mean it.
+ *
+ * AND THE THIRD IS A PAGE'S TOO AND IS NOT A PREDICATE — IT IS WHERE A FORK HAPPENED THAT ASKED NOTHING THIS
+ * ENGINE CAN NAME. decide_key answers NULL for a value whose identity concolic.c cannot spell, and every route
+ * to that NULL bottoms out in one place: `operand_kind` classifies an Object or a Symbol as unspellable
+ * (literal_ident's own note says why — an object's identity is its ADDRESS, which does not survive the park a
+ * resumed flow replays through, and coercing it would run the page's `toString` from C), and
+ * concolic_ident_compose then makes every value derived from one unspellable too. So the branch keeps both
+ * arms, records no constraint, and had exactly ONE row for all of it: a single hand-written mechanism name
+ * standing in for whatever share of a document's forks reach a value this engine declines to name.
+ * THAT IS §AN-ASSERT-THAT-NAMES-A-REMEDY-BUT-NOT-A-SITE PERFORMED BY AN INSTRUMENT INSTEAD OF BY AN ASSERT.
+ * The row states an action — "this is where the frontier is growing" — with no object, in the one table whose
+ * entire job is to say WHERE; and its own banner already condemns the shape one population over ("a peer's
+ * answer, a message from one arm of a sender's branch, a drive of a function the page never called are three
+ * different things and one row for all three describes none of them"). The same sentence is true of every
+ * unnameable branch in a bundle, and there is nothing here a reader can go and look at.
+ * ITS KEY IS THE VALUE'S OWN DISPLAY SHAPE, AND IT IS A REPORTING ADDRESS RATHER THAN AN IDENTITY — which is
+ * the whole of why it may exist at all. A shape is ALWAYS present (concolic_alloc strdups `{}` for a value
+ * handed none, so there is no absence for a consumer to default past); it is composed from PROGRAM FACTS and
+ * holds no address, so it names the same thing on the flow that minted it, on the flow that resumes it from
+ * the cold tier and in the next session — the property §AN-INDEX-NAMES-A-THING-ONLY-WHILE-THE-SET-IS-FIXED
+ * refuses to a pc and to an object's address alike; and derived_operand_shape renders `?` at exactly the
+ * operand whose identity went absent, so a row merges precisely what this engine cannot tell apart and
+ * nothing else. What a shape must NEVER become is the CONSTRAINT key: filing it there would let one flow's
+ * `a[x]` decide another flow's `b[x]`, and concolic.c states the asymmetry in one line beside the field
+ * itself: "Absence costs forks; a wrong identity costs the arm." The replay slot stays absent, and that pair is the honest one: this table
+ * says where a fork happened, not what it asked.
+ * SO IT IS PAGE-GROWN AND TAKES A FIXED TABLE OF ITS OWN, never the predicates'. Sharing theirs would let
+ * whichever population is heavier evict the rows the other exists to name, which is the argument the split
+ * above already makes one population over — and it would make the two bounds one number, which is the state
+ * where a census can no longer say which of its answers it has stopped answering. Its keys open on `~`, a byte
+ * THIS FILE writes in front of the shape, because a shape is the page's bytes and can spell any first byte at
+ * all: the namespace is the writer's to STATE and never the object's to sniff, which is the rule
+ * fork_key_count already keeps for the other two. */
 #define DECIDE_FORK_KEYS 64
-static struct { char *key; long n, err; } g_fork_keys[DECIDE_FORK_KEYS];
+/* SMALLER THAN THE PREDICATES' TABLE ON PURPOSE, and the reason is what a row of each is FOR. A predicate row
+   names a question, and a document asks a great many distinct ones; an unnamed site names a SHAPE, and the
+   shapes that reach this table are the handful of expression forms an engine cannot name (a dynamic key read
+   on an ordinary object, a derivation over one, a comparison between two) rather than one per branch. A table
+   sized for the wrong distribution spends slots that are never claimed, and every unclaimed slot is a row of
+   the OTHER census that could have existed instead. */
+#define DECIDE_SITE_KEYS 32
+/* ONE ROW SHAPE FOR EVERY ADMITTED TABLE, because Space-Saving is ONE algorithm and two spellings of it would
+   be two rules free to disagree about what `err` means. `err` is the mass this row inherited from whatever it
+   displaced, so `n - err` is the floor it may publish; a row admitted before its table filled carries 0. */
+typedef struct { char *key; long n, err; } ForkRow;
+static ForkRow g_fork_keys[DECIDE_FORK_KEYS];
+static ForkRow g_fork_sites[DECIDE_SITE_KEYS];
 static struct { char *key; long n; } *g_fork_mech;   /* grows: bounded by this tree, never by a document */
 static int  g_fork_mech_n, g_fork_mech_cap;
 static long g_fork_total;
@@ -526,6 +572,14 @@ void decide_free(void) {
         free(g_fork_keys[i].key);
         g_fork_keys[i].key = NULL; g_fork_keys[i].n = g_fork_keys[i].err = 0;
     }
+    /* AND THE UNNAMED SITES, WHOSE ROWS ARE THE PAGE'S BYTES — released here for the reason the declaration
+       gives for declaring them beside the others: a census whose teardown could not see a table would hold one
+       strdup per distinct shape past the session that produced them, and a shape is unbounded in both its
+       length and its count. */
+    for (i = 0; i < DECIDE_SITE_KEYS; i++) {
+        free(g_fork_sites[i].key);
+        g_fork_sites[i].key = NULL; g_fork_sites[i].n = g_fork_sites[i].err = 0;
+    }
     for (i = 0; i < g_fork_mech_n; i++) free(g_fork_mech[i].key);
     free(g_fork_mech); g_fork_mech = NULL; g_fork_mech_n = g_fork_mech_cap = 0;
     g_fork_total = 0;
@@ -582,19 +636,38 @@ int decide_cursor(void) { return g_c; }
    recognizer shape, at the one place it would silently invert the answer — and a caller passing NULL for "I
    have no key" must not be able to masquerade as one that has nothing to say. So each site names which
    population it is filing into, and BOTH halves are asserted here, at the one point every row converges on. */
-typedef enum { FORK_ROW_PREDICATE, FORK_ROW_SYNTHETIC } ForkRowKind;
+/* AND A THIRD MEMBER FOR THE THIRD POPULATION, stated by its filing site exactly as the other two are: a fork
+   whose value this engine could not name is not a predicate (nothing was asked and nothing recorded) and it is
+   not prose this tree authored (its name is the page's shape), so a caller that had only the other two to
+   choose from had to lie about one of them — which is how one hand-written mechanism row came to stand for a
+   population a document grows. */
+typedef enum { FORK_ROW_PREDICATE, FORK_ROW_SYNTHETIC, FORK_ROW_SITE } ForkRowKind;
+
+/* THE BYTE THIS FILE WRITES IN FRONT OF AN UNNAMED SITE'S SHAPE — the third namespace, declared once because
+   the filing site asserts it, the emission asserts it again where the consumer reads it, and engine/build.mjs
+   partitions the object by it. It is a PREFIX rather than a property of the key because a shape is the page's
+   bytes: `(` and every decimal digit are spellings a page can produce, so nothing about the shape itself could
+   ever tell the three populations apart. */
+#define FORK_SITE_PREFIX '~'
 
 /* THE CENSUS'S OWN ARITHMETIC, WALKED RATHER THAN CARRIED. A running sum kept beside the rows would be a second
    copy of one fact, agreeing with them only for as long as somebody remembers to update both — so the check
    that the rows account for every fork is computed FROM the rows, at every row that changes, which is where a
    broken sum is still one operation away from its cause. Both are pure and vanish with the asserts. */
-static long fork_census_sum(void)
+static long ss_sum(const ForkRow *rows, int cap)
 {
     long s = 0;
     int i;
 
-    for (i = 0; i < DECIDE_FORK_KEYS; i++) s += g_fork_keys[i].n;   /* an unclaimed row holds 0 */
-    for (i = 0; i < g_fork_mech_n; i++)    s += g_fork_mech[i].n;
+    for (i = 0; i < cap; i++) s += rows[i].n;   /* an unclaimed row holds 0 */
+    return s;
+}
+static long fork_census_sum(void)
+{
+    long s = ss_sum(g_fork_keys, DECIDE_FORK_KEYS) + ss_sum(g_fork_sites, DECIDE_SITE_KEYS);
+    int i;
+
+    for (i = 0; i < g_fork_mech_n; i++) s += g_fork_mech[i].n;
     return s;
 }
 /* EVERY ROW'S OWN SHAPE. A claimed row was claimed BY AN ARRIVAL and only ever grows, so it holds at least one
@@ -602,15 +675,22 @@ static long fork_census_sum(void)
    has of saying "not seen". And `err <= n - 1` is Space-Saving's guarantee restated as a bound the publisher
    depends on: the floor a row publishes is `n - err`, so an error that reached its count would publish a floor
    of zero and put a site in the census that this table cannot prove took a single fork. */
+static int ss_rows_sane(const ForkRow *rows, int cap)
+{
+    int i;
+
+    for (i = 0; i < cap; i++) {
+        if (!rows[i].key) { if (rows[i].n || rows[i].err) return 0; continue; }
+        if (rows[i].n < 1 || rows[i].err < 0 || rows[i].err > rows[i].n - 1) return 0;
+    }
+    return 1;
+}
 static int fork_rows_sane(void)
 {
     int i;
 
-    for (i = 0; i < DECIDE_FORK_KEYS; i++) {
-        if (!g_fork_keys[i].key) { if (g_fork_keys[i].n || g_fork_keys[i].err) return 0; continue; }
-        if (g_fork_keys[i].n < 1 || g_fork_keys[i].err < 0 || g_fork_keys[i].err > g_fork_keys[i].n - 1)
-            return 0;
-    }
+    if (!ss_rows_sane(g_fork_keys, DECIDE_FORK_KEYS)) return 0;
+    if (!ss_rows_sane(g_fork_sites, DECIDE_SITE_KEYS)) return 0;
     for (i = 0; i < g_fork_mech_n; i++)
         if (!g_fork_mech[i].key || g_fork_mech[i].n < 1) return 0;
     return 1;
@@ -618,14 +698,14 @@ static int fork_rows_sane(void)
 /* The lightest claimed row's count — Space-Saving's eviction candidate, and the bound on the hits of every key
    the table is NOT holding. -1 while a row is still unclaimed, which is the state in which nothing is evicted
    and no key has been excluded at all. */
-static long fork_pred_min(void)
+static long ss_min(const ForkRow *rows, int cap)
 {
     long m = -1;
     int i;
 
-    for (i = 0; i < DECIDE_FORK_KEYS; i++) {
-        if (!g_fork_keys[i].key) return -1;   /* rows fill left to right: a gap means the table is not full */
-        if (m < 0 || g_fork_keys[i].n < m) m = g_fork_keys[i].n;
+    for (i = 0; i < cap; i++) {
+        if (!rows[i].key) return -1;   /* rows fill left to right: a gap means the table is not full */
+        if (m < 0 || rows[i].n < m) m = rows[i].n;
     }
     return m;
 }
@@ -633,39 +713,39 @@ static long fork_pred_min(void)
 /* SPACE-SAVING ADMISSION — see the rows' declaration for why this algorithm and not the other. Three cases and
    there is no fourth: the row already holding this key, a row never claimed, and a full table, where the
    LIGHTEST row gives up its NAME and keeps its MASS. */
-static void fork_pred_count(const char *key)
+static void ss_admit(ForkRow *rows, int cap, const char *key)
 {
     int i, light = 0;
     long inherited;
     char *name;
 
-    for (i = 0; i < DECIDE_FORK_KEYS; i++) {
-        if (!g_fork_keys[i].key) {          /* never claimed: this row starts exact and stays exact */
-            g_fork_keys[i].key = strdup(key);
-            CHECK(g_fork_keys[i].key, "decide: OOM recording which predicate is growing the frontier");
-            g_fork_keys[i].n = 1;
-            g_fork_keys[i].err = 0;
+    for (i = 0; i < cap; i++) {
+        if (!rows[i].key) {                 /* never claimed: this row starts exact and stays exact */
+            rows[i].key = strdup(key);
+            CHECK(rows[i].key, "decide: OOM recording which predicate is growing the frontier");
+            rows[i].n = 1;
+            rows[i].err = 0;
             return;
         }
-        if (!strcmp(g_fork_keys[i].key, key)) { g_fork_keys[i].n++; return; }
-        if (g_fork_keys[i].n < g_fork_keys[light].n) light = i;
+        if (!strcmp(rows[i].key, key)) { rows[i].n++; return; }
+        if (rows[i].n < rows[light].n) light = i;
     }
     /* THE MASS IS INHERITED AND THE NAME IS NOT, which is the one thing an eviction must not get wrong. The
        displaced key's hits STAY in the table, or the rows stop summing to the forks and the frontier's
        provenance identity stops closing; and they are recorded as the new row's ERROR, or they are published
        as forks at the key that displaced it — an evicted site's count resurrected under another site's name,
        which is the single failure this whole column exists to make impossible. */
-    inherited = g_fork_keys[light].n;
-    DCHECK(inherited == fork_pred_min(),
+    inherited = rows[light].n;
+    DCHECK(inherited == ss_min(rows, cap),
            "a fork census eviction displaced a row that is not the lightest — Space-Saving bounds a row's error "
            "by the count of the row it displaced, so displacing anything heavier makes every floor this table "
            "publishes larger than the algorithm can prove and the census overstates a site");
     name = strdup(key);
     CHECK(name, "decide: OOM recording which predicate is growing the frontier");
-    free(g_fork_keys[light].key);
-    g_fork_keys[light].key = name;
-    g_fork_keys[light].n   = inherited + 1;
-    g_fork_keys[light].err = inherited;
+    free(rows[light].key);
+    rows[light].key = name;
+    rows[light].n   = inherited + 1;
+    rows[light].err = inherited;
 }
 
 /* AND THE MECHANISM ROWS, EXACT, IN A TABLE THAT GROWS — see the declaration. There is no admission policy here
@@ -714,11 +794,19 @@ static void fork_key_count(const char *key, ForkRowKind kind)
            "the prose rows are told apart from constraint keys by their leading `(` and by nothing else, so a "
            "name without it is a fabricated predicate: it merges with a real key the moment one spells the "
            "same way, and until then it reports a branch the program never took");
-    /* THE POPULATION THE CALLER NAMED IS THE TABLE IT GOES INTO, which makes the two namespaces STRUCTURAL and
-       leaves the two asserts above as what they always were: a check that a site is filing into the population
-       it thinks it is. Two tables cannot collide however a key is spelled. */
+    /* …AND AN UNNAMED SITE IS ASSERTED BY NEITHER OF THOSE, WHICH IS A STATEMENT AND NOT AN OMISSION. Its
+       name is the PAGE's display shape, which can open on a decimal digit or a `(` as easily as anything
+       else, so there is no first byte to check here and a check that passed would be about nothing. Its
+       namespace is MADE at the emission, where FORK_SITE_PREFIX is written in front of the shape — see
+       fork_site_name for why the byte is not carried on the key, and decide_fork_json for the assert that
+       stands where a consumer actually reads it. What keeps this population out of the other two here is
+       structural and needs no byte at all: the caller states the kind and the kind picks the TABLE. */
+    /* THE POPULATION THE CALLER NAMED IS THE TABLE IT GOES INTO, which makes the three namespaces STRUCTURAL
+       and leaves the asserts above as what they always were: a check that a site is filing into the population
+       it thinks it is. Three tables cannot collide however a key is spelled. */
     g_fork_total++;
-    if (kind == FORK_ROW_PREDICATE) fork_pred_count(key);
+    if (kind == FORK_ROW_PREDICATE) ss_admit(g_fork_keys,  DECIDE_FORK_KEYS, key);
+    else if (kind == FORK_ROW_SITE) ss_admit(g_fork_sites, DECIDE_SITE_KEYS, key);
     else                            fork_mech_count(key);
     DCHECK(fork_rows_sane(),
            "a fork census row is a shape this table cannot publish — every claimed row holds at least the one "
@@ -730,6 +818,56 @@ static void fork_key_count(const char *key, ForkRowKind kind)
            "mass by construction (a hit, a claim and an eviction each add exactly one), so a divergence here "
            "is a fork counted into the total and filed into neither table, and the frontier's provenance "
            "identity `created = 1 + forks + …` no longer closes over anything a reader can subtract");
+}
+
+/* THE NAME OF A FORK THIS ENGINE COULD NOT SPELL A QUESTION FOR — the value's own display shape, BORROWED
+ * from the record and never owned here (the census strdups what it admits, and the byte that puts this row in
+ * its own namespace is written by decide_fork_json).
+ *
+ * IT ANSWERS "WHERE" AND IT MUST NOT BE READ AS "WHAT". A site key is not an identity and is never handed to
+ * concolic_constrain_branch or to the decision vector's question column: `a[x]` and `b[x]` over two ordinary
+ * objects compose ONE shape, so filing it as a constraint would decide one flow's read from another's — which
+ * concolic.c prices in one line beside the field itself ("Absence costs forks; a wrong identity costs the
+ * arm."). The fork stays
+ * two-armed, the replay slot stays absent, and this table records only that a fork happened here.
+ *
+ * THE SHAPE IS TOTAL, WHICH IS WHY THERE IS NOTHING TO DEFAULT. concolic_alloc strdups `{}` for a value handed
+ * no shape at all, so every live concolic has one and a consumer never meets an absence to fill — the DCHECK
+ * below asserts that rather than a `? :` past it, because a NULL here would mean the record was reached
+ * through something that is not a concolic and the row would then name whatever the fallback spelled.
+ *
+ * AND IT BORROWS THE SHAPE RATHER THAN BUILDING A KEY, WHICH IS A COST DECISION AND NOT A STYLE ONE. This
+ * runs ON EVERY FORK of this class — a quarter of a real bundle's forks — and this file's own DecSeg layout
+ * note already refuses a second allocation at that frequency ("a second reclaim_malloc per segment is a second
+ * allocation per FORK, and this file's whole history is about what per-fork cost does at 16046 flows"). A
+ * prefixed key would be one malloc, one copy and one free per fork to prepend ONE CONSTANT BYTE, so the byte
+ * is written where the object is composed instead and the table stores the page's shape verbatim. The
+ * namespace is therefore created AT THE EMISSION, which is also where a consumer reads it and where
+ * decide_fork_json already re-asserts the other two — a shape is the PAGE's bytes and can open on a decimal
+ * digit (`5..toFixed()`), on `(`, on `_`, on anything, so nothing about the string could ever have carried
+ * the distinction on its own.
+ *
+ * RESIDUAL — WHAT THIS DOES NOT COVER: the OPERAND still has no name. This gives the FORK an address; it does
+ * not give the Object or Symbol it was taken over an identity, so such a branch still records no constraint,
+ * claims no replay slot, and re-forks every time the flow reaches it. That is CORRECT as it stands rather than
+ * unfinished — an object's only name here is its ADDRESS, which the allocator reuses and which no park
+ * survives, so spelling one would be the wrong-identity half of concolic.c's trade and would cost the arm.
+ * WHAT MUST EXIST AFTERWARD: a name for an ordinary object composed from what the BUNDLE determines and the
+ * session does not — minted where the object is CREATED and never read off its address — after which
+ * concolic.c can spell an identity for a value derived from one, decide_key stops answering NULL for it, and
+ * that fork moves out of this population into the predicate rows with a replay slot of its own.
+ * HOW ITS ABSENCE WOULD SHOW: a `~` row climbing across a session while the flow that owns it consumes no
+ * recorded arms — g_replay_hits flat against a growing site row — which is a question re-asked with nothing
+ * accumulating rather than a search that is narrowing. */
+static const char *fork_site_name(JSValueConst subject) {
+    const char *sh = concolic_shape_c(subject);
+
+    DCHECK(sh != NULL,
+           "a fork with no spellable question was asked to name its site over a value that is not a concolic "
+           "— every value this seam decides over is one (decide_branch and solver_outcome both assert it), and "
+           "every concolic carries a display shape because its mint copies `{}` for a value handed none, so a "
+           "NULL here is a decision reached over something that never went through that mint");
+    return sh;
 }
 
 /* THE CENSUS SERIALIZES ITSELF, which is the rule solver/result.c states for every surface it composes:
@@ -800,6 +938,21 @@ char *decide_fork_json(void)
        rather than half-decoding it — so the spelling that would break this write is the spelling that stops
        the build. A key the loop below escapes is the PAGE's and has no such guarantee. */
     static const char LIGHTEST_KEY[] = "_the most any site this table is not holding can have taken";
+    /* THE THIRD POPULATION'S OWN PAIR, AND THEY ARE ITS OWN BECAUSE A BOUND IS ABOUT ONE TABLE. Space-Saving's
+       guarantee — a key the table is NOT holding took at most the lightest resident count — is a statement
+       about the table that did the evicting, so publishing one number over two tables would answer the
+       question "could an excluded PREDICATE outrank the named ones" with a fact about the shapes and the other
+       way round. Two tables, two spills, two bounds, and each pair is checked against the other exactly as the
+       first one is.
+       THE OVERFLOW ROW OPENS ON `(` AND NOT ON THE SITE PREFIX, which is deliberate and is the same reading
+       the first one already has: it is not a site, it is the mass of the sites this table CANNOT name, so it
+       belongs to the prose namespace and is matched BY NAME before any byte test — the rule decide.h states
+       for its twin. Naming it with the prefix would put a non-site among the sites, which is the
+       non-site-rendered-as-a-site defect this whole column exists to end. */
+    static const char SITE_OVERFLOW_KEY[] =
+        "(forks at unnamed sites the named shapes cannot prove are their own)";
+    static const char SITE_LIGHTEST_KEY[] =
+        "_the most any unnamed fork site this table is not holding can have taken";
     size_t n = 3;   /* "{}" and the NUL */
     char *out;
     size_t len = 0;
@@ -808,15 +961,22 @@ char *decide_fork_json(void)
        the one function whose whole subject is telling them apart. */
     int i, phase, members = 0;
     long spill = 0, sum = 0, lightest;
+    long site_spill = 0, site_lightest;
 
     /* THE SIZE IS COUNTED FROM THE ROWS THEMSELVES rather than estimated, because a key is the PAGE's bytes
        and has no bound this file may assume. Every byte of a key can escape to six (`\u00XX`), a row costs the
        two quotes, the colon, the comma and a long's widest 20 digits, and the object costs its braces. */
     for (i = 0; i < DECIDE_FORK_KEYS; i++)
         if (g_fork_keys[i].key) { n += strlen(g_fork_keys[i].key) * 6 + 24; spill += g_fork_keys[i].err; }
+    /* …AND A SITE ROW COSTS ONE BYTE MORE THAN ITS KEY, because the `~` that puts it in its own namespace is
+       written HERE and is not part of the stored key (fork_site_name says why). It sits inside the 24 bytes
+       every row already carries for its punctuation and its widest count, so it is priced and not slack. */
+    for (i = 0; i < DECIDE_SITE_KEYS; i++)
+        if (g_fork_sites[i].key) { n += strlen(g_fork_sites[i].key) * 6 + 24; site_spill += g_fork_sites[i].err; }
     for (i = 0; i < g_fork_mech_n; i++) n += strlen(g_fork_mech[i].key) * 6 + 24;
     if (spill) n += sizeof OVERFLOW_KEY * 6 + 24;
-    if (g_fork_total) n += sizeof LIGHTEST_KEY * 6 + 24;
+    if (site_spill) n += sizeof SITE_OVERFLOW_KEY * 6 + 24;
+    if (g_fork_total) n += sizeof LIGHTEST_KEY * 6 + 24 + sizeof SITE_LIGHTEST_KEY * 6 + 24;
     out = malloc(n);
     if (!out) return NULL;
     out[len++] = '{';
@@ -833,7 +993,8 @@ char *decide_fork_json(void)
        "every key ever seen is resident" and the most an absent site can have taken is exactly ZERO. Above
        zero it is Space-Saving's bound, which holds only over a full table — and a full table is what a
        non-zero spill proves. `{}` is untouched and still says this document never forked. */
-    lightest = spill ? fork_pred_min() : 0;
+    lightest      = spill      ? ss_min(g_fork_keys,  DECIDE_FORK_KEYS) : 0;
+    site_lightest = site_spill ? ss_min(g_fork_sites, DECIDE_SITE_KEYS) : 0;
     if (g_fork_total) {
         DCHECK(lightest >= 0,
                "the fork census has mass it cannot attribute and yet reports an unclaimed predicate row — an "
@@ -857,20 +1018,54 @@ char *decide_fork_json(void)
         DCHECK(len < n, "the fork census overran the size counted for its own bound — that member's key is "
                         "this file's own literal and was priced from it, so it does not fit only if the "
                         "pricing above stopped being over the same string");
+        /* AND THE UNNAMED SITES' BOUND, ON EVERY OBJECT THAT HAS ROWS, FOR ITS TWIN'S REASON EXACTLY — a
+           member that came and went could not be told from one a producer predating it never wrote, and a
+           stale line would then be partitioned happily with an unprefixed site read as a predicate floor. The
+           two DCHECKs above are made again over this pair rather than assumed from it: they are Space-Saving's
+           guarantee restated over ONE table, and this is a different table with a different history. */
+        DCHECK(site_lightest >= 0,
+               "the fork census has unattributable mass among its UNNAMED SITES and yet reports an unclaimed "
+               "site row — an eviction only ever happens on a FULL table, so this pair says a shape was "
+               "displaced out of a table that still had a free slot, and the bound about to be published "
+               "holds over a full table and nothing else");
+        DCHECK((site_lightest > 0) == (site_spill > 0),
+               "the fork census's bound on the unnamed sites it is not holding disagrees with that table's "
+               "own overflow row about whether anything was ever excluded — one fact stated twice, so a "
+               "reader trusting either is contradicted by the other and the pair stops separating an EVICTED "
+               "shape from one this document never reached");
+        DCHECK(SITE_LIGHTEST_KEY[0] == '_',
+               "the unnamed-site bound is named in a namespace a ROW can spell — a consumer tells a member "
+               "from a row by that leading `_` and by nothing else, so a name without it is summed into the "
+               "forks as mass no fork produced");
+        members++;
+        out[len++] = ',';
+        len += (size_t)snprintf(out + len, n - len, "\"%s\":%ld", SITE_LIGHTEST_KEY, site_lightest);
+        DCHECK(len < n, "the fork census overran the size counted for the unnamed sites' bound — that "
+                        "member's key is this file's own literal and was priced from it");
     }
-    for (phase = 0; phase < 3; phase++)
-    for (i = 0; i < (phase == 0 ? g_fork_mech_n : phase == 1 ? DECIDE_FORK_KEYS : 1); i++) {
+    for (phase = 0; phase < 5; phase++)
+    for (i = 0; i < (phase == 0 ? g_fork_mech_n :
+                     phase == 1 ? DECIDE_FORK_KEYS :
+                     phase == 3 ? DECIDE_SITE_KEYS : 1); i++) {
         const char *k;
         long hits;
+        /* THE ONE PHASE WHOSE NAMESPACE IS MADE HERE RATHER THAN CARRIED ON THE KEY — see fork_site_name. */
+        int prefixed = (phase == 3);
 
         if (phase == 0) {                               /* the mechanisms: exact, and no error to publish */
             k = g_fork_mech[i].key; hits = g_fork_mech[i].n;
         } else if (phase == 1) {                        /* the predicates: the floor, never the counter */
             if (!g_fork_keys[i].key) continue;
             k = g_fork_keys[i].key; hits = g_fork_keys[i].n - g_fork_keys[i].err;
-        } else {
+        } else if (phase == 2) {
             if (!spill) continue;
             k = OVERFLOW_KEY; hits = spill;
+        } else if (phase == 3) {                        /* the unnamed sites: the floor, on its own table */
+            if (!g_fork_sites[i].key) continue;
+            k = g_fork_sites[i].key; hits = g_fork_sites[i].n - g_fork_sites[i].err;
+        } else {
+            if (!site_spill) continue;
+            k = SITE_OVERFLOW_KEY; hits = site_spill;
         }
         sum += hits;
         /* THE NAMESPACE, ASSERTED WHERE THE CONSUMER READS IT AND NOT ONLY WHERE THE ROW WAS FILED.
@@ -878,14 +1073,23 @@ char *decide_fork_json(void)
            comes OUT still carries the first byte the object is partitioned by. A reader that wants "which
            PREDICATE" rather than "which fork site" splits these rows on exactly this test, so a third spelling
            does not arrive as an unknown — it arrives as one of the other two, or as mass in neither. */
-        DCHECK(*k == '(' || (*k >= '0' && *k <= '9'),
-               "the fork census is emitting a row whose name opens on neither of its two namespaces — a "
-               "constraint key opens on concolic_ident_compose's decimal length prefix and a mechanism row on "
-               "`(`, and the object is partitioned by that byte alone. A row outside both is read as whichever "
-               "of the two its first byte happens to resemble, which files a mechanism's exact count among the "
-               "predicate floors or a page's predicate among rows a document cannot grow");
+        DCHECK(prefixed || *k == '(' || (*k >= '0' && *k <= '9'),
+               "the fork census is emitting a row whose name opens on none of its three namespaces — a "
+               "constraint key opens on concolic_ident_compose's decimal length prefix, a mechanism row and "
+               "the two overflow rows on `(`, and an unnamed fork site on the prefix written one line below "
+               "this; the object is partitioned by that byte alone. A row outside all three is read as "
+               "whichever of them its first byte happens to resemble, which files a mechanism's exact count "
+               "among the predicate floors, or a page's shape among rows a document cannot grow");
+        DCHECK(!prefixed || FORK_SITE_PREFIX != '(',
+               "the unnamed-site prefix has become a byte one of the other namespaces already owns — the "
+               "three populations are told apart by that byte and nothing else, so this would file every "
+               "shape a document forked at among the rows a document cannot grow");
         if (members++) out[len++] = ',';
         out[len++] = '"';
+        /* THE NAMESPACE, WRITTEN. It is one byte in front of the page's own bytes rather than a byte stored on
+           every row, and it is written INSIDE the quotes and ABOVE the escaping loop because it is this file's
+           literal and not the page's: escaping it would be escaping a character this file chose. */
+        if (prefixed) out[len++] = FORK_SITE_PREFIX;
         for (; *k; k++) {
             if (*k == '"' || *k == '\\') { out[len++] = '\\'; out[len++] = *k; }
             else if ((unsigned char)*k < 0x20) len += (size_t)snprintf(out + len, n - len, "\\u%04x",
@@ -907,10 +1111,11 @@ char *decide_fork_json(void)
     DCHECK(sum == g_fork_total,
            "the fork census object's rows do not sum to the forks it counted, and the object is where that "
            "identity is actually READ — a consumer takes the total off these rows, so a partition that leaks "
-           "hands back percentages of a denominator that is not the number of forks. The three phases are a "
-           "partition of Space-Saving's counters (a mechanism's exact count, a predicate's floor `n - err`, "
-           "and the errors summed once), so a mismatch is a phase that skipped a claimed row or double-counted "
-           "an error. `sum` is over ROWS ONLY and the bound member is deliberately outside it — it is a bound "
+           "hands back percentages of a denominator that is not the number of forks. The five phases are a "
+           "partition of Space-Saving's counters over BOTH admitted tables (a mechanism's exact count, a "
+           "predicate's floor `n - err`, that table's errors summed once, an unnamed site's floor, and that "
+           "table's errors summed once), so a mismatch is a phase that skipped a claimed row or "
+           "double-counted an error. `sum` is over ROWS ONLY and the bound member is deliberately outside it — it is a bound "
            "on hits and not a count of them, and adding it here would make this identity close over mass no "
            "fork produced, which is the one way the check could pass while the object it checks is wrong");
     return out;
@@ -1359,8 +1564,8 @@ static int dec_replay(uint32_t asked) {
    The parent's own arm is constrained by decide_arm's tail rather than here, so that the constraint is applied
    in ONE place for all three ways a decision is reached — and so that the seam, which may assemble the sibling
    before this returns, sees the parent's constraint exactly as the sibling's frozen copy left it. */
-static int dec_fork_here(JSContext *ctx, const char *key, uint32_t asked, int restartable, int real_arm,
-                        int *forked) {
+static int dec_fork_here(JSContext *ctx, const char *key, JSValueConst subject, uint32_t asked,
+                        int restartable, int real_arm, int *forked) {
     int take = real_arm < 0 ? 1 : real_arm;
     void *dblob;
     void *pblob;
@@ -1369,13 +1574,24 @@ static int dec_fork_here(JSContext *ctx, const char *key, uint32_t asked, int re
            "a fork was told the real arm is a value that is neither arm nor the unobserved marker — it comes "
            "from one ToBoolean of one example, so a third value is a caller computing it somewhere else");
     dblob = decide_fork_blob(g_c, !take, asked);
-    /* THE TWO NAMESPACES PART HERE, and the ternary that used to stand in one argument is why they must: a
+    /* THE NAMESPACES PART HERE, and the ternary that used to stand in one argument is why they must: a
        `key ? key : "(prose)"` hands one parameter two populations, so the site that KNOWS which one it has is
-       the site that was saying nothing about it. A value with no identity this engine can spell is not a
-       predicate — decide_key returns NULL for it and both arms are kept — so its row is a named mechanism like
-       every other fork that asked no question. */
-    if (key) fork_key_count(key, FORK_ROW_PREDICATE);
-    else     fork_key_count("(no source identity)", FORK_ROW_SYNTHETIC);
+       the site that was saying nothing about it.
+       AND THE SECOND ARM USED TO BE ONE HAND-WRITTEN MECHANISM ROW FOR EVERY FORK IN THIS CLASS, which is the
+       defect this pair replaces. `(no source identity)` was true and it named no site: it counted every branch
+       over a value concolic.c declines to spell — a dynamic key read on an ordinary object, a derivation over
+       one, a comparison between two — into a single number in the table whose entire job is to say WHERE the
+       frontier grows. Reading it told you an action with no object, which is §AN-ASSERT-THAT-NAMES-A-REMEDY-
+       BUT-NOT-A-SITE arriving in an instrument, and the row was routinely the largest thing in the object.
+       IT IS A SITE AND STILL NOT A PREDICATE, which is why it is a THIRD population and not a widening of the
+       first. Nothing was asked: decide_key answered NULL, both arms are kept, no constraint is recorded and no
+       replay slot is claimed. The row says where a fork HAPPENED; the census's predicate rows say what a fork
+       ASKED, and merging the two would put a branch in that population the program never took. */
+    if (key) {
+        fork_key_count(key, FORK_ROW_PREDICATE);
+    } else {
+        fork_key_count(fork_site_name(subject), FORK_ROW_SITE);
+    }
     pblob = concolic_pins_suspend();
     *forked = engine_prepare_fork(ctx, dblob, pblob, key, restartable);
     dec_append(take, asked);         /* this flow: the observed arm, onto the head the freeze above emptied */
@@ -1450,8 +1666,13 @@ static int dec_answer_here(const char *key, uint32_t asked, int nonforking) {
  * observation cannot change a decision that has been taken. A replayed arm is this flow's own recorded answer
  * and a refined one is a consequence of its own constraint; re-deciding either from an example would be the
  * second evaluator §Re-execution forbids, re-deciding a predicate from something other than the run. */
-static int decide_arm(JSContext *ctx, const char *key, int restartable, int nonforking, int real_arm,
-                      int *forked) {
+/* `subject` IS THE VALUE THE DECISION IS ABOUT, AND IT IS HERE ONLY SO A FORK THAT ASKED NOTHING CAN NAME
+ * WHERE IT HAPPENED. It is read at exactly one line — dec_fork_here's else arm, where `key` is NULL — and it
+ * is never consulted for the ARM: a shape is not an identity and deciding a branch from one would let two
+ * reads this engine cannot tell apart decide each other. Both entries assert it is a concolic before they get
+ * here (decide_branch's guard, solver_outcome's DCHECK), so it is never a value with no record behind it. */
+static int decide_arm(JSContext *ctx, const char *key, JSValueConst subject, int restartable, int nonforking,
+                      int real_arm, int *forked) {
     uint32_t asked = dec_key_hash(key);
     int arm;
     *forked = 0;
@@ -1495,7 +1716,7 @@ static int decide_arm(JSContext *ctx, const char *key, int restartable, int nonf
            mints the sibling, and one that does not takes the arm the SITE declared and records it. It is not a
            fallback selecting between two implementations of a decision: there is one decision, and this is
            what the other arm's absence means. */
-        arm = engine_session_forks() ? dec_fork_here(ctx, key, asked, restartable, real_arm, forked)
+        arm = engine_session_forks() ? dec_fork_here(ctx, key, subject, asked, restartable, real_arm, forked)
                                      : dec_answer_here(key, asked, nonforking);
     }
     /* ONE PLACE, ALL THREE ARMS — a replayed arm and a refined one narrow this flow exactly as a forked one
@@ -1679,7 +1900,7 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
        run saw says which arm is real, and XORing it would turn that into the arm 0. */
     if (real != REAL_ARM_UNOBSERVED) real ^= neg;
     key = decide_key(cond);
-    arm = decide_arm(ctx, key, restartable, nonforking, real, &forked);
+    arm = decide_arm(ctx, key, cond, restartable, nonforking, real, &forked);
     free(key);
 
     decide_note_forced_arm(cond, real, arm);
@@ -2151,7 +2372,7 @@ int solver_outcome(JSContext *ctx, JSValueConst over, const char *op, int n, int
            ordinary completion there (core/timing/timer.c says so at §8.7's step 4). So this entry cannot be
            reached in a non-forking session, and SOLVER_NO_NONFORKING_ARM is what says so: if it ever is, the
            crash names the machine's question rather than recording an arm nobody chose. */
-        arm = decide_arm(ctx, key, 0, SOLVER_NO_NONFORKING_ARM, real_arm, &forked);
+        arm = decide_arm(ctx, key, over, 0, SOLVER_NO_NONFORKING_ARM, real_arm, &forked);
         free(key);
         /* THE ARM THIS FLOW ENDS ON, AGAINST THE MACHINE'S DECLARATION — the same statement decide_branch
            makes one screen up, made here BEFORE the forked bit is composed because the bit is a message to the
