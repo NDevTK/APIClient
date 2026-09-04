@@ -3376,10 +3376,31 @@ JSValue concolic_new_derived(JSContext *ctx, const char *op, const JSValueConst 
                    "which is concolic_new's question and carries a provenance this entry has no operand to "
                    "take one from");
     DCHECK(operands != NULL, "a derivation was minted with an operand count and no operands");
-    DCHECK(!JS_IsObject(example),
-           "a derivation was handed an OBJECT as its concrete example — an example is the value the caller "
-           "COMPUTED by running the real operation on the operands' own examples, so it is a primitive; a "
-           "later §7.1.4 ToNumber over an object one reaches ToPrimitive from C");
+    /* AN OBJECT EXAMPLE IS NOT REFUSED HERE, AND THE ASSERT THAT USED TO REFUSE ONE IS RETIRED RATHER THAN
+       MOVED. It read "an example is the value the caller COMPUTED by running the real operation on the
+       operands' own examples, so it is a primitive; a later §7.1.4 ToNumber over an object one reaches
+       ToPrimitive from C" — and every clause of that is true of a COERCION and none of it is true of this
+       function, which runs no coercion at all. It composes a shape and an identity and hands the example to
+       concolic_derived to store.
+       IT WAS THE ONLY COPY OF THAT ARGUMENT STANDING ANYWHERE BUT AT A COERCION. The others are
+       concolic_arith_hook's, over the operands it is about to put through §7.1.4 ToNumber; this file's `+`
+       hook's, over §13.15.3 step 1.c's two primitives; and quickjs.c's two, over the JS_ToInt32 and the
+       numeric comparison each of them is standing in front of. Each of those guards a conversion it performs
+       on the next line and each of them stays. This one guarded a store.
+       AND IT MADE THE DERIVED PATH DISAGREE WITH THE SOURCE PATH ABOUT A STATE THIS CLASS IS BUILT ON.
+       concolic_new attaches an object example with no assert, because a server-injected record's example IS an
+       object — example_slot reads its slots, concolic_exotic_own_names walks it with
+       JS_GetOwnPropertyNames, concolic_exotic_delete removes members from it, and every one of those is what
+       models a record at all. Two seams over one primitive, one asserting and one not, and the silent one had
+       been exercised on the whole population of injected state without firing.
+       WHAT FIRED IT was §25.5.2 JSON.parse ( text [ , reviver ] ) over an unknown text: js_json_parse_vfini
+       derives its completion from the source and attaches what the real codec made of that source's example,
+       which for a text whose example is `{"limit":7}` is an Object — the one concrete thing the run performed
+       the real parse to obtain, and the value `page.limit` is then read back out of. (Its own comment argues
+       for exactly that and is not quoted here: a run of this tree's prose in quotation marks under a spec
+       citation is indistinguishable, to citegen and to a reader, from a sentence claimed to be the spec's.) The
+       comparison path already refuses an object example at its own door for its own reason (example_comparable,
+       which declines the identity of a value this engine minted); nothing else here coerces one. */
     for (i = 0; i < n; i++)
         if (concolic_is(operands[i])) { first = i; break; }
     /* NO OPERAND IS UNKNOWN, so the caller already has the answer and there is nothing to derive — the same
@@ -4172,12 +4193,39 @@ static int concolic_exotic_delete(JSContext *ctx, JSValueConst obj, JSAtom prop)
  * getPrototypeOf(x)` false, and defeats §10.4.7.2 SetImmutablePrototype ( obj, proto ), which the contract at
  * JSClassExoticMethods.get_prototype makes this class's [[SetPrototypeOf]] by declaring one at all), with the
  * two ownership sites a JSValue on this record obliges — concolic_finalizer frees it and concolic_gc_mark
- * reports it. (2) A CONCOLIC ARM IN 7.3.21 OrdinaryHasInstance's LINK WALK. Half (1) alone does not merely
- * leave that walk wrong, it HANGS it: the walk asks O.[[GetPrototypeOf]]() per link and stops on null or on
- * SameValue(P, O), both decided in C with no fork, so an unknown that answers a fresh unknown per link never
- * reaches either — and `e instanceof Object` is written by the very libraries this fixes. The fork has to be
- * the walk's, because the truthful model is not an infinite chain: a real chain is FINITE of unknown length,
- * which is a question ("is this link the end?") and therefore a concolic bool, not a bound.
+ * reports it. (2) A CONCOLIC ARM IN §7.3.21 OrdinaryHasInstance ( ctor, instance )'s LINK WALK. Half (1) alone
+ * does not merely leave that walk wrong, it HANGS it: the walk asks instance.[[GetPrototypeOf]]() per link and
+ * stops on null or on SameValue, both decided in C with no fork, so an unknown that answers a fresh unknown per
+ * link never reaches either — and `e instanceof Object` is written by the very libraries this fixes. The fork
+ * has to be the walk's, because the truthful model is not an infinite chain: a real chain is FINITE of unknown
+ * length, which is a question rather than a bound.
+ *
+ * AND THAT QUESTION HAS THREE ANSWERS AND NOT TWO, WHICH IS THIS RESIDUAL CORRECTING ITSELF. The clause above
+ * said "is this link the end?" and therefore "a concolic bool", and a bool is a two-way partition of a
+ * three-way question. §7.3.21's step 6 is a Repeat whose body is exactly three steps — 6.a "Set instance to ?
+ * instance.[[GetPrototypeOf]]()", 6.b "If instance is null, return false", 6.c "If SameValue(proto, instance)
+ * is true, return true" — so one iteration over an unknown link has three feasible completions: the chain ENDS
+ * here (false), this link IS proto (true), and neither, which continues. "The end" names 6.b and 6.c at once
+ * and then cannot say which, so the arm that answers it decides nothing; and a two-arm fork that keeps only
+ * 6.b DELETES the world in which `e instanceof Object` is TRUE, which on a server-injected record is the world
+ * a real session is standing in. That is CLAUDE.md's undercount exactly: the completions were enumerated from
+ * the branch of the text ("does the walk stop?") rather than from what the page can observe ("false", "true",
+ * "not yet"). Declare n == 3 with `real` UNSTATED — no example says which, and the numbering rule is what a
+ * non-forking run takes.
+ *
+ * AND THE ASK IS KEYED BY THE LINK'S OWN IDENTITY, NEVER BY ITS POSITION IN THE WALK. Each link is the
+ * memoised derivation half (1) mints, so it has a name that is composed from the receiver and survives a park;
+ * the depth does not — it is an ordinal over a chain the page can lengthen, and a replayed ordinal renames its
+ * referent. The engine's own unknown-length chain is the precedent for the whole shape (an `askop` composed at
+ * EVERY entry, the ask and the resume that consumes an answer alike, because JSStepHdr::fork_op is BORROWED
+ * for the length of the request and the machine must be able to re-spell it after a park).
+ *
+ * AND A THIRD CONSUMER THE CLAUSE ABOVE DOES NOT NAME, reached from JS_SetPrototypeInternal: §10.4.7.2's own
+ * step 2 is `SameValue(proto, current)` over the value THIS entry returns, and that comparison is a pointer
+ * test between two Objects. With a derived unknown as `current` it can never hold, so `Object.setPrototypeOf`
+ * over an unknown answers a fabricated `false` — or, in the throwing form, a TypeError — for the same reason
+ * the walk answers a fabricated `false`. It is the same missing arm at a second door, and a diff that gives
+ * the walk its fork and leaves this one deciding in C has fixed one of two.
  *
  * HOW ITS ABSENCE SHOWS, in one line a reader can go and look for: a page that walks a prototype chain over a
  * server-injected record throws `cannot read property '<x>' of null` at a line real Chrome does not throw at,
@@ -4191,9 +4239,13 @@ static JSValue concolic_exotic_get_prototype(JSContext *ctx, JSValueConst obj) {
     DFAIL("§10.1.1 [[GetPrototypeOf]] ( ) was asked of the solver's own value class and this engine has no "
           "answer for it that is not invented: a value nobody has observed has an unknown prototype, and the "
           "NULL the shape link holds is the positive claim that it has none. Build it as a DERIVATION over the "
-          "receiver, memoised on the record so the answer has an identity, AND in the SAME diff give 7.3.21 "
-          "OrdinaryHasInstance's link walk a forking arm — that walk stops on null or SameValue decided in C, "
-          "so a derived prototype without it does not answer wrongly, it does not terminate");
+          "receiver, memoised on the record so the answer has an identity, AND in the SAME diff give §7.3.21 "
+          "OrdinaryHasInstance ( ctor, instance )'s link walk a forking arm — that walk stops on null or "
+          "SameValue decided in C, so a derived prototype without it does not answer wrongly, it does not "
+          "terminate. THREE completions per link and not two: §7.3.21 step 6.b returns false, step 6.c returns "
+          "true, and neither continues, so a two-arm 'is this the end' deletes the world where the page's "
+          "`instanceof` is TRUE. See this entry's own comment for the third door (§10.4.7.2 step 2's SameValue, "
+          "reached from JS_SetPrototypeInternal) that the same absence answers wrongly");
     /* RELEASE ANSWERS EXACTLY WHAT THE SHAPE LINK ANSWERED BEFORE THIS ENTRY EXISTED. In release we can neither
        fix nor add a capability, so the same fabrication stands and this hook is a no-op — what it must not do
        is invent a DIFFERENT concrete prototype, which would make the two builds disagree about a value the
