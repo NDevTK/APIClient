@@ -459,6 +459,78 @@ static char *ident_of_operand(JSContext *ctx, JSValueConst v)
     return literal_ident(ctx, v);
 }
 
+/* A STRING OPERAND, RENDERED AS THE PAGE WROTE IT. The quotes are not decoration: §7.1.19 ToString spells the
+   Number 5 and the String "5" with the same byte, so a display that showed both as `5` would be COARSER than
+   the identity beside it, which separates them by kind. The two characters that could close the rendering
+   early are escaped for the same reason — `f("a\"", "b")` and `f("a", "\"b")` must not render alike. OWNED. */
+static char *shape_quote(const char *s)
+{
+    size_t i, j, n = strlen(s), extra = 0;
+    char *out;
+
+    for (i = 0; i < n; i++) if (s[i] == '"' || s[i] == '\\') extra++;
+    out = reclaim_malloc(n + extra + 3);
+    CHECK(out, "concolic: OOM quoting a string operand for a display shape");
+    out[0] = '"';
+    j = 1;
+    for (i = 0; i < n; i++) {
+        if (s[i] == '"' || s[i] == '\\') out[j++] = '\\';
+        out[j++] = s[i];
+    }
+    out[j++] = '"';
+    out[j] = '\0';
+    return out;
+}
+
+/* ONE OPERAND'S DISPLAY — THE SHAPE TWIN OF ident_of_operand ABOVE, AND IT LIVES HERE BECAUSE THE TWO ARE ONE
+   RULE. An unknown renders as its own hole shape and a concrete one as the LITERAL the page wrote; an operand
+   this engine may not spell at all (an Object or a Symbol — operand_kind's own last line) renders "?", and it
+   has already made the whole IDENTITY absent through concolic_ident_compose's unspellable-member rule.
+   THE RULE THE PAIR ENFORCES, and it is an invariant rather than a preference: A SHAPE MUST SEPARATE EVERY
+   PAIR OF OPERANDS ITS IDENTITY SEPARATES. keyname_record spends a display shape to buy a property atom, so a
+   shape coarser than the identity beside it makes two distinct unknowns ONE slot on the page's own object —
+   and the assert there is the one that catches it. That is why the kind is rendered here (a quoted String, a
+   BigInt's `n`) and not dropped as §7.1.19 ToString drops it: `f(x, 5)` and `f(x, "5")` are two derivations
+   and two identities, so they are owed two shapes.
+   literal_tok AND NOT JS_ToCString, which is the same distinction operand_kind's own comment draws: §7.1.19
+   ToString step 10 sends an Object to ToPrimitive, running the page's own valueOf from a C activation with no
+   flow base under it. OWNED by the caller. */
+static char *derived_operand_shape(JSContext *ctx, JSValueConst v)
+{
+    ConcolicLit kind;
+    char *tok, *r;
+
+    if (concolic_is(v)) {
+        const char *sh = concolic_shape_c(v);
+        return shapef("%s", sh ? sh : "{}");
+    }
+    kind = operand_kind(v);
+    tok = literal_tok(ctx, v);
+    if (!tok) return shapef("?");
+    switch (kind) {
+    case CONCOLIC_LIT_STRING: r = shape_quote(tok); break;
+    /* §6.1.6.2 The BigInt Type spells 5n as "5", which is the Number's spelling — the same collision one type
+       over, and the identity separates them by kind exactly as it does the String. */
+    case CONCOLIC_LIT_BIGINT: r = shapef("%sn", tok); break;
+    case CONCOLIC_LIT_NUMBER:
+    case CONCOLIC_LIT_BOOL:
+    case CONCOLIC_LIT_NULL:
+    case CONCOLIC_LIT_UNDEFINED:
+        /* §7.1.19 ToString of each of these IS the literal a page writes for it, and no two of the four spell
+           one token, so the token alone already separates what the identity separates. */
+        r = shapef("%s", tok);
+        break;
+    case CONCOLIC_LIT_NONE:
+        DFAIL("a concrete operand spelled a token under the kind operand_kind reserves for values it refuses "
+              "to spell — literal_tok answers NULL for exactly that kind, so a token arriving with it means "
+              "the two classifications of one operand have disagreed");
+        r = shapef("?");
+        break;
+    }
+    free(tok);
+    return r;
+}
+
 /* Mint a value DERIVED from an unknown one: `ident` is CONSUMED, `example` is CONSUMED, and the candidate
    substitution applies exactly as it does to a source read (see concolic_new). */
 static JSValue concolic_derived(JSContext *ctx, const char *shape, const char *src, const char *root,
@@ -2787,12 +2859,35 @@ static JSValue concolic_call(JSContext *ctx, JSValueConst func_obj, JSValueConst
            "a concolic value was called as a CONSTRUCTOR — this class never sets the constructor bit, so "
            "`this_val` here is the receiver and nothing else, and a new.target arriving in that slot would "
            "be filed as the object a page's own predicate tested");
-    shape = shapef("%s()", c->shape ? c->shape : "{}");
-    /* THE ARGUMENTS ARE PART OF THE CALL'S IDENTITY. `x.startsWith("/api")` and `x.startsWith("javascript:")`
-       are two gates over one source, and a call identity that dropped its arguments made the second DECIDED by
-       the first — the same collapse the relational operator's missing operand made, reached by another route.
+    /* THE ARGUMENTS ARE PART OF THE CALL'S IDENTITY, AND THEREFORE PART OF ITS SHAPE. `x.startsWith("/api")`
+       and `x.startsWith("javascript:")` are two gates over one source, and a call identity that dropped its
+       arguments made the second DECIDED by the first — the same collapse the relational operator's missing
+       operand made, reached by another route.
+       THE SHAPE DROPPED THEM FOR LONGER THAN THE IDENTITY DID, AND THAT WAS THE SAME DEFECT ONE FIELD OVER.
+       shapef's own banner already states the rule this line now obeys — a shape "is ALSO the field path an @S
+       candidate is injected at", so two derivations sharing one shape share one injection address — and it was
+       written there about TRUNCATION, which was fixed. This was the identical loss by OMISSION: `h.slice(1)`
+       and `h.slice(2)` composed two identities and ONE shape `{location.hash}.slice()`, so keyname_record's
+       assert fired the moment both were used as property keys, and with the assert compiled out the two
+       distinct unknown keys bought ONE atom and landed in ONE slot on the page's own object. Reproduced at
+       origin/main 9c757178 in four lines, and the same document answered `Object.keys(o).length === 1`.
+       IT IS ALSO THE HONEST DISPLAY, which is why this is a repair rather than a disambiguator bolted on:
+       §@H asks for "the expression the run actually built", and the page wrote the argument.
        An argument this engine cannot spell (a plain object) makes the whole identity absent, so both arms of
-       every branch over the result stay. */
+       every branch over the result stay — and it renders "?", which is the one pair this rule cannot separate;
+       see the NAMED RESIDUAL at keyname_record. */
+    {
+        char *args = NULL;
+        for (i = 0; i < argc; i++) {
+            char *a = derived_operand_shape(ctx, argv[i]);
+            char *next = args ? shapef("%s, %s", args, a) : shapef("%s", a);
+            free(a);
+            free(args);
+            args = next;
+        }
+        shape = shapef("%s(%s)", c->shape ? c->shape : "{}", args ? args : "");
+        free(args);
+    }
     owned = reclaim_malloc((size_t)(argc + 1) * sizeof *owned);
     f = reclaim_malloc((size_t)(argc + 2) * sizeof *f);
     CHECK(owned && f, "concolic: OOM identifying a call over an unknown value");
@@ -3084,9 +3179,15 @@ int concolic_arith_hook(JSContext *ctx, JSValue *sp, int op, int nops) {
     } else {
         const char *f[2];
         char *ia = ident_of_operand(ctx, a), *ib = ident_of_operand(ctx, b);
-        char *sa = ca ? strdup(concolic_shape_c(a) ? concolic_shape_c(a) : "{}") : cstr_dup(ctx, a);
-        char *sb = cb ? strdup(concolic_shape_c(b) ? concolic_shape_c(b) : "{}") : cstr_dup(ctx, b);
-        CHECK(sa && sb, "concolic arithmetic: OOM shape");
+        /* derived_operand_shape AND NOT A SECOND SPELLING OF IT. This was `ca ? shape(a) : cstr_dup(ctx, a)`,
+           which is that function hand-rolled, minus the KIND and plus a hazard: cstr_dup is an unconditional
+           JS_ToCString, so `x * obj` sent §7.1.19 ToString step 10 to ToPrimitive and ran the page's own
+           valueOf from a C activation with no flow base under it — the same call operand_kind's own banner
+           records taking four real bundles' engine instances down at concolic_cmp_hook. Routing to the one
+           speller fixes both at once: `x * 2` and `x * "2"` are two identities and are now two shapes, and an
+           operand this engine refuses to spell renders `?` instead of running the page's code. */
+        char *sa = derived_operand_shape(ctx, a);
+        char *sb = derived_operand_shape(ctx, b);
         shape = shapef("%s%s%s", sa, name, sb);
         free(sa); free(sb);
         f[0] = ia; f[1] = ib;
@@ -3256,25 +3357,6 @@ JSValue concolic_tobool_hook(JSContext *ctx, JSValueConst v, int negate) {
    about their call sites and is stated at each of them, never here — a list here would be the next sentence to
    go stale. What is true of THIS function is only its contract: it derives from the operand and attaches
    whatever example it is handed, JS_UNDEFINED included, and never computes or predicts one itself. */
-/* ONE OPERAND'S DISPLAY, FOR THE JOINED SHAPE BELOW — an unknown renders as its own hole shape and a concrete
-   one as the text it spells, which is exactly the pair concolic_arith_hook renders for `x + 2`. A concrete
-   operand this engine may not spell at all (an Object or a Symbol — operand_kind's own last line) renders "?",
-   and it has already made the whole IDENTITY absent through concolic_ident_compose's unspellable-member rule,
-   so the shape is the only thing left for it to say. OWNED by the caller. */
-static char *derived_operand_shape(JSContext *ctx, JSValueConst v)
-{
-    char *r;
-
-    if (concolic_is(v)) {
-        const char *sh = concolic_shape_c(v);
-        return shapef("%s", sh ? sh : "{}");
-    }
-    /* literal_tok AND NOT JS_ToCString, which is the same distinction operand_kind's own comment draws: §7.1.19
-       ToString step 10 sends an Object to ToPrimitive, running the page's own valueOf from a C activation with
-       no flow base under it. */
-    r = literal_tok(ctx, v);
-    return r ? r : shapef("?");
-}
 
 /* SEE concolic.h — the VALUE twin of concolic_new_rel, over an ORDERED operand list, and the one speller
    concolic_builtin_hook is the n == 1 case of. */
@@ -3452,19 +3534,68 @@ static void keyname_record(const char *shape, const char *src, const char *root,
            de-taint a value — it MIS-ATTRIBUTES one, so a sink reached through the second source is reported
            against the first and its @S candidate is solved at an address that never fed it. Two concrete
            strings would be the smaller error.
-           WHERE THE FIX GOES IF IT FIRES, which is never here: concolic_new_derived composes a shape out of
-           its operands' SHAPES while composing an identity out of their IDENTS, so two derivations that differ
-           only in an operand's identity spell one shape by construction. The shape has to carry what the
-           identity carries before a value spelled that way can be a key. */
+           WHERE THE FIX GOES IF IT FIRES, which is never here. This paragraph named ONE function —
+           concolic_new_derived — and that was wrong, in exactly the way CLAUDE.md predicts a remedy clause is
+           wrong: the SPEC half held and the claim about THIS TREE did not. It was refuted by reading the
+           spellers rather than the named line. concolic_new_derived is not the speller that fires and was
+           never the only one; THE RULE IS THE THING, and it is checked at every speller that composes a shape
+           and an identity out of one operand list:
+
+               A SHAPE MUST SEPARATE EVERY PAIR OF OPERANDS ITS IDENTITY SEPARATES,
+               WHEREVER THE SHAPE IS AN EXPRESSION.
+
+           The second line is not a hedge on the first, it is the boundary the sweep found, and stating the
+           rule without it would be an absolute one counterexample retires. concolic_add_hook's shape is NOT
+           an expression: it is the STRING the concatenation produced, which is what makes `"/api/" + x` render
+           `/api/{x}` — the @H provenance the endpoint surface is composed of. So `x + 5` and `x + "5"` are two
+           identities under one shape THERE and must stay that way; that pair belongs to the residual below and
+           not to any speller. Every other site in this file renders an expression and owes the rule outright.
+
+           The one that actually fired is concolic_call, which spelled `%s()` over the CALLEE ALONE while
+           composing `()` over the callee AND every argument — so `h.slice(1)` and `h.slice(2)` were two
+           identities under one shape. Reproduced at origin/main 9c757178 in four lines of page script, and
+           the fix is at that speller. derived_operand_shape carried a smaller instance of the same loss at
+           the leaf (§7.1.19 ToString spells the Number 5 and the String "5" alike while the identity separates
+           them by kind); it is now kind-faithful and sits beside ident_of_operand so the pair reads as one
+           rule.
+           concolic_key_read_hook was a THIRD: it spelled `{}` for the OBJECT while composing the object's
+           identity into `[]`, so `__FLAGS[k]` and `__NEXT_DATA__[k]` were two identities under one shape. A
+           draft of this paragraph claimed that site was exempt because an ordinary object has no identity
+           either; that is true of an ordinary object and FALSE of an unknown RECORD, which has one — and the
+           four-line document proving it fired this assert. The claim was written, then checked, then refuted,
+           which is the only reason it is not still standing here as an exemption.
+           concolic_typeof_hook was a FOURTH: it spelled `typeof %s` over the operand's SRC, which every
+           derivation off one source inherits, so `typeof (x+1)` and `typeof (x+2)` were one shape — and it
+           was the wrong display besides, naming the source where the page wrote the derived value.
+           concolic_arith_hook was a FIFTH, by hand-rolling derived_operand_shape's job as `cstr_dup`: the same
+           loss of the kind, plus an unconditional JS_ToCString that ran the page's own valueOf from a C
+           activation with no flow base under it. All five now route through the two spellers that sit
+           together, which is what makes the rule checkable by reading one place instead of five.
+
+           NAMED RESIDUAL — THE ONE PAIR NO SHAPE CHANGE REACHES, and it is the case this assert is BLIND to
+           rather than the case it catches. Where an operand is an Object or a Symbol, concolic_ident_compose
+           makes the WHOLE identity absent, so two genuinely different derivations carry ident == NULL, equal
+           src and equal root: every field this assert compares AGREES, the assert passes, and the two still
+           buy one atom and land in ONE slot. Measured on the artifact of 9c757178:
+           `o[h.slice({})] = "a"; o[h.slice({z:1})] = "b";` emitted `Object.keys(o).length` as 1 and read `b`
+           back through the first key, with no abort anywhere.
+           WHAT THE NEXT DIFF BUILDS: not a finer shape — there is none, because the identity is absent too —
+           but an ANSWER for a key whose value has no spellable identity at all. That is a question about what
+           .key_name may spend, not about what a speller renders, and it is the only half of this defect that
+           is a missing capability rather than a wrong rendering.
+           HOW ITS ABSENCE SHOWS: a page whose unknown key is derived through an unspellable operand (a RegExp
+           handed to `replace`, an options object handed to a formatter) loses members off its own object —
+           `Object.keys(o).length` short by one per collision — while this assert stays silent. */
 #if APICLIENT_DEV
         DCHECK(keyname_str_same(g_keynames[i].src, src) &&
                keyname_str_same(g_keynames[i].root, root) &&
                keyname_str_same(g_keynames[i].ident, ident),
                "two different unknowns denote ONE property name — a display shape is what this engine spends "
                "to buy an atom, so two values that spell one shape land in one slot and the name->value "
-               "restore answers one of them for a key that was the other. The repair is in the SPELLER: make "
-               "the shape carry what the identity carries (concolic_new_derived), before a value spelled that "
-               "way is used as a key");
+               "restore answers one of them for a key that was the other. The repair is at whichever SPELLER "
+               "composed this value: a shape must separate every pair of operands its identity separates. Read "
+               "the paragraph above before reaching for a function name — this message used to carry one and "
+               "it was the wrong one");
 #endif
         return;
     }
@@ -3547,12 +3678,23 @@ JSValue concolic_key_read_hook(JSContext *ctx, JSValueConst obj, JSValueConst ke
     if (!concolic_is(key)) return JS_UNINITIALIZED;
     src = concolic_src_c(key);
     root = concolic_root_c(key);
-    shape = shapef("{}[%s]", concolic_shape_c(key) ? concolic_shape_c(key) : "{}");
     /* WHICH OBJECT WAS READ IS HALF THE IDENTITY: `a[x]` and `b[x]` are two reads and one must not decide the
        other. An ordinary object has no identity that survives the park a resumed flow replays through, so the
-       composition is ABSENT there and every branch over the result keeps both arms. */
+       composition is ABSENT there and every branch over the result keeps both arms.
+       AND IT IS HALF THE SHAPE FOR THE SAME REASON, WHICH THIS LINE SPELLED `{}` FOR AND DID NOT SAY. The
+       object was in the identity and NOT in the display, so two unknown RECORDS read with one unknown key —
+       `__FLAGS[k]` and `__NEXT_DATA__[k]` — composed two identities under the one shape `{}[{x}]`; used as
+       property keys those bought ONE atom, which keyname_record asserts against and which, with the assert
+       compiled out, is one slot for two members. Reproduced on the artifact of origin/main 9c757178.
+       derived_operand_shape IS THE SPELLER and not a `%s` of concolic_shape_c, because it is the twin of the
+       ident_of_operand call directly below: an unknown renders as its own shape, a spellable primitive as the
+       literal the page wrote, and an ordinary object as `?` — which is the honest display for the operand
+       whose identity is absent, and the one pair this rule cannot separate. */
     io = ident_of_operand(ctx, obj);
     ik = ident_of_operand(ctx, key);
+    { char *os = derived_operand_shape(ctx, obj);
+      shape = shapef("%s[%s]", os, concolic_shape_c(key) ? concolic_shape_c(key) : "{}");
+      free(os); }
     f[0] = io; f[1] = ik;
     ident = concolic_ident_compose("[]", f, 2);
     free(io); free(ik);
@@ -3562,13 +3704,18 @@ JSValue concolic_key_read_hook(JSContext *ctx, JSValueConst obj, JSValueConst ke
 }
 
 JSValue concolic_typeof_hook(JSContext *ctx, JSValueConst v) {
-    const char *src, *f[1];
+    const char *sh, *f[1];
     char *shape, *ident;
     JSValue r;
 
     if (!concolic_is(v)) return JS_UNINITIALIZED;
-    src = concolic_src_c(v);
-    shape = shapef("typeof %s", src ? src : "{}");
+    /* THE OPERAND'S SHAPE AND NOT ITS SRC, which is what concolic_tostr_hook eight lines up already does and
+       what this line did not. A src is inherited by every derivation off one source — `x+1` and `x+2` carry
+       x's — so spelling the display off it made `typeof (x+1)` and `typeof (x+2)` ONE shape over two
+       identities, which is one property atom for two values at keyname_record. It was also simply the wrong
+       display: `typeof {location.hash}` names the source, and the page wrote typeof of the derived value. */
+    sh = concolic_shape_c(v);
+    shape = shapef("typeof %s", sh ? sh : "{}");
     f[0] = concolic_ident_c(v);
     ident = concolic_ident_compose("typeof", f, 1);
     r = concolic_derived(ctx, shape, shape, concolic_root_c(v), ident, JS_UNDEFINED);
@@ -4517,6 +4664,16 @@ int concolic_add_hook(JSContext *ctx, JSValue *sp, JSConcolicAddOp op) {
            "13.15.3 and 22.1.3.5 disagree about the numeric arm, so an unnamed caller has no answer here");
     if (!ca && !cb) return 0;
 
+    /* THE ONE SPELLER THIS SITE MUST NOT ROUTE TO, AND THE REASON IS THE PRODUCT. Every other shape in this
+       file renders the EXPRESSION the page wrote, and derived_operand_shape therefore renders a String operand
+       QUOTED so the display separates what the identity separates. A concatenation's shape is not an
+       expression: it is the STRING the concatenation produced, which is what makes `"/api/" + cfg.region`
+       render `/api/{cfg.region}` — the @H provenance the whole endpoint surface is composed of. Quoting here
+       would spell it `"/api/"{cfg.region}` and there is no version of that worth having.
+       SO THIS SITE IS DELIBERATELY COARSER THAN ITS IDENTITY, and it is the counterexample to the rule stated
+       at keyname_record rather than an oversight: `x + 5` and `x + "5"` compose two identities and one shape,
+       and no shape change can separate them without destroying the URL. See the NAMED RESIDUAL there — the
+       repair for that pair is at what .key_name may SPEND, never here. */
     char *sha = ca ? strdup(concolic_shape_c(a) ? concolic_shape_c(a) : "{}") : cstr_dup(ctx, a);
     char *shb = cb ? strdup(concolic_shape_c(b) ? concolic_shape_c(b) : "{}") : cstr_dup(ctx, b);
     CHECK(sha && shb, "concolic +: OOM shape");

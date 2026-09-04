@@ -1665,8 +1665,9 @@ static const char *HTML =
        real raw-fragment XSS. The two writes together are the only arrangement that tells "the source transform
        is applied" apart from "the derivation stopped at the first spelling": the first must NOT fire and the
        second MUST.
-       IT IS A DERIVED SOURCE IDENTITY ON PURPOSE. `location.hash.slice(1)` composes `{location.hash}.slice()`
-       (concolic.h states that derivation byte for byte), so this is its OWN search with its own probes — the
+       IT IS A DERIVED SOURCE IDENTITY ON PURPOSE. `location.hash.slice(1)` composes `{location.hash}.slice(1)`
+       (concolic.h states that derivation byte for byte, ARGUMENT INCLUDED — a call shape that dropped its
+       arguments made two derivations one property atom), so this is its OWN search with its own probes — the
        negative half above keeps its parked entry instead of being absorbed into a search that fires. The ROOT
        is still `location.hash`, which is what carries the percent-encode set through the derivation, so the
        constraint this search is solved under is the same one. */
@@ -7535,8 +7536,13 @@ static int param_value_only(const char *js, const char *url, const char *pname, 
  * array at all. */
 /* THE ATTRIBUTE-VALUE SEARCH'S SOURCE, SPELLED ONCE. `location.hash.slice(1)` composes this identity byte for
  * byte (concolic.h states the derivation), and four rows plus a stage read it — four copies of one string, each
- * free to drift from concolic.c's composition on its own. */
-#define ATTR_SRC "{" LOCATION_HASH_SRC "}.slice()"
+ * free to drift from concolic.c's composition on its own.
+ * THE ARGUMENT IS IN IT, and that is the composition and not a decoration on it: concolic_call renders every
+ * argument it composes into the call's IDENTITY, because a shape must separate every pair of operands its
+ * identity separates — `h.slice(1)` and `h.slice(2)` are two derivations and were one shape, which made them
+ * one property atom (keyname_record, solver/concolic.c). This define is the one place in the tree that names a
+ * with-arguments call shape as a literal, so it is the one place that moves with that rule. */
+#define ATTR_SRC "{" LOCATION_HASH_SRC "}.slice(1)"
 
 /* ONE @S RECORD'S OWN BOUNDS, which every reader below is a question asked INSIDE. An entry runs from its
  * `{"sink":` to its own closing brace, and that is the whole of what makes an answer a measurement rather than
