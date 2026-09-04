@@ -1553,6 +1553,71 @@ typedef struct {
        the family charge was added for. */
     long families;
 
+    /* THE THIRD ACCOUNTING SCOPE — A FORK SUBTREE — AND THE ELEVEN ROWS THAT MAKE "THE TWO SIDES OF THIS
+     * BRANCH RECEIVED X AND Y" A NUMBER INSTEAD OF AN ARGUMENT.
+     *
+     * WHY NEITHER SCOPE ABOVE COULD ANSWER IT. `svc_max`/`svc_min` are the MEMBER's silence and
+     * `svc_fam_max`/`svc_fam_min` are the FAMILY ROOT's, with nothing between them — and the row above says
+     * why the second pair is usually mute: on a page whose flows all descend from boot, `families` is 1 and
+     * the family half is a common offset that orders nothing. So WITHIN a family the branch is invisible and
+     * BETWEEN families there is only one family, which is exactly the pair of blind spots a subtree sits in.
+     * A BUCKET IS A TOP-LEVEL ARM: the node forked directly off a family root, reached from every member of
+     * its subtree in one indirection (flow.c's FlowAcct `branch`). Every branch a ROOT flow takes opens one,
+     * which on a real page is every branch the boot flow itself takes. A branch taken DEEPER is summed into
+     * its top-level arm and is not separated — the residual at flow.c's FlowAcct `up` states that, states what
+     * the next diff must build, and states that `br_depth_max` below is the row deciding what it may cost.
+     *
+     * THE KINDS ARE IN THE NAMES BECAUSE THEY DECIDE WHAT MAY BE DONE WITH THE NUMBERS. `branches`,
+     * `br_live_*` and `br_depth_max` are GAUGES over the buckets standing NOW and may FALL between samples, so
+     * none of them may be differenced. `br_born_max`, `br_us_*`, `br_retired_us` and `charged_us` are LIFETIME
+     * counters, never forgiven and never reset — which is the property that separates them from every `svc*`
+     * row above, all of which are silence SINCE an account's last emission and are sent to zero for a whole
+     * family in one statement. An arm that burned an hour and then emitted did not RECEIVE less, and receipt
+     * is the question these ask. MICROSECONDS, not notches: the seven `svc*` rows are quotients whose names do
+     * not say so, and this file records the relay that cost — a notch count read as a dispatch count that
+     * exists nowhere in the program. There is no quotient here to be mis-read.
+     *
+     * HOW TO READ THEM, SO IT IS NOT RE-DERIVED AT EVERY SITE. `br_live_max / members` is how concentrated the
+     * FRONTIER is in one side of one top-level branch, and the other side is the remainder. `br_us_max /
+     * charged_us` is how concentrated the THREAD is, and again the other side is the remainder — which is why
+     * both totals are published rather than only the extrema. Those two together are the X and the Y.
+     * `br_born_max` beside `br_live_max` separates a bucket that MINTS unboundedly from one that merely HOLDS
+     * a lot at this instant, and those two take opposite diffs. `br_live_min` is 0 or 1 whenever the family
+     * ROOT's own bucket is still standing, because a root's bucket holds exactly one member by construction
+     * (every arm it forks opens a bucket of its own) — so the informative floor is over the ARMS and the root
+     * is the reason the minimum reads low; do not take `br_live_min` for "the other side of the branch".
+     *
+     * TWO CONSERVATION IDENTITIES DEFINE THEM AND BOTH ARE ASSERTED IN flow_wfq_census WHERE EVERY TERM IS IN
+     * ONE HAND. `br_live_sum == members`: the buckets PARTITION the frontier, so a sum below is a member
+     * counted nowhere and a sum above is one counted twice. `br_us_sum + br_retired_us == charged_us`: every
+     * microsecond the scheduler charges lands on exactly one bucket, and a bucket freed once its subtree is
+     * wholly departed folds its total into the retired term rather than losing it. Every term of both is
+     * published, so both are checkable from OUTSIDE the process on the emitted document — which is the only
+     * property of a per-bucket number a reader can check without re-deriving the mechanism behind it.
+     *
+     * WHERE THE INSTRUMENT RUNS AND HOW OFTEN, WHICH IS PART OF WHAT IT REPORTS. Two int64 adds per CHARGE
+     * (flow_age_running, once per slice), about four stores per FORK, one increment per DEPARTURE, three adds
+     * per node FREE, one comparison per trip of acct_compress_dead's existing loop, and inside the census's
+     * EXISTING member walk one pointer load plus a generation compare per member and about eight compares per
+     * distinct bucket. No new walk, nothing per-opcode, and nothing whose cost grows with the fork depth. */
+    long branches;      /* GAUGE: distinct top-level-arm buckets holding at least one live member */
+    long br_live_max;   /* GAUGE: the most live members in one bucket — the fat side of a branch */
+    long br_live_min;   /* GAUGE: the fewest; see above for why the root's bucket usually owns this */
+    long br_live_sum;   /* GAUGE: their sum, published because `== members` is the partition identity */
+    long br_born_max;   /* LIFETIME: the most members ever MINTED into one live bucket */
+    int64_t br_us_max;  /* LIFETIME MICROSECONDS: the most thread time one bucket's subtree ever received */
+    int64_t br_us_min;  /* LIFETIME MICROSECONDS: the least */
+    int64_t br_us_sum;  /* LIFETIME MICROSECONDS: their sum — one half of the burn identity */
+    int64_t br_retired_us; /* LIFETIME MICROSECONDS received by buckets whose subtree has wholly departed */
+    int64_t charged_us; /* LIFETIME MICROSECONDS the scheduler has charged at all — the identity's total */
+    /* GAUGE: how deep in the fork tree the deepest LIVE member sits (0 at a root). It ranks nothing and it is
+       not about buckets; it is here because it is the one row that says whether this engine's fork tree is a
+       STAR (one flow forking N arms off one node, so an aggregate maintained by walking to the root costs O(1)
+       amortised) or a CHAIN (each arm forking the next, so the same walk is quadratic). Those two shapes are
+       indistinguishable in every other row of this struct, and which one it is decides what the per-node
+       generalisation of these buckets may cost. */
+    int br_depth_max;
+
     /* THE @S CANDIDATE SESSIONS, ASKED DIRECTLY, because the first reading of this census had to INFER them
      * and the inference was three fields long: `val_zero` counts members that inherited nothing, `unrun`
      * counts members never charged, `self_emit == 0` is what rules out a just-emitted flow among them, and

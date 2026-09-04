@@ -697,6 +697,41 @@ char *result_wfq_json(void) {
                         statement and each may FALL between two samples. `topForgiven` below counts those
                         events and is the only row on this line that is a lifetime count of them. */
                      "\"svcMax\":%lld,\"svcMin\":%lld,\"svcFamMax\":%lld,\"svcFamMin\":%lld,\"families\":%ld,"
+                     /* AND THE SCOPE BETWEEN THOSE TWO — a FORK SUBTREE, which neither of the pairs on the
+                        line above can reach. `svcMax`/`svcMin` are one MEMBER's silence; `svcFamMax`/
+                        `svcFamMin` are the FAMILY ROOT's and, on the `families: 1` frontier a real page
+                        presents, a common offset that orders nothing. So within a family the branch is
+                        invisible and between families there is only one family, and "the two sides of this
+                        branch received X and Y" had no number anywhere. A bucket is a TOP-LEVEL ARM (a node
+                        forked directly off a family root); a branch taken deeper is summed into its
+                        top-level arm — solver/flow.c's residual at FlowAcct `up` states that limit.
+                        THE KINDS DIFFER ON THIS LINE AND THE NAMES SAY SO. `branches`, `brLive*` and
+                        `brDepthMax` are GAUGES over the buckets standing NOW and may FALL between samples, so
+                        none may be differenced. Every name carrying `Life` is a LIFETIME counter in
+                        MICROSECONDS or in members, never forgiven and never reset — which is exactly what
+                        separates them from the seven notch rows above, all of which are silence SINCE an
+                        account's last emission and go to zero for a whole family in one statement. An arm
+                        that burned an hour and then emitted did not RECEIVE less, and receipt is what these
+                        ask. There is no quotient hidden in any of them.
+                        READ `brLiveMax / members` for how concentrated the FRONTIER is in one side of one
+                        top-level branch and `brUsLifeMax / chargedUsLife` for how concentrated the THREAD is;
+                        the other side of the branch is the remainder of each, which is why both totals are
+                        here and not only the extrema. `brBornLifeMax` beside `brLiveMax` separates a bucket
+                        that MINTS unboundedly from one merely HOLDING a lot now, and those take opposite
+                        diffs. Do NOT read `brLiveMin` as the other side: a family ROOT's bucket holds exactly
+                        one member by construction, so while the root stands this is 0 or 1 and says nothing
+                        about any arm.
+                        TWO IDENTITIES DEFINE THESE AND BOTH ARE CHECKABLE ON THIS DOCUMENT, which is the one
+                        property of a per-bucket number a reader can check without re-deriving the mechanism:
+                        `brLiveSum == members` (the buckets partition the frontier — below is a member counted
+                        nowhere, above is one counted twice) and `brUsLifeSum + brRetiredUsLife ==
+                        chargedUsLife` (every charged microsecond lands on exactly one bucket, and a bucket
+                        whose subtree has wholly departed folds its total into the retired term rather than
+                        losing it). Both are asserted in flow_wfq_census where every term is in one hand. */
+                     "\"branches\":%ld,\"brLiveMax\":%ld,\"brLiveMin\":%ld,\"brLiveSum\":%ld,"
+                     "\"brBornLifeMax\":%ld,\"brUsLifeMax\":%lld,\"brUsLifeMin\":%lld,"
+                     "\"brUsLifeSum\":%lld,\"brRetiredUsLife\":%lld,\"chargedUsLife\":%lld,"
+                     "\"brDepthMax\":%d,"
                      "\"visMin\":%lld,\"visMax\":%lld,\"visZero\":%ld,"
                      "\"cands\":%ld,\"candUnrun\":%ld,\"candSvcMax\":%lld,\"candDecMax\":%ld,\"decMax\":%ld,"
                      "\"distMax\":%.3f,\"wTop\":%.3f,\"wMin\":%.3f,\"candWMax\":%.3f,"
@@ -850,6 +885,10 @@ char *result_wfq_json(void) {
                      (long long)w.picks_live, (long long)w.picks_max, (long long)w.picks_lifetime,
                      (long long)w.svc_max, (long long)w.svc_min,
                      (long long)w.svc_fam_max, (long long)w.svc_fam_min, w.families,
+                     w.branches, w.br_live_max, w.br_live_min, w.br_live_sum,
+                     w.br_born_max, (long long)w.br_us_max, (long long)w.br_us_min,
+                     (long long)w.br_us_sum, (long long)w.br_retired_us, (long long)w.charged_us,
+                     w.br_depth_max,
                      (long long)w.vis_min, (long long)w.vis_max, w.vis_zero,
                      w.cand_members, w.cand_unrun, (long long)w.cand_svc_max, w.cand_dec_max, w.dec_max,
                      w.dist_max, w.w_top, w.w_min, w.cand_w_max,

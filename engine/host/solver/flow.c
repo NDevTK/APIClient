@@ -122,39 +122,28 @@ static Flow *g_running = NULL;   /* the flow currently holding the worker (the s
 typedef struct FlowAcct {
     Flow *owner;              /* the flow this node accounts for; NULL once it has left the frontier */
     /* THE NODE OF THE FLOW THIS ONE WAS FORKED FROM; NULL for a from-baseline flow.
-       NAMED RESIDUAL — THE ORDER HAS EXACTLY TWO ACCOUNTING SCOPES AND THIS FIELD IS THE ONLY RECORD OF THE
-       LEVELS BETWEEN THEM. Not covered: every quantity flow_weight reads is held either at the FAMILY ROOT
-       (`fam_us`, `base`, `earned`, `emit_gen`, all reached through `Flow.family`, which points past this
-       chain straight at the root) or at the MEMBER (`Flow.cpu`, `Flow.visits`, the fitness rungs). This field
-       records every level in between and is read by acct_unref and acct_compress_dead — both lifetime
-       management — and by three preconditions. Nothing charges through it and nothing ranks by it. So a fork
-       that goes on to become a SUBTREE of N members is not an accounting unit at any scope: its N arms
-       present N separate claims against the single arm on the other side of the same branch, and neither of
-       the two scopes that exist can see that, because within a family the branch is invisible and between
-       families there is only one family on a page whose flows all descend from boot. That is CLAUDE.md's
-       "CPU-aging starves a RUNNER and structurally cannot starve a BRANCHER" stated as a property of this
-       struct rather than of the term: the aging is charged correctly at both scopes it HAS.
-       AND IT IS NOT MERELY UNCHARGED, IT IS UNADDRESSABLE, which is why this is a residual and not a pointer
-       somebody can start reading. acct_compress_dead splices dead intermediate nodes OUT of the chain, so the
-       node standing for one side of a branch is gone the moment the flow that forked it departs — and that
-       compression is correct for what it is for, since a family whose arms depart one at a time would
-       otherwise retain one node per departed arm for as long as any descendant lives. Retention wants the
-       dead spine gone and a subtree charge wants exactly the dead spine; the two are in direct opposition and
-       neither is wrong.
-       WHAT THE NEXT DIFF BUILDS: an OBSERVATION and not a charge — a per-subtree service and membership
-       figure the census can publish, so "the two sides of this branch received X and Y" is a number instead of
-       an argument. That needs a branch node that outlives its owner's departure and a census scope for it;
-       WfqCensus's service rows are `svc_max`/`svc_min` (the member) and `svc_fam_max`/`svc_fam_min` (the
-       family root), with nothing between them, so the row is new rather than a re-read of one that is there.
-       A WEIGHT TERM IS NOT WHAT THIS RESIDUAL ASKS FOR and must not be built off it: a term that separated the
-       two sides of a branch would fail flow_fork_inherit's rank-neutrality equality by construction, which is
-       the one thing about this that is already asserted.
-       HOW ITS ABSENCE SHOWS: it is showing now. A `never_picked_at_top` plateau that no row can attribute —
-       the two sides of every branch in it are worth exactly the same by construction, and nothing anywhere
-       says how much thread time each side went on to receive, so the plateau is equally consistent with an
-       order that has stopped separating members and with an order separating members correctly while one
-       branch mints them faster than the thread can reach them. The `arrivals`/`departures` pair says which of
-       those two the FRONTIER is in; it does not say which BRANCH did it, and that is this field's question. */
+       NAMED RESIDUAL — THE THIRD ACCOUNTING SCOPE IS BUILT AND IT IS ONE LEVEL DEEP. `branch` below is that
+       scope: every flow reaches, in one indirection, the TOP-LEVEL ARM its whole subtree hangs under, and
+       flow_wfq_census publishes that bucket's live membership, its lifetime membership and its lifetime burn.
+       So the sentence this residual used to say could not be said — "the two sides of this branch received X
+       and Y" — is a number for every branch a ROOT flow takes, which on a page whose flows all descend from
+       boot is every branch the boot flow itself takes.
+       NOT COVERED: A BRANCH TAKEN BY A FLOW THAT IS NOT A ROOT. Both sides of such a fork inherit the same
+       bucket, so a subtree that mints unboundedly two levels down is summed into its top-level arm and is
+       indistinguishable there from an arm that mints unboundedly at the first branch. This field is still the
+       only record of those levels, and it is still the case that nothing charges through it and nothing ranks
+       by it: it is read by acct_unref, by acct_compress_dead and by three preconditions, all lifetime
+       management, plus the one-level branch derivation in flow_fork_inherit.
+       WHAT THE NEXT DIFF BUILDS: the SAME three counters held per NODE rather than per top-level arm, so a
+       bucket is any fork point and `branch` is no longer one level. What must exist afterward is an update
+       whose cost is not O(depth) at every charge — the natural spelling walks `up` from the running flow to
+       the root on every slice, which is affordable on a STAR fork tree and quadratic on a CHAIN. `brDepthMax`
+       is the row this diff adds to answer which of the two this engine actually builds; that row is the
+       precondition for the next diff and not a mechanism it may assume.
+       HOW ITS ABSENCE SHOWS: `branches` small while `brLiveMax` sits at nearly `members` — one bucket holding
+       the whole frontier, with nothing to say which fork INSIDE it did the minting. That is a real state and
+       not a hypothetical: an arm forked off boot which then forks unboundedly presents exactly it, and is
+       indistinguishable in these rows from boot forking unboundedly at one top-level branch. */
     struct FlowAcct *up;
     int refcount;             /* the owner's reference + every live child's `up` */
     /* THE FAMILY'S SERVICE SINCE ITS LAST EMISSION — the quantity flow_weight's aging term is now made of, and
@@ -309,11 +298,89 @@ typedef struct FlowAcct {
        counted by the next one instead of inheriting a stale mark; the generation is bumped past zero on wrap
        for the same reason. It is written only by the census, which decides nothing. */
     unsigned census_gen;
+    /* THE TOP-LEVEL ARM THIS NODE'S SUBTREE HANGS UNDER — the ACCOUNTING SCOPE BETWEEN the member and the
+       family root, and the four fields below are what it accounts for. A root's is ITSELF; a node forked
+       DIRECTLY off a root is ITSELF (it is a new arm of the family); anything deeper inherits its parent's. So
+       every ancestry path holds EXACTLY ONE node with `branch == self`, it is set once at the node's creation
+       and never moves, and every flow reaches its bucket in ONE indirection — the same shape `Flow.family`
+       already uses to reach the root without walking, and for the same reason: flow_weight is evaluated inside
+       DCHECK conditions, where a walk that compresses is forbidden.
+       WHAT IT IS FOR, AND IT IS AN OBSERVATION RATHER THAN A CHARGE. The order reads NOTHING here. The aging
+       is charged at the two scopes it already has (the member's `Flow.cpu` and the family's `fam_us`), and a
+       weight term over a branch would fail flow_fork_inherit's rank-neutrality equality by construction. What
+       these fields make possible is the one sentence neither existing scope can say: WITHIN a family the
+       branch is invisible, BETWEEN families there is only one family on a page whose flows all descend from
+       boot, so "the two sides of this branch received X and Y" was an argument and is now a number.
+       AND IT IS WHY acct_compress_dead HAS A THIRD STOP CONDITION. Retention wants a dead spine gone; a
+       subtree figure wants exactly the dead spine, because the service a DEPARTED arm consumed is part of what
+       its subtree received. Those two are in direct opposition and neither is wrong. They are separated by
+       noticing that only ONE node per path has to survive its owner: the compression still splices out every
+       dead node between a live member and its branch node — which is where the unbounded retention was, one
+       node per departed arm — and stops AT the branch node, which is then pinned by its descendants' own `up`
+       references with no second refcount to keep in step. One extra retained node per LIVE bucket, and a
+       bucket with no live member has refcount zero and is freed like any other node. */
+    struct FlowAcct *branch;
+    /* THE THREAD TIME EVERY FLOW IN THIS BRANCH'S SUBTREE HAS EVER BURNED, IN MICROSECONDS — a LIFETIME
+       COUNTER, MEANINGFUL ONLY WHERE `branch == self`, and it is NOT the quantity `fam_us` above is.
+       `fam_us` is a GAUGE: the family's burn SINCE ITS LAST EMISSION, sent to zero for a whole family in one
+       statement by flow_credit_emit, so it may FALL between two samples and may not be differenced. This is
+       never forgiven and never reset, because the question it answers is not "how much silence is this account
+       carrying" but "how much of the thread did this side of the branch GET" — and an arm that burned an hour
+       and then emitted did not thereby receive less. Every microsecond charged in flow_age_running lands on
+       exactly one of these, which is what makes the identity at the end of flow_wfq_census exact.
+       MICROSECONDS AND NOT NOTCHES, DELIBERATELY. The seven `svc*` rows are all `<thread time> /
+       FLOW_SERVICE_US` and their names do not say so, and this file records what that cost: `svcMax: 1764`
+       relayed as a dispatch count that exists nowhere in this program. A raw microsecond total has no
+       quotient in it to be mis-read, and the row it is published under says its unit and its kind. */
+    int64_t sub_us;
+    /* EVERY MEMBER EVER MINTED INTO THIS BRANCH'S SUBTREE, AND EVERY ONE THAT HAS EVER LEFT IT — two LIFETIME
+       COUNTERS whose difference is the bucket's LIVE membership, which is the other half of "X and Y". Held as
+       a pair rather than as one live count for `g_arrivals`/`g_departures`' reason exactly: a gauge cannot say
+       whether a bucket that holds a hundred members now has minted a hundred or a hundred thousand, and that
+       difference is the whole question a branching subtree poses.
+       BOTH ARE MONOTONE ACROSS THE ONE RE-PARENTING THAT HAPPENS. flow_new opens a bucket for every flow
+       (a flow with no parent yet IS its own top-level arm), and flow_fork_inherit then moves the newborn into
+       its parent's — as `sub_gone++` here and `sub_born++` there, in one statement, never as a retraction of
+       the `sub_born` already published. So a census landing between the two reads a coherent frontier and
+       neither counter ever falls. */
+    long sub_born;
+    long sub_gone;
+    /* HOW DEEP IN THE FORK TREE THIS NODE SITS — 0 at a root, parent + 1 at a fork, never moved by the
+       compression (which rewrites `up` and not this). It is a GAUGE over the live members the census reaches,
+       it ranks nothing, and it is here to answer ONE question that decides what the next diff may cost: an
+       aggregate maintained by walking to the root on every charge is O(depth) per charge, which is affordable
+       if the fork tree is a STAR (one flow forking N arms off one node) and quadratic if it is a CHAIN (each
+       arm forking the next). Those two shapes are indistinguishable in every other row here, and this file is
+       written against a walk whose arms could be either. */
+    int depth;
+    /* THE CENSUS'S MARK FOR THE BUCKET WALK — separate from `census_gen` above and not a second spelling of
+       it, because a ROOT is both a family AND a branch and one field cannot record that it has been counted
+       once as each. Same generation VALUE, two marks. Zero is unmarked, `reclaim_calloc` supplies it. */
+    unsigned branch_gen;
 } FlowAcct;
 
 /* THE CENSUS, counted at the two points a node's lifetime begins and ends so the pair cannot drift from what it
    counts — the same shape as the four frozen chains', and asserted at the frontier's teardown. */
 static long g_acct_live;
+
+/* EVERY MICROSECOND THIS INSTANCE HAS EVER CHARGED, AND THE SHARE OF IT THAT WENT TO BRANCH BUCKETS WHOSE
+   WHOLE SUBTREE HAS SINCE DEPARTED — the two LIFETIME COUNTERS that make the per-branch burn published by
+   flow_wfq_census a CONSERVATION rather than a list of extrema. Every `us` that reaches flow_age_running lands
+   on exactly one branch's `sub_us`; a branch node is freed only once nothing in its subtree is live, and its
+   total is folded into the second of these at that free. So the whole of the thread this instance has spent is
+   accounted for at every instant by `sum over live buckets + retired == charged`, which is the identity
+   asserted at the end of the census and — because all three terms are published — checkable from OUTSIDE the
+   process on the emitted document.
+   NEITHER IS RESET BY flow_registry_init, for `g_picks_total`'s reason, AND THE IDENTITY SURVIVES THAT
+   DELIBERATELY: flow_registry_free drains the frontier through flow_release, every flow departs, every node
+   reaches refcount zero, so every bucket's total has been folded into the retired term by the time a second
+   registry comes up. A quantity a second registry would zero is not commensurable with the counters nothing
+   zeroes, and here it would additionally break an identity that is otherwise exact.
+   MICROSECONDS, LIFETIME, NEVER FORGIVEN — which is what separates them from every `svc*` row in the census.
+   Those are silence since an account's last emission and are sent to zero for a whole family in one statement;
+   these count thread time RECEIVED, and an arm that burned an hour and then emitted did not receive less. */
+static int64_t g_charged_us = 0;
+static int64_t g_branch_retired_us = 0;
 
 /* Drop a reference: refcount--, free at zero, continue into `up`. A LOOP, not recursion — the ancestry is as
    deep as the fork tree, which an unknown-length walk makes as deep as the walk is long, and the C stack cannot
@@ -325,6 +392,20 @@ static void acct_unref(FlowAcct *a) {
                "a fork-tree node was freed while the flow it accounts for is still in the frontier — that "
                "flow holds a reference of its own, so a zero here means the reference was dropped twice and "
                "that flow's next departure charges through freed memory");
+        /* A BRANCH BUCKET'S TOTALS OUTLIVE THE BUCKET — folded here rather than lost, which is what keeps the
+           census's burn identity exact instead of one-sided. A node with `branch == self` is reached from a
+           live member in one indirection, so its reaching zero here says NOTHING in its subtree is live any
+           more: its lifetime burn can no longer be published as a live bucket's, and dropping it would make
+           the engine's total thread time silently unaccountable for as the frontier turns over.
+           IT IS ALSO WHERE THE `branch` POINTER IS PROVED NOT TO DANGLE. Every live member's `branch` names a
+           node on its own ancestry path, acct_compress_dead stops at branch nodes so that path always still
+           holds one, and a node with a live descendant therefore has a reference — so a bucket freed here has
+           no live member naming it, which is the same fact the fold rests on. */
+        DCHECK(a->branch != NULL,
+               "a fork-tree node reached its free with no branch bucket — flow_new is the only mint and it "
+               "points every node at one, so this node was built somewhere else and the thread time charged "
+               "through it has been accounted to nobody");
+        if (a->branch == a) g_branch_retired_us += a->sub_us;
         free(a);
         g_acct_live--;
         a = up;
@@ -339,10 +420,21 @@ static void acct_unref(FlowAcct *a) {
    iteration.
    IT STOPS AT THE ROOT — `t->up` non-NULL is the loop condition — and the root is the node every member of the
    family points its `family` tag at, so no compression can ever move a tag or orphan one. Refs the new target
-   BEFORE dropping the old link, so the unref cannot free the node it walked to. */
+   BEFORE dropping the old link, so the unref cannot free the node it walked to.
+   AND IT STOPS AT A BRANCH NODE, WHICH IS THE ONE PLACE RETENTION AND ACCOUNTING WERE IN DIRECT OPPOSITION.
+   Retention wants the dead spine gone; a SUBTREE figure wants exactly the dead spine, because the service a
+   departed arm consumed is part of what its subtree received. Both are right, and they are separated by how
+   MANY nodes each needs: the accounting needs ONE per path (the top-level arm — FlowAcct's `branch`), while
+   the unbounded retention this loop exists to prevent is one node per DEPARTED ARM, all of which sit between a
+   live member and that one node and are still spliced out here. So the third clause pins exactly one node per
+   live bucket and costs the walk one comparison per trip.
+   THE `t->up` CLAUSE IS NOW IMPLIED BY THE NEW ONE — a node with `up == NULL` is a root and a root's `branch`
+   is itself — and it is KEPT because it states the root stop DIRECTLY. The guarantee above ("no compression
+   can ever move a tag or orphan one") is a claim about the ROOT, and replacing a stated guarantee with a
+   derived one is how a guarantee stops being checkable. */
 static void acct_compress_dead(FlowAcct *a) {
     FlowAcct *t = a->up;
-    while (t && !t->owner && t->up) t = t->up;
+    while (t && !t->owner && t->up && t->branch != t) t = t->up;
     if (t && t != a->up) { t->refcount++; acct_unref(a->up); a->up = t; }
 }
 
@@ -359,6 +451,17 @@ static void acct_depart(Flow *f) {
            "a flow departed without owning its own fork-tree node — either it never got one, or another flow's "
            "node is standing in for it, and the family this flow's arms are charged to is not its own");
     f->acct->owner = NULL;   /* it has left the frontier: a later compression walks past it */
+    /* …AND THE MEMBER LEAVES ITS BRANCH BUCKET, on the line that performs the departure and BEFORE the unref
+       below, because the bucket may BE this node and this is the last instant it is certainly addressable.
+       `sub_gone` and not a live decrement, for `g_departures`' reason: a gauge cannot say whether a bucket
+       holding a hundred members has minted a hundred or a hundred thousand, and that difference is the entire
+       question a branching subtree poses. What the bucket RECEIVED (`sub_us`) is untouched here — a departed
+       arm's thread time is part of what its subtree got, which is the whole reason the bucket outlives it. */
+    DCHECK(f->acct->branch != NULL,
+           "a departing flow's fork-tree node names no branch bucket — flow_new points every node at one, so "
+           "this member's whole subtree is unaccounted and the census's membership identity is about to fail "
+           "on a frontier that is otherwise healthy");
+    f->acct->branch->sub_gone++;
     acct_compress_dead(f->acct);
     acct_unref(f->acct);
     f->acct = NULL;
@@ -1199,6 +1302,24 @@ void flow_age_running(int64_t us) {
        Neither of them is the OPTIMISM term's quantity; that one is a count of completed units of work and is
        charged by flow_credit_visit, which is why it is a separate call from this one. */
     g_running->family->fam_us += us;
+    /* …AND THE SAME MICROSECONDS ON THIS FLOW'S BRANCH BUCKET, WHICH IS AN OBSERVATION AND NOT A THIRD CHARGE.
+       Nothing in flow_weight reads it. It is here because this is the ONE site that adds to either half above,
+       so it is the one site at which every microsecond the engine spends can be attributed to a side of a
+       branch — and because a bucket that were charged anywhere else could disagree with the two halves it is
+       supposed to be a partition of.
+       LIFETIME AND NEVER FORGIVEN, unlike both halves above: `cpu` and `fam_us` are silence SINCE the
+       account's last emission and flow_credit_emit sends them to zero, while the question a bucket answers is
+       how much of the thread this side of the branch GOT, and an arm that burned an hour and then emitted did
+       not thereby receive less. That is why it is a separate accumulator and not a read of either.
+       AND THE INSTANCE TOTAL BESIDE IT, which is what makes the per-bucket numbers a conservation rather than
+       a list: every microsecond charged here lands on exactly one bucket, so `sum over live buckets + retired
+       == charged` is exact and is asserted at the end of flow_wfq_census. */
+    DCHECK(g_running->acct != NULL && g_running->acct->branch != NULL,
+           "the running flow has no fork-tree node, or its node names no branch bucket — a live member's node "
+           "is minted at flow_new and released only at its departure, so this flow is being charged thread "
+           "time that can be attributed to no side of any branch");
+    g_running->acct->branch->sub_us += us;
+    g_charged_us += us;
     /* THE SAME MICROSECONDS WENT TO BOTH HALVES, WHICH IS WHAT KEEPS THEM ONE READING AT TWO SCOPES. This is
        the only site that ADDS to either, so it is the only one that could add to one and not the other — a
        charge that reached `cpu` and missed `fam_us` would make an arm's own silence outgrow its family's and
@@ -1555,6 +1676,32 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
        the ranking is decided, and its place is UNDER the flow it branched from. */
     sib->acct->up = parent->acct;
     parent->acct->refcount++;
+    /* AND THE BRANCH BUCKET THIS ARM'S SUBTREE WILL BE COUNTED IN — the third accounting scope, decided at the
+       one line that decides everything else about a newborn arm's place, and derived from the edge above
+       rather than stored twice. A fork off a ROOT is a NEW top-level arm and keeps the bucket flow_new opened
+       for it; a fork off anything else joins its parent's. So exactly one node per ancestry path answers
+       `branch == self`, and every member reaches its bucket in one indirection.
+       THE MEMBERSHIP MOVES AS A DEPARTURE AND AN ARRIVAL, IN ONE STATEMENT, and that is not ceremony: both
+       counters are LIFETIME and a census can land between flow_new and this line (flow_new's own allocations
+       may page a flow out), so retracting the `sub_born` flow_new published would make a lifetime counter fall
+       — which is the one thing that would stop these being counters at all. The transfer leaves the sibling's
+       own node at born == gone, which is a bucket of zero live members that no census will ever reach, because
+       nothing points `branch` at it any more.
+       THIS TERM IS NOT IN THE RANK-NEUTRALITY EQUALITY BELOW, and that is a statement rather than an omission:
+       flow_weight reads nothing here, so the equality would pass whether these lines existed or not. A weight
+       term that separated the two sides of a branch would FAIL that equality by construction — see the
+       residual at `up` for why this scope is an observation and must not become a term. */
+    sib->acct->depth = parent->acct->depth + 1;
+    {
+        FlowAcct *br = parent->acct->up ? parent->acct->branch : sib->acct;
+        DCHECK(br != NULL && sib->acct->branch == sib->acct && sib->acct->sub_born == 1 &&
+               sib->acct->sub_gone == 0,
+               "a forked sibling reached its inheritance without the branch bucket flow_new opens for every "
+               "node, or already carrying membership in one — the transfer below is a departure and an "
+               "arrival of ONE member, so a sibling arriving with any other count publishes a bucket total "
+               "that no flow corresponds to and the census's membership identity fails on a healthy frontier");
+        if (br != sib->acct) { sib->acct->sub_gone++; br->sub_born++; sib->acct->branch = br; }
+    }
     /* AND THE PATH'S FORCED MARK — the one thing inherited here that the ranking never reads, and it is stated
        at this line for the SAME sentence the five terms above are stated for: an arm is its parent's path with
        one more arm on it, so everything the parent's path has already stood on, the arm stands on too. A
@@ -1950,6 +2097,12 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
     CHECK(f->acct, "flow_add: OOM allocating a flow's fork-tree node — a flow whose arms cannot be charged back "
                    "lets a fork chain burn the thread forever without its rank ever moving");
     f->acct->owner = f; f->acct->refcount = 1;
+    /* …AND IT OPENS A BRANCH BUCKET OF ITS OWN, WHICH IS TRUE AT THIS INSTANT AND NOT A PLACEHOLDER. A flow
+       with no parent yet IS a top-level arm; flow_fork_inherit is the only thing that ever moves it into
+       another's, and it does so as a departure from this bucket and an arrival in that one so neither counter
+       ever falls. Depth zero for the same reason — this node is a root until something says otherwise, which
+       is the identical sentence `family` one line down already makes about the account. */
+    f->acct->branch = f->acct; f->acct->sub_born = 1; f->acct->depth = 0;
     /* …AND IT IS ITS OWN FAMILY UNTIL SOMETHING SAYS OTHERWISE. A from-baseline flow founds a family and keeps
        this; a FORK joins its parent's (flow_fork_inherit) and this root becomes a plain ancestry node. Pointed
        here rather than left NULL so no flow can exist without an account for the aging term OR THE REWARD to
@@ -3740,6 +3893,26 @@ static double wfq_accounted_spread(const WfqCensus *c) {
    reached tens of thousands of members is a walk, and a single increment is not. */
 static unsigned g_wfq_census_gen;
 
+/* OPEN ONE BRANCH BUCKET INTO THE CENSUS, ONCE PER SCAN HOWEVER MANY DOORS REACH IT — the mark is the node's
+   own, so this is idempotent within a scan and that is what makes the sums a PARTITION rather than a weighted
+   count. A FUNCTION and not a macro because it is called from exactly one place per door with no invariant to
+   stamp a site for: nothing here can fail, it only accumulates. Called with a node the caller has already
+   asserted is a bucket (`branch == self`). */
+static void branch_take(WfqCensus *out, FlowAcct *br) {
+    long live;
+    if (br->branch_gen == g_wfq_census_gen) return;
+    br->branch_gen = g_wfq_census_gen;
+    live = br->sub_born - br->sub_gone;
+    out->branches++;
+    out->br_live_sum += live;
+    out->br_us_sum += br->sub_us;
+    if (out->branches == 1 || live > out->br_live_max) out->br_live_max = live;
+    if (out->branches == 1 || live < out->br_live_min) out->br_live_min = live;
+    if (out->branches == 1 || br->sub_us > out->br_us_max) out->br_us_max = br->sub_us;
+    if (out->branches == 1 || br->sub_us < out->br_us_min) out->br_us_min = br->sub_us;
+    if (br->sub_born > out->br_born_max) out->br_born_max = br->sub_born;
+}
+
 void flow_wfq_census(WfqCensus *out) {
     Flow *top;
     int i;
@@ -3797,6 +3970,18 @@ void flow_wfq_census(WfqCensus *out) {
     out->picks_lifetime = g_picks_total;
     out->svc_max = out->svc_min = out->svc_fam_max = out->svc_fam_min = 0;
     out->families = 0;
+    out->branches = 0;
+    out->br_live_max = out->br_live_min = out->br_live_sum = out->br_born_max = 0;
+    out->br_us_max = out->br_us_min = out->br_us_sum = 0;
+    out->br_depth_max = 0;
+    /* THE TWO INSTANCE TOTALS, WHICH ARE NOT READINGS OF THIS WALK — assigned unconditionally, exactly as
+       `picks_lifetime` and `nonreward_max` are, so they are the same numbers on an empty scan as on a full
+       one. They are the other two terms of the burn identity asserted at the end of this function, and
+       publishing all three is what makes that identity checkable from outside the process. */
+    out->br_retired_us = g_branch_retired_us;
+    out->charged_us = g_charged_us;
+    /* A FRESH MARK FOR THE BUCKET WALK, sharing this scan's generation VALUE and using a mark of its own,
+       because a ROOT is both a family and a branch and one field cannot record being counted once as each. */
     /* A FRESH MARK FOR THIS SCAN, PAST ZERO, so a node minted since the last census (calloc'd to 0) reads as
        unmarked rather than as already counted. */
     if (++g_wfq_census_gen == 0) g_wfq_census_gen = 1;
@@ -4031,12 +4216,80 @@ void flow_wfq_census(WfqCensus *out) {
             if (f->family && f->family->census_gen != g_wfq_census_gen) {
                 f->family->census_gen = g_wfq_census_gen;
                 out->families++;
+                /* …AND THE ROOT'S OWN BRANCH BUCKET, OPENED HERE BECAUSE THIS IS WHERE THE ROOT IS ALREADY IN
+                   HAND AND ALREADY GUARDED. A root's bucket holds exactly ONE member — the root flow itself,
+                   since every arm it forks opens a bucket of its own — so the instant the root flow departs,
+                   its node is still held alive by its children's `up` references while NOTHING names it
+                   through `branch` any more, and the thread time the root burned (boot's, on a real page)
+                   would be in neither the live sum nor the retired term for the rest of the session. That is
+                   the one way the burn identity below could fail on a healthy frontier, and it is closed by
+                   the door rather than by a term in the identity. Once per distinct family per census, which
+                   is the frequency a root bucket wants; the node's own mark makes it idempotent against the
+                   member door below, which reaches the same node while the root flow is still standing. */
+                DCHECK(f->family->branch == f->family,
+                       "a family ROOT is not a branch bucket of its own — flow_new points a fresh node's "
+                       "`branch` at itself and only a fork ever moves it, so this root has been through an "
+                       "inheritance it cannot have had, and the thread time its own flow burned is about to "
+                       "be attributed to somebody else's subtree");
+                branch_take(out, f->family);
             }
             if (fam > out->svc_fam_max) out->svc_fam_max = fam;
             /* …AND ITS FLOOR, WHICH IS WHAT SAYS THE TERM IS ORDERING RATHER THAN OFFSETTING — see flow.h.
                A maximum states how LARGE the family half is; only the pair states how much of it any
                comparison in this frontier can see, and on a single-family frontier that is exactly zero. */
             if (i == 0 || fam < out->svc_fam_min) out->svc_fam_min = fam;
+        }
+        /* AND THE BRANCH BUCKET THIS MEMBER'S SUBTREE IS COUNTED IN — the accounting scope BETWEEN the two the
+           rows above read, and the one this census could not previously reach at all. `svc_max`/`svc_min` are
+           the MEMBER's silence and `svc_fam_max`/`svc_fam_min` are the FAMILY ROOT's, and on a page whose
+           flows all descend from boot the second pair is a common offset that orders nothing — so neither of
+           them can say how much of the thread each SIDE of a branch received, which is the one question a
+           frontier that grows without draining poses.
+           COUNTED BY IDENTITY AND NOT BY VALUE, in the same walk and by the same mark trick the family count
+           beside it uses: two buckets standing at one burn are two buckets. Each distinct bucket is opened
+           exactly once per census however many arms it has standing, which is what makes the sum below a
+           partition of the frontier rather than a weighted count of it.
+           THE READING, STATED HERE SO IT IS NOT RE-DERIVED AT EVERY SITE. `br_live_max` against `members` is
+           how concentrated the frontier is in one side of one top-level branch; `br_us_max` against
+           `charged_us` is how concentrated the THREAD is; and the other side of that branch is the remainder
+           of each, which is why both totals are published rather than only the extrema. `br_born_max` against
+           `br_live_max` separates a bucket that MINTS unboundedly from one that merely HOLDS a lot right now,
+           and those two take opposite diffs. */
+        {
+            FlowAcct *br;
+            DCHECK(f->acct != NULL,
+                   "a live member of the frontier has no fork-tree node — the node is minted at flow_new and "
+                   "released only at the departure that also removes the flow, so this member is standing in "
+                   "the registry after its account was torn down and every burn charged through it is lost");
+            br = f->acct->branch;
+            DCHECK(br != NULL,
+                   "a live member's fork-tree node names no branch bucket — flow_new points every node at "
+                   "one and flow_fork_inherit only ever re-points it at another, so this member's thread "
+                   "time is being charged to no side of any branch");
+            /* THROUGH TWO DOORS, AND THE SECOND ONE IS THE BURN IDENTITY'S WHOLE SOUNDNESS. Every live
+               bucket must be reached by this walk or its lifetime burn is in neither the live sum nor the
+               retired term, and the identity below then fails on a healthy frontier. A NON-ROOT bucket is
+               reached by its own subtree: a node is alive only while it has a live-owner descendant, and
+               every descendant of a non-root bucket names that bucket. A FAMILY ROOT is the exception, and
+               it is a structural one rather than a corner: the root's bucket holds exactly ONE member — the
+               root flow itself, since every arm it forks opens a bucket of its own — so the moment the root
+               flow departs, its node is still held alive by its children's `up` references while NOTHING
+               names it through `branch` any more. Its own thread time (boot's, on a real page) would then be
+               charged to no published bucket for the rest of the session.
+               `Flow.family` IS that door — it points straight at the root, a root's `branch` is itself, and
+               any live member of the family reaches it — and the door is opened in the FAMILY-ROOT block
+               above rather than here, deliberately. That block already tests `f->family` before dereferencing
+               it and already fires exactly once per distinct family per census, which is exactly the
+               frequency a root bucket wants; opening it HERE would have been this file's FIRST release-mode
+               dereference of a pointer that only a DCHECK guards, which is a promotion an observation has no
+               business making. Marking through the node's OWN generation is what stops the root being counted
+               twice while its own flow is still standing — one bucket reached two ways, not two buckets. */
+            branch_take(out, br);
+            /* …AND HOW DEEP IN THE FORK TREE THE DEEPEST LIVE MEMBER SITS, which is not a fact about buckets
+               and is taken here because this is where the node is already in hand. It is what says whether the
+               tree this engine builds is a STAR or a CHAIN, and that is what decides whether the per-node
+               generalisation the residual at FlowAcct's `up` names can be maintained by walking. */
+            if (f->acct->depth > out->br_depth_max) out->br_depth_max = f->acct->depth;
         }
         /* THE FLOOR, TAKEN OVER EVERY MEMBER AND NOT ONLY THE SERVED ONES — see flow.h. A frontier holding one
            never-run flow reads 0 here and that is the answer, not a hole in it: the aging term is then charging
@@ -4360,6 +4613,35 @@ void flow_wfq_census(WfqCensus *out) {
            "the two has acquired a second writer, or a member joined or left `g_flows` without going through "
            "flow_new or flow_remove, and `arrivals / picksLifetime` is about to be published as the rate at "
            "which THIS frontier grows when it is a rate about some other population");
+    /* AND THE TWO IDENTITIES THAT DEFINE THE BRANCH ROWS, ASSERTED WHERE BOTH HALVES OF EACH ARE IN ONE HAND.
+       They are the only property of a per-bucket number a reader can check without re-deriving the mechanism
+       that produced it, and both are exact rather than one-sided because each event has exactly one writer.
+       MEMBERSHIP: every live member belongs to exactly ONE bucket (`branch` is set once at flow_new and moved
+       once, at the fork, as a matched departure and arrival), and the walk above opens each distinct bucket
+       exactly once, so the live counts PARTITION the frontier. A break is a bucket a member no longer names —
+       a fork that did not move its membership, a departure that did not surrender it, or a `branch` pointer
+       re-written by something that is not flow_fork_inherit — and every branch reading is then about a
+       population that is not this frontier. It is one-sided in NEITHER direction on purpose: a sum BELOW
+       `members` is a member counted nowhere, and a sum ABOVE it is a member counted twice, and those are two
+       different defects that must not share an answer.
+       BURN: every microsecond charged in flow_age_running lands on exactly one bucket's `sub_us`, and a bucket
+       is freed only once nothing in its subtree is live, at which point acct_unref folds its total into the
+       retired term. So the whole of the thread this instance has spent is attributed at every instant. A break
+       is a charge that reached one half of flow_age_running and not the other, or a bucket freed without its
+       fold — and either leaves `brUsLifeMax / chargedUsLife`, which is the concentration reading these rows
+       exist for, as a fraction of the wrong denominator. ALL THREE TERMS ARE PUBLISHED, so this is also
+       checkable from outside the process on the emitted document, exactly as the arrival pair above is. */
+    DCHECK(out->br_live_sum == (long)out->members,
+           "the frontier's branch buckets do not partition its members — a live member belongs to exactly one "
+           "bucket and each bucket is opened once per census, so a sum below `members` is a member counted in "
+           "no bucket and a sum above it is one counted in two. Every per-branch row is about to be published "
+           "as a share of a frontier it is not a partition of");
+    DCHECK(out->br_us_sum + out->br_retired_us == out->charged_us,
+           "the thread time attributed to branch buckets does not add up to the thread time the scheduler has "
+           "charged — every microsecond lands on exactly one bucket and a bucket's total is folded into the "
+           "retired term when it is freed, so a break is a charge that reached the aging and not the bucket, "
+           "or a bucket freed without its fold, and `brUsLifeMax / chargedUsLife` is about to be published as "
+           "a fraction of a denominator the numerator is not drawn from");
 }
 
 /* The four questions, each a seed, a filter or a direction over the one scan above. */
