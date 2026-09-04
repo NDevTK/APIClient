@@ -68,19 +68,34 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                    /* THE `.idl` FILES EVERY `idlharness` TEST FETCHES — WITHOUT WHICH THAT WHOLE FAMILY IS AN
                       EXCLUDED TEST THAT COLLECTS, RUNS, AND PASSES EVERY CHECK THIS FILE MAKES ABOUT ITS OWN
                       COLLECTION. It is the excluded-test failure at one remove, and it is the hardest-looking
-                      shape of it yet: twenty-three idlharness files ARE named by the entries below, ARE
-                      classified as tests by tools/manifest/sourcefile.py and by this gate alike, ARE handed
-                      their META scripts, and DO run — and every one of them reports exactly two subtests,
-                      `idl_test setup` and `<harness>`, because `resources/idlharness.js`'s `fetch_spec` is
+                      shape of it yet: the idlharness files ARE named by the entries below, ARE classified as
+                      tests by tools/manifest/sourcefile.py and by this gate alike, ARE handed their META
+                      scripts, and DO run — and every one of them REPORTED EXACTLY TWO SUBTESTS, `idl_test
+                      setup` and `<harness>`, because `resources/idlharness.js`'s `fetch_spec` is
                       `fetch('/interfaces/' + spec + '.idl')` and this corpus had no `interfaces` directory.
-                      `css/cssom/idlharness.html` is the one that says so in words — `Error fetching
-                      /interfaces/cssom.idl.` — and the other twenty-two time out awaiting that same promise,
-                      which is the same fact wearing the column that hides it. So the family's rows were a
-                      statement about THIS LIST and not about the engine, while the total looked complete.
+                      `css/cssom/idlharness.html` was the one that said so in words — `Error fetching
+                      /interfaces/cssom.idl.` — and the rest timed out awaiting that same promise, which is the
+                      same fact wearing the column that hides it. So the family's rows were a statement about
+                      THIS LIST and not about the engine, while the total looked complete.
+                      THE FLOOR IS THE TELL, AND IT IS THE PART THAT OUTLIVES THIS INCIDENT: when every member
+                      of a family reports the SAME SMALL SUBTEST COUNT, that count is a DECLARED FIXTURE that
+                      never arrived, because one rejected promise fails every member at the identical point. A
+                      family scoring badly varies; a family that is not running does not. That is why
+                      `idlFixtures` below resolves an `.idl` at COLLECTION and why each run prints its subtest
+                      count beside its verdict — neither is decoration, and the second is what makes the first
+                      falsifiable.
+                      HOW MANY MEMBERS THE FAMILY HAS IS NOT WRITTEN HERE. It grows with WPT_PATHS, so a number
+                      here is wrong the moment somebody widens the list — and the reader who wants it is the one
+                      about to invalidate it. `idlFixtures` IS the derivation; run it rather than quoting a
+                      count.
                       WHAT WAS THEREFORE NEVER ASKED IS THE ONLY THING IN THIS TREE THAT CAN ASK IT.
                       engine/idlgen.mjs, engine/idl_members.mjs and engine/idl_installed.mjs diff the spec's
                       member NAMES against the names each component installs, so they measure PRESENCE and
-                      nothing else — `grep -c variadic` over all three is zero. idlharness.js asserts the
+                      nothing else — `grep -c variadic` over all three is zero. TWO LATER TOOLS NARROWED THAT
+                      GAP AND DID NOT CLOSE IT, and saying which is what stops the next reader building a third
+                      copy: engine/argaudit.mjs joins a member's DECLARED argument types against its own BODY,
+                      and engine/argtypegate.mjs joins that declaration against the IDL — both read the
+                      DECLARATION, so neither can see what the engine actually INSTALLED. idlharness.js asserts the
                       properties a name cannot carry: a function object's `length` (the interface object's, an
                       operation's minimum argument count, a getter's 0 and a setter's 1), whether a name is an
                       accessor or a data property (attribute vs operation), the interface object's `name`, its
@@ -98,10 +113,32 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       storage, storage-buckets, permissions, service-workers, xhr, cssom, cssom-view,
                       css-pseudo, pointerevents, uievents, SVG, mathml-core, fullscreen, wai-aria, webidl,
                       observable.tentative — so this one entry is what turns the family on.
-                      NOTHING IS PREDICTED HERE ABOUT WHAT THEY SCORE. Expect bad first numbers and expect them
-                      to be large: an idlharness file is one subtest per interface plus one per member, so a
-                      family that has reported two subtests apiece will report thousands, and what each failure
-                      NAMES is the work queue. */
+                      THE PREDICTION THAT STOOD HERE WAS THAT THE NUMBERS WOULD BE LARGE AND BAD, AND THE HALF
+                      IT GOT WRONG IS THE USEFUL HALF. Large is right — a member of this family reports subtests
+                      in the hundreds, one per interface plus one per member. What it implied was that `length`
+                      would be the finding, since arity is the axis the paragraph above says nothing local can
+                      ask. IT IS NOT. The dominant failure is PROPERTY ATTRIBUTES, and the second is the BRAND
+                      CHECK; arity is a rounding error beside them, because the `.length` values are mostly
+                      right and it is what surrounds them that is wrong.
+                      AND THE SPLIT IS PER-INSTALLER, NOT PER-INTERFACE — which is the structural fact, and the
+                      one that predicts the next member without anybody counting. Web IDL §3.7.6 Attributes and
+                      §3.7.7 Operations both build their descriptor with `[[Enumerable]]: true`, while §3.7.3's
+                      @@toStringTag and the interface object on the global are `[[Enumerable]]: false`. A
+                      component installed through core/idl_args.h's `idl_install_*` gets exactly that. A
+                      component installed through quickjs's OWN `JS_SetPropertyFunctionList` gets ECMAScript
+                      BUILT-IN attributes — non-enumerable members, which is right for `Array.prototype.map` and
+                      wrong for every Web IDL member — and one whose interface object reaches the global through
+                      `JS_SetPropertyStr` gets an ordinary [[Set]]'s writable+enumerable+configurable, wrong in
+                      the OPPOSITE direction. So the failing set is not a list of interfaces; it is whichever
+                      components still reach those two quickjs entries. GREP FOR THE INSTALLER, NEVER FOR THE
+                      INTERFACE.
+                      THE BRAND CHECK IS THE SAME QUESTION ASKED OF THE RECEIVER, and it is worse than a wrong
+                      answer. idlharness calls every operation with `this = null` and `this = {}` and requires a
+                      TypeError. Where the engine derives its record from `this_val` and DCHECKs that the derived
+                      pointer is non-NULL, the receiver is a value THE PAGE SUPPLIED — input, not something this
+                      codebase computed — so the assert stands on the one thing CLAUDE.md says an assert may
+                      never stand on, and `X.prototype.m.call(null)` ABORTS the engine where the spec asks it to
+                      throw. That is not a hypothetical: it is how a variant of dom/idlharness.window.js ends. */
                    "interfaces",
                    /* THE STANDARD, THEN ITS COMPONENTS — the same two-level shape as `dom` below, and for the
                       same reason twice over. `FileAPI/blob` and three siblings were listed and the STANDARD was
