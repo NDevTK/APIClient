@@ -12,23 +12,37 @@
  * cell, and `w` is not, so it is a plain slot in the frame's own buffer. Reporting both `typeof`s in one URL
  * makes the loss a CONSERVATION IDENTITY a reader can check without knowing anything about the engine: the
  * statement either ran or it did not, so `plain-function` beside `closure-undefined` is not a small number, it
- * is a contradiction. The third field reads the same cell from the frame instead of from the closure, which
- * says whether the two READERS disagree or the CELL is wrong.
+ * is a contradiction. The third field reads the same cell from the FRAME instead of from the CLOSURE, which
+ * says whether the two READERS disagree or the CELL itself is wrong. They agree; the cell is wrong.
  *
- * AND THE CONTROL IS IN THE SAME DOCUMENT, because the discriminator is the whole finding. `/q/` runs the
- * identical fork over a cell whose owning frame has already RETURNED — a DETACHED cell, whose storage is the
- * heap and not a frame slot. Everything else is the same: same unknown, same depth, same assignment shape.
- * `/q/` is correct and `/p/` is not, so what fails is not "a cell across a fork" but an OPEN cell, whose
- * `pvalue` is a slot in the frame that MINTED it — and which clone_susp_frame / clone_deep_flow share with the
- * sibling while giving the sibling its own copied buffer. See the DCHECK in get_captured_cell.
+ * WHAT WAS MEASURED, AND AT WHAT STRENGTH. Driven with `solvergate.mjs --run <this> <sched>` against the
+ * artifact then in engine/host/out (built at superproject f49e7bf6, submodule state unrecorded), so these are
+ * numbers about that artifact and not about a revision anyone can rebuild.
+ *   - THIS SHAPE, 9 runs (6 `direct`, 2 `preempt`, 1 `eager`): the wrong value in 7 of 9.
+ *   - The same document with the uncaptured witness `w` removed, 3 runs: 2 of 3.
+ *   - THE CONTROL, 3 runs, 0 of 3 — the identical fork over a cell whose owning frame has already RETURNED, so
+ *     the cell is DETACHED and its storage is the heap rather than a frame slot. Same unknown, same depth,
+ *     same assignment shape. It is NOT in this document because putting it here SUPPRESSES the defect (5 runs,
+ *     0 of 5): a second IIFE is a second unknown and a bigger frontier, and it moves the interleaving. That
+ *     sensitivity is a fact about the defect, not a flaw in the control.
+ * WHAT REPRODUCES AND WHAT DOES NOT. The COUNT of wrong arms per run varies and some runs are clean, so no
+ * count here is a measurement of anything. What does not vary is the IDENTITY of the wrong answer: it is
+ * always the PRE-ASSIGNMENT value, always on the FORCED sibling (arm2), and always beside `plain-function`.
+ * Read this document for that identity; a clean run is not evidence the defect is gone.
+ *
+ * WHAT IT NAMES. What fails is not "a cell across a fork" but an OPEN cell, whose `pvalue` is a slot in the
+ * frame that MINTED it — and which clone_susp_frame / clone_deep_flow share with the sibling (+1 ref) while
+ * giving the sibling its own copied buffer. The COW delta isolates the CELL; it does not isolate the FRAME
+ * SLOT the cell points into, and a frame is flow-private. See the DCHECK in get_captured_cell.
  *
  * WHAT IT ASKS OF THE GATE. Every arm assigns before it reads, so `typeof` is `"function"` in every world this
  * program has; there is no schedule under which `undefined` is an answer. It is therefore also a
  * schedule-invariance failure in solvergate's own terms — the finding set stops being a function of the
  * document — and it is expected to FAIL until a forked sibling's captured local has storage of its own.
  *
- * The depth is NOT the mechanism. This reproduces with TWO flows; the real bundle needed ~39k only because a
- * larger frontier makes the interleaving that loses the write near-certain. */
+ * THE DEPTH IS NOT THE MECHANISM. This reproduces with TWO flows. The real bundle needed roughly 39k only
+ * because a larger frontier makes the interleaving that loses the write near-certain, which is the same
+ * sensitivity the control paragraph above measures from the other side. */
 (function () {
   var v = undefined, w = undefined, arm = 0;
   function rd() { return v; }
@@ -37,13 +51,5 @@
   function d(n) { if (n > 0) return d(n - 1); if (__FLAGS.b) { arm = 1; } else { arm = 2; } return arm; }
   var b = d(3), assigned = (w = v = function () { return 1; }), pad = 0;
   fetch("/p/closure-" + (typeof rd()) + "/frame-" + (typeof v) + "/plain-" + (typeof w) + "/arm" + b);
-})();
-
-function mkbox() { var v = undefined; return { set: function (f) { v = f; }, get: function () { return v; } }; }
-(function () {
-  var box = mkbox(), w = undefined, arm = 0;
-  function d(n) { if (n > 0) return d(n - 1); if (__FLAGS.c) { arm = 1; } else { arm = 2; } return arm; }
-  var b = d(3), assigned = (box.set(w = function () { return 1; })), pad = 0;
-  fetch("/q/cell-" + (typeof box.get()) + "/plain-" + (typeof w) + "/arm" + b);
 })();
 </script>
