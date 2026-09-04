@@ -69,6 +69,20 @@ typedef struct {
     char *br_key;
     signed char br_neg; /* 1 = this value is the logical COMPLEMENT of the predicate `br_key` names */
     JSValue example;    /* concrete example, or JS_UNDEFINED */
+    /* THIS VALUE'S OWN [[Prototype]], DERIVED ONCE AND HELD — §10.1.1 [[GetPrototypeOf]] ( ) over an unknown,
+       memoised because the answer must have an IDENTITY the page can compare. A fresh derivation per call
+       answers `Object.getPrototypeOf(x) === Object.getPrototypeOf(x)` FALSE, which is a wrong answer no page
+       can be written around; and §10.4.7.2 SetImmutablePrototype ( obj, proto ) step 2 is a SameValue against
+       whatever step 1 returned, so a value that differs per call cannot satisfy its own [[SetPrototypeOf]].
+       JS_UNINITIALIZED = not yet asked. It is written here rather than left to reclaim_calloc for cmp_algo's
+       reason — the allocator's zero is a JSValue this file did not choose, and "nobody has asked yet" is a
+       state that has to be spelled rather than inherited.
+       IT IS NOT PER-FLOW STATE AND MUST NOT BE CAPTURED, which is the identical argument the key-name map
+       states about itself two hundred lines down: the prototype of a value is a pure function of that value,
+       so two flows asking mint ONE answer and neither can disagree with the other. What is per-flow is
+       anything the page then WRITES through the link, and that is an ordinary property write the COW delta
+       already carries. */
+    JSValue proto;
     int cmp_op;         /* for an EQUALITY RESULT: OPCMP_EQ/NE — `src <op> cmp_tok` (else OPCMP_NONE) */
     char *cmp_tok;      /* the concrete side of the equality, SPELLED (§7.1.19 ToString of the operand) */
     signed char cmp_kind;  /* …and WHAT it spells (ConcolicLit) — the spelling's other half, never separable
@@ -1410,12 +1424,20 @@ static void concolic_finalizer(JSRuntime *rt, JSValueConst val) {
     free(c->sp_subj);
     ident_list_free(c->conj, c->conj_n);
     JS_FreeValueRT(rt, c->example);
+    /* …AND THE SECOND OWNED JSValue ON THIS RECORD. A field added to the struct creates an obligation here and
+       at concolic_gc_mark together, and the two are read as a pair for that reason. JS_UNINITIALIZED is not
+       refcounted, so the never-asked case costs nothing and needs no test. */
+    JS_FreeValueRT(rt, c->proto);
     free(c);
 }
 
 static void concolic_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func) {
     Concolic *c = JS_GetOpaque(val, g_concolic_class);
     if (c && !JS_IsUndefined(c->example)) JS_MarkValue(rt, c->example, mark_func);
+    /* THE DERIVED PROTOTYPE IS REACHABLE ONLY FROM HERE, so a walk that does not report it counts a live
+       object as garbage. It is another value of THIS class, which is what makes the report obligatory rather
+       than merely tidy: the chain a page walks is these records pointing at each other. */
+    if (c && !JS_IsUninitialized(c->proto)) JS_MarkValue(rt, c->proto, mark_func);
 }
 
 /* @S CANDIDATE injection: during a verification re-run, the attacker source identified by g_cand_src returns
@@ -4170,15 +4192,15 @@ static int concolic_exotic_delete(JSContext *ctx, JSValueConst obj, JSAtom prop)
     return ret;
 }
 
-/* §10.1.1 [[GetPrototypeOf]] ( ) OVER AN UNKNOWN — AND WHY THE ANSWER MAY NOT BE A CONCRETE ONE.
+/* §10.1.1 [[GetPrototypeOf]] ( ) OVER AN UNKNOWN — AND WHY THE ANSWER IS NOT A CONCRETE ONE.
  *
  * WHAT THIS CLASS ANSWERED BEFORE THE HOOK EXISTED, AND WHY NOTHING REPORTED IT. A concolic is an ordinary
  * JSObject minted through JS_NewObjectClass, and this class registers no class_proto — so its objects carry a
  * NULL [[Prototype]], which JS_GetPrototype reads straight off the shape and hands the page as JS_NULL. That
  * is a FABRICATION in §Attacker-sources' exact sense: nothing was observed about the value, and `null` is not
  * "unknown", it is the positive claim that this value HAS NO PROTOTYPE. It is also the one answer that makes
- * an ordinary prototype-chain walk THROW instead of fork, so it does not merely mislead a report — it kills
- * the program that would have produced one, and it does so silently, because `null` is a legal answer that no
+ * an ordinary prototype-chain walk THROW instead of fork, so it did not merely mislead a report — it killed
+ * the program that would have produced one, and it did so silently, because `null` is a legal answer that no
  * assert anywhere had a reason to question.
  *
  * THE DEFECT SHAPE, which is the part that stays true: an operator with no concolic arm collapses opacity to
@@ -4187,70 +4209,65 @@ static int concolic_exotic_delete(JSContext *ctx, JSValueConst obj, JSAtom prop)
  * that same rule one internal method over. `operand_kind` above already records what a prototype walk costs
  * when it does not fork; this is the walk's other half.
  *
- * WHAT THE NEXT DIFF BUILDS, AND IT IS TWO THINGS THAT MUST LAND TOGETHER. (1) This entry answers a DERIVED
- * unknown — concolic_new_derived(ctx, "[[GetPrototypeOf]]", &obj, 1, JS_UNDEFINED), memoised on the record so
- * the answer has an IDENTITY the page can compare (a fresh value per call answers `getPrototypeOf(x) ===
- * getPrototypeOf(x)` false, and defeats §10.4.7.2 SetImmutablePrototype ( obj, proto ), which the contract at
- * JSClassExoticMethods.get_prototype makes this class's [[SetPrototypeOf]] by declaring one at all), with the
- * two ownership sites a JSValue on this record obliges — concolic_finalizer frees it and concolic_gc_mark
- * reports it. (2) A CONCOLIC ARM IN §7.3.21 OrdinaryHasInstance ( ctor, instance )'s LINK WALK. Half (1) alone
- * does not merely leave that walk wrong, it HANGS it: the walk asks instance.[[GetPrototypeOf]]() per link and
- * stops on null or on SameValue, both decided in C with no fork, so an unknown that answers a fresh unknown per
- * link never reaches either — and `e instanceof Object` is written by the very libraries this fixes. The fork
- * has to be the walk's, because the truthful model is not an infinite chain: a real chain is FINITE of unknown
- * length, which is a question rather than a bound.
+ * THE ANSWER IS A DERIVATION OVER THE RECEIVER, MEMOISED. See the `proto` field for why holding it is not an
+ * optimisation: the page can compare two answers, and §10.4.7.2 SetImmutablePrototype ( obj, proto ) step 2
+ * compares one of them against a value it was given, so an answer that differs per call is wrong twice over.
  *
- * AND THAT QUESTION HAS THREE ANSWERS AND NOT TWO, WHICH IS THIS RESIDUAL CORRECTING ITSELF. The clause above
- * said "is this link the end?" and therefore "a concolic bool", and a bool is a two-way partition of a
- * three-way question. §7.3.21's step 6 is a Repeat whose body is exactly three steps — 6.a "Set instance to ?
- * instance.[[GetPrototypeOf]]()", 6.b "If instance is null, return false", 6.c "If SameValue(proto, instance)
- * is true, return true" — so one iteration over an unknown link has three feasible completions: the chain ENDS
- * here (false), this link IS proto (true), and neither, which continues. "The end" names 6.b and 6.c at once
- * and then cannot say which, so the arm that answers it decides nothing; and a two-arm fork that keeps only
- * 6.b DELETES the world in which `e instanceof Object` is TRUE, which on a server-injected record is the world
- * a real session is standing in. That is CLAUDE.md's undercount exactly: the completions were enumerated from
- * the branch of the text ("does the walk stop?") rather than from what the page can observe ("false", "true",
- * "not yet"). Declare n == 3 with `real` UNSTATED — no example says which, and the numbering rule is what a
- * non-forking run takes.
+ * IT DOES NOT TERMINATE ON ITS OWN, WHICH IS WHY THE LINK WALK'S FORK LANDS WITH IT. §7.3.21
+ * OrdinaryHasInstance ( ctor, instance )'s step 6 asks instance.[[GetPrototypeOf]]() per link and stops on
+ * null or on SameValue — both decided in C, with no fork — so a chain of derived unknowns reaches neither and
+ * the walk runs for ever. The truthful model is not an infinite chain: a real chain is FINITE of unknown
+ * length, so "how long" is a QUESTION and never a bound, and the question is asked at the walk. It is asked
+ * there and not here because only the walk holds `proto`, which is half of what step 6.c compares.
  *
- * AND THE ASK IS KEYED BY THE LINK'S OWN IDENTITY, NEVER BY ITS POSITION IN THE WALK. Each link is the
- * memoised derivation half (1) mints, so it has a name that is composed from the receiver and survives a park;
- * the depth does not — it is an ordinal over a chain the page can lengthen, and a replayed ordinal renames its
- * referent. The engine's own unknown-length chain is the precedent for the whole shape (an `askop` composed at
- * EVERY entry, the ask and the resume that consumes an answer alike, because JSStepHdr::fork_op is BORROWED
- * for the length of the request and the machine must be able to re-spell it after a park).
+ * AND THAT QUESTION HAS THREE ANSWERS AND NOT TWO. §7.3.21's step 6 is a Repeat whose body is exactly three
+ * steps — 6.a "Set instance to ? instance.[[GetPrototypeOf]]()", 6.b "If instance is null, return false",
+ * 6.c "If SameValue(proto, instance) is true, return true" — so one iteration over an unknown link has three
+ * feasible completions: the chain ENDS here, this link IS proto, and neither. An earlier statement of this
+ * design said "is this link the end?" and therefore "a concolic bool", and a bool is a two-way partition of a
+ * three-way question: it names 6.b and 6.c at once and then cannot say which, and a two-arm fork keeping only
+ * 6.b DELETES the world in which `e instanceof Object` is TRUE — which on a server-injected record is the
+ * world a real session is standing in. The completions had been enumerated from the branch of the text rather
+ * than from what the page can observe. js_instanceof_step declares three.
  *
- * AND A THIRD CONSUMER THE CLAUSE ABOVE DOES NOT NAME, reached from JS_SetPrototypeInternal: §10.4.7.2's own
- * step 2 is `SameValue(proto, current)` over the value THIS entry returns, and that comparison is a pointer
- * test between two Objects. With a derived unknown as `current` it can never hold, so `Object.setPrototypeOf`
- * over an unknown answers a fabricated `false` — or, in the throwing form, a TypeError — for the same reason
- * the walk answers a fabricated `false`. It is the same missing arm at a second door, and a diff that gives
- * the walk its fork and leaves this one deciding in C has fixed one of two.
- *
- * HOW ITS ABSENCE SHOWS, in one line a reader can go and look for: a page that walks a prototype chain over a
- * server-injected record throws `cannot read property '<x>' of null` at a line real Chrome does not throw at,
- * and the throw kills the script that would have emitted the endpoints behind it.
+ * THE THIRD DOOR IS §10.4.7.2, reached from JS_SetPrototypeInternal, and it is NOT answered here. Its step 2
+ * SameValue is a pointer test between two Objects, so a derived unknown as `current` can never satisfy it and
+ * `Object.setPrototypeOf` over an unknown answers `false` — or, in the throwing form, a TypeError.
+ * NAMED RESIDUAL. WHAT IS NOT COVERED: that comparison, which §10.4.7.2 makes undecidable over an unknown
+ * exactly as step 6.c is. WHAT THE NEXT DIFF BUILDS: the same two-completion ask at that site — it is
+ * step 6.c's question with nothing else attached, so it is one ask and not a walk. HOW ITS ABSENCE SHOWS: a
+ * page that calls `Object.setPrototypeOf(rec, Base.prototype)` on a server-injected record and then reads a
+ * member of `Base.prototype` off it takes the arm in which the write was refused, and reports the member as
+ * absent at a line real Chrome does not refuse at. It is NOT reached from a plain `instanceof` and it is not
+ * on the path this entry's own fixture exercises, which is why it is a residual and not a second half.
  *
  * IT RUNS NONE OF THE PAGE'S CODE, which the entry's contract requires rather than suggests: it is reached
- * from JS_GetPrototype, whose C callers have no flow base to suspend into. Both halves above are allocation
- * and comparison; neither calls anything of the page's. */
+ * from JS_GetPrototype, whose C callers have no flow base to suspend into. The mint is an allocation and a
+ * composition; neither calls anything of the page's. */
 static JSValue concolic_exotic_get_prototype(JSContext *ctx, JSValueConst obj) {
-    (void)ctx; (void)obj;
-    DFAIL("§10.1.1 [[GetPrototypeOf]] ( ) was asked of the solver's own value class and this engine has no "
-          "answer for it that is not invented: a value nobody has observed has an unknown prototype, and the "
-          "NULL the shape link holds is the positive claim that it has none. Build it as a DERIVATION over the "
-          "receiver, memoised on the record so the answer has an identity, AND in the SAME diff give §7.3.21 "
-          "OrdinaryHasInstance ( ctor, instance )'s link walk a forking arm — that walk stops on null or "
-          "SameValue decided in C, so a derived prototype without it does not answer wrongly, it does not "
-          "terminate. THREE completions per link and not two: §7.3.21 step 6.b returns false, step 6.c returns "
-          "true, and neither continues, so a two-arm 'is this the end' deletes the world where the page's "
-          "`instanceof` is TRUE. See this entry's own comment for the third door (§10.4.7.2 step 2's SameValue, "
-          "reached from JS_SetPrototypeInternal) that the same absence answers wrongly");
-    /* RELEASE ANSWERS EXACTLY WHAT THE SHAPE LINK ANSWERED BEFORE THIS ENTRY EXISTED. In release we can neither
-       fix nor add a capability, so the same fabrication stands and this hook is a no-op — what it must not do
-       is invent a DIFFERENT concrete prototype, which would make the two builds disagree about a value the
-       page can compare. */
-    return JS_NULL;
+    Concolic *c = JS_GetOpaque(obj, g_concolic_class);
+
+    DCHECK(c != NULL, "§10.1.1 [[GetPrototypeOf]] ( ) was dispatched to this class's entry for an object that "
+                      "carries none of its state — the exotic table is reached through the class id, so an "
+                      "object answering to it with no record is one this file did not mint");
+    if (!c)
+        return JS_NULL;
+    /* DERIVED ONCE AND HELD. The operand is the RECEIVER, so the answer's identity is composed from this
+       value's own — which is what makes two asks about one record one question, here and at the outcome seam
+       the link walk asks through. */
+    if (JS_IsUninitialized(c->proto))
+        c->proto = concolic_new_derived(ctx, "[[GetPrototypeOf]]", &obj, 1, JS_UNDEFINED);
+    /* concolic_new_derived answers JS_UNINITIALIZED for exactly one reason — NO operand is unknown — and the
+       operand here is the receiver, which reached this entry through this class's own exotic table. So the
+       sentinel surviving the mint is that dispatch having delivered a value that is not one of ours, and it
+       must be said HERE: JS_GetPrototype's own check would report only that the answer is neither an Object
+       nor null, which is true of the sentinel and names nothing. */
+    DCHECK(!JS_IsUninitialized(c->proto),
+           "the derivation of an unknown's prototype answered the no-unknown-operand sentinel over a receiver "
+           "this class's own exotic table dispatched on");
+    /* A NEW REFERENCE, because [[GetPrototypeOf]] is a spec internal method whose callers own what it returns —
+       JS_GetPrototype's do, and so does §10.4.7.2 step 1's. The memo keeps its own. */
+    return JS_DupValue(ctx, c->proto);
 }
 
 static JSClassExoticMethods g_concolic_exotic = {
@@ -4420,6 +4437,10 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
        zero it would otherwise hold is JS_CONCOLIC_EQ_LOOSE, so a value that is not a predicate at all would
        answer that the page wrote `==` over it. */
     c->cmp_algo = CMP_ALGO_NONE;
+    /* NOBODY HAS ASKED FOR THIS VALUE'S PROTOTYPE YET, and that is a state rather than a zero — see the field.
+       It is set at the ONE mint every concolic goes through, so there is no route to a record whose sentinel
+       was never written. */
+    c->proto = JS_UNINITIALIZED;
     c->rel_op = REL_NONE;   /* reclaim_calloc already zeroes it; stated beside cmp_op so the two stay one act */
     JS_SetOpaque(obj, c);
     return obj;
