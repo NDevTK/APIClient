@@ -44,10 +44,41 @@
  * one of those from a `window.__FLAGS` the server would have written for a logged-in visitor: both are "not a
  * standard's name, never written by anything, missed on the global". Erring toward the fork is the correct
  * side to be wrong on (§solver: a concrete `undefined` buries the admin code, and the WFQ starves an arm that
- * emits nothing), so this arm stays as it is until something can DECIDE it rather than default it. What would
- * decide it is a fact that arrives AFTER the read — the program's own later definition of the same global
- * name, `x || (x = {})` being the canonical shape — which is a classification this engine's primitives can
- * express and does not yet perform.
+ * emits nothing), so this arm stays as it is until something can DECIDE it rather than default it.
+ *
+ * AND THE THING THIS PARAGRAPH USED TO NOMINATE AS THAT DECIDER IS UNSOUND — IT IS WRITTEN OUT HERE BECAUSE IT
+ * WAS LANDED AS AN INSTRUCTION AND A LANE WOULD HAVE BUILT IT. It said the classification is decidable from a
+ * fact that arrives AFTER the read — the program's OWN later definition of the same global name, `x || (x =
+ * {})` being the canonical shape — so the arm asserting an external supplier could be retired once the
+ * family established that the program defines the name. The counterexample is one line long and it is one of
+ * the commonest lines on the web: `window.__FLAGS = window.__FLAGS || {}`. Every SSR hydration shim, `gon`,
+ * and `window.dataLayer = window.dataLayer || []` is written that way. The program DOES define the name, so
+ * the retirement fires, and the surviving arm holds a bundle-built `{}` whose extent no grant admits — so
+ * `__FLAGS.admin` answers `undefined` concretely and the admin surface is buried. That is the exact loss this
+ * file exists to prevent, delivered by the mechanism proposed to improve it.
+ *
+ * THE GENERAL FORM, WHICH IS WHAT SURVIVES AND IS WORTH MORE THAN THE INCIDENT: EVERY CANDIDATE THAT KEYS ON
+ * THE PROGRAM'S OWN HANDLING OF ABSENCE FAILS, AND FAILS FOR ONE REASON. A defensive read (`window.__USER &&
+ * …`), a `typeof` guard, and a defining write (`x = x || {}`) are all the program saying IT DOES NOT KNOW
+ * WHETHER THE NAME IS BOUND — which is equally true of a polyfill probing for another host's global and of a
+ * bundle reading state its server may not have rendered. The program's code is written by people who do not
+ * know, in EITHER case, so nothing in that code can separate the two. Only a fact about the PRODUCER can, and
+ * this engine holds one for a record (js_document_container_grant asks whether the document's own bytes wrote
+ * the extent) and holds none for a name nothing wrote. The honest statement of what would have to exist is
+ * therefore not a run fact about the program at all: it is a SECOND OBSERVATION OF THE DOCUMENT — the same
+ * address fetched under different credentials, whose injected namespace differs exactly in the names a server
+ * renders for a session — which is a differential this tool could take and does not.
+ *
+ * AND THE PRIMITIVE THIS WAS ANCHORED TO IS NOT THE ONE IT LOOKS LIKE. §solver's CONCRETIZE-ON-PIN is a
+ * DETERMINATION about one value by a predicate THE FLOW ITSELF EVALUATED — concolic_new states it exactly:
+ * "A pin is a fact about THIS value, so it applies exactly where the value being minted IS the pinned one."
+ * A retraction is the opposite twice over: the fact is established by a SIBLING arm rather than by the flow
+ * being narrowed, and it deletes a world instead of determining a value. concolic_pin already names that
+ * hazard about this very primitive — "the witness does not merely get emitted, it deletes the sibling world
+ * the run never contradicted. An absent pin forks and explores both; a wrong one decides an arm nothing
+ * downstream can contradict." The retraction is that wrong pin, one level up. And whatever a later reader
+ * decides here, it is not a §NO BOUNDS question: this arm has no cap in it and must not gain one — the cost
+ * of a world nobody can contradict is the WFQ's to order, never this file's to refuse.
  *
  * AND IT IS ASKED OF A PRESENT MEMBER AS WELL AS OF A MISSING ONE, which is the half that decides the case
  * §solver names by name. A server that ships `window.__FLAGS={admin:false}` has WRITTEN the field, so the read
@@ -416,6 +447,26 @@ JSValue absent_read_hook(JSContext *ctx, JSValueConst obj, JSAtom name)
            TWO VOCABULARIES, BECAUSE TWO STANDARDS OWN NAMES HERE AND THIS ARM USED TO ASK ABOUT ONE. See this
            file's header for what asking about only Web IDL left falling through. */
         if (absent_is_platform_name(s) || absent_is_language_name(s))
+            goto done;
+        /* AND AN INDEX IS NOT A FIELD OF A RECORD AT ALL, WHICH IS A QUESTION ABOUT THE KEY SPACE AND NOT
+           ABOUT WHICH VOCABULARY OWNS A NAME. The channel's key rule admits array indices because a server's
+           state tree is records inside LISTS and the walk reaches an element by its index —
+           `__STATE__.users[0]` — and THE GLOBAL IS NOT A LIST. An integer key on it is HTML §7.2.2.2 Indexed
+           access on the Window object, which says of it that "indexed access to document tree child
+           navigables is defined through the [[GetOwnProperty]] internal method of the WindowProxy object": the
+           extent is the INTERFACE'S, exactly as Web IDL §3.8 Platform objects implementing interfaces makes a
+           platform object's member list the interface's rather than the document's. THIS ENGINE OWNS THE
+           NAVIGABLE TREE, so an index past the child-navigable count has a real answer that this run computed
+           — §10.1.8.1 OrdinaryGet ( O, P, Receiver ) step 2.b's `undefined` — and minting an unknown for it is
+           the "record wrongly ON the channel" direction this file's header calls the silent one: nothing
+           throws, and a `for (i = 0; i < window.length; i++) window[i]` walk performs it once per iteration
+           past the end.
+           IT IS THIS ARM'S RULE AND NOT ns_join'S. A document that writes `window[0] = {…}` in an inline
+           script publishes a record there in its own right, and that record's members are read through the
+           RECORD arm below — which is why the composer still spells an index off the root and why refusing one
+           HERE takes nothing away: a server that injected at an integer key made it PRESENT, and a present key
+           never reaches this hook. */
+        if (JS_AtomIsIndexName(name))
             goto done;
     } else {
         base = ns_path_of(obj);
