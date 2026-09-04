@@ -89,6 +89,12 @@ const RequestRecord *request_record_of(JSValueConst v);
  * Returns 0, or -1 with the TypeError §5.4 states live: step 10's `window`, step 17's "navigate" mode, step
  * 21's "only-if-cached", and step 25's method. `rec` is left safe to free either way.
  *
+ * IT ALSO RETURNS -1 FOR A MEMBER THIS ENGINE CANNOT YET APPLY, which is a different thing from a step's own
+ * refusal and is stated here because a caller cannot tell them apart and must not try: a member whose value is
+ * UNKNOWN EXTERNAL INPUT aborts in a dev build at the step that reads it, naming what to build, and throws a
+ * TypeError in release. §5.4's ORDER decides which member reports, exactly as it decides which TypeError a
+ * page sees when two members are bad at once.
+ *
  * NAMED RESIDUAL: the request's URL is not on this record, so §5.6 step 2's literal [[Construct]] — which
  * would delete `fetch()`'s remaining copy of steps 5-6 as this deletes its copy of 10-27 — cannot be built
  * yet. §5.4 step 5 parses the input STRING, and a `fetch('/api/u?uid=' + state.id)` URL is UNKNOWN EXTERNAL

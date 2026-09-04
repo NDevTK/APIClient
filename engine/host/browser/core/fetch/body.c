@@ -17,6 +17,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "solver/concolic.h"
 #include "solver/cow.h"
 #include "core/byte_reader.h"
 #include "core/encoding/text_stream.h"
@@ -208,6 +209,51 @@ int body_extract(JSContext *ctx, BodyState *b, JSValueConst init, bool keepalive
     if (JS_IsNull(init) || JS_IsUndefined(init))
         return body_state_set(ctx, b, NULL, 0);
 
+    /* §5.2's UNION OVER UNKNOWN EXTERNAL INPUT — RESOLVED HERE, WHERE THE UNION'S ONE RULE LIVES, AND NOT AT
+     * THE ARM IT USED TO FALL INTO. `fetch(u, {method:"POST", body: cfg.payload})` is the commonest POST a
+     * bundle writes, and `cfg.payload` is unknown wherever the state that carries it is server-injected or an
+     * uncalled function's argument, so this is the ordinary case rather than an exotic one.
+     *
+     * ITS ARM IS DECIDED AND THERE IS NOTHING HERE TO FORK. Web IDL §3.2.25 Union types walks the value's own
+     * type: an unknown wears an ordinary Object with no brand and no @@iterator, so it matches none of step
+     * 11's sub-arms and control reaches step 15 — "If types includes a string type, then return the result of
+     * converting V to that type" — which for `BodyInit` is the USVString arm. That is the same answer
+     * core/frame/navigator_beacon.c's §3 step 6 already gives an unknown `data`, and the arm being determined
+     * is why this states a MISSING CAPABILITY rather than a set of feasible worlds.
+     *
+     * WHAT WAS WRONG BEFORE WAS THE DIAGNOSIS AND NOT ONLY THE ROUTE. A concolic satisfied `JS_IsObject`, fell
+     * into the BufferSource arm below, and aborted there under a message blaming a CALLER FOR HAVING NO
+     * DECLARATION: its words are that fetch(input, init) reads init["body"] with a raw property get and never
+     * runs the union's rule. That sentence is true of a plain object and FALSE of this population: `new Request(u,
+     * {body: x})` declares IDL_BODYINIT_NULLABLE, whose rule crosses unknown external input UNCONVERTED on
+     * purpose so that opacity survives the boundary, and it reproduces the identical abort. A reader obeying
+     * that message would have built fetch()'s missing declaration and watched the abort stay exactly where it
+     * was. CLAUDE.md rates a wrong diagnosis above a missing one, so the union's own rule answers first.
+     *
+     * WHAT IS NOT COVERED: the string arm itself. §5.2's USVString arm sets the body's source to the UTF-8
+     * encoding of the object, and a BodyState's `bytes` is a `char *`, which cannot BE the unknown any more
+     * than a `const char *` can carry one at a ToString boundary. WHAT THE NEXT DIFF BUILDS: §2.2.5 Requests'
+     * body source on BodyState as a JSValue, so the unknown rides it and §5.3 Body mixin's `text()` resolves
+     * WITH it (opaque-infectious, so a page's own `JSON.parse(await r.text())` forks where the spec says it
+     * does) — together with the readers that today take `bytes` straight off the struct, since each of those
+     * would otherwise read a NULL as an empty body and report a POST as bodyless. HOW ITS ABSENCE SHOWS: this
+     * abort, on any document whose request body is not a value the run computed.
+     *
+     * IN RELEASE the throw below is what a page sees, which is a wrong answer and a DEFINED one — where
+     * falling into the BufferSource arm produced whichever refusal `JS_GetArrayBufferView` happened to make
+     * about a value that is not a buffer at all. */
+    if (concolic_is(init)) {
+        DFAIL("Fetch §5.2 BodyInit unions' extract a body was handed UNKNOWN EXTERNAL INPUT. Web IDL §3.2.25 "
+              "Union types step 15 decides its arm — the USVString one — so this is not a fork and not a "
+              "union the caller failed to resolve: it is §5.2's string arm needing a body source that can BE "
+              "the unknown, where core/fetch/body.h declares a `char *`. Build §2.2.5 Requests' body source "
+              "as a JSValue on BodyState, with §5.3 Body mixin's readers resolving with it, and bring every "
+              "reader that takes `bytes` off the struct with it in the same diff");
+        JS_ThrowTypeError(ctx, "this engine cannot yet carry a request body whose bytes are unknown external "
+                               "input");
+        return -1;
+    }
+
     {
         size_t blen = 0;
         const char *btype = NULL;
@@ -332,6 +378,12 @@ int body_extract(JSContext *ctx, BodyState *b, JSValueConst init, bool keepalive
            the USVString arm's ToString has to be a STAGE in js_fetch_step, because it runs the page's code
            (FETCH_INPUT_URL_STR is the shape it takes). Re-stating the arm list in fetch.c would make three
            copies of one union, which is the thing this assert exists to keep honest. */
+        /* AND THE POPULATION THIS SENTENCE IS ABOUT IS NOW THE ONE IT NAMES. It used to fire for UNKNOWN
+           EXTERNAL INPUT as well, which HAS a declaration wherever it arrives through `new Request(u, {body:
+           x})` — so the message was a confident wrong diagnosis for half of what reached it, sending its
+           reader to build fetch()'s missing declaration for an abort that would not have moved. The union's
+           rule answers an unknown at the top of this function now, so what is left here is exactly the plain
+           object the sentence describes. */
         DCHECK(!JS_IsException(buf),
                "the BodyInit union let through an object that is none of its arms — every caller with a "
                "DECLARATION converts the USVString arm before this point, so the caller that reached here has "

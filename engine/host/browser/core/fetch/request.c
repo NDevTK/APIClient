@@ -28,6 +28,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "solver/concolic.h"
 #include "core/dom/abort.h"
 #include "core/fetch/fetch.h"
 #include "core/file/blob.h"
@@ -534,6 +535,9 @@ static bool req_init_is_empty(JSContext *ctx, JSValueConst init)
 
 /* A dictionary member as a plain string, or `dflt` when the page did not supply it. The declaration has
    already converted each to a real string, so this reads an engine-built object and runs nothing.
+   RETURNS NULL FOR EXACTLY ONE THING — a member whose value is UNKNOWN EXTERNAL INPUT, with the TypeError it
+   throws live and the DFAILF beside it naming what to build. OOM is a CHECK below and aborts, so a caller
+   testing for NULL is testing for that refusal and for nothing else.
    `dflt` IS THE VALUE STEP 12 CARRIED FORWARD, never a constant the call site picked: §5.4 sets a request's
    mode / credentials mode / cache mode / redirect mode / integrity metadata from the INIT MEMBER ONLY WHERE IT
    EXISTS, and from the input request otherwise. A `?:` PAST A FAILED CONVERSION IS GONE with it — the read
@@ -544,6 +548,48 @@ static char *init_str(JSContext *ctx, JSValueConst init, const char *name, const
     JSValue v = idl_dict_get(ctx, init, name);
     char *r;
     if (JS_IsUndefined(v)) { JS_FreeValue(ctx, v); return js_strdup(ctx, dflt); }
+    /* SEVEN MEMBERS ARRIVE HERE AND THE UNKNOWN ONE SPLITS THEM IN TWO, WHICH IS WHY THIS IS ONE ABORT AND
+     * NOT ONE ANSWER. `fetch(u, {credentials: cfg.creds})` and `fetch(u, {integrity: cfg.sri})` reach this
+     * same line with unknown external input and take the document down at the ToString boundary below, and
+     * what each of them NEEDS is different:
+     *
+     * FIVE OF THE SEVEN ARE ENUMERATIONS — `mode`, `credentials`, `cache`, `redirect`, `referrerPolicy` — and
+     * an unknown at one of them needs NOTHING of this record at all. Web IDL §3.2.18 Enumeration types makes
+     * the member's domain FINITE: the declared value list, plus the TypeError §3.2.18 states for everything
+     * else. Every one of those worlds places a REAL string from the list, which a `char *` carries perfectly,
+     * so the arms are feasible worlds the algorithms behind this boundary observe apart — `credentials:
+     * "include"` is a credentialed request and `"omit"` is not, and picking either for a value nothing is
+     * known about deletes the other. That is the same shape core/idl_args.h's `idl_concolic_rule` already
+     * files Web IDL §3.2.3 boolean under, and IDL_ENUM sits under that switch's `default:` at CROSSES today —
+     * which is the state that row's own comment records the boolean having been in, a type whose conversion
+     * decides a world filed with the types whose conversion merely coerces bytes a body still holds. (That
+     * sentence is idl_args.h's, not a standard's; grep the row before acting on this, since it is a claim
+     * about a tree that moves.) The resolution site is the DECLARATION's, which holds the machine this
+     * operation does not, and the member loop in idl_args.c already asserts that every FORKS type has an arm
+     * in it and tells its reader to give the type that arm beside the boolean's. So an enum member is not
+     * this file's to answer, and answering it here would be the second copy of a rule that exists to have
+     * one.
+     *
+     * TWO OF THE SEVEN ARE PLAIN STRINGS — `referrer` (USVString) and `integrity` (DOMString) — whose bytes
+     * are the page's own and whose worlds are not enumerable. Those need what §5.4 step 25's method needs and
+     * for the same reason: a record field that can BE the unknown. See that step's block below.
+     *
+     * A `?:` PAST THIS IS THE ONE ANSWER THAT IS NEVER RIGHT, for the reason the `dflt` paragraph above
+     * already gives about OOM: a default here turns "the page asked for something this engine cannot state"
+     * into "the page asked for same-origin credentials", which is a plausible datum where a crash belongs. */
+    if (concolic_is(v)) {
+        DFAILF("Fetch §5.4 new Request(input, init) applied the RequestInit member `%s`, and its value is "
+               "UNKNOWN EXTERNAL INPUT. If `%s` is one of §5.4's five ENUMERATION members the fix is not "
+               "here: Web IDL §3.2.18 Enumeration types gives it a finite domain whose every world is a real "
+               "string this record already carries, so give IDL_ENUM its FORKS row in idl_concolic_rule and "
+               "its arm in the dictionary member loop, beside the boolean's. If it is `referrer` or "
+               "`integrity` it needs what §5.4 step 25's method needs — that field on the request record as "
+               "a JSValue, and this operation holding the JSStepHdr a fork is asked through", name, name);
+        JS_FreeValue(ctx, v);
+        JS_ThrowTypeError(ctx, "this engine cannot yet apply a RequestInit member whose value is unknown "
+                               "external input");
+        return NULL;
+    }
     {
         const char *c = JS_ToCString(ctx, v);
         CHECK(c != NULL, "OOM reading a RequestInit member the declaration has already converted to a string");
@@ -610,10 +656,18 @@ int request_init_apply(JSContext *ctx, JSValueConst init, const RequestRecord *f
        from. §5.4 spells each of these "If init[member] exists, then set request's <field> to it", over a
        request that already holds the input's value — so a constant in the `dflt` position is a statement that
        the page asked for it, and for a Request input that statement is false. */
+    /* EVERY init_str BELOW IS CHECKED AT ITS OWN STEP, AND THE ANSWER IT IS CHECKED FOR IS ITS REFUSAL AND
+       NEVER AN OOM — that is a CHECK inside it, which aborts. NULL therefore means exactly one thing (see its
+       block: a member whose value is unknown external input) with the TypeError already live, and it is
+       checked HERE rather than at the CHECK below because §5.4's ORDER IS OBSERVABLE: a page that writes two
+       bad members sees the earlier step's refusal, and two of these fields are `strcmp`'d by the steps that
+       follow them. The record is left safe to free either way, which is this operation's stated contract. */
     rec->referrer        = init_str(ctx, init, "referrer",                          /* steps 13-14 */
                                     (from && !init_not_empty) ? from->referrer : "about:client");
+    if (!rec->referrer) return -1;
     rec->referrer_policy = init_str(ctx, init, "referrerPolicy",                    /* steps 13, 15 */
                                     (from && !init_not_empty) ? from->referrer_policy : "");
+    if (!rec->referrer_policy) return -1;
     /* §5.4 steps 16-18: "navigate" is not a mode a page may ask for. Step 16 is "Let mode be init["mode"] if
        it exists, and fallbackMode otherwise" — and fallbackMode is set to "cors" at step 5.5, the STRING arm,
        and left null by the Request arm; step 18's "If mode is non-null" is what then leaves a Request input's
@@ -623,13 +677,16 @@ int request_init_apply(JSContext *ctx, JSValueConst init, const RequestRecord *f
            "this engine mints a Request, so step 13's \"if request's mode is navigate, set it to same-origin\" "
            "is unreachable rather than unimplemented");
     rec->mode = init_str(ctx, init, "mode", from ? from->mode : "cors");
+    if (!rec->mode) return -1;
     if (!strcmp(rec->mode, "navigate")) {                                         /* step 17 */
         JS_ThrowTypeError(ctx, "a Request cannot be constructed with mode \"navigate\"");
         return -1;
     }
     rec->credentials     = init_str(ctx, init, "credentials",                      /* step 19 */
                                     from ? from->credentials : "same-origin");
+    if (!rec->credentials) return -1;
     rec->cache           = init_str(ctx, init, "cache", from ? from->cache : "default");   /* step 20 */
+    if (!rec->cache) return -1;
     /* §5.4 step 21: "only-if-cached" asks the cache to answer without going to the network, which only means
        anything for a same-origin request — so any other mode is a TypeError. */
     if (!strcmp(rec->cache, "only-if-cached") && strcmp(rec->mode, "same-origin")) {
@@ -637,7 +694,9 @@ int request_init_apply(JSContext *ctx, JSValueConst init, const RequestRecord *f
         return -1;
     }
     rec->redirect        = init_str(ctx, init, "redirect", from ? from->redirect : "follow");   /* step 22 */
+    if (!rec->redirect) return -1;
     rec->integrity       = init_str(ctx, init, "integrity", from ? from->integrity : "");       /* step 23 */
+    if (!rec->integrity) return -1;
     /* §5.4 step 24: "If init["keepalive"] exists, then set request's keepalive to it" — so an ABSENT member
        leaves step 12's value standing, which is the input request's or `false` for a string.
        THE READ IS `idl_dict_bool` AND NOT A BARE `JS_ToBool`, because ToBoolean over unknown external input
@@ -651,7 +710,61 @@ int request_init_apply(JSContext *ctx, JSValueConst init, const RequestRecord *f
     {
         JSValue mv = idl_dict_get(ctx, init, "method");
         if (JS_IsUndefined(mv)) {
+            /* §2.2.5 Requests: "A request has an associated method (a method). Unless stated otherwise it is
+               `GET`." So this constant is the SPEC's initial value for the request step 5 minted out of a
+               STRING input, reached only where the member is absent — not a field this reader defaulted. */
             rec->method = js_strdup(ctx, from ? from->method : "GET");
+        } else if (concolic_is(mv)) {
+            /* §5.4 STEP 25 OVER A METHOD NOBODY KNOWS — THE THREE THINGS THAT ARE ALREADY SETTLED, AND THE ONE
+             * THAT IS NOT. `fetch(u, {method: options.method || "get"})` is the shape, one arm of that `||`
+             * carrying the unknown, and an orphan drive of any wrapper reaches it that way by construction:
+             * Web IDL declares `method` a ByteString and core/idl_args.h's IDL_CONCOLIC_CROSSES passes unknown
+             * external input through that conversion UNCONVERTED on purpose, so opacity survives it.
+             *
+             * (1) READING BYTES OFF IT IS WRONG, which is what the line below did and what took the document
+             * down: ECMAScript §7.1.19 ToString ( arg ) steps 9-12 hand an Object to §7.1.1 ToPrimitive (
+             * input [ , preferredType ] ), which over an unknown is the identity, so the byte consumer owed C
+             * a JSString that does not exist.
+             * (2) SUBSTITUTING ITS DISPLAY SHAPE IS WORSE and is the answer to refuse first, because it does
+             * not abort. `{orphan….arg0}.method` is not a token, so §2.2.1 Methods' "A method is a byte
+             * sequence that matches the method token production" fails and step 25 throws a TypeError that
+             * DELETES the request — the endpoint this tool exists to emit — by running a predicate over a
+             * string no run ever computed. It would also decide step 32.1's CORS-safelisted-method test and
+             * step 35's GET/HEAD body test by `strcmp` against that same fabricated string.
+             * (3) THE COMPLETIONS ARE TWO AND NOT THREE, counted from what the PAGE CAN OBSERVE rather than
+             * from the branches of the prose: `new Request` returned, or it threw a TypeError. §2.2.1 makes a
+             * forbidden method a method ("A forbidden method is a method that is a byte-case-insensitive
+             * match for `CONNECT`, `TRACE`, or `TRACK`"), so the two refusals partition the domain — but §5.4
+             * step 25 throws ONE TypeError for both where XHR §3.5.1 The open() method names a "SyntaxError"
+             * and a "SecurityError" apart, and two arms a page cannot tell apart are one world twice. There is
+             * no third: the operand is a value, not an algorithm that could settle nothing.
+             *
+             * WHAT IS MISSING IS SOMEWHERE TO PUT THE ANSWER. On the ordinary completion step 25.3's
+             * "Normalize method" is a DERIVATION and never a decision — §2.2.1's "To normalize a method, if it
+             * is a byte-case-insensitive match for `DELETE`, `GET`, `HEAD`, `OPTIONS`, `POST`, or `PUT`,
+             * byte-uppercase it" answers an unknown with an unknown in both of its worlds — and step 25.4 then
+             * has to STORE that, where request.h declares a `char *`. WHAT THE NEXT DIFF BUILDS: §2.2.5
+             * Requests' method on the request record as a JSValue so it can BE the unknown, with `Request`'s
+             * `method` getter answering it, steps 32.1 and 35 asking the fork rather than `strcmp`, the @H
+             * surface taking the domain-annotated SHAPE (concolic_name_cstr) in the one column an endpoint is
+             * identified by, and §4.1 Main fetch answering a method this agent cannot spell INSIDE the agent
+             * — credentialed by construction, not established to be in RFC 9110 §9.2.1 Safe Methods' safe set,
+             * and off a forced arm is the one combination that is never a setting, whose correct output is to
+             * derive it, report it and not send it. AND THE FORK NEEDS A MACHINE: this operation is §5.4 steps
+             * 10-27 for BOTH of its callers and holds no JSStepHdr, so step_fork_run cannot be asked here
+             * until it takes one — which is the single change that unblocks this member and the seven
+             * `init_str` members above it.
+             * HOW ITS ABSENCE SHOWS: this abort, on any bundle whose method is not a literal. */
+            DFAIL("Fetch §5.4 new Request(input, init) step 25 was handed a method that is UNKNOWN EXTERNAL "
+                  "INPUT. Its two observable completions are `returned` and `threw a TypeError`, and the "
+                  "ordinary one has nowhere to store its answer: core/fetch/request.h declares the record's "
+                  "method a `char *`, which cannot carry an unknown any more than the ToString boundary "
+                  "below it could. Build §2.2.5 Requests' method as a JSValue on the record, and give this "
+                  "operation the JSStepHdr its fork has to be asked through");
+            JS_FreeValue(ctx, mv);
+            JS_ThrowTypeError(ctx, "this engine cannot yet build a Request whose method is unknown external "
+                                   "input");
+            return -1;
         } else {
             const char *mc = JS_ToCString(ctx, mv);
             if (!mc) { JS_FreeValue(ctx, mv); return -1; }
