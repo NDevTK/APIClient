@@ -3019,7 +3019,11 @@ function scanJS(file, src) {
   collectDomainsJS(file, src, code, struct);
   collectAbiJS(file, src, code, struct);
 
-  return { file, src, localReads, localWrites, litShapes, memberAssigns, wholeDefaults, site, initOf, binderOf, paramSlot,
+  /* `code` LEAVES WITH THE SCAN because §THE DERIVED READER asks a question about this file's own text that
+     no per-read record can carry: which calls DELIMIT A REGION OF A PRODUCER. Handing out the masked text
+     rather than re-reading the file is the same rule the revision guard states — a second read is a second
+     instant, and a scan that answers about two of them answers about no revision. */
+  return { file, src, code, localReads, localWrites, litShapes, memberAssigns, wholeDefaults, site, initOf, binderOf, paramSlot,
            localParamSlot, callArgsOf, guardedBy, foreignImports, importOf, iterOf, pushArgsOf, returnsOf,
            asserted: (off) => assertSpans.some(([a, b]) => off >= a && off < b) };
 }
@@ -3682,6 +3686,11 @@ const REV_AT_START = gateRevision(cone);
 for (const l of revisionLines(REV_AT_START)) console.log(l);
 
 const jsScans = [];
+/* THE PRODUCER'S OWN BYTES, KEPT FROM THE ONE READ THAT SCANNED THEM. §THE DERIVED READER resolves a region a
+   consumer delimits by two literals of the producer's own text, and it must resolve it in the SAME bytes every
+   file:line above was measured in — a re-read is a second instant, and this scan already prints whether the
+   tree moved under it because an answer spanning two of them describes no revision. */
+const cSrc = new Map();   // repo-relative path -> source text
 /* The scans, keyed by their repo-relative path, so a relative import specifier resolves to the module that
    declares the name — which is how §the ORIGIN of a value follows a producer one module further. */
 const scanByFile = new Map();
@@ -3699,7 +3708,7 @@ for (const f of files) {
   let src;
   try { src = readFileSync(f.path, "utf8"); } catch { continue; }
   const rel = relative(ROOT, f.path);
-  if (f.lang === "c") { scanC(rel, src); continue; }
+  if (f.lang === "c") { cSrc.set(rel, src); scanC(rel, src); continue; }
   if (f.lang === "html") {
     const view = htmlScriptView(src);
     if (!view) continue;    /* a document with no inline script carries no seam — decided, not unreadable */
@@ -4085,6 +4094,14 @@ const corpusDecided = [];     // {file,line,recv,names,cShape,cN,jsShape,jsN}
    emission's own key list, and the defect is identical — a field read off a record that does not have it,
    excused until now by an unrelated party that happens to spell a field the same way. */
 const offRecord = [];         // {file,line,recv,shape,name,writes}
+/* A NAME THE CONSUMER ITSELF PUT ON THE RECORD, which is the one write OFF-RECORD's own sentence excludes and
+   its test did not. That category says these reads were "excused by whichever UNRELATED party in the corpus
+   happened to spell the field the same way", and a member assignment onto a receiver of THIS record in THIS
+   file is not an unrelated party — it is this consumer, deriving a value the producer deliberately does not
+   restate. Decided and printed with the assignment that made it, never accused: the remedy an accusation asks
+   for is to make the producer emit the row, and that would give a quantity whose whole value is being DERIVED
+   AS A CHECK a second writer, which is the assertion deleted rather than a contract closed. */
+const consumerSynth = [];     // {file,line,recv,shape,name,at}
 
 /* The interface a receiver EXPRESSION evaluates to, or null. Every arm is a construct that names a type; the
    `seen` set is a cycle guard for `const a = b, const b = a`, not a depth bound. */
@@ -4809,11 +4826,30 @@ for (const s of jsScans) {
          a receiver whose identity this file got wrong. The name written NOWHERE is not diverted into this
          category — it stays READ-NO-WRITER, which is louder and is already the right row for it. */
       if (!shapes.get(best).has(r.name)) {
+        /* ASKED BEFORE THE ACCUSATION, AT THE SHAPE AND NOT AT THE FILE. The question is whether THIS consumer
+           writes this name onto a record of the SAME shape this read anchored to, and the construct that answers
+           it is a member ASSIGNMENT whose own receiver reads this shape's rows — the same two-name threshold the
+           anchor above is decided by, so there is one rule here and not a second copy of it. A file-wide test
+           would have excused a read off an unrelated receiver that merely shares the file; this excuses only a
+           record the consumer demonstrably holds. */
+        const syn = fields.get(r.name)?.writes.length ? (() => {
+          for (const a of s.memberAssigns) {
+            if (a.name !== r.name) continue;
+            const rs2 = byRecv.get(a.key);
+            if (!rs2) continue;
+            const on = new Set();
+            for (const q of rs2) if (shapes.get(best).has(q.name)) on.add(q.name);
+            if (on.size >= 2) return { ...s.site(a.off), recv: rs2[0].recv, on: [...on] };
+          }
+          return null;
+        })() : null;
         if (r.coerced && !r.form && !r.consumed)
           coerced.push({ ...site, name: r.name, ...r.coerced, where: r.coercedAt,
-                         disp: fields.get(r.name)?.writes.length ? "the emission it anchors to, which does NOT carry this name"
+                         disp: syn ? "the emission it anchors to, onto which this consumer wrote this name itself"
+                                   : fields.get(r.name)?.writes.length ? "the emission it anchors to, which does NOT carry this name"
                                                                                 : "no producer anywhere" });
-        if (fields.get(r.name)?.writes.length)
+        if (syn) consumerSynth.push({ ...site, name: r.name, at: syn });
+        else if (fields.get(r.name)?.writes.length)
           offRecord.push({ ...site, name: r.name, writes: fields.get(r.name).writes.slice(0, 4) });
         else rec(fields, r.name).reads.push(site);
         continue;
@@ -5021,7 +5057,105 @@ const readNoWriter =[...fields].filter(([, e]) => e.reads.length && !e.writes.le
 const readAnywhere = new Set();
 for (const s of jsScans) for (const r of s.localReads) readAnywhere.add(r.name);
 for (const [n, e] of fields) if (e.reads.some((r) => r.file.endsWith(".c") || r.file.endsWith(".h"))) readAnywhere.add(n);
-const writeNoReader = [...fields].filter(([n, e]) => cEmitted.has(n) && e.writes.length && !readAnywhere.has(n));
+/* ---- the DERIVED reader ------------------------------------------------------------------------------- */
+/* A CONSUMER THAT TAKES ITS REQUIRED FIELD SET OUT OF THE PRODUCER HAS NO LITERAL NAME TO GREP FOR, AND THE
+ * CATEGORY ABOVE IS A NAME GREP. `readAnywhere` asks "does any construct in this corpus spell this token", and
+ * a reader built to §AN-AUDITOR-DERIVES-THE-RULE-IT-CHECKS-FROM-THE-CODE-THAT-OWNS-IT spells none of them: it
+ * reads the row set off the composer's own format string and then requires every row of it, so the day a row is
+ * added the reader knows. Both instruments obey the same rule and they answer OPPOSITE things about the same
+ * emission, and the one that is wrong is the one asking about tokens.
+ *   THE COST IS NOT A WASTED READING, WHICH IS WHY THIS IS A DEFECT IN THIS FILE AND NOT NOISE IN IT.
+ * §Architecture's prescribed remedy for a write-with-no-reader is to ADD a reader, and adding a LITERAL one
+ * here re-creates the hand-typed list the derivation replaced — a list this tree records as having been wrong
+ * SEVEN times, three of those misses landing in the hour the derivation that ended it was being written. So the
+ * finding does not merely mislead: it argues for undoing the fix. A count that mixes "I found a defect" with "I
+ * cannot see this construct" is the three-states-behind-one-answer shape arriving in the instrument built to
+ * end it, and the answer is a BAND, decided and printed, never a silent exemption.
+ *   AND IT IS DERIVED, NOT LISTED. A hand-kept set of exempt field names would be the EIGHTH instance of the
+ * thing above. What is read instead is the CALL: a consumer that delimits a region of a producer by two
+ * literals of that producer's own text has named the region, and this resolves it in the producer's bytes —
+ * the same discipline `idlgen` follows in reading the real `.idl`, and the same one the derivation being
+ * credited follows in reading the real format string. Nothing here types a field name, so a row added over
+ * there joins the credited set on the same run it joins the census.
+ *   WHAT MAKES IT A ROUTE RATHER THAN A FALLBACK, on §the-test-for-a-predicate: delete the derived readers and
+ * this predicate answers NO for every emission and the rows come back as findings — it selects against nothing
+ * and there is no second implementation for it to hide. It CLASSIFIES, and the class it puts a row in is
+ * printed with the call site that put it there, so a reader can disagree in one line.
+ *   NAMED RESIDUAL — WHAT THIS DOES NOT ESTABLISH. It reads that the call DELIMITS the region; it does not read
+ * what the callee then does with it, because that would mean interpreting the callee's extraction. So a call
+ * that delimited a producer's region for some purpose OTHER than taking its field names out would credit that
+ * region's rows with a reader they do not have, and this category would UNDER-report — the direction
+ * `readAnywhere` already takes deliberately, one construct over. The next diff that needs it resolves the
+ * callee's declaration in the same file and confirms its extraction yields the region's own key spellings; its
+ * absence shows as a locator printed below whose credited names nobody can find a use for. EVERY locator this
+ * finds is printed, with its region and its rows, so the whole population is one screen and not an assertion. */
+const regionLocators = [];    // {file, line, callee, cFile, from, to, lineA, lineB, emits:[], only:[]}
+const derivedRead = new Map();   // field name -> the locator that answers for it
+{
+  const LIT = String.raw`"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'`;
+  /* MATCHED ON THE MASKED `code`, where a comment is blank and a string literal's own characters are intact —
+     so a locator written inside a comment cannot be one, and the literal is read as the bytes the callee gets. */
+  const CALL = new RegExp(String.raw`([A-Za-z_$][\w$]*)\s*\(\s*(${LIT})\s*,\s*(${LIT})\s*,\s*(${LIT})`, "g");
+  /* A JS STRING LITERAL'S OWN VALUE, in both spellings, because the one that locates the @HWORK line is single
+     quoted precisely so it can hold the double quote that opens the format. Unreadable is NOT-A-LOCATOR rather
+     than a guess: a literal this cannot decode is one whose bytes it cannot look for in the producer either. */
+  const unlit = (t) => {
+    try { return t[0] === '"' ? JSON.parse(t)
+                              : JSON.parse('"' + t.slice(1, -1).replace(/\\'/g, "'").replace(/"/g, '\\"') + '"'); }
+    catch { return null; }
+  };
+  const cPaths = [...cSrc.keys()];
+  for (const s of jsScans) {
+    let m;
+    CALL.lastIndex = 0;
+    while ((m = CALL.exec(s.code))) {
+      if (m.index > 0 && /[\w$]/.test(s.code[m.index - 1])) continue;   /* the tail of a longer identifier */
+      const path = unlit(m[2]), from = unlit(m[3]), to = unlit(m[4]);
+      if (path === null || from === null || to === null || !path) continue;
+      /* THE PRODUCER IS NAMED RELATIVE TO A ROOT THIS FILE DOES NOT KNOW, so the path is resolved by suffix
+         against the corpus rather than by joining a root guessed at here — and a path that names two producers
+         is REFUSED with its place, never picked between. */
+      const fit = cPaths.filter((k) => k === path || k.endsWith("/" + path)).filter((k) => {
+        const t = cSrc.get(k), a = t.indexOf(from);
+        return a >= 0 && t.indexOf(to, a) >= 0;
+      });
+      if (!fit.length) continue;
+      if (fit.length > 1) {
+        refuse(s.file, lineOf(s.src, m.index),
+               "a call delimiting a region of a producer by that producer's own text, whose file argument names " +
+               "more than one file in this corpus — which region a consumer derives its field set from cannot " +
+               "be decided, and crediting either would answer for rows of the other",
+               `${m[1]}(${JSON.stringify(path)}, …) — ${fit.join(", ")}`);
+        continue;
+      }
+      const cFile = fit[0], t = cSrc.get(cFile);
+      const a = t.indexOf(from), b = t.indexOf(to, a) + to.length;
+      const loc = { file: s.file, line: lineOf(s.src, m.index), callee: m[1], cFile, from, to,
+                    lineA: lineOf(t, a), lineB: lineOf(t, b - 1), emits: [], only: [] };
+      regionLocators.push(loc);
+    }
+  }
+  /* A ROW IS ANSWERED BY THE REGION THAT CONTAINS ITS EMISSION, which is the WRITE SITE and never the enclosing
+     body: the @HWORK region is one printf inside a function whose body opens seventy lines above it, so a body
+     span would have credited that whole function and a body-keyed test would have credited nothing. */
+  for (const [n, e] of fields) {
+    if (!cEmitted.has(n)) continue;
+    for (const loc of regionLocators)
+      if (e.writes.some((w) => w.file === loc.cFile && w.line >= loc.lineA && w.line <= loc.lineB)) {
+        loc.emits.push(n);
+        if (!derivedRead.has(n)) derivedRead.set(n, loc);
+        if (!readAnywhere.has(n)) loc.only.push(n);
+        break;
+      }
+  }
+}
+
+/* AND THE DERIVED READER IS SUBTRACTED HERE AND NOWHERE ELSE — not folded into `readAnywhere`, because the two
+   are different answers and a reader who cannot tell them apart is back where this started: `readAnywhere` says
+   a construct SPELLS the token, and `derivedRead` says a consumer requires the row without spelling it. Merged,
+   the band below could not print which rows are answered by which, and a derivation that silently stopped
+   covering a region would look exactly like a row that grew a literal reader. */
+const writeNoReader = [...fields].filter(([n, e]) => cEmitted.has(n) && e.writes.length && !readAnywhere.has(n) && !derivedRead.has(n));
 const mReadNoWriter = [...markers].filter(([, e]) => e.reads.length && !e.writes.length);
 const mWriteNoReader = [...markers].filter(([, e]) => e.writes.length && !e.reads.length);
 
@@ -5061,6 +5195,25 @@ show(`READ with no writer — ${readNoWriter.length} record field name(s) a cons
 /* GROUPED BY THE EMISSION, because one emission losing its whole reader is one fact and eighty-two names is a
    list. A record with every field unread is a document nobody opens; a record with ONE field unread is a
    rename that landed on one side, and the two want opposite fixes. */
+/* THE JUDGED POPULATION, ON THE LINE THE FINDING IS ON AND ON EVERY RUN. §Testing records an instrument whose
+   findings fell 978 → 688 while its VERIFIED count fell 4164 → 2490 — coverage collapsing and reading as
+   accuracy, because the number the findings were drawn FROM was on a line nobody went to. A count of defects
+   falls both when defects are fixed and when the instrument stops looking, and only the denominator tells those
+   apart. It prints on the clean day too, for the reason the corpus census does: a line that appears only on the
+   bad day is one nobody learns to look for. */
+/* THE TWO ANSWERS OVERLAP AND THE OVERLAP IS STATED, because three numbers that do not add up to the population
+   are three numbers a reader has to guess the relationship of — and a partition nobody can check is exactly the
+   shape this line was added to stop. spelled + derived − both = judged, on every run. */
+{
+  const judged = [...fields].filter(([n, e]) => cEmitted.has(n) && e.writes.length).map(([n]) => n);
+  const spelled = judged.filter((n) => readAnywhere.has(n)).length;
+  const derived = judged.filter((n) => derivedRead.has(n)).length;
+  const both = judged.filter((n) => readAnywhere.has(n) && derivedRead.has(n)).length;
+  log(`serialized field names JUDGED for a reader — ${judged.length}: ${spelled} named by a construct that ` +
+      `SPELLS them, ${derived} required by a consumer that DERIVES its row set from the producer (${both} both), ` +
+      `${writeNoReader.length} answered by neither`);
+}
+
 if (writeNoReader.length) {
   const bySite = new Map();
   for (const [n, e] of writeNoReader) {
@@ -5072,6 +5225,28 @@ if (writeNoReader.length) {
       `from ${bySite.size} emission(s) ──`);
   for (const [k, ns] of [...bySite].sort((a, b) => b[1].length - a[1].length))
     log(`  ${k}  ${ns.length} of the shape: ${ns.sort().join(" ")}`);
+}
+
+/* PRINTED IN FULL AND NOT A DEFECT, on the rule DECIDED PLATFORM is printed under: a decided negative nobody
+   can see is the concealment this file exists to report, performed on its own output. Every locator is a claim
+   this scan made about which rows a consumer requires, so every locator is somewhere a reader can disagree —
+   and the rows it is the ONLY answer for are named apart, because those are exactly the rows the category above
+   would otherwise be accusing. An empty list is legible for the same reason the derived-composer line is: this
+   whole band collapses to nothing if a call's spelling stops parsing here, and that would return the gate to
+   accusing correctly-written code with nothing to say it had. */
+if (regionLocators.length) {
+  log(`── DERIVED READER — ${regionLocators.length} consumer(s) that take their required field set out of the ` +
+      `producer, answering for ${derivedRead.size} row(s) that no construct anywhere SPELLS. A name grep cannot ` +
+      `see these; adding one would re-create the hand list the derivation replaced ──`);
+  for (const l of regionLocators)
+    log(`  ${l.file}:${l.line}  ${l.callee}(…) delimits ${l.cFile}:${l.lineA}..${l.lineB} by \`${l.from.replace(/\n/g, "\\n")}\`` +
+        ` → ${l.emits.length} emitted row(s)` +
+        (l.only.length ? `, ${l.only.length} of them answered by NOTHING ELSE: ${l.only.sort().join(" ")}`
+                       : `, every one of which a construct also spells`));
+} else {
+  log(`── DERIVED READER — NONE. No consumer in this corpus delimits a region of a producer by that producer's ` +
+      `own text, so every emitted row above is judged by whether some construct SPELLS its name. If that is a ` +
+      `surprise, the locator parse is what collapsed, not the derivations ──`);
 }
 
 /* NAMED, not "matched": a marker can be referred to by a diagnostic that tells the next reader to look for it,
@@ -5275,6 +5450,20 @@ if (offRecord.length) {
           `; not emitted there; written at ${x.writes.map(place).join(", ")}`);
     }
   }
+}
+
+/* PRINTED IN FULL AND NOT A DEFECT, beside the category it was taken out of, so the two are one screen and the
+   subtraction is visible rather than a number that got smaller. A row here is a claim that the consumer put the
+   name on the record itself; the assignment is named, so a reader who thinks the receiver is a different record
+   can say so in one line. */
+if (consumerSynth.length) {
+  log(`── DECIDED CONSUMER-SYNTHESISED — ${consumerSynth.length} read(s) of a name the anchored emission does not ` +
+      `carry BECAUSE THIS CONSUMER WROTE IT ONTO THE RECORD, deriving it from rows the emission does carry. The ` +
+      `producer's silence is deliberate where the value is a residue of its own published parts, and an ` +
+      `accusation here asks for a SECOND WRITER of a quantity whose whole worth is being derived as a check ──`);
+  for (const c of consumerSynth)
+    log(`  ${place(c)}  \`${c.recv}.${c.name}\`  anchors to ${c.shape}; written at ${place(c.at)} onto ` +
+        `\`${c.at.recv}\`, a receiver of that same emission (reads ${c.at.on.map((n) => `\`${n}\``).join(", ")})`);
 }
 
 if (offInterface.length) {
