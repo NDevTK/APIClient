@@ -505,11 +505,28 @@ static char *literal_ident(JSContext *ctx, JSValueConst v)
            COUNT OF PRIOR CREATIONS AT THAT SITE, because a site is 1:N with the objects made there and one
            `{}` in a loop is one site and a thousand objects — a fact about the EXECUTED PREFIX, so a replay
            reproduces it by reproducing the prefix and a fork carries it as it carries every other prefix
-           quantity. ITS ABSENCE SHOWS as a `~` site row over a `{}`-shaped subject that climbs across a
-           session while `replayHits` stays flat; the intrinsic half is done when the rows over %-named
-           subjects have left that column, and only that half has left it today. Building the site half
-           WITHOUT the ordinal is worse than leaving it: three iterations of one loop would name one object,
-           so iteration 1's constraint would refine 2 and 3 and ARMS WOULD BE LOST rather than duplicated. */
+           quantity. ITS ABSENCE SHOWS as a `~` site row whose subject renders `?` — derived_operand_shape's
+           answer for an operand with no name — climbing across a session while `replayHits` stays flat.
+           `{}` IS NOT THAT SPELLING AND NAMING IT AS ONE SENDS A READER TO GREP FOR THE WRONG THING: `{}` is
+           what a CONCOLIC handed no shape renders as, and it was also this site's own spelling for an object
+           operand until derived_operand_shape was routed here — so a census row `~{}[…]` quoted from an older
+           artifact and a row `~?[…]` measured today are ONE population under two spellings, and only the
+           second is greppable in this tree.
+           Building the site half WITHOUT the ordinal is worse than leaving it: three iterations of one loop
+           would name one object, so iteration 1's constraint would refine 2 and 3 and ARMS WOULD BE LOST
+           rather than duplicated.
+
+           AND WHAT A NAME BUYS IS THE COLLAPSE OF A REPEAT, NEVER OF A BREADTH — which decides how the fork
+           census is read after this lands, and reading it the other way makes a working namer look broken. A
+           named branch over an unknown value STILL FORKS: naming is what lets concolic_branch_decided refine
+           the SAME question asked again, so N DISTINCT named operands owe N distinct questions and exactly
+           the worlds they owed before. Collapsing those would be the wrong narrowing §Solver-half forbids.
+           So on a BREADTH document the win is that ONE site row of N becomes N predicate rows summing to N,
+           each with a replay slot — the frontier is unchanged and that is CORRECT — and only on a REPETITION
+           document does the frontier fall. Measured on frozen bytes, one intrinsic and one unknown key
+           branched R times, three runs each, identical: before the namer the frontier is 2^R and the forks
+           2^R - 1 (2/1, 4/3, 8/7 at R = 1, 2, 3), with a PAGE-CREATED base giving BYTE-IDENTICAL numbers —
+           which is what makes that base the control for this one. */
         char *nm = intrinsic_name(ctx, v);
         const char *nf[1];
         if (!nm) return NULL;
