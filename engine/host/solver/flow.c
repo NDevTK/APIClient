@@ -859,6 +859,46 @@ void flow_credit_emit(double v) {
  * NOT KEYED ON THE RUNNING FLOW, unlike the credit above: the observation is made about a specific flow's own
  * bytes and the caller already holds that flow, so passing it is what stops this becoming a second way to ask
  * which flow is running. */
+void flow_observe_replay(Flow *f, long consumed, long total) {
+    double frac;
+
+    DCHECK(f != NULL,
+           "an @S candidate's runway position was recorded against no flow — the fraction is a reading of ONE "
+           "flow's progress along ITS OWN recorded path, so a caller with no flow measured somebody else's");
+    DCHECK(f->cand_payload != NULL,
+           "a runway position was recorded for a flow carrying no payload — the runway is the approach to a "
+           "candidate's own source read, so a flow with no payload has no source read to be approaching and "
+           "would rank above every exploration flow on a measurement of nothing. The population is the caller's "
+           "to state, not this function's to sniff: decide.c asks the question only of a candidate");
+    DCHECK(total > 0 && consumed >= 0 && consumed <= total,
+           "an @S candidate's runway position is not a position on its own path — `consumed` is the arms this "
+           "run has REPLAYED and `total` the recorded path they are a prefix of, so a value outside [0,total] "
+           "is a numerator taken from one flow and a denominator from another, and the fraction it makes enters "
+           "the weight beside an optimism term whose entire range is 1.0");
+    /* PAST THE DELIVERY THIS RUNG IS PINNED AND MAY NOT BE WRITTEN, which is the ladder's own rule rather than
+       a guard: the source read is behind this flow, so the runway has stopped being the question, and a live
+       fraction here would rank a delivered candidate whose recorded path runs on past its source read BELOW an
+       undelivered one that happened to consume all of its own. Asserted rather than silently skipped, because
+       reaching this line in that state means dec_replay is still consuming arms for a flow whose own delivery
+       has been recorded — two components disagreeing about where this candidate stands. */
+    if (f->cand_rung >= FLOW_RUNG_DELIVERED) {
+        DCHECK(f->cand_replay == 1.0,
+               "a delivered @S candidate's runway rung is not pinned — flow_observe_rung pins it at the "
+               "delivery because past the source read the runway is not the question, so an unpinned value "
+               "here is that pin having been missed and the ladder's bottom two bands now overlap");
+        return;
+    }
+    frac = (double)consumed / (double)total;
+    /* MONOTONE, AND THAT IS THE INVARIANT AND NOT A CLAMP — flow_observe_survival's sentence, one rung down. A
+       candidate's recorded path is FIXED for its life, so the longest prefix any replay has consumed can only
+       be discovered and never undone: a lower reading is another sample of the same fixed question, and taking
+       it would demote a flow for a re-execution that diverged earlier than one before it. The early return is
+       what keeps the frontier from re-ranking for a rank that did not move. */
+    if (frac <= f->cand_replay) return;
+    f->cand_replay = frac;
+    frontier_rank_changed();
+}
+
 void flow_observe_survival(Flow *f, double frac) {
     DCHECK(f != NULL,
            "an @S candidate's surviving fraction was recorded against no flow — the distance is a fact about "
@@ -927,6 +967,16 @@ void flow_observe_rung(Flow *f, int rung) {
            "about to hand that same payload the whole ladder anyway");
     if (rung <= f->cand_rung) return;  /* not an improvement: the rank did not move, so nothing may re-rank */
     f->cand_rung = rung;
+    /* …AND THE RUNWAY BENEATH IT IS COMPLETE, BY DEFINITION AND NOT BY OBSERVATION. The ladder's rule is that a
+       flow cannot hold a rung without its predecessor, and rung zero is the approach to the source read this
+       delivery reports at — so past it the runway is not the question any more. Written HERE rather than left
+       to dec_replay because the recorded path may run on past the source read: a delivered candidate would
+       otherwise go on reading a fraction below 1.0 and rank beneath an UNDELIVERED one that happened to
+       consume all of its own path, which inverts the ladder at its first step. Pinned, the two bottom bands
+       are disjoint — [0, 0.2] undelivered against [0.4, 0.6] delivered — which is the whole reason the rung
+       below is worth having. Unconditional because a rung can only be reached once (the early return above),
+       and idempotent because 1.0 is the fraction's own ceiling. */
+    f->cand_replay = 1.0;
     frontier_rank_changed();
 }
 
@@ -1273,7 +1323,7 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
        that ran the sibling — or credited it — before handing it its account would have run it at a rank nobody
        chose, and the assignment would then silently erase whatever that run produced. */
     DCHECK(sib->val == 0.0 && sib->cpu == 0 && sib->cpu_gen == 0 && sib->visits == 0 && sib->picks == 0 &&
-           sib->cand_surv == 0.0 && sib->cand_rung == 0 && sib->path_forced == 0 &&
+           sib->cand_replay == 0.0 && sib->cand_surv == 0.0 && sib->cand_rung == 0 && sib->path_forced == 0 &&
            sib->family == sib->acct && sib->family->fam_us == 0 && sib->family->emit_gen == 0 &&
            sib->family->base == 0.0 && sib->family->earned == 0.0 && !sib->family->placed,
            "a forked sibling was credited, charged, DISPATCHED or DECIDED before it inherited its parent's "
@@ -1328,6 +1378,7 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
        "a term the fork does not carry" shape, and a list-of-fields assertion would have passed with the rung
        left behind — a candidate that had ARRIVED and ESCAPED could then re-enter the queue as one that had
        merely survived, by branching, which is worth two thirds of the comparator's whole range. */
+    sib->cand_replay = parent->cand_replay;
     sib->cand_surv = parent->cand_surv;
     sib->cand_rung = parent->cand_rung;
     /* AND THE FAMILY IT JOINS — the term the AGING reads AND the term the REWARD is, and the one line that
@@ -1370,9 +1421,13 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
        "prefer flows that have run" tiebreak). Any of those would make the two sides differ here, at the fork,
        instead of six minutes later in a progress line that says `finished 0`.
        RE-DERIVED FOR EVERY TERM, AND IT IS NOT AN ASSUMPTION CARRIED OVER. flow_weight is now
-       `fam_val + (cand_surv + cand_rung)/FLOW_RUNGS_N + 1/(1+visits) − (own_silence + fam_us)*RATE`, so a fork
-       must carry SEVEN things for this to hold and it carries exactly seven through SIX assignments:
-       `cand_surv` and `cand_rung` (copied above — the fitness comparator's two rung quantities), `visits`
+       `fam_val + (cand_replay + cand_surv + cand_rung)/FLOW_RUNGS_N + 1/(1+visits) − (own_silence + fam_us)*RATE`,
+       so a fork must carry EIGHT things for this to hold and it carries exactly eight through SEVEN
+       assignments: `cand_replay`, `cand_surv` and `cand_rung` (copied above — the fitness comparator's three
+       rung quantities, and the first of them is the one this enumeration most recently gained: the runway
+       fraction is a fact about the path both arms SHARE, and decide_fork_blob hands the sibling the parent's
+       cursor, so the two arms of one parent forked at two instants read it the same — which is the test this
+       equality structurally cannot make and the reason the term had to satisfy it by construction), `visits`
        (copied above — the optimism term's), `cpu` AND `cpu_gen` (copied above — the aging's own half is a
        reading and the mark that says which window it is a reading OF, and neither is that half without the
        other), and the family tag (joined above), which carries BOTH the reward and the aging's other half. Each addition to the formula has arrived through this
@@ -2927,7 +2982,13 @@ static double flow_queue_weight(const Flow *f) {
    never accumulated, so there is no stored reading anywhere that was written under the old denominator: the
    parked-candidate record ('c', cold.c) carries the substitution and not the ladder, and a resumed candidate
    re-earns every rung by replaying to its own source read. A renumbering here is therefore not a format
-   change, and it would be one the moment a rung crossed the tier. */
+   change, and it would be one the moment a rung crossed the tier.
+   THE DENOMINATOR HAS MOVED AGAIN SINCE, AND THE WORKED NUMBERS ABOVE ARE THE OLD LADDER'S. With the runway
+   fraction beneath it (flow.h) there are five rungs, so a delivery is two fifths of the range rather than a
+   quarter and the bands are [0, 0.2] undelivered, [0.4, 0.6] delivered, [0.6, 0.8] arrived, [0.8, 1.0]
+   escaped. The rescale is order-preserving among candidates for the same reason it was the last time — every
+   one that has any reading at all has the same rung added beneath it — and the ordering it newly creates,
+   between two candidates at different points of the SAME runway, is the one the whole rung exists for. */
 double flow_distance(const Flow *f) {
     DCHECK(f != NULL, "the fitness term was asked of no flow — it is a reading OF an item, so there is no item "
                       "here for it to be a reading of");
@@ -2937,7 +2998,7 @@ double flow_distance(const Flow *f) {
        parent's substitution a few lines later, and the rank-neutrality equality between those two points calls
        this function. So the invariant is asserted at engine.c's fork, where both halves are in place and where
        a field added to the candidate identity is already an obligation. */
-    return (f->cand_surv + (double)f->cand_rung) / (double)FLOW_RUNGS_N;
+    return (f->cand_replay + f->cand_surv + (double)f->cand_rung) / (double)FLOW_RUNGS_N;
 }
 
 /* THE RANGE OF EVERYTHING THE ORDER IS MADE OF EXCEPT THE REWARD — written as the DERIVATION and not as the
@@ -2959,7 +3020,9 @@ double flow_distance(const Flow *f) {
    work". What is bounded is how far a term may LIFT an item, because that is what decides whether a member can
    be put behind something other than a finding. */
 #define FLOW_NONREWARD_MAX ( 1.0 / (1.0 + 0.0)                                          /* optimism, zero visits */ \
-                           + (1.0 + (double)(FLOW_RUNGS_N - 1)) / (double)FLOW_RUNGS_N  /* distance, top rung   */ \
+                           + (1.0 + 1.0 + (double)(FLOW_RUNGS_N - 2)) / (double)FLOW_RUNGS_N /* distance: two   */ \
+                                                                                        /* fractions + the top  */ \
+                                                                                        /* boolean rung         */ \
                            - 0.0 * FLOW_AGE_QUANTUM )                                   /* aging, no silence    */
 
 /* WHAT THE ORDER IS MADE OF BESIDES THE REWARD, AND THE ONE PLACE THE CLAIM "THE REWARD IS THE ONLY UNRANGED

@@ -1300,6 +1300,28 @@ static int dec_replay(uint32_t asked) {
        an arm whose recorded question the branch re-asked — which is the whole of what this ledger claims. A
        count taken above the comparison would count ATTEMPTS, and an attempt is what a divergence also is. */
     g_replay_hits++;
+    /* …AND THE RUNWAY RUNG, OBSERVED HERE BECAUSE THIS IS THE ONLY LINE IN THE ENGINE THAT CONSUMES A RECORDED
+       ARM. §@S(i) requires every rung to have an observation site "STRICTLY BEFORE the thing it is a distance
+       to", and every rung the fitness had reported AT a sink or AT the source read — so a candidate crossing
+       eight hundred gates of its replay ranked exactly like one that had executed nothing, while two of the
+       four weight terms strictly FELL as it made that progress. This is the site that is before all of them.
+       THE NUMERATOR IS `g_c` AND IT IS HONEST ONLY AT THIS LINE, which is why the call is here and not at the
+       scheduler. The cursor advances on APPENDS too (dec_new_decision, dec_nonforking), so a candidate that
+       has diverged and forked nine hundred times would read a full path it never walked; taken on the far side
+       of the key comparison it is exactly the recorded path CONSUMED, which is the same reasoning the counter
+       one line up already rests on.
+       AND THE DENOMINATOR IS READ LIVE RATHER THAN STORED. A divergence ENDS the vector at the cursor
+       (dec_leave_path), which would make the fraction 1.0 for a path the flow abandoned — except that this
+       function asserts `g_c < dec_total()` at entry, so no reading is ever TAKEN after a truncation and the
+       last one taken was against the untruncated path. The observer is monotone, so the abandoned reading
+       cannot be walked back by a later, smaller one either.
+       THE POPULATION IS STATED HERE AND ASSERTED THERE. A runway is the approach to a CANDIDATE's own source
+       read, so the question is asked only of a flow that carries a payload; flow_observe_replay DCHECKs that
+       rather than tolerating a caller who does not, which is the shape flow_observe_survival already has. */
+    {
+        Flow *f = flow_running();
+        if (f && f->cand_payload) flow_observe_replay(f, g_c, dec_total());
+    }
     return arm;
 }
 

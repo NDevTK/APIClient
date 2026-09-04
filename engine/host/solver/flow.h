@@ -61,10 +61,35 @@ typedef struct FlowAcct FlowAcct;
    nonzero fraction under rung 0 would rank a flow that has delivered nothing beside one that has. No such
    flow exists: a survival fraction is measured only on bytes that entered the program, so the delivery is
    already recorded when it is taken, and flow_observe_survival asserts exactly that rather than trusting it. */
+/* AND THE PARAGRAPH ABOVE WAS RIGHT ABOUT THE OBJECTION AND WRONG ABOUT THE REMEDY, WHICH IS WHY THERE IS NOW
+   A RUNG BELOW THE DELIVERY. It says the delivery is "the one honest observation available in between", and
+   §@S(i) asks for a site "STRICTLY BEFORE the thing it is a distance to" — but the delivery IS the source
+   read. A site AT the thing is the outcome restated, which is this paragraph's own objection applied to the
+   answer it produced: with the delivery as the floor, a candidate 800 gates into its replay and one that has
+   not executed an opcode both still stand at exactly 0, and the sentence naming that as the defect stood four
+   lines above the rung that reproduced it. MEASURED: eight sinks at `substituted: 0`, no candidate reaching
+   its own source read, with the runway at ~866 statements and a fresh flow's optimism bonus outranking a
+   saturated frontier for about twelve quanta — which does not buy a traversal. Progress along the runway was
+   not merely unmeasured, it was PENALISED: no term of flow_weight rises there, and two of the four strictly
+   FALL as a candidate makes progress (the optimism decays per dispatch, the aging notch grows) while the
+   reward is frozen by construction.
+   THE RUNWAY'S OWN FRACTION IS THAT SITE, and it is the one quantity this codebase already computes there: how
+   far along its recorded path a candidate has REPLAYED. Its observation site is dec_replay, one arm at a time,
+   every one of them strictly before the source read the delivery reports at.
+   AND IT IS PINNED TO 1.0 AT THE DELIVERY, WHICH IS A DEFINITION AND NOT AN OBSERVATION — the ladder's rule is
+   that a flow cannot hold a rung without its predecessor, and past the source read the runway is no longer the
+   question. Left as a live fraction it would rank a delivered candidate whose recorded path runs on past its
+   source read BELOW an undelivered one that happened to consume all of its own, which inverts the ladder at
+   its first step. Pinned, the bands are disjoint and strictly ordered: undelivered [0, 0.2], delivered
+   [0.4, 0.6], arrived [0.6, 0.8], escaped [0.8, 1.0].
+   THE RANGE IS STILL EXACTLY 1.0 — two fractional rungs plus three booleans over a denominator of five — so
+   the price against the optimism term is unchanged, and flow.c's flow_silence_us_to_sink reads FLOW_RUNGS_N
+   rather than a literal so it moved with this and did not have to be redone. What DID change is what each
+   reading is WORTH: a delivery was a quarter of the range and is now two fifths. */
 #define FLOW_RUNG_DELIVERED 1 /* this flow's payload was substituted into the page's own program — a SOURCE read */
 #define FLOW_RUNG_ARRIVED   2 /* this flow's breakout reached the sink its own search is for */
 #define FLOW_RUNG_ESCAPED   3 /* …and stood there in a position the sink's own language executes */
-#define FLOW_RUNGS_N        4 /* the fractional rung plus the three above it — the comparator's denominator */
+#define FLOW_RUNGS_N        5 /* the TWO fractional rungs plus the three above them — the comparator's denominator */
 
 /* WHAT ONE STEP OF A FLOW ANSWERED. OWED is not a third kind of flow — it is the same flow reporting that the
    work it has left belongs to the host, so the scheduler can tell an exhausted frontier from a waiting one
@@ -365,10 +390,26 @@ typedef struct Flow {
        distance is an OBSERVATION of a re-execution, and a resumed session has not made it. A parked candidate
        comes back at zero and re-earns it from its first arrival, which is what keeps the number a measurement
        of this session's runs rather than a rank inherited from a run nobody watched. */
+    /* RUNG ZERO, HELD AS THE FRACTION IT IS: how far along its own recorded path this candidate has REPLAYED,
+       in [0,1] — the runway, and the only rung whose observation site is strictly before the source read.
+       IT IS THE REPLAYED ARMS AND NOT THE RAW CURSOR, which is the difference between a distance travelled and
+       a distance claimed. `g_c` advances on APPENDS as well as on replays, so a diverged candidate that forks
+       nine hundred times would read a full path it never walked; dec_replay moves the cursor only on the far
+       side of the key comparison — an arm whose recorded question the branch actually re-asked — so a reading
+       taken there is the path CONSUMED. The denominator is read live at that same site rather than stored,
+       which is sound for one reason worth stating: a divergence ENDS the vector at the cursor, and dec_replay
+       asserts `g_c < dec_total()` at entry, so no reading is ever taken after a truncation and the last one
+       taken was against the untruncated path.
+       MONOTONE WITHIN A RUN, for flow_observe_survival's reason exactly: a candidate's recorded path is fixed
+       for its life, so the longest prefix any replay has consumed can only be discovered, never undone, and a
+       lower reading is another sample of the same fixed question rather than a demotion.
+       IT DOES NOT CROSS THE COLD TIER, like every other term of this comparator: a distance is an OBSERVATION
+       of a re-execution and a resumed session has not made it. */
+    double cand_replay;
     /* RUNG ONE, HELD AS THE FRACTION IT IS: the best fraction of this flow's own payload that any re-execution
-       has been observed to deliver to any code-execution sink, in [0,1]. It is the only rung that is not a
-       boolean, because "how much of what the page was given is still alive" has degrees and the other two do
-       not. */
+       has been observed to deliver to any code-execution sink, in [0,1]. It is not the only fractional rung any
+       more — the runway above it is the other — and it is still not a boolean, because "how much of what the
+       page was given is still alive" has degrees and the two sink rungs do not. */
     double cand_surv;
     /* …AND THE BOOLEAN RUNGS, AS A COUNT RATHER THAN AS BITS, because they are ORDERED and a count is what
        makes the order the arithmetic instead of a convention: 0 = this flow's bytes are not in the program at
@@ -1978,6 +2019,15 @@ double flow_distance(const Flow *f);
    IT ASSERTS THE RUNG BELOW IT, which is the flow-side half of the precondition solve.c's three candidate-arm
    sink entries state: a fraction is the surviving run of THIS flow's payload, so a flow whose payload is not
    in the program has nothing for the number to be a fraction of and the run found is the page's own text. */
+/* A CANDIDATE HAS REPLAYED PART OF ITS OWN RECORDED PATH — rung zero, the runway, and the observation §@S(i)
+ * requires that no site in this engine was making. `consumed` is the arms this run has replayed and `total` the
+ * recorded path they are a prefix of; the reading is their ratio and NOTHING is accumulated. Called from
+ * decide.c's dec_replay, one arm at a time, each strictly before the source read the delivery reports at.
+ * A READING AND NOT A PAYMENT, so it is written rather than added and says the same thing however many times it
+ * is taken — the distinction flow_observe_survival's banner draws between a comparator and a ledger, and the
+ * one that makes a fitness usable at all. */
+void  flow_observe_replay(Flow *f, long consumed, long total);
+
 void  flow_observe_survival(Flow *f, double frac);
 /* …AND THE RUNGS THAT THIS FLOW'S BYTES HAVE NOW REACHED — FLOW_RUNG_DELIVERED, _ARRIVED or _ESCAPED.
    SAME RULES, SECOND QUANTITY, AND IT IS A SEPARATE ENTRY POINT BECAUSE THE OBSERVATIONS ARE MADE AT SEPARATE
