@@ -136,18 +136,56 @@ static void range_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_fun
     range_bounds_mark(rt, b, mark_func);
 }
 
-/* The receiver, brand-checked against §5.5's own class — NOT against AbstractRange's list, because a
-   StaticRange has none of these members and `Range.prototype.setStart.call(staticRange)` must be a TypeError
-   rather than a live edit of an object the spec says never moves. */
-static RangeBounds *range_here(JSContext *ctx, JSValueConst v)
+/* DOES THIS VALUE IMPLEMENT `Range` — Web IDL §3.7 Interfaces' implementation-check an object step 3, "If
+   object does not implement interface, then throw a TypeError.", as the PREDICATE core/idl_args' idl_this_iface
+   takes. §3.7.7 Operations' create an operation function asks it at step 2.1.2.3, BEFORE step 2.1.4 computes
+   the effective overload set, so a member that states it at its DECLARATION refuses a foreign receiver before
+   §3.6 Overload resolution algorithm converts an argument. That order is OBSERVABLE here and not a nicety:
+   `setStart`'s second position is IDL_UNSIGNED_LONG and `createContextualFragment`'s only one is IDL_DOMSTRING,
+   so a body test lets `Range.prototype.setStart.call({}, node, {valueOf(){ … }})` run the PAGE'S OWN CODE and
+   throw afterwards, where a browser throws with none of it having run.
+
+   BRAND-CHECKED AGAINST §5.5's OWN CLASS — NOT against AbstractRange's list, because a StaticRange has none of
+   these members and `Range.prototype.setStart.call(staticRange)` must be a TypeError rather than a live edit of
+   an object the spec says never moves.
+
+   AND IT ANSWERS `b != NULL` FOR FREE, which is what lets a converted body ASSERT where it used to BRANCH: an
+   object of this class always carries its record (range_finalizer says why — one mint, nothing between that can
+   throw), so this is exactly the test range_here already made, and a receiver it admits has a record in EVERY
+   build. The declaration is therefore the guard that survives release; the DCHECK below it asserts only that
+   the declaration was made, so nothing here promotes a dev-only check into a release dereference. */
+static bool range_is(JSValueConst v)
+{
+    return JS_GetOpaque(v, g_range_class) != NULL;
+}
+
+/* THE RECORD FOR A RECEIVER §3.7 HAS ALREADY ADMITTED — every §5.5 OPERATION, whose declaration states the
+   interface above. Reaching a body means idl_implementation_check ran and passed, so the only condition left
+   for this to fire on is a member installed WITHOUT its brand, which is this engine's own routing being wrong
+   and not a fact about page input. */
+static RangeBounds *range_receiver(JSValueConst v)
 {
     RangeBounds *b = JS_GetOpaque(v, g_range_class);
-    if (!b) {
+
+    DCHECK(b != NULL, "a §5.5 member reached its body on a receiver that is not a Range — its declaration "
+                      "states Web IDL §3.7 Interfaces' implementation check, so reaching the body means "
+                      "idl_implementation_check did not run for it");
+    cow_capture_host_record(v, b, &RANGE_BOUNDS_REC);
+    return b;
+}
+
+/* THE SAME QUESTION FOR THE ONE MEMBER THAT CANNOT STATE IT. `commonAncestorContainer` is minted by
+   idl_install_accessor as a plain JS_CFUNC_getter_magic with no pool entry, so it converges on nothing that
+   could ask §3.7 for it — the residual core/idl_args.c names at the site it would reach. ONE ANSWER TO ONE
+   QUESTION: this routes to the predicate above, so the two ways into a §5.5 member cannot drift. When a plain
+   getter gains a pool entry, this function goes with it. */
+static RangeBounds *range_here(JSContext *ctx, JSValueConst v)
+{
+    if (!range_is(v)) {
         JS_ThrowTypeError(ctx, "not a Range");
         return NULL;
     }
-    cow_capture_host_record(v, b, &RANGE_BOUNDS_REC);
-    return b;
+    return range_receiver(v);
 }
 
 static lxb_dom_node_t *bounds_start(const RangeBounds *b) { return node_of(b->start_node); }
@@ -466,12 +504,11 @@ static const char *const R_WHAT[R_MEMBER_N] = {
 
 static JSValue js_range_member(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    RangeBounds *b = range_here(ctx, this_val);
+    RangeBounds *b = range_receiver(this_val);
     JSValueConst nodev = argc > 0 ? argv[0] : JS_UNDEFINED;
     lxb_dom_node_t *n;
     uint32_t off = 0;
 
-    if (!b) return JS_EXCEPTION;
     switch (magic) {
     case R_SET_START:
     case R_SET_END:
@@ -771,11 +808,10 @@ int range_str_step(JSContext *ctx, JSStepHdr *hdr, RangeStrState *s, RangeBounds
 static int js_range_to_string(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                               JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
-    RangeBounds *b = range_here(ctx, hdr->this_val);
+    RangeBounds *b = range_receiver(hdr->this_val);
 
     (void)argc; (void)argv; (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
-    if (!b) return JS_STEP_ABRUPT;
     return range_str_step(ctx, hdr, st, b, presult);
 }
 
@@ -1027,8 +1063,7 @@ static int rx_run(JSContext *ctx, JSStepHdr *hdr, RxState *s, int move, int base
     if (!s->sp) {
         /* THE TOP FRAME IS THE RECEIVER'S OWN RANGE — read here and nowhere else, because everything below is
            stated over the four values step 3 snapshots. */
-        RangeBounds *b = range_here(ctx, hdr->this_val);
-        if (!b) return JS_STEP_ABRUPT;
+        RangeBounds *b = range_receiver(hdr->this_val);
         f = rx_push(ctx, s);
         f->sn = bounds_start(b);
         f->so = b->start_off;
@@ -1089,10 +1124,9 @@ static int rx_run(JSContext *ctx, JSStepHdr *hdr, RxState *s, int move, int base
             /* STEPS 12-15, AND ONLY FOR THE PAGE'S OWN RANGE. A subrange is not a live range in this engine
                (see RxFrame) and nothing reads its position after this point, so moving it would be writing a
                value with no reader — the observable half of these steps is the receiver's. */
-            RangeBounds *b = range_here(ctx, hdr->this_val);
+            RangeBounds *b = range_receiver(hdr->this_val);
             lxb_dom_node_t *nn;
             uint32_t no;
-            if (!b) return JS_STEP_ABRUPT;
             range_collapse_point(f->sn, f->en, f->so, &nn, &no);
             {
                 JSValue w = node_wrap(ctx, nn);
@@ -1336,8 +1370,7 @@ static int rd_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
 
     (void)argc; (void)argv; (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
-    b = range_here(ctx, hdr->this_val);
-    if (!b) return JS_STEP_ABRUPT;
+    b = range_receiver(hdr->this_val);
     return range_del_step(ctx, hdr, st, b, presult);
 }
 
@@ -1412,11 +1445,10 @@ static int rs_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
                    JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
     RsState *s = st;
-    RangeBounds *b = range_here(ctx, hdr->this_val);
+    RangeBounds *b = range_receiver(hdr->this_val);
     lxb_dom_node_t *np = argc > 0 ? node_of(argv[0]) : NULL;
 
     (void)out_cb; (void)out_argc;
-    if (!b) { JS_FreeValue(ctx, cb_result); return JS_STEP_ABRUPT; }
     DCHECK(np != NULL, "surroundContents reached the body with something that is not a node");
 
     if (hdr->stage == RS_CHECK) {
@@ -1538,14 +1570,13 @@ static int js_range_contextual_fragment(JSContext *ctx, JSStepHdr *hdr, void *st
         hdr->stage = FRAG_START;
     }
     if (hdr->stage == FRAG_START) {
-        RangeBounds *b = range_here(ctx, hdr->this_val);
+        RangeBounds *b = range_receiver(hdr->this_val);
         lxb_dom_element_t *el = NULL;
         lxb_dom_document_fragment_t *out;
         lxb_dom_document_t *doc;
         lxb_dom_node_t *node;
         const char *html;
 
-        if (!b) return JS_STEP_ABRUPT;                                  /* the receiver is not a Range */
         node = bounds_start(b);                                         /* STEP 2 */
         DCHECK(node != NULL,
                "§8.5.7 step 2 read a Range's start node and found none — §5.5 gives every live range two "
@@ -1787,10 +1818,9 @@ enum { R_CLIENT_RECTS = 0, R_BOUNDING_RECT };
 
 static JSValue js_range_rects(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    RangeBounds *b = range_here(ctx, this_val);
+    RangeBounds *b = range_receiver(this_val);
 
     (void)argc; (void)argv;
-    if (!b) return JS_EXCEPTION;
     if (magic == R_CLIENT_RECTS) return range_client_rects(ctx, b);
     DCHECK(magic == R_BOUNDING_RECT, "a CSSOM VIEW §9 Range member was declared with a magic neither of the two "
                                      "members the partial interface declares carries");
@@ -1840,40 +1870,58 @@ void range_init(JSContext *ctx)
 
     for (k = 0; k < R_MEMBER_N; k++) g_id[k] = -1;
     g_id[R_SET_START] = idl_method_id(ctx, NODE_OFFSET, 2, js_range_member, R_SET_START);
+    idl_this_iface(range_is, "Range");
     idl_iface_brand(node_class_id());
     g_id[R_SET_END] = idl_method_id(ctx, NODE_OFFSET, 2, js_range_member, R_SET_END);
+    idl_this_iface(range_is, "Range");
     idl_iface_brand(node_class_id());
     for (k = R_SET_START_BEFORE; k <= R_SET_END_AFTER; k++) {
         g_id[k] = idl_method_id(ctx, ONE_NODE, 1, js_range_member, k);
+        idl_this_iface(range_is, "Range");
         idl_iface_brand(node_class_id());
     }
     g_id[R_COLLAPSE] = idl_method_id(ctx, ONE_BOOL, 1, js_range_member, R_COLLAPSE);
+    idl_this_iface(range_is, "Range");
     idl_optional_from(0);
     g_id[R_SELECT_NODE] = idl_method_id(ctx, ONE_NODE, 1, js_range_member, R_SELECT_NODE);
+    idl_this_iface(range_is, "Range");
     idl_iface_brand(node_class_id());
     g_id[R_SELECT_CONTENTS] = idl_method_id(ctx, ONE_NODE, 1, js_range_member, R_SELECT_CONTENTS);
+    idl_this_iface(range_is, "Range");
     idl_iface_brand(node_class_id());
     g_id[R_CLONE] = idl_method_id(ctx, NULL, 0, js_range_member, R_CLONE);
+    idl_this_iface(range_is, "Range");
     g_id[R_DETACH] = idl_method_id(ctx, NULL, 0, js_range_member, R_DETACH);
+    idl_this_iface(range_is, "Range");
     /* `short compareBoundaryPoints(unsigned short how, Range sourceRange)` — the interface arm brands against
        THIS class, so a StaticRange or a plain object is a TypeError before step 1. */
     g_id[R_COMPARE_BP] = idl_method_id(ctx, HOW_RANGE, 2, js_range_member, R_COMPARE_BP);
+    idl_this_iface(range_is, "Range");
     idl_iface_brand(g_range_class);
     g_id[R_IS_POINT_IN] = idl_method_id(ctx, NODE_OFFSET, 2, js_range_member, R_IS_POINT_IN);
+    idl_this_iface(range_is, "Range");
     idl_iface_brand(node_class_id());
     g_id[R_COMPARE_POINT] = idl_method_id(ctx, NODE_OFFSET, 2, js_range_member, R_COMPARE_POINT);
+    idl_this_iface(range_is, "Range");
     idl_iface_brand(node_class_id());
     g_id[R_INTERSECTS] = idl_method_id(ctx, ONE_NODE, 1, js_range_member, R_INTERSECTS);
+    idl_this_iface(range_is, "Range");
     idl_iface_brand(node_class_id());
     g_id[R_INSERT_NODE] = idl_method_id(ctx, ONE_NODE, 1, js_range_member, R_INSERT_NODE);
+    idl_this_iface(range_is, "Range");
     idl_iface_brand(node_class_id());
     g_id_to_string = idl_method_id_step(ctx, NULL, 0, NULL, 0, &RANGE_TO_STRING, 0);
+    idl_this_iface(range_is, "Range");
     /* §5.5's five content-moving members. The three that take no argument declare none; surroundContents takes
        a `Node newParent`, whose interface arm brands it before step 1 runs. */
     g_id_delete = idl_method_id_step(ctx, NULL, 0, NULL, 0, &RANGE_DELETE, 0);
+    idl_this_iface(range_is, "Range");
     g_id_extract = idl_method_id_step(ctx, NULL, 0, NULL, 0, &RANGE_EXTRACT, RX_EXTRACT);
+    idl_this_iface(range_is, "Range");
     g_id_clone_contents = idl_method_id_step(ctx, NULL, 0, NULL, 0, &RANGE_EXTRACT, RX_CLONE_CONTENTS);
+    idl_this_iface(range_is, "Range");
     g_id_surround = idl_method_id_step(ctx, ONE_NODE, 1, NULL, 0, &RANGE_SURROUND, 0);
+    idl_this_iface(range_is, "Range");
     idl_iface_brand(node_class_id());
     /* HTML §8.5.7's `partial interface Range` — `[CEReactions, NewObject] DocumentFragment
        createContextualFragment((TrustedHTML or DOMString) string)`. ONE REQUIRED argument, so no
@@ -1888,9 +1936,12 @@ void range_init(JSContext *ctx)
        queue, so a custom element the placement upgrades runs its reactions at this member's epilogue like
        any other. */
     g_id_contextual_fragment = idl_method_id_step(ctx, ONE_HTML, 1, NULL, 0, &RANGE_CONTEXTUAL_FRAGMENT, 0);
+    idl_this_iface(range_is, "Range");
     /* CSSOM VIEW §9's `partial interface Range` — neither member takes an argument. */
     g_id_client_rects = idl_method_id(ctx, NULL, 0, js_range_rects, R_CLIENT_RECTS);
+    idl_this_iface(range_is, "Range");
     g_id_bounding_rect = idl_method_id(ctx, NULL, 0, js_range_rects, R_BOUNDING_RECT);
+    idl_this_iface(range_is, "Range");
 
     /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. Every one of these twenty-four
        slots was held by a release that gave NONE of them back: `range_free` closed the live list and returned,

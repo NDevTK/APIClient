@@ -79,16 +79,47 @@ static void tw_set_at(JSContext *ctx, WalkerData *w, JSValue *slot, JSValue v,
 }
 #define tw_set(ctx_, w_, slot_, v_) tw_set_at((ctx_), (w_), (slot_), (v_), __FILE__, __LINE__)
 
-/* The receiver, brand-checked. Every member of §6.2 is declared on the prototype, so a page can apply one to
-   anything at all and the answer is a TypeError rather than a walk of nothing. */
-static WalkerData *walker_here(JSContext *ctx, JSValueConst v)
+/* DOES THIS VALUE IMPLEMENT `TreeWalker` — Web IDL §3.7 Interfaces' implementation-check an object step 3, "If
+   object does not implement interface, then throw a TypeError.", as the PREDICATE core/idl_args' idl_this_iface
+   takes. §3.7.7 Operations' create an operation function asks it at step 2.1.2.3, BEFORE step 2.1.4 computes
+   the effective overload set, so a member stating it at its DECLARATION refuses a foreign receiver ahead of
+   §3.6 Overload resolution algorithm's conversions — an order a body cannot reproduce, because a body runs
+   AFTER every conversion. §3.7.6 Attributes' setter opening steps ask the same question at the same point,
+   which is why `currentNode`'s setter states it too and no longer tests its receiver by hand.
+   PURE, DELIBERATELY: it is called by the brand check and must not capture the record into a flow's delta for a
+   receiver that is about to be refused. walker_of's capture belongs to the members that ACCEPT one. */
+static bool walker_is(JSValueConst v)
+{
+    return JS_GetOpaque(v, g_walker_class) != NULL;
+}
+
+/* THE RECORD FOR A RECEIVER §3.7 HAS ALREADY ADMITTED — §6.2's seven operations and its `currentNode` setter,
+   whose declarations state the interface above. Reaching a body means idl_implementation_check ran and passed,
+   so the only condition left for this to fire on is a member installed WITHOUT its brand: this engine's own
+   routing being wrong, never a fact about page input. */
+static WalkerData *walker_receiver(JSValueConst v)
 {
     WalkerData *w = walker_of(v);
-    if (!w) {
+
+    DCHECK(w != NULL, "a §6.2 member reached its body on a receiver that is not a TreeWalker — its declaration "
+                      "states Web IDL §3.7 Interfaces' implementation check, so reaching the body means "
+                      "idl_implementation_check did not run for it");
+    return w;
+}
+
+/* THE SAME QUESTION FOR THE MEMBERS THAT CANNOT STATE IT — §6.2's four ATTRIBUTE GETTERS, which
+   idl_install_accessor mints as plain JS_CFUNC_getter_magic functions with no pool entry, so they converge on
+   nothing that could ask §3.7 for them: the residual core/idl_args.c names at the site it would reach. Note the
+   SPLIT at `currentNode`, whose SETTER has a pool entry and whose GETTER does not — the two halves of one
+   attribute are checked at two places until that residual closes. ONE ANSWER TO ONE QUESTION: this routes to
+   the predicate above, so they cannot disagree meanwhile. */
+static WalkerData *walker_here(JSContext *ctx, JSValueConst v)
+{
+    if (!walker_is(v)) {
         JS_ThrowTypeError(ctx, "not a TreeWalker");
         return NULL;
     }
-    return w;
+    return walker_receiver(v);
 }
 
 static void walker_finalizer(JSRuntime *rt, JSValue val)
@@ -220,11 +251,10 @@ static int tw_parent_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
                           JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
     TreeWalkState *s = st;
-    WalkerData *w = walker_here(ctx, hdr->this_val);
+    WalkerData *w = walker_receiver(hdr->this_val);
     int r;
 
     (void)argc; (void)argv;
-    if (!w) { JS_FreeValue(ctx, cb_result); return JS_STEP_ABRUPT; }
 
     if (hdr->stage == TWP_ASCEND) {
         JS_FreeValue(ctx, cb_result);
@@ -278,11 +308,10 @@ static int tw_children_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
                             JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
     TreeWalkState *s = st;
-    WalkerData *w = walker_here(ctx, hdr->this_val);
+    WalkerData *w = walker_receiver(hdr->this_val);
     int type = idl_step_magic(hdr), r;
 
     (void)argc; (void)argv;
-    if (!w) { JS_FreeValue(ctx, cb_result); return JS_STEP_ABRUPT; }
 
     if (hdr->stage == TWC_ENTER) {
         JS_FreeValue(ctx, cb_result);
@@ -341,11 +370,10 @@ static int tw_siblings_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
                             JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
     TreeWalkState *s = st;
-    WalkerData *w = walker_here(ctx, hdr->this_val);
+    WalkerData *w = walker_receiver(hdr->this_val);
     int type = idl_step_magic(hdr), r;
 
     (void)argc; (void)argv;
-    if (!w) { JS_FreeValue(ctx, cb_result); return JS_STEP_ABRUPT; }
 
     if (hdr->stage == TWS_ENTER) {
         JS_FreeValue(ctx, cb_result);
@@ -408,11 +436,10 @@ static int tw_previous_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
                             JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
     TreeWalkState *s = st;
-    WalkerData *w = walker_here(ctx, hdr->this_val);
+    WalkerData *w = walker_receiver(hdr->this_val);
     int r;
 
     (void)argc; (void)argv;
-    if (!w) { JS_FreeValue(ctx, cb_result); return JS_STEP_ABRUPT; }
 
     if (hdr->stage == TWV_ENTER) {
         JS_FreeValue(ctx, cb_result);
@@ -489,11 +516,10 @@ static int tw_next_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
                         JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
     TreeWalkState *s = st;
-    WalkerData *w = walker_here(ctx, hdr->this_val);
+    WalkerData *w = walker_receiver(hdr->this_val);
     int r;
 
     (void)argc; (void)argv;
-    if (!w) { JS_FreeValue(ctx, cb_result); return JS_STEP_ABRUPT; }
 
     if (hdr->stage == TWN_ENTER) {
         JS_FreeValue(ctx, cb_result);
@@ -571,10 +597,9 @@ static JSValue js_walker_get(JSContext *ctx, JSValueConst this_val, int magic)
    brand-checked by the declaration's IDL_INTERFACE, so a non-Node threw before this ran. */
 static JSValue js_walker_set_current(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
-    WalkerData *w = walker_here(ctx, this_val);
+    WalkerData *w = walker_receiver(this_val);
 
     (void)magic;
-    if (!w) return JS_EXCEPTION;
     tw_set(ctx, w, &w->current, JS_DupValue(ctx, val));
     return JS_UNDEFINED;
 }
@@ -592,16 +617,29 @@ void tree_walker_init(JSContext *ctx)
     JS_NewClass(g_walker_rt, g_walker_class, &d);
     node_filter_init(ctx);
 
+    /* EVERY ONE OF THEM STATES ITS RECEIVER INTERFACE — see walker_is. A member that does not is not merely
+       unchecked here: its body would have to test by hand, AFTER §3.6's conversions, which is the one order a
+       page can tell apart. */
     g_id_parent   = idl_method_id_step(ctx, NULL, 0, NULL, 0, &TW_PARENT, 0);
+    idl_this_iface(walker_is, "TreeWalker");
     g_id_first    = idl_method_id_step(ctx, NULL, 0, NULL, 0, &TW_CHILDREN, TWC_FIRST);
+    idl_this_iface(walker_is, "TreeWalker");
     g_id_last     = idl_method_id_step(ctx, NULL, 0, NULL, 0, &TW_CHILDREN, TWC_LAST);
+    idl_this_iface(walker_is, "TreeWalker");
     g_id_next_sib = idl_method_id_step(ctx, NULL, 0, NULL, 0, &TW_SIBLINGS, TWC_FIRST);
+    idl_this_iface(walker_is, "TreeWalker");
     g_id_prev_sib = idl_method_id_step(ctx, NULL, 0, NULL, 0, &TW_SIBLINGS, TWC_LAST);
+    idl_this_iface(walker_is, "TreeWalker");
     g_id_prev     = idl_method_id_step(ctx, NULL, 0, NULL, 0, &TW_PREVIOUS, 0);
+    idl_this_iface(walker_is, "TreeWalker");
     g_id_next     = idl_method_id_step(ctx, NULL, 0, NULL, 0, &TW_NEXT, 0);
+    idl_this_iface(walker_is, "TreeWalker");
     /* `attribute Node currentNode` — an INTERFACE type, so `walker.currentNode = null` is a TypeError from the
-       declaration and never from a check this body would have to remember. */
+       declaration and never from a check this body would have to remember. The RECEIVER is declared for the
+       same reason and at the same place: §3.7.6 Attributes' setter opening steps brand-check `this` before the
+       assigned value is converted, so both facts about this setter are stated here and neither is a body test. */
     g_id_set_current = idl_setter_id(ctx, IDL_INTERFACE, false, js_walker_set_current, 0);
+    idl_this_iface(walker_is, "TreeWalker");
     idl_iface_brand(node_class_id());
 
     realm_declare_intrinsic(tree_walker_install_proto);

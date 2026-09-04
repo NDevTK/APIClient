@@ -118,14 +118,46 @@ static void ni_set_at(JSContext *ctx, IterData *it, JSValue *slot, JSValue v,
 }
 #define ni_set(ctx_, it_, slot_, v_) ni_set_at((ctx_), (it_), (slot_), (v_), __FILE__, __LINE__)
 
-static IterData *iter_here(JSContext *ctx, JSValueConst v)
+/* DOES THIS VALUE IMPLEMENT `NodeIterator` — Web IDL §3.7 Interfaces' implementation-check an object step 3,
+   "If object does not implement interface, then throw a TypeError.", as the PREDICATE core/idl_args'
+   idl_this_iface takes. §3.7.7 Operations' create an operation function asks it at step 2.1.2.3, BEFORE step
+   2.1.4 computes the effective overload set, so a member stating it at its DECLARATION refuses a foreign
+   receiver ahead of §3.6 Overload resolution algorithm's conversions — an order a body cannot reproduce.
+   §6.1's three operations take no argument, so nothing of the page's runs between the two orders TODAY; the
+   declaration is still where the brand belongs, because what keeps that true is the ARGUMENT LIST, which is
+   the one thing a later partial interface can change without touching this file.
+   PURE, DELIBERATELY: it is called by the brand check and must not capture the record into a flow's delta for
+   a receiver that is about to be refused. iter_of's capture belongs to the members that ACCEPT one. */
+static bool iter_is(JSValueConst v)
+{
+    return JS_GetOpaque(v, g_iter_class) != NULL;
+}
+
+/* THE RECORD FOR A RECEIVER §3.7 HAS ALREADY ADMITTED — §6.1's three operations, whose declarations state the
+   interface above. Reaching a body means idl_implementation_check ran and passed, so the only condition left
+   for this to fire on is a member installed WITHOUT its brand: this engine's own routing, never page input. */
+static IterData *iter_receiver(JSValueConst v)
 {
     IterData *it = iter_of(v);
-    if (!it) {
+
+    DCHECK(it != NULL, "a §6.1 member reached its body on a receiver that is not a NodeIterator — its "
+                       "declaration states Web IDL §3.7 Interfaces' implementation check, so reaching the body "
+                       "means idl_implementation_check did not run for it");
+    return it;
+}
+
+/* THE SAME QUESTION FOR THE MEMBERS THAT CANNOT STATE IT — §6.1's five ATTRIBUTE GETTERS, which
+   idl_install_accessor mints as plain JS_CFUNC_getter_magic functions with no pool entry, so they converge on
+   nothing that could ask §3.7 for them: the residual core/idl_args.c names at the site it would reach. ONE
+   ANSWER TO ONE QUESTION: this routes to the predicate above, so the two ways into a §6.1 member cannot drift.
+   When a plain getter gains a pool entry, this function goes with it. */
+static IterData *iter_here(JSContext *ctx, JSValueConst v)
+{
+    if (!iter_is(v)) {
         JS_ThrowTypeError(ctx, "not a NodeIterator");
         return NULL;
     }
-    return it;
+    return iter_receiver(v);
 }
 
 static void iter_finalizer(JSRuntime *rt, JSValue val)
@@ -284,12 +316,11 @@ static int ni_traverse_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
                             JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
     NodeIterState *s = st;
-    IterData *it = iter_here(ctx, hdr->this_val);
+    IterData *it = iter_receiver(hdr->this_val);
     int type = idl_step_magic(hdr), result = 0, r;
     lxb_dom_node_t *root;
 
     (void)argc; (void)argv;
-    if (!it) { JS_FreeValue(ctx, cb_result); return JS_STEP_ABRUPT; }
     root = node_of(it->t.root);
     DCHECK(root != NULL, "a NodeIterator's root is not a node");
 
@@ -378,12 +409,17 @@ static JSValue js_iter_get(JSContext *ctx, JSValueConst this_val, int magic)
 
 /* §6.1: "The detach() method steps are to do nothing." The functionality was REMOVED from the standard and the
    member kept for compatibility, so a no-effect body here is the spec's own text and not a stub — it is the one
-   shape §NO STUBS exempts, and the brand check is what keeps it from being a no-op on anything at all. */
+   shape §NO STUBS exempts. What keeps it from being a no-op on ANYTHING AT ALL is its declaration's receiver
+   interface: `NodeIterator.prototype.detach.call({})` is §3.7 step 3's TypeError, decided before this runs.
+   THE CALL BELOW IS THE ASSERTION AND NOT THE CHECK, and this is the member that most needs one — a body that
+   does nothing cannot LOOK wrong, so a detach whose brand was never declared would answer `undefined` for every
+   receiver on earth and no test of its behaviour could tell. Asserting the routing here is the only thing that
+   would say so. */
 static JSValue js_iter_detach(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    IterData *it = iter_here(ctx, this_val);
-    (void)argc; (void)argv; (void)magic;
-    return it ? JS_UNDEFINED : JS_EXCEPTION;
+    (void)ctx; (void)argc; (void)argv; (void)magic;
+    iter_receiver(this_val);
+    return JS_UNDEFINED;
 }
 
 static int g_id_next = -1, g_id_prev = -1, g_id_detach = -1;
@@ -398,8 +434,11 @@ void node_iterator_init(JSContext *ctx)
     node_filter_init(ctx);
 
     g_id_next   = idl_method_id_step(ctx, NULL, 0, NULL, 0, &NI_TRAVERSE, NI_NEXT);
+    idl_this_iface(iter_is, "NodeIterator");
     g_id_prev   = idl_method_id_step(ctx, NULL, 0, NULL, 0, &NI_TRAVERSE, NI_PREVIOUS);
+    idl_this_iface(iter_is, "NodeIterator");
     g_id_detach = idl_method_id(ctx, NULL, 0, js_iter_detach, 0);
+    idl_this_iface(iter_is, "NodeIterator");
 
     realm_declare_intrinsic(node_iterator_install_proto);
 }
