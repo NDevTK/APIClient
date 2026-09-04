@@ -1541,14 +1541,43 @@ static int dec_replay(uint32_t asked) {
    arm PRIMARY; the forced sibling drops the contradicted example, so only gate-DEPENDENT values degrade to a
    shape while gate-independent values stay concrete" — and with TRUE hardcoded the first clause was false, so
    the second clause was being asked of the wrong sibling. `if (cfg.admin)` over a loaded `false` kept the
-   ADMIN arm as the primary and pushed the arm a real session takes into a sibling, which is not a fairness
-   question (both arms run, both are ranked identically) but a REPORTING one: the primary is the flow whose
-   values are the ones a session would have computed, and every @H value on it is stated as observed.
+   ADMIN arm as the primary and pushed the arm a real session takes into a sibling, which is a REPORTING
+   question: the primary is the flow whose values are the ones a session would have computed, and every @H
+   value on it is stated as observed.
+   IT IS A FAIRNESS QUESTION TOO, AND THIS SENTENCE USED TO SAY IT WAS NOT. "Both arms run, both are ranked
+   identically" is true AT the branch and stops being true one quantum later: only the kept arm goes on
+   running, and what it becomes is a POPULATION while its sibling stays one member. §ONE WFQ policy's
+   correction is the reason — aging "is TRUE OF A MONOPOLIZING RUNNER AND FALSE OF A MONOPOLIZING BRANCHER",
+   because a fork COPIES the charge, so N members of the kept arm share the debt of the one that ran and the
+   parked sibling sits frozen at the identical charge. Rank-neutrality is a statement about MEMBERS, and this
+   line hands one of two WORLDS the thread.
    `real_arm` IS THAT OBSERVATION AND NOT A PREFERENCE — the arm §7.1.2 ToBoolean gives for the concrete
    example the value already carries, computed ONCE by the caller and used both here and by the FORCED mark, so
    the two cannot answer differently about one branch. -1 is "nothing observed says", which is the honest state
    for genuinely external input and absent app state (example-free by design), and there this flow keeps TRUE
-   exactly as it did — an arbitrary but STATED choice between two arms neither of which contradicts anything.
+   exactly as it did — a choice between two arms neither of which contradicts anything.
+   AND "ARBITRARY" IS WHAT THAT CHOICE IS IN PRINCIPLE AND NOT WHAT IT IS IN EFFECT, BECAUSE THE MEANING OF
+   ARM 1 IS SUPPLIED BY WHOEVER SPELLED THE PREDICATE. Where the ENGINE spells it, a step machine numbers its
+   ordinary completion 0 (core/timing/timer.c states the convention at §8.7's step 4), `outcome_nth` asks
+   position 0 first while `real` is UNSTATED, and the walk returns that completion the moment an arm answers
+   1 — so at the outcome seam this constant answers "yes, the ordinary completion" and the machine TERMINATES.
+   Where the PAGE spells it, `arm` means "the page's own gate answered true", and for the commonest shape in
+   JavaScript — a loop's continuation test over an unknown length — true is KEEP GOING. One constant,
+   opposite meanings, and the arm that ENDS the walk is the runner's at one seam and the sibling's at the
+   other.
+   MEASURED, ON FROZEN BYTES, n=3, AND THE CONTROL IS INSIDE EACH SAMPLE (a fixture whose only variable is
+   whether one global is defined; artifact built from 2fd95568, an ancestor of this commit — re-derive before
+   quoting). One run held TEN ladders, all over sibling derivations of ONE unknown. The SIX engine-spelled
+   ones were none of them longer than two rows and the deepest question any of them asked was `>2`:
+   `[[OwnPropertyKeys]]>1` 3349 with no `>2`; `LengthOfArrayLike>0` 3337 and 2877 with no `>1`; and three
+   that reached a second row at 33 hits and stopped. The FOUR page-spelled `n < len` ladders ran 2, 4, 14 and
+   29 rows — the longest from n=0 to n=28, still 44 hits at its tail. Same page, same instant, same operand
+   family; the only difference is who owned the polarity of the question.
+   THE REPAIR IS NOT A DIFFERENT CONSTANT, AND THAT IS WHY THIS RECORDS THE EFFECT RATHER THAN CHANGING THE
+   LINE. Arm 0 is not the neutral answer either: it would keep the SKIP arm of `if (__FLAGS.admin)` as the
+   runner, which is the burial §Attacker-sources exists to prevent, and it would state a PREFERENCE at the one
+   line whose whole paragraph is that `real_arm` is an observation and never one. No constant is right for
+   both shapes, because the page owns the polarity of one of them.
    THE SIBLING'S SNAPSHOT DOES NOT PRE-RECORD ITS ARM, and that deletion is what makes the order in decide_arm
    one rule instead of two. It used to write FALSE into the constraint, take the snapshot, then overwrite with
    TRUE — so the sibling was born already knowing the answer to the branch it was about to re-execute, its
