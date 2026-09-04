@@ -3270,7 +3270,29 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
    the same way, which is exactly what the caller's `hostHolderOf` question decides here. Two spellings of one
    document would pass both checks and build a second tree, a second realm and a second run of that document's
    scripts inside one agent, so the name is asserted to be unheld across the WHOLE pool before it crosses. */
-async function engineJoin(eng, msg, docName, topLevelUrl, inherited, parentNavigable, containerPolicy,
+/* THE DOCUMENT'S BYTES ARE A PARAMETER AND NOT A FIELD OF `msg`, WHICH IS THE WHOLE OF WHAT THIS ENTRY GOT
+   WRONG. It read `msg.pageHtml`, and the two callers hold that fact in two different places: a child
+   announced by a peer engine arrives on a message this zone BUILT with `pageHtml` on it, while a TAB
+   NAVIGATION arrives on the ambient AST_ANALYZE message — whose own entry asserts, in this file, that
+   `msg.pageHtml === undefined`, because "a seed is an address and never bytes". The bytes for that caller are
+   on the waiting job (`_waiting.push({ html: loaded.bytes, msg, … })`), which is exactly where engineCreate's
+   admission arm already reads them from.
+   SO THE TWO ASSERTS COULD NOT BOTH BE SATISFIED ON ONE PATH, and the swap arm below was UNREACHABLE WITHOUT
+   ABORTING from the day it was written. That arm exists to end an abort — its own comment says the case "USED
+   TO BE THE ABORT THAT KILLED THE SCHEDULER FOR THE REST OF THE SESSION" — and it went on killing it one
+   assert later, on `a joined document arrived as neither a byte sequence nor characters`, for every top
+   document navigated in a cluster that already had an instance. `_hostDead` is set once and never cleared, so
+   the cost is not one page: every document arriving afterwards is answered by `_hostKicksRefused++` and the
+   extension learns nothing for the rest of the browser session. Measured on play.grafana.org at head
+   64b09d1e: run 0 analysed the page, run 1 (the same URL, same browser) died here, run 2 was refused before
+   it began — `testing/live-run.js` printed the cause verbatim off the run record.
+   IT IS A PARAMETER RATHER THAN A SECOND READ AT THE SWAP SITE because a caller that must remember to put a
+   field on somebody else's message is a caller that can forget, and the forgetting is invisible: `pageHtml`
+   is not part of the AST_ANALYZE contract, so nothing on that path is even entitled to hold it. Stated as an
+   argument, the operation takes its input WITH it (CLAUDE.md §AN-OPERATION-THAT-BECOMES-A-WORK-ITEM-TAKES-ITS-
+   INPUTS-WITH-IT), the assert below stands on the thing the caller actually said, and the shape matches
+   engineCreate's, whose second parameter is the same fact for the same reason. */
+async function engineJoin(eng, html, msg, docName, topLevelUrl, inherited, parentNavigable, containerPolicy,
                           ancestorOrigins, creationSandboxFlags) {
   DCHECK(eng.state === "hot" || eng.state === "fetching",
          "a document was joined to an instance in state `" + eng.state + "` — a join ADDS a document to a LIVE " +
@@ -3327,14 +3349,15 @@ async function engineJoin(eng, msg, docName, topLevelUrl, inherited, parentNavig
          "a document was joined with no HTML §7.1.5 CREATION SANDBOXING FLAG SET — the composed set and " +
          "`none` are the two facts a host states, so an absent one is a caller that skipped the question and " +
          "a sandboxed frame joined with its scripts, its forms and its `document.domain` unsandboxed");
-  const html = msg.pageHtml;
   /* THE SAME ONE SHAPE THE ROOT'S DOCUMENT TAKES, and for the same reason: `content.mojom.Renderer.Join`
      declares `array<uint8>` because `qjs_join` has main.c's byte-identical signature, so the two operations
      take ONE contract and a change to what a document arrives with reaches both. */
   DCHECK(html instanceof Uint8Array || typeof html === "string",
-         "a joined document arrived as neither a byte sequence nor characters — every live document is " +
-         "navigationLoad's response body and a cold-tier one may hold characters, so anything else " +
-         "is a document this agent would hold as nothing at all");
+         "a document was joined with no BYTES — every live document is navigationLoad's response body and a " +
+         "cold-tier one may hold characters, so anything else is a document this agent would hold as nothing " +
+         "at all. It is the CALLER'S to state: a peer engine's create notice carries it on the message this " +
+         "zone built, and a tab navigation carries it on the waiting job (`_waiting`'s `html`), never on the " +
+         "AST_ANALYZE message — whose own entry asserts `pageHtml === undefined` because a seed is an address");
   const _doc = html instanceof Uint8Array ? html : new TextEncoder().encode(html);
   /* THE SAME 0x00 THE ROOT'S DOCUMENT NO LONGER ASSERTS AGAINST, deleted here with it and for the one reason:
      `qjs_join` takes `(bytes, len)` now, so a joined document carrying a NUL parses whole and the tokenizer
@@ -4087,8 +4110,12 @@ async function hostNotice(eng, line) {
              "flag that says so can only be stated before the frontier is seeded; this instance's was seeded " +
              "for a document nothing held a proxy for, and the first read through the new child's proxy will " +
              "arrive at a heap entitled to have finished");
-      await engineJoin(holder, msg, f[1], f[5], inherited, parentNavigable, containerPolicy, ancestorOrigins,
-                       creationSandboxFlags);
+      /* THE BYTES ARE ON THE MESSAGE HERE, and this is the one caller for which that is true: `msg` is the
+         object this zone composed for the announced child (`{ type: "AST_ANALYZE", pageHtml: _childBytes, … }`)
+         rather than one an ambient observer sent. Passed explicitly for the same reason the engineCreate call
+         on the arm below it does — one operation, one statement of what it acts on. */
+      await engineJoin(holder, msg.pageHtml, msg, f[1], f[5], inherited, parentNavigable, containerPolicy,
+                       ancestorOrigins, creationSandboxFlags);
       return;
     }
     /* A CHILD DOCUMENT IS A DOCUMENT: it joins the ONE pool and is ranked, sliced, parked and finalized by the
@@ -5125,7 +5152,13 @@ async function hostSchedule(pool, ops) {
 
 // ---- Engine-bound ops + the live pool ----
 const _pool = [];        // BOOTING/hot/fetching engines — one record per agent cluster, bounded by the RAM floor
-const _waiting = [];      // documents awaiting a slot: { code, html, msg, persist, resolve } — NO instance built yet
+/* documents awaiting a slot: { html, msg, persist, resolve, reject } — NO instance built yet. `code` stood in
+   this list and no writer has ever put one here (the entry that fills it passes the empty string explicitly at
+   the one call site that needs one), and `html` is the field BOTH consumers must read: the admission arm hands
+   it to engineCreate and the navigation arm hands it to engineJoin. The message beside it carries no document
+   — that entry asserts so — so a consumer reaching for `msg.pageHtml` on one of these jobs is reaching for a
+   field this table's own producer is forbidden to write. */
+const _waiting = [];
 /* ADDRESSES AN APPLICATION HAS DECLARED ARE PAGES OF ITSELF, waiting to be loaded — the third kind of Level-1
    work item, beside a document that has bytes and a parked frontier that has recipes.
    WHAT PUTS ONE HERE. An engine reached HTML §7.4.4 "Non-fragment synchronous \"navigations\""'s URL and
@@ -5552,7 +5585,11 @@ const _hostOps = {
       /* AND §7.3.1.3's PARENT IS `u` FOR THE SAME SENTENCE: what joins here is a TOP-LEVEL TRAVERSABLE's
          incoming Document (§7.4.6.1 "Updating the traversable"), which is nested in nothing — and §3.1.3's
          list is `none` because a Document nested in nothing has no container document for its step 2 to find. */
-      await engineJoin(swap.cluster, swap.job.msg, swap.docId, _tlu,
+      /* THE BYTES ARE ON THE JOB, NOT ON ITS MESSAGE — `_waiting.push({ html: loaded.bytes, msg, … })` is the
+         only writer of this table, and the AST_ANALYZE entry that fills it asserts the message carries no
+         document at all. This is the same `job.html` the admission arm below hands engineCreate; reading
+         `swap.job.msg.pageHtml` instead is what made this branch abort on every navigation it was built for. */
+      await engineJoin(swap.cluster, swap.job.html, swap.job.msg, swap.docId, _tlu,
                        { csp: "", selfOrigin: "", embedder: NEW_EMBEDDER_POLICY }, "u", "null", "none",
                        "none");
       await engineUnload(swap.cluster, swap.outgoing, swap.docId);
