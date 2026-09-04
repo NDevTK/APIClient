@@ -25,6 +25,7 @@
 #include "quickjs.h"
 #include "core/events/before_unload_event.h"
 #include "core/events/create_event.h"
+#include "core/events/custom_event.h"
 #include "core/events/event.h"
 #include "core/events/focus_event.h"
 #include "core/events/hash_change_event.h"
@@ -76,10 +77,10 @@ static JSValue make_before_unload_event(JSContext *ctx)
     return before_unload_event_new(ctx);
 }
 
-/* THE UIEvent, MouseEvent, KeyboardEvent, FocusEvent AND HashChangeEvent ROWS NEED NO MAKER OF THEIR OWN. Each
-   of those interfaces exports DOM §2.5's "create an event using X" — every attribute at its un-initialized
-   value — and that is exactly and only what a maker owes, so the interface's own entry IS the maker rather than
-   a wrapper restating it here.
+/* THE UIEvent, MouseEvent, KeyboardEvent, FocusEvent, HashChangeEvent AND CustomEvent ROWS NEED NO MAKER OF
+   THEIR OWN. Each of those interfaces exports DOM §2.5's "create an event using X" — every attribute at its
+   un-initialized value — and that is exactly and only what a maker owes, so the interface's own entry IS the
+   maker rather than a wrapper restating it here.
    `mouseevents` and `uievents` are the same interface under §4.5's legacy alias, which is why two rows share
    one entry: the table's first column is a string, its second is the interface, and only the second decides
    what is built. */
@@ -91,7 +92,7 @@ static JSValue make_before_unload_event(JSContext *ctx)
 static const CreateEventRow CREATE_EVENT[] = {
     { "beforeunloadevent",      "BeforeUnloadEvent",      make_before_unload_event },
     { "compositionevent",       "CompositionEvent",       NULL },
-    { "customevent",            "CustomEvent",            NULL },
+    { "customevent",            "CustomEvent",            custom_event_new },
     { "devicemotionevent",      "DeviceMotionEvent",      NULL },
     { "deviceorientationevent", "DeviceOrientationEvent", NULL },
     { "dragevent",              "DragEvent",              NULL },

@@ -19,9 +19,13 @@
  * own words — so the citation audit could not tell it from a sentence claiming to be DOM §2.2's, and reported
  * it as a quotation that standard does not contain. A phrase this file coined is written without the mark.)
  *
- * WHAT IS ABSENT AND WHY. CustomEvent and the typed events this tree has not reached yet (FocusEvent,
- * InputEvent, TouchEvent…) are their own interfaces with their own state; they are honestly missing rather
- * than approximated by an Event with extra properties, and the IDL audit names them. §2.2's `relatedTarget`
+ * WHAT IS ABSENT AND WHY. The typed events this tree has not reached yet (InputEvent, TouchEvent…) are their
+ * own interfaces with their own state; they are honestly missing rather than approximated by an Event with
+ * extra properties, and the IDL audit names them. CustomEvent and FocusEvent were in that list and are not
+ * any more — core/events/custom_event.c and core/events/focus_event.c — which is why this sentence now names
+ * a KIND rather than a roll: a list of what is ABSENT is read by exactly the person about to remove an entry
+ * from it, so it is wrong the moment it is useful, and the audit is the derivation that cannot go stale.
+ * §2.2's `relatedTarget`
  * and `touch target list` are NOT with them, and reading the standard is what says so: they are associated
  * values of the EVENT, initially null and the empty list, and UIEvents and Touch Events only define
  * ATTRIBUTES over them. So they are slots here like every other, they are what §2.9 retargets at each path
@@ -39,6 +43,7 @@
 #include "quickjs-step.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
+#include "core/events/custom_event.h"
 #include "core/events/event.h"
 #include "core/events/message_event.h"
 #include "core/events/error_event.h"
@@ -1004,6 +1009,10 @@ void event_install(JSContext *ctx, JSValueConst global)
 
 static void event_declare_subclasses(JSContext *ctx)
 {
+    /* DOM §2.4 Interface CustomEvent — the one subclass this STANDARD declares, and the one an application
+       constructs for itself. It is first because it extends Event and nothing else: every other row below
+       belongs to some other standard's partial or to a chain of its own. */
+    custom_event_init(ctx);
     message_event_init(ctx);
     error_event_init(ctx);
     page_transition_event_init(ctx);
@@ -1059,6 +1068,7 @@ static void event_free_subclasses(JSRuntime *rt)
     page_transition_event_free(rt);
     error_event_free(rt);
     message_event_free(rt);
+    custom_event_free(rt);
 }
 
 /* THE RUNTIME, NOT A REALM — this is core/platform.h's release column, and what it gives back is the AGENT's.
