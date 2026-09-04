@@ -3694,14 +3694,24 @@ static JSValue js_el_get_style(JSContext *ctx, JSValueConst this_val, int magic)
     return cur;
 }
 
-/* CSSOM §7.2's getComputedStyle(elt, pseudoElt) — "return a live CSSStyleProperties object" with the computed flag
-   SET, the readonly flag SET, the parent CSS rule null and the owner node the element. The pseudo-element
-   argument is converted and rejected rather than ignored: this engine has no pseudo-element boxes, and
-   answering the ORIGINATING element's values for `::before` would be a wrong answer rather than a missing
-   one. */
+/* CSSOM §7.2 Extensions to the Window Interface's getComputedStyle(elt, pseudoElt), whose step 6 returns "a
+   live CSSStyleProperties object" with the computed flag set, the readonly flag set, the parent CSS rule null
+   and the owner node `obj`.
+   §7.2 HAS NO THROW ANYWHERE IN IT, AND THIS MEMBER HAD ONE. What stood here answered `NotSupportedError` for
+   EVERY non-empty pseudoElt, and the six steps contain no such step: step 3 is entered only "If pseudoElt is
+   provided, is not the empty string, AND STARTS WITH A COLON", and its 3.2 handles a pseudo this UA cannot
+   resolve by making `obj` null rather than by throwing — "If type is failure, or is a ::slotted() or ::part()
+   pseudo-element, let obj be null". Three spellings a browser answers were therefore refused: an explicit
+   `null` (the declared type was `IDL_DOMSTRING`, not the IDL's `CSSOMString?`, so it arrived as the four
+   characters "null" and was non-empty), any COLONLESS string (`getComputedStyle(el, "foo")` is step 3's
+   condition unmet, so `obj` stays `elt`), and every call whose second argument a page computed. A fabricated
+   refusal is worse than a missing capability: the page cannot tell it from a real UA answer, and no gate here
+   can see a member inventing a behaviour its section does not contain.
+   WHAT IS GENUINELY MISSING IS STEP 3'S TWO HALVES and they crash by name below. */
 static JSValue js_get_computed_style(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     lxb_dom_node_t *n;
+    const char *pseudo = NULL;   /* §7.2 step 3's bytes; NULL when the argument is absent or the IDL null */
 
     (void)magic; (void)this_val;
     /* `elt` is required and its type is `Element`, and BOTH are the declaration's: §3.6 step 5 throws for a
@@ -3714,16 +3724,79 @@ static JSValue js_get_computed_style(JSContext *ctx, JSValueConst this_val, int 
     DCHECK(n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT,
            "getComputedStyle's `elt` reached its body as something that is not an element — the declaration "
            "brands it against the node class and narrows it with element_is, so §3.2.15 owes the TypeError");
-    if (argc > 1 && JS_IsString(argv[1])) {
-        const char *p = JS_ToCString(ctx, argv[1]);
-        bool named = p && *p;
-        JS_FreeCString(ctx, p);
-        if (named)
-            return JS_ThrowDOMException(ctx, "NotSupportedError",
-                                        "pseudo-element computed styles are not modelled: this engine builds "
-                                        "no pseudo-element boxes, and answering the originating element's "
-                                        "values would be a wrong answer rather than a missing one");
+    /* §7.2 STEP 3'S CONDITION IS OVER BYTES, SO IT IS ASKED OF BYTES — never of the argument's TAG. The test
+       that stood here was `JS_IsString(argv[1])`, and a concolic fails it BY CONSTRUCTION rather than by
+       anything about the value: unknown external input crosses a `CSSOMString?` position AS ITSELF
+       (core/idl_args.h's idl_concolic_rule), so `getComputedStyle(el, cfg.pseudo)` was not a string, took the
+       no-pseudo arm, and answered the element's own style with nothing anywhere saying a condition had been
+       decided by a type test instead of by the value. That is the silent half of §RUN-DON'T-MATCH: an arm
+       chosen for a reason that is not about the page's value at all.
+       ABSENCE AND NULL ARE THE DECLARATION'S ANSWER AND ARE ASKED AS SUCH. The position is `optional
+       CSSOMString? pseudoElt`, so IDL_DOMSTRING_NULLABLE makes Web IDL §3.2.20's null rule convert an explicit
+       `null` AND an explicit `undefined` to the IDL null before any ToString — and a concolic is neither, which
+       is exactly why THESE two tests are sound where a tag test is not: they ask what the conversion produced,
+       not what kind of thing the page wrote. */
+    if (argc > 1 && !JS_IsNull(argv[1])) {
+        JSValue example = concolic_is(argv[1]) ? concolic_example(ctx, argv[1]) : JS_UNDEFINED;
+
+        /* AN UNKNOWN WITH NO EXAMPLE CANNOT BE ASKED STEP 3'S CONDITION AT ALL, and both of its answers are
+           feasible worlds this member's steps tell apart. */
+        if (concolic_is(argv[1]) && JS_IsUndefined(example)) {
+            const char *shape = concolic_shape_c(argv[1]);
+
+            JS_FreeValue(ctx, example);
+            DFAILF("CSSOM §7.2 Extensions to the Window Interface's getComputedStyle was given a `pseudoElt` "
+                   "that is UNKNOWN EXTERNAL INPUT WITH NO EXAMPLE (`%s`), and step 3's condition — "
+                   "\"provided, is not the empty string, and starts with a colon\" — is a question about its "
+                   "BYTES. Both answers are feasible and they are two different objects: step 3 unentered "
+                   "leaves `obj` as `elt` and step 6 returns the ELEMENT's computed style, while step 3 entered "
+                   "makes `obj` a pseudo-element or null. WHAT IS MISSING is the OUTCOME FORK at this member's "
+                   "own seam — it is a plain C body, so building it means making it a step machine and asking "
+                   "quickjs-step.h's step_fork_run which completion the condition reached, exactly as "
+                   "§6.6.1's three value tests in this file need. ITS ABSENCE WOULD SHOW as a page reading its "
+                   "pseudo out of injected state (`getComputedStyle(el, cfg.pseudo)`) exploring neither world.",
+                   shape ? shape : "{}");
+        }
+        DCHECK(!JS_IsObject(example),
+               "a `pseudoElt`'s unknown carries an OBJECT as its concrete example — an example is the value "
+               "this engine COMPUTED, so it is a primitive, and §7.1.19 ToString over an object one runs the "
+               "PAGE's toString from a C activation with no flow base under it");
+        /* THE EXAMPLE IS THIS FLOW'S OWN ANSWER TO STEP 3, AND THAT IS A NAMED RESIDUAL. It is the value the
+           run computed by running the real operators on real operands, so the arm it selects is the arm a real
+           session takes — right for this flow, NARROWER than the spec, and the sibling world is what the fork
+           above builds. ITS ABSENCE SHOWS as a page whose computed pseudo happens to be empty never exploring
+           the world in which it names a pseudo-element. */
+        pseudo = JS_IsUndefined(example) ? JS_ToCString(ctx, argv[1]) : JS_ToCString(ctx, example);
+        JS_FreeValue(ctx, example);
+        if (!pseudo) return JS_EXCEPTION;
     }
+    /* STEP 3, ENTERED. Its two halves are both absent from this engine and neither may be faked: 3.1's parse
+       and 3.3's pseudo-element. Claiming 3.2's `failure` for a pseudo that PARSES would report an empty block
+       as this UA's answer for `::before`, which is the invented-value defect one layer up from the throw this
+       replaces. RELEASE FALLS THROUGH to the element's own style, which is what every other unbuilt arm in
+       this component does (core/css/css_computed_value.c's inset arm is the same shape) — a dev build cannot
+       reach it, and release adds no capability. */
+    if (pseudo && *pseudo == ':')
+        DFAIL("CSSOM §7.2 Extensions to the Window Interface's getComputedStyle entered step 3 — its "
+              "`pseudoElt` is provided, is not the empty string, and starts with a colon — and BOTH of that "
+              "step's substeps are unbuilt here. 3.1 is \"Parse pseudoElt as a <pseudo-element-selector>, and "
+              "let type be the result\", which this engine has no parser for: core/dom/selector_match.c owns "
+              "the agent's one selector matcher and answers about ELEMENTS, and nothing in core/css parses a "
+              "pseudo-element selector into a type. 3.3 is \"Otherwise let obj be the given pseudo-element of "
+              "elt\", and there is no pseudo-element box in this engine to be given — core/layout names "
+              "pseudo-elements only inside the spec sentences it quotes and builds one nowhere. BUILD 3.1 "
+              "FIRST, as its own component beside the "
+              "selector matcher, because it is what makes 3.2's \"If type is failure, or is a ::slotted() or "
+              "::part() pseudo-element, let obj be null\" answerable — and that arm needs no boxes at all: it "
+              "is a computed block whose declarations are EMPTY, which step 5's \"If obj is not null\" is what "
+              "produces. Only then does 3.3 need the box tree. WHAT MUST NOT HAPPEN IS THE THROW THAT STOOD "
+              "HERE: §7.2 contains no throw, so `NotSupportedError` was a behaviour this member invented and a "
+              "page cannot tell from a real one");
+    /* ONE FREE, AFTER THE TEST AND NOT INSIDE IT. A `JS_FreeCString` in the arm above would run TWICE in a
+       release build — the DFAIL is compiled out there, so the arm falls through to this line — which is the
+       shape §Offensive-programming warns of from the other side: a dev-only abort is what was holding an
+       ownership invariant together, and the release build is where that shows. */
+    if (pseudo) JS_FreeCString(ctx, pseudo);
     {
         JSValue proto = cssd_proto(ctx), out = cssd_new(ctx, proto, argv[0], JS_NULL, true, true);
 
@@ -3812,7 +3885,13 @@ void cssom_init(JSContext *ctx)
                only "a Node" and idl_iface_narrow(element_is) is what says which kind — the pairing
                core/dom/shadow_root.h states and slot.c, element_internals.c and intersection_observer.c
                already use. */
-            static const IdlArgType TWO[2] = { IDL_INTERFACE, IDL_DOMSTRING };
+            /* `optional CSSOMString? pseudoElt` — NULLABLE, and it was declared IDL_DOMSTRING. Web IDL
+               §3.2.20's null rule converts an explicit `null` and an explicit `undefined` to the IDL null
+               before ToString is ever reached, so the non-nullable spelling handed the body the four
+               characters "null" and `getComputedStyle(el, null)` — which every browser answers — was refused
+               as a pseudo-element. It is the same load-bearing distinction core/idl_args.h records for
+               `textContent`, arriving in a second member. */
+            static const IdlArgType TWO[2] = { IDL_INTERFACE, IDL_DOMSTRING_NULLABLE };
             g_id_gcs = idl_method_id(ctx, TWO, 2, js_get_computed_style, 0);
             idl_optional_from(1);
             idl_iface_brand(node_class_id());
