@@ -1310,10 +1310,42 @@ defect(`Web IDL §3.7.2 legacy factory functions whose presence this audit CANNO
    the interface and it declares no constructor, or the corpus carries no such name. Both belong in this one
    category (the engine gives [[Construct]] to something the platform does not construct either way) and each
    row says WHICH, because the fix differs — write the mint's justification against the IDL, or fix a typo. */
-const strayConstructs = [...world.constructs]
+const strayAll = [...world.constructs]
   .filter((n) => { const c = ownConstructors(n); return !legacyFactories.has(n) && !(c && c.length); }).sort();
+/* AND THE ROW'S THIRD EXPLANATION IS A REASON NOT TO CHARGE THE NAME AT ALL, WHICH THE ROW SAID AND THIS
+   COUNTER DID NOT. The message below has always offered a forwarded name three readings, the third being that
+   "the C's own row filter removes this row and this scan cannot evaluate it" — and then counted the name as a
+   DEFECT anyway, which is a verdict the audit's own sentence says it cannot reach. That is the three-states-
+   behind-one-answer shape arriving inside the instrument built to end it: a typo, a mint that needs its
+   justification written, and a construct this scan cannot see are three findings, and only the first two are
+   the engine's.
+   MEASURED, AND IT WAS THE WHOLE OF THIS CATEGORY. `HTMLUnknownElement` is one cell of the element-interface
+   table's `iface` column, which core/html/html_element.c's install loop hands to a shared minting helper — and
+   that loop's FIRST statement is `if (iface_is_base(HTML_IFACE[i].iface)) continue;`, so the name never reaches
+   the mint. Its interface object is installed two lines above the loop by node_install_interface, whose
+   constructor is the shared Illegal-constructor throw, so `new HTMLUnknownElement()` already does exactly what
+   Web IDL §3.7.1 Interface object requires — which is what the HTML Standard's own IDL asks for, declaring the
+   interface under `// Note: intentionally no [HTMLConstructor]`. The audit was right about the column and wrong
+   about the engine, and it named a fidelity bug that is not there.
+   WHY THE ABSTENTION IS PER-NAME HERE AND GLOBAL ON THE CONSTRUCTOR AXIS. `ctorUnread` abstains over the whole
+   axis because an unread mint could name ANY interface, so no interface's ABSENCE from `constructs` proves
+   anything. This is the opposite direction: the name is PRESENT, and what is unproven is only whether the
+   filtered loop reaches THAT cell — a question about one column, answerable for the names in it and nobody
+   else's. So the two abstentions have different scopes because they are abstaining about different things.
+   WHAT WOULD DECIDE ONE. Nothing in this tree lets a filtered loop state which of its column's names it gave
+   [[Construct]] to: `idl_install_covers_column` asserts every name of a column is an OWN PROPERTY of the
+   target, which is the PRESENCE axis and answers the same for an interface object that constructs and one that
+   throws. A constructor-axis counterpart — a declaration the C makes at the minting loop, asserting of each
+   covered name that its interface object's [[Construct]] is §3.2.3's rather than the shared throw — is what
+   would move these names out of this band, and it does not exist yet. Until it does, ABSTAIN: a wrong
+   accusation here costs a reader a hunt for a bug that is not there, and this one already did. */
+const strayForwarded = (n) => world.constructsForwarded.has(n) && !world.constructsDirect.has(n);
+const strayConstructs = strayAll.filter((n) => !strayForwarded(n));
+const strayUnproven = strayAll.filter(strayForwarded);
 defect("interface objects this engine gives [[Construct]] that the platform declares no constructor for",
        strayConstructs.length);
+defect("names a filtered install loop's COLUMN carries whose mint this scan cannot prove reaches them — " +
+       "neither charged as a stray construct nor credited as constructing", strayUnproven.length);
 /* THE ROW STATES HOW THE NAME WAS READ, because the two readings do not support the same accusation and the
    difference decides which of three things a reader should go and do. A name read as a LITERAL beside the mint
    is evidence about THAT interface and the row's original two branches are the whole answer. A name read out of
@@ -1322,21 +1354,31 @@ defect("interface objects this engine gives [[Construct]] that the platform decl
    REACHES the name, and a row filter this scan cannot see is the third explanation. Printing the first two
    alone for a forwarded name is the same defect this diff is closing, one category over: right about the
    observable, wrong about the cause, with an instruction ("fix a typo") that does not fit what happened. */
-for (const n of strayConstructs) {
-  const via = world.constructsForwarded.get(n);
-  const how = !via || world.constructsDirect.has(n)
-    ? `either the identifier beside the mint misspells an interface, or the mint is a Web IDL §3.7.2 ` +
-      `"Legacy factory functions" name this index does not carry`
-    : `the name was not written beside the mint: ${via.mint.file.replace(BROWSER + "/", "")}:${via.mint.line}'s ` +
-      `\`${via.mint.form}\` is handed a parameter, and this name is one cell of \`${via.read.expr}\` at ` +
-      `${via.read.file.replace(BROWSER + "/", "")}:${via.read.line}. So either that identifier misspells an ` +
-      `interface, or the C's own row filter removes this row and this scan cannot evaluate it — which is a ` +
-      `coverage fact the C states (idl_install_covers_column) and this audit reads, not one it may assume`;
+const strayWhat = (n) => byName.has(n) ? `the corpus declares \`${n}\` with no constructor operation`
+                                       : `NO IDL in the corpus declares \`${n}\` at all`;
+for (const n of strayConstructs)
   console.log(`[idl-audit] ${n}: this engine mints a CONSTRUCTING interface object for it and ` +
-              `${byName.has(n) ? `the corpus declares \`${n}\` with no constructor operation`
-                               : `NO IDL in the corpus declares \`${n}\` at all`} — ${how}. Web IDL §3.7.1's ` +
+              `${strayWhat(n)} — either the identifier beside the mint misspells an interface, or the mint is ` +
+              `a Web IDL §3.7.2 "Legacy factory functions" name this index does not carry. Web IDL §3.7.1's ` +
               `construct steps throw a TypeError for an interface not declared ` +
               `with one, so a page reaching this gets behaviour no browser has`);
+/* THE ABSTENTION'S OWN ROWS — a work queue for the reader and never an accusation, which is the difference the
+   counter above now keeps. Each says exactly what was read and where, so the one command that settles it (open
+   the loop and look at its `continue`) is obvious, and so that a name whose loop really does mint it is still
+   visible rather than dropped. */
+for (const n of strayUnproven) {
+  const via = world.constructsForwarded.get(n);
+  console.log(`[idl-audit] ${n}: ${strayWhat(n)}, and this engine's mint for it CANNOT BE DECIDED from the ` +
+              `source: the name was not written beside the mint — ` +
+              `${via.mint.file.replace(BROWSER + "/", "")}:${via.mint.line}'s \`${via.mint.form}\` is handed a ` +
+              `parameter, and this name is one cell of \`${via.read.expr}\` at ` +
+              `${via.read.file.replace(BROWSER + "/", "")}:${via.read.line}. The column proves the mint could ` +
+              `reach the name; a \`continue\` in that loop is C this scan does not evaluate, so the readings ` +
+              `are three and not two — the identifier misspells an interface, the mint needs its justification ` +
+              `written against the IDL, or the loop's row filter removes this row and the engine is already ` +
+              `right. Deciding it needs the C to state the CONSTRUCTOR-axis counterpart of ` +
+              `idl_install_covers_column, which asserts presence and answers the same for an interface object ` +
+              `that constructs and one that throws.`);
 }
 if (totalMissing)
   console.log(`[idl-audit] ${distinct.size} distinct spec members this engine does not install (${totalMissing} ` +

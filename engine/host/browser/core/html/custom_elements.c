@@ -2195,6 +2195,21 @@ JSValue custom_elements_element_constructor(JSContext *ctx, const char *iface)
     DCHECK(strcmp(iface, "HTMLElement") != 0,
            "HTMLElement was minted through the shared entry point — it must go through "
            "custom_elements_html_constructor, which is what records §3.2.3 step 7.1's identity for this realm");
+    /* THE OTHER BASE INTERFACE, AND IT IS EXCLUDED FOR THE OPPOSITE REASON — not because its constructor is
+       minted somewhere else, but because it HAS NONE. Every interface §3.2.3 covers carries [HTMLConstructor],
+       and HTMLUnknownElement is the one element interface the HTML Standard's own IDL declares without it,
+       under a comment saying so in as many words: `interface HTMLUnknownElement : HTMLElement {` followed by
+       `// Note: intentionally no [HTMLConstructor]`. So a mint reaching here with that name would give a page
+       `new HTMLUnknownElement()` in place of Web IDL §3.7.1 Interface object's TypeError, which is behaviour no
+       browser has.
+       IT HOLDS TODAY BY A `continue` FIFTEEN LINES FROM THE CALL, which is exactly why it is asserted here: the
+       one caller filters both base interfaces out with iface_is_base before it reaches this function, so the
+       invariant is real and is stated nowhere the reader of THIS function can see it. There is exactly one call
+       site, so this abort names an unambiguous address without threading one. */
+    DCHECK(strcmp(iface, "HTMLUnknownElement") != 0,
+           "HTMLUnknownElement was minted as a CONSTRUCTING interface object — the HTML Standard declares it "
+           "with intentionally no [HTMLConstructor], so its interface object must be the one node.c installs "
+           "with the shared Illegal-constructor throw and never one of §3.2.3's");
     ctor = idl_step_constructor(ctx, iface, g_id_html_ctor);
     CHECK(!JS_IsException(ctor), "an HTML element interface object could not be allocated");
     return ctor;

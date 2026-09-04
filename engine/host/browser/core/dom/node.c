@@ -2037,7 +2037,10 @@ static JSValue js_text_whole(JSContext *ctx, JSValueConst this_val, int magic)
     return r;
 }
 
-/* §4.13 `ProcessingInstruction.target` — the only member the interface adds to CharacterData. */
+/* §4.13 `ProcessingInstruction.target` — the getter whose steps are "return this's target". It is NOT the only
+   member the interface adds to CharacterData, and the sentence that said so here was true of an older edition:
+   §4.13 now also declares a constructor and seven attribute-map members. See the named residual at the
+   prototype build below for what is missing and how its absence shows. */
 static JSValue js_pi_target(JSContext *ctx, JSValueConst this_val, int magic)
 {
     lxb_dom_node_t *n = node_of(this_val);
@@ -4502,8 +4505,38 @@ void node_install_protos(JSContext *ctx)
         slot_install_slottable_mixin(ctx, text_proto);
         idl_interface_tag(ctx, comment_proto, "Comment");
         {
-            /* §4.12 `interface CDATASection : Text` — no members of its own. §4.13
-               `interface ProcessingInstruction : CharacterData` adds exactly `target`. */
+            /* §4.12 `interface CDATASection : Text` — no members of its own.
+               §4.13 Interface ProcessingInstruction — NAMED RESIDUAL, and the code below is CORRECT for what it
+               covers rather than unfinished: `target` is the whole of what this prototype claims, and it
+               answers exactly §4.13's "return this's target".
+               WHAT IS NOT COVERED: §4.13 also declares `constructor(DOMString target, optional DOMString data
+               = "")` and SEVEN members over a per-node "attribute map" — hasAttributes, getAttributeNames,
+               getAttribute, setAttribute, removeAttribute, toggleAttribute, hasAttribute — none of which are
+               installed here. The map is real state and not a view of `data`: DOM §1.4 Name validation says "A
+               string is a valid attribute local name if its length is at least 1" and forbids only whitespace,
+               NUL, `/`, `=` and `>`, so `setAttribute("0", "x")` is legal, while `0` does not match XML's Name
+               production and so cannot be read back out of the serialized `data` — re-deriving the map would
+               answer false to a hasAttribute() a browser answers true to.
+               WHAT THE NEXT DIFF BUILDS: a COW-captured named-slot store keyed by a NODE, holding the map as
+               one JS value so it forks per flow and parks to the cold tier. It does not exist — the only
+               named-slot write in this engine is solver/dom_cow.h's `dom_cow_set_prop_taint`, whose owner
+               parameter is an `lxb_dom_element_t *`, and a ProcessingInstruction is not an element — which is
+               why this is a residual rather than a call. The GRAMMAR half is already landed and is not what is
+               missing: core/xml/xml_pseudo_attr.h is §4.13's "update attributes from data" step 2, "the parsing
+               result of invoking the rules for parsing pseudo-attributes from a string". Two hooks follow the
+               store: every site that creates a processing instruction runs "initialize a ProcessingInstruction"
+               step 5, and §4.10 Interface CharacterData's "replace data" step 12 — "and
+               piAttributesAlreadyUpdated is false, then update attributes from data given node" — needs the
+               flag §4.10 spells "an optional boolean piAttributesAlreadyUpdated (default false)", which
+               node_cd_replace_data does not take.
+               HOW ITS ABSENCE WOULD SHOW: `new ProcessingInstruction("a","b")` is a TypeError — the interface
+               object node_install_interface builds carries the shared Illegal-constructor throw — and
+               `pi.getAttribute` and its six siblings are `undefined`, so a page that reads one calls undefined
+               and throws. On a real document it shows as an `<?xml-stylesheet href="…" type="…"?>` whose
+               pseudo-attributes nothing can read.
+               `sheet` IS A DIFFERENT QUESTION AND NOT PART OF THIS RESIDUAL: it is not DOM's at all. CSSOM
+               declares `ProcessingInstruction includes LinkStyle`, so it is a mixin member owned by the
+               stylesheet component, and it would be absent here even with every §4.13 member above built. */
             JSValue cdata_proto = JS_NewObjectProto(ctx, text_proto);
             JSValue pi_proto = JS_NewObjectProto(ctx, cd);
             CHECK(!JS_IsException(cdata_proto) && !JS_IsException(pi_proto),
