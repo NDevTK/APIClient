@@ -60,9 +60,17 @@ static PendIndexNode    *g_nodes_tail;  /* appended in creation order, so the jo
  * single reading of a level can tell a host that is paying promptly from one that has never paid at all.
  *
  * WHAT IT COST TO NOT HAVE IT, WHICH IS WHY IT IS HERE AND NOT A ROW SOMEBODY MIGHT LIKE. `hostAsked` and
- * `hostAnswered` are minted at engine.c's `mint_req`, whose only two callers push FLOW_PENDING_HOSTREQ — so
- * they count cross-instance rendezvous and NOTHING ELSE, and a document that makes no cross-document read
- * reads `0/0` for ever, correctly. That pair was rendered under a caption asking whether "a waiting frontier
+ * `hostAnswered` are minted at engine.c's `mint_req`, whose callers push FLOW_PENDING_HOSTREQ — the four
+ * cross-instance reads (a navigable's, a remote object's, a WindowProxy's, an iframe's) AND
+ * `XMLHttpRequest`, which places its request through the same rendezvous because §3.5.6's synchronous arm
+ * must BLOCK the flow and the asynchronous arm places the identical request from a task. So a document
+ * that makes no cross-document read AND NO XHR reads `0/0` for ever; a document that XHRs does not.
+ * THIS SENTENCE SAID "only two callers" AND "NOTHING ELSE", AND BOTH WERE WRONG — the second by exactly
+ * the caller a reader of a census most needs to know about. It is repaired here rather than deleted
+ * because a reader who re-derives the narrow reading will re-introduce it. Its sibling in solver/result.c
+ * carried the identical claim and was repaired first; this one survived that repair for a while, which is
+ * the recurrence CLAUDE.md names — a fix filed where it was found, while the wrong spelling stays at every
+ * site that reached for the same idiom. The grep that ends it is the CLAIM, not the symbol. That pair was rendered under a caption asking whether "a waiting frontier
  * is waiting because of the RANKING or because nobody paid it", which is the GENERAL question, and a reader
  * took the general answer from it: `hostAsked: 0` was reported as "nothing is ever asked of the host" for a
  * fixture whose registers held hundreds of thousands of records. Nothing was wrong with the number. What was
