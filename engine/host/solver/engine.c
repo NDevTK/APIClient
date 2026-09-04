@@ -229,7 +229,7 @@ void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst
 /* PARK ON A DYNAMIC `import()`. The same register and the same URL, and a DIFFERENT delivery: a module load is
    owed SOURCE TEXT, so the delivery settles `resolve` with the reply's body rather than with the reply record a
    `fetch()` becomes a Response from. */
-void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, const char *url) {
+void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, JSValueConst reject, const char *url) {
     Flow *f = flow_running();
     /* …AND ITS DESTINATION IS `script`, WHICH IS WHAT MAKES A CHUNK A CODE LOAD AT THE CHOKEPOINT. HTML
        §8.1.6.7.3 HostLoadImportedModule: "Let destination be `script`" — and for a dynamic `import()` nothing
@@ -244,6 +244,19 @@ void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, const char 
     DCHECK(url != NULL && *url, "a dynamic import parked with no module URL for the host to fetch");
     e = pending_push(&f->pending, FLOW_PENDING_MODULE, flow_path_forced(f));
     pending_set(e, PEND_RESOLVE, JS_DupValue(ctx, resolve));
+    /* AND THE HALF THE LOAD'S FAILURE IS OWED FROM, which this park did not take and the caller therefore
+       freed unused. A load has two outcomes and this is the only park whose failure is a REJECTION rather
+       than an event at an element: HTML §8.1.6.7.3 "HostLoadImportedModule(referrer, moduleRequest,
+       loadState, payload)"'s onSingleFetchComplete makes a null moduleScript "ThrowCompletion(a new
+       TypeError)", and ECMAScript §13.3.10.3 "ContinueDynamicImport ( promiseCapability, moduleCompletion )"
+       calls "promiseCapability.[[Reject]]" with it. Without it the delivery had exactly one thing it could do
+       with a network error — settle `resolve` with the empty source text, which compiles and evaluates an
+       EMPTY MODULE — so `import(u).catch(h)` ran `h` never and a bundle's fallback chunk was unreachable. */
+    DCHECK(JS_IsFunction(ctx, reject),
+           "a dynamic import parked with no REJECT capability — JS_NewPromiseCapability mints both halves and "
+           "this park is what the failure arm reaches the second one through, so a record without it could "
+           "answer a network error only by settling the SUCCESS half with bytes that never arrived");
+    pending_set(e, PEND_REJECT, JS_DupValue(ctx, reject));
     /* AND §4.3 Scheme fetch WITH IT — `import("data:text/javascript,export default 1")` is a load this agent
        answers out of the specifier's own bytes, and the promise this park settles is the one
        JS_ModuleLoadPending is about to be handed. */
@@ -3488,29 +3501,47 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                    "the synchronous kind is skipped above and the fetch kind is excluded by this condition, "
                    "so a fourth answer means a park of some new kind is being delivered with no arm of its own");
             if (kind == FLOW_PENDING_MODULE) {
-                /* AND THE ONE PROGRAM KIND WITH NO ELEMENT TO FIRE AT, WHICH IS A DIFFERENT ALGORITHM AND
-                   CRASHES RATHER THAN TAKING THIS ONE. HTML §8.1.6.7.3 "HostLoadImportedModule(referrer,
-                   moduleRequest, loadState, payload)" ends in `onSingleFetchComplete`, whose first steps are
-                   "Let completion be null." and "If moduleScript is null, then set completion to
-                   ThrowCompletion(a new TypeError)", and its step 5 performs FinishLoadingImportedModule with
-                   that completion — ECMAScript §16.2.1.11 "FinishLoadingImportedModule ( referrer,
-                   moduleRequest, payload, result )", whose dynamic-import arm is §13.3.10.3
-                   "ContinueDynamicImport ( promiseCapability, moduleCompletion )": "If moduleCompletion is an
-                   abrupt completion", "Perform ! Call(promiseCapability.[[Reject]], undefined, «
-                   moduleCompletion.[[Value]] »)". There is no element in a dynamic import, so firing `error`
-                   at one would fire at nothing and leave the importing flow parked for ever; and settling `resolve` with the empty source text — which is what the
-                   line below this block did and still does in release — compiles and evaluates an EMPTY
-                   MODULE, so `import(u).catch(h)` runs `h` never and the page's fallback chunk is never
-                   loaded. BUILD the rejection: engine_pending_module_url mints JS_NewPromiseCapability's
-                   `resolving[1]` and frees it unused, so this record must carry that capability (a PEND_REJECT
-                   field) and this arm must call it with a TypeError. */
-                DFAIL("a dynamic import()'s module load answered with §5.6's network error and this delivery "
-                      "has no rejection arm for it. HTML §8.1.6.7.3 HostLoadImportedModule's "
-                      "onSingleFetchComplete makes a null moduleScript ThrowCompletion(a new TypeError), "
-                      "which ECMAScript §13.3.10.3 ContinueDynamicImport hands to the promise's [[Reject]]; "
-                      "this engine settles `resolve` with the empty source text instead, which evaluates an "
-                      "empty module and runs "
-                      "no `catch`. Carry the reject capability on the record and call it here");
+                /* AND THE ONE PROGRAM KIND WITH NO ELEMENT TO FIRE AT, WHOSE FAILURE IS THEREFORE A REJECTION
+                   AND NOT AN EVENT. HTML §8.1.6.7.3 "HostLoadImportedModule(referrer, moduleRequest,
+                   loadState, payload)" ends in `onSingleFetchComplete`, whose first steps are "Let completion
+                   be null." and "If moduleScript is null, then set completion to ThrowCompletion(a new
+                   TypeError)", and whose last performs FinishLoadingImportedModule with that completion —
+                   ECMAScript §16.2.1.11 "FinishLoadingImportedModule ( referrer, moduleRequest, payload,
+                   result )", whose dynamic-import arm is §13.3.10.3 "ContinueDynamicImport ( promiseCapability,
+                   moduleCompletion )": "If moduleCompletion is an abrupt completion", "Perform !
+                   Call(promiseCapability.[[Reject]], undefined, « moduleCompletion.[[Value]] »)".
+                   WHAT IT REPLACED SETTLED THE SUCCESS HALF. `resolve` was the only capability this record
+                   carried, so a network error reached reply_source_text, whose bytes came back EMPTY from
+                   fetch_reply_body's network-error arm — an empty source text, which compiles and evaluates
+                   as a valid EMPTY MODULE. `import(u).catch(h)` therefore ran `h` never and `await import(u)`
+                   continued as though the chunk had loaded and exported nothing, which is indistinguishable
+                   from a chunk that legitimately does.
+                   THE TYPE IS THE STANDARD'S; THE MESSAGE IS NOT, BECAUSE THE STANDARD GIVES NONE. "a new
+                   TypeError" names a constructor and no text, so the string is this engine's, and it names
+                   the ADDRESS — the one fact a page's handler cannot re-derive from the rejection.
+                   AS A FLOW, for the reason the settle two branches below is: the rejection triggers the
+                   page's own `catch` reactions, which is where a bundle keeps its fallback host and its
+                   degraded-mode configuration — the code §What-the-tool-produces exists to reach. */
+                JSValue rej = pending_get(p, PEND_REJECT);
+                JSValue uv = pending_get(p, PEND_URL), err;
+                const char *u;
+
+                DCHECK(JS_IsFunction(ctx, rej),
+                       "a dynamic import's park carries no REJECT capability — engine_pending_module_url "
+                       "asserts both halves at the push, so a record here without one was pushed by something "
+                       "that is not that park, and its network error has no way to reach the page's `catch`");
+                u = JS_IsString(uv) ? JS_ToCString(ctx, uv) : NULL;
+                JS_ThrowTypeError(ctx, "Failed to fetch dynamically imported module: %s",
+                                  u ? u : "(the park carried no address)");
+                err = JS_GetException(ctx);
+                if (u) JS_FreeCString(ctx, u);
+                JS_FreeValue(ctx, uv);
+                if (JS_CallAsFlow(ctx, rej, err) < 0) {
+                    JSValue exc = JS_GetException(ctx);
+                    JS_FreeValue(ctx, exc);   /* a rejected load is the page's to observe, not this step's */
+                }
+                JS_FreeValue(ctx, err);
+                JS_FreeValue(ctx, rej);
             } else {
                 if (kind == FLOW_PENDING_DOCSCRIPT) {
                     /* THE ROW IS ALREADY THERE AND IT IS CONVERTED IN PLACE, NEVER REMOVED. A row's index is
@@ -3564,10 +3595,13 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                     JS_FreeValue(ctx, uv);
                     JS_FreeValue(ctx, ev);
                 }
-                JS_FreeValue(ctx, pv);
-                JS_FreeValue(ctx, p);
-                return;
             }
+            /* AND THE ENTRY IS DONE EITHER WAY. It left the register before this arm ran (pending_remove
+               above), so nothing below can reach it and nothing is still owed for it: the page has been told
+               by the algorithm its kind names, and this delivery — like every other — settles ONE. */
+            JS_FreeValue(ctx, pv);
+            JS_FreeValue(ctx, p);
+            return;
         }
         if (kind == FLOW_PENDING_DOCSCRIPT) {
             /* AN EXTERNAL SCRIPT OF SOME DOCUMENT OF THIS AGENT, AT ITS POSITION IN THIS FLOW'S SEQUENCE
@@ -4569,15 +4603,15 @@ static int flow_answer_fork(JSContext *ctx, Flow *f) {
  * the same flow; and BEFORE the flow resumes its frame, because the frame is what the arm is a clone OF.
  * ONE ARM PER STEP, like every other branch of flow_step — the scheduler re-ranks between each.
  *
- * EVERY KIND WITH AN ELEMENT TAKES THE SAME ANSWER, AND THERE IS ONLY ONE ANSWER TO GIVE. §5.6's network
- * error crosses as JS_NULL, and flow_deliver_one_reply is where a JS_NULL becomes each kind's own failure:
- * FLOW_PENDING_RESOLVE rejects the page's promise with it, and the two `<script src>` kinds become HTML
- * §4.12.1.1 "Processing model"'s element whose result is null, whose "execute the script element" step 4
- * fires `error` at the element and runs nothing. So this fork writes the SAME value for all three and holds
- * no per-kind knowledge at all — which is what makes the refusal and a real network failure one path rather
- * than two, and it is why the arm was built at the delivery and not here.
- * THE ONE KIND LEFT CRASHES rather than picking the nearest wrong answer: a dynamic `import()` has no element,
- * and §8.1.6.7.3 HostLoadImportedModule's rejection needs a capability the record does not carry yet. */
+ * EVERY KIND TAKES THE SAME ANSWER, AND THERE IS ONLY ONE ANSWER TO GIVE. §5.6's network error crosses as
+ * JS_NULL, and flow_deliver_one_reply is where a JS_NULL becomes each kind's own failure: a `fetch()` rejects
+ * the page's promise with it; the two `<script src>` kinds become HTML §4.12.1.1 "Processing model"'s element
+ * whose result is null, whose "execute the script element" step 4 fires `error` at the element and runs
+ * nothing; and a dynamic `import()` rejects with the TypeError §8.1.6.7.3 HostLoadImportedModule's
+ * onSingleFetchComplete names. So this fork writes the SAME value for every kind and holds NO per-kind
+ * knowledge at all — which is what makes a refusal and a real network failure one path rather than two, and
+ * it is why every one of those arms lives at the delivery and none of them here. This function's entire
+ * knowledge of the outcome is the one line that writes JS_NULL. */
 static int flow_decline_fork(JSContext *ctx, Flow *f) {
     int n = pending_count(f->pending), i;
 
@@ -4615,36 +4649,6 @@ static int flow_decline_fork(JSContext *ctx, Flow *f) {
                "a SYNCHRONOUS host request carries a refusal — those records are never keyed into the pair "
                "index, so engine_decline cannot reach one, and the answer below would settle a rendezvous "
                "the asking machine consumes with engine_host_take");
-        if (kind == FLOW_PENDING_MODULE) {
-            const char *why = JS_ToCString(ctx, reason);
-            /* THE ONE PARK WITH NO ELEMENT TO FIRE AT. §4.12.1.1's error arm is built and the two `<script
-               src>` kinds take it below (their answer is §5.6's network error and flow_deliver_one_reply
-               turns that into an element whose result is null); a dynamic `import()` is a DIFFERENT algorithm
-               — HTML §8.1.6.7.3 "HostLoadImportedModule ( referrer, moduleRequest, loadState, payload )"'s
-               `onSingleFetchComplete` makes a null moduleScript "ThrowCompletion(a new TypeError)", which
-               ECMAScript §13.3.10.3 "ContinueDynamicImport ( promiseCapability, moduleCompletion )" hands to
-               the promise's [[Reject]]. Routing it to the element arm would fire at nothing and leave the
-               importing flow parked for ever. The rejection needs a capability this record does not carry: engine_pending_module_url mints
-               JS_NewPromiseCapability's `resolving[1]` and frees it unused, so the next diff puts that
-               capability on the record and calls it — here and at the delivery's own null arm, which DFAILs
-               for the same missing thing. */
-            DFAILF("a dynamic import() was DECLINED by the trusted zone and this fork has no failure arm for "
-                   "it. The two `<script src>` kinds are answered with Fetch §5.6 \"Fetch methods\"' network "
-                   "error and §4.12.1.1 \"Processing model\" step 4 fires `error` at their element; an "
-                   "import() has NO element, and HTML §8.1.6.7.3 HostLoadImportedModule's onSingleFetchComplete "
-                   "makes a null moduleScript ThrowCompletion(a new TypeError), which ECMAScript §13.3.10.3 "
-                   "ContinueDynamicImport hands to the promise's [[Reject]]. BUILD that: carry "
-                   "JS_NewPromiseCapability's reject capability on the record (engine_pending_module_url "
-                   "frees it unused today) and call it here. "
-                   "refusal=%s", why ? why : "(unreadable)");
-            if (why) JS_FreeCString(ctx, why);
-            /* AND IN RELEASE, WHERE THAT ABORT IS COMPILED OUT, THE PARK IS WHAT IT ALREADY WAS — the flow
-               stays parked at the `import()` that asked, which is the state this seam has always had for a
-               refused module load. Nothing is invented and nothing is lost: the arm is missing, not the wait. */
-            JS_FreeValue(ctx, reason);
-            JS_FreeValue(ctx, e);
-            continue;
-        }
         /* BOTH HOMES OF THE SUSPENSION ARE ASKED, AND NEITHER IS REQUIRED — which is the one place this fork
            differs from flow_answer_fork's and is not a weakening of it. That one forks a flow suspended AT a
            synchronous cross-instance read, so it always holds a call site: a frame if it was inside a program,

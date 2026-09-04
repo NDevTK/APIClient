@@ -52,7 +52,17 @@ static JSModuleDef *module_load(JSContext *ctx, const char *module_name, void *o
        no `deliver` closure to run that answer through and needs none: §4.3's response is placed ON the pending
        record and the flow's own delivery settles this promise from it, exactly as it settles from the trusted
        zone's reply (solver/engine.c's pending_park_request). */
-    engine_pending_module_url(ctx, resolving[0], module_name);
+    /* BOTH HALVES GO ON THE PARK, AND `resolving[1]` USED TO BE FREED HERE UNUSED — a capability minted and
+       dropped, which is the write-with-no-reader half of §Architecture's broken-contract pair and cost the
+       engine the whole of ECMAScript §13.3.10.3 "ContinueDynamicImport ( promiseCapability, moduleCompletion
+       )"'s abrupt arm. With only the resolve half recorded, a load the network failed or the trusted zone
+       refused left the delivery one thing it could do: settle SUCCESS with the empty source text, which
+       compiles and evaluates a valid EMPTY MODULE. `import(u).catch(h)` therefore never ran `h`, and a
+       bundle's fallback chunk — the code this tool exists to reach — was unreachable through the one door a
+       page opens it with. HTML §8.1.6.7.3 "HostLoadImportedModule(referrer, moduleRequest, loadState,
+       payload)"'s onSingleFetchComplete is what the park now has both halves for: "If moduleScript is null,
+       then set completion to ThrowCompletion(a new TypeError)". */
+    engine_pending_module_url(ctx, resolving[0], resolving[1], module_name);
     JS_FreeValue(ctx, resolving[0]);
     JS_FreeValue(ctx, resolving[1]);
     JS_ModuleLoadPending(ctx, promise);   /* ownership transfers */

@@ -544,8 +544,14 @@ void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst
                               const FetchRequest *req);
 /* The same park for a DYNAMIC `import()`, whose delivery differs: a module load is owed SOURCE TEXT, so the
    drain settles `resolve` with the reply's BODY rather than with the reply record `fetch()` makes a Response
-   out of. Sharing the fetch park handed the module compiler that record. */
-void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, const char *url);
+   out of. Sharing the fetch park handed the module compiler that record.
+   BOTH HALVES OF THE CAPABILITY, because a load has two outcomes and this is the only kind whose failure is a
+   REJECTION rather than an event at an element. HTML §8.1.6.7.3 "HostLoadImportedModule(referrer,
+   moduleRequest, loadState, payload)"'s onSingleFetchComplete makes a null moduleScript "ThrowCompletion(a new
+   TypeError)"; ECMAScript §13.3.10.3 "ContinueDynamicImport ( promiseCapability, moduleCompletion )" calls
+   "promiseCapability.[[Reject]]" with it. `reject` used to be minted by the caller and freed unused, so a
+   failed chunk settled `resolve` with the empty source text and `import(u).catch(h)` never ran `h`. */
+void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, JSValueConst reject, const char *url);
 /* THE FRONTIER'S BEST WEIGHT — what the host ranks this document's engine by against every other live one.
    Level-1 and level-2 are ONE policy (§scheduler): the host orders engines by their best flow exactly as the
    engine orders flows, so this is flow_weight of the flow the SCHEDULER WOULD PICK — flow_next_to_run with no

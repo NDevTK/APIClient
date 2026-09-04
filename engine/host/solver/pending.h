@@ -102,6 +102,23 @@ int pending_prov_compose(int kind, int path_forced);
  * own-property-count DCHECK — the assert at the origin CLAUDE.md §Architecture names, rather than a comment. */
 #define PEND_SHARE  0
 #define PEND_STRUCT 1
+/* `reject` IS THE CAPABILITY'S OTHER HALF, and it is on the record for the same reason `resolve` is: a park is
+   what a promise's settlement is owed FROM, and a promise has two settlements. It carries exactly one kind's
+   failure — a dynamic `import()`'s, whose network error is not an event at an element but a REJECTION: HTML
+   §8.1.6.7.3 "HostLoadImportedModule(referrer, moduleRequest, loadState, payload)"'s onSingleFetchComplete
+   makes a null moduleScript "ThrowCompletion(a new TypeError)", and ECMAScript §13.3.10.3 "ContinueDynamicImport
+   ( promiseCapability, moduleCompletion )" calls "promiseCapability.[[Reject]]" with it.
+   IT WAS MINTED AND THROWN AWAY, WHICH IS WHY THIS FIELD EXISTS RATHER THAN A SECOND REGISTER.
+   core/loader/module_loader.c builds the capability with JS_NewPromiseCapability and freed `resolving[1]`
+   unused, so nothing in this engine could produce that ThrowCompletion at all: a chunk whose load failed
+   settled `resolve` with the EMPTY SOURCE TEXT, which compiles and evaluates an empty module, so
+   `import(u).catch(h)` ran `h` never and a bundle's fallback chunk was unreachable. A capability half that is
+   minted and dropped is the write-with-no-reader half of §Architecture's broken-contract pair.
+   SHARE, for `resolve`'s reason exactly and in its own words: the already-resolved latch and the promise's
+   settlement are per-flow state the COW delta captures, which is what lets both arms settle one capability.
+   The two halves of one capability may not differ in this, or an arm would hold a reject for a promise whose
+   resolve it shares. Its default is JS_UNDEFINED — "this park owes no rejection", which is every kind but the
+   module load — and the delivery asserts the pair rather than defaulting past a missing half. */
 /* `completion` IS THE ANSWER'S OTHER HALF — ECMA-262 6.2.4 says a completion is a TYPE and a VALUE, and a
    register with a slot for the value and none for the type delivers a peer's THROW as `undefined`. It rides
    the record beside the value it belongs to, is SHARED for the same reason the value is (an answer that
@@ -229,6 +246,8 @@ int pending_prov_compose(int kind, int path_forced);
  * producer states the absence), never a hole a reader fills in. */
 #define PENDING_FIELDS(X)                    \
     X(RESOLVE,    "resolve",   PEND_SHARE,  JS_UNDEFINED)                              \
+    /* …and the OTHER HALF of the same capability, for the one kind whose failure is a REJECTION */ \
+    X(REJECT,     "reject",    PEND_SHARE,  JS_UNDEFINED)                              \
     X(VALUE,      "value",     PEND_SHARE,  JS_UNDEFINED)                              \
     /* no answer yet, so no completion type and no answering timeline */               \
     X(COMPLETION, "completion",PEND_SHARE,  JS_UNDEFINED)                              \
