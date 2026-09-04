@@ -791,7 +791,11 @@ enum {
 };
 
 /* §4.2 "URL miscellaneous": "A URL cannot have a username/password/port if its host is null or the empty
-   host, or its scheme is `file`." The three setters that write those parts all return early on it.
+   string, or its scheme is "file"." The three setters that write those parts all return early on it.
+   THE QUOTATION SAID "the empty host" AND THE STANDARD SAYS "the empty string" — one word, and the word is
+   the one that matters here: the EMPTY HOST is §4.1's own named host value, so the mis-transcription read as
+   a claim about a host variant rather than about a host that serializes to nothing, which is a different
+   predicate over the same three setters.
    IT CARRIES THE SPEC'S WHOLE NAME AND IS PUBLIC. It was `url_cannot_have_credentials`, private — a name that
    drops the PORT, which is the one of the three another standard asks about: HTML §7.2.4's port setter opens
    with this predicate word for word. A shortened name invites the reader who needs the port arm to re-read
@@ -1728,10 +1732,12 @@ static JSValue js_url_get(JSContext *ctx, JSValueConst this_val, int magic)
     return r;
 }
 
-/* URL Standard §6.1 URL class — `toJSON()` and the stringifier are both `href`. */
-static JSValue js_url_tojson(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+/* URL Standard §6.1 URL class — `toJSON()` and the stringifier are both `href`. TWO MEMBERS, ONE ALGORITHM:
+   §6.1 declares `stringifier;` and `USVString toJSON();` separately, so each gets its own declaration and its
+   own minted function (its own `name`), and they share this body because the standard gives them one answer. */
+static JSValue js_url_tojson(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    (void)argc; (void)argv;
+    (void)argc; (void)argv; (void)magic;
     return js_url_get(ctx, this_val, URL_HREF);
 }
 
@@ -1875,6 +1881,14 @@ static JSValue js_url_static(JSContext *ctx, JSValueConst this_val, int argc, JS
     JSValueConst unk = url_unknown_operand(argc, argv);
 
     (void)this_val;
+    /* §6.1 declares `url` REQUIRED, so the args machine has already thrown for a call that did not supply it
+       — Web IDL §3.6 Overload resolution algorithm's count against the surviving entry, performed once for
+       every declared member. This used to read `argc > 0 ? argv[0] : JS_UNDEFINED`, which turned
+       `URL.parse()` into a parse of the string "undefined" and answered `null` where the IDL owes a
+       TypeError; the declaration is what makes that state unreachable, so it is asserted rather than
+       defaulted past. */
+    DCHECK(argc >= 1, "§6.1's URL.parse/canParse reached its body with no address — the declaration makes the "
+                      "first argument required, so the args machine owed a TypeError before this ran");
     /* §6.1's `static URL? parse(USVString url, ...)` and `static boolean canParse(USVString url, ...)` OVER
        UNKNOWN INPUT. They are the constructor's own algorithm without the throw, so they answer the way the
        constructor answers: a derived unknown that keeps the source's identity, so a later branch still forks
@@ -1885,7 +1899,7 @@ static JSValue js_url_static(JSContext *ctx, JSValueConst this_val, int argc, JS
        base decides the result the same way the address does, and asking it here would be a second answer. */
     if (!JS_IsUninitialized(unk)) {
         UrlRecord ex_rec;
-        int got = url_example_parse(ctx, argc > 0 ? argv[0] : JS_UNDEFINED, argc, argv, &ex_rec);
+        int got = url_example_parse(ctx, argv[0], argc, argv, &ex_rec);
         JSValue real = JS_UNDEFINED;
 
         DCHECK(got >= -1 && got <= 1,
@@ -1909,7 +1923,7 @@ static JSValue js_url_static(JSContext *ctx, JSValueConst this_val, int argc, JS
         return concolic_builtin_hook(ctx, unk,
                                      magic == URL_STATIC_CANPARSE ? "URL.canParse" : "URL.parse", real);
     }
-    in = JS_ToCStringLen(ctx, &in_len, argc > 0 ? argv[0] : JS_UNDEFINED);
+    in = JS_ToCStringLen(ctx, &in_len, argv[0]);
     if (!in) return JS_EXCEPTION;
     url_record_init(&base);
     if (argc > 1 && !JS_IsUndefined(argv[1])) {
@@ -2148,31 +2162,77 @@ static JSValue js_url_set(JSContext *ctx, JSValueConst this_val, JSValueConst va
     return JS_UNDEFINED;
 }
 
-static const JSCFunctionListEntry js_url_proto_funcs[] = {
-    JS_CGETSET_MAGIC_DEF("href", js_url_get, js_url_set, URL_HREF),
-    JS_CGETSET_MAGIC_DEF("origin", js_url_get, NULL, URL_ORIGIN),
-    JS_CGETSET_MAGIC_DEF("protocol", js_url_get, js_url_set, URL_PROTOCOL),
-    JS_CGETSET_MAGIC_DEF("username", js_url_get, js_url_set, URL_USERNAME),
-    JS_CGETSET_MAGIC_DEF("password", js_url_get, js_url_set, URL_PASSWORD),
-    JS_CGETSET_MAGIC_DEF("host", js_url_get, js_url_set, URL_HOST),
-    JS_CGETSET_MAGIC_DEF("hostname", js_url_get, js_url_set, URL_HOSTNAME),
-    JS_CGETSET_MAGIC_DEF("port", js_url_get, js_url_set, URL_PORT),
-    JS_CGETSET_MAGIC_DEF("pathname", js_url_get, js_url_set, URL_PATHNAME),
-    JS_CGETSET_MAGIC_DEF("search", js_url_get, js_url_set, URL_SEARCH),
-    JS_CGETSET_MAGIC_DEF("hash", js_url_get, js_url_set, URL_HASH),
-    JS_CGETSET_MAGIC_DEF("searchParams", js_url_get_params, NULL, 0),
-    JS_CFUNC_DEF("toJSON", 0, js_url_tojson),
-    JS_CFUNC_DEF("toString", 0, js_url_tojson),
+/* §6.1 URL class's REGULAR ATTRIBUTES, IN THE ORDER THE IDL DECLARES THEM.
+ *
+ * WHY THIS IS A TABLE AND NOT A `JSCFunctionListEntry` LIST ANY MORE. `JS_SetPropertyFunctionList` gives a
+ * member ECMAScript-BUILTIN attributes — non-enumerable, which is right for `Array.prototype.map` and wrong
+ * for every Web IDL member there has ever been. Web IDL §3.7.6 Attributes' define the attributes states the
+ * descriptor outright: "Let desc be the PropertyDescriptor{[[Getter]]: getter, [[Setter]]: setter,
+ * [[Enumerable]]: true, [[Configurable]]: configurable}", with the preceding step being the only thing an
+ * unforgeable member changes — "Let configurable be false if attr is unforgeable and true otherwise." So
+ * every one of these twelve answered `Object.getOwnPropertyDescriptor(URL.prototype,"href").enumerable` with
+ * false, and `for (const k in url)` enumerated nothing, in an engine whose whole job is to run a page's own
+ * bundle over its own objects. WPT's own oracle names each of them: `url/idlharness.any.js` reported
+ * `property should be enumerable expected true got false` once per member.
+ *
+ * THE REPAIR IS TO ROUTE, NOT TO SPELL A DESCRIPTOR HERE. `idl_install_accessor` performs §3.7.6's define at
+ * the one place the engine states it, and it carries the rest of the section with it — the getter minted with
+ * §3.7.6's own name ("Let name be the string \"get \" prepended to attribute's identifier"), the setter as a
+ * declared member of the args machine rather than a raw C function the coercion of whose operand would run
+ * the page's `toString` from a C activation. A second correct answer written here is the shape that drifts.
+ *
+ * `readonly` IS THE IDL'S OWN COLUMN and decides whether a setter is declared at all; §3.7.6's create an
+ * attribute setter "returns undefined if attr is read only", which is the -1 the declaration loop passes.
+ * `searchParams` carries a different getter and the magic it is declared with is unread by that getter, which
+ * is why the table names the getter per row rather than deriving it from the member. */
+static const struct {
+    const char *name;
+    IdlGetter   get;
+    int         member;      /* the magic `get` is declared with — URL_* for js_url_get, unread otherwise */
+    bool        readonly;    /* §6.1's `readonly` — no setter is declared and none is installed */
+} URL_ATTRS[] = {
+    { "href",         js_url_get,        URL_HREF,     false },
+    { "origin",       js_url_get,        URL_ORIGIN,   true  },
+    { "protocol",     js_url_get,        URL_PROTOCOL, false },
+    { "username",     js_url_get,        URL_USERNAME, false },
+    { "password",     js_url_get,        URL_PASSWORD, false },
+    { "host",         js_url_get,        URL_HOST,     false },
+    { "hostname",     js_url_get,        URL_HOSTNAME, false },
+    { "port",         js_url_get,        URL_PORT,     false },
+    { "pathname",     js_url_get,        URL_PATHNAME, false },
+    { "search",       js_url_get,        URL_SEARCH,   false },
+    { "searchParams", js_url_get_params, 0,            true  },
+    { "hash",         js_url_get,        URL_HASH,     false },
 };
+#define URL_NATTRS ((int)(sizeof(URL_ATTRS) / sizeof(URL_ATTRS[0])))
+
+/* DECLARED ONCE PER AGENT, INSTALLED PER REALM — the IDL pool is sealed after agent init, so a declaration
+   made from a per-realm install works for the first realm and aborts on the second. */
+static int g_url_attr_set[URL_NATTRS];
+static int g_url_tojson    = -1;
+static int g_url_tostring  = -1;
+static int g_url_static_id[2] = { -1, -1 };   /* indexed by URL_STATIC_PARSE / URL_STATIC_CANPARSE */
+static int g_url_objurl_id[2] = { -1, -1 };   /* File API §8.4 Creating and Revoking a blob URL */
 
 /* File API §8's two members, DECLARED on the URL interface and DEFINED by File API — so they install here and
-   the blob URL store lives with the component that knows what a Blob is. Neither runs the page's code: the
-   argument is brand-tested rather than converted, and the store is this engine's own. */
+   the blob URL store lives with the component that knows what a Blob is, which is this engine's own.
+   NEITHER BODY RUNS THE PAGE'S CODE, and the two reach that by different routes now that both are declared
+   members: `createObjectURL` takes its `(Blob or MediaSource)` UNCONVERTED (IDL_ANY) and brand-tests it, so
+   nothing here coerces; `revokeObjectURL` takes a DOMString, and the ToString that may be the page's runs on
+   the args machine BEFORE this body, which is where a coercion that can suspend belongs. This comment used to
+   say the argument is brand-tested rather than converted, full stop — true of one member and, once the second
+   was declared with its IDL's type, no longer true of the other. */
 static JSValue js_url_object_url(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     (void)this_val;
+    /* File API §8.4 Creating and Revoking a blob URL declares both arguments REQUIRED, so Web IDL §3.6
+       Overload resolution algorithm's count has already thrown for a call that omitted one. It is asserted
+       rather than defaulted past for the reason the statics' is. */
+    DCHECK(argc >= 1, "File API §8.4's createObjectURL/revokeObjectURL reached its body with no argument — "
+                      "the declaration makes it required, so the args machine owed a TypeError before this "
+                      "ran");
     if (magic == 0) {
-        char *url = blob_url_create(ctx, argc > 0 ? argv[0] : JS_UNDEFINED);
+        char *url = blob_url_create(ctx, argv[0]);
         JSValue r;
         if (!url) return JS_EXCEPTION;
         r = JS_NewString(ctx, url);
@@ -2181,7 +2241,7 @@ static JSValue js_url_object_url(JSContext *ctx, JSValueConst this_val, int argc
     }
     {
         size_t len = 0;
-        const char *url = JS_ToCStringLen(ctx, &len, argc > 0 ? argv[0] : JS_UNDEFINED);
+        const char *url = JS_ToCStringLen(ctx, &len, argv[0]);
         if (!url) return JS_EXCEPTION;
         blob_url_revoke(ctx, url, len);
         JS_FreeCString(ctx, url);
@@ -2189,18 +2249,24 @@ static JSValue js_url_object_url(JSContext *ctx, JSValueConst this_val, int argc
     }
 }
 
-static const JSCFunctionListEntry js_url_static_funcs[] = {
-    JS_CFUNC_MAGIC_DEF("parse", 1, js_url_static, URL_STATIC_PARSE),
-    JS_CFUNC_MAGIC_DEF("canParse", 1, js_url_static, URL_STATIC_CANPARSE),
-    JS_CFUNC_MAGIC_DEF("createObjectURL", 1, js_url_object_url, 0),
-    JS_CFUNC_MAGIC_DEF("revokeObjectURL", 1, js_url_object_url, 1),
-};
-
 void url_init(JSContext *ctx)
 {
     JSClassDef def = { "URL", .finalizer = url_finalizer, .gc_mark = url_gc_mark };
     JSRuntime *rt = JS_GetRuntime(ctx);
     static const IdlArgType CTOR_ARGS[2] = { IDL_USVSTRING, IDL_USVSTRING };
+    /* §6.1's `static URL? parse(USVString url, optional USVString base)` and `static boolean canParse(...)` —
+       the constructor's own argument list, declared the same way for the same reason. */
+    static const IdlArgType STATIC_ARGS[2] = { IDL_USVSTRING, IDL_USVSTRING };
+    /* File API §8.4 Creating and Revoking a blob URL's `static DOMString createObjectURL((Blob or
+       MediaSource) obj)`. IDL_ANY is this pool's spelling for an argument passed through unconverted, which
+       is what a UNION OF INTERFACE TYPES needs here: the body brand-tests the object and there is no single
+       class for idl_iface_brand to name. The conversion therefore stays exactly what it was; what changes is
+       that the member is now DECLARED, so its arity is Web IDL §3.7.7 Operations' and a zero-argument call is
+       the TypeError the IDL owes. */
+    static const IdlArgType OBJURL_ARGS[1] = { IDL_ANY };
+    /* File API §8.4's `static undefined revokeObjectURL(DOMString url)`. */
+    static const IdlArgType REVOKE_ARGS[1] = { IDL_DOMSTRING };
+    int i;
 
     DCHECK(g_url_rt == NULL || g_url_rt == rt,
            "URL was installed into a second runtime — its class id and step id belong to the first, and one "
@@ -2212,26 +2278,64 @@ void url_init(JSContext *ctx)
     JS_NewClass(rt, g_url_class, &def);
     g_url_ctor_stepid = idl_method_id_step(ctx, CTOR_ARGS, 2, NULL, 0, &js_url_ctor_decl, 0);
     idl_optional_from(1);   /* §5.1: `constructor(USVString url, optional USVString base)` */
+    /* §6.1'S SETTERS, DECLARED RATHER THAN HANDED TO A PROPERTY LIST. Each is `attribute USVString`, so the
+       type is what performs the coercion — and that is not a descriptor detail: the constructor's own comment
+       says why, "`new URL({toString(){…}})` runs that toString, and running it from C is the
+       drive-to-completion this engine aborts on", and `url.href = {toString(){…}}` is the same page code
+       reached through the same standard's setter. A raw JS_CGETSET setter coerces from a C activation. */
+    for (i = 0; i < URL_NATTRS; i++)
+        g_url_attr_set[i] = URL_ATTRS[i].readonly
+                                ? -1
+                                : idl_setter_id(ctx, IDL_USVSTRING, false, js_url_set, URL_ATTRS[i].member);
+    /* §6.1's `USVString toJSON()` and its `stringifier;`. Two members of the interface, so two declarations —
+       each mints its own function object and so answers `name` with its own identifier. */
+    g_url_tojson   = idl_method_id(ctx, NULL, 0, js_url_tojson, 0);
+    g_url_tostring = idl_method_id(ctx, NULL, 0, js_url_tojson, 0);
+    /* THE STATICS ARE MEMBERS TOO. Their arguments were reaching `JS_ToCStringLen` straight out of a C body,
+       which is the constructor's abort one member over, and their arity was a hand-written 1 that the args
+       machine derives instead: Web IDL §3.7.7 Operations' create an operation function ends "Let length be
+       the length of the shortest argument list in the entries in S", which is min(first optional, declared
+       positions) and is why an install has no length to pass and no length to get wrong. */
+    g_url_static_id[URL_STATIC_PARSE] = idl_method_id(ctx, STATIC_ARGS, 2, js_url_static, URL_STATIC_PARSE);
+    idl_optional_from(1);
+    g_url_static_id[URL_STATIC_CANPARSE] =
+        idl_method_id(ctx, STATIC_ARGS, 2, js_url_static, URL_STATIC_CANPARSE);
+    idl_optional_from(1);
+    g_url_objurl_id[0] = idl_method_id(ctx, OBJURL_ARGS, 1, js_url_object_url, 0);
+    g_url_objurl_id[1] = idl_method_id(ctx, REVOKE_ARGS, 1, js_url_object_url, 1);
     realm_declare_intrinsic(url_install_proto);
 }
 
-/* §4.4's INTERFACE PROTOTYPE OBJECT, FOR ONE REALM. `searchParams` hands back a URLSearchParams, which is
-   minted from THIS realm's class slot, so the two interfaces have to be per-realm together or a URL built in
-   one document answers `.searchParams` with an object belonging to another. */
+/* Web IDL §3.7.3 Interface prototype object's OBJECT FOR §6.1 URL class, FOR ONE REALM. `searchParams` hands
+   back a URLSearchParams, which is minted from THIS realm's class slot, so the two interfaces have to be
+   per-realm together or a URL built in one document answers `.searchParams` with an object belonging to
+   another.
+   THIS LINE CITED §4.4 — which under this file's standard is URL §4.4 URL parsing, an algorithm over a string
+   that has nothing to do with an interface's prototype. The concept is Web IDL's and is named above; the
+   number was wrong in the way this project rates worse than an absent one, since it resolves and reads as
+   authoritative. */
 void url_install_proto(JSContext *ctx)
 {
     JSValue proto, prev;
+    int i;
 
     DCHECK(g_url_class != 0, "a realm asked for URL.prototype before the class was declared");
     prev = JS_GetClassProto(ctx, g_url_class);
     DCHECK(JS_IsNull(prev), "url_install_proto ran twice in one realm");
     JS_FreeValue(ctx, prev);
 
+    DCHECK(g_url_tojson >= 0 && g_url_tostring >= 0,
+           "URL.prototype was built in an agent that never declared §6.1's members — the ids are the pool's "
+           "and the pool is sealed after agent init, so there is nothing to install and nothing to mint");
     proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(proto), "URL.prototype could not be allocated");
     idl_interface_tag(ctx, proto, "URL");
-    JS_SetPropertyFunctionList(ctx, proto, js_url_proto_funcs,
-                               (int)(sizeof(js_url_proto_funcs) / sizeof(js_url_proto_funcs[0])));
+    /* Web IDL §3.7.6 Attributes and §3.7.7 Operations, both through the one define each of them states. */
+    for (i = 0; i < URL_NATTRS; i++)
+        idl_install_accessor(ctx, proto, URL_ATTRS[i].name, URL_ATTRS[i].get, URL_ATTRS[i].member,
+                             g_url_attr_set[i]);
+    idl_install_method(ctx, proto, "toJSON", g_url_tojson);
+    idl_install_method(ctx, proto, "toString", g_url_tostring);
     JS_SetClassProto(ctx, g_url_class, proto);
 }
 
@@ -2247,14 +2351,58 @@ void url_install(JSContext *ctx, JSValueConst global)
         JS_SetConstructor(ctx, ctor, proto);
         JS_FreeValue(ctx, proto);
     }
-    JS_SetPropertyFunctionList(ctx, ctor, js_url_static_funcs,
-                               (int)(sizeof(js_url_static_funcs) / sizeof(js_url_static_funcs[0])));
+    /* Web IDL §3.7.7 Operations' define the static operations, on the interface object exactly as its opening
+       sentence puts them: "Static operations are exposed of the interface object." The descriptor is the same
+       one the regular half gets — "Let desc be the PropertyDescriptor{[[Value]]: method, [[Writable]]:
+       modifiable, [[Enumerable]]: true, [[Configurable]]: modifiable}" — which is what a property list does
+       not give and what idl_install_method does. §6.1's two, then File API §8.4's two. */
+    idl_install_method(ctx, ctor, "parse",           g_url_static_id[URL_STATIC_PARSE]);
+    idl_install_method(ctx, ctor, "canParse",        g_url_static_id[URL_STATIC_CANPARSE]);
+    idl_install_method(ctx, ctor, "createObjectURL", g_url_objurl_id[0]);
+    idl_install_method(ctx, ctor, "revokeObjectURL", g_url_objurl_id[1]);
+    /* NAMED RESIDUAL — §3.7's PROPERTY ON THE GLOBAL IS STILL AN ORDINARY [[Set]].
+     *
+     * WHAT IS NOT COVERED: Web IDL §3.7 Interfaces says of an exposed interface that "The name of the
+     * property is the identifier of the interface, and its value is an object called the interface object",
+     * and every implementation defines that property NON-ENUMERABLE — which is what WPT's idlharness asserts,
+     * quoting an edition of §3.7 that stated the descriptor in words ("The property has the attributes
+     * { [[Writable]]: true, [[Enumerable]]: false, [[Configurable]]: true }"; the 31 August 2026 edition this
+     * tree indexes states the property's existence and no longer states its attributes). `JS_SetPropertyStr`
+     * is an ordinary [[Set]] and creates a writable, enumerable, configurable property, so `URL` is
+     * enumerable on the global. Nor is §6.1's `LegacyWindowAlias=webkitURL` installed at all.
+     *
+     * IT IS A RESIDUAL AND NOT A ROUTING FAILURE, WHICH IS WHY IT IS WRITTEN DOWN RATHER THAN FIXED HERE.
+     * There is no installer to route to: `idl_install_interface_object_exposed` is for an interface with NO
+     * constructor — it MINTS its own §3.7.1 object over idl_illegal_ctor, so handing it URL's would replace a
+     * working `new URL()` with a TypeError — and its own body performs the same `JS_SetPropertyStr`, so both
+     * of its call sites carry this defect too. Spelling a descriptor at this line instead would be a second
+     * answer to a question 84 other sites in this engine ask.
+     *
+     * WHAT THE NEXT DIFF BUILDS: an entry in core/idl_args that DEFINES §3.7's property from an interface
+     * object its caller already built (the twin of idl_install_interface_object_exposed for a constructible
+     * interface), with §3.7's descriptor, plus its [LegacyWindowAlias] arm for the aliases §3.7 gives the
+     * same value; idl_install_interface_object_exposed is then that entry's mint plus that define, and this
+     * line and the 84 like it route to it.
+     *
+     * HOW ITS ABSENCE SHOWS: `url/idlharness.any.js` fails "URL interface: existence and properties of
+     * interface object" with `self's property "URL" should not be enumerable expected false got true`, and
+     * "URL interface: legacy window alias" with `webkitURL should exist expected true got false`. */
     JS_SetPropertyStr(ctx, (JSValue)global, "URL", ctor);
 }
 
 void url_free(JSContext *ctx)
 {
+    int i;
+
+    (void)ctx;
     /* the prototypes are the REALMS' — released with their contexts */
     g_url_rt = NULL;
     g_url_ctor_stepid = -1;
+    /* THE POOL IDS GO BACK WITH THE POOL. They index the agent's IDL pool, which the next agent rebuilds from
+       zero, so an id left standing is a live-looking index into a pool that no longer holds that member —
+       which the installs' own DCHECKs would then read as "already declared". */
+    for (i = 0; i < URL_NATTRS; i++) g_url_attr_set[i] = -1;
+    g_url_tojson = g_url_tostring = -1;
+    g_url_static_id[0] = g_url_static_id[1] = -1;
+    g_url_objurl_id[0] = g_url_objurl_id[1] = -1;
 }
