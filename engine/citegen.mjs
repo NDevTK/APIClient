@@ -437,6 +437,28 @@ const SPECS = [
      than assumed to be zero — and printing it is what made someone read the number. */
   { key: "streams", label: "Streams Standard", kind: "bikeshed",
     base: "https://streams.spec.whatwg.org/", edition: "maintained", anchors: ["streams"] },
+  /* OBSERVABLE, AND IT IS AN INDEX RATHER THAN A FOREIGN ROW BECAUSE A REFUSAL WOULD HAVE BOUGHT SILENCE ON A
+     WHOLE COMPONENT. The two answers are not equally honest here, and the choice is decided by what this tree
+     already writes: `core/dom/observable.c`, `observable_ops.c` and `observable_impl.h` carry three hundred-odd
+     citations between them and the standard numbers exactly the sections they name: §2.1 The Subscriber
+     interface, §2.2 The Observable interface, §2.2.1 Supporting concepts, §2.3.1 from(), §2.3.2 and §2.3.3,
+     §3 EventTarget integration.
+     WHAT THE ABSENCE OF THIS ROW WAS DOING WAS NOT COUNTING THEM — IT WAS JUDGING THEM AGAINST ANOTHER
+     DOCUMENT, which is the `file system access` failure and not the Streams one. An unanchored §2.1 in an
+     IDL-and-HTML-dense file falls to the file vote, and the vote had somewhere wrong to go: the quotation of
+     the fully-active guard the four Subscriber members open with was compared against HTML §2.1 and reported
+     as not found, and `fully active` — an HTML term the Observable prose uses — resolved that §2.1 to HTML on
+     its own evidence and raised a misattribution. Both are false and neither is an edit any author could make
+     at the site. A foreign row would have turned those two into a refusal, which is honest and permanent; an
+     index turns them into a VERIFIED, because the sentence is Observable §2.1's own. MEASURED on one frozen
+     tree, this row alone: 166 citations moved OUT of the unjudged bands and into the judged population, +10
+     VERIFIED, three false agreement sites cleared, and nine misattributions of one Observable section for
+     another newly SEEN. The cost of the index is the one every row here carries — a renumbering between
+     two regens, which `--regen` prints — against a refusal's cost of never checking a component this engine
+     implements in full. */
+  { key: "observable", label: "Observable", kind: "bikeshed",
+    base: "https://wicg.github.io/observable/", edition: "maintained",
+    anchors: ["observable", "observable standard"] },
   /* THE EIGHT BELOW WERE COUNTED AND NEVER CHECKED, WHICH READS EXACTLY LIKE A CLEAN BILL AND IS A SILENT ZERO.
      Streams proved the size of that: the run before its row reported 226 citations under OTHER_SPECS, the run
      after audited 928 and raised 26 misattributions that were not new — they were newly SEEN. Every standard
@@ -1899,6 +1921,15 @@ function classifyAnchor(toks) {
   return null;
 }
 
+/* WHICH FILES THIS AUDIT IS FOR, STATED ONCE. The two paragraphs inside `walk` argue each extension into this
+ * set; the set itself has a second reader in `--since`, which built its own list as a git pathspec and was
+ * therefore free to disagree — and did, for as long as `.js` and `.mjs` were audited by the walk and invisible
+ * to the delta. A lane editing the trusted zone got `0 introduced` from a mode that had judged none of it.
+ * A REGEXP AND A PATHSPEC ARE TWO ALPHABETS FOR ONE FACT, so the pathspec is DERIVED from this rather than
+ * written beside it: add an extension here and both readers gain it in the same edit. */
+const AUDITED_EXT = /\.(c|h|md|js|mjs)$/;
+const AUDITED_GLOBS = ["*.c", "*.h", "*.md", "*.js", "*.mjs"];
+
 function walk(dir, out = []) {
   /* THE CHECKOUT IS SHARED AND EDITED UNDER THIS WALK. An editor's temporary file appears between the readdir
    * and the stat and is gone before it, so a scan that trusts a name it just read crashes on another lane's
@@ -1929,7 +1960,7 @@ function walk(dir, out = []) {
      * CLAUDE.md §Architecture makes the bridge a first-class half of the product, and §Security puts the CORB
      * gate, the SOP/CORS decision and the destructive-path deny list in `safe-fetch.js` BY NAME: a wrong Fetch
      * number there governs a security decision and misleads exactly as `core/fetch/fetch.c` would. */
-    else if (/\.(c|h|md|js|mjs)$/.test(e)) out.push(p);
+    else if (AUDITED_EXT.test(e)) out.push(p);
   }
   return out;
 }
@@ -1962,6 +1993,25 @@ function proseSpans(src, path) {
     }
     return out;
   }
+  /* A TEMPLATE LITERAL IS A STRING LITERAL, AND IT IS THE ONE KIND OF PROSE THIS SCANNER COULD NOT SEE. The
+   * branches below are the two places a C file can hold a citation; JavaScript has a THIRD, which this walk
+   * started reading the day `.js` and `.mjs` were admitted and which this scanner was never told about.
+   * WHAT THAT COST WAS BOTH FAILURES AT ONCE, WHICH IS WHY IT IS ONE BRANCH AND NOT A PATCH ON EITHER.
+   *   A template holding no `/*` was READ BY NOTHING: not counted short, not counted unresolved, not counted
+   *     anywhere — the silent zero `quotedRuns` names one screen down, in a file kind the walk believes it is
+   *     auditing. Every generator in `engine/` writes its C output through one, so the prose that TEACHES the
+   *     conventions of the emitted header sat outside every channel here.
+   *   A template holding one was read as a COMMENT, because `/*` inside it opens the comment branch and `*\/`
+   *     ends it — an extent that starts and stops at two marks the author wrote as OUTPUT, and swallows the
+   *     program text between two literals on the way. MEASURED, and it is the one false positive the
+   *     agreement channel carried at the revision this landed: `encgen.mjs` splits an Encoding §4.2 sentence
+   *     across a concatenation, and the joint between the two chunks reached the quotation check INSIDE the quoted
+   *     text, so a correct quotation of a real standard could not match it at any authoring — a finding no
+   *     edit at the site could clear, charged against prose that was right.
+   * THE FIX FOR THE SECOND IS NOT A JOINT RULE HERE. Once a template is a LITERAL, its chunks are adjacent
+   * literals of one expression, and what joins two of those is `LITERAL_JOINT`'s to say — one constant, read
+   * by every walk of that adjacency. This branch owns only what prose IS. */
+  const js = !!path && /\.(js|mjs)$/i.test(path);
   const spans = [];
   const n = src.length;
   for (let i = 0; i < n; ) {
@@ -1972,13 +2022,75 @@ function proseSpans(src, path) {
     } else if (c === "/" && src[i + 1] === "/") {
       let e = src.indexOf("\n", i + 2); if (e < 0) e = n;
       spans.push([i + 2, e, "c"]); i = e;
+    } else if (js && c === "`") {
+      i = scanTemplate(src, i, spans);
     } else if (c === '"' || c === "'") {
       let j = i + 1;
       while (j < n && src[j] !== c) { if (src[j] === "\\") j++; if (src[j] === "\n") break; j++; }
       spans.push([i + 1, Math.min(j, n), "s"]); i = j + 1;
     } else i++;
   }
+  /* EVERY READER OF A SPAN LIST BISECTS IT, so a scanner that emits one out of order or overlapping does not
+   * report a wrong span — it makes `spanAt` and `inSpans` answer about a DIFFERENT span, quietly, for the rest
+   * of the run. The template scanner is the first one here that recurses, and a recursion is exactly where an
+   * offset gets emitted twice; this states the property those readers already assume rather than trusting the
+   * scanner to have it. */
+  for (let i = 1; i < spans.length; i++)
+    if (spans[i][0] < spans[i - 1][1])
+      throw new Error(`${path}: prose spans out of order at ${spans[i - 1]} then ${spans[i]} — every reader of ` +
+                      `this list bisects it, so an overlap answers about the wrong span rather than failing`);
   return spans;
+}
+
+/* ONE TEMPLATE LITERAL, SCANNED AND NOT MATCHED, for the reason `quotedRuns` gives about the other marks: a
+ * pattern with a minimum length silently re-pairs every delimiter after a short one, and a template's
+ * delimiter cannot also be an apostrophe, so a scan that walks it cannot mis-pair. Returns the index just past
+ * the closing backtick; pushes one span per CHUNK, because a substitution is program text and not prose.
+ * THE CHUNK SPLIT IS THE WHOLE POINT OF SCANNING RATHER THAN SLICING. `${e.name}` and `${JSON.stringify(x)}`
+ * are the program, and this tree writes both inside sentences: read as prose they hand the citation scan a
+ * dotted number that is a property access and the quotation check a run of identifiers no standard has. Two
+ * chunks around a substitution are two spans, so nothing merges them and neither half claims the other's
+ * words — which is also the honest reading of a quotation with a computed value spliced into it: it is not a
+ * verbatim quotation of anything. */
+function scanTemplate(src, i, spans) {
+  const n = src.length;
+  let j = i + 1, start = j;
+  while (j < n && src[j] !== "`") {
+    if (src[j] === "\\") { j += 2; continue; }
+    if (src[j] === "$" && src[j + 1] === "{") {
+      if (j > start) spans.push([start, j, "s"]);
+      j = scanSubst(src, j + 2, spans);
+      start = j;
+      continue;
+    }
+    j++;
+  }
+  if (Math.min(j, n) > start) spans.push([start, Math.min(j, n), "s"]);
+  return Math.min(j + 1, n);
+}
+
+/* THE PROGRAM TEXT INSIDE A SUBSTITUTION, walked only far enough to find where it ENDS. A `}` inside a string
+ * or a nested template is not the closing brace, so the walk skips those the same way the top-level scan does
+ * — and a nested template is itself prose, so its chunks are pushed here rather than discarded: this tree
+ * composes a message out of nested templates and the sentence in the inner one is a sentence somebody wrote.
+ * The pushes stay ASCENDING because each is emitted at the offset the walk is standing on, which is what the
+ * ordering assertion above is written over. */
+function scanSubst(src, i, spans) {
+  const n = src.length;
+  let depth = 1, j = i;
+  while (j < n && depth > 0) {
+    const c = src[j];
+    if (c === "{") { depth++; j++; }
+    else if (c === "}") { depth--; j++; }
+    else if (c === "`") j = scanTemplate(src, j, spans);
+    else if (c === '"' || c === "'") {
+      let k = j + 1;
+      while (k < n && src[k] !== c) { if (src[k] === "\\") k++; if (src[k] === "\n") break; k++; }
+      if (Math.min(k, n) > j + 1) spans.push([j + 1, Math.min(k, n), "s"]);
+      j = Math.min(k + 1, n);
+    } else j++;
+  }
+  return j;
 }
 
 /* WHICH SPAN AN OFFSET IS IN, or null. Same bisection as inSpans; kept separate because inSpans answers a
@@ -2054,6 +2166,23 @@ function spanIdxAt(spans, at) {
   return -1;
 }
 
+/* THE JOINT BETWEEN TWO ADJACENT LITERALS OF ONE MESSAGE, WHICH IS ONE RULE AND HAS ONE OWNER. The paragraph
+ * above is written about `proseUnit`'s three readers and it understates the population: `quotedSrcRuns` walks
+ * the SAME adjacency to build a run, so the rule had TWO copies and a paraphrase rather than one copy and two
+ * copies — and the copy that drifts is the one nobody runs against reality. It is a constant here so that a
+ * fifth reader cannot spell it a fourth way.
+ * WHAT A JOINT IS: the closing delimiter, the concatenation the language spells between them if it spells one,
+ * and the opening delimiter. C joins adjacent literals with NOTHING, so this read `"` and whitespace and was a
+ * rule about one language inside a scan that walks two. JavaScript writes the same adjacency `"…" + "…"` and
+ * two backticked chunks joined by one `+`, and a quotation split across one arrived with the joint standing
+ * INSIDE it — measured on `encgen.mjs`, where a correct quotation of Encoding §4.2 could not be matched at ANY
+ * authoring, because nothing an author writes at the site removes a joint the language requires. That is a
+ * finding no edit can clear, charged against prose that is right, which this file rates worse than a miss.
+ * AT MOST ONE OPERATOR, and that is a derivation and not a threshold: one closing delimiter, one
+ * concatenation, one opening delimiter. Two operators in a row is an expression rather than a joint, and
+ * admitting it would let a unit reach across program text this scan never read. */
+const LITERAL_JOINT = /^["'`\s]*\+?["'`\s]*$/;
+
 /* THE PROSE UNIT A CITATION STANDS IN, AND THE ONE PLACE THIS FILE STATES WHERE A MESSAGE BEGINS AND ENDS.
  * The unit is the span the citation sits in, WIDENED in both directions to the maximal run of adjacent string
  * literals whenever it sits in one — the paragraph above says why a run and not a span, and this is that
@@ -2071,11 +2200,10 @@ function proseUnit(src, spans, at) {
   if (i < 0) return null;
   let lo = i, hi = i;
   if (spans[i][2] === "s") {
-    /* adjacent literals of ONE message are separated by nothing but whitespace and their own two quotes */
     while (hi + 1 < spans.length && spans[hi + 1][2] === "s" &&
-           /^["\s]*$/.test(src.slice(spans[hi][1], spans[hi + 1][0]))) hi++;
+           LITERAL_JOINT.test(src.slice(spans[hi][1], spans[hi + 1][0]))) hi++;
     while (lo > 0 && spans[lo - 1][2] === "s" &&
-           /^["\s]*$/.test(src.slice(spans[lo - 1][1], spans[lo][0]))) lo--;
+           LITERAL_JOINT.test(src.slice(spans[lo - 1][1], spans[lo][0]))) lo--;
   }
   return { i, lo, hi, kind: spans[i][2] };
 }
@@ -2087,6 +2215,25 @@ function proseUnitKey(src, spans, at) {
   return u ? u.lo : -1;
 }
 
+/* A UNIT'S OWN TEXT, TAKEN FROM ITS SPANS AND NEVER FROM A SLICE OF THE FILE. Both readers below used to cut
+ * the source between two offsets and then DELETE the joint with a pattern — `(?<!\\)"\s*"` — which is a THIRD
+ * spelling of `LITERAL_JOINT` written in the wrong alphabet: it says what a joint looks like as TEXT while the
+ * constant says what it looks like as an OFFSET RANGE, and the two must agree for a message's words to come
+ * out as the author wrote them. They did not, the moment a second language's joint existed. This reads the
+ * spans `proseUnit` already returned, so the joint is not deleted at all — it is never picked up, because the
+ * program's own characters lie BETWEEN the spans and a walk over spans cannot reach them.
+ * JOINED WITH NOTHING, which is the C semantics being preserved rather than a choice: adjacent literals
+ * concatenate with no separator, so a word split across two of them is one word, and inserting a space here
+ * would split it in every token stream downstream. */
+function unitProse(src, spans, u, from, to) {
+  let out = "";
+  for (let k = u.lo; k <= u.hi; k++) {
+    const a = Math.max(spans[k][0], from), b = Math.min(spans[k][1], to);
+    if (b > a) out += src.slice(a, b);
+  }
+  return u.kind === "s" ? unescapeC(out) : out.replace(/\n\s*\*?\s*/g, " ");
+}
+
 /* The prose a citation governs, flattened into ONE line the way a reader reads it. A comment's line wrap and
  * its `*` gutter are not part of any sentence; a literal run's joints are not either, and the escape a C
  * literal spells `\"` is the quotation mark the author wrote. Unescaping is what makes a quotation inside a
@@ -2096,11 +2243,7 @@ function governedProse(src, spans, at, len, stopAt) {
   if (!u) return "";
   let end = spans[u.hi][1];
   if (stopAt !== null && stopAt < end) end = stopAt;
-  const raw = src.slice(at + len, Math.max(at + len, end));
-  return u.kind === "s"
-    /* the joint between two literals is an unescaped `"` pair; a `\"` is content and must survive it */
-    ? unescapeC(raw.replace(/(?<!\\)"\s*"/g, ""))
-    : raw.replace(/\n\s*\*?\s*/g, " ");
+  return unitProse(src, spans, u, at + len, Math.max(at + len, end));
 }
 
 /* The same prose on the other side of the citation — everything from the start of the unit up to the number.
@@ -2109,8 +2252,7 @@ function governedProse(src, spans, at, len, stopAt) {
 function precedingProse(src, spans, at) {
   const u = proseUnit(src, spans, at);
   if (!u) return "";
-  const raw = src.slice(spans[u.lo][0], at);
-  return u.kind === "s" ? unescapeC(raw.replace(/(?<!\\)"\s*"/g, "")) : raw.replace(/\n\s*\*?\s*/g, " ");
+  return unitProse(src, spans, u, spans[u.lo][0], at);
 }
 
 /* ---- the STEP axis: a number no section index can see ---------------------------------------------------- */
@@ -2665,14 +2807,17 @@ function quotedSrcRuns(src, spans) {
   const m = mask.join("");
   /* A MESSAGE IS SEVERAL ADJACENT LITERALS AND A QUOTATION CROSSES THEM — the same adjacency `governedProse`
    * and `precedingProse` walk, read here as MAXIMAL runs because a quotation that opens before a number and
-   * closes after it must be ONE unit or the number stands inside neither half of it. */
+   * closes after it must be ONE unit or the number stands inside neither half of it. What a joint IS is
+   * `LITERAL_JOINT`'s to say and not this function's — see it at `proseUnit`, which walks the same adjacency
+   * for three other readers. This used to spell the rule again here, and the second spelling is what a joint
+   * in a language the first one had never met went wrong in. */
   const runs = [];
   for (let i = 0; i < spans.length; i++) {
     const start = spans[i][0];
     let end = spans[i][1], j = i;
     if (spans[i][2] === "s")
       while (j + 1 < spans.length && spans[j + 1][2] === "s" &&
-             /^["\s]*$/.test(src.slice(spans[j][1], spans[j + 1][0]))) { j++; end = spans[j][1]; }
+             LITERAL_JOINT.test(src.slice(spans[j][1], spans[j + 1][0]))) { j++; end = spans[j][1]; }
     for (const q of quotedRuns(m.slice(start, end)))
       runs.push([start + q.at, start + q.at + q.text.length + 1]);
     i = j;
@@ -5437,9 +5582,21 @@ function audit(argv, opts = {}) {
     console.log(`      (--all prints them; \`node engine/citegen.mjs <path>\` audits one path and prints every finding in it)`);
   };
 
+  /* AND THIS LINE PRINTS ON THE CLEAN DAY TOO, WHICH IS THE WHOLE OF WHY IT IS AN `else` AND NOT AN `if`.
+     It is the REFUSAL band — the standards this run counted and never checked — and it used to appear only
+     when it was non-empty, which is the shape CLAUDE.md names as furniture: a line nobody learns to look for,
+     because it is absent on every run where it says nothing. That matters in one direction specifically, and
+     it is the direction a reader is least suspicious of. A finding total falls when defects are FIXED and it
+     falls when the instrument STOPS LOOKING, and moving a standard OUT of the judged population and into this
+     band does the second while reading as the first. A reader who cannot see the band at zero has no way to
+     tell which happened. So the zero is stated, in the same words as the non-zero, on every run. */
   if (byOther.size) {
     const all = [...byOther].sort((a, b) => b[1] - a[1]), shown = full ? all : all.slice(0, 14);
     console.log(`  standards seen but not indexed: ${shown.map(([k, v]) => `${k}=${v}`).join(" ")}${tail(all, shown)}`);
+  } else {
+    console.log(`  standards seen but not indexed: none — every standard a citation in this run NAMED has a row in SPECS, ` +
+      `so nothing here was counted and left unchecked on that ground. A standard MOVING into this line is a coverage loss ` +
+      `however small the finding total gets.`);
   }
   const gaps = [...unknownTok].filter(([, v]) => v >= 8).sort((a, b) => b[1] - a[1]);
   if (gaps.length) {
@@ -6135,15 +6292,29 @@ function audit(argv, opts = {}) {
  * a finding it did not introduce gets muted exactly as fast as one that fails it for five hundred it did not
  * introduce. So this prints, and the human decides. */
 function since(ref, argv) {
-  const changed = execFileSync("git", ["diff", "--name-only", ref, "--", "*.c", "*.h", "*.md"],
-    { cwd: ROOT, encoding: "utf8" }).split("\n").filter(Boolean);
-  const files = changed.map((r) => join(ROOT, r)).filter((p) => existsSync(p));
-  if (!files.length) { console.log(`no .c/.h/.md file differs from ${ref} — nothing for this mode to compare`); return; }
+  const git = (args) => execFileSync("git", args, { cwd: ROOT, encoding: "utf8" }).split("\n").filter(Boolean);
+  const changed = git(["diff", "--name-only", ref, "--", ...AUDITED_GLOBS]);
+  /* AND THE FILE THAT IS NOT IN GIT YET, WHICH THIS MODE REPORTED AS `0 introduced` WHILE READING NONE OF IT.
+     `git diff` compares two trees and an UNTRACKED file is in neither, so it is not omitted with a message —
+     it is absent from the list, and the delta prints a clean zero for a diff whose whole content is a new
+     component. That is the excluded-test shape this file names elsewhere: the total LOOKS complete. It is not
+     a `git show` failure and needs no error handling — the `catch` below already reads an absent-at-ref file
+     as empty, which is exactly the right answer for one: every finding in a new file is that diff's own. */
+  const untracked = git(["ls-files", "--others", "--exclude-standard", "--", ...AUDITED_GLOBS]);
+  const files = [...new Set([...changed, ...untracked])].map((r) => join(ROOT, r)).filter((p) => existsSync(p));
+  if (!files.length) { console.log(`no audited file (${AUDITED_GLOBS.join(" ")}) differs from ${ref} or stands untracked — nothing for this mode to compare`); return; }
 
   const baseSrc = new Map();
   for (const p of files) {
     const rel = relative(ROOT, p);
-    try { baseSrc.set(p, execFileSync("git", ["show", `${ref}:${rel}`], { cwd: ROOT, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 })); }
+    /* `stderr: "ignore"` because a file absent at <ref> is the EXPECTED case here and git says so loudly:
+       `fatal: path '<p>' exists on disk, but not in '<ref>'` reaches the terminal on the child's stderr while
+       the `catch` below handles it perfectly. A handled condition that prints a fatal is a false alarm at the
+       top of a report, and a reader who has just been told this mode reads untracked files has every reason
+       to read it as the mode failing on exactly those. Nothing is hidden: the header line states how many of
+       the files read were untracked. */
+    try { baseSrc.set(p, execFileSync("git", ["show", `${ref}:${rel}`],
+      { cwd: ROOT, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] })); }
     catch { baseSrc.set(p, ""); }        /* absent at ref — a new file owns every finding in it */
   }
   const key = (f) => `${f.file}\u0000${f.kind}\u0000${f.no}\u0000${f.msg}\u0000${f.qtext || ""}`.replace(/:\d+/g, "");
@@ -6153,8 +6324,8 @@ function since(ref, argv) {
   const added = tip.filter((f) => !had.has(key(f)));
   const gone = base.filter((f) => !new Set(tip.map(key)).has(key(f)));
 
-  console.log(`spec-citation delta against ${ref}: ${files.length} changed .c/.h/.md file(s), ` +
-    `${base.length} finding(s) before, ${tip.length} after`);
+  console.log(`spec-citation delta against ${ref}: ${files.length} audited file(s) read (${changed.length} ` +
+    `differ from ${ref}, ${untracked.length} untracked), ${base.length} finding(s) before, ${tip.length} after`);
   console.log(`\nINTRODUCED BY THIS DIFF: ${added.length}`);
   for (const f of added) { console.log(`  ${f.file}:${f.line}  ${f.kind}  ${f.msg}`); console.log(`      ${f.text.trim()}`); }
   console.log(`\nRETIRED BY THIS DIFF: ${gone.length}`);

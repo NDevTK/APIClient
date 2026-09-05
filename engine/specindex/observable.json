@@ -1,0 +1,341 @@
+{
+ "spec": "Observable",
+ "key": "observable",
+ "base": "https://wicg.github.io/observable/",
+ "specUpdated": "21 November 2025",
+ "fetched": "2026-09-05",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "introduction"
+  },
+  "2": {
+   "title": "Core infrastructure",
+   "page": "",
+   "id": "core-infrastructure"
+  },
+  "3": {
+   "title": "EventTarget integration",
+   "page": "",
+   "id": "event-target-integration"
+  },
+  "4": {
+   "title": "Security & Privacy Considerations",
+   "page": "",
+   "id": "security-and-privacy"
+  },
+  "5": {
+   "title": "Acknowledgements",
+   "page": "",
+   "id": "acks"
+  },
+  "2.1": {
+   "title": "The Subscriber interface",
+   "page": "",
+   "id": "subscriber-api"
+  },
+  "2.2": {
+   "title": "The Observable interface",
+   "page": "",
+   "id": "observable-api"
+  },
+  "2.2.1": {
+   "title": "Supporting concepts",
+   "page": "",
+   "id": "observable-supporting-concepts"
+  },
+  "2.3": {
+   "title": "Operators",
+   "page": "",
+   "id": "operators"
+  },
+  "2.3.1": {
+   "title": "from()",
+   "page": "",
+   "id": "observable-from"
+  },
+  "2.3.2": {
+   "title": "Observable -returning operators",
+   "page": "",
+   "id": "observable-returning-operators"
+  },
+  "2.3.3": {
+   "title": "Promise -returning operators",
+   "page": "",
+   "id": "promise-returning-operators"
+  }
+ },
+ "dfns": {
+  "addteardown( teardown )": [
+   "2.1"
+  ],
+  "catch( callback )": [
+   "2.3.2"
+  ],
+  "close a subscription": [
+   "2.1"
+  ],
+  "complete steps": [
+   "2.2.1"
+  ],
+  "convert to an observable": [
+   "2.2.1"
+  ],
+  "default error algorithm": [
+   "2.2.1"
+  ],
+  "drop( amount )": [
+   "2.3.2"
+  ],
+  "error steps": [
+   "2.2.1"
+  ],
+  "error( error )": [
+   "2.1"
+  ],
+  "every( predicate options )": [
+   "2.3.3"
+  ],
+  "every(predicate options)": [
+   "2.3.3"
+  ],
+  "filter( predicate )": [
+   "2.3.2"
+  ],
+  "finally( callback )": [
+   "2.3.2"
+  ],
+  "find( predicate options )": [
+   "2.3.3"
+  ],
+  "find(predicate options)": [
+   "2.3.3"
+  ],
+  "first( options )": [
+   "2.3.3"
+  ],
+  "flatmap process next value steps": [
+   "2.3.2"
+  ],
+  "flatmap( mapper )": [
+   "2.3.2"
+  ],
+  "foreach( callback options )": [
+   "2.3.3"
+  ],
+  "foreach(callback options)": [
+   "2.3.3"
+  ],
+  "from( value )": [
+   "2.3.1"
+  ],
+  "inspect( inspectorunion )": [
+   "2.3.2"
+  ],
+  "internal observer": [
+   "2.2.1"
+  ],
+  "internal observers": [
+   "2.1"
+  ],
+  "last( options )": [
+   "2.3.3"
+  ],
+  "map( mapper )": [
+   "2.3.2"
+  ],
+  "new observable( callback )": [
+   "2.2"
+  ],
+  "next steps": [
+   "2.2.1"
+  ],
+  "next( value )": [
+   "2.1"
+  ],
+  "observable event listener invoke algorithm": [
+   "3"
+  ],
+  "reduce( reducer initialvalue options )": [
+   "2.3.3"
+  ],
+  "reduce(reducer initialvalue options)": [
+   "2.3.3"
+  ],
+  "reduce(reducer initialvalue)": [
+   "2.3.3"
+  ],
+  "some( predicate options )": [
+   "2.3.3"
+  ],
+  "some(predicate options)": [
+   "2.3.3"
+  ],
+  "subscribe callback": [
+   "2.2"
+  ],
+  "subscribe to an observable": [
+   "2.2.1"
+  ],
+  "subscribe( observer options )": [
+   "2.2"
+  ],
+  "subscribe(observer options)": [
+   "2.2"
+  ],
+  "subscription controller": [
+   "2.1"
+  ],
+  "switchmap process next value steps": [
+   "2.3.2"
+  ],
+  "switchmap( mapper )": [
+   "2.3.2"
+  ],
+  "take( amount )": [
+   "2.3.2"
+  ],
+  "takeuntil( value )": [
+   "2.3.2"
+  ],
+  "teardown callbacks": [
+   "2.1"
+  ],
+  "toarray( options )": [
+   "2.3.3"
+  ],
+  "weak subscriber": [
+   "2.2"
+  ],
+  "when( type options )": [
+   "3"
+  ],
+  "when(type options)": [
+   "3"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "addteardown( teardown )": {
+   "5": 2
+  },
+  "catch( callback )": {
+   "5": 2
+  },
+  "close a subscription": {
+   "2.2.1": 3
+  },
+  "complete steps": {
+   "2.3.2": 14,
+   "2.3.3": 9
+  },
+  "drop( amount )": {
+   "5": 2
+  },
+  "error steps": {
+   "2.3.2": 15,
+   "2.3.3": 9
+  },
+  "error( error )": {
+   "5": 2,
+   "2.2.1": 10,
+   "2.3.2": 27
+  },
+  "every( predicate options )": {
+   "5": 3
+  },
+  "filter( predicate )": {
+   "5": 2
+  },
+  "finally( callback )": {
+   "5": 2
+  },
+  "find( predicate options )": {
+   "5": 3
+  },
+  "first( options )": {
+   "5": 3
+  },
+  "flatmap( mapper )": {
+   "5": 2
+  },
+  "foreach( callback options )": {
+   "5": 3
+  },
+  "from( value )": {
+   "5": 4,
+   "2.3.2": 5
+  },
+  "inspect( inspectorunion )": {
+   "5": 3
+  },
+  "internal observer": {
+   "2.3.2": 14,
+   "2.3.3": 9
+  },
+  "internal observers": {
+   "2.2.1": 7
+  },
+  "last( options )": {
+   "5": 3
+  },
+  "map( mapper )": {
+   "5": 2
+  },
+  "new observable( callback )": {
+   "5": 3
+  },
+  "next steps": {
+   "2.1": 4,
+   "2.3.2": 14,
+   "2.3.3": 11
+  },
+  "next( value )": {
+   "5": 2,
+   "2.2.1": 3,
+   "2.3.2": 11
+  },
+  "reduce( reducer initialvalue options )": {
+   "5": 4
+  },
+  "some( predicate options )": {
+   "5": 3
+  },
+  "subscribe callback": {
+   "2.2.1": 5,
+   "2.3.2": 11
+  },
+  "subscribe to an observable": {
+   "2.3.2": 15,
+   "2.3.3": 9
+  },
+  "subscribe( observer options )": {
+   "5": 4,
+   "2.2.1": 3
+  },
+  "subscription controller": {
+   "3": 3,
+   "2.2.1": 9,
+   "2.3.2": 19
+  },
+  "switchmap( mapper )": {
+   "5": 2
+  },
+  "take( amount )": {
+   "5": 2
+  },
+  "takeuntil( value )": {
+   "5": 2
+  },
+  "toarray( options )": {
+   "5": 3
+  },
+  "weak subscriber": {
+   "2.2.1": 4
+  },
+  "when( type options )": {
+   "5": 3
+  }
+ }
+}
