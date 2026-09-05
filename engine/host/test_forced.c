@@ -6104,6 +6104,60 @@ static JSContext *tf_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const 
     return ctx;
 }
 
+/* ---- A HOST DIAGNOSTIC'S READ IS AN OWN-SLOT READ, NEVER A [[Get]] ---------------------------------------
+ *
+ * ECMAScript §10.1.8.1 OrdinaryGet ( O, P, Receiver ) step 7 is "Return ? Call(getter, Receiver)" — the page's
+ * function — so a `JS_GetPropertyStr` written in a fixture is a C activation with no flow base under it
+ * driving a JS body to completion. The engine aborts there by name in dev and answers a TypeError in release,
+ * so this is not a style preference: a [[Get]] here either kills the smoke for every lane or returns an
+ * exception the read beside it cannot tell from an absent member.
+ * THE SPELLING WAS ALREADY IN THIS BLOCK, which is the whole of why this is a ROUTING fix and not a second
+ * correct answer: the own-property probes below were written against JS_GetOwnPropertyNoUserCode and the value
+ * reads beside them were not, so ONE question had TWO spellings within twelve lines and only the shorter one
+ * could reach page code. That entry asserts at the CLASS that it runs none of the page's code — an ordinary
+ * object answers out of its own shape, a Proxy aborts — so what comes back is a fact about the SHAPE and never
+ * about what a getter would have said.
+ * AND IT IS STRICTLY STRONGER THAN THE [[Get]] IT REPLACES, WHICH IS WHY THE CONVERSION LOSES NOTHING. A
+ * [[Get]] walks the prototype chain, so it cannot tell an own slot from an inherited one and answers the same
+ * bytes either way; every read here is of a member a standard places on a NAMED object, so the walk was never
+ * wanted. Web IDL §3.8 Platform objects implementing interfaces places an interface object on the realm's
+ * global with "Perform DefineMethodProperty(target, id, interfaceObject, false)", and §3.7.1 Interface object
+ * places that object's prototype on it with a
+ * "PropertyDescriptor{[[Value]]: proto, [[Writable]]: false, [[Enumerable]]: false, [[Configurable]]: false}".
+ * Both are OWN DATA properties of the object named at the call, so this asks for exactly what those two steps
+ * wrote and the placement becomes an ASSERTION where the [[Get]] silently accepted an inherited answer.
+ * THE MESSAGE NAMES BOTH OPERANDS BECAUSE THE CHECK IS INSIDE A HELPER. An assert stamps the line it is
+ * WRITTEN at, so an invariant checked in a shared helper reports the helper for every caller and states a
+ * remedy with no object; the caller therefore passes the ROLE of the object it is asking about beside the
+ * identifier, and an abort says which of this block's four reads produced it. */
+static JSValue tf_own_data_value(JSContext *ctx, JSValueConst obj, const char *id, const char *holder)
+{
+    JSPropertyDescriptor d;
+    JSAtom a = JS_NewAtom(ctx, id);
+    int has;
+
+    CHECKF(a != JS_ATOM_NULL, "the witness name `%s` could not be interned", id);
+    has = JS_GetOwnPropertyNoUserCode(ctx, &d, obj, a);
+    JS_FreeAtom(ctx, a);
+    CHECKF(has == 1,
+           "a worker realm's %s carries no OWN property `%s` (the probe answered %d). Web IDL §3.8 Platform "
+           "objects implementing interfaces places an interface object with \"Perform DefineMethodProperty"
+           "(target, id, interfaceObject, false)\" and §3.7.1 Interface object places its prototype with a "
+           "\"PropertyDescriptor{[[Value]]: proto, [[Writable]]: false, [[Enumerable]]: false, "
+           "[[Configurable]]: false}\", both OWN properties of the object named here — so this is an install "
+           "that did not run or one that ran against the wrong target. -1 is neither: over an ordinary object "
+           "with no exotic hook the only remaining failure is an allocation",
+           holder, id, has);
+    CHECKF(!(d.flags & JS_PROP_GETSET),
+           "a worker realm's %s carries `%s` as an ACCESSOR where Web IDL writes a data property — §3.8's "
+           "DefineMethodProperty and §3.7.1's DefinePropertyOrThrow each define a [[Value]], and a getter in "
+           "that slot is page-reachable code standing where a host diagnostic reads storage",
+           holder, id);
+    JS_FreeValue(ctx, d.getter);
+    JS_FreeValue(ctx, d.setter);
+    return d.value;
+}
+
 /* WEB IDL §3.3.7 [Exposed] STEP 1, MEASURED — the consumer that makes the exposure axis falsifiable.
  *
  * WHAT THIS IS NOT: a worker. It builds no WorkerGlobalScope, runs no worker script and creates no agent —
@@ -6232,20 +6286,28 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
        questions beside it. */
     {
         JSValue wg = JS_GetGlobalObject(worker);
-        JSValue dwgs_c = JS_GetPropertyStr(worker, wg, "DedicatedWorkerGlobalScope");
-        JSValue wgs_c = JS_GetPropertyStr(worker, wg, "WorkerGlobalScope");
-        JSValue dwgs_p = JS_GetPropertyStr(worker, dwgs_c, "prototype");
-        JSValue wgs_p = JS_GetPropertyStr(worker, wgs_c, "prototype");
+        /* THE FOUR READS THAT REACH THESE OBJECTS GO THROUGH ONE DOOR — see tf_own_data_value for why a
+           [[Get]] is the wrong question here and why the own-slot answer is the stronger one. */
+        JSValue dwgs_c = tf_own_data_value(worker, wg, "DedicatedWorkerGlobalScope", "global object");
+        JSValue wgs_c = tf_own_data_value(worker, wg, "WorkerGlobalScope", "global object");
+        JSValue dwgs_p = tf_own_data_value(worker, dwgs_c, "prototype",
+                                           "DedicatedWorkerGlobalScope interface object");
+        JSValue wgs_p = tf_own_data_value(worker, wgs_c, "prototype",
+                                          "WorkerGlobalScope interface object");
+        /* [[GetPrototypeOf]] RUNS NONE OF THE PAGE'S CODE OVER THESE TWO, and that is a contract rather than an
+           accident of the current install: JSClassExoticMethods' get_prototype hook states it in its own words,
+           and the one thing that would break it — a Proxy, whose [[GetPrototypeOf]] IS the page's trap — is not
+           what either of these objects is. So there is no no-user-code spelling to route to here and the read
+           stays as it is. */
         JSValue p1 = JS_GetPrototype(worker, wg);
         JSValue p2 = JS_GetPrototype(worker, p1);
-        JSValue selfv = JS_GetPropertyStr(worker, wg, "self");
-        JSValue bad;
+        JSPropertyDescriptor selfd;
         JSAtom sa = JS_NewAtom(worker, "self");
         JSAtom tag = JS_WellKnownSymbolAtom(JS_WKS_TO_STRING_TAG);
         int own_proto, own_global, own_dwgs, own_tag;
 
         CHECK(sa != JS_ATOM_NULL, "the `self` witness name could not be interned");
-        own_proto  = JS_GetOwnPropertyNoUserCode(worker, NULL, wgs_p, sa);
+        own_proto  = JS_GetOwnPropertyNoUserCode(worker, &selfd, wgs_p, sa);
         own_global = JS_GetOwnPropertyNoUserCode(worker, NULL, wg, sa);
         own_dwgs   = JS_GetOwnPropertyNoUserCode(worker, NULL, dwgs_p, sa);
         own_tag    = JS_GetOwnPropertyNoUserCode(worker, NULL, wg, tag);
@@ -6262,7 +6324,9 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
               "THAT object's must be WorkerGlobalScope.prototype. A page reads this as "
               "`self instanceof WorkerGlobalScope`, and a global left on Object.prototype answers false to "
               "every brand test a bundle writes");
-        /* §3.7.3 against §3.8, in the two directions that tell the placement apart. */
+        /* §3.7.3 against §3.8, in the two directions that tell the placement apart. THIS RUNS BEFORE ANY READ
+           OF `selfd`, and the order is load-bearing rather than tidy: the descriptor is only filled on the
+           arm where own_proto answered 1. */
         CHECK(own_proto == 1 && own_global == 0 && own_dwgs == 0,
               "HTML §10.2.1.1's `self` is not where Web IDL puts it: it is a regular attribute of "
               "`WorkerGlobalScope`, which is NOT declared [Global], so §3.7.3's \"If interface is not declared "
@@ -6270,24 +6334,47 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
               "is therefore an own property of NEITHER the global object nor DedicatedWorkerGlobalScope"
               ".prototype, which §3.7.3 leaves with no member on it at all. A page reads the difference with "
               "getOwnPropertyDescriptor");
-        /* §10.2.1.1: "The self attribute must return the WorkerGlobalScope object itself." */
-        CHECK(JS_VALUE_GET_PTR(selfv) == JS_VALUE_GET_PTR(wg),
-              "HTML §10.2.1.1's `self` did not return the WorkerGlobalScope object itself — a bare `self` is "
-              "how every worker script names its own global, so an answer that is not that object is a "
-              "different program");
-        /* AND ITS BRAND CHECK IS REAL, WHICH IS THE ONE ASSERTION HERE THAT NEEDS ITS OWN OPERAND. Every check
-           above passes over a `self` installed as a plain data value with no §3.7.6 steps behind it at all.
-           Web IDL §3.7.6 Attributes' create an attribute getter throws "if jsValue does not implement target",
-           and WorkerGlobalScope.prototype is an ordinary object that implements nothing — so reading `self`
-           off it must THROW. It must be a TypeError and not an abort: a receiver is page-supplied input. */
-        bad = JS_GetPropertyStr(worker, wgs_p, "self");
-        CHECK(JS_IsException(bad),
-              "reading `self` off WorkerGlobalScope.prototype did not throw — Web IDL §3.7.6 Attributes' "
-              "create an attribute getter step 1.1.2.3 is \"If jsValue does not implement target, then ... "
-              "throw a TypeError\", and that prototype implements nothing. A getter that answers here is one "
-              "with no brand check, which makes every assertion above it pass over a plain data property");
-        JS_FreeValue(worker, bad);
-        JS_FreeValue(worker, JS_GetException(worker));
+        /* ---- AND ITS SHAPE IS THE OTHER HALF OF THE INSTALL, ASKED OF THE DESCRIPTOR ------------------------
+           Everything above passes over a `self` installed as a plain data value with no §3.7.6 steps behind it
+           at all, and the assertion that used to stand here could not close that: it performed a [[Get]] of
+           `self` on WorkerGlobalScope.prototype and required an exception, under a message claiming to prove
+           that the getter carries §3.7.6's brand check. IT PROVED NO SUCH THING. A C-side [[Get]] that reaches
+           ANY accessor is refused by the engine before the getter's body runs — an abort in dev, a TypeError in
+           release — so its two sides could not disagree about the brand check for any build of any getter. What
+           it could really decide is whether the slot is an accessor AT ALL, which is a question about the SHAPE
+           and is what the descriptor answers directly, with no page code and no exception to interpret.
+           SO THE FOUR FACTS Web IDL §3.7.6 Attributes STATES ABOUT THE SLOT ARE ASSERTED AS FOUR, out of its
+           "define the attributes" step: "Let configurable be false if attr is unforgeable and true otherwise"
+           and "Let desc be the PropertyDescriptor{[[Getter]]: getter, [[Setter]]: setter, [[Enumerable]]:
+           true, [[Configurable]]: configurable}". `self` is a regular, non-unforgeable, READ ONLY attribute, so
+           each of the four has exactly one answer and none of them is a constant this fixture chose. */
+        CHECK((selfd.flags & JS_PROP_GETSET) != 0,
+              "HTML §10.2.1.1's `self` is a DATA property of WorkerGlobalScope.prototype where Web IDL §3.7.6 "
+              "Attributes defines an accessor — its \"define the attributes\" step builds a PropertyDescriptor "
+              "out of a getter and a setter, so a slot holding a [[Value]] is a member with no §3.7.6 steps "
+              "behind it at all. Every placement assertion above this line passes over one, which is why the "
+              "shape is asked separately");
+        CHECK(JS_IsFunction(worker, selfd.getter),
+              "HTML §10.2.1.1's `self` is an accessor on WorkerGlobalScope.prototype whose [[Get]] is not a "
+              "function — Web IDL §3.7.6 Attributes' \"define the attributes\" step reads \"Let getter be the "
+              "result of creating an attribute getter given attr, definition, and realm\", and that algorithm "
+              "answers a function object. A page reads this as "
+              "`Object.getOwnPropertyDescriptor(WorkerGlobalScope.prototype, \"self\").get`");
+        CHECK(JS_IsUndefined(selfd.setter),
+              "HTML §10.2.1.1's `self` carries a [[Set]] where Web IDL §3.7.6 Attributes leaves none: the IDL "
+              "declares `readonly attribute WorkerGlobalScope self`, and §3.7.6's own note is \"the algorithm "
+              "to create an attribute setter returns undefined if attr is read only\". A setter here is a "
+              "member a page can write through that the standard gives it no way to write");
+        CHECK((selfd.flags & JS_PROP_ENUMERABLE) != 0 && (selfd.flags & JS_PROP_CONFIGURABLE) != 0,
+              "HTML §10.2.1.1's `self` does not carry Web IDL §3.7.6 Attributes' attribute bits — its \"define "
+              "the attributes\" step is \"Let desc be the PropertyDescriptor{[[Getter]]: getter, [[Setter]]: "
+              "setter, [[Enumerable]]: true, [[Configurable]]: configurable}\" with \"Let configurable be false "
+              "if attr is unforgeable and true otherwise\", and `self` is not [LegacyUnforgeable] — so both are "
+              "true. A page reads enumerable with `for (var k in WorkerGlobalScope.prototype)` and "
+              "configurable by redefining the member, which is what a polyfill does");
+        JS_FreeValue(worker, selfd.value);
+        JS_FreeValue(worker, selfd.getter);
+        JS_FreeValue(worker, selfd.setter);
         /* ECMAScript's own @@toStringTag of "global" must be GONE, or it shadows the §3.7.3 interface tag and
            `Object.prototype.toString.call(self)` answers "[object global]" where a browser answers
            "[object DedicatedWorkerGlobalScope]". core/frame/window.c deletes the identical property at
@@ -6297,7 +6384,25 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
               "a worker realm's global object still carries ECMAScript's own @@toStringTag — it shadows the "
               "Web IDL §3.7.3 class string on DedicatedWorkerGlobalScope.prototype, so "
               "`Object.prototype.toString.call(self)` answers \"[object global]\"");
-        JS_FreeValue(worker, selfv);
+        /* NAMED RESIDUAL — THE GETTER'S ANSWER AND ITS BRAND CHECK.
+           WHAT IS NOT COVERED: the two facts that need the getter's BODY to run. HTML §10.2.1.1's own sentence
+           — "The self attribute must return the WorkerGlobalScope object itself" — is a claim about what a
+           call ANSWERS, and Web IDL §3.7.6 Attributes' create an attribute getter step 1.1.2.3, "If jsValue
+           does not implement target, then ... throw a TypeError", is a claim about what the body does with a
+           receiver that implements nothing. Neither is a property of the slot, so no descriptor read can
+           reach either, and this fixture is a C activation: ECMAScript §10.1.8.1 OrdinaryGet ( O, P, Receiver )
+           step 7 is "Return ? Call(getter, Receiver)", which has no flow base under it here, so a call would
+           drive a page-reachable body to completion instead of parking it.
+           WHAT THE NEXT DIFF BUILDS: the two assertions expressed as a PROGRAM and run in the worker realm as
+           a flow, through the JS_FlowNew/JS_FlowResume pair this file already drives at tf_step_diff_run —
+           `self === globalThis` for the first, and a `try { WorkerGlobalScope.prototype.self } catch (e) { e
+           instanceof TypeError }` for the second — so the getter's body runs with a flow base under it and a
+           park inside it is a park rather than a drive-to-completion.
+           HOW ITS ABSENCE WOULD SHOW: a `self` whose getter answers some other object, or one minted with no
+           §3.7.6 brand check at all, satisfies every assertion above — the slot is still an accessor, its
+           [[Get]] is still a function, its bits are still right. A worker script's bare `self` would then name
+           something that is not its global, and `WorkerGlobalScope.prototype.self` would answer an object
+           where a browser throws, and this realm's own diagnostic would report neither. */
         JS_FreeValue(worker, p1);
         JS_FreeValue(worker, p2);
         JS_FreeValue(worker, wgs_p);
@@ -6508,7 +6613,10 @@ static void idb_key_path_selftest(JSContext *ctx, JSValueConst conn, JSValueCons
     static const char *const EMPTY_ENTRY[] = { "" };
     static const char *const STRINGIFIED[] = { "multi_array", "a,b" };
     JSValue tx, store, first, second, held, entry;
+    JSPropertyDescriptor ed;
+    JSAtom idx;
     const char *s;
+    int got;
 
     idb_selftest_path_valid(ctx, JS_NewString(ctx, "a.b"), true,
                             "§2.5: \"a string consisting of two or more identifiers separated by periods\"");
@@ -6555,7 +6663,28 @@ static void idb_key_path_selftest(JSContext *ctx, JSValueConst conn, JSValueCons
           "Array; `FrozenArray<T>` is a different parameterized type (§3.2.27) that neither this attribute's "
           "declaration (`readonly attribute any keyPath`) nor §4.5's prose names, so freezing it would be a "
           "property of the answer that no sentence of either standard asks for");
-    entry = JS_GetPropertyUint32(ctx, first, 1);
+    /* AND THE ELEMENT IS ENGINE-OWNED STORAGE, SO IT IS READ OFF THE SHAPE — see tf_own_data_value's banner
+       for why a host diagnostic performs no [[Get]] at all. `first` is the plain Array Web IDL §3.2.21 minted
+       for this very call, so its indices are properties THIS RUN created; the [[Get]] that stood here walked
+       to Array.prototype for an index the conversion had dropped and answered `undefined`, which the string
+       compare below reports as a WRONG ORDER. An own read tells the two apart, and the accessor question is
+       asked for the same reason it is asked of `self`: a getter in that slot is page-reachable code standing
+       where this reads storage. */
+    idx = JS_NewAtomUInt32(ctx, 1);
+    CHECK(idx != JS_ATOM_NULL, "the key-path element index could not be interned");
+    got = JS_GetOwnPropertyNoUserCode(ctx, &ed, first, idx);
+    JS_FreeAtom(ctx, idx);
+    CHECK(got == 1,
+          "§4.5's keyPath Array carries no OWN element at index 1 — this store was created with a TWO-entry "
+          "sequence key path, so Web IDL §3.2.21's conversion owes an Array holding both, and an absent index "
+          "is an entry the conversion DROPPED rather than one it ordered wrongly");
+    CHECK(!(ed.flags & JS_PROP_GETSET),
+          "§4.5's keyPath Array carries an ACCESSOR at index 1 — Web IDL §3.2.21 converts a sequence into a "
+          "plain Array whose elements are data properties, so a getter there is page-reachable code standing "
+          "in the storage this diagnostic reads");
+    JS_FreeValue(ctx, ed.getter);
+    JS_FreeValue(ctx, ed.setter);
+    entry = ed.value;
     s = JS_ToCString(ctx, entry);
     CHECK(s != NULL && strcmp(s, "b") == 0,
           "§4.5's conversion did not carry the store's key path across in order");
