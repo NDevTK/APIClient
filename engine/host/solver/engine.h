@@ -257,6 +257,14 @@ void engine_set_timer_hook(int (*fn)(JSContext *ctx));
    browser half. Asked at the same moment and immediately BEFORE the timer step, because the two are due at
    moments on the ONE virtual clock and this one defers to a timer that expires first. */
 void engine_set_rendering_hook(int (*fn)(JSContext *ctx));
+/* THE EVENT LOOP'S IDLE RUNG — Cooperative Scheduling of Background Tasks §5.1 Start an idle period algorithm
+   and §5.2 Invoke idle callbacks algorithm (core/scheduling/idle_callback.h). Registered by that component for
+   the reason the two above are registered rather than named: the scheduler may not depend on the browser half.
+   Asked BELOW both of them, and that is the standard's own position rather than a preference — §5.1's note is
+   "The algorithm is called by the event loop processing model when it determines that the event loop is
+   OTHERWISE IDLE", so a rendering opportunity and a due timer are both work an idle period must not run ahead
+   of. Answers 1 when it started a period or queued one callback. */
+void engine_set_idle_hook(int (*fn)(JSContext *ctx));
 void engine_set_document_done_hook(int (*fn)(JSContext *ctx));
 /* HTML §4.6.8.20 Link type "preload"'s browsing-context-connected time for the elements a PARSE produced
    (html_link.h). Registered by the link component for the reason the two above are registered rather than

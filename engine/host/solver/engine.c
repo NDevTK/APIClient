@@ -540,6 +540,21 @@ void engine_set_rendering_hook(int (*fn)(JSContext *ctx))
     g_rendering_hook = fn;
 }
 
+/* THE EVENT LOOP'S IDLE RUNG — Cooperative Scheduling of Background Tasks §5.1 and §5.2, registered by the
+   component that owns them for the reason the two above are: naming it here would make the scheduler depend on
+   the browser half. It is asked BELOW both clock-driven sources because §5.1's own note places it there ("when
+   it determines that the event loop is OTHERWISE IDLE"), and it is NOT a third clock: an idle period is due
+   whenever nothing else is, so it asks the virtual clock nothing and defers to both by position alone. */
+static int (*g_idle_hook)(JSContext *ctx);
+void engine_set_idle_hook(int (*fn)(JSContext *ctx))
+{
+    DCHECK(fn == NULL || g_idle_hook == NULL,
+           "a second component claimed the event loop's idle rung — there is ONE event loop per agent and its "
+           "idle period is one per Window, so the second claim silently stops the first ever being asked and "
+           "every registered idle callback goes uninvoked with nothing to say so");
+    g_idle_hook = fn;
+}
+
 /* HTML §4.6.8.20 Link type "preload"'s browsing-context-connected time for the elements a PARSE produced,
    registered by the link component for the reason the two above are: naming it here would make the scheduler
    depend on the browser half. It is asked AHEAD of everything else a flow could do, which is the position and
@@ -7883,6 +7898,14 @@ static int flow_step(JSContext *ctx, Flow *f) {
                task on the timer task source given global to run task", so a due timer IS a runnable task and
                §8.1.7.3 step 2 runs it. */
             else if (g_timer_hook && g_timer_hook(ctx)) { g_step_unit = STEP_UNIT_TIMER; return 0; }
+            /* AND THE IDLE RUNG — Cooperative Scheduling of Background Tasks §5.1 Start an idle period
+               algorithm, whose note says it "is called by the event loop processing model when it determines
+               that the event loop is otherwise idle". THIS LINE IS WHERE THAT SENTENCE IS TRUE: every source
+               above has been asked and answered no, so the loop is otherwise idle by construction rather than
+               by a clock reading nobody could take on this host. One step per visit — a period started, or one
+               callback queued — because §5.1 step 6 and §5.2 step 3.4 both QUEUE a task rather than looping,
+               and this rung being reached again IS that task being run. */
+            else if (g_idle_hook && g_idle_hook(ctx)) { g_step_unit = STEP_UNIT_IDLE_PERIOD; return 0; }
             /* ONLY HOST-OWED REPLIES REMAIN: no progress, and NOT finished.
              *
              * BELOW THE TWO CLOCK-DRIVEN SOURCES, which is the same sentence the lifecycle arm makes one rung
@@ -10877,6 +10900,9 @@ void solver_agent_free(JSContext *ctx)
     DCHECK(g_rendering_hook == NULL,
            "§8.1.7.3's in-parallel half was still registered when the solver's agent state was released — "
            "core/rendering/rendering.c claimed it and gives it back at rendering_free");
+    DCHECK(g_idle_hook == NULL,
+           "the event loop's idle rung was still registered when the solver's agent state was released — "
+           "core/scheduling/idle_callback.c claimed it and gives it back at idle_callback_free");
     DCHECK(g_checkpoint_hook == NULL,
            "the end-of-microtask-checkpoint step was still registered when the solver's agent state was "
            "released — core/indexeddb/idb_transaction.c claimed it and gives it back at idb_transaction_free");

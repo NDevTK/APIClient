@@ -85,6 +85,7 @@
 #include "core/platform.h"
 #include "core/realm.h"
 #include "core/rendering/animation_frame.h"
+#include "core/scheduling/idle_callback.h"
 #include "core/rendering/page_reveal.h"
 #include "core/rendering/rendering.h"
 #include "core/resize_observer/resize_observer.h"
@@ -229,6 +230,7 @@ static void d_window_message(JSContext *c, const PlatformAgent *a) { (void)a; wi
 static void d_broadcast_channel(JSContext *c, const PlatformAgent *a) { (void)a; broadcast_channel_init(c); }
 static void d_unhandled_rejection(JSContext *c, const PlatformAgent *a) { (void)a; unhandled_rejection_init(c); }
 static void d_animation_frame(JSContext *c, const PlatformAgent *a) { (void)a; animation_frame_init(c); }
+static void d_idle_callback(JSContext *c, const PlatformAgent *a) { (void)a; idle_callback_init(c); }
 static void d_page_reveal(JSContext *c, const PlatformAgent *a) { (void)a; page_reveal_init(c); }
 static void d_viewport(JSContext *c, const PlatformAgent *a) { (void)a; viewport_init(c); }
 static void d_visual_viewport(JSContext *c, const PlatformAgent *a) { (void)a; visual_viewport_init(c); }
@@ -495,6 +497,7 @@ static void r_timer(JSRuntime *rt) { timer_free(rt); }
    engine's JS_FreeRuntime asserts that list empty. */
 static void r_event_loop(JSRuntime *rt) { event_loop_free(rt); }
 static void r_animation_frame(JSRuntime *rt) { animation_frame_free(rt); }
+static void r_idle_callback(JSRuntime *rt) { idle_callback_free(rt); }
 static void r_structured_clone(JSRuntime *rt) { structured_clone_free(rt); }
 static void r_rendering(JSRuntime *rt) { rendering_free(rt); }
 static void r_document(JSRuntime *rt) { document_agent_free(rt); }
@@ -670,6 +673,7 @@ static void d_structured_clone(JSContext *c, const PlatformAgent *a) { (void)a; 
 static void i_structured_clone(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; structured_clone_install(c, g); }
 static void i_unhandled_rejection(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; unhandled_rejection_install(c, g); }
 static void i_animation_frame(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; animation_frame_install(c, g); }
+static void i_idle_callback(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; idle_callback_install(c, g); }
 static void i_page_reveal(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; page_reveal_install(c, g); }
 static void i_media_query_list(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; media_query_list_install(c, g); }
 static void i_simple_dialogs(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; simple_dialogs_install(c, g); }
@@ -939,6 +943,13 @@ static const PlatformComponent PLATFORM[] = {
     { "unhandled_rejection", d_unhandled_rejection, i_unhandled_rejection, r_unhandled_rejection },
     /* §8.12 Animation frames's map before §8.1.7.3 step 14 consumes it, and §7.4.6.3's reveal after Event. */
     { "animation_frame",     d_animation_frame,     i_animation_frame, r_animation_frame },
+    /* COOPERATIVE SCHEDULING OF BACKGROUND TASKS §4 and §5, BESIDE the row above because they are the same
+       shape of thing — a Window's own list of registered callbacks, drained by a rung of the one event loop —
+       and because neither constrains the other: §4's three concepts and §4.3's prototype chain to nothing this
+       list builds, and §5's rung is registered on the scheduler rather than on a component. ONE ROW FOR TWO
+       INTERFACES: §4.3's IdleDeadline is declared and installed from this component's own `_init`/`_install`
+       (its only producer is §5.2 step 3.2), which is why both witness names below map here. */
+    { "idle_callback",       d_idle_callback,       i_idle_callback, r_idle_callback },
     { "page_reveal",         d_page_reveal,         i_page_reveal, r_page_reveal },
     { "viewport",            d_viewport,            NULL,        r_viewport },
     { "visual_viewport",     d_visual_viewport,     NULL,        r_visual_viewport },
@@ -1135,6 +1146,14 @@ static const struct { const char *name, *component; IdlExposure exposure; } PLAT
     { "postMessage",           "window_message" },
     { "structuredClone",       "structured_clone" },
     { "requestAnimationFrame", "animation_frame" },
+    /* COOPERATIVE SCHEDULING OF BACKGROUND TASKS §4's two Window members, and the Web IDL §3.7.1 interface
+       object of the IdleDeadline that component's §4.3 declares. A real
+       bundle's guard is `window.requestIdleCallback ? window.requestIdleCallback(f) : setTimeout(f, 1)`, so an
+       install that stopped happening takes the setTimeout arm and is invisible; `IdleDeadline` is the name a
+       page reads to feature-detect the interface itself. */
+    { "requestIdleCallback",   "idle_callback" },
+    { "cancelIdleCallback",    "idle_callback" },
+    { "IdleDeadline",          "idle_callback" },
     { "matchMedia",            "media_query_list" },
     /* CSSOM §8.1's namespace object. It is on browser/platform_names.h for the reason the three simple-dialog
        members are, so an install that stopped happening would surface one frame away from the absence —

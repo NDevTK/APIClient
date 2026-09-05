@@ -78,6 +78,7 @@
     X(LIFECYCLE,          "document-lifecycle-stage")                             \
     X(RENDERING,          "queue-rendering-opportunity")                          \
     X(TIMER,              "fire-due-timer")                                       \
+    X(IDLE_PERIOD,        "start-or-run-an-idle-period")                         \
     /* NO `unhandled-rejection-notify` ROW, AND ITS ABSENCE IS A STATEMENT. HTML  */ \
     /* §8.1.4.7 Unhandled promise rejections' "notify about rejected promises" is */ \
     /* a step of "perform a microtask checkpoint", which HTML §8.1.7.3 Processing */ \
