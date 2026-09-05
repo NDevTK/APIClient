@@ -1,6 +1,6 @@
 /* HTML §10.2.1.1 "The WorkerGlobalScope common interface" and §10.2.1.2 "Dedicated workers and the
- * DedicatedWorkerGlobalScope interface" — the OBJECTS a worker realm is made of, before any member of either
- * interface has a value.
+ * DedicatedWorkerGlobalScope interface" — the OBJECTS a worker realm is made of, and the members whose value
+ * this engine can compute, each on the object Web IDL puts it on.
  *
  * WHAT THIS COMPONENT IS, AND WHY IT IS THE FIRST THING A WORKER REALM OWES. Every member of both sections
  * lands on one of exactly three objects: WorkerGlobalScope.prototype, DedicatedWorkerGlobalScope.prototype, or
@@ -16,11 +16,35 @@
  * three objects existed, so this is not the smallest piece of §10.2.1.1 that could be built — it is the piece
  * every other piece is placed onto.
  *
+ * REAL CHROME AGREES WITH BOTH ARMS, MEASURED RATHER THAN ASSUMED — and it is recorded here because the
+ * opposite was relayed to this file as a fact. The brief that produced this diff said real Chrome DIVERGES and
+ * puts some of §10.2.1.2's members on a prototype; CLAUDE.md's own answer to that ("Real Chrome is
+ * CONFIRMATION, never the source of truth — the spec is") would have had the same code written either way, so
+ * what the check bought is not the design but the knowledge that there is no divergence to record. Chrome
+ * 148.0.7778.167, headless, a dedicated worker over a blob: script, reading
+ * `Object.getOwnPropertyDescriptor` on each of the three objects: every member WorkerGlobalScope declares —
+ * `self`, `location`, `navigator`, `importScripts`, `onerror`, `onlanguagechange`, `onrejectionhandled`,
+ * `onunhandledrejection` — and every member its WindowOrWorkerGlobalScope include brings is an own property of
+ * `WorkerGlobalScope.prototype`; every member DedicatedWorkerGlobalScope declares — `name`, `postMessage`,
+ * `close` — and every member ITS includes bring — `onmessage`, `onmessageerror` from MessageEventTarget,
+ * `requestAnimationFrame`, `cancelAnimationFrame` from AnimationFrameProvider — is an OWN PROPERTY OF THE
+ * GLOBAL. `DedicatedWorkerGlobalScope.prototype` carries not one of them. That is §3.7.3's two arms exactly.
+ *
+ * WHAT MAKES THE FALSE CLAIM PLAUSIBLE IS WORTH MORE THAN THE CORRECTION: most of these names ARE on a
+ * prototype, so a reader who checks a few and stops sees a prototype and calls it a divergence. The
+ * discriminator is never WHERE a member is, it is WHICH INTERFACE DECLARES IT — and `WorkerGlobalScope` is
+ * the not-[Global] one, which is why its members are on a prototype in a browser and must be here too.
+ *
+ * THE TWO DIVERGENCES THAT MEASUREMENT DID FIND ARE ABOUT EXISTENCE AND NOT ABOUT PLACEMENT: `onoffline` and
+ * `ononline` are declared by §10.2.1.1 and are ABSENT from Chrome's WorkerGlobalScope entirely — absent from
+ * all three objects — so a build that installs them is stricter than Chrome and correct, and a page's
+ * `"ononline" in self` reads `false` there and will read `true` here. The spec is what this engine follows.
+ *
  * A WORKER IS A DIFFERENT AGENT, AND NOTHING HERE CROSSES AN INSTANCE BOUNDARY. CLAUDE.md's
  * §AN-INSTANCE-IS-AN-ORIGIN-KEYED-AGENT-CLUSTER makes a worker global a separate instance from the Window that
  * owns it, and the closed set that may cross one is serialized TEXT carrying its TYPE. This file builds
- * objects INSIDE one realm and sends nothing anywhere: the two interface objects, two prototypes and one
- * attribute below are all reachable only from the realm they were minted in. §10.2.1.2's `postMessage` is the
+ * objects INSIDE one realm and sends nothing anywhere: the two interface objects, the two prototypes and the
+ * members installed below are all reachable only from the realm they were minted in. §10.2.1.2's `postMessage` is the
  * member that would cross, and it is a named residual at the bottom of this file for exactly that reason —
  * there is no peer instance to post to, and this diff provisions none.
  *
@@ -124,6 +148,69 @@ static JSValue js_wgs_self(JSContext *ctx, JSValueConst this_val, int magic)
     return js;
 }
 
+/* ---- WHERE A MEMBER LANDS, ASSERTED WHERE THE PLACEMENT IS DECIDED --------------------------------------
+ *
+ * Web IDL §3.7.3 "Interface prototype object" and §3.8 "Platform objects implementing interfaces" put a member
+ * on one of three objects and the arm is chosen by whether the DECLARING interface carries [Global]. That is
+ * the one decision this file makes over and over, it is made at an INSTALL — a call whose target is an
+ * argument — and nothing about a wrong target fails: the member works, `self.onmessage = f` still fires, and
+ * only a `getOwnPropertyDescriptor` a page never writes can tell. So it is asserted here rather than left to
+ * the fixture, which measures ONE realm built by ONE host and cannot speak for the next member added.
+ *
+ * IT NAMES BOTH OPERANDS AND NEITHER IS A LITERAL COPIED FROM THE OTHER: the member's IDENTIFIER, which the
+ * install was given, and the OBJECT it was given, compared against the three this function was handed. A
+ * violated placement therefore reports which object holds the member and which one the arm required, rather
+ * than restating the call.
+ *
+ * EVERY VALUE IT STANDS ON IS THIS ENGINE'S. The three objects were built four lines up and no script has run
+ * in this realm — realm intrinsics are installed before any page code exists — so there is no page-supplied
+ * byte anywhere in the question, which is what makes a DCHECK the right macro rather than a refusal.
+ *
+ * [[GetOwnProperty]] IS THE OPERATION AND IT RUNS NONE OF THE PAGE'S CODE, which is JS_GetOwnPropertyNoUserCode's
+ * own declared claim (a class with no exotic own-property hook answers out of its shape). A prototype-walking
+ * read would answer 1 for all three objects of any chain and assert nothing at all. */
+#if APICLIENT_DEV
+typedef enum { WGS_ON_GLOBAL, WGS_ON_DWGS_PROTO, WGS_ON_WGS_PROTO } WgsPlacement;
+
+static void wgs_assert_placed(JSContext *ctx, const char *member, WgsPlacement where,
+                              JSValueConst g, JSValueConst dwgs_p, JSValueConst wgs_p)
+{
+    static const char *const WHAT[3] = {
+        "the realm's global object, which is Web IDL §3.8's arm for a member DedicatedWorkerGlobalScope "
+        "declares, because that interface IS [Global]",
+        "DedicatedWorkerGlobalScope.prototype, which §3.7.3 leaves carrying nothing but `constructor`",
+        "WorkerGlobalScope.prototype, which is §3.7.3's arm for a member WorkerGlobalScope declares, because "
+        "that interface is NOT [Global]"
+    };
+    JSValueConst obj[3];
+    JSAtom a = JS_NewAtom(ctx, member);
+    int own[3], i;
+
+    obj[0] = g; obj[1] = dwgs_p; obj[2] = wgs_p;
+    DCHECK(a != JS_ATOM_NULL, "a §3.7.3 placement witness could not be interned");
+    for (i = 0; i < 3; i++) {
+        own[i] = JS_GetOwnPropertyNoUserCode(ctx, NULL, obj[i], a);
+        DCHECK(own[i] >= 0,
+               "a §3.7.3 placement probe threw — [[GetOwnProperty]] over the three objects this file just "
+               "built runs none of the page's code, and no page code has run in this realm at all");
+    }
+    JS_FreeAtom(ctx, a);
+    DCHECKF(own[(int)where] == 1,
+            "`%s` is not an own property of %s — that is where Web IDL puts it, so either the install below "
+            "was handed the wrong target or it did not run",
+            member, WHAT[(int)where]);
+    for (i = 0; i < 3; i++)
+        DCHECKF(i == (int)where || own[i] != 1,
+                "`%s` is an own property of %s AND is owed to %s — a member placed on two of the three objects "
+                "answers from whichever the prototype chain reaches first, so the wrong one is invisible to "
+                "every read a page makes by writing the member's name",
+                member, WHAT[i], WHAT[(int)where]);
+}
+#define WGS_ASSERT_PLACED(c, m, w, g, d, p) wgs_assert_placed((c), (m), (w), (g), (d), (p))
+#else
+#define WGS_ASSERT_PLACED(c, m, w, g, d, p) ((void)0)
+#endif
+
 /* ---- THE REALM ---------------------------------------------------------------------------------------- */
 
 static void worker_global_scope_install_realm(JSContext *ctx)
@@ -187,6 +274,54 @@ static void worker_global_scope_install_realm(JSContext *ctx)
        and this one is a platform object implementing an interface. The identical delete is at §7.2.2's
        install for the identical reason. */
     JS_DeleteProperty(ctx, g, JS_WellKnownSymbolAtom(JS_WKS_TO_STRING_TAG), 0);
+
+    /* §10.2.1.1's `self` LANDED WHERE §3.7.3 PUT IT — asserted at the install, over the three objects this
+       function has in hand, because the target of an install is an argument and a wrong one is silent. */
+    WGS_ASSERT_PLACED(ctx, "self", WGS_ON_WGS_PROTO, g, dwgs_p, wgs_p);
+
+    /* ---- §10.2.1.2's MEMBERS: THE OTHER ARM OF THE SAME SPLIT, ON THE INSTANCE -----------------------------
+       WEB IDL §2.3 "Interface mixins" MAKES A MIXIN'S MEMBERS THIS INTERFACE'S OWN: "An includes statement is
+       a definition (matching IncludesStatement) used to declare that all objects implementing an interface I
+       (identified by the first identifier) must additionally include the members of interface mixin M
+       (identified by the second identifier)." So `DedicatedWorkerGlobalScope includes MessageEventTarget`,
+       which §10.2.1.2 writes directly beneath its IDL block, declares `onmessage` and `onmessageerror` ON THE
+       [Global] INTERFACE. HTML §9.4.3 "The MessageEventTarget mixin" states them for the OBJECTS rather than
+       for a prototype: "The following are the event handlers (and their corresponding event handler event
+       types) that must be supported, as event handler IDL attributes, by objects implementing the
+       MessageEventTarget interface".
+       So §3.8's create-instance arm is the one that applies and they are OWN PROPERTIES OF THE GLOBAL — the
+       opposite object from `self`, installed out of the same two sections of one standard, and the two land
+       apart because of which interface DECLARES each and for no other reason.
+
+       IT RUNS BEFORE THE TWO PROPERTY REFERENCES BELOW BECAUSE §3.8 PUTS IT THERE. Its create-instance steps
+       read "Define the regular attributes of interface on instance, given realm" and, three steps later,
+       "Define the global property references on instance, given realm" — the interface's own members first,
+       the interface objects after. Nothing in this realm can observe the difference today, and the order is
+       the algorithm's rather than this file's taste: a later member whose install reads the global's own shape
+       would be the first thing that could.
+
+       THE MASK IS A SET AND NOT A LIST OF NAMES. core/events/event_target.h's EH_PORT is the bit for exactly
+       {`onmessage`, `onmessageerror`} — that header's EH_MESSAGE_PORT note says so in its own words, and says
+       why `onclose` had to leave it — so it is §9.4.3's whole set and nothing else. Spelling the two names out
+       here instead would be the hand-copied list core/realm.h exists to abolish, and it would put a second
+       copy of §9.4.3's table in this file beside event_target.c's.
+       ITS NAME SAYS MessagePort AND ITS POPULATION IS FOUR INTERFACES, WHICH IS NOT A DEBT — the reflex on
+       seeing that is to ask for it to be renamed EH_MESSAGE_EVENT_TARGET, and that rename would be WRONG.
+       Three of the four reach the pair through the mixin (`MessagePort includes MessageEventTarget`, `Worker
+       includes MessageEventTarget`, and this one); HTML §9.5 "Broadcasting to other browsing contexts"
+       declares the same two names in BroadcastChannel's OWN IDL, with no includes statement anywhere — so a
+       bit named after the mixin would be carried by an interface that does not include it. What the bit is is
+       the NAME SET, which is what a bitmask over event handler names is for and why it can serve all four.
+
+       AND THE HANDLERS ARE INSTALLABLE ON A [Global] OBJECT TODAY, WHICH IS THE PART THE RESIDUAL BELOW USED
+       TO DENY — see (5)(a), which is corrected rather than deleted. event_target_install_handlers goes through
+       `idl_install_accessor_step`, whose getter and setter are POOL MEMBERS; only the PLAIN-C forms are minted
+       through core/idl_args.c's idl_mint_plain_getter, which is the mint that wraps a global attribute in
+       §3.7.6's opening steps against the Window brand. Two doors, one of them already carrying the receiver's
+       interface as data. */
+    event_target_install_handlers(ctx, g, EH_PORT);
+    WGS_ASSERT_PLACED(ctx, "onmessage", WGS_ON_GLOBAL, g, dwgs_p, wgs_p);
+    WGS_ASSERT_PLACED(ctx, "onmessageerror", WGS_ON_GLOBAL, g, dwgs_p, wgs_p);
 
     /* §3.8's define the global property references, step 3.1 — for both interfaces, because both are exposed
        in this realm and §3.8's population is every interface that is, not every interface that has a member
@@ -254,27 +389,58 @@ void worker_global_scope_free(JSRuntime *rt)
  *
  * (4) §10.2.1.1's SIX EVENT HANDLER IDL ATTRIBUTES — `onerror`, `onlanguagechange`, `onoffline`, `ononline`,
  *     `onrejectionhandled`, `onunhandledrejection`. NOT COVERED: none of the six is installed. NEXT DIFF: a
- *     bit of core/events/event_target.h's §8.1.8.2 mask for the set §10.2.1.1's own table declares, which is
- *     the way that file already takes a mixin's membership; `onerror` additionally needs
+ *     NEW bit in core/events/event_target.h's mask — EH_WORKER_GLOBAL_SCOPE — for the set §10.2.1.1's own
+ *     table declares, which is the way that file already takes an interface's or a mixin's membership. It has
+ *     to be a NEW bit and cannot reuse one: WorkerGlobalScope declares these six ON ITSELF (its IDL writes
+ *     them in the interface, it includes no mixin that carries them), and every existing bit that holds any of
+ *     the six holds dozens of names beside them — `EH_GLOBAL | EH_WINDOW` would put the whole of
+ *     GlobalEventHandlers and WindowEventHandlers on a prototype whose IDL declares neither. `onerror`
+ *     additionally needs
  *     `OnErrorEventHandler`'s five-argument invocation, which core/events/event_handler.c has for §8.1.8.1's
  *     Window `onerror` and which is a DIFFERENT member on a different interface. ABSENCE SHOWS AS:
  *     `self.onerror = f` creates an ordinary own data property on the global instead of writing §8.1.8.1's
  *     event handler map, so `Object.getOwnPropertyDescriptor(WorkerGlobalScope.prototype,"onerror")` is
  *     undefined and the handler never runs.
  *
- * (5) §10.2.1.2's `name`, `postMessage` and `close` — EVERY MEMBER OF §10.2.1.2 — AND A SUBPROBLEM UNDERNEATH
- *     ALL THREE. NOT COVERED: nothing is installed on the global object. Three separate things block them and
- *     they are not the same size:
- *       (a) THE SHARED ONE, WHICH IS THE FIRST TO BUILD. Web IDL §3.7.6's create an attribute getter step
- *           1.1.2.3 throws "if jsValue does not implement target", and this engine's one implementation of
- *           that step — core/idl_args.c's idl_attribute_this, which every attribute installed on a realm's
- *           [Global] object is minted through — resolves the receiver through core/frame/window_proxy.c and
- *           throws a TypeError naming "interface Window". A `name` installed on a worker global would
- *           therefore be an attribute whose brand check asks the wrong question of the right object. NEXT
- *           DIFF: give that one step the realm's [Global] INTERFACE instead of a hardcoded Window — the realm
- *           already states it (core/realm.c's global-names slot), so the fact exists and is not being read.
- *           ABSENCE SHOWS AS: the first §10.2.1.2 attribute installed on a worker global throws
- *           "does not implement interface Window" when read from its own realm's global object.
+ * (5) §10.2.1.2's `name`, `postMessage` and `close` — the three members the interface DECLARES, as against the
+ *     two its MessageEventTarget include brings, which are installed above. NOT COVERED: none of the three.
+ *     Three separate things block them and they are not the same size:
+ *       (a) THE SHARED ONE, WHOSE SCOPE THIS ENTRY GOT WRONG AND WHICH IS WHY `onmessage` LANDED WITHOUT IT.
+ *           Web IDL §3.7.6's create an attribute getter step 1.1.2.3 throws "if jsValue does not implement
+ *           target", and core/idl_args.c's idl_attribute_this resolves the receiver through
+ *           core/frame/window_proxy.c and throws a TypeError naming interface Window. THE CLAIM THAT USED TO
+ *           STAND HERE — that this is the step every attribute installed on a realm's [Global] object is
+ *           minted through — IS FALSE, and it is the shape CLAUDE.md's §AN-OVER-CLAIM-IS-REFUTABLE names: an
+ *           absolute about every member of a population, written from one door. There are TWO doors.
+ *           idl_mint_plain_getter takes the Window-branded wrapper only `if (on_global)`, and it is reached
+ *           only by the PLAIN-C-getter forms — idl_install_accessor, idl_install_accessor_no_user_code,
+ *           idl_install_replaceable and idl_install_replaceable_value. `idl_install_accessor_step`, whose
+ *           getter and setter are POOL MEMBERS, mints through idl_mint_accessor and never touches it; a pool
+ *           member's receiver brand is per-member DATA (`idl_this_iface`), which is the very repair this entry
+ *           says the next diff must build and which that half of the machine already has. §10.2.1.2's
+ *           `onmessage`/`onmessageerror` are step accessors, so they are installed above and this blocks
+ *           nothing about them.
+ *           WHAT IT DOES STILL BLOCK is every PLAIN-C attribute on a worker global, which is `name` here
+ *           (`[Replaceable]`, so idl_install_replaceable) and every WindowOrWorkerGlobalScope attribute in
+ *           residual (7).
+ *           NEXT DIFF: §3.7.6 step 1.1.2.3's `target` becomes THIS realm's [Global] interface, with the
+ *           receiver resolution and the brand coming from that interface rather than from
+ *           core/frame/window_proxy.c. idl_attribute_this now asserts exactly that gap at its own head —
+ *           a DCHECKF over idl_global_names_are_window(realm_global_names(ctx)) — so the crash names the
+ *           repair from inside the file that owes it, and the retired argument beside it (that Window was the
+ *           only [Global] interface here) is recorded there rather than left standing.
+ *           AND THE LAYERING IS THE REASON IT IS NOT ONE DIFF WITH THIS ONE. The brand that `target` would
+ *           have to be for a worker realm is worker_global_scope_implements, which lives in THIS directory,
+ *           and core/idl_args.c may not include core/workers/ — core/ depending on workers/ inverts the
+ *           dependency and would make every host that installs an attribute link the worker layer. So the
+ *           brand travels as DATA the realm's [Global] interface STATES, registered where the realm is built,
+ *           the way core/events/event_target.h's event_target_set_click_terms already hands a component's
+ *           predicate to a layer that must not name it. That is the shape; it is not built, and this residual
+ *           is the whole of what is claimed about it.
+ *           ABSENCE SHOWS AS: a PLAIN-C attribute installed on a worker global reaches that DCHECKF in a dev
+ *           build, and in a release build throws "does not implement interface Window" when read from its own
+ *           realm's global object — and NEITHER happens for a step accessor, which is what makes the two doors
+ *           distinguishable by a one-line probe rather than by reading the mint.
  *       (b) `name` HAS NO PRODUCER. §10.2.1.1 says "A WorkerGlobalScope object has an associated name (a
  *           string). It is set during creation", and the algorithm that does the setting is HTML §10.2.4
  *           "Processing model"'s run a worker, whose own step is "Set worker global scope's name to
@@ -306,12 +472,13 @@ void worker_global_scope_free(JSRuntime *rt)
  (7) THE MIXINS BOTH INTERFACES INCLUDE, WHICH IS THE LARGEST OF THESE AND THE ONE THIS LIST DID NOT NAME
  *     UNTIL engine/idlgen.mjs WAS RUN. NOT COVERED: `WorkerGlobalScope includes WindowOrWorkerGlobalScope`
  *     (HTML §8.2 "The WindowOrWorkerGlobalScope mixin") and `includes FontFaceSource`, and
- *     `DedicatedWorkerGlobalScope includes AnimationFrameProvider` (HTML §8.12 "Animation frames") and
- *     `includes MessageEventTarget` (HTML §9.4.3 "The MessageEventTarget mixin"). Web IDL §2.3 "Interface mixins"
- *     is what makes each of those a member here and not a separate surface: an includes statement is "used to
- *     declare that all objects implementing an interface I identified by the first identifier must
- *     additionally include the members of interface mixin M identified by the second identifier", so every one
- *     of them is owed exactly as a declared member is. That is roughly twenty names, and it dwarfs (1)-(5) put together.
+ *     `DedicatedWorkerGlobalScope includes AnimationFrameProvider` (HTML §8.12 "Animation frames"). Its fourth
+ *     include, `MessageEventTarget`, is BUILT — see the install above; this entry named it while it was not,
+ *     and it is struck here rather than left to read as owed. Web IDL §2.3 "Interface mixins"
+ *     is what makes each of those a member here and not a separate surface: "An includes statement is a
+ *     definition (matching IncludesStatement) used to declare that all objects implementing an interface I
+ *     (identified by the first identifier) must additionally include the members of interface mixin M
+ *     (identified by the second identifier)." So every one of them is owed exactly as a declared member is. That is roughly twenty names, and it dwarfs (1)-(5) put together.
  *     NEXT DIFF: none of them alone — each mixin member belongs to the component that already owns it for
  *     Window (core/timing/timer.c's four timer names, core/fetch/fetch.c's `fetch`, core/structured_clone.c's
  *     `structuredClone`), so what this owes is a per-realm install in each of those components rather than a
