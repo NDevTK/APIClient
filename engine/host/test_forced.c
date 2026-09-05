@@ -61,6 +61,7 @@
 #include "core/dom/document.h"
 #include "core/events/message_port.h"
 #include "core/frame/policy_container.h"
+#include "core/frame/secure_context.h"
 #include "core/events/event_target.h"
 #include "core/platform.h"
 #include "core/realm.h"
@@ -6090,7 +6091,8 @@ static JSContext *tf_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const 
        themselves into, so a component added anywhere is installed in every realm with no host to edit.
        §7.4 decided this child's top-level creation URL and handed it over — using `url` would make an
        about:blank iframe of an http page a secure context. */
-    realm_install_intrinsics(ctx, top_level_url, "Window");   /* §3.3.7 step 1: a child navigable is a Window */
+    /* §3.3.7 step 1: a child navigable is a Window; §8.1.3.5 step 1.2.1: a Window has no owner set. */
+    realm_install_intrinsics(ctx, top_level_url, "Window", false);
     tf_realm_install(ctx, dom, url, origin, kind, policy, permissions_policy, sandbox_flags, doc_id,
                      nav_proxy);
     return ctx;
@@ -6122,15 +6124,35 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
         { "MessageChannel", true, true  },   /* [Exposed=(Window,Worker)] */
     };
     JSContext *worker = JS_NewContext(JS_GetRuntime(ctx));
+    /* THE SECOND WORKER REALM IS THE OTHER ARM OF ONE STEP, and it is a second REALM because that is the only
+       thing that differs between the two: §8.1.3.5 step 1.2.1's operand is per-environment, so measuring both
+       of its answers takes two environments. See the assertion below for what makes the pair discriminating. */
+    JSContext *worker_insecure = JS_NewContext(JS_GetRuntime(ctx));
     JSValue win_global, worker_global;
+    bool owner_secure;
     int i;
 
-    CHECK(worker != NULL, "a realm for the §3.3.7 [Exposed] step 1 measurement could not be created");
+    CHECK(worker != NULL && worker_insecure != NULL,
+          "a realm for the §3.3.7 [Exposed] step 1 measurement could not be created");
     CHECK(JS_AddIntrinsicDOMException(worker) == 0, "the DOMException intrinsic failed to install in a realm");
-    /* THE SAME ONE CALL EVERY REALM GOES THROUGH, with one argument different — which is the whole claim. A
-       second builder here would be the hand-copied intrinsic list core/realm.h exists to abolish, and it would
-       also measure a realm no host can build. */
-    realm_install_intrinsics(worker, top_level_url, "DedicatedWorkerGlobalScope");
+    CHECK(JS_AddIntrinsicDOMException(worker_insecure) == 0,
+          "the DOMException intrinsic failed to install in a realm");
+    /* WHAT THE OWNER WOULD SAY, ASKED OF THE OWNER — HTML §8.1.3.5 Secure contexts step 1.2.1 reads "global's
+       owner set[0]'s relevant settings object is a secure context", and the realm this fixture is standing in
+       is the Window that would be creating the worker. Taking the answer from the owner rather than restating
+       it is the point: a fixture that spelled `true` here would be asserting the arm agrees with a constant,
+       where this asserts it agrees with the OWNER. */
+    owner_secure = secure_context_is(ctx);
+    /* THE SAME ONE CALL EVERY REALM GOES THROUGH, with the arguments a WORKER environment states — which is
+       the whole claim. A second builder here would be the hand-copied intrinsic list core/realm.h exists to
+       abolish, and it would also measure a realm no host can build.
+       AND THE TOP-LEVEL CREATION URL IS NULL, WHICH IS NOT THIS FIXTURE BEING TERSE. HTML §10.2.6.2 Script
+       settings for workers sets a worker environment's "creation URL to worker global scope's url, top-level
+       creation URL to null", so a fixture handing this call the OWNER's address — which is what stood here —
+       builds an environment no host can correctly build and measures §8.1.3.5 out of its step 2, the step the
+       standard never lets a WorkerGlobalScope reach. */
+    realm_install_intrinsics(worker, NULL, "DedicatedWorkerGlobalScope", owner_secure);
+    realm_install_intrinsics(worker_insecure, NULL, "DedicatedWorkerGlobalScope", !owner_secure);
     win_global = JS_GetGlobalObject(ctx);
     worker_global = JS_GetGlobalObject(worker);
     for (i = 0; i < (int)(sizeof EXPECT / sizeof EXPECT[0]); i++) {
@@ -6157,9 +6179,46 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
                in_worker ? "carries" : "does not carry", EXPECT[i].name,
                EXPECT[i].in_worker ? "must be there" : "must not");
     }
+    /* AND THE §8.1.3.5 MEASUREMENT RUNS AFTER THE LOOP ABOVE, WHICH IS AN ORDERING AND NOT A TIDY-UP. The
+       EXPECT table is this fixture's CONTROL: it exists so a build whose per-realm intrinsics stopped
+       installing FAILS on a name that must be there rather than passing on an absence. An assertion placed
+       ahead of it would abort first on any run where the control was the thing with something to say, and the
+       report would then name §8.1.3.5 for a defect in the install column — a control is only a control while
+       it is the first thing that can speak. Nothing below reads anything an intrinsic installs (the realm
+       fields are written by realm_install_intrinsics itself), so this order costs the measurement nothing. */
+    /* HTML §8.1.3.5 STEP 1.2, MEASURED IN BOTH DIRECTIONS AT ONCE. Two worker realms differing in nothing but
+       step 1.2.1's operand must disagree, and NO OTHER ARM OF THE ALGORITHM CAN PRODUCE A DISAGREEMENT: step 2
+       reads the top-level creation URL, which §10.2.6.2 leaves null for both of these, and step 1.3 is a
+       constant. So this is not a check that the branch was written, it is a check that the branch DECIDES —
+       an implementation that answered a worker out of step 2, as this file's did until the realm could state a
+       [Global] interface, gives the two realms the SAME answer whatever that answer is.
+       AND THE WINDOW HALF IS THE CONTROL: it takes step 2 over a real address, so the two steps are measured
+       in one run over one runtime, which is what makes a disagreement attributable to the branch. */
+    CHECKF(secure_context_is(worker) == owner_secure && secure_context_is(worker_insecure) == !owner_secure,
+           "HTML §8.1.3.5 Secure contexts step 1.2 did not decide: two realms whose global object implements "
+           "`DedicatedWorkerGlobalScope`, alike in everything but step 1.2.1's operand, answered %d and %d. "
+           "Step 1.2.1 is \"If global's owner set[0]'s relevant settings object is a secure context, then "
+           "return true\", and §10.2.6.2 Script settings for workers gives neither realm a top-level creation "
+           "URL for step 2 to have answered from — so an answer that ignores the operand is an answer from a "
+           "step this environment cannot reach",
+           (int)secure_context_is(worker), (int)secure_context_is(worker_insecure));
+    /* THE CONTROL IS STEP 2 AGAINST ITS OWN OPERAND, AND IT HAD TO BE — the obvious spelling here compares
+       the Window realm's answer with `owner_secure`, and `owner_secure` was READ FROM IT one call above, so
+       the two sides could not disagree under any state of the program. This asks the other question: a Window
+       environment takes §8.1.3.5 step 2, whose operand is "environment's top-level creation URL", so its
+       answer must be Secure Contexts §3.2's over the address this realm was built at and nothing else. */
+    CHECKF(secure_context_is(ctx) == secure_context_url_potentially_trustworthy(top_level_url),
+           "HTML §8.1.3.5 Secure contexts step 2 did not answer this Window realm from its own top-level "
+           "creation URL: the realm says %d and Secure Contexts §3.2 Is url potentially trustworthy? says %d "
+           "of `%s`. This is the CONTROL for the worker measurement above — a Window must reach step 2, so it "
+           "failing means the branch added for step 1.2 is catching a realm that is not a WorkerGlobalScope",
+           (int)secure_context_is(ctx),
+           (int)secure_context_url_potentially_trustworthy(top_level_url), top_level_url);
+
     JS_FreeValue(ctx, win_global);
     JS_FreeValue(worker, worker_global);
     JS_FreeContext(worker);
+    JS_FreeContext(worker_insecure);
 }
 
 /* INDEXED DATABASE §2.1's DATABASE AND §2.2's OBJECT STORE — the state a store IS, before anything schedules

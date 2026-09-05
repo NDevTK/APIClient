@@ -36,9 +36,47 @@ void realm_declare_intrinsic(RealmIntrinsic install);
  * is a SECURE CONTEXT, and Web IDL §3.3.13's [SecureContext] members are then INSTALLED OR NOT — so the fact
  * has to exist before the intrinsics do. A component cannot supply it (a realm intrinsic has no document in
  * front of it), and a line each host writes before this call is the hand-copied list this whole file exists to
- * abolish; an ARGUMENT is the version a host cannot forget, because forgetting it does not compile. */
+ * abolish; an ARGUMENT is the version a host cannot forget, because forgetting it does not compile.
+ *
+ * AND THE TOP-LEVEL CREATION URL IS NULL FOR A WORKER, WHICH IS WHY THE THIRD ARGUMENT ARRIVED. HTML §10.2.6.2
+ * "Script settings for workers" sets a worker environment's fields straight out: "creation URL to worker
+ * global scope's url, top-level creation URL to null". So the field this call used to REQUIRE is exactly the
+ * field a worker environment does not have, and §8.1.3.5 "Secure contexts" is why that costs nothing — its
+ * step 1.2 answers for a WorkerGlobalScope and RETURNS before step 2 ever reads the URL. Pass NULL for a
+ * worker realm and the value §8.1.3.5 step 1.2.1 reads instead; pass the URL and `false` for a Window one.
+ * Each combination is asserted, so the pair a host cannot state wrongly is the only pair that passes. */
 void realm_install_intrinsics(JSContext *ctx, const char *top_level_creation_url,
-                              const char *global_interface);
+                              const char *global_interface, bool owner_is_secure_context);
+
+/* WEB IDL §3.3.8 [Global]: is this realm's global object a WorkerGlobalScope, or a WorkletGlobalScope — HTML
+ * §8.1.3.5 "Secure contexts" step 1.2's and step 1.3's conditions, over the mask above. core/idl_args.h owns
+ * the reading of the mask and states why it answers an interface question; these two exist so the ONE reader
+ * that needs them does not have to hold a realm and a mask at once. */
+bool realm_global_is_worker(JSContext *ctx);
+bool realm_global_is_worklet(JSContext *ctx);
+
+/* HTML §8.1.3.5 "Secure contexts" STEP 1.2.1's OPERAND — "If global's owner set[0]'s relevant settings object
+ * is a secure context, then return true".
+ *
+ * IT IS A BOOLEAN AND NOT AN OWNER, AND THAT IS THE DESIGN RATHER THAN A SIMPLIFICATION. A worker is a
+ * DIFFERENT AGENT (SECURITY.md's origin-keyed agent cluster), so the owner's environment settings object lives
+ * in another instance and a live reference to it crosses nothing — not a process, not an instance, not a park.
+ * What crosses is the ANSWER, and the standard says in its own note that the answer is the same whichever
+ * owner you ask: "We only need to check the 0th item since they will necessarily all be consistent." So the
+ * fact is settled by the creating agent at worker-creation time and INHERITED, exactly as §8.1.3.1's
+ * top-level creation URL is inherited by a child navigable rather than looked up.
+ *
+ * NAMED RESIDUAL. WHAT IS NOT COVERED: §10.2.1.1 "The WorkerGlobalScope common interface"'s owner set itself —
+ * "A WorkerGlobalScope object has an associated owner set (a set of Document and WorkerGlobalScope objects)" —
+ * is not built, so nothing can ADD an owner, and the only reader of that set this engine has is step 1.2.1,
+ * whose answer arrives as this value instead. WHAT THE NEXT DIFF BUILDS: §10.2.1.1's interface, whose state
+ * includes that set; step 1.2.1 then reads owner set[0]'s stored answer through it and this accessor becomes
+ * the set's first element rather than a field. HOW ITS ABSENCE WOULD SHOW: a NESTED dedicated worker — a
+ * worker created by a worker, which §10.2.3 "The worker's lifetime" is explicitly about ("i.e. if we are
+ * creating a nested dedicated worker") — has a WorkerGlobalScope in its owner set rather than a Document, and
+ * with no set there is nowhere for the outer worker to be recorded; the inner one's answer would have to be
+ * re-stated by whoever creates it instead of being read off the outer global. */
+bool realm_owner_is_secure_context(JSContext *ctx);
 
 /* WEB IDL §3.3.8 [Global]'s GLOBAL NAMES this realm's global object implements — the REALM side of §3.3.7
  * [Exposed] step 1's "realm.[[GlobalObject]] does not implement an interface that is in construct's exposure
@@ -70,7 +108,14 @@ unsigned realm_global_names(JSContext *ctx);
  * gives `about:blank` at the top.
  *
  * OWNED — a JS string, released by the caller. It is a JS value because a per-realm fact is held in quickjs's
- * own per-context slot (below), which is the store that is already freed with the realm. */
+ * own per-context slot (below), which is the store that is already freed with the realm.
+ *
+ * IT IS AN ERROR TO ASK A WORKER REALM. HTML §10.2.6.2 "Script settings for workers" sets a worker
+ * environment's "top-level creation URL to null", so there is no string to return and no reader entitled to
+ * one — the field is not written for such a realm at all rather than written with a stand-in, because a
+ * stand-in is a plausible datum and this one would decide §8.1.3.5's answer. The two readers this engine has
+ * besides §8.1.3.5 both INHERIT the field into a child navigable, which a worker does not have, so the
+ * DCHECK names the question rather than guarding a case anybody meant to reach. */
 JSValue realm_top_level_creation_url(JSContext *ctx);
 
 /* Agent teardown: the declarations are the agent's. */

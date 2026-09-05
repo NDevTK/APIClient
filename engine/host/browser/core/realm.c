@@ -53,6 +53,13 @@ static int g_top_level_url_slot;
    means. */
 static int g_global_names_slot;
 
+/* HTML §8.1.3.5 "Secure contexts" STEP 1.2.1's OPERAND — the answer the worker's owner gave — in the same
+   per-realm store and for the same reason as the two above: it is a fact about the ENVIRONMENT, settled when
+   the realm is built, and step 1.2.1 is asked of it while the intrinsics are still installing (every
+   [SecureContext] member of every per-realm install runs §3.3.7 step 2 through it). WRITTEN ONLY FOR A WORKER
+   REALM, because it is the only realm the step reaches; see realm.h for why the fact crosses as a boolean. */
+static int g_owner_secure_slot;
+
 #if APICLIENT_DEV
 /* bsearch over IDL_EXPOSURE's own rows, keyed by the identifier — the same shape core/idl_args.c uses over the
    same table, because the table is sorted by that field and there is one right way to ask it. */
@@ -126,9 +133,9 @@ static void realm_assert_global_property_references(JSContext *ctx)
 #endif
 
 void realm_install_intrinsics(JSContext *ctx, const char *top_level_creation_url,
-                              const char *global_interface)
+                              const char *global_interface, bool owner_is_secure_context)
 {
-    JSValue url;
+    unsigned names;
     int i;
 
     DCHECK(ctx != NULL, "the per-realm intrinsics were installed into no realm");
@@ -151,15 +158,49 @@ void realm_install_intrinsics(JSContext *ctx, const char *top_level_creation_url
            "page writes over one of them would decide instead of forking, for this realm's whole life. Declare "
            "first: concolic_install_source_overlay for a solver host, concolic_declare_browser_only for a "
            "conformance one, both before platform_agent_init");
-    /* EVERY ENVIRONMENT HAS ONE. §8.1.3.1's field is null only for a worker or a worklet, and this engine has
-       neither — every environment it builds is a Window one, created AT an address. A host with nothing to
-       pass here has not decided which document this realm is, which is the same thing location.c's install
-       asserts one layer up and for the same reason: the empty string used to be answered quietly and the
-       quiet answer hid a host passing the wrong field entirely. */
-    DCHECK(top_level_creation_url != NULL && *top_level_creation_url,
-           "a realm was built with no TOP-LEVEL CREATION URL — HTML §8.1.3.5 reads it to decide whether this "
-           "environment is a SECURE CONTEXT, and Web IDL §3.3.13's members are installed or absent by that "
-           "answer, so a realm without it is a realm whose platform surface is undecided");
+    /* WHICH FIELDS THIS ENVIRONMENT OWES IS DECIDED BY WHAT KIND OF GLOBAL IT HAS, so the [Global] interface is
+       resolved before either of them is checked. That ordering is the fix rather than a detail: this used to
+       require a TOP-LEVEL CREATION URL of every realm, on the argument that "§8.1.3.1's field is null only for
+       a worker or a worklet, and this engine has neither". The spec half of that sentence is exactly right —
+       HTML §10.2.6.2 "Script settings for workers" sets a worker environment's fields as "creation URL to
+       worker global scope's url, top-level creation URL to null" — and the half about this tree stopped being
+       true, so the assert forbade the one realm kind it had correctly described. */
+    names = idl_global_names_of(global_interface);
+    if (idl_global_names_are_worklet(names))
+        DFAILF("a realm was built stating it implements `%s`, a Web IDL §3.3.8 [Global] WORKLET interface — "
+               "HTML §8.1.3.5 Secure contexts step 1.3 (\"If global is a WorkletGlobalScope, then return "
+               "true\") is written below and needs no operand, but which of §8.1.3.1 Environments' fields a "
+               "WORKLET environment states is not derived anywhere in this tree: §10.2.6.2 Script settings for "
+               "workers is a WORKER algorithm and reading it as a worklet's would be a guess about a standard "
+               "nobody fetched. Derive the worklet environment's fields and state them here", global_interface);
+    if (idl_global_names_are_worker(names)) {
+        /* §10.2.6.2 SETS IT TO NULL, so a host that HAS one to pass has built the wrong environment — most
+           likely by handing a worker realm the OWNER document's address, which is a Window's field and would
+           make §8.1.3.5 answer this realm out of step 2 over a URL that is not this environment's. */
+        DCHECK(top_level_creation_url == NULL,
+               "a WORKER realm was built WITH a top-level creation URL — HTML §10.2.6.2 Script settings for "
+               "workers sets a worker environment's \"creation URL to worker global scope's url, top-level "
+               "creation URL to null\", and §8.1.3.5 Secure contexts step 1.2 answers for a WorkerGlobalScope "
+               "and returns before step 2 would read one. Pass NULL and the owner's answer");
+    } else {
+        /* EVERY OTHER ENVIRONMENT HAS ONE, created AT an address. A host with nothing to pass here has not
+           decided which document this realm is, which is the same thing location.c's install asserts one layer
+           up and for the same reason: the empty string used to be answered quietly and the quiet answer hid a
+           host passing the wrong field entirely. */
+        DCHECK(top_level_creation_url != NULL && *top_level_creation_url,
+               "a realm was built with no TOP-LEVEL CREATION URL — HTML §8.1.3.5 reads it to decide whether "
+               "this environment is a SECURE CONTEXT, and Web IDL §3.3.13's members are installed or absent by "
+               "that answer, so a realm without it is a realm whose platform surface is undecided");
+        /* AND IT HAS NO OWNER SET TO HAVE AN ANSWER FROM. §8.1.3.5 step 1.2.1 reads "global's owner set[0]'s
+           relevant settings object", and an owner set is §10.2.1.1 state that only a WorkerGlobalScope has —
+           so `true` here is a host stating a fact that does not exist, and `false` is the one value that says
+           nothing. Asserting it is what makes the fourth argument impossible to state wrongly rather than
+           merely easy to state correctly. */
+        DCHECK(!owner_is_secure_context,
+               "a non-worker realm was built stating an OWNER's secure-context answer — HTML §8.1.3.5 Secure "
+               "contexts step 1.2.1 reads that from a WorkerGlobalScope's §10.2.1.1 owner set, and a Window "
+               "environment has no owner set for the value to be about. A Window realm passes false");
+    }
     /* AND WHICH [Global] INTERFACE ITS GLOBAL OBJECT IMPLEMENTS, for the same reason and one line further on:
        Web IDL §3.3.7 [Exposed] step 1 decides which interface objects the intrinsics below may put on this
        global at all, so the answer has to exist before the first of them runs. A host that does not state it
@@ -173,11 +214,19 @@ void realm_install_intrinsics(JSContext *ctx, const char *top_level_creation_url
         g_top_level_url_slot = realm_value_declare(ctx, "HTML §8.1.3.1 the environment's top-level creation URL");
     if (!g_global_names_slot)
         g_global_names_slot = realm_value_declare(ctx, "Web IDL §3.3.8 [Global] the realm's global names");
-    url = JS_NewString(ctx, top_level_creation_url);
-    CHECK(!JS_IsException(url), "realm: the environment's top-level creation URL could not be allocated");
-    realm_value_set(ctx, g_top_level_url_slot, url);
-    realm_value_set(ctx, g_global_names_slot,
-                    JS_NewInt32(ctx, (int32_t)idl_global_names_of(global_interface)));
+    if (!g_owner_secure_slot)
+        g_owner_secure_slot = realm_value_declare(ctx, "HTML §8.1.3.5 the worker owner's secure-context answer");
+    /* THE GLOBAL NAMES FIRST, because everything below and every install after it reads them: §3.3.7 step 1
+       through idl_exposed_in_realm, and §8.1.3.5's own branch through realm_global_is_worker. */
+    realm_value_set(ctx, g_global_names_slot, JS_NewInt32(ctx, (int32_t)names));
+    if (idl_global_names_are_worker(names)) {
+        realm_value_set(ctx, g_owner_secure_slot, JS_NewBool(ctx, owner_is_secure_context));
+    } else {
+        JSValue url = JS_NewString(ctx, top_level_creation_url);
+
+        CHECK(!JS_IsException(url), "realm: the environment's top-level creation URL could not be allocated");
+        realm_value_set(ctx, g_top_level_url_slot, url);
+    }
     for (i = 0; i < g_n; i++)
         g_list[i](ctx);
 #if APICLIENT_DEV
@@ -193,7 +242,54 @@ JSValue realm_top_level_creation_url(JSContext *ctx)
     DCHECK(g_top_level_url_slot != 0,
            "a realm's top-level creation URL was read in an agent where no realm has been built — the field is "
            "created WITH the realm, so a reader that gets here is standing outside every realm there is");
+    /* AND THIS REALM'S ENVIRONMENT HAS ONE. HTML §10.2.6.2 Script settings for workers sets a worker
+       environment's "top-level creation URL to null", so the slot is deliberately not written for such a realm
+       — and it is asserted HERE rather than answered with a stand-in because every reader of this field acts
+       on the address: §8.1.3.5 decides a platform surface from it, and the other two INHERIT it into a child
+       navigable. A stand-in would be a plausible datum in all three. */
+    DCHECK(!realm_global_is_worker(ctx),
+           "HTML §8.1.3.1 Environments' top-level creation URL was read in a WORKER realm, where §10.2.6.2 "
+           "Script settings for workers sets it to null. §8.1.3.5 Secure contexts asks this realm's question "
+           "at its step 1.2 instead (realm_owner_is_secure_context); a reader inheriting the field into a "
+           "child navigable is standing in a realm that has none, because a worker has no navigables");
     return realm_value_get(ctx, g_top_level_url_slot);   /* asserts THIS realm ran the install */
+}
+
+bool realm_global_is_worker(JSContext *ctx)
+{
+    return idl_global_names_are_worker(realm_global_names(ctx));
+}
+
+bool realm_global_is_worklet(JSContext *ctx)
+{
+    return idl_global_names_are_worklet(realm_global_names(ctx));
+}
+
+bool realm_owner_is_secure_context(JSContext *ctx)
+{
+    JSValue v;
+    bool r;
+
+    DCHECK(g_owner_secure_slot != 0,
+           "HTML §8.1.3.5 step 1.2.1's operand was read in an agent where no realm has been built — the field "
+           "is created WITH the realm, so a reader that gets here is standing outside every realm there is");
+    /* A WORKER REALM IS THE ONLY ONE THAT WRITES IT, so this is the same two-sided statement the URL accessor
+       above makes from the other side: neither field is answered for the realm kind that does not state it. */
+    DCHECK(realm_global_is_worker(ctx),
+           "HTML §8.1.3.5 Secure contexts step 1.2.1's operand — the worker owner's own secure-context answer "
+           "— was read in a realm whose global is not a WorkerGlobalScope. Step 1.2 is what reaches 1.2.1, and "
+           "a realm that does not take that branch is answered by step 2 over its top-level creation URL");
+    v = realm_value_get(ctx, g_owner_secure_slot);   /* asserts THIS realm ran the install */
+    /* READ OFF THE TAG, NEVER THROUGH A COERCION — the same rule realm_global_names states just below, and for
+       the identical reason: JS_ToBool's result is what would say whether the read worked, so a check that read
+       it would be a check with a side effect, compiled out in release. This value is one this file wrote with
+       JS_NewBool and nothing else can reach the slot. */
+    DCHECK(JS_VALUE_GET_TAG(v) == JS_TAG_BOOL,
+           "HTML §8.1.3.5 step 1.2.1's operand is not the boolean this file wrote there — the slot is written "
+           "once, by realm_install_intrinsics, from the answer the creating agent stated");
+    r = JS_VALUE_GET_BOOL(v) != 0;
+    JS_FreeValue(ctx, v);
+    return r;
 }
 
 unsigned realm_global_names(JSContext *ctx)
@@ -229,6 +325,7 @@ void realm_intrinsics_free(void)
        class id in a runtime that is going away with it. */
     g_top_level_url_slot = 0;
     g_global_names_slot = 0;
+    g_owner_secure_slot = 0;
 }
 
 /* A slot IS a class id whose per-context prototype slot holds something that is not a prototype. Nothing is

@@ -2334,6 +2334,17 @@ bool idl_exposed_in_realm(JSContext *ctx, const char *identifier);
  * absent from — a whole platform surface silently missing, which is the shape §3.3.7 step 1 can fail in. */
 unsigned idl_global_names_of(const char *global_interface);
 
+/* HTML §8.1.3.5 "Secure contexts" step 1.2's condition ("If global is a WorkerGlobalScope") and step 1.3's
+ * ("If global is a WorkletGlobalScope"), read off the §3.3.8 [Global] global names above.
+ *
+ * A REALM STORES THE MASK, AND §8.1.3.5 ASKS ABOUT THE INTERFACE — so these are only sound because the two
+ * agree over the corpus's own rows, which idl_args.c derives rather than assumes. Every caller is a step of
+ * that algorithm; core/frame/secure_context.c is the one that runs it and core/realm.c is the one that decides
+ * which fields a realm's environment is required to state. They take the MASK and not a JSContext because the
+ * question is about §3.3.8's vocabulary and not about any realm — the realm is core/realm.h's to supply. */
+bool idl_global_names_are_worker(unsigned global_names);
+bool idl_global_names_are_worklet(unsigned global_names);
+
 /* WEB IDL §3.7.6 Attributes' NAME FOR AN ACCESSOR'S FUNCTION OBJECT — "Let name be the string \"get \"
  * prepended to attribute's identifier" for create an attribute getter, and "Let name be the string \"set \"
  * prepended to id" for create an attribute setter. The installers below perform it themselves and no caller of

@@ -6382,6 +6382,46 @@ unsigned idl_global_names_of(const char *global_interface)
     return r->names;
 }
 
+/* HTML §8.1.3.5 "Secure contexts" step 1.2's and step 1.3's CONDITIONS — "If global is a WorkerGlobalScope"
+   and "If global is a WorkletGlobalScope" — asked of the §3.3.8 [Global] global names a realm already holds.
+
+   WHY THE MASK ANSWERS AN INHERITANCE QUESTION, which is the one thing a reader should check before trusting
+   these. §8.1.3.5's condition is an INTERFACE test, and what a realm stores is the resolved global-name set —
+   so these two are only correct if the `Worker` name and "inherits WorkerGlobalScope" pick out the same rows.
+   They do, and it is DERIVED rather than asserted: over IDL_GLOBALS' nine rows, browser/idl_inheritance.h
+   makes DedicatedWorker, RTCIdentityProvider, ServiceWorker and SharedWorker the four whose ancestry contains
+   `WorkerGlobalScope`, and those are exactly the four IDL_GLOBAL_WORKER rows; the same holds of WORKLET and
+   `WorkletGlobalScope` over the other four, and `Window` carries neither. Both facts come out of the corpus's
+   own tables, so the day webref adds a [Global] interface that breaks the coincidence, the DCHECK below is
+   what says so rather than a member answering out of the wrong arm.
+
+   THEY LIVE HERE AND NOT IN core/realm.c, WHICH IS WHERE THE CALLER IS, for a mechanical reason worth stating
+   because it looks like the wrong home: the global-name bits are browser/idl_exposure.h's enum, this file is
+   the one translation unit that includes that header unconditionally, and realm.c includes it only under
+   APICLIENT_DEV — so moving the include out of that guard to reach two constants would leave IDL_EXPOSURE and
+   IDL_GLOBALS unused in a release build, which is a -Wunused-const-variable in a shared tree. The §3.3.8
+   vocabulary is this component's anyway: idl_global_names_of above resolves a name INTO the mask, and these
+   two read a meaning OUT of it, which is the same question one step apart.
+
+   TWO PREDICATES AND NOT ONE ENUM, because they are two of §8.1.3.5's conditions and a caller asks whichever
+   step it is standing at. One bit is a FACT; each of these is a QUESTION asked of it. */
+bool idl_global_names_are_worker(unsigned global_names)
+{
+    DCHECK(!(global_names & IDL_GLOBAL_WORKER) || !(global_names & IDL_GLOBAL_WORKLET),
+           "a realm's Web IDL §3.3.8 [Global] global names carry BOTH `Worker` and `Worklet` — HTML §8.1.3.5 "
+           "Secure contexts asks step 1.2's WorkerGlobalScope question before step 1.3's WorkletGlobalScope "
+           "one, so a global that is both would take the worker arm and the two arms answer differently. No "
+           "row of browser/idl_exposure.h's IDL_GLOBALS carries both; a corpus that grows one has made "
+           "§8.1.3.5's branch order observable and it must then be read off the interface's ancestry rather "
+           "than off this mask");
+    return (global_names & IDL_GLOBAL_WORKER) != 0u;
+}
+
+bool idl_global_names_are_worklet(unsigned global_names)
+{
+    return (global_names & IDL_GLOBAL_WORKLET) != 0u;
+}
+
 bool idl_exposed_in_realm(JSContext *ctx, const char *identifier)
 {
     const IdlExposureRow *r;

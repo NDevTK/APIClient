@@ -46,10 +46,21 @@ bool secure_context_origin_potentially_trustworthy(const UrlRecord *u);
    URL at all: a string with no origin cannot have a trustworthy one. */
 bool secure_context_url_potentially_trustworthy(const char *url);
 
-/* HTML §8.1.3.5 "is `ctx`'s environment a secure context?" — Is url potentially trustworthy? given this
-   realm's environment's TOP-LEVEL CREATION URL (core/realm.h holds it, because the environment is created with
-   the realm). The Worker and Worklet branches of §8.1.3.5 are not reachable here: this engine has no
-   WorkerGlobalScope and no WorkletGlobalScope, so every environment it has is a Window one. */
+/* HTML §8.1.3.5 "Secure contexts" — "is `ctx`'s environment a secure context?", all three of its steps.
+ *
+ * WHICH ARM ANSWERS IS DECIDED BY THE REALM'S §3.3.8 [Global] INTERFACE, which core/realm.h holds because the
+ * environment is created with the realm. Step 1.2 answers a WorkerGlobalScope from its owner's own answer;
+ * step 1.3 answers a WorkletGlobalScope `true`; step 2 is the top-level-creation-URL test, and it is the arm
+ * this file used to be ALL of.
+ *
+ * THE SENTENCE THAT STOOD HERE SAID THE OTHER TWO WERE UNREACHABLE, on the ground that this engine had no
+ * WorkerGlobalScope and no WorkletGlobalScope and so every environment it had was a Window one — a claim about
+ * the TREE beside reasoning about the STANDARD that was exactly right. The tree moved: a realm now states which
+ * interface its global object implements, so a worker realm is a realm this engine can build, and the missing
+ * arms stopped being a narrowing at that moment. What made it worse than an ordinary gap is that falling
+ * through to step 2 does not fail — HTML §10.2.6.2 "Script settings for workers" gives a worker environment no
+ * top-level creation URL at all, so the fall-through either reads a field that is not this environment's or
+ * reads none, and Web IDL §3.3.13 [SecureContext] spends the answer on whether a member EXISTS. */
 bool secure_context_is(JSContext *ctx);
 
 #endif

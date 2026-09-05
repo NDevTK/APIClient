@@ -1494,7 +1494,11 @@ void platform_agent_init(JSContext *ctx, const char *origin, const char *top_lev
        component that assembles the surface is the one that knows. The day this engine grows a
        WorkerGlobalScope it is a second entry beside this one, with its own install column, and not an
        argument that makes this one answer two questions. */
-    realm_install_intrinsics(ctx, agent->top_level_url, "Window");
+    /* AND `false` IS §8.1.3.5 STEP 1.2.1's OPERAND, WHICH A WINDOW ENVIRONMENT DOES NOT HAVE. The answer is
+       read from a WorkerGlobalScope's §10.2.1.1 owner set, a Window has none, and core/realm.c asserts that a
+       non-worker realm states exactly this value — so the argument is not a default here, it is the only
+       thing this realm is entitled to say. */
+    realm_install_intrinsics(ctx, agent->top_level_url, "Window", false);
 }
 
 void platform_agent_free(void)

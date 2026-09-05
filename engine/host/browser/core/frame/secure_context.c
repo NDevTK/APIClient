@@ -145,13 +145,45 @@ bool secure_context_url_potentially_trustworthy(const char *url)
 
 bool secure_context_is(JSContext *ctx)
 {
-    JSValue v = realm_top_level_creation_url(ctx);
-    const char *url = JS_ToCString(ctx, v);
+    JSValue v;
+    const char *url;
     bool r;
 
+    /* HTML §8.1.3.5 "Secure contexts", ALL THREE OF ITS TOP-LEVEL STEPS, in the order it states them — and the
+       order is the whole content rather than a formality. Step 1 opens "If environment is an environment
+       settings object", which every environment this engine has is; its 1.1 names the global, and 1.2 and 1.3
+       ask what KIND of global that is. Only if neither answers does step 2 look at the top-level creation URL.
+       WHY THAT ORDER IS LOAD-BEARING HERE: HTML §10.2.6.2 "Script settings for workers" sets a worker
+       environment's "creation URL to worker global scope's url, top-level creation URL to null", so step 2 has
+       no operand at all in a worker realm — a worker of an `https` page would answer FALSE out of step 2 and
+       TRUE out of step 1.2, and Web IDL §3.3.13 [SecureContext] then removes a member rather than making it
+       throw, so the two arms are two different platform surfaces and not two spellings of one.
+       THIS FILE USED TO IMPLEMENT STEP 2 ALONE, under a header comment arguing that the Worker and Worklet
+       branches were unreachable here because this engine had no WorkerGlobalScope and no WorkletGlobalScope,
+       so every environment it had was a Window one. That was true of the tree it was written against and
+       stopped being true when a realm gained the ability to state which §3.3.8 [Global] interface its global
+       object implements — at which point the missing arms were not a narrowing but a WRONG ANSWER, reached by
+       falling through to a step the standard never lets a worker reach. (The retired sentence is paraphrased
+       rather than quoted deliberately: double quotes in this tree are a STANDARD's words, and engine/citegen
+       reads them as such — it reported this very paragraph as a fabricated Web IDL §3.3.13 quotation when the
+       sentence was reproduced verbatim, which is the auditor being right about the notation.) */
+    if (realm_global_is_worker(ctx))               /* step 1.2 */
+        return realm_owner_is_secure_context(ctx); /* step 1.2.1 / 1.2.2 — see core/realm.h for why a boolean */
+    /* STEP 1.3, whose whole body is the answer: "If global is a WorkletGlobalScope, then return true."
+       ("Worklets can only be created in secure contexts.") NOTHING IN THIS BUILD REACHES IT — no host states a
+       worklet [Global] interface and core/realm.c DFAILs on one — and it is written anyway rather than left
+       for the day a worklet realm arrives, because a step omitted here is a step whoever builds that realm has
+       to REMEMBER, which is the hand-copied list core/realm.h exists to abolish. It has no operand, so there is
+       nothing about it that could be got wrong by writing it early. */
+    if (realm_global_is_worklet(ctx))              /* step 1.3 */
+        return true;
+    /* STEP 2, and STEP 3's `false` as the answer of the predicate it calls. */
+    v = realm_top_level_creation_url(ctx);
+    url = JS_ToCString(ctx, v);
     /* THE ENVIRONMENT IS THE REALM'S AND IT IS SET WHEN THE REALM IS BUILT, so there is no realm this can be
-       asked of that has none — realm_top_level_creation_url asserts that from the other side. A ToString over
-       a string runs no page code and has nothing to fail with. */
+       asked of that has none — realm_top_level_creation_url asserts that from the other side, including the
+       worker case the branch above has already returned for. A ToString over a string runs no page code and
+       has nothing to fail with. */
     CHECK(url != NULL, "the realm's top-level creation URL would not convert to a C string");
     r = secure_context_url_potentially_trustworthy(url);
     JS_FreeCString(ctx, url);
