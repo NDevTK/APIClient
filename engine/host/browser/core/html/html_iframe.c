@@ -1,7 +1,11 @@
 /* HTMLIFrameElement's NAVIGABLE — HTML §4.8.5, and the element half of the cross-document machinery.
  *
- * §4.8.5's insertion steps CREATE A CHILD NAVIGABLE when an `<iframe>` is inserted into a document, and they do
- * it THERE — synchronously, in the same turn as the append. `frame.contentWindow` answers on the very next line
+ * §4.8.5's POST-CONNECTION steps CREATE A CHILD NAVIGABLE when an `<iframe>` is inserted into a document, and
+ * they do it THERE — synchronously, in the same turn as the append, because DOM §4.2.3's insert step 12 runs
+ * them over staticNodeList before the write returns. POST-CONNECTION AND NOT INSERTION IS THE STANDARD'S OWN
+ * CHOICE AND IT IS FORCED: §4.2.3 defines the insertion steps as steps that "must not modify the node tree that
+ * insertedNode participates in, create browsing contexts, fire events, or otherwise execute JavaScript", and
+ * creating a child navigable creates a browsing context. `frame.contentWindow` answers on the very next line
  * in every browser, and the spec files say so directly: `const otherW = document.body.appendChild(frame)
  * .contentWindow` then reads `otherW.self`. It is not lazily on the first `contentWindow` either, which is
  * observably different — a page may insert a frame and read `window.length` without ever touching it.

@@ -1,13 +1,21 @@
 /* EVERY CSS PROPERTY DEFINITION CARRIES AN "Applies to:" LINE, and CSSOM §9 READS IT — this is that line.
  *
- * §9 does not say "the resolved value of `width` is the used value". It says: "If THE PROPERTY APPLIES TO THE
- * ELEMENT and the resolved value of the display property is not none or contents, then the resolved value is
- * the used value. Otherwise the resolved value is the computed value." That is a CONJUNCTION, and only its
- * second half had ever been asked here — so `getComputedStyle(span).width` was routed to a used value that
+ * CSSOM §9 "Resolved Values" is NOT the flat rule that the resolved value of `width` is the used value —
+ * that sentence is nobody's and is written here without quotation marks for that reason. §9 says: "If
+ * THE PROPERTY APPLIES TO THE ELEMENT OR PSEUDO-ELEMENT and the resolved value of the display property is not
+ * none or contents, then the resolved value is the used value. Otherwise the resolved value is the computed
+ * value." That is a CONJUNCTION, and only its second half had ever been asked here — so
+ * `getComputedStyle(span).width` was routed to a used value that
  * does not exist, when CSS 2.1 §10.2's own "Applies to: all elements but non-replaced inline elements" makes
  * the answer the COMPUTED value, `auto`, in every user agent. The first conjunct is not a way of excluding
  * elements from a layout that is not written yet: it is a REAL ANSWER for a large share of the elements on a
  * page, and getting it right is what makes the layout's remaining scope small and honest.
+ *
+ * §9's SUBJECT IS AN ELEMENT *OR A PSEUDO-ELEMENT* AND THIS ENTRY TAKES AN ELEMENT, which is not a narrowing
+ * decided here: CSSOM §7.2 Extensions to the Window Interface's `getComputedStyle` reaches a pseudo-element
+ * only through its step 3, and core/css/css_style_declaration.c aborts at that step by name — so no route to
+ * this predicate carries one, and giving it a second subject would be a parameter no caller could fill.
+ * The obligation moves with that crash; it is not a second thing to record here.
  *
  * IT IS DECIDED FROM THE COMPUTED `display`, which is the only thing an "Applies to:" line ever names. The
  * lines are quoted at their sites and are the properties' own, from the specs that define them:

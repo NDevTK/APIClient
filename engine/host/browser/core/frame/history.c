@@ -163,7 +163,7 @@ static JSValue js_hist_set_scroll_restoration(JSContext *ctx, JSValueConst this_
     return JS_UNDEFINED;
 }
 
-/* ---- §7.2.5's "a Document can have its URL rewritten to a URL targetURL" ------------------------------------
+/* ---- §7.2.5's "a Document document can have its URL rewritten to a URL targetURL" ------------------------
  *
  * Verbatim, and the shape of it matters: the first test is a conjunction over the ORIGIN-BEARING components
  * (scheme, username, password, host, port) and every later test loosens by scheme. `https://example.com/home`

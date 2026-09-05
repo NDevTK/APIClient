@@ -543,9 +543,9 @@ const IdlStepDecl *attr_set_attribute_decl(void) { return &ATTR_SET_STEP; }
  * attribute" with §1.4's name check in front of it. They live BESIDE the interface they build rather than in
  * document.c, so there is one "create an attribute" and not a second copy of it three files away.
  *
- * THE LOWERCASING CONDITION HAS ONE TERM HERE AND ONLY HERE. `createAttribute` step 2 is "If THIS IS AN HTML
- * DOCUMENT, set localName to localName in ASCII lowercase" — no HTML-namespace conjunct, because there is no
- * element yet. Every other lowercasing site in the attribute surface (get an attribute by name, setAttribute,
+ * THE LOWERCASING CONDITION HAS ONE TERM HERE AND ONLY HERE. §4.5's `createAttribute` step 2 is "If THIS IS AN
+ * HTML DOCUMENT, then set localName to localName in ASCII lowercase" — no HTML-namespace conjunct, because
+ * there is no element yet. Every other lowercasing site in the attribute surface (get an attribute by name, setAttribute,
  * hasAttribute, toggleAttribute, NamedNodeMap's supported property names) tests TWO terms, and
  * `createAttributeNS` tests none at all. magic 0 = createAttribute, 1 = createAttributeNS. */
 static JSValue js_doc_create_attribute(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,

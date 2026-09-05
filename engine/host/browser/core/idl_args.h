@@ -1958,9 +1958,9 @@ bool    idl_dict_bool_at(JSContext *ctx, JSValueConst dict, const char *name,
    done and the buffer has been released.
    AND IT MAY RUN THE PAGE'S CODE, WHICH IS A PROPERTY OF DOM §4.2.3 "Mutation algorithms"'s TWO PHASES AND NOT
    OF THIS TRANSPORT. The two are opposite and the standard states both in its own words. §4.2.3 defines the
-   INSERTION STEPS with "These steps must not modify the node tree that insertedNode participates in, fire
-   events, or otherwise execute JavaScript", so a request that parked on the page's code between two of them
-   would be a timeline the standard forbids. Its POST-CONNECTION steps are the opposite by construction —
+   INSERTION STEPS with "These steps must not modify the node tree that insertedNode participates in, create
+   browsing contexts, fire events, or otherwise execute JavaScript", so a request that parked on the page's
+   code between two of them would be a timeline the standard forbids. Its POST-CONNECTION steps are the opposite by construction —
    insert step 10 collects staticNodeList up front precisely "because the post-connection steps can modify the
    tree's structure, making live traversal unsafe" — and HTML §4.12.1.1 "Processing model"'s own worked example
    REQUIRES the page's code to run between two of staticNodeList's entries: `body.append(script1, script2)`

@@ -76,8 +76,9 @@
  * §6.4.4.2's `@layer <layer-name>#;` is §8.2's CSSLayerStatementRule, so the builder's `has_block` fork — the
  * one `@import` and `@font-face` already take to tell a rule from a drop — here picks between two interfaces
  * instead. They differ in EVERYTHING the interfaces differ in: a block is a §6.4.5 grouping rule holding the
- * layer's rules ("such @layer block rules have the same restrictions and processing as a conditional group rule
- * with a true condition"), a statement contains nothing at all; a block declares AT MOST ONE name and a
+ * layer's rules ("such @layer block rules have the same restrictions and processing as a conditional group
+ * rule [CSS-CONDITIONAL-3] with a true condition"), a statement contains nothing at all; a block declares AT
+ * MOST ONE name and a
  * statement ONE OR MORE; and they sit in different places in a sheet — §6.4.4.2 admits the statement before
  * `@import` and `@namespace` as well as wherever any rule may go, which is the ONE rule type with two
  * admissible positions and the reason css_rule.c states a sheet's prologue as a set of ZONES rather than as a

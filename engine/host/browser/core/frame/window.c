@@ -231,8 +231,10 @@ static JSValue js_win_frame_element(JSContext *ctx, JSValueConst this_val, int m
 
     (void)magic;
     if (JS_IsUninitialized(nav)) return JS_EXCEPTION;
-    /* Steps 1-2. §7.2.2's "the navigable whose active document is document" has no answer once the navigable
-       has been detached from the tree or its Document destroyed — one question, asked where `top` and `parent`
+    /* Steps 1-2. Step 1 is "let current be this's node navigable", and §7.3.1 Navigables defines that as
+       "the navigable whose active document is node's node document, or null if there is no such navigable" —
+       which has no answer once the navigable has been detached from the tree or its Document destroyed —
+       one question, asked where `top` and `parent`
        ask it (window_proxy.h). IT WAS `window_proxy_destroyed` HERE, which is only half of the fact and the
        half that arrives LATE: §7.5.10's destroy is a queued task, while §7.3.1.6 step 3's sever happens inside
        the removing steps, so this answered a container ELEMENT for a frame whose own subtree had already been

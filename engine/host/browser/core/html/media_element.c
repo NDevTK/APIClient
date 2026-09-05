@@ -614,8 +614,13 @@ static int media_task_step(JSContext *ctx, void *stp, JSValue cb_result, JSValue
                 type = JS_ToCString(ctx, name);
                 JS_FreeValue(ctx, name);
                 CHECK(type != NULL, "§4.8.11: OOM reading a queued task's event name");
-                /* None of §4.8.11's own events bubbles and none is cancelable — the standard names each fire
-                   as "fire an event named e at the element" and gives no initialiser. */
+                /* None of §4.8.11's own events bubbles and none is cancelable, and that is DOM §2.10 Firing
+                   events speaking rather than a default picked here. §4.8.11.5 and §4.8.11.6 spell every one of
+                   these as "fire an event named <name> at the media element" and stop; §2.10's own note says
+                   what a further phrase would have looked like — "If the event needs its bubbles or cancelable
+                   attribute initialized, one could write 'fire an event named submit at target with its
+                   cancelable attribute initialized to true'". There is no such phrase, so §2.10 step 1's
+                   default eventConstructor of Event is what is created and both attributes keep their false. */
                 s->ev = event_new(ctx, type, /*bubbles*/ false, /*cancelable*/ false);
                 JS_FreeCString(ctx, type);
                 if (JS_IsException(s->ev)) { s->ev = JS_UNDEFINED; return JS_STEP_ABRUPT; }
@@ -1260,8 +1265,8 @@ static void media_invoke_selection(JSContext *ctx, JSValueConst el)
        SAID OTHERWISE IS GONE WITH THE TWO THINGS IT NAMED. It stood here because step 4's await-a-stable-state
        is, per §8.1.7.3, a microtask the USER AGENT queues from an algorithm running in parallel — and
        §4.8.11.2's "if a media element is created with a src attribute, the user agent must IMMEDIATELY invoke
-       the resource selection algorithm" brought every `<video src>` in a page's own markup through
-       media_element_parsed's walk, inside qjs_init, before the frontier exists. quickjs's platform enqueue
+       the media element's resource selection algorithm" brought every `<video src>` in a page's own markup
+       through media_element_parsed's walk, inside qjs_init, before the frontier exists. quickjs's platform enqueue
        routed an ownerless callback to the baseline list only when it was a TASK, so the microtask fell onto the
        global job list this engine never drains and qjs_begin aborted on it.
        Both halves this comment asked for have landed: the routing condition no longer asks `is_task`, and the

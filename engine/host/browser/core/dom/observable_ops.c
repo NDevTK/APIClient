@@ -364,10 +364,10 @@ int obs_ops_entry(JSContext *ctx, JSObsState *s, int op, int *pr)
         return 0;
 
     case OP_WHEN:
-        /* §3 when(type, options) step 1: "If this's relevant global object is a Window whose associated
-           Document is not fully active, then return" — and it returns UNDEFINED, not an Observable, which is
-           the one place in this standard where a member's declared return type is not what a detached document
-           gets. The receiver is any EventTarget, so there is no brand test beyond the object check the
+        /* §3 when(type, options) step 1: "If this's relevant global object is a `Window` object, and its
+           associated `Document` is not fully active, then return." — and it returns UNDEFINED, not an
+           Observable, which is the one place in this standard where a member's declared return type is not
+           what a detached document gets. The receiver is any EventTarget, so there is no brand test beyond the object check the
            dispatch itself will make. */
         if (!JS_IsObject(s->hdr.this_val)) {
             JS_ThrowTypeError(ctx, "when called on something that is not an EventTarget");

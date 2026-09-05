@@ -127,12 +127,13 @@ SandboxFlags sandbox_creation_flags(const SandboxEmbedder *embedder, SandboxFlag
 
 SandboxFlags sandbox_popup_flags(SandboxFlags source_flags)
 {
-    /* §7.1: "If sandboxingFlagSet's sandbox propagates to auxiliary browsing contexts flag is set, then all
-       the flags that are set in sandboxingFlagSet must be set in chosen's active browsing context's popup
-       sandboxing flag set." The flag's own definition says what it is for: "prevents content from escaping
-       the sandbox by ensuring that any auxiliary browsing context it creates INHERITS the content's active
-       sandboxing flag set". Without it the popup starts clean, which is exactly what
-       `allow-popups-to-escape-sandbox` asks for. */
+    /* §7.3.1.7 "Navigable target names"' rules for choosing a navigable: "If sandboxingFlagSet's sandbox
+       propagates to auxiliary browsing contexts flag is set, then all the flags that are set in
+       sandboxingFlagSet must be set in chosen's active browsing context's popup sandboxing flag set." The
+       flag's own definition is one section away, in §7.1.5 Sandboxing, and says what it is for: "This flag
+       prevents content from escaping the sandbox by ensuring that any auxiliary browsing context it creates
+       inherits the content's active sandboxing flag set". Without it the popup starts clean, which is
+       exactly what `allow-popups-to-escape-sandbox` asks for. */
     return (source_flags & SANDBOX_PROPAGATES_TO_AUXILIARY) ? source_flags : 0;
 }
 

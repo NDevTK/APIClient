@@ -225,15 +225,32 @@ static bool font_line_height_valid(const char *w, size_t len)
  *
  * §2.1.1's OWN THREE INVALID EXAMPLES ARE THE TEST: `Red/Black`, `"Lucida" Grande` and `Ahem!` are each named
  * there as an invalid declaration. So a comma-separated part is either ONE `<string>` and nothing else, or a
- * sequence of idents each of which starts with an ident-start code point — CSS Syntax §4.2's "a letter, a
- * non-ASCII code point, or U+005F LOW LINE", plus a leading hyphen or escape, which §4.3.9 admits — and
- * carries no delimiter. That refuses all three, and admits `Palatino`, `new century schoolbook` unquoted and
- * `"new century schoolbook"` quoted.
+ * sequence of idents each of which starts with an ident-start code point — CSS Syntax §4.2's "A letter, a
+ * non-ASCII ident code point, or U+005F LOW LINE (_)", plus a leading hyphen or escape, which §4.3.9 admits —
+ * and carries no delimiter. That refuses all three, and admits `Palatino`, `new century schoolbook`
+ * unquoted and `"new century schoolbook"` quoted.
  *
  * IT IS NOT A CHARACTER-EXACT `<custom-ident>` PARSE, and the gap is named rather than papered: an ESCAPE
  * (`\31 0th`) is admitted by its backslash without its hex digits being read. That is the direction §2.1.1's
  * own note points ("most punctuation characters and digits at the start of each token must be escaped"), so
- * the looseness admits a valid spelling rather than a value the grammar rejects. */
+ * the looseness admits a valid spelling rather than a value the grammar rejects.
+ *
+ * AND THE WORD "ident" IN §4.2's DEFINITION IS THE SECOND NAMED RESIDUAL, WHICH IS WHY IT IS QUOTED ABOVE AND
+ * NOT ELIDED. A "non-ASCII ident code point" is not "any code point above ASCII": §4.2 enumerates it — U+00B7,
+ * U+00C0 to U+00D6, U+00D8 to U+00F6, U+00F8 to U+037D, U+037F to U+1FFF, U+200C, U+200D, U+203F, U+2040,
+ * U+2070 to U+218F, U+2C00 to U+2FEF, U+3001 to U+D7FF, U+F900 to U+FDCF, U+FDF0 to U+FFFD, and everything at
+ * or above U+10000, all inclusive — a set §4.2 says it chose because "this matches the list of non-ASCII
+ * codepoints allowed to be used in HTML valid custom element names".
+ *   WHAT IS NOT COVERED: the test below is over BYTES, so every byte at or above 0x80 answers yes. U+00D7,
+ *   U+00F7, U+037E, the surrogates and U+FFFE are outside §4.2's set and are admitted here, as is any byte of
+ *   their UTF-8 encodings.
+ *   WHAT THE NEXT DIFF BUILDS: a §4.2 ident-start predicate over DECODED code points that tests those ranges,
+ *   which core/css/css_property_syntax.c's `syn_is_ident_start` must be routed to as well — it states the same
+ *   byte-view assumption in its own comment, so ONE answer has to replace two rather than a second table
+ *   appearing beside this one.
+ *   HOW ITS ABSENCE WOULD SHOW: `font-family: ×Arial` is a valid declaration here and an invalid one in a
+ *   browser, because U+00D7 is not an ident-start code point and `<custom-ident>+` therefore has no first
+ *   token — so `getComputedStyle(el).fontFamily` reports it instead of the inherited value. */
 static bool font_family_ident_start(unsigned char c)
 {
     return isalpha(c) || c == '_' || c == '-' || c == '\\' || c >= 0x80;

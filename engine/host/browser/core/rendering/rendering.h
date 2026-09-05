@@ -29,7 +29,10 @@
  * behaviour without one. What a display would change is step 22 and nothing else.
  *
  * WHEN THERE IS AN OPPORTUNITY AT ALL is the in-parallel loop's step 1 ("wait until at least one navigable
- * MIGHT have a rendering opportunity"), and this engine answers it with exactly step 4's own test hoisted:
+ * whose active document's relevant agent's event loop is eventLoop MIGHT have a rendering opportunity"), whose
+ * elided middle is what scopes the wait to ONE event loop — this instance is an origin-keyed agent cluster and
+ * asks it of the realm it is given, so the scoping is structural here rather than a filter. This engine answers
+ * the rest of it with exactly step 4's own test hoisted:
  * a navigable might have one when its active document has something for these steps to do — it has not been
  * revealed, or its map of animation frame callbacks is non-empty. That is the spec's own reason redundant
  * queuing is harmless, read from the other end, and it is what keeps a page that is not animating from

@@ -76,22 +76,26 @@
  *     test denies that a ratio. An image DECODER is what makes it reachable.
  *   - AND THE SAME SIZE UNDER `box-sizing: border-box`, which is a COMPUTATION and not a second assertion.
  *     What stood here called it one, on the ground that css-sizing §5 "makes the declared value the BORDER
- *     box's while §10.2 and CSSOM §9 both mean the content box's" — and §5's own next sentence says the
- *     opposite: "Used values, as exposed for instance through getComputedStyle(), also refer to the border
- *     box." So the exposed used value is the border box's size, which is the declared length except when the
- *     paddings and borders alone exceed it and the content box floors at zero (§5's own worked example: "the
- *     border-box size ends up at 120px, even though width: 100px is specified"). It is the LARGER of the two,
- *     and the four terms it needs are the two paddings and the two border widths.
+ *     box's while §10.2 and CSSOM §9 both mean the content box's" — and BOTH HALVES OF THAT WERE
+ *     UNRESOLVABLE: css-sizing-3 §5 is "Intrinsic Size Determination", which decides nothing about
+ *     `box-sizing`, and an unlevelled `css-sizing` names no document. The section is css-sizing-3 §3.3 "Box
+ *     Edges for Sizing: the box-sizing property", and its own sentence says the opposite of what stood here:
+ *     "Used values of the sizing properties, as exposed for instance through getComputedStyle(), also refer to
+ *     the border box." So the exposed used value is the border box's size, which is the declared length except
+ *     when the paddings and borders alone exceed it and the content box floors at zero (§3.3's own worked
+ *     example: "the border-box size ends up at 120px, even though width: 100px is specified for the border
+ *     box"). It is the LARGER of the two, and the four terms it needs are the two paddings and the two border
+ *     widths.
  *   - AND THE PADDING EDGE'S EXTENT, which is not a property at all and is exactly why it is an entry HERE
  *     rather than arithmetic at the one caller that wants it. CSS 2.1 §8's box model makes the padding box the
  *     CONTENT box plus the two paddings on the axis, and that one sentence is the whole derivation in BOTH
  *     `box-sizing` modes — what differs between them is not the padding edge, it is which box the USED SIZE
  *     above is the size OF. Under `content-box` that size IS the content box and the two paddings are added;
- *     under `border-box` css-sizing §5 makes it the BORDER box, so the content box is that size minus the same
- *     four terms §5's own conversion names, and the paddings are added back to THAT. A CALLER CANNOT WRITE
- *     THIS: `used_value_px(el, "width")` plus the two paddings is the answer in one mode and DOUBLE-COUNTS
+ *     under `border-box` css-sizing-3 §3.3 makes it the BORDER box, so the content box is that size minus the
+ *     same four terms §3.3's own conversion names, and the paddings are added back to THAT. A CALLER CANNOT
+ *     WRITE THIS: `used_value_px(el, "width")` plus the two paddings is the answer in one mode and DOUBLE-COUNTS
  *     them in the other, and nothing in the number it got back says which mode produced it. So the four terms
- *     are computed once, in one function, and both directions of §5's conversion are stated over that one
+ *     are computed once, in one function, and both directions of §3.3's conversion are stated over that one
  *     result — the double-count is not a mistake to avoid, it is a sentence there is no longer anywhere to
  *     write.
  *   - A MARGIN, PADDING OR `width` whose computed value is a PERCENTAGE, which §8.3, §8.4 and §10.2 all resolve
@@ -181,8 +185,8 @@ CssPx used_value_px(lxb_dom_element_t *el, const char *name);
 
 /* THE USED EXTENT OF THE PADDING EDGE on one axis, in CSS pixels — the horizontal one for `vertical` false and
    the vertical one for true. CSSOM VIEW §6's `clientWidth` and `clientHeight` step 3 is its caller, and the
-   header above derives it: the content box on that axis plus the two paddings, with css-sizing §5 deciding
-   which box `used_value_px` handed back.
+   header above derives it: the content box on that axis plus the two paddings, with css-sizing-3 §3.3
+   deciding which box `used_value_px` handed back.
    IT IS AN EXTENT AND NOT AN EDGE POSITION, and the two are different components for that reason: a POSITION
    is a coordinate in the ICB's own space that §9.4's flow layout produces by placing each box inside the
    containing block §10.1 gives it (core/layout/flow_position.h), while a distance between two parallel edges
@@ -198,7 +202,8 @@ CssPx used_value_padding_edge_px(lxb_dom_element_t *el, bool vertical);
    "border edge surrounds the box's border" and whose "four border edges define the box's border box". It is
    the padding edge plus the two border widths on the axis, and it is an ENTRY beside the padding edge rather
    than arithmetic at a caller for the same reason that one is: which box `used_value_px` handed back is
-   css-sizing §5's question, and a caller holding only the number cannot answer it. Both go through the one
+   css-sizing-3 §3.3's question, and a caller holding only the number cannot answer it. Both go through the
+   one
    four-term surround, so the two edges cannot come to describe different boxes.
    ITS CALLER IS CSSOM VIEW §6's `getClientRects()` STEP 3 — a box fragment's BORDER AREA — and CSSOM VIEW §7's
    `offsetWidth`/`offsetHeight` are the second, which is why it is stated here once rather than in either.
@@ -237,8 +242,8 @@ CssPx used_value_leading_edge_px(lxb_dom_element_t *el, bool vertical);
 /* THE USED EXTENT OF THE MARGIN EDGE on one axis, in CSS pixels — CSS 2 §8.1 "Box dimensions"' outermost
    nesting, "the margin edge surrounds the box margin … the four margin edges define the box's MARGIN BOX". It
    is the border edge plus the two margins on the axis, and it is the third entry of the same one nesting for
-   the reason the second is: which box `used_value_px` handed back is css-sizing §5's question, so a caller
-   holding only the number cannot add the right terms to it.
+   the reason the second is: which box `used_value_px` handed back is css-sizing-3 §3.3's question, so a
+   caller holding only the number cannot add the right terms to it.
    ITS CALLER IS CSS 2.2 §10.8's STEP 1 — "for replaced elements, inline-block elements, and inline-table
    elements, this is the HEIGHT OF THEIR MARGIN BOX; for inline boxes, this is their 'line-height'" — and CSS
    2.2 §9.4.2's line, which puts the same box's inline extent between its neighbours ("horizontal margins,
@@ -268,10 +273,11 @@ CssPx used_value_margin_edge_px(lxb_dom_element_t *el, bool vertical);
 CssPx used_value_border_edge_from_content_px(lxb_dom_element_t *el, CssPx content, bool vertical);
 
 /* THE BOX'S OWN CONTENT EXTENT on one axis, in CSS pixels — CSS 2.1's `width` and `height` in the sense CSS
-   2.1 itself means them, which is NOT always what `used_value_px` answers. css-sizing §5 makes the used value
-   "as exposed for instance through getComputedStyle()" refer to the BORDER box under `box-sizing: border-box`,
-   and a caller doing geometry with it wants the content box — so this is §5's conversion run once, in the one
-   place that owns its four terms, rather than a subtraction each caller would have to know to perform and
+   2.1 itself means them, which is NOT always what `used_value_px` answers. css-sizing-3 §3.3 makes the used
+   value "as exposed for instance through getComputedStyle()" refer to the BORDER box under
+   `box-sizing: border-box`, and a caller doing geometry with it wants the content box — so this is §3.3's
+   conversion run once, in the one place that owns its four terms, rather than a subtraction each caller would
+   have to know to perform and
    would double-count in the other mode.
    TWO SPECS ASK FOR IT BY NAME AND BOTH ARE ABOUT REPLACED CONTENT. css-images-3 §4.5 "Sizing Objects: the
    object-fit property" defines the CONCRETE OBJECT SIZE under the initial `fill` as "the element's used width

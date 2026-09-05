@@ -90,9 +90,12 @@ typedef struct {
    AUXILIARY navigable, which has none) and the browsing context's POPUP SANDBOXING FLAG SET. */
 SandboxFlags sandbox_creation_flags(const SandboxEmbedder *embedder, SandboxFlags popup_flags);
 
-/* §7.1's RULES FOR CHOOSING A NAVIGABLE, the step that populates a new top-level browsing context's POPUP
-   SANDBOXING FLAG SET: "if sandboxingFlagSet's sandbox propagates to auxiliary browsing contexts flag is set,
-   then all the flags that are set in sandboxingFlagSet must be set in chosen's popup sandboxing flag set."
+/* §7.3.1.7 "Navigable target names"' RULES FOR CHOOSING A NAVIGABLE — the step that populates a new
+   top-level browsing context's POPUP SANDBOXING FLAG SET: "If sandboxingFlagSet's sandbox propagates to
+   auxiliary browsing contexts flag is set, then all the flags that are set in sandboxingFlagSet must be set in
+   chosen's active browsing context's popup sandboxing flag set."
+   NOT §7.1.5, WHICH IS WHERE THE FLAG IS DEFINED AND NOT WHERE IT IS APPLIED — the two sections are the
+   vocabulary and the algorithm, and a bare §7.1 here named neither.
    `source_flags` is the OPENING document's active sandboxing flag set. This is what `allow-popups-to-escape-
    sandbox` turns off, and it is the reason a popup's flags are not simply its opener's. */
 SandboxFlags sandbox_popup_flags(SandboxFlags source_flags);

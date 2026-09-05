@@ -14,7 +14,8 @@
 void history_init(JSContext *ctx);
 void history_free(void);
 
-/* §7.2.5's "a Document can have its URL rewritten to a URL targetURL", asked of THIS realm's Document.
+/* §7.2.5's "a Document document can have its URL rewritten to a URL targetURL", asked of THIS realm's
+   Document.
  *
  * IT LEAVES THIS FILE BECAUSE §7.2.6.10.4 ASKS IT TOO — the inner navigate event firing algorithm's step 7
  * computes `canIntercept` from exactly this predicate — and the rule is a table of per-scheme loosenings

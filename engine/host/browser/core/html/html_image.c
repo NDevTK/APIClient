@@ -442,8 +442,13 @@ static int img_task_step(JSContext *ctx, void *stp, JSValue cb_result, JSValue *
             STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
             type = JS_ToCString(ctx, name);
             CHECK(type != NULL, "§4.8.4.3.5: OOM reading a queued image task's event name");
-            /* Neither of §4.8.4.3.5's two events bubbles and neither is cancelable — the standard names each
-               fire as "fire an event named e at the img element" and gives no initialiser. */
+            /* Neither of §4.8.4.3.5's two events bubbles and neither is cancelable, and that is DOM §2.10
+               Firing events speaking rather than a default picked here. §4.8.4.3.5 spells both as "fire an
+               event named load at the img element" and "fire an event named error at the img element" and
+               stops; §2.10's own note says what a further phrase would have looked like — "If the event needs
+               its bubbles or cancelable attribute initialized, one could write 'fire an event named submit at
+               target with its cancelable attribute initialized to true'". There is no such phrase, so §2.10
+               step 1's default eventConstructor of Event is what is created and both keep their false. */
             s->ev = event_new(ctx, type, /*bubbles*/ false, /*cancelable*/ false);
             JS_FreeCString(ctx, type);
             if (JS_IsException(s->ev)) { s->ev = JS_UNDEFINED; return JS_STEP_ABRUPT; }

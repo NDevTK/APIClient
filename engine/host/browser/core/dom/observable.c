@@ -633,9 +633,10 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
                 return JS_STEP_ABRUPT;
             }
             s->sub = JS_DupValue(ctx, s->hdr.this_val);
-            /* §2.1's FULLY-ACTIVE GUARD, which every one of these four members opens with: "If the relevant
-               global object is a Window whose associated Document is not fully active, then return." It is
-               after the brand test and after Web IDL's argument conversion, because those precede step 1 —
+            /* §2.1's FULLY-ACTIVE GUARD, which every one of these four members opens with: "If this's
+               relevant global object is a `Window` object, and its associated `Document` is not fully active,
+               then return." It is after the brand test and after Web IDL's argument conversion, because
+               those precede step 1 —
                `subscriber.next()` with no arguments is still a TypeError in a detached document. */
             if (!document_fully_active(ctx)) {
                 obs_goto(s, S_DONE);

@@ -40,8 +40,10 @@ bool iframe_has_navigable(JSContext *ctx, JSValueConst wrapper);
    completion. §7.3.3's named-access walk did exactly that and aborted three spec files. The navigable is a
    slot on the wrapper; asking the component that owns the slot runs no page code by construction. */
 JSValue iframe_navigable(JSContext *ctx, JSValueConst wrapper);
-/* §4.8.5's create-a-child-navigable, run from the insertion-steps walk exactly where the spec puts it. It does
-   not suspend and cannot: the child's document name is minted locally and the host is notified, so there is
+/* §4.8.5's create-a-child-navigable, run from the POST-CONNECTION half of core/dom/element.c's tree-steps
+   walk, which is where §4.8.5 puts it — DOM §4.2.3 forbids the INSERTION steps to "create browsing contexts",
+   and this creates one. It does not suspend and cannot: the child's document name is minted locally and the
+   host is notified, so there is
    nothing to wait for — which is what makes `frame.contentWindow` answer on the line after the append. Calling
    it for an element that already has one in this flow is a no-op. */
 void iframe_create_navigable(JSContext *ctx, JSValueConst wrapper);

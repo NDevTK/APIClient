@@ -2358,8 +2358,8 @@ static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h, JSVal
        the one place that knows the phase — idl_args.c must not know what a Node is, so it forwards a request
        and asserts only that the code is one the step contract defines.
        §4.2.3 defines the INSERTION STEPS as steps that "must not modify the node tree that insertedNode
-       participates in, fire events, or otherwise execute JavaScript", so a request made from TS_PHASE_INSERTION
-       would run the page's code between two nodes' insertion steps — a timeline no browser produces and the
+       participates in, create browsing contexts, fire events, or otherwise execute JavaScript", so a request
+       made from TS_PHASE_INSERTION would run the page's code between two nodes' insertion steps — a timeline no browser produces and the
        thing the old blanket refusal in the drain was reaching for. The POST-CONNECTION steps are the opposite
        and the standard says so twice: insert step 10 collects staticNodeList up front "because the
        post-connection steps can modify the tree's structure, making live traversal unsafe", and HTML §4.12.1.1
