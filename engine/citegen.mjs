@@ -530,6 +530,26 @@ const SPECS = [
      `Encoding §7.2` are one spelling by the time classifyAnchor sees them. */
   { key: "encoding", label: "Encoding Standard", kind: "bikeshed",
     base: "https://encoding.spec.whatwg.org/", edition: "maintained", anchors: ["encoding"] },
+  /* THE COOKIE STORE API, AND ITS BASE IS THE ONE THING ABOUT IT A READER MUST NOT RECALL. This standard
+     MOVED ORGANISATION: the two addresses a search returns for it — `wicg.github.io/cookie-store/` and
+     `w3c.github.io/webappsec-cookie-store/` — both answer 404 today, and the document lives at
+     `cookiestore.spec.whatwg.org` as a WHATWG Living Standard whose own boilerplate records the move from
+     the W3C WICG. A row carrying either dead address would not fail loudly at the site of the mistake; it
+     would fail at the next `--regen`, which is the one command nobody runs on the day they add a row.
+     WHAT ITS ABSENCE WAS DOING WAS THE SILENT ZERO. Thirteen `Cookie Store API §N` sites stand in five files
+     — `cookie_store.c`/`.h`, `loader/cookie_jar.c`/`.h` and `url/registrable_domain.h` — and every one of
+     them named a standard nothing here indexed, so not one was checked. The numbers they name are real and
+     this standard has all of them: §3 "The CookieStore interface" with §3.1 get() and §3.2 getAll() and
+     §3.4 delete(), §6.1 "The Window interface", §7.1 "Query cookies" and §7.2 "Set a cookie".
+     ITS ANCHOR IS THE THREE-WORD NAME AND MUST BE, for the reason `state token api` gives on the foreign
+     list: anchorTokens reads AT MOST THREE trailing words, so `cookie store api` is the longest tail the
+     tokenizer can ever produce for this standard and a longer spelling would be an entry with no reader.
+     The one site that writes `Store API` alone is a C string literal split mid-name (`"… Cookie "` then
+     `"Store API §3.1 …"`), and anchorTokens already flattens the join, so it presents the same three words.
+     `cookie store` alone is NOT listed: nothing in this tree writes it in front of a §, and an anchor no
+     citation produces is a claim about a spelling rather than about a document. */
+  { key: "cookiestore", label: "Cookie Store API", kind: "bikeshed",
+    base: "https://cookiestore.spec.whatwg.org/", edition: "maintained", anchors: ["cookie store api"] },
   { key: "permissions", label: "Permissions", kind: "respec",
     base: "https://w3c.github.io/permissions/", edition: "maintained", anchors: ["permissions"] },
   /* FULLSCREEN, AND IT IS THE MANUFACTURED-FINDING SHAPE THIS TABLE'S hrtime ROW DESCRIBES RATHER THAN A SILENT
@@ -1822,6 +1842,34 @@ const OTHER_SPECS = [
      a standard whose text this audit does not hold; an index row would be better and is a fetch away
      (drafts.csswg.org/resize-observer-1/, a bikeshed document). */
   "resize observer",
+  /* COOPERATIVE SCHEDULING OF BACKGROUND TASKS (requestIdleCallback), AND IT IS THE FIRST ENTRY ON THIS LIST
+     WHOSE INDEX ROW IS NOT "A FETCH AWAY" — which is the sentence three neighbours above this one carry, so
+     it is worth stating why it is false here rather than leaving the next reader to re-derive it.
+     THE MAINTAINED DOCUMENT CANNOT BE READ BY ANY READER IN THIS FILE, and that is a fact about what the
+     server sends rather than about this tool. `w3c.github.io/requestidlecallback/` answers 200 with 28 KB of
+     UNRENDERED ReSpec SOURCE: it carries a `respecConfig`, no `<time class="dt-published">`, and ZERO
+     numbered headings, because ReSpec numbers a document IN THE BROWSER at render time. The bytes therefore
+     contain no section numbers at all. Contrast the `permissions` row, which is `kind: "respec"` and works:
+     that URL serves 337 KB of RENDERED output with no `respecConfig`, a dt-published and 49 `<bdi
+     class="secno">` headings. THE PRESENCE OF `respecConfig` IS THE TELL THAT A PAGE IS THE SOURCE, and it
+     reads exactly like evidence that the respec reader is the right one — it is the opposite.
+     AND NEITHER REMAINING ANSWER IS HONEST. `www.w3.org/TR/requestidlecallback/` IS rendered (17 numbered
+     headings, dt-published), so it would parse — but it is a /TR/ path, which the edition assertion refuses
+     for a "maintained" row and refuses correctly, and "final" would be a claim that the editors have STOPPED
+     when the document is a W3C Working Draft with a live Editor's Draft. `labs.w3.org/spec-generator` answers
+     503, and `index.html` is byte-identical to the directory, so there is no rendered form of the maintained
+     document to fetch. Writing a reader that numbers the ReSpec SOURCE by document order would be this
+     codebase restating ReSpec's own numbering algorithm — the second copy CLAUDE.md refuses, and the one
+     that manufactures wrong answers rather than losing coverage.
+     SO A FOREIGN ROW IS THE HONEST STATE, and it is `background tasks` because that is what the tokenizer can
+     produce: every one of the eleven sites spells the standard `Cooperative Scheduling of Background Tasks
+     §N` — `platform.c` in capitals, which classifyAnchor lowercases — five words, and anchorTokens reads at
+     most three, so it offers `of background tasks` and then `background tasks`. The sites stand in
+     `core/scheduling`, in `core/platform.c` and in `solver/engine.c`/`.h`, and an `other:` anchor is never judged,
+     which is what stops a future file vote placing this standard's §4 and §5 on whichever document a
+     scheduling file otherwise cites. They remain COUNTED AND NEVER CHECKED, and that is a silence this list
+     prints rather than a clean bill. */
+  "background tasks",
   /* CSS modules, as this tree spells them when it does not use the levelled shortname */
   "css", "selectors", "cascade", "view", "values", "sizing", "fonts", "backgrounds", "text",
   "display", "position", "overflow", "images", "color", "transforms", "writing", "box", "inline",

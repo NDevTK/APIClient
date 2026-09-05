@@ -1,0 +1,392 @@
+{
+ "spec": "Cookie Store API",
+ "key": "cookiestore",
+ "base": "https://cookiestore.spec.whatwg.org/",
+ "specUpdated": "20 April 2026",
+ "fetched": "2026-09-05",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "intro"
+  },
+  "2": {
+   "title": "Concepts",
+   "page": "",
+   "id": "concepts"
+  },
+  "3": {
+   "title": "The CookieStore interface",
+   "page": "",
+   "id": "CookieStore"
+  },
+  "4": {
+   "title": "The CookieStoreManager interface",
+   "page": "",
+   "id": "CookieStoreManager"
+  },
+  "5": {
+   "title": "Event interfaces",
+   "page": "",
+   "id": "event-interfaces"
+  },
+  "6": {
+   "title": "Global interfaces",
+   "page": "",
+   "id": "globals"
+  },
+  "7": {
+   "title": "Algorithms",
+   "page": "",
+   "id": "algorithms"
+  },
+  "8": {
+   "title": "Security considerations",
+   "page": "",
+   "id": "security"
+  },
+  "9": {
+   "title": "Privacy considerations",
+   "page": "",
+   "id": "privacy"
+  },
+  "1.1": {
+   "title": "Alternative to document.cookie",
+   "page": "",
+   "id": "intro-proposed-change"
+  },
+  "1.2": {
+   "title": "Summary",
+   "page": "",
+   "id": "intro-summary"
+  },
+  "1.3": {
+   "title": "Querying cookies",
+   "page": "",
+   "id": "intro-query"
+  },
+  "1.4": {
+   "title": "Modifying cookies",
+   "page": "",
+   "id": "intro-modify"
+  },
+  "1.5": {
+   "title": "Monitoring cookies",
+   "page": "",
+   "id": "intro-monitor"
+  },
+  "2.1": {
+   "title": "Cookie",
+   "page": "",
+   "id": "cookie-concept"
+  },
+  "2.2": {
+   "title": "Cookie store",
+   "page": "",
+   "id": "cookie-store--concept"
+  },
+  "2.3": {
+   "title": "Extensions to Service Workers",
+   "page": "",
+   "id": "service-worker-extensions"
+  },
+  "3.1": {
+   "title": "The get() method",
+   "page": "",
+   "id": "CookieStore-get"
+  },
+  "3.2": {
+   "title": "The getAll() method",
+   "page": "",
+   "id": "CookieStore-getAll"
+  },
+  "3.3": {
+   "title": "The set() method",
+   "page": "",
+   "id": "CookieStore-set"
+  },
+  "3.4": {
+   "title": "The delete() method",
+   "page": "",
+   "id": "CookieStore-delete"
+  },
+  "4.1": {
+   "title": "The subscribe() method",
+   "page": "",
+   "id": "CookieStoreManager-subscribe"
+  },
+  "4.2": {
+   "title": "The getSubscriptions() method",
+   "page": "",
+   "id": "CookieStoreManager-getSubscriptions"
+  },
+  "4.3": {
+   "title": "The unsubscribe() method",
+   "page": "",
+   "id": "CookieStoreManager-unsubscribe"
+  },
+  "4.4": {
+   "title": "The ServiceWorkerRegistration interface",
+   "page": "",
+   "id": "ServiceWorkerRegistration"
+  },
+  "5.1": {
+   "title": "The CookieChangeEvent interface",
+   "page": "",
+   "id": "CookieChangeEvent"
+  },
+  "5.2": {
+   "title": "The ExtendableCookieChangeEvent interface",
+   "page": "",
+   "id": "ExtendableCookieChangeEvent"
+  },
+  "6.1": {
+   "title": "The Window interface",
+   "page": "",
+   "id": "Window"
+  },
+  "6.2": {
+   "title": "The ServiceWorkerGlobalScope interface",
+   "page": "",
+   "id": "ServiceWorkerGlobalScope"
+  },
+  "7.1": {
+   "title": "Query cookies",
+   "page": "",
+   "id": "query-cookies-algorithm"
+  },
+  "7.2": {
+   "title": "Set a cookie",
+   "page": "",
+   "id": "set-cookie-algorithm"
+  },
+  "7.3": {
+   "title": "Delete a cookie",
+   "page": "",
+   "id": "delete-cookie-algorithm"
+  },
+  "7.4": {
+   "title": "Process changes",
+   "page": "",
+   "id": "process-changes"
+  },
+  "8.1": {
+   "title": "Gotcha!",
+   "page": "",
+   "id": "gotcha"
+  },
+  "8.2": {
+   "title": "Restrict?",
+   "page": "",
+   "id": "restrict"
+  },
+  "8.3": {
+   "title": "Secure cookies",
+   "page": "",
+   "id": "secure-cookies"
+  },
+  "8.4": {
+   "title": "Surprises",
+   "page": "",
+   "id": "surprises"
+  },
+  "8.5": {
+   "title": "Prefixes",
+   "page": "",
+   "id": "prefixes"
+  },
+  "8.6": {
+   "title": "URL scoping",
+   "page": "",
+   "id": "url-scoping"
+  },
+  "8.7": {
+   "title": "Cookie aversion",
+   "page": "",
+   "id": "aversion"
+  },
+  "9.1": {
+   "title": "Clear cookies",
+   "page": "",
+   "id": "clear-cookies"
+  }
+ },
+ "dfns": {
+  "associated cookiestore": [
+   "6.1",
+   "6.2"
+  ],
+  "constructor(type eventinitdict)": [
+   "5.1",
+   "5.2"
+  ],
+  "cookie change": [
+   "7.4"
+  ],
+  "cookie change subscription": [
+   "2.3"
+  ],
+  "cookie change subscription list": [
+   "2.3"
+  ],
+  "cookie store": [
+   "2.2"
+  ],
+  "cookiechangeevent(type eventinitdict)": [
+   "5.1"
+  ],
+  "create a cookielistitem": [
+   "7.1"
+  ],
+  "date serialize": [
+   "7"
+  ],
+  "delete a cookie": [
+   "7.3"
+  ],
+  "delete( name )": [
+   "3.4"
+  ],
+  "delete( options )": [
+   "3.4"
+  ],
+  "extendablecookiechangeevent(type eventinitdict)": [
+   "5.2"
+  ],
+  "fire a change event": [
+   "7.4"
+  ],
+  "get( name )": [
+   "3.1"
+  ],
+  "get( options )": [
+   "3.1"
+  ],
+  "getall( name )": [
+   "3.2"
+  ],
+  "getall( options )": [
+   "3.2"
+  ],
+  "http only flag": [
+   "2.1"
+  ],
+  "id dom cookiechangeevent changed changed": [
+   "5.1"
+  ],
+  "id dom cookiechangeevent deleted deleted": [
+   "5.1"
+  ],
+  "id dom extendablecookiechangeevent changed changed": [
+   "5.2"
+  ],
+  "id dom extendablecookiechangeevent deleted deleted": [
+   "5.2"
+  ],
+  "maximum attribute value size": [
+   "2.1"
+  ],
+  "maximum name value pair size": [
+   "2.1"
+  ],
+  "normalize a cookie name or value": [
+   "2.1"
+  ],
+  "observable changes": [
+   "7.4"
+  ],
+  "prepare lists": [
+   "7.4"
+  ],
+  "process cookie changes": [
+   "7.4"
+  ],
+  "query cookies": [
+   "7.1"
+  ],
+  "script visible": [
+   "2.1"
+  ],
+  "set a cookie": [
+   "7.2"
+  ],
+  "set( name value )": [
+   "3.3"
+  ],
+  "set( options )": [
+   "3.3"
+  ],
+  "subscribe( subscriptions )": [
+   "4.1"
+  ],
+  "unsubscribe( subscriptions )": [
+   "4.3"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "associated cookiestore": {
+   "9.1": 2
+  },
+  "cookiechangeevent(type eventinitdict)": {
+   "9.1": 5
+  },
+  "delete a cookie": {
+   "3.4": 2
+  },
+  "delete( name )": {
+   "9.1": 2
+  },
+  "delete( options )": {
+   "9.1": 2
+  },
+  "extendablecookiechangeevent(type eventinitdict)": {
+   "9.1": 5
+  },
+  "get( name )": {
+   "9.1": 2
+  },
+  "get( options )": {
+   "1.3": 3,
+   "9.1": 3
+  },
+  "getall( name )": {
+   "9.1": 2
+  },
+  "getall( options )": {
+   "1.3": 4,
+   "9.1": 3
+  },
+  "maximum attribute value size": {
+   "7.2": 2
+  },
+  "normalize a cookie name or value": {
+   "7.2": 2,
+   "9.1": 2
+  },
+  "query cookies": {
+   "3.1": 2,
+   "3.2": 2
+  },
+  "script visible": {
+   "1.2": 2
+  },
+  "set a cookie": {
+   "3.3": 2
+  },
+  "set( name value )": {
+   "1.4": 2,
+   "9.1": 2
+  },
+  "set( options )": {
+   "9.1": 2
+  },
+  "subscribe( subscriptions )": {
+   "4": 2,
+   "9.1": 2
+  },
+  "unsubscribe( subscriptions )": {
+   "9.1": 2
+  }
+ }
+}

@@ -2,9 +2,18 @@
  * has, over RFC 6265's jar in core/loader/cookie_jar.c.
  *
  * WHICH STANDARD THIS IS, BECAUSE IT MOVED. The Cookie Store API was developed in the W3C WICG and is now a
- * WHATWG Living Standard: "Cookie Store API Standard", https://cookiestore.spec.whatwg.org/, whose own
- * boilerplate records the move — "This Living Standard was originally developed in the W3C WICG". Its old
- * WICG address 404s. Every citation in this component is to the WHATWG document's section numbers.
+ * WHATWG Living Standard at https://cookiestore.spec.whatwg.org/, whose own intellectual-property boilerplate
+ * records that move. Both old addresses 404 — wicg.github.io/cookie-store and w3c.github.io/webappsec-cookie-
+ * store — so a reader correcting this URL from memory would break every citation below. Every citation in
+ * this component is to the WHATWG document's section numbers.
+ * THE BOILERPLATE IS PARAPHRASED HERE AND NOT QUOTED, AND THAT IS A RULE RATHER THAN A PREFERENCE. A
+ * standard's front and back matter sits OUTSIDE every numbered section, so a section-keyed corpus cannot hold
+ * it: a quoted run of it standing under this banner's §3 citation is checked against §3, is truthfully not
+ * found there, and stays a finding for ever at a comment that is correct. That is the cry-wolf direction
+ * CLAUDE.md rates worse than no citation at all — a permanent red teaches a reader to skim the category every
+ * real finding sits in. So a sentence worth keeping from un-numbered matter is REPORTED, never quoted; only
+ * text a section owns is quoted. Measured: this exact run was the single finding the cookiestore index
+ * surfaced when it was added, and nothing at the site was wrong.
  *
  * WHAT THIS COMPONENT IS AND IS NOT. It is §3.1's `get` and §3.2's `getAll` — the QUERY half, §7.1 "Query
  * cookies" — and the §6.1 Window member that reaches them. It is NOT §3.3's `set` or §3.4's `delete`, and that
