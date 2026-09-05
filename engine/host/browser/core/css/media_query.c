@@ -7,6 +7,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/css/css_code_point.h"
 #include "core/css/css_dimension.h"
 #include "core/css/font_metrics.h"
 #include "core/css/font_size_functions.h"
@@ -298,6 +299,9 @@ enum { TK_EOF = 0, TK_IDENT, TK_NUM, TK_DIM, TK_COLON, TK_COMMA, TK_LPAREN, TK_R
 
 typedef struct {
     const char *s;      /* the whole source, so a span can be taken */
+    const char *end;    /* one past its last byte — CSS Syntax §4.2 is asked of a CODE POINT, and reading one
+                           out of UTF-8 needs an extent; this text is NUL-terminated, so it is computed once
+                           at init rather than re-measured per token */
     const char *p;      /* the cursor, at the START of `kind` */
     const char *next;   /* just past `kind` */
     int         kind;
@@ -307,12 +311,33 @@ typedef struct {
 
 static bool mq_is_space(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f'; }
 static bool mq_is_digit(char c) { return c >= '0' && c <= '9'; }
-static bool mq_is_name_start(char c)
-{
-    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || c == '-' || (unsigned char)c >= 0x80;
-}
-static bool mq_is_name(char c) { return mq_is_name_start(c) || mq_is_digit(c); }
+
+/* WHAT MAY OPEN A `<media-feature>` NAME OR A `<dimension>` UNIT — CSS Syntax §4.2's ident-start code point,
+ * plus §4.3.9 "Check if three code points would start an ident sequence"'s leading hyphen, which the caller's
+ * own `-5` guard is the rest of.
+ *
+ * IT ASKS ABOUT A CODE POINT AND NOT A BYTE, AND THAT IS THE WHOLE OF THE CHANGE HERE. What stood in its place
+ * ended in `(unsigned char)c >= 0x80`, which is not §4.2's set: §4.2 enumerates the non-ASCII ident code
+ * points and leaves U+00D7, U+00F7, U+037E, U+FFFE and U+FFFF outside it, while every byte of each of their
+ * UTF-8 encodings is >= 0x80. One question asked in one wrong way at three sites — core/css/css_code_point.h
+ * is the one answer all three now route to. */
+static bool mq_is_name_start(uint32_t cp) { return cp == '-' || css_cp_is_ident_start(cp); }
+/* No hyphen arm here, and that asymmetry is CSS Syntax §4.2 "Definitions"'s: its ident code point is "An
+   ident-start code point, a digit, or U+002D HYPHEN-MINUS (-)", which already contains the hyphen, so only
+   the START of a name needs one added. */
+static bool mq_is_name(uint32_t cp) { return css_cp_is_ident(cp); }
 static char mq_lower(char c) { return (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c; }
+
+/* THE BYTES of the ident sequence at `p`, which is what the two scans below copy. A LENGTH rather than a walk
+   that copies as it goes, because the copy is over BYTES — `mq_lower` touches only ASCII, so a multi-byte code
+   point is carried through it unchanged — and only the END of the sequence is a §4.2 question. */
+static size_t mq_ident_len(const MqLex *L, const char *p)
+{
+    size_t k = 0, n;
+
+    while (mq_is_name(css_cp_at(p + k, L->end, &n))) k += n;
+    return k;
+}
 
 static void mq_scan(MqLex *L)
 {
@@ -324,12 +349,14 @@ static void mq_scan(MqLex *L)
     L->ident[0] = 0;
     L->num = 0;
     if (!*p) { L->kind = TK_EOF; L->next = p; return; }
-    if (mq_is_name_start(*p) && !(*p == '-' && mq_is_digit(p[1]))) {
-        for (i = 0; mq_is_name(p[i]); i++)
+    if (mq_is_name_start(css_cp_at(p, L->end, NULL)) && !(*p == '-' && mq_is_digit(p[1]))) {
+        size_t got = mq_ident_len(L, p);
+
+        for (i = 0; i < got; i++)
             if (i + 1 < sizeof(L->ident)) L->ident[i] = mq_lower(p[i]);
         L->ident[i < sizeof(L->ident) ? i : sizeof(L->ident) - 1] = 0;
         L->kind = TK_IDENT;
-        L->next = p + i;
+        L->next = p + got;
         return;
     }
     if (mq_is_digit(*p) || ((*p == '-' || *p == '+' || *p == '.') && (mq_is_digit(p[1]) ||
@@ -337,12 +364,14 @@ static void mq_scan(MqLex *L)
         char *end = NULL;
         L->num = strtod(p, &end);
         p = end;
-        if (mq_is_name_start(*p)) {                       /* a `<dimension>`: the unit rides the number */
-            for (i = 0; mq_is_name(p[i]); i++)
+        if (mq_is_name_start(css_cp_at(p, L->end, NULL))) {   /* a `<dimension>`: the unit rides the number */
+            size_t got = mq_ident_len(L, p);
+
+            for (i = 0; i < got; i++)
                 if (i + 1 < sizeof(L->ident)) L->ident[i] = mq_lower(p[i]);
             L->ident[i < sizeof(L->ident) ? i : sizeof(L->ident) - 1] = 0;
             L->kind = TK_DIM;
-            L->next = p + i;
+            L->next = p + got;
         } else {
             L->kind = TK_NUM;
             L->next = p;
@@ -366,6 +395,7 @@ static void mq_scan(MqLex *L)
 static void mq_lex_init(MqLex *L, const char *s)
 {
     L->s = s;
+    L->end = s + strlen(s);
     L->next = s;
     mq_scan(L);
 }

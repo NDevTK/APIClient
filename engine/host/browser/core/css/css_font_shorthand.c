@@ -2,10 +2,12 @@
 #include <ctype.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "check.h"
+#include "core/css/css_code_point.h"   /* CSS Syntax §4.2 is asked of a CODE POINT, never of a byte */
 #include "core/css/css_defaulting.h"
 #include "core/css/css_font_shorthand.h"
 #include "core/css/css_length.h"
@@ -230,30 +232,41 @@ static bool font_line_height_valid(const char *w, size_t len)
  * and carries no delimiter. That refuses all three, and admits `Palatino`, `new century schoolbook`
  * unquoted and `"new century schoolbook"` quoted.
  *
- * IT IS NOT A CHARACTER-EXACT `<custom-ident>` PARSE, and the gap is named rather than papered: an ESCAPE
- * (`\31 0th`) is admitted by its backslash without its hex digits being read. That is the direction §2.1.1's
- * own note points ("most punctuation characters and digits at the start of each token must be escaped"), so
- * the looseness admits a valid spelling rather than a value the grammar rejects.
+ * IT IS NOT A CHARACTER-EXACT `<custom-ident>` PARSE, AND THE RESIDUAL RUNS IN BOTH DIRECTIONS — which the
+ * example that stood here got backwards, and it was MEASURED rather than re-read. An ESCAPE is admitted by its
+ * backslash without its hex digits being read, so `\310th` passes; that is the direction §2.1.1's own note
+ * points ("most punctuation characters and digits at the start of each token must be escaped"), and the
+ * looseness there admits a valid spelling rather than a value the grammar rejects. But `\31 0th` — the
+ * spelling this comment used to name as the admitted one — is REFUSED, both before and after the code-point
+ * diff below, because CSS Syntax §4.3.7 "Consume an escaped code point"'s "If the next input code point is
+ * whitespace, consume it as well" is not run here: the space reads as a name separator, and the `0th` left
+ * behind it opens with a digit.
+ *   WHAT IS NOT COVERED, THEN: an escape is a BACKSLASH to this file and not an algorithm, so the whitespace
+ *   §4.3.7 makes part of one is a separator here.
+ *   WHAT THE NEXT DIFF BUILDS: §4.3.12 "Consume an ident sequence" over this text — the walk that consumes an
+ *   escape together with the whitespace §4.3.7 ends it with, so one ident is one ident.
+ *   HOW ITS ABSENCE WOULD SHOW: `font: 12px \31 0th` is an invalid declaration here and sets `font-family` to
+ *   `10th` in a browser, so every one of §2.7's nineteen longhands keeps its cascaded value instead.
  *
- * AND THE WORD "ident" IN §4.2's DEFINITION IS THE SECOND NAMED RESIDUAL, WHICH IS WHY IT IS QUOTED ABOVE AND
- * NOT ELIDED. A "non-ASCII ident code point" is not "any code point above ASCII": §4.2 enumerates it — U+00B7,
- * U+00C0 to U+00D6, U+00D8 to U+00F6, U+00F8 to U+037D, U+037F to U+1FFF, U+200C, U+200D, U+203F, U+2040,
- * U+2070 to U+218F, U+2C00 to U+2FEF, U+3001 to U+D7FF, U+F900 to U+FDCF, U+FDF0 to U+FFFD, and everything at
- * or above U+10000, all inclusive — a set §4.2 says it chose because "this matches the list of non-ASCII
- * codepoints allowed to be used in HTML valid custom element names".
- *   WHAT IS NOT COVERED: the test below is over BYTES, so every byte at or above 0x80 answers yes. U+00D7,
- *   U+00F7, U+037E, the surrogates and U+FFFE are outside §4.2's set and are admitted here, as is any byte of
- *   their UTF-8 encodings.
- *   WHAT THE NEXT DIFF BUILDS: a §4.2 ident-start predicate over DECODED code points that tests those ranges,
- *   which core/css/css_property_syntax.c's `syn_is_ident_start` must be routed to as well — it states the same
- *   byte-view assumption in its own comment, so ONE answer has to replace two rather than a second table
- *   appearing beside this one.
- *   HOW ITS ABSENCE WOULD SHOW: `font-family: ×Arial` is a valid declaration here and an invalid one in a
- *   browser, because U+00D7 is not an ident-start code point and `<custom-ident>+` therefore has no first
- *   token — so `getComputedStyle(el).fontFamily` reports it instead of the inherited value. */
-static bool font_family_ident_start(unsigned char c)
+ * AND THE WORD "ident" IN §4.2's DEFINITION IS WHY THE TEST BELOW IS NOT A BYTE TEST. A non-ASCII ident code
+ * point is an ENUMERATED SET and not "any code point above ASCII", so §4.2 is asked here of a DECODED code
+ * point through core/css/css_code_point.h, which owns that set and §3.3's filter that decides what §4.2 is
+ * ever asked about. What stood here was `isalpha(c) || c == '_' || c == '-' || c == '\\' || c >= 0x80` over one
+ * BYTE, and every byte of the UTF-8 encoding of U+00D7 MULTIPLICATION SIGN, U+00F7 DIVISION SIGN, U+037E GREEK
+ * QUESTION MARK, U+FFFE and U+FFFF is >= 0x80 — so `font-family: ×Arial` was a valid declaration here and an
+ * invalid one in a browser, and `getComputedStyle(el).fontFamily` reported it instead of the inherited value.
+ *   THE `-` AND THE `\` STAY AND ARE NOT ROUTED, because they are not §4.2 classes: they are §4.3.9 "Check if
+ * three code points would start an ident sequence"'s leading hyphen and escape, which this component admits
+ * loosely (the escape's hex digits are not read — the paragraph above owns that residual). Folding them into
+ * the §4.2 question is what made one predicate answer two of them.
+ *   AND `isalpha` WAS WRONG IN A SECOND WAY THAT HAD NOTHING TO DO WITH BYTES: §4.2's letter is "An uppercase
+ * letter or a lowercase letter", each an ASCII range it defines, and `isalpha` answers the C locale's
+ * question instead. */
+static bool font_family_ident_start(const char *s, size_t n, size_t i)
 {
-    return isalpha(c) || c == '_' || c == '-' || c == '\\' || c >= 0x80;
+    uint32_t cp = css_cp_at(s + i, s + n, NULL);
+
+    return cp == '-' || cp == '\\' || css_cp_is_ident_start(cp);
 }
 
 static bool font_family_part_valid(const char *s, size_t n)
@@ -274,7 +287,7 @@ static bool font_family_part_valid(const char *s, size_t n)
     while (i < n) {
         size_t start = i;
 
-        if (!font_family_ident_start((unsigned char)s[i])) return false;
+        if (!font_family_ident_start(s, n, i)) return false;
         while (i < n && !isspace((unsigned char)s[i])) {
             /* §2.1.1's `Red/Black` and `Ahem!`: a delimiter inside an unquoted family name is invalid. */
             if (strchr("/()[]{}!\"'`;:@#$%^&*=+<>?|~,\\", s[i]) != NULL && s[i] != '\\') return false;
