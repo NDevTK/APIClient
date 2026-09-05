@@ -34,6 +34,7 @@
 #include "core/html/referrer_policy_attribute.h"   /* §7.1.6 returns §2.5.5's attribute STATE, not its bytes */
 #include "core/dom/element.h"
 #include "core/dom/node.h"
+#include "core/dom/shadow_root.h"   /* §4.8 "Interface ShadowRoot"'s shadow-including tree order */
 #include "core/dom/document.h"
 #include "core/events/event.h"
 #include "core/events/event_target.h"
@@ -602,12 +603,35 @@ void iframe_run_load_event_steps(JSContext *ctx, JSValueConst wrap)
  * parse reaches it and is refused at the record by core/dom/element.c's tree_steps_can_run, because the steps
  * run in the node's document's realm and this engine installs that realm after the parse — so the parsed
  * tree's iframes get their step here, once, when the document is installed. Everything a script appends
- * afterwards goes through the chokepoint and needs nothing from this. */
+ * afterwards goes through the chokepoint and needs nothing from this.
+ *
+ * THE WALK IS SHADOW-INCLUDING, and the standard says so in a sentence of its own: §4.8.5's own note beside
+ * these steps reads "Although iframes are processed while in a shadow tree, per the above, several other
+ * aspects of their behavior are not well-defined with regards to shadow trees." Processed — so an `<iframe>`
+ * inside a shadow tree gets its navigable, which is the same fact core/dom/element.c's chokepoint already acts
+ * on for the script-inserted half (DOM §4.4's `isConnected` is stated over the SHADOW-INCLUDING root, so such
+ * an element IS browsing-context connected and §4.2.3 insert step 7.7 reaches it). This entry ran the LIGHT
+ * tree and therefore answered differently from the chokepoint for one shape — the one this walk exists for:
+ * `<template shadowrootmode=open><iframe src=x></template>` in the page's own markup. document_install runs
+ * declarative_shadow_parsed BEFORE this line, deliberately, so by now that `<iframe>` is in a shadow tree and
+ * a `first_child`/`next`/`parent` walk cannot see it — it got no navigable, never loaded, never fired `load`,
+ * had no `contentWindow`, and was absent from §7.3.1.5 "Related navigable collections"' descendant navigables,
+ * while the identical markup written by a script got all of it. Its sibling walks in that same install
+ * sequence — core/html/media_element.c's §4.8.11.2 sweep, html_image.c's, html_link.c's,
+ * html_style_element.c's, event_handler_attribute.c's — are all shadow-including for this one reason, and this
+ * was the entry that was not.
+ *
+ * IT IS NOT THE SAME QUESTION `child_navigables` BELOW ASKS, and the two walkers disagreeing is the correct
+ * state rather than a leftover: that one is §7.3.1.5's DOCUMENT-TREE CHILD NAVIGABLES, which the same section
+ * states over "all descendants of document that are navigable containers, in tree order" — light, deliberately,
+ * one paragraph after stating descendant navigables over "all shadow-including descendants … in
+ * shadow-including tree order". So a shadow-tree frame LOADS and is not counted by `window.length`, which is
+ * exactly the under-specification §4.8.5's note is pointing at. */
 void iframe_document_parsed(JSContext *ctx)
 {
     lxb_dom_node_t *root = document_root_node(ctx), *n;
 
-    for (n = root; n; n = node_next_in(n, root)) {
+    for (n = root; n; n = shadow_root_next_in_shadow_including(ctx, n, root)) {
         if (iframe_element_is(n)) {
             JSValue w = node_wrap(ctx, n);
             iframe_create_navigable(ctx, w);
@@ -633,6 +657,23 @@ void iframe_document_parsed(JSContext *ctx)
  * per-flow (the wrapper slot), so an element that is in both flows' trees still only counts for the flow that
  * gave it one. That is why this asks iframe_has_navigable rather than counting <iframe> ELEMENTS: an element
  * whose navigable was destroyed is still in the tree until it is removed, and it is not a child navigable.
+ *
+ * THE WALK IS THE LIGHT TREE, AND THAT IS THE STANDARD'S OWN CHOICE RATHER THAN THIS FILE'S. §7.3.1.5 "Related
+ * navigable collections" states two collections one after the other and spells them differently on purpose:
+ * DESCENDANT NAVIGABLES take "a list of all shadow-including descendants of document that are navigable
+ * containers, in shadow-including tree order", and DOCUMENT-TREE CHILD NAVIGABLES — the one §7.2.2.2 "Indexed
+ * access on the Window object" states `length` and `window[i]` over — take "a list of all descendants of
+ * document that are navigable containers, in tree order". The name says it too: document-TREE. So a frame the
+ * page put in a shadow tree HAS a navigable (§4.8.5's post-connection steps run for it, which is what the
+ * parsed-tree walk above and core/dom/element.c's chokepoint both do) and is NOT counted here, and the two
+ * facts are consistent because they are answers to two questions. §4.8.5's own note names this as known
+ * under-specification: "Although iframes are processed while in a shadow tree, per the above, several other
+ * aspects of their behavior are not well-defined with regards to shadow trees."
+ * RECORDED BECAUSE IT HAS ALREADY BEEN PREDICTED AS A BUG. a6724092 routed §6.6.2's focus-chain container walk
+ * from the light-tree successor to the shadow-including one and handed over the prediction that this site
+ * under-counts "by exactly the same mechanism"; it does not, and routing it would make `window.length` count a
+ * frame no browser counts. Same walker, different question — which is the whole reason the classification is
+ * made per site and not per spelling.
  *
  * `want` < 0 counts them all and returns JS_UNDEFINED; otherwise the nth is returned, or JS_UNDEFINED. */
 static JSValue child_navigables(JSContext *ctx, int want, int *out_n)

@@ -1014,8 +1014,11 @@ void html_image_update(JSContext *ctx, lxb_dom_element_t *el)
    FOLLOWING SIBLINGS of the relevant img element." So a mutated `source` is relevant to exactly the `img`
    elements that come AFTER it under the same `picture` parent — one `<picture>` may hold several, and each of
    them selects out of a different prefix of the child list.
-   A `source` OUTSIDE a `picture` is §4.8.12's media-element source and is nobody's image candidate; it reaches
-   this function and leaves it, which is why the parent test is here rather than at the call sites. */
+   A `source` OUTSIDE a `picture` is §4.8.2 "The source element"'s media-element source and is nobody's image
+   candidate; it reaches this function and leaves it, which is why the parent test is here rather than at the
+   call sites. (This said §4.8.12, which is "The map element" — the same mis-citation media_element.c carried
+   at eight sites and a6724092 repaired there; the title travels with the number so the next reader can see a
+   mismatch instead of trusting one.) */
 static void img_source_mutated(JSContext *ctx, lxb_dom_element_t *src)
 {
     lxb_dom_node_t *parent = lxb_dom_interface_node(src)->parent;
