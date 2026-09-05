@@ -61,6 +61,58 @@ void fetch_free(JSRuntime *rt);
    member, so a zero-filled struct is DISTINGUISHABLE from every legal one and policy_should_block_request's
    own asserts name it — while an uninitialised automatic would hand the CSP walk a stack address to compare
    bytes at. */
+
+/* FETCH §2.2.5 "Requests"' CREDENTIALS MODE, AS ITS OWN CLOSED DOMAIN — "A request has an associated
+ * credentials mode, which is `omit`, `same-origin`, or `include`. Unless stated otherwise, it is
+ * `same-origin`."
+ *
+ * IT IS A STATEMENT ABOUT A REQUEST AND NEVER A PERMISSION, which is the whole reason it may live in this
+ * engine at all. SECURITY.md puts the credential DECISION behind the trusted zone's chokepoint, and this
+ * field does not move it: the algorithm that CREATES a request is the only party that knows what the standard
+ * says its credentials mode is, and a zone that was never told cannot decide about it. That is the same
+ * sentence `destination` and the §2.2.5 metadata are carried by, arriving at the field CLAUDE.md's
+ * §A-REQUEST-CARRIES-THE-PROVENANCE names beside the method: "`safeFetch` decides, from the provenance the
+ * request declares beside its method and credential state".
+ *
+ * IT IS AN ENUM AND NOT A `const char *`, which is where it parts company with `destination` one field up.
+ * That one is text because §2.2.5's destination enumeration MOVES and is shared across the ABI with the
+ * trusted zone, so two copies of a growing list would disagree. This domain is CLOSED at three members and
+ * has not moved, and the one thing anything does with it is compare identity — so a string would put the
+ * literal at every producer, where a misspelling is not a compile error and lands on whichever arm a
+ * consumer's `else` happens to be. That is core/frame/policy_container.h's argument for making the parser
+ * metadata an enum while its two neighbours stay strings, and it is the same argument here. The WIRE spelling
+ * is `fetch_credentials_token`'s and nobody else's, exactly as solver/engine.h's provenance has one mapping
+ * and two spellings so a caller cannot reach a fourth answer.
+ *
+ * `_UNPLACED` IS NOT A REQUEST STATE AND IS NOT "I DO NOT KNOW". It is what a zero-fill leaves, and it exists
+ * for the reason the record's own paragraph above rests on: it is what makes a struct nobody assigned
+ * DISTINGUISHABLE from every legal value. §2.2.5's "unless stated otherwise" default is `same-origin`, which
+ * is a POSITIVE answer a producer may state and not a hole — so a producer that has not been told writes
+ * nothing and `fetch_owe` aborts, rather than writing the default and making "the algorithm says
+ * same-origin" indistinguishable from "nobody plumbed this". There is deliberately NO constructor meaning
+ * unknown, for policy_container.h's reason word for word. */
+typedef enum {
+    FETCH_CREDENTIALS_UNPLACED = 0,
+    FETCH_CREDENTIALS_OMIT,
+    FETCH_CREDENTIALS_SAME_ORIGIN,
+    FETCH_CREDENTIALS_INCLUDE,
+} FetchCredentialsMode;
+
+/* THE ONE WIRE SPELLING OF THAT DOMAIN, and the only place the three words are written. Fatal — never a
+   DCHECK — on `_UNPLACED` and on anything outside the enum, for the reason solver/engine.h's
+   `engine_provenance_token` gives about its own three: a release build falling through would hand the trusted
+   zone whatever the compiler left in the register, and the zone would decide a credential question from it. */
+const char *fetch_credentials_token(FetchCredentialsMode m);
+
+/* …AND ITS INVERSE, for the one producer that holds the mode as TEXT because Web IDL handed it one: §5.4's
+   `RequestInit` member is an `enum RequestCredentials`, so core/fetch/request.h keeps the record's field as
+   the string §2.6.1-style reflection hands back to `request.credentials`. Mapping it here rather than at that
+   producer is what keeps ONE vocabulary: a second switch beside the record would be free to answer a word
+   this one does not. Fatal on a word §2.2.5 does not define, and that is an assertion about THIS engine and
+   not about a page — Web IDL §3.2.19 Enumeration types has already refused every other string before the
+   record was filled, so an arrival here is our own conversion having stopped. */
+FetchCredentialsMode fetch_credentials_of_token(const char *token);
+
 typedef struct {
     const char   *method;
     const char   *url;
@@ -69,6 +121,34 @@ typedef struct {
     const char   *body;
     size_t        body_len;
     CspRequestMetadata metadata;
+    /* Fetch §2.2.5 "Requests"' credentials mode — see the domain above. STATED by the algorithm that creates
+       the request, because that algorithm is the only thing that knows: HTML §2.5.1 "Terminology"'s create a
+       potential-CORS request answers it for an `<img>`, a `<link rel=preload>` and an `EventSource`, HTML
+       §2.5.4 "CORS settings attributes"' CORS settings attribute credentials mode answers it for a
+       `modulepreload`, XHR §3.5.6 "The send() method" answers it from `withCredentials`, and Fetch §5.4
+       "Request class" answers it from `RequestInit`. Those five do not agree — §2.5.1 and §2.5.4 give the No
+       CORS state OPPOSITE answers, which is §2.5.4's own "repurposed to have a slightly different meaning" —
+       so there is no value this record could carry by default that is right for more than one of them.
+       RESIDUAL — CORRECT AND NARROWER, NAMED RATHER THAN CRASHED ON, because every producer that reaches
+       `fetch_owe` states the mode its own algorithm names and there is no case at that seam to abort on.
+       WHAT IS NOT COVERED: the field is stated on the request and does not yet reach the party that decides
+       from it. A park carries `method`, `url`, `destination`, `headers` and `body` onto the pending line and
+       the trusted zone reads them there; the credentials mode has no slot on that line, so the ONLY seam
+       whose credentials mode reaches the zone today is XMLHttpRequest's synchronous host request, whose
+       record is JSON and states it as a member. WHAT THE NEXT DIFF BUILDS: the field on the pending line
+       beside the destination, carried through the split every host performs on that line and read by
+       `extension/lib/safe-fetch.js`'s caller in `bridge.js` — which already speaks these three words on the
+       XHR route and DCHECKs them there. HOW ITS ABSENCE WOULD SHOW: a `<link rel=preload>` and an `<img>`
+       state `include` here and reach the zone with nothing, so a same-origin resource a browser fetches with
+       cookies is fetched without them and a personalised body is learned as the logged-out one.
+       AND TWO PARKS DO NOT PASS THIS SEAM AT ALL, which is the other half of the same residual: a dynamic
+       `import()` and an INJECTED `<script src>` build their own record and reach the park directly rather
+       than through `fetch_owe`, so they carry the unplaced zero and no assert here can see them. Their mode
+       is HTML §4.12.1 "The script element"'s — the CORS settings attribute credentials mode of the element's
+       `crossorigin` content attribute for the injected script, and the referencing script's fetch options for
+       the `import()`. HOW THAT HALF WOULD SHOW: a `<script crossorigin=use-credentials src>` chunk loads
+       uncredentialed the day the field reaches the wire, which is the population @S reaches most. */
+    FetchCredentialsMode credentials;
 } FetchRequest;
 
 /* FETCH §4.1 "Main fetch" STEP 7, AS THE ONE COMPONENT IT IS A STEP OF — "If should request be blocked due to

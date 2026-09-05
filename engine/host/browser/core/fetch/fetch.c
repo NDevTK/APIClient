@@ -120,6 +120,44 @@ bool fetch_is_script_like(const char *destination)
     return false;
 }
 
+/* FETCH §2.2.5 "Requests"' CREDENTIALS MODE, IN THE TWO DIRECTIONS ONE MAPPING GOES — see core/fetch/fetch.h
+   for why the domain is an enum and the wire spelling is only here. The three words are §2.2.5's own: "A
+   request has an associated credentials mode, which is `omit`, `same-origin`, or `include`. Unless stated
+   otherwise, it is `same-origin`." */
+const char *fetch_credentials_token(FetchCredentialsMode m)
+{
+    switch (m) {
+    case FETCH_CREDENTIALS_OMIT:        return "omit";
+    case FETCH_CREDENTIALS_SAME_ORIGIN: return "same-origin";
+    case FETCH_CREDENTIALS_INCLUDE:     return "include";
+    case FETCH_CREDENTIALS_UNPLACED:    break;
+    }
+    /* A GUARD OVER A DOMAIN THIS ENGINE ENUMERATES, and fatal rather than dev-only because the alternative in
+       release is not a wrong word but an UNINITIALISED one: the caller is about to state a credential fact to
+       the party that decides from it. `_UNPLACED` reaches here only from a record whose producer never wrote
+       the field, which `fetch_owe` refuses first — so this is the same refusal at the one entry that could be
+       reached by a component that does not go through the seam. */
+    CHECK_FAIL("a request's credentials mode was spelled for the wire and is not one Fetch §2.2.5 \"Requests\" "
+               "defines — the domain is `omit`, `same-origin` and `include`, and the zero is core/fetch/fetch.h's "
+               "_UNPLACED, which is a producer that stated nothing rather than a request in a fourth state");
+    return NULL;
+}
+
+FetchCredentialsMode fetch_credentials_of_token(const char *token)
+{
+    if (token) {
+        if (!strcmp(token, "omit"))        return FETCH_CREDENTIALS_OMIT;
+        if (!strcmp(token, "same-origin")) return FETCH_CREDENTIALS_SAME_ORIGIN;
+        if (!strcmp(token, "include"))     return FETCH_CREDENTIALS_INCLUDE;
+    }
+    CHECK_FAIL("a request record's credentials mode is a word Fetch §2.2.5 \"Requests\" does not define — the "
+               "only producer holding this field as TEXT is §5.4 \"Request class\"'s record, whose value came "
+               "through Web IDL §3.2.19 Enumeration types' conversion of `RequestCredentials` and is therefore "
+               "one of the three by the time the record is filled. An arrival here is this engine's own "
+               "conversion having stopped, never a string a page reached this function with");
+    return FETCH_CREDENTIALS_UNPLACED;
+}
+
 /* THE SAME SEAM, FOR A COMPONENT WHOSE OWN STANDARD SAYS "FETCH REQUEST" — see fetch.h. `value` is the second
    parameter the provider takes and is JS_UNDEFINED here for the reason it is at `fetch()`'s own call: the
    URL form of the park owes its answer to the host, and a value supplied up front is a reply nobody asked
@@ -189,6 +227,24 @@ void fetch_owe(JSContext *ctx, JSValueConst deliver, const FetchRequest *req)
            "names (`image` at §4.8.4.3.5, `script` at §8.1.4.2, the empty string at §5.6's fetch()), and if "
            "you hold an `as`-attribute keyword run Fetch §2.2.7 Miscellaneous' translate a potential "
            "destination over it first — `fetch` is a POTENTIAL destination and not a destination");
+    /* …AND ITS CREDENTIALS MODE, ASSERTED HERE FOR THE DESTINATION'S REASON EXACTLY: this is the last line at
+       which the component that built the request is still on the stack. Fetch §2.2.5 "Requests" gives every
+       request one, and the party that knows which is the algorithm that CREATED it — HTML §2.5.1
+       "Terminology"'s create a potential-CORS request for an `<img>` and a `<link rel=preload>`, HTML §2.5.4
+       "CORS settings attributes"' CORS settings attribute credentials mode for a `modulepreload`, §5.4
+       "Request class"'s `RequestInit` for a `fetch()`. Those algorithms DISAGREE about the No CORS state, so
+       there is no default this seam could supply that is right for more than one of its callers, and the zero
+       is not a fourth state but a producer that stated nothing.
+       THE ENGINE STATES AND THE ZONE DECIDES. This is not a credential policy and there is no `if` about it
+       anywhere below: SECURITY.md puts SOP, CORS and credentials behind the trusted chokepoint, and what this
+       assert buys that zone is a request it can decide ABOUT rather than one it has to guess at. */
+    DCHECK(req->credentials != FETCH_CREDENTIALS_UNPLACED,
+           "a request was owed to the host stating no CREDENTIALS MODE — Fetch §2.2.5 \"Requests\" gives every "
+           "request one (\"unless stated otherwise, it is `same-origin`\") and the trusted zone decides the "
+           "credential question from it, so a component that reaches this seam without one is not making a "
+           "request that lacks the field, it is making one whose cookies are decided by silence. State the "
+           "mode the algorithm creating this request names — core/html/cors_settings_attribute.h holds HTML "
+           "§2.5.1's and §2.5.4's two answers over the element's `crossorigin` state, and they differ");
     /* §4.3 SCHEME FETCH, FIRST. A scheme this agent answers is answered here and the host is never told about
        it; only §4.3's "HTTP(S) scheme" arm reaches the provider. The blob URL entry is JS_UNDEFINED because no
        standard but §5.4's Request constructor has one to have captured (core/fetch/scheme_fetch.h). */
@@ -922,6 +978,17 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, const RequestRecord 
                rather than written here, because §2.2.5 puts it on the request and both of §5's entry points
                fill it through the one function that does. */
             req.destination = rec->destination;
+            /* AND ITS CREDENTIALS MODE, OFF THE SAME RECORD — §5.4 step 19 is "If init[\"credentials\"] exists,
+               then set request's credentials mode to it", over a request that already holds §2.2.5's
+               `same-origin` for an input that named none, and request_init_apply writes exactly that. It is
+               READ here rather than decided here for `destination`'s reason: §5.4 puts the field on the
+               request and the one function that applies that dictionary fills it.
+               THIS MACHINE'S OWN BANNER RECORDS THIS FIELD AS A DEFECT THE DICTIONARY CONVERSION CLOSED
+               ("the other thirteen were accepted by the page and dropped on the floor"), and it closed half
+               of it: `{credentials: "include"}` has been CONVERTED and answerable through
+               `request.credentials` since that diff, and it still reached the network as nothing at all,
+               because this record had nowhere to put it. This line is the other half. */
+            req.credentials = fetch_credentials_of_token(rec->credentials);
             req.headers = hdrs;
             req.body = body;
             req.body_len = body_len;

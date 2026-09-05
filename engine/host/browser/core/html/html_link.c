@@ -31,6 +31,8 @@
 #include "core/mime/mime_type.h"    /* §4.6.8.20's "a string type matches a preload destination" */
 #include "solver/concolic.h"        /* §2.5.6's slot holds a JS value, so a nonce can be unknown input */
 #include "core/html/nonce_attribute.h" /* §4.2.4.3 takes the request's nonce from [[CryptographicNonce]] */
+#include "core/html/cors_settings_attribute.h" /* …and its CREDENTIALS MODE from `crossorigin`, by
+                                                  TWO algorithms this file's two types split on */
 #include "core/html/html_link.h"
 
 static int      g_ready;
@@ -630,10 +632,15 @@ static char *link_url_absolute(JSContext *ctx, const char *href, size_t href_n)
  * §4.6.8.12 Link type "modulepreload" share, which is everything from the two metadata members off THIS
  * element to the park.
  *
- * WHAT THE TWO CALLERS STATE, AND WHY THOSE ARE THE ONLY PARAMETERS. They differ at exactly the three places
+ * WHAT THE TWO CALLERS STATE, AND WHY THOSE ARE THE ONLY PARAMETERS. They differ at exactly the four places
  * their standards differ and nowhere else: the DESTINATION (§4.6.8.20 step 3's TRANSLATED preload destination
  * against §4.6.8.12 step 2's `as` state), the PARSER METADATA (§4.2.4.3 states none, so preload carries Fetch
- * §2.2.5's initial empty string, while §4.6.8.12 step 13 states "not-parser-inserted" outright), and the
+ * §2.2.5's initial empty string, while §4.6.8.12 step 13 states "not-parser-inserted" outright), the
+ * CREDENTIALS MODE (§4.2.4.3 goes through HTML §2.5.1 "Terminology"'s create a potential-CORS request while
+ * §4.6.8.12 step 7 takes HTML §2.5.4 "CORS settings attributes"' CORS settings attribute credentials mode —
+ * two algorithms over ONE attribute that give the No CORS state OPPOSITE answers, which is §2.5.4's own
+ * "repurposed to have a slightly different meaning" and is why a bare `<link rel=preload>` is credentialed and
+ * a bare `<link rel=modulepreload>` is not), and the
  * processResponse steps (§4.6.8.20 branches on network-error-or-not, §4.6.8.12 step 14 on whether a MODULE
  * SCRIPT was created). Everything between is ONE algorithm asked twice — the nonce read, the integrity, the
  * CSP verdict and the park — and a second hand-written copy of it would be free to drift at the one member
@@ -646,7 +653,7 @@ static char *link_url_absolute(JSContext *ctx, const char *href, size_t href_n)
  * after `fetch_owe` has copied what the park needs and not before. */
 static void link_fetch_request(JSContext *ctx, lxb_dom_element_t *el, JSValueConst wrap, const char *abs,
                                const char *destination, CspParserMetadata parser_metadata,
-                               JSCFunctionData *deliver)
+                               FetchCredentialsMode credentials, JSCFunctionData *deliver)
 {
     size_t integrity_n = 0;
     const char *integrity = link_attr(el, "integrity", &integrity_n);
@@ -662,6 +669,12 @@ static void link_fetch_request(JSContext *ctx, lxb_dom_element_t *el, JSValueCon
            "a link element's request was created with no parser metadata stated — Fetch §2.2.5 \"Requests\" "
            "gives the field an initial empty string and each of this file's two types says which of the three "
            "values its own algorithm sets, so the unplaced zero here is a caller that stated nothing");
+    DCHECK(credentials != FETCH_CREDENTIALS_UNPLACED,
+           "a link element's request was created with no CREDENTIALS MODE stated — this file's two types "
+           "reach it by two different algorithms (HTML §2.5.1 \"Terminology\"'s create a potential-CORS "
+           "request for §4.2.4.3, HTML §2.5.4 \"CORS settings attributes\"' CORS settings attribute "
+           "credentials mode for §4.6.8.12 step 7) and those two disagree about the No CORS state, so there "
+           "is no value this function could supply that is right for both callers");
 
     /* §4.2.4.3's create a link request STEPS 6-7 — "Set request's integrity metadata to options's integrity"
        and "Set request's cryptographic nonce metadata to options's cryptographic nonce metadata" — over the
@@ -758,6 +771,11 @@ static void link_fetch_request(JSContext *ctx, lxb_dom_element_t *el, JSValueCon
         /* THE SAME VALUE §4.1 STEP 7 WAS ASKED WITH, on the request — so the park's own step 7 asks the
            identical question of the identical request rather than re-reading the element's two members. */
         req.metadata = metadata;
+        /* …AND THE CALLER'S CREDENTIALS MODE, WHICH IS THE ONE MEMBER OF THIS REQUEST NEITHER THIS FUNCTION
+           NOR THE HOST MAY DERIVE. Fetch §2.2.5 "Requests" gives every request one and the trusted zone
+           decides the credential question from it; which of §2.5.1's and §2.5.4's two answers governs is a
+           fact about WHICH `rel` keyword's algorithm is running, and only the caller knows that. */
+        req.credentials = credentials;
         fetch_owe(ctx, d, &req);
         JS_FreeValue(ctx, d);
     }
@@ -884,8 +902,17 @@ static void link_preload(JSContext *ctx, lxb_dom_element_t *el)
        the referrer policy, the client and the priority, and Fetch §2.2.5 "Requests"' parser metadata is not
        among them — so a `<link>` request carries that field's initial EMPTY STRING whether the element came
        from the markup or from `document.createElement`. §4.6.8.12 Link type "modulepreload" is the sibling
-       that states one, which is why the value is this caller's to pass rather than the callee's to assume. */
-    link_fetch_request(ctx, el, wrap, abs, destination, CSP_PARSER_METADATA_EMPTY, link_deliver);
+       that states one, which is why the value is this caller's to pass rather than the callee's to assume.
+       AND THE CREDENTIALS MODE IS THE STEP OF §4.2.4.3's create a link request THAT BUILDS THE REQUEST AT
+       ALL: "Let request be the result of creating a potential-CORS request given url, options's destination,
+       and options's crossorigin", whose
+       third operand §4.2.4.4 "Processing `Link` headers"' create link options from element fills with
+       "crossorigin the state of el's crossorigin content attribute". So a `<link rel=preload>` with no
+       `crossorigin` attribute is in the No CORS state, which HTML §2.5.1 "Terminology" answers `include` — the
+       OPPOSITE of what its modulepreload sibling answers for the identical markup, and the reason this value
+       is passed rather than computed inside the shared function. */
+    link_fetch_request(ctx, el, wrap, abs, destination, CSP_PARSER_METADATA_EMPTY,
+                       cors_potential_request_credentials(cors_settings_attribute_state(el)), link_deliver);
     JS_FreeValue(ctx, wrap);
     free(abs);
 }
@@ -1121,14 +1148,22 @@ static void link_modulepreload(JSContext *ctx, lxb_dom_element_t *el)
        credentials mode, referrer policy is referrer policy, and fetch priority is fetch priority". That field
        is what CSP §6.7.1.1 "Script directives pre-request check" step 1.3 reads, and
        which matters here because a module preload destination is script-like and therefore reaches §6.7.1.1
-       at all. Step 7's credentials mode, step 11's referrer policy and step 12's fetch priority have no field
-       on this engine's FetchRequest — no request this engine builds carries any of the three, so computing
-       them here would be three values written where nothing can read them, which is the shape §NO STUBS
-       forbids rather than a gap peculiar to this algorithm.
+       at all.
+       STEP 7'S CREDENTIALS MODE IS CARRIED NOW, AND THE ARGUMENT THAT SAID IT COULD NOT BE IS RETIRED RATHER
+       THAN DELETED. It stood here with step 11's referrer policy and step 12's fetch priority as "three
+       values written where nothing can read them", which was right about all three when the record had no
+       field for any of them and is wrong about this one now: the credentials mode reaches the trusted zone,
+       which decides the credential question from it, so computing it here is a value with a consumer.
+       Step 11's referrer policy and step 12's fetch priority still have no field and still have no reader, so
+       the sentence holds for them and they stay uncomputed. Step 7 is "Let credentials mode be the CORS
+       settings attribute credentials mode for el's crossorigin attribute" — HTML §2.5.4 "CORS settings
+       attributes"' table and not §2.5.1's algorithm, which is what makes a bare `<link rel=modulepreload>`
+       `same-origin` where the identical `<link rel=preload>` is `include`.
        STEP 14 IS THE CALL BELOW: this file's processResponse steps are `link_module_deliver`, which is step
        14's "following steps given result", and the graph's own module-map effect is the named residual at
        this function's banner. */
     link_fetch_request(ctx, el, wrap, abs, destination, CSP_PARSER_METADATA_NOT_PARSER_INSERTED,
+                       cors_settings_attribute_credentials(cors_settings_attribute_state(el)),
                        link_module_deliver);
     JS_FreeValue(ctx, wrap);
     free(abs);

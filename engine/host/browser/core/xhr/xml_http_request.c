@@ -1751,6 +1751,19 @@ static void xhr_take_reply(JSContext *ctx, XhrData *d, JSValueConst reply)
     JS_FreeValue(ctx, st_v); JS_FreeValue(ctx, hs_v); JS_FreeValue(ctx, bd_v);
 }
 
+/* XHR §3.5.6 "The send() method" STEP 6'S CREDENTIALS MODE, IN ONE PLACE. Step 6 is "Let req be a new
+   request, initialized as follows", and one of its eleven members is "credentials mode: If this's cross-origin
+   credentials is true, then `include`; otherwise `same-origin`." — the field §3.5.4 "The withCredentials getter
+   and setter" writes and nothing else reads.
+   IT IS A FUNCTION AND NOT A TERNARY AT EACH SITE because §3.5.6's request is composed TWICE in this file — as
+   the `FetchRequest` Fetch §4.3 Scheme fetch is asked about, and as the JSON record the trusted host is handed
+   — and those are the SAME request. Two spellings of one member is the shape that has nothing to make them
+   agree; the wire words are core/fetch/fetch.h's `fetch_credentials_token` and appear nowhere in this file. */
+static FetchCredentialsMode xhr_credentials_mode(const XhrData *d)
+{
+    return d->cross_origin_credentials ? FETCH_CREDENTIALS_INCLUDE : FETCH_CREDENTIALS_SAME_ORIGIN;
+}
+
 /* The request the host is owed, as one self-describing JSON record: `{method, url, credentials, provenance,
    headers, body}`. It is JSON because the ANSWER already crosses that way (main.c's qjs_host_answer parses one)
    and because a host that must route this to safeFetch needs every field — SECURITY.md's chokepoint cannot
@@ -1796,7 +1809,11 @@ static char *xhr_request_op(JSContext *ctx, XhrData *d)
     json_buf_raw(&b, ","); json_buf_key(&b, "url");
     json_buf_str(&b, u);
     json_buf_raw(&b, ","); json_buf_key(&b, "credentials");
-    json_buf_str(&b, d->cross_origin_credentials ? "include" : "same-origin");
+    /* §3.5.6 step 6's member, through the one spelling — see xhr_credentials_mode above and
+       core/fetch/fetch.h's `fetch_credentials_token`, which is where the three words Fetch §2.2.5 "Requests"
+       defines are written. This line used to hold two of them inline, which made this seam the only place in
+       the engine that could say a credentials mode at all and said it in a vocabulary of its own. */
+    json_buf_str(&b, fetch_credentials_token(xhr_credentials_mode(d)));
     json_buf_raw(&b, ","); json_buf_key(&b, "provenance");
     json_buf_str(&b, engine_provenance_of_running_path());
     json_buf_raw(&b, ","); json_buf_key(&b, "headers"); json_buf_raw(&b, "[");
@@ -1838,9 +1855,14 @@ static char *xhr_request_op(JSContext *ctx, XhrData *d)
    fixture calling `api.get('/users', {params:{page:2}})` emitted 0 endpoints against 8889 flows; the same
    request written as `fetch()` emitted 1.
  *
- * §3.5.6 step 5 IS THE PLACE, because that is where the spec itself assembles `req` out of exactly these four
+ * §3.5.6 step 6 IS THE PLACE, because that is where the spec itself assembles `req` out of exactly these four
  * — "method: this's request method / URL: this's request URL / header list: this's author request headers /
- * body: this's request body" — so nothing here re-derives what the record already holds. Before §4.1 decides
+ * body: this's request body" — so nothing here re-derives what the record already holds. (IT SAID STEP 5 AND
+ * THAT WAS OFF BY ONE, in the direction §Browser-half warns of: §3.5.6 has TWELVE top-level steps counted with
+ * list depth tracked, step 5 is "If one or more event listeners are registered on this's upload object, then
+ * set this's upload listener to true" and step 6 is "Let req be a new request, initialized as follows". The
+ * QUOTATION above was right about the section the whole time, which is why nothing reported it: the auditor
+ * checks that a step number RESOLVES, never that it is the step the prose is describing.) Before §4.1 decides
  * WHO answers, for the same reason `fetch()` records before its own network edge: a `data:` URL this agent
  * resolves itself is a request the page made, and an endpoint is what the page's code composed, never what
  * came back.
@@ -1924,9 +1946,17 @@ static void xhr_record_endpoint(JSContext *ctx, XhrData *d)
  * `GET text/xml,<template …> HTTP/1.1` with an empty `Host:` and wptserve answered 400 — a malformed request
  * to a server that had never heard of the URL, for every `xhr.open("GET", "data:…")` in the corpus.
  *
- * STEP 7 IS HERE AND NOT ONLY IN core/fetch, because §3.5.6 step 4 is "Fetch req" and the fetch it names is the
- * SAME algorithm `fetch()` performs — a component that owns a second door onto the network owns every step in
- * front of it. Answering it anywhere else would leave `xhr.open("GET", "http://host:25/")` reaching the trusted
+ * STEP 7 IS HERE AND NOT ONLY IN core/fetch, because §3.5.6 hands `req` to the SAME algorithm `fetch()`
+ * performs — its step 11 (this's synchronous is false) and its step 12 (this's synchronous is true) each
+ * reach "Set this's fetch controller to the result of fetching req …", the two arms of one request — and a
+ * component that owns a second door onto the network owns every step in front of it.
+ * (THIS SAID §3.5.6 STEP 4 IS "Fetch req" AND BOTH HALVES WERE WRONG: step 4 is the body-and-Content-Type
+ * step, and the words "Fetch req" occur nowhere in the XMLHttpRequest Standard — in this tree's committed
+ * corpus or in the live edition. A two-word run in quotation marks is under the auditor's six-word floor and
+ * a step number that RESOLVES is all its step channel asks, so both halves were invisible to every instrument
+ * here; it was found by counting §3.5.6's twelve top-level steps with list depth tracked, which the committed
+ * step index corroborates.)
+ * Answering it anywhere else would leave `xhr.open("GET", "http://host:25/")` reaching the trusted
  * zone with the one request the standard says must never be made.
  *
  * AND §4.3 Scheme fetch IS NOT WRITTEN OUT HERE. This function used to carry its own copy of the switch — a `data` arm and
@@ -1956,7 +1986,7 @@ static bool xhr_main_fetch_local(JSContext *ctx, XhrData *d)
        credentialed by construction, a method not established to be in RFC 9110 §9.2.1 Safe Methods' safe set
        is not established to leave the server's state alone, and this one came off a forced arm — the one
        combination that is never a setting. Its correct output is what that rule names: derive it in full,
-       report it, do not send it. §3.5.6 step 5's endpoint record one frame up is where the report happened.
+       report it, do not send it. §3.5.6 step 6's endpoint record one frame up is where the report happened.
        IT IS THE SAME SHAPE AS THE BLOCK BELOW AND NOT A SECOND MECHANISM: §3's response IS a network error
        already, so this is nothing written and everything not done — the lifecycle machine's "handle errors"
        fires the request error steps on the way out, which for §3.5.6 is an `error` event.
@@ -1988,7 +2018,8 @@ static bool xhr_main_fetch_local(JSContext *ctx, XhrData *d)
        errors" fires the request error steps on the way out — which for §3.5.6 is an `error` event, or a
        NetworkError thrown out of a synchronous send.
        BOTH CHECKS OR NEITHER. The step is one disjunction, and this component owns it for the same reason the
-       header note above gives — §3.5.6 step 4 is "Fetch req", the same algorithm `fetch()` performs — so
+       header note above gives — §3.5.6 steps 11 and 12 hand `req` to the same algorithm `fetch()` performs
+       ("Set this's fetch controller to the result of fetching req …", once per synchronicity arm) — so
        answering only the port half here would make `connect-src 'none'` block a `fetch()` and permit the
        identical request written as an XMLHttpRequest: one policy answering differently depending on which
        door the page used. §6.8.1 gives an XHR the EMPTY destination exactly as it gives `fetch()` one, so both
@@ -2034,7 +2065,13 @@ static bool xhr_main_fetch_local(JSContext *ctx, XhrData *d)
                      "never arrives here, so this is a String or the object holds what §3.5.1 never wrote");
     memset(&req, 0, sizeof req);
     req.method = m;
-    req.url = u;   /* the two fields §4.3 Scheme fetch reads; a §4.3 answer never reaches the host, so it owes it nothing */
+    req.url = u;   /* the two fields §4.3 Scheme fetch reads */
+    /* …AND THE CREDENTIALS MODE, WHICH §4.3 DOES NOT READ AND THIS REQUEST HAS ANYWAY. It is the same request
+       §3.5.6 step 6 built — the one the trusted host is handed when §4.3 answers `HTTP(S) scheme` — so a
+       record that stated the member on one route and not the other would be two requests wearing one name.
+       Stating it here is also what keeps the field's zero meaning what core/fetch/fetch.h says it means: a
+       producer that never wrote it, rather than a producer whose route happened not to need it. */
+    req.credentials = xhr_credentials_mode(d);
     switch (scheme_fetch(ctx, &req, JS_UNDEFINED, &reply)) {
     case SCHEME_FETCH_RESPONSE:
         /* Through the ONE reply object every answer to this component takes, exactly as a host reply is. */
@@ -2075,7 +2112,7 @@ static int js_xhr_run_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         s->cb[0] = s->cb[1] = s->cb[2] = s->cb[3] = JS_UNDEFINED;
         s->transmitted = s->length = 0;
         if (mode == XHR_MODE_ERROR) { s->hdr.stage = XR_ERR_BEGIN; goto error_steps; }
-        /* §3.5.6 step 5's request record, onto the @H surface, before §4.1 chooses who answers it. */
+        /* §3.5.6 step 6's request record, onto the @H surface, before §4.1 chooses who answers it. */
         xhr_record_endpoint(ctx, d);
         /* Fetch §4.1: main fetch decides WHO answers. A request this agent answers itself — a port §2.9 blocks,
            or a scheme §4.3 resolves here — has its response on the record already and owes the host nothing, so

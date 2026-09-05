@@ -31,6 +31,8 @@
 #include "core/frame/policy_container.h"
 #include "core/html/html_image.h"
 #include "core/html/image_source_set.h"   /* §4.8.4.3.7-.12: what source this element selects, and from what */
+#include "core/html/cors_settings_attribute.h" /* §4.8.4.3.5 creates a POTENTIAL-CORS request, whose
+                                                    credentials mode is HTML §2.5.1's over this attribute */
 #include "core/image/image_header.h"        /* css-images-3 §4.1's natural dimensions, out of the reply's own header */
 
 /* §4.8.4.3 "Processing model": "An image request's state is one of the following" — and the two composite
@@ -915,6 +917,19 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
         req.method = "GET";
         req.url = abs;
         req.destination = "image";
+        /* …AND THE THIRD FIELD THAT SAME SENTENCE STATES. §4.8.4.3.5's step is "creating a potential-CORS
+           request given urlString, `image`, and the current state of the element's crossorigin content
+           attribute", and HTML §2.5.1 "Terminology"'s create a potential-CORS request answers a CREDENTIALS
+           MODE out of that third operand exactly as it answers the destination out of the second — "Let
+           credentialsMode be `include`", then "If corsAttributeState is Anonymous, set credentialsMode to
+           `same-origin`".
+           SO A BARE `<img src>` IS `include`, WHICH IS THE ANSWER A CONSTANT HERE WOULD HAVE GOT WRONG. No
+           CORS is the missing value default, §2.5.1 names only Anonymous, and a plain image therefore carries
+           cookies in a real browser — so writing §2.2.5's `same-origin` default at this site would have been
+           a fabricated fact about every image this engine fetches, and the trusted zone would have decided
+           the credential question from it. The attribute is READ rather than assumed for the same reason
+           §4.8.4.3.5 lists `crossorigin` among the attributes whose change re-runs this algorithm. */
+        req.credentials = cors_potential_request_credentials(cors_settings_attribute_state(el));
         req.headers = NULL;
         req.body = NULL;
         req.body_len = 0;
