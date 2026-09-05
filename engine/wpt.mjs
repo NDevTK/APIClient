@@ -703,7 +703,21 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       script=`, counted apart because a total of 68 read as documents would have been wrong
                       about both halves — so expect what a corpus that wants a driver does in an engine that
                       has none, and what each abort NAMES is the work queue, read off the run. */
-                   "fullscreen"];
+                   "fullscreen",
+                   /* COOKIES — ADDED BECAUSE A LANDED FIX HAD NO ORACLE IN EITHER DIRECTION. RFC 6265 §5.3
+                      step 5 refuses a `Domain` that is a public suffix, and until it was built this engine
+                      STORED `Domain=com`; the reason it survived is that no gate here could see it. That is
+                      the excluded-test failure in its purest form — not a test that fails, a test that is not
+                      on disk, so the area reports nothing and the total looks complete.
+                      THE SHAPE WORTH KEEPING: a cone entry is not a coverage preference, it is the set of
+                      questions this tree is ABLE to ask. A component can be built, asserted and reviewed
+                      against a standard nobody can score it against, and nothing anywhere says so — the
+                      sparse cone is read by no audit and appears in no verdict. So when a diff implements a
+                      step, ask whether its area is IN this list before predicting anything about a gate, and
+                      say "unscorable here" rather than quoting a pass that was never attempted.
+                      Widening this list is expected to ADD failures. Per §A-DIRECTORY-THAT-ABORTS, that is the
+                      first honest measurement of an area and never a regression to revert. */
+                   "cookies"];
 
 /* AND THE DIRECTORIES WHOSE OWN LEVEL CONE MODE HAS ALREADY PUT ON DISK. A cone-mode checkout materializes every
    file of every directory ON THE PATH to a listed one, so naming one helper's `resources` lands its standard's
