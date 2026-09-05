@@ -656,8 +656,6 @@ static void i_queuing_strategy(JSContext *c, JSValueConst g, const PlatformDocum
 static void i_writable_stream(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; writable_stream_install(c, g); }
 static void i_transform_stream(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; transform_stream_install(c, g); }
 static void i_blob(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; blob_install(c, g); }
-static void i_encoding(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; encoding_install(c, g); }
-static void i_text_stream(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; text_stream_install(c, g); }
 /* THE ADDRESS, NOT THE ORIGIN. `window.origin` is §4.7's serialization OF the address, so a host that handed
    this the origin got a `location`-free Window whose own `origin` was re-derived from a string that was
    already one — and the WPT runner, the one host whose whole job is measuring fidelity, did exactly that. */
@@ -739,8 +737,15 @@ static const PlatformComponent PLATFORM[] = {
     { "writable_stream",     d_writable_stream,     i_writable_stream },
     { "transform_stream",    d_transform_stream,    i_transform_stream },
     { "blob",                d_blob,                i_blob },
-    { "encoding",            d_encoding,            i_encoding },
-    { "text_stream",         d_text_stream,         i_text_stream },
+    /* NO DOCUMENT HALF. Encoding §7.2 Interface TextDecoder, §7.4 Interface TextEncoder, §7.5 Interface
+       TextDecoderStream and §7.6 Interface TextEncoderStream all declare `[Exposed=*]`, and Web IDL §3.8
+       Platform objects implementing interfaces is "To define the global property references on target, given
+       realm realm" whose step 1 is "Let interfaces be a list that contains every interface that is exposed in
+       realm" — a REALM, with no Document in the algorithm. Each component's own realm intrinsic places its two
+       interface objects beside the prototypes it already built there, so a realm that reaches no
+       platform_document_install gets all four. */
+    { "encoding",            d_encoding,            NULL },
+    { "text_stream",         d_text_stream,         NULL },
     /* §2.7 before §7.2.5, and its per-document half is inside window_install for the reason above. */
     { "event_target",        d_event_target,        NULL,        r_event_target },
     /* HR-TIME §7's Performance, whose position is fixed from BOTH sides and by nothing else. `interface

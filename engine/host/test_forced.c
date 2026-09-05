@@ -6220,6 +6220,31 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
         { "URL",              true, true  },   /* [Exposed=*] */
         { "URLSearchParams",  true, true  },   /* [Exposed=*] */
         { "webkitURL",        true, false },   /* §3.8 step 3.1.4: an alias is Window's even when `*` is not */
+        /* THE ENCODING STANDARD'S FOUR, AND THE MIXIN THAT IS NOT ONE OF THEM. Encoding §7.2 Interface
+           TextDecoder, §7.4 Interface TextEncoder, §7.5 Interface TextDecoderStream and §7.6 Interface
+           TextEncoderStream all declare `[Exposed=*]`, so both realms owe all four names. The four span TWO
+           components and two core/platform.c rows, which is why all four are here and not one per file: the
+           banner above records `MessagePort` for exactly this reason — a component that carried one Web IDL
+           §3.8 property reference across a change and dropped its sibling passed — and this group offers that
+           mistake twice over, once per component.
+           `TextDecoderCommon` IS WHY THESE ROWS DISCRIMINATE RATHER THAN CONFIRM. It sits in the same IDL
+           file, one declaration above `TextDecoder`, and `TextDecoder includes TextDecoderCommon` — but it is
+           an `interface mixin`, and Web IDL §3.7.1 Interface object is written of an interface, so a mixin has
+           no interface object and Web IDL §3.8 step 1's population ("every interface that is exposed in
+           realm") does not contain it. A conversion that placed what its component's IDL DECLARES rather than
+           what §3.8 enumerates passes all four rows above and fails this one.
+           AND IT IS THE ONE ROW browser/idl_exposure.h CANNOT BACK UP, WHICH IS THE POINT OF PUTTING IT HERE.
+           That header states, in as many words, that a name with no row is EXPOSED, and a mixin gets no row
+           because the generator keys on the constructs Web IDL §3.8 defines — so
+           `idl_exposed_in_realm("TextDecoderCommon")` answers TRUE and the door would place the name in BOTH
+           realms without a word. This row is therefore a statement about the INSTALL alone, in the one place
+           the exposure table is silent by construction. */
+        { "TextDecoder",        true, true  },   /* Encoding §7.2 "Interface TextDecoder", [Exposed=*] */
+        { "TextEncoder",        true, true  },   /* Encoding §7.4 "Interface TextEncoder", [Exposed=*] */
+        { "TextDecoderStream",  true, true  },   /* Encoding §7.5 "Interface TextDecoderStream", [Exposed=*] */
+        { "TextEncoderStream",  true, true  },   /* Encoding §7.6 "Interface TextEncoderStream", [Exposed=*] */
+        /* Encoding §7.1 "Interface mixin TextDecoderCommon" — a MIXIN, so no Web IDL §3.8 reference anywhere */
+        { "TextDecoderCommon",  false, false },
     };
     JSContext *worker = JS_NewContext(JS_GetRuntime(ctx));
     /* THE SECOND WORKER REALM IS THE OTHER ARM OF ONE STEP, and it is a second REALM because that is the only

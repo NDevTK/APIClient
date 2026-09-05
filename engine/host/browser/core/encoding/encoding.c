@@ -1523,18 +1523,31 @@ void encoding_init(JSContext *ctx)
     idl_optional_from(0);
     idl_arg_default(0, IDL_DEFAULT_STRING, "utf-8");
     g_enc_ctor_stepid = idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_enc_ctor_decl, 0);
-    realm_declare_intrinsic(encoding_install_protos);
+    realm_declare_intrinsic(encoding_install_realm);
 }
 
-/* §7.2's AND §7.4's INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM. */
-void encoding_install_protos(JSContext *ctx)
+/* ENCODING §7.2 Interface TextDecoder's AND §7.4 Interface TextEncoder's INTERFACE PROTOTYPE OBJECTS, THEIR
+   Web IDL §3.7.1 Interface object's INTERFACE OBJECTS, AND Web IDL §3.8's PROPERTY REFERENCES FOR THEM — FOR
+   ONE REALM.
+   THE INTERFACE OBJECTS ARE HERE BECAUSE Web IDL §3.8 IS GIVEN A REALM. Web IDL §3.8 Platform objects
+   implementing interfaces' `define the global property references` is "To define the global property
+   references on target, given realm realm", step 1 being "Let interfaces be a list that contains every
+   interface that is exposed in realm" — the population is a REALM's and the algorithm names no Document.
+   Encoding §7.2 and §7.4 both declare `[Exposed=*]`, so EVERY realm owes both names — and while they were
+   placed from core/platform.c's per-document column, a worker realm, which reaches no
+   platform_document_install, got neither the objects nor the names. Each prototype is in hand at the point
+   its interface object is minted, so the separate per-document entry's two JS_GetClassProto re-reads are
+   gone. */
+void encoding_install_realm(JSContext *ctx)
 {
-    JSValue dec_p, enc_p, prev;
+    JSValue dec_p, enc_p, prev, global, ctor;
 
     DCHECK(g_dec_class != 0, "a realm asked for TextDecoder.prototype before the class was declared");
+    DCHECK(g_dec_ctor_stepid >= 0, "a realm asked for the Encoding globals before encoding_init declared them");
     prev = JS_GetClassProto(ctx, g_dec_class);
-    DCHECK(JS_IsNull(prev), "encoding_install_protos ran twice in one realm");
+    DCHECK(JS_IsNull(prev), "encoding_install_realm ran twice in one realm");
     JS_FreeValue(ctx, prev);
+    global = JS_GetGlobalObject(ctx);
 
     dec_p = JS_NewObject(ctx);
     CHECK(!JS_IsException(dec_p), "TextDecoder.prototype could not be allocated");
@@ -1543,7 +1556,14 @@ void encoding_install_protos(JSContext *ctx)
     idl_install_accessor(ctx, dec_p, "fatal", js_decoder_get, DEC_FATAL, -1);
     idl_install_accessor(ctx, dec_p, "ignoreBOM", js_decoder_get, DEC_IGNORE_BOM, -1);
     idl_install_method(ctx, dec_p, "decode", g_id_decode);
-    JS_SetClassProto(ctx, g_dec_class, dec_p);
+    ctor = idl_step_constructor(ctx, "TextDecoder", g_dec_ctor_stepid);
+    CHECK(!JS_IsException(ctor), "the TextDecoder interface object could not be allocated");
+    JS_SetConstructor(ctx, ctor, dec_p);
+    /* THE EXPOSURE IS THE DOOR'S ANSWER, NOT A CONDITION HERE: idl_define_global_property_reference asks
+       Web IDL §3.3.7 [Exposed] step 1 against this realm's Web IDL §3.3.8 [Global] global names, keyed by the
+       identifier it is already handed, so nothing at this site re-derives what the corpus states. */
+    idl_define_global_property_reference(ctx, global, "TextDecoder", ctor);
+    JS_SetClassProto(ctx, g_dec_class, dec_p);   /* the realm owns it from here */
 
     enc_p = JS_NewObject(ctx);
     CHECK(!JS_IsException(enc_p), "TextEncoder.prototype could not be allocated");
@@ -1551,32 +1571,13 @@ void encoding_install_protos(JSContext *ctx)
     idl_install_accessor(ctx, enc_p, "encoding", js_encoder_get, 0, -1);
     idl_install_method(ctx, enc_p, "encode", g_id_encode);
     idl_install_method(ctx, enc_p, "encodeInto", g_id_encode_into);
-    JS_SetClassProto(ctx, g_enc_class, enc_p);
-}
-
-void encoding_install(JSContext *ctx, JSValueConst global)
-{
-    JSValue ctor;
-    DCHECK(g_dec_ctor_stepid >= 0, "the Encoding globals were installed before encoding_init declared them");
-    ctor = idl_step_constructor(ctx, "TextDecoder", g_dec_ctor_stepid);
-    CHECK(!JS_IsException(ctor), "the TextDecoder interface object could not be allocated");
-    {
-        JSValue proto = JS_GetClassProto(ctx, g_dec_class);
-        DCHECK(!JS_IsNull(proto), "TextDecoder was installed into a realm that never ran its proto build");
-        JS_SetConstructor(ctx, ctor, proto);
-        JS_FreeValue(ctx, proto);
-    }
-    idl_define_global_property_reference(ctx, global, "TextDecoder", ctor);
-
     ctor = idl_step_constructor(ctx, "TextEncoder", g_enc_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the TextEncoder interface object could not be allocated");
-    {
-        JSValue proto = JS_GetClassProto(ctx, g_enc_class);
-        DCHECK(!JS_IsNull(proto), "TextEncoder was installed into a realm that never ran its proto build");
-        JS_SetConstructor(ctx, ctor, proto);
-        JS_FreeValue(ctx, proto);
-    }
+    JS_SetConstructor(ctx, ctor, enc_p);
     idl_define_global_property_reference(ctx, global, "TextEncoder", ctor);
+    JS_SetClassProto(ctx, g_enc_class, enc_p);   /* the realm owns it from here */
+
+    JS_FreeValue(ctx, global);
 }
 
 void encoding_free(JSContext *ctx)

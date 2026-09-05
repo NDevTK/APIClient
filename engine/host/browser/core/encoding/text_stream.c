@@ -788,18 +788,32 @@ void text_stream_init(JSContext *ctx)
        operation is the caller that performs it. */
     g_td_stepid = idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_td_decl, 0);
     g_td_slot = realm_value_declare(ctx, "Encoding §7.5's UTF-8 text decode of a ReadableStream");
-    realm_declare_intrinsic(text_stream_install_protos);
+    realm_declare_intrinsic(text_stream_install_realm);
 }
 
-/* §7.5's AND §7.6's INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM. */
-void text_stream_install_protos(JSContext *ctx)
+/* ENCODING §7.5 Interface TextDecoderStream's AND §7.6 Interface TextEncoderStream's INTERFACE PROTOTYPE
+   OBJECTS, THEIR Web IDL §3.7.1 Interface object's INTERFACE OBJECTS, AND Web IDL §3.8's PROPERTY REFERENCES
+   FOR THEM — FOR ONE REALM.
+   THE INTERFACE OBJECTS ARE HERE BECAUSE Web IDL §3.8 IS GIVEN A REALM. Web IDL §3.8 Platform objects
+   implementing interfaces' `define the global property references` is "To define the global property
+   references on target, given realm realm", step 1 being "Let interfaces be a list that contains every
+   interface that is exposed in realm" — the population is a REALM's and the algorithm names no Document.
+   Encoding §7.5 and §7.6 both declare `[Exposed=*]`, so EVERY realm owes both names — and while they were
+   placed from core/platform.c's per-document column, a worker realm, which reaches no
+   platform_document_install, got neither the objects nor the names. Each prototype is in hand at the point
+   its interface object is minted, so the separate per-document entry's two JS_GetClassProto re-reads are
+   gone. */
+void text_stream_install_realm(JSContext *ctx)
 {
-    JSValue tds_p, tes_p, prev;
+    JSValue tds_p, tes_p, prev, global, ctor;
 
     DCHECK(g_tds_class != 0, "a realm asked for TextDecoderStream.prototype before the class was declared");
+    DCHECK(g_tds_ctor_stepid >= 0,
+           "a realm asked for the Encoding stream globals before text_stream_init declared them");
     prev = JS_GetClassProto(ctx, g_tds_class);
-    DCHECK(JS_IsNull(prev), "text_stream_install_protos ran twice in one realm");
+    DCHECK(JS_IsNull(prev), "text_stream_install_realm ran twice in one realm");
     JS_FreeValue(ctx, prev);
+    global = JS_GetGlobalObject(ctx);
 
     tds_p = JS_NewObject(ctx);
     CHECK(!JS_IsException(tds_p), "TextDecoderStream.prototype could not be allocated");
@@ -809,7 +823,14 @@ void text_stream_install_protos(JSContext *ctx)
     idl_install_accessor(ctx, tds_p, "ignoreBOM", js_tds_get, TDS_IGNORE_BOM, -1);
     idl_install_accessor(ctx, tds_p, "readable", js_gts_get, GTS_READABLE, -1);
     idl_install_accessor(ctx, tds_p, "writable", js_gts_get, GTS_WRITABLE, -1);
-    JS_SetClassProto(ctx, g_tds_class, tds_p);
+    ctor = idl_step_constructor(ctx, "TextDecoderStream", g_tds_ctor_stepid);
+    CHECK(!JS_IsException(ctor), "the TextDecoderStream interface object could not be allocated");
+    JS_SetConstructor(ctx, ctor, tds_p);
+    /* THE EXPOSURE IS THE DOOR'S ANSWER, NOT A CONDITION HERE: idl_define_global_property_reference asks
+       Web IDL §3.3.7 [Exposed] step 1 against this realm's Web IDL §3.3.8 [Global] global names, keyed by the
+       identifier it is already handed, so nothing at this site re-derives what the corpus states. */
+    idl_define_global_property_reference(ctx, global, "TextDecoderStream", ctor);
+    JS_SetClassProto(ctx, g_tds_class, tds_p);   /* the realm owns it from here */
 
     tes_p = JS_NewObject(ctx);
     CHECK(!JS_IsException(tes_p), "TextEncoderStream.prototype could not be allocated");
@@ -817,10 +838,20 @@ void text_stream_install_protos(JSContext *ctx)
     idl_install_accessor(ctx, tes_p, "encoding", js_tes_get, 0, -1);
     idl_install_accessor(ctx, tes_p, "readable", js_gts_get, GTS_READABLE, -1);
     idl_install_accessor(ctx, tes_p, "writable", js_gts_get, GTS_WRITABLE, -1);
-    JS_SetClassProto(ctx, g_tes_class, tes_p);
+    ctor = idl_step_constructor(ctx, "TextEncoderStream", g_tes_ctor_stepid);
+    CHECK(!JS_IsException(ctor), "the TextEncoderStream interface object could not be allocated");
+    JS_SetConstructor(ctx, ctor, tes_p);
+    idl_define_global_property_reference(ctx, global, "TextEncoderStream", ctor);
+    JS_SetClassProto(ctx, g_tes_class, tes_p);   /* the realm owns it from here */
+
+    JS_FreeValue(ctx, global);
 
     /* The shared decode, minted for THIS realm. It is not a member of either interface, so it goes on neither
-       prototype and no page can reach it; the two `textStream()` members take it with text_stream_decode_op. */
+       prototype and no page can reach it; the two `textStream()` members take it with text_stream_decode_op.
+       IT IS NOT A Web IDL §3.8 PROPERTY REFERENCE and gains no exposure question with the two above —
+       Encoding §7.5 Interface TextDecoderStream exports "set up a text decoder stream" for another
+       specification to perform, and the operation this slot holds is that performance rather than an
+       identifier any global carries. */
     {
         DCHECK(g_td_stepid >= 0,
                "a realm asked for the UTF-8 text decode before text_stream_init declared its machine");
@@ -833,33 +864,6 @@ JSValue text_stream_decode_op(JSContext *ctx)
     DCHECK(g_td_slot >= 0,
            "the UTF-8 text decode was asked for before this component declared its realm slot");
     return realm_value_get(ctx, g_td_slot);   /* OWNED */
-}
-
-void text_stream_install(JSContext *ctx, JSValueConst global)
-{
-    JSValue ctor;
-
-    DCHECK(g_tds_ctor_stepid >= 0,
-           "the Encoding stream globals were installed before text_stream_init declared them");
-    ctor = idl_step_constructor(ctx, "TextDecoderStream", g_tds_ctor_stepid);
-    CHECK(!JS_IsException(ctor), "the TextDecoderStream interface object could not be allocated");
-    {
-        JSValue proto = JS_GetClassProto(ctx, g_tds_class);
-        DCHECK(!JS_IsNull(proto), "TextDecoderStream was installed into a realm with no proto build");
-        JS_SetConstructor(ctx, ctor, proto);
-        JS_FreeValue(ctx, proto);
-    }
-    idl_define_global_property_reference(ctx, global, "TextDecoderStream", ctor);
-
-    ctor = idl_step_constructor(ctx, "TextEncoderStream", g_tes_ctor_stepid);
-    CHECK(!JS_IsException(ctor), "the TextEncoderStream interface object could not be allocated");
-    {
-        JSValue proto = JS_GetClassProto(ctx, g_tes_class);
-        DCHECK(!JS_IsNull(proto), "TextEncoderStream was installed into a realm with no proto build");
-        JS_SetConstructor(ctx, ctor, proto);
-        JS_FreeValue(ctx, proto);
-    }
-    idl_define_global_property_reference(ctx, global, "TextEncoderStream", ctor);
 }
 
 void text_stream_free(JSContext *ctx)

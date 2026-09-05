@@ -7,8 +7,18 @@
 #include <stddef.h>
 
 void encoding_init(JSContext *ctx);
-void encoding_install_protos(JSContext *ctx);   /* §7.1's and §7.2's prototypes, for ONE realm */
-void encoding_install(JSContext *ctx, JSValueConst global);
+/* Encoding §7.2 Interface TextDecoder's and §7.4 Interface TextEncoder's prototypes, their Web IDL §3.7.1
+   Interface object's interface objects, and the Web IDL §3.8 property references for them — for ONE realm,
+   declared into core/realm.h's list. ONE entry because Web IDL §3.8 Platform objects implementing interfaces'
+   `define the global property references` is given "target" and "a realm realm" and its step 1 population is
+   "every interface that is exposed in realm": no Document appears in it. Both interfaces declare
+   `[Exposed=*]`, so EVERY realm owes both names — and while the interface objects were installed from
+   core/platform.c's per-document column, a worker realm, which reaches no platform_document_install, received
+   neither.
+   THE PAIR IS Encoding §7.2 AND §7.4, NEVER §7.2 AND §7.1: Encoding §7.1 Interface mixin TextDecoderCommon
+   and §7.3 Interface mixin TextEncoderCommon are MIXINS, and Web IDL §3.7.1 Interface object is written of an
+   interface — so a mixin has no interface object and Web IDL §3.8 defines no property reference for one. */
+void encoding_install_realm(JSContext *ctx);
 void encoding_free(JSContext *ctx);
 
 /* ---- WHAT §7.5's TextDecoderStream AND §7.6's TextEncoderStream REACH THIS COMPONENT THROUGH ---------------

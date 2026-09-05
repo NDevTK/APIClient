@@ -4,8 +4,15 @@
 #include "quickjs.h"
 
 void text_stream_init(JSContext *ctx);
-void text_stream_install_protos(JSContext *ctx);   /* §7.5's and §7.6's prototypes, for ONE realm */
-void text_stream_install(JSContext *ctx, JSValueConst global);
+/* Encoding §7.5 Interface TextDecoderStream's and §7.6 Interface TextEncoderStream's prototypes, their Web
+   IDL §3.7.1 Interface object's interface objects, and the Web IDL §3.8 property references for them — for
+   ONE realm, declared into core/realm.h's list. ONE entry because Web IDL §3.8 Platform objects implementing
+   interfaces' `define the global property references` is given "target" and "a realm realm" and its step 1
+   population is "every interface that is exposed in realm": no Document appears in it. Both interfaces
+   declare `[Exposed=*]`, so EVERY realm owes both names — and while the interface objects were installed from
+   core/platform.c's per-document column, a worker realm, which reaches no platform_document_install, received
+   neither. */
+void text_stream_install_realm(JSContext *ctx);
 void text_stream_free(JSContext *ctx);
 
 /* THE UTF-8 TEXT DECODE OF A ReadableStream, AS THIS REALM'S FUNCTION OBJECT — Fetch §5.3 "Body mixin"'s
