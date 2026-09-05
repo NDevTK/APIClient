@@ -1458,8 +1458,18 @@ async function frontierRederive(e) {
            "because no such entry could exist. Park the load's PROVENANCE on the frontier entry beside " +
            "`credentialed` (it travels the AST_ANALYZE record the same way) and read it here, before a " +
            "widening makes a re-fetch claim a grade the person granted to one document about another");
+    /* AND FETCH §2.2.5 "Requests"' CREDENTIALS MODE, WHICH FOR A NAVIGATION IS THE SPEC'S OWN LITERAL. HTML
+       §7.4.5 "Populating a session history entry"'s create navigation params by fetching builds "a new
+       request, with … destination `document` … credentials mode `include`", so this is not a policy this
+       zone is choosing — it is what the algorithm performing the navigation says the request IS, stated
+       here because this zone is the party performing it. It is the OTHER half of the credential decision
+       from `credentialed` beside it: that flag is this zone's willingness to spend the session, this token
+       is what the request is, and `safe-fetch.js` composes the two (see `_credentialedOf`). Stating it is
+       what lets that composition REQUIRE a mode wherever the session pays, which is the rule that stops a
+       credential question being answered by silence. */
     try { r = await self.safeFetch(e.sourceUrl, { pageUrl: e.sourceUrl, pageOrigin: e.origin,
                                                   destination: "document", provenance: PROVENANCE_DERIVED,
+                                                  credentials: "include",
                                                   credentialed: navigationCarriesSession(e.sourceUrl, e.origin) }); }
     catch (err) { RETHROW_FATAL(err); r = null; }
   }
@@ -2099,8 +2109,18 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
     /* AND `provenance`, WHICH IS WHAT DECIDES WHETHER THE REQUEST HAPPENS AT ALL. It is the caller's
        statement about who named this address, relayed verbatim; this function neither tests it nor completes
        it, because the zone that owns the firing decision is the one that opens the socket. */
+    /* AND FETCH §2.2.5 "Requests"' CREDENTIALS MODE, WHICH FOR A NAVIGATION IS THE SPEC'S OWN LITERAL. HTML
+       §7.4.5 "Populating a session history entry"'s create navigation params by fetching builds "a new
+       request, with … destination `document` … credentials mode `include`", so this is not a policy this
+       zone is choosing — it is what the algorithm performing the navigation says the request IS, stated
+       here because this zone is the party performing it. It is the OTHER half of the credential decision
+       from `credentialed` beside it: that flag is this zone's willingness to spend the session, this token
+       is what the request is, and `safe-fetch.js` composes the two (see `_credentialedOf`). Stating it is
+       what lets that composition REQUIRE a mode wherever the session pays, which is the rule that stops a
+       credential question being answered by silence. */
     const r = await self.safeFetch(abs, { pageUrl: principalUrl, pageOrigin: principalOrigin,
                                           destination: "document", provenance: provenance,
+                                          credentials: "include",
                                           credentialed: navigationCarriesSession(abs, principalOrigin) });
     DCHECK(r && typeof r === "object" && r.body instanceof Uint8Array && r.headers && typeof r.headers === "object",
            "safeFetch answered a document load with something other than its reply record — HTML §7.4.5 " +
@@ -2850,16 +2870,27 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
      "Requests" gives every request one; `safe-fetch.js` decides the CORB class from §2.2.5's own script-like
      predicate over it. It is passed THROUGH rather than reduced to a boolean here, because a boolean is a
      second vocabulary for a spec field and the zone that decides is the one that should read the value. */
-  const fetched = async (method, u, destination, provenance) => {
+  const fetched = async (method, u, destination, provenance, credentials) => {
     DCHECK(typeof destination === "string",
            "a pending request reached the chokepoint with no DESTINATION — GetPending answers " +
-           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL` and Fetch §2.2.5 makes the " +
-           "destination part of the request, so a caller that omits it is one whose code load would be " +
-           "fetched as data and compiled. The empty string is a real destination and means DATA");
+           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>CREDENTIALS<TAB>URL` and Fetch §2.2.5 " +
+           "makes the destination part of the request, so a caller that omits it is one whose code load " +
+           "would be fetched as data and compiled. The empty string is a real destination and means DATA");
     DCHECK(typeof method === "string" && method !== "",
            "a pending request reached the chokepoint with no method — GetPending answers " +
-           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL` and the (method, url) pair is what " +
-           "the flow parked on, so a request whose method is unknown can be neither refused nor issued");
+           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>CREDENTIALS<TAB>URL` and the " +
+           "(method, url) pair is what the flow parked on, so a request whose method is unknown can be " +
+           "neither refused nor issued");
+    /* AND THE CREDENTIALS MODE, ASSERTED HERE FOR THE DESTINATION'S REASON EXACTLY: it is half of what this
+       zone must know to perform the request correctly rather than a hint, and a caller that omits it is one
+       whose request `safe-fetch.js` would decide the credential question for by silence. It is passed
+       THROUGH and not reduced to a boolean here — that reduction is the chokepoint's, made from this token
+       and from this zone's own willingness, which are two facts and not one (see `_credentialedOf`). */
+    DCHECK(typeof credentials === "string" && credentials !== "",
+           "a pending request reached the chokepoint with no CREDENTIALS MODE — GetPending answers " +
+           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>CREDENTIALS<TAB>URL`, Fetch §2.2.5 " +
+           "\"Requests\" gives every request one, and only the algorithm that created it knows which. A " +
+           "caller that drops it hands `safe-fetch.js` a request it can decide nothing about");
     /* THE METHOD HALF OF THE FIRING QUESTION, ASKED OF THE CHOKEPOINT RATHER THAN RE-DERIVED HERE. This was
        `if (method !== "GET") return null` — the SAME rule `engine/trusted.mjs` held in its own copy, and the
        two answered it DIFFERENTLY: that host DECLINED (the flow stays parked) and this one returned Fetch
@@ -2947,7 +2978,15 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          supplies no `pageOrigin`, so asking for cookies here can only ever produce a reply the chokepoint's
          own credentialed SOP refuses unread; the flag and the principal are two halves of one decision and
          this path has not taken it. */
-      const opts = { pageUrl: msg.sourceUrl, destination, provenance, credentialed: false };
+      /* AND THE REQUEST'S OWN CREDENTIALS MODE BESIDE THAT LITERAL, WHICH IS THE OTHER HALF OF ONE
+         DECISION AND NOT A SECOND SPELLING OF THIS ONE. `credentialed: false` is this zone's WILLINGNESS,
+         stated for the reason the finding above gives — this call supplies no `pageOrigin`, so asking for
+         cookies here could only produce a reply the chokepoint's own credentialed SOP refuses unread.
+         `credentials` is what the ALGORITHM said the request is (Fetch §2.2.5 "Requests"), relayed verbatim
+         off the pending line. Their conjunction is `safe-fetch.js`'s, and the mode can only ever narrow it —
+         so relaying it takes no new decision today and is what makes the `omit` parks refusable, and the
+         `include` ones honest, the day the principal above is wired. */
+      const opts = { pageUrl: msg.sourceUrl, destination, provenance, credentials, credentialed: false };
       const r = await self.safeFetch(abs, opts);
       /* THE CHOKEPOINT'S RECORD IS FIXED — safe-fetch.js returns {ok,status,statusText,headers,body,urlList}
          on every path it has, including every blocked one. `if (!r || typeof r.body !== "string") return null`
@@ -3147,7 +3186,12 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          `opts.credentialed` — that flag is the trusted zone's decision to replay a learned GET with the user's
          cookies, and taking it from the page's `withCredentials` would let the analysed bundle turn credential
          attachment on for itself. The field is read only in the REFUSING direction, which is the one direction
-         an untrusted bundle cannot exploit: the worst it can do with it is decline its own request. */
+         an untrusted bundle cannot exploit: the worst it can do with it is decline its own request.
+         IT IS NOW ALSO RELAYED AS `opts.credentials`, WHICH IS NOT THAT FLAG AND DOES NOT BECOME IT. That
+         option is Fetch §2.2.5 "Requests"' credentials mode — a STATEMENT about what the request is —
+         and `safe-fetch.js` composes it with `credentialed` in the one direction this paragraph already
+         argues is safe: it can refuse and it cannot grant. So the sentence above still holds word for word,
+         and the field has a reader for the first time on both sides of the seam rather than only here. */
       DCHECK(q.credentials === "include" || q.credentials === "same-origin",
              "the engine's xhr.send record names no credentials mode this zone speaks (`" + q.credentials +
              "`) — XHR §3.5.6 The send() method computes exactly two, and xhr_request_op writes one on every " +
@@ -3181,8 +3225,16 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
              "the three solver/engine.h declares — xhr_request_op writes one on every record from " +
              "engine_provenance_of_running_path, and the firing decision is made from it, so an absent or " +
              "unknown one is a producer that stopped stating what its request is evidence of");
+      /* AND THE MODE THE RECORD ALREADY CARRIED, RELAYED RATHER THAN DROPPED. XHR §3.5.6 "The send()
+         method" sets the request's credentials mode from §3.5.4's `withCredentials`, the engine states it
+         on this record, this zone DCHECKs its vocabulary above — and it stopped there, which is the
+         write-with-no-reader half of a broken contract. It is passed as `credentials`, which is a STATEMENT
+         about the request, and NOT as `credentialed`, which is this zone's own decision to spend the
+         session and is still false here: the two are composed at the chokepoint and the statement can only
+         ever narrow. Relaying it takes no new decision and gives the refusal below a fact to be about. */
       const r = await self.safeFetch(abs, { pageUrl: msg.sourceUrl, destination: "",
-                                            provenance: q.provenance, headers: q.headers });
+                                            provenance: q.provenance, credentials: q.credentials,
+                                            headers: q.headers });
       DCHECK(r && typeof r === "object" && r.body instanceof Uint8Array && typeof r.status === "number" &&
              r.headers && typeof r.headers === "object",
              "safeFetch answered an XHR with something other than its reply record — §3.5.6's response is " +
@@ -3661,14 +3713,15 @@ async function engineDecline(eng, method, url, reason) {
    the grammar actually promises. */
 function pendingRequest(line) {
   const f = line.split("\t");
-  CHECK(f.length === 5 && f[0] !== "" && f[4] !== "",
+  CHECK(f.length === 6 && f[0] !== "" && f[5] !== "",
         "content.mojom.Renderer.GetPending answered a line that is not " +
-        "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL`: `" + line + "` — the engine joins the " +
-        "five and this zone must deliver against the (method, url) pair, so a line missing a field puts a " +
-        "token where the address belongs and keys a reply on a request nothing parked on");
+        "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>CREDENTIALS<TAB>URL`: `" + line + "` — the " +
+        "engine joins the six and this zone must deliver against the (method, url) pair, so a line missing a " +
+        "field puts a token where the address belongs and keys a reply on a request nothing parked on");
   const destination = f[1];
   const initiator = f[2];
   const provenance = f[3];
+  const credentials = f[4];
   /* THREE FIELDS AND THREE QUESTIONS, AND THE ONE THIS ZONE ACTS ON IS THE DESTINATION. Fetch §2.2.5
      "Requests" gives every request one, the engine states it at each park off the request record, and
      `safe-fetch.js` decides the CORB class by asking §2.2.5's own SCRIPT-LIKE predicate of it. That question
@@ -3706,7 +3759,17 @@ function pendingRequest(line) {
         "GetPending stated a provenance this zone does not know: `" + provenance + "` — solver/engine.h " +
         "declares exactly `observed`, `derived` and `forced`, and a fourth value would be answered by " +
         "whichever arm the firing policy happens to be written with as its else");
-  return { method: f[0], destination, initiator, provenance, url: f[4] };
+  /* AND THE FOURTH FIELD IS FETCH §2.2.5 "Requests"' CREDENTIALS MODE, WHICH IS THE ONE THIS ZONE ACTS ON
+     BESIDE THE DESTINATION — it says WHOSE SESSION PAYS. Only the algorithm that CREATED the request knows
+     it (§2.5.1's create a potential-CORS request for an `<img>`, §2.5.4's CORS settings attribute credentials
+     mode for a `<script src>`, §5.4's `RequestInit` for a `fetch()`), and those algorithms disagree, so there
+     is no value this zone could supply. It is RELAYED and never re-derived here, exactly as the provenance
+     is: `safe-fetch.js` composes it with this zone's own willingness and holds every `if` about it.
+     THE MEMBERSHIP CHECK IS THERE AND NOT HERE, for the reason the destination's is — an unknown word is
+     fatal at the door that decides (`_credentialedOf`), which is one check for BOTH hosts, since
+     `engine/trusted.mjs` loads that same file verbatim. What is asserted here is the LINE'S SHAPE, which is
+     this splitter's own contract. */
+  return { method: f[0], destination, initiator, provenance, credentials, url: f[5] };
 }
 async function engineServiceFetch(eng) {   // one round: answer every parked REQUEST, then the engine is hot again
   /* THE REPLY'S METADATA CROSSES AS TEXT AND CARRYING ITS TYPE — JSON, exactly as qjs_host_answer's answer
@@ -3736,8 +3799,8 @@ async function engineServiceFetch(eng) {   // one round: answer every parked REQ
      it, the splitter above CHECKed it, and then it stopped here: every park was fired, at every grade, and the
      check that validated the word was validating a field with no reader. */
   for (const line of requests) {
-    const { method, destination, provenance, url } = pendingRequest(line);
-    const answer = await eng.fetched(method, url, destination, provenance);
+    const { method, destination, provenance, credentials, url } = pendingRequest(line);
+    const answer = await eng.fetched(method, url, destination, provenance, credentials);
     /* A DECLINE IS ITS OWN DELIVERY, AND DELIVERING NOTHING WAS ONLY HALF OF IT. The park was right — the
        engine's register keys on (method, url), `provide` clears the entry, and leaving it there is the flow
        STAYING PARKED, which is what §@S requires of a search not yet solved and what lets the request fire the

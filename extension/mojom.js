@@ -440,7 +440,7 @@
         reply: [
           { name: "requests", type: "string",
             why: "the REQUESTS flows are parked on — one " +
-                 "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL` line each, " +
+                 "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>CREDENTIALS<TAB>URL` line each, " +
                  "newline-joined, \"\" for none, deduped by the PAIR. The field was `urls` and the list was addresses alone, which is a " +
                  "request named by half of itself: a page that issues a GET and a POST to one address parks " +
                  "two, and both settled with whichever body the zone fetched first. TAB can occur in none of " +
@@ -458,7 +458,16 @@
                  "flag, which says whether the BYTES THIS ZONE FETCHED named the request or whether running " +
                  "code did. It is the grammar GetHostRequests already answers in, and an " +
                  "empty list is the empty string and never a NULL pointer turned into the four characters " +
-                 "\"null\" and then into one bogus record" },
+                 "\"null\" and then into one bogus record. The CREDENTIALS MODE is Fetch §2.2.5 " +
+                 "\"Requests\"' own — `omit`, `same-origin` or `include`, spelled by " +
+                 "core/fetch/fetch.h's `fetch_credentials_token` and by nothing else — and it says WHOSE " +
+                 "SESSION PAYS. Only the algorithm that CREATED the request knows it and those algorithms " +
+                 "disagree (HTML §2.5.1's create a potential-CORS request and §2.5.4's CORS settings " +
+                 "attribute credentials mode give the No CORS state opposite answers), so there is no value " +
+                 "a consumer could supply. It crosses as the three-valued token and never as a boolean " +
+                 "because `same-origin` is CONDITIONAL on a same-origin test that is the trusted zone's to " +
+                 "make: the engine STATES and `safe-fetch.js` DECIDES, composing it with that zone's own " +
+                 "willingness to spend the session" },
           WORKING_SET] },
 
       /* ORDINAL 8 WAS `GetChunks` AND IS NOT REUSED. It answered the module loader's register of specifiers,

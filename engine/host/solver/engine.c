@@ -28,6 +28,9 @@
 #include "core/html/html_script.h"   /* §4.12.1.1's encoding-parse of `src` against §8.1.3.2's API base URL (§4.4
                                         stood here and is "Grouping content") — the ONE
                                         statement of it, and the only thing this file needed core/url/url.h for */
+#include "core/html/cors_settings_attribute.h"   /* HTML §2.5.4: the CORS settings attribute credentials
+                                                   mode an element's `crossorigin` state names, which is what a
+                                                   §4.12.1.1 park states as its request's credentials mode */
 #include "core/html/nonce_attribute.h"   /* §4.12.1.1 reads el's [[CryptographicNonce]] SLOT, not its attribute */
 #include "core/loader/script_fetch.h"   /* HTML §8.1.4.2: where a fetched body becomes a script's source text */
 #include "core/frame/window_message.h"   /* the receiving half of a routed `windowproxy.post` */
@@ -204,6 +207,34 @@ static ScriptCspMeta script_csp_meta(JSContext *ctx, lxb_dom_element_t *el)
     return h;
 }
 
+/* FETCH §2.2.5 "Requests"' CREDENTIALS MODE FOR A PARK WHOSE REPLY IS A PROGRAM — the three parks in this
+   file that build their own request record rather than reaching `fetch_owe`, which is where every other
+   producer's mode is asserted (core/fetch/fetch.c). All three take the SAME answer and it is the element's:
+   HTML §4.12.1.1 "Processing model" — "Let module script credentials mode be the CORS settings attribute
+   credentials mode for el's crossorigin content attribute" — and then "Let options be a script fetch options
+   whose … credentials mode is module script credentials mode", for a CLASSIC external script exactly as for
+   a module one. §8.1.4.2 "Fetching scripts"' set up the classic script request then
+   "set request's … credentials mode to options's credentials mode", so the element's `crossorigin` state IS the request's
+   mode, and a dynamic `import()` inherits it unchanged: §8.1.4.2's get the descendant script fetch options
+   step 1 is "Let newOptions be a copy of originalOptions", which touches integrity and fetch priority and
+   nothing else.
+   IT IS §2.5.4's TABLE AND NOT §2.5.1's, AND THE TWO DISAGREE. core/html/cors_settings_attribute.h holds
+   both and says why they are two entries: §2.5.1's create a potential-CORS request answers `include` for the
+   No CORS state (which is what makes a bare `<img src>` carry cookies), and §2.5.4's CORS settings attribute
+   credentials mode answers `same-origin` for it. A `<script src>` with no `crossorigin` attribute is
+   `same-origin`, which is why a same-origin chunk load carries the session in a real browser and a
+   cross-origin one does not.
+   NULL IS A STATED ANSWER AND NOT A HOLE, for the reason `script_csp_meta` gives about the same operand one
+   function up: a row no `<script>` element produced — a lazy chunk, an @S candidate, a `javascript:` URL —
+   has no attribute to read, and §8.1.4.2 names the answer for it, "The default script fetch options are a
+   script fetch options whose … credentials mode is `same-origin`". That is §2.5.4's own No CORS row too, so
+   the two arms agree and the NULL arm is stated rather than defaulted into the other. */
+static FetchCredentialsMode script_credentials_mode(lxb_dom_element_t *el)
+{
+    return el ? cors_settings_attribute_credentials(cors_settings_attribute_state(el))
+              : FETCH_CREDENTIALS_SAME_ORIGIN;
+}
+
 static void script_csp_meta_free(JSContext *ctx, ScriptCspMeta *h)
 {
     if (h->nonce) JS_FreeCString(ctx, h->nonce);
@@ -238,9 +269,29 @@ static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *
            "decide whether the reply may be ingested as CODE. A park that does not say would have its reply "
            "classified by whichever arm the zone happens to write first, which is how a cross-origin HTML body "
            "gets compiled. Name the destination at the component that built the request");
+    /* AND THE CREDENTIALS MODE, WHICH A PARK CANNOT DERIVE EITHER AND WHICH DECIDES WHOSE SESSION PAYS.
+       Fetch §2.2.5 Requests gives every request one ("unless stated otherwise, it is `same-origin`"), and
+       `same-origin` is a POSITIVE answer a producer may state — which is exactly why the zero is refused
+       here rather than turned into it: core/fetch/fetch.h's `FETCH_CREDENTIALS_UNPLACED` is what a zero-fill
+       leaves, so writing §2.2.5's default for it would make "the algorithm says same-origin" and "nobody
+       plumbed this" the same bytes on the wire. `fetch_owe` asserts the same thing at the other door
+       (core/fetch/fetch.c) and this is the CONSUMER'S half of it, which is what reaches the three parks in
+       this file that build their own record and never pass that door. */
+    DCHECK(req->credentials != FETCH_CREDENTIALS_UNPLACED,
+           "a request parked on an ADDRESS without stating its CREDENTIALS MODE — Fetch §2.2.5 Requests "
+           "gives every request one and the trusted zone decides from it whether the person's session pays "
+           "for this fetch, so a park that does not say would have that answered by whichever arm the zone "
+           "writes as its else. State the mode the algorithm creating this request names "
+           "(core/html/cors_settings_attribute.h holds HTML §2.5.1's and §2.5.4's two answers over an "
+           "element's `crossorigin` state, and they differ)");
     pending_set(e, PEND_URL, JS_NewString(ctx, req->url));
     pending_set(e, PEND_METHOD, JS_NewString(ctx, req->method));
     pending_set(e, PEND_DESTINATION, JS_NewString(ctx, req->destination));
+    /* THE ONE WIRE SPELLING IS `fetch_credentials_token`'S AND NOBODY ELSE'S (core/fetch/fetch.h), so this
+       is a call and not three literals; it is FATAL on the unplaced zero, which is the release backstop
+       under the DCHECK above. UNCONDITIONAL, so a record that still carries pending.h's JS_NULL is one this
+       door never ran on rather than one whose producer said nothing. */
+    pending_set(e, PEND_CREDENTIALS, JS_NewString(ctx, fetch_credentials_token(req->credentials)));
     if (req->headers && req->headers->n > 0) {
         JSValue hl = pending_list_new();
         int hi;
@@ -382,7 +433,9 @@ void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, JSValueCons
        other, which is how a document's own `<script src>` reached the trusted zone with no load class at all.
        The METHOD is `GET`: a chunk load states its own. */
     FetchRequest req = { "GET", url, PENDING_DESTINATION_SCRIPT, NULL, NULL, 0,
-                         /* placed below, off the element */ { NULL, 0, NULL, 0, CSP_PARSER_METADATA_UNPLACED } };
+                         /* placed below, off the element */ { NULL, 0, NULL, 0, CSP_PARSER_METADATA_UNPLACED },
+                         /* …and so is the credentials mode, off the same element */
+                         FETCH_CREDENTIALS_UNPLACED };
     /* …AND FETCH §2.2.5's METADATA, WHICH FOR A DYNAMIC IMPORT IS THE REFERRER'S. HTML §8.1.6.7.3
        HostLoadImportedModule: "Let fetchOptions be the result of getting the descendant script fetch options
        given originalFetchOptions, url, and settingsObject" — and THAT ALGORITHM IS §8.1.4.2 "Fetching
@@ -400,6 +453,11 @@ void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, JSValueCons
     DCHECK(f != NULL, "a dynamic import was issued outside a running flow");
     meta = script_csp_meta(ctx, flow_dyn_el(f));
     req.metadata = meta.m;
+    /* …AND ITS CREDENTIALS MODE, WHICH FOR A DYNAMIC IMPORT IS THE REFERRING SCRIPT'S — see
+       `script_credentials_mode`. §8.1.4.2's get the descendant script fetch options COPIES it, so the
+       element whose program this flow is running decides it, and a chunk imported from a row no `<script>`
+       produced takes §8.1.4.2's default script fetch options. */
+    req.credentials = script_credentials_mode(flow_dyn_el(f));
     DCHECK(url != NULL && *url, "a dynamic import parked with no module URL for the host to fetch");
     e = pending_push(&f->pending, FLOW_PENDING_MODULE, flow_path_forced(f));
     pending_set(e, PEND_RESOLVE, JS_DupValue(ctx, resolve));
@@ -455,7 +513,9 @@ void engine_pending_script_url(JSContext *ctx, const char *url, ScriptType stype
        So the type decides the DECODE and the evaluation entry, and it does not decide this: either way the
        reply becomes a program, which is precisely what CORB exists to keep cross-origin data out of. */
     FetchRequest req = { "GET", url, PENDING_DESTINATION_SCRIPT, NULL, NULL, 0,
-                         /* placed below, off the element */ { NULL, 0, NULL, 0, CSP_PARSER_METADATA_UNPLACED } };
+                         /* placed below, off the element */ { NULL, 0, NULL, 0, CSP_PARSER_METADATA_UNPLACED },
+                         /* …and so is the credentials mode, off the same element */
+                         FETCH_CREDENTIALS_UNPLACED };
     /* …AND §4.12.1.1's THREE METADATA MEMBERS, off the element this park already carries. This is the entry the
        whole convergence was built for: `<script nonce=x src=…>` under `script-src 'nonce-x'` is the shape
        modern CSP is written in, and until step 7 was asked at the park no `<script src>` in this engine was
@@ -470,6 +530,10 @@ void engine_pending_script_url(JSContext *ctx, const char *url, ScriptType stype
            "so no such element ever reaches a park");
     meta = script_csp_meta(ctx, el);
     req.metadata = meta.m;
+    /* …AND ITS CREDENTIALS MODE, off the same element and by §4.12.1.1's own step — see
+       `script_credentials_mode`. `<script crossorigin=use-credentials src>` is the population this states
+       for: without it the park carried a zero-fill and the chunk was fetched with the mode nobody named. */
+    req.credentials = script_credentials_mode(el);
     e = pending_push(&f->pending, FLOW_PENDING_SCRIPT, flow_path_forced(f));
     pending_set_int(e, PEND_SCRIPT_TYPE, (int)stype);
     /* AND WHICH DOCUMENT'S PROGRAM THE REPLY WILL BE. The element was inserted into a tree, and the realm this
@@ -2944,6 +3008,52 @@ static int prov_of_token(const char *tok, size_t n) {
                 "written — the buffer is this function's alone", (int)n, tok);
 }
 
+/* …AND THE SAME TRIP BACK FOR FETCH §2.2.5's CREDENTIALS MODE, length-delimited for `prov_of_token`'s
+   reason: the caller holds a FIELD of a line and not a NUL-terminated string. It is derived from
+   core/fetch/fetch.h's own wire spelling rather than restating the three words — that file says in as many
+   words that the spelling is `fetch_credentials_token`'s "and nobody else's", and a second copy here would
+   be the list-beside-a-list this join has already been burnt by. */
+static FetchCredentialsMode cred_of_token(const char *tok, size_t n) {
+    FetchCredentialsMode m;
+    for (m = FETCH_CREDENTIALS_OMIT; m <= FETCH_CREDENTIALS_INCLUDE; m++) {
+        const char *w = fetch_credentials_token(m);
+        if (n == strlen(w) && !memcmp(tok, w, n)) return m;
+    }
+    CHECK_FAILF("engine: a line this join wrote carries the credentials token `%.*s`, which it cannot have "
+                "written — the buffer is this function's alone", (int)n, tok);
+}
+
+/* THE SET'S CREDENTIALS MODE IS ITS LEAST CREDENTIALED MEMBER, WHICH IS THE DESTINATION'S RULE AND NOT THE
+   PROVENANCE'S — and the two must not be read as one. The dedup is over the (method, url) PAIR, so ONE reply
+   satisfies every park in the set; the initiator and the provenance fold toward what is MOST OBSERVED, which
+   is a claim about evidence and is monotone in the right direction for both. This is a claim about WHOSE
+   SESSION PAYS, and the two errors are not symmetric: fetching credentialed for a set containing an `omit`
+   park hands that park a personalised body its own algorithm said it must not see, which is the leak
+   CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE is about; fetching uncredentialed for a set containing an
+   `include` park hands it the logged-out body, which is a NARROWING and loses reach rather than spending
+   somebody's session. So the fold is `least credentialed wins`, exactly as the destination's is `strictest
+   ingestion wins`.
+   IT IS WRITTEN OVER THE ENUMERATORS AND NOT OVER THEIR NUMBERS. core/fetch/fetch.h declares them in this
+   order and does not say the order is a rank, so a `<`-fold here would be a second, unstated claim about
+   that declaration — the kind that keeps holding until somebody inserts a member.
+   WHAT IS NOT COVERED: a request's credentials mode is part of what a request IS, so two parks on one
+   (method, url) stating different modes are two REQUESTS a browser makes twice, and this folds them into
+   one. WHAT THE NEXT DIFF BUILDS: the mode in the dedup KEY beside the method and the url — which is not a
+   change to this loop alone, because `engine_provide` pairs a reply against that same (method, url) and
+   would answer only the first of the two lines. HOW ITS ABSENCE SHOWS: a page whose `<img
+   crossorigin=use-credentials src=u>` and whose `fetch(u)` name one address learns the logged-out body for
+   the image, and the census's own request count stays one where a browser's network log shows two. */
+static FetchCredentialsMode cred_narrower(FetchCredentialsMode a, FetchCredentialsMode b) {
+    if (a == FETCH_CREDENTIALS_OMIT || b == FETCH_CREDENTIALS_OMIT) return FETCH_CREDENTIALS_OMIT;
+    if (a == FETCH_CREDENTIALS_SAME_ORIGIN || b == FETCH_CREDENTIALS_SAME_ORIGIN)
+        return FETCH_CREDENTIALS_SAME_ORIGIN;
+    DCHECK(a == FETCH_CREDENTIALS_INCLUDE && b == FETCH_CREDENTIALS_INCLUDE,
+           "a pending line's credentials mode is neither of Fetch §2.2.5 Requests' three — the unplaced zero "
+           "is what a producer that stated nothing leaves, and pending_park_request refuses it, so reaching "
+           "this fold with one is that door having stopped asserting");
+    return FETCH_CREDENTIALS_INCLUDE;
+}
+
 /* IS THIS INITIATOR TOKEN THE PARSER-INSERTED ONE — asked of a field of a line and of the entry's own token
    through the same two comparisons, so the join cannot decide the question one way in one place and another
    way in the other. It is a MEMBERSHIP test and not a length test: reading "six bytes" as "parser" was sound
@@ -2975,7 +3085,8 @@ const char *engine_pending_fetches(void) {
             JSValue uv = pending_get(pe, PEND_URL);
             JSValue mv = pending_get(pe, PEND_METHOD);
             JSValue dv = pending_get(pe, PEND_DESTINATION);
-            size_t ul = 0, ml = 0, dl = 0;
+            JSValue cv = pending_get(pe, PEND_CREDENTIALS);
+            size_t ul = 0, ml = 0, dl = 0, cl = 0;
             const char *u = JS_IsString(uv) ? JS_ToCStringLen(pending_ctx(), &ul, uv) : NULL;
             const char *m = JS_IsString(mv) ? JS_ToCStringLen(pending_ctx(), &ml, mv) : NULL;
             /* FETCH §2.2.5's DESTINATION, off the record the park stamped it on. It is NOT derived from the
@@ -2983,6 +3094,12 @@ const char *engine_pending_fetches(void) {
                are one kind of park and opposite answers to "may this reply be compiled", so a kind-to-class
                table would be a second producer of a fact the request already carries. */
             const char *d = JS_IsString(dv) ? JS_ToCStringLen(pending_ctx(), &dl, dv) : NULL;
+            /* FETCH §2.2.5's CREDENTIALS MODE, off the same record and for the destination's reason
+               exactly: the algorithm that CREATED the request is the only party that knows it, and the
+               party that decides from it is at the other end of this line. pending.h's default is JS_NULL
+               and `pending_park_request` writes this field unconditionally, so a NULL here is a park that
+               never took an address — which the `skip` below has already dropped on `!u`. */
+            const char *c = JS_IsString(cv) ? JS_ToCStringLen(pending_ctx(), &cl, cv) : NULL;
             /* HTML §4.12.1's PARSER-INSERTED FLAG, read off the kind the park already carries — see
                engine.h's tokens for why the engine states it and does not act on it. */
             const char *ini = pending_get_int(pe, PEND_KIND) == FLOW_PENDING_DOCSCRIPT
@@ -3046,6 +3163,24 @@ const char *engine_pending_fetches(void) {
                        "consumer decides the CORB class by asking whether this value is SCRIPT-LIKE, so a "
                        "value outside the enumeration is read as `not code` by default and a script's reply is "
                        "ingested as data");
+                /* AND THE CREDENTIALS MODE'S HALF OF THE SAME CONTRACT, asserted where the record is read
+                   because that is where a park that never wrote it becomes a line the zone must decide from.
+                   pending.h's default is JS_NULL and the park writes the field unconditionally, so a NULL is
+                   the park door having stopped writing rather than a producer that stated nothing — which is
+                   a different repair, and the two must not read alike here. */
+                DCHECK(c != NULL,
+                       "an outstanding request carries an ADDRESS and no CREDENTIALS MODE — the field is "
+                       "written unconditionally by pending_park_request (this file) after it has refused the "
+                       "unplaced zero, so a record with an address and no mode is that door having been "
+                       "bypassed. Route the park through it; a producer that merely stated nothing aborts "
+                       "there instead, naming the algorithm that owes the answer");
+                /* AND THE ENUMERATION, ASKED BY MAKING THE CALL RATHER THAN BY ASSERTING OVER IT. A
+                   DCHECK wrapped round `cred_of_token` would compare a value with the only value it can
+                   return, since that function is FATAL on a word §2.2.5 does not define — and it is fatal
+                   for `engine_provenance_token`'s reason, which is this one: what is at stake is whether
+                   the person's session pays for this fetch, and a release build that let an unknown word
+                   through would have the zone answer that from whichever arm its policy has as its else. */
+                (void)cred_of_token(c, cl);
                 /* FETCH §4.3 Scheme fetch's CLOSURE, AND THIS IS THE CONSUMER IT BELONGS AT. Everything this
                    loop writes is handed to the trusted zone, which can fetch NOTHING but an HTTP(S) scheme
                    (Fetch §2.1 URL) and answers a refusal the page cannot tell from a network failure — so a
@@ -3079,13 +3214,14 @@ const char *engine_pending_fetches(void) {
                     char *t2 = t1 ? memchr(t1 + 1, '\t', (size_t)(lend - t1 - 1)) : NULL;
                     char *t3 = t2 ? memchr(t2 + 1, '\t', (size_t)(lend - t2 - 1)) : NULL;
                     char *t4 = t3 ? memchr(t3 + 1, '\t', (size_t)(lend - t3 - 1)) : NULL;
-                    DCHECK(t4 != NULL,
-                           "a line already in this join carries fewer than four TABs — the buffer is this "
+                    char *t5 = t4 ? memchr(t4 + 1, '\t', (size_t)(lend - t4 - 1)) : NULL;
+                    DCHECK(t5 != NULL,
+                           "a line already in this join carries fewer than five TABs — the buffer is this "
                            "function's alone and every line it writes is `METHOD<TAB>DESTINATION<TAB>"
-                           "INITIATOR<TAB>PROVENANCE<TAB>URL`, so this is the writer and the reader having "
-                           "parted");
+                           "INITIATOR<TAB>PROVENANCE<TAB>CREDENTIALS<TAB>URL`, so this is the writer and the "
+                           "reader having parted");
                     if ((size_t)(t1 - q) == ml && !memcmp(q, m, ml) &&
-                        (size_t)(lend - (t4 + 1)) == ul && !memcmp(t4 + 1, u, ul)) {
+                        (size_t)(lend - (t5 + 1)) == ul && !memcmp(t5 + 1, u, ul)) {
                         /* THE SET'S INITIATOR IS THE MOST OBSERVED OF ITS MEMBERS, and that is a statement
                            about the REQUEST rather than a preference. The dedup is over the pair because the
                            pair is the request's identity and one reply fills every entry parked on it — so
@@ -3130,11 +3266,18 @@ const char *engine_pending_fetches(void) {
                         size_t d_at = (size_t)(t1 + 1 - join), d_len = (size_t)(t2 - (t1 + 1));
                         size_t i_at = (size_t)(t2 + 1 - join), i_len = (size_t)(t3 - (t2 + 1));
                         size_t p_at = (size_t)(t3 + 1 - join), p_len = (size_t)(t4 - (t3 + 1));
+                        size_t c_at = (size_t)(t4 + 1 - join), c_len = (size_t)(t5 - (t4 + 1));
                         int mo_prov = prov_of_token(t3 + 1, p_len);
                         int mo_parser = ini_is_parser(t2 + 1, i_len) || ini_is_parser(ini, il);
                         int widen_dst = destination_is_script_like(d, dl) &&
                                         !destination_is_script_like(join + d_at, d_len);
+                        /* …AND THE SET'S CREDENTIALS MODE, WHICH FOLDS THE OTHER WAY FROM THE TWO TOKEN
+                           FIELDS BESIDE IT — see `cred_narrower` for why least-credentialed wins and for the
+                           residual this fold is. */
+                        FetchCredentialsMode mo_cred = cred_narrower(cred_of_token(t4 + 1, c_len),
+                                                                    cred_of_token(c, cl));
                         if (prov_v < mo_prov) mo_prov = prov_v;
+                        join_set_field(&join, &n_out, &cap, c_at, c_len, fetch_credentials_token(mo_cred));
                         join_set_field(&join, &n_out, &cap, p_at, p_len, engine_provenance_token(mo_prov));
                         join_set_field(&join, &n_out, &cap, i_at, i_len,
                                        mo_parser ? PENDING_INITIATOR_PARSER : PENDING_INITIATOR_SCRIPT);
@@ -3149,7 +3292,7 @@ const char *engine_pending_fetches(void) {
                 }
             }
             if (!skip) {
-                while (n_out + ml + dl + il + pl + ul + 6 > cap) {
+                while (n_out + ml + dl + il + pl + cl + ul + 7 > cap) {
                     cap *= 2;
                     join = realloc(join, cap);
                     CHECK(join, "engine: OOM growing the pending-request join");
@@ -3162,6 +3305,8 @@ const char *engine_pending_fetches(void) {
                 join[n_out++] = '\t';
                 memcpy(join + n_out, prov, pl); n_out += pl;
                 join[n_out++] = '\t';
+                memcpy(join + n_out, c, cl); n_out += cl;
+                join[n_out++] = '\t';
                 memcpy(join + n_out, u, ul); n_out += ul;
                 join[n_out++] = '\n';
                 join[n_out] = 0;
@@ -3169,6 +3314,8 @@ const char *engine_pending_fetches(void) {
             if (u) JS_FreeCString(pending_ctx(), u);
             if (m) JS_FreeCString(pending_ctx(), m);
             if (d) JS_FreeCString(pending_ctx(), d);
+            if (c) JS_FreeCString(pending_ctx(), c);
+            JS_FreeValue(pending_ctx(), cv);
             JS_FreeValue(pending_ctx(), dv);
             JS_FreeValue(pending_ctx(), mv);
             JS_FreeValue(pending_ctx(), uv);
@@ -3178,10 +3325,10 @@ const char *engine_pending_fetches(void) {
 }
 
 void engine_pending_split(char *line, const char **method, const char **destination, const char **initiator,
-                          const char **provenance, const char **url) {
-    char *tab, *tab2, *tab3, *tab4;
+                          const char **provenance, const char **credentials, const char **url) {
+    char *tab, *tab2, *tab3, *tab4, *tab5;
 
-    DCHECK(line && method && destination && initiator && provenance && url,
+    DCHECK(line && method && destination && initiator && provenance && credentials && url,
            "a pending line was split with nowhere to put its fields");
     tab = strchr(line, '\t');
     /* A `CHECK`, NOT A DCHECK, because the release path has no defined answer: the fields are what a reply
@@ -3190,7 +3337,8 @@ void engine_pending_split(char *line, const char **method, const char **destinat
        nothing else would say so. */
     CHECK(tab != NULL,
           "engine: a host split a pending line that carries no TAB — engine_pending_fetches joins "
-          "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL` lines and this one is none of that");
+          "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>CREDENTIALS<TAB>URL` lines and this "
+          "one is none of that");
     tab2 = strchr(tab + 1, '\t');
     /* THE SECOND TAB IS THE ONE A HOST WRITTEN AGAINST THE OLD GRAMMAR WOULD NOT FIND, and it is a CHECK for
        the same sentence as the first with the failure one field over: without it the INITIATOR silently becomes
@@ -3200,8 +3348,8 @@ void engine_pending_split(char *line, const char **method, const char **destinat
        the URL is the remainder of the line. */
     CHECK(tab2 != NULL,
           "engine: a host split a pending line carrying one TAB — engine_pending_fetches joins "
-          "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL` and this host is reading a shorter "
-          "grammar that preceded it, so its address is about to be a destination");
+          "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>CREDENTIALS<TAB>URL` and this host is "
+          "reading a shorter grammar that preceded it, so its address is about to be a destination");
     tab3 = strchr(tab2 + 1, '\t');
     /* THE THIRD TAB IS THE ONE A HOST WRITTEN AGAINST THE THREE-FIELD GRAMMAR WOULD NOT FIND, and it is a
        CHECK for the same sentence as the two above with the failure one field further over: without it the
@@ -3212,8 +3360,8 @@ void engine_pending_split(char *line, const char **method, const char **destinat
        whose firing decision cannot see the distinction it is supposed to be made on. */
     CHECK(tab3 != NULL,
           "engine: a host split a pending line carrying two TABs — engine_pending_fetches joins "
-          "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL` and this host is reading a shorter "
-          "grammar that preceded it, so its address is about to be an initiator token");
+          "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>CREDENTIALS<TAB>URL` and this host is "
+          "reading a shorter grammar that preceded it, so its address is about to be an initiator token");
     tab4 = strchr(tab3 + 1, '\t');
     /* THE FOURTH TAB IS THE ONE A HOST WRITTEN AGAINST THE FOUR-FIELD GRAMMAR WOULD NOT FIND, and it is a
        CHECK for the same sentence as the three above with the failure one field further over. The grammar
@@ -3223,18 +3371,36 @@ void engine_pending_split(char *line, const char **method, const char **destinat
        grammar is one whose ingestion decision is made on a field that is not there. */
     CHECK(tab4 != NULL,
           "engine: a host split a pending line carrying three TABs — engine_pending_fetches joins "
-          "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL` and this host is reading the "
-          "four-field grammar that preceded it, so its address is about to be a provenance token and its CORB "
-          "class is about to be decided on a field that is not there");
+          "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>CREDENTIALS<TAB>URL` and this host is "
+          "reading the four-field grammar that preceded it, so its address is about to be a provenance token "
+          "and its CORB class is about to be decided on a field that is not there");
+    tab5 = strchr(tab4 + 1, '\t');
+    /* THE FIFTH TAB IS THE ONE A HOST WRITTEN AGAINST THE FIVE-FIELD GRAMMAR WOULD NOT FIND, and it is a
+       CHECK for the same sentence as the four above with the failure one field further over: without it the
+       CREDENTIALS MODE silently becomes the address, so the zone would fetch the eleven characters
+       `same-origin` and every flow parked on the real URL would wait for a reply keyed on a request nothing
+       made. The grammar that preceded it could not say WHOSE SESSION PAYS: Fetch §2.2.5 "Requests" gives
+       every request a credentials mode and only the algorithm that CREATED the request knows it, so a host
+       still reading five fields is one deciding the credential question by silence — which for a
+       `<link rel=preload>` or an `<img crossorigin=use-credentials>` means a personalised body learned as
+       the logged-out one, and in the other direction means a park whose own algorithm said `omit` fetched
+       with the person's cookies. */
+    CHECK(tab5 != NULL,
+          "engine: a host split a pending line carrying four TABs — engine_pending_fetches joins "
+          "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>CREDENTIALS<TAB>URL` and this host is "
+          "reading the five-field grammar that preceded it, so its address is about to be a credentials "
+          "token and whose session pays for this fetch is about to be decided on a field that is not there");
     *tab = 0;
     *tab2 = 0;
     *tab3 = 0;
     *tab4 = 0;
+    *tab5 = 0;
     *method = line;
     *destination = tab + 1;
     *initiator = tab2 + 1;
     *provenance = tab3 + 1;
-    *url = tab4 + 1;
+    *credentials = tab4 + 1;
+    *url = tab5 + 1;
     /* FETCH §2.2.5's ENUMERATION, ASKED OF THE LINE — the same test the join asked before writing it, at the
        other end, because a field is a contract and a contract is checked by both parties. The EMPTY STRING
        passes and must: §2.2.5's default is a destination like any other and it is what `fetch()` has. */
@@ -3252,6 +3418,13 @@ void engine_pending_split(char *line, const char **method, const char **destinat
            "a pending line's PROVENANCE is none of the three tokens engine.h declares — the trusted zone's "
            "FIRING decision reads this field, and CLAUDE.md forbids a reply to a FORCED request ever being "
            "reported as OBSERVED, which a defaulted fourth value is exactly how it would be");
+    /* FETCH §2.2.5's CREDENTIALS MODE, ASKED OF THE LINE THROUGH THE ONE MAPPING core/fetch/fetch.h OWNS —
+       `fetch_credentials_of_token`, which is FATAL on a word §2.2.5 does not define, so the call IS the
+       check and an assert over it could only compare a value with itself. It is fatal rather than a DCHECK
+       for the reason that file gives: the zone decides a credential question from this field, and a release
+       build that let an unknown word through would have that decided by whichever arm its policy has as its
+       else. */
+    (void)fetch_credentials_of_token(*credentials);
 }
 
 /* IS ANYTHING OUTSTANDING ON THE WHOLE FRONTIER — the third answer over the same two walks above, and the one
@@ -5735,7 +5908,9 @@ static void engine_pending_docscript(Flow *f, int at) {
        points greater than U+007E" — so a NUL is `%00` and never the byte. */
     const char *url = dyn_body_text(f->dyn[at]);
     FetchRequest req = { "GET", url, PENDING_DESTINATION_SCRIPT, NULL, NULL, 0,
-                         /* placed below, off the element */ { NULL, 0, NULL, 0, CSP_PARSER_METADATA_UNPLACED } };
+                         /* placed below, off the element */ { NULL, 0, NULL, 0, CSP_PARSER_METADATA_UNPLACED },
+                         /* …and so is the credentials mode, off the same element */
+                         FETCH_CREDENTIALS_UNPLACED };
     /* …AND §4.12.1.1's THREE METADATA MEMBERS, READ OFF THE ROW'S OWN ELEMENT. A document's external script has
        one — engine_queue_docscript_url and the seed's address arm both take it, and flow_deliver_one_reply
        asserts it again on the failure path. NULL is a stated answer here and not a hole: a host driving a
@@ -5751,6 +5926,10 @@ static void engine_pending_docscript(Flow *f, int at) {
            "the host is shown would be a PREFIX of the address the element names");
     meta = script_csp_meta(ctx, f->dyn_el[at]);
     req.metadata = meta.m;
+    /* …AND ITS CREDENTIALS MODE, off the row's own element and by the same §4.12.1.1 step as the injected
+       script's — see `script_credentials_mode`. A row a host SYNTHESIZED has no element and takes §8.1.4.2's
+       default script fetch options, exactly as its metadata does one line up. */
+    req.credentials = script_credentials_mode(f->dyn_el[at]);
     e = pending_push(&f->pending, FLOW_PENDING_DOCSCRIPT, flow_path_forced(f));
     /* WHICH ROW THIS PARK IS FOR, BY NAME — it is the row's `dyn_id` rather than its position because a
        position is a fact about the row only while the set is fixed (solver/flow.h), and this entry outlives

@@ -398,7 +398,7 @@ int pending_owed_replies(JSValueConst reg)
            reached through the one entry kind for which no reply exists at all. */
         if (kind != FLOW_PENDING_HOSTREQ && pend_host_owed(e)) {
             /* A DEBT IS A REPLY THAT CAN STILL ARRIVE, AND ONLY THE PAIR MAKES ONE ARRIVE. engine_pending_fetches
-               lists `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL` and engine_provide delivers
+               lists `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>CREDENTIALS<TAB>URL` and engine_provide delivers
                against the pair, so an owed
                entry missing either is one the host was never shown and never will be — counting it credits a reply nobody is
                going to send, and the credit is then spent by a reply the host genuinely mispaired. Asserted at

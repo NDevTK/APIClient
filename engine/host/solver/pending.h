@@ -226,6 +226,26 @@ int pending_prov_compose(int kind, int path_forced);
  * SHARE, for `answerFixed`'s reason exactly: an arm forked AFTER the decline was taken is that timeline
  * continued, and its own failure path is explored by the failure arm's own branch-siblings rather than by a
  * second arm of the same decline. */
+/* `credentials` IS FETCH §2.2.5 "Requests"' CREDENTIALS MODE, AS THE ONE WIRE SPELLING core/fetch/fetch.h
+ * declares — "A request has an associated credentials mode, which is `omit`, `same-origin`, or `include`."
+ * It rides the record for `destination`'s reason word for word: a park cannot derive it, only the algorithm
+ * that CREATED the request knows it, and the party that DECIDES from it is the trusted zone at the other end
+ * of the pending line. The engine states; extension/lib/safe-fetch.js decides, and there is no `if` about
+ * this value anywhere in this engine.
+ * IT IS THE §2.2.5 TOKEN AND NOT A BOOLEAN, and that is the whole of why it is worth a field. `same-origin`
+ * is a CONDITIONAL answer whose condition — is this address same-origin with the page's principal — is the
+ * SOP question SECURITY.md gives to the zone and to nothing else, so an engine that collapsed the three
+ * values to "does this carry cookies" would have had to answer it here, in the half that holds no network
+ * policy. Three values cross; the boolean is derived where the principal is.
+ * ITS DEFAULT IS JS_NULL AND THAT IS A DIFFERENT FACT FROM `FETCH_CREDENTIALS_UNPLACED`, which is the
+ * distinction the two ends are asserted on. `pending_park_request` writes this field UNCONDITIONALLY and
+ * aborts before it on an unplaced mode, so a record still carrying JS_NULL is one that never took an
+ * ADDRESS at all — a park answered by its own caller, or a synchronous host request — and the join skips
+ * those on the URL before it ever reads this. A record that reached the join with JS_NULL here would be the
+ * park door having stopped writing it, which is a different repair from a producer that stated no mode, and
+ * conflating them is how "nobody plumbed this" becomes a credential answered by silence.
+ * SHARE, for `destination`'s reason exactly: an arm forked while the load is in flight is the same request,
+ * built on the prefix both arms share, and its credentials mode is a fact about that request. */
 /* AND THE FOURTH COLUMN IS THE FIELD'S "NOTHING YET", WHICH IS WHY THIS TABLE IS FOUR COLUMNS AND NOT THREE.
  * Three of the four things a field obliges were already derived from this list — the id, the interned name, and
  * what the fork does with it — and the fourth, its value at the push, was a SEPARATE hand-written sequence of
@@ -270,6 +290,9 @@ int pending_prov_compose(int kind, int path_forced);
     X(METHOD,     "method",    PEND_SHARE,  JS_NULL)                                   \
     /* no DESTINATION STATED, which the join refuses to list rather than classifying */ \
     X(DESTINATION,"destination",PEND_SHARE, JS_NULL)                                   \
+    /* NO CREDENTIALS MODE STATED — which `pending_park_request` refuses to reach, so a record  \
+       carrying this default is one no park with an ADDRESS ever touched (see the paragraph above) */ \
+    X(CREDENTIALS,"credentials",PEND_SHARE, JS_NULL)                                   \
     X(HEADERS,    "headers",   PEND_STRUCT, JS_NULL)                                   \
     X(BODY,       "body",      PEND_SHARE,  JS_NULL)                                   \
     /* 0 is "this park's reply is not a program", which is every kind but the injected <script src> */ \

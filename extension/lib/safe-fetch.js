@@ -471,7 +471,12 @@ function _provenanceOf(opts) {
    an option added to the body and forgotten in this list aborts on its AUTHOR's own first call, at the line
    they just wrote — while the failure it closes is silent and belongs to somebody else, later. */
 var _SAFEFETCH_OPTIONS = ["pageUrl", "pageOrigin", "destination", "provenance", "credentialed",
-                          "headers", "signal", "onChunk"];
+                          "credentials", "headers", "signal", "onChunk"];
+/* FETCH §2.2.5 "Requests"' CREDENTIALS MODE — "which is `omit`, `same-origin`, or `include`" — and these are
+   the same three words `core/fetch/fetch.h`'s `fetch_credentials_token` puts on the pending line, which is
+   the only place they are spelled on the engine side. Written here rather than derived because this zone is
+   the other party to that contract and a contract is checked by both. */
+var _CREDENTIALS_MODES = ["omit", "same-origin", "include"];
 /* DCHECK AND NOT CHECK, ON THE DISCRIMINATOR THIS FILE ALREADY STATES FOR `opts.pageUrl`: release must still
    be able to PROCEED, and it can. With this compiled out every unread option is dropped exactly as it is
    dropped today, and every one of them lands on the safe side — a dropped `method` fires the GET this file
@@ -539,9 +544,15 @@ function _refuseUnreadOptions(opts) {
    header list it is. The bundle's and this zone's own analyzer-probe list are two populations that arrive
    through one parameter, and the credentialed question is answerable for one of them and not the other —
    so what is missing is that distinction, carried from the site that knows, exactly as `provenance` and the
-   page-context relay's initiator grade already are. Its absence shows as this abort and nowhere else. */
+   page-context relay's initiator grade already are. Its absence shows as this abort and nowhere else.
+   AND THE OPENING SENTENCE OF THIS BLOCK IS ABOUT `credentialed`, NOT ABOUT `credentials`, WHICH THE WIRE
+   DOES STATE — the two are one letter apart on purpose because they are one decision made of two facts.
+   `credentials` is Fetch §2.2.5 "Requests"' credentials mode, named by the algorithm that CREATED the
+   request and carried across the seam on the pending line beside its method and its destination. It can
+   only ever NARROW what this zone was already willing to do; the derivation of the pair is below. */
 function _credentialedOf(opts) {
   var credentialed = !!opts.credentialed;
+  var mode = opts.credentials;
   CHECK(!(credentialed && opts.headers),
         "safeFetch was asked for a CREDENTIALED request that also states a header list — these are two " +
         "populations arriving through one parameter and only one of them has been decided. The header list " +
@@ -554,7 +565,57 @@ function _credentialedOf(opts) {
         "(credentialed AND state-mutating AND forced) rebuilt past the place this file closed it. State " +
         "whose header list it is at the site that knows, the way `provenance` is stated, or send it " +
         "uncredentialed");
-  return credentialed;
+  /* AND THE SECOND INPUT, WHICH IS THE REQUEST'S OWN AND NOT THIS ZONE'S. `credentialed` is a decision — this
+     zone's willingness to spend the person's session on this fetch. `credentials` is a STATEMENT — Fetch
+     §2.2.5 "Requests"' credentials mode, named by the algorithm that CREATED the request and carried across
+     the seam on the pending line. They are two questions and CLAUDE.md forbids one bit answering both: the
+     zone cannot know what §2.5.1 or §2.5.4 says an `<img>`'s or a `<script src>`'s mode is, and the engine
+     cannot know whether this person wants their session spent here. So both are stated and the answer is
+     their conjunction.
+     THE STATEMENT CAN ONLY EVER NARROW, WHICH IS WHAT MAKES ADDING IT SAFE. There is no arm below on which a
+     stated mode turns credentials ON where this zone had not already said yes — an engine that could do that
+     would be holding network policy, which SECURITY.md puts here and nowhere else. What it CAN do is refuse:
+     a park whose own algorithm said `omit` is never credentialed however willing this zone is.
+     A MODE IS VALIDATED WHENEVER IT IS STATED AND IS REQUIRED WHENEVER THE SESSION PAYS, which are two rules
+     because they close two different holes. An unknown word is a producer drift and is fatal at any setting —
+     `_isScriptLike`'s lesson one field over, where an invented token and an absent one took the identical
+     permissive arm. An ABSENT one is a caller that named no creating algorithm, which is honest for a request
+     this zone composed itself (a probe, a gate's own load) and is exactly what may not be true of a
+     cookie-bearing one: this zone may not spend somebody's session on a request whose creating algorithm never
+     said whether it should.
+     WHAT IS NOT COVERED: `same-origin` when this zone is willing. §2.2.5 makes that a CONDITIONAL answer —
+     credentials only where the request is same-origin — and this file already answers that comparison, but
+     AFTER the wire, over the post-redirect origin (`_resourceSameOrigin`), which is the wrong side of the
+     fetch to decide from. WHAT THE NEXT DIFF BUILDS: the same-origin test lifted to the request's own parsed
+     URL against `pageOrigin` and read here, with the post-fetch gate keeping the redirect case it already
+     owns. HOW ITS ABSENCE SHOWS: it cannot show today and that is why it crashes rather than guessing — every
+     caller in this tree that is willing is a §7.4 navigation stating `include`, so this arm is unreachable
+     by construction and the day a caller reaches it is the day the answer must be built rather than defaulted
+     to the logged-out body in silence. */
+  CHECK(mode === undefined || _CREDENTIALS_MODES.indexOf(mode) >= 0,
+        "safeFetch was called with a CREDENTIALS MODE that is none of Fetch §2.2.5 \"Requests\"' three: " +
+        JSON.stringify(mode) + " — the engine spells them in exactly one place " +
+        "(core/fetch/fetch.h's `fetch_credentials_token`, which is what writes this field onto the pending " +
+        "line), so a fourth word is that spelling and this one having parted, and it would be answered here " +
+        "by whichever arm happens to be last");
+  CHECK(!credentialed || mode !== undefined,
+        "safeFetch was asked for a CREDENTIALED request that states no Fetch §2.2.5 credentials mode — this " +
+        "zone owns whether the person's session is spent and the algorithm that CREATED the request owns " +
+        "what the request IS, and neither answers for the other. Spending a session on a request whose " +
+        "creating algorithm never said whether it should is the credential question decided by silence, " +
+        "which is the whole reason the mode crosses the seam. State it (`include` is HTML §7.4.5 " +
+        "\"Populating a session history entry\"'s answer for a navigation), or send it uncredentialed");
+  if (!credentialed) return false;
+  /* §2.2.5's own arms, in its own order. `omit` is the narrowing this whole parameter exists to be able to
+     make; `include` is the one every willing caller in this tree states. */
+  if (mode === "omit") return false;
+  if (mode === "include") return true;
+  CHECK_FAIL("safeFetch was asked for a CREDENTIALED request whose Fetch §2.2.5 credentials mode is " +
+             "`same-origin`, and that is a CONDITIONAL answer this file does not yet resolve BEFORE the " +
+             "wire — see the paragraph above. It is fatal rather than narrowed to `omit` because a silent " +
+             "narrowing here hands a same-origin document load the LOGGED-OUT body with nothing anywhere " +
+             "saying so, which is the moat this tool exists to cross. Build the pre-request same-origin " +
+             "test against `pageOrigin`; every willing caller today is a §7.4 navigation stating `include`");
 }
 /* THE PER-ORIGIN EXPLORATION WIDENING — A PERSON'S SENTENCE, NEVER AN INFERENCE.
    CLAUDE.md §Attacker-sources: firing what a bundle only reaches past a forced gate is

@@ -1613,7 +1613,7 @@ QJS_EXPORT void qjs_provide(const char *method, const char *url, const char *rep
        target (RFC 9112 §3 Request Line). A zone still calling this with four operands lands its URL in `method`
        and engine_provide's token assert names exactly that. */
     DCHECK(method != NULL, "a reply was provided with no METHOD — qjs_pending answers "
-                           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL` and this entry takes "
+                           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>CREDENTIALS<TAB>URL` and this entry takes "
                            "the pair; a host sending the address alone is answering a request it cannot name");
     DCHECK(reply != NULL, "a reply was provided with no text at all — a network error is the JSON `null`, "
                           "which is a value the engine's delivery distinguishes from a reply it never got");
@@ -1678,7 +1678,7 @@ QJS_EXPORT void qjs_decline(const char *method, const char *url, const char *rea
     DCHECK(g_begun, "a request was refused to an engine that never ran");
     DCHECK(method != NULL && url != NULL,
            "a refusal arrived naming no request — qjs_pending answers "
-           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL` and a refusal answers the same PAIR "
+           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>CREDENTIALS<TAB>URL` and a refusal answers the same PAIR "
            "a reply does, because it answers the same question; one that names neither half refuses nothing");
     DCHECK(reason != NULL && *reason != '\0',
            "a refusal arrived with no REASON — the flow it refuses will not drain this session, so the reason "

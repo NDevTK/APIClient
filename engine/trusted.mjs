@@ -589,7 +589,7 @@ async function main() {
              bytes: rec.bytes };
   }
 
-  const workFetch = async (e, method, destination, initiator, provenance, url) => {
+  const workFetch = async (e, method, destination, initiator, provenance, credentials, url) => {
     const abs = new URL(url, e.docUrl).href;
     /* THE PRODUCER'S VOCABULARY, CHECKED BEFORE IT IS ACTED ON. solver/engine.h declares exactly two initiator
        tokens and exactly three provenance tokens, and an unknown one would be routed by whichever arm of the
@@ -655,7 +655,14 @@ async function main() {
     /* AND THE PROVENANCE BESIDE IT, WHICH IS THE FIRING DECISION'S ONE INPUT. This zone states it and does not
        test it: `_firingRefusal` refuses a FORCED park at an unwidened origin before a socket is opened, and
        the refusal comes back in the reply record's `statusText` like every other refusal that function makes. */
-    const raw = await ZONE.safeFetch(abs, { pageUrl: e.docUrl, destination, provenance, credentialed: false });
+    /* AND FETCH §2.2.5 "Requests"' CREDENTIALS MODE, PASSED THROUGH FOR THE DESTINATION'S REASON WORD FOR
+       WORD: the engine states what the request IS and this zone decides what to do about it. `credentialed`
+       stays this host's own decision and stays false — it says whether the PERSON'S SESSION pays, and this
+       host has no session to spend — while the mode says what the algorithm that created the request named.
+       The chokepoint composes the two (`_credentialedOf`) and the mode can only ever narrow, so relaying it
+       takes no new decision here and gives that composition a fact to be about. */
+    const raw = await ZONE.safeFetch(abs, { pageUrl: e.docUrl, destination, provenance, credentials,
+                                            credentialed: false });
     /* A REFUSAL THIS ZONE'S OWN POLICY MADE IS A DECLINE AND NOT A NETWORK ERROR, and the difference is what
        the flow does next. A `provide` of `null` is Fetch §5.6's network error: the page's request RESUMES down
        its failure path having been told the server could not be reached, which for a request nobody sent is a
@@ -982,16 +989,17 @@ async function main() {
     if (line.startsWith('@RESULT ')) { e.result = line.slice('@RESULT '.length); return; }
     const f = line.split('\t');
     if (f[0] === 'fetch') {
-      if (f.length !== 6)
+      if (f.length !== 7)
         throw new Error('the host announced a fetch that is not ' +
-                        '`fetch<TAB>METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL`: ' +
+                        '`fetch<TAB>METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>CREDENTIALS<TAB>' +
+                        'URL`: ' +
                         `${line} — the bill is ` +
                         'the pending line verbatim and this zone splits it where the engine joined it, so a ' +
                         'short record is the two grammars having parted');
-      const [, method, destination, initiator, provenance, url] = f;
+      const [, method, destination, initiator, provenance, credentials, url] = f;
       const key = `${method}\t${url}`;
       if (e.answered.has(key)) return;
-      track(e, key, workFetch(e, method, destination, initiator, provenance, url));
+      track(e, key, workFetch(e, method, destination, initiator, provenance, credentials, url));
     } else if (f[0] === 'request') {
       const id = Number(f[1]), op = f.slice(2).join('\t');
       const key = `req:${f[1]}`;

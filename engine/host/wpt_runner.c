@@ -371,7 +371,7 @@ static char g_wpt_root[512];
  * A `fetch()` PARKS the flow that issued it (engine_pending_fetch_url): the flow keeps its snapshot, reports
  * itself host-owed, and its continuation resumes with the reply. That register records the WHOLE request —
  * method, headers and body — and the seam the HOST is offered now names TWO of those: engine_pending_fetches
- * lists `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL` and engine_provide delivers against the
+ * lists `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>CREDENTIALS<TAB>URL` and engine_provide delivers against the
  * pair. The corpus still asks this host for
  * POSTs whose answer depends on the BODY sent (`echo-content.py`) and for probes whose answer is the HEADERS it
  * was given (`inspect-headers.py`), and neither is on the line.
@@ -1489,7 +1489,7 @@ static int wpt_issue_pending(void)
     CHECK(list != NULL, "wpt: OOM copying the frontier's pending list");
     for (p = list; *p; ) {
         char *end = strchr(p, '\n');
-        const char *method, *destination, *initiator, *provenance, *url;
+        const char *method, *destination, *initiator, *provenance, *credentials, *url;
         FetchRequest req = {0};   /* §2.2.5 metadata stated as "nothing yet": these are the RUNNER's own
                                      HTTP client requests and reach no park, so a zero is the named abort a
                                      future reader gets rather than a stack address it would compare bytes at */
@@ -1506,13 +1506,19 @@ static int wpt_issue_pending(void)
            WHO ASKED and of WHAT THE REQUEST IS EVIDENCE OF is the zone that talks to the real web
            (engine/trusted.mjs); what is owed here is the vocabulary assert, because a runner that read a field
            it never checked would be the first to see the producer drift. */
-        engine_pending_split(p, &method, &destination, &initiator, &provenance, &url);
+        engine_pending_split(p, &method, &destination, &initiator, &provenance, &credentials, &url);
         DCHECK(!strcmp(initiator, PENDING_INITIATOR_PARSER) || !strcmp(initiator, PENDING_INITIATOR_SCRIPT),
                "the pending join stated an initiator that is neither token engine.h declares");
         DCHECK(!strcmp(provenance, PENDING_PROVENANCE_OBSERVED) ||
                !strcmp(provenance, PENDING_PROVENANCE_DERIVED) ||
                !strcmp(provenance, PENDING_PROVENANCE_FORCED),
                "the pending join stated a provenance that is none of the three tokens engine.h declares");
+        /* …AND FETCH §2.2.5's CREDENTIALS MODE, ASSERTED THE SAME WAY AND THROUGH THE ONE MAPPING THAT OWNS
+           THE THREE WORDS (core/fetch/fetch.h). This runner's loopback corpus has no session to spend, so it
+           issues every park whatever the mode says — but the vocabulary is the producer's contract and this
+           is one of the two hosts that would see it drift first. `fetch_credentials_of_token` is fatal on a
+           word §2.2.5 does not define, so the call IS the assert. */
+        (void)fetch_credentials_of_token(credentials);
         /* AN ENTRY STAYS LISTED UNTIL IT IS ANSWERED, and this host now visits the list at every slice rather
            than once per answer — so without this the page's one `fetch` would become one REQUEST PER SLICE at
            the server, which is a different question asked repeatedly rather than the one the flow parked on. */
@@ -1526,6 +1532,11 @@ static int wpt_issue_pending(void)
            body to keep out of a compiler — but the record it builds is core/fetch/fetch.h's request and a
            field left unwritten in it is an uninitialised read waiting for the first consumer that grows one. */
         req.destination = destination;
+        /* …AND THE CREDENTIALS MODE THE LINE STATED, PUT BACK FOR THE DESTINATION'S REASON WORD FOR WORD:
+           this record is core/fetch/fetch.h's request, whose zero for this field is the unplaced not-a-value
+           that `fetch_owe` and `pending_park_request` both abort on, so leaving it is an uninitialised read
+           waiting for the first consumer that grows one. */
+        req.credentials = fetch_credentials_of_token(credentials);
         req.headers = rec >= 0 ? &g_owed[rec].headers : &none;
         req.body = rec >= 0 ? g_owed[rec].body : NULL;
         req.body_len = rec >= 0 ? g_owed[rec].body_len : 0;

@@ -1009,8 +1009,8 @@ const char *engine_provenance_token(int prov);
    and the zone has no register. */
 
 /* WHAT THE HOST STILL OWES THE FRONTIER'S NETWORK PARKS — one
- * `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL` line per outstanding request,
- * newline-terminated, "" for none, DEDUPED BY THE PAIR.
+ * `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>CREDENTIALS<TAB>URL` line per outstanding
+ * request, newline-terminated, "" for none, DEDUPED BY THE PAIR.
  * THIS SENTENCE NAMED FOUR FIELDS AFTER THE PROVENANCE BECAME THE FIFTH, which is the ordinary way a grammar
  * stated in prose beside the function that joins it goes wrong: every reader of the LINE was updated and the
  * one-line description of it was not. engine_pending_split below is the authority on the shape — it is what
@@ -1032,6 +1032,20 @@ const char *engine_provenance_token(int prov);
  * so; the destination is a property of the REQUEST (Fetch §2.2.5), every park states it, and the side list is
  * gone rather than kept beside this one.
  *
+ * THE CREDENTIALS MODE IS ON IT FOR THE METHOD'S AND THE DESTINATION'S REASON EXACTLY, and it is the field
+ * that says WHOSE SESSION PAYS. Fetch §2.2.5 "Requests" gives every request one and only the algorithm that
+ * CREATED the request knows which — HTML §2.5.1 "Terminology"'s create a potential-CORS request for an
+ * `<img>`, §2.5.4 "CORS settings attributes"' CORS settings attribute credentials mode for a `<script src>`,
+ * XHR §3.5.6 "The send() method" from `withCredentials`, Fetch §5.4 "Request class" from `RequestInit` — and
+ * those algorithms DISAGREE, so there is no value a consumer could supply that is right for more than one of
+ * them. It crosses as §2.2.5's own THREE-VALUED token and never as a boolean, because `same-origin` is a
+ * CONDITIONAL answer whose condition is the SOP question SECURITY.md gives to the trusted zone and to nothing
+ * else: an engine that collapsed the three to "does this carry cookies" would have had to answer it in the
+ * half that holds no network policy. The engine STATES; extension/lib/safe-fetch.js DECIDES, and derives its
+ * own boolean there from this token and from its own willingness to spend the session.
+ * ITS SPELLING IS core/fetch/fetch.h's `fetch_credentials_token` AND NOBODY ELSE'S — that file says so in as
+ * many words, and it is why neither the join, the split nor this header restates the three words.
+ *
  * WHY A TAB, AND WHY THAT IS NOT AN INVENTED DELIMITER. No field can contain one. A serialized URL cannot:
  * URL Standard §4.4 URL parsing removes all ASCII tab or newline from its input before anything else, so no
  * URL record can hold one and no serialization can produce one. A method cannot: Fetch §2.2.1 Methods says a
@@ -1044,16 +1058,21 @@ const char *engine_provenance_token(int prov);
 const char *engine_pending_fetches(void);
 /* ONE LINE, SPLIT WHERE IT WAS JOINED — because three hosts each deriving the pair is three places to get it
    wrong, which is the hand-copy 59d0e42d abolished. `line` is the host's own mutable copy of one line (no
-   newline); each TAB is overwritten with a NUL and the five fields are handed back pointing into it.
-   THE DESTINATION, THE INITIATOR AND THE PROVENANCE ARE OUT-PARAMETERS AND NONE IS OPTIONAL, deliberately: a
+   newline); each TAB is overwritten with a NUL and the six fields are handed back pointing into it.
+   THE DESTINATION, THE INITIATOR, THE PROVENANCE AND THE CREDENTIALS MODE ARE OUT-PARAMETERS AND NONE IS
+   OPTIONAL, deliberately: a
    host that did not want one could pass NULL and would then be a host reading a request whose LOAD CLASS — or
    whose PROVENANCE — it never asked about, which is the defaulted-field defect wearing a convenience. Two of
    them are sharp in different ways: a host that skips the load class fetches a script as data, which is the
    state that field was added to end; a host that skips the provenance fires a request no client makes and
    carries its reply as an observation, which is what CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE forbids in as
-   many words. It costs a caller three locals and three membership asserts. */
+   many words; and a host that skips the CREDENTIALS MODE decides whose session pays for the fetch by
+   silence, which sends a `<link rel=preload>` that stated `include` out uncredentialed and learns a
+   personalised body as the logged-out one — or, in the other direction, spends the person's cookies on a
+   park whose own algorithm said `omit`. It costs a caller four locals and four membership asserts. */
 void engine_pending_split(char *line, const char **method, const char **destination,
-                          const char **initiator, const char **provenance, const char **url);
+                          const char **initiator, const char **provenance, const char **credentials,
+                          const char **url);
 /* DELIVER A BODY FOR ONE REQUEST — keyed on `(method, url)`, which is what the flow parked on. Returns how many
    entries it filled; 0 with nothing matched is the host's pairing being off (or a sale — engine_take_paged_owed),
    and it is the CALLER that tells those apart because the caller owns the credit. */

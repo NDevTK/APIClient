@@ -1247,7 +1247,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
            "converges on, so whatever enqueued this load bypassed it");
     if (fetches && !s->req) {
         /* `document.fetch<TAB><provenance><TAB><url>` — THE ADDRESS LAST, WHICH IS THE PENDING LINE'S OWN
-           SHAPE (solver/engine.h joins `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL`) and is
+           SHAPE (solver/engine.h joins `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>CREDENTIALS<TAB>URL`) and is
            the only ordering a host can split without knowing how many fields there will be next time: every
            fixed-vocabulary token comes first and the URL is the remainder. This record carried the address
            ALONE, and a host handed an address and nothing else has no way to tell a navigation a real client

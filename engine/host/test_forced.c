@@ -346,7 +346,7 @@ static int fixture_provide(JSContext *ctx) {
         const char *nl = strchr(urls, '\n');
         size_t len = nl ? (size_t)(nl - urls) : strlen(urls);
         char *one = malloc(len + 1);
-        const char *method, *destination, *initiator, *provenance, *url;
+        const char *method, *destination, *initiator, *provenance, *credentials, *url;
         UrlRecord rec;
         char *abs;
         JSValue reply;
@@ -354,7 +354,8 @@ static int fixture_provide(JSContext *ctx) {
 
         CHECK(one, "the fixture could not name the request it is answering");
         memcpy(one, urls, len); one[len] = 0;
-        /* THE LINE IS `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL` AND IT IS SPLIT BY THE
+        /* THE LINE IS `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>CREDENTIALS<TAB>URL` AND IT
+           IS SPLIT BY THE
            ENGINE'S OWN SPLITTER — the reply seam is keyed on the pair, so a fixture that answered the whole
            line as an address would match nothing. THIS FIXTURE ANSWERS EVERY PARK WHATEVER IT SAYS ABOUT
            ITSELF, deliberately: what it exercises is the PATH (parked, delivered, resumed), and both a firing
@@ -362,13 +363,17 @@ static int fixture_provide(JSContext *ctx) {
            anything. What is asserted here is their VOCABULARY, which is the producer's contract and is exactly
            what a fixture is for; the DESTINATION's is asserted inside the splitter against Fetch §2.2.5's own
            enumeration, which is too long to restate at each host and is one table for that reason. */
-        engine_pending_split(one, &method, &destination, &initiator, &provenance, &url);
+        engine_pending_split(one, &method, &destination, &initiator, &provenance, &credentials, &url);
         DCHECK(!strcmp(initiator, PENDING_INITIATOR_PARSER) || !strcmp(initiator, PENDING_INITIATOR_SCRIPT),
                "the pending join stated an initiator that is neither token engine.h declares");
         DCHECK(!strcmp(provenance, PENDING_PROVENANCE_OBSERVED) ||
                !strcmp(provenance, PENDING_PROVENANCE_DERIVED) ||
                !strcmp(provenance, PENDING_PROVENANCE_FORCED),
                "the pending join stated a provenance that is none of the three tokens engine.h declares");
+        /* …AND FETCH §2.2.5's CREDENTIALS MODE, through the one mapping that owns the three words
+           (core/fetch/fetch.h), which is fatal on a word §2.2.5 does not define — so the call IS the assert
+           and this fixture reads the field it is handed rather than dropping it. */
+        (void)fetch_credentials_of_token(credentials);
         url_record_init(&rec);
         ok = url_parse(&rec, url, strlen(url), &base);
         DCHECK(ok, "the fixture was asked for a URL that will not parse even against its document's address");

@@ -199,7 +199,7 @@ async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, inher
     M.HEAPU8[p + u8.length] = 0;
     return [p, u8.length];
   };
-  /* KEYED ON THE REQUEST, WHICH IS THE PAIR: `qjs_pending` answers `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL` lines and
+  /* KEYED ON THE REQUEST, WHICH IS THE PAIR: `qjs_pending` answers `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>CREDENTIALS<TAB>URL` lines and
      the delivery matches both halves, so a GET and a POST to one address are two questions with two replies. */
   const provide = (method, u, reply, body) => {
     const [p, n] = bs(body);
@@ -415,15 +415,18 @@ async function service(e) {
   let paid = 0;
   for (const line of e.str('qjs_pending').split('\n').filter(Boolean)) {
     const t = line.split('\t');
-    if (t.length !== 5 || t.some((x, i) => i !== 1 && x === ''))
-      fail(`a pending line is not \`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL\`: ${line} — ` +
+    if (t.length !== 6 || t.some((x, i) => i !== 1 && x === ''))
+      fail('a pending line is not ' +
+           `\`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>CREDENTIALS<TAB>URL\`: ${line} — ` +
            'the empty DESTINATION is Fetch §2.2.5\'s own default and is the one field that may be empty');
     /* THE DESTINATION IS NOT NAMED HERE, AND THAT IS A STATEMENT. It is the CORB class — whether a reply may
        be ingested as code — and this driver ingests nothing: it mints its own reply out of a literal, so
        there are no fetched bytes for a class to be about. Its vocabulary is asserted where it is WRITTEN
        (the join's `destination_is_type`) and where bytes are actually classified by it; a driver that
-       re-checked it here would be a third speller of Fetch §2.2.5's enumeration. */
-    const [method, , initiator, provenance, u] = t;
+       re-checked it here would be a third speller of Fetch §2.2.5's enumeration. The CREDENTIALS MODE beside
+       it is skipped for the identical reason and one step further: it says whose session pays, this driver
+       has no session, and its vocabulary is asserted at the door that decides from it. */
+    const [method, , initiator, provenance, , u] = t;
     /* THIS DRIVER ANSWERS EVERY PARK WHATEVER IT SAYS ABOUT ITSELF — its fixtures' fetches are named `/hold`,
        `/resume`, `/got` and `/closed` and the reply is `{}` served out of a literal, so there is no network
        here for a firing policy to be about. The vocabularies are checked because a driver that read a field it
