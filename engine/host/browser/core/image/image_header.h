@@ -8,9 +8,9 @@
  * question reaches `partially available`, `completely available` and the `load` event; an agent that cannot
  * takes the third arm for every reply and fires `error` at every image ever fetched, which is what this build
  * did. The dimensions of a PNG, a GIF and a JPEG are STATED IN THEIR HEADERS as integer fields at defined
- * offsets, so determining them is a header read — CLAUDE.md §Headless-is-not-valueless' "the only missing
- * piece is a physical IO device; the spec still defines behavior without one", and the same answer the mock
- * filesystem gives: model the state, do not shrug to opaque.
+ * offsets, so determining them is a header read. That is what CLAUDE.md §Headless-is-not-valueless asks for —
+ * the missing piece is a physical IO device and the spec still defines the behaviour without one — and it is
+ * the same answer the mock filesystem gives: model the state, do not shrug to opaque.
  *
  * WHAT IS DELIBERATELY NOT HERE. No pixel decode, no colour management, no interlace pass reconstruction —
  * none of those is an operand of anything §4.8.4.3.5, §4.8.3's `naturalWidth` or HTML §15.4.2 "Images" reads.
@@ -19,9 +19,9 @@
  * THE SIGNATURE TABLE IS NOT DUPLICATED HERE. Which byte pattern is which image type is MIME Sniffing §6.1
  * "Matching an image type pattern", and core/mime/mime_sniff.h already holds that table cell for cell. A
  * second copy would be two tables free to drift into disagreeing about what a PNG is — the same defect
- * core/html/html_image.h names for the image request STATE, where a private copy of the four values in the
- * layout "would be two enumerations free to drift". So this component asks §6.1 what the bytes ARE and owns
- * only the part §6.1 does not answer: where each format states its dimensions.
+ * core/html/html_image.h names for the image request STATE, where it rejects a private copy of the four
+ * values in the layout as two enumerations free to drift apart. So this component asks §6.1 what the bytes
+ * ARE and owns only the part §6.1 does not answer: where each format states its dimensions.
  *
  * THE BYTES ARE A STRANGER'S AND ARE NEVER ASSERTED. CLAUDE.md's rule for a value this codebase did not
  * compute is that it is INPUT and not an invariant: a malformed header is REFUSED — `supported` or `have_dims`
