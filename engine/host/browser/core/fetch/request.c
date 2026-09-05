@@ -509,6 +509,40 @@ static const IdlDictMember REQUEST_INIT[] = {
    enumerations and one carrying a `= "none"` default, all three shapes already in use above). */
 #define REQUEST_INIT_N ((int)(sizeof(REQUEST_INIT) / sizeof(REQUEST_INIT[0])))
 
+/* THE INVARIANT THE §3.2.18 FORK AT THE DECLARATION NOW GUARANTEES, MADE TO FIRE — a `RequestInit` member
+   declared IDL_ENUM cannot reach `init_str` still carrying unknown external input. It is the one thing that
+   reader cannot see for itself: a value that arrived CONVERTED looks exactly like a value that was never
+   unknown, so nothing downstream distinguishes "the enumeration fork ran" from "the enumeration fork was
+   deleted and this member was placed unconverted".
+   THE TYPE IS READ OFF THE TABLE ABOVE AND NOT RESTATED — a second copy of "which members are enumerations" is
+   the copy that drifts, and prose is where it drifted before: five members were named at `init_str`'s site and
+   the other three (`duplex`, `priority`, `targetAddressSpace`) were not, because a list written for the members
+   one operation happens to read is a list of that operation and never of the type.
+   A NAME THE TABLE DOES NOT DECLARE IS NOT IDL_ENUM AND THEREFORE PASSES, which is correct rather than lax:
+   every call site is a literal from this file, so a name that misses the table is a typo, and a typo already
+   fails at `idl_dict_get` by reading a member the declaration never converted. */
+static void dcheck_init_member_is_not_enum(const char *name)
+{
+#if APICLIENT_DEV
+    int i;
+
+    DCHECK(name != NULL, "a RequestInit member was read with no member name");
+    for (i = 0; i < REQUEST_INIT_N; i++)
+        if (!strcmp(REQUEST_INIT[i].name, name))
+            DCHECK(REQUEST_INIT[i].type != IDL_ENUM,
+                   "a RequestInit member declared IDL_ENUM reached §5.4's string reader still carrying "
+                   "UNKNOWN EXTERNAL INPUT — Web IDL §3.2.18 Enumeration types is asked at the DECLARATION "
+                   "over a finite domain, so every arm that reaches this operation holds one of the "
+                   "enumeration's own strings and the refusal arm threw §3.2.18 step 2's TypeError before "
+                   "this call. An unknown here means the §3.2.17 member loop's §3.2.18 fork did not run for "
+                   "it: check that core/idl_args.h's idl_concolic_rule still answers IDL_CONCOLIC_FORKS for "
+                   "IDL_ENUM, because if it does not, this member was placed unconverted for a body that was "
+                   "promised one of the list's strings");
+#else
+    (void)name;
+#endif
+}
+
 /* Web IDL §3.2.17 Dictionary types: a member the page did not supply is NOT ON the converted dictionary, and
    `undefined` is how that reads — which is the same test §5.4 spells "init[member] exists". Every member of
    REQUEST_INIT declares no default (see above), so absence and `undefined` coincide for all of them. */
@@ -548,43 +582,40 @@ static char *init_str(JSContext *ctx, JSValueConst init, const char *name, const
     JSValue v = idl_dict_get(ctx, init, name);
     char *r;
     if (JS_IsUndefined(v)) { JS_FreeValue(ctx, v); return js_strdup(ctx, dflt); }
-    /* SEVEN MEMBERS ARRIVE HERE AND THE UNKNOWN ONE SPLITS THEM IN TWO, WHICH IS WHY THIS IS ONE ABORT AND
-     * NOT ONE ANSWER. `fetch(u, {credentials: cfg.creds})` and `fetch(u, {integrity: cfg.sri})` reach this
-     * same line with unknown external input and take the document down at the ToString boundary below, and
-     * what each of them NEEDS is different:
+    /* SEVEN MEMBERS ARRIVE HERE AND ONLY TWO OF THEM CAN STILL BE UNKNOWN, WHICH IS WHY THIS IS ONE ABORT
+     * AND A NARROW ONE. `fetch(u, {integrity: cfg.sri})` is the shape that reaches it.
      *
      * FIVE OF THE SEVEN ARE ENUMERATIONS — `mode`, `credentials`, `cache`, `redirect`, `referrerPolicy` — and
-     * an unknown at one of them needs NOTHING of this record at all. Web IDL §3.2.18 Enumeration types makes
-     * the member's domain FINITE: the declared value list, plus the TypeError §3.2.18 states for everything
-     * else. Every one of those worlds places a REAL string from the list, which a `char *` carries perfectly,
-     * so the arms are feasible worlds the algorithms behind this boundary observe apart — `credentials:
-     * "include"` is a credentialed request and `"omit"` is not, and picking either for a value nothing is
-     * known about deletes the other. That is the same shape core/idl_args.h's `idl_concolic_rule` already
-     * files Web IDL §3.2.3 boolean under, and IDL_ENUM sits under that switch's `default:` at CROSSES today —
-     * which is the state that row's own comment records the boolean having been in, a type whose conversion
-     * decides a world filed with the types whose conversion merely coerces bytes a body still holds. (That
-     * sentence is idl_args.h's, not a standard's; grep the row before acting on this, since it is a claim
-     * about a tree that moves.) The resolution site is the DECLARATION's, which holds the machine this
-     * operation does not, and the member loop in idl_args.c already asserts that every FORKS type has an arm
-     * in it and tells its reader to give the type that arm beside the boolean's. So an enum member is not
-     * this file's to answer, and answering it here would be the second copy of a rule that exists to have
-     * one.
+     * THEY ARE ANSWERED BEFORE THIS OPERATION RUNS AT ALL. They used to abort here, and the argument written
+     * at this line was that Web IDL §3.2.18 Enumeration types makes the member's domain finite so the fix
+     * belonged at the DECLARATION rather than here. That argument is DISCHARGED: `idl_concolic_rule` files
+     * IDL_ENUM under IDL_CONCOLIC_FORKS, and the §3.2.17 member loop asks §3.2.18's completions over an
+     * unknown at the outcome seam — the N strings the IDL lists plus step 2's ONE TypeError, N+1 worlds. So a
+     * member declared IDL_ENUM reaches this reader as a REAL STRING FROM ITS OWN LIST on every arm that gets
+     * here, and on the refusal arm the flow threw §3.2.18's TypeError and never called this at all. The
+     * assert below is that sentence made to fire, because it is the one thing this reader cannot see
+     * for itself: a value that arrives converted looks exactly like a value that was never unknown.
+     * (That IS a claim about a tree that moves — grep `case IDL_ENUM:` in core/idl_args.h's
+     * `idl_concolic_rule` before acting on it, and if the row has gone, this abort's population is five
+     * members wider than the message below says.)
      *
      * TWO OF THE SEVEN ARE PLAIN STRINGS — `referrer` (USVString) and `integrity` (DOMString) — whose bytes
-     * are the page's own and whose worlds are not enumerable. Those need what §5.4 step 25's method needs and
-     * for the same reason: a record field that can BE the unknown. See that step's block below.
+     * are the page's own and whose worlds are NOT enumerable, so there is nothing here to fork over: a string
+     * type has no finite domain to enumerate and §@H's rule is that a value known only to satisfy a gate is
+     * INVENTED rather than computed. Those need what §5.4 step 25's method needs and for the same reason: a
+     * record field that can BE the unknown. See that step's block below.
      *
      * A `?:` PAST THIS IS THE ONE ANSWER THAT IS NEVER RIGHT, for the reason the `dflt` paragraph above
      * already gives about OOM: a default here turns "the page asked for something this engine cannot state"
      * into "the page asked for same-origin credentials", which is a plausible datum where a crash belongs. */
     if (concolic_is(v)) {
+        dcheck_init_member_is_not_enum(name);
         DFAILF("Fetch §5.4 new Request(input, init) applied the RequestInit member `%s`, and its value is "
-               "UNKNOWN EXTERNAL INPUT. If `%s` is one of §5.4's five ENUMERATION members the fix is not "
-               "here: Web IDL §3.2.18 Enumeration types gives it a finite domain whose every world is a real "
-               "string this record already carries, so give IDL_ENUM its FORKS row in idl_concolic_rule and "
-               "its arm in the dictionary member loop, beside the boolean's. If it is `referrer` or "
-               "`integrity` it needs what §5.4 step 25's method needs — that field on the request record as "
-               "a JSValue, and this operation holding the JSStepHdr a fork is asked through", name, name);
+               "UNKNOWN EXTERNAL INPUT. `%s` is one of §5.4's two PLAIN-STRING members — `referrer` is a "
+               "USVString and `integrity` a DOMString — whose bytes are the page's own, so there is no finite "
+               "domain to enumerate and no fork to ask: what it needs is somewhere to PUT the unknown. Build "
+               "that field on the request record as a JSValue, exactly as §5.4 step 25's method needs, and "
+               "give this operation the JSStepHdr the method's fork has to be asked through", name, name);
         JS_FreeValue(ctx, v);
         JS_ThrowTypeError(ctx, "this engine cannot yet apply a RequestInit member whose value is unknown "
                                "external input");
@@ -752,8 +783,11 @@ int request_init_apply(JSContext *ctx, JSValueConst init, const RequestRecord *f
              * and off a forced arm is the one combination that is never a setting, whose correct output is to
              * derive it, report it and not send it. AND THE FORK NEEDS A MACHINE: this operation is §5.4 steps
              * 10-27 for BOTH of its callers and holds no JSStepHdr, so step_fork_run cannot be asked here
-             * until it takes one — which is the single change that unblocks this member and the seven
-             * `init_str` members above it.
+             * until it takes one — which is the single change that unblocks this member and the TWO
+             * `init_str` members above it. It was seven until Web IDL §3.2.18 Enumeration types gained its
+             * fork at the DECLARATION: five of that seven are enumerations and are answered before this
+             * operation runs at all, so what is left needing a JSValue field is `referrer`, `integrity` and
+             * this method.
              * HOW ITS ABSENCE SHOWS: this abort, on any bundle whose method is not a literal. */
             DFAIL("Fetch §5.4 new Request(input, init) step 25 was handed a method that is UNKNOWN EXTERNAL "
                   "INPUT. Its two observable completions are `returned` and `threw a TypeError`, and the "
@@ -1099,9 +1133,46 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
     return 0;
 }
 
+/* WHY THIS MACHINE'S STATE MUST NOT BE FORKED ONCE IT HOLDS A HEADER LIST — see IdlStepDecl.unforkable, and
+ * core/fetch/fetch.c's js_fetch_unforkable, which is the same defect in the other half of §5.4 and states the
+ * rule at length. In one sentence: `tramp_step_state_clone` BYTE-COPIES the state and re-takes only what
+ * `visit` names, `js_request_ctor_visit` names the fill and the result, and `js_request_ctor_release` frees
+ * `s->list` — a `HeaderList` whose `e` is a foreign C allocation no visit can reach. Two arms, one pointer,
+ * two frees.
+ *
+ * IT IS THE HEADER LIST ALONE HERE, and that is the difference from the `fetch()` machine rather than an
+ * omission: this constructor's record lives on the OBJECT it is building (`s->result`'s opaque), which is a
+ * declared slot the visit names and a refcounted object both arms share rather than a struct either of them
+ * copies. Only step 33's list is the machine's own C memory.
+ *
+ * REACHABLE ON THE ORDINARY SHAPE: the list exists from step 33's header fill onward, and that fill is where
+ * this constructor runs the page's code — a `HeadersInit` getter, iterator or Proxy trap, and then §5.2's body
+ * extraction after it — so any concolic branch inside a page's own header value forks with this machine on the
+ * frame chain.
+ *
+ * WHAT THE NEXT DIFF BUILDS: §5.1's header list as slots the visit can name, so a fork re-takes them, with
+ * `js_request_ctor_release` no longer discharging what the declaration names (core/idl_args.c's release fold
+ * asserts that pairing). HOW ITS ABSENCE SHOWS: this abort, on `new Request(u, {headers: h})` where h's
+ * conversion runs code that forks. */
+static const char *js_request_ctor_unforkable(const void *st)
+{
+    const JSRequestCtorState *s = st;
+
+    DCHECK(s != NULL, "the Request constructor was asked whether it may be forked with no state to ask about");
+    if (!s->list.e)
+        return NULL;
+    return "Fetch §5.4 new Request(input, init) was forked while holding step 33's header list. A step state "
+           "is BYTE-COPIED at a deep fork and only what `visit` names is re-taken, and this list's entries are "
+           "freed by the machine's `release` instead — so both arms would hold one allocation and free it "
+           "twice. Build §5.1's header list out of slots the visit can name, and delete this refusal with it";
+}
+
 static const IdlStepDecl js_request_ctor_decl = {
     js_request_ctor_step, sizeof(JSRequestCtorState), js_request_ctor_visit, js_request_ctor_release,
-    "Fetch §5.4 new Request(input, init)", REQ_CTOR_STEPS
+    "Fetch §5.4 new Request(input, init)", REQ_CTOR_STEPS,
+    /* `catches_abrupt` = 0: this constructor PROPAGATES — a throwing header value or body `toString` is the
+       page's to see at the `new Request` it wrote, and the epilogue re-raises it. */
+    0, js_request_ctor_unforkable
 };
 
 static const JSCFunctionListEntry js_request_proto_funcs[] = {

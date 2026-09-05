@@ -1292,10 +1292,58 @@ static int js_fetch_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
     return 0;
 }
 
+/* WHY THIS MACHINE'S STATE MUST NOT BE FORKED ONCE IT HOLDS §5.4's RECORD — see IdlStepDecl.unforkable.
+ *
+ * THE RULE IS THIS STRUCT'S OWN AND IT IS STATED ON `body_mime` TWELVE LINES ABOVE THE FIELDS THAT BREAK IT:
+ * "a step state is BYTE-COPIED at a deep fork and only what `visit` names is re-taken, so a heap pointer here
+ * would be freed by both arms". `tramp_step_state_clone` is that byte copy — `memcpy(h, o, sz)` and then the
+ * declared slots taken a second time through `visit` — and `js_fetch_release`'s own comment names the three
+ * fields the visit CANNOT name: §2.2.5's request record (nine `js_strdup`'d strings), the extracted body
+ * (`bytes`, plus a `stream` JSValue the visit does not reach either) and the parsed header list
+ * (`HeaderList::e`). Each is freed by `release`, and every clone gets its own teardown, so a fork raised while
+ * they are held gives two arms one set of pointers and two frees of it — a double free for the C allocations
+ * and a reference-count underflow for the stream, neither of which is a wrong ANSWER that anything reports.
+ *
+ * IT IS REACHABLE ON THE ORDINARY SHAPE and not on an exotic one: the stages after FETCH_RECORD are exactly
+ * the two that run the page's code — the §5.1 header fill's conversion of a `HeadersInit` (a getter, an
+ * iterator, a Proxy trap, a `toString`) and §5.2's body extraction — so any concolic branch inside a page's
+ * own header or body value forks the flow with this machine on its frame chain.
+ *
+ * THE PREDICATE IS THE RECORD AND COVERS ALL THREE, because §5.4's members are applied at FETCH_RECORD and the
+ * header list and the body come after it: `rec.method` is NULL for a zeroed state and non-NULL from the moment
+ * `request_init_apply` returns 0 (the CHECK at the end of that operation is what makes the second half true),
+ * so it is exactly the window in which any of the three exists. A fork before it — the `input` ToString at
+ * FETCH_URL_STR — copies a state whose every filled slot the visit names, and stays allowed.
+ *
+ * WHAT THE NEXT DIFF BUILDS, AND IT IS THE SAME DIFF §5.4 STEP 25's METHOD IS WAITING FOR: the record's owned
+ * fields as JSValues rather than `char *`, named by `js_fetch_visit` so a fork re-takes them, with
+ * `js_fetch_release` no longer discharging what the declaration names (idl_args.c's release fold asserts that
+ * pairing). §2.2.5's method has to become a JSValue anyway before it can BE unknown external input, so the two
+ * are one conversion; the body's bytes and the header list's entries follow it. HOW ITS ABSENCE SHOWS: this
+ * abort, on any page whose `fetch()` headers or body run code that forks. */
+static const char *js_fetch_unforkable(const void *st)
+{
+    const JSFetchState *s = st;
+
+    DCHECK(s != NULL, "the fetch machine was asked whether it may be forked with no state to ask about");
+    if (!s->rec.method)
+        return NULL;
+    return "Fetch §5.6 Fetch methods' fetch(input, init) was forked while holding §2.2.5's request record. A "
+           "step state is BYTE-COPIED at a deep fork and only what `visit` names is re-taken, and this "
+           "machine's record (nine engine-allocated strings), extracted body (`bytes`, and a `stream` the "
+           "visit does not name either) and parsed header list are freed by its `release` instead — so both "
+           "arms would hold one set of pointers and free it twice. Build §2.2.5's request record out of "
+           "JSValues the visit can name, which is the same conversion §5.4 step 25's method needs before it "
+           "can carry unknown external input, and delete this refusal with it";
+}
+
 static const IdlStepDecl js_fetch_decl = {
     js_fetch_step, sizeof(JSFetchState), js_fetch_visit, js_fetch_release,
     "Fetch §5.6 Fetch methods' fetch(input, init), performing §5.4 new Request(input, init) inline",
-    js_fetch_steps
+    js_fetch_steps,
+    /* `catches_abrupt` = 0: this member PROPAGATES — a throwing header value or body `toString` is the page's
+       to see at the call it wrote, and the epilogue re-raises it. */
+    0, js_fetch_unforkable
 };
 
 
