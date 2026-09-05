@@ -29,7 +29,7 @@ void intersection_observer_entry_install(JSContext *ctx, JSValueConst global);
 void intersection_observer_entry_free(JSRuntime *rt);
 
 /* §3.2.6 step 1 — "CONSTRUCT an IntersectionObserverEntry, passing in time, rootBounds, boundingClientRect,
- * intersectionRect, isIntersecting, and target", plus §3.2.10 step 3.18's `isVisible` and `intersectionRatio`,
+ * intersectionRect, isIntersecting, and target", plus §3.2.10 step 2.2.18's `isVisible` and `intersectionRatio`,
  * which that step passes and §3.2.6's own prose has not caught up with. The argument ORDER here is §3.2.10 step
  * 3.18's, which is the caller that exists.
  *

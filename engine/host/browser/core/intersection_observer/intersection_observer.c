@@ -178,7 +178,7 @@ static JSValue io_reg_list(JSContext *ctx, JSValueConst wrap, int create)
     return l;
 }
 
-/* §3.2.10 step 3.1's "the registration record whose observer property is equal to observer". OWNED,
+/* §3.2.10 step 2.2.1's "the registration record whose observer property is equal to observer". OWNED,
    JS_UNDEFINED when the target carries none for this observer. */
 static JSValue io_registration(JSContext *ctx, JSValueConst target, JSValueConst observer)
 {
@@ -569,7 +569,7 @@ static IoRect io_compute_intersection(JSContext *ctx, lxb_dom_node_t *target, JS
     /* A TARGET THAT GENERATES NO BOX HAS NO CONTAINING BLOCK, so step 2 has nothing to bind and step 3's walk
        cannot start — CSS 2.1 §10.1 is defined over BOXES, and core/dom/element_view.h's one predicate is what
        decides whether there is one. Step 1's rectangle is then §6's own zero rectangle (get-the-bounding-box
-       step 2, "a DOMRect whose x, y, width and height members are zero", which every user agent computes
+       step 2, "a DOMRect object whose x, y, width and height members are zero", which every user agent computes
        identically for such an element), and steps 4 to 6 map and intersect it. That is the loop body doing
        nothing rather than a step being skipped, and it is the case a lazy-loading bundle spends most of its
        observations in: a target it has not inserted yet, or one its own CSS has set to `display: none`. */
@@ -590,10 +590,10 @@ static IoRect io_compute_intersection(JSContext *ctx, lxb_dom_node_t *target, JS
             } else if (rootn->type == LXB_DOM_NODE_TYPE_DOCUMENT) {
                 if (rootn == lxb_dom_interface_node(target->owner_document)) break;
             } else {
-                /* An ELEMENT root the chain never met — step 3.6 already refused that target and skipped to
+                /* An ELEMENT root the chain never met — step 2.2.6 already refused that target and skipped to
                    step 11, so this walk was never entered for it. */
                 DFAIL("INTERSECTION OBSERVER §3.2.7's walk reached the initial containing block without meeting "
-                      "an ELEMENT intersection root — §3.2.10 step 3.6 skips a target that is not a descendant "
+                      "an ELEMENT intersection root — §3.2.10 step 2.2.6 skips a target that is not a descendant "
                       "of the root in the containing block chain, so this walk cannot have been entered");
             }
             DFAIL("INTERSECTION OBSERVER §3.2.7 step 3.1: the walk has reached 'the DOCUMENT of a NESTED "
@@ -733,11 +733,11 @@ static void io_queue_entry(JSContext *ctx, JSValueConst observer, JSValueConst s
        the entry; that day is this one — §2.3's own constructor cannot flatten a member carrying unknown
        external input, so the record takes JSValues and this caller hands over what the clock produced.
        The assert stays because it is about THIS WALK and is stronger than what the record can say:
-       io_update_target's step 3.2 crashes on an unknown frame timestamp before this is reached, so the only
+       io_update_target's step 2.2.2 crashes on an unknown frame timestamp before this is reached, so the only
        moments that get here are ones the clock computed. */
     entry_time = hr_time_relative(rctx, frame_ts);
     DCHECK(JS_IsNumber(entry_time),
-           "§2.3's IntersectionObserverEntry time is not a number — §3.2.10 step 3.2 refuses an unknown "
+           "§2.3's IntersectionObserverEntry time is not a number — §3.2.10 step 2.2.2 refuses an unknown "
            "frame timestamp above, so nothing unknown can have reached this derivation");
     entry = intersection_observer_entry_new(rctx, entry_time,
                                             io_rect_value(rctx, root), io_rect_value(rctx, target_rect),
@@ -750,13 +750,13 @@ static void io_queue_entry(JSContext *ctx, JSValueConst observer, JSValueConst s
     io_queue_task(ctx);                                                   /* step 3 */
 }
 
-/* §3.2.10 step 3.6's "target is a DESCENDANT OF THE INTERSECTION ROOT IN THE CONTAINING BLOCK CHAIN". */
+/* §3.2.10 step 2.2.6's "target is a DESCENDANT OF THE INTERSECTION ROOT IN THE CONTAINING BLOCK CHAIN". */
 static bool io_in_containing_chain(lxb_dom_node_t *target, lxb_dom_node_t *root)
 {
     lxb_dom_element_t *c;
 
     /* A TARGET THAT GENERATES NO BOX IS IN NO CONTAINING BLOCK CHAIN AT ALL — §10.1 is defined over boxes — so
-       it is not a descendant of the root in one, and step 3.6 skips it to step 11. */
+       it is not a descendant of the root in one, and step 2.2.6 skips it to step 2.2.11. */
     if (!element_view_has_box(target)) return false;
     c = used_value_containing_block(lxb_dom_interface_element(target));
     while (c != NULL) {
@@ -766,11 +766,27 @@ static bool io_in_containing_chain(lxb_dom_node_t *target, lxb_dom_node_t *root)
     return false;
 }
 
-/* §3.2.10 step 3, for ONE target of ONE observer. The step numbers are the section's own. */
+/* §3.2.10 step 2.2, for ONE target of ONE observer.
+
+   HOW THIS SECTION'S STEPS ARE NUMBERED HERE, STATED ONCE SO NO SITE BELOW RE-DERIVES IT. §3.2.10 has exactly
+   TWO top-level steps — "Let observer list be…" and "For each observer in observer list" — and the per-target
+   work is the SECOND sub-step of the second of those, so every number below is a full outline path `2.2.N`
+   over a list of 21. Each parent holds exactly ONE list, so the path is unambiguous. THE SECTION ITSELF
+   SPELLS THESE BARE — steps 2.2.5 and 2.2.6 say "skip to step 11", meaning the eleventh member of this same
+   list — and that cross-reference is what fixes the numbering: counting to it lands on "Let isIntersecting be
+   true if targetRect and rootBounds intersect or are edge-adjacent", which is step 2.2.11 below.
+   WHAT THIS REPLACES, BECAUSE THE WRONG FORM IS THE INTUITIVE ONE: these were `3.N` throughout, which is one
+   nesting level FLATTENED — reading the two d2 items as top-level peers promotes them to steps 2 and 3 and
+   makes the per-target list "3.N". The second component was right at all 21 sites; only the prefix named a
+   top-level step §3.2.10 does not have. The rest of this tree already writes them BARE (core/dom/
+   element_view.h's "step 9", core/css/css_length.h's "steps 9 and 10", core/css/css_math.c's "step 12"), so
+   this file was the one that disagreed with its siblings and with the section. §3.2.7's and §3.2.5's own
+   `3.N` sub-numbers elsewhere in this file are CORRECT and untouched: each of those sections really does have
+   a step 3 that holds exactly one list. */
 static void io_update_target(JSContext *ctx, JSValueConst observer, JSValueConst state, JSValueConst target,
                              IoRect root, JSValueConst frame_ts)
 {
-    JSValue reg = io_registration(ctx, target, observer);                 /* step 3.1 */
+    JSValue reg = io_registration(ctx, target, observer);                 /* step 2.2.1 */
     JSValue thresholds;
     lxb_dom_node_t *tn = node_of(target), *rootn;
     IoRect target_rect, inter;
@@ -781,18 +797,20 @@ static void io_update_target(JSContext *ctx, JSValueConst observer, JSValueConst
     JSValue v;
 
     DCHECK(JS_IsObject(reg),
-           "§3.2.10 step 3.1 found no registration record for a target in an observer's "
+           "§3.2.10 step 2.2.1 found no registration record for a target in an observer's "
            "[[ObservationTargets]] — §3.2.2 appends the two together and §3.2.3 removes them together");
     v = JS_GetPropertyUint32(ctx, (JSValue)state, IO_S_DELAY);
     JS_ToFloat64(ctx, &delay, v);
     JS_FreeValue(ctx, v);
     last = io_num_at(ctx, reg, IOR_LAST_UPDATE);
-    /* STEP 3.2's THROTTLE IS A COMPARISON, AND OVER AN UNKNOWN MOMENT IT IS A FORK THIS COMPONENT CANNOT ASK.
+    /* STEP 2.2.2's THROTTLE IS A COMPARISON, AND OVER AN UNKNOWN MOMENT IT IS A FORK THIS COMPONENT CANNOT ASK.
        `frameTimestamp` is HTML §8.1.7.3 step 1's last render opportunity time, a moment on the event loop's
        one virtual clock — and that clock becomes unknown external input the moment a timer set with an
        unknown `timeout` fires (core/timing/event_loop.h). `time - time of last update < delay` then has two
-       real answers, "the target is skipped this frame" and "it is not", and both are programs the page can
-       observe: an observer whose callback never runs and one whose does.
+       real answers — the target is SKIPPED this frame, or it is NOT — and both are programs the page can
+       observe: an observer whose callback never runs and one whose does. (Those two outcomes are stated in
+       this engine's words, not the standard's, so they carry no quotation marks: a quoted phrase beside a
+       spec citation is read as that standard's text by every reader and by engine/citegen.mjs.)
        IT CANNOT BE ASKED HERE, and that is a missing SEAM rather than a missing decision. §3.2.10 runs inside
        HTML §8.1.7.3's update-the-rendering step machine, and a fork needs a resume point the forking site
        owns — the machine's own `step_fork_run`, reached through its JSStepHdr. This walk is a plain C
@@ -806,17 +824,17 @@ static void io_update_target(JSContext *ctx, JSValueConst observer, JSValueConst
        number picked for `frameTimestamp` — which would decide the throttle for every observer in the
        document from inside an accessor. */
     if (concolic_is(frame_ts))
-        DFAIL("§3.2.10 step 3.2's throttle compares the frame timestamp against this registration's last "
+        DFAIL("§3.2.10 step 2.2.2's throttle compares the frame timestamp against this registration's last "
               "update, and the frame timestamp is an UNKNOWN moment — the event loop's clock has been moved "
               "there by a timer whose `timeout` was unknown external input. Both outcomes of the comparison "
               "are real programs, so it is a FORK, and this walk has no seam to fork at: thread HTML "
               "§8.1.7.3's update-the-rendering JSStepHdr through intersection_observer_update and "
               "io_update_target and ask it with step_fork_run (see the paragraph at this line)");
     JS_ToFloat64(ctx, &ts, frame_ts);
-    if (ts - last < delay) { JS_FreeValue(ctx, reg); return; }            /* step 3.2 */
-    JS_SetPropertyUint32(ctx, reg, IOR_LAST_UPDATE, JS_NewFloat64(ctx, ts));         /* step 3.3 */
+    if (ts - last < delay) { JS_FreeValue(ctx, reg); return; }            /* step 2.2.2 */
+    JS_SetPropertyUint32(ctx, reg, IOR_LAST_UPDATE, JS_NewFloat64(ctx, ts));         /* step 2.2.3 */
 
-    /* step 3.4 */
+    /* step 2.2.4 */
     target_rect.x = target_rect.y = target_rect.w = target_rect.h = css_px(0.0);
     inter = target_rect;
 
@@ -826,16 +844,16 @@ static void io_update_target(JSContext *ctx, JSValueConst observer, JSValueConst
     if (rootn != NULL && lxb_dom_interface_node(tn->owner_document) !=
                          (rootn->type == LXB_DOM_NODE_TYPE_DOCUMENT
                           ? rootn : lxb_dom_interface_node(rootn->owner_document)))
-        skipped = true;                                                   /* step 3.5 */
+        skipped = true;                                                   /* step 2.2.5 */
     else if (rootn != NULL && rootn->type == LXB_DOM_NODE_TYPE_ELEMENT && !io_in_containing_chain(tn, rootn))
-        skipped = true;                                                   /* step 3.6 */
+        skipped = true;                                                   /* step 2.2.6 */
     if (!skipped) {
-        target_rect = io_bounding_box(tn);                                /* step 3.7 */
-        inter = io_compute_intersection(ctx, tn, state, root);            /* step 3.8 */
+        target_rect = io_bounding_box(tn);                                /* step 2.2.7 */
+        inter = io_compute_intersection(ctx, tn, state, root);            /* step 2.2.8 */
     }
-    target_area = css_px_mul(target_rect.w, target_rect.h);               /* step 3.9 */
-    inter_area = css_px_mul(inter.w, inter.h);                            /* step 3.10 */
-    /* STEP 3.11 — "isIntersecting is true if targetRect and rootBounds INTERSECT OR ARE EDGE-ADJACENT, even if
+    target_area = css_px_mul(target_rect.w, target_rect.h);               /* step 2.2.9 */
+    inter_area = css_px_mul(inter.w, inter.h);                            /* step 2.2.10 */
+    /* STEP 2.2.11 — "isIntersecting is true if targetRect and rootBounds INTERSECT OR ARE EDGE-ADJACENT, even if
        the intersection has zero area (because rootBounds or targetRect have zero area)". The comparison is on
        the EXAMPLES: this is C and cannot fork, and the examples are what css_length.h says C compares.
        IT IS ASKED OF targetRect AND rootBounds and NOT of the intersection, which is the section's own wording
@@ -846,10 +864,10 @@ static void io_update_target(JSContext *ctx, JSValueConst observer, JSValueConst
                       target_rect.x.px + target_rect.w.px >= root.x.px &&
                       target_rect.y.px <= root.y.px + root.h.px &&
                       target_rect.y.px + target_rect.h.px >= root.y.px;
-    /* step 3.12 */
+    /* step 2.2.12 */
     ratio = target_area.px != 0.0 ? css_px_div(inter_area, target_area)
                                   : css_px(is_intersecting ? 1.0 : 0.0);
-    /* STEP 3.13 — "the index of the FIRST entry in observer.thresholds whose value is GREATER THAN
+    /* STEP 2.2.13 — "the index of the FIRST entry in observer.thresholds whose value is GREATER THAN
        intersectionRatio, or the LENGTH of thresholds if intersectionRatio is greater than or equal to the last
        entry". The list is sorted ascending by §3.2.1 step 7, so the first such index is the walk's first hit
        and the fall-through is the length. */
@@ -862,21 +880,21 @@ static void io_update_target(JSContext *ctx, JSValueConst observer, JSValueConst
         if (io_num_at(ctx, thresholds, k) > ratio.px) { threshold_index = k; break; }
     JS_FreeValue(ctx, thresholds);
 
-    is_visible = io_compute_visibility(ctx, state);                       /* step 3.14 */
-    prev_index = io_num_at(ctx, reg, IOR_PREV_THRESHOLD);                 /* step 3.15 */
-    v = JS_GetPropertyUint32(ctx, reg, IOR_PREV_INTERSECTING);            /* step 3.16 */
+    is_visible = io_compute_visibility(ctx, state);                       /* step 2.2.14 */
+    prev_index = io_num_at(ctx, reg, IOR_PREV_THRESHOLD);                 /* step 2.2.15 */
+    v = JS_GetPropertyUint32(ctx, reg, IOR_PREV_INTERSECTING);            /* step 2.2.16 */
     prev_intersecting = JS_ToBool(ctx, v) > 0;
     JS_FreeValue(ctx, v);
-    v = JS_GetPropertyUint32(ctx, reg, IOR_PREV_VISIBLE);                 /* step 3.17 */
+    v = JS_GetPropertyUint32(ctx, reg, IOR_PREV_VISIBLE);                 /* step 2.2.17 */
     prev_visible = JS_ToBool(ctx, v) > 0;
     JS_FreeValue(ctx, v);
     if ((double)threshold_index != prev_index || is_intersecting != prev_intersecting ||
-        is_visible != prev_visible)                                       /* step 3.18 */
+        is_visible != prev_visible)                                       /* step 2.2.18 */
         io_queue_entry(ctx, observer, state, frame_ts, root, target_rect, inter, is_intersecting, is_visible,
                        ratio, target);
-    JS_SetPropertyUint32(ctx, reg, IOR_PREV_THRESHOLD, JS_NewFloat64(ctx, (double)threshold_index)); /* 3.19 */
-    JS_SetPropertyUint32(ctx, reg, IOR_PREV_INTERSECTING, JS_NewBool(ctx, is_intersecting));         /* 3.20 */
-    JS_SetPropertyUint32(ctx, reg, IOR_PREV_VISIBLE, JS_NewBool(ctx, is_visible));                   /* 3.21 */
+    JS_SetPropertyUint32(ctx, reg, IOR_PREV_THRESHOLD, JS_NewFloat64(ctx, (double)threshold_index)); /* 2.2.19 */
+    JS_SetPropertyUint32(ctx, reg, IOR_PREV_INTERSECTING, JS_NewBool(ctx, is_intersecting));         /* 2.2.20 */
+    JS_SetPropertyUint32(ctx, reg, IOR_PREV_VISIBLE, JS_NewBool(ctx, is_visible));                   /* 2.2.21 */
     JS_FreeValue(ctx, reg);
 }
 
@@ -1202,7 +1220,7 @@ static JSValue js_io_observe(JSContext *ctx, JSValueConst this_val, int argc, JS
        −1 is what §3.4.2's "no entry has yet been queued" is read off — see intersection_observer.h. */
     JS_SetPropertyUint32(ctx, rec, IOR_PREV_THRESHOLD, JS_NewFloat64(ctx, -1.0));
     JS_SetPropertyUint32(ctx, rec, IOR_PREV_INTERSECTING, JS_FALSE);
-    /* §3.1.2's lastUpdateTime, which §3.2.2 does not name and §3.2.10 step 3.2 reads. Zero is the time origin,
+    /* §3.1.2's lastUpdateTime, which §3.2.2 does not name and §3.2.10 step 2.2.2 reads. Zero is the time origin,
        so the first frame's `time - 0 < delay` is false for the `delay: 0` every observer that did not opt in
        has — which is what makes an un-delayed observer report on the very first frame. */
     JS_SetPropertyUint32(ctx, rec, IOR_LAST_UPDATE, JS_NewFloat64(ctx, 0.0));
