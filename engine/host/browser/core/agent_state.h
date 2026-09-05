@@ -138,6 +138,41 @@ bool agent_state_slot(int i, const char **component, const char **what);
 /* EVERY DECLARED SLOT IS BACK AT ITS PRE-INIT VALUE. Run once, at the end of the release column. */
 void agent_state_check_released(void);
 
+/* THE INVERSE OF THIS COMPONENT'S DECLARATIONS, DERIVED FROM THEM — the LAST line of a component's release.
+ *
+ * WHY IT EXISTS. The release used to be the inverse of the declaration by being WRITTEN as one: a component
+ * declared N slots in its `_init` and reset N slots in its `_free`, and the two lists were kept in step by
+ * whoever remembered. That is a list maintained twice, in two functions a thousand lines apart, and the
+ * failure mode is not a mistake anybody makes reading the code — it is a diff that ADDS a declaration to a
+ * component that already has a release, touching only the `_init`. Measured, exactly once each way in one
+ * session: a step id added to an existing component's `_init` with no matching line in its `_free` aborted TWO
+ * stages of a build, and a new component landing the same week reset six of its seven slots and left the
+ * seventh. Both were caught by agent_state_check_released — the mechanism works — and both were the same
+ * clerical error, which is the kind a registry should not be asking a person to get right.
+ *
+ * SO THE UNDO IS COMPUTED FROM THE DECLARATIONS THEMSELVES. The registry already holds every slot's ADDRESS
+ * and its KIND, and a kind IS a pre-init value — slot_is_pre_init reads exactly that pairing to decide the
+ * check. This writes the same pairing. A component that declares a tenth slot therefore owes its release
+ * NOTHING NEW, and the state where a declaration has no inverse cannot be reached by adding one.
+ *
+ * WHAT IT DOES NOT DO, AND WHY THE FORCING FUNCTION SURVIVES. It resets HANDLES, never references: freeing
+ * what a slot names is the component's own work and stays in its `_free`, because only the component knows
+ * whether a slot holds a JSValue, an atom, a malloc'd buffer or nothing at all. And this is called BY the
+ * component rather than by core/platform.c's release column, which is not an oversight — a column that undid
+ * every component automatically would make agent_state_check_released unable to fire at all, so a release
+ * that never ran, or returned early, would stop being caught. One line per component is what leaves that
+ * check something to say.
+ *
+ * IT IS THE LAST LINE, AND THE ORDER IS PART OF THE CONTRACT. A release that hands another component's claim
+ * back, or asserts a claimant has already handed it back (§2.9's tree walk, §9.4.2's handler-set hook), is
+ * asking about a slot this would null; called first, it would answer those DCHECKs itself. Free, assert, then
+ * undo.
+ *
+ * A COMPONENT NAME THAT DECLARED NOTHING IS AN ABORT and not a no-op, because the name is written twice — once
+ * here and once at each declaration — and a silent no-op is the shape where the two spellings differ and the
+ * release stops being the inverse of anything. */
+void agent_state_undo(const char *component);
+
 /* The registry is the AGENT's, like everything on it. */
 void agent_state_reset(void);
 

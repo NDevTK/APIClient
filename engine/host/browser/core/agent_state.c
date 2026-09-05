@@ -107,6 +107,63 @@ static int slot_is_pre_init(const AgentSlot *s)
     return 0;
 }
 
+/* THE WRITE SIDE OF slot_is_pre_init, PAIRED WITH IT ARM FOR ARM — see agent_state.h for why the undo is
+   derived from the declarations rather than written out a second time in each release.
+   THE CONST IS DROPPED HERE AND NOWHERE ELSE, and it is dropped over a real object rather than a claim: every
+   declared slot is a MUTABLE static, which its own `_init` proves by writing it. The `const` on the declaring
+   entry points says the DECLARATION does not write the slot, and that stays true — this is a different entry
+   point and it is the only one that writes.
+   THE POINTER ARM MIRRORS THE READ'S memcmp WITH A memcpy for the reason agent_state.h gives for the read: a
+   slot may hold a function pointer, and neither a read nor a write of one may go through a `void *` lvalue.
+   Copying a null object pointer's bytes over one is what the check ALREADY assumes when it compares them, so
+   the two arms make the same assumption or neither does — and the assert below is what makes that assumption
+   fire instead of being trusted. */
+static void slot_set_pre_init(const AgentSlot *s)
+{
+    void *p = (void *)s->slot;
+
+    switch (s->kind) {
+    case SLOT_ID:    *(int *)p = -1; break;
+    case SLOT_FLAG:  *(int *)p = 0; break;
+    case SLOT_CLASS: *(JSClassID *)p = 0; break;
+    case SLOT_ATOM:  *(JSAtom *)p = JS_ATOM_NULL; break;
+    case SLOT_VALUE: *(JSValue *)p = JS_UNDEFINED; break;
+    case SLOT_PTR:   { void *null = NULL; memcpy(p, &null, sizeof null); break; }
+    default:
+        DFAIL("a slot of agent state has a kind this file cannot undo — every kind IS a pre-init value, so a "
+              "kind the write side has no case for is a slot whose release would silently do nothing");
+        return;
+    }
+    /* TWO-SIDED, AND NOT DECORATION: this is the one place the engine ASSUMES a set of bytes spells a kind's
+       pre-init value, and the pointer arm assumes it hardest. Asking the reader back is what turns that
+       assumption into something that fires at the write instead of at the next agent's `_init`. */
+    DCHECK(slot_is_pre_init(s),
+           "undoing a declaration of agent state did not put the slot back at its pre-init value — the write "
+           "side and the read side of one kind disagree, and the release that just ran will be reported as "
+           "not having run");
+}
+
+void agent_state_undo(const char *component)
+{
+    int i, n = 0;
+
+    DCHECK(component != NULL && *component, "a component undid its agent state without naming itself");
+    for (i = 0; i < g_n; i++) {
+        if (strcmp(g_slots[i].component, component) != 0) continue;
+        slot_set_pre_init(&g_slots[i]);
+        n++;
+    }
+    /* THE NAME IS WRITTEN TWICE — here and at every declaration — so the state this refuses is the two
+       spellings differing. A no-op would leave every one of that component's slots set and report the failure
+       against the DECLARING name, several stages later, as a release that never ran. */
+    DCHECKF(n > 0,
+            "`%s` undid its agent state and this registry holds no declaration under that name. The component "
+            "argument is spelled once here and once at each agent_state_* call, and it is core/platform.c's "
+            "ROW name rather than the file's — for a sub-component, the row whose release reaches it. Either "
+            "this spelling is wrong or the declarations' is",
+            component);
+}
+
 void agent_state_check_released(void)
 {
 #if APICLIENT_DEV

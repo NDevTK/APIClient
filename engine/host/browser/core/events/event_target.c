@@ -133,8 +133,6 @@ static const IdlStepDecl EHG_DECL;
    rather than a loop in event_target_init because the ids are indexed by the handler table and belong beside
    it, and EH_COUNT is not in scope this far up the file. */
 static void handler_declare_members(JSContext *ctx);
-/* Their inverse, for the same reason: the release column runs a thousand lines above the table. */
-static void handler_release_members(void);
 static void event_target_install(JSContext *ctx);
 
 /* §8.1.8.2's handler list is AGENT state, so its two hand-written columns are checked where it is declared. */
@@ -483,23 +481,22 @@ void event_target_free(JSRuntime *rt)
     JS_FreeValueRT(rt, g_handler_key);
     JS_FreeValueRT(rt, g_handler_marker);
     JS_FreeValueRT(rt, g_uncompiled_key);
-    g_uncompiled_key = JS_UNDEFINED;
     /* THE PROTOTYPE IS NOT RELEASED HERE: each realm's is held by that realm's class-proto slot and goes with
        the realm. Neither is the dispatcher — there is no lasting one to hold. */
-    g_key = g_click_flag_key = g_handler_key = g_handler_marker = JS_UNDEFINED;
-    /* THE IDS THIS AGENT WAS ISSUED, GIVEN BACK. A step id and a class id name a registration in the runtime
-       that is going away with them; kept, they are what a SECOND agent's lazy `if (id < 0)` reads to decide it
-       need not register again — core/agent_state.h's fetch defect, and the registry below asserts it. */
-    g_et_class = 0;
-    g_add_stepid = g_remove_stepid = g_dispatch_stepid = -1;
-    g_dispatch_pair_stepid = -1;
-    g_click_stepid = -1;
-    /* §8.1.8.1's ~90 pairs, given back for the same reason as the five above and asserted by the same walk —
-       each one is declared to core/agent_state.h, so a row left set here is named individually. It is a call
-       rather than a loop because the ids are indexed by the handler table and live beside it, which is a
-       thousand lines below this release. */
-    handler_release_members();
-    g_ready = 0;
+    /* EVERY HANDLE THIS COMPONENT DECLARED, GIVEN BACK, FROM THE ONE LIST THAT ALREADY NAMES THEM — the five
+       values freed above, the class id, the six step ids, §8.1.8.1's ~90 accessor pairs and the declaration
+       latch. A step id and a class id name a registration in the runtime that is going away with them; kept,
+       they are what a SECOND agent's lazy `if (id < 0)` reads to decide it need not register again —
+       core/agent_state.h's fetch defect.
+       RETIRED TEXT, unquoted because it is this file's own and not a standard's: this was eight assignments
+       enumerating the slots by hand, under a comment saying the registry asserts them. The enumeration was
+       WRONG for as long as §8.1.8.1's getter machine had a declaration in event_target_init and no line here,
+       and it aborted the two build stages that provision a second agent. It is deleted rather than corrected,
+       because a list of slots kept in step by whoever remembers is the defect and the missing line was only
+       its symptom — see core/agent_state.h's agent_state_undo for the argument.
+       IT IS LAST because the five DCHECKs above ask whether a claimant has handed its hook back, and those
+       hooks are slots this call would otherwise null before they were asked about. */
+    agent_state_undo("event_target");
 }
 
 /* THE RELEVANT GLOBAL OBJECT, WHICH IS THE RUNNING REALM'S — asked of the realm rather than remembered.
@@ -2804,23 +2801,16 @@ static void handler_declare_members(JSContext *ctx)
            idl_mint_accessor asserts the declaration derives it, so a setter declared with any other arity is
            an operation wearing an attribute's install. */
         g_handler_set_id[i] = idl_setter_id(ctx, IDL_ANY, /*null_to_empty*/ false, js_handler_set, i);
-        /* DECLARED TO core/agent_state.h ROW BY ROW, because the enforcement is per SLOT: a single row would
-           leave the other ~179 unasserted, and a stale step id is exactly what the next agent's `_init` reads
-           to decide it need not declare again. Nothing is printed for these on the clean path — the registry
-           walk only speaks when a slot is still set after the release column ran. */
+        /* DECLARED TO core/agent_state.h ROW BY ROW, because both things the registry does with a slot are per
+           SLOT: it asserts each one is back at its pre-init value, and it is what PUTS it back — this release
+           is derived from these ~180 declarations and event_target_free carries no line naming them. A single
+           summary row would leave the other ~179 neither asserted nor undone. Nothing is printed for these on
+           the clean path; the walk only speaks when a slot is still set after the release column ran. */
         agent_state_id("event_target", &g_handler_get_id[i],
                        "HTML §8.1.8.1's event handler IDL attribute getter machine, one per attribute");
         agent_state_id("event_target", &g_handler_set_id[i],
                        "HTML §8.1.8.1's event handler IDL attribute setter, one per attribute");
     }
-}
-
-static void handler_release_members(void)
-{
-    int i;
-
-    for (i = 0; i < EH_COUNT; i++)
-        g_handler_get_id[i] = g_handler_set_id[i] = -1;
 }
 
 void event_target_install_handlers(JSContext *ctx, JSValueConst target, int mask)
