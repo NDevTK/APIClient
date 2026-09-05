@@ -2406,8 +2406,13 @@ void popover_declare(JSContext *ctx)
         CHECK(g_slot_atom[i] != JS_ATOM_NULL, "a §6.12 popover state slot key could not be interned");
     }
     /* CSS Positioned Layout Level 4 §3's top layer, declared from here because §6.12's show popover step 18 is
-       what puts an element in it and this file is that step's home. The day §4.11.4's `showModal()` or
-       Fullscreen lands, that component declares nothing of its own — it calls the same three algorithms. */
+       what puts an element in it and this file is that step's home. This line used to speak of the day §4.11.4's
+       `showModal()` or Fullscreen would land — deliberately PARAPHRASED rather than quoted, because
+       engine/citegen.mjs cannot tell a quotation of this tree's own prose from one of the standard's and
+       reported exactly that when it was quoted. showModal HAS landed, and the prediction held: core/html/html_dialog.c
+       declares nothing of §3's own and calls the same three algorithms, its show a modal dialog step 15 reaching
+       add-an-element-to-the-top-layer and its removing steps step 2 reaching remove-immediately. Fullscreen is
+       still the outstanding one. */
     top_layer_declare(ctx);
     /* §6.12's HIDE A POPOVER. The step-def id is the RUNTIME's and the slot id is the AGENT's, so both are
        taken here, EAGERLY — a def registered on first use would be registered inside whichever flow happened to
