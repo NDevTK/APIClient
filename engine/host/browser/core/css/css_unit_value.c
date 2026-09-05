@@ -448,6 +448,13 @@ void css_unit_value_free(void)
 {
     DCHECK(g_unit_class != 0, "CSS Typed OM 1 §4.3.3's CSSUnitValue was released in an agent that never "
                               "declared it");
-    g_id_ctor = g_id_to_string = g_id_value_set = -1;
-    g_unit_class = 0;
+    /* EVERY HANDLE THIS ROW DECLARED, GIVEN BACK FROM THE ONE LIST THAT ALREADY NAMES THEM — the CSSUnitValue
+       class, §4.3.3's constructor and `value` setter declarations, and §2's stringifier declaration. Nothing
+       here holds a reference: the three prototypes and the interface objects are the REALMS' and go with them.
+       LAST, AND THAT ORDER IS THE CONTRACT (core/agent_state.h): the assert above reads g_unit_class, which is
+       this component's latch and a slot this call nulls, so a release that undid first would answer its own
+       check. It is called BY this component rather than from core/platform.c's release column deliberately —
+       a column that undid every component automatically would leave agent_state_check_released nothing to
+       catch. */
+    agent_state_undo("css_unit_value");
 }

@@ -400,8 +400,13 @@ void css_namespace_init(JSContext *ctx)
 
 void css_namespace_free(void)
 {
-    int i;
-
-    for (i = 0; i < M_N; i++) g_id[i] = -1;
-    for (i = 0; i < CSS_UNIT_FN_N; i++) g_unit_fn_id[i] = -1;
+    /* EVERY HANDLE THIS ROW DECLARED, GIVEN BACK FROM THE ONE LIST THAT ALREADY NAMES THEM — the M_N
+       operations and CSS Typed OM 1 §4.3.5's CSS_UNIT_FN_N numeric factory functions. This component holds
+       nothing but pool ids, so there is no reference to give back and the undo is the whole release: the two
+       loops that stood here walked the same two ranges the declarations walk, in a second place, and a range
+       that drifted from its declaration's would have left the tail set with nothing to say so.
+       LAST, AND THAT ORDER IS THE CONTRACT (core/agent_state.h) — it is trivially last here, and it is called
+       BY this component rather than from core/platform.c's release column deliberately: a column that undid
+       every component automatically would leave agent_state_check_released nothing to catch. */
+    agent_state_undo("css_namespace");
 }

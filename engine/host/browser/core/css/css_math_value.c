@@ -834,15 +834,19 @@ void css_math_value_init(JSContext *ctx)
 
 void css_math_value_free(JSRuntime *rt)
 {
-    unsigned k;
-
     DCHECK(g_abstract_class != 0,
            "CSS Typed OM 1 §4.3.4 was released in an agent that never declared it");
-    for (k = 0; k < CSS_MATH_OP_N; k++) { g_class[k] = 0; g_id_ctor[k] = -1; }
     JS_FreeAtomRT(rt, g_atom_items);
-    g_atom_items = JS_ATOM_NULL;
     JS_FreeValueRT(rt, g_items_key);
-    g_items_key = JS_UNDEFINED;
-    g_array_class = 0;
-    g_abstract_class = 0;   /* the latch the init above consults — see core/agent_state.h */
+    /* EVERY HANDLE THIS ROW DECLARED, GIVEN BACK FROM THE ONE LIST THAT ALREADY NAMES THEM — the
+       CSS_MATH_OP_N subclass ids and their CSS_MATH_OP_N constructor declarations, the CSSNumericArray class,
+       the private Symbol and its interned name, and §4.3.4's abstract class, which is the latch
+       css_math_value_init opens on. The per-index loop that stood here enumerated the same slots a second
+       time, in a function a thousand lines from the declarations — see core/agent_state.h's
+       agent_state_undo for why that list is the defect and not the clerical error it produces.
+       LAST, AND THAT ORDER IS THE CONTRACT: the two frees above read g_atom_items and g_items_key, and the
+       assert at the top reads the latch, so a release that undid first would be answering its own check. It
+       is called BY this component rather than from core/platform.c's release column deliberately — a column
+       that undid every component automatically would leave agent_state_check_released nothing to catch. */
+    agent_state_undo("css_math_value");
 }

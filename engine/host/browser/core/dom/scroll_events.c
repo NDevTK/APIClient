@@ -256,6 +256,13 @@ void scroll_events_init(JSContext *ctx)
 
 void scroll_events_free(void)
 {
-    /* The records are the REALMS' — each is released with its context. What the agent holds is the slot. */
-    g_slot = -1;
+    /* The records are the REALMS' — each is released with its context. What the agent holds is the slot, and
+       it is a slot and not a reference, so there is nothing to free above this and the undo is the whole
+       release. EVERY HANDLE THIS ROW DECLARED, GIVEN BACK FROM THE ONE LIST THAT ALREADY NAMES THEM — see
+       core/agent_state.h's agent_state_undo for why the assignment that stood here is a second copy of the
+       declaration rather than its inverse, even where the copy is one line long.
+       LAST, AND THAT ORDER IS THE CONTRACT — trivially so here, nothing above reads g_slot. It is called BY
+       this component rather than from core/platform.c's release column deliberately: a column that undid every
+       component automatically would leave agent_state_check_released nothing to catch. */
+    agent_state_undo("scroll_events");
 }

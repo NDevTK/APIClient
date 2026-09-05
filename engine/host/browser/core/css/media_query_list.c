@@ -553,18 +553,23 @@ void media_query_list_free(JSRuntime *rt)
            "in — its two classes, its realm-value slot and its four member declarations are registrations in "
            "that runtime, and zeroing them against another leaves every one of them standing in the runtime "
            "that issued them");
-    /* The prototypes and the collections are the REALMS' — each goes with its context. */
+    /* The prototypes and the collections are the REALMS' — each goes with its context. THE REFERENCE IS THIS
+       COMPONENT'S WORK AND STAYS HERE: agent_state_undo resets HANDLES and never references, because only this
+       file knows that g_ev_key holds a value and g_slot does not. */
     JS_FreeValueRT(rt, g_ev_key);
-    g_ev_key = JS_UNDEFINED;
-    g_slot = g_id_match = g_id_add = g_id_remove = g_id_ev_ctor = -1;
-    /* AND THE TWO CLASS IDS, which this release kept. core/agent_state.h settles it: a class is registered in a
-       RUNTIME, so a carried id names a class in a runtime that is gone — and because JS_NewClassID returns a
-       non-zero slot UNCHANGED rather than allocating, a second agent's media_query_list_init would hand
-       JS_NewClass numbers the new runtime's own allocator never issued and will issue to whichever component
-       asks next. Giving g_mql_class back is what made mql_finalizer's `JS_GetOpaque(val, g_mql_class)` a leak,
-       so that entry reaches its record through JS_GetAnyOpaque now — the obligation the zeroing creates,
-       discharged in the same diff rather than named in a comment. */
-    g_mql_class = 0;
-    g_ev_class = 0;
-    g_rt = NULL;
+    /* EVERY HANDLE THIS ROW DECLARED, GIVEN BACK FROM THE ONE LIST THAT ALREADY NAMES THEM — the runtime, the
+       two class ids, §4.2's internal-slot Symbol, the realm-value slot and the four member declarations.
+       THE TWO CLASS IDS ARE AMONG THEM, and that is the same settlement the enumeration here used to argue for
+       by hand: a class is registered in a RUNTIME, so a carried id names a class in a runtime that is gone —
+       and because JS_NewClassID returns a non-zero slot UNCHANGED rather than allocating, a second agent's
+       media_query_list_init would hand JS_NewClass numbers the new runtime's own allocator never issued and
+       will issue to whichever component asks next. Giving g_mql_class back is what made mql_finalizer's
+       `JS_GetOpaque(val, g_mql_class)` a leak, so that entry reaches its record through JS_GetAnyOpaque — the
+       obligation the zeroing creates, and it is unchanged by where the zeroing is written.
+       LAST, AND THAT ORDER IS THE CONTRACT (core/agent_state.h): the two asserts above read g_rt and the free
+       above reads g_ev_key, and both are slots this call nulls, so a release that undid first would answer its
+       own checks and free JS_UNDEFINED. It is called BY this component rather than from core/platform.c's
+       release column deliberately — a column that undid every component automatically would leave
+       agent_state_check_released nothing to catch. */
+    agent_state_undo("media_query_list");
 }

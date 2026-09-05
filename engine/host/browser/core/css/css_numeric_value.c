@@ -1419,9 +1419,14 @@ void css_numeric_value_free(void)
 {
     unsigned m;
 
-    for (m = 0; m < CSS_NUMERIC_MEMBER_N; m++) {
+    /* THE ASSERT KEEPS ITS LOOP AND THE RESET LOSES ONE: this reads g_id[m], which the undo below nulls, so
+       it runs FIRST — core/agent_state.h states that order as the contract. */
+    for (m = 0; m < CSS_NUMERIC_MEMBER_N; m++)
         DCHECKF(g_id[m] >= 0,
                 "CSS Typed OM 1 §4.3.1's member %u was released in an agent that never declared it", m);
-        g_id[m] = -1;
-    }
+    /* EVERY HANDLE THIS ROW DECLARED, GIVEN BACK FROM THE ONE LIST THAT ALREADY NAMES THEM — §4.3.1's ten
+       member declarations, which the _Static_assert at the top of this file pins to CSS_NUMERIC_MEMBER_N.
+       It is called BY this component rather than from core/platform.c's release column deliberately: a column
+       that undid every component automatically would leave agent_state_check_released nothing to catch. */
+    agent_state_undo("css_numeric_value");
 }
