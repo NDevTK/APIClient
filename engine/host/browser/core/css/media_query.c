@@ -317,8 +317,9 @@ static bool mq_is_digit(char c) { return c >= '0' && c <= '9'; }
  * own `-5` guard is the rest of.
  *
  * IT ASKS ABOUT A CODE POINT AND NOT A BYTE, AND THAT IS THE WHOLE OF THE CHANGE HERE. What stood in its place
- * ended in `(unsigned char)c >= 0x80`, which is not §4.2's set: §4.2 enumerates the non-ASCII ident code
- * points and leaves U+00D7, U+00F7, U+037E, U+FFFE and U+FFFF outside it, while every byte of each of their
+ * ended in `(unsigned char)c >= 0x80`, which is not CSS Syntax §4.2 "Definitions"'s set: that section
+ * enumerates the non-ASCII ident code points and leaves U+00D7, U+00F7, U+037E, U+FFFE and U+FFFF outside it,
+ * while every byte of each of their
  * UTF-8 encodings is >= 0x80. One question asked in one wrong way at three sites — core/css/css_code_point.h
  * is the one answer all three now route to. */
 static bool mq_is_name_start(uint32_t cp) { return cp == '-' || css_cp_is_ident_start(cp); }
