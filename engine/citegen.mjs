@@ -4365,6 +4365,25 @@ function audit(argv, opts = {}) {
             : stated ? "nearTitle"
             : how === "file" ? "voted"
             : !tx ? "noCorpus"
+            /* AND THIS LAST TEST'S JUSTIFICATION HAS BEEN MEASURED FALSE ONCE, WHICH IS RECORDED HERE RATHER
+               THAN LEFT FOR THE NEXT READER TO REDISCOVER. The bucket reads a stated title whose WORDS occur
+               in the cited section's text as "the author quoted the section, not its heading", and the
+               haystack is the cited section JOINED WITH ITS SUBSECTIONS — whose own numbers and TITLES are
+               the first tokens of each slice, because that is how the corpus stores a section. So a title
+               that heads NOTHING can be absorbed here by a SUBSECTION'S HEADING, which is this channel's own
+               question one level down and the opposite of what the bucket claims.
+               MEASURED, with a positive control, after another lane reported a wrong title going unreported:
+               `css-values-4 §6.1.2 'Viewport-relative Lengths'` — §6.1.2 is "Viewport-percentage Lengths: the
+               *vw…" and `Viewport-relative` is §6.1.2.2's word, in "The Various Viewport-relative Units".
+               Two clean single-line controls, one single-quoted and one double-quoted, both left
+               TITLE-MISMATCH at 0. §6.1.2's OWN text does not carry `viewport relative` at all; §6.1.2.2's
+               does, in its heading, and the join is what put the control here.
+               WHY IT IS NOT REPAIRED IN THE DIFF THAT FOUND IT: check (5)'s paragraph below records the
+               measurement that made this whole band a census rather than a finding, and moving one bucket out
+               of it is a decision about that band, taken against a reading of the band, not a bug fix. What
+               is wrong TODAY is the SENTENCE, so the sentence is what changes; the next reader who wants the
+               bucket narrowed should ask the phrase whether it titles a section CONTAINED BY the cited one
+               before asking whether its words appear under it, and read the whole band before landing it. */
             : containsFragments(Object.keys(tx).filter((n) => n === no || contains(no, n))
                                   .map((n) => tx[n]).join(" "), [quoteTokens(c.quoted, false)]) ? "inSectionText"
             : "unplaced";
@@ -5945,7 +5964,8 @@ function audit(argv, opts = {}) {
     console.log(`    ${b.quotation} are long enough that the QUOTATION CHECK judged them (${MIN_COMPARED_WORDS}+ compared words) — not silent, reported there`);
     console.log(`    ${b.possessive} are the possessive \`§N's "X"\`, which claims X is IN §N and asserts nothing about §N's title — check (3)'s question, and it found no term`);
     console.log(`    ${b.term} carry a phrase some OTHER standard defines, already counted as another standard's vocabulary`);
-    console.log(`    ${b.inSectionText} quote words that ARE in the cited section's own text — the author quoted the section, not its heading`);
+    console.log(`    ${b.inSectionText} quote words that ARE in the text of the cited section OR OF A SUBSECTION OF IT — usually the author quoting the section rather than its heading,` +
+      ` but a corpus slice begins with its own number and TITLE, so a title that heads nothing can be absorbed here by a SUBSECTION'S heading. Measured with a positive control: see the bucket`);
     console.log(`    ${b.nearTitle} state a title the cited standard carries at a section CONTAINING or CONTAINED BY the cited one — less precise, not wrong`);
     console.log(`    ${b.voted} stand under a standard only a file vote placed, so "no section of X is titled this" would be a claim about a document the citation never named`);
     console.log(`    ${b.noCorpus} cite a standard with a section index but no committed text corpus; ${b.oneWord} state a one-word title and ${b.notWords} normalize to no words at all`);
