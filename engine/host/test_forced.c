@@ -6205,6 +6205,21 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
            them unconditionally would put two interface objects on every document's global. */
         { "WorkerGlobalScope",           false, true },   /* [Exposed=Worker] */
         { "DedicatedWorkerGlobalScope",  false, true },   /* [Global=(Worker,DedicatedWorker)] */
+        /* THE URL STANDARD'S TWO, AND THE ALIAS THAT SPLITS THEM. §6.1 URL class and §6.2 URLSearchParams
+           class are both `[Exposed=*]`, so both realms owe both names; §6.1 additionally declares
+           `LegacyWindowAlias=webkitURL`, and Web IDL §3.8 Platform objects implementing interfaces step
+           3.1.4's condition is "If the interface is declared with a [LegacyWindowAlias] extended attribute,
+           and target implements the Window interface", so the alias is owed by the Window realm ALONE while
+           the interface it aliases is owed by both.
+           THAT PAIR IS WHY THESE THREE ROWS ARE DISCRIMINATING RATHER THAN THREE MORE OF THE SAME. `URL` and
+           `webkitURL` are ONE interface object placed under two names by two adjacent steps of one algorithm,
+           so a column that placed the alias by copying the interface's own exposure — the easy wrong answer,
+           since `[Exposed=*]` is right there on the same declaration — passes every `URL` row ever written and
+           fails `webkitURL` here. The rows run in opposite directions for the same reason `DOMParser` and
+           `WorkerGlobalScope` above do, and no row of this table asked the ALIAS question before. */
+        { "URL",              true, true  },   /* [Exposed=*] */
+        { "URLSearchParams",  true, true  },   /* [Exposed=*] */
+        { "webkitURL",        true, false },   /* §3.8 step 3.1.4: an alias is Window's even when `*` is not */
     };
     JSContext *worker = JS_NewContext(JS_GetRuntime(ctx));
     /* THE SECOND WORKER REALM IS THE OTHER ARM OF ONE STEP, and it is a second REALM because that is the only

@@ -7,8 +7,13 @@
 #include "core/url/url.h"
 
 void usp_init(JSContext *ctx);
-void usp_install_proto(JSContext *ctx);   /* §6.2's prototype, for ONE realm */
-void usp_install(JSContext *ctx, JSValueConst global);
+/* §6.2's prototype, its Web IDL §3.7.1 interface object and the §3.8 property reference for it — for ONE
+   realm, declared into core/realm.h's list. ONE entry because §3.8 `define the global property references` is
+   given "target" and "a realm realm" and its step 1 population is "every interface that is exposed in realm":
+   no Document appears in it. §6.2 declares `[Exposed=*]`, so EVERY realm owes the name — and while the
+   interface object was installed from core/platform.c's per-document column, a worker realm, which reaches no
+   platform_document_install, received neither. */
+void usp_install_realm(JSContext *ctx);
 void usp_free(JSContext *ctx);
 
 /* §6.2 URLSearchParams class's "a URLSearchParams object has an associated URL object". A URL's

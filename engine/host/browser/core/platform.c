@@ -650,8 +650,6 @@ static void r_simple_dialogs(JSRuntime *rt) { (void)rt; simple_dialogs_free(); }
 
 /* ---- the document half ---------------------------------------------------------------------------------- */
 
-static void i_url(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; url_install(c, g); }
-static void i_usp(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; usp_install(c, g); }
 static void i_form_data(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; form_data_install(c, g); }
 static void i_readable_stream(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; readable_stream_install(c, g); }
 static void i_queuing_strategy(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; queuing_strategy_install(c, g); }
@@ -727,8 +725,14 @@ static const PlatformComponent PLATFORM[] = {
        putting it second rather than late. The namespace object goes on the global through a realm
        intrinsic, so a child navigable gets its own count map, group stack and timer table. */
     { "console",             d_console,             NULL,        r_console },
-    { "url",                 d_url,                 i_url },
-    { "url_search_params",   d_usp,                 i_usp },
+    /* NO DOCUMENT HALF. URL §6.1 URL class and §6.2 URLSearchParams class are both `[Exposed=*]`, and Web IDL
+       §3.8 Platform objects implementing interfaces is "To define the global property references on target,
+       given realm realm" whose step 1 is "Let interfaces be a list that contains every interface that is
+       exposed in realm" — a REALM, with no Document in the algorithm. Each component's own realm intrinsic
+       places its interface object beside the prototype it already built there, so a realm that reaches no
+       platform_document_install gets both. */
+    { "url",                 d_url,                 NULL },
+    { "url_search_params",   d_usp,                 NULL },
     { "form_data",           d_form_data,           i_form_data },
     { "readable_stream",     d_readable_stream,     i_readable_stream },
     { "queuing_strategy",    d_queuing_strategy,    i_queuing_strategy },

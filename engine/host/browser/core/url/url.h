@@ -99,8 +99,13 @@ typedef enum {
 } UrlStateOverride;
 bool url_parse_override(UrlRecord *url, const char *input, size_t len, UrlStateOverride state);
 
-/* §4.2 "URL miscellaneous": "A URL cannot have a username/password/port if its host is null or the empty host,
-   or its scheme is `file`." The preamble of §6.1's and HTML §7.2.4's port setters both, verbatim. */
+/* §4.2 "URL miscellaneous": "A URL cannot have a username/password/port if its host is null or the empty
+   string, or its scheme is "file"." The preamble of §6.1's and HTML §7.2.4's port setters both, verbatim.
+   THIS DECLARATION SAID "the empty host" WHERE THE STANDARD SAYS "the empty string", and its definition in
+   url.c had already been repaired — one sentence quoted at two sites, one of them corrected, which is the
+   state a per-site check cannot report and a diff of the siblings finds for nothing. The word matters for the
+   reason recorded there: the EMPTY HOST is §4.1's own named host value, so the mis-transcription read as a
+   claim about a host variant rather than about a host that serializes to nothing. */
 bool url_cannot_have_username_password_port(const UrlRecord *u);
 
 /* §4.5 "URL serializer" — the whole record, or every part of it. Each returns a malloc'd string. */
@@ -209,10 +214,19 @@ char *url_encoded_serialize(const UrlEncodedList *l, size_t *out_n);
 int   url_encoded_name_cmp(const UrlEncodedPair *a, const UrlEncodedPair *b);
 char *url_encoded_strdup(const char *s, size_t n);
 
-/* The `URL` interface — §5. */
+/* URL §6.1 "URL class" — the `URL` interface. This line cited §5, which is "application/x-www-form-urlencoded"
+   and defines a serializer over a byte sequence rather than any interface; §6 "API" is where this standard puts
+   its two classes. */
 void url_init(JSContext *ctx);
-void url_install_proto(JSContext *ctx);   /* §4.4's prototype, for ONE realm */
-void url_install(JSContext *ctx, JSValueConst global);
+/* §6.1's prototype, its Web IDL §3.7.1 interface object, and the §3.8 property references for `URL` and
+   `webkitURL` — for ONE realm, declared into core/realm.h's list. ONE entry because §3.8 `define the global
+   property references` is given "target" and "a realm realm" and its step 1 population is "every interface
+   that is exposed in realm": no Document appears in it. §6.1 declares `[Exposed=*]`, so EVERY realm owes the
+   name — and while the interface object was installed from core/platform.c's per-document column, a worker
+   realm, which reaches no platform_document_install, received none of it. (This declaration cited §4.4, which
+   under this project's standard is URL §4.4 URL parsing — an algorithm over a string with nothing to say
+   about an interface's prototype; the concept is Web IDL's and is named above.) */
+void url_install_realm(JSContext *ctx);
 void url_free(JSContext *ctx);
 
 #endif

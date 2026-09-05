@@ -2324,25 +2324,33 @@ void url_init(JSContext *ctx)
     idl_optional_from(1);
     g_url_objurl_id[0] = idl_method_id(ctx, OBJURL_ARGS, 1, js_url_object_url, 0);
     g_url_objurl_id[1] = idl_method_id(ctx, REVOKE_ARGS, 1, js_url_object_url, 1);
-    realm_declare_intrinsic(url_install_proto);
+    realm_declare_intrinsic(url_install_realm);
 }
 
-/* Web IDL §3.7.3 Interface prototype object's OBJECT FOR §6.1 URL class, FOR ONE REALM. `searchParams` hands
-   back a URLSearchParams, which is minted from THIS realm's class slot, so the two interfaces have to be
-   per-realm together or a URL built in one document answers `.searchParams` with an object belonging to
-   another.
+/* Web IDL §3.7.3 Interface prototype object's OBJECT FOR §6.1 URL class, ITS §3.7.1 INTERFACE OBJECT, AND
+   §3.8's PROPERTY REFERENCES FOR BOTH ITS NAMES — FOR ONE REALM. `searchParams` hands back a URLSearchParams,
+   which is minted from THIS realm's class slot, so the two interfaces have to be per-realm together or a URL
+   built in one document answers `.searchParams` with an object belonging to another.
+   THE INTERFACE OBJECT IS HERE BECAUSE §3.8 IS GIVEN A REALM. `define the global property references` is "To
+   define the global property references on target, given realm realm", step 1 being "Let interfaces be a
+   list that contains every interface that is exposed in realm" — the population is a REALM's and the
+   algorithm names no Document. §6.1 declares `[Exposed=*]`, so EVERY realm owes this name — and while it was
+   placed from core/platform.c's per-document column, a worker realm, which reaches no
+   platform_document_install, got none of it. The prototype is in hand here, so the separate per-document
+   entry's JS_GetClassProto re-read is gone: re-reading it would be a second answer to a question this
+   function has just settled.
    THIS LINE CITED §4.4 — which under this file's standard is URL §4.4 URL parsing, an algorithm over a string
    that has nothing to do with an interface's prototype. The concept is Web IDL's and is named above; the
    number was wrong in the way this project rates worse than an absent one, since it resolves and reads as
    authoritative. */
-void url_install_proto(JSContext *ctx)
+void url_install_realm(JSContext *ctx)
 {
     JSValue proto, prev;
     int i;
 
     DCHECK(g_url_class != 0, "a realm asked for URL.prototype before the class was declared");
     prev = JS_GetClassProto(ctx, g_url_class);
-    DCHECK(JS_IsNull(prev), "url_install_proto ran twice in one realm");
+    DCHECK(JS_IsNull(prev), "url_install_realm ran twice in one realm");
     JS_FreeValue(ctx, prev);
 
     DCHECK(g_url_tojson >= 0 && g_url_tostring >= 0,
@@ -2357,50 +2365,47 @@ void url_install_proto(JSContext *ctx)
                              g_url_attr_set[i]);
     idl_install_method(ctx, proto, "toJSON", g_url_tojson);
     idl_install_method(ctx, proto, "toString", g_url_tostring);
-    JS_SetClassProto(ctx, g_url_class, proto);
-}
 
-void url_install(JSContext *ctx, JSValueConst global)
-{
-    JSValue ctor;
-    DCHECK(g_url_ctor_stepid >= 0, "URL was installed before url_init declared its constructor");
-    ctor = idl_step_constructor(ctx, "URL", g_url_ctor_stepid);
-    CHECK(!JS_IsException(ctor), "the URL interface object could not be allocated");
     {
-        JSValue proto = JS_GetClassProto(ctx, g_url_class);
-        DCHECK(!JS_IsNull(proto), "URL was installed into a realm that never ran its proto build");
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue ctor;
+
+        DCHECK(g_url_ctor_stepid >= 0, "URL was installed before url_init declared its constructor");
+        ctor = idl_step_constructor(ctx, "URL", g_url_ctor_stepid);
+        CHECK(!JS_IsException(ctor), "the URL interface object could not be allocated");
         JS_SetConstructor(ctx, ctor, proto);
-        JS_FreeValue(ctx, proto);
-    }
-    /* Web IDL §3.7.7 Operations' define the static operations, on the interface object exactly as its opening
-       sentence puts them: "Static operations are exposed of the interface object." The descriptor is the same
-       one the regular half gets — "Let desc be the PropertyDescriptor{[[Value]]: method, [[Writable]]:
-       modifiable, [[Enumerable]]: true, [[Configurable]]: modifiable}" — which is what a property list does
-       not give and what idl_install_method does. §6.1's two, then File API §8.4's two. */
-    idl_install_method(ctx, ctor, "parse",           g_url_static_id[URL_STATIC_PARSE]);
-    idl_install_method(ctx, ctor, "canParse",        g_url_static_id[URL_STATIC_CANPARSE]);
-    idl_install_method(ctx, ctor, "createObjectURL", g_url_objurl_id[0]);
-    idl_install_method(ctx, ctor, "revokeObjectURL", g_url_objurl_id[1]);
-    /* WEB IDL §3.8 Platform objects implementing interfaces' STEP 3.1.3, then STEP 3.1.4 — in that order,
-       because that is the order the algorithm performs them in and the alias's value is the object step 3.1.3
-       has already defined. URL §6.1 URL class declares `[Exposed=*, LegacyWindowAlias=webkitURL]`.
+        /* Web IDL §3.7.7 Operations' define the static operations, on the interface object exactly as its opening
+           sentence puts them: "Static operations are exposed of the interface object." The descriptor is the same
+           one the regular half gets — "Let desc be the PropertyDescriptor{[[Value]]: method, [[Writable]]:
+           modifiable, [[Enumerable]]: true, [[Configurable]]: modifiable}" — which is what a property list does
+           not give and what idl_install_method does. §6.1's two, then File API §8.4's two. */
+        idl_install_method(ctx, ctor, "parse",           g_url_static_id[URL_STATIC_PARSE]);
+        idl_install_method(ctx, ctor, "canParse",        g_url_static_id[URL_STATIC_CANPARSE]);
+        idl_install_method(ctx, ctor, "createObjectURL", g_url_objurl_id[0]);
+        idl_install_method(ctx, ctor, "revokeObjectURL", g_url_objurl_id[1]);
+        /* WEB IDL §3.8 Platform objects implementing interfaces' STEP 3.1.3, then STEP 3.1.4 — in that order,
+           because that is the order the algorithm performs them in and the alias's value is the object step 3.1.3
+           has already defined. URL §6.1 URL class declares `[Exposed=*, LegacyWindowAlias=webkitURL]`.
 
-       THE DUP COMES FIRST BECAUSE THE DOOR CONSUMES. Both entries take ownership of the reference they are
-       handed (idl_args.h says so of the door and the alias follows it), so the second reference is taken while
-       `ctor` is still this function's, and the two names then share ONE object — which is what §3.8 step
-       3.1.4.1.1 means by defining the alias over `interfaceObject`: `webkitURL === URL` is true in a browser,
-       `webkitURL.name` is "URL", and `new webkitURL(...)` runs §6.1's constructor because it IS §6.1's
-       constructor.
+           THE DUP COMES FIRST BECAUSE THE DOOR CONSUMES. Both entries take ownership of the reference they are
+           handed (idl_args.h says so of the door and the alias follows it), so the second reference is taken while
+           `ctor` is still this function's, and the two names then share ONE object — which is what §3.8 step
+           3.1.4.1.1 means by defining the alias over `interfaceObject`: `webkitURL === URL` is true in a browser,
+           `webkitURL.name` is "URL", and `new webkitURL(...)` runs §6.1's constructor because it IS §6.1's
+           constructor.
 
-       THE ALIAS IS WINDOW-ONLY WHERE THE INTERFACE IS `*`, and neither half of that is decided here: §3.8 step
-       3.1.4's realm condition is asked inside idl_define_legacy_window_alias, and §3.3.7 [Exposed] step 1 is
-       asked inside the door off browser/idl_exposure.h's generated row. This component states the two names
-       and nothing about which realms they reach. */
-    {
-        JSValue alias = JS_DupValue(ctx, ctor);
-        idl_define_global_property_reference(ctx, global, "URL", ctor);
-        idl_define_legacy_window_alias(ctx, global, "webkitURL", alias);
+           THE ALIAS IS WINDOW-ONLY WHERE THE INTERFACE IS `*`, and neither half of that is decided here: §3.8 step
+           3.1.4's realm condition is asked inside idl_define_legacy_window_alias, and §3.3.7 [Exposed] step 1 is
+           asked inside the door off browser/idl_exposure.h's generated row. This component states the two names
+           and nothing about which realms they reach. */
+        {
+            JSValue alias = JS_DupValue(ctx, ctor);
+            idl_define_global_property_reference(ctx, global, "URL", ctor);
+            idl_define_legacy_window_alias(ctx, global, "webkitURL", alias);
+        }
+        JS_FreeValue(ctx, global);
     }
+    JS_SetClassProto(ctx, g_url_class, proto);   /* the realm owns it from here */
 }
 
 void url_free(JSContext *ctx)

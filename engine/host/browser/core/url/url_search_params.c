@@ -670,17 +670,25 @@ void usp_init(JSContext *ctx)
 
     g_usp_ctor_stepid = idl_method_id_step(ctx, ONE_ANY, 1, NULL, 0, &js_usp_ctor_decl, 0);
     idl_optional_from(0);   /* §6.2: `constructor(optional init = "")` */
-    realm_declare_intrinsic(usp_install_proto);
+    realm_declare_intrinsic(usp_install_realm);
 }
 
-/* §6.2's INTERFACE PROTOTYPE OBJECT, FOR ONE REALM. */
-void usp_install_proto(JSContext *ctx)
+/* §6.2's INTERFACE PROTOTYPE OBJECT, ITS Web IDL §3.7.1 INTERFACE OBJECT, AND §3.8's PROPERTY REFERENCE FOR
+   IT — FOR ONE REALM.
+   THE INTERFACE OBJECT IS HERE BECAUSE §3.8 IS GIVEN A REALM. `define the global property references` is "To
+   define the global property references on target, given realm realm", step 1 being "Let interfaces be a
+   list that contains every interface that is exposed in realm" — the population is a REALM's and the
+   algorithm names no Document. §6.2 declares `[Exposed=*]`, so EVERY realm owes this name — and while it was
+   placed from core/platform.c's per-document column, a worker realm, which reaches no
+   platform_document_install, got neither the object nor the name. The prototype is in hand here, so the
+   separate per-document entry's JS_GetClassProto re-read is gone. */
+void usp_install_realm(JSContext *ctx)
 {
     JSValue proto, prev;
 
     DCHECK(g_usp_class != 0, "a realm asked for URLSearchParams.prototype before the class was declared");
     prev = JS_GetClassProto(ctx, g_usp_class);
-    DCHECK(JS_IsNull(prev), "usp_install_proto ran twice in one realm");
+    DCHECK(JS_IsNull(prev), "usp_install_realm ran twice in one realm");
     JS_FreeValue(ctx, prev);
 
     proto = JS_NewObject(ctx);
@@ -696,22 +704,23 @@ void usp_install_proto(JSContext *ctx)
     idl_install_method(ctx, proto, "toString", g_usp_id[USP_TOSTRING]);
     idl_install_accessor(ctx, proto, "size", js_usp_get_size, 0, -1);
     idl_pair_iter_install(ctx, proto, g_usp_pair_handle);
-    JS_SetClassProto(ctx, g_usp_class, proto);
-}
 
-void usp_install(JSContext *ctx, JSValueConst global)
-{
-    JSValue ctor;
-    DCHECK(g_usp_ctor_stepid >= 0, "URLSearchParams was installed before usp_init declared its constructor");
-    ctor = idl_step_constructor(ctx, "URLSearchParams", g_usp_ctor_stepid);
-    CHECK(!JS_IsException(ctor), "the URLSearchParams interface object could not be allocated");
     {
-        JSValue proto = JS_GetClassProto(ctx, g_usp_class);
-        DCHECK(!JS_IsNull(proto), "URLSearchParams was installed into a realm that never ran its proto build");
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue ctor;
+
+        DCHECK(g_usp_ctor_stepid >= 0,
+               "URLSearchParams was installed before usp_init declared its constructor");
+        ctor = idl_step_constructor(ctx, "URLSearchParams", g_usp_ctor_stepid);
+        CHECK(!JS_IsException(ctor), "the URLSearchParams interface object could not be allocated");
         JS_SetConstructor(ctx, ctor, proto);
-        JS_FreeValue(ctx, proto);
+        /* THE EXPOSURE IS THE DOOR'S ANSWER, NOT A CONDITION HERE: idl_define_global_property_reference asks
+           §3.3.7 [Exposed] step 1 against this realm's §3.3.8 [Global] global names, keyed by the identifier
+           it is already handed, so nothing at this site re-derives what the corpus states. */
+        idl_define_global_property_reference(ctx, global, "URLSearchParams", ctor);
+        JS_FreeValue(ctx, global);
     }
-    idl_define_global_property_reference(ctx, global, "URLSearchParams", ctor);
+    JS_SetClassProto(ctx, g_usp_class, proto);   /* the realm owns it from here */
 }
 
 void usp_free(JSContext *ctx)
