@@ -2381,24 +2381,26 @@ void url_install(JSContext *ctx, JSValueConst global)
     idl_install_method(ctx, ctor, "canParse",        g_url_static_id[URL_STATIC_CANPARSE]);
     idl_install_method(ctx, ctor, "createObjectURL", g_url_objurl_id[0]);
     idl_install_method(ctx, ctor, "revokeObjectURL", g_url_objurl_id[1]);
-    /* NAMED RESIDUAL — §6.1's [LegacyWindowAlias] IS NOT INSTALLED.
-     *
-     * WHAT IS NOT COVERED: URL §6.1 URL class declares `[Exposed=*, LegacyWindowAlias=webkitURL]`, and Web IDL
-     * §3.8 Platform objects implementing interfaces gives an alias the SAME interface object under a second
-     * identifier — its own step performs DefineMethodProperty over `interfaceObject` exactly as the one below
-     * does, so the two names share a value and `globalThis.webkitURL === globalThis.URL`. Only `URL` is
-     * defined here, so the alias is absent. The DESCRIPTOR half of this residual is gone: the call below is
-     * §3.8's one door, so `URL` is no longer enumerable and no longer bypasses §3.3.7 [Exposed] step 1.
-     *
-     * WHAT THE NEXT DIFF BUILDS: a second idl_define_global_property_reference call for "webkitURL" over a
-     * JS_DupValue of the same `ctor`, restricted to a Window global — the alias is Window-only where the
-     * interface is `*`, and browser/idl_exposure.h has no `webkitURL` row, so the gate inside the door
-     * answers `true` for it by the unknown-name arm rather than by the corpus. The corpus row is therefore
-     * part of that diff and not an afterthought; without it the alias would appear in every worker realm.
-     *
-     * HOW ITS ABSENCE WOULD SHOW: `url/idlharness.any.js` fails "URL interface: legacy window alias" with
-     * `webkitURL should exist expected true got false`. */
-    idl_define_global_property_reference(ctx, global, "URL", ctor);
+    /* WEB IDL §3.8 Platform objects implementing interfaces' STEP 3.1.3, then STEP 3.1.4 — in that order,
+       because that is the order the algorithm performs them in and the alias's value is the object step 3.1.3
+       has already defined. URL §6.1 URL class declares `[Exposed=*, LegacyWindowAlias=webkitURL]`.
+
+       THE DUP COMES FIRST BECAUSE THE DOOR CONSUMES. Both entries take ownership of the reference they are
+       handed (idl_args.h says so of the door and the alias follows it), so the second reference is taken while
+       `ctor` is still this function's, and the two names then share ONE object — which is what §3.8 step
+       3.1.4.1.1 means by defining the alias over `interfaceObject`: `webkitURL === URL` is true in a browser,
+       `webkitURL.name` is "URL", and `new webkitURL(...)` runs §6.1's constructor because it IS §6.1's
+       constructor.
+
+       THE ALIAS IS WINDOW-ONLY WHERE THE INTERFACE IS `*`, and neither half of that is decided here: §3.8 step
+       3.1.4's realm condition is asked inside idl_define_legacy_window_alias, and §3.3.7 [Exposed] step 1 is
+       asked inside the door off browser/idl_exposure.h's generated row. This component states the two names
+       and nothing about which realms they reach. */
+    {
+        JSValue alias = JS_DupValue(ctx, ctor);
+        idl_define_global_property_reference(ctx, global, "URL", ctor);
+        idl_define_legacy_window_alias(ctx, global, "webkitURL", alias);
+    }
 }
 
 void url_free(JSContext *ctx)

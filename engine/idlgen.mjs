@@ -2024,10 +2024,59 @@ const exposureMask = (set, what) => {
 const maskSpelling = (m) => (m === null ? "IDL_EXPOSED_STAR"
   : exposureBitNames.filter((n) => m & exposureBit.get(n)).map((n) => `IDL_GLOBAL_${n.toUpperCase()}`)
       .join(" | "));
+/* WEB IDL §3.4.11 [LegacyWindowAlias]'s IDENTIFIERS, per interface — the FOURTH kind of name §3.8 `define the
+   global property references` puts on a global, and the one this table was keyed without.
+   Web IDL §3.4.11 [LegacyWindowAlias]: "If the [LegacyWindowAlias] extended attribute appears on an interface,
+   it indicates that the Window interface will have a property for each identifier mentioned in the extended
+   attribute, whose value is the interface object for the interface." Web IDL §3.7 Interfaces says the same one
+   step down — "for each identifier in [LegacyWindowAlias]'s identifiers there exists a corresponding property
+   on the Window global object" — and Web IDL §3.8 Platform objects implementing interfaces' step 3.1.4 is
+   where the condition is written as an algorithm: "If the interface is declared with a [LegacyWindowAlias]
+   extended attribute, and target implements the Window interface".
+   THE SET IS `Window` AND IT IS NOT THE INTERFACE'S OWN, which is the whole reason this cannot be spelled like
+   the [LegacyFactoryFunction] line below it. §3.8 step 3.2 has NO realm condition, so a factory function goes
+   wherever its interface goes and `exposureMask(ifaceExposure(iface))` is exactly right for it; step 3.1.4 adds
+   "and target implements the Window interface", so an alias's set is Window INTERSECT the interface's — and
+   §3.4.11 requires the interface to include Window ("The [LegacyWindowAlias] extended attribute must not be
+   specified on an interface that does not include the Window interface in its exposure set"), which makes that
+   intersection Window. Copying the factory line's shape would have been measurably wrong rather than pedantic:
+   three of the corpus's four aliased interfaces are [Exposed=(Window,Worker)], so `SVGPoint`, `SVGRect`,
+   `SVGMatrix` and `WebKitCSSMatrix` would each have got a WORKER bit and appeared in every worker realm — the
+   exact defect a Window-only alias exists to not have.
+   THE CONFORMANCE REQUIREMENTS ARE CHECKED AND NOT ASSUMED, because each of them is what makes the emitted row
+   mean what it says, and a corpus that breaks one would emit a row that is silently a different claim. */
+const legacyWindowAliasOf = new Map();   /* alias identifier -> the interface whose interface object it names */
+for (const n of idl.declarations) {
+  if (!n.name || n.partial) continue;    /* read off the ORIGINAL definition, for ifaceExposure's own reason */
+  const ext = extOf(n, "LegacyWindowAlias");
+  if (!ext) continue;
+  const v = rhsNames(ext);
+  /* §3.4.11: "The [LegacyWindowAlias] extended attribute must either take an identifier or take an identifier
+     list." A bare form gives [] and a `*` gives EXPOSED_STAR; neither is an identifier, so neither can name a
+     property, and a row emitted from one would carry an empty name. */
+  if (v === EXPOSED_STAR || !Array.isArray(v) || !v.length)
+    throw new Error(`[idl-audit] ${n.name} carries a [LegacyWindowAlias] that is neither an identifier nor an ` +
+                    `identifier list — Web IDL §3.4.11 [LegacyWindowAlias] requires one of the two, and there ` +
+                    `is no property name to define without it`);
+  /* §3.4.11: "An interface must not have more than one [LegacyWindowAlias] extended attributes specified." */
+  if ((n.extAttrs || []).filter((a) => a.name === "LegacyWindowAlias").length > 1)
+    throw new Error(`[idl-audit] ${n.name} carries more than one [LegacyWindowAlias] extended attribute, which ` +
+                    `Web IDL §3.4.11 forbids — which one names the aliases is then this generator's guess`);
+  /* §3.4.11: "The [LegacyWindowAlias] extended attribute must not be specified on an interface that does not
+     include the Window interface in its exposure set." Emitting IDL_GLOBAL_WINDOW for an interface that is NOT
+     on Window would put a name on the Window global pointing at an interface object that realm never built. */
+  const e = ifaceExposure(n.name);
+  if (e !== EXPOSED_STAR && !e.has("Window"))
+    throw new Error(`[idl-audit] ${n.name} is [LegacyWindowAlias=…] and its exposure set is ` +
+                    `${showExposure(e)}, which does not include Window — Web IDL §3.4.11 forbids that, and ` +
+                    `§3.8 step 3.1.4's alias property would name an interface object no Window realm has`);
+  for (const id of v) legacyWindowAliasOf.set(id, n.name);
+}
 /* EVERY IDENTIFIER §3.8 CAN DEFINE ON A GLOBAL: an interface, a namespace, a callback interface — §3.7.1 and
-   §3.13.1 each put one property on the global under the construct's own identifier — and every
-   §3.7.2 LEGACY FACTORY FUNCTION, whose name is on the global too and is no interface's, so a table keyed by
-   interface name alone would leave `Image`, `Audio` and `Option` in a worker. */
+   §3.13.1 each put one property on the global under the construct's own identifier — every §3.7.2 LEGACY
+   FACTORY FUNCTION, whose name is on the global too and is no interface's, so a table keyed by interface name
+   alone would leave `Image`, `Audio` and `Option` in a worker — and every §3.4.11 [LegacyWindowAlias]
+   IDENTIFIER, which is the one kind whose exposure set is NOT its interface's (see the derivation above). */
 const exposureRows = [];
 for (const [name, node] of byName) {
   const kind = (originalOf.get(name) || node).type;
@@ -2037,6 +2086,35 @@ for (const [name, node] of byName) {
 for (const [factory, iface] of legacyFactoryOf)
   if (byName.has(iface))
     exposureRows.push([factory, exposureMask(ifaceExposure(iface), `${iface}'s [LegacyFactoryFunction=${factory}]`)]);
+/* §3.8 step 3.1.4's OWN CONDITION, as the row's set — `Window`, from the algorithm and not from the interface.
+   `exposureMask` is still what spells it, so a corpus in which no interface is [Global=Window] crashes here
+   with the message that entry already carries rather than emitting a set of no bits, which is how `*` is
+   spelled and would read as EXPOSED EVERYWHERE. */
+for (const [alias, iface] of legacyWindowAliasOf)
+  if (byName.has(iface))
+    exposureRows.push([alias, exposureMask(new Set(["Window"]),
+                                           `${iface}'s [LegacyWindowAlias=${alias}]`)]);
+/* THE NAMES MUST BE UNIQUE, AND THAT IS THE CONSUMER'S REQUIREMENT RATHER THAN A TIDINESS ONE: core/idl_args.c
+   and core/realm.c both reach this table with `bsearch`, which over duplicate keys returns AN element and not a
+   determinate one — so two rows under one name is a construct whose exposure answer depends on the array's
+   length. Web IDL §3.4.11 already forbids the three collisions that could produce one (an alias identifier
+   "must not be the same as one used by a [LegacyWindowAlias] extended attribute on this interface or another
+   interface", "must not be the same as the identifier used by a [LegacyFactoryFunction] extended attribute on
+   this interface or another interface", and "must not be the same as an identifier of an interface that has an
+   interface object"), so this asserts the corpus obeys its own rule at the one place the answer would go
+   quietly wrong. It is checked over the WHOLE array rather than per source, because the collisions §3.4.11
+   names are BETWEEN the three kinds and a per-kind check cannot see any of them. */
+{
+  const seen = new Map();
+  for (const [n] of exposureRows) {
+    if (seen.has(n))
+      throw new Error(`[idl-audit] two §3.8 global property references are both named \`${n}\` — Web IDL ` +
+                      `§3.4.11 [LegacyWindowAlias] and §3.7.2 forbid an identifier collision between an ` +
+                      `interface, a legacy factory function and a legacy window alias, and IDL_EXPOSURE is ` +
+                      `read with bsearch, which answers with an unspecified one of two rows sharing a key`);
+    seen.set(n, true);
+  }
+}
 exposureRows.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
 const globalRows = [...globalNamesOf].map(([iface, names]) =>
   [iface, [...names].reduce((m, n) => m | exposureBit.get(n), 0)]);
@@ -2050,10 +2128,11 @@ const exposureH =
   " * sets that step intersects, both straight out of the corpus's own extended attributes.\n" +
   " *\n" +
   " * IDL_EXPOSURE is the CONSTRUCT side, keyed by the identifier Web IDL §3.8 `define the global property\n" +
-  " * references` puts on a global: every interface, namespace and callback interface, plus every §3.7.2\n" +
-  " * legacy factory function name. IDL_GLOBALS is the REALM side: each §3.3.8 [Global] interface and the\n" +
-  " * global names its global object implements. core/idl_args.c intersects them; core/realm.c is where a\n" +
-  " * realm states which of the IDL_GLOBALS rows its global object is.\n" +
+  " * references` puts on a global: every interface, namespace and callback interface, every §3.7.2 legacy\n" +
+  " * factory function name, and every §3.4.11 [LegacyWindowAlias] identifier. IDL_GLOBALS is the REALM side:\n" +
+  " * each §3.3.8 [Global] interface and the global names its global object implements. core/idl_args.c\n" +
+  " * intersects them; core/realm.c is where a realm states which of the IDL_GLOBALS rows its global object\n" +
+  " * is.\n" +
   " *\n" +
   " * A NAME WITH NO ROW IS EXPOSED. Absence of evidence must not remove a property, so an identifier the\n" +
   " * corpus does not declare keeps the global property it would have had — the rows that carry information\n" +
@@ -2073,6 +2152,11 @@ const exposureH =
   "   the right spelling of it and not a hole: an exposure set of no global names is a construct exposed\n" +
   "   nowhere, which §3.3.7 forbids (the generator crashes on one), so the value cannot mean anything else. */\n" +
   "#define IDL_EXPOSED_STAR 0u\n\n" +
+  "/* AN ALIAS ROW\'S SET IS §3.8 STEP 3.1.4\'S OWN CONDITION AND NOT ITS INTERFACE\'S EXPOSURE SET. Step 3.2\n" +
+  "   defines a §3.7.2 legacy factory function with no realm condition, so that row carries the interface\'s\n" +
+  "   set; step 3.1.4 reads \"If the interface is declared with a [LegacyWindowAlias] extended attribute, and\n" +
+  "   target implements the Window interface\", so an alias row carries IDL_GLOBAL_WINDOW however widely the\n" +
+  "   interface itself is exposed — DOMPoint is [Exposed=(Window,Worker)] and `SVGPoint` is Window-only. */\n" +
   "typedef struct IdlExposureRow {\n" +
   "    const char *name;   /* the identifier §3.8 defines on the global */\n" +
   "    unsigned    set;    /* §3.3.7's exposure set of the construct that identifier names */\n" +

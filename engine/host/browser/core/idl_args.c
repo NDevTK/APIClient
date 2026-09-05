@@ -6422,6 +6422,25 @@ bool idl_global_names_are_worklet(unsigned global_names)
     return (global_names & IDL_GLOBAL_WORKLET) != 0u;
 }
 
+/* WEB IDL §3.8 Platform objects implementing interfaces' STEP 3.1.4's SECOND CONJUNCT — "and target implements
+   the Window interface". Same mask, third question, and the derivation runs the same way as the two above:
+   browser/idl_exposure.h's IDL_GLOBALS gives IDL_GLOBAL_WINDOW to exactly one of its nine rows, `Window`, so
+   the bit and the interface pick out the same realms. Unlike §8.1.3.5's pair this one has a one-row witness
+   rather than an ancestry one, which is why the DCHECK below is about a COLLISION rather than about ancestry:
+   what would break the equivalence is a SECOND [Global] interface whose global names include `Window`, and the
+   observable form of that is a realm carrying `Window` together with a name from another global family. */
+bool idl_global_names_are_window(unsigned global_names)
+{
+    DCHECK(!(global_names & IDL_GLOBAL_WINDOW) ||
+           global_names == IDL_GLOBAL_WINDOW,
+           "a realm's Web IDL §3.3.8 [Global] global names carry `Window` together with another global name — "
+           "browser/idl_exposure.h's IDL_GLOBALS gives IDL_GLOBAL_WINDOW to the `Window` row and to no other, "
+           "which is the whole reason this bit answers §3.8 step 3.1.4's INTERFACE question. A corpus that "
+           "grows a second [Global] interface naming `Window` has made that false, and step 3.1.4 must then be "
+           "asked of the realm's [Global] interface rather than of this mask");
+    return (global_names & IDL_GLOBAL_WINDOW) != 0u;
+}
+
 bool idl_exposed_in_realm(JSContext *ctx, const char *identifier)
 {
     const IdlExposureRow *r;
@@ -7027,6 +7046,67 @@ void idl_define_global_property_reference(JSContext *ctx, JSValueConst global, c
        past a failure would leave the interface UNREACHABLE under a name a page feature-detects, and the only
        way this fails on a fresh global is allocation. */
     CHECK(defined >= 0, "an interface's property could not be defined on the global");
+}
+
+/* WEB IDL §3.4.11 [LegacyWindowAlias], WHICH IS §3.8's STEP 3.1.4 — see idl_args.h for the sentences and for
+   why the alias's value is the interface object itself. Web IDL §3.8 Platform objects implementing interfaces'
+   step 3.1.4 reads "If the interface is declared with a
+   [LegacyWindowAlias] extended attribute, and target implements the Window interface, then: for every
+   identifier id in [LegacyWindowAlias]'s identifiers: Perform DefineMethodProperty(target, id, interfaceObject,
+   false)" — one condition, one loop, one define, and this entry is the condition and the define with the loop
+   left at the caller.
+
+   THE WINDOW TEST IS WHAT MAKES A WORKER REALM STRUCTURALLY UNABLE TO SEE AN ALIAS, and it is deliberately not
+   the only thing standing there. Two independent mechanisms refuse, from two different algorithms:
+     - HERE, §3.8 step 3.1.4's own condition, asked of the realm's §3.3.8 [Global] global names. This is CODE.
+       No table, no corpus row and no generator can defeat it, which is the property the phrase "Window-only by
+       definition" has to cash out as.
+     - AT THE DOOR, §3.3.7 [Exposed] step 1, keyed by the alias IDENTIFIER, over the row engine/idlgen.mjs now
+       emits for every §3.4.11 identifier with IDL_GLOBAL_WINDOW as its set.
+   BEFORE THE ROW EXISTED THE SECOND ONE ADMITTED RATHER THAN REFUSED, which is why it is named here and not
+   assumed: idl_exposed_in_realm returns true for a name with no row (that is the sound direction and it is
+   right), so an alias installed with no corpus row behind it would have been a Window-only name present in
+   EVERY realm — the exact defect §3.8's one door was closed at eight sites to prevent, re-opened by the one
+   kind of name the table was not keyed by.
+
+   AND THE TWO ARE ASSERTED TO AGREE, WHICH IS NOT VACUOUS: one side is data from webref and the other is a
+   constant of §3.8, so an identifier this engine aliases that the corpus does not declare — a hand-written
+   name, a misspelling, an alias webref stopped shipping — makes them disagree, and the disagreement is exactly
+   the state in which the door would have let this name into a worker. The DCHECK is asked only where the
+   answer can be wrong: in a non-Window realm, where the door is what would have had to refuse. */
+void idl_define_legacy_window_alias(JSContext *ctx, JSValueConst global, const char *id,
+                                    JSValue interface_object)
+{
+    DCHECK(id != NULL && *id, "a [LegacyWindowAlias] was defined with no identifier — Web IDL §3.4.11 names the "
+                              "Window property after the extended attribute's own identifier, and there is "
+                              "nothing else to key it by");
+    DCHECK(JS_IsObject(global), "a [LegacyWindowAlias] was defined on something that is not an object");
+    /* SHARPER THAN THE DOOR'S ASSERT, AND ENTITLED TO BE. §3.8's door takes five kinds of argument and one of
+       them is an ordinary object, so it can only check `is an object`; step 3.1.4.1.1's argument is
+       `interfaceObject` and nothing else, and Web IDL §3.7.1 Interface object makes that a function object
+       (Web IDL §3.7.1 Interface object: "The interface object for a given interface is a built-in function
+       object"). The value is one this
+       codebase minted, never bytes a stranger stated. */
+    DCHECK(JS_IsFunction(ctx, interface_object),
+           "a [LegacyWindowAlias] was defined over something that is not a function — Web IDL §3.8 step 3.1.4.1.1 "
+           "defines the alias over `interfaceObject`, the same object step 3.1.2 created, and §3.7.1 Interface "
+           "object makes every one of those a built-in function object");
+    /* §3.8 STEP 3.1.4's "and target implements the Window interface". */
+    if (!idl_global_names_are_window(realm_global_names(ctx))) {
+        DCHECKF(!idl_exposed_in_realm(ctx, id),
+                "`%s` is installed as a Web IDL §3.4.11 [LegacyWindowAlias] and browser/idl_exposure.h has no "
+                "row excluding it from this realm — §3.8 step 3.1.4 refuses it here because this realm's global "
+                "object does not implement Window, and §3.3.7 [Exposed] step 1 at the door would have ADMITTED "
+                "it, since a name with no row is exposed. The alias identifier is missing from the generated "
+                "table: engine/idlgen.mjs emits one IDL_GLOBAL_WINDOW row per [LegacyWindowAlias] identifier "
+                "the corpus declares, so either this name is not one webref declares or the table is stale "
+                "(`node engine/idlgen.mjs --regen`)", id);
+        JS_FreeValue(ctx, interface_object);
+        return;
+    }
+    /* §3.8 STEP 3.1.4.1.1's DefineMethodProperty, through the one door — the same call, the same descriptor and
+       the same §3.3.7 step 1 gate step 3.1.3 went through one step earlier. */
+    idl_define_global_property_reference(ctx, global, id, interface_object);
 }
 
 /* WEB IDL §3.11.1 "Legacy callback interface object". "For every callback interface that is exposed in a given

@@ -2165,6 +2165,35 @@ JSValue idl_interface_object(JSContext *ctx, const char *name, JSValueConst prot
    TAKES OWNERSHIP of `object`, exactly as the JS_SetPropertyStr every site used to call did, so a conversion is
    the call and nothing else. `global` is BORROWED. */
 void idl_define_global_property_reference(JSContext *ctx, JSValueConst global, const char *id, JSValue object);
+/* WEB IDL §3.4.11 [LegacyWindowAlias] — §3.8's step 3.1.4, WHOLE, for one of the extended attribute's
+ * identifiers. Web IDL §3.4.11 [LegacyWindowAlias]: "If the [LegacyWindowAlias] extended attribute appears on
+ * an interface, it indicates that the Window interface will have a property for each identifier mentioned in
+ * the extended attribute, whose value is the interface object for the interface." Web IDL §3.7 Interfaces says where and what: "If the
+ * [LegacyWindowAlias] extended attribute was specified on an exposed interface, then for each identifier in
+ * [LegacyWindowAlias]'s identifiers there exists a corresponding property on the Window global object. The name
+ * of the property is the given identifier, and its value is a reference to the interface object for the
+ * interface".
+ *
+ * THE VALUE IS THE INTERFACE OBJECT ITSELF AND NOT A SECOND ONE. §3.8 step 3.1.4.1.1 performs
+ * "DefineMethodProperty(target, id, interfaceObject, false)" over the SAME `interfaceObject` step 3.1.2 built
+ * and step 3.1.3 already defined under the interface's own identifier — so `globalThis.webkitURL ===
+ * globalThis.URL` is true, `webkitURL.name` is "URL", and a page's `x instanceof webkitURL` is the same brand
+ * check as `x instanceof URL`. A caller therefore passes a JS_DupValue of the object it is about to define (or
+ * has defined) as the interface object, never a fresh mint: two objects would answer `===` wrong and give the
+ * alias a `prototype` of its own. Ownership follows the door's — the reference is CONSUMED on every path.
+ *
+ * ONE CALL PER IDENTIFIER, because §3.8 step 3.1.4.1 is a loop over the identifiers and 3.1.4.1.1 is one
+ * define. A variadic taking the list would be the NULL-terminated argument scan this project has already been
+ * miscompiled into an infinite loop by, for a saving of one line at the one corpus interface that has two.
+ *
+ * WHY IT IS A SEPARATE ENTRY AND NOT AN ARGUMENT TO THE DOOR: step 3.1.4 carries a condition the other four
+ * DefineMethodProperty steps do not — "and target implements the Window interface" — and that condition is a
+ * CONSTANT OF THE ALGORITHM rather than a property of the construct. It is not a fallback selecting against
+ * anything (§C-stack's test: delete every alias in the corpus and the question still has to be asked of the
+ * next one), and it is not a second door: this entry DEFINES nothing itself, it asks step 3.1.4's condition and
+ * calls idl_define_global_property_reference, which stays the one place a name reaches a global. */
+void idl_define_legacy_window_alias(JSContext *ctx, JSValueConst global, const char *id,
+                                    JSValue interface_object);
 /* §3.11.1's LEGACY CALLBACK INTERFACE OBJECT — what a callback interface on which constants are defined puts
    on the global. It is a BUILT-IN FUNCTION OBJECT ("Let F be CreateBuiltinFunction(steps, 0, id, « », realm)"
    over steps that throw a TypeError), which is why the spec's own note says `typeof` answers "function"; an
@@ -2344,6 +2373,18 @@ unsigned idl_global_names_of(const char *global_interface);
  * question is about §3.3.8's vocabulary and not about any realm — the realm is core/realm.h's to supply. */
 bool idl_global_names_are_worker(unsigned global_names);
 bool idl_global_names_are_worklet(unsigned global_names);
+
+/* WEB IDL §3.8 Platform objects implementing interfaces' STEP 3.1.4's SECOND CONJUNCT — "and target implements
+ * the Window interface" — read off the same §3.3.8 [Global] mask, and a THIRD question asked of it rather than
+ * a third bit. It is a different algorithm from the two above (HTML §8.1.3.5's steps), which is why it has its
+ * own name: the mask is a FACT about a realm, and every one of these is a QUESTION some step asks of it.
+ *
+ * IT IS DERIVED FROM THE TABLE AND NOT ASSERTED. Of browser/idl_exposure.h's nine IDL_GLOBALS rows, exactly one
+ * carries IDL_GLOBAL_WINDOW, and it is `Window` — so a realm whose global names contain that bit and a realm
+ * whose global object implements the Window interface are the same realms. The day webref declares a
+ * second [Global] interface whose global names include `Window`, that stops being true, and idl_args.c's DCHECK
+ * is what says so rather than an alias quietly appearing in a realm §3.8 excludes it from. */
+bool idl_global_names_are_window(unsigned global_names);
 
 /* WEB IDL §3.7.6 Attributes' NAME FOR AN ACCESSOR'S FUNCTION OBJECT — "Let name be the string \"get \"
  * prepended to attribute's identifier" for create an attribute getter, and "Let name be the string \"set \"

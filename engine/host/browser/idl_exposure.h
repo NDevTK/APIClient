@@ -4,10 +4,11 @@
  * sets that step intersects, both straight out of the corpus's own extended attributes.
  *
  * IDL_EXPOSURE is the CONSTRUCT side, keyed by the identifier Web IDL §3.8 `define the global property
- * references` puts on a global: every interface, namespace and callback interface, plus every §3.7.2
- * legacy factory function name. IDL_GLOBALS is the REALM side: each §3.3.8 [Global] interface and the
- * global names its global object implements. core/idl_args.c intersects them; core/realm.c is where a
- * realm states which of the IDL_GLOBALS rows its global object is.
+ * references` puts on a global: every interface, namespace and callback interface, every §3.7.2 legacy
+ * factory function name, and every §3.4.11 [LegacyWindowAlias] identifier. IDL_GLOBALS is the REALM side:
+ * each §3.3.8 [Global] interface and the global names its global object implements. core/idl_args.c
+ * intersects them; core/realm.c is where a realm states which of the IDL_GLOBALS rows its global object
+ * is.
  *
  * A NAME WITH NO ROW IS EXPOSED. Absence of evidence must not remove a property, so an identifier the
  * corpus does not declare keeps the global property it would have had — the rows that carry information
@@ -40,6 +41,11 @@ enum {
    nowhere, which §3.3.7 forbids (the generator crashes on one), so the value cannot mean anything else. */
 #define IDL_EXPOSED_STAR 0u
 
+/* AN ALIAS ROW'S SET IS §3.8 STEP 3.1.4'S OWN CONDITION AND NOT ITS INTERFACE'S EXPOSURE SET. Step 3.2
+   defines a §3.7.2 legacy factory function with no realm condition, so that row carries the interface's
+   set; step 3.1.4 reads "If the interface is declared with a [LegacyWindowAlias] extended attribute, and
+   target implements the Window interface", so an alias row carries IDL_GLOBAL_WINDOW however widely the
+   interface itself is exposed — DOMPoint is [Exposed=(Window,Worker)] and `SVGPoint` is Window-only. */
 typedef struct IdlExposureRow {
     const char *name;   /* the identifier §3.8 defines on the global */
     unsigned    set;    /* §3.3.7's exposure set of the construct that identifier names */
@@ -882,17 +888,20 @@ static const IdlExposureRow IDL_EXPOSURE[] = {
     { "SVGMPathElement",                                      IDL_GLOBAL_WINDOW },
     { "SVGMarkerElement",                                     IDL_GLOBAL_WINDOW },
     { "SVGMaskElement",                                       IDL_GLOBAL_WINDOW },
+    { "SVGMatrix",                                            IDL_GLOBAL_WINDOW },
     { "SVGMetadataElement",                                   IDL_GLOBAL_WINDOW },
     { "SVGNumber",                                            IDL_GLOBAL_WINDOW },
     { "SVGNumberList",                                        IDL_GLOBAL_WINDOW },
     { "SVGPathElement",                                       IDL_GLOBAL_WINDOW },
     { "SVGPathSegment",                                       IDL_GLOBAL_WINDOW },
     { "SVGPatternElement",                                    IDL_GLOBAL_WINDOW },
+    { "SVGPoint",                                             IDL_GLOBAL_WINDOW },
     { "SVGPointList",                                         IDL_GLOBAL_WINDOW },
     { "SVGPolygonElement",                                    IDL_GLOBAL_WINDOW },
     { "SVGPolylineElement",                                   IDL_GLOBAL_WINDOW },
     { "SVGPreserveAspectRatio",                               IDL_GLOBAL_WINDOW },
     { "SVGRadialGradientElement",                             IDL_GLOBAL_WINDOW },
+    { "SVGRect",                                              IDL_GLOBAL_WINDOW },
     { "SVGRectElement",                                       IDL_GLOBAL_WINDOW },
     { "SVGSVGElement",                                        IDL_GLOBAL_WINDOW },
     { "SVGScriptElement",                                     IDL_GLOBAL_WINDOW },
@@ -1094,6 +1103,7 @@ static const IdlExposureRow IDL_EXPOSURE[] = {
     { "WebGLUniformLocation",                                 IDL_GLOBAL_WINDOW | IDL_GLOBAL_WORKER },
     { "WebGLVertexArrayObject",                               IDL_GLOBAL_WINDOW | IDL_GLOBAL_WORKER },
     { "WebGLVertexArrayObjectOES",                            IDL_GLOBAL_WINDOW | IDL_GLOBAL_WORKER },
+    { "WebKitCSSMatrix",                                      IDL_GLOBAL_WINDOW },
     { "WebSocket",                                            IDL_GLOBAL_WINDOW | IDL_GLOBAL_WORKER },
     { "WebTransport",                                         IDL_GLOBAL_WINDOW | IDL_GLOBAL_WORKER },
     { "WebTransportBidirectionalStream",                      IDL_GLOBAL_WINDOW | IDL_GLOBAL_WORKER },
@@ -1188,6 +1198,7 @@ static const IdlExposureRow IDL_EXPOSURE[] = {
     { "XRWebGLSubImage",                                      IDL_GLOBAL_WINDOW },
     { "XSLTProcessor",                                        IDL_GLOBAL_WINDOW },
     { "console",                                              IDL_EXPOSED_STAR },
+    { "webkitURL",                                            IDL_GLOBAL_WINDOW },
 };
 
 static const IdlGlobalRow IDL_GLOBALS[] = {
