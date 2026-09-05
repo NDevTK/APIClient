@@ -6720,25 +6720,10 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
               "a worker realm's global object still carries ECMAScript's own @@toStringTag — it shadows the "
               "Web IDL §3.7.3 class string on DedicatedWorkerGlobalScope.prototype, so "
               "`Object.prototype.toString.call(self)` answers \"[object global]\"");
-        /* NAMED RESIDUAL — THE GETTER'S ANSWER AND ITS BRAND CHECK.
-           WHAT IS NOT COVERED: the two facts that need the getter's BODY to run. HTML §10.2.1.1's own sentence
-           — "The self attribute must return the WorkerGlobalScope object itself" — is a claim about what a
-           call ANSWERS, and Web IDL §3.7.6 Attributes' create an attribute getter step 1.1.2.3, "If jsValue
-           does not implement target, then ... throw a TypeError", is a claim about what the body does with a
-           receiver that implements nothing. Neither is a property of the slot, so no descriptor read can
-           reach either, and this fixture is a C activation: ECMAScript §10.1.8.1 OrdinaryGet ( O, P, Receiver )
-           step 7 is "Return ? Call(getter, Receiver)", which has no flow base under it here, so a call would
-           drive a page-reachable body to completion instead of parking it.
-           WHAT THE NEXT DIFF BUILDS: the two assertions expressed as a PROGRAM and run in the worker realm as
-           a flow, through the JS_FlowNew/JS_FlowResume pair this file already drives at tf_step_diff_run —
-           `self === globalThis` for the first, and a `try { WorkerGlobalScope.prototype.self } catch (e) { e
-           instanceof TypeError }` for the second — so the getter's body runs with a flow base under it and a
-           park inside it is a park rather than a drive-to-completion.
-           HOW ITS ABSENCE WOULD SHOW: a `self` whose getter answers some other object, or one minted with no
-           §3.7.6 brand check at all, satisfies every assertion above — the slot is still an accessor, its
-           [[Get]] is still a function, its bits are still right. A worker script's bare `self` would then name
-           something that is not its global, and `WorkerGlobalScope.prototype.self` would answer an object
-           where a browser throws, and this realm's own diagnostic would report neither. */
+        /* THE RESIDUAL THAT STOOD HERE IS DISCHARGED BELOW, by the block after this one closes: it
+           named the getter's ANSWER and its BRAND CHECK as the two facts needing the body to run, and
+           said the next diff was to express them as a PROGRAM driven through tf_step_diff_run. That is
+           what the block below does, with five more questions of the same kind beside them. */
         JS_FreeValue(worker, p1);
         JS_FreeValue(worker, p2);
         JS_FreeValue(worker, wgs_p);
@@ -6747,6 +6732,169 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
         JS_FreeValue(worker, dwgs_c);
         JS_FreeValue(worker, wg);
     }
+    /* ---- AND NOW A PROGRAM RUNS IN THAT REALM ----------------------------------------------------------
+     *
+     * EVERYTHING ABOVE THIS LINE IS A C ACTIVATION READING SHAPES. [[HasProperty]], [[GetPrototypeOf]] and
+     * [[GetOwnProperty]] over the objects this realm's intrinsics built decide WHERE a member is and WHAT KIND
+     * of slot it sits in, and not one of them runs a member's BODY. So a `self` whose getter answers some
+     * other object, a getter minted with no brand check at all, a class string that never reaches
+     * `Object.prototype.toString`, an interface object whose `prototype` is the wrong object, and an event
+     * handler accessor pair that throws on its first assignment ALL satisfy every assertion above: the slot is
+     * still an accessor, its [[Get]] is still a function, its bits are still right and the two [[Prototype]]
+     * links still hold. Those are facts about what a CALL ANSWERS, and the only thing that decides one is a
+     * running program. Until this block there had never been one in a realm that is not a Window.
+     *
+     * IT IS A FLOW AND NOT A JS_Call, WHICH IS THE HALF THIS OWES THE SCHEDULER RATHER THAN THE PLATFORM.
+     * HTML §10.2.4 Processing model's run a worker reaches its script through "If script is a classic script,
+     * then run the classic script script", and CLAUDE.md's §scheduler makes that a preemptible frame on the
+     * one frontier rather than a C activation driven to completion. So the program is driven by
+     * tf_step_diff_run — the same JS_FlowNew/JS_FlowResume pair the two step differentials above use, which is
+     * why there is no second drive loop here — and it is run TWICE, once with the policy DECLINING every yield
+     * and once FORCING every one. A worker realm's flow that answered differently under the two schedules is
+     * §scheduler's razor exactly: a resume that dropped, reordered or forgot something is a cap.
+     *
+     * WHAT IS STILL NOT A WORKER, said here so this is not read as more than it is. HTML §10.2.4 Processing
+     * model's step before the one quoted above is "Run the rest of these steps in that agent", and this realm
+     * is in the CALLING agent: there is no worker agent, no script fetch, no MessagePort pair and no `Worker`
+     * interface object. What this measures is the REALM and the members installed in it, under execution. The
+     * ordered remainder is the residual at the bottom of core/workers/worker_global_scope.c.
+     *
+     * EACH QUESTION CARRIES TWO BITS AND NOT ONE. A fact that does not hold, and a question that could not be
+     * decided because something threw, are different facts, and one bit would average them — the shape that
+     * makes a search report a gap it cannot be directed at. So the program returns its answers in bits 0-7 and,
+     * in bits 8-15, whichever questions raised an exception it could not attribute; a row's THREW bit is
+     * checked FIRST, so a throw is reported as a throw. Its per-question `catch` is not a swallowed error: the
+     * catch IS the measurement, and every arm of it writes a bit some CHECK below reads. */
+    {
+        /* ONE ROW PER BIT, IN THE PROGRAM'S ORDER, each carrying the sentence it rests on — because a shared
+           loop reports its own file and line for every row, so the MEMBER has to travel with the message. */
+        static const struct { int bit; const char *fact; } RAN[] = {
+            { 0x01,
+              "HTML §10.2.1.1 The WorkerGlobalScope common interface's `self` did not answer this realm's own "
+              "global object. That section states the member in one sentence — \"The self attribute must "
+              "return the WorkerGlobalScope object itself\" — which is a claim about what a CALL answers and "
+              "therefore one no descriptor read above this line can reach: a getter returning some other "
+              "object is still an accessor, still a function, and still carries Web IDL §3.7.6 Attributes' "
+              "four bits. A worker script's bare `self` would name something that is not the global it is "
+              "running in" },
+            { 0x02,
+              "Web IDL §3.7.6 Attributes' create an attribute getter did not refuse a receiver that implements "
+              "nothing: `WorkerGlobalScope.prototype.self` must throw a TypeError, because that algorithm "
+              "reads \"If jsValue does not implement target, then: If attribute was specified with the "
+              "[LegacyLenientThis] extended attribute, then return undefined. Otherwise, throw a TypeError.\" "
+              "and `WorkerGlobalScope.prototype` is an ordinary object implementing no interface. A getter "
+              "with no brand check answers the prototype object itself, which a page reads as a "
+              "WorkerGlobalScope that is not one" },
+            { 0x04,
+              "Web IDL §3.7.6 Attributes' create an attribute getter did not substitute this realm's global "
+              "object for an absent receiver: it reads \"Let jsValue be the this value, if it is not null or "
+              "undefined, or realm's global object otherwise\", so "
+              "`Object.getOwnPropertyDescriptor(WorkerGlobalScope.prototype, \"self\").get.call(undefined)` "
+              "must answer this realm's global object rather than throw. It is the one arm of that step no "
+              "receiver a page can supply reaches" },
+            { 0x08,
+              "Web IDL §3.7.3 Interface prototype object's class string does not reach "
+              "`Object.prototype.toString` from this realm's global object. Web IDL §3.7.3 Interface prototype "
+              "object says \"The class string of an interface prototype object is the interface's qualified "
+              "name\", so "
+              "`Object.prototype.toString.call(self)` must answer \"[object DedicatedWorkerGlobalScope]\". The "
+              "own-@@toStringTag deletion asserted above is only half of that: it removes the property that "
+              "would SHADOW the tag and says nothing about whether the tag on "
+              "DedicatedWorkerGlobalScope.prototype is found" },
+            { 0x10,
+              "Web IDL §3.7.1 Interface object's `prototype` slot does not put this realm's global object on "
+              "the chain a brand test walks — `self instanceof DedicatedWorkerGlobalScope`, "
+              "`self instanceof WorkerGlobalScope` and `self instanceof EventTarget` must all be true. "
+              "ECMAScript §7.3.21 OrdinaryHasInstance ( ctor, instance ) is what a page's `instanceof` runs, "
+              "\"If SameValue(proto, instance) is true, return true\" over each object the receiver's chain "
+              "reaches, and it starts from the object those three NAMES resolve to — which the "
+              "[[GetPrototypeOf]] identities asserted above never touch, because they compare the links "
+              "against objects this fixture read out of the interface objects rather than against what a page "
+              "gets by writing the name" },
+            { 0x20,
+              "HTML §10.2.1.1 The WorkerGlobalScope common interface's event handler IDL attributes do not "
+              "round-trip in a worker realm: `self.onerror = f` followed by `self.onerror` must answer `f`. "
+              "That section's own table is \"The following are the event handlers (and their corresponding "
+              "event handler event types) that must be supported, as event handler IDL attributes, by objects "
+              "implementing the WorkerGlobalScope interface\", and HTML §8.1.8.1 Event handlers is the "
+              "algorithm the pair runs. The placement audit at the install decides WHERE the accessor lives; "
+              "this is the first thing in this engine to run its BODY" },
+            { 0x40,
+              "HTML §9.4.3 The MessageEventTarget mixin's event handler IDL attributes do not round-trip in a "
+              "worker realm: `self.onmessage = h` followed by `self.onmessage` must answer `h`. HTML §9.4.3's "
+              "table is \"The following are the event handlers (and their corresponding event handler event "
+              "types) that must be supported, as event handler IDL attributes, by objects implementing the "
+              "MessageEventTarget interface\", and HTML §10.2.1.2 Dedicated workers and the "
+              "DedicatedWorkerGlobalScope interface's `DedicatedWorkerGlobalScope includes MessageEventTarget` "
+              "is what brings the pair here. These two are OWN PROPERTIES OF THE GLOBAL where the row above is "
+              "on a prototype, so the pair exercises Web IDL §3.8 Platform objects implementing interfaces' "
+              "create-instance arm and the row above exercises §3.7.3's" }
+        };
+        /* THE PROGRAM. Single-quoted throughout so no JavaScript string needs escaping into C, and every
+           question is independent: one that throws sets its THREW bit and leaves the others alone. */
+        const char *SRC =
+            "(function(){ var b = 0, t = 0, g = globalThis, d, f, h;"
+            " try { if (self === g) b |= 1; } catch (e) { t |= 1; }"
+            " try { WorkerGlobalScope.prototype.self; }"
+            "   catch (e) { if (e instanceof TypeError) b |= 2; else t |= 2; }"
+            " try { d = Object.getOwnPropertyDescriptor(WorkerGlobalScope.prototype, 'self');"
+            "       if (d.get.call(undefined) === g) b |= 4; } catch (e) { t |= 4; }"
+            " try { if (Object.prototype.toString.call(g) === '[object DedicatedWorkerGlobalScope]') b |= 8; }"
+            "   catch (e) { t |= 8; }"
+            " try { if (g instanceof DedicatedWorkerGlobalScope && g instanceof WorkerGlobalScope"
+            "        && g instanceof EventTarget) b |= 16; } catch (e) { t |= 16; }"
+            " try { f = function(){}; self.onerror = f; if (self.onerror === f) b |= 32; }"
+            "   catch (e) { t |= 32; }"
+            " try { h = function(){}; self.onmessage = h; if (self.onmessage === h) b |= 64; }"
+            "   catch (e) { t |= 64; }"
+            " return b | (t * 256); })()";
+        int susp_d = 0, mach_d = 0, susp_f = 0, mach_f = 0, i;
+        int32_t got_d, got_f;
+
+        got_d = tf_step_diff_run(worker, SRC, "worker-realm-members", &TF_DIFF_DECLINE, &susp_d, &mach_d);
+        CHECK(susp_d == 0,
+              "a worker realm's flow parked with the policy DECLINING every offer — an offer the policy "
+              "refuses must re-enter the machine, not park it, or the offer is a bound wearing a question "
+              "mark. This is the same claim the two step differentials above make, asked for the first time "
+              "of a realm whose global object is not a Window");
+        for (i = 0; i < (int)(sizeof RAN / sizeof RAN[0]); i++) {
+            CHECKF((got_d & (RAN[i].bit << 8)) == 0,
+                   "a program running in a realm whose global object implements `DedicatedWorkerGlobalScope` "
+                   "raised an exception this fixture cannot attribute while deciding the following, so the "
+                   "fact below was NOT DECIDED rather than decided wrongly — %s", RAN[i].fact);
+            CHECKF((got_d & RAN[i].bit) != 0, "%s", RAN[i].fact);
+        }
+        got_f = tf_step_diff_run(worker, SRC, "worker-realm-members", &TF_DIFF_FORCE, &susp_f, &mach_f);
+        CHECKF(got_f == got_d,
+               "the SAME program in the SAME worker realm answered 0x%x with every yield FORCED and 0x%x with "
+               "every one DECLINED — a resume dropped, reordered or forgot part of a flow whose realm is not "
+               "a Window, which is the cap CLAUDE.md's §scheduler razor names: a yield you cannot prove is "
+               "lossless is a cap. The two runs differ in NOTHING else, so a disagreement is about the "
+               "suspend/resume path and never about the members above",
+               (unsigned)got_f, (unsigned)got_d);
+        /* WHAT IS DELIBERATELY NOT ASSERTED, AND WHY. `mach_d`/`mach_f` are the largest step-machine census
+           seen at a suspension and `susp_f` is how many times the FORCED run parked. The two differentials
+           above assert both because their programs call exactly ONE builtin each and the claim is about that
+           builtin; this program's calls are seven platform members whose rest points are not a set this
+           fixture can enumerate without building. An assert whose firing state you cannot construct is the
+           finding, so these are read and not asserted. */
+        (void)mach_d; (void)mach_f; (void)susp_f;
+        JS_SetFlowControlHooks(&TF_DIFF_NONE);
+    }
+    /* NAMED RESIDUAL — THE DELIVERY HALF OF §10.2.1.1's SIX.
+       WHAT IS NOT COVERED: that `self.onerror = f` is READ BACK is a fact about the accessor pair; nothing
+       above FIRES anything at this global. HTML §8.1.8.1 Event handlers' special error event handling — its
+       five-argument invocation and its inverted reading of the handler's return value — needs an ErrorEvent
+       of type `error` dispatched AT this realm's global, which HTML §8.1.4.6 Runtime script errors does for
+       an uncaught exception in a running script.
+       WHAT THE NEXT DIFF BUILDS: a worker-realm flow whose UNCAUGHT exception reaches
+       core/events/report_exception.c — that component already fires at JS_GetGlobalObject of the realm it is
+       running in, so what is absent is a CALLER and not the algorithm; tf_step_diff_run refuses an exception
+       outright, under a message of this file's own naming a step differential fixture, so the driver is the piece
+       that has to change.
+       HOW ITS ABSENCE WOULD SHOW: a page's `self.onerror = function (m, u, l, c, e) { … }` in a worker is
+       assigned and read back correctly by every assertion above and would never be CALLED, so a worker's whole
+       error-reporting surface is dead with nothing in this fixture saying so. */
     /* STREAMS §4.4 AND §4.5 ARE ONE CLASS AND TWO INTERFACES, SO THEIR PROTOTYPES MUST BE TWO OBJECTS — the
        one thing about this group the EXPECT table above cannot ask. That table is [[HasProperty]], so it sees
        a NAME and never the OBJECT behind it: every row of it passes over a `ReadableStreamBYOBReader` whose

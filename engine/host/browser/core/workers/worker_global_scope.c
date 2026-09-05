@@ -497,24 +497,66 @@ void worker_global_scope_free(JSRuntime *rt)
  *     install is at §3.7.3's not-[Global] arm above with a placement audit that DERIVES the set from those
  *     rows. Its third claim was RIGHT and is why the member was worth building: `onerror` needed nothing
  *     beyond the bit, because §8.1.8.1's step 4 had already stopped asking the Window brand.
- *     WHAT IS STILL OWED IS NOT A MEMBER, IT IS A REALM. No host in this build calls
- *     realm_install_intrinsics with `DedicatedWorkerGlobalScope`, so the exposure gate at the top of
- *     worker_global_scope_install_realm returns before anything it builds is built — the six accessors, the
- *     `self` accessor, the two prototypes, the two interface objects and every placement assert alike. What
- *     DOES run today is worker_global_scope_init, which declares the class and hands the events layer HTML
- *     §8.2's WorkerGlobalScope brand; the install itself has never executed in any realm. NEXT DIFF:
- *     HTML §10.2.4 Processing model's run a worker, reached from §10.2.6.3 Dedicated workers and the Worker
- *     interface's constructor, which is what builds such a realm; residual (5)(b) and (5)(c) name the same
- *     two algorithms, so it is ONE subproblem and not three. HOW ITS ABSENCE SHOWS: `Worker` is not a
- *     declared name in a Window realm, so a page's `new Worker(u)` throws ReferenceError on its first line
- *     and there is no object for any of this to be a member of.
- *     AND ONE ARM OF §8.1.8.1 STAYS UNEXERCISED FOR THAT REASON AND NOT FOR THIS ONE, which is worth
- *     separating because the two look alike from outside. Special error event handling — step 4's
- *     five-argument invocation and step 6's inverted reading — needs an ErrorEvent of type `error` whose
- *     currentTarget is a worker global holding an `onerror` entry. The entry is now possible; the fire is
- *     not, because HTML §8.1.4.6 Runtime script errors fires at the realm's global and no script runs in a
- *     worker realm yet. So the member is a necessary step and not a sufficient one, and a report that says
- *     the arm is now reachable is over-claiming by exactly one algorithm.
+ *     WHAT IS STILL OWED IS NOT A MEMBER AND IT IS NOT THE REALM EITHER, AND THE SENTENCE THAT STOOD HERE
+ *     SAYING OTHERWISE WAS FALSE WHEN IT WAS WRITTEN. It said that no host in this build calls
+ *     realm_install_intrinsics with `DedicatedWorkerGlobalScope`, so that the exposure gate at the top of
+ *     worker_global_scope_install_realm returns before anything it builds is built, and that the install
+ *     itself had never executed in any realm. (Its words are not reproduced as a quotation because a quoted
+ *     run spanning several comment lines is read by engine/citegen.mjs as a QUOTATION OF THE SPEC the
+ *     nearest citation names, and this tree's own retired prose then reports as a fabricated one.)
+ *     test_forced.c's exposure_selftest has made that call TWICE, for two realms, since the commit that added
+ *     the §8.1.3.5 branch — which is an ANCESTOR of the commit that wrote the sentence. So the gate does not return, and the six accessors, the `self` accessor, the
+ *     two prototypes, the two interface objects and every placement assert in this file have run on every
+ *     build since.
+ *     IT IS KEPT RATHER THAN DELETED BECAUSE THE METHOD IS WHAT THE NEXT READER WOULD COPY, and the method is
+ *     the whole finding: this was not a claim that went stale as the tree moved — the tree had not moved —
+ *     it is a claim that was never checked, because its author asked WHICH HOST BUILDS A WORKER REALM by
+ *     picturing the shipped entry point instead of grepping the call. A fixture IS a host here: `main.c` and
+ *     `test_forced.c` are ALTERNATIVES, each owning the program's entry, and the smoke the build runs is the
+ *     second one. The check was one `git grep realm_install_intrinsics`, and it answers at the writing
+ *     revision and not only today.
+ *     WHAT WAS ACTUALLY OWED WAS EXECUTION. A realm existed and no SCRIPT had ever run in one, so every
+ *     member's BODY was unexercised: `self`'s answer, its Web IDL §3.7.6 Attributes brand check, the class
+ *     string a page reads through `Object.prototype.toString`, the brand a page reads through `instanceof`,
+ *     and the six accessors' getter and setter. Those are facts about what a CALL answers and no
+ *     descriptor read can decide one. test_forced.c's exposure_selftest now runs a program in that realm as
+ *     a flow, under two schedules, and asserts all seven.
+ *     THE ORDERED REMAINDER IS HTML §10.2.4 Processing model's run a worker, IN THAT SECTION'S OWN ORDER, and
+ *     it is FIVE subproblems rather than one — the sentence above called it ONE and that is the other half of
+ *     what it got wrong:
+ *       (i)   THE AGENT. "Run the rest of these steps in that agent". A dedicated worker is a DIFFERENT AGENT
+ *             from its owner, so it is a separate instance and the closed set that may cross the boundary is
+ *             serialized TEXT carrying its type — never a live JSValue. Nothing here provisions a peer, and a
+ *             cross-instance design nothing provisions has never run.
+ *       (ii)  THE SCRIPT FETCH. §10.2.4's obtain-script step, whose classic arm fetches a classic worker
+ *             script — one load through the one chokepoint, stating its destination and its credentials mode,
+ *             with no second transport and no carve-out.
+ *       (iii) RUNNING IT. "If script is a classic script, then run the classic script script" — a preemptible
+ *             frame on the one frontier, which is the shape test_forced.c now drives, with the source coming
+ *             from (ii) instead of from a fixture.
+ *       (iv)  THE PORT PAIR. §10.2.4's inside-port steps, which entangle a MessagePort in the worker's realm
+ *             with the outside one. HTML §9.2 exists in this build; what does not is an entanglement whose
+ *             two ends are in two instances.
+ *       (v)   HTML §10.2.6.3 Dedicated workers and the Worker interface's `Worker`, LAST — "Returns a new
+ *             Worker object. scriptURL will be fetched and executed in the background, creating a new global
+ *             environment for which worker represents the communication channel". It is last because
+ *             installing the interface object before (i)-(iv) exist flips a bundle's `if (window.Worker)`
+ *             guard TRUE and abandons the fallback branch that was working, which is worse than the absence in
+ *             both arms — so the first four are not a decomposition OF (v), they are its precondition.
+ *     HOW ITS ABSENCE SHOWS: `Worker` is not a declared name in a Window realm, so a page's `new Worker(u)`
+ *     throws ReferenceError on its first line and there is no object for any of this to be a member of.
+ *     AND ONE ARM OF HTML §8.1.8.1 Event handlers STAYS UNEXERCISED FOR A THIRD REASON AGAIN, which is worth
+ *     separating because all of them look alike from outside. Special error event handling — its
+ *     five-argument invocation and its inverted reading of the handler's return value — needs an ErrorEvent
+ *     of type `error` whose currentTarget is a worker global HOLDING an `onerror` entry. Both halves of that
+ *     are now possible: the entry is installable, and a script DOES run in a worker realm — test_forced.c
+ *     drives one there as a flow and assigns `self.onerror` through the accessor. THE REASON THAT USED TO BE
+ *     GIVEN — `no script runs in a worker realm yet` — is retired rather than deleted, because a reader who
+ *     re-derives it will re-introduce it. What is missing now is the FIRE: HTML §8.1.4.6 Runtime script
+ *     errors fires at JS_GetGlobalObject of the realm it is running in, so the algorithm is present and the
+ *     CALLER is not — nothing routes a worker-realm flow's uncaught exception into it. So the member is a
+ *     necessary step and not a sufficient one, and a report that says the arm is now reachable is
+ *     over-claiming by exactly one caller.
  *     WHAT IS NOT A RESIDUAL HERE, stated because the reflex is to read it as one: `languagechange`,
  *     `offline` and `online` are dispatched by no algorithm in this build — but nor are they for `Window`,
  *     where the identical three rows have carried EH_WINDOW all along, so installing them on a second

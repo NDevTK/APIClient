@@ -1733,10 +1733,14 @@ static void eh_assert_types(void)
     /* AND THE THIRD CLOSED LIST A BIT HERE STANDS FOR, counted for the same reason and with one difference
        worth stating: this one runs where the other two do — at the agent's own init — while the component
        that INSTALLS by it (core/workers/worker_global_scope.c) is gated on a realm whose global names contain
-       `DedicatedWorkerGlobalScope`, and no host in this build creates one. So a count kept beside the install
-       would never execute; kept here it fires on every agent, which is what makes it a check rather than a
-       comment. The install site keeps the PLACEMENT audit, which needs the three objects and cannot live
-       here.
+       `DedicatedWorkerGlobalScope`. So a count kept beside the install fires only in an agent that has built
+       such a realm and is SILENT in every agent that has not — which is most of them, a Window realm never
+       reaching that install at all; kept here it fires on every agent, which is what makes it a check rather
+       than a comment. THE REASON THAT STOOD HERE WAS `and no host in this build creates one`, AND IT WAS
+       FALSE WHEN IT WAS WRITTEN — test_forced.c's exposure_selftest builds two such realms and has since
+       before this sentence landed. It is corrected rather than deleted because the CONCLUSION is unchanged
+       and a reader who re-derives the retired reason would find it false and move the count. The install site
+       keeps the PLACEMENT audit, which needs the three objects and cannot live here.
        BOTH OPERANDS ARE INDEPENDENT: `worker_global` is walked out of the rows above, and SIX is the number
        of rows HTML §10.2.1.1 The WorkerGlobalScope common interface's own table has. That interface reaches
        these six through no mixin — its two includes statements are WindowOrWorkerGlobalScope and
