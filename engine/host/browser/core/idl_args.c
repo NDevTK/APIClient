@@ -6891,7 +6891,36 @@ static JSValue idl_held_value_get(JSContext *ctx, JSValueConst this_val, int arg
 #if APICLIENT_DEV
 static void idl_check_global_target(JSContext *ctx, JSValueConst target, const char *name, const char *form)
 {
-    if (idl_target_is_realm_global(ctx, target)) return;
+    if (idl_target_is_realm_global(ctx, target)) {
+        /* AND THE MEMBER IS NOT A §3.8 IDENTIFIER, which is the fact core/realm.c's walk over the finished
+           global rests its whole classification on and which nothing asserted. That walk reads every own
+           property of the realm's global and uses `a row in browser/idl_exposure.h` to decide which question
+           the name owes; its banner argues STRUCTURALLY that a MEMBER has no row, because the table is keyed
+           by the identifier Web IDL §3.8 Platform objects implementing interfaces defines on a global while
+           the names arriving HERE are Web IDL §3.7.6 Attributes' members of the [Global] interface. Those are
+           two vocabularies and the claim is that they do not intersect — a claim about a GENERATED table and
+           this tree's member names, neither of which this file controls, and therefore one that can stop
+           being true when webref ships a new construct rather than when someone edits code.
+           IT IS ASSERTED AT THE INSTALL BECAUSE THAT IS WHERE THE MEMBER NAME IS IN HAND. The walk itself
+           cannot make this check: by the time it runs, a colliding name is indistinguishable from a §3.8
+           property reference — which is exactly the damage, since it would then demand the property be
+           NON-enumerable while §3.7.6 requires an attribute to be enumerable, and would answer §3.3.7 step 1
+           for the member out of an unrelated construct's exposure set. Both operands are committed artifacts
+           of this project and the two can disagree, so this is a guard against corpus drift and not a
+           restatement: today no member installed on a realm's global has a row. */
+        DCHECKF(bsearch(name, IDL_EXPOSURE, sizeof IDL_EXPOSURE / sizeof IDL_EXPOSURE[0],
+                        sizeof IDL_EXPOSURE[0], idl_exposure_row_cmp) == NULL,
+                "the %s attribute `%s` is a Web IDL §3.7.6 Attributes member of this realm's [Global] "
+                "interface, and browser/idl_exposure.h ALSO carries `%s` as an identifier Web IDL §3.8 "
+                "Platform objects implementing interfaces defines on a global. core/realm.c's walk over the "
+                "finished global classifies a property by whether it has a row there, so from its side this "
+                "member is now a §3.8 property reference: it will require `%s` to be non-enumerable, which "
+                "§3.7.6 forbids for an attribute, and it will answer §3.3.7 [Exposed] step 1 for the member "
+                "out of the exposure set of whatever construct the corpus named. Give that walk a way to tell "
+                "the two vocabularies apart that does not rest on the identifiers being disjoint",
+                form, name, name, name);
+        return;
+    }
     DFAILF("the %s attribute `%s` was installed on something that is not the realm's global object — Web IDL "
            "§3.7.6 Attributes places a regular attribute on the interface prototype object unless its "
            "interface is [Global], so an accessor minted here for an ordinary interface is placed by the "

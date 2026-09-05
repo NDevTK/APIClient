@@ -2290,8 +2290,26 @@ int idl_freeze_array(JSContext *ctx, JSValueConst arr);
  * is a SEPARATE question rather than another value here is that §3.3.7's conditions are ORTHOGONAL: an
  * interface is routinely `[Exposed=(Window,Worker), SecureContext]`, so a single scalar could not state both
  * and one of the two would have to be dropped at every such member. This enum is the CONDITIONAL-ATTRIBUTE
- * axis (steps 2 and 3); the EXPOSURE-SET axis (step 1) is decided by an identifier and a realm, and neither of
- * those is a thing a component has to state.
+ * axis (steps 2 and 3); the EXPOSURE-SET axis (step 1) is decided by an identifier and a realm.
+ *
+ * AND THAT LAST CLAUSE USED TO END `and neither of those is a thing a component has to state`, WHICH IS TRUE
+ * OF A §3.8 IDENTIFIER AND FALSE OF A MEMBER — the difference being the whole reason the member half of step 1
+ * has no carrier anywhere in this engine. §3.3.7 [Exposed] is declared to apply to an individual interface
+ * member, interface mixin member, or namespace member, and its `is exposed in realm` algorithm is written over
+ * a construct that may be a member; §3.7.6 Attributes then asks it per attribute, in the one step of `define
+ * the attributes` that removes one — "If attr is not exposed in realm, then continue." So a MEMBER owes step 1
+ * exactly as an interface object does. What it does NOT have is a name that answers it: §3.3.7's own note says
+ * "the exposure set of its members is a function of the interface that includes them", so `performance` is
+ * Window-and-Worker through `WindowOrWorkerGlobalScope` while `innerWidth` is Window-only through CSSOM VIEW's
+ * `partial interface Window`, and the two are indistinguishable from the identifier alone. `idl_exposed_in_realm`
+ * below therefore CANNOT be the member's answer — browser/idl_exposure.h is keyed by the identifier §3.8 puts on
+ * a global, a member has no row there, and a name with no row is exposed — so asking it of a member name is a
+ * check whose two sides cannot disagree.
+ *
+ * SO THE MEMBER-SIDE EXPOSURE SET IS DATA THE COMPONENT STATES, the way this enum's own banner already argues
+ * for [SecureContext] and for the identical reason: it is a fact about a member that only the component
+ * declaring it knows. It is NOT stated today and no door asks it — see `idl_exposed_in_realm`'s own note for
+ * which doors those are and for what stands in a realm because of it.
  *
  * WHAT THIS PARAGRAPH USED TO ARGUE, because it was true and it was also the blocker: that [Exposed] is
  * decided by which global a component installs on, that this engine has exactly one global kind — no
@@ -2349,7 +2367,36 @@ bool idl_exposed(JSContext *ctx, IdlExposure exposure);
  * WHERE IT IS ASKED IS §3.8's ONE ENTRY, `idl_define_global_property_reference`, which every interface object,
  * legacy factory function and namespace object in this engine already converges on. That is the same rule the
  * `_exposed` installers state from the other side — the question is asked at the one place, never at eighty
- * call sites — with the difference that here no caller states anything at all. */
+ * call sites — with the difference that here no caller states anything at all.
+ *
+ * AND THAT IS THE WHOLE OF THE AXIS THIS ENTRY CAN CARRY, WHICH IS NARROWER THAN §3.3.7 STEP 1. §3.8 places
+ * an IDENTIFIER on a global; §3.7.6 Attributes places a MEMBER on it, by the other arm of its opening prose —
+ * "Regular attributes are exposed on the interface prototype object" unless the interface is [Global] — and it
+ * asks step 1 per attribute at "If attr is not exposed in realm, then continue." This entry cannot answer THAT
+ * ask: a member has no row, a name with no row is exposed, so it would return true for every member in every
+ * realm. See the IdlExposure banner above for why a member's exposure set is the component's to state.
+ *
+ * THE MEMBER ARM OF STEP 1 IS ASKED BY NO DOOR, AND THIS IS AN UNBUILT GATE RATHER THAN A NAMED RESIDUAL —
+ * the distinction is the mechanical one and it decides what the next reader does. A residual says the code is
+ * CORRECT and narrower than the spec; this code is WRONG, so what is recorded here is a capability to BUILD,
+ * named so the next attempt starts from building it rather than from rediscovering it. Every §3.7.6 member
+ * installed as an own property of the realm's global — the `[Replaceable]`, held-value and plain-accessor
+ * forms below — is placed without §3.7.6's continue-step being asked, so a realm whose [Global] interface is
+ * not Window carries the Window-only ones.
+ * IT IS REACHED TODAY AND THE POPULATION IS NOT EMPTY: core/realm.h's per-realm intrinsic list is the SAME
+ * list for every realm, so a `DedicatedWorkerGlobalScope` realm receives CSSOM VIEW's `partial interface
+ * Window` viewport members, `navigation`, `visualViewport` and `screen` — every one of them a member of an
+ * interface the corpus declares `[Global=Window, Exposed=Window]` — alongside the `WindowOrWorkerGlobalScope`
+ * ones that legitimately belong there. `performance` is the one that is right, which is why it is the wrong
+ * member to reason from: it is `[Exposed]` in a worker through its mixin, so an install gated on nothing
+ * happens to give it the correct answer while giving its neighbours the wrong one.
+ * WHAT THE NEXT DIFF BUILDS: the exposure SET as a per-member argument the component states beside its
+ * IdlExposure — one more field on the install, not a second gate — asked once inside idl_args.c the way
+ * `idl_exposed` already is, so no install site re-derives it. A member's set cannot be derived from its own
+ * identifier, which is why it has to be stated; see the IdlExposure banner for §3.3.7's own sentence on that.
+ * HOW ITS ABSENCE SHOWS: `'innerWidth' in self` answers TRUE in a worker realm where a browser answers false,
+ * and NO gate in this tree reports it — core/realm.c's walk over the finished global skips every one of these
+ * names because it classifies by the same identifier table, and a member has no row in it. */
 bool idl_exposed_in_realm(JSContext *ctx, const char *identifier);
 
 /* WEB IDL §3.3.8 [Global]'s GLOBAL NAMES of one global interface — "The [Global] extended attribute also
