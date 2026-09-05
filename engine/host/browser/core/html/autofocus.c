@@ -257,6 +257,28 @@ int autofocus_element_inserted(lxb_dom_element_t *el, JSStepHdr *h, uint8_t *ua_
        first question — asked here rather than at the caller, because the caller is DOM §4.2.3's per-node walk
        and every condition an insertion step has belongs to the step. */
     if (!lxb_dom_element_get_attribute(el, (const lxb_char_t *)"autofocus", 9, &len)) return 0;
+    /* AND THE REST OF THAT SAME SENTENCE — "is INSERTED INTO A DOCUMENT" — which is a DEFINED TERM rather
+       than prose, and is the condition these steps were missing. HTML §2.1.4 "DOM trees" defines it and its
+       neighbour in ADJACENT paragraphs, spelled differently on purpose and pointing at two different DOM
+       concepts: "A node is inserted into a document when the insertion steps are invoked with it as the
+       argument and it is now in a document tree", against "A node becomes connected when the insertion steps
+       are invoked with it as the argument and it is now connected". DOM §4.2.1 "Document tree" settles the
+       first — "A node is in a document tree if its root is a document" — and DOM §4.2.2 "Shadow tree" the
+       second: "A node is connected if its shadow-including root is a document". ROOT against SHADOW-INCLUDING
+       ROOT, so an element in a shadow tree IS connected and is NOT in a document tree.
+       IT IS ASKED HERE FOR THE REASON THE ATTRIBUTE ABOVE IS, and the callers must not ask it: DOM §4.2.3
+       "Mutation algorithms" runs the insertion steps for "each shadow-including inclusive descendant" of the
+       inserted node, so the mutation chokepoint is RIGHT to walk that way and right to gate only on
+       connectedness — it drives every element insertion step there is, and this step's neighbours there
+       (§4.8.2's `source`, §4.8.3's `img`, §4.6.8.20's `link`) are stated over hooks that DO reach a shadow
+       tree. The steps therefore RUN for a node in a shadow tree and this one has to decline. Without the
+       decline an `<input autofocus>` a script wrote into a shadow root became a candidate, and the flush would
+       run §6.6.4's focusing steps on it — the four focus events at the page's own listeners, fired for an
+       element no browser fires them for.
+       `node_root` is DOM §4.4's "root" and is the primitive node_is_connected is built out of, one climb
+       short of it — shadow_root_shadow_including_root is this walk plus the hop to the host — so asking it
+       here is routing to the spelling the tree already has rather than writing a second one. */
+    if (node_root(n)->type != LXB_DOM_NODE_TYPE_DOCUMENT) return 0;
     /* STEP 1 is the standard's own OPTIONAL return: "if the user has indicated (for example, by starting to
        type in a form control) that they do not wish focus to be changed, then optionally return." It is
        conditioned on an indication that arrives through an input device, and this user agent dispatches no
@@ -308,7 +330,20 @@ int autofocus_element_inserted(lxb_dom_element_t *el, JSStepHdr *h, uint8_t *ua_
    NULL — and that is not a shape the steps tolerate, it is one focus_allow_focus_steps_run ASSERTS against at
    the moment the question is reached, so a parsed tree that needs the fork names the mechanism to build rather
    than silently taking an arm. Every step before that question is decided without asking, which is why this
-   walk is correct for every document whose parsed tree does not reach it. */
+   walk is correct for every document whose parsed tree does not reach it.
+
+   THE WALK IS LIGHT, AND THAT IS §6.6.7'S OWN ANSWER RATHER THAN AN OMISSION IN IT — it is the one walk in
+   this install sequence whose steps are stated over "inserted into a document", and the paragraph above at the
+   attribute test is why that phrase decides the tree order: it holds only where the element's ROOT is a
+   document, which a shadow tree's is not. So the parsed tree's `<template shadowrootmode=open><input
+   autofocus>` is correctly invisible here, and routing this walk to shadow-including tree order would be a
+   SPEC REGRESSION rather than a widening.
+   §4.8.5'S PARSED-IFRAME WALK BESIDE THIS ONE IS THE CONTRAST AND NOT THE PRECEDENT. It is stated over the
+   POST-CONNECTION steps, which DOM §4.2.3 "Mutation algorithms" gates on "if node is connected" — so it is
+   shadow-including for exactly the reason this walk is not, and the two sit one line apart in document_install
+   disagreeing on tree order because the STANDARD disagrees about their hooks. A neighbouring walk's tree order
+   is evidence about the hook ITS feature is stated over and about nothing else; the majority in this sequence
+   is not evidence about this one. */
 void autofocus_document_parsed(JSContext *ctx)
 {
     lxb_dom_node_t *root = document_root_node(ctx), *n;
