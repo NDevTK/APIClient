@@ -4322,15 +4322,32 @@ static int concolic_exotic_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint
             /* -1 is "this flow has not been asked", which is a fact about the CONSUMER and not about the
                record: whichever spelling reached this internal method did so without first forking on the
                record's key set, so there is no arm to answer with and the empty List would be the fabricated
-               fact again. It also covers a record with no identity to key the question by, which is the same
-               unbuilt consumer one step earlier — the ask must not be reachable for a record this engine
-               cannot spell. */
-            DFAIL("an unknown with NO EXAMPLE was asked to enumerate itself and its enumeration had not been "
-                  "FORKED — the empty List would state that the record holds nothing, which is a fact this run "
-                  "never observed. §Attacker-sources' \"Iterating an opaque collection FORKS unbounded (each "
-                  "iteration a parkable flow)\" is what belongs here, and it belongs at the CONSUMER: ask "
-                  "concolic_own_keys_pred over the record and fork on it before requesting "
-                  "§10.1.11 [[OwnPropertyKeys]] ( ), so that this line answers the arm the flow decided");
+               fact again.
+               THE REMEDY THIS CRASH USED TO NAME WAS ALREADY BUILT, AND THAT IS RECORDED HERE RATHER THAN
+               QUIETLY CORRECTED. It said to "ask concolic_own_keys_pred over the record and fork on it before
+               requesting §10.1.11", and the engine's own own-keys step machine does exactly that: it calls
+               JSConcolicHooks.own_keys_pred, forks the boolean through the step driver, runs the
+               unknown-member chain on the true arm and only then issues the request. A reader following the
+               sentence would have built a second copy of a mechanism this tree has — the failure CLAUDE.md's
+               §A-DFAIL-OUTLIVES-THE-ABSENCE names, where the spec half stays right and the claim about the
+               tree goes wrong — so what the crash names now is the ROUTING and the naming, which are the two
+               things that are actually absent.
+               TWO STATES REACH IT AND THEY TAKE DIFFERENT WORK. (i) A consumer that reaches this internal
+               method WITHOUT the step machine — an engine-side key walk, or any call spelling that does not
+               go through the seam that asks the hook — has no arm because nothing asked for one; that one is
+               ROUTED, not built. (ii) A record this engine cannot SPELL composes no identity, so
+               concolic_own_keys_pred answers JS_UNINITIALIZED, the seam correctly declines to fork a question
+               with no key, and the arm is absent by construction; that one is literal_ident's named residual
+               (a page-created object is named by its creation site plus the creating flow's count of prior
+               creations there), and until it exists the ask must not be reachable for such a record. */
+            DFAIL("an unknown with NO EXAMPLE was asked to enumerate itself and this flow holds no ARM for its "
+                  "enumeration — the empty List would state that the record holds nothing, which is a fact "
+                  "this run never observed. The fork itself is NOT missing: the own-keys step machine asks "
+                  "JSConcolicHooks.own_keys_pred and forks it before issuing the request, so reaching this "
+                  "line means either a consumer that went round that seam (route it — do not build a second "
+                  "fork) or a record with no identity to key the question by, for which the hook declines to "
+                  "mint a predicate at all and the ask must not be reachable until such a record can be "
+                  "named");
         }
         return 0;
     }
