@@ -433,8 +433,9 @@ static IoRect io_viewport_rect(JSContext *ctx)
    ways that all pointed the same direction — it reported a clip where there is none:
      - it read the computed `overflow-x`/`overflow-y` with NO `Applies to:` line, which is the mistake
        core/css/css_transform.h's header names in as many words. css-overflow-3 §3.1's line is "block
-       containers, flex containers, grid containers, and table grid boxes", so `overflow: hidden` on a
-       `display: inline` element has a computed value and clips nothing;
+       containers [CSS2], flex containers [CSS-FLEXBOX-1], grid containers [CSS-GRID-1], and table grid boxes
+       [CSS-TABLES-3]" — the sibling spelling core/layout/scroll_container.c already carries — so
+       `overflow: hidden` on a `display: inline` element has a computed value and clips nothing;
      - it ignored §3.1.4 "Overflow Viewport Propagation", under which the root element — or the body, for the
        ordinary `<html>` whose own overflow is `visible` — has a USED overflow of `visible` because the value
        was given to the VIEWPORT. `<html style="overflow-x:hidden">` and `body { overflow-x: hidden }` are two
@@ -618,9 +619,11 @@ static IoRect io_compute_intersection(JSContext *ctx, lxb_dom_node_t *target, JS
            retired claim was that "CSSOM VIEW defines a SCROLL CONTAINER by the same overflow properties a
            CONTENT CLIP is defined by", so one predicate could stand for both. `overflow: clip` refutes it:
            css-overflow-3 §3.1 puts `clip` among the NON-scrollable values, so such a box is NOT a scroll
-           container and takes no `[[scrollMargin]]` — and it clips its content to the padding edge, so step
-           3.4 applies to it in full. That is the value css-overflow added so an author could clip WITHOUT a
-           scroll container, which is precisely the case the fused predicate could not express. Both questions
+           container and takes no `[[scrollMargin]]` — and it clips its content to the padding edge, so
+           §3.2.7's own step 3.4 applies to it in full. That is the value css-overflow added so an author could
+           clip WITHOUT a scroll container, which is precisely the case the fused predicate could not express.
+           (Every bare sub-number in this paragraph is INTERSECTION OBSERVER §3.2.7's, not the css-overflow-3
+           section named beside it.) Both questions
            are now asked of core/layout/scroll_container.h, which reads ONE computed keyword and answers each
            over it, so they cannot drift apart. */
         if (scroll_container_is(container))                               /* step 3.3 */
