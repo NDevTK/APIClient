@@ -1,8 +1,12 @@
 /* THE @S JS-CONTEXT BREAKOUT, DERIVED FROM THE SINK'S OWN LEXICAL STATE — never picked from a list.
  *
  * CLAUDE.md §@S: "The breakout is DERIVED from the parsed sink context for EVERY sink class — no fixed payload
- * table. […] JS breakout from a real lexical-context detector (solve_js.c → construct_js_breakout: the hole's
- * string/template/comment state decides the minimal escape)." What stood here instead was CANDS_JS, five
+ * table. […] JS breakout from a real lexical-context detector (`solve_js.c`: the hole's ECMAScript §12
+ * ECMAScript Language: Lexical Grammar state — string, template, comment, regexp — decides the minimal
+ * escape)." (Re-read from CLAUDE.md rather than carried: this quotation said "solve_js.c →
+ * construct_js_breakout" and "string/template/comment state", and the sentence now names the SECTION rather
+ * than a function — `construct_js_breakout` is a symbol that occurs nowhere in this tree and in no version of
+ * that file, so it was the one coordinate a reader could not check.) What stood here instead was CANDS_JS, five
  * guessed payloads sprayed at every eval sink, and its defect is the one CANDS_HTML had: a sink whose lexical
  * state none of the five fitted was UNSOLVABLE BY CONSTRUCTION and the search could not say so — it reported
  * `parked, tried 5` with no statement of what it had failed to escape. Two of the five could never fit any
@@ -27,17 +31,33 @@
  * needs one and the line comment's resume does not), the trailing `//` because §12.4 makes a single-line
  * comment run to the end of the line and the literal's ORIGINAL terminator is on it, and the re-opened
  * MultiLineComment because §12.4 makes that production non-nesting: the page's own terminator is still ahead,
- * and a Script that does not parse cannot fire.
+ * and a Script that does not parse cannot fire. THE `//` IS A LITERAL'S BYTE AND NOT A TAIL EVERY ESCAPE
+ * WEARS — it discards an ORPHANED TERMINATOR, so a hole inside a TOKEN (a §12.7 IdentifierName or
+ * PrivateIdentifier, a §12.9.3 NumericLiteral) writes none: a token ends where a non-IdentifierPart begins
+ * and orphans nothing, and carrying one there was measured turning two states that FIRE in a real engine into
+ * SyntaxErrors, by eating the `}` the page had on the same line.
  *
  * THE ENGINE'S OWN TOKENIZER CANNOT ANSWER THIS, which is why a §12 scanner lives here and is not a second
  * implementation of one that exists. quickjs's `next_token` DISCARDS comments (`goto redo` at both comment
- * arms) — a hole inside `//` is precisely a state it never reports — and it does not decide §12.1's goal
- * symbol at all: `js_parse_regexp` is called by the PARSER (`js_parse_primary_expr`), so the tokenizer alone
- * never knows whether a `/` opened a RegularExpressionLiteral. Both facts are what this file must report.
+ * arms) — a hole inside `//` is precisely a state it never reports — and it does not decide the goal symbol
+ * at all: `js_parse_regexp` is called by the PARSER, from `js_parse_drive` and from
+ * `js_parse_skip_parens_token` and from nowhere else, so the tokenizer alone never knows whether a `/` opened
+ * a RegularExpressionLiteral. Both facts are what this file must report. (Two corrections, each verified by
+ * grepping engine/qjs/quickjs.c rather than recalled: the caller named here until now was
+ * `js_parse_primary_expr`, which occurs in that file ZERO times and never has; and the goal symbol was cited
+ * as §12.1, which is "Unicode Format-Control Characters" — the multiple-goal-symbols paragraph is §12
+ * ECMAScript Language: Lexical Grammar's own opening. A reader who grepped either found an absence and would
+ * have concluded a seam had to be built from nothing.)
  *
- * A STATE WITH NO ESCAPE RULE CRASHES, NAMING ITSELF. That is the work queue, and it is NOT the same thing as
- * a search that has not solved — a derived escape that does not fire is an ordinary parked @S search (CLAUDE.md
- * forbids asserting on that), while a context this file cannot NAME is an unbuilt capability. */
+ * A STATE WITH NO ESCAPE RETURNS ZERO, AND THAT IS A FIRST-CLASS ANSWER. This paragraph used to say such a
+ * state CRASHES "naming itself", on the reasoning that a context this file cannot NAME is an unbuilt
+ * capability. The reasoning survives and the conclusion does not, because the two things it separated are
+ * three: a state this file cannot NAME would indeed be a gap, but a state it names correctly and out of which
+ * §12 defines NO EXIT is a finished answer, and a state whose exit exists and cannot be DECIDED without the
+ * syntactic grammar is a parked search. §@S names an unsolved sink as explicitly NOT a `@WHY`, and the crash
+ * cost the whole DOCUMENT — every finding of the run — to report one sink's unsolvability. What still crashes
+ * is the one thing that is this file's own broken logic: a scan that consumed the hole without reporting it.
+ * The three zero-returning states each say at their own arm which of the two they are. */
 #ifndef ENGINE_HOST_SOLVER_SOLVE_JS_H
 #define ENGINE_HOST_SOLVER_SOLVE_JS_H
 
@@ -68,9 +88,13 @@ typedef void (*SolveJsEmit)(void *user, const char *breakout);
    the others left in place — and leaving them in place changes nothing, because an alphanumeric run is an
    IdentifierName in source and an ordinary character everywhere else. solve_html.c must rename them only
    because its `locate` walks a tree and returns the FIRST match. */
-/* `d` IS THE OTHER HALF OF THE SOLVE, and §12 gives this class no second spelling to choose between — a
-   §12.9.4 SingleStringCharacters hole is left by exactly one code point. So the constraint here does not
-   pick an escape, it DECIDES WHETHER THE ONE ESCAPE EXISTS AT ALL: the special-query percent-encode set
+/* `d` IS THE OTHER HALF OF THE SOLVE, and for nearly every state it does not CHOOSE between spellings — a
+   §12.9.4 SingleStringCharacters hole is left by exactly one code point. (Two states do have two, and the
+   pair is not a choice this constraint makes either: where §12 hands the boundary question to the SYNTACTIC
+   grammar — `if (a)` and `f()` end in the same `)` and take opposite answers — BOTH spellings are emitted as
+   two candidates of one search and firing picks, which is §@S's own rule. The constraint still gates each.)
+   So for a single-spelling state the constraint does not pick an escape, it DECIDES WHETHER THE ONE ESCAPE
+   EXISTS AT ALL: the special-query percent-encode set
    (URL §1.3 "Percent-encoded bytes") holds U+0027 APOSTROPHE, so `';X9()//` is unsatisfiable through
    `location.search` and emitting it spends a whole document re-run to arrive as `%27`. Zero is then the
    honest answer and the search is parked, exactly as it is for §13.2.5.5 PLAINTEXT. */
@@ -92,7 +116,7 @@ int solve_js_breakouts(const char *output, const SolveDelivered *d, SolveJsEmit 
  * ARRIVE at its sink (bytes present) without ESCAPING (still inside the literal it was written into), and
  * without this those two failures were one number.
  *
- * SOUND-ONLY, IN THE DIRECTION THAT MATTERS. Every state the scan cannot decide — §12.1's goal symbol at a
+ * SOUND-ONLY, IN THE DIRECTION THAT MATTERS. Every state the scan cannot decide — §12's goal symbol at a
  * `/`, a string the page never terminated — answers 0, so an escape is never CLAIMED on a scan that could not
  * be made. A rung that over-claims promotes a candidate that cannot fire; one that under-claims merely leaves
  * it ordered where it was.

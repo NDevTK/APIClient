@@ -12,10 +12,13 @@
 
 /* THE §12 STATE the attacker's bytes are in. Named after the grammar's own productions because the escape is
    that production's exit — the names ARE the derivation, not documentation of it.
-   The second group is states this file can NAME but has no escape rule for, and the third is a scan that could
-   not reach the hole at all. Both are returned rather than crashed on HERE, so that the whole work queue is one
-   switch in one place (`construct`) — and so a release build, where a DFAIL compiles out, emits no breakout for
-   them instead of falling through to another state's escape. */
+   THE SECOND GROUP IS THE STATES WITH NO ESCAPE, AND THAT IS A FIRST-CLASS ANSWER RATHER THAN A GAP. Each is a
+   state §12 defines and out of which §12 defines no exit that could carry a firing call, so `construct` returns
+   ZERO for it — the same answer, for the same reason, that solve_html.c's §13.2.5.5 PLAINTEXT arm returns:
+   "not one this file has not built yet, one that does not exist — so the search is honestly parked with
+   nothing tried". CLAUDE.md §Offensive programming names an unsolved @S sink as explicitly NOT a `@WHY`, and
+   an abort here would cost the WHOLE DOCUMENT — every other finding of the run — to report one sink's
+   unsolvability. What each of the three states is unable to do differs and is written at its own arm. */
 typedef enum {
     JS_SOURCE = 0,      /* §12 Lexical Grammar, between input elements — the bytes ARE source (NOT §12.6
                            Tokens, which is what stood here: an input element is §12's own unit, and the
@@ -30,25 +33,35 @@ typedef enum {
     JS_RE_CLASS,        /* §12.9.5 RegularExpressionClassChars */
     JS_RE_FLAGS,        /* §12.9.5 RegularExpressionFlags */
 
-    JS_IN_IDENT,        /* §12.7 inside an IdentifierName token */
-    JS_IN_NUMBER,       /* §12.9.3 inside a NumericLiteral token */
-    JS_IN_PRIVATE,      /* §12.6 inside a PrivateIdentifier token */
-    JS_IN_ESCAPE_DEEP,  /* §12.9.4 inside the digits of a Hex/UnicodeEscapeSequence, past its first character */
+    JS_IN_IDENT,        /* §12.7 Names and Keywords, inside an IdentifierName token */
+    JS_IN_NUMBER,       /* §12.9.3 Numeric Literals, inside a NumericLiteral token */
+    JS_IN_PRIVATE,      /* §12.7 Names and Keywords, inside a PrivateIdentifier whose name is not yet empty
+                           (§12.6 Tokens, which is what stood here, only LISTS PrivateIdentifier as a
+                           CommonToken alternative — `PrivateIdentifier :: # IdentifierName` is §12.7's) */
 
-    JS_GOAL_AMBIGUOUS,  /* §12.1 the goal symbol at a `/` is a fact about the SYNTACTIC grammar */
+    JS_IN_PRIVATE_FIRST,/* §12.7, and the name is still EMPTY at the hole — no escape, see construct */
+    JS_GOAL_AMBIGUOUS,  /* §12 the goal symbol at a `/` is a fact about the SYNTACTIC grammar. NOT §12.1, which
+                           is "Unicode Format-Control Characters"; the multiple-goal-symbols paragraph is §12
+                           ECMAScript Language: Lexical Grammar's own opening */
     JS_NOT_A_SCRIPT     /* the sink output is not a parseable Script prefix, so §12 defines no state at the hole */
 } HoleState;
 
-/* WHERE THE HOLE IS, and one orthogonal bit: whether its FIRST byte is the character an unfinished escape
-   sequence consumes. That bit is orthogonal because §12.9.4/.6/.9.5 each admit a backslash inside them, so it
-   multiplies the state rather than being one of them — and it changes the escape by exactly one filler byte. */
+/* WHERE THE HOLE IS, and the DEBT an unfinished escape sequence has left it holding. That debt is orthogonal
+   to the state because §12.9.4/.6/.9.5 each admit a backslash inside them, so it multiplies the state rather
+   than being one of them — and it changes the escape only by the bytes the sequence still owes.
+   `esc` IS THE ONE-CHARACTER CASE AND `owed`/`close` ARE THE REST OF THE SAME FACT. The hole's first byte is
+   either the single character a `\` consumes (§12.9.4 SingleEscapeCharacter and its neighbours — `esc`), or it
+   is inside the DIGITS of a §12.9.4 HexEscapeSequence or UnicodeEscapeSequence, past that character. The
+   second used to be its own HoleState and it should never have been one: a hole inside `\x4` is still inside
+   the STRING, left by the string's own quote, and the sequence is a prefix the escape pays off — so the state
+   is the literal's and the debt rides beside it, which is what makes every literal arm below work unchanged. */
 /* …AND, FOR A HOLE BETWEEN TOKENS, THE TWO FACTS §12.10.1 DECIDES ON. A hole in a STATE is left by that
    state's own exit and nothing else matters; a hole at a token BOUNDARY has no state to leave, and what can
    still go wrong there is the boundary itself — whether the grammar accepts the injected call juxtaposed
    against the token before it, which §12.10.1 answers from the previous token and from whether a
    LineTerminator separates them. Carried on the hole because the scan is the only thing that knows them and
    construct is the only thing that needs them. */
-typedef struct { HoleState st; int esc; int prev; int sol; } Hole;
+typedef struct { HoleState st; int esc; int owed; int close; int prev; int sol; } Hole;
 
 /* WHAT THE PREVIOUS INPUT ELEMENT DECIDES ABOUT A `/`. §12 opens with the reason this exists: "There are
    several situations where the identification of lexical input elements is sensitive to the syntactic grammar
@@ -132,6 +145,42 @@ static size_t esc_span(const char *s, size_t n, size_t k) {
     return j + l;
 }
 
+/* …AND WHAT THAT SEQUENCE STILL OWES when the hole sits at `at`, past the character the backslash consumes.
+   DERIVED FROM esc_span RATHER THAN FROM A SECOND COPY OF §12.9.4's ARITIES, which is the whole reason it is
+   spelled this way: `HexEscapeSequence :: x HexDigit HexDigit` and `UnicodeEscapeSequence :: u Hex4Digits`
+   are fixed widths, so every byte from the first digit to the span's END is a HexDigit and the debt is simply
+   the distance to that end — a second function counting 2 and 4 again would be a second copy of one fact,
+   free to disagree with the one the scan is steering by.
+   `u{` IS THE ONE THAT IS NOT A WIDTH. §12.9.4 spells it `u{ CodePoint }` and §12.9.6 defines
+   `CodePoint :: HexDigits[~Sep] but only if the MV of HexDigits ≤ 0x10FFFF`, so what it owes is the `}` —
+   plus ONE HexDigit when the hole stands exactly where the first one would, because CodePoint derives
+   HexDigits and HexDigits is not empty. Where digits are ALREADY written the debt is the `}` alone, and that
+   is not thrift: appending a digit to a code point the page began could push its MV over 0x10FFFF, which
+   §12.9.4.1 Static Semantics: Early Errors makes a SyntaxError, so paying only what is owed is what keeps the
+   escape parseable. Returns the HexDigit count; sets *close when a `}` is owed too. */
+static int esc_owed(const char *s, size_t n, size_t k, size_t at, int *close) {
+    size_t e;
+
+    if (k + 2 < n && s[k + 1] == 'u' && s[k + 2] == '{') { *close = 1; return at > k + 3 ? 0 : 1; }
+    *close = 0;
+    e = esc_span(s, n, k);
+    return at < e ? (int)(e - at) : 0;
+}
+
+/* THE DEEP-ESCAPE INVARIANT, EXPANDED AT EACH SITE RATHER THAN CALLED. §12.9.4's sequence is part of a
+   Single/DoubleStringCharacter and §12.9.6's of a TemplateCharacter, so a hole inside its digits is still
+   inside the LITERAL and is left by the literal's own terminator — the debt is a prefix the escape pays, not
+   a state of its own. Two scanners reach that conclusion and a shared FUNCTION would stamp ITS line on both
+   crashes; a macro stamps the caller's, which is the one a reader has to open. */
+#define SOLVE_JS_DEEP_DCHECK                                                                            \
+    DCHECK(k + 1 < n && (s[k + 1] == 'x' || s[k + 1] == 'u'),                                            \
+           "a §12.9.4 escape sequence was reported as holding the hole inside its DIGITS while its "     \
+           "second character is neither `x` nor `u` — every other EscapeSequence spans ONE code point "  \
+           "past the backslash, and the locator's first byte is ASCII alphanumeric (asserted at both "   \
+           "entry points), so it can be neither a continuation byte of a multi-byte SourceCharacter nor " \
+           "the <LF> of a LineContinuation's <CR><LF>. A hole deep inside any other sequence therefore " \
+           "means the span and the hole were measured against different strings")
+
 /* §12.9.4 StringLiteral opened by `q` at `i`. Returns the offset past the closing quote; sets *hit when the
    hole is inside. */
 static size_t str_end(Scan *z, size_t i, char q, Hole *h, int *hit) {
@@ -148,7 +197,11 @@ static size_t str_end(Scan *z, size_t i, char q, Hole *h, int *hit) {
         if (s[k] == '\\') {
             size_t e = esc_span(s, n, k);
             if (z->at == k + 1) { h->st = st; h->esc = 1; return e; }
-            if (z->at > k + 1 && z->at < e) { h->st = JS_IN_ESCAPE_DEEP; h->esc = 0; return e; }
+            if (z->at > k + 1 && z->at < e) {
+                SOLVE_JS_DEEP_DCHECK;
+                h->st = st; h->esc = 0; h->owed = esc_owed(s, n, k, z->at, &h->close);
+                return e;
+            }
             k = e;
             continue;
         }
@@ -177,7 +230,11 @@ static size_t tmpl_chars(Scan *z, size_t k, int *sub, Hole *h, int *hit) {
         if (s[k] == '\\') {
             size_t e = esc_span(s, n, k);
             if (z->at == k + 1) { h->st = JS_TEMPLATE; h->esc = 1; return e; }
-            if (z->at > k + 1 && z->at < e) { h->st = JS_IN_ESCAPE_DEEP; h->esc = 0; return e; }
+            if (z->at > k + 1 && z->at < e) {
+                SOLVE_JS_DEEP_DCHECK;
+                h->st = JS_TEMPLATE; h->esc = 0; h->owed = esc_owed(s, n, k, z->at, &h->close);
+                return e;
+            }
             k = e;
             continue;
         }
@@ -412,7 +469,7 @@ static Hole scan(Scan *z) {
     /* EVERY FIELD, at the one declaration, because this function returns from a dozen places and a state that
        does not care about the boundary fields would otherwise return whatever the stack held — which
        construct's JS_SOURCE arm would then read as a real answer. */
-    h.st = JS_NOT_A_SCRIPT; h.esc = 0; h.prev = PREV_NONE; h.sol = 1;
+    h.st = JS_NOT_A_SCRIPT; h.esc = 0; h.owed = 0; h.close = 0; h.prev = PREV_NONE; h.sol = 1;
     while (i < n) {
         size_t l = 0;
         uint32_t c;
@@ -484,8 +541,15 @@ static Hole scan(Scan *z) {
                 if (hit) return h;
                 i = e; continue;
             }
-            e = ident_end(s, n, i + 1);                          /* §12.6 PrivateIdentifier */
-            if (z->at < e) { h.st = JS_IN_PRIVATE; h.esc = 0; return h; }
+            /* §12.7 `PrivateIdentifier :: # IdentifierName` — the `#` alone is not the token, so WHETHER ANY
+               NAME PRECEDES THE HOLE decides whether there is an escape at all, exactly as §12.9.5's empty
+               body does one production over. `construct` answers the two differently and says why. */
+            e = ident_end(s, n, i + 1);
+            if (z->at < e) {
+                h.st = z->at == i + 1 ? JS_IN_PRIVATE_FIRST : JS_IN_PRIVATE;
+                h.esc = 0; h.sol = 0;
+                return h;
+            }
             i = e; z->prev = PREV_OPERAND; z->sol = 0; continue;
         }
         /* Annex B.1.1, which this engine's own tokenizer implements (`allow_html_comments`), so the derivation
@@ -517,7 +581,21 @@ static Hole scan(Scan *z) {
                not defensive: without it the scan would consume nothing and turn on the spot, so an eval sink
                handed a stray backslash would HANG the derivation instead of reporting an unparseable Script. */
             if (e == i) { h.st = JS_NOT_A_SCRIPT; h.esc = 0; return h; }
-            if (z->at < e) { h.st = JS_IN_IDENT; h.esc = 0; return h; }
+            if (z->at < e) {
+                /* THE EXIT ENDS THE TOKEN, SO THE HOLE IS AT A TOKEN BOUNDARY AND `prev` IS THE SAME FACT IT
+                   IS AT JS_SOURCE — what the injected call is juxtaposed against. The token it is juxtaposed
+                   against is the page's PREFIX ALONE (`retur` of `return`, `typeof` of `typeofX`), so the
+                   classification is asked of `at - i` bytes and not of the whole name the page would have
+                   had: which of those two the exit leaves behind is the entire difference between `;X9()`
+                   and ` X9()`, and §12.7.2's ReservedWord list is what tells them apart.
+                   `sol` IS 0 BY CONSTRUCTION and is written rather than left: a token began before the hole
+                   and §12.3's LineTerminator would have ended it, so nothing separates the call from it and
+                   §12.10.1 supplies no semicolon. */
+                h.st = JS_IN_IDENT; h.esc = 0;
+                h.prev = word_prev(s + i, z->at - i);
+                h.sol = 0;
+                return h;
+            }
             z->prev = word_prev(s + i, e - i);
             i = e; z->sol = 0; continue;
         }
@@ -564,8 +642,20 @@ static int emit_one(SolveJsEmit emit, void *user, int *n, const SolveDelivered *
      - §12.4 also makes MultiLineComment non-nesting, so the page's own terminator, still ahead in the source,
        would be an offending token: the exit re-opens a MultiLineComment and that same terminator closes it. */
 static int construct(Hole h, const SolveDelivered *d, SolveJsEmit emit, void *user) {
-    const char *escape = NULL;
-    int n = 0;
+    /* TWO SLOTS, AND THE SECOND IS NOT A SECOND GUESS — it is the one place where §12 hands the question to
+       the SYNTACTIC grammar and this component still has an answer worth firing. `if (a)` and `f()` end in
+       the SAME `)`, and the first accepts `X9()` juxtaposed against it while the second requires `;X9()`; no
+       classification recorded beside `prev` can separate them, because what differs is which production the
+       `)` closes. CLAUDE.md §@S already decides what to do with a question re-execution can settle: it says @S
+       searches freely for a firing input because emission is working-PoC-only and fire-verified, so a wrong
+       solve simply never fires and is discarded, and completeness beats purity. (Stated rather than quoted: a
+       quotation of THIS PROJECT's own prose standing under an ECMAScript citation is one engine/citegen.mjs
+       reads as a claim about ECMAScript and reports as fabricated, which is a wrong finding at a site nobody
+       can repair.) So both spellings are pushed as two candidates of ONE search and the fire picks. Every
+       other state fills one slot. */
+    const char *escape[2] = { NULL, NULL };
+    char pend[8];
+    int n = 0, i, owed;
 
     switch (h.st) {
     case JS_SOURCE:
@@ -581,108 +671,227 @@ static int construct(Hole h, const SolveDelivered *d, SolveJsEmit emit, void *us
            not supply one, and nowhere else: after an operator (`cfg=`) a `;` would itself be the SyntaxError.
            (This is the citation that was wrong rather than merely imprecise — it read §12.6 Tokens, and input
             elements are §12. Checking it is what found the missing separator.) */
-        if (h.sol || h.prev == PREV_NONE || h.prev == PREV_OPERATOR) escape = "X9()";
-        else if (h.prev == PREV_OPERAND) escape = ";X9()";
+        if (h.sol || h.prev == PREV_NONE || h.prev == PREV_OPERATOR) escape[0] = "X9()";
+        else if (h.prev == PREV_OPERAND) escape[0] = ";X9()";
         else {
-            /* THE SECOND AXIS, AND IT IS NOT THE ONE §12.9.5 NEEDS. `prev` classifies tokens for the GOAL
-               SYMBOL question — may a `/` here open a RegularExpressionLiteral — and PREV_AMBIG is the answer
-               to THAT question, not to this one. For the boundary the four members split differently and each
-               is decidable: `)` REQUIRES the separator (`f()X9()` does not parse), `await` and `of` FORBID it
-               (both require an operand, so `await ;` is a SyntaxError), and `}` and `yield` ACCEPT it (`x =
-               {};X9()` and `yield ;X9()` both parse, as does a block's `}` without one). So this needs a
+            /* THE CRASH THAT STOOD HERE PRESCRIBED A REMEDY THAT CANNOT BE BUILT, AND THAT IS THE FINDING.
+               It said the five PREV_AMBIG tokens "split differently and each is decidable", and asked for "a
                second classification recorded beside `prev` at each of the sites that sets it — one word of
-               spec per site — not a guess between two escapes here. Build that. */
-            DFAIL("the attacker bytes begin an input element straight after `)`, `}`, `of`, `yield` or `await` "
-                  "with no LineTerminator between — §12.10.1 supplies no semicolon there, and whether one may "
-                  "be WRITTEN differs across exactly those tokens while §12.9.5's goal-symbol classification "
-                  "lumps them together. Record the boundary question beside `prev` at each site that sets it");
-            return 0;
+               spec per site". Its own worked example refutes it: `f()X9()` does not parse and `if (a)X9()`
+               does, and BOTH sites write a `)` — so the fact that decides the boundary is which production
+               that `)` closes, which is the syntactic grammar and not something the site setting `prev` can
+               know. Its reading of the other four was wrong in the same direction rather than merely
+               incomplete: `await` and `of` were said to FORBID the separator, and each is a plain
+               IdentifierReference outside an async body or a for-of head, where `await;X9()` parses and
+               `await X9()` does not.
+               WHAT IS TRUE OF ALL FIVE IS THAT EACH SPELLING PARSES IN SOME READING AND FIRES WHEN IT DOES:
+               `if(a)X9()` / `f();X9()`, `{}X9()` / `x={};X9()`, `for(x of X9())`, `yield X9()` (which CALLS
+               X9 and yields its result) / `yield;X9()`, `await X9()` / `await;X9()`. So both are emitted and
+               re-execution decides, which is §@S's own rule for exactly this shape. */
+            escape[0] = ";X9()";
+            escape[1] = "X9()";
         }
         break;
-    case JS_STR_SINGLE:  escape = "';X9()//";  break;   /* §12.9.4 SingleStringCharacters end at `'` */
-    case JS_STR_DOUBLE:  escape = "\";X9()//"; break;   /* §12.9.4 DoubleStringCharacters end at `"` */
+    case JS_STR_SINGLE:  escape[0] = "';X9()//";  break;   /* §12.9.4 SingleStringCharacters end at `'` */
+    case JS_STR_DOUBLE:  escape[0] = "\";X9()//"; break;   /* §12.9.4 DoubleStringCharacters end at `"` */
     case JS_TEMPLATE:
         /* §12.9.6 TemplateCharacters end at `${` into a substitution whose expression is EVALUATED, and `}`
            returns to a TemplateMiddle/TemplateTail — so the template's own backtick still closes it and this
            exit is strictly shorter than one that ends the literal. The deleted CANDS_JS could not express it:
            its backtick closed a literal whose terminator was still ahead, which parses as a second template. */
-        escape = "${X9()}";
+        escape[0] = "${X9()}";
         break;
     case JS_COMMENT_LINE:
         /* §12.4: "the LineTerminator at the end of the line is not considered to be part of the single-line
            comment" — so one byte leaves the state, and §12.10 rule 1 supplies the semicolon across it. */
-        escape = "\nX9()";
+        escape[0] = "\nX9()";
         break;
-    case JS_COMMENT_BLOCK: escape = "*/;X9();/*";  break;   /* §12.4 MultiLineComment, left then re-opened */
-    case JS_RE_BODY:       escape = "/;X9()//";    break;   /* §12.9.5 RegularExpressionBody ends at `/` */
+    case JS_COMMENT_BLOCK: escape[0] = "*/;X9();/*";  break;   /* §12.4 MultiLineComment, left then re-opened */
+    case JS_RE_BODY:       escape[0] = "/;X9()//";    break;   /* §12.9.5 RegularExpressionBody ends at `/` */
     case JS_RE_BODY_FIRST:
         /* THE SAME EXIT, PLUS THE ONE CHARACTER §12.9.5 REQUIRES IT TO HAVE. Nothing of the body precedes the
            hole, so closing immediately would write `//`, which Note 2 makes a §12.4 SingleLineComment and not
            an empty literal — the fire would be inside the comment it wrote. `a` is a RegularExpressionChar and
            a RegularExpressionFirstChar (that production excludes only `*`, `\`, `/` and `[`), so one character
            is the whole of the difference. */
-        escape = "a/;X9()//";
+        escape[0] = "a/;X9()//";
         break;
-    case JS_RE_CLASS:      escape = "]/;X9()//";   break;   /* §12.9.5 RegularExpressionClass ends at `]` */
+    case JS_RE_CLASS:      escape[0] = "]/;X9()//";   break;   /* §12.9.5 RegularExpressionClass ends at `]` */
     case JS_RE_FLAGS:
         /* §12.9.5 RegularExpressionFlags is an IdentifierPartChar run; `;` is not one, so the literal ends
            there and there is no exit character to write at all. */
-        escape = ";X9()//";
+        escape[0] = ";X9()//";
         break;
 
     case JS_IN_IDENT:
-        DFAIL("the attacker bytes land INSIDE a §12.7 IdentifierName, and no §12 exit reaches out of a token — "
-              "ending the name leaves the page's own leading characters as an IdentifierReference that is "
-              "EVALUATED before the injected call, so a ReferenceError there means X9 never runs and the escape "
-              "has to be built out of what the probe run learned about that prefix, not out of the grammar");
-        return 0;
+        /* A TOKEN DOES HAVE AN EXIT, AND THE CRASH THAT STOOD HERE DENIED IT. It said "no §12 exit reaches out
+           of a token", and §12's own opening says the source text "is scanned from left to right, repeatedly
+           taking the longest possible sequence of code points as the next input element" — so a §12.7
+           IdentifierName ends at the first code point that is not an IdentifierPart, and writing one IS the
+           exit. What the crash was actually describing is the second half of its own sentence: the truncated
+           prefix is left standing where the syntactic grammar will read it, and if it is an undefined
+           IdentifierReference the program throws a ReferenceError before X9 runs. That is an ordinary parked
+           @S search — the candidate does not fire and is discarded — and never a reason to construct nothing,
+           because the prefix a page concatenates onto is usually a name that page has.
+           WHICH exit byte is §12.10.1's question asked of the token the truncation leaves BEHIND, which is why
+           `scan` classifies the prefix rather than the whole name. After an IdentifierReference, or one of the
+           five §12.7.2 words that are themselves primary expressions, the call stands against an operand on
+           the same line, §12.10.1 supplies no semicolon, and the exit writes one. After a ReservedWord in
+           operator position (`typeof`, `new`, `delete`) a `;` is itself the SyntaxError and the exit is §12.2
+           WhiteSpace, which ends the name just as well and leaves the word its operand. `of`, `yield` and
+           `await` are each of those in some reading and take both spellings, exactly as the boundary above.
+           NO TRAILING `//`, AND THAT IS THE DIFFERENCE BETWEEN A TOKEN INTERIOR AND A LITERAL. Every literal
+           arm writes one because §12 leaves it an ORPHANED TERMINATOR — the quote, the backtick, the closing
+           `/` the page still has ahead of it — and §12.4 makes a SingleLineComment run to the end of the line,
+           which is exactly where that terminator sits. A token has no terminator: it ends where a
+           non-IdentifierPart begins, so truncating it orphans NOTHING and a `//` here would discard the page's
+           own remaining bytes for no §12 reason. MEASURED, in a real engine over this file's own fixtures:
+           carrying one turned `class C{#p=1;m(){this.#p<HOLE>}}new C().m()` and
+           `function*g(){yield<HOLE>}g().next()` from FIRING into SyntaxErrors, because the `}` each needs was
+           on the same line as the hole. Where the page's suffix does not compose with the truncated token the
+           candidate simply does not fire, which is an ordinary parked @S search and is the syntactic grammar's
+           half of the question, not §12's.
+           NAMED RESIDUAL — a name spelled with §12.7's `\ UnicodeEscapeSequence` (the second alternative of
+           both IdentifierStart and IdentifierPart) whose hole lands inside that escape's digits is NOT
+           covered: ending the token there leaves a truncated `\u00` and the candidate cannot compile. The next
+           diff carries the debt the way the literals now do — ask esc_owed at the identifier branch of `scan`,
+           as str_end and tmpl_chars already do, and let `owed` reach this arm. Its absence shows as an eval
+           sink whose witness holds a backslash inside the identifier ahead of the locator and whose candidates
+           never once fire. */
+        if (h.prev == PREV_OPERATOR)     escape[0] = " X9()";
+        else if (h.prev == PREV_OPERAND) escape[0] = ";X9()";
+        else { escape[0] = ";X9()"; escape[1] = " X9()"; }
+        break;
     case JS_IN_NUMBER:
-        DFAIL("the attacker bytes land INSIDE a §12.9.3 NumericLiteral — a radix prefix swallowed them into the "
-              "literal's own digit set, so the escape is a digit that terminates the literal followed by a "
-              "resume, and which digit is legal depends on the radix; build it");
-        return 0;
+        /* NO DIGIT TERMINATES A NumericLiteral — a digit CONTINUES one, which is the opposite of what the
+           crash that stood here said ("the escape is a digit that terminates the literal … which digit is
+           legal depends on the radix"). §12.9.3 Numeric Literals ends with the rule that does terminate one:
+           "The SourceCharacter immediately following a NumericLiteral must not be an IdentifierStart or
+           DecimalDigit". A `;` ends the literal and satisfies that constraint in the same byte, and a literal
+           is an operand, so §12.10.1 supplies no semicolon on this line and the exit writes the one it needs.
+           THE DIGIT IS OWED FOR THE OPPOSITE REASON, and it is the JS_RE_BODY_FIRST shape one production over:
+           the hole is reachable with the literal still EMPTY, because `HexIntegerLiteral :: 0x HexDigits` and
+           its binary and octal siblings each need at least one digit of their own set — `0x;` is a
+           SyntaxError, and `0x` followed by the locator is exactly how this state is reached, since the
+           locator's first byte is ASCII alphanumeric and `HexDigit :: one of 0 1 2 3 4 5 6 7 8 9 a b c d e f
+           A B C D E F` swallows it.
+           `0` IS THE ONE FILLER THAT SERVES EVERY RADIX, which is why no radix branch is needed and no state
+           has to record whether the run was empty: `BinaryDigit :: one of 0 1`, `OctalDigit :: one of 0 1 2 3
+           4 5 6 7`, DecimalDigit and HexDigit all derive it, and where digits already stand it merely extends
+           a run every one of those productions is left-recursive in. It is the same argument the pending-`n`
+           filler below makes for §12.9.4's SingleEscapeCharacter — one byte, legal in every state that can
+           owe it. */
+        escape[0] = "0;X9()";
+        break;
     case JS_IN_PRIVATE:
-        DFAIL("the attacker bytes land INSIDE a §12.6 PrivateIdentifier — a private name is meaningful only "
-              "inside the class body that declares it, so the escape is not a token exit but a choice of a "
-              "declared name, and it has to be built from what the probe run saw of that class");
-        return 0;
-    case JS_IN_ESCAPE_DEEP:
-        DFAIL("the attacker bytes land inside the DIGITS of a §12.9.4 HexEscapeSequence or "
-              "UnicodeEscapeSequence, past the character the backslash consumes — the exit is the remaining hex "
-              "digits that sequence still owes, and how many are owed depends on which of `\\x`, `\\uXXXX` and "
-              "`\\u{…}` opened it; build that count into the escape");
+        /* §12.7 `PrivateIdentifier :: # IdentifierName`, so the exit is the IdentifierName's exit and nothing
+           more — the same one JS_IN_IDENT takes. The crash that stood here said, in its own words and no
+           standard's, that `the escape is not a token exit but a choice of a declared name`: it IS a token
+           exit, and no name has to be chosen, because
+           the name the truncation leaves standing is the PAGE'S OWN and the page is what declared it. What
+           that crash was right about is confined to the case where no such prefix exists, which is now
+           JS_IN_PRIVATE_FIRST and is answered there.
+           `;` AND NOT A SPACE, and the split JS_IN_IDENT makes cannot arise: §12.7 derives PrivateIdentifier
+           through IdentifierName, and §12.7.2's ReservedWord is a subset of IdentifierName that a leading `#`
+           puts out of reach — so the token left behind is an operand in every reading a class body admits
+           (`this.#pre`), and §12.10.1 supplies no semicolon against it. NO TRAILING `//`, for the reason
+           JS_IN_IDENT gives above — a token orphans no terminator, and a real engine measured the comment
+           turning this very state's fixture into a SyntaxError by eating the `}` that closes the method. */
+        escape[0] = ";X9()";
+        break;
+    case JS_IN_PRIVATE_FIRST:
+        /* NO ESCAPE, AND THAT IS THE ANSWER RATHER THAN A GAP. §12.7 gives `#` no meaning alone —
+           `PrivateIdentifier :: # IdentifierName` — so an exit here would have to supply the whole name, and
+           a name this run never observed is one CLAUDE.md §RUN-DON'T-MATCH forbids inventing AND one the
+           grammar rejects outright: a PrivateIdentifier must be declared by the class body enclosing it, so
+           every name that could be written is an early error and no search over them can converge. The two
+           prohibitions agree, and that agreement is what makes this FINAL rather than merely unbuilt.
+           Zero, never a crash — the same answer solve_html.c's §13.2.5.5 PLAINTEXT arm gives, for the same
+           reason: the search is honestly parked with nothing tried. */
         return 0;
     case JS_GOAL_AMBIGUOUS:
-        DFAIL("a `/` before the hole follows a `)`, a `}`, or one of `of`/`yield`/`await`, and §12 states that "
-              "which goal symbol is in force there is decided by the SYNTACTIC grammar — this component has "
-              "only the lexical one, so it cannot tell a §12.9.5 RegularExpressionLiteral from §12.8's "
-              "DivPunctuator and every state after that `/` would be a guess. Route the question to the real "
-              "parser, which already answers it: `js_parse_regexp` has exactly TWO callers in engine/qjs's "
-              "quickjs.c — `js_parse_drive`, at the `parse_regexp` label its expression entry reaches from a "
-              "`/` or a `TOK_DIV_ASSIGN` token, and `js_parse_skip_parens_token` — and `next_token` is not one "
-              "of them, which is the whole reason a lexer cannot answer this. GREP BOTH NAMES BEFORE BUILDING "
-              "AGAINST THEM: they are this fork's own trampolined parser and nothing here is notified when "
-              "the submodule moves. The name this crash carried until now, `js_parse_primary_expr`, occurs "
-              "nowhere in that file and never has in its whole history, so a reader who grepped it found an "
-              "absence and would have concluded the seam had to be built from nothing");
+        /* THE LEXICAL GRAMMAR CANNOT DECIDE THIS AND SAYS SO ITSELF, so answering ZERO is the sound answer and
+           not a missing one. §12 opens: "There are several situations where the identification of lexical
+           input elements is sensitive to the syntactic grammar context that is consuming the input elements.
+           This requires multiple goal symbols for the lexical grammar." A `/` after `)`, `}`, `of`, `yield` or
+           `await` is exactly such a situation — it is §12.9.5's RegularExpressionLiteral under one goal symbol
+           and §12.8's DivPunctuator under another — so every state AFTER it, the hole's included, would be a
+           guess, and solve_js.h states the direction that must never be got wrong: an escape is never CLAIMED
+           on a scan that could not be made.
+           THIS USED TO ABORT, WHICH WAS THE WRONG COST. A page holding `(a+b)/2` anywhere ahead of an eval
+           hole is ordinary minified code, and the crash spent the WHOLE DOCUMENT — every finding of the run,
+           in both of the views §What-the-tool-produces names — to report that one sink was undecidable.
+           CLAUDE.md §Offensive programming lists an unsolved @S sink among the states that are explicitly NOT
+           a `@WHY`: it is the exploration surface, not a broken invariant of this file's own logic.
+           NAMED RESIDUAL — WHAT IS NOT COVERED is a witness carrying such a `/` before the locator; this file
+           constructs nothing for it, while an escape may well exist. WHAT THE NEXT DIFF BUILDS is the seam to
+           the parser that already answers it: `js_parse_regexp` in engine/qjs's quickjs.c, whose callers are
+           `js_parse_drive` (at the `parse_regexp` label its expression entry reaches from a `/` or a
+           `TOK_DIV_ASSIGN` token) and `js_parse_skip_parens_token` — TWO of them, and `next_token` is not one,
+           which is the whole reason a lexer cannot answer this. Both names were grepped in that file at the
+           revision this landed and both are present; `js_parse_primary_expr`, which an older spelling of this
+           site named and solve_js.h named until now, occurs there ZERO times, so grep them again before
+           building against them — nothing here is notified when the submodule moves. HOW ITS ABSENCE SHOWS is
+           a search parked at `probes == payloads`, which solve.h currently reads as the single positive
+           statement that the source's percent-encode set makes the escape unsatisfiable — the one record
+           spelling this answer and the JS_NOT_A_SCRIPT one below now also land in. */
         return 0;
     case JS_NOT_A_SCRIPT:
-        DFAIL("the string an eval sink was handed is not a parseable Script prefix before the hole — an "
-              "unterminated §12.9.4 string literal, an unterminated §12.4 MultiLineComment, a `}` closing a "
-              "brace nothing opened, or a code point §12 admits nowhere. §12 defines no state at the hole, so "
-              "the page built this string out of parts this derivation has not been shown how to join");
+        /* NO ESCAPE, BECAUSE THE PROGRAM NEVER RUNS. The witness is the whole text a code-execution sink was
+           handed — quickjs's js_eval_program_source announces it for §19.2.1.1 PerformEval's direct and
+           indirect spellings alike, and for §20.2.1.1.1 CreateDynamicFunction it announces the SYNTHESIZED
+           `(function anonymous(…){…})` source rather than the body, so every route delivers a complete
+           program text. A text that is not one — an unterminated §12.9.4 string literal, an unterminated
+           §12.4 MultiLineComment, a `}` closing a brace nothing opened, a code point §12 admits nowhere — is
+           a SyntaxError the sink throws BEFORE evaluating anything, so no bytes written at the hole can fire
+           and there is nothing for a search to converge on. §@S accepts nothing but firing as proof, and here
+           nothing can fire.
+           THE CRASH THAT STOOD HERE READ THIS AS A JOINING PROBLEM — its own closing words, no standard's,
+           were `the page built this string out of parts this derivation has not been shown how to join` —
+           which is a claim about a FRAGMENT. The witness is never a fragment, for the reason above, so the
+           sentence described a case that does not arrive.
+           SOUND IN THE DIRECTION THAT COSTS A CANDIDATE AND NEVER IN THE ONE THAT INVENTS ONE, which is what
+           makes zero safe here: where this scan reaches JS_NOT_A_SCRIPT on a text that IS a Script, the
+           search is left ordered where it was, and where it under-reads nothing is claimed. */
         return 0;
     }
-    /* A PENDING BACKSLASH IS SATISFIED BY EXACTLY ONE CHARACTER, and `n` is the one that consumes nothing
-       beyond itself: §12.9.4 SingleEscapeCharacter lists it, and it is neither `x`, `u`, nor a DecimalDigit, so
-       no Hex/Unicode/LegacyOctal sequence starts. Inside a §12.9.5 literal the same byte is §22.2.1's
-       ControlEscape, so one filler serves every state that admits a backslash. */
+    /* A PENDING ESCAPE SEQUENCE IS PAID OFF BEFORE THE STATE IS LEFT, and the two spellings of that debt are
+       one fact — see the Hole declaration. A BACKSLASH the hole stands directly after is satisfied by exactly
+       one character, and `n` is the one that consumes nothing beyond itself: §12.9.4 `SingleEscapeCharacter ::
+       one of ' " \ b f n r t v` lists it, and it is neither `x`, `u`, nor a DecimalDigit, so no
+       Hex/Unicode/LegacyOctal sequence starts. Inside a §12.9.5 literal the same byte is §22.2.1's
+       ControlEscape, so one filler serves every state that admits a backslash. DIGITS the hole stands inside
+       are paid in `0`, a HexDigit under §12.9.3's own definition, and the `}` §12.9.4's `u{ CodePoint }` still
+       owes closes the sequence after them. */
     DCHECK(!h.esc || h.st == JS_STR_SINGLE || h.st == JS_STR_DOUBLE || h.st == JS_TEMPLATE ||
            h.st == JS_RE_BODY || h.st == JS_RE_CLASS,   /* never _FIRST: a backslash before it IS a first char */
            "a pending escape sequence was reported for a §12 state that has no backslash production — only "
            "12.9.4's string characters, 12.9.6's template characters and 12.9.5's body and class admit one, so "
            "a comment or a bare source position claiming one means a scanner set the bit on the wrong hole");
-    emit_one(emit, user, &n, d, "%s%s", h.esc ? "n" : "", escape);
+    DCHECK((!h.owed && !h.close) || h.st == JS_STR_SINGLE || h.st == JS_STR_DOUBLE || h.st == JS_TEMPLATE,
+           "a MULTI-character escape debt was reported for a §12 state that has no multi-character escape "
+           "sequence — §12.9.4's Hex/UnicodeEscapeSequence reaches only a StringLiteral and, through "
+           "§12.9.6's TemplateEscapeSequence, a Template, while §12.9.5's `RegularExpressionBackslashSequence "
+           ":: \\ RegularExpressionNonTerminator` is one code point and can hold no hole inside it");
+    DCHECK(h.owed >= 0 && h.owed <= 4,
+           "a §12.9.4 escape sequence was reported owing more HexDigits than any of them has — `Hex4Digits :: "
+           "HexDigit HexDigit HexDigit HexDigit` is the widest, `HexEscapeSequence :: x HexDigit HexDigit` is "
+           "two and `u{ CodePoint }` is asked for one, so a larger debt means esc_owed measured the span "
+           "against a different string than the hole was found in");
+    {
+        int k = 0;
+
+        if (h.esc) pend[k++] = 'n';
+        for (owed = h.owed; owed > 0; owed--) pend[k++] = '0';
+        if (h.close) pend[k++] = '}';
+        pend[k] = '\0';
+    }
+    DCHECK(escape[0] != NULL,
+           "a §12 state named by the scan reached the emitter with neither an escape nor a refusal — every arm "
+           "above either fills the first slot or returns, so an empty one means a state was added to HoleState "
+           "and given no answer, and the breakout emitted would be whatever the stack held");
+    for (i = 0; i < 2; i++)
+        if (escape[i]) emit_one(emit, user, &n, d, "%s%s", pend, escape[i]);
     return n;
 }
 
