@@ -1060,6 +1060,26 @@ const DROP = new Map([
                 /* Declared above INSTANT_CENSUSES and spread here, because `snapshot` reads the same four for
                    a different reason — see that declaration. */
                 ...INSTANT_CENSUSES,
+                /* THE FIFTH CENSUS, DROPPED HERE AND DELIBERATELY NOT ADDED TO `INSTANT_CENSUSES`, WHICH IS
+                   THE WHOLE OF WHAT ITS CLASSIFICATION SAYS. solver/absent.c's `_absent` is neither a reading
+                   of an instant nor a finding: its rows are LIFETIME COUNTS of reads of a global name a
+                   standard owns and this realm did not answer, so it is dropped on the ground every COST in
+                   this list is dropped on — how many times a line is read is how many flows reached it, which
+                   is `_flows`' and `_sourceReads`' ground exactly and is the schedule's to choose.
+                   IT IS NOT IN `INSTANT_CENSUSES` BECAUSE THAT LIST'S OTHER CONSUMER ASKS A DIFFERENT
+                   QUESTION, and answering it by adding a name here would pay for this drop out of that one —
+                   CLAUDE.md §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS, which the paragraph declaring
+                   COMPOSE_COST_WFQ makes for the same reason. `snapshot` compares two composes at ONE
+                   boundary with no step in between, and composing a document performs no property read on any
+                   global object, so this census must be byte-identical across that pair. Holding it there is
+                   free and it is the only thing in this tree that checks that composing a result document is
+                   side-effect-free with respect to the engine's own global reads; if it ever reddens there,
+                   the composition path has acquired a global read and that is a finding rather than a gate
+                   fault.
+                   WHAT IS HELD INVARIANT INSTEAD is the same thing the four above answer with: `fetchCallSites`
+                   and `securitySinks`. A schedule that read an absent name a different number of times and
+                   still learned the same surface passes, and one that learned less fails on the surface. */
+                "_absent",
                 /* THE ONE COST IN THIS SET THAT IS NOT A COUNT, AND IT IS DROPPED ON THE SPEC'S OWN GATING
                    RATHER THAN ON A MAGNITUDE. Every other name above is a total or a reading of an instant
                    whose SIZE the schedule chooses, and that reason does not reach a LIST OF MESSAGES — a

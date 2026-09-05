@@ -165,6 +165,8 @@
  * object the ENGINE has marked as published, the mark is cleared at every allocation, and the only thing that
  * sets it is the publication that files the row. So a recycled address cannot answer with a dead document's
  * path — it has no mark until something publishes it, and publishing appends the row that describes it. */
+#include <stdarg.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -189,9 +191,15 @@
    header records for the 22-name list, arriving through a generator instead of through a typed list.
    ONCE PER TABLE AND DEV-ONLY: the scan is O(n) and the answer cannot change within a process, so `checked`
    is the whole cost after the first call. `which` is the ADDRESS the abort would otherwise lack — this helper
-   is reached from two predicates and stamps its own line for both, so the vocabulary travels with the
-   operation rather than being derived here (CLAUDE.md §AN-ASSERT-THAT-NAMES-A-REMEDY). */
-static int names_has(const char *const *tbl, int n, const char *name, const char *which, int *checked)
+   is reached over two vocabularies and stamps its own line for both, so the vocabulary travels with the
+   operation rather than being derived here (CLAUDE.md §AN-ASSERT-THAT-NAMES-A-REMEDY).
+   IT HANDS BACK THE TABLE'S OWN ENTRY RATHER THAN A YES, and that is not a convenience: the entry is a static
+   string this file generated its tables from, so a caller may key on the POINTER and a page's bytes can never
+   enter anything keyed that way. `strcmp(name, tbl[mid]) == 0` makes the two byte-identical, so returning the
+   caller's `name` would be the same STRING and a different lifetime and a different provenance — and the
+   census keyed on this answer would then hold a pointer into a JS_AtomToCString the hook frees on its way
+   out. Returns NULL for "no table holds it", which no entry can collide with. */
+static const char *names_find(const char *const *tbl, int n, const char *name, const char *which, int *checked)
 {
     int lo = 0, hi = n - 1;
 
@@ -218,22 +226,17 @@ static int names_has(const char *const *tbl, int n, const char *name, const char
         int mid = lo + (hi - lo) / 2;
         int c = strcmp(name, tbl[mid]);
         if (c == 0)
-            return 1;
+            return tbl[mid];
         if (c < 0)
             hi = mid - 1;
         else
             lo = mid + 1;
     }
-    return 0;
+    return NULL;
 }
 
 /* One flag per table; the host is one agent per instance and nothing here is entered from a second thread. */
 static int g_platform_sorted, g_language_sorted;
-
-int absent_is_platform_name(const char *name)
-{
-    return names_has(PLATFORM_NAMES, PLATFORM_NAMES_N, name, "Web IDL [Exposed=Window]", &g_platform_sorted);
-}
 
 /* NAMED RESIDUAL — NOT COVERED: `Intl`. ECMA-402 is a THIRD standard that puts a name on the global object,
    and it puts exactly one there (§8 The Intl Object); this engine does not build it, `Intl` is in neither
@@ -248,10 +251,334 @@ int absent_is_platform_name(const char *name)
    HOW ITS ABSENCE SHOWS: `window.Intl` or `Intl.NumberFormat` in any bundle carrying a locale-formatting
    polyfill mints an unknown with source identity `{Intl}` and its gate forks, where a real browser answers a
    real namespace and where this engine's honest answer is the ReferenceError naming the component to
-   write. It is visible in a run's `_forkAt` as a row named for that source. */
-int absent_is_language_name(const char *name)
+   write. It is visible in a run's `_forkAt` as a row named for that source — and, since it is answered as app
+   state rather than suppressed, it is counted by absent_json under the app-state member and never as a name
+   this engine owes, which is the second reading of the same gap and the one that says how large it is. */
+const char *absent_standard_name(const char *name, AbsentVocab *vocab)
 {
-    return names_has(LANGUAGE_NAMES, LANGUAGE_NAMES_N, name, "ECMAScript §19 global-object", &g_language_sorted);
+    const char *e;
+
+    DCHECK(vocab != NULL, "a global name was asked which standard owns it with nowhere to put the answer — "
+                          "the vocabulary is the half of this answer a `@WHY` has to be able to state, and a "
+                          "caller that wants only the yes/no is a caller that will re-derive it wrongly");
+    e = names_find(PLATFORM_NAMES, PLATFORM_NAMES_N, name, "Web IDL [Exposed=Window]", &g_platform_sorted);
+    if (e) {
+        *vocab = ABSENT_VOCAB_WEBIDL;
+        return e;
+    }
+    e = names_find(LANGUAGE_NAMES, LANGUAGE_NAMES_N, name, "ECMAScript §19 global-object", &g_language_sorted);
+    if (e) {
+        *vocab = ABSENT_VOCAB_ECMASCRIPT;
+        return e;
+    }
+    return NULL;
+}
+
+/* ---- WHAT THIS DOCUMENT ASKED FOR AND THIS ENGINE DID NOT ANSWER ------------------------------------------
+ *
+ * THE ARM ABOVE IS CORRECT AND IT IS SILENT, AND THOSE ARE TWO DIFFERENT PROPERTIES. This file's header says
+ * of an unbuilt Web API that "its ReferenceError is the forcing function that names the component to write",
+ * and that is true of `new EventSource(url)` — the page throws, the throw carries the name, and
+ * result.c's `pageErrors` carries the throw. It is FALSE of `if (window.EventSource)`, which is what a real
+ * bundle writes instead: the read misses, the suppression below leaves it alone, §10.1.8.1 OrdinaryGet
+ * ( O, P, Receiver ) step 2.b answers `undefined`, the guard takes its false arm, and the whole feature
+ * branch behind it is unreachable with NOTHING ANYWHERE SAYING SO. What is lost is not the line — it is every
+ * endpoint and every sink behind the guard, which is precisely the surface §What-the-tool-produces exists to
+ * find. A run like that completes, emits, and looks healthy.
+ *
+ * SO THE SUPPRESSION RECORDS WHAT IT SUPPRESSED. Not a behaviour change — the arm decides exactly what it
+ * decided before, and forcing the true arm of a guard over an API this engine cannot execute would manufacture
+ * a flow that dies at the very next member call. A MEASUREMENT.
+ *
+ * THE POPULATION IS THE INTERSECTION AND THAT IS THE WHOLE POINT. It is not the 1333 names Web IDL exposes on
+ * Window, and it is not the several hundred of them this build does not install: both of those are facts about
+ * the BUILD, true of every run, and they say nothing whatever about a document. It is the names THIS DOCUMENT
+ * READ that a standard owns and this realm did not answer — a document that never mentions `OffscreenCanvas`
+ * is not missing coverage, and one that feature-detects it and takes the false arm is. That set is exactly
+ * what reaching this arm means, so it is recorded HERE and nowhere else: the read MISSED (so nothing in this
+ * realm answers the name) and a vocabulary CLAIMED it (so a standard owes an answer).
+ *
+ * KIND: every number below is a LIFETIME COUNT OF EVENTS — monotone within one agent's life, differenceable
+ * across two samples of one document, and zeroed with the published-namespace registry at absent_free, which
+ * concolic.c calls on the agent's release column. It shares that lifetime with `_candidates` and `_sourceReads`
+ * on the same result document and NOT with `_switches`, which is the instance's own.
+ *
+ * THE DENOMINATOR IS EMITTED BESIDE THE ROWS, because a count of unanswered names states nothing on its own:
+ * seven is a different fact out of ten global misses than out of ten thousand. The reads this hook was asked
+ * about with the GLOBAL as base partition into exactly three, and all three are emitted:
+ *   owed        — a standard owns the name and this realm has none: the rows below, summed.
+ *   index       — an integer key on the global, refused by the arm that cites HTML §7.2.2.2 Indexed access on
+ *                 the Window object.
+ *   app state   — everything else, minted as an unknown because no vocabulary claimed it.
+ * `owed + index + appState == globalReads` is asserted in the composer, where all four are in one hand.
+ *
+ * WHAT THIS IS NOT A FRACTION OF, STATED SO NOBODY READS IT AS ONE: it is not the fraction of the platform
+ * surface this document uses. The hook is reached ONLY on a miss, so a name this engine DOES answer never
+ * arrives here at all and the answered half of the document's ask is invisible from this file. A coverage
+ * figure over the document's ask would need a count of global reads that HIT, which is a hook on the fast path
+ * of every property read in the engine and is not this instrument.
+ *
+ * NAMED RESIDUAL — NOT COVERED: the two feature-detect spellings that never perform a [[Get]] that misses.
+ * `typeof EventSource` is OP_get_var_undef, which quickjs.c answers `undefined` at the opcode without asking
+ * this hook at all (ECMAScript §13.5.3 The typeof Operator is defined on an unresolvable Reference), and
+ * `"EventSource" in window` is [[HasProperty]], which has no absent seam. Both are ordinary spellings and the
+ * first is the DOMINANT one in transpiled code.
+ * WHAT THE NEXT DIFF BUILDS: a recording-only entry on this file — never the minting hook, since minting at
+ * `typeof` would change what §13.5.3 answers — called from those two miss arms in the engine, which is a
+ * submodule change and therefore a diff of its own.
+ * HOW ITS ABSENCE SHOWS: a bundle whose whole feature detection is written `typeof X !== "undefined"` emits
+ * `_absent` with the members present and ZERO rows while taking the false arm on every one of them — this
+ * census reading clean on exactly the page it was built to describe. The check is one line of a fixture:
+ * a document that reads `window.X` and one that reads `typeof X` for the SAME absent X must produce the same
+ * row, and today only the first does.
+ *
+ * NAMED RESIDUAL — NOT COVERED: whether a recorded read was the SILENT one. `js_absent_ask` has exactly two
+ * callers (grep: engine/qjs/quickjs.c 13100 and 48178) and both hand this file the same base and the same
+ * atom: the property-read miss that degrades to `undefined`, and the unresolvable Reference that goes on to
+ * throw. The outcome differs entirely AFTER this hook returns, so a row of twelve reads cannot be read as
+ * twelve silent degradations.
+ * WHAT THE NEXT DIFF BUILDS: the ask carrying which of its two callers asked, so the row splits into the arm
+ * that degraded and the arm that threw — again a submodule change.
+ * HOW ITS ABSENCE SHOWS: a page that only ever writes `new EventSource(…)` is FULLY diagnosed by its own
+ * ReferenceError in `pageErrors` and still appears here, so a reader cross-references the two surfaces by
+ * hand; a name in this census with no matching `pageErrors` entry is the silent case and a name in both is
+ * ambiguous. */
+typedef struct { const char *name; long reads; AbsentVocab vocab; } OwedRow;
+static OwedRow *g_owed;
+static int g_owed_n, g_owed_cap;
+/* THE THREE ARMS OF THE GLOBAL MISS, EACH RAISED AT THE SITE THAT DECIDES IT — never one counter incremented
+   in three places, because the whole value of the partition is that a reader can see WHICH arm moved. */
+static long g_owed_reads, g_index_refused, g_appstate_mints;
+/* AND THE POPULATION THEY PARTITION, RAISED SEPARATELY AT THE TOP OF THAT ARM. It is not the sum of the three
+   — see the raise for why deriving it would make the composer's identity a restatement instead of a check. */
+static long g_global_reads;
+/* AND THE SAME OWED READS SPLIT BY WHICH STANDARD OWES THEM, which is the fact absent_standard_name exists to
+   carry: an unbuilt Web IDL interface is a browser component to write and an uninstalled ECMAScript §19 name
+   is a language intrinsic this build did not link, and those are two different pieces of work. */
+static long g_owed_by_vocab[ABSENT_VOCAB_N];
+
+/* RECORD ONE READ OF A NAME A STANDARD OWNS AND THIS REALM DOES NOT ANSWER. `name` is the TABLE'S entry, so
+   the row is keyed by POINTER: two reads of one name are one row, and a page cannot get its bytes in here.
+   NO CAP AND NO SEEN-SET (CLAUDE.md §NO BOUNDS). The table grows for as long as a document reads new names,
+   and a SECOND read of a name already in it raises that row rather than being dropped — the two facts a
+   reader needs are how MANY names went unanswered and how HARD the document leant on each, and a set would
+   answer only the first while looking like it answered both.
+   THE SCAN IS LINEAR AND IS POINTER EQUALITY, which is cheap for the reason the population is: this runs only
+   where a read has ALREADY missed the whole prototype chain of the global AND matched a binary search, so the
+   distinct names are what one document asked for and not what a standard defines. A hash here would be a
+   second index over a table whose whole content is normally under a hundred rows. */
+static void owed_note(const char *name, AbsentVocab vocab)
+{
+    int i;
+
+    DCHECK(name != NULL, "a read was recorded as owed with no name — the caller's name is the vocabulary's own "
+                         "entry and absent_standard_name returns NULL rather than an empty one, so this is a "
+                         "caller recording the MISS arm of that lookup as though it were the hit arm");
+    /* A `CHECK` AND NOT A `DCHECK`, BECAUSE THE NEXT LINE INDEXES AN ARRAY WITH IT. The value is this
+       codebase's own — absent_standard_name writes it on every hit and the enum is the only thing that mints
+       one — so asserting on it is legitimate; what decides the MACRO is that the guarded operation happens in
+       EVERY build. A dev-only guard over a release-mode indexed write is CLAUDE.md's promoted-DCHECK defect:
+       the check is compiled out of exactly the build where the write still happens, trading a dev abort for a
+       wild store into whatever follows the counters. */
+    CHECKF(vocab < ABSENT_VOCAB_N, "a read was recorded as owed by a standard this file has no vocabulary for "
+                                   "(%d of %d) — the enum is the only thing that mints one and "
+                                   "absent_standard_name writes it on every hit, so an out-of-range value is a "
+                                   "caller passing an uninitialised local, and the line below indexes the "
+                                   "per-standard split with it", (int)vocab, (int)ABSENT_VOCAB_N);
+    g_owed_reads++;
+    g_owed_by_vocab[vocab]++;
+    for (i = 0; i < g_owed_n; i++)
+        if (g_owed[i].name == name) {
+            g_owed[i].reads++;
+            return;
+        }
+    if (g_owed_n == g_owed_cap) {
+        int cap = g_owed_cap ? g_owed_cap * 2 : 8;
+        OwedRow *rows = (OwedRow *)realloc(g_owed, sizeof(*rows) * (size_t)cap);
+        /* CHECK AND NOT A SILENT DROP, for this file's own reason one function up: the alternative to failing
+           here is a census that reads CLEAN on a document that asked for a name nothing answered, which is the
+           silence this whole surface exists to end, arriving through the allocator. */
+        CHECK(rows != NULL, "absent: OOM growing the table of standard-owned names this realm did not answer — "
+                            "the alternative to failing here is publishing a census that reads clean for a "
+                            "document whose feature branches were all taken false");
+        g_owed = rows;
+        g_owed_cap = cap;
+    }
+    g_owed[g_owed_n].name = name;
+    g_owed[g_owed_n].reads = 1;
+    g_owed[g_owed_n].vocab = vocab;
+    g_owed_n++;
+}
+
+/* ONE APPEND, TWO PASSES, AND NO HAND-COUNTED SIZE — solver/compose.h's rule applied to a LOOP, which is the
+   one shape `composef` cannot serve because the row count is a fact about the document. `out == NULL` is the
+   MEASURING pass: C99 §7.19.6.5 "The snprintf function" — "If n is zero, nothing is written, and s may be a
+   null pointer" — so the same argument list is measured and then written with nothing counted by hand between,
+   and there is no margin for a miscount to hide in (compose.h states what that margin cost twice).
+   THE FIT IS ASSERTED ON THE WRITING PASS ONLY, because on the measuring pass there is no buffer to overrun
+   and `cap - len` would be an underflow of the very quantity being computed. */
+static size_t absent_emitf(char *out, size_t cap, size_t len, const char *fmt, ...) APICLIENT_PRINTF(4, 5);
+static size_t absent_emitf(char *out, size_t cap, size_t len, const char *fmt, ...)
+{
+    va_list ap;
+    int need;
+
+    va_start(ap, fmt);
+    need = out ? vsnprintf(out + len, cap - len, fmt, ap) : vsnprintf(NULL, 0, fmt, ap);
+    va_end(ap);
+    CHECK(need >= 0, "absent: the owed-name census could not be MEASURED — vsnprintf reported an encoding "
+                     "error, so there is no length to allocate against and any size chosen here would be the "
+                     "hand-counted guess solver/compose.h exists to stop anyone writing");
+    DCHECK(!out || (size_t)need < cap - len,
+           "the owed-name census wrote past the length its own measuring pass computed — the two passes read "
+           "one argument list over one table, so they can only disagree if a row changed between them, and "
+           "what a truncation here loses is not a digit but the CLOSING BRACE: the document that embeds this "
+           "census would not parse and every finding for the page would be discarded");
+    return len + (size_t)need;
+}
+
+/* THE CENSUS SERIALIZES ITSELF, which is the rule solver/result.c states for every surface it composes and
+   which solver/decide.c's `_forkAt` follows for the same reason: the keys are this file's own vocabulary and
+   the escaping question is a fact about this table's contents, so it belongs where the table is.
+   NO ESCAPING PASS, AND THAT IS ASSERTED RATHER THAN BELIEVED. A row's key is a GENERATED VOCABULARY'S OWN
+   ENTRY — absent_standard_name returns `tbl[mid]` and owed_note keys on that pointer — so it is this
+   codebase's bytes and not the page's, which is the one thing that makes writing it raw sound. decide.c's
+   rows are the PAGE's bytes and escape every one of them; the difference is provenance and nothing else, so
+   the provenance is what is checked below.
+   MEMBERS OPEN ON `_` AND ROWS CANNOT, which is decide.c's namespace rule and is asserted here for its
+   reason: a consumer sums the ROWS to get the reads and reads the MEMBERS as the population they are drawn
+   from, so a member that could be mistaken for a row would put the denominator inside its own numerator. No
+   name either standard puts on the global object opens on an underscore, and that is a claim about two
+   generated tables, so it is a DCHECK over this codebase's own bytes and not over a document's.
+   IT IS NEVER `{}`. Every member is emitted on every census, zeroes included, so this object has rows only
+   when a document actually asked for something this realm could not answer and has MEMBERS always — which is
+   what makes the clean day readable: `owed 0 of 4128 global reads` is a positive statement that this engine
+   answered everything the standards were asked for, and it is the line that would otherwise appear only when
+   something was wrong and so be a line nobody had learned to look for. Caller frees. */
+char *absent_json(void)
+{
+    /* THE MEMBER NAMES, READ AS PROSE WITH THEIR VALUE APPENDED, because extension/popup.js renders a census
+       generically as `key value` — so a terse field name arrives at a person in the exact shape of a row, and
+       a row here is the name of a component this engine owes. decide.c's bound member is named the same way
+       and for the same reason. */
+    static const char KEY_READS[] = "_reads of the global object this file was asked about";
+    static const char KEY_OWED[]  = "_of those, reads of a name below — a standard owns it and this realm has none";
+    static const char KEY_INDEX[] = "_of those, refused as an integer key on the global";
+    static const char KEY_APP[]   = "_of those, minted as unknown server-injected app state";
+    /* ONE PER VOCABULARY AND INDEXED BY THE ENUM, which is what the header's `ABSENT_VOCAB_N` promise buys: a
+       third standard adds a row to this array and to `g_owed_by_vocab`, and nothing else here changes. */
+    static const char *const KEY_VOCAB[ABSENT_VOCAB_N] = {
+        "_of those owed reads, names Web IDL exposes on Window",
+        "_of those owed reads, names ECMAScript §19 The Global Object puts there"
+    };
+    char *out = NULL;
+    size_t cap = 0, len = 0;
+    long sum = 0, rowsby[ABSENT_VOCAB_N];
+    int pass, i, v;
+
+    for (v = 0; v < ABSENT_VOCAB_N; v++)
+        rowsby[v] = 0;
+    /* THE ROWS SUMMED TWICE OVER, ONCE WHOLE AND ONCE PER STANDARD — which is what makes the per-standard
+       split CHECKABLE rather than merely published, and what gives `OwedRow.vocab` a reader. That field is
+       written at every row and it would otherwise be read by nothing at all: a name WRITTEN somewhere and
+       READ nowhere is the broken contract this whole census exists to make visible one level up, and landing
+       one inside it would be the instrument committing the defect it reports. What it must NOT be is the
+       assert a reader reaches for first — "the row's vocabulary equals what absent_standard_name would say
+       today" cannot fail, because that lookup searches the two tables in a fixed order and answers one
+       vocabulary per name for the life of the process, and an assert whose two sides cannot disagree is a
+       NON-check that certifies whatever it never examined. THESE two sides can: one accumulates per EVENT in
+       owed_note and the other per ROW here, so they part company if the grow path drops a row or a bucket is
+       raised twice. */
+    for (i = 0; i < g_owed_n; i++) {
+        sum += g_owed[i].reads;
+        /* A `CHECK` FOR THE REASON THE RAISE HAS ONE — the line under it indexes `rowsby` with this value in
+           every build, and a guard that is compiled out of the build where the write still happens is not a
+           guard. It is NOT an `if` past a broken invariant either: there is no arm here that could be right,
+           since a row filed under no vocabulary is a row this file cannot report at all. */
+        CHECKF(g_owed[i].vocab < ABSENT_VOCAB_N,
+               "the owed-name census holds a row (\"%s\") filed under a standard this file has no vocabulary "
+               "for — owed_note asserts the same thing at the raise, so a row that reaches the composer with "
+               "one is a row written past the end of the table or a struct laid out differently by the two",
+               g_owed[i].name);
+        rowsby[g_owed[i].vocab] += g_owed[i].reads;
+    }
+    /* THE THREE IDENTITIES, ASSERTED WHERE ALL THEIR TERMS ARE IN ONE HAND — CLAUDE.md §A-GAUGE-AND-A-LIFETIME
+       -COUNTER: a quantity whose kind a reader cannot name from its output is one they are not entitled to do
+       arithmetic on, and the identity is the one property of a counter a reader can actually check. */
+    DCHECK(sum == g_owed_reads,
+           "the owed-name census's rows do not sum to the owed reads it counted, and the object is where that "
+           "identity is READ — a consumer takes the share of unanswered reads off these rows, so a partition "
+           "that leaks hands back a fraction of a denominator that is not the number of reads. Every raise of "
+           "the total is owed_note's and owed_note raises exactly one row with it, so a mismatch is a row "
+           "dropped by the grow path or a total raised by a second writer");
+    DCHECK(g_owed_reads + g_index_refused + g_appstate_mints == g_global_reads,
+           "the three arms of the global miss do not sum to the reads this hook was asked about — the "
+           "denominator is raised ONCE at the top of that arm and each arm raises its own counter, so this "
+           "fires exactly when a fourth way out of the block was added without classifying its read. Every "
+           "number in this census is a fraction of that denominator, so an unclassified arm does not make one "
+           "row wrong, it makes the whole object a partition of a population it no longer covers");
+    for (v = 0; v < ABSENT_VOCAB_N; v++)
+        DCHECKF(rowsby[v] == g_owed_by_vocab[v],
+                "the per-standard split of the owed reads disagrees with the rows it is a split OF (standard "
+                "%d: %ld by the rows, %ld by the counter) — the counter is raised once per READ in owed_note "
+                "and this sum is taken once per ROW here, so the two part company exactly when a row is "
+                "dropped by the grow path or a bucket is raised twice. It is stated per standard rather than "
+                "as one total because the total closes over a bucket raised for the WRONG standard while the "
+                "split does not, and which standard owes the work is the whole content of this pair: an "
+                "unbuilt Web IDL interface is a browser component to write and an uninstalled ECMAScript §19 "
+                "name is a language intrinsic this build did not link",
+                v, rowsby[v], g_owed_by_vocab[v]);
+
+    for (pass = 0; pass < 2; pass++) {
+        len = absent_emitf(out, cap, 0, "{\"%s\":%ld", KEY_READS, g_global_reads);
+        len = absent_emitf(out, cap, len, ",\"%s\":%ld", KEY_OWED, g_owed_reads);
+        len = absent_emitf(out, cap, len, ",\"%s\":%ld", KEY_INDEX, g_index_refused);
+        len = absent_emitf(out, cap, len, ",\"%s\":%ld", KEY_APP, g_appstate_mints);
+        for (v = 0; v < ABSENT_VOCAB_N; v++)
+            len = absent_emitf(out, cap, len, ",\"%s\":%ld", KEY_VOCAB[v], g_owed_by_vocab[v]);
+        for (i = 0; i < g_owed_n; i++) {
+            const char *k = g_owed[i].name;
+#if APICLIENT_DEV
+            const char *c;
+
+            /* THE PROVENANCE THIS WRITE RESTS ON, ASSERTED WHERE IT IS RELIED ON. The key is written with no
+               escaping, which is sound only because it is a generated table's entry rather than a page's
+               bytes — so what is checked is exactly what the write needs and no more: a byte that would end
+               the JSON string early, or one a reader would have to decode.
+               THE SCAN IS DEV-ONLY AND THE `#if` IS OVER THE LOOP RATHER THAN INSIDE IT, which is this file's
+               own shape at names_find and is not tidiness: a DCHECKF body compiles out and the loop AROUND it
+               does not, so leaving it would walk every byte of every row of every census a release build ever
+               composes in order to do nothing. */
+            for (c = k; *c; c++)
+                DCHECKF(*c != '"' && *c != '\\' && (unsigned char)*c >= 0x20,
+                        "the owed-name census is writing a row key holding a byte JSON cannot carry raw "
+                        "(\"%s\", byte 0x%02x) — this row is written with no escaping pass because its key is "
+                        "browser/platform_names.h's or browser/language_names.h's OWN entry, keyed by pointer "
+                        "so a page's bytes can never reach it. A byte like this means that provenance no "
+                        "longer holds, and the document embedding this census would not parse",
+                        k, (unsigned char)*c);
+            DCHECKF(*k != '_',
+                    "the owed-name census is writing a row named \"%s\", which opens on the `_` its MEMBERS "
+                    "are told apart by — a consumer sums the rows to get the reads and reads the members as "
+                    "the population they are drawn from, so a row in the member namespace puts a denominator "
+                    "inside its own numerator. No name Web IDL exposes on Window and no name ECMAScript §19 "
+                    "puts on the global object opens on an underscore, so this is a generated table having "
+                    "gained a name neither standard spells", k);
+#endif
+            len = absent_emitf(out, cap, len, ",\"%s\":%ld", k, g_owed[i].reads);
+        }
+        len = absent_emitf(out, cap, len, "}");
+        if (pass == 0) {
+            cap = len + 1;
+            out = (char *)malloc(cap);
+            if (!out) return NULL;
+        }
+    }
+    DCHECK(len + 1 == cap,
+           "the owed-name census was written to a different length than it was measured for — the two passes "
+           "walk one table with one argument list, so they can only disagree if a row changed between them, "
+           "and the byte the second pass lost is the closing brace rather than a digit");
+    return out;
 }
 
 /* THE PUBLISHED RECORDS AND THE PATHS THEY WERE PUBLISHED AT. Keyed by the record's ADDRESS — see the header
@@ -281,6 +608,19 @@ void absent_free(void)
     free(g_ns);
     g_ns = NULL;
     g_ns_n = g_ns_cap = 0;
+    /* AND THE OWED-NAME CENSUS WITH IT, WHICH IS WHAT MAKES IT A PER-DOCUMENT READING RATHER THAN A PER-PROCESS
+       ONE. The rows hold no allocation of their own — every `name` is a generated table's static entry — so
+       only the vector goes; the counters are zeroed BESIDE it, because a table emptied under counters that
+       kept counting would publish an `owed` total that no row sums to and the identity the composer asserts
+       would fire on the next census of the next document. On a host that runs several documents in one process
+       (the native WPT runner) this is the boundary at which `_absent` starts again, and it is the same
+       boundary `_orphansDriven` uses. */
+    free(g_owed);
+    g_owed = NULL;
+    g_owed_n = g_owed_cap = 0;
+    g_owed_reads = g_index_refused = g_appstate_mints = g_global_reads = 0;
+    for (i = 0; i < ABSENT_VOCAB_N; i++)
+        g_owed_by_vocab[i] = 0;
 }
 
 /* THE KEY, READ ONCE FOR EVERY HALF OF THIS FILE, AND THE ENGINE'S GATE ASSERTED WHERE THE PATH IS COMPOSED
@@ -479,17 +819,40 @@ JSValue absent_read_hook(JSContext *ctx, JSValueConst obj, JSAtom name)
     const char *base = NULL;
     JSValue r = JS_UNINITIALIZED;
     char *shape = NULL, *src = NULL;
+    /* THE POISON IS THE VALUE owed_note'S OWN ASSERT NAMES, so a vocabulary that is read without having been
+       written aborts at the record with the name in hand rather than filing one standard's work under the
+       other's. `absent_standard_name` writes it on every hit and leaves it alone on the miss, and the miss is
+       the arm where nothing reads it. */
+    AbsentVocab vocab = ABSENT_VOCAB_N;
+    const char *owed;
 
     JS_FreeValue(ctx, g);
     if (is_global) {
+        /* THE DENOMINATOR, RAISED ONCE AND INDEPENDENTLY OF THE THREE ARMS BELOW — which is what makes the
+           identity the composer asserts a CHECK rather than a restatement. Derived as the sum of the arms it
+           could not disagree with them under any state of this function, and an assert whose two sides cannot
+           disagree is not a weak check but a NON-check that certifies whatever it never examined; raised here,
+           it fires the day an arm is added that leaves this block without classifying its read. It counts what
+           this HOOK was asked about with the global as base and not "every global miss": js_absent_ask gates
+           on the key rule first, so a symbol never arrives and is in neither the numerator nor this. */
+        g_global_reads++;
         /* A name a STANDARD owns on the global object is a component this engine owes; leave the read alone
            so its throw names it. Asked ONLY of the global, because those names live there: `gon.Node` is a
            field of an app record that happens to be spelled like an interface, and suppressing it would
            answer a real unknown with `undefined`.
            TWO VOCABULARIES, BECAUSE TWO STANDARDS OWN NAMES HERE AND THIS ARM USED TO ASK ABOUT ONE. See this
            file's header for what asking about only Web IDL left falling through. */
-        if (absent_is_platform_name(s) || absent_is_language_name(s))
+        owed = absent_standard_name(s, &vocab);
+        if (owed) {
+            /* AND IT IS RECORDED ON THE WAY PAST, which is the whole of this file's answer to the silence the
+               arm above creates. The decision is UNCHANGED — nothing forks, nothing is minted, the read is
+               left exactly as alone as it was — and what the census gains is the one population that says
+               something about a run: the names THIS DOCUMENT asked a standard for that this realm did not
+               answer. See the census banner above owed_note for the population, the denominator and the two
+               spellings of a guard this cannot see. */
+            owed_note(owed, vocab);
             goto done;
+        }
         /* AND AN INDEX IS NOT A FIELD OF A RECORD AT ALL, WHICH IS A QUESTION ABOUT THE KEY SPACE AND NOT
            ABOUT WHICH VOCABULARY OWNS A NAME. The channel's key rule admits array indices because a server's
            state tree is records inside LISTS and the walk reaches an element by its index —
@@ -508,8 +871,16 @@ JSValue absent_read_hook(JSContext *ctx, JSValueConst obj, JSAtom name)
            RECORD arm below — which is why the composer still spells an index off the root and why refusing one
            HERE takes nothing away: a server that injected at an integer key made it PRESENT, and a present key
            never reaches this hook. */
-        if (JS_AtomIsIndexName(name))
+        if (JS_AtomIsIndexName(name)) {
+            g_index_refused++;
             goto done;
+        }
+        /* THE THIRD ARM, COUNTED WHERE IT IS DECIDED AND NOT WHERE IT IS PERFORMED. The mint itself is below
+           and is shared with the record arm, so raising it there would count a published record's absent
+           member among the global's — two populations under one name, which is the defect this partition
+           exists to end one level up. Reaching this line IS the global arm deciding that no vocabulary claimed
+           the name, which is the decision the row reports. */
+        g_appstate_mints++;
     } else {
         base = ns_path_of(obj);
         /* THE ENGINE HAS ALREADY DECIDED THIS RECORD IS PUBLISHED — it does not ask otherwise — so a record

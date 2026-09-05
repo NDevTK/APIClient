@@ -17,6 +17,7 @@
 #include "solver/pending_index.h"
 #include "solver/dom_cow.h"   /* the DOM half of the swap census — see result_swap_json */
 #include "solver/decide.h"    /* …and which predicate grew the frontier — see decide_fork_json */
+#include "solver/absent.h"    /* …and which names a standard owns this realm answered with silence */
 /* …and what the ORDER above them was denominated in, which is the fact that decides whether two of these
    documents may be compared at all. Composed by the component that owns it — see result.h and quantum.h. */
 #include "solver/quantum.h"
@@ -1663,6 +1664,20 @@ char *result_json(JSContext *ctx) {
     char *heap = result_heap_json(ctx);
     char *swap = result_swap_json();
     char *forkAt = decide_fork_json();
+    /* AND WHAT THE DOCUMENT ASKED A STANDARD FOR THAT THIS REALM DID NOT ANSWER — the census whose whole
+       subject is a reading that is otherwise INVISIBLE rather than merely unpublished, which is what makes it
+       different from the four above. Those were computed on every run and printed only by the smoke driver's
+       loop; this one was never computed at all, because the arm it measures is a `goto done` whose entire
+       observable effect is that a guard takes its false arm. An unbuilt API a page CONSTRUCTS throws and the
+       throw rides `pageErrors`; an unbuilt API a page FEATURE-DETECTS answers `undefined`, and every endpoint
+       and sink behind that guard is unreachable with nothing anywhere saying so — so a run that learned
+       nothing for that reason is indistinguishable, on this document, from a page that had nothing to learn.
+       IT IS NOT CONDITIONED ON THERE BEING ANYTHING TO REPORT, which is the whole point and is
+       CLAUDE.md §A-DIAGNOSTIC-GATED-ON-A-FINDING: the run that emits nothing is the run whose reasons are
+       wanted, so this composer emits its members on every document including the ones with no rows at all.
+       solver/absent.c states the population, its denominator, the kind of every row and the identity they
+       close over. */
+    char *absent = absent_json();
     /* AND WHAT THE ORDER THOSE FIVE SIT UNDER WAS DENOMINATED IN — solver/quantum.h's composer, not a sixth
        one of ours. It is the only field on this document that is neither a total over the run nor a reading of
        an instant: it is a property of the HOST, and it is here because without it two `_wfq` orderings taken
@@ -1678,9 +1693,9 @@ char *result_json(JSContext *ctx) {
     char *out;
 
     if (!eps || !sinks || !errs || !errsRetracted || !errsExplored || !wfq || !cold || !heap || !swap ||
-        !forkAt || !quantum) {
+        !forkAt || !quantum || !absent) {
         free(eps); free(sinks); free(errs); free(errsRetracted); free(errsExplored); free(wfq);
-        free(cold); free(heap); free(swap); free(forkAt); free(quantum);
+        free(cold); free(heap); free(swap); free(forkAt); free(quantum); free(absent);
         return NULL;
     }
     /* NO SLACK, NO COUNT, NO MARGIN — see solver/compose.h's `composef`, which this composer is the reason
@@ -1841,6 +1856,13 @@ char *result_json(JSContext *ctx) {
                                 only place the accessor that decides it is in view: see result_cold_json,
                                 result_heap_json and result_swap_json. */
                              "\"_cold\":%s,\"_heap\":%s,\"_swap\":%s,\"_forkAt\":%s,"
+                             /* AND THE NAMES A STANDARD OWNS THAT THIS REALM ANSWERED WITH SILENCE — a fifth
+                                nested object, beside the four for the reason they are four: a reader compares
+                                WITHIN a census and never across. Its rows are LIFETIME COUNTS zeroed with the
+                                published-namespace registry at the agent's release, which is `_orphansDriven`'s
+                                boundary and not `_switches`'s; solver/absent.c states that at the composer,
+                                which is where the accessor that decides it is in view. */
+                             "\"_absent\":%s,"
                              /* AND WHAT ALL OF THE ABOVE WERE DENOMINATED IN — the one nested object here that
                                 is neither a total nor a reading of an instant, but a property of the HOST that
                                 decides whether two of these documents may be compared at all. result.h and
@@ -1853,7 +1875,7 @@ char *result_json(JSContext *ctx) {
                      routedEnds[ROUTED_TASK_FIRED], routedEnds[ROUTED_TASK_TARGET_ORIGIN],
                      routedEnds[ROUTED_TASK_TARGET_GONE], routedEnds[ROUTED_TASK_THREW],
                      srcReads, sinkReached, sinkTainted, sinkSuppressed,
-                     orphansDriven, orphansAsked, wfq, cold, heap, swap, forkAt, quantum,
+                     orphansDriven, orphansAsked, wfq, cold, heap, swap, forkAt, absent, quantum,
                      cold_park_json());
     }
     free(eps);
@@ -1866,6 +1888,7 @@ char *result_json(JSContext *ctx) {
     free(heap);
     free(swap);
     free(forkAt);
+    free(absent);
     free(quantum);
     return out;
 }

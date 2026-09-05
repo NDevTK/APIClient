@@ -243,8 +243,11 @@ function assertResultDocument(r) {
   /* AND WHAT THAT ORDER WAS DENOMINATED IN — solver/quantum.h's `_quantum`, and it is asserted HERE, between
      the order and the four censuses, because that is what it qualifies rather than a place in a list.
      IT IS NOT A CENSUS AND MUST NOT JOIN THEIR LOOP, WHICH IS THE WHOLE REASON IT IS THREE NAMED ASSERTS. Every
-     row of `_wfq`, `_cold`, `_heap`, `_swap` and `_forkAt` is a READING OF AN INSTANT and is checked by one
-     generic "is a finite number" pass, which is right for them and would be the defect here: `_quantum` is a
+     row of `_wfq`, `_cold`, `_heap`, `_swap`, `_forkAt` and `_absent` is a FINITE NUMBER and is checked by one
+     generic pass that asks exactly that and nothing about its KIND — most of them read an instant, `_absent`
+     and the larger half of `_cold` are lifetime counts, and each composer states which at the composer
+     because that is the only place the accessor deciding it is in view. The generic pass is right for all of
+     them and would be the defect here: `_quantum` is a
      constant property of the HOST and the BUILD, its `measure` is a STRING and its `isCpu` is a BOOLEAN, and a
      loop that only knows how to say "number" would either reject the object or force the producer to spell a
      yes/no as 0/1 — at which point it silently becomes a sixth census and the one fact it carries is gone.
@@ -283,14 +286,23 @@ function assertResultDocument(r) {
          "the engine's _quantum carries no positive `sliceMs` — it is solver/engine.h's ENGINE_QUANTUM_MS, a " +
          "compile-time constant of the artifact, so a zero or a NaN is the composer having lost it rather " +
          "than a host that shares its thread infinitely finely");
-  /* THE THREE SUBSYSTEM CENSUSES AND THE FRONTIER'S PROVENANCE — solver/result.h's `_cold`, `_heap`, `_swap`
-     and solver/decide.h's `_forkAt`. They arrive for the reason `_wfq` did and it is the same defect at four
+  /* THE THREE SUBSYSTEM CENSUSES, THE FRONTIER'S PROVENANCE, AND THE SILENCE — solver/result.h's `_cold`,
+     `_heap`, `_swap`, solver/decide.h's `_forkAt` and solver/absent.h's `_absent`. The first four arrive for
+     the reason `_wfq` did and it is the same defect at four
      times the size: every one of them was printed ONLY by `run_scheduler`, the smoke driver's loop, which
      `qjs_step` does not call — so what the frontier is made of, what the runtime and the C allocator under it
      hold, what a context switch costs, and which predicate is growing the frontier were computed on every
      census of every production run and readable off NONE of them. Sixty-nine numbers, and the subsystems they
      measure are precisely the ones that only do their real work HERE: the pager pages under RAM pressure in
      the extension, the realm ceiling is reached on real pages, a delta chain accumulates over a real frontier.
+     THE FIFTH IS A DIFFERENT DEFECT AND IS THE REASON IT IS IN THIS LOOP RATHER THAN BESIDE IT. `_absent` was
+     not computed-and-unprinted; it was NOT COMPUTED AT ALL, because what it measures is an arm of
+     solver/absent.c whose whole observable effect is that a page's `if (window.EventSource)` takes its false
+     arm. An unbuilt web API a page CONSTRUCTS throws, and the throw reaches a person through `pageErrors`;
+     one a page FEATURE-DETECTS answers `undefined`, and every endpoint and every sink behind that guard is
+     unreachable with nothing anywhere saying so. So this row is what tells a run that learned nothing because
+     the page had nothing to learn from a run that learned nothing because this engine answered its questions
+     with silence, and those were one document until it existed.
      ONE LOOP AND NO NAME LIST, WHICH IS THE SAME SPLIT `_wfq` MAKES ONE BLOCK UP. The counters above are named
      because this zone READS each of them onto the run record one field at a time; these are relayed WHOLE and
      rendered generically by popup.js, so a row added to a census reaches a human with nothing edited here and
@@ -303,7 +315,7 @@ function assertResultDocument(r) {
      predicates that actually forked, so `{}` is the positive statement THIS DOCUMENT NEVER FORKED, which is a
      real and loud answer on a page whose bundle should have branched on opaque input. Collapsing those two
      into one check would make the loudest finding in this block indistinguishable from a relay that broke. */
-  for (const k of ["_cold", "_heap", "_swap", "_forkAt"]) {
+  for (const k of ["_cold", "_heap", "_swap", "_forkAt", "_absent"]) {
     DCHECK(r[k] && typeof r[k] === "object" && !Array.isArray(r[k]),
            "the engine's result document carries no " + k + " census — solver/result.c composes it into " +
            "every document it builds, partials included. Its absence has the same two causes as a missing " +
@@ -346,12 +358,23 @@ function assertResultDocument(r) {
                "while each other row still looks like a measurement");
     }
   }
-  for (const k of ["_cold", "_heap", "_swap"])
+  for (const k of ["_cold", "_heap", "_swap", "_absent"])
     DCHECK(Object.keys(r[k]).length > 0,
            "the engine's " + k + " census is EMPTY — unlike `_wfq`, whose absent rows are how a drained " +
-           "frontier says there was no order to report, this one reads the frontier, the runtime or the C " +
-           "allocator, and all three exist at every instant a document can be composed at. There is no " +
-           "reading in which it has no rows, so an empty object is the composer having stopped composing");
+           "frontier says there was no order to report, this one reads the frontier, the runtime, the C " +
+           "allocator or the population of global reads, and all four exist at every instant a document can " +
+           "be composed at. There is no reading in which it has no rows, so an empty object is the composer " +
+           "having stopped composing");
+  /* AND `_absent` IS IN THAT LIST AND NOT IN `_forkAt`'S, WHICH IS THE SAME SPLIT ONE ROW DOWN AND IS WHY IT
+     IS WORTH SAYING TWICE. `_forkAt` may legitimately be `{}` — the positive statement that this document
+     never forked. `_absent` may not: solver/absent.c emits its MEMBERS on every census, zeroes included,
+     precisely so that the clean day prints too. A run in which this engine answered every standard-owned name
+     the page asked for is `owed 0 of N global reads`, which is a reading; `{}` would be that composer having
+     stopped composing, and the two must not arrive looking alike. The distinction matters more here than
+     anywhere else in this block because THIS census is the one whose subject is a silence — a page that
+     feature-detects an API this engine has not built takes the guard's false arm and loses every endpoint
+     behind it with nothing else anywhere saying so, so a census that could read `{}` for two different
+     reasons would reproduce the defect it exists to report. */
   DCHECK(Array.isArray(r._park),
          "the engine's result document carries no _park array — that is the PARKED RESIDUE (solver/cold.h), " +
          "the recipes this zone writes to IndexedDB and hands back to qjs_begin next session. An absent one " +
@@ -559,14 +582,20 @@ function linesToAnalysis(lines, msg, outcome, eng) {
         wfq: result._wfq,
         /* AND THE THREE SUBSYSTEM CENSUSES BESIDE IT, CROSSING WHOLE FOR THE IDENTICAL REASON. What the
            FRONTIER is made of, what the RUNTIME and the C allocator hold, what a context SWITCH costs, and
-           which PREDICATE is growing the frontier — four readings of an instant, four objects, and this zone
+           which PREDICATE is growing the frontier — four objects, and this zone
            reads no row of any of them. Until they rode this document they were printed only by the smoke
            driver's loop, so every one of these numbers had been quoted about one fixture and never once about
            a real page; a row added to any of them now reaches the popup with nothing edited on this path.
-           THEY STAY FOUR OBJECTS AND ARE NOT FOLDED INTO ONE, because a reader compares WITHIN a census and
-           never across: a byte figure beside a switch count beside a realm count is three different questions
-           and folding them invites exactly the comparison none of them supports. */
+           THEY STAY SEPARATE OBJECTS AND ARE NOT FOLDED INTO ONE, because a reader compares WITHIN a census
+           and never across: a byte figure beside a switch count beside a realm count is three different
+           questions and folding them invites exactly the comparison none of them supports. */
         cold: result._cold, heap: result._heap, swap: result._swap, forkAt: result._forkAt,
+        /* AND THE FIFTH, WHICH IS NOT A READING OF AN INSTANT AND IS NOT A SUBSYSTEM: the names a STANDARD
+           owns that this document read and this realm did not answer, with the population of global reads
+           they are drawn from. It crosses for a reason the other four do not share — they were computed and
+           printed nowhere a person runs, and this one was never computed at all, because what it measures is
+           an arm whose entire observable effect is that a page's `if (window.X)` takes its false arm. */
+        absent: result._absent,
         /* AND WHAT THE ORDER ABOVE WAS DENOMINATED IN — solver/quantum.h's `_quantum`, relayed whole beside
            the readings it qualifies. It is the ONE field on this record that is neither a total over the run
            nor a reading of an instant: it is a property of the HOST, constant for the session, and it is here

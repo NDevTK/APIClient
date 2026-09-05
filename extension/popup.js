@@ -1487,8 +1487,8 @@ function renderEngineRuns() {
       + ` Either way, two runs of THIS SAME build over this same page take different orders: compare two runs `
       + `of one build before reading a difference between two builds.`
       + `</span>`;
-    /* AND THE THREE SUBSYSTEMS UNDER THE ORDER — solver/result.c's `_cold`, `_heap`, `_swap` and decide.c's
-       `_forkAt`, relayed whole by bridge.js. Same defect as `_wfq` and four times the size: each was printed
+    /* AND THE THREE SUBSYSTEMS UNDER THE ORDER, THE FORK TABLE, AND THE SILENCE — solver/result.c's `_cold`,
+       `_heap`, `_swap`, decide.c's `_forkAt` and absent.c's `_absent`, relayed whole by bridge.js. Same defect as `_wfq` and four times the size: each was printed
        ONLY by the smoke driver's loop, which the extension's ABI never enters, so what the pager is holding,
        what the heap is made of, what a context switch costs and which predicate is growing the frontier had
        never once been visible to a person running this — on the one host where a real page actually reaches
@@ -1500,7 +1500,16 @@ function renderEngineRuns() {
        that this document never forked — loud on a bundle that should have branched on opaque input — and a
        row that simply printed nothing there would say it in the same way as a census that failed to arrive.
        The other three cannot be empty; bridge.js asserts that rather than this view assuming it. */
-    const CENSUS = [["cold", "frontier + cold tier"], ["heap", "heap"], ["swap", "COW switch"]];
+    /* AND THE FOURTH IS THE ONE THAT IS NOT A SUBSYSTEM. `absent` is solver/absent.c's census of the names a
+       STANDARD owns that this document READ and this realm did not answer, beside the population of global
+       reads they are drawn from. It sits with the three because it is shaped like them and is rendered like
+       them, and it answers a different question from all of them: not what the engine was doing, but what the
+       page ASKED FOR and got silence for. A page that writes `new EventSource(url)` throws and the throw is
+       already on this view; a page that writes `if (window.EventSource)` gets `undefined`, takes the false
+       arm, and loses every endpoint and sink behind the guard with nothing else here saying so — so a row
+       reading `owed 0` is a real clean bill and a row naming three interfaces is a work queue. */
+    const CENSUS = [["cold", "frontier + cold tier"], ["heap", "heap"], ["swap", "COW switch"],
+                    ["absent", "asked for and not answered"]];
     const censusRows = CENSUS.map(([k, label]) => {
       DCHECK(m[k] && typeof m[k] === "object",
              "an engine run record reached the popup with no `" + k + "` census — solver/result.c composes " +
