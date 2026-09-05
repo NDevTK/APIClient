@@ -122,9 +122,10 @@
 #include "core/layout/line_break.h"
 
 /* THE RUN IS A SEQUENCE OF ITEMS AND NOT OF CHARACTERS, because four different things occupy positions in it
- * and only one of them is text. css-sizing-3 §2.2 "Intrinsic Contributions" puts an inline box's own horizontal
- * margins, borders and padding into what it contributes ("based on the OUTER SIZE of the box"), and css-text-3
- * §5.5 "Line Breaking Details" places them at the box's TWO BOUNDARIES rather than at every break inside it —
+ * and only one of them is text. css-sizing-3 §2.2 "Intrinsic Size Contributions" puts an inline box's own
+ * horizontal margins, borders and padding into what it contributes ("based on the OUTER SIZE of the box"), and
+ * css-text-3 §5.5 "Line Breaking Details" places them at the box's TWO BOUNDARIES rather than at every break
+ * inside it —
  * "inline box boundaries do not introduce a forced line break or soft wrap opportunity in the flow". So an
  * edge is A WIDTH AT A POSITION, and there is no code point to hang it on.
  * IT CANNOT BE A CHARACTER, and that is §5.5's sentence rather than a preference: [UAX14] decides breaks from

@@ -420,12 +420,12 @@ ReplacedElement replaced_element_of(lxb_dom_element_t *el)
        resource a browser would be showing. */
     if (lxb_html_tree_node_is(n, LXB_TAG_OBJECT)) return rep_not();
 
-    /* NO `audio` IN THIS BUILD IS A REPLACED ELEMENT, WHICH IS §15.4.1's SENTENCE READ RATHER THAN A SHRUG.
-       §15.4.1: "The `audio` element, WHEN IT IS EXPOSING A USER INTERFACE, is expected to be treated as a
-       replaced element about one line high, as wide as is necessary to expose the user agent's user interface
-       features. When an audio element is NOT exposing a user interface, the user agent is expected to force
-       its `display` property to compute to `none`, irrespective of CSS rules." The element is replaced in the
-       first branch only.
+    /* NO `audio` IN THIS BUILD IS A REPLACED ELEMENT, WHICH IS HTML §15.4.1 "Embedded content"'s SENTENCE
+       READ RATHER THAN A SHRUG. HTML §15.4.1 "Embedded content" says: "The `audio` element, WHEN IT IS
+       EXPOSING A USER INTERFACE, is expected to be treated as a replaced element about one line high, as wide
+       as is necessary to expose the user agent's user interface features. When an audio element is NOT
+       exposing a user interface, the user agent is expected to force its `display` property to compute to
+       `none`, irrespective of CSS rules." The element is replaced in the first branch only.
        THIS AGENT EXPOSES NO USER INTERFACE FOR ANY MEDIA ELEMENT, and that is the agent's own statement to
        make rather than a fact about the element: HTML §4.8.11.13 "User interface" leaves it open in both
        directions — a user agent "may implement this simply by exposing a user interface to the user as

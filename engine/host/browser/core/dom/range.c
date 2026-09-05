@@ -36,7 +36,7 @@
 #include "core/dom/range.h"
 #include "core/geometry/dom_rect.h"
 #include "core/geometry/dom_rect_list.h"
-#include "core/html/fragment_parser.h"   /* HTML §13.4's parse — §8.5.7 is a sixth declaration over it */
+#include "core/html/fragment_parser.h"   /* HTML §13.4's parse — HTML §8.5.7 is a sixth declaration over it */
 #include "core/html/trusted_types.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
@@ -106,8 +106,8 @@ static void range_live_drop(void)
  * JS_GetAnyOpaque, because the collector dispatched here THROUGH the class — the id is a fact it already has
  * and must not look up. It is NOT compared against `g_range_class` either: that is the guaranteed-false `@WHY`
  * agent_state.h records for remote_object.c. `range_here` keeps the class test, because that one is Web IDL
- * §3.7.6 Attributes' and §3.7.7 Operations' BRAND — §5.5 declares both member kinds — and runs while the
- * agent is live. */
+ * §3.7.6 "Attributes"' and Web IDL §3.7.7 "Operations"' BRAND — §5.5 declares both member kinds — and runs
+ * while the agent is live. */
 static void range_finalizer(JSRuntime *rt, JSValue val)
 {
     JSClassID id = 0;
@@ -136,14 +136,14 @@ static void range_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_fun
     range_bounds_mark(rt, b, mark_func);
 }
 
-/* DOES THIS VALUE IMPLEMENT `Range` — Web IDL §3.7 Interfaces' implementation-check an object step 3, "If
+/* DOES THIS VALUE IMPLEMENT `Range` — Web IDL §3.7 "Interfaces"' implementation-check an object step 3, "If
    object does not implement interface, then throw a TypeError.", as the PREDICATE core/idl_args' idl_this_iface
-   takes. §3.7.7 Operations' create an operation function asks it at step 2.1.2.3, BEFORE step 2.1.4 computes
-   the effective overload set, so a member that states it at its DECLARATION refuses a foreign receiver before
-   §3.6 Overload resolution algorithm converts an argument. That order is OBSERVABLE here and not a nicety:
-   `setStart`'s second position is IDL_UNSIGNED_LONG and `createContextualFragment`'s only one is IDL_DOMSTRING,
-   so a body test lets `Range.prototype.setStart.call({}, node, {valueOf(){ … }})` run the PAGE'S OWN CODE and
-   throw afterwards, where a browser throws with none of it having run.
+   takes. Web IDL §3.7.7 "Operations"' create an operation function asks it at step 2.1.2.3, BEFORE step 2.1.4
+   computes the effective overload set, so a member that states it at its DECLARATION refuses a foreign receiver
+   before Web IDL §3.6 "Overload resolution algorithm" converts an argument. That order is OBSERVABLE here and
+   not a nicety: `setStart`'s second position is IDL_UNSIGNED_LONG and `createContextualFragment`'s only one is
+   IDL_DOMSTRING, so a body test lets `Range.prototype.setStart.call({}, node, {valueOf(){ … }})` run the
+   PAGE'S OWN CODE and throw afterwards, where a browser throws with none of it having run.
 
    BRAND-CHECKED AGAINST §5.5's OWN CLASS — NOT against AbstractRange's list, because a StaticRange has none of
    these members and `Range.prototype.setStart.call(staticRange)` must be a TypeError rather than a live edit of
@@ -159,10 +159,10 @@ static bool range_is(JSValueConst v)
     return JS_GetOpaque(v, g_range_class) != NULL;
 }
 
-/* THE RECORD FOR A RECEIVER §3.7 HAS ALREADY ADMITTED — every §5.5 OPERATION, whose declaration states the
-   interface above. Reaching a body means idl_implementation_check ran and passed, so the only condition left
-   for this to fire on is a member installed WITHOUT its brand, which is this engine's own routing being wrong
-   and not a fact about page input. */
+/* THE RECORD FOR A RECEIVER Web IDL §3.7 "Interfaces" HAS ALREADY ADMITTED — every §5.5 OPERATION, whose
+   declaration states the interface above. Reaching a body means idl_implementation_check ran and passed, so the
+   only condition left for this to fire on is a member installed WITHOUT its brand, which is this engine's own
+   routing being wrong and not a fact about page input. */
 static RangeBounds *range_receiver(JSValueConst v)
 {
     RangeBounds *b = JS_GetOpaque(v, g_range_class);
@@ -176,9 +176,9 @@ static RangeBounds *range_receiver(JSValueConst v)
 
 /* THE SAME QUESTION FOR THE ONE MEMBER THAT CANNOT STATE IT. `commonAncestorContainer` is minted by
    idl_install_accessor as a plain JS_CFUNC_getter_magic with no pool entry, so it converges on nothing that
-   could ask §3.7 for it — the residual core/idl_args.c names at the site it would reach. ONE ANSWER TO ONE
-   QUESTION: this routes to the predicate above, so the two ways into a §5.5 member cannot drift. When a plain
-   getter gains a pool entry, this function goes with it. */
+   could ask Web IDL §3.7 "Interfaces" for it — the residual core/idl_args.c names at the site it would reach.
+   ONE ANSWER TO ONE QUESTION: this routes to the predicate above, so the two ways into a §5.5 member cannot
+   drift. When a plain getter gains a pool entry, this function goes with it. */
 static RangeBounds *range_here(JSContext *ctx, JSValueConst v)
 {
     if (!range_is(v)) {
@@ -1520,33 +1520,35 @@ static const IdlStepDecl RANGE_SURROUND = { rs_step, sizeof(RsState), rs_visit, 
  * `partial interface Range { [CEReactions, NewObject] DocumentFragment
  *  createContextualFragment((TrustedHTML or DOMString) string); };` — HTML §8.5.7, NOT "DOM Parsing and
  * Serialization". That specification has been merged into HTML and survives only as a stub with an issue
- * tracker, which §8.5.7's own first paragraph is the link to; a reader holding it is holding a document that
- * no longer defines this member.
+ * tracker, which HTML §8.5.7's own first paragraph is the link to; a reader holding it is holding a document
+ * that no longer defines this member.
  *
- * WHAT MAKES IT "CONTEXTUAL" is steps 2-6, and they are the whole of what this file adds to the shared §13.4
- * machine: the markup is parsed in the tree-building context of the RANGE'S START NODE, so `<tr>` inside a
- * `<table>` context survives and the same string parsed bare does not. Dropping the context — parsing against
- * `body` always, or against the document element — is the one implementation mistake that leaves every other
- * assertion in the WPT file passing, so the context is resolved here and handed to fragment_parse_begin as
- * `context`, which is the same argument §8.5.4's innerHTML setter hands it.
+ * WHAT MAKES IT "CONTEXTUAL" is steps 2-6, and they are the whole of what this file adds to the shared
+ * HTML §13.4 "Parsing HTML fragments" machine: the markup is parsed in the tree-building context of the
+ * RANGE'S START NODE, so `<tr>` inside a `<table>` context survives and the same string parsed bare does not.
+ * Dropping the context — parsing against `body` always, or against the document element — is the one
+ * implementation mistake that leaves every other assertion in the WPT file passing, so the context is resolved
+ * here and handed to fragment_parse_begin as `context`, which is the same argument HTML §8.5.4 "The innerHTML
+ * property"'s setter hands it.
  *
  * ITS SCRIPTS RUN, AND THAT IS THE MEMBER'S DEFINING PROPERTY rather than a detail. §13.2.4.5 "Other parsing
  * state flags" names this member BY NAME as the user of the FRAGMENT parser scripting mode — "Scripts are
  * executed as soon as they are inserted into the document as part of a the HTML fragment parsing algorithm,
  * ignoring async and defer attributes. This mode is used by createContextualFragment()." — and step 7 passes
  * `Fragment` outright. So a `<script>` in the markup is NOT marked already started, does not run while the
- * fragment is detached (§4.12.1 step 7, "If el is not connected, then return"), and runs the moment the page
- * appends the fragment to a document. That is a SOLVER-VISIBLE difference and not only a fidelity one: a
+ * fragment is detached (HTML §4.12.1 "The script element" step 7, "If el is not connected, then return"), and
+ * runs the moment the page appends the fragment to a document. That is a SOLVER-VISIBLE difference and not
+ * only a fidelity one: a
  * bundle that builds DOM this way ships code whose execution the engine would otherwise never reach.
  *
- * THE SINK IS REAL AND IS REPORTED AS ONE. §8.5.7's own note is "This method performs no sanitization to
+ * THE SINK IS REAL AND IS REPORTED AS ONE. HTML §8.5.7's own note is "This method performs no sanitization to
  * remove potentially-dangerous elements and attributes like script or event handler content attributes", so
  * this joins innerHTML and insertAdjacentHTML on solve_html_sink — and it is the STRONGEST of the three,
  * because the breakout does not need an `onerror` to fire: a `<script>` in the markup executes on insertion.
  *
  * IT PLACES INTO A DocumentFragment INSTEAD OF A TREE, which is the only structural difference from the five
- * members that came before it, and it needs no new placement kind: §13.4 step 15 creates the fragment the
- * algorithm returns, and FRAG_INTO_CHILDREN with that fragment as the anchor reaches the identical loop.
+ * members that came before it, and it needs no new placement kind: HTML §13.4 step 15 creates the fragment
+ * the algorithm returns, and FRAG_INTO_CHILDREN with that fragment as the anchor reaches the identical loop.
  * Nothing in it is connected, so §4.2.3's insertion steps reach no `<script>` preparation — which is exactly
  * what "not yet added to document, should not have run" means. */
 static int js_range_contextual_fragment(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
@@ -1579,7 +1581,8 @@ static int js_range_contextual_fragment(JSContext *ctx, JSStepHdr *hdr, void *st
 
         node = bounds_start(b);                                         /* STEP 2 */
         DCHECK(node != NULL,
-               "§8.5.7 step 2 read a Range's start node and found none — §5.5 gives every live range two "
+               "HTML §8.5.7 \"The createContextualFragment() method\" step 2 read a Range's start node and "
+               "found none — §5.5 gives every live range two "
                "boundary points at construction and every setter replaces rather than clears one, so a null "
                "here is a range this engine built and DOM §5.5 cannot describe");
         doc = node->owner_document;
@@ -1606,12 +1609,13 @@ static int js_range_contextual_fragment(JSContext *ctx, JSStepHdr *hdr, void *st
            document if its type is `xml`; otherwise an HTML document" is what the first conjunct asks, which is
            why it is the NEGATION of document_is_xml_of and not a content-type string.
            WHY THE STANDARD DOES THIS AT ALL: parsing against `<html>` would put the markup through
-           §13.2.6.4.3 'The "before head" insertion mode' and materialise a `<head>` and a `<body>` around it,
-           which is the compat bug the WPT file cites (Mozilla 585819) — so `<span>Hello</span>` selected over
+           HTML §13.2.6.4.3 'The "before head" insertion mode' and materialise a `<head>` and a `<body>` around
+           it, which is the compat bug the WPT file cites (Mozilla 585819) — so `<span>Hello</span>` selected
+           over
            `document.documentElement` must come back as one `<span>` and not as a document skeleton.
            The `body` is in NO TREE and nothing else will ever free it, so the machine owns it: it goes on
            `own_context`, which fragment_parse_release destroys on the completed path and the throw path
-           alike — the same field, and the same reason, as §8.5.5 step 5's. */
+           alike — the same field, and the same reason, as HTML §8.5.5 "The outerHTML property" step 5's. */
         if (el == NULL ||
             (!document_is_xml_of(lxb_dom_interface_node(el)->owner_document) &&
              lxb_dom_interface_node(el)->ns == LXB_NS_HTML &&
@@ -1619,14 +1623,14 @@ static int js_range_contextual_fragment(JSContext *ctx, JSStepHdr *hdr, void *st
             /* "…AND THE HTML NAMESPACE" is step 6's own last clause, so it is NAMED here. It was being taken
                from `lxb_dom_document_t::type`, which nothing in this engine writes — see document.h's
                document_create_element_html — and a Range whose start node is in an XML document therefore got
-               a `body` in NO namespace, which §13.4 step 2 reads to pick the tokenizer state. */
+               a `body` in NO namespace, which HTML §13.4 step 2 reads to pick the tokenizer state. */
             s->own_context = document_create_element_html(doc, "body", 4);
             el = s->own_context;
         }
         DCHECK(lxb_dom_interface_node(el)->owner_document == doc,
-               "§8.5.7's context element belongs to a document other than the range's — steps 4 and 5 take the "
-               "start node or its parent and step 6 creates in this's node document, so all three are one "
-               "document, and §13.4 step 15 creates the returned fragment in it");
+               "HTML §8.5.7's context element belongs to a document other than the range's — steps 4 and 5 "
+               "take the start node or its parent and step 6 creates in this's node document, so all three are "
+               "one document, and HTML §13.4 step 15 creates the returned fragment in it");
         /* HTML §13.4 "Parsing HTML fragments" STEP 15 — "Let fragment be the result of creating a document
            fragment given target's node document" — hoisted ahead of the parse because it is what this member
            RETURNS and because the placement needs it as its anchor. THIS FLOW MADE IT, so the delta owns it
@@ -1634,8 +1638,9 @@ static int js_range_contextual_fragment(JSContext *ctx, JSStepHdr *hdr, void *st
            reachable from no tree, so without the creation entry every one ever built would sit in that arena
            with no owner and invisible to the runtime's gc_obj_list walk, which only sees GC objects. */
         out = lxb_dom_document_fragment_interface_create(doc);
-        CHECK(out != NULL, "§13.4 step 15's DocumentFragment could not be created — handing back a null the "
-                           "page cannot tell from a fragment it never asked for is not an option");
+        CHECK(out != NULL, "HTML §13.4 \"Parsing HTML fragments\" step 15's DocumentFragment could not be "
+                           "created — handing back a null the page cannot tell from a fragment it never asked "
+                           "for is not an option");
         dom_cow_note_created(lxb_dom_interface_node(out));
         /* THE SINK, BEFORE THE PARSE and whatever the value turns out to be — see the header above. */
         solve_html_sink(ctx, s->compliant);
@@ -1647,7 +1652,8 @@ static int js_range_contextual_fragment(JSContext *ctx, JSStepHdr *hdr, void *st
             return JS_STEP_DONE;
         }
         DCHECK(JS_IsString(s->compliant),
-               "§8.5.7 reached its body with an unconverted argument — the IDL declaration is what converts "
+               "HTML §8.5.7 \"The createContextualFragment() method\" reached its body with an unconverted "
+               "argument — the IDL declaration is what converts "
                "it, and running the page's toString from here is the drive-to-completion the flow machinery "
                "exists to avoid");
         html = JS_ToCString(ctx, s->compliant);
@@ -1655,8 +1661,8 @@ static int js_range_contextual_fragment(JSContext *ctx, JSStepHdr *hdr, void *st
         /* STEP 7 — "Return the result of invoking the fragment parsing algorithm steps with element,
            compliantString, and Fragment." THREE arguments, and the third is the one this member exists to
            pass. `allowDeclarativeShadowRoots` is not among them, so HTML §8.5.4's fragment parsing algorithm
-           steps hand §13.4 the literal `false`: a `<template shadowrootmode>` in this markup stays a template,
-           exactly as it does through innerHTML. */
+           steps hand HTML §13.4 the literal `false`: a `<template shadowrootmode>` in this markup stays a
+           template, exactly as it does through innerHTML. */
         fragment_parse_begin(ctx, s, el, lxb_dom_interface_node(out), FRAG_INTO_CHILDREN, html,
                              /*clear_first*/ false, /*allow_declarative*/ false, FRAG_SCRIPTING_FRAGMENT);
         JS_FreeCString(ctx, html);
@@ -1664,9 +1670,10 @@ static int js_range_contextual_fragment(JSContext *ctx, JSStepHdr *hdr, void *st
         return JS_STEP_YIELD;
     }
     r = fragment_parse_step(ctx, hdr, s);
-    /* STEP 7's RETURN, taken at the machine's terminal: `anchor` is §13.4 step 15's fragment and the placement
-       has just emptied §13.4 step 12's `root` into it. It is read off the state rather than remembered in a
-       local because every stage between here and FRAG_START is a rest point a park can happen at. */
+    /* STEP 7's RETURN, taken at the machine's terminal: `anchor` is HTML §13.4 step 15's fragment and the
+       placement has just emptied HTML §13.4 step 12's `root` into it. It is read off the state rather than
+       remembered in a local because every stage between here and FRAG_START is a rest point a park can happen
+       at. */
     if (r == 0) *presult = node_wrap(ctx, s->anchor);
     return r;
 }
@@ -1685,10 +1692,12 @@ static const IdlStepDecl RANGE_CONTEXTUAL_FRAGMENT = {
 /* ---- CSSOM VIEW §9 "Extensions to the Range Interface" ---------------------------------------------------
  * `partial interface Range { DOMRectList getClientRects(); [NewObject] DOMRect getBoundingClientRect(); }`.
  *
- * IT IS A SELECTION ALGORITHM OVER §6's, NOT A SECOND GEOMETRY. §9 states its list as two inclusion rules and
- * computes no rectangle of its own for an element: "for each element selected by the range, whose parent is
- * NOT selected by the range, include the border areas returned by invoking getClientRects() on the element."
- * That invocation is §2's INTERNAL algorithm (core/dom/element_view.h), so a page that overwrites
+ * IT IS A SELECTION ALGORITHM OVER CSSOM View §6 "Extensions to the Element Interface"'s, NOT A SECOND
+ * GEOMETRY. CSSOM View §9 states its list as two inclusion rules and computes no rectangle of its own for an
+ * element: "for each element selected by the range, whose parent is NOT selected by the range, include the
+ * border areas returned by invoking getClientRects() on the element." That invocation is CSSOM View §2
+ * "Terminology"'s INTERNAL algorithm (core/dom/element_view.h) — its rule that a member "said to call another
+ * method or attribute" invokes the internal API — so a page that overwrites
  * `Element.prototype.getClientRects` cannot change what a Range measures — and every box this engine cannot
  * place crashes THERE, in the one component that owns a border area, rather than a second time here.
  *
@@ -1696,29 +1705,31 @@ static const IdlStepDecl RANGE_CONTEXTUAL_FRAGMENT = {
  * selected is already inside its parent's border area, so including it again would double-count it. "Selected
  * by the range" is DOM §5.5's CONTAINED IN, which `range_contains` above already decides.
  *
- * THE TEXT RULE IS THE ONE THIS ENGINE CANNOT RUN, and §9 says exactly why in its own words: the bounds "are
- * computed using FONT METRICS; thus, for horizontal writing, the vertical dimension of each box is determined
- * by the font ascent and descent, and the horizontal dimension by the text advance width", over whole
- * TYPOGRAPHIC CHARACTER UNITS. That is the same capability CSS 2 §9.4.2's line boxes need, so it is named as
- * one thing in both places rather than as two gaps.
+ * THE TEXT RULE IS THE ONE THIS ENGINE CANNOT RUN, and CSSOM View §9 says exactly why in its own words: the
+ * bounds "are computed using FONT METRICS; thus, for horizontal writing, the vertical dimension of each box is
+ * determined by the font ascent and descent, and the horizontal dimension by the text advance width", over
+ * whole TYPOGRAPHIC CHARACTER UNITS. That is the same capability CSS 2.1 §9.4.2 "Inline formatting contexts"'s
+ * line boxes need, so it is named as one thing in both places rather than as two gaps.
  *
  * THE COORDINATE SPACE IS THE ELEMENT MEMBER'S, because the rectangles ARE the element member's. */
 
-/* §9's "the range is not in the document" — DOM §5.5 makes a live range's root "the root of its start node",
-   so a range whose nodes hang off a DocumentFragment or a detached subtree has a root that is not a Document
-   and every user agent answers it with an empty list. The per-ELEMENT questions (is it being rendered, does it
-   generate a box) are §6 step 1's and are asked there, once per element. */
+/* CSSOM View §9 "Extensions to the Range Interface"'s "the range is not in the document" — DOM §5.5 makes a
+   live range's root "the root of its start node", so a range whose nodes hang off a DocumentFragment or a
+   detached subtree has a root that is not a Document and every user agent answers it with an empty list. The
+   per-ELEMENT questions (is it being rendered, does it generate a box) are CSSOM View §6 "Extensions to the
+   Element Interface" step 1's and are asked there, once per element. */
 static bool range_in_document(const RangeBounds *b)
 {
     return range_root(b)->type == LXB_DOM_NODE_TYPE_DOCUMENT;
 }
 
-/* §9's TEXT rule's own condition — "for each Text node SELECTED OR PARTIALLY SELECTED by the range (INCLUDING
-   WHEN THE BOUNDARY-POINTS ARE IDENTICAL)". The parenthesis is a third case and not a restatement: a collapsed
-   range inside a Text node contains it under neither of DOM §5.5's two predicates (a node is not contained in a
-   range whose boundary points are both inside it, and it is not partially contained either, since it is an
-   inclusive ancestor of BOTH boundary nodes), and §9 still says a rectangle is included for it — which is what
-   makes a collapsed range's `getBoundingClientRect` a caret position in every user agent. */
+/* CSSOM View §9 "Extensions to the Range Interface"'s TEXT rule's own condition — "for each Text node
+   SELECTED OR PARTIALLY SELECTED by the range (INCLUDING WHEN THE BOUNDARY-POINTS ARE IDENTICAL)". The
+   parenthesis is a third case and not a restatement: a collapsed range inside a Text node contains it under
+   neither of DOM §5.5's two predicates (a node is not contained in a range whose boundary points are both
+   inside it, and it is not partially contained either, since it is an inclusive ancestor of BOTH boundary
+   nodes), and CSSOM View §9 still says a rectangle is included for it — which is what makes a collapsed
+   range's `getBoundingClientRect` a caret position in every user agent. */
 static bool range_selects_text(const RangeBounds *b, lxb_dom_node_t *n)
 {
     lxb_dom_node_t *sn = bounds_start(b), *en = bounds_end(b);
@@ -1727,10 +1738,11 @@ static bool range_selects_text(const RangeBounds *b, lxb_dom_node_t *n)
     return n == sn || n == en || range_contains(b, n) || bp_partially_contains(sn, en, n);
 }
 
-/* §9's getClientRects(), in the spec's own order — ONE tree walk in CONTENT ORDER, which is what the standard
-   asks the merged list to be in ("a list of DOMRect objects IN CONTENT ORDER that matches the following
-   constraints"). Two separate passes would produce the two constraints' lists concatenated and not
-   interleaved, which is a different list whenever a range covers both. */
+/* CSSOM View §9 "Extensions to the Range Interface"'s getClientRects(), in the spec's own order — ONE tree
+   walk in CONTENT ORDER, which is what the standard asks the merged list to be in ("a list of DOMRect objects
+   IN CONTENT ORDER that matches the following constraints"). Two separate passes would produce the two
+   constraints' lists concatenated and not interleaved, which is a different list whenever a range covers
+   both. */
 static JSValue range_client_rects(JSContext *ctx, const RangeBounds *b)
 {
     lxb_dom_node_t *root, *n;
@@ -1752,12 +1764,13 @@ static JSValue range_client_rects(JSContext *ctx, const RangeBounds *b)
                   "box is determined by the font ascent and descent, and the horizontal dimension by the text "
                   "advance width', with a partially covered TYPOGRAPHIC CHARACTER UNIT (half a surrogate pair, "
                   "part of a grapheme cluster) rounded out to the whole unit. THE VERTICAL DIMENSION IS NO "
-                  "LONGER THE GAP: the ascent and descent this rule names are CSS 2 §10.8.1 'Leading and "
+                  "LONGER THE GAP: the ascent and descent this rule names are CSS 2.1 §10.8.1 'Leading and "
                   "half-leading''s `A` and `D`, and core/css/font_metrics.h holds both for the first available "
                   "font. WHAT IS ABSENT IS THE ADVANCE WIDTH — font_metrics.h measures exactly two glyphs "
                   "(css-values-4 §6.1.1's assumed '0' for `ch` and '水' for `ic`) and no run of text — which "
-                  "is the SAME missing capability CSS 2 §9.4.2's line boxes need for an inline box's fragments "
-                  "and §10.6.3's line-box arm needs for a content-based height. BUILD the per-glyph advance "
+                  "is the SAME missing capability CSS 2.1 §9.4.2 'Inline formatting contexts''s line boxes "
+                  "need for an inline box's fragments and CSS 2.1 §10.6.3's line-box arm needs for a "
+                  "content-based height. BUILD the per-glyph advance "
                   "beside `A` and `D`, and css-text-3's typographic character unit segmentation; this rule and "
                   "those two are then one component's three consumers");
         if (n->type == LXB_DOM_NODE_TYPE_ELEMENT && range_contains(b, n) &&
@@ -1765,8 +1778,10 @@ static JSValue range_client_rects(JSContext *ctx, const RangeBounds *b)
             JSValue list = element_view_client_rects(lxb_dom_interface_element(n)), len;
             uint32_t i, m = 0;
 
-            DCHECK(JS_IsObject(list), "§9 invoked §6's getClientRects() on a selected element and got no list "
-                                      "back — that algorithm answers a DOMRectList on every path it has");
+            DCHECK(JS_IsObject(list), "CSSOM View §9 \"Extensions to the Range Interface\" invoked CSSOM View "
+                                      "§6 \"Extensions to the Element Interface\"'s getClientRects() on a "
+                                      "selected element and got no list back — that algorithm answers a "
+                                      "DOMRectList on every path it has");
             len = JS_GetPropertyStr(ctx, list, "length");
             JS_ToUint32(ctx, &m, len);
             JS_FreeValue(ctx, len);
@@ -1778,10 +1793,11 @@ static JSValue range_client_rects(JSContext *ctx, const RangeBounds *b)
     return dom_rect_list_new(ctx, out);
 }
 
-/* §9's getBoundingClientRect(), which is its OWN four steps and not §6's get-the-bounding-box — the standard
-   writes them out again for the Range, so they are written out again here. Steps 3 and 4 reduce a list of one
-   to that one rectangle under either, for the reason ev_bounding_rect states in element_view.c, and the choice
-   between them for a longer list is the same unwritten comparison over a possibly-concolic number. */
+/* CSSOM View §9 "Extensions to the Range Interface"'s getBoundingClientRect(), which is its OWN four steps
+   and not CSSOM View §6 "Extensions to the Element Interface"'s get-the-bounding-box — the standard writes
+   them out again for the Range, so they are written out again here. Steps 3 and 4 reduce a list of one to that
+   one rectangle under either, for the reason ev_bounding_rect states in element_view.c, and the choice between
+   them for a longer list is the same unwritten comparison over a possibly-concolic number. */
 static JSValue range_bounding_rect(JSContext *ctx, const RangeBounds *b)
 {
     JSValue list = range_client_rects(ctx, b), len;
@@ -1799,7 +1815,8 @@ static JSValue range_bounding_rect(JSContext *ctx, const RangeBounds *b)
     if (n == 1) {
         JSValue only = JS_GetPropertyUint32(ctx, list, 0);
 
-        DCHECK(dom_rect_is(only), "§9's getBoundingClientRect read a list whose one member is not a DOMRect");
+        DCHECK(dom_rect_is(only), "CSSOM View §9 \"Extensions to the Range Interface\"'s "
+                                  "getBoundingClientRect read a list whose one member is not a DOMRect");
         JS_FreeValue(ctx, list);
         return only;
     }

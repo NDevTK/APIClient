@@ -174,7 +174,8 @@ static bool uv_display_is_ruby(const char *d)
 /* THE VALUES THAT REALLY ARE BLOCK-LEVEL IN NORMAL FLOW, WRITTEN OUT — and the whole point is that this is a
    LIST rather than an `else`, because matching none of the other tests is not the same fact as being
    block-level. Each entry is one sentence of css-display-3 and none of them is a resemblance:
-     - `block` — §2.1 "Outer Display Roles for Flow Layout: the block, inline, and run-in keywords": "The
+     - `block` — css-display-3 §2.1 "Outer Display Roles for Flow Layout: the block, inline, and run-in
+       keywords": "The
        element generates a box that is block-level when placed in flow layout".
      - `flow` and `flow-root` — a bare <display-inside> keyword, whose outer type §2.2 "Inner Display Layout
        Models: the flow, flow-root, table, flex, grid, and ruby keywords" defaults for it: "the element's outer
@@ -2416,11 +2417,13 @@ static CssPx uv_block_auto_width(lxb_dom_element_t *el, CssLength size_len, UvBo
  * second one — "if 'width' is 'auto', the used value is the shrink-to-fit width AS FOR FLOATING ELEMENTS" — so
  * one function serves both box types and the `auto` margin rule they also share is already `uv_margin`'s.
  *
- * TWO OF THE THREE TERMS ARE css-sizing-3's, UNDER ITS NAMES, and §2.1 "Auto Box Sizes" is what pins the
+ * TWO OF THE THREE TERMS ARE css-sizing-3's, UNDER ITS NAMES, and css-sizing-3 §2.1 "Auto Box Sizes" is what
+ * pins the
  * vocabularies together by name rather than by resemblance: the "preferred width" IS the max-content inline
  * size ("this is called the 'preferred width' in CSS2.1§10.3.5") and the "preferred minimum width" IS the
  * min-content inline size ("this is called the 'preferred minimum width' in CSS2.1§10.3.5"). The AVAILABLE
- * WIDTH is §2.1's stretch-fit inline size, and §2.1 says that too — "for the inline axis, this is called the
+ * WIDTH is css-sizing-3 §2.1's stretch-fit inline size, and css-sizing-3 §2.1 says that too — "for the inline
+ * axis, this is called the
  * 'available width' in CSS2.1§10.3.5 and computed by the rules in CSS2.1§10.3.3" — which is why the subtraction
  * below is the same six-term one `uv_block_auto_width` performs and not a second spelling of it.
  *
@@ -2429,11 +2432,13 @@ static CssPx uv_block_auto_width(lxb_dom_element_t *el, CssLength size_len, UvBo
  * member there already answers under. Writing the term as a literal zero here would be one component deciding
  * that again; it is absent because there is nothing to subtract.
  *
- * WHY THE FORMULA IS WRITTEN IN CSS 2.2's ORDER AND NOT css-sizing-3 §2.1's `clamp`. §2.1 states the same
+ * WHY THE FORMULA IS WRITTEN IN CSS 2.2's ORDER AND NOT css-sizing-3 §2.1's `clamp`. css-sizing-3 §2.1
+ * "Auto Box Sizes" states the same
  * result as `clamp(min-content size, stretch-fit size, max-content size)`, i.e. `max(min-content, min(max-
  * content, stretch-fit))`, and the two are the SAME FUNCTION only while `min-content <= max-content` — which
  * core/layout/text_run.c asserts at the read for exactly this reason. Under a violated relation they differ:
- * CSS 2.2's spelling would return the min-content size and §2.1's the max-content one. Taking the section's own
+ * CSS 2.2's spelling would return the min-content size and css-sizing-3 §2.1's the max-content one. Taking the
+ * section's own
  * order keeps the code checkable against the sentence quoted above, and the assert one level down keeps the
  * other spelling from being a different algorithm behind an equals sign.
  *
