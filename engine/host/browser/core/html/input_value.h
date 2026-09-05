@@ -51,6 +51,31 @@ JSValue input_value_set(JSContext *ctx, JSValueConst wrap, JSValueConst val);
    five text states, so a caller that reaches here has already asked. */
 void input_value_set_relevant(JSContext *ctx, JSValueConst wrap, JSValueConst val);
 
+/* §4.10.5's TYPE CHANGE STEPS — "When an input element's type attribute changes state, the user agent must run
+   the following steps". A no-op for every element and attribute but an `input`'s `type`, like every other
+   member of §4.9's attribute change steps.
+   IT TAKES THE OLD VALUE because the hook fires AFTER the write, so the PREVIOUS state — which each of the
+   three transfer branches is a condition on — cannot be read off the element any more.
+   ITS ONE CALL SITE is core/dom/element.c's element_attr_changed, beside media_element_attr_changed and
+   html_option_attr_changed. Until that line exists these steps do not run, and input_value.c's
+   iv_check_type_change is the crash that says so.
+
+   NAMED RESIDUAL — the steps built here are HTML §4.10.5's 1, 2, 3 and 6, which is what the value is made of;
+   its steps 4, 5, 7, 8 and 9 are NOT built, and each needs a component this file does not own:
+     - HTML §4.10.5 step 4 ("Update the element's rendering and behavior to the new state's") has no renderer
+       to tell.
+     - HTML §4.10.5 step 5 ("Signal a type change for the element. (The Radio Button state uses this, in
+       particular.)") has no site anywhere in this engine — grep finds no radio button group at all — so the
+       next diff builds §4.10.5.1.16's group beside this call. Its absence shows as two `type=radio` controls
+       of one name both reporting `checked` after one is switched to radio last.
+     - HTML §4.10.5 steps 7-9 reset the text entry cursor to the BEGINNING when a control becomes selectable, and
+       core/html/text_control_selection.c exports a move-to-END and no move-to-start; the next diff adds
+       text_control_selection_move_to_start beside text_control_selection_move_to_end. Its absence shows as
+       `i.value = "ab"; i.selectionStart = 1; i.type = "checkbox"; i.type = "text"; i.selectionStart`
+       answering 1 where a browser answers 0 — a cursor surviving a stint in a state it does not apply to. */
+void input_value_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local,
+                              const char *old_val, size_t old_len);
+
 /* §4.10.5.4's `files`, declared once per AGENT and installed on HTMLInputElement.prototype — the same three
    calls §4.10.21's constraint validation makes, from the same places, because the member goes on a prototype
    §4.10 owns and the algorithm behind it is this file's. */
