@@ -100,6 +100,9 @@ static int g_dispatch_pair_stepid = -1;
 /* The ids JS_RegisterStepDef handed this runtime for add/removeEventListener. `type` is a Web IDL DOMString,
    so it is ToString on whatever the page passed and cannot be a JS_ToCString from C. */
 static int g_add_stepid = -1, g_remove_stepid = -1, g_dispatch_stepid = -1;
+/* HTML §8.1.8.1's event handler IDL attribute GETTER, as one machine minted once per attribute per realm.
+   Runtime-lifetime like every other step id here, and given back at this component's release. */
+static int g_handler_get_stepid = -1;
 /* §2.9's SYNTHETIC CLICK, whose declaration is beside its own step def far below. The ID is here with the
    other four because event_target_init declares all five to core/agent_state.h and the release gives all five
    back, and a slot named in one place and defined in another is how one of them came to be left set. */
@@ -124,6 +127,10 @@ static JSClassID g_et_class;
    with the first. A tentative definition is what lets the declaration sit with its stages and still be the
    thing this function passes to the pool. */
 static const IdlStepDecl AEL_DECL;
+/* HTML §8.1.8.1's event handler getter machine, for the same reason and by the same tentative definition: the
+   definition sits beside the algorithm and its stage list, and event_target_init hands the runtime this one
+   object. */
+static const JSTrampStepDef EHG_DEF;
 static void event_target_install(JSContext *ctx);
 
 /* §8.1.8.2's handler list is AGENT state, so its two hand-written columns are checked where it is declared. */
@@ -239,6 +246,12 @@ void event_target_init(JSContext *ctx)
                                              &AEL_DECL, 1);
         idl_optional_from(2);   /* §2.7: `removeEventListener(type, callback, optional options)` */
     }
+    /* §8.1.8.1's getter machine. A RAW registration and not an idl_args pool member: the pool's accessor
+       installs mint through idl_mint_accessor, which takes a getter step id AND a setter step id, and
+       js_handler_set is an ordinary C setter — idl_args.h carries that as its own named residual over these
+       very attributes. So this family stays at its raw JS_DefinePropertyGetSet until that installer form
+       exists, and what changes here is only that the GETTER half is now a machine. */
+    g_handler_get_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &EHG_DEF);
     JS_NewClassID(JS_GetRuntime(ctx), &g_et_class);
     JS_NewClass(JS_GetRuntime(ctx), g_et_class, &d);
     /* §2.7's PROTOTYPE IS A PER-REALM INTRINSIC LIKE EVERY OTHER ONE, and it goes in the same list — which is
@@ -254,6 +267,7 @@ void event_target_init(JSContext *ctx)
     agent_state_value("event_target", &g_handler_marker, "HTML §8.1.8.1's handler placeholder in a listener list");
     agent_state_value("event_target", &g_uncompiled_key, "HTML §8.1.8.1's internal raw uncompiled handler brand");
     agent_state_class("event_target", &g_et_class, "§2.7's interface prototype slot and brand");
+    agent_state_id("event_target", &g_handler_get_stepid, "HTML §8.1.8.1's event handler getter machine");
     agent_state_id("event_target", &g_add_stepid, "§2.7's addEventListener machine");
     agent_state_id("event_target", &g_remove_stepid, "§2.7's removeEventListener machine");
     agent_state_id("event_target", &g_dispatch_stepid, "§2.7's dispatchEvent machine");
@@ -2345,40 +2359,144 @@ static JSValue handler_determine_target(JSContext *ctx, JSValueConst target, int
     return JS_DupValue(ctx, global);
 }
 
-/* §8.1.8.1's GETTER OF AN EVENT HANDLER IDL ATTRIBUTE — determine the target, answer null if it is null, and
-   otherwise get the current value there.
-   RESIDUAL: THIS ENTRY CANNOT PERFORM STEPS 3.8-3.12, SO IT CRASHES ON THE ONE VALUE THAT NEEDS THEM. WHAT IS
-   NOT COVERED: reading `el.onclick` FROM SCRIPT while the handler is still the uncompiled record the markup
-   minted — the dispatch walk compiles the same record perfectly well, because it is a step machine and this is
-   a plain C accessor with no flow base under it. WHAT THE NEXT DIFF BUILDS: this getter as a step machine,
-   minted with JS_NewStepClosure (the magic travels as closure data, a machine's own magic being its stepid),
-   after which it holds a JSStepHdr and a request buffer and calls handler_compile_run exactly as the walk
-   does; the read opcodes already hand a callable getter to the tramp, so it is a machine to write and not a
-   routing question to answer. HOW ITS ABSENCE SHOWS: `<body onload="…">` runs, and a script that READS
-   `window.onload` before the load event has dispatched aborts here — the order decides it, which is why the
-   getter and the walk had to be told apart rather than answered together. */
-static JSValue js_handler_get(JSContext *ctx, JSValueConst this_val, int magic)
-{
-    JSValue target = handler_determine_target(ctx, this_val, magic), h;
+/* §8.1.8.1's GETTER OF AN EVENT HANDLER IDL ATTRIBUTE — three steps, ONE `<ol>` with no nested list in it:
+ * "Let eventTarget be the result of determining the target of an event handler given this object and name",
+ * "If eventTarget is null, then return null", "Return the result of getting the current value of the event
+ * handler given eventTarget and name". All of the depth is inside that third step, whose own step 3 is the
+ * twelve-substep compile.
+ *
+ * IT IS A STEP MACHINE, AND THE REST POINT IS NOT THIS ALGORITHM'S — it is inherited from the one step it
+ * ends in. Steps 3.8-3.12 produce their function by EVALUATING a program, which is a CALL, and quickjs.c's
+ * JS_CallInternal DFAILs UNCONDITIONALLY on a bytecode body entered by C recursion below a live flow — it does
+ * not ask what the body contains. So a plain C accessor cannot finish this getter, and the previous revision
+ * crashed here saying so. What replaced the crash is not a way to make that call safe from C; it is this
+ * function becoming the kind of thing that may make it, which is what §C-stack means by hooking a
+ * continuation-holding builtin into the flow machinery rather than re-hosting it.
+ *
+ * THE DISPATCH WALK ALREADY DROVE THE SAME SUB-ALGORITHM, and this reaches it through the identical call.
+ * handler_compile_run is a sub-algorithm of a step machine rather than a machine, so the record it needs — one
+ * stage byte, a call phase and a request buffer — belongs to whichever machine drives it. The walk keeps those
+ * in its own state as `ehc`/`cphase`/`cb`; this keeps them in its own, and the two never share one. That the
+ * SAME function serves both is the point: a getter compiling a handler by a second route is two answers to
+ * §8.1.8.1 step 3, and the day one of them gained step 3.11 the other would not have.
+ *
+ * THE MAGIC TRAVELS AS CLOSURE DATA BECAUSE A MACHINE'S MAGIC IS ITS STEPID. JS_CFUNC_step spends the function
+ * object's magic slot on the step id, so the ~90 handler attributes cannot be ~90 magics over one machine the
+ * way they were over one C getter. They are one machine minted ~90 times, each carrying its index — which is
+ * what JS_NewStepClosure is for, and the reason the mint below is the NAMED form: Web IDL §3.7.6 Attributes
+ * mints an attribute getter with "the string \"get \" prepended to attribute's identifier", and a closure
+ * minted without a name answers `Object.getOwnPropertyDescriptor(el, "onerror").get.name` with the empty
+ * string. That name is not decoration — it is the property the corpus's own idlharness reads off every
+ * member, and this is the largest attribute family in the engine. */
+enum { EHG_CD_MAGIC, EHG_CD_N };
 
-    if (JS_IsNull(target))
-        return JS_NULL;
-    h = handler_current(ctx, target, EH_TYPE[magic]);
-    JS_FreeValue(ctx, target);
-    if (handler_compile_owed(ctx, h)) {
-        JS_FreeValue(ctx, h);
-        DFAILF("the event handler IDL attribute `%s` was READ FROM SCRIPT while its value is still HTML "
-               "§8.1.8.1 \"Event handlers\"'s internal raw uncompiled handler, and steps 3.8-3.12 CALL a "
-               "bytecode body — which a plain C accessor may not do, because it has no flow base under it. "
-               "handler_compile_run performs those steps and the dispatch walk drives it; this getter has to "
-               "become a step machine to drive it too. Answering null here instead would be the silence the "
-               "whole path replaced, and answering the RECORD would hand a page an object that is not a "
-               "callback. The residual above this function is the design",
-               EH_NAME[magic]);
-        return JS_NULL;
-    }
-    return h;
+#define EHG_STAGES(X)                                                                                          \
+    X(EHG_GET, "HTML §8.1.8.1 the getter of an event handler IDL attribute steps 1-3 (determine the target, "   \
+               "then get the current value, whose steps 3.8-3.12 evaluate the program that produces the "       \
+               "handler and therefore park)")
+enum { EHG_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const EHG_STEPS[] = { EHG_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    JSStepHdr hdr;
+    /* handler_compile_run's OWN stage byte, which it documents as zero exactly when no compile is in flight —
+       so it doubles as this machine's "have I parked inside step 3" test and there is no second flag to keep
+       in step with it. */
+    uint8_t   ehc;
+    uint8_t   cphase;   /* the program evaluation's call phase, borrowed by handler_compile_run */
+    /* STEP 1's eventTarget, OWNED ACROSS THE PARK. It is re-derivable from the receiver — determine the target
+       runs no page code — but re-deriving it on the resume would ask a question the page's own handler may
+       have changed the answer to between the park and the resume (a `<body>` removed from its document has no
+       active document, so step 3 of determine the target answers null where it had answered the Window). The
+       algorithm binds `eventTarget` once, at step 1, and every later step names THAT object. */
+    JSValue   target;
+    JSValue   result;   /* step 3's answer, OWNED until fini takes it */
+    JSValue   cb[2];    /* [this, func] — step 3.9's program evaluation is called with no arguments */
+} EhGetState;
+
+static void ehg_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    EhGetState *s = st;
+    int i;
+
+    v->val(ctx, &s->target);
+    v->val(ctx, &s->result);
+    STEP_CB_FOREACH(s->cb, i) v->val(ctx, &s->cb[i]);
 }
+
+static JSValue ehg_fini(JSContext *ctx, void *st, bool take_result)
+{
+    EhGetState *s = st;
+    JSValue r = take_result ? s->result : JS_UNDEFINED;
+
+    (void)ctx;
+    if (take_result) s->result = JS_UNDEFINED;
+    return r;
+}
+
+static int ehg_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    EhGetState *s = st;
+    int magic = JS_VALUE_GET_INT(JS_StepClosureData(&s->hdr, EHG_CD_MAGIC));
+    JSValue h;
+    int r;
+
+    DCHECK(magic >= 0 && magic < EH_COUNT,
+           "an event handler getter machine was minted over a magic the attribute list does not name");
+    DCHECK(s->hdr.stage == EHG_GET, "§8.1.8.1's event handler getter resumed into a stage it does not have");
+
+    /* THE RESUME COMES BACK INSIDE STEP 3, NOT AT STEP 1. `ehc` is non-zero exactly while the compile is in
+       flight, so it is the whole of the routing: steps 1-2 are performed once, on the entry that finds it
+       zero, and a park inside step 3.9 returns here to finish the same compile over the same target. */
+    if (s->ehc != 0)
+        goto compile;
+
+    /* STEP 1 — "Let eventTarget be the result of determining the target of an event handler given this object
+       and name." The receiver is the header's, which is where a machine's `this` lives. */
+    s->target = handler_determine_target(ctx, s->hdr.this_val, magic);
+    /* STEP 2 — "If eventTarget is null, then return null." */
+    if (JS_IsNull(s->target)) {
+        s->result = JS_NULL;
+        return JS_STEP_DONE;
+    }
+    /* STEP 3 — "Return the result of getting the current value of the event handler given eventTarget and
+       name." handler_current performs that algorithm's code-free half and answers the INTERNAL RAW UNCOMPILED
+       HANDLER when its steps 3.8-3.12 are owed; the predicate below is what tells that third answer from a
+       value the page assigned, exactly as the dispatch walk's does. */
+    h = handler_current(ctx, s->target, EH_TYPE[magic]);
+    if (!handler_compile_owed(ctx, h)) {
+        s->result = h;
+        return JS_STEP_DONE;
+    }
+    /* The RECORD is not the answer and must never leave this function — the compile below replaces it, and
+       step 3.12 writes the function back to the map so a second read never reaches here at all. */
+    JS_FreeValue(ctx, h);
+compile:
+    r = handler_compile_run(ctx, &s->ehc, &s->cphase, STEP_CB(s->cb), s->target, EH_TYPE[magic],
+                            cb_result, &s->result, out_cb, out_argc);
+    if (r > 0)
+        return r;   /* parked evaluating the program; the resume re-enters above and jumps back to `compile` */
+    if (r < 0) {
+        /* THE ABRUPT ARM IS A THROW OUT OF THE GETTER AND NOT A NULL, and that is the one place this algorithm
+           differs from the dispatch walk's use of the same sub-algorithm. §2.9 "inner invoke" step 2.11 gives
+           the walk somewhere to put an exception — REPORT it and carry on down the listener list — because a
+           dispatch has more listeners to run. A getter has no such step: Web IDL §3.7.6's attribute getter is
+           `Return ? ...`, so an abrupt completion PROPAGATES to the page's own `el.onclick` expression, which
+           is what a browser does and what answering null would hide. */
+        return JS_STEP_ABRUPT;
+    }
+    DCHECK(JS_IsFunction(ctx, s->result),
+           "§8.1.8.1 step 3's compile answered the getter with something that is not a function — step 3.12 "
+           "writes a Web IDL EventHandler callback function object, and this getter hands its caller exactly "
+           "what the next dispatch would invoke");
+    return JS_STEP_DONE;
+}
+
+static const JSTrampStepDef EHG_DEF = {
+    sizeof(EhGetState), ehg_step, ehg_fini, 0, .visit = ehg_visit,
+    .algorithm = "HTML §8.1.8.1 the getter of an event handler IDL attribute",
+    .steps = EHG_STEPS
+};
 
 /* HTML §8.1.8.1's handler attributes are ordinarily pure state — assign a function, it is called when the event
    fires, and nothing else happens. The platform has ONE exception: §9.4.2 says setting `onmessage` on a
@@ -2605,13 +2723,24 @@ void event_target_install_handlers(JSContext *ctx, JSValueConst target, int mask
             continue;
         a = JS_NewAtom(ctx, EH_NAME[i]);
         CHECK(a != JS_ATOM_NULL, "an event handler name could not be interned");
-        /* The getter/setter cprotos take their own signatures, which the magic-function constructor reaches
-           through one pointer type — the same cast every JS_CGETSET_MAGIC_DEF performs at compile time. */
+        /* THE GETTER IS A MACHINE AND THE SETTER IS A PLAIN C FUNCTION, which is not an inconsistency but the
+           two halves answering different questions. §8.1.8.1's SETTER runs no page code — it writes the
+           handler map and activates a listener — so it has nothing to park on. Its GETTER ends in get the
+           current value, whose steps 3.8-3.12 EVALUATE a program, and a call is the one thing a C accessor
+           may not make below a live flow. So the getter is minted as a step closure carrying its attribute
+           index, and the setter keeps the magic-function cast every JS_CGETSET_MAGIC_DEF performs.
+           WEB IDL §3.7.6's NAME IS ON BOTH, from the one composer, which is why the mint is the `2` form:
+           a step closure minted by the unnamed entry answers `.name` with the empty string. */
+        JSValueConst gdata[EHG_CD_N];
+
+        DCHECK(g_handler_get_stepid >= 0,
+               "an event handler attribute was installed before event_target_init declared its getter machine");
+        gdata[EHG_CD_MAGIC] = JS_NewInt32(ctx, i);
         JS_DefinePropertyGetSet(ctx, (JSValue)target, a,
-                                JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_handler_get,
-                                                     idl_accessor_name(gb, sizeof gb, EH_NAME[i],
-                                                                       IDL_ACCESSOR_GET), 0,
-                                                     JS_CFUNC_getter_magic, i),
+                                JS_NewStepClosure2(ctx, g_handler_get_stepid,
+                                                   idl_accessor_name(gb, sizeof gb, EH_NAME[i],
+                                                                     IDL_ACCESSOR_GET), 0,
+                                                   EHG_CD_N, gdata),
                                 JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_handler_set,
                                                      idl_accessor_name(sb, sizeof sb, EH_NAME[i],
                                                                        IDL_ACCESSOR_SET), 1,
@@ -3632,10 +3761,16 @@ compile_handler:
             if (s->eh_index >= 0) {
                 /* HTML §8.1.8.1's GET THE CURRENT VALUE steps 3.8-3.12. handler_current stopped at the last
                    step that runs no code and answered the INTERNAL RAW UNCOMPILED HANDLER when the compile is
-                   owed; this is where it is performed, because this machine has the JSStepHdr and the request
-                   buffer that a program evaluation needs and the plain C accessor does not. It happens ONCE
-                   per handler — step 3.12 writes the function back to the map — so the second dispatch of the
-                   same type finds a function here and this whole block is a predicate that answers false. */
+                   owed; this is one of the TWO drivers that finish it, because a program evaluation needs a
+                   JSStepHdr and a request buffer and this machine has both.
+                   THE OTHER DRIVER IS THE IDL ATTRIBUTE GETTER, and saying so here is the point: this comment
+                   used to justify itself by saying the plain C accessor does not have them — unquoted, because
+                   it is this file's own retired sentence and not a standard's — and that was a true statement
+                   about a getter which has since become a machine of its own. Both call the SAME
+                   handler_compile_run over their own stage byte, phase and buffer, so §8.1.8.1 step 3 has one
+                   implementation and not one per door. It happens ONCE per handler either way — step 3.12
+                   writes the function back to the map — so whichever door arrives second finds a function and
+                   this whole block is a predicate that answers false. */
                 if (s->ehc != 0 || handler_compile_owed(ctx, s->lcb)) {
                     JSValue compiled = JS_UNDEFINED;
                     const char *t = JS_IsString(s->type) ? JS_ToCString(ctx, s->type) : NULL;
