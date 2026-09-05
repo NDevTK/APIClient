@@ -93,11 +93,21 @@ static int idl_exposure_row_name_cmp(const void *key, const void *row)
    which is spelled `location`, `document`, `fetch` — can never be mistaken for one of these. No ECMAScript
    intrinsic global name is a Web IDL identifier either, so the JS engine's own globals are outside the set.
    WHAT IT DOES NOT SEE, named because a check trusted past its evidence is worse than none: an interface
-   object a HOST puts on the global AFTER this returns (a harness global, a solver seam) is outside the walk,
-   because the walk runs where the platform's own installs finish. Those are not §3.8 property references and
-   none of them is named by the corpus; the day one is, this check is the thing that has to move rather than
-   the thing that was wrong. */
-static void realm_assert_global_property_references(JSContext *ctx)
+   object a HOST puts on the global AFTER the platform's own installs finish (a harness global, a solver seam)
+   is outside the walk. Those are not §3.8 property references and none of them is named by the corpus; the day
+   one is, this check is the thing that has to move rather than the thing that was wrong.
+   AND IT IS ASKED AT BOTH ENDS OF A REALM'S CONSTRUCTION, WHICH USED TO BE ONE END AND A WRONG CLAIM. It ran
+   only where the per-realm intrinsic list finishes, under a comment saying the invariant is about the FINISHED
+   global — an argument that is exactly right and was being applied to the wrong operand, which is the failure
+   a well-argued banner is most likely to hide. A realm whose global object is a WorkerGlobalScope IS finished
+   there; a WINDOW realm is not, because core/platform.c's per-document install column runs afterwards, and at
+   the revision this was written that column placed 82 of the 143 §3.8 property references in this tree. So the
+   walk was auditing under half of a Window's global and reporting it as the whole. Moving it to the other end
+   would have been the mirror of that — blind to every worker realm, which is the realm kind §3.3.7 [Exposed]
+   step 1 exists to make different — so core/platform.c calls it as well, and this stays where a realm that
+   never reaches a document install is still judged. Running twice over one global costs nothing: the walk
+   allocates no state, decides nothing, and the property it asserts is monotone. */
+void realm_assert_global_property_references(JSContext *ctx)
 {
     JSPropertyEnum *tab = NULL;
     uint32_t n = 0, i;
@@ -230,9 +240,14 @@ void realm_install_intrinsics(JSContext *ctx, const char *top_level_creation_url
     for (i = 0; i < g_n; i++)
         g_list[i](ctx);
 #if APICLIENT_DEV
-    /* EVERY §3.8 PROPERTY REFERENCE THIS REALM HAS, NOW THAT IT HAS ALL OF THEM. It is asked here and not
-       inside a component because the invariant is about the FINISHED global: a component can only see the one
-       name it installed, and what has to be true is a statement about the whole object. */
+    /* EVERY §3.8 PROPERTY REFERENCE THE PER-REALM INTRINSIC LIST PLACED. It is asked here and not inside a
+       component because the invariant is about the GLOBAL and not about one name: a component can only see the
+       one it installed, and what has to be true is a statement about the whole object.
+       IT IS NOT NECESSARILY THE WHOLE OF THIS REALM'S GLOBAL, and saying so is the point — for a realm whose
+       global object is a WorkerGlobalScope this IS the end of its construction, and for a WINDOW realm
+       core/platform.c's per-document install column runs after this returns and asks the same question again
+       at the end that finishes THAT realm. See the banner above for why one function with two callers is
+       routing rather than a second copy. */
     realm_assert_global_property_references(ctx);
 #endif
 }

@@ -660,10 +660,8 @@ static void i_text_stream(JSContext *c, JSValueConst g, const PlatformDocument *
    this the origin got a `location`-free Window whose own `origin` was re-derived from a string that was
    already one — and the WPT runner, the one host whose whole job is measuring fidelity, did exactly that. */
 static void i_window(JSContext *c, JSValueConst g, const PlatformDocument *d) { window_install(c, g, d->url); }
-static void i_event(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; event_install(c, g); }
 static void i_message_event(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; message_event_install(c, g); }
 static void i_error_event(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; error_event_install(c, g); }
-static void i_message_port(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; message_port_install(c, g); }
 static void i_performance_observer(JSContext *c, JSValueConst g, const PlatformDocument *d)
 { (void)d; performance_observer_install(c, g); }
 static void i_xhr(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; xhr_install(c, g); }
@@ -693,7 +691,6 @@ static void i_document(JSContext *c, JSValueConst g, const PlatformDocument *d)
     document_install(c, g, d->dom, d->url, d->kind, d->policy, d->permissions_policy, d->sandbox_flags,
                      d->doc_id, d->nav_proxy);
 }
-static void i_domparser(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; domparser_install(c, g); }
 static void i_xml_serializer(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; xml_serializer_install(c, g); }
 
 /* THE LIST. ORDER IS DEPENDENCY ORDER and it is ONE order for both halves, which is what keeps a component to
@@ -884,7 +881,7 @@ static const PlatformComponent PLATFORM[] = {
        Object.prototype and its two attributes read its own slot record. */
     { "input_device_capabilities", d_input_device_capabilities, NULL,
                                                           r_input_device_capabilities },
-    { "event",               d_event,               i_event,     r_event },
+    { "event",               d_event,               NULL,        r_event },
     /* §4.2's IDBVersionChangeEvent, and it is HERE rather than beside the other Indexed Database rows for the
        one reason that decides every position in this list: its prototype chains to Event.prototype, which the
        row above builds, and core/realm.h runs the per-realm installs in declaration order. §5.1's own
@@ -896,7 +893,7 @@ static const PlatformComponent PLATFORM[] = {
     { "message_event",       NULL,                  i_message_event },
     { "error_event",         NULL,                  i_error_event },
     { "report_exception",    d_report_exception,    NULL,        r_report_exception },
-    { "message_port",        d_message_port,        i_message_port, r_message_port },
+    { "message_port",        d_message_port,        NULL,        r_message_port },
     { "xml_http_request",    d_xhr,                 i_xhr,       r_xhr },
     /* FILE API §6 Reading Data, AFTER `xml_http_request` and not beside `blob`. Two rows decide it and
        both are the standards' own: §6.4.1 Event Summary makes every event this component fires a
@@ -1058,7 +1055,7 @@ static const PlatformComponent PLATFORM[] = {
        this interface builds a second Document through core/dom/document.h's `document_new`, so the component
        that owns Documents is what it is declared against. Its own prototype chains to Object.prototype, so no
        earlier row is required for that half. */
-    { "domparser",           d_domparser,           i_domparser, r_domparser },
+    { "domparser",           d_domparser,           NULL,        r_domparser },
     /* HTML §8.5.8's XMLSerializer, AFTER `element` and beside §8.5.1's DOMParser. After element because its
        declaration brands `serializeToString(Node root)` against the Node class, which element_init is what
        creates (through node_init) — a row above that one would hand the declaration a class id of zero. It
@@ -1651,6 +1648,16 @@ void platform_document_install(JSContext *ctx, JSValueConst global, lxb_html_doc
             PLATFORM[i].install(ctx, global, doc);
 
 #if APICLIENT_DEV
+    /* WEB IDL §3.8's DESCRIPTOR OVER THE GLOBAL THIS COLUMN HAS NOW FINISHED. core/realm.c owns the walk and
+       asks it where the per-realm intrinsic list ends, which is the end of a WORKER realm's construction and
+       NOT the end of a Window's: this column runs afterwards, so every §3.8 property reference it places was
+       outside the only audit of them there was. It is one function with two callers because a realm has two
+       possible ends, and it is asked BEFORE the witness loop below for the same reason that loop's own
+       ordering matters — this one names the IDENTIFIER that reached the global the wrong way, which is an
+       address, while the witness names a component that owes a name, and a global assembled through [[Set]]
+       is a defect in how the name got here rather than in whether it is here. */
+    realm_assert_global_property_references(ctx);
+
     for (i = 0; i < PLATFORM_WITNESS_N; i++) {
         JSAtom a = JS_NewAtom(ctx, PLATFORM_WITNESS[i].name);
         /* WHAT THIS REALM OWES, decided by Web IDL §3.3.7 [Exposed]'s own "is exposed in realm" and by nothing

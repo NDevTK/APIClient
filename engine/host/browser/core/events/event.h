@@ -6,17 +6,18 @@
 #include "quickjs.h"
 
 void event_init(JSContext *ctx);
-/* §2.2's PROTOTYPE FOR ONE REALM. Run it where a realm's other intrinsics are added, exactly once per realm —
-   the agent's first realm gets it from event_init, because every prototype derived from Event chains to that
-   realm's and so it has to exist before them. */
-void event_install_proto(JSContext *ctx);
+/* §2.2's PROTOTYPE AND §3.8's GLOBAL PROPERTY REFERENCE, FOR ONE REALM. Run it where a realm's other
+   intrinsics are added, exactly once per realm — the agent's first realm gets it from event_init, because
+   every prototype derived from Event chains to that realm's and so it has to exist before them.
+   ONE ENTRY BECAUSE §3.8 IS GIVEN A REALM. `define the global property references` takes "target" and "a realm
+   realm", and step 1's population is "every interface that is exposed in realm" — no Document appears in the
+   algorithm. `Event` is `[Exposed=*]`, so it belongs in EVERY realm; while its interface object was installed
+   from core/platform.c's per-document column it was absent from every realm no Document was installed over. */
+void event_install_realm(JSContext *ctx);
 /* Undone ONCE PER AGENT, from core/platform.c's release column — which takes the RUNTIME, because what
    this gives back is the AGENT's and not any realm's. It also releases the thirteen subclasses
    event_init declares, so the whole family is one row. */
 void event_free(JSRuntime *rt);
-/* `Event` as a global: the interface object, its prototype, and §2.2's phase constants. */
-void event_install(JSContext *ctx, JSValueConst global);
-
 /* `Event.prototype`, for a DERIVED interface to chain from — `interface PromiseRejectionEvent : Event` is a
    real prototype chain a page can walk, not a flag on Event. */
 /* PER REALM — §3.7 gives each its own, and here that decides ANSWERS and not just identities: a C member runs

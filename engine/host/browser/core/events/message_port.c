@@ -1027,7 +1027,7 @@ void message_port_init(JSContext *ctx)
         g_id_close = idl_method_id_step(ctx, NULL, 0, NULL, 0, &PORT_CLOSE_DECL, 0);
     }
     g_chan_ctor_stepid = idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_chan_ctor_decl, 0);
-    realm_declare_intrinsic(message_port_install_protos);
+    realm_declare_intrinsic(message_port_install_realm);
 
     g_deliver_stepid = JS_RegisterStepDef(rt, &js_port_deliver_def);
     DCHECK(g_deliver_stepid >= 0, "§9.4.4's delivery machine could not be declared against this runtime");
@@ -1055,16 +1055,23 @@ void message_port_init(JSContext *ctx)
        it is true; see there. */
 }
 
-/* §9.4.4's AND §9.4.2's INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM. `postMessage` is the member that makes
-   this an answer and not an identity: a shared one would serialize and deliver under the realm that built it,
-   so a port handed to a child document would carry the parent's realm into every message it sent. */
-void message_port_install_protos(JSContext *ctx)
+/* §9.4.4's AND §9.4.2's INTERFACE PROTOTYPE OBJECTS AND THEIR §3.8 PROPERTY REFERENCES, FOR ONE REALM.
+   `postMessage` is the member that makes this an answer and not an identity: a shared one would serialize and
+   deliver under the realm that built it, so a port handed to a child document would carry the parent's realm
+   into every message it sent.
+   THE INTERFACE OBJECTS ARE HERE BECAUSE §3.8 IS GIVEN A REALM. `define the global property references` is "To
+   define the global property references on target, given realm realm", step 1 being "Let interfaces be a
+   list that contains every interface that is exposed in realm" — the population is a REALM's and the algorithm
+   names no Document. Both identifiers are `[Exposed=(Window,Worker)]` in the corpus (MessagePort additionally
+   AudioWorklet), so both belong in a WORKER realm — and while they were installed from core/platform.c's
+   per-document column, a worker realm, which reaches no platform_document_install, got neither. */
+void message_port_install_realm(JSContext *ctx)
 {
     JSValue port_p, chan_p, prev;
 
     DCHECK(g_port_class != 0, "a realm asked for MessagePort.prototype before the class was declared");
     prev = JS_GetClassProto(ctx, g_port_class);
-    DCHECK(JS_IsNull(prev), "message_port_install_protos ran twice in one realm");
+    DCHECK(JS_IsNull(prev), "message_port_install_realm ran twice in one realm");
     JS_FreeValue(ctx, prev);
 
     /* §9.4.4: `interface MessagePort : EventTarget` — the listeners and the two handler attributes. */
@@ -1076,7 +1083,6 @@ void message_port_install_protos(JSContext *ctx)
     idl_install_method(ctx, port_p, "postMessage", g_id_post);
     idl_install_method(ctx, port_p, "start", g_id_start);
     idl_install_method(ctx, port_p, "close", g_id_close);
-    JS_SetClassProto(ctx, g_port_class, port_p);
 
     chan_p = JS_NewObject(ctx);
     CHECK(!JS_IsException(chan_p), "MessageChannel.prototype could not be allocated");
@@ -1085,27 +1091,31 @@ void message_port_install_protos(JSContext *ctx)
        [Global]: on the INTERFACE PROTOTYPE OBJECT. They were own data properties of each channel. */
     idl_install_accessor(ctx, chan_p, "port1", js_chan_port, 0, -1);
     idl_install_accessor(ctx, chan_p, "port2", js_chan_port, 1, -1);
+
+    /* §3.7.1's TWO INTERFACE OBJECTS AND §3.8's PROPERTY REFERENCES FOR THEM, over the two prototypes built
+       above and BEFORE either is handed to its class. The two class-proto READS the separate per-document entry
+       used to make are gone: the prototypes are already in hand here, so re-reading them would be a second
+       answer to a question this function has just settled. JS_SetClassProto CONSUMES its argument, which is
+       why both hand-offs now happen last — that keeps every reference in this block an owned one.
+       THE EXPOSURE IS THE DOOR'S ANSWER, NOT A CONDITION HERE: idl_define_global_property_reference asks
+       §3.3.7 [Exposed] step 1 against this realm's §3.3.8 [Global] global names, keyed by the identifier it is
+       already handed, so nothing at this site re-derives what the corpus states. */
+    {
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue ctor;
+
+        DCHECK(g_chan_ctor_stepid >= 0, "MessageChannel was installed before message_port_init declared it");
+        ctor = idl_interface_object(ctx, "MessagePort", port_p);
+        idl_define_global_property_reference(ctx, global, "MessagePort", ctor);
+
+        ctor = idl_step_constructor(ctx, "MessageChannel", g_chan_ctor_stepid);
+        CHECK(!JS_IsException(ctor), "the MessageChannel interface object could not be allocated");
+        JS_SetConstructor(ctx, ctor, chan_p);
+        idl_define_global_property_reference(ctx, global, "MessageChannel", ctor);
+        JS_FreeValue(ctx, global);
+    }
+    JS_SetClassProto(ctx, g_port_class, port_p);    /* the realm owns them from here */
     JS_SetClassProto(ctx, g_chan_class, chan_p);
-}
-
-void message_port_install(JSContext *ctx, JSValueConst global)
-{
-    JSValue ctor;
-
-    JSValue port_p = JS_GetClassProto(ctx, g_port_class), chan_p = JS_GetClassProto(ctx, g_chan_class);
-
-    DCHECK(g_chan_ctor_stepid >= 0, "MessageChannel was installed before message_port_init declared it");
-    DCHECK(!JS_IsNull(port_p) && !JS_IsNull(chan_p),
-           "the messaging interfaces were installed into a realm that never ran their proto build");
-    ctor = idl_interface_object(ctx, "MessagePort", port_p);
-    idl_define_global_property_reference(ctx, global, "MessagePort", ctor);
-
-    ctor = idl_step_constructor(ctx, "MessageChannel", g_chan_ctor_stepid);
-    CHECK(!JS_IsException(ctor), "the MessageChannel interface object could not be allocated");
-    JS_SetConstructor(ctx, ctor, chan_p);
-    idl_define_global_property_reference(ctx, global, "MessageChannel", ctor);
-    JS_FreeValue(ctx, port_p);
-    JS_FreeValue(ctx, chan_p);
 }
 
 void message_port_free(JSRuntime *rt)

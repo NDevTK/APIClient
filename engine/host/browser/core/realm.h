@@ -118,6 +118,27 @@ unsigned realm_global_names(JSContext *ctx);
  * DCHECK names the question rather than guarding a case anybody meant to reach. */
 JSValue realm_top_level_creation_url(JSContext *ctx);
 
+/* WEB IDL §3.8 Platform objects implementing interfaces' DESCRIPTOR, ASSERTED OVER A REALM'S GLOBAL — see
+ * realm.c for what the walk reads and why an assert at §3.8's own entry could not make this statement.
+ *
+ * IT HAS TWO CALLERS BECAUSE A REALM'S CONSTRUCTION HAS TWO ENDS, AND THAT IS ROUTING RATHER THAN A COPY.
+ * The invariant is about a FINISHED global, and which call finishes one depends on what kind of realm it is: a
+ * realm whose global object is a WorkerGlobalScope is finished when realm_install_intrinsics returns, and a
+ * WINDOW realm is not — core/platform.c's per-document install column runs afterwards and puts most of this
+ * browser's §3.8 property references there. Asked only at the first end it audits a FRACTION of a Window's
+ * global and reports it as the whole; MOVED to the second end it stops seeing worker realms altogether, which
+ * is the realm kind whose surface §3.3.7 [Exposed] step 1 exists to make different. So it is one function
+ * asked at both ends, and running twice over a Window's global costs nothing: the walk allocates no state,
+ * decides nothing, and asserts a property that is monotone — a name that got there through an ordinary [[Set]]
+ * does not stop having been set.
+ *
+ * DEV ONLY, like the walk itself: the condition is a full own-property enumeration of the global, which is
+ * work rather than a side-effect-free test, so it is the block and not merely the DCHECK that is compiled out.
+ * A caller therefore guards its call with APICLIENT_DEV rather than relying on an empty body. */
+#if APICLIENT_DEV
+void realm_assert_global_property_references(JSContext *ctx);
+#endif
+
 /* Agent teardown: the declarations are the agent's. */
 void realm_intrinsics_free(void);
 

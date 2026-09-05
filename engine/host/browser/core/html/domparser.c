@@ -446,7 +446,7 @@ void domparser_init(JSContext *ctx)
     agent_state_flag("domparser", &g_ready, "HTML §8.5.1's declaration latch");
     agent_state_id("domparser", &g_id_ctor, "HTML §8.5.1's DOMParser constructor declaration");
     agent_state_id("domparser", &g_id_parse, "HTML §8.5.1's parseFromString declaration");
-    realm_declare_intrinsic(domparser_install_proto);
+    realm_declare_intrinsic(domparser_install_realm);
 }
 
 /* THE INVERSE OF THE DECLARATION ABOVE, which did not exist. The prototype and the interface object are the
@@ -462,29 +462,36 @@ void domparser_free(void)
     g_class = 0;
 }
 
-void domparser_install_proto(JSContext *ctx)
+/* §8.5.1's INTERFACE PROTOTYPE OBJECT AND ITS §3.8 PROPERTY REFERENCE, FOR ONE REALM — one function because
+   Web IDL states them of one thing. §3.8 `define the global property references` is "To define the global
+   property references on target, given realm realm", and its step 1 is "Let interfaces be a list that
+   contains every interface that is exposed in realm": the population is a REALM's, and a Document appears
+   nowhere in the algorithm. This half used to be a second entry reached only from core/platform.c's
+   per-document install column, so a realm with no Document — every realm whose global object is not a Window —
+   carried §3.7's prototype and no `DOMParser` property at all, which is not a smaller browser but an
+   INCOHERENT one: the prototype exists, the interface object naming it does not, and `'DOMParser' in
+   globalThis` answers false in a Window realm too until some document is installed over it.
+   THE EXPOSURE IS DECIDED BY THE DOOR AND NOT BY AN `if` HERE. `[Exposed=Window]` is stated by the corpus, and
+   idl_define_global_property_reference asks §3.3.7 [Exposed] step 1 against this realm's §3.3.8 [Global]
+   global names before it defines anything — so this same call is a define in a Window realm and a decline in a
+   worker one, with no condition written at this site to drift from the IDL. */
+void domparser_install_realm(JSContext *ctx)
 {
-    JSValue proto, prev;
+    JSValue global, proto, prev, ctor;
 
     DCHECK(g_ready, "a realm asked for DOMParser.prototype before the interface was declared");
     prev = JS_GetClassProto(ctx, g_class);
-    DCHECK(JS_IsNull(prev), "domparser_install_proto ran twice in one realm");
+    DCHECK(JS_IsNull(prev), "domparser_install_realm ran twice in one realm");
     JS_FreeValue(ctx, prev);
     proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(proto), "DOMParser.prototype could not be allocated");
     idl_interface_tag(ctx, proto, "DOMParser");
     idl_install_method(ctx, proto, "parseFromString", g_id_parse);
-    JS_SetClassProto(ctx, g_class, proto);
-}
-
-void domparser_install(JSContext *ctx, JSValueConst global)
-{
-    JSValue proto = JS_GetClassProto(ctx, g_class), ctor;
-
-    DCHECK(g_ready, "DOMParser was installed before domparser_init declared it");
-    DCHECK(!JS_IsNull(proto), "DOMParser was installed in a realm that never ran its prototype install");
     ctor = idl_step_constructor(ctx, "DOMParser", g_id_ctor);
+    CHECK(!JS_IsException(ctor), "the DOMParser interface object could not be allocated");
     JS_SetConstructor(ctx, ctor, proto);
-    JS_FreeValue(ctx, proto);
+    JS_SetClassProto(ctx, g_class, proto);   /* the realm owns it from here */
+    global = JS_GetGlobalObject(ctx);
     idl_define_global_property_reference(ctx, global, "DOMParser", ctor);
+    JS_FreeValue(ctx, global);
 }

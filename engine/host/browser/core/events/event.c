@@ -944,20 +944,26 @@ void event_init(JSContext *ctx)
     agent_state_id("event", &g_return_value_setid, "DOM §2.2 Interface Event's legacy `returnValue` setter");
     agent_state_id("event", &g_init_event_id,
                    "DOM §2.2 Interface Event's `initEvent(type, optional bubbles, optional cancelable)`");
-    realm_declare_intrinsic(event_install_proto);
+    realm_declare_intrinsic(event_install_realm);
     event_declare_subclasses(ctx);
 }
 
-/* §2.2's INTERFACE PROTOTYPE OBJECT, FOR ONE REALM — run where a realm's other intrinsics are added, exactly
-   once per realm. */
-void event_install_proto(JSContext *ctx)
+/* §2.2's INTERFACE PROTOTYPE OBJECT AND ITS §3.8 PROPERTY REFERENCE, FOR ONE REALM — run where a realm's other
+   intrinsics are added, exactly once per realm.
+   THEY ARE ONE ENTRY BECAUSE WEB IDL STATES THEM OF ONE THING. §3.8 `define the global property references` is
+   "To define the global property references on target, given realm realm", and its step 1 is "Let interfaces
+   be a list that contains every interface that is exposed in realm" — a REALM, with no Document anywhere in the
+   algorithm. The interface object used to be a second entry reached only from core/platform.c's per-document
+   install column, so `Event` — which the corpus declares `[Exposed=*]`, exposed in EVERY realm there is — was
+   absent from every realm no Document was installed over. */
+void event_install_realm(JSContext *ctx)
 {
     JSValue proto, prev;
 
     DCHECK(g_ready, "a realm asked for Event.prototype before event_init declared the interface");
     prev = JS_GetClassProto(ctx, g_event_class);
     DCHECK(JS_IsNull(prev),
-           "event_install_proto ran twice in one realm — §3.7 gives a realm ONE Event.prototype, and a second "
+           "event_install_realm ran twice in one realm — §3.7 gives a realm ONE Event.prototype, and a second "
            "would leave every event already chained to the first answering out of a discarded one");
     JS_FreeValue(ctx, prev);
     proto = JS_NewObject(ctx);
@@ -977,6 +983,28 @@ void event_install_proto(JSContext *ctx)
        already states as `idl_optional_from(1)`. The 3 that stood here was the DECLARED arity, which is what
        §3.7.7 explicitly is not. */
     idl_install_method(ctx, proto, "initEvent", g_init_event_id);
+
+    /* §3.7.1's INTERFACE OBJECT AND §3.8's PROPERTY REFERENCE FOR IT, in the same realm and the same breath,
+       and BEFORE the prototype is handed to the class — JS_SetClassProto CONSUMES its argument, so building
+       the constructor over `proto` first is what keeps every reference here an owned one rather than a
+       borrowed read of what the class now holds.
+       A step machine that is also a CONSTRUCTOR: `new Event(type, init)` converts two page-reachable arguments
+       before the body runs, and JS_CFUNC_step_ctor is what makes the declaration usable with `new`.
+       THE EXPOSURE IS THE DOOR'S ANSWER AND NOT A CONDITION HERE: idl_define_global_property_reference asks
+       §3.3.7 [Exposed] step 1 against this realm's §3.3.8 [Global] global names, and `Event`'s exposure set is
+       the corpus's `*`, which step 1 tests for before it looks at the realm at all. */
+    {
+        JSValue ctor = idl_step_constructor(ctx, "Event", g_ctor_stepid);
+        JSValue global;
+
+        CHECK(!JS_IsException(ctor), "the Event interface object could not be allocated");
+        JS_SetConstructor(ctx, ctor, proto);
+        JS_SetPropertyFunctionList(ctx, ctor, js_event_consts,
+                                   (int)(sizeof(js_event_consts) / sizeof(js_event_consts[0])));
+        global = JS_GetGlobalObject(ctx);
+        idl_define_global_property_reference(ctx, global, "Event", ctor);
+        JS_FreeValue(ctx, global);
+    }
     JS_SetClassProto(ctx, g_event_class, proto);   /* the realm owns it from here */
 }
 
@@ -984,28 +1012,9 @@ JSValue event_proto(JSContext *ctx)
 {
     JSValue proto = JS_GetClassProto(ctx, g_event_class);
     DCHECK(!JS_IsNull(proto),
-           "Event.prototype was asked for in a realm that never ran event_install_proto — a realm whose "
+           "Event.prototype was asked for in a realm that never ran event_install_realm — a realm whose "
            "intrinsics were not all installed answers a derived interface's chain out of another document");
     return proto;   /* OWNED */
-}
-
-void event_install(JSContext *ctx, JSValueConst global)
-{
-    JSValue ctor;
-
-    DCHECK(g_ready, "Event was installed before event_init built its prototype");
-    /* A step machine that is also a CONSTRUCTOR: `new Event(type, init)` converts two page-reachable arguments
-       before the body runs, and JS_CFUNC_step_ctor is what makes the declaration usable with `new`. */
-    ctor = idl_step_constructor(ctx, "Event", g_ctor_stepid);
-    CHECK(!JS_IsException(ctor), "the Event interface object could not be allocated");
-    {
-        JSValue proto = event_proto(ctx);
-        JS_SetConstructor(ctx, ctor, proto);
-        JS_FreeValue(ctx, proto);
-    }
-    JS_SetPropertyFunctionList(ctx, ctor, js_event_consts,
-                               (int)(sizeof(js_event_consts) / sizeof(js_event_consts[0])));
-    idl_define_global_property_reference(ctx, global, "Event", ctor);
 }
 
 static void event_declare_subclasses(JSContext *ctx)

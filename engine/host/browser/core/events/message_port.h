@@ -6,9 +6,13 @@
 #include "quickjs.h"
 
 void message_port_init(JSContext *ctx);
-/* §9.4.2/§9.4.3's two interface prototype objects for ONE realm — declared into core/realm.h's list. */
-void message_port_install_protos(JSContext *ctx);
-void message_port_install(JSContext *ctx, JSValueConst global);
+/* §9.4.2/§9.4.3's two interface prototype objects AND their two §3.8 global property references, for ONE realm
+   — declared into core/realm.h's list. ONE entry because Web IDL §3.8 `define the global property references`
+   is given "target" and "a realm realm" and its step 1 population is "every interface that is exposed in
+   realm": no Document appears in it. Both identifiers are `[Exposed=(Window,Worker)]`, so a WORKER realm owes
+   both — and while the interface objects were installed from core/platform.c's per-document column, a worker
+   realm, which reaches no platform_document_install, received neither. */
+void message_port_install_realm(JSContext *ctx);
 /* Agent teardown — core/platform.h's release column. It takes the RUNTIME because everything it gives back is
    the agent's: two class ids, three pool entries, the delivery callee, the live-port table, and HTML §8.1.7.2's
    handler-set hook, which this component claimed in core/events/event_target.c and must release before that

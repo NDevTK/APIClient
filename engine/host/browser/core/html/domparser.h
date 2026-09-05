@@ -5,10 +5,11 @@
 
 /* The AGENT's half: the class, the constructor and `parseFromString`, declared once. */
 void domparser_init(JSContext *ctx);
-/* §3.7's prototype for ONE realm — declared into core/realm.h's list by domparser_init. */
-void domparser_install_proto(JSContext *ctx);
-/* §3.7.1's interface object on this realm's global. */
-void domparser_install(JSContext *ctx, JSValueConst global);
+/* §3.7's prototype AND §3.8's global property reference for ONE realm — declared into core/realm.h's list by
+   domparser_init. ONE entry because §3.8 `define the global property references` is given a REALM and names no
+   Document; the interface object used to be a second, per-document entry, so a realm that is not a Window's
+   carried the prototype and no `DOMParser` property naming it. */
+void domparser_install_realm(JSContext *ctx);
 /* The AGENT's half, undone — core/platform.h's release column. */
 void domparser_free(void);
 

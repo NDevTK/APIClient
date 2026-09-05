@@ -6107,21 +6107,34 @@ static JSContext *tf_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const 
  * to build a realm that gets the `[Exposed=Worker]` surface and not Window's, so a worker script could only
  * have run in a realm where `document` exists.
  *
- * IT IS THREE ASSERTIONS AND NOT ONE, because a gate that only ever checks the ABSENT direction passes for a
+ * IT IS FOUR ASSERTIONS AND NOT ONE, because a gate that only ever checks the ABSENT direction passes for a
  * realm in which nothing was installed at all — the vacuous check this project keeps meeting. So:
  *   `DOMParser`      is `[Exposed=Window]`               — ABSENT here, PRESENT in the Window realm beside it;
  *   `Event`          is `[Exposed=*]`                    — PRESENT in both, so the install ran;
  *   `MessageChannel` is `[Exposed=(Window,Worker)]`      — PRESENT in both, and it is the row that separates
  *                                                          "the worker realm keeps everything" from "the
- *                                                          worker realm keeps what its own IDL names".
+ *                                                          worker realm keeps what its own IDL names";
+ *   `MessagePort`    is `[Exposed=(AudioWorklet,Window,Worker)]` — PRESENT in both, and it is here because it
+ *                                                          is the OTHER of the two identifiers one component
+ *                                                          places: with only MessageChannel witnessed, a
+ *                                                          component that carried one §3.8 property reference
+ *                                                          across a change and dropped its sibling passed.
  * The Window control is read from the caller's realm rather than assumed, so a run in which the intrinsics
- * silently stopped installing anything fails on the control instead of passing on the absence. */
+ * silently stopped installing anything fails on the control instead of passing on the absence.
+ *
+ * EVERY ROW'S IDENTIFIER MUST BE PLACED BY THE PER-REALM COLUMN, AND THAT IS WHAT THE TABLE MEASURES RATHER
+ * THAN AN ASSUMPTION IT MAKES. This runs immediately after platform_agent_init and before any document is
+ * installed over any realm, so the only §3.8 property references either global carries are the ones
+ * core/realm.h's intrinsic list placed. An identifier installed from core/platform.c's per-document column is
+ * therefore absent from BOTH realms here — which is the state the Window arm below reports, and it is a
+ * statement about the COLUMN and not about the component. */
 static void exposure_selftest(JSContext *ctx, const char *top_level_url)
 {
     static const struct { const char *name; bool in_window, in_worker; } EXPECT[] = {
         { "DOMParser",      true, false },   /* [Exposed=Window] */
         { "Event",          true, true  },   /* [Exposed=*] */
         { "MessageChannel", true, true  },   /* [Exposed=(Window,Worker)] */
+        { "MessagePort",    true, true  },   /* [Exposed=(AudioWorklet,Window,Worker)] */
     };
     JSContext *worker = JS_NewContext(JS_GetRuntime(ctx));
     /* THE SECOND WORKER REALM IS THE OTHER ARM OF ONE STEP, and it is a second REALM because that is the only
@@ -6167,10 +6180,17 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
               "an exposure probe threw — [[HasProperty]] over a realm's global runs no page code");
         CHECKF((in_win == 1) == EXPECT[i].in_window,
                "the Window realm's global %s `%s`, and Web IDL §3.3.7 [Exposed] says it %s — this is the "
-               "CONTROL half of the step 1 measurement, so it failing means the intrinsic that installs `%s` "
-               "did not run rather than that step 1 is wrong",
+               "CONTROL half of the step 1 measurement, so it failing is a fact about the INSTALL and never "
+               "about step 1. Web IDL §3.8 Platform objects implementing interfaces is \"To define the global "
+               "property references on target, given realm realm\", and its step 1 is \"Let interfaces be a "
+               "list that contains every interface that is exposed in realm\" — a REALM, with no Document in "
+               "the algorithm. This measurement runs before any document is installed over any realm, so `%s` "
+               "is owed by core/realm.h's per-realm intrinsic list: either that install stopped running, or "
+               "the §3.8 property reference for `%s` is still being placed from core/platform.c's PER-DOCUMENT "
+               "column, where it is absent from every realm no Document is installed over — a worker realm "
+               "always, and a Window realm until one is",
                in_win ? "carries" : "does not carry", EXPECT[i].name,
-               EXPECT[i].in_window ? "must be there" : "must not", EXPECT[i].name);
+               EXPECT[i].in_window ? "must be there" : "must not", EXPECT[i].name, EXPECT[i].name);
         CHECKF((in_worker == 1) == EXPECT[i].in_worker,
                "a realm whose global object implements `DedicatedWorkerGlobalScope` %s `%s`, and Web IDL "
                "§3.3.7 [Exposed] step 1 says it %s: the construct's exposure set is intersected with the "
