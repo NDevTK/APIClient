@@ -2306,10 +2306,19 @@ int idl_freeze_array(JSContext *ctx, JSValueConst arr);
  * a global, a member has no row there, and a name with no row is exposed — so asking it of a member name is a
  * check whose two sides cannot disagree.
  *
- * SO THE MEMBER-SIDE EXPOSURE SET IS DATA THE COMPONENT STATES, the way this enum's own banner already argues
- * for [SecureContext] and for the identical reason: it is a fact about a member that only the component
- * declaring it knows. It is NOT stated today and no door asks it — see `idl_exposed_in_realm`'s own note for
- * which doors those are and for what stands in a realm because of it.
+ * THE MEMBER-SIDE EXPOSURE SET IS `idl_member_exposed_in_realm` BELOW, AND IT IS DERIVED RATHER THAN STATED.
+ * The paragraph above is exactly right that a member's set cannot be read off its identifier BY REASONING; it
+ * does not follow that a component has to state it, and this sentence used to say it did: it asserted that the
+ * member-side exposure set was data the component states, on the ground that only the component declaring a
+ * member knows it, with the next diff named as one more field on every install. That clause is RETIRED and the
+ * correction is recorded here rather than deleted, because a reader who re-derives the abandoned design will
+ * build it: the fact is a CORPUS fact, in the member's own extended attributes, so a C declaration restating it
+ * would be the hand-kept second copy §Browser half bans — and the engine already had the machinery, since
+ * engine/idlgen.mjs computes §3.3.7's `get the exposure set of a construct C` for its own gap audit and
+ * browser/idl_exposure.h is already a table keyed by a name one vocabulary over. What is genuinely the
+ * component's to state is [SecureContext], which no artifact can decide for it; that is why THIS enum stays.
+ * The measured cost of the retired clause would have been every install site's signature for a fact no site
+ * knows better than the corpus does.
  *
  * WHAT THIS PARAGRAPH USED TO ARGUE, because it was true and it was also the blocker: that [Exposed] is
  * decided by which global a component installs on, that this engine has exactly one global kind — no
@@ -2374,30 +2383,43 @@ bool idl_exposed(JSContext *ctx, IdlExposure exposure);
  * "Regular attributes are exposed on the interface prototype object" unless the interface is [Global] — and it
  * asks step 1 per attribute at "If attr is not exposed in realm, then continue." This entry cannot answer THAT
  * ask: a member has no row, a name with no row is exposed, so it would return true for every member in every
- * realm. See the IdlExposure banner above for why a member's exposure set is the component's to state.
- *
- * THE MEMBER ARM OF STEP 1 IS ASKED BY NO DOOR, AND THIS IS AN UNBUILT GATE RATHER THAN A NAMED RESIDUAL —
- * the distinction is the mechanical one and it decides what the next reader does. A residual says the code is
- * CORRECT and narrower than the spec; this code is WRONG, so what is recorded here is a capability to BUILD,
- * named so the next attempt starts from building it rather than from rediscovering it. Every §3.7.6 member
- * installed as an own property of the realm's global — the `[Replaceable]`, held-value and plain-accessor
- * forms below — is placed without §3.7.6's continue-step being asked, so a realm whose [Global] interface is
- * not Window carries the Window-only ones.
- * IT IS REACHED TODAY AND THE POPULATION IS NOT EMPTY: core/realm.h's per-realm intrinsic list is the SAME
- * list for every realm, so a `DedicatedWorkerGlobalScope` realm receives CSSOM VIEW's `partial interface
- * Window` viewport members, `navigation`, `visualViewport` and `screen` — every one of them a member of an
- * interface the corpus declares `[Global=Window, Exposed=Window]` — alongside the `WindowOrWorkerGlobalScope`
- * ones that legitimately belong there. `performance` is the one that is right, which is why it is the wrong
- * member to reason from: it is `[Exposed]` in a worker through its mixin, so an install gated on nothing
- * happens to give it the correct answer while giving its neighbours the wrong one.
- * WHAT THE NEXT DIFF BUILDS: the exposure SET as a per-member argument the component states beside its
- * IdlExposure — one more field on the install, not a second gate — asked once inside idl_args.c the way
- * `idl_exposed` already is, so no install site re-derives it. A member's set cannot be derived from its own
- * identifier, which is why it has to be stated; see the IdlExposure banner for §3.3.7's own sentence on that.
- * HOW ITS ABSENCE SHOWS: `'innerWidth' in self` answers TRUE in a worker realm where a browser answers false,
- * and NO gate in this tree reports it — core/realm.c's walk over the finished global skips every one of these
- * names because it classifies by the same identifier table, and a member has no row in it. */
+ * realm. That ask is `idl_member_exposed_in_realm` below, over a table keyed by the other vocabulary. */
 bool idl_exposed_in_realm(JSContext *ctx, const char *identifier);
+
+/* WEB IDL §3.3.7 [Exposed] STEP 1 ASKED OF A MEMBER — the ask §3.7.6 Attributes makes at "If attr is not
+ * exposed in realm, then continue." and §3.7.7 Operations makes at "If op is not exposed in realm, then
+ * continue.", for a member the [Global] arm of each puts on the realm's global object rather than on a
+ * prototype.
+ *
+ * IT IS A SECOND TABLE AND NOT A SECOND LOOKUP, for the reason the entry above ends on: §3.8's identifiers and
+ * §3.7.6's members are two vocabularies, IDL_EXPOSURE is keyed by the first, and a member has no row in it. The
+ * rows come out of the same corpus by the same algorithm — engine/idlgen.mjs runs §3.3.7's `get the exposure
+ * set of a construct C` over every member of every [Global] interface — so the two tables cannot disagree about
+ * what §3.3.7 says, which is the property that made generating the first one worth doing.
+ *
+ * THE ANSWER IS A SOUND OVER-APPROXIMATION, AND THAT IS A NAMED RESIDUAL RATHER THAN A GAP. WHAT IS NOT
+ * COVERED: §3.7.6 asks its question of ONE attribute of ONE definition, and this entry is handed only a NAME —
+ * so its row is the union over every interface the realm's global implements, its ancestors included, and it
+ * refuses only a name that NO such interface declares as exposed here. A realm's global that implements two
+ * interfaces declaring one identifier keeps the property when either is exposed, where §3.7.6 would have
+ * removed one member and kept the other; since both arms end in a property under that name, no page can see
+ * the difference. WHAT THE NEXT DIFF BUILDS: the declaring interface as data at the install — which is the
+ * same missing argument `idl_check_global_target`'s own DFAIL already names, so it is one thing to build and
+ * not two — after which the question is keyed by (interface, member) and the union goes. HOW ITS ABSENCE WOULD
+ * SHOW: a member this engine installs under a name some OTHER interface of the same global also declares, with
+ * only that other interface exposed here — measurable as a property present whose getter belongs to an
+ * interface this realm does not implement, never as a missing name.
+ *
+ * A NAME WITH NO ROW IS EXPOSED, which is browser/idl_exposure.h's own rule and is the direction that cannot
+ * remove something on absence of evidence. The generator omits a member whose exposure set is `*` and one
+ * whose set is empty, because neither can EXCLUDE a realm and a set of no bits is how `*` is spelled — so a
+ * member installed on a global that the corpus does not declare on any [Global] interface keeps its property,
+ * exactly as an unknown identifier keeps its own.
+ *
+ * IT IS THE MEMBER NAME AND NOT AN ACCESSOR'S — the "get "/"set " prefix §3.7.6 puts on the FUNCTION OBJECT is
+ * not part of the property key and not part of the corpus's identifier, so the string asked here is the one
+ * the install was handed. */
+bool idl_member_exposed_in_realm(JSContext *ctx, const char *member);
 
 /* WEB IDL §3.3.8 [Global]'s GLOBAL NAMES of one global interface — "The [Global] extended attribute also
  * defines the global names for the interface" — which is the REALM side of §3.3.7 step 1's intersection. (The

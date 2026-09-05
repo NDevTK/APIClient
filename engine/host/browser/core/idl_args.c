@@ -6206,6 +6206,9 @@ int idl_freeze_array(JSContext *ctx, JSValueConst arr)
 /* The ONE mint and its §3.7.6 Attributes form, defined beside idl_step_function below because that is where
    every other minting form lives; declared here because the accessor installs reach them first. */
 static JSValue idl_mint_accessor(JSContext *ctx, const char *name, int stepid, int expect);
+/* §3.7.6's and §3.7.7's continue-step — defined beside the two tables it reads, forward-declared here because
+   the first member-placing entry in this file stands above them. */
+static bool idl_global_member_refused(JSContext *ctx, JSValueConst target, const char *name);
 /* And the ONE mint for an attribute whose getter is a plain C function — defined beside §3.7.6's receiver
    machinery below, because routing a global attribute's read through it is the whole of what it decides. */
 static JSValue idl_mint_plain_getter(JSContext *ctx, JSValueConst target, const char *name,
@@ -6304,8 +6307,13 @@ const char *idl_accessor_name(char *buf, size_t cap, const char *id, IdlAccessor
 void idl_install_accessor_step(JSContext *ctx, JSValueConst target, const char *name,
                                int getter_stepid, int setter_stepid)
 {
-    JSAtom a = JS_NewAtom(ctx, name);
+    JSAtom a;
     JSValue g = JS_UNDEFINED, st = JS_UNDEFINED;
+
+    /* §3.7.6's CONTINUE-STEP — see idl_global_member_refused. Nothing is minted: the two step functions are
+       built below, and a member this realm has no property for must cost neither. */
+    if (idl_global_member_refused(ctx, target, name)) return;
+    a = JS_NewAtom(ctx, name);
 
     DCHECK(a != JS_ATOM_NULL, "an IDL accessor name could not be interned");
     DCHECK(getter_stepid >= 0, "idl_install_accessor_step with no getter — a write-only attribute installs "
@@ -6464,6 +6472,61 @@ bool idl_exposed_in_realm(JSContext *ctx, const char *identifier)
     return (r->set & realm_global_names(ctx)) != 0u;
 }
 
+static int idl_member_exposure_row_cmp(const void *key, const void *row)
+{
+    return strcmp((const char *)key, ((const IdlMemberExposureRow *)row)->name);
+}
+
+/* WEB IDL §3.3.7 [Exposed] STEP 1 OVER §3.7.6's AND §3.7.7's VOCABULARY — see idl_args.h for why this is a
+   second table rather than a second lookup into IDL_EXPOSURE, and for the residual the union carries.
+   THE TABLE IS SORTED BY THE GENERATOR AND ITS IDENTIFIERS ARE ASCII, which idlgen.mjs refuses to emit
+   otherwise, so this bsearch and that sort are the same order — the identical argument IDL_EXPOSURE's reader
+   above makes, and it has to be made again because the two arrays are sorted by two calls. */
+bool idl_member_exposed_in_realm(JSContext *ctx, const char *member)
+{
+    const IdlMemberExposureRow *r;
+
+    DCHECK(member != NULL && *member,
+           "Web IDL §3.3.7 step 1 was asked about no member — §3.7.6 Attributes asks it of an attribute and "
+           "§3.7.7 Operations of an operation, and each of those is a NAMED member with nothing else to key "
+           "the question by");
+    r = bsearch(member, IDL_MEMBER_EXPOSURE, sizeof IDL_MEMBER_EXPOSURE / sizeof IDL_MEMBER_EXPOSURE[0],
+                sizeof IDL_MEMBER_EXPOSURE[0], idl_member_exposure_row_cmp);
+    if (r == NULL) return true;                     /* a name with no row is exposed — idl_args.h says why */
+    /* THE GENERATOR EMITS NO ROW THAT CANNOT EXCLUDE, AND THE TWO SIDES CAN DISAGREE: this is a claim about a
+       committed generated artifact against a constant of this file, so a regenerated table whose filter
+       changed makes it false without anyone editing C. It matters because a set of no bits is how `*` is
+       SPELLED — the arithmetic below would read such a row as excluding EVERY realm and would remove the
+       member everywhere, which is the one direction this table must never fail in.
+       THE RELEASE ARM ANSWERS `exposed`, WHICH IS THE SAME ARM THE NO-ROW CASE TAKES, so a production build
+       reading a drifted table keeps the property rather than silently emptying a global. */
+    if (r->set == IDL_EXPOSED_STAR) {
+        DFAILF("browser/idl_exposure.h carries `%s` with an exposure set of no global names — "
+               "engine/idlgen.mjs omits a member whose §3.3.7 exposure set is `*` or empty precisely because "
+               "IDL_EXPOSED_STAR is how a wildcard is spelled, so a row that reached this table is a set the "
+               "intersection below would read as excluding every realm. Regenerate with "
+               "`node engine/idlgen.mjs --regen`, or restore the generator's filter", member);
+        return true;
+    }
+    return (r->set & realm_global_names(ctx)) != 0u;
+}
+
+/* WEB IDL §3.7.6 Attributes' "If attr is not exposed in realm, then continue." AND §3.7.7 Operations' "If op
+   is not exposed in realm, then continue.", as the one question every member-placing entry in this file asks
+   before it builds anything.
+   IT IS ASKED ONLY OF A MEMBER ON THE REALM'S GLOBAL, and that is a limit of the TABLE and not a reading of
+   the spec. §3.7.6 asks its step of every attribute, prototype members included; IDL_MEMBER_EXPOSURE holds
+   only the members of [Global] interfaces and their ancestors, so a prototype member's name looked up there
+   would be answered out of an unrelated construct's exposure set — `width` is a Screen member and `name` is a
+   Window one, and a table that cannot tell those apart must not be asked about the first. The target test is
+   what keeps the question inside the population the table is drawn from.
+   IT RUNS IN RELEASE, because §3.7.6's continue-step is the standard's own behaviour and not a check: a
+   member removed here is a member a page's feature detection must not find, in every build. */
+static bool idl_global_member_refused(JSContext *ctx, JSValueConst target, const char *name)
+{
+    return idl_target_is_realm_global(ctx, target) && !idl_member_exposed_in_realm(ctx, name);
+}
+
 bool idl_exposed(JSContext *ctx, IdlExposure exposure)
 {
     switch (exposure) {
@@ -6495,8 +6558,13 @@ static void idl_define_accessor(JSContext *ctx, JSValueConst target, const char 
                                 bool no_user_code)
 {
     DCHECK(setter_stepid < 0 || idl_declared_before_seal(setter_stepid), name);
-    JSAtom a = JS_NewAtom(ctx, name);
+    JSAtom a;
     JSValue g = JS_UNDEFINED, st = JS_UNDEFINED;
+
+    /* §3.7.6's CONTINUE-STEP — see idl_global_member_refused. This is the entry the plain, [SecureContext],
+       no-user-code and [LegacyUnforgeable] attribute forms all reach, so the four ask it once between them. */
+    if (idl_global_member_refused(ctx, target, name)) return;
+    a = JS_NewAtom(ctx, name);
 
     DCHECK(a != JS_ATOM_NULL, "an IDL accessor name could not be interned");
     DCHECK(getter != NULL || !no_user_code,
@@ -6966,6 +7034,10 @@ void idl_install_replaceable(JSContext *ctx, JSValueConst target, const char *na
                              IdlGetter getter, int getter_magic)
 {
     DCHECK(getter != NULL, "a replaceable attribute with no getter — it is READONLY, so the read is all it has");
+    /* §3.7.6's CONTINUE-STEP — see idl_global_member_refused. It is asked HERE and not inside
+       idl_define_replaceable because that entry CONSUMES a getter this line has not built yet, and the
+       cheapest correct refusal is the one that never mints. */
+    if (idl_global_member_refused(ctx, target, name)) return;
     idl_define_replaceable(ctx, target, name, idl_mint_plain_getter(ctx, target, name, getter, getter_magic));
 }
 
@@ -6993,6 +7065,10 @@ static JSValue idl_held_value_getter(JSContext *ctx, const char *name, JSValue v
 
 void idl_install_replaceable_value(JSContext *ctx, JSValueConst target, const char *name, JSValue value)
 {
+    /* §3.7.6's CONTINUE-STEP — see idl_global_member_refused. `value` is CONSUMED on every path, so
+       a refusal frees it — a caller that got it back would have two shapes to write instead of one, which is
+       the same argument §3.8's own door makes about the interface object it declines to define. */
+    if (idl_global_member_refused(ctx, target, name)) { JS_FreeValue(ctx, value); return; }
     idl_define_replaceable(ctx, target, name, idl_held_value_getter(ctx, name, value));
 }
 
@@ -7011,9 +7087,12 @@ void idl_install_replaceable_value(JSContext *ctx, JSValueConst target, const ch
 void idl_install_value_attribute(JSContext *ctx, JSValueConst target, const char *name, JSValue value,
                                  IdlAttrForge forge)
 {
-    JSValue g = idl_held_value_getter(ctx, name, value);
+    JSValue g;
     JSAtom a;
 
+    /* §3.7.6's CONTINUE-STEP — see idl_global_member_refused. `value` is CONSUMED, as above. */
+    if (idl_global_member_refused(ctx, target, name)) { JS_FreeValue(ctx, value); return; }
+    g = idl_held_value_getter(ctx, name, value);
     IDL_CHECK_GLOBAL_TARGET(ctx, target, name, "held-value readonly");
     a = JS_NewAtom(ctx, name);
     DCHECK(a != JS_ATOM_NULL, "an IDL attribute name could not be interned");
@@ -7325,6 +7404,9 @@ void idl_install_method(JSContext *ctx, JSValueConst target, const char *name, i
 {
     DCHECK(idl_declared_before_seal(stepid), name);
     DCHECK(stepid >= 0, "an IDL member was installed before it was declared");
+    /* §3.7.7's CONTINUE-STEP — see idl_global_member_refused. The [SecureContext] operation form reaches it
+       through here, so the two ask it once. */
+    if (idl_global_member_refused(ctx, target, name)) return;
     JS_SetPropertyStr(ctx, (JSValue)target, name,
                       idl_mint_step(ctx, name, stepid, JS_CFUNC_step, IDL_SEC_METHOD));
 }
@@ -7346,6 +7428,9 @@ void idl_install_method_unforgeable(JSContext *ctx, JSValueConst target, const c
 {
     DCHECK(idl_declared_before_seal(stepid), name);
     DCHECK(stepid >= 0, "an unforgeable IDL operation was installed before it was declared");
+    /* §3.7.7's CONTINUE-STEP — see idl_global_member_refused. §3.7.7 asks it of every operation it places,
+       and [LegacyUnforgeable] changes the DESCRIPTOR rather than the question. */
+    if (idl_global_member_refused(ctx, target, name)) return;
     JS_DefinePropertyValueStr(ctx, (JSValue)target, name,
                               idl_mint_step(ctx, name, stepid, JS_CFUNC_step, IDL_SEC_METHOD),
                               JS_PROP_ENUMERABLE);
@@ -7379,6 +7464,10 @@ void idl_install_step_method(JSContext *ctx, JSValueConst target, const char *na
     DCHECK(idl_member_of_step(stepid) < 0,
            "a DECLARED IDL member was installed through idl_install_step_method — it has a pool entry, so it "
            "installs through idl_install_method, which is what names it");
+    /* §3.7.7's CONTINUE-STEP — see idl_global_member_refused. A member with no pool entry is still a §3.7.7
+       operation and owes the same step; what it lacks is a derived `length`, which is a different residual
+       and is stated above. */
+    if (idl_global_member_refused(ctx, target, name)) return;
     JS_SetPropertyStr(ctx, (JSValue)target, name,
                       JS_NewCFunction2(ctx, NULL, name, length, JS_CFUNC_step, stepid));
 }
