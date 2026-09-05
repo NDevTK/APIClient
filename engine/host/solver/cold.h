@@ -426,7 +426,19 @@ void cold_census_release(ColdCensus *out);
  *                                 and the payload cross as lower-case HEX — the payload is ATTACKER TEXT and
  *                                 never an index into solve.c's breakout tables, which §@S's derived-breakout
  *                                 work will delete, and an index into a table that no longer exists is still a
- *                                 valid index. `cand_verifying` and `cand_fired` deliberately do NOT cross;
+ *                                 valid index.
+ *                                 A WELL-FORMED 'c' RECORD IS NOT THEREFORE A CANDIDATE THIS BUILD WILL RUN.
+ *                                 The payload was constructed by an EARLIER session's derivation, and the
+ *                                 rules that admit one have since changed: solve_resume_candidate seeds the
+ *                                 search's delivery table from the root's carrier declaration and then asks
+ *                                 whether these exact bytes can be carried, refusing the record when they
+ *                                 cannot. That is why the payload is an ARGUMENT to it and not merely a field
+ *                                 this arm assigns — handed the identity and not the bytes, the one door the
+ *                                 cold tier goes through could re-open the search and could not decline it.
+ *                                 A refused record is NOT a residue and does not fail the parse: the flow is
+ *                                 rebuilt without its substitution, so the path is replayed and the search is
+ *                                 re-derived, and the refusal is counted in ColdResumed's `cands_withdrawn`.
+ *                                 `cand_verifying` and `cand_fired` deliberately do NOT cross;
  *                                 see cold.c's park_rec_cand for why dropping the second is what keeps a
  *                                 recorded PoC an observation rather than an inherited claim.
  *                                 `root` IS THE DELIVERY PROVENANCE AND NOT A SECOND SPELLING OF `src`. The
@@ -643,6 +655,18 @@ typedef struct {
     long segs;     /* frozen decision segments rebuilt from 's' records — the shared prefixes every flow stands on */
     long flows;    /* 'f': exploration flows */
     long cands;    /* 'c': @S candidate sessions, each carrying a hex source and payload */
+    /* 'c' RECORDS THIS BUILD REFUSED — the other outcome of the same arm, and a number that must not be folded
+       into either neighbour. A parked candidate carries bytes an EARLIER session's derivation constructed, and
+       solve_resume_candidate narrows the search's delivery table from the root's carrier declaration before it
+       registers anything: a record naming a payload the carrier can neither percent-encode nor hold is refused
+       there, and this arm lands the flow WITHOUT its substitution (the recipe outlives the bytes — the path is
+       replayed, the sink is re-detected, and the search re-derives a spelling that can actually be carried).
+       It is a summand of the same total as `flows` and `cands` because it produced a member; it is its own
+       column because the two neighbours would each say something false about it. Counted into `cands`, a host
+       reads candidate sessions that never registered; counted into `flows`, the residue reports carrying no @S
+       record at all — and ZERO here is the load-bearing value, the positive statement that this build and the
+       session that wrote the residue still agree about what the source can carry. */
+    long cands_withdrawn;
     long worlds;   /* 'w': foreign world segments re-materialized from the vectors that first built them */
     /* 'o': the drives this rebuild inherited — flows waiting to be handed back the function they were driving.
        It is a SUBSET of `flows`+`cands` and never a summand of them, because an 'o' record names the flow

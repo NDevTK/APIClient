@@ -148,8 +148,8 @@ const char *solve_candidate_root(const char *src, const char *sink_name);
    candidate needs this file to know. It answers the sink table's OWN pointer for `sink_name`, which is what
    re-binds a class that crossed the tier by NAME (a `cand_sink` is a pointer into static storage with no
    identity outside the session it was minted in), and it re-registers that sink as PENDING and already-TRIED
-   once.
-   ALL THREE OR NONE, WHICH IS WHY IT IS ONE CALL AND NOT THREE.
+   once — OR it REFUSES the record, which is the fourth thing and the reason the payload is an argument.
+   ALL FOUR OR NONE, WHICH IS WHY IT IS ONE CALL AND NOT FOUR.
      - The pending list is rebuilt by DETECTION, and a VERIFYING flow does not detect (solve_eval_sink and its
        siblings take the candidate branch and never call add_pending). So a resumed candidate that finished
        before any exploration flow had re-reached its sink would hand record_sink a finding for a sink it has
@@ -164,16 +164,34 @@ const char *solve_candidate_root(const char *src, const char *sink_name);
        hit emit_delivery's assert: the whole @RESULT aborted in dev, and in release the envelope rendered the
        silence that MEANS "no component carries these bytes to the victim" over a payload whose delivery the
        ended session knew exactly. It crosses as the 'c' record's own field; see cold.h's grammar.
-   Returns the table's pointer; a name this build's table does not have is a residue written by a build whose
-   sink classes this one no longer has, and it says so rather than resuming a search that cannot report. */
-const char *solve_resume_candidate(const char *src, const char *root, const char *sink_name);
+     - And the PAYLOAD arrives with them, because learning the root is what makes the payload ANSWERABLE and
+       this is the only moment both are in one hand. cand_learn_root seeds the search's delivery table from the
+       root's carrier declaration, so the instant after it runs these bytes can be asked about — and a record
+       written by a build that PREDATES that narrowing names a payload carrying a byte the carrier can neither
+       percent-encode nor hold. Handed the root and not the bytes, this door registered such a record as a live
+       candidate and the whole session then rested on concolic_deliver's abort to notice, one document re-run
+       later, with the crash naming the delivery site rather than the record. It is refused HERE, with the same
+       solve_delivered_ok the seed door asks of a freshly derived escape, so the two doors onto a candidate
+       flow share ONE refusal instead of one door having none.
+   Returns the table's pointer, or NULL for a record this session declines — and the two NULLs are different
+   facts the caller must not merge. A sink-class NAME this build's table does not have is a residue written by
+   a build whose classes this one has dropped, and it ABORTS in dev before returning. A refused PAYLOAD is not
+   a residue and not an error: the record is well-formed, this build's carrier rules have simply moved past the
+   session that wrote it, so it is withdrawn quietly, counted as `resumed_withdrawn`, and NEITHER `tried` nor
+   `resumed` moves for it — those count candidate RUNS and a withdrawn record has none. The caller drops the
+   candidate fields and keeps the FLOW: the recipe outlives the bytes, so the path comes back as an ordinary
+   exploration flow that re-detects the sink and re-opens the search against the table this call just
+   narrowed. See cold.c's 'c' arm, which is the one caller. */
+const char *solve_resume_candidate(const char *src, const char *root, const char *sink_name,
+                                   const char *payload);
 
 /* EVERY DETECTED SINK as a JSON ARRAY (caller frees). Two entry shapes, because a sink is in one of two states
    and they must never be confused:
      fire-verified  `{"sink":..,"source":..,"poc":..,"firesOn":..[,"cspBlocks":".."][,"trustedTypes":"script"]
                       ,"searched":N[,"sourceEncodes":".."][,"sourceDelivers":".."][,"delivery":".."]
                       [,"deliveryPrefix":"#"]}`
-     parked search  `{"sink":..,"source":..,"search":"parked","tried":N,"resumed":R,"reached":M,"turns":T,
+     parked search  `{"sink":..,"source":..,"search":"parked","tried":N,"resumed":R,"resumedWithdrawn":RW,
+                      "reached":M,"turns":T,
                       "substituted":D,"sinkStrings":X,"runwayPerMille":R2,"survived":S,
                       "survivedOf":L[,"survivedAt":A,"survivedTo":O],"escaped":E[,"fires":F][,"witnessed":W]
                       [,"deliveryProbed":B],"probes":P,"payloads":[..],
@@ -341,7 +359,13 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
    by construction, which is the joint solve's correct and final answer for that spelling. It is also the
    arithmetic that keeps `tried` and `payloads` readable together — `tried` counts the entries NOT marked here,
    plus any candidate resumed out of the cold tier whose bytes this session's own search never constructed, and
-   which therefore has no row at all. `resumed` IS THAT SECOND TERM, and until it was emitted this arithmetic
+   which therefore has no row at all. `resumedWithdrawn` IS OUTSIDE THAT SUM AND IS NOT A THIRD TERM OF IT: a
+   parked record this build refuses (solve_resume_candidate, on the root's carrier declaration) never becomes a
+   candidate run, so it is in neither `tried` nor `resumed` and adding it would count a run that did not
+   happen. It is emitted beside them because the three states — nothing was ever parked here, something was
+   parked and ran, something was parked and this build's carrier rules refuse it — otherwise share the one
+   answer `tried:0,resumed:0`, and that answer is read below as a positive statement about the columns.
+   `resumed` IS THAT SECOND TERM, and until it was emitted this arithmetic
    was one a reader could not perform: the sentence named two quantities and the record carried one, so
    `tried:6` beside `payloads:[]` read identically as a cross-session search whose every run was rebuilt from a
    park document and as a producer that had dropped a field.

@@ -1662,26 +1662,63 @@ void cold_resume(JSContext *ctx, const char *recipes)
             root = park_unhex(rb, q);
             q = park_comma(q);
             fl->cand_payload = park_unhex(q, end);
-            /* THE SINK BINDS BACK TO THE TABLE'S OWN POINTER, and the same call re-registers the sink as
-               pending-and-tried AND tells it how these bytes arrive — solve.h says why those are one call and
-               not three. `cand_verifying` is not set here: solve_flow_begin sets it from `cand_src` on the
+            /* THE SINK BINDS BACK TO THE TABLE'S OWN POINTER, and the same call tells the search how these
+               bytes arrive, re-registers it as pending-and-tried, and REFUSES the record where the root's
+               carrier contradicts the payload — solve.h says why those are one call and not four, and the
+               third is why `tried` moves for a record this call accepts rather than for every record it reads.
+               `cand_verifying` is not set here: solve_flow_begin sets it from `cand_src` on the
                switch-in, before this flow runs an opcode. `cand_fired` is not set here either, and that is the
                whole point — the replay has to observe the fire again or nothing is recorded.
                THE ROOT DOES NOT LAND ON THE FLOW, it lands on the SEARCH, which is the same asymmetry
                park_rec_cand reads it back out of: one sink's N resumed candidates hand the same root to the
                same entry and cand_learn_root asserts they agree. So this string is ours to free, and freeing
                it here is what says the flow never owned it. */
-            fl->cand_sink = solve_resume_candidate(fl->cand_src, root, sname);
+            /* THE PAYLOAD GOES WITH THEM, AND THIS LINE USED TO HAND OVER EVERYTHING BUT. The three identity
+               fields crossed and the BYTES did not, so the one door the cold tier goes through could re-open
+               the search and could not refuse the record — a residue written before this build's carrier
+               declaration narrowed the delivery table came back as a live candidate, and the session then
+               rested on concolic_deliver's abort to notice, a whole document re-run later, at a site that
+               names the delivery rather than the record. Passing them is what lets solve.c ask the SAME
+               solve_delivered_ok it asks of a freshly derived escape, so a refusal is spelled once for both
+               doors instead of existing at only one of them. */
+            fl->cand_sink = solve_resume_candidate(fl->cand_src, root, sname, fl->cand_payload);
             free(root);
-            /* AND THE PAYLOAD'S PROVENANCE IS STATED, because this is the only site that knows it. These bytes
-               came out of the record above, so this session's search list has no row for them unless its own
-               derivation independently constructs the same string. solve.c's arrival check reads exactly this
-               to tell a resumed candidate — legitimate — from a candidate assembled outside both of the
-               search's doors, which is a defect; without it the two are one absent row. Set here rather than
-               re-derived on switch-in the way `cand_verifying` is, because there is nothing on the flow to
-               re-derive it FROM: a resumed candidate and a seeded one are byte-for-byte the same assembly
-               apart from where the payload was read. */
-            fl->cand_resumed = 1;
+            if (!fl->cand_sink) {
+                /* WITHDRAWN — this build's carrier rules have moved past the session that wrote this record,
+                   and the bytes are refused rather than replayed. THE FLOW SURVIVES AND ONLY THE SUBSTITUTION
+                   GOES, which is the whole difference between a narrowing and a cap: what the declaration
+                   contradicts is that THESE bytes reach that sink, and it contradicts nothing about the PATH
+                   the record also carries. So the four candidate fields go and everything an 'f' record would
+                   have rebuilt stays — the segment, the reward, the pin blob, the started latch — and the
+                   member comes back as an ordinary exploration flow that replays the arms which reached this
+                   sink, DETECTS there like any other, and re-opens the search through add_pending. The search
+                   then derives its escapes against the delivery table solve_resume_candidate has ALREADY
+                   narrowed on the way past, so what is re-derived is a spelling this carrier can actually
+                   carry. The recipe outlives the bytes; §Time-travel's re-derivable category is exactly this
+                   and it is why nothing here is a lost world.
+                   BOTH STRINGS ARE FREED AND BOTH POINTERS CLEARED, and the clearing is the load-bearing half:
+                   solve_flow_begin reads `cand_src` as the whole of whether a member is a candidate, so a
+                   freed pointer left in place would make a verifying flow out of a record nothing registered
+                   — and every assert down that path (`tried > 0`, the search entry, the arrival rung) would
+                   then be right to fire, on a flow this arm meant to hand back as an explorer.
+                   `cand_resumed` IS DELIBERATELY NOT SET. It states that a payload rode the FLOW rather than a
+                   row in this session's search list, and there is no payload here to state it about; setting
+                   it would tell solve.c's arrival check to read a substitution that no longer exists. */
+                free(fl->cand_src);     fl->cand_src = NULL;
+                free(fl->cand_payload); fl->cand_payload = NULL;
+                g_resumed.cands_withdrawn++;
+            } else {
+                /* AND THE PAYLOAD'S PROVENANCE IS STATED, because this is the only site that knows it. These
+                   bytes came out of the record above, so this session's search list has no row for them unless
+                   its own derivation independently constructs the same string. solve.c's arrival check reads
+                   exactly this to tell a resumed candidate — legitimate — from a candidate assembled outside
+                   both of the search's doors, which is a defect; without it the two are one absent row. Set
+                   here rather than re-derived on switch-in the way `cand_verifying` is, because there is
+                   nothing on the flow to re-derive it FROM: a resumed candidate and a seeded one are
+                   byte-for-byte the same assembly apart from where the payload was read. */
+                fl->cand_resumed = 1;
+                g_resumed.cands++;
+            }
             /* AND IT IS REBUILT EXACTLY AS AN 'f' IS, including a `-` segment. The temptation here is to say
                that `-` means "never scheduled" and leave such a candidate un-started, the way
                solve_seed_candidates leaves a fresh one — but the record CANNOT distinguish that from a flow
@@ -1694,7 +1731,10 @@ void cold_resume(JSContext *ctx, const char *recipes)
             fl->started = 1;
             fl->dec_blob = decide_blob_new(sid >= 0 ? seg[sid] : NULL);
             fl->pin_blob = concolic_pins_blob_empty();
-            flows++; g_resumed.cands++;
+            /* THE FLOW IS COUNTED HERE AND ITS KIND WAS COUNTED ABOVE, because a 'c' record now lands in one
+               of two kinds and only the branch that chose knows which. `flows` is the merge's own total and a
+               withdrawn record still produced a member, so it rises either way. */
+            flows++;
             last_flow = fl;
         } else {
             /* 'd' IS NOT AN ARM ANY MORE AND IS NOT SILENTLY IGNORED EITHER. It named an engine-seeded
@@ -1750,9 +1790,15 @@ void cold_resume(JSContext *ctx, const char *recipes)
        it resumed, or the residue looks like it was never read back. */
     /* …AND THE SAME FACT DECOMPOSED, for a host that can ask rather than read. The sum is asserted against the
        count the merge itself kept, so an arm added to the grammar without a counter is caught here instead of
-       silently reporting a kind that ran as one that did not. */
+       silently reporting a kind that ran as one that did not.
+       `cands_withdrawn` IS A THIRD SUMMAND AND NOT A FOURTH RECORD KIND. The grammar still has one 'c' arm;
+       what it now has is two OUTCOMES, because solve_resume_candidate can refuse a record whose payload this
+       build's carrier declaration contradicts and the arm then lands an exploration flow instead of a
+       candidate. Both produced a member, so both are in the sum — folding the withdrawals into `cands` would
+       report candidates that never registered, and folding them into `flows` would hide that the residue
+       carried @S records at all, which is the one thing this census exists to make visible. */
     g_resumed.segs = seg_n;
-    DCHECK(g_resumed.flows + g_resumed.cands == flows,
+    DCHECK(g_resumed.flows + g_resumed.cands + g_resumed.cands_withdrawn == flows,
            "the rebuild's per-kind census does not add up to the flows it landed — a record kind produced a "
            "flow without counting itself, so a host asking which arms of the grammar ran is told one did not");
     /* THE ORPHAN LOCATORS ARE DELIBERATELY OUTSIDE THAT SUM, because an 'o' record does not produce a flow —

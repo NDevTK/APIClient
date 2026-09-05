@@ -320,6 +320,21 @@ typedef struct {
        arithmetic over three other fields, which is the view-restating-a-producer-fact this file declines
        twice elsewhere. */
     int resumed;
+    /* …AND HOW MANY CAME BACK AND WERE REFUSED, which is a THIRD state and not the absence of the second. A
+       parked candidate carries bytes a PREVIOUS session's derivation constructed, and this session's rules are
+       not that session's: the root's carrier declaration narrows the delivery table the moment the root
+       arrives (cand_learn_root), so a record written before that narrowing names a payload whose arrival this
+       build can positively contradict. solve_resume_candidate withdraws it, and this is where that says so.
+       IT IS NOT `resumed` MINUS ANYTHING AND IT IS NOT `tried`: a withdrawn record never becomes a candidate
+       run, so neither of those may move for it, and without this field the three states — no candidate was
+       ever parked for this search, one was parked and ran, one was parked and this build refuses it — collapse
+       into the one answer `tried:0,resumed:0`, which solve.h defines as the positive statement that every run
+       this search has had is a row in `payloads`. That is the same silent-wrong-verdict shape `opened` was
+       made a field to end, arriving one door over.
+       IT IS ALSO THE EVIDENCE add_pending READS. A withdrawal creates the array slot (the table has to exist
+       before it can refuse anything) and raises nothing else, so an entry standing at `tried:0` is no longer
+       proof of a third writer into g_pending — this number is what tells the two apart. */
+    int resumed_withdrawn;
     /* HAS DETECTION OPENED THIS SEARCH — a fact about the SEARCH, and the reason it is a field rather than the
        `created` flag add_pending used to read. Two doors reach an entry and only one of them can open a
        search: DETECTION stands at the sink holding the value that arrived, which is what the class's probe and
@@ -801,6 +816,11 @@ static Cand *sink_search(const char *src, int sink, int *created) {
        realloc'd and never zeroed, and a garbage nonzero here does not merely misreport a quantity — it excuses
        exactly the arrival the assert beside it exists to catch, which is the confident-wrong direction. */
     e->resumed = 0;
+    /* SAME LINE AND SAME REASON AS THE FIELD ABOVE IT, and sharper: the array is realloc'd and never zeroed,
+       and add_pending reads this number as the positive statement that a withdrawal accounts for an entry
+       nothing has tried. A garbage nonzero here would EXCUSE the third-door arrival that assert exists to
+       catch, which is the confident-wrong direction rather than a misreported quantity. */
+    e->resumed_withdrawn = 0;
     /* THE SEARCH IS NOT OPEN YET, AND THE SLOT EXISTING IS NOT THE SAME FACT — see add_pending. The array is
        realloc'd and never zeroed, so a latch left holding whatever the allocator had would make a search read
        as already opened and it would never get its probe. */
@@ -1007,16 +1027,23 @@ static void add_pending(const char *src, const char *root, int sink) {
     if (e->opened) return;
     /* …AND THE ONLY OTHER DOOR THAT CAN HAVE MADE THE SLOT SAYS SO IN ITS OWN NUMBERS. A detection opening a
        search on an entry it did not create means some other producer made that entry, and there is exactly one
-       — solve_resume_candidate, which raises `tried` for every candidate it rebuilds. So the two halves of the
-       state this latch now permits are checkable against each other, and a THIRD door (a future writer into
-       g_pending that neither detects nor resumes) shows up here instead of quietly acquiring a probe and a
-       path it has no claim to. */
-    DCHECK(created || e->tried > 0,
+       — solve_resume_candidate.
+       IT ACCOUNTS FOR ITS RECORDS IN TWO NUMBERS AND NOT ONE, AND THIS ASSERT USED TO NAME ONLY THE FIRST. It
+       read `created || e->tried > 0` under the argument that the rebuild "raises `tried` for every candidate
+       it rebuilds", and that argument is retired: a record whose payload the root's carrier positively refuses
+       is WITHDRAWN, which creates the slot — the delivery table has to exist before anything can be refused
+       against it — and raises `resumed_withdrawn` instead. Under the old spelling the first such record made
+       every later detection of that sink abort on an assert that was right about its own rule and wrong about
+       the tree. Both terms are here because both are real evidence of the same producer, and neither is a
+       widening: a third door (a future writer into g_pending that neither detects nor resumes nor withdraws)
+       still shows up here rather than quietly acquiring a probe and a path it has no claim to. */
+    DCHECK(created || e->tried > 0 || e->resumed_withdrawn > 0,
            "a sink search is being opened on an entry this detection did not create and no cold-resumed "
            "candidate accounts for — g_pending has two writers, detection and the cold tier's rebuild, and the "
-           "second raises `tried` for every record it brings back, so an entry that predates this call with "
-           "nothing tried was put there by a third door and is about to be handed a context probe and a "
-           "re-injection point on behalf of a search nobody opened");
+           "second either RESUMES a record (raising `tried`) or WITHDRAWS one whose carrier refuses its "
+           "payload (raising `resumed_withdrawn`), so an entry that predates this call with neither was put "
+           "there by a third door and is about to be handed a context probe and a re-injection point on behalf "
+           "of a search nobody opened");
     e->opened = 1;
     /* THE RE-INJECTION POINT IS A FACT ABOUT THE SEARCH, NOT ABOUT THE DERIVATION, so it is taken HERE — at the
        one moment a flow is standing at this sink holding the value that reached it. The field's own comment
@@ -2209,8 +2236,10 @@ const char *solve_candidate_root(const char *src, const char *sink_name) {
     return e->root;
 }
 
-/* A PARKED CANDIDATE COMING BACK — see solve.h for why the re-binding and the bookkeeping are ONE call. */
-const char *solve_resume_candidate(const char *src, const char *root, const char *sink_name) {
+/* A PARKED CANDIDATE COMING BACK — see solve.h for why the re-binding, the bookkeeping and the REFUSAL are ONE
+   call. */
+const char *solve_resume_candidate(const char *src, const char *root, const char *sink_name,
+                                   const char *payload) {
     int i, cls = -1;
 
     /* THE ROOT IS PART OF THE IDENTITY THAT CROSSES, and it was the part that did not. A resumed candidate
@@ -2218,10 +2247,14 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
        in the record the entry stood at NULL and every emit of it hit emit_delivery's assert: in dev the whole
        report aborted, and in release the envelope rendered the silence that MEANS "no component carries these
        bytes" over a payload whose delivery the ended session knew exactly. */
-    DCHECK(src && *src && root && *root && sink_name && *sink_name,
-           "a parked @S candidate was rebuilt without a source, without a delivery root or without a sink "
-           "class — its identity IS the substitution it carries and the route those bytes take to the victim, "
-           "so any one missing makes it an exploration flow wearing a payload, or a payload nothing delivers");
+    DCHECK(src && *src && root && *root && sink_name && *sink_name && payload && *payload,
+           "a parked @S candidate was rebuilt without a source, without a delivery root, without a sink class "
+           "or without its payload — its identity IS the substitution it carries and the route those bytes "
+           "take to the victim, so any one missing makes it an exploration flow wearing a payload, or a "
+           "payload nothing delivers. This asserts the record's SHAPE and not its content: the bytes are ones "
+           "an earlier session of this engine wrote (cold.c's park_rec_cand asserts the same non-emptiness on "
+           "the write side), so an empty field here is a residue this grammar did not produce, while WHAT the "
+           "payload says is a stranger's business and is refused below rather than asserted");
     for (i = 0; i < SINK_CLASS_N; i++)
         if (!strcmp(SINKS[i].name, sink_name)) { cls = i; break; }
     if (cls < 0) {
@@ -2236,8 +2269,10 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
        flow being rebuilt is one of its candidates. Opening it again would seed the whole search a second time,
        which is precisely what the park's write-once assert exists to prevent, arriving through the other door.
        It dedups, so a session that resumes five candidates for one sink registers it once and raises `tried`
-       five times — exactly the number of candidate runs that sink's search has had, and exactly what the
-       parked-search entry reports. */
+       once per candidate it ACCEPTS — exactly the number of candidate runs that sink's search has had, and
+       exactly what the parked-search entry reports. Five records are not therefore five runs: the refusal
+       below can withdraw any of them, and `tried` counts runs rather than records precisely so that the two
+       stay distinguishable when they differ. */
     {
         int created = 0;
         Cand *e = sink_search(src, cls, &created);
@@ -2246,6 +2281,43 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
            sink this is cand_learn_root's equality assert over what the fourth wrote, which is the only thing
            that can say a park document's records still agree with each other. */
         cand_learn_root(e, root);
+        /* …AND THE SAME DOOR THAT LEARNS THE ROOT IS WHERE THE PAYLOAD IS REFUSED, because learning the root
+           IS what makes the refusal answerable: cand_learn_root seeds this table's carrier half from the
+           declaration, so the line above is the first instant in this session at which these bytes can be
+           asked about at all. Asked with solve_delivered_ok — the SAME predicate solve_seed_candidates asks of
+           a freshly derived escape — so the two doors onto a candidate flow share one refusal rather than
+           spelling two that can drift apart.
+           WHAT FALSIFIES THE RECORD'S PREMISE, stated plainly because §NO BOUNDS requires it of every
+           narrowing: a parked candidate asserts that these bytes reach this sink as themselves, and the root's
+           carrier declaration says one of them never enters the page's program IN ANY FORM — RFC 6265 §4.1.1's
+           cookie-octet excludes it and the plant does not percent-encode it either. That is a positive
+           contradiction and not a fact merely consistent with the premise: no page-side transform recovers a
+           byte that was never carried, so no run can widen this half of the table and no later observation can
+           reinstate the record. It is the same pruning solve_seed_candidates performs on a contradicted
+           spelling, and it is not a cap — there is no count here, no age, no retry limit and no seen-set, and
+           the WORLD the record named is not deleted with it: the recipe outlives the bytes. The flow keeps its
+           decision segment and comes back as an ORDINARY exploration flow (cold.c drops the four candidate
+           fields), so it replays the path that reached this sink, DETECTS there, and re-opens the search — and
+           the search then derives its escapes against the table this very call has already narrowed. The
+           contradicted spelling is what is refused; the search that would construct a deliverable one is
+           re-derived rather than lost.
+           IT CANNOT WITHDRAW AN INSTRUMENT, WHICH IS THE ONE THING THE SEED DOOR NEEDS ITS `kind` FOR AND THIS
+           ONE HAS NO WAY TO ASK. A resumed payload has no row in `pl` (cand_kind_of returns 0 for it by
+           construction — see its note), so probe-versus-escape is not a question this door can answer; it does
+           not have to be. Both instruments are printable US-ASCII BY CONSTRUCTION — the context probe is
+           ASCII alphanumeric so it cannot change the parse it reads, and the delivery probe is a token plus a
+           decimal digit plus a DECLARED byte (bytes_probe) — while the refusal covers exactly the bytes
+           OUTSIDE printable US-ASCII (carrier_shared_byte), and cand_learn_root's own two-sided assert holds
+           the declared and refused sets disjoint. So no probe this file builds can be refused here, and the
+           seed door's `kind == CAND_PROBE` exemption has nothing to guard against on this path.
+           NOTHING IS COUNTED FOR A WITHDRAWAL. `tried` and `resumed` are counts of candidate RUNS and this
+           record produces none, so raising either would report a run the search never had; `g_cands_seeded` is
+           the cost of a document re-run and no re-run is spent. What IS raised is the withdrawal itself, which
+           is the third state the pair above cannot express and the evidence add_pending reads. */
+        if (!solve_delivered_ok(&e->deliv, payload)) {
+            e->resumed_withdrawn++;
+            return NULL;
+        }
         e->tried++;
         /* …AND WHICH OF THOSE RUNS THIS IS, because `tried` alone cannot say. A reader holding `tried:6` beside
            an empty `payloads` list is looking at either a cross-session search whose every run came back from
@@ -2497,7 +2569,13 @@ void solve_flow_begin(Flow *f) {
            the creation itself, solve_resume_candidate during the cold rebuild and before the flow runs an
            opcode — so a switch-in standing over `tried:0` is a THIRD door, and the card would report turns
            with no seeded candidate behind them. It is the pair `s-*-seeded` and `s-*-ran` are read as, stated
-           where the second of them is written. */
+           where the second of them is written.
+           A WITHDRAWN RECORD IS NOT A COUNTEREXAMPLE TO THAT, and the reason is worth stating because the two
+           doors no longer raise `tried` unconditionally. solve_resume_candidate can refuse a parked candidate
+           whose payload the root's carrier contradicts, and it raises `resumed_withdrawn` instead — but the
+           same refusal makes cold.c drop `cand_src`, and `cand_src` is the whole of what the branch above
+           tests, so a withdrawn record never reaches this line as a candidate at all. The claim here is about
+           every flow that DOES reach it, and it is still exactly true of all of them. */
         DCHECK(!e || e->tried > 0,
                "an @S candidate flow was switched in for a search that reports no candidate seeded — both "
                "doors into a candidate raise `tried` before the flow is reachable by the pick, so a turn "
@@ -2732,6 +2810,19 @@ char *solve_json_array(JSContext *ctx) {
            search has had is one of the rows below, which is what licenses every implication read off them. */
         json_buf_raw(&b, ","); json_buf_key(&b, "resumed");
         snprintf(t, sizeof t, "%d", g_pending[i].resumed); json_buf_raw(&b, t);
+        /* …AND HOW MANY CAME BACK AND WERE REFUSED BEFORE THEY COULD RUN, which is the state the pair above
+           cannot express. A parked record carries bytes an EARLIER session derived, and this build narrows the
+           delivery table from the root's carrier declaration the moment the root arrives, so a record written
+           before that narrowing names a payload this build positively contradicts and never runs
+           (solve_resume_candidate). Neither `tried` nor `resumed` moves for it — both count RUNS — so without
+           this number a search whose every parked candidate was refused reports `tried:0,resumed:0` exactly as
+           a search nothing was ever parked for, and that reading is the positive statement (solve.h) that
+           every run this search has had is a row in `payloads`. The two take opposite actions: the first says
+           this build's carrier rules have moved past a stored recipe, the second says the frontier never
+           reached here. UNCONDITIONAL, and 0 is the load-bearing value: it is what says the residue and this
+           build still agree about what the source can carry. */
+        json_buf_raw(&b, ","); json_buf_key(&b, "resumedWithdrawn");
+        snprintf(t, sizeof t, "%d", g_pending[i].resumed_withdrawn); json_buf_raw(&b, t);
         /* …AND HOW MANY OF THOSE RUNS GOT HERE, which is the half `tried` cannot state (see the field). The
            two together are the only thing that tells a document nobody has explored far enough apart from a
            breakout that arrived and did not work — `reached:0` is the first, anything else is the second. */

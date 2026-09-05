@@ -2158,11 +2158,23 @@ static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *roo
                case it named — a cookie-sourced JS-context search whose hole sits in a §12.4 SingleLineComment,
                whose exit escape is the one derived breakout in this engine carrying a byte outside printable
                US-ASCII — is refused at construction and reported as a parked search.
-               IT STAYS BECAUSE THE SEED IS NOT THE ONLY DOOR ONTO A CANDIDATE FLOW. A candidate rebuilt from
-               the cold tier carries a payload read out of a park document rather than one this session
-               constructed, and solve_resume_candidate is handed its search's root and NOT those bytes — so a
-               record written by a build that predates this refusal resumes without being asked. That is the
-               one route left to this abort, and it is what the abort now names. */
+               THE COLD TIER WAS THE ONE ROUTE LEFT AND IT IS CLOSED, so this abort now names NO route and is a
+               backstop in the full sense rather than a residual with a door still open. The residual that
+               stood here said a candidate rebuilt from a park document carries bytes this session never
+               constructed while solve_resume_candidate was handed its search's ROOT and not those bytes, so a
+               record written before this refusal existed resumed unasked. That was exact, and the fix is the
+               one it named: the payload is now an ARGUMENT to that call, which asks solve_delivered_ok against
+               the table cand_learn_root has just seeded from the root's carrier declaration, and refuses the
+               record where the two disagree. Every route onto a candidate payload therefore passes a refusal
+               now — solve_seed_candidates withdraws a contradicted escape before it becomes a flow and asserts
+               it again where the document re-run is spent, solve_resume_candidate refuses a parked record
+               before it registers anything, and engine.c's candidate-session fork copies a payload from a
+               parent that already passed one (a sibling is its parent's path with one arm appended, so it
+               inherits the answer rather than needing its own).
+               WHAT WOULD MAKE IT FIRE IS THEREFORE A NEW PRODUCER, which is exactly what a backstop is for:
+               any future writer of Flow.cand_payload that does not go through one of those three. It is not
+               deleted with the residual, because the thing it guards is not a route but an INVARIANT over a
+               field, and the field is reachable from anywhere in this engine that can hold a Flow. */
             DFAILF("an @S candidate carries the byte 0x%02X to a source whose carrier can neither encode it nor "
                    "hold it — the declared set lists only the PRINTABLE bytes the carrier's own production "
                    "excludes, so a byte outside US-ASCII has no delivery this component can state and both "
