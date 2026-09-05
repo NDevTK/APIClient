@@ -4759,7 +4759,7 @@ void css_rule_install(JSContext *ctx, JSValueConst global)
        what carries them to every interface that inherits. */
     rule_install_constants(ctx, iface[0]);
     for (i = 0; i < n; i++)
-        JS_SetPropertyStr(ctx, global, IFACES[i].name, iface[i]);
+        idl_define_global_property_reference(ctx, global, IFACES[i].name, iface[i]);
 }
 
 void css_rule_free(JSRuntime *rt)

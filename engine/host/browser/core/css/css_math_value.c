@@ -772,7 +772,7 @@ void css_math_value_install_realm(JSContext *ctx, JSValueConst numeric_proto)
         ctor = idl_step_constructor(ctx, MV[k].iface, g_id_ctor[k]);
         CHECK(!JS_IsException(ctor), "a CSSMathValue subclass interface object could not be allocated");
         JS_SetConstructor(ctx, ctor, proto);
-        JS_SetPropertyStr(ctx, global, MV[k].iface, ctor);
+        idl_define_global_property_reference(ctx, global, MV[k].iface, ctor);
         JS_SetClassProto(ctx, g_class[k], proto);   /* CONSUMES proto */
     }
     JS_FreeValue(ctx, mv_proto);
