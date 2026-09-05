@@ -377,6 +377,30 @@ var _DESTINATION_TYPES = ["", "audio", "audioworklet", "document", "embed", "fon
 // ingestion from — and the field the ingestion IS decided from was the one taken on the
 // producer's word. Refusing here closes it for BOTH hosts at once, which is the reason
 // it belongs at the chokepoint rather than in either host's splitter.
+/* ── DOES A GATE IN THIS FILE READ THIS REQUEST'S WHOLE BODY ─────────────────────────────────────────────
+   A POSITIVE STATEMENT ABOUT THE REQUEST, ASKED BEFORE ANY BYTE MOVES, and the one thing that decides whether
+   a reply may be handed over a piece at a time. It is DERIVED FROM `_isScriptLike` AND NEVER RESTATED: CORB is
+   the only gate below that reads the body, its scope IS that predicate, and a second spelling of that scope
+   here would be a copy that goes stale the day the predicate moves — which is the same reason `_isScriptLike`
+   itself sits beside `_DESTINATION_TYPES` rather than in a zone that only relays the field.
+
+   WHY THE ANSWER IS NOT "SNIFF THE FIRST CHUNK AND CARRY ON". Measured, with a control, over one 9 KB JSON
+   body labelled `text/plain`, cross-origin, script-like: the WHOLE body sniffs `protected: true` and
+   `_corbDeniesScript` answers `sniffed-data`, so the load is refused; the FIRST 4096 BYTES sniff
+   `protected: false` and it answers null, so the same body is admitted to a code loader — and the record's
+   type goes `application/json` to `text/plain` with it. That is not a weaker decision, it is the OPPOSITE
+   decision, and it is structural rather than unlucky: `_sniff`'s second arm re-parses the whole body, so any
+   JSON document longer than 4096 bytes fails the prefix parse BY CONSTRUCTION and cannot reach the arm that
+   protects it. A first-chunk CORB answer therefore fails OPEN on the commonest shape there is.
+
+   SO THE ANSWER IS A REFUSAL AND NOT A PARTIAL ANSWER. A script-like destination is not streamable, the
+   caller is TOLD so before the request is made, and nothing is handed over. It is graded `decline` rather
+   than `network` on this file's own discriminator: a real browser streams a script perfectly well, so no
+   browser refuses this and there is nothing to relay — only this tool declines, which is what `decline`
+   means and is why the flow parks rather than exploring a failure path no server produced. */
+function _bodyGated(opts) {
+  return _isScriptLike(_destinationOf(opts));
+}
 function _destinationOf(opts) {
   CHECK(typeof opts.destination === "string" && _DESTINATION_TYPES.indexOf(opts.destination) >= 0,
         "safeFetch was called with a DESTINATION that is not one Fetch §2.2.5 \"Requests\" enumerates: " +
@@ -447,7 +471,7 @@ function _provenanceOf(opts) {
    an option added to the body and forgotten in this list aborts on its AUTHOR's own first call, at the line
    they just wrote — while the failure it closes is silent and belongs to somebody else, later. */
 var _SAFEFETCH_OPTIONS = ["pageUrl", "pageOrigin", "destination", "provenance", "credentialed",
-                          "headers", "signal"];
+                          "headers", "signal", "onChunk"];
 /* DCHECK AND NOT CHECK, ON THE DISCRIMINATOR THIS FILE ALREADY STATES FOR `opts.pageUrl`: release must still
    be able to PROCEED, and it can. With this compiled out every unread option is dropped exactly as it is
    dropped today, and every one of them lands on the safe side — a dropped `method` fires the GET this file
@@ -967,11 +991,11 @@ function _urlList(requested, finalHref, redirected) {
    gate ladder above it rather than a preference about how bytes are moved. This was
    `new Uint8Array(await resp.arrayBuffer())`, which is Fetch §5.3 "Body mixin"'s consume-body run to
    completion, and that is the DEGENERATE CASE of this loop: every chunk is accumulated and the assembled
-   sequence is byte-identical, so every gate below and every caller reads exactly what it read before. What
-   changes is that the SEAM EXISTS. An incremental delivery — a `text/event-stream` that never ends, a
-   progressive `responseText`, a `ReadableStream` off a `fetch` body — is this loop with a sink inside it, and
-   the whole of what makes that admissible is WHERE the loop sits: BELOW every gate that reads the response
-   HEAD and ABOVE the one gate that reads the BODY.
+   sequence is byte-identical, so every gate below and every caller reads exactly what it read before whether
+   a sink is stated or not. An incremental delivery — a `text/event-stream` that never ends, a progressive
+   `responseText`, a `ReadableStream` off a `fetch` body — is this loop RELEASING each chunk to `opts.onChunk`
+   as it arrives, and the whole of what makes that admissible is WHERE the loop sits: BELOW every gate that
+   reads the response HEAD and ABOVE the one gate that reads the BODY.
 
    WHICH GATES READ WHICH, BECAUSE A LATER DIFF RESTS ON IT AND IT IS STATED NOWHERE ELSE. The scheme
    allowlist, both private-host checks (initial and post-redirect), both destructive-path checks, both
@@ -985,26 +1009,49 @@ function _urlList(requested, finalHref, redirected) {
    longer than 4096 bytes fails the prefix parse by construction. A first-chunk sniff cannot reach that arm at
    all, and the arm it does reach answers `protected: false`, which is CORB's ALLOW arm and `_computedType`'s
    empty string. The classification therefore does not degrade loudly: it degrades toward admitting a
-   cross-origin data body into a code loader, and toward a record stating that the resource has no type. A
-   script-like destination is not streamable, and the sink a later diff puts in this loop is owed that refusal
-   rather than a partial answer to a question CORB asks of the whole resource.
+   cross-origin data body into a code loader, and toward a record stating that the resource has no type. So a
+   script-like destination is NOT STREAMABLE, and that is a REFUSAL rather than a partial answer to a question
+   CORB asks of the whole resource: `_bodyGated` derives the set from `_isScriptLike`, and the entry answers
+   `blocked-stream-body-gated:<destination>` before the request is made. The DCHECK at the head of this
+   function is that same rule asserted where the release actually happens.
 
-   AND `computedType` IS THE ONE HEAD FIELD THAT IS BODY-DERIVED, which is the other half of the same fact.
-   `status`, `statusText`, the header map and the URL list are all answerable the instant `fetch` returns; the
-   computed type is the sniff's, so a head delivered before its body cannot carry one. That is a fact about
-   this record rather than about this loop, and it is written here because this is where the two halves part.
+   AND `computedType` IS THE ONE HEAD FIELD THAT IS BODY-DERIVED, which is the other half of the same fact
+   and is what this seam does NOT answer. `status`, `statusText`, the header map and the URL list are all
+   answerable the instant `fetch` returns; the computed type is the sniff's, so a head delivered BEFORE its
+   body cannot carry one, and `core/fetch/fetch.c` DCHECKs its presence on the reply record. A sink here is
+   therefore handed BYTES while its caller still holds no head — enough for a consumer that parses a byte
+   stream, and not enough for one that must announce a connection before it may dispatch. That is a fact about
+   the RECORD rather than about this loop, and it is the next subproblem rather than a gap in this one.
 
    THE CHUNKS ARE FOREIGN OBJECTS AND ARE NEVER `instanceof`-TESTED. `engine/trusted.mjs` runs this file in a
    vm context whose `fetch` is the OUTER realm's, so a chunk this reader yields is that realm's `Uint8Array`
    and not this one's — the same cross-realm question that file already names about values travelling the
    other way. `%TypedArray%.prototype.set` is an internal-slot check rather than a realm check, so the
    accumulation is realm-agnostic, while an `instanceof` here would answer false for a perfectly good chunk. */
-async function _readBody(resp) {
+async function _readBody(resp, sink, gated) {
+  /* THE PRECONDITION ASSERTED AT THE CONSUMER, WHICH IS WHERE IT BITES. The entry refuses a body-gated
+     request that asked for chunks and returns before this is reached, so this cannot fire today — and it is
+     here for the case that rule is written for: a route added later reaches the release point instead of
+     silently widening the old answer. Deleting the entry refusal makes THIS fire rather than making a
+     cross-origin data body stream into a code loader. */
+  DCHECK(!(sink !== undefined && gated),
+         "a body-gated request reached the chunk release point — CORB is the one gate in this file that reads " +
+         "the BODY, a first-chunk sniff answers it the OPPOSITE way for any JSON document over 4096 bytes, and " +
+         "a chunk handed over here has not passed it. The entry refuses this with " +
+         "`blocked-stream-body-gated:` before the request is made; reaching this line means that refusal was " +
+         "removed and the reply is about to be streamed past the only gate that needed all of it");
+  DCHECK(sink === undefined || typeof sink === "function",
+         "safeFetch was asked for incremental delivery with an `onChunk` that is not callable — the sink is a " +
+         "value this zone composes at its own call site, never one the untrusted engine states, so a " +
+         "non-function is this zone's contract broken and would throw mid-body with the request already spent");
   /* A RESPONSE WITH NO BODY IS NOT AN EMPTY ONE, AND THE PLATFORM STATES WHICH THIS IS. Fetch §5.3 "Body
      mixin" — "The body getter steps are to return null" where there is none — and §2.2.3 "Statuses" says when
      that arises: "A null body status is a status that is 101, 103, 204, 205, or 304." There is no reader to
      take, and the `arrayBuffer()` this replaces answered a zero-length sequence for exactly this case, so this
      arm is what keeps the loop byte-identical with the await it replaces rather than a guard over a hole. */
+  /* A SINK STATED OVER A RESPONSE WITH NO BODY IS CALLED ZERO TIMES, which is the honest report and not a
+     hole: there are no chunks, so there is nothing to release, and the completed record still answers the
+     empty byte sequence below. A sink that must tell "no body" from "not yet" reads the returned record. */
   if (resp.body === null) return _NO_BYTES();
   var reader = resp.body.getReader();
   var parts = [], total = 0, step, chunk, i, out, off;
@@ -1027,6 +1074,11 @@ async function _readBody(resp) {
            "the response body reader yielded a chunk that is not a byte view — the bytes themselves are a " +
            "stranger's and are never asserted on, but the SHAPE of a chunk is this host's contract, and a " +
            "non-view accumulates as zeroes into the body that every gate below and the engine read as the reply");
+    /* RELEASED BEFORE IT IS ACCUMULATED, because timeliness is the whole of what a sink buys — a consumer
+       handed the chunk only after the loop ends is the `await` this replaced, wearing a callback. The
+       accumulation continues underneath it either way, so the record every gate below reads is the same
+       record whether a sink was stated or not: incremental delivery ADDS a reader, and removes none. */
+    if (sink !== undefined) sink(chunk);
     parts.push(chunk);
     total += chunk.byteLength;
   }
@@ -1072,6 +1124,17 @@ async function safeFetch(url, opts) {
      is where a real browser puts it too. */
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:")
     return _refused("network", "blocked-scheme:" + parsed.protocol, [parsed.href], {});
+  /* AND WHETHER THIS REPLY MAY BE HANDED OVER A PIECE AT A TIME — asked HERE, of the REQUEST, before the
+     target is judged and long before the wire, because it is a fact about what the caller asked for and about
+     this file's own gates rather than anything a server will say. See `_bodyGated` for the measurement that
+     makes it a refusal instead of a partial answer.
+     IT IS THE REFUSAL AND NOT A FLAG. Serving a body-gated request whole while its caller asked for chunks
+     would be CLAUDE.md's §A-FLAG-THAT-REPORTS-AN-OUTCOME exactly — an announcement standing in for the work —
+     and it fails in the direction that matters: the caller believes it is streaming, and the one gate that
+     needed the whole body is the one it stopped waiting for. A caller that asked for something this file will
+     not do is told so, in the same `blocked-<rule>:<ground>` vocabulary every other refusal here uses. */
+  if (opts.onChunk !== undefined && _bodyGated(opts))
+    return _refused("decline", "blocked-stream-body-gated:" + _destinationOf(opts), [parsed.href], {});
   // Origin-relative SSRF (see header). The PRINCIPAL is the analysed DOCUMENT's OWN
   // address, passed PER CALL as opts.pageUrl — NOT a shared global: two grinds run
   // concurrently in one worker, so a worker-global principal would let one page's
@@ -1370,7 +1433,7 @@ async function safeFetch(url, opts) {
      identical byte sequence — is the head/body gate boundary argued at `_readBody`:
      every gate above this line reads the request or the response HEAD, the one gate
      below it reads the BODY, and this is where the two halves of a reply part. */
-  var body = await _readBody(resp);
+  var body = await _readBody(resp, opts.onChunk, _bodyGated(opts));
   /* THE ONE SNIFF, AND THE ONE TYPE IT PRODUCES. Both readers below are handed THIS
      pass: the CORB gate reads `protected` and the record reads `type`. That is what
      "safeFetch is the only source of sniffing" means as a shape rather than as a
