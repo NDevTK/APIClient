@@ -25,6 +25,7 @@
 #include "core/events/event_target.h"
 #include "core/events/message_event.h"
 #include "core/events/message_port.h"
+#include "core/workers/worker_global_scope.h"
 #include "core/events/report_exception.h"
 #include "core/fetch/fetch.h"
 #include "core/file/blob.h"
@@ -211,6 +212,8 @@ static void d_input_device_capabilities(JSContext *c, const PlatformAgent *a)
 static void d_event(JSContext *c, const PlatformAgent *a) { (void)a; event_init(c); }
 static void d_report_exception(JSContext *c, const PlatformAgent *a) { (void)a; report_exception_init(c); }
 static void d_message_port(JSContext *c, const PlatformAgent *a) { (void)a; message_port_init(c); }
+static void d_worker_global_scope(JSContext *c, const PlatformAgent *a)
+{ (void)a; worker_global_scope_init(c); }
 static void d_xhr(JSContext *c, const PlatformAgent *a) { (void)a; xhr_init(c); }
 static void d_location(JSContext *c, const PlatformAgent *a) { (void)a; location_init(c); }
 static void d_session_history(JSContext *c, const PlatformAgent *a) { (void)a; session_history_init(c); }
@@ -487,6 +490,7 @@ static void r_event(JSRuntime *rt) { event_free(rt); }
 static void r_report_exception(JSRuntime *rt) { report_exception_free(rt); }
 static void r_event_target(JSRuntime *rt) { event_target_free(rt); }
 static void r_message_port(JSRuntime *rt) { message_port_free(rt); }
+static void r_worker_global_scope(JSRuntime *rt) { worker_global_scope_free(rt); }
 static void r_timer(JSRuntime *rt) { timer_free(rt); }
 /* HTML §8.1.7's OWN RECORD AND §8.12's MAP KEYS, the last two components that were still a hand-copied pair of
    lines in each of three hosts' teardowns — `animation_frame_free(ctx); event_loop_free(ctx);`, written after
@@ -894,6 +898,22 @@ static const PlatformComponent PLATFORM[] = {
     { "error_event",         NULL,                  i_error_event },
     { "report_exception",    d_report_exception,    NULL,        r_report_exception },
     { "message_port",        d_message_port,        NULL,        r_message_port },
+    /* HTML §10.2.1.1 The WorkerGlobalScope common interface and §10.2.1.2 Dedicated workers and the
+       DedicatedWorkerGlobalScope interface — the objects a WORKER realm's global object is made of. It is
+       after `event_target` because its per-realm install calls event_target_derived_proto and core/realm.h
+       runs the intrinsics in DECLARATION order, and that is the only constraint this diff has: it reads no
+       other component's state. It is placed here rather than immediately after that row so the argument
+       `performance` makes for its own position — which names "the row above" — keeps meaning what it says.
+       ITS THIRD COLUMN IS EMPTY AND ALWAYS WILL BE. The third column is the PER-DOCUMENT install, and a
+       WorkerGlobalScope realm has no Document to be installed over — HTML §10.2.6.2 Script settings for
+       workers is what a worker environment states instead. That is the whole reason Web IDL §3.8 Platform
+       objects implementing interfaces had to be given a REALM before this component could exist.
+       AND IT HAS NO WITNESS ROW, deliberately. The witness loop runs inside the per-document install, so it
+       only ever stands in a WINDOW realm — where §3.3.7 [Exposed] step 1 makes both of these names UNOWED
+       and the row would assert nothing but their absence. A row that can never see the install it is named
+       for reads as coverage and checks nothing of it; engine/host/test_forced.c's exposure_selftest is the
+       oracle for this component, because it is the one place a second realm is actually built. */
+    { "worker_global_scope", d_worker_global_scope, NULL,        r_worker_global_scope },
     { "xml_http_request",    d_xhr,                 i_xhr,       r_xhr },
     /* FILE API §6 Reading Data, AFTER `xml_http_request` and not beside `blob`. Two rows decide it and
        both are the standards' own: §6.4.1 Event Summary makes every event this component fires a

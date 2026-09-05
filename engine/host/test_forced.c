@@ -2,6 +2,7 @@
  * BOTH arms via the dispatch loop, with the fork expressed purely as a decision-vector sibling (no OP_if
  * rewind, no frame snapshot). Runs standalone against clean upstream quickjs + the new solver components. */
 #include "quickjs.h"
+#include "quickjs-step.h"   /* JS_WellKnownSymbolAtom — the @@toStringTag the §10.2.1.1 arm reads */
 #include "check.h"
 #include "qjs_abi.h"   /* the production `qjs_*` entries — this file's `--abi` arm is a host of them */
 #include "solver/concolic.h"
@@ -6135,6 +6136,16 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
         { "Event",          true, true  },   /* [Exposed=*] */
         { "MessageChannel", true, true  },   /* [Exposed=(Window,Worker)] */
         { "MessagePort",    true, true  },   /* [Exposed=(AudioWorklet,Window,Worker)] */
+        /* THE TWO ROWS THAT RUN THE OTHER WAY, and until they existed the table had none. Every row above is
+           PRESENT-IN-WINDOW, so a per-realm column that placed every identifier it had in EVERY realm passed
+           all four — `DOMParser` is the only one that could have caught it and it is the WINDOW-only
+           direction. These are the WORKER-only one: HTML §10.2.1.1 The WorkerGlobalScope common interface is
+           `[Exposed=Worker]` and §10.2.1.2 Dedicated workers and the DedicatedWorkerGlobalScope interface is
+           `[Global=(Worker,DedicatedWorker),Exposed=DedicatedWorker]`, so Web IDL §3.3.7 [Exposed] step 1
+           intersects each against a Window realm's global names and gets nothing. A component that installed
+           them unconditionally would put two interface objects on every document's global. */
+        { "WorkerGlobalScope",           false, true },   /* [Exposed=Worker] */
+        { "DedicatedWorkerGlobalScope",  false, true },   /* [Global=(Worker,DedicatedWorker)] */
     };
     JSContext *worker = JS_NewContext(JS_GetRuntime(ctx));
     /* THE SECOND WORKER REALM IS THE OTHER ARM OF ONE STEP, and it is a second REALM because that is the only
@@ -6199,13 +6210,111 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
                in_worker ? "carries" : "does not carry", EXPECT[i].name,
                EXPECT[i].in_worker ? "must be there" : "must not");
     }
+    /* HTML §10.2.1.1 The WorkerGlobalScope common interface AND §10.2.1.2 Dedicated workers and the
+       DedicatedWorkerGlobalScope interface — WHERE Web IDL PUTS A MEMBER, which the EXPECT table above cannot
+       ask. That table is [[HasProperty]], so it sees a NAME and never an OBJECT: every row of it would pass
+       over a realm whose whole prototype chain was Object.prototype and whose members were own properties of
+       the global. This is the other question, and it is the substance of what §10.2.1.1 owes a realm.
+       WEB IDL DECIDES THE PLACEMENT BY [Global] AND THE TWO INTERFACES TAKE OPPOSITE ARMS, which is what makes
+       this discriminating rather than a restatement of the install. §3.7.3 Interface prototype object's last
+       conditional is "If interface is not declared with the [Global] extended attribute, then: Define the
+       regular attributes of interface on interfaceProtoObj given realm" — `WorkerGlobalScope` is not [Global],
+       so `self` is on ITS prototype — while §3.8 Platform objects implementing interfaces takes the other arm
+       for the [Global] one, "If interface is declared with the [Global] extended attribute, then: ... Define
+       the regular attributes of interface on instance", so DedicatedWorkerGlobalScope.prototype carries no
+       member at all. A build that installed `self` on the global, which is the placement §7.2.2's `self`
+       takes and therefore the one a reader copies, satisfies the identity below and fails the two own-property
+       questions beside it. */
+    {
+        JSValue wg = JS_GetGlobalObject(worker);
+        JSValue dwgs_c = JS_GetPropertyStr(worker, wg, "DedicatedWorkerGlobalScope");
+        JSValue wgs_c = JS_GetPropertyStr(worker, wg, "WorkerGlobalScope");
+        JSValue dwgs_p = JS_GetPropertyStr(worker, dwgs_c, "prototype");
+        JSValue wgs_p = JS_GetPropertyStr(worker, wgs_c, "prototype");
+        JSValue p1 = JS_GetPrototype(worker, wg);
+        JSValue p2 = JS_GetPrototype(worker, p1);
+        JSValue selfv = JS_GetPropertyStr(worker, wg, "self");
+        JSValue bad;
+        JSAtom sa = JS_NewAtom(worker, "self");
+        JSAtom tag = JS_WellKnownSymbolAtom(JS_WKS_TO_STRING_TAG);
+        int own_proto, own_global, own_dwgs, own_tag;
+
+        CHECK(sa != JS_ATOM_NULL, "the `self` witness name could not be interned");
+        own_proto  = JS_GetOwnPropertyNoUserCode(worker, NULL, wgs_p, sa);
+        own_global = JS_GetOwnPropertyNoUserCode(worker, NULL, wg, sa);
+        own_dwgs   = JS_GetOwnPropertyNoUserCode(worker, NULL, dwgs_p, sa);
+        own_tag    = JS_GetOwnPropertyNoUserCode(worker, NULL, wg, tag);
+        JS_FreeAtom(worker, sa);
+        CHECK(own_proto >= 0 && own_global >= 0 && own_dwgs >= 0 && own_tag >= 0,
+              "an own-property probe threw over a worker realm's globals — none of these objects is a Proxy "
+              "and none carries an exotic hook, so there is no page code for one to have run");
+        /* §3.7.3's PROTO STEP, BOTH LINKS. "Otherwise, if interface is declared to inherit from another
+           interface, then set proto to the interface prototype object in realm of that inherited interface." */
+        CHECK(JS_VALUE_GET_PTR(p1) == JS_VALUE_GET_PTR(dwgs_p) &&
+              JS_VALUE_GET_PTR(p2) == JS_VALUE_GET_PTR(wgs_p),
+              "a worker realm's prototype chain is not the one Web IDL §3.7.3 Interface prototype object "
+              "builds: the global object's [[Prototype]] must be DedicatedWorkerGlobalScope.prototype and "
+              "THAT object's must be WorkerGlobalScope.prototype. A page reads this as "
+              "`self instanceof WorkerGlobalScope`, and a global left on Object.prototype answers false to "
+              "every brand test a bundle writes");
+        /* §3.7.3 against §3.8, in the two directions that tell the placement apart. */
+        CHECK(own_proto == 1 && own_global == 0 && own_dwgs == 0,
+              "HTML §10.2.1.1's `self` is not where Web IDL puts it: it is a regular attribute of "
+              "`WorkerGlobalScope`, which is NOT declared [Global], so §3.7.3's \"If interface is not declared "
+              "with the [Global] extended attribute\" arm defines it on WorkerGlobalScope.prototype — and it "
+              "is therefore an own property of NEITHER the global object nor DedicatedWorkerGlobalScope"
+              ".prototype, which §3.7.3 leaves with no member on it at all. A page reads the difference with "
+              "getOwnPropertyDescriptor");
+        /* §10.2.1.1: "The self attribute must return the WorkerGlobalScope object itself." */
+        CHECK(JS_VALUE_GET_PTR(selfv) == JS_VALUE_GET_PTR(wg),
+              "HTML §10.2.1.1's `self` did not return the WorkerGlobalScope object itself — a bare `self` is "
+              "how every worker script names its own global, so an answer that is not that object is a "
+              "different program");
+        /* AND ITS BRAND CHECK IS REAL, WHICH IS THE ONE ASSERTION HERE THAT NEEDS ITS OWN OPERAND. Every check
+           above passes over a `self` installed as a plain data value with no §3.7.6 steps behind it at all.
+           Web IDL §3.7.6 Attributes' create an attribute getter throws "if jsValue does not implement target",
+           and WorkerGlobalScope.prototype is an ordinary object that implements nothing — so reading `self`
+           off it must THROW. It must be a TypeError and not an abort: a receiver is page-supplied input. */
+        bad = JS_GetPropertyStr(worker, wgs_p, "self");
+        CHECK(JS_IsException(bad),
+              "reading `self` off WorkerGlobalScope.prototype did not throw — Web IDL §3.7.6 Attributes' "
+              "create an attribute getter step 1.1.2.3 is \"If jsValue does not implement target, then ... "
+              "throw a TypeError\", and that prototype implements nothing. A getter that answers here is one "
+              "with no brand check, which makes every assertion above it pass over a plain data property");
+        JS_FreeValue(worker, bad);
+        JS_FreeValue(worker, JS_GetException(worker));
+        /* ECMAScript's own @@toStringTag of "global" must be GONE, or it shadows the §3.7.3 interface tag and
+           `Object.prototype.toString.call(self)` answers "[object global]" where a browser answers
+           "[object DedicatedWorkerGlobalScope]". core/frame/window.c deletes the identical property at
+           §7.2.2's install, so a worker realm that kept it would be the one global in this engine that lies
+           about what it is. */
+        CHECK(own_tag == 0,
+              "a worker realm's global object still carries ECMAScript's own @@toStringTag — it shadows the "
+              "Web IDL §3.7.3 class string on DedicatedWorkerGlobalScope.prototype, so "
+              "`Object.prototype.toString.call(self)` answers \"[object global]\"");
+        JS_FreeValue(worker, selfv);
+        JS_FreeValue(worker, p1);
+        JS_FreeValue(worker, p2);
+        JS_FreeValue(worker, wgs_p);
+        JS_FreeValue(worker, dwgs_p);
+        JS_FreeValue(worker, wgs_c);
+        JS_FreeValue(worker, dwgs_c);
+        JS_FreeValue(worker, wg);
+    }
     /* AND THE §8.1.3.5 MEASUREMENT RUNS AFTER THE LOOP ABOVE, WHICH IS AN ORDERING AND NOT A TIDY-UP. The
        EXPECT table is this fixture's CONTROL: it exists so a build whose per-realm intrinsics stopped
        installing FAILS on a name that must be there rather than passing on an absence. An assertion placed
        ahead of it would abort first on any run where the control was the thing with something to say, and the
        report would then name §8.1.3.5 for a defect in the install column — a control is only a control while
-       it is the first thing that can speak. Nothing below reads anything an intrinsic installs (the realm
-       fields are written by realm_install_intrinsics itself), so this order costs the measurement nothing. */
+       it is the first thing that can speak. THE SAME ORDERING IS WHY THE HTML §10.2.1.1
+       "The WorkerGlobalScope common interface" BLOCK ABOVE SITS BELOW THE
+       LOOP AND NOT ABOVE IT: it reads objects an intrinsic installed, so it is downstream of exactly the
+       column the control speaks for. What stood here was a sentence of this fixture's own — that nothing below
+       the loop read anything an intrinsic installs — which was an argument for why the §8.1.3.5 pair could sit
+       under the control and was written as a claim about everything below it. It is restated here without
+       quotation marks deliberately: it is THIS TREE's retired prose and not any standard's, and quoting it
+       under the citation above aims the auditor's quotation channel at a sentence no document contains; that pair still reads only realm fields realm_install_intrinsics
+       writes itself, and it is no longer the only thing down here. */
     /* HTML §8.1.3.5 STEP 1.2, MEASURED IN BOTH DIRECTIONS AT ONCE. Two worker realms differing in nothing but
        step 1.2.1's operand must disagree, and NO OTHER ARM OF THE ALGORITHM CAN PRODUCE A DISAGREEMENT: step 2
        reads the top-level creation URL, which §10.2.6.2 leaves null for both of these, and step 1.3 is a
