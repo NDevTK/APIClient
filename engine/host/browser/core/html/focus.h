@@ -118,10 +118,36 @@ bool focus_focused_area_is_viewport(JSContext *docctx);
    the ordinary page. `docctx` is the realm whose ACTIVE DOCUMENT the area belongs to. OWNED. */
 JSValue focus_focused_area_dom_anchor(JSContext *docctx);
 
+/* §6.6.2 Data model's "FOCUSED": "When an element is the DOM anchor of a focusable area of the currently
+   focused area of a top-level traversable, it is focused." THE FOCUSED ELEMENT, which HTML §4.11.4 The dialog
+   element's `show()` step 7 and its show a modal dialog step 16 both write into the subject's PREVIOUSLY
+   FOCUSED ELEMENT.
+   IT IS NOT focus_focused_area_dom_anchor. That one is scoped to ONE Document and answers about its own focused
+   area, which every Document has; this one is scoped to the TOP-LEVEL TRAVERSABLE and descends through
+   navigable containers, so with the focus inside a child frame the two answer with different nodes. §6.12's
+   show popover step 17 states the first and §4.11.4's two show algorithms state the second, so this build has
+   one door for each sentence rather than one door answering both.
+   JS_NULL when nothing is focused — this engine's initial designation is the VIEWPORT, whose DOM anchor is the
+   Document, and a Document is not an element. OWNED. */
+JSValue focus_focused_element(JSContext *ctx);
+
 /* §6.6.7 flush steps 5.9-5.10's verdict: target is the candidate, and if that is not a focusable area then the
    result of GETTING THE FOCUSABLE AREA for it — is that target non-null? A question rather than a request,
    because §6.6.4's delegate search walks content attributes and shadow roots and runs no page code. */
 bool focus_focusable_area_exists(JSContext *docctx, JSValueConst el);
+
+/* HTML §6.6.4 Processing model's FOCUS DELEGATE, 7 steps — "The focus delegate for a focusTarget, given an
+   optional string focusTrigger (default 'other')". A QUESTION and not a request: it reads content attributes,
+   shadow roots and the focusability predicates and runs no page code, exactly as focus_focusable_area_exists
+   does.
+   IT IS EXPORTED BECAUSE ANOTHER SECTION STATES IT BY NAME. HTML §4.11.4 The dialog element's DIALOG FOCUSING
+   STEPS step 4 is "If control is null, then set control to the focus delegate of subject", and the search this
+   is a wrapper over already exists here as §6.6.4's one implementation — so the alternative is not a smaller
+   diff, it is a second reading of "what a focus delegate is" living in html_dialog.c. What the wrapper adds
+   over the search is steps 1 to 3 and 7, which get-the-focusable-area's own callers never needed because that
+   algorithm reaches the search through its own delegating-host branch with whereToLook already resolved.
+   `focus_target` is an element's wrapper. The answer is OWNED, and JS_NULL for the standard's null. */
+JSValue focus_delegate(JSContext *ctx, JSValueConst focus_target);
 
 /* §6.6.7 flush step 5.11.3's "run the focusing steps for target", as a request the calling machine parks on —
    the same two-leg shape and the same reason as focus_viewport_run. `docctx` must be the realm whose ACTIVE

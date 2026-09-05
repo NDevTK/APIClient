@@ -67,6 +67,31 @@ void top_layer_remove_immediately(JSContext *ctx, JSValueConst el);
    value this cascade has no property for. */
 bool top_layer_is_in(JSContext *ctx, JSValueConst el);
 
+/* §3's SET ITSELF — "Documents have a top layer, an ordered set containing elements from the document" — asked
+ * with Infra's `contain`. THE PREDICATE ABOVE IS NOT THIS ONE and the difference is the pending removals: an
+ * element whose removal is pending is CONTAINED here and is NOT "in the top layer" there.
+ *
+ * IT IS BACK, AND THE PARAGRAPH ABOVE IS WHY RATHER THAN A CONTRADICTION OF IT. That one records a raw
+ * predicate DELETED because its single caller — §6.12 The popover attribute's show popover step 6 — meant the
+ * derived term and had been written against the raw one, and it ends by saying what would bring one back: "A
+ * caller that wants the filtered term asks for it when it has one, which is the policy above again." This is
+ * that sentence read in the other direction. HTML §4.11.4 The dialog element's show a modal dialog step 15 is
+ * a caller that means the RAW set and says so in its own markup: "If subject's node document's top layer does
+ * not already contain subject, then add an element to the top layer given subject", where `top layer` links to
+ * css-position-4's #document-top-layer and `contain` to Infra's list-contains — not to #in-the-top-layer, which
+ * the standard uses one step later in §4.11.4's own removing steps.
+ *
+ * THE TWO ANSWERS DIFFER ON A SEQUENCE A PAGE WRITES, so this is not a distinction without a consequence.
+ * `d.close(); d.showModal();` in one task leaves the dialog CONTAINED in the layer with its removal pending —
+ * close the dialog step 6 requested one and no rendering update has processed it — so the raw question answers
+ * true and step 15 skips the add, while the derived one answers false and would re-add. §3.3's own
+ * add-an-element-to-the-top-layer step 2 is what makes the re-add legal rather than an assert failure, which
+ * is precisely why the wrong predicate here would be SILENT: it would move the dialog to the end of the layer
+ * and clear its pending removal, changing paint order and cancelling a removal the standard leaves standing.
+ *
+ * NEITHER SET IS MINTED — a question about a document leaves no property write on shared baseline state. */
+bool top_layer_set_contains(JSContext *ctx, JSValueConst el);
+
 /* ── §3's ORDER, READ ────────────────────────────────────────────────────────────────────────────────────────
  *
  * THE FIRST DERIVED CONCEPT TO ARRIVE, AND IT ARRIVES WITH ITS CALLER. That is the policy above obeyed rather

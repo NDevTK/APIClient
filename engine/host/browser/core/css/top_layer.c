@@ -241,6 +241,20 @@ bool top_layer_is_in(JSContext *ctx, JSValueConst el)
     return in;
 }
 
+/* §3's SET ITSELF, asked with Infra's `contain` — see top_layer.h for why this is BACK, what it is not, and
+   which one caller means it rather than §3.3's derived term. NEITHER SET IS MINTED, for the reason the
+   predicate above states: this is a question about a document. */
+bool top_layer_set_contains(JSContext *ctx, JSValueConst el)
+{
+    JSValue doc = tl_document_of(ctx, el);
+    JSValue layer = tl_set(ctx, doc, g_atom_layer, false);
+    bool contains = tl_index_of(ctx, layer, el) >= 0;
+
+    JS_FreeValue(ctx, layer);
+    JS_FreeValue(ctx, doc);
+    return contains;
+}
+
 /* §3's ORDER, READ — see top_layer.h for why the walk lives here, why "topmost" is the LAST member, why it
    reads the `top layer` rather than §3.3's "is in the top layer", and why it answers with the member and never
    with its rank. */

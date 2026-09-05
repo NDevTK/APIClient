@@ -44,6 +44,29 @@ int html_dialog_close_run(JSContext *ctx, DialogCloseRun **slot, JSValueConst su
                           JSValueConst source, JSValue in, JSValue **out_cb, int *out_argc);
 
 
+/* §4.11.4's DIALOG FOCUSING STEPS, 10 steps — "The dialog focusing steps, given a dialog element subject, are
+ * as follows". Run at `show()` step 11, at show a modal dialog step 20, and at HTML §6.12 The popover
+ * attribute's POPOVER FOCUSING STEPS step 2, which is the caller this door is exported for: "If subject is a
+ * dialog element, then run the dialog focusing steps given subject and return."
+ *
+ * TWO OF THE TEN ARE REQUESTS, so this is a cursor and not a call: step 1's §6.6.6 allow focus steps FORKS
+ * (its second clause is §6.4.1's transient activation, unknown external state), and step 6's §6.6.4 focusing
+ * steps fire `blur`, `focusout`, `focus` and `focusin` at the page's listeners. The state is OPAQUE and
+ * heap-held, the same shape and the same reason as DialogCloseRun above: the caller holds the pointer in its
+ * own state block and names it in its own `visit`, so a fork inside one of those listeners gives each arm its
+ * own half-finished run. `*slot` starts NULL, which a js_mallocz'd caller state already is.
+ *
+ * `hdr` is the CALLING machine's header, which step 1's fork is taken at. `subject` is BORROWED — the run dups
+ * it across the suspension. Returns JS_STEP_FORK or JS_STEP_CALL (the caller returns it), or 0 when the ten
+ * steps have finished; `in` is the calling machine's re-entry value and is CONSUMED. The caller releases the
+ * state on the path that FINISHES; the visit covers the flow that is abandoned. */
+typedef struct DialogFocusingRun DialogFocusingRun;
+
+void html_dialog_focusing_visit(JSContext *ctx, DialogFocusingRun **slot, JSStepVisit *v);
+void html_dialog_focusing_release(JSContext *ctx, DialogFocusingRun **slot);
+int  html_dialog_focusing_run(JSContext *ctx, JSStepHdr *hdr, DialogFocusingRun **slot, JSValueConst subject,
+                              JSValue in, JSValue **out_cb, int *out_argc);
+
 /* §4.11.4's "Each dialog element has an is modal boolean, initially false." Read by HTML §6.12 The popover
    attribute's check popover validity step 3, whose fourth disjunct refuses a `dialog` element whose is modal is
    true. It is a QUESTION about a slot and runs no page code, so it is a plain predicate; false for anything
@@ -80,6 +103,30 @@ JSValue html_dialog_request_close_source_element(JSContext *ctx, JSValueConst di
    state is not None; otherwise false." §6.10.2 declares that algorithm "can never throw an exception", so it is
    a predicate and not a request — every one of its questions is a slot read or a content-attribute read. */
 bool html_dialog_close_watcher_enabled(JSContext *ctx, JSValueConst dialog);
+
+/* HTML §6.3.1 Modal dialogs and inert subtrees: "A Document document is BLOCKED BY A MODAL DIALOG subject if
+ * subject is the topmost dialog element in document's top layer."
+ *
+ * A DERIVED PREDICATE WITH NO STORAGE ANYWHERE, which is why §4.11.4's show a modal dialog step 14 — "Set
+ * subject's node document to be blocked by the modal dialog subject" — writes no field: it is PERFORMED by
+ * step 15's add to the top layer, and step 14's site carries a two-sided assert instead. A stored bit would be
+ * a second answer to a question css-position-4 §3's top layer already answers, and the two would part company
+ * the moment §4.11.4's removing steps take the element out of the layer or a rendering update processes a
+ * pending removal.
+ * It lives in §4.11.4's component because `dialog` is §4.11.4's element, and it reads §3's ORDER through
+ * core/css/top_layer.h's own walk rather than by indexing the set. Runs no page code. The answer is the
+ * SUBJECT — OWNED, and JS_NULL for a document no modal dialog blocks. */
+JSValue html_dialog_blocked_by_modal_dialog(JSContext *ctx, JSValueConst document);
+
+/* The rest of §6.3.1's sentence, as the question HTML §6.3's INERT asks of one node: "While document is so
+ * blocked, every node that is connected to document, with the exception of the subject element and its flat
+ * tree descendants, must become inert."
+ * IT IS HERE AND NOT AT core/html/focus.c's inert walk for the reason the predicate above is: both halves of
+ * the sentence are about a `dialog`, and answering the second where the first is answered is what keeps the
+ * exception and the blocking from being read out of two places. The flat-tree half is CSS Scoping §4.1's and is
+ * routed to the ONE walk this build has, which core/html/popover.h explains and which CRASHES rather than
+ * guessing at the shadow edges the node tree cannot answer for. Runs no page code. */
+bool html_dialog_node_is_blocked_by_modal_dialog(JSContext *ctx, const lxb_dom_node_t *n);
 
 /* §4.11.4's ATTRIBUTE CHANGE STEPS, 6 steps, "given element, localName, oldValue, value, and namespace … used
    for dialog elements" — registered on core/dom/element.c's element_attr_changed, which is the one place every

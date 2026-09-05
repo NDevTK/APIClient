@@ -1484,9 +1484,13 @@ static const IdlStepDecl AEL_DECL = { ael_step, sizeof(AelState), ael_visit, NUL
        caller it arrived with — and §3's `fullscreenEnabled`, `fullscreen` and `fullscreenElement` getters, plus \
        HTMLIFrameElement's `allowFullscreen` reflection and the §9.4 step 3 that attribute now performs.         \
        WHAT IT DOES NOT CARRY is anything that SETS the flag. §2's fullscreen an element is its one setter, and  \
-       its steps 1 and 2 run HTML §6.12's topmost popover ancestor and hide popovers until, which               \
-       core/html/popover.c DFAILs on by name — so every document's fullscreen element is null, there is no list  \
-       of pending fullscreen events, and so no `requestFullscreen` and no `exitFullscreen`.                      \
+       its steps 1 and 2 run HTML §6.12's topmost popover ancestor and hide popovers until. THIS LINE SAID      \
+       core/html/popover.c "DFAILs on by name" AND THAT WAS NEVER TRUE OF EITHER — there is no such crash at    \
+       any revision: topmost popover ancestor was built and static, and hide popovers until was simply absent  \
+       with nothing anywhere naming it, which is the shape a grep for the capability cannot find. Both are     \
+       BUILT AND EXPORTED now (core/html/popover.h), so those two steps are two calls; what still does not     \
+       exist is the rest of fullscreen an element, so every document's fullscreen element is null, there is no \
+       list of pending fullscreen events, and so no `requestFullscreen` and no `exitFullscreen`.               \
        THE NEXT DIFF BUILDS THE FLAG'S WRITER, and the tree already names the join: core/rendering/rendering.c's \
        steps_11_to_13 carries `realm_awaits(docctx, "Document.prototype.exitFullscreen", …)`, a producer probe   \
        that ABORTS the moment that member is installed, naming update-the-rendering step 12 as the thing to      \

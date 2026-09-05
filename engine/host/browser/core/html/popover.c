@@ -493,26 +493,49 @@ static bool popover_flat_tree_descendant(JSContext *ctx, const lxb_dom_node_t *n
         lxb_dom_node_t *p = cur->parent;
 
         if (shadow_root_is(p))
-            DFAIL("HTML §6.12 The popover attribute's topmost popover ancestor walks the FLAT TREE, and this "
-                  "node's parent IS A SHADOW ROOT — CSS Scoping §4.1 Flattening the DOM into an Element Tree "
-                  "puts a shadow root's children under the HOST, so the node tree's parent chain leaves the "
-                  "tree here and the flat tree does not. Walking on would answer a popover ancestry question "
-                  "with a chain the flat tree has no edge in — a WRONG ancestor, not an absent one. BUILD the "
-                  "flat-tree parent (the host, for a shadow root's own children; DOM §4.2.2's assigned slot, "
-                  "for a slottable) as one component and ask it here and at core/html/html_element_view.c's "
-                  "CSSOM VIEW §7 walk, which is stopped by the same absence");
+            DFAIL("CSS Scoping §4.1 Flattening the DOM into an Element Tree's DESCENDANT relation was asked of "
+                  "a node whose parent IS A SHADOW ROOT. §4.1 puts a shadow root's children under the HOST, so "
+                  "the node tree's parent chain leaves the tree here and the flat tree does not. Walking on "
+                  "would answer an ancestry question with a chain the flat tree has no edge in — a WRONG "
+                  "ancestor, not an absent one, and its two callers are both decided by that answer: §6.12 The "
+                  "popover attribute's topmost popover ancestor, and HTML §6.3.1 Modal dialogs and inert "
+                  "subtrees' exception for the modal dialog's own flat tree descendants. BUILD the flat-tree "
+                  "parent (the host, for a shadow root's own children; DOM §4.2.2's assigned slot, for a "
+                  "slottable) as one component and ask it here and at core/html/html_element_view.c's CSSOM "
+                  "VIEW §7 walk, which is stopped by the same absence");
         if (p->type == LXB_DOM_NODE_TYPE_ELEMENT &&
             shadow_root_of_element(ctx, lxb_dom_interface_element(p)) != NULL)
-            DFAIL("HTML §6.12 The popover attribute's topmost popover ancestor walks the FLAT TREE, and an "
-                  "element on this chain HOSTS A SHADOW ROOT — CSS Scoping §4.1 Flattening the DOM into an "
-                  "Element Tree fills a shadow host with its SHADOW tree's children instead of its light "
-                  "ones, so this node is a flat-tree child of the `slot` it is assigned to (or of nothing at "
-                  "all) and not of the host. Answering from the node tree would make a light child of a "
-                  "shadow host count as nested inside a popover the flat tree never nests it in. BUILD the "
-                  "flat-tree parent over DOM §4.2.2's assigned slot and slottable and ask it here");
+            DFAIL("CSS Scoping §4.1 Flattening the DOM into an Element Tree's DESCENDANT relation was asked "
+                  "over a chain on which an element HOSTS A SHADOW ROOT. §4.1 fills a shadow host with its "
+                  "SHADOW tree's children instead of its light ones, so this node is a flat-tree child of the "
+                  "`slot` it is assigned to (or of nothing at all) and not of the host. Answering from the "
+                  "node tree would make a light child of a shadow host count as nested inside an ancestor the "
+                  "flat tree never nests it in — which decides §6.12's topmost popover ancestor one way and "
+                  "§6.3.1's inert-subtree exception the other. BUILD the flat-tree parent over DOM §4.2.2's "
+                  "assigned slot and slottable and ask it here");
         if (p == ancestor) return true;
     }
     return false;
+}
+
+/* CSS Scoping §4.1 "Flattening the DOM into an Element Tree"'s DESCENDANT relation, as the door another section
+ * takes. It is the walk above and not a second one.
+ *
+ * IT IS EXPORTED FROM HERE AND THIS IS THE WRONG OWNER, WHICH IS SAID PLAINLY RATHER THAN LEFT TO BE NOTICED.
+ * The flat tree is CSS Scoping's concept, not §6.12's; the walk lives here only because §6.12's topmost popover
+ * ancestor is what first needed it, and the two DFAILs inside it already name the component that must one day
+ * own it ("BUILD the flat-tree parent … as one component and ask it here"). A SECOND caller has now arrived —
+ * HTML §6.3.1 Modal dialogs and inert subtrees' "with the exception of the subject element and its flat tree
+ * descendants" — and the choice at that point is between a copy and a wrong-owner export. A copy is the worse
+ * of the two by this codebase's own rule: two answers to one question drift, and the day the flat-tree parent
+ * is built one of them would be converted and the other left, whereas one door means both callers move
+ * together in the diff that builds it.
+ *
+ * STRICT, because DOM's "descendant" is; a caller wanting §6.3.1's INCLUSIVE exception asks `node == ancestor`
+ * itself, which is one comparison and reads as the sentence the standard writes. */
+bool popover_flat_tree_descendant_of(JSContext *ctx, const lxb_dom_node_t *node, const lxb_dom_node_t *ancestor)
+{
+    return popover_flat_tree_descendant(ctx, node, ancestor);
 }
 
 /* "the index of the LAST item in `list` of which `node` is a flat tree descendant, otherwise -1" — the one
@@ -1032,6 +1055,197 @@ static int popover_stack_until_run(JSContext *ctx, PopoverStackUntilRun *r, JSVa
     return 0;
 }
 
+/* Release what ONE run of the eight steps above still holds. The `_run` cursor's values are ordinarily
+   released by the walk itself — steps 5 and 8 free each slice as they finish with it — so this is for the
+   holder that abandons a run: a heap-held state freed on the normal path, where the teardown's visit will
+   never see it. Its two callers are the two shapes a holder can be; the visit above is what covers the
+   abandoned-flow path. */
+static void popover_stack_until_free(JSContext *ctx, PopoverStackUntilRun *r)
+{
+    int k;
+
+    JS_FreeValue(ctx, r->to_hide);
+    JS_FreeValue(ctx, r->to_remain);
+    JS_FreeValue(ctx, r->to_check);
+    r->to_hide = r->to_remain = r->to_check = JS_UNDEFINED;
+    STEP_CB_FOREACH(r->cb, k) {
+        JS_FreeValue(ctx, r->cb[k]);
+        r->cb[k] = JS_UNDEFINED;
+    }
+}
+
+/* ---- §6.12's HIDE POPOVERS UNTIL -----------------------------------------------------------------------------
+ *
+ * "To hide popovers until, given a Document document, an HTML element or null endpoint, a boolean
+ * focusPreviousElement, and a boolean fireEvents", 5 steps. It is the WRAPPER over the two algorithms above:
+ * its steps 2 and 5 are HIDE POPOVER STACK UNTIL over the Hint stack and then over the Auto stack, and its
+ * steps 1, 3 and 4 are the substitution between them.
+ *
+ * IT IS EXPORTED AND EVERYTHING IT IS MADE OF IS NOT, WHICH IS THE WHOLE POINT OF THE SHAPE. Sections outside
+ * §6.12 reach hide popovers until and nothing else: HTML §4.11.4 The dialog element's `show()` step 10 and its
+ * show a modal dialog step 19, and FULLSCREEN §2 Model's fullscreen an element step 2. None of them reaches the
+ * SHOWING HINT POPOVER LIST, the HINT STACK PARENT or HIDE POPOVER STACK UNTIL, so those three stay static and
+ * this one door is the whole of what crosses the header. §6.12's list algebra is then answered in exactly one
+ * place — and a second reading of it would not be merely redundant, it would be page-visibly wrong, since a
+ * popover left showing over a modal dialog is precisely what steps 2 and 5 exist to prevent.
+ *
+ * IT IS A `_run` CURSOR AND NOT A REGISTERED MACHINE, for the reason popover.h gives for the stack-until it
+ * wraps: its nesting is FIXED and acyclic. A hide popovers until contains at most two stack-until runs, one at
+ * a time, and neither of those can contain a hide popovers until — the recursion §6.12 really does have passes
+ * through HIDE A POPOVER, which is a CALL and therefore a heap frame. So ONE cursor serves both of steps 2 and
+ * 5, reset between them by popover_stack_until_init, exactly as show popover step 15 resets it between its own
+ * two runs.
+ *
+ * ITS STATE IS OPAQUE AND HEAP-HELD, which is core/html/html_dialog.h's DialogCloseRun shape and is here for
+ * the same reason: the caller holds a pointer in its own state block and names it in its own `visit`, so a
+ * fork inside a `beforetoggle` listener two levels down gives each arm its own half-finished walk, and none of
+ * §6.12's internals has to cross the header for that to work. */
+struct PopoverHideUntilRun {
+    uint8_t              stage;         /* PHU_* */
+    uint8_t              is_hint;       /* step 1's endpointIsHint, latched before step 2 runs any page code */
+    JSValue              document;      /* the Document wrapper (owned) */
+    JSValue              endpoint;      /* the algorithm's `endpoint`: an HTML element or JS_NULL (owned) */
+    JSValue              auto_endpoint; /* steps 3 and 4's autoEndpoint (owned) */
+    PopoverStackUntilRun su;            /* steps 2 and 5's cursor, ONE run at a time */
+};
+
+enum { PHU_HINT_STACK = 0, PHU_AUTO_STACK, PHU_DONE };
+
+static void popover_hide_until_elem_visit(JSContext *ctx, void *elem, JSStepVisit *v)
+{
+    PopoverHideUntilRun *r = elem;
+
+    v->val(ctx, &r->document);
+    v->val(ctx, &r->endpoint);
+    v->val(ctx, &r->auto_endpoint);
+    popover_stack_until_visit(ctx, &r->su, v);
+}
+
+void popover_hide_popovers_until_visit(JSContext *ctx, PopoverHideUntilRun **slot, JSStepVisit *v)
+{
+    /* ONE operation rather than a buffer copy plus a loop, because the two consumers need OPPOSITE ORDER — the
+       clone must copy the block before taking references into it, the teardown must release those references
+       before freeing it. The same reason html_dialog.c's close-the-dialog run is written this way. */
+    v->array(ctx, (void **)slot, sizeof(struct PopoverHideUntilRun), 1, 1, popover_hide_until_elem_visit);
+}
+
+void popover_hide_popovers_until_release(JSContext *ctx, PopoverHideUntilRun **slot)
+{
+    PopoverHideUntilRun *r = *slot;
+
+    if (!r) return;
+    JS_FreeValue(ctx, r->document);
+    JS_FreeValue(ctx, r->endpoint);
+    JS_FreeValue(ctx, r->auto_endpoint);
+    popover_stack_until_free(ctx, &r->su);
+    js_free(ctx, r);
+    *slot = NULL;
+}
+
+int popover_hide_popovers_until_run(JSContext *ctx, PopoverHideUntilRun **slot, JSValueConst document,
+                                    JSValueConst endpoint, bool focus_previous_element, bool fire_events,
+                                    JSValue in, JSValue **out_cb, int *out_argc)
+{
+    PopoverHideUntilRun *r = *slot;
+    int rc;
+
+    if (!r) {
+        r = js_mallocz(ctx, sizeof *r);
+        CHECK(r != NULL, "popover: OOM allocating HTML §6.12 The popover attribute's hide-popovers-until state");
+        *slot = r;
+        /* EVERY owned field before the first thing that can fail — an abandoned run is released through the
+           one declaration above, which frees exactly what this state holds and nothing else, and a js_mallocz'd
+           block is not a block of JS_UNDEFINEDs. */
+        r->document = r->endpoint = r->auto_endpoint = JS_UNDEFINED;
+        popover_stack_until_init(&r->su);
+        r->stage = PHU_HINT_STACK;
+        DCHECK(JS_IsObject(document),
+               "§6.12's hide popovers until was given no Document — the standard types its first argument a "
+               "Document, and every caller resolves \"element's node document\" before reaching here");
+        DCHECK(JS_IsNull(endpoint) || html_element_is(endpoint),
+               "§6.12's hide popovers until was given an endpoint that is neither an HTML element nor null — "
+               "it takes \"an HTML element or null endpoint\", and every caller in this build binds it from "
+               "TOPMOST POPOVER ANCESTOR, which answers with exactly those two");
+        r->document = JS_DupValue(ctx, document);
+        r->endpoint = JS_DupValue(ctx, endpoint);
+        {
+            /* Step 1 — "Let endpointIsHint be true if document's showing hint popover list contains endpoint;
+               otherwise false."
+               ASKED HERE, BEFORE STEP 2 HIDES ANYTHING, which is the standard's own order and not an
+               optimisation: step 2's hides run the page's `beforetoggle` listeners, and the boolean is bound
+               at step 1 and read at step 4. */
+            JSValue hints = popover_showing_list(ctx, document, POPOVER_STATE_HINT);
+
+            r->is_hint = popover_list_index_of(ctx, hints, popover_list_len(ctx, hints), endpoint) >= 0;
+            JS_FreeValue(ctx, hints);
+        }
+        /* Steps 3 and 4 — "Let autoEndpoint be endpoint" and "If endpointIsHint is true, then set autoEndpoint
+           to document's hint stack parent."
+           BOUND HERE RATHER THAN AFTER STEP 2, FOR THE SAME REASON STEP 1 IS ASKED HERE, and this one is a
+           behaviour difference and not a shape: §6.12's hide a popover step 17 CLEARS the document's hint
+           stack parent, and step 2 below runs that algorithm over every hint popover it hides — so a read
+           taken between steps 2 and 5 answers NULL where the standard answers with the element, and a null
+           autoEndpoint hides the WHOLE Auto stack instead of the part above the hint's parent. The standard's
+           own note says what the substitution is for: "if endpoint is a hint popover, auto popovers are
+           closed, except those that are parent to that hint popover" — a statement about the stack as it stood
+           when this algorithm was entered.
+           AN ABSENT HINT-STACK-PARENT SLOT IS THE STANDARD'S NULL, and null is a value the stack-until takes:
+           its step 2's "does not contain" is then true, lastHideIndex is 0, and the whole Auto stack is
+           hidden. */
+        r->auto_endpoint = JS_DupValue(ctx, endpoint);
+        if (r->is_hint) {
+            JSValue parent = ps_get(ctx, document, PS_DOC_HINT_PARENT);
+
+            JS_FreeValue(ctx, r->auto_endpoint);
+            r->auto_endpoint = JS_IsUndefined(parent) ? JS_NULL : parent;
+        }
+    }
+    if (r->stage == PHU_HINT_STACK) {
+        /* Step 2 — "Run hide popover stack until given document, endpoint, Hint, focusPreviousElement, and
+           fireEvents." */
+        rc = popover_stack_until_run(ctx, &r->su, r->document, r->endpoint, POPOVER_STATE_HINT,
+                                     focus_previous_element, fire_events, in, out_cb, out_argc);
+        if (rc) return rc;
+        in = JS_UNDEFINED;                  /* the stack-until CONSUMED it */
+        popover_stack_until_init(&r->su);   /* step 5's run is that algorithm from its own step 1 */
+        r->stage = PHU_AUTO_STACK;
+    }
+    DCHECK(r->stage == PHU_AUTO_STACK,
+           "§6.12's hide popovers until was re-entered after its step 5 had finished — its state is released "
+           "by the caller that allocated it, and a caller that runs the algorithm twice allocates two");
+    /* Step 5 — "Run hide popover stack until given document, autoEndpoint, Auto, focusPreviousElement, and
+       fireEvents." */
+    rc = popover_stack_until_run(ctx, &r->su, r->document, r->auto_endpoint, POPOVER_STATE_AUTO,
+                                 focus_previous_element, fire_events, in, out_cb, out_argc);
+    if (rc) return rc;
+    r->stage = PHU_DONE;
+    return 0;
+}
+
+/* §6.12's TOPMOST POPOVER ANCESTOR, as the door a section outside §6.12 takes. The algorithm is above; this is
+   the export, and it is the WHOLE signature the standard states rather than the one shape §4.11.4 happens to
+   pass, because a narrowed door would be a second name for one algorithm and FULLSCREEN §2 Model's fullscreen
+   an element step 1 passes the same three arguments §4.11.4 does. It runs NO page code — both showing-popover
+   lists are derived reads over the top layer with a C predicate — so it is a plain call and not a request.
+   `source` is an HTML element or JS_NULL. The answer is OWNED, and JS_NULL for the standard's null. */
+JSValue popover_topmost_popover_ancestor(JSContext *ctx, JSValueConst subject, JSValueConst source,
+                                         bool is_popover)
+{
+    return popover_topmost_ancestor(ctx, subject, source, is_popover);
+}
+
+/* §6.12: "Every HTML element has a popover visibility state, initially hidden, with these potential values:
+   hidden, showing." The question "is this element IN THE POPOVER SHOWING STATE", which HTML §4.11.4 The dialog
+   element's show a modal dialog asks TWICE — at its step 5, where the answer throws an "InvalidStateError"
+   DOMException, and again at its step 9, where it merely returns, because step 6 fired `beforetoggle` at the
+   page in between and a listener may have shown the subject as a popover.
+   Two values, so the boolean slot IS the state and no third answer exists; false for an element §6.12 has
+   never shown, which is every element a page never made a popover. */
+bool popover_element_is_showing(JSContext *ctx, JSValueConst el)
+{
+    return popover_is_showing(ctx, el);
+}
+
 /* ---- §6.12's HIDE A POPOVER, as its own step machine ---------------------------------------------------------
  *
  * "To hide a popover given an HTML element element, a boolean focusPreviousElement, a boolean fireEvents, a
@@ -1522,6 +1736,11 @@ typedef struct {
     JSValue ancestor;         /* step 15.1's ancestor, bound there and read again at step 19 (owned) */
     JSValue originally_focused;  /* step 17's originallyFocusedElement, read again at step 24 (owned) */
     PopoverStackUntilRun su;  /* step 15's HIDE POPOVER STACK UNTIL cursor, one run at a time */
+    /* The POPOVER FOCUSING STEPS' step 2 delegation to §4.11.4's DIALOG FOCUSING STEPS — OPAQUE and heap-held,
+       named in the visit below. Non-NULL is also this machine's only record that it is INSIDE that step: step
+       2 returns without binding a `control`, so nothing else on this state distinguishes a run suspended in it
+       from one that has not reached step 1. */
+    DialogFocusingRun *dfocus;
     /* THE WIDEST OF THE THREE REQUESTS THIS BODY MAKES — show popover step 9's fire (EVENT_FIRE_CB_SLOTS = 5),
        the popover focusing steps' step 6 (FOCUS_ELEMENT_CB_SLOTS = 3), and the hide a popover CALL at
        PO_HIDE_CALL (POPOVER_HIDE_CB_SLOTS = 7), which is the widest. Named by that TYPE rather than by a
@@ -1542,6 +1761,7 @@ static void popover_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->ancestor);
     v->val(ctx, &s->originally_focused);
     popover_stack_until_visit(ctx, &s->su, v);
+    html_dialog_focusing_visit(ctx, &s->dfocus, v);
     STEP_CB_FOREACH(s->cb, k)
         v->val(ctx, &s->cb[k]);
 }
@@ -1615,6 +1835,16 @@ static int popover_focusing_steps(JSContext *ctx, PopoverState *s, JSStepHdr *hd
     DCHECK(docctx != NULL, "§6.12's popover focusing steps were reached for an element whose node document has "
                            "no active realm — show popover step 3's check popover validity has already refused "
                            "a document that is not fully active");
+    /* A RE-ENTRY THAT IS ALREADY INSIDE STEP 2 GOES STRAIGHT BACK TO IT, and it is asked BEFORE the block
+       below because that block's first act is to release `in` — which is the completion §4.11.4's own step 6
+       is waiting for. Asking `control` alone cannot tell the two apart: step 2 returns without ever binding
+       one, so a run suspended inside the dialog focusing steps looks exactly like a run that has not started. */
+    if (s->dfocus != NULL) {
+        r = html_dialog_focusing_run(ctx, hdr, &s->dfocus, s->el, in, out_cb, out_argc);
+        if (r) return r;
+        html_dialog_focusing_release(ctx, &s->dfocus);
+        return 0;                                                                            /* step 2's "and return" */
+    }
     if (JS_IsUndefined(s->control)) {
         /* `in` is the driver's re-entry value and NOTHING between here and step 6 consumes one: step 1's
            request forks rather than calling, and steps 2-5 run no page code at all. It is released here, once,
@@ -1626,15 +1856,22 @@ static int popover_focusing_steps(JSContext *ctx, PopoverState *s, JSStepHdr *hd
         r = focus_allow_focus_steps_run(docctx, hdr, &s->ua_phase, &allow);
         if (r) return r;
         if (!allow) return 0;
-        /* Step 2. §4.11.4's DIALOG FOCUSING STEPS are a different algorithm over the same subject, and this
-           build has none of them — html_dialog.c builds close-the-dialog and `returnValue` and nothing shaped
-           like the rest. A `<dialog popover>` is ordinary markup, so this is reachable. */
-        if (html_dialog_is_dialog(n))
-            DFAIL("HTML §6.12 The popover attribute's popover focusing steps step 2 runs HTML §4.11.4 The "
-                  "dialog element's DIALOG FOCUSING STEPS for a `dialog` element and returns — this build has "
-                  "no dialog focusing steps (core/html/html_dialog.c builds close-the-dialog and `returnValue` "
-                  "only), so a `<dialog popover>` reaching showPopover() has no focus model to run. Build "
-                  "§4.11.4's dialog focusing steps beside close-the-dialog, then call them here");
+        /* Step 2 — "If subject is a dialog element, then run the DIALOG FOCUSING STEPS given subject and
+           return." A different algorithm over the same subject, and it is §4.11.4's, so it is run through the
+           door core/html/html_dialog.h exports rather than approximated here: its ten steps are not these ten
+           (its step 4 is §6.6.4's FOCUS DELEGATE where step 4 here is the AUTOFOCUS delegate, and its step 6
+           narrows to sequentially focusable areas for a `dialog`). A `<dialog popover>` is ordinary markup, so
+           this arm is reached by any page that writes one.
+           A `DFAIL` STOOD HERE SAYING THIS BUILD HAD NO DIALOG FOCUSING STEPS, and it is deleted in the diff
+           that builds them rather than left to go on saying a landed capability is missing — which is the one
+           kind of stale claim nothing in this tree catches, because a crash tells its reader not to go and
+           look. */
+        if (html_dialog_is_dialog(n)) {
+            r = html_dialog_focusing_run(ctx, hdr, &s->dfocus, s->el, JS_UNDEFINED, out_cb, out_argc);
+            if (r) return r;
+            html_dialog_focusing_release(ctx, &s->dfocus);
+            return 0;
+        }
         /* Step 3. */
         if (dom_attr_get_ns(lxb_dom_interface_element(n), NULL, "autofocus") != NULL) {
             s->control = JS_DupValue(ctx, s->el);
@@ -1706,6 +1943,7 @@ static int popover_body(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
         s->ancestor = s->originally_focused = JS_UNDEFINED;
         STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
         popover_stack_until_init(&s->su);
+        s->dfocus = NULL;
         s->which = PA_NONE;
         s->fphase = s->ua_phase = s->focus_phase = 0;
         s->showing_taken = 0;

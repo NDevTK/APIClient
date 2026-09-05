@@ -69,6 +69,7 @@
 #include "core/frame/navigation.h"
 #include "core/frame/window_proxy.h"
 #include "core/html/focus.h"
+#include "core/html/html_dialog.h"
 #include "core/html/html_element.h"
 #include "core/html/html_form.h"
 #include "core/html/html_iframe.h"
@@ -292,19 +293,25 @@ static bool tabindex_value(const lxb_dom_node_t *n, long long *pv)
 }
 
 /* §6.3's INERT. "By default, a node is not inert", and the two things that make one inert are the `inert`
-   content attribute on the node or a flat-tree ancestor, and §6.3.1's blocking by a MODAL DIALOG. The second
-   contributes nothing in this build and that is asserted rather than assumed: a document is blocked only by the
-   topmost dialog in its TOP LAYER, the top layer is filled by `showModal`, and rendering.c's step 23 assert
-   already names `HTMLDialogElement.prototype.showModal` as the producer that does not exist — so the day it
-   does, that assert fires and this walk gains its second clause. */
-static bool node_is_inert(const lxb_dom_node_t *n)
+   content attribute on the node or a flat-tree ancestor, and §6.3.1's blocking by a MODAL DIALOG.
+   THE SECOND CLAUSE IS LIVE NOW, AND THE SENTENCE THAT STOOD HERE IS THE REASON IT IS WORTH SAYING SO. It read
+   that the modal-dialog clause "contributes nothing in this build and that is asserted rather than assumed",
+   naming rendering.c's step 23 assert as the producer probe that would fire the day `showModal` landed. That
+   probe was DELETED — rendering.c's own step 23 records why, and correctly: the top layer is filled by §6.12
+   The popover attribute's show popover whether or not any dialog exists. So the forcing function this walk was
+   resting on had been gone for some time, and the walk would have gone on answering `false` for every node a
+   modal dialog blocks with a comment above it certifying that it could not happen. The clause is built here in
+   the diff that lands §4.11.4's show a modal dialog, which is the step that first puts a `dialog` in the layer.
+   §6.3.1's own predicate is DERIVED over that layer and is answered by the component that owns the `dialog`
+   element — there is no flag anywhere for these two readings to disagree about. */
+static bool node_is_inert(JSContext *ctx, const lxb_dom_node_t *n)
 {
     const lxb_dom_node_t *a;
     size_t len = 0;
 
     for (a = n; a; a = a->parent)
         if (a->type == LXB_DOM_NODE_TYPE_ELEMENT && el_attr(a, "inert", &len)) return true;
-    return false;
+    return html_dialog_node_is_blocked_by_modal_dialog(ctx, n);
 }
 
 /* §6.6.2 row 1's last criterion, "the element is BEING RENDERED, or delegating its rendering to its children,
@@ -378,7 +385,7 @@ static bool el_is_focusable_area(JSContext *ctx, JSValueConst el)
     sr = shadow_root_of_element(ctx, lxb_dom_interface_element(n));
     if (sr && shadow_root_flag(ctx, sr, SHADOW_ROOT_DELEGATES_FOCUS)) return false;
     if (html_form_control_is_disabled(ctx, el)) return false;   /* "not actually disabled" */
-    if (node_is_inert(n)) return false;
+    if (node_is_inert(ctx, n)) return false;
     return element_view_has_box(n);
 }
 
@@ -589,6 +596,71 @@ static void get_focusable_area(JSContext *ctx, int kind, JSValueConst v, int *pk
     focusable_area_here(ctx, kind, v, pk, pv, &descend);
     if (*pk == FA_NONE && descend)
         delegate_search(ctx, descend, el_is(node_of(v), "dialog"), pk, pv);
+}
+
+/* §6.6.4's FOCUS DELEGATE, whole — "The focus delegate for a focusTarget, given an optional string focusTrigger
+ * (default 'other'), is given by the following steps", 7 steps — as the door HTML §4.11.4 The dialog element's
+ * DIALOG FOCUSING STEPS step 4 takes ("If control is null, then set control to the focus delegate of subject").
+ *
+ * IT IS A WRAPPER AND NOT A SECOND WALK. Steps 4 through 6 ARE the search above: step 4 is its autofocus pass,
+ * step 6 is its plain pass, and its `is_dialog` argument is step 6's own two-armed condition ("if focusTarget is
+ * a dialog element and descendant is sequentially focusable" against "if focusTarget is not a dialog and
+ * descendant is a focusable area"). What this adds is only steps 1 to 3 and 7, which no caller of
+ * get_focusable_area needed because that algorithm reaches the search through its OWN delegating-host branch
+ * and therefore arrives with whereToLook already resolved. A copy of the search at §4.11.4 would be the second
+ * reading of "what a focus delegate is", and the two would answer differently the day either moved.
+ *
+ * STEP 1 IS THE ONE A CALLER CANNOT DERIVE, and it is asymmetric in a way worth stating: a focusTarget that is
+ * a shadow host whose shadow root does NOT delegate focus has no focus delegate at all, while a focusTarget
+ * that is not a host at all does. So a missing shadow root and a shadow root that does not delegate are opposite
+ * answers, which is why this is asked here rather than left to el_is_focusable_area's own host test.
+ *
+ * IT RUNS NO PAGE CODE: content-attribute reads, shadow-root reads and the focusability predicates, which is
+ * the same contract focus_focusable_area_exists carries. The FOCUS TRIGGER is "other" at every call site this
+ * build has, for the reason the search's own header gives.
+ *
+ * The answer is OWNED, and JS_NULL for the standard's null at steps 1 and 7. */
+JSValue focus_delegate(JSContext *ctx, JSValueConst focus_target)
+{
+    lxb_dom_node_t *n = node_of(focus_target);
+    lxb_dom_node_t *sr, *where_to_look;
+    JSValue found;
+    int kind;
+
+    DCHECK(n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT,
+           "HTML §6.6.4 Processing model's FOCUS DELEGATE was asked of something that is not an element — the "
+           "standard states it over a focusTarget, and its one caller in this build is §4.11.4's dialog "
+           "focusing steps step 4, whose subject is the brand-checked `dialog` receiver");
+    sr = shadow_root_of_element(ctx, lxb_dom_interface_element(n));
+    /* Step 1 — "If focusTarget is a shadow host and its shadow root's delegates focus is false, then return
+       null." A focusTarget that is NOT a host falls through, which is the asymmetry named above. */
+    if (sr && !shadow_root_flag(ctx, sr, SHADOW_ROOT_DELEGATES_FOCUS)) return JS_NULL;
+    /* Steps 2 and 3 — "Let whereToLook be focusTarget" and "If whereToLook is a shadow host, then set
+       whereToLook to whereToLook's shadow root." */
+    where_to_look = sr ? sr : n;
+    /* Steps 4 through 6, which are the search above: its autofocus pass IS step 4's autofocus delegate, its
+       plain pass IS step 6, and step 5's early return is the search answering from the first pass.
+       `is_dialog` IS focusTarget's OWN answer and not whereToLook's, because step 6's condition names
+       focusTarget — which matters exactly when a `dialog` delegates focus into a shadow root, where the
+       narrowing to SEQUENTIALLY focusable areas must still apply. */
+    delegate_search(ctx, where_to_look, el_is(n, "dialog"), &kind, &found);
+    if (kind == FA_NONE) {
+        JS_FreeValue(ctx, found);
+        return JS_NULL;                                                                        /* step 7 */
+    }
+    /* The search answers with §6.6.2's KIND as well as its value, and every kind but FA_ELEMENT is a focusable
+       area that is not an element — the viewport, a Document, a navigable. §4.11.4's step 6 then "runs the
+       focusing steps for control", which focus_element_run states over an ELEMENT, so a non-element delegate
+       is a shape this build's one caller cannot carry rather than a value to hand it silently. */
+    if (kind != FA_ELEMENT)
+        DFAIL("HTML §6.6.4 Processing model's FOCUS DELEGATE answered with a focusable area that is not an "
+              "element — §6.6.2 Data model's viewport, a Document, or a navigable's active document, each of "
+              "which its get-the-focusable-area branches can return. Its caller is HTML §4.11.4 The dialog "
+              "element's dialog focusing steps step 4, whose step 6 runs the focusing steps for `control`, and "
+              "focus_element_run takes an ELEMENT. BUILD the kind-carrying entry beside focus_element_run — "
+              "the one machine already holds a §6.6.2 kind on its own state — and hand this answer to it "
+              "whole, rather than narrowing the delegate to elements here");
+    return found;
 }
 
 /* ---- §6.6.2's focus chain ---------------------------------------------------------------------------------
@@ -1202,7 +1274,7 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
                     n = anchor;
                 }
             }
-            if (n && node_is_inert(n)) { JS_FreeValue(ctx, focused); return 0; }         /* step 2 */
+            if (n && node_is_inert(ctx, n)) { JS_FreeValue(ctx, focused); return 0; }         /* step 2 */
             /* Step 3's area-shape and scrollable-region substitutions reach kinds this engine does not model
                (see the file header), so the old focus target is unchanged by them.
                Step 4: "let old chain be the CURRENT FOCUS CHAIN of the top-level traversable in which old focus
@@ -1276,7 +1348,7 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
                     s->kind = FA_DOCUMENT;
                 }
             }
-            if ((s->kind == FA_ELEMENT || s->kind == FA_VIEWPORT) && node_is_inert(node_of(s->target)))
+            if ((s->kind == FA_ELEMENT || s->kind == FA_VIEWPORT) && node_is_inert(ctx, node_of(s->target)))
                 return 0;                                                               /* step 4 */
             currently_focused_area(ctx, &fk, &focused);                                 /* step 5 */
             {
@@ -1592,6 +1664,36 @@ JSValue focus_focused_area_dom_anchor(JSContext *ctx)
     DCHECK(kind == FA_ELEMENT || kind == FA_VIEWPORT,
            "a §6.6.2 focused area was read as something that is neither an element nor a viewport — those are "
            "the two designations this engine models, and the record holds nothing else");
+    return area;
+}
+
+/* §6.6.2 Data model's "FOCUSED", as the ELEMENT that term names: "When an element is the DOM anchor of a
+ * focusable area of the currently focused area of a top-level traversable, it is focused."
+ *
+ * IT IS NOT focus_focused_area_dom_anchor AND THE TWO MUST NOT BE SUBSTITUTED FOR ONE ANOTHER. That one answers
+ * about ONE Document's own focused area, which every Document has whether or not anything in it is focused;
+ * this one is scoped to the TOP-LEVEL TRAVERSABLE and walks down through navigable containers, so a page whose
+ * focus sits in a child frame answers here with the child's element and there with the frame's. HTML §6.12 The
+ * popover attribute's show popover step 17 states the first ("document's focused area of the document's DOM
+ * anchor") and HTML §4.11.4 The dialog element's `show()` step 7 and its show a modal dialog step 16 state the
+ * second ("the focused element") — two different sentences in two standards' sections, and this build now has
+ * a door for each rather than one answering both.
+ *
+ * JS_NULL WHERE THERE IS NO FOCUSED ELEMENT, which is the ordinary case rather than an edge: this engine's
+ * initial designation is the VIEWPORT, whose DOM anchor is the Document, and a Document is not an element — so
+ * a page that has focused nothing has no focused element, and §4.11.4's callers store the standard's null.
+ * OWNED. */
+JSValue focus_focused_element(JSContext *ctx)
+{
+    JSValue area;
+    int kind;
+
+    DCHECK(g_ready, "§6.6.2's FOCUSED element was asked for before focus_init declared §6.6's members");
+    currently_focused_area(ctx, &kind, &area);
+    if (kind != FA_ELEMENT) {
+        JS_FreeValue(ctx, area);
+        return JS_NULL;
+    }
     return area;
 }
 

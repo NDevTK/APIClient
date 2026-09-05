@@ -22,17 +22,18 @@
  *     DIALOG HTML ELEMENT REMOVING STEPS. The whole chain needs no member call to run: `<dialog open>` in
  *     markup and `d.open = true` on a connected `<dialog>` each establish a watcher, and an Esc then closes it.
  *   - `close()` and `requestClose()`, and REQUEST TO CLOSE THE DIALOG under the second of them.
- *
- * `show()` AND `showModal()` ARE ABSENT, HONESTLY, AND THE REASON IS AN ORDERED SUBPROBLEM IN ANOTHER
- * COMPONENT rather than a judgement about size. Both end in "Run hide popovers until given document, hideUntil,
- * false, and true" and both refuse a subject that is in §6.12's POPOVER SHOWING STATE; HTML §6.12's HIDE POPOVERS
- * UNTIL is 5 steps stated over §6.12's showing hint popover list, its hint stack parent and its hide popover
- * stack until, and none of those exists outside core/html/popover.c. Copying that algebra here is the
- * one-fact-two-answers defect with a page-visible consequence — a popover left showing over a modal dialog is
- * exactly what those steps prevent — so the two members land in the diff that exports it, together with
- * §4.11.4's DIALOG FOCUSING STEPS, which both of them end with and which §6.12's own popover focusing steps
- * step 2 already carries a crash naming. A page calling either gets its own TypeError, which is this engine's
- * forcing function, rather than a shape-only method.
+ *   - `show()`, SHOW A MODAL DIALOG, `showModal()` and the DIALOG FOCUSING STEPS, which are the top of that
+ *     chain and therefore last. They arrived with three doors exported from core/html/popover.c — §6.12's
+ *     HIDE POPOVERS UNTIL, its TOPMOST POPOVER ANCESTOR and its POPOVER SHOWING STATE — and with §6.6.4's
+ *     FOCUS DELEGATE exported from core/html/focus.c. Not one of those is copied here: hide popovers until is
+ *     stated over §6.12's showing hint popover list, its hint stack parent and its hide popover stack until,
+ *     all three of which stay STATIC in that file, so §6.12's list algebra has exactly one reading in this
+ *     build. A copy would not merely duplicate it — a popover left showing over a modal dialog is precisely
+ *     what those steps prevent, so a drifted copy would be wrong on the screen.
+ *   - HTML §6.3.1 Modal dialogs and inert subtrees' BLOCKED BY A MODAL DIALOG, which show a modal dialog step
+ *     14 states and step 15 performs. It is DERIVED over css-position-4 §3's top layer and stores nothing, and
+ *     core/html/focus.c's inert walk is its consumer — a clause that walk could not have before this file put
+ *     a `dialog` in the layer.
  *
  * THE FOUR `realm_awaits` THAT STOOD IN THIS FILE ARE GONE, AND NOT BECAUSE THE MEMBERS THEY NAMED LANDED.
  * Each guarded a step whose only producer was said to be `show()`, `showModal()` or `requestClose()`, and each
@@ -66,9 +67,11 @@
 #include "core/events/event_target.h"
 #include "core/html/close_watcher.h"
 #include "core/html/enumerated_attribute.h"
+#include "core/html/autofocus.h"
 #include "core/html/focus.h"
 #include "core/html/html_dialog.h"
 #include "core/html/html_element.h"
+#include "core/html/popover.h"
 #include "core/html/toggle_event.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
@@ -125,6 +128,8 @@ static int     g_id_return_value = -1;
 static int     g_id_closed_by = -1;
 static int     g_id_close = -1;
 static int     g_id_request_close = -1;
+static int     g_id_show = -1;
+static int     g_id_show_modal = -1;
 
 /* The slot's value, or JS_UNDEFINED for "the initial value the standard names". OWNED. */
 static JSValue ds_get(JSContext *ctx, JSValueConst obj, int slot)
@@ -451,6 +456,68 @@ bool html_dialog_close_watcher_enabled(JSContext *ctx, JSValueConst dialog)
        its own step 7, so a dialog whose closedby is None still answers an explicit request. */
     if (ds_flag(ctx, dialog, DS_ENABLE_CW_REQ_CLOSE)) return true;
     return dialog_computed_closed_by_state(ctx, dialog) != DIALOG_CLOSEDBY_NONE;
+}
+
+/* ---- HTML §6.3.1 Modal dialogs and inert subtrees ---------------------------------------------------------
+ *
+ * "A Document document is BLOCKED BY A MODAL DIALOG subject if subject is the topmost dialog element in
+ * document's top layer. While document is so blocked, every node that is connected to document, with the
+ * exception of the subject element and its flat tree descendants, must become inert."
+ *
+ * IT IS DERIVED AND NOTHING STORES IT, WHICH IS WHY show a modal dialog's STEP 14 WRITES NO FIELD. That step
+ * reads "Set subject's node document to be blocked by the modal dialog subject", and a bit set there would be
+ * a second answer to a question css-position-4 §3's top layer already answers — with the two free to disagree
+ * the moment §4.11.4's own removing steps take the element out of the layer, or a rendering update processes a
+ * pending removal, neither of which is a place anybody would remember to clear a flag. So step 14 is PERFORMED
+ * BY STEP 15, which adds the subject to the top layer and thereby makes it the topmost `dialog` in it, and
+ * step 14's site carries the two-sided assert instead of a write.
+ *
+ * "TOPMOST" IS css-position-4 §3's OWN ORDER, read through core/css/top_layer.h's walk rather than by indexing
+ * the set here — "the last element in the top layer is rendered on top of everything else" — and that walk
+ * reads the `top layer` rather than §3.3's "is in the top layer", which is the reading §6.3.1 wants: a modal
+ * dialog whose removal is pending is still rendered, so it still blocks, until a rendering update processes it.
+ *
+ * It runs no page code: a backwards walk of an Array with a local-name predicate. OWNED, JS_NULL for a document
+ * no modal dialog blocks. */
+static bool dialog_topmost_dialog_pred(JSContext *ctx, JSValueConst el, void *opaque)
+{
+    (void)ctx;
+    (void)opaque;
+    return html_dialog_is_dialog(node_of(el));
+}
+
+JSValue html_dialog_blocked_by_modal_dialog(JSContext *ctx, JSValueConst document)
+{
+    DCHECK(JS_IsObject(document), "§6.3.1's BLOCKED BY A MODAL DIALOG was asked of something that is not a "
+                                  "Document — the predicate is stated over one, and its callers resolve a "
+                                  "node's owner document before asking");
+    return top_layer_topmost(ctx, document, dialog_topmost_dialog_pred, NULL);
+}
+
+bool html_dialog_node_is_blocked_by_modal_dialog(JSContext *ctx, const lxb_dom_node_t *n)
+{
+    JSValue doc, subject;
+    lxb_dom_node_t *sn;
+    bool blocked;
+
+    if (!n || !n->owner_document) return false;
+    doc = node_wrap(ctx, lxb_dom_interface_node(n->owner_document));
+    subject = html_dialog_blocked_by_modal_dialog(ctx, doc);
+    JS_FreeValue(ctx, doc);
+    if (JS_IsNull(subject)) return false;                     /* the document is blocked by nothing */
+    sn = node_of(subject);
+    JS_FreeValue(ctx, subject);
+    DCHECK(sn != NULL, "§6.3.1's topmost `dialog` in a top layer has no element node — the set holds element "
+                       "wrappers and nothing else puts a value in it");
+    /* "every node that is CONNECTED TO document" — a node the tree no longer holds is not made inert by
+       anything, which is also what keeps a detached subtree focusable while a modal dialog is up. */
+    if (!node_is_connected((lxb_dom_node_t *)n)) return false;
+    /* "with the exception of the SUBJECT ELEMENT and its FLAT TREE DESCENDANTS". The inclusive half is one
+       comparison here and the strict half is CSS Scoping §4.1's relation, asked of the ONE walk this build has
+       (see core/html/popover.h for why that door is where it is). */
+    if (n == sn) return false;
+    blocked = !popover_flat_tree_descendant_of(ctx, n, sn);
+    return blocked;
 }
 
 /* ---- HTML §3.1.1 The Document object's OPEN DIALOGS LIST -------------------------------------------------------
@@ -1137,22 +1204,563 @@ int html_dialog_close_run(JSContext *ctx, DialogCloseRun **slot, JSValueConst su
     return dialog_close_tail(ctx, r);
 }
 
+enum { M_SHOW = 0, M_SHOW_MODAL };
+
+/* WHERE THE SHARED TAIL STANDS. Three positions, and each is a place the tail can be RE-ENTERED at: its
+   entry, its hide-popovers-until request, and its dialog focusing steps. An ordinal over the standard's own
+   sub-sequence, which nothing the page does can renumber. */
+enum { DSH_TAIL_ENTER = 0, DSH_TAIL_HIDE, DSH_TAIL_FOCUS };
+
+#define DIALOG_SHOW_STAGES(X) \
+    X(DSH_ENTER, "HTML §4.11.4 The dialog element's `show()` steps 1-2 or its show a modal dialog steps 1-5: " \
+                 "the two early returns and the three or four \"InvalidStateError\" throws, every one of them " \
+                 "an attribute read, a slot read, a connectedness walk or a §6.12 popover-visibility slot read") \
+    X(DSH_FIRE,  "HTML §4.11.4 The dialog element's `show()` step 3 or its show a modal dialog step 6 (fire an " \
+                 "event named beforetoggle, using ToggleEvent, cancelable, with oldState \"closed\" and " \
+                 "newState \"open\" — and, for the modal algorithm, source — at the subject)") \
+    X(DSH_AFTER, "HTML §4.11.4 The dialog element's `show()` steps 4-6 or its show a modal dialog steps 7-15: " \
+                 "the second look at the attribute (and, for the modal algorithm, at connectedness and the " \
+                 "popover showing state), the queued dialog toggle event task, the `open` attribute, and the " \
+                 "modal algorithm's is modal, its blocked-by-a-modal-dialog assert and its top-layer add") \
+    X(DSH_TAIL,  "HTML §4.11.4 The dialog element's `show()` steps 7-11 or its show a modal dialog steps " \
+                 "16-20, which are the same five sentences: the previously focused element, the node " \
+                 "document, TOPMOST POPOVER ANCESTOR, HIDE POPOVERS UNTIL, and the DIALOG FOCUSING STEPS")
+enum { IDL_STEP_STAGE_BASE(DIALOG_SHOW_STAGES) DIALOG_SHOW_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const DIALOG_SHOW_STEPS[] = { DIALOG_SHOW_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    uint8_t  tail;                  /* DSH_TAIL_* — where the shared tail stands */
+    uint8_t  fphase;                /* the `beforetoggle` fire request's own phase */
+    JSValue  subject;               /* `this`, the brand-checked dialog (owned) */
+    JSValue  source;                /* show a modal dialog's `source`, which both members pass as null (owned) */
+    JSValue  ev;                    /* the `beforetoggle` event, minted once and held across the fire (owned) */
+    JSValue  doc;                   /* step 8 / 17's `document` (owned) */
+    JSValue  hide_until_endpoint;   /* step 9 / 18's hideUntil (owned) */
+    PopoverHideUntilRun *hiding;    /* step 10 / 19's request — OPAQUE and heap-held, named in the visit */
+    DialogFocusingRun   *focusing;  /* step 11 / 20's request — the same shape, and this file owns that one */
+    /* THE ONE REQUEST THIS BODY MAKES ITSELF — the `beforetoggle` fire — named by its TYPE rather than by a
+       number, which is what core/events/event_target.h asks. The two delegated requests hold their own buffers
+       inside their own states and do not draw on this one. */
+    EventFireCb cb;
+} DialogShowState;
+
+static void dialog_show_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    DialogShowState *s = st;
+    int k;
+
+    v->val(ctx, &s->subject);
+    v->val(ctx, &s->source);
+    v->val(ctx, &s->ev);
+    v->val(ctx, &s->doc);
+    v->val(ctx, &s->hide_until_endpoint);
+    popover_hide_popovers_until_visit(ctx, &s->hiding, v);
+    html_dialog_focusing_visit(ctx, &s->focusing, v);
+    STEP_CB_FOREACH(s->cb, k)
+        v->val(ctx, &s->cb[k]);
+}
+
+/* ---- §4.11.4's `show()`, SHOW A MODAL DIALOG, and the DIALOG FOCUSING STEPS -----------------------------------
+ *
+ * THE THREE ARE ONE MACHINE WITH A MAGIC, for the reason `close()` and `requestClose()` are one below: the two
+ * members differ in WHICH algorithm they delegate to and in nothing else, and every step after the fork is
+ * literally the same sentence in both. §4.11.4's `showModal()` method steps are ONE sentence — "the showModal()
+ * method steps are to show a modal dialog given this and null" — so the member contributes no step of its own.
+ *
+ * THE TAIL IS WRITTEN ONCE AND THAT IS THE STANDARD'S DOING, NOT A FACTORING. `show()`'s steps 7 through 11 and
+ * show a modal dialog's steps 16 through 20 are word for word the same five sentences with `this` and `subject`
+ * exchanged: set the previously focused element to the focused element, let document be the node document, let
+ * hideUntil be topmost popover ancestor given the subject, null and false, run hide popovers until given
+ * document, hideUntil, false and true, and run the dialog focusing steps. A copy at each arm would be five
+ * steps two sites had to stay abreast of, which is the shape that drifts.
+ *
+ * WHAT THIS DIFF EXPORTED FROM core/html/popover.c AND WHY IT IS THE MINIMUM. Steps 9/18 and 10/19 are §6.12's
+ * TOPMOST POPOVER ANCESTOR and its HIDE POPOVERS UNTIL, and show a modal dialog's steps 5 and 9 are §6.12's
+ * POPOVER SHOWING STATE — three doors. Everything hide popovers until is BUILT from stays static there: its
+ * showing hint popover list, its hint stack parent and its hide popover stack until are named by no section
+ * outside §6.12, so §6.12's list algebra keeps exactly one reading. Copying that algebra here would not merely
+ * duplicate it — a popover left showing over a modal dialog is exactly what those steps prevent, so the copy
+ * would be wrong on the screen and not only in the tree.
+ *
+ * `show()` HAS NO POPOVER-SHOWING-STATE CHECK AND show a modal dialog HAS TWO, which is worth stating because
+ * the opposite is easy to assume. §4.11.4 gives `show()` eleven steps and none of them asks; show a modal
+ * dialog asks at its step 5, where the answer THROWS an "InvalidStateError" DOMException, and again at its step
+ * 9, where it merely RETURNS — because step 6 fired `beforetoggle` at the page in between and a listener may
+ * have shown the subject as a popover. The same asymmetry runs through the pair: show a modal dialog re-asks
+ * connectedness at step 8 and `show()` never asks it at all.
+ *
+ * STEP 14 WRITES NOTHING. "Set subject's node document to be blocked by the modal dialog subject" is a
+ * statement §6.3.1 DERIVES from css-position-4 §3's top layer — "if subject is the topmost dialog element in
+ * document's top layer" — so what performs it is step 15's add, and step 14's site carries the two-sided assert
+ * that the add did perform it. A bit here would be the flag that announces an outcome instead of performing
+ * one, and it would be a second answer to a question the layer already answers.
+ *
+ * STEP 12 ASSERTS AND DOES NOT ESTABLISH. "Assert: subject's close watcher is not null" is satisfied by step
+ * 11's `open` attribute going through the DOM mutation chokepoint: §4.11.4's attribute change steps run the
+ * dialog setup steps, whose step 5 sets the dialog close watcher. That chain is why this file was built from
+ * the bottom up and why these two members are the last of the four to land. */
+
+/* §4.11.4's "The DIALOG FOCUSING STEPS, given a dialog element subject", 10 steps. Two of them are REQUESTS —
+ * step 1's §6.6.6 allow focus steps FORKS (its second clause is §6.4.1's transient activation, which is unknown
+ * external state) and step 6's §6.6.4 focusing steps fire `blur`, `focusout`, `focus` and `focusin` at the
+ * page's listeners — so this is a cursor its holder drives rather than a call.
+ *
+ * IT IS EXPORTED, AND THE CRASH THAT ASKED FOR IT IS DELETED IN THE SAME DIFF. HTML §6.12 The popover
+ * attribute's POPOVER FOCUSING STEPS step 2 is "If subject is a dialog element, then run the dialog focusing
+ * steps given subject and return", and popover.c carried a `DFAIL` there saying this build had no such
+ * algorithm and naming what to build. A crash that goes on saying a capability is absent after it lands is the
+ * one stale claim nothing catches, so the crash goes with the absence rather than after it.
+ *
+ * ITS STEPS 7 TO 10 ARE §6.12's POPOVER FOCUSING STEPS' STEPS 7 TO 10, and core/html/autofocus.h says so at the
+ * one door both take: they are §6.6.7's state, so the component that owns the autofocus candidates list and the
+ * processed flag writes them, and neither of the two focusing-steps algorithms holds a copy.
+ *
+ * STEP 4's FOCUS DELEGATE IS §6.6.4's AND IS ASKED OF core/html/focus.h. That search is §6.6.4's one
+ * implementation and it already narrows its plain pass to SEQUENTIALLY focusable areas when the focus target is
+ * a `dialog`, which is step 6 of the focus delegate's own seven — so the `dialog`-specific half of this step is
+ * answered by the algorithm the standard states it in rather than by a condition here. */
+struct DialogFocusingRun {
+    uint8_t ua_phase;      /* step 1's fork phase */
+    uint8_t focus_phase;   /* step 6's request phase */
+    JSValue subject;       /* the algorithm's `subject` (owned) */
+    JSValue control;       /* steps 2-5's `control`; JS_UNDEFINED is "step 2's null, not yet decided" (owned) */
+    JSValue cb[FOCUS_ELEMENT_CB_SLOTS];   /* step 6's request buffer, by the type focus.h declares for it */
+};
+
+static void dialog_focusing_elem_visit(JSContext *ctx, void *elem, JSStepVisit *v)
+{
+    DialogFocusingRun *r = elem;
+    int k;
+
+    v->val(ctx, &r->subject);
+    v->val(ctx, &r->control);
+    STEP_CB_FOREACH(r->cb, k)
+        v->val(ctx, &r->cb[k]);
+}
+
+void html_dialog_focusing_visit(JSContext *ctx, DialogFocusingRun **slot, JSStepVisit *v)
+{
+    /* ONE operation rather than a buffer copy plus a loop, because the two consumers need OPPOSITE ORDER — see
+       html_dialog_close_visit, which is written this way for the same reason. */
+    v->array(ctx, (void **)slot, sizeof(struct DialogFocusingRun), 1, 1, dialog_focusing_elem_visit);
+}
+
+void html_dialog_focusing_release(JSContext *ctx, DialogFocusingRun **slot)
+{
+    DialogFocusingRun *r = *slot;
+    int k;
+
+    if (!r) return;
+    JS_FreeValue(ctx, r->subject);
+    JS_FreeValue(ctx, r->control);
+    STEP_CB_FOREACH(r->cb, k) JS_FreeValue(ctx, r->cb[k]);
+    js_free(ctx, r);
+    *slot = NULL;
+}
+
+int html_dialog_focusing_run(JSContext *ctx, JSStepHdr *hdr, DialogFocusingRun **slot, JSValueConst subject,
+                             JSValue in, JSValue **out_cb, int *out_argc)
+{
+    DialogFocusingRun *r = *slot;
+    JSContext *docctx;
+    lxb_dom_element_t *el;
+    bool allow = false;
+    int rc;
+
+    if (!r) {
+        int k;
+
+        r = js_mallocz(ctx, sizeof *r);
+        CHECK(r != NULL, "dialog: OOM allocating §4.11.4's dialog-focusing-steps state");
+        *slot = r;
+        /* EVERY owned field before anything that can fail — an abandoned run is released through the one
+           declaration above, which frees exactly what this state holds, and a js_mallocz'd block is not a block
+           of JS_UNDEFINEDs. */
+        r->subject = r->control = JS_UNDEFINED;
+        STEP_CB_FOREACH(r->cb, k) r->cb[k] = JS_UNDEFINED;
+        r->ua_phase = r->focus_phase = 0;
+        DCHECK(dialog_elem_of(subject) != NULL,
+               "§4.11.4's DIALOG FOCUSING STEPS were given something that is not a `dialog` element — the "
+               "standard states them over a dialog element subject, and both of their callers reach them with "
+               "one in hand: §4.11.4's own two show algorithms from a brand-checked receiver, and §6.12's "
+               "popover focusing steps step 2 from its own local-name test");
+        r->subject = JS_DupValue(ctx, subject);
+    }
+    docctx = dialog_document_realm(r->subject);
+    el = dialog_elem_of(r->subject);
+    /* THE ONLY CALLER THAT CAN ARRIVE HERE WITH NO REALM IS `show()`, AND THAT IS A CAPABILITY AND NOT AN
+       INVARIANT — which is why this is a DFAIL and not the DCHECK its two sibling algorithms carry. Show a
+       modal dialog's step 3 THREW for a document that is not fully active and §6.12's show popover step 3
+       refused one, so for those two a null realm really would be a broken invariant. §4.11.4 gives `show()`
+       eleven steps and NOT ONE of them asks about the node document at all, so `document.implementation
+       .createHTMLDocument()`'s `<dialog>` reaches step 11 with a document no navigable holds — ordinary code,
+       not an edge. */
+    if (docctx == NULL)
+        DFAIL("HTML §4.11.4 The dialog element's DIALOG FOCUSING STEPS step 1 runs HTML §6.6.6 Focus management "
+              "APIs' ALLOW FOCUS STEPS given the subject's NODE DOCUMENT, and this document is no realm's "
+              "active document — which `show()` permits, because none of its eleven steps asks whether the node "
+              "document is fully active. §6.6.6 states both clauses over the Document: the first asks whether "
+              "target is allowed to use the `focus-without-user-activation` feature and the second whether "
+              "target's relevant global object has transient activation. core/html/focus.h's door takes a REALM "
+              "because every caller so far had one. BUILD the Document-keyed entry beside "
+              "focus_allow_focus_steps_run — the permissions policy is on the Document and the relevant global "
+              "object is reachable from it — and route this call through it. ANSWERING false HERE WOULD BE A "
+              "GUESS: it is probably the right answer for a document nobody displays, and probably is not the "
+              "standard this file implements");
+    if (JS_IsUndefined(r->control)) {
+        /* `in` is the holder's re-entry value and NOTHING between here and step 6 consumes one: step 1's
+           request FORKS rather than calling, and steps 2 through 5 run no page code at all. It is released
+           here, once, so the only path that forwards it is the one that owes it to step 6. A re-entry that
+           already HAS a control skips this block and hands `in` straight to that request. */
+        JS_FreeValue(ctx, in);
+        in = JS_UNDEFINED;
+        /* Step 1 — "If the allow focus steps given subject's node document return false, then return." */
+        rc = focus_allow_focus_steps_run(docctx, hdr, &r->ua_phase, &allow);
+        if (rc) return rc;
+        if (!allow) return 0;
+        /* Step 2 is "Let control be null" and is the absence this cursor already holds.
+           Step 3 — "If subject has the autofocus attribute, then set control to subject." */
+        if (dom_attr_get_ns(el, NULL, "autofocus") != NULL) {
+            r->control = JS_DupValue(ctx, r->subject);
+        } else {
+            r->control = focus_delegate(ctx, r->subject);                                        /* step 4 */
+            if (JS_IsNull(r->control)) {
+                /* Step 5 — "If control is null, then set control to subject." A `dialog` with no focusable
+                   descendant focuses ITSELF, which is what makes step 6's own note ("if control is not
+                   focusable, this will do nothing") the ordinary outcome rather than an error. */
+                JS_FreeValue(ctx, r->control);
+                r->control = JS_DupValue(ctx, r->subject);
+            }
+        }
+    }
+    DCHECK(!JS_IsUndefined(r->control),
+           "§4.11.4's dialog focusing steps reached step 6 with no control — steps 3, 4 and 5 between them "
+           "leave one bound on every arm, step 5 being the one that binds the subject itself");
+    /* Step 6 — "Run the focusing steps for control." */
+    rc = focus_element_run(docctx, r->control, &r->focus_phase, STEP_CB(r->cb), in, out_cb, out_argc);
+    if (rc) return rc;
+    /* Steps 7 to 10, through the one door §6.12's popover focusing steps take. THE REALM IS THE CONTROL'S AND
+       NOT THE SUBJECT'S: both steps name `control`, and step 4's focus delegate can legitimately answer with an
+       element of another document — a `dialog` containing an `iframe` whose content navigable's active document
+       holds the delegate — so passing the subject's would answer step 8 about the wrong document. */
+    autofocus_focusing_steps_tail(dialog_document_realm(r->control));
+    return 0;
+}
+
+/* `show()`'s STEP 7 THROUGH 11 AND SHOW A MODAL DIALOG's STEP 16 THROUGH 20, which are the same five sentences.
+   Returns the holder's contract: >0 to return, -1 with a throw live, 0 when the five have finished. `in` is
+   CONSUMED. */
+static int dialog_show_tail(JSContext *ctx, JSStepHdr *hdr, DialogShowState *s, JSValue in,
+                            JSValue **out_cb, int *out_argc)
+{
+    int rc;
+
+    if (s->tail == DSH_TAIL_ENTER) {
+        JSValue focused;
+
+        JS_FreeValue(ctx, in);
+        in = JS_UNDEFINED;
+        /* `show()` step 7 / show a modal dialog step 16 — "Set <subject>'s previously focused element to the
+           FOCUSED element." §6.6.2's own term, scoped to the TOP-LEVEL TRAVERSABLE, which is not the same
+           question §6.12's show popover step 17 asks ("document's focused area of the document's DOM anchor")
+           and is asked of the door core/html/focus.h declares for this sentence. A page that has focused
+           nothing has no focused ELEMENT — this engine designates the VIEWPORT, whose DOM anchor is the
+           Document — so the field is set to the standard's null, and close the dialog step 12 then restores
+           nothing, which is what a browser does. */
+        focused = focus_focused_element(ctx);
+        html_dialog_set_previously_focused_element(ctx, s->subject, focused);
+        JS_FreeValue(ctx, focused);
+        /* Step 8 / 17 — "Let document be <subject>'s node document." */
+        DCHECK(JS_IsUndefined(s->doc), "a §4.11.4 show run bound its `document` twice — the tail runs once and "
+                                       "this is its only writer");
+        s->doc = dialog_document_of(ctx, s->subject);
+        DCHECK(JS_IsObject(s->doc),
+               "§4.11.4's show tail reached a `dialog` with no node document wrapper — every path into it has "
+               "already run this element's attribute change steps, which resolve the same document");
+        /* Step 9 / 18 — "Let hideUntil be the result of running TOPMOST POPOVER ANCESTOR given <subject>, null,
+           and false." FALSE, so §6.12's step 2 arm runs: the subject need not be a popover at all, and that
+           algorithm's own note says what the false means — "if the provided element is a top layer element such
+           as a dialog which is not showing as a popover, then topmost popover ancestor will only look in the
+           node tree to find the first popover". */
+        DCHECK(JS_IsUndefined(s->hide_until_endpoint), "a §4.11.4 show run bound `hideUntil` twice");
+        s->hide_until_endpoint = popover_topmost_popover_ancestor(ctx, s->subject, JS_NULL, /*isPopover*/ false);
+        s->tail = DSH_TAIL_HIDE;
+    }
+    if (s->tail == DSH_TAIL_HIDE) {
+        /* Step 10 / 19 — "Run HIDE POPOVERS UNTIL given document, hideUntil, false, and true." The two booleans
+           are focusPreviousElement FALSE and fireEvents TRUE: the popovers this closes must NOT pull the focus
+           back, because step 11 is about to place it inside the dialog, and they must fire their `beforetoggle`
+           and `toggle` events, which is why this is a request and not a call. */
+        rc = popover_hide_popovers_until_run(ctx, &s->hiding, s->doc, s->hide_until_endpoint,
+                                            /*focusPreviousElement*/ false, /*fireEvents*/ true,
+                                            in, out_cb, out_argc);
+        if (rc) return rc;
+        in = JS_UNDEFINED;   /* the request CONSUMED it */
+        popover_hide_popovers_until_release(ctx, &s->hiding);
+        s->tail = DSH_TAIL_FOCUS;
+    }
+    DCHECK(s->tail == DSH_TAIL_FOCUS, "a §4.11.4 show run resumed into a tail phase this machine does not have");
+    /* Step 11 / 20 — "Run THE DIALOG FOCUSING STEPS given <subject>." */
+    rc = html_dialog_focusing_run(ctx, hdr, &s->focusing, s->subject, in, out_cb, out_argc);
+    if (rc) return rc;
+    html_dialog_focusing_release(ctx, &s->focusing);
+    return 0;
+}
+
+/* THE PROLOGUE OF BOTH ALGORITHMS — `show()`'s steps 1-2 and show a modal dialog's steps 1-5. Returns 1 for
+   "this algorithm has returned" and 0 to go on to the fire; a throw is left live and answered by -1. */
+static int dialog_show_prologue(JSContext *ctx, DialogShowState *s, int magic)
+{
+    lxb_dom_element_t *el = dialog_elem_of(s->subject);
+    JSContext *docctx;
+
+    if (magic == M_SHOW) {
+        /* `show()` step 1 — "If this has an open attribute and is modal of this is FALSE, then return." The
+           polarity is the mirror of show a modal dialog's step 1 and it is the whole of what makes `show()` on
+           an already-modal dialog a THROW rather than a no-op: a modal dialog falls through to step 2. */
+        if (dialog_has_open(el) && !ds_flag(ctx, s->subject, DS_IS_MODAL)) return 1;
+        /* Step 2. */
+        if (dialog_has_open(el)) {
+            JS_ThrowDOMException(ctx, "InvalidStateError",
+                                 "show() was called on a dialog that is already showing as a modal dialog");
+            return -1;
+        }
+        /* `show()` HAS NO FURTHER GUARD, which is not an omission of this file's: §4.11.4 gives it eleven steps
+           and none of them asks about the node document being fully active, about connectedness, or about the
+           popover showing state. All three are show a modal dialog's, and every one of them is there because a
+           MODAL dialog takes the top layer and the focus. */
+        return 0;
+    }
+    DCHECK(magic == M_SHOW_MODAL, "a §4.11.4 show machine ran with a magic this file has no algorithm for");
+    /* Show a modal dialog step 1 — "If subject has an open attribute and is modal of subject is TRUE, then
+       return." */
+    if (dialog_has_open(el) && ds_flag(ctx, s->subject, DS_IS_MODAL)) return 1;
+    if (dialog_has_open(el)) {                                                                   /* step 2 */
+        JS_ThrowDOMException(ctx, "InvalidStateError",
+                             "showModal() was called on a dialog that is already showing non-modally");
+        return -1;
+    }
+    /* Step 3 — "If subject's node document is not fully active, then throw." A Document no navigable holds is
+       not fully active, so a NULL realm IS that answer rather than a missing pointer. */
+    docctx = dialog_document_realm(s->subject);
+    if (docctx == NULL || !document_fully_active(docctx)) {
+        JS_ThrowDOMException(ctx, "InvalidStateError",
+                             "showModal() was called on a dialog whose node document is not fully active");
+        return -1;
+    }
+    if (!node_is_connected(node_of(s->subject))) {                                               /* step 4 */
+        JS_ThrowDOMException(ctx, "InvalidStateError",
+                             "showModal() was called on a dialog that is not connected");
+        return -1;
+    }
+    /* Step 5 — "If subject is in the POPOVER SHOWING STATE, then throw." §6.12's own state, asked of the one
+       door core/html/popover.h exports for it. Step 9 asks the same question again and merely RETURNS, because
+       step 6 fires `beforetoggle` at the page in between. */
+    if (popover_element_is_showing(ctx, s->subject)) {
+        JS_ThrowDOMException(ctx, "InvalidStateError",
+                             "showModal() was called on a dialog that is already showing as a popover");
+        return -1;
+    }
+    return 0;
+}
+
+/* SHOW A MODAL DIALOG'S STEPS 12 THROUGH 15 — the four the modal algorithm has and `show()` does not. */
+static void dialog_show_modal_steps_12_to_15(JSContext *ctx, DialogShowState *s)
+{
+    /* Step 12 — "Assert: subject's close watcher is not null." IT ASSERTS AND DOES NOT ESTABLISH: step 11's
+       `open` attribute went through the DOM mutation chokepoint, so §4.11.4's attribute change steps ran the
+       dialog setup steps, whose step 5 SET the dialog close watcher. A null here means that chain did not run
+       for this element, which is the same absence request to close the dialog's own step 3 names. */
+    DCHECK(!ds_is_null(ctx, s->subject, DS_CLOSE_WATCHER),
+           "§4.11.4's show a modal dialog step 12 asserts the dialog's close watcher is not null, and this one "
+           "has none. Step 11 added the `open` attribute one step ago, which reaches §4.11.4's attribute change "
+           "steps through core/dom/element.c's mutation chokepoint and runs the dialog setup steps, whose step "
+           "5 is \"Set the dialog close watcher with subject\". A null here means the write did not reach that "
+           "hook — the attribute was placed past the chokepoint — so a close request would not close this "
+           "modal dialog and Esc would do nothing");
+    ds_set(ctx, s->subject, DS_IS_MODAL, JS_TRUE);                                              /* step 13 */
+    /* Step 14 — "Set subject's node document to be blocked by the modal dialog subject." IT WRITES NOTHING,
+       AND THE ASSERT BELOW IS WHY THAT IS THE IMPLEMENTATION RATHER THAN A GAP. §6.3.1 DERIVES the predicate —
+       "A Document document is blocked by a modal dialog subject if subject is the topmost dialog element in
+       document's top layer" — so what makes the sentence TRUE is step 15's add, and a bit set here would be a
+       second answer to a question css-position-4 §3's layer already answers. §4.11.4's own note beside this
+       step describes the CONSEQUENCE — "this will cause the focused area of the document to become inert" —
+       rather than a field, and that consequence is core/html/focus.c's inert walk, which asks §6.3.1's
+       predicate directly. */
+    /* Step 15 — "If subject's node document's top layer does not already CONTAIN subject, then add an element
+       to the top layer given subject." THE RAW SET, which is the term §4.11.4's own markup links to here
+       (css-position-4's `top layer`, with Infra's `contain`) and NOT §3.3's "is in the top layer" — the two
+       differ for a dialog whose removal is pending, which `d.close(); d.showModal();` in one task produces.
+       core/css/top_layer.h states that difference at the door. */
+    if (!top_layer_set_contains(ctx, s->subject)) top_layer_add(ctx, s->subject);
+    /* THE TWO-SIDED HALF OF STEP 14, STANDING AFTER THE STEP THAT PERFORMS IT — AND IT ASSERTS THAT THE
+       DOCUMENT IS BLOCKED, NEVER THAT IT IS BLOCKED BY THIS SUBJECT. The stronger assert was written here
+       first and it is wrong, because the standard's own two sentences can disagree and the sequence that
+       makes them is one a page writes: `a.showModal(); b.showModal(); a.close(); a.showModal();` in ONE task
+       leaves `a` CONTAINED in the layer with its removal pending, so step 15 SKIPS the add, `b` is still the
+       last member, and §6.3.1 derives that the document is blocked by `b` while step 14 says `a`. That is a
+       disagreement in the text, not a defect this file can assert away — and an assert that fires on
+       legitimate page input is a guard on an EXPECTATION rather than on an invariant.
+       WHAT IS GUARANTEED after step 15 is that the subject is a `dialog` contained in the layer, so the
+       topmost `dialog` in it is SOME element rather than null — which is what makes step 14's sentence true at
+       all, and which is a fact about the set this file just wrote. It is also
+       the one reader §6.3.1's predicate has inside this component, so the derivation is exercised on every
+       modal show rather than only from core/html/focus.c's inert walk. */
+    {
+        JSValue doc = dialog_document_of(ctx, s->subject);
+        JSValue blocking = html_dialog_blocked_by_modal_dialog(ctx, doc);
+        bool blocked = !JS_IsNull(blocking);
+
+        JS_FreeValue(ctx, blocking);
+        JS_FreeValue(ctx, doc);
+        DCHECK(blocked,
+               "§4.11.4's show a modal dialog step 14 says the subject's node document is now BLOCKED BY A "
+               "MODAL DIALOG, and §6.3.1 derives that from the top layer — \"A Document document is blocked by "
+               "a modal dialog subject if subject is the topmost dialog element in document's top layer\" — so "
+               "step 15's add is what performs it. The derivation answers NULL, which means the layer holds no "
+               "`dialog` at all one step after this one put the subject in it: either step 15's add did not "
+               "append, or the topmost walk is reading a different document than the one the add wrote");
+    }
+}
+
+static int dialog_show_body(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSValueConst *argv,
+                            JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    DialogShowState *s = state;
+    int magic = idl_step_magic(hdr);
+    lxb_dom_element_t *el;
+    bool not_canceled = true;
+    int rc;
+
+    (void)argc;
+    (void)argv;
+    if (hdr->stage == DSH_ENTER) {
+        int k;
+
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        /* EVERY owned field before the first thing that can fail — the teardown discharges exactly what the
+           declaration names, so a field handed over late is a field nothing releases. */
+        s->subject = s->source = s->ev = s->doc = s->hide_until_endpoint = JS_UNDEFINED;
+        s->hiding = NULL;
+        s->focusing = NULL;
+        STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
+        s->tail = DSH_TAIL_ENTER;
+        s->fphase = 0;
+        /* Web IDL §3.7.7 Operations' BRAND CHECK, a THROW rather than an assert for the reason this file's two
+           accessors state: a page reaches a method off the prototype with `.call` on anything at all, so the
+           receiver is the PAGE's input and never a value this codebase computed. */
+        if (!dialog_elem_of(hdr->this_val)) {
+            JS_ThrowTypeError(ctx, "show()/showModal() was called on something that is not a <dialog> element");
+            return JS_STEP_ABRUPT;
+        }
+        s->subject = JS_DupValue(ctx, hdr->this_val);
+        /* `showModal()`'s one step is "show a modal dialog given this and NULL", and `show()` states no source
+           at all — its step 5 queues the toggle task with null and its step 3's fire names no source
+           initializer. So the source is the standard's null for both members, and it is a FIELD rather than a
+           constant because show a modal dialog takes it as an argument and §4.11.5 Dialog light dismiss is the
+           caller that will one day pass an element. */
+        s->source = JS_NULL;
+        rc = dialog_show_prologue(ctx, s, magic);
+        if (rc < 0) return JS_STEP_ABRUPT;
+        if (rc > 0) { *presult = JS_UNDEFINED; return JS_STEP_DONE; }
+        STEP_GOTO(hdr->stage, DSH_FIRE, &s->fphase, NULL);
+    }
+    el = dialog_elem_of(s->subject);
+    if (hdr->stage == DSH_FIRE) {
+        if (JS_IsUndefined(s->ev)) {
+            /* `show()` step 3 / show a modal dialog step 6. CANCELABLE — this is the one `beforetoggle` in
+               §4.11.4 that is, which is why steps 4 and 7 exist: a handler that calls `preventDefault()` makes
+               the fire answer false and the algorithm returns.
+               THE `source` INITIALIZER IS NAMED BY SHOW A MODAL DIALOG AND NOT BY `show()`, AND THE TWO REACH
+               THE SAME VALUE BY DIFFERENT ROUTES, which is why one argument serves both: the modal algorithm
+               initializes it to its own `source`, which both members pass as null, and `show()` names no
+               initializer at all, so ToggleEventInit's declared default stands — `Element? source = null`.
+               Passing this field is therefore the standard's answer on both arms, and it is what carries the
+               difference the day §4.11.5 Dialog light dismiss supplies an element. */
+            s->ev = toggle_event_new(ctx, "beforetoggle", DIALOG_STATE_CLOSED, DIALOG_STATE_OPEN, s->source,
+                                     /*bubbles*/ false, /*cancelable*/ true);
+            if (JS_IsException(s->ev)) {
+                s->ev = JS_UNDEFINED;
+                return JS_STEP_ABRUPT;
+            }
+        }
+        rc = event_target_fire_run(ctx, &s->fphase, STEP_CB(s->cb), s->subject, s->ev, JS_UNDEFINED, cb_result,
+                                   &not_canceled, out_cb, out_argc);
+        if (rc > 0) return rc;
+        if (rc < 0) return JS_STEP_ABRUPT;
+        cb_result = JS_UNDEFINED;   /* the fire request TOOK it */
+        JS_FreeValue(ctx, s->ev);
+        s->ev = JS_UNDEFINED;
+        /* "If the result of firing an event … is FALSE, then return." */
+        if (!not_canceled) { *presult = JS_UNDEFINED; return JS_STEP_DONE; }
+        STEP_GOTO(hdr->stage, DSH_AFTER, &s->fphase, NULL);
+    }
+    if (hdr->stage == DSH_AFTER) {
+        /* NOTHING IN THIS STAGE ASKS ANYTHING, so a completion arriving here is spent — and it is released
+           HERE rather than at the door, because the stage below DOES ask and its re-entry carries an answer an
+           unconditional free would have eaten. */
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        /* `show()` step 4 / show a modal dialog step 7 — the attribute is read AGAIN, because a `beforetoggle`
+           handler had the element in its hands. */
+        if (!dialog_has_open(el)) { *presult = JS_UNDEFINED; return JS_STEP_DONE; }
+        if (magic == M_SHOW_MODAL) {
+            /* Steps 8 and 9 — the second look at connectedness and at the popover showing state, both of
+               which a `beforetoggle` listener can have changed, and both of which merely RETURN here where
+               steps 4 and 5 threw. `show()` has neither. */
+            if (!node_is_connected(node_of(s->subject))) { *presult = JS_UNDEFINED; return JS_STEP_DONE; }
+            if (popover_element_is_showing(ctx, s->subject)) { *presult = JS_UNDEFINED; return JS_STEP_DONE; }
+        }
+        /* `show()` step 5 / show a modal dialog step 10 — "Queue a dialog toggle event task given <subject>,
+           'closed', 'open', and <source>." */
+        dialog_queue_toggle_task(ctx, s->subject, DIALOG_STATE_CLOSED, DIALOG_STATE_OPEN, s->source);
+        /* `show()` step 6 / show a modal dialog step 11 — "Add an open attribute to <subject>, whose value is
+           the empty string." IT IS FAR MORE THAN AN ATTRIBUTE WRITE: it goes through the DOM mutation
+           chokepoint, so §4.11.4's own attribute change steps run and their step 6 runs the DIALOG SETUP
+           STEPS, which append the element to its document's open dialogs list and SET THE DIALOG CLOSE
+           WATCHER. That is what step 12 below asserts and what makes an Esc close this dialog. */
+        dom_cow_set_attribute(el, "open", "", 0, JS_UNDEFINED);
+        if (magic == M_SHOW_MODAL) dialog_show_modal_steps_12_to_15(ctx, s);
+        STEP_GOTO(hdr->stage, DSH_TAIL, &s->fphase, NULL);
+    }
+    DCHECK(hdr->stage == DSH_TAIL, "a §4.11.4 show machine resumed at a stage it does not have");
+    rc = dialog_show_tail(ctx, hdr, s, cb_result, out_cb, out_argc);
+    if (rc > 0) return rc;
+    if (rc < 0) return JS_STEP_ABRUPT;
+    *presult = JS_UNDEFINED;
+    return JS_STEP_DONE;
+}
+
+/* WHAT THIS MACHINE TOOK AND MUST GIVE BACK ON EVERY EXIT. The hide-popovers-until state is a REFERENCE the
+   visit above names, so the teardown that follows this hook releases it; what belongs here is anything this
+   machine LATCHED, and it has latched nothing — `show()` and show a modal dialog raise no flag that a later
+   step owes back, which is the whole difference from `requestClose()`'s enable-close-watcher latch. It is
+   declared rather than left NULL so the declaration reads as a decision instead of an omission. */
+static void dialog_show_release(JSContext *ctx, void *st)
+{
+    (void)ctx;
+    (void)st;
+}
+
+/* THE TAIL IS NAMED, for the reason the close()/requestClose() declaration states: a POSITIONAL initializer
+   that runs to the end of the struct silently re-aims every value after the next field added.
+   `catches_abrupt` is 0 because neither algorithm catches: an abrupt from the fire or from HIDE POPOVERS UNTIL
+   is the page's own `beforetoggle` handler throwing, and §4.11.4 gives these members no step that swallows it.
+   `unforkable` is NULL because this machine holds only JSValues, its own cursors and the hide-popovers-until
+   state, every one of which the visit above names. */
+static const IdlStepDecl DIALOG_SHOW_DECL = {
+    dialog_show_body, sizeof(DialogShowState), dialog_show_visit, dialog_show_release,
+    "HTML §4.11.4 The dialog element's show() and showModal()", DIALOG_SHOW_STEPS,
+    .catches_abrupt = 0, .unforkable = NULL
+};
+
 /* ---- §4.11.4's REQUEST TO CLOSE THE DIALOG, AND THE TWO MEMBERS OVER IT ---------------------------------------
  *
  * `close()` and `requestClose()` are ONE machine with a magic, for core/html/close_watcher_interface.c's
  * reason: the two differ in WHICH algorithm they delegate to and in nothing else, and a second implementation
  * of the receiver resolution and the "if returnValue is not given" step is a second place for them to disagree.
- *
- * `show()` and `showModal()` ARE NOT HERE, and that is an ordered subproblem rather than an omission. Both end
- * in "Run hide popovers until given document, hideUntil, false, and true" (show() step 10, show a modal dialog
- * step 19) and both refuse a subject that is in §6.12's POPOVER SHOWING STATE — HTML §6.12 The popover attribute's HIDE
- * POPOVERS UNTIL is 5 steps stated over §6.12's own showing hint popover list, its hint stack parent and its
- * hide popover stack until, none of which exist outside core/html/popover.c and none of which may be copied
- * here: a second reading of §6.12's list algebra is the one-fact-two-answers defect with a page-visible
- * consequence, since a popover left showing over a modal dialog is exactly what those steps exist to prevent.
- * The two members land in the diff that exports §6.12's hide popovers until as a request, together with
- * §4.11.4's DIALOG FOCUSING STEPS, which both of them end with and which §6.12's own popover focusing steps
- * step 2 already carries a crash for. */
+ */
 
 enum { M_CLOSE = 0, M_REQUEST_CLOSE };
 
@@ -1379,6 +1987,12 @@ void html_dialog_declare(JSContext *ctx)
     g_id_request_close = idl_method_id_step(ctx, CLOSE_ARGS, 1, NULL, 0, &DIALOG_MEMBER_DECL,
                                             M_REQUEST_CLOSE);
     idl_optional_from(0);
+    /* `[CEReactions] undefined show()` and `[CEReactions] undefined showModal()` — ZERO arguments each, so
+       neither takes an argument-type list, and both name the ONE machine with a magic for the reason the pair
+       above do: §4.11.4's `showModal()` method steps are a single sentence delegating to show a modal dialog,
+       and every step after the two algorithms' prologues is the same sentence in both. */
+    g_id_show = idl_method_id_step(ctx, NULL, 0, NULL, 0, &DIALOG_SHOW_DECL, M_SHOW);
+    g_id_show_modal = idl_method_id_step(ctx, NULL, 0, NULL, 0, &DIALOG_SHOW_DECL, M_SHOW_MODAL);
     /* §4.9's ATTRIBUTE CHANGE STEPS and §4.2.3's REMOVING STEPS are registered by core/dom/element.c, which
        owns both lists and the ORDER within them; this file supplies the two entry points and says so at their
        declarations in html_dialog.h. Registering them from here would put §4.11.4 in a list whose ordering
@@ -1395,8 +2009,12 @@ void html_dialog_install(JSContext *ctx, JSValueConst dialog_proto)
        declares them in and there is no other order to prefer. */
     DCHECK(g_id_close >= 0 && g_id_request_close >= 0,
            "§4.11.4's close()/requestClose() were installed before html_dialog_declare took their pool ids");
+    DCHECK(g_id_show >= 0 && g_id_show_modal >= 0,
+           "§4.11.4's show()/showModal() were installed before html_dialog_declare took their pool ids");
     idl_install_accessor(ctx, dialog_proto, "returnValue", js_dialog_get_return_value, 0, g_id_return_value);
     idl_install_accessor(ctx, dialog_proto, "closedBy", js_dialog_get_closed_by, 0, g_id_closed_by);
+    idl_install_method(ctx, dialog_proto, "show", g_id_show);
+    idl_install_method(ctx, dialog_proto, "showModal", g_id_show_modal);
     idl_install_method(ctx, dialog_proto, "close", g_id_close);
     idl_install_method(ctx, dialog_proto, "requestClose", g_id_request_close);
 }
@@ -1419,4 +2037,6 @@ void html_dialog_free(JSRuntime *rt)
     g_id_closed_by = -1;
     g_id_close = -1;
     g_id_request_close = -1;
+    g_id_show = -1;
+    g_id_show_modal = -1;
 }
