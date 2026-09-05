@@ -2196,6 +2196,115 @@ int concolic_candidate_delivered(void) {
  * concrete value here to report — the same answer as a member the record does not hold, for a different and
  * equally honest reason. `JSON.parse` builds only data properties, so the only route to one is a 25.5.1 step 9
  * reviver that defined one, which is the page's own choice. */
+/* §10.4.3.5 StringGetOwnProperty ( string, propertyKey ) — THE OWN MEMBERS OF A VALUE WHOSE EXAMPLE IS A
+ * STRING, and the only own members any PRIMITIVE example has: §10.4.3 String Exotic Objects is the one
+ * primitive wrapper that owns properties at all, so a Number, Boolean, BigInt or Symbol example answers none
+ * and the `!JS_IsObject` arm below was right about every primitive except this one.
+ *
+ * IT IS NOT "INVENTING THE OPERATION", WHICH IS WHAT THE LINE IT REPLACES SAID. That line refused a primitive
+ * example's members on the ground that `{hash}.length` is a DERIVATION rather than a slot — which is true, and
+ * is an argument about what may be ANSWERED as the member's value, not about what the derivation may CARRY.
+ * The bytes are not answered: concolic_exotic_get_own reports a derived unknown and concolic_exotic_get mints
+ * it, and this fills that derivation's EXAMPLE exactly as `"/api/" + cfg.region` fills one — CLAUDE.md
+ * §Solver-half puts it that the example propagates because the engine runs the real op, and §6.1.4 The
+ * String Type's code-unit indexing and `length` are real ops run on a value the flow had in hand. Refusing
+ * them did not keep the engine honest, it DROPPED an observation: `location.hash` carrying the example
+ * `#/a/b` answered an EXAMPLE-FREE unknown for `.length` and for `[0]`, and every string a page built out of
+ * those lost its concrete value with them — which §@H calls a wrong report rather than a partial one, since
+ * the run had computed it.
+ *
+ * THE ATTRIBUTES ARE §10.4.3's OWN AND THEY ARE NOT THIS CLASS'S USUAL ONES. §10.4.3.5 step 10 returns, for
+ * an index, the PropertyDescriptor whose [[Writable]] is false, [[Enumerable]] true and [[Configurable]]
+ * false; §10.4.3.4 StringCreate ( value, proto ) step 8 defines `length` with all three false. That is why
+ * the three internal methods that WRITE ask JS_IsString before reaching for the example: a non-configurable
+ * member cannot be materialised onto the record, and there is no character to take out of a String primitive
+ * if it could be.
+ *
+ * CANONICAL, NOT MERELY NUMERIC. §10.4.3.5 step 2 runs CanonicalNumericIndexString ( propertyKey ), so `01`,
+ * `1.0`, `+1`, ` 1` and `-0` are ordinary property names and not indices. A digits-only test with no leading
+ * zero is that intersected with step 3 (an integral Number), step 4 (not -0𝔽 and not below it) and step 8
+ * (below `length`) — every name it rejects is a name those steps answer undefined for anyway, including a run
+ * of digits too long to be any string's index.
+ *
+ * THE VALUE IS TAKEN FROM THE ENGINE'S OWN READ AND NOT SPELLED HERE, which is what makes this RUNNING the
+ * op rather than a second implementation of §10.4.3.1: JS_GetPropertyInternal answers `length` off a String
+ * primitive with `js_int32(p1->len)` and an in-range integer index with `js_new_string_char`, both without
+ * allocating a wrapper and both BEFORE the primitive's prototype is consulted — which is the property that
+ * matters here, because String.prototype is page-patchable and this runs inside an internal method with no
+ * flow base to run a page's getter on. The range check is therefore not an optimisation: an index at or past
+ * the end is exactly the read that WOULD reach the prototype, so step 7's answer is taken here and the engine
+ * is never asked for it.
+ *
+ * 1 = the string holds this own member; `*out_value` is OWNED and `*out_flags` is the member's own C/W/E.
+ * 0 = it holds none. */
+/* HOW MANY CODE UNITS A STRING EXAMPLE HOLDS — §6.1.4 The String Type's count, which is the `length` member
+   §10.4.3.4 StringCreate ( value, proto ) step 8 defines, and the bound §10.4.3.5 step 8 tests an index
+   against. Read through the engine's own O(1) answer for a String primitive rather than converted, for the
+   reason spelled above. */
+static int64_t string_example_units(JSContext *ctx, JSValueConst example)
+{
+    JSValue lv;
+    int64_t len = 0;
+
+    DCHECK(JS_IsString(example), "the code units of a non-String example were counted — every caller asks "
+                                 "JS_IsString first, so this is a walk that reached a record whose example is "
+                                 "something else entirely");
+    lv = JS_GetPropertyStr(ctx, example, "length");
+    DCHECK(JS_IsNumber(lv),
+           "a String primitive answered its own `length` with something that is not a Number — the read is "
+           "§10.4.3.4 StringCreate ( value, proto ) step 8's own property and the engine answers it off the "
+           "string's own count before any prototype is consulted, so a non-Number here is a read that went "
+           "somewhere else");
+    JS_ToInt64(ctx, &len, lv);
+    JS_FreeValue(ctx, lv);
+    return len;
+}
+
+static int string_example_slot(JSContext *ctx, JSValueConst example, JSAtom atom,
+                               JSValue *out_value, int *out_flags)
+{
+    const char *name;
+    int64_t len, i;
+    uint64_t idx = 0;
+    int is_len, is_idx = 0;
+
+    if (!JS_IsString(example))
+        return 0;
+    name = JS_AtomToCString(ctx, atom);
+    if (!name)
+        return 0;   /* a name that would not convert names no member of a String */
+    is_len = !strcmp(name, "length");
+    if (!is_len && name[0] >= '0' && name[0] <= '9' && !(name[0] == '0' && name[1] != '\0')) {
+        /* TEN DIGITS IS THE WHOLE OF THE RANGE THAT CAN NAME ONE — 2^32-2 is ten digits, and a longer run
+           leaves `name[i]` non-NUL, which answers "not a member" exactly as step 7 does for an index at or
+           past the end. The bound is also what keeps the accumulate inside uint64_t. */
+        for (i = 0; name[i] && i < 10; i++) {
+            if (name[i] < '0' || name[i] > '9') break;
+            idx = idx * 10 + (uint64_t)(name[i] - '0');
+        }
+        is_idx = (name[i] == '\0');
+    }
+    JS_FreeCString(ctx, name);
+    if (!is_len && !is_idx)
+        return 0;
+    len = string_example_units(ctx, example);
+    if (is_len) {
+        *out_value = JS_NewInt64(ctx, len);
+        *out_flags = 0;                    /* §10.4.3.4 step 8: not W, not E, not C */
+        return 1;
+    }
+    if (idx >= (uint64_t)len)
+        return 0;                          /* §10.4.3.5 step 8: an index at or past the end holds nothing */
+    *out_value = JS_GetPropertyUint32(ctx, example, (uint32_t)idx);
+    DCHECK(JS_IsString(*out_value),
+           "a String primitive answered an IN-RANGE index with something that is not a String — the engine "
+           "answers one off the string's own code units and returns before the primitive's prototype is "
+           "reached, so a non-String here is a read that fell through to String.prototype, which the page "
+           "owns and which this internal method has no flow base to run");
+    *out_flags = JS_PROP_ENUMERABLE;       /* §10.4.3.5 step 10: E only */
+    return 1;
+}
+
 /* ONE READ OF THE EXAMPLE'S OWN SLOT, answering BOTH questions the record is asked about a member: WHAT it
    holds (the value a derived member carries) and WHETHER it holds it, with the attributes it states. They are
    one §6.2.6 Property Descriptor and two reads of it would be two answers about one record — the same
@@ -2210,10 +2319,11 @@ static int example_slot(JSContext *ctx, JSValueConst parent_example, JSAtom atom
 
     *out_value = JS_UNDEFINED;
     *out_flags = 0;
-    /* A primitive example has no members to read: `{hash}.length` off a concrete fragment is a DERIVATION and
-       not a slot, and answering it from this object-shaped read would be this file inventing the operation. */
+    /* A PRIMITIVE EXAMPLE HAS THE MEMBERS §10.4.3 GIVES IT AND NO OTHERS, which for everything but a String
+       is none — see string_example_slot for why answering them is running the real op rather than inventing
+       it, and for the argument this replaces. */
     if (!JS_IsObject(parent_example))
-        return 0;
+        return string_example_slot(ctx, parent_example, atom, out_value, out_flags);
     has = JS_GetOwnSlotDesc(ctx, &pd, parent_example, atom);
     DCHECK(has >= 0,
            "reading a member off a concolic's own example threw — JS_GetOwnSlotDesc runs none of the page's "
@@ -4010,7 +4120,15 @@ static int concolic_exotic_get_own(JSContext *ctx, JSPropertyDescriptor *desc, J
        example_slot gives, and is still reported as a data property: what the page's getter would compute is
        unknown, and an unknown is what this class answers with. */
     JS_FreeValue(ctx, ev);
-    desc->flags = (eflags & JS_PROP_ENUMERABLE) | JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE;
+    /* …AND THE ATTRIBUTES ARE THE RECORD'S FOR AN OBJECT EXAMPLE AND §10.4.3's FOR A STRING ONE, which is one
+       question and not two: the forced C|W says every member of a RECORD is one this class can materialise
+       (the define below takes it out of the example and defines it on the object), and a String's own members
+       are fixed — §10.4.3.5 step 10 makes an index non-writable and non-configurable and §10.4.3.4 step 8
+       makes `length` all three false — so forcing them here would report a member the define is about to
+       refuse, and the two internal methods would disagree about one record. */
+    desc->flags = JS_IsString(c->example)
+                      ? (eflags & (JS_PROP_ENUMERABLE | JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE))
+                      : ((eflags & JS_PROP_ENUMERABLE) | JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE);
     desc->getter = JS_UNDEFINED;
     desc->setter = JS_UNDEFINED;
     desc->value = concolic_exotic_get(ctx, obj, atom, obj);
@@ -4217,14 +4335,31 @@ static int concolic_exotic_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint
         return 0;
     }
     if (JS_IsString(c->example)) {
-        /* §10.4.3 String Exotic Objects gives a String's own keys as its index properties plus `length`, so
-           the empty List is FALSE for a non-empty one — a wrong positive statement rather than a missing
-           capability. This class models a RECORD's members and declines a primitive example's at every other
-           door too (see example_slot); the wrapper surface is the thing to build. */
-        DFAIL("an unknown whose example is a STRING was asked to enumerate itself — §10.4.3 String Exotic "
-              "Objects' index properties are the answer and this class does not model them; build the "
-              "primitive-example wrapper surface rather than reporting the record as empty");
-        return 0;
+        /* §10.4.3.3 [[OwnPropertyKeys]] ( ) OVER A STRING EXAMPLE — its step 5, "For each integer i such
+           that 0 ≤ i < length, in ascending order", whose one sub-step appends ToString of each, and then
+           the object's other own string keys, of which a String has exactly one: `length`. The empty List a
+           DFAIL used to stand in for is FALSE for a non-empty string — `Object.keys(x).length === 0` would be
+           DECIDED for a value the run had every character of — which is why this is the answer and not a
+           report of a missing capability.
+           THE RECORD HAS NO ORDINARY SLOTS TO COLLIDE WITH, which is what keeps quickjs's merge free of the
+           duplicate §6.1.7.3 Invariants of the Essential Internal Methods forbids: the only writer that could
+           put one there is the define below, and it REFUSES every member of a String example because
+           §10.4.3.5 makes them non-configurable. The shared assertion at the tail of this function is what
+           says so on every walk rather than here on trust. */
+        int64_t units = string_example_units(ctx, c->example), k;
+
+        n = (uint32_t)(units + 1);
+        tab = js_malloc(ctx, (size_t)n * sizeof *tab);
+        CHECK(tab != NULL, "concolic: OOM enumerating the own members of a String example");
+        for (k = 0; k < units; k++) {
+            tab[k].atom = JS_NewAtomUInt32(ctx, (uint32_t)k);
+            CHECK(tab[k].atom != JS_ATOM_NULL, "concolic: OOM naming a String example's index member");
+            tab[k].is_enumerable = 1;      /* §10.4.3.5 step 10 */
+        }
+        tab[units].atom = JS_NewAtom(ctx, "length");
+        CHECK(tab[units].atom != JS_ATOM_NULL, "concolic: OOM naming a String example's `length`");
+        tab[units].is_enumerable = 0;      /* §10.4.3.4 step 8 */
+        goto have_keys;
     }
     if (!JS_IsObject(c->example))
         return 0;   /* a number/boolean/bigint/null record HAS no own keys — `Object.keys(5)` is [] */
@@ -4233,6 +4368,7 @@ static int concolic_exotic_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint
            "page's code, and an internal method reached from C has no flow base to run one on");
     if (JS_GetOwnPropertyNames(ctx, &tab, &n, c->example, JS_GPN_STRING_MASK | JS_GPN_SYMBOL_MASK) < 0)
         return -1;
+have_keys:
 #if APICLIENT_DEV
     {
     uint32_t i;
@@ -4275,6 +4411,31 @@ static int concolic_exotic_define_own(JSContext *ctx, JSValueConst obj, JSAtom p
     if (!c || !concolic_exotic_get_own(ctx, &cur, obj, prop))
         return JS_DefineProperty(ctx, obj, prop, val, getter, setter, flags | JS_PROP_NO_EXOTIC);
 
+    /* A STRING EXAMPLE'S OWN MEMBERS ARE NOT MATERIALISABLE AND THE DEFINE IS REFUSED. §10.4.3.2
+       [[DefineOwnProperty]] ( propertyKey, propertyDesc ) step 2 sends a member StringGetOwnProperty answers
+       for to IsCompatiblePropertyDescriptor against that descriptor, which for a non-configurable,
+       non-writable current accepts only a descriptor that changes nothing — and current's [[Value]] here is a
+       freshly minted derived unknown, so no incoming value can be SameValue with it. The refusal is also the
+       only sound answer this class HAS: the write path below materialises a member by deleting it from the
+       example, and there is no character to take out of a String primitive.
+       IT THROWS OR ANSWERS FALSE BY THE CALLER'S RULE, not by this file's. `Object.defineProperty` asks with
+       JS_PROP_THROW and `'use strict'; x[0] = 'z'` with JS_PROP_THROW_STRICT against the running frame, both
+       of which live inside quickjs, so JS_RefuseOrThrowTypeError is the one spelling that answers both — the
+       same edge window.c, storage.c and idl_indexed.c already refuse through.
+       NAMED RESIDUAL — the code is CORRECT for every define that CHANGES something and NARROWER than
+       §10.4.3.2 step 2's compatibility test, which ACCEPTS a define that changes nothing.
+         NOT COVERED: `Object.defineProperty(x, "0", {enumerable: true})` — a descriptor with no [[Value]]
+           restating attributes the member already has, which IsCompatiblePropertyDescriptor answers true for.
+         WHAT THE NEXT DIFF BUILDS: that comparison, over `cur.flags` and the incoming `flags`, accepting only
+           where every field the descriptor STATES already matches current's — which is the same merge the
+           `nf` block below performs for a record's member, read as a test instead of as an assignment.
+         HOW ITS ABSENCE SHOWS: that call throwing a TypeError where a browser returns the object. It cannot
+           show for a define carrying a value, because SameValue against a freshly minted derived unknown is
+           false whatever the page passed. */
+    if (JS_IsString(c->example)) {
+        JS_FreeValue(ctx, cur.value);
+        return JS_RefuseOrThrowTypeError(ctx, flags, "property is not configurable");
+    }
     DCHECK(!(cur.flags & JS_PROP_GETSET),
            "this class reported one of its own members as an ACCESSOR — every one of them is a data property "
            "carrying a derived unknown, so a getter here is a descriptor built somewhere this file does not "
@@ -4318,6 +4479,16 @@ static int concolic_exotic_delete(JSContext *ctx, JSValueConst obj, JSAtom prop)
     if (!c || !example_slot(ctx, c->example, prop, &ev, &eflags))
         return 1;   /* nothing there to remove, which [[Delete]] reports as success */
     JS_FreeValue(ctx, ev);
+    /* §10.1.10.1 OrdinaryDelete step 4: a member whose [[Configurable]] is false is not removed and the
+       method answers FALSE. Every own member of a String example is one (§10.4.3.1 step 8, StringCreate step
+       6), and this is asked before the removal below because that removal is a property delete on the example
+       and a String primitive has no property to delete — `delete x[0]` would otherwise reach JS_DeleteProperty
+       with a non-object and fire the assert written for a frozen record. The answer is a bare false rather
+       than a refusal-or-throw: §13.5.1.2 Runtime Semantics: Evaluation's `delete UnaryExpression` step 4.f —
+       "If deleteStatus is false and ref.[[Strict]] is true, throw a TypeError exception" — is what raises the
+       strict-mode TypeError, from the operator and not from the internal method. */
+    if (JS_IsString(c->example))
+        return 0;
     DCHECK(!JS_IsProxy(c->example),
            "a concolic's example is a Proxy — removing a member is that Proxy's `deleteProperty` trap, which "
            "is the page's code, and an internal method reached from C has no flow base to run one on");
