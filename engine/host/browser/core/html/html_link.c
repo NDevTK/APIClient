@@ -433,7 +433,8 @@ static const char *preload_destination_of(lxb_dom_element_t *el)
    reaches the same translation the day it is built. §4.6.8.12 Link type "modulepreload" does NOT, and its
    not doing so is a fact about that algorithm rather than an omission here: its step 3 refuses everything
    that is not a module preload destination, and `fetch` — the one member translation exists for — is not
-   one, so a `modulepreload` never reaches a value this function would have to change. The spec's own ASSERT is the DCHECK — a
+   one, so a `modulepreload` never reaches a value this function would have to change.
+   The spec's own ASSERT is the DCHECK — a
    potential destination that is neither `fetch` nor a destination is a caller that skipped §2.2.5's
    enumeration, and the value it would hand on is one the pending join refuses and the chokepoint aborts. */
 static const char *translate_potential_destination(const char *potential)
