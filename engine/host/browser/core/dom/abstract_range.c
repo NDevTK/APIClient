@@ -415,18 +415,23 @@ void abstract_range_install(JSContext *ctx, JSValueConst global)
 
 void abstract_range_free(JSRuntime *rt)
 {
-    int k;
-
     (void)rt;   /* the prototypes are the REALMS' — released with their contexts */
     DCHECK(g_static_class != 0, "§5.4's StaticRange was released in an agent that never declared it");
-    /* THE SIX SLOTS, GIVEN BACK — the whole of what this release did not do. The two CLASSES go back to 0
-       because a class is registered in a RUNTIME (core/agent_state.h's one policy), and `g_static_class` is
-       additionally this component's latch, so a carried id would make the next agent's abstract_range_init
-       return before re-registering EITHER class. §5.3's walk is emptied for the sharper reason: every entry in
-       it is an id abstract_range_of hands to JS_GetOpaque on every getter, so a surviving one is a dead
-       runtime's number asked about a live object. */
-    for (k = 0; k < ABSTRACT_RANGE_CLASSES; k++) g_bounds_classes[k] = 0;
-    g_bounds_class_n = 0;
-    g_id_static_ctor = -1;
-    g_abstract_class = g_static_class = 0;
+    /* THE SIX SLOTS ARE NOT GIVEN BACK HERE ANY MORE, and this release frees nothing, so it is now the assert
+       above and that fact. They are declared under `element` — this is a sub-component of that row, reached
+       from range_free and so from element_free — and element_free's last line undoes the whole row from the
+       registry that already holds every one of their addresses and kinds. The enumeration that stood here was
+       the same six names written a second time, one function away from the six agent_state_class/_flag/_id
+       calls in abstract_range_init, kept in step by whoever remembered; core/agent_state.h's agent_state_undo
+       says why that is the defect and not the clerical error it produces.
+       WHAT THE ENUMERATION ARGUED IS UNCHANGED AND IS WHY IT COSTS NOTHING TO MOVE. The two CLASSES still go
+       back to 0 before the next agent — a class is registered in a RUNTIME, and `g_static_class` is this
+       component's latch, so a carried id would make the next abstract_range_init return before re-registering
+       EITHER class. What moves is only WHEN, and it moves LATER: §5.3's walk is now emptied after
+       element_free's cascade rather than in the middle of it, which is the direction that matters, because
+       every entry in it is an id abstract_range_of hands to JS_GetOpaque on every getter and §5.5's
+       range_pre_remove DCHECKs that the record it gets back is not NULL. Emptying it here left that walk
+       answering NULL for every live range while element_free still had a dozen releases and node_free's
+       wrapper walk to run — a guaranteed false `@WHY` for any range still live at teardown, which range.c's
+       own comment says is every document.createRange() and every Selection's range. */
 }

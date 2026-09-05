@@ -245,6 +245,10 @@ void document_current_script_free(void)
 {
     DCHECK(g_cs_slot >= 0, "§3.1.7's currentScript was released in an agent that never declared it");
     /* THE RECORDS ARE THE REALMS' — each is in its own per-context slot and released with its context. What
-       this component itself holds is the slot id. */
-    g_cs_slot = -1;
+       this component itself holds is the slot id, and it is a slot and not a reference, so there is nothing
+       to free here and nothing above this that guards one. It is declared under `document` — this is a
+       sub-component of that row and document_agent_free is the release that reaches it — so that release's
+       last line puts it back from the registry that already holds its address and kind, and the assignment
+       that stood here was this file's one agent_state_id call written a second time (core/agent_state.h's
+       agent_state_undo). The assert above stays, because it is what says this agent ever declared it. */
 }

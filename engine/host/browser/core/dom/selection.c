@@ -986,10 +986,17 @@ void selection_install_window_members(JSContext *ctx, JSValueConst global)
    `sel_gc_mark` read neither the class nor any other static of this file — see the paragraph above them. */
 void selection_free(void)
 {
-    int k;
-
     DCHECK(g_sel_class != 0, "§3's Selection was released in an agent that never declared it");
-    for (k = 0; k < SM_N; k++) g_id[k] = -1;
-    g_id_delete = g_id_stringifier = g_id_doc_get = g_id_win_get = -1;
-    g_sel_class = 0;
+    /* THE SLOTS ARE NOT ENUMERATED HERE ANY MORE — §3's class and its member and stringifier declarations,
+       plus §4.1's and §4.2's two getSelection entries. They are declared under `document`, because this is a
+       sub-component of that row and document_agent_free is the release that reaches it, and that release's
+       last line undoes the whole row from the registry that already holds every slot's address and kind. See
+       core/agent_state.h's agent_state_undo for why the list that stood here was a second copy of this file's
+       own agent_state_class/_id calls rather than their inverse — this file's comment below already records
+       what it cost when the two came apart.
+       WHAT THE LIST ARGUED IS UNCHANGED, and only WHEN moves. The CLASS still goes back to 0 before the next
+       agent — it is registered in a RUNTIME and it is this component's latch — and the pool entries still go
+       back to -1. Nothing between this line and document_agent_free's last reads any of them: the release
+       frees nothing, so no null here guards a free, and §5.3's abstract_range_of, which this file's
+       sel_bounds reaches, is `element`'s state and is released by a row that runs AFTER this one. */
 }

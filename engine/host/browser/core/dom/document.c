@@ -5159,14 +5159,6 @@ void document_agent_free(JSRuntime *rt)
     document_domain_free();
     document_write_free(rt);
     document_metadata_free();
-    /* THE PROTOTYPES ARE THE REALMS' — each is in its own class-proto slot and released with its context. What
-       this component itself holds is the class, the pool entries and the two realm-value slot ids. */
-    g_document_class = g_xml_document_class = 0;
-    g_id_create_element = g_id_create_text = g_id_create_comment = g_id_create_fragment =
-        g_id_create_element_ns = g_id_create_iterator = g_id_create_walker = g_id_create_range =
-        g_id_create_event = g_id_create_cdata = g_id_create_pi = g_id_doc_ctor = g_id_adopt_node =
-        g_id_title_set = g_id_dir_set = g_id_location_set = -1;
-    g_ready_slot = g_showing_slot = -1;
     DCHECK(JS_GetContextMarkHook(rt) == document_realm_mark,
            "§gc's realm-mark hook was given back at the Document component's agent release — it must NOT be, "
            "and this is where that is checked. The records it reports outlive this call (a child navigable's is "
@@ -5175,5 +5167,28 @@ void document_agent_free(JSRuntime *rt)
            "cannot subtract them, the realm reads as externally rooted, and the collection that would have "
            "freed the record is the one the record prevents — which is exactly the cycle doc_rec_new asserts "
            "the hook's presence to make impossible. Its storage is rt->ctx_mark and JS_FreeRuntime releases it");
-    g_document_rt = NULL;
+    /* EVERY HANDLE THIS ROW DECLARED, GIVEN BACK FROM THE ONE LIST THAT ALREADY NAMES THEM — this component's
+       recorded runtime, §4.5's two classes, its sixteen member declarations and the two realm-value slot ids
+       §3.1.5's readiness and §7.5.9's page showing live in, together with everything the sub-components above
+       declare under this row's name: §3.1.7's currentScript slot, Selection API §3's class and its six
+       entries, FULLSCREEN §2's flag key and its Symbol, and §6.6's focused-area slot and its eight members.
+       See core/agent_state.h's agent_state_undo for why the enumerations that stood here and in four other
+       files were a second copy of the declarations rather than their inverse — `document` is declared from
+       FIVE files, so the list was being kept in step across all five by whoever remembered, and the failure
+       is not a misreading but a diff that adds a declaration to one `_init` and touches no `_free` at all.
+       THE PROTOTYPES ARE STILL THE REALMS' — each is in its own class-proto slot and released with its
+       context — and what this row holds is only the classes, the pool entries and the slot ids the line above
+       used to spell out.
+       WHAT STAYS ABOVE IS EVERY REFERENCE, AND WITH IT THE NULL THAT GUARDS A FREE: the undo resets HANDLES
+       and never references, so fullscreen_free keeps both its JS_FreeAtomRT/JS_FreeValueRT and its own reset
+       beside them. That is not the second copy this call replaces — thirteen more sub-releases run after that
+       free, and a slot left naming a freed atom or a dropped value for the length of them is read by whatever
+       comes next; the undo re-nulls each idempotently. What went are the enumerations with nothing freed
+       above them, which is all four of the others.
+       LAST, AND THAT ORDER IS THE CONTRACT (core/agent_state.h). The assert at the top reads g_document_rt and
+       the one directly above asserts a claimant has NOT handed §gc's realm-mark hook back, so a release that
+       undid first would answer its own check. It is called BY this component rather than from
+       core/platform.c's release column deliberately: a column that undid every component automatically would
+       leave agent_state_check_released nothing to catch. */
+    agent_state_undo("document");
 }

@@ -3208,7 +3208,6 @@ void element_free(JSRuntime *rt)
            "the DOM group was released against a runtime that is not the one it declared in — every JSValue and "
            "every atom the cascade below gives back would have its reference subtracted from a runtime that "
            "never took it, and JS_FreeValueRT reports nothing at all when it is the wrong one");
-    g_element_rt = NULL;
     /* THE TWO DOM-WRITE HOOKS THIS FILE CLAIMED, GIVEN BACK BEFORE THE CASCADE RUNS. Both live in
        solver/dom_cow.c and name code in this group — §4.3's character-data record and §4.9's attribute-changed
        steps — so a release that kept them would leave the DOM chokepoint calling into components the lines
@@ -3272,4 +3271,27 @@ void element_free(JSRuntime *rt)
        claim by four months. The second call was harmless only because node_free happens to be idempotent, and
        a teardown whose safety rests on that is one edit away from a double free. */
     node_free(rt);
+    /* EVERY HANDLE THIS ROW DECLARED, GIVEN BACK FROM THE ONE LIST THAT ALREADY NAMES THEM — this file's
+       recorded runtime, its NamedNodeMap slot key and its scratch list, plus §5.3's, §5.4's and §5.5's three
+       classes, §5.3's two-entry walk and its count, and the pool entries core/dom/abstract_range.c,
+       core/dom/range.c and core/html/custom_elements.c declare under this row's name. See
+       core/agent_state.h's agent_state_undo for why the enumerations that stood in those three releases were
+       a second copy of the declarations rather than their inverse: `element` is declared from FOUR files, so
+       the list was being kept in step across four of them by whoever remembered.
+       WHAT STAYS ABOVE IS EVERY REFERENCE, AND WITH IT THE NULL THAT GUARDS A FREE — the undo resets HANDLES
+       and never references, so `free(g_ts)`, the JS_FreeAtomRT of the slot key and custom_elements_free's
+       JS_FreeValueRT of §4.13.4's map all keep their own reset beside them. That is NOT the second copy this
+       call replaces: those nulls are what stops a freed pointer, atom or value being read by the rest of this
+       cascade, which runs a dozen more releases and then node_free's wrapper walk after them, and the undo
+       re-nulls each idempotently. The enumerations that went are the ones with nothing freed above them —
+       class ids and pool entries, valid in a runtime that is still alive here and read by nobody between
+       their release and this line.
+       LAST, AND THAT ORDER IS THE CONTRACT (core/agent_state.h). Two things above depend on it: the assert at
+       the top reads g_element_rt, and §5.5's live-range walk reaches its records through
+       abstract_range_of, which is a JS_GetOpaque over §5.3's walk — so a release that undid first would
+       answer its own check and would empty that walk while the tree hooks node_free clears are still
+       installed. It is called BY this component rather than from core/platform.c's release column
+       deliberately: a column that undid every component automatically would leave
+       agent_state_check_released nothing to catch. */
+    agent_state_undo("element");
 }

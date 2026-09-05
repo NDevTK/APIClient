@@ -2062,20 +2062,24 @@ void range_install(JSContext *ctx, JSValueConst global)
    frees the array. A list that is already empty is freed at once, which is the ordinary case. */
 void range_free(JSRuntime *rt)
 {
-    int k;
-
     DCHECK(g_range_class != 0, "§5.5's Range was released in an agent that never declared it");
     g_live_closed = 1;
     range_live_drop();
-    /* AND THE TWENTY-FOUR SLOTS, GIVEN BACK — the half this release did not have. The CLASS goes back to 0
-       because a class is registered in a RUNTIME (core/agent_state.h states the one policy): a carried id
-       would name a class in a runtime that is gone AND, being the latch above, would make the next agent's
-       `range_init` return before re-registering it. The pool entries go back to -1 because the pool they
-       index is the agent's too, and an entry the next agent's `range_install_proto` reads is an index into a
-       pool that no longer exists. */
-    for (k = 0; k < R_MEMBER_N; k++) g_id[k] = -1;
-    g_id_to_string = g_id_delete = g_id_extract = g_id_clone_contents = g_id_surround = -1;
-    g_id_client_rects = g_id_bounding_rect = g_id_contextual_fragment = -1;
-    g_range_class = 0;
+    /* AND THE TWENTY-FOUR SLOTS ARE NOT ENUMERATED HERE ANY MORE. They are declared under `element` — this is
+       a sub-component of that row, reached from element_free — and element_free's last line undoes the whole
+       row from the registry that already holds every slot's address and kind. The list that stood here was
+       the same twenty-four names written a second time, a hundred lines from the agent_state_class/_id calls
+       that declare them, and `element` is declared from FOUR files, so keeping the two in step was a clerical
+       obligation spread across all four; core/agent_state.h's agent_state_undo says why that is the defect.
+       WHAT THE LIST ARGUED IS UNCHANGED. The CLASS still goes back to 0 before the next agent — a class is
+       registered in a RUNTIME, and being the latch above, a carried id would make the next `range_init`
+       return before re-registering it — and the pool entries still go back to -1 because the pool they index
+       is the agent's. Only WHEN moves, and it moves LATER, which is the safe direction here: nothing between
+       this line and element_free's last reads any of them, both collector entries reach their record through
+       JS_GetAnyOpaque rather than through g_range_class, and §5.5's live-range walk keeps answering while the
+       tree hooks node_free clears are still installed.
+       `g_live_closed` IS NOT AMONG THEM and stays here: it is the one slot whose value at the release column
+       must be 1, so it is not declared to core/agent_state.h at all and range_live_drop's last finalizer is
+       what winds it back — see the comment above that function. */
     abstract_range_free(rt);
 }

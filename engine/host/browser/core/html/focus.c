@@ -2028,9 +2028,15 @@ void focus_install_window_members(JSContext *ctx, JSValueConst target)
 void focus_free(void)
 {
     DCHECK(g_ready, "§6.6's focus machinery was released in an agent that never declared it");
+    /* THE NINE SLOTS ARE NOT ENUMERATED HERE ANY MORE — the realm-value slot §6.6's focused area lives in and
+       the eight member declarations over it. They are declared under `document`, because this is a
+       sub-component of that row and document_agent_free is the release that reaches it, and that release's
+       last line undoes the whole row from the registry that already holds every one of their addresses and
+       kinds. See core/agent_state.h's agent_state_undo for why the three lines that stood here were a second
+       copy of the nine agent_state_id calls in focus_init rather than their inverse. This release frees
+       nothing — a slot id and eight pool entries are handles and not references — so there is no null above
+       that guards a free, and the undo is the whole of what went.
+       `g_ready` IS NOT AMONG THEM and stays: it is this component's own declaration latch and is not declared
+       to core/agent_state.h, so nothing else would put it back. */
     g_ready = 0;
-    g_focus_slot = -1;
-    g_id_el_focus = g_id_el_blur = g_id_win_focus = g_id_has_focus = g_id_set_tab_index = -1;
-    g_id_win_blur = -1;
-    g_id_viewport = g_id_autofocus = -1;
 }
