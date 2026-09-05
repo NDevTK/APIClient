@@ -153,13 +153,13 @@ static JSValue js_cs_query(JSContext *ctx, JSValueConst this_val, int argc, JSVa
 
     if (!cs_brand(ctx, this_val))
         return JS_EXCEPTION;
-    /* IDL_USVSTRING_OR_DICT places a string for Web IDL §3.6 step 12.15's entry and an engine-built dictionary
-       for step 12.11's, and places UNKNOWN EXTERNAL INPUT as itself on the forked USVString world — so a
-       concolic here is the string arm, which is the same test core/frame/window_message.c makes and states. */
+    /* IDL_STRING_OR_DICT places a string for Web IDL §3.6 step 12.15's entry and an engine-built dictionary
+       for step 12.11's, and places UNKNOWN EXTERNAL INPUT as itself on the forked string world — so a concolic
+       here is the string arm, which is the same test core/frame/window_message.c makes and states. */
     by_string = JS_IsString(arg) || concolic_is(arg);
     DCHECK(by_string || JS_IsObject(arg) || JS_IsUndefined(arg),
            "CookieStore's get/getAll reached its body with an argument that is neither a string, an object nor "
-           "absent — IDL_USVSTRING_OR_DICT places one of those three, and an OMITTED argument is the `= {}` "
+           "absent — IDL_STRING_OR_DICT places one of those three, and an OMITTED argument is the `= {}` "
            "dictionary rather than an absent one");
     if (!by_string && !JS_IsUndefined(arg)) {
         opt_name = idl_dict_get(ctx, arg, "name");
@@ -363,9 +363,33 @@ static void cs_install_realm(JSContext *ctx)
 void cookie_store_init(JSContext *ctx)
 {
     /* §3.1's `get(USVString name)` and `get(optional CookieStoreGetOptions options = {})` — Web IDL §3.6's
-       effective overload set has an entry of length 0 and two of length 1, so at the one arity both stand and
-       the distinguishing argument decides: IDL_USVSTRING_OR_DICT is that decision stated as a type. */
-    static const IdlArgType QUERY_ARGS[1] = { IDL_USVSTRING_OR_DICT };
+       effective overload set has an entry of length 0 and TWO OF LENGTH 1, so at the one arity step 4 removes
+       NEITHER and the whole decision is step 12's clause chain at the distinguishing argument.
+
+       WHICH IS WHY THIS IS NOT IDL_USVSTRING_OR_DICT, AND THAT ROW'S OWN NAME IS THE TRAP. This member's two
+       entries END AT THE SAME POSITION; IDL_USVSTRING_OR_DICT is idl_args.c's LENGTH-DIFFERING split, "a
+       declared type whose two overload entries END AT DIFFERENT POSITIONS", which is HTML §7.2.2's
+       `window.postMessage` (2 against 3) and not this. Declaring it here set `split_at` on a member with no
+       longer entry to describe, and idl_args.c's seal aborted the build by name.
+       THE REMEDY THAT ABORT NAMES IS WRONG FOR THIS MEMBER. It says to state where the longer entry's optional
+       arguments begin with idl_overload_split_optional_from — correct for a member that HAS a longer entry, and
+       here it would silence the assert while leaving a split that rewrites this position to a plain USVString at
+       an arity that cannot occur, throwing the dictionary arm away. The spec half of that crash is right and its
+       remedy clause is a hypothesis; this is the case where the hypothesis does not hold.
+       IDL_SEQUENCE_OBJECT_OR_DICT is the same shape one arm over — MessagePort's two entries are both two long,
+       "the arity shortcut IDL_USVSTRING_OR_DICT leans on has nothing to shortcut" — so the same-length rows are
+       what a step-12-decided overload takes, and IDL_STRING_OR_DICT is the one of those with a string arm.
+
+       NAMED RESIDUAL. NOT COVERED: IDL_STRING_OR_DICT's string arm is a DOMString (§3.2.11) and this IDL writes
+       USVString (§3.2.12), so a lone surrogate in a queried name is not replaced with U+FFFD before the
+       comparison in js_cs_query. Every OTHER value resolves identically, because §3.6 step 12's clause chain
+       does not consult the arm's string kind. NEXT DIFF: a same-length row with a USVString arm in
+       core/idl_args.{c,h} — listed by idl_type_is_dictionary, answering idl_concolic_rule IDL_CONCOLIC_FORKS,
+       and NOT listed by idl_type_is_length_split, which is the one predicate that separates these two families;
+       that file has a live lane in it, so it is sequenced rather than raced. HOW ITS ABSENCE SHOWS:
+       `cookieStore.get('\uD800')` compares un-replaced surrogate bytes against the jar where a browser
+       compares U+FFFD, so a cookie actually named U+FFFD is not found. */
+    static const IdlArgType QUERY_ARGS[1] = { IDL_STRING_OR_DICT };
     const int NOPT = (int)(sizeof(COOKIE_STORE_GET_OPTIONS) / sizeof(COOKIE_STORE_GET_OPTIONS[0]));
     JSClassDef d = { "CookieStore" };
 
