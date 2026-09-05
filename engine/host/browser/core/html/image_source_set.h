@@ -73,10 +73,19 @@
  *
  * WHAT IS ABSENT AND IS NOT A HOLE, twice, because both look like skipped steps and neither is:
  *   - §4.8.4.3.9's "set el's dimension attribute source to child" is not STORED. It is a pure function of this
- *     walk — the child that matched, when that child has a `width` or `height` attribute, and `el` otherwise —
- *     and its only consumers are §4.8.3's `width` and `height`, which core/html/html_image.c declares ABSENT
- *     because their first branch is the element's rendered size. A stored copy of a derived fact is a second
- *     thing to keep in step; the day those members exist they take it from this walk.
+ *     walk — the child that matched, when that child has a `width` or `height` attribute, and `el` otherwise.
+ *     ITS CONSUMER IS NOT §4.8.3's `width` and `height`, which is what this header used to say and is wrong in
+ *     both halves: those two members are INSTALLED by core/html/html_image.c, and §4.8.3's determine the
+ *     dimensions never reads a dimension attribute source — the term does not occur in §4.8.3 at all. A reader
+ *     obeying the retired sentence would have wired this walk into an algorithm that has no operand for it.
+ *     THE CONSUMER IS HTML §15.4.3 "Attributes for embedded content and images", whose presentational hints
+ *     map "The width and height attributes on an img element's dimension attribute source" to the `width` and
+ *     `height` properties and to `aspect-ratio` — so what this walk owes is a fact about the RENDERING, and it
+ *     is answered in core/css/css_presentational_hints.c, which carries §15.3.2's and §15.3.8's hints and no
+ *     §15.4.3 mapping. Storing it before that mapping exists would be a field with no reader, which is the
+ *     mirror of the defect CLAUDE.md counts seven of. ITS ABSENCE SHOWS as `<picture>` whose selected
+ *     `<source>` carries `width`/`height`: the hint is taken from the `img` element, so the aspect-ratio
+ *     reserved before the image loads is the wrong one and the page reflows where a browser does not.
  *   - §4.8.4.3.13 "Reacting to environment changes" is a "may at any time" algorithm — a UA is not required to
  *     ever run it — and it is the SECOND caller of §4.8.4.3.7, not part of it. It belongs beside the resize
  *     steps that would trigger it, with the pending request half of §4.8.4.3.5 that it is written in terms of.

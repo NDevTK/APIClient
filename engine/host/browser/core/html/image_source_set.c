@@ -652,7 +652,15 @@ static bool iss_component_values(const char *text, size_t len, IssCvList *out)
    MEDIA QUERIES". So core/css/media_query.h's table is the answer and this file carries no second copy of it.
    FALSE for a unit that is not a `<length>` at all; a unit that IS one and that table cannot absolutize is a
    MISSING COMPONENT and crashes here, because reporting it as a refusal would turn one into a page's own parse
-   error. */
+   error.
+   THE GAP IS STANDING AND IS NOT A LIST, because the two entries answer DIFFERENT QUESTIONS.
+   `css_length_is_length_unit` is §6's `<length>` PRODUCTION — core/css/css_length.c admits every unit any
+   specification defines as one precisely so that one this engine cannot absolutize is a missing component
+   rather than a syntax error — while `mq_unit_px` is an ABSOLUTIZATION table. A production is necessarily
+   WIDER than a resolver, so this crash re-opens whenever a specification defines a new length unit, and a
+   census of today's difference written here would be wrong the moment somebody drained it. WHICH UNITS REACH
+   IT TODAY IS DERIVED AND NOT RECORDED: it is the set difference between `css_len_unit_known`'s families in
+   core/css/css_length.c and `mq_unit_px`'s rows in core/css/media_query.c, which two greps answer. */
 static bool iss_length_px(JSContext *ctx, double n, const char *unit, size_t unit_len, double *px)
 {
     if (media_query_length_px(ctx, n, unit, unit_len, px)) return true;
@@ -660,11 +668,22 @@ static bool iss_length_px(JSContext *ctx, double n, const char *unit, size_t uni
         DFAIL("a `sizes` attribute's `<source-size-value>` is a `<length>` in a unit core/css/media_query.c "
               "cannot absolutize. HTML §4.8.4.3 'Processing model' is explicit that a source size's units "
               "other than the viewport-relative ones 'must be interpreted the same as in Media Queries', "
-              "so this is that component's unit table and not a second one — and css-values-4 §6.1.1 "
-              "'Font-relative Lengths' and §6.1.2 'Viewport-relative Lengths' are the two families it "
-              "stops short of (the ten font METRICS beyond `em`/`rem`/`ex`/`ch`, and the `sv*`/`lv*`/`dv*` "
-              "and `vi`/`vb` viewport families). Reporting one as an author's mistake would turn a missing "
-              "component into a page's own parse error. Build it there, beside the table this asks");
+              "so this is that component's unit table and not a second one. WHICH units it stops short of is "
+              "the difference between `css_len_unit_known`'s families in core/css/css_length.c and "
+              "`mq_unit_px`'s rows in core/css/media_query.c — read those two rather than this sentence, "
+              "which cannot stay true as either moves. THE ONE CORRECTION THAT DERIVATION CANNOT MAKE FOR "
+              "ITSELF is that the gate admits THREE families and only TWO of them are css-values-4's. Each "
+              "citation below is written on ONE line so it can be grepped as one: "
+              "css-values-4 §6.1.1 'Font-relative Lengths'; "
+              "css-values-4 §6.1.2 'Viewport-percentage Lengths' — this said 'Viewport-relative Lengths', "
+              "which is no section's title at all: 'Viewport-relative' is §6.1.2.2's word, in 'The Various "
+              "Viewport-relative Units'; and "
+              "css-conditional-5 §7 'Container Relative Lengths', the third family, whose six units a reader "
+              "consulting css-values-4 alone will not find at all — and §7 already states their answer for a "
+              "`sizes` attribute, which has no query container: \"If no eligible query container is "
+              "available, then use the small viewport size for that axis.\" Reporting any of them as an "
+              "author's mistake would turn a missing component into a page's own parse error. Build it "
+              "there, beside the table this asks");
     return false;
 }
 
@@ -1162,10 +1181,9 @@ static void iss_update_source_set(JSContext *ctx, lxb_dom_element_t *el, ImageSo
 
         /* Step 5.9: "If child has WIDTH OR HEIGHT attributes, set el's DIMENSION ATTRIBUTE SOURCE to child.
            Otherwise, set el's dimension attribute source to el."
-           NOT STORED, and image_source_set.h says why: it is a pure function of this walk, its only consumers
-           are §4.8.3's `width` and `height` — which core/html/html_image.c declares ABSENT because their first
-           branch is the element's rendered size — and a stored copy of a derived fact is a second thing to
-           keep in step. The day those members exist they take it from here. */
+           NOT STORED, and image_source_set.h says why: it is a pure function of this walk, and its consumer is
+           HTML §15.4.3's presentational hints rather than §4.8.3's `width` and `height` — which are installed
+           and do not read it. Storing it before that mapping exists would be a field with no reader. */
 
         /* THE SOURCE SIZE'S ONE CONSUMER AGAIN — see the same test in create-a-source-set. */
         if (!JS_IsUndefined(taint)) {

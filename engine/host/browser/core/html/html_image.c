@@ -964,9 +964,20 @@ static JSValue js_img_dimension(JSContext *ctx, JSValueConst this_val, int magic
                   "the alt text lays out into, which CSS 2.1 §9.4.2 \"Inline formatting contexts\" defines. THE "
                   "FONT IS NO LONGER THE MISSING OPERAND — core/layout/text_run.h measures a run's advance and "
                   "its break opportunities, and §10.3.5's shrink-to-fit is computed over them — what is missing "
-                  "is the EXTENT of the line boxes themselves, which is a greedy fill against each line's "
-                  "available width and is core/layout/line_box.c's own named crash. BUILD that fill; every "
-                  "text-sized replaced element in core/layout/replaced_element.c is waiting on the same one");
+                  "is NOT the fill, and this crash said it was for long enough to be worth naming: "
+                  "core/layout/line_box.c's `lb_fill` is built and has callers, and that file's own named "
+                  "crash is about a `wbr`'s SOFT WRAP OPPORTUNITY rather than the fill — it says in its own "
+                  "words that the fill 'already weighs every soft wrap opportunity in a run against each "
+                  "line's available width'. The EXTENT is built too: `line_box_inline_margin_span` reports "
+                  "where a non-replaced inline box's edges reach as an extreme over ALL its fragments, and "
+                  "it ASSERTS the non-replaced-inline precondition this arm has already established. WHAT "
+                  "IS ACTUALLY LEFT IS A DEFINITION, not machinery: 'rendered width' is used by §4.8.3 and "
+                  "defined by NOTHING — the term carries no `dfn` in §4.8.3, §4.8.4 or §15.4 — and CSS 2.1 "
+                  "§10.3.1 'Inline, non-replaced elements' gives this box no `width` for it to name, while "
+                  "§9.4.2 splits it into a SET of fragments so 'the' width is a choice among edges rather "
+                  "than a read. DECIDE which edge that term names, against real Chrome per CLAUDE.md's "
+                  "confirmation rule, and this member is one call. ITS ABSENCE SHOWS as this abort on "
+                  "`<img src=... alt=...>` whose request broke, in any rendered document");
         return element_view_length_long(ctx, used_value_content_px(el, vertical));
     }
     st = img_state(ctx, this_val);
