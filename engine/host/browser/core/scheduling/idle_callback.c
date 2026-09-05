@@ -291,6 +291,15 @@ static int idle_start_period(JSContext *ctx)
     for (i = 0; i < n; i++)                                       /* step 4, preserving order */
         ic_push(ctx, run, JS_GetPropertyUint32(ctx, pending, i));
     JS_SetPropertyStr(ctx, pending, "length", JS_NewUint32(ctx, 0));   /* step 5 */
+    /* THE RUNG ANSWERS 1, SO IT MUST HAVE CONSUMED SOMETHING. A source that reports progress it did not make
+       is a live-lock the scheduler cannot tell from progress — core/dom/document.c's lifecycle step says so in
+       those words — and this rung is asked whenever the running flow has nothing else to do, so a repeat costs
+       every other member of the frontier its turn. Step 5 emptying the pending list IS this arm's progress:
+       until a page requests again, idle_step_window cannot reach it a second time. */
+    DCHECK(ic_len(ctx, pending) == 0,
+           "§5.1 step 5 left entries in the list of idle request callbacks — the arm answers 1, and an arm that "
+           "reports progress without emptying that list is asked again at the very next dispatch with the same "
+           "state in front of it");
     JS_FreeValue(ctx, pending);
     JS_FreeValue(ctx, run);
     return 1;
@@ -327,8 +336,9 @@ static int idle_start_period(JSContext *ctx)
 static int idle_invoke_one(JSContext *ctx)
 {
     JSValue run = ic_list(ctx, g_atom_runnable), entry, cb, deadline;
+    uint32_t n_before = ic_len(ctx, run);
 
-    DCHECK(ic_len(ctx, run) > 0,
+    DCHECK(n_before > 0,
            "§5.2 was run for a Window whose list of runnable idle callbacks is empty — step 3's guard is asked "
            "by the rung above, so reaching here means the two disagree about one list");
     entry = JS_GetPropertyUint32(ctx, run, 0);                    /* step 3.1: "pop the top callback" */
@@ -341,6 +351,15 @@ static int idle_invoke_one(JSContext *ctx)
        resurrecting the one being run, and what makes §4.2 from inside a callback name the remaining entries
        rather than this one. */
     ic_remove_at(ctx, run, 0);
+    /* AND THIS ARM'S PROGRESS IS THE POP, for the reason step 5's is the clear — see idle_start_period. It is
+       what makes a callback that re-requests from inside itself ORDINARY rather than a live-lock: the entry it
+       adds goes to the PENDING list (§4.1 step 4), this entry is already gone, and the next visit finds a
+       shorter run list. A self-rescheduling idle callback then runs once per turn of the loop, for ever, which
+       is what the page asked for and is the same thing HTML §8.12's map does for a self-rescheduling
+       animation callback. */
+    DCHECK(ic_len(ctx, run) == n_before - 1,
+           "§5.2 step 3.1's pop did not shorten the list of runnable idle callbacks — the arm answers 1, so an "
+           "arm that leaves the list as it found it is re-entered with the same top entry at every dispatch");
     JS_FreeValue(ctx, entry);
     JS_FreeValue(ctx, run);
 
@@ -489,26 +508,31 @@ void idle_callback_install(JSContext *ctx, JSValueConst global)
     idle_deadline_install(ctx, global);
 }
 
-/* THE RUNTIME, NOT A REALM, and it is core/platform.c's release column that calls it — see core/platform.h. */
+/* THE RUNTIME, NOT A REALM, and it is core/platform.c's release column that calls it — see core/platform.h.
+   IT RELEASES BOTH INTERFACES, because this row declares both: §4.3's own references go back through
+   idle_deadline_free, and every HANDLE either file declared goes back through the one line at the end. */
 void idle_callback_free(JSRuntime *rt)
 {
     /* NOT `if (!g_ready) return;`. The release is the inverse of the DECLARATION and rides the same row of
        core/platform.c's one list, whose declare pass is unconditional — so reaching here undeclared is a host
        that tore this component down with something that is not the platform's one list. */
     DCHECK(g_ready, "§4 was released in an agent that never declared it");
-    g_ready = 0;
     /* THE HOOK IS GIVEN BACK, because solver/engine.c asserts a single claimant and a second agent in one
        process would otherwise find the slot still held by a runtime that is gone. */
     engine_set_idle_hook(NULL);
     idle_deadline_free(rt);
     /* The RECORDS are the realms' — each is released with its context, which is what the per-realm slot array
-       is for, and each flow's own entries go with the delta that holds them. */
+       is for, and each flow's own entries go with the delta that holds them. What this owns is the three
+       interned keys. */
     JS_FreeAtomRT(rt, g_atom_pending);
     JS_FreeAtomRT(rt, g_atom_runnable);
     JS_FreeAtomRT(rt, g_atom_next);
-    g_atom_pending = g_atom_runnable = g_atom_next = JS_ATOM_NULL;
-    g_slot = -1;
-    /* AND THE TWO MEMBER DECLARATIONS, which name entries in a pool idl_args_pool_free restarts at 0 and step
-       definitions registered with a runtime that is going away with them (core/agent_state.h). */
-    g_id_request = g_id_cancel = -1;
+    /* EVERY HANDLE THIS ROW DECLARED, GIVEN BACK FROM THE ONE LIST THAT ALREADY NAMES THEM — this file's three
+       interned keys, its realm slot, its two member declarations and its latch, AND idle_deadline.c's seven,
+       which are declared under this row's name for the reason stated there.
+       LAST, AND THAT ORDER IS THE CONTRACT (core/agent_state.h): the frees above and the assert at the top are
+       reading slots this nulls, so a release that undid first would be answering its own checks. It is called
+       BY this component rather than from core/platform.c's release column deliberately — a column that undid
+       every component automatically would leave agent_state_check_released nothing to catch. */
+    agent_state_undo("idle_callback");
 }

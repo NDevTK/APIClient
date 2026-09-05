@@ -192,13 +192,21 @@ void idle_deadline_init(JSContext *ctx)
     g_ready = 1;
     realm_declare_intrinsic(idle_deadline_install_proto);
 
-    agent_state_flag("idle_deadline", &g_ready, "the declaration latch");
-    agent_state_class("idle_deadline", &g_class, "§4.3's IdleDeadline class");
-    agent_state_value("idle_deadline", &g_state_key, "§4.3's associated-concept record key");
-    agent_state_atom("idle_deadline", &g_atom_state, "§4.3's record key, interned");
-    agent_state_atom("idle_deadline", &g_atom_deadline, "the record's `get deadline time` field name");
-    agent_state_atom("idle_deadline", &g_atom_timeout, "the record's §4.3 `timeout` field name");
-    agent_state_id("idle_deadline", &g_id_remaining, "§4.3's timeRemaining declaration");
+    /* UNDER `idle_callback`, WHICH IS core/platform.c's ROW NAME AND NOT THIS FILE'S. core/agent_state.h states
+       the rule at agent_state_undo — "it is core/platform.c's ROW name rather than the file's — for a
+       sub-component, the row whose release reaches it" — and this component has no row of its own by design:
+       §4.3's only producer is §5.2 step 3.2, so one row declares, installs and releases both interfaces.
+       DECLARING UNDER THE FILE'S OWN NAME WAS A REAL ABORT AND NOT A TIDINESS POINT. core/platform.c's
+       platform_check_agent_state walks every declaration and DFAILs on a component name its list has no row
+       for, so seven slots under `idle_deadline` stopped the agent before anything else could be checked — and
+       being first, it would have MASKED the missing reset below rather than merely adding to it. */
+    agent_state_flag("idle_callback", &g_ready, "§4.3's declaration latch");
+    agent_state_class("idle_callback", &g_class, "§4.3's IdleDeadline class");
+    agent_state_value("idle_callback", &g_state_key, "§4.3's associated-concept record key");
+    agent_state_atom("idle_callback", &g_atom_state, "§4.3's record key, interned");
+    agent_state_atom("idle_callback", &g_atom_deadline, "the record's `get deadline time` field name");
+    agent_state_atom("idle_callback", &g_atom_timeout, "the record's §4.3 `timeout` field name");
+    agent_state_id("idle_callback", &g_id_remaining, "§4.3's timeRemaining declaration");
 }
 
 void idle_deadline_install_proto(JSContext *ctx)
@@ -237,16 +245,22 @@ void idle_deadline_install(JSContext *ctx, JSValueConst global)
     JS_FreeValue(ctx, proto);
 }
 
+/* THE REFERENCES THIS COMPONENT HOLDS, GIVEN BACK — and ONLY those. Every HANDLE it declared is undone by the
+   one line at the end of idle_callback_free, out of the declarations themselves, because those declarations are
+   under that row's name; core/agent_state.h's agent_state_undo says why the two halves are split that way (only
+   the component knows whether a slot holds a JSValue, an atom or a class id, and only the registry can be
+   relied on to name all of them).
+   THAT SPLIT IS THIS FILE'S OWN INCIDENT. It reset six of its seven declared slots and left `g_class` — the one
+   handle with no reference to free beside it, so nothing in the body pointed at it — which
+   agent_state_check_released reports as a component that "reports itself built and whose every other handle is
+   null" in the NEXT agent of the process. The class id is not a process-lifetime handle to be kept: it names a
+   JS_NewClass registration in the runtime that is going away with it, and a second agent reading a non-zero
+   `g_class` would answer brand checks against a class of the dead runtime. */
 void idle_deadline_free(JSRuntime *rt)
 {
     DCHECK(g_ready, "§4.3 was released in an agent that never declared it");
-    g_ready = 0;
     JS_FreeValueRT(rt, g_state_key);
-    g_state_key = JS_UNDEFINED;
     JS_FreeAtomRT(rt, g_atom_state);
     JS_FreeAtomRT(rt, g_atom_deadline);
     JS_FreeAtomRT(rt, g_atom_timeout);
-    g_atom_state = g_atom_deadline = g_atom_timeout = JS_ATOM_NULL;
-    /* The member declaration names an entry in a pool idl_args_pool_free restarts at 0 (core/agent_state.h). */
-    g_id_remaining = -1;
 }
