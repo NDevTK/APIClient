@@ -3376,25 +3376,32 @@ static int wpt_child_main(int argc, char **argv)
        them to the ONE scheduler and steps it. What that deletes is a `while (JS_FlowResume)` per script — a
        drive-to-completion with the frontier bypassed, which is the one thing §scheduler forbids at every depth
        and which this host had at the very top of every program it ran.
-       AN EXTERNAL SCRIPT IS FETCHED INTO ITS OWN SLOT, in position, because classic scripts run in document
-       order and one that did not load is a script that runs nothing rather than one that moves the others up.
-       (The engine's own answer for an external script is the docscript park — the flow waits and the host
-       fills the shared slot — and this host will use it the moment its network edge can carry a REQUEST rather
-       than a URL; today's `fetch` seam names only the URL, which cannot say which POST body a corpus handler
-       is being asked to echo.) */
+       AN EXTERNAL SCRIPT IS LEFT AS AN EXTERNAL ROW — `(bodies[i] NULL, srcs[i] its address)`, which is what
+       core/loader/document_scripts.h declares such an entry IS ("external (srcs[i] is its URL, bodies[i] NULL
+       until the host supplies it)"). The flow parks on it, wpt_issue_pending below asks for it with the rest
+       of the frontier's pending list, and wpt_request_finish delivers a reply record carrying the STATUS — so
+       the document's own scripts go through §8.1.4.2 "Fetching scripts" exactly as the shipped host's do,
+       rather than past it.
+       WHAT THIS DELETED WAS A PRE-FETCH THAT MANUFACTURED A PROGRAM OUT OF AN ABSENCE. It read each address
+       with wpt_get and wrote `body ? body : strdup("")` into the slot — and wpt_get answers NULL for BOTH of
+       §8.1.4.2's failure members, a transport error and a status outside Fetch §2.2.3 "Statuses"' ok range
+       ("An ok status is a status in the range 200 to 299, inclusive"). So a `<script src>` this corpus server
+       answered 404 became an EMPTY PROGRAM: it compiled, it ran, it defined nothing, and §4.12.1.1
+       "Processing model"'s "execute the script element" reached step 8 — "If el's from an external file is
+       true, then fire an event named load at el" — where step 4, "If el's result is null, then fire an event
+       named error at el, and return", is the step the standard owes it. A test host that answers `load` where
+       a browser answers `error` does not merely miss a defect; it makes a fixture asserting `onerror` PASS
+       FOR THE WRONG REASON, which is worse than having no fixture. That default is CLAUDE.md's
+       §A-FIELD-A-CONSUMER-DEFAULTS at a seam: the `?:` turned "the producer produced nothing" into a
+       plausible datum, and the plausible datum was a program.
+       AND THE RESIDUAL THAT STOOD HERE NAMED A BLOCKER THIS HOST NO LONGER HAS. It said this host would use
+       the park "the moment its network edge can carry a REQUEST rather than a URL; today's `fetch` seam names
+       only the URL". engine_pending_split hands wpt_issue_pending a method, a destination, an initiator, a
+       provenance, a credentials mode and a URL, and that function puts every one of them back onto a
+       core/fetch/fetch.h request — headers and body included, out of `g_owed`, for a park that has a record.
+       A `<script src>` is Fetch §2.2.5 Requests' `GET` with no body at all (engine_pending_docscript says so
+       at the park), so the echoed-POST-body case the clause turned on cannot arise for this row. */
     ds = document_exec_scripts(g_wpt_dom);
-    {
-        int i;
-        for (i = 0; i < ds.n; i++) {
-            if (ds.bodies[i] || !ds.srcs[i]) continue;
-            {
-                size_t len = 0;
-                char *body = wpt_get(ds.srcs[i], &len);
-                ds.bodies[i] = body ? body : strdup("");
-                CHECK(ds.bodies[i] != NULL, "wpt: OOM loading a child document's external script");
-            }
-        }
-    }
     engine_sched_begin(ctx, ds.bodies, ds.srcs, ds.types, ds.els, ds.n, /*forking*/0, NULL);
     /* THE DOCUMENT RUNS BEFORE THE FIRST QUESTION ARRIVES, which is what makes a child a participant rather
        than an empty frame — message-opener.html's whole body is one script that posts to its opener, and that
@@ -3556,10 +3563,31 @@ int main(int argc, char **argv)
                that never asked for it must not be given one.
                AN EXTERNAL SCRIPT IS FETCHED INTO ITS OWN SLOT, in position, because classic scripts run in
                document order and one that did not load is a script that runs nothing rather than one that
-               moves the others up. (The engine's own answer for an external script is the docscript park —
-               the flow waits and the host fills the shared slot — and this host will use it the moment its
-               network edge can carry a REQUEST rather than a URL; today's seam names only the URL, which
-               cannot say which POST body a corpus handler is being asked to echo.) */
+               moves the others up.
+               NAMED RESIDUAL — THIS PATH DOES NOT GO THROUGH §8.1.4.2 AND THE CHILD PATH ABOVE NOW DOES.
+               WHAT IS NOT COVERED: the engine's own answer for an external script is the docscript park (the
+               flow waits, wpt_issue_pending asks, and the reply that arrives carries the STATUS §8.1.4.2's
+               "fetch a classic script" step 5.2 refuses on), and this loop pre-fetches instead — so a
+               `<script src>` this corpus server answers with a non-ok status is DROPPED from the sequence
+               below rather than run through §4.12.1.1 "Processing model"'s "execute the script element" step
+               4, "If el's result is null, then fire an event named error at el, and return". Dropping it is
+               narrower than that step and not a false success: the element takes no position and fires
+               NOTHING, so a corpus test asserting `onerror` fails rather than passing for the wrong reason.
+               The former default here was `strdup("")` and that WAS a false success; the child path's note
+               above records why.
+               WHAT THE NEXT DIFF BUILDS: this loop deleted the same way the child path's was, leaving each
+               external entry as document_scripts.h's `(bodies[i] NULL, srcs[i] its address)` row. It is a
+               separate diff and not this one because THE REPORT HOOK'S POSITION IS COMPUTED OVER THIS LIST —
+               wpt_insert_report searches `g_prog_names` for a program whose name ends `/resources/
+               testharness.js` and inserts the report immediately after it — so a path that parks instead of
+               pre-fetching contributes no name, the search finds nothing, and every html-mode file reports
+               its own "no testharness.js among this document's programs" instead of its subtests. That
+               position has to be derived from the DOCUMENT's script inventory before the sequence is built,
+               and doing both in one diff is the two-ends-of-a-seam scope this file has been wrong about
+               before. HOW ITS ABSENCE SHOWS: a corpus test that loads a script under a deliberate non-ok
+               status (wptserve's `?pipe=status(404)`) and asserts an `error` event at the element reports
+               that event never firing, in html mode only, while the same assertion passes in a child
+               document. */
             DocScripts ds = document_exec_scripts(g_wpt_dom);
             for (i = 0; i < ds.n; i++) {
                 /* AN INLINE `<script>` HAS NO ADDRESS — §4.12.1.1: "If el does not have a src content

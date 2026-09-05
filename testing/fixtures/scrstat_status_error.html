@@ -1,0 +1,72 @@
+<!doctype html><meta charset="utf-8"><title>script: a non-ok status fires error, not load</title>
+<!-- CONFORMANCE FIXTURE (kept, not a regression test): every assertion below is a SPEC-DEFINED OBSERVABLE of
+     an unmodified page, not an internal of any fix. Nothing here names a symbol, a file or a commit.
+
+     WHAT IT ASSERTS, and the two sections that say it.
+     HTML §8.1.4.2 "Fetching scripts", "fetch a classic script" step 5.2 opens "If any of the following are
+     true:" over a TWO-ITEM list — "bodyBytes is null or failure" and "response's status is not an ok status"
+     — and then "run onComplete given null, and abort these steps". (5.2's two disjuncts are items of a <ul>
+     INSIDE step 5.2, so the steps that follow are 5.3 potentialMIMETypeForEncoding, 5.4 encoding, 5.5
+     sourceText, 5.8 onComplete; counting the disjuncts as peers is what promotes every later number by one.)
+     Fetch §2.2.3 "Statuses" is the only definition of the second member: "An ok status is a status in the
+     range 200 to 299, inclusive."
+     A refused fetch therefore makes the element's result NULL, and HTML §4.12.1.1 "Processing model"'s
+     "execute the script element" is where a page sees it: step 4 is "If el's result is null, then fire an
+     event named error at el, and return", and step 8 — the one that is NOT reached — is "If el's from an
+     external file is true, then fire an event named load at el."
+     So a `<script src>` answered 404 owes its element an `error` and owes it NO `load`, and the response body
+     must never become a program. That is the whole of what this document is about, and it is what a page's
+     own `s.onerror = () => loadFrom(FALLBACK_CDN)` is written against.
+
+     THE ORACLE IS THE FIXTURE SERVER'S ACCESS LOG, which is evidence from OUTSIDE the engine: each handler
+     and each served body requests one distinctive path, and the server logs every request line before it
+     resolves a file. The observation paths do not exist on disk and answer 404; the REQUEST is the record,
+     not the reply. (`X9()` is not the instrument here — it records a finding only on an @S candidate flow,
+     which is a different question from whether a handler body ran.)
+
+     THE LOG HAS TWO AUTHORS AND `referer` IS WHAT TELLS THEM APART, which is the one thing a reader has to
+     know before counting a single line. Driving this document through testing/harness.js loads it TWICE: real
+     Chrome loads and runs it in the tab, and the extension's engine loads and runs it again through
+     `safeFetch`. Chrome sends a `Referer` on every subresource and every handler `fetch`; safeFetch sends
+     none. So a line whose referer is this document is CHROME — which makes the browser's own answer a control
+     sitting in the same log as the subject, at no cost — and a line with no referer is the ENGINE. The ONE
+     line the channel cannot attribute is this document itself: a top-level navigation carries no referer
+     either, so two of those lines are one Chrome load and one engine load.
+
+     THE CONTROL IS LOAD-BEARING AND IS WHY THE SECOND ELEMENT EXISTS. An engine that fired NO script events
+     at all would leave `scrstat-404-load.txt` absent, which is exactly what a correct refusal leaves — an
+     absent count and a zero count are different facts and must not be averaged. The control is the same
+     element shape at 200: its `load` firing is the positive statement that `<script>` load/error handlers
+     work in this run, so the 404 element's `error` and the absence of its `load` are then readings rather
+     than silence. The inline script at the top separates a third state again: a document that never ran.
+
+     STATUS IS CHOSEN WITH WPTSERVE'S OWN `status` PIPE (tools/wptserve/wptserve/pipes.py), so this document
+     asks for a status in the same query grammar the WPT corpus does. The body is served as
+     `application/javascript` either way: the refusal under test is over the STATUS alone — §8.1.4.2 says so
+     in its own words, "For historical reasons, this algorithm does not include MIME type checking".
+
+     EXPECTED (spec-correct) access log:
+       requested: scrstat-doc-parsed, scrstat-404-error, scrstat-ctl-load, scrstat-ctl-body-ran
+       ABSENT   : scrstat-404-load, scrstat-404-body-ran, scrstat-ctl-error
+     THE INVERSION TO WATCH FOR is `scrstat-404-body-ran` and `scrstat-404-load` together: that is the error
+     page compiled and run as this document's program, with the element told it succeeded.
+
+     WHERE THE CITATIONS ABOVE ARE ACTUALLY CHECKED, because it is not here. `engine/citegen.mjs` audits
+     `.c/.h/.md/.js/.mjs` and walks `engine/host`, `extension` and `engine/*.mjs`; an `.html` under `testing/`
+     is outside both, and pointing the tool at this file directly resolves its section numbers and compares
+     ZERO of its quotations — a silent zero, not a clean bill. So the load-bearing quotations are ALSO carried
+     by scrstat_bad.js and scrstat_ok.js beside this file, where `node engine/citegen.mjs testing/fixtures/
+     scrstat_bad.js testing/fixtures/scrstat_ok.js` compares and VERIFIES every one of them against the
+     committed corpus. If a quotation here is ever edited, edit it there too — that is the copy an instrument
+     can read. -->
+<script>fetch("/scrstat-doc-parsed.txt");</script>
+
+<!-- THE SUBJECT: an ok-typed, well-formed JavaScript body under a status §2.2.3 excludes. -->
+<script src="/scrstat_bad.js?pipe=status(404)"
+        onerror="fetch('/scrstat-404-error.txt')"
+        onload="fetch('/scrstat-404-load.txt')"></script>
+
+<!-- THE CONTROL: the identical element shape, same server, same content-type, ok status. -->
+<script src="/scrstat_ok.js"
+        onerror="fetch('/scrstat-ctl-error.txt')"
+        onload="fetch('/scrstat-ctl-load.txt')"></script>
