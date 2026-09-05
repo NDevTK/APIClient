@@ -94,9 +94,24 @@ export function blankComments(src) {
   /* SPLIT BY CODE UNIT, NOT BY CODE POINT. `Array.from` iterates CODE POINTS, so one astral character makes the
      array shorter than the string and every offset after it is wrong by the number of surrogate pairs seen so
      far — while `src[i]`, `src.indexOf` and every regex index are code-UNIT based. Three emoji in one comment
-     of one component shifted that file's whole tail by three, the comment blanking then ran from the wrong
-     place, and the file contributed ZERO placement sites to a run that reported no blind spot at all. That is
-     the shape this instrument's own controls exist to catch: an empty answer that is a fact about the parser. */
+     of one component were seen to coincide with that file contributing ZERO placement sites to a run reporting
+     no blind spot at all — an empty answer that is a fact about the parser, which is the shape this
+     instrument's own controls exist to catch.
+     THE CAUSAL STORY ABOVE IS NOT ESTABLISHED, AND SAYING SO IS THE POINT. Reverting this line to `Array.from`
+     does NOT make `after_astral` fail, and it still does not with the fixture's astral run widened six-fold —
+     checked on a copy, both arms, before this note was written. The reason is visible here: the astral
+     character sits INSIDE the comment being blanked, so it is overwritten in either spelling, and a uniform
+     shift of a string the parser thereafter reads on its own terms is not observable. So the emoji may have
+     been a coincidence and the zero may have had another cause.
+     THE LINE STAYS AS IT IS ON AN A-PRIORI ARGUMENT, WHICH IS THE HALF THAT DOES HOLD: `src[i]`, `src.indexOf`
+     and every regex index above are code-UNIT based, so the array they write through must be too — that is
+     true whether or not any file has ever tripped it. What is retired is the claim to have MEASURED the
+     failure. CLAUDE.md rates a correct conclusion reached by a wrong argument as worse than an open question,
+     because a reader who checks the argument finds it false and discards the conclusion with it.
+     WHAT WOULD CLOSE THIS: a control whose astral character sits OUTSIDE any comment or string, where the two
+     spellings genuinely disagree about what the blanked output contains. `after_astral` does not discriminate
+     and is a coverage row rather than a control until then. HOW ITS ABSENCE SHOWS: this line can be reverted
+     and every control still passes, which is what was observed. */
   const out = src.split("");
   let i = 0;
   const n = src.length;
