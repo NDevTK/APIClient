@@ -2381,34 +2381,24 @@ void url_install(JSContext *ctx, JSValueConst global)
     idl_install_method(ctx, ctor, "canParse",        g_url_static_id[URL_STATIC_CANPARSE]);
     idl_install_method(ctx, ctor, "createObjectURL", g_url_objurl_id[0]);
     idl_install_method(ctx, ctor, "revokeObjectURL", g_url_objurl_id[1]);
-    /* NAMED RESIDUAL — §3.7's PROPERTY ON THE GLOBAL IS STILL AN ORDINARY [[Set]].
+    /* NAMED RESIDUAL — §6.1's [LegacyWindowAlias] IS NOT INSTALLED.
      *
-     * WHAT IS NOT COVERED: Web IDL §3.7 Interfaces says of an exposed interface that "The name of the
-     * property is the identifier of the interface, and its value is an object called the interface object",
-     * and every implementation defines that property NON-ENUMERABLE — which is what WPT's idlharness asserts,
-     * quoting an edition of §3.7 that stated the descriptor in words ("The property has the attributes
-     * { [[Writable]]: true, [[Enumerable]]: false, [[Configurable]]: true }"; the 31 August 2026 edition this
-     * tree indexes states the property's existence and no longer states its attributes). `JS_SetPropertyStr`
-     * is an ordinary [[Set]] and creates a writable, enumerable, configurable property, so `URL` is
-     * enumerable on the global. Nor is §6.1's `LegacyWindowAlias=webkitURL` installed at all.
+     * WHAT IS NOT COVERED: URL §6.1 URL class declares `[Exposed=*, LegacyWindowAlias=webkitURL]`, and Web IDL
+     * §3.8 Platform objects implementing interfaces gives an alias the SAME interface object under a second
+     * identifier — its own step performs DefineMethodProperty over `interfaceObject` exactly as the one below
+     * does, so the two names share a value and `globalThis.webkitURL === globalThis.URL`. Only `URL` is
+     * defined here, so the alias is absent. The DESCRIPTOR half of this residual is gone: the call below is
+     * §3.8's one door, so `URL` is no longer enumerable and no longer bypasses §3.3.7 [Exposed] step 1.
      *
-     * IT IS A RESIDUAL AND NOT A ROUTING FAILURE, WHICH IS WHY IT IS WRITTEN DOWN RATHER THAN FIXED HERE.
-     * There is no installer to route to: `idl_install_interface_object_exposed` is for an interface with NO
-     * constructor — it MINTS its own §3.7.1 object over idl_illegal_ctor, so handing it URL's would replace a
-     * working `new URL()` with a TypeError — and its own body performs the same `JS_SetPropertyStr`, so both
-     * of its call sites carry this defect too. Spelling a descriptor at this line instead would be a second
-     * answer to a question 84 other sites in this engine ask.
+     * WHAT THE NEXT DIFF BUILDS: a second idl_define_global_property_reference call for "webkitURL" over a
+     * JS_DupValue of the same `ctor`, restricted to a Window global — the alias is Window-only where the
+     * interface is `*`, and browser/idl_exposure.h has no `webkitURL` row, so the gate inside the door
+     * answers `true` for it by the unknown-name arm rather than by the corpus. The corpus row is therefore
+     * part of that diff and not an afterthought; without it the alias would appear in every worker realm.
      *
-     * WHAT THE NEXT DIFF BUILDS: an entry in core/idl_args that DEFINES §3.7's property from an interface
-     * object its caller already built (the twin of idl_install_interface_object_exposed for a constructible
-     * interface), with §3.7's descriptor, plus its [LegacyWindowAlias] arm for the aliases §3.7 gives the
-     * same value; idl_install_interface_object_exposed is then that entry's mint plus that define, and this
-     * line and the 84 like it route to it.
-     *
-     * HOW ITS ABSENCE SHOWS: `url/idlharness.any.js` fails "URL interface: existence and properties of
-     * interface object" with `self's property "URL" should not be enumerable expected false got true`, and
-     * "URL interface: legacy window alias" with `webkitURL should exist expected true got false`. */
-    JS_SetPropertyStr(ctx, (JSValue)global, "URL", ctor);
+     * HOW ITS ABSENCE WOULD SHOW: `url/idlharness.any.js` fails "URL interface: legacy window alias" with
+     * `webkitURL should exist expected true got false`. */
+    idl_define_global_property_reference(ctx, global, "URL", ctor);
 }
 
 void url_free(JSContext *ctx)

@@ -3008,13 +3008,13 @@ void xhr_install(JSContext *ctx, JSValueConst global)
     DCHECK(g_ready, "XMLHttpRequest was installed before xhr_init declared it");
     proto = JS_GetClassProto(ctx, g_xhr_et_class);
     DCHECK(!JS_IsNull(proto), "XMLHttpRequest was installed into a realm that never ran its proto build");
-    JS_SetPropertyStr(ctx, (JSValue)global, "XMLHttpRequestEventTarget",
-                      idl_interface_object(ctx, "XMLHttpRequestEventTarget", proto));
+    idl_define_global_property_reference(ctx, global, "XMLHttpRequestEventTarget",
+                                        idl_interface_object(ctx, "XMLHttpRequestEventTarget", proto));
     JS_FreeValue(ctx, proto);
 
     proto = JS_GetClassProto(ctx, g_upload_class);
-    JS_SetPropertyStr(ctx, (JSValue)global, "XMLHttpRequestUpload",
-                      idl_interface_object(ctx, "XMLHttpRequestUpload", proto));
+    idl_define_global_property_reference(ctx, global, "XMLHttpRequestUpload",
+                                        idl_interface_object(ctx, "XMLHttpRequestUpload", proto));
     JS_FreeValue(ctx, proto);
 
     proto = JS_GetClassProto(ctx, g_xhr_class);
@@ -3024,7 +3024,7 @@ void xhr_install(JSContext *ctx, JSValueConst global)
                                (int)(sizeof(XHR_CONSTANTS) / sizeof(XHR_CONSTANTS[0])));
     JS_SetConstructor(ctx, ctor, proto);
     JS_FreeValue(ctx, proto);
-    JS_SetPropertyStr(ctx, (JSValue)global, "XMLHttpRequest", ctor);
+    idl_define_global_property_reference(ctx, global, "XMLHttpRequest", ctor);
 
     progress_event_install(ctx, global);
 }

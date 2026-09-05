@@ -1282,7 +1282,7 @@ void request_install(JSContext *ctx, JSValueConst global)
         JS_SetConstructor(ctx, ctor, proto);
         JS_FreeValue(ctx, proto);
     }
-    JS_SetPropertyStr(ctx, (JSValue)global, "Request", ctor);
+    idl_define_global_property_reference(ctx, global, "Request", ctor);
 }
 
 void request_free(JSContext *ctx)

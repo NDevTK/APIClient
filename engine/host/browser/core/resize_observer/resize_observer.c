@@ -986,7 +986,7 @@ void resize_observer_install(JSContext *ctx, JSValueConst global)
     DCHECK(!JS_IsNull(proto), "ResizeObserver was installed in a realm that never ran its prototype install");
     JS_SetConstructor(ctx, ctor, proto);
     JS_FreeValue(ctx, proto);
-    JS_SetPropertyStr(ctx, (JSValue)global, "ResizeObserver", ctor);
+    idl_define_global_property_reference(ctx, global, "ResizeObserver", ctor);
 }
 
 /* NONE OF THIS COMPONENT'S THREE CLASSES HAS A FINALIZER OR A gc_mark, which is why resetting the class ids is

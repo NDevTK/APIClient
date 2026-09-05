@@ -149,8 +149,8 @@ void resize_observer_size_install(JSContext *ctx, JSValueConst global)
 
     DCHECK(!JS_IsNull(proto),
            "ResizeObserverSize was installed in a realm that never ran its prototype install");
-    JS_SetPropertyStr(ctx, (JSValue)global, "ResizeObserverSize",
-                      idl_interface_object(ctx, "ResizeObserverSize", proto));
+    idl_define_global_property_reference(ctx, global, "ResizeObserverSize",
+                                        idl_interface_object(ctx, "ResizeObserverSize", proto));
     JS_FreeValue(ctx, proto);
 }
 
