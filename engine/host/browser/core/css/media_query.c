@@ -213,6 +213,7 @@ typedef struct {
     double dppx;
     double font_size;          /* css-values-4 §6.1.1's "initial values of the font ... properties" */
     double ascent;             /* CSS 2.1 §10.8.1's `A` at that size — core/css/font_metrics.h's picked face */
+    double line_height;        /* §6.1.1's `lh` base — the same clause's "line-height" half, `normal` resolved */
     int    color_bits;
 } MqEnv;
 
@@ -248,6 +249,33 @@ static void mq_env(JSContext *ctx, MqEnv *e)
        comparison below is a C `if`, and core/css/font_metrics.c is where the fact behind the number is minted
        for the readers that cross to a page. */
     e->ascent = font_metrics_ascent_px(ctx, css_px(e->font_size)).px;
+    /* §6.1.1's clause quoted above names TWO initial values, not one — "the initial values of the font AND
+       LINE-HEIGHT properties" — and the second is what `lh` is a multiple of. css-inline-3 §5.1 "Line Spacing:
+       the line-height property" gives `Initial: normal`, and §6.1.1 states the conversion for exactly that
+       keyword: `lh` is "equal to the computed value of the line-height property of the element on which it is
+       used, CONVERTING NORMAL TO AN ABSOLUTE LENGTH BY USING ONLY THE METRICS OF THE FIRST AVAILABLE FONT".
+       That is one number core/css/font_metrics.h already owns under CSS 2.1 §10.8.1's name for it, `AD`, and
+       it is READ here rather than re-derived for the reason the two lines above are: the ratio would then be
+       one fact in two places, and a page could read two different answers for `line-height: normal` through
+       `getComputedStyle` and through `1lh`. */
+    e->line_height = font_metrics_normal_line_height_px(ctx, css_px(e->font_size)).px;
+    /* THE ENVIRONMENT'S OWN INVARIANT, ASSERTED WHERE IT IS BORN. Every viewport-percentage and container
+       length below is a FRACTION of one of these two extents, so a NaN or a non-positive one does not fail
+       loudly there — it produces a plausible number that rides on as a concolic's EXAMPLE, which is strictly
+       worse than a crash because a fabricated example is what the forced-execution search then composes its
+       next candidate out of. core/frame/viewport.h answers a MODELLED rectangle — a picked size for the
+       top-level traversable, and a child navigable's own for an iframe — and states which spec rule fixes
+       each; both are positive by construction, and that header is where they are cited rather than here,
+       because a citation repeated is a citation that can go stale in two places. So a violation is this
+       engine's own geometry having lost an operand, not a fact about a page. */
+    DCHECK(e->width > 0.0 && e->width == e->width && e->width * 0.0 == 0.0,
+           "the modelled viewport reported a WIDTH that is not a finite positive number of CSS pixels. Every "
+           "css-values-4 §6.1.2 viewport-percentage length is a fraction of it, so a zero, a negative, a NaN "
+           "or an infinity here becomes a `100vw` this engine reports as a real measurement");
+    DCHECK(e->height > 0.0 && e->height == e->height && e->height * 0.0 == 0.0,
+           "the modelled viewport reported a HEIGHT that is not a finite positive number of CSS pixels. Every "
+           "css-values-4 §6.1.2 viewport-percentage length is a fraction of it, so a zero, a negative, a NaN "
+           "or an infinity here becomes a `100vh` this engine reports as a real measurement");
     /* §4.5: `color` is the bits per COLOUR COMPONENT of the output device. screen.c owns the depth. */
     e->color_bits = screen_color_depth() / 3;
 }
@@ -868,11 +896,111 @@ MediaQuerySet *media_query_parse_one(const char *text)
 
 /* ---- evaluation — MQ4 §3 and §4 ------------------------------------------------------------------------------ */
 
-/* A `<length>` in CSS pixels. css-values-4 §6.1.1's own last clause is why the font-relative units resolve
-   against the INITIAL value of `font-size` here and NOT against a computed one: a media query is evaluated
-   outside the context of an element, so there is no element whose `font-size` an `em` could be — "when used
-   outside the context of an element (such as in media queries), the font-relative lengths units refer to the
-   metrics corresponding to the initial values of the font and line-height properties".
+/* css-writing-modes-4 §6.1 "Abstract Dimensions"'s INLINE and BLOCK AXES, resolved to the PHYSICAL ones. §6.1
+   defines each relative to a writing mode — "inline axis: The axis in the inline dimension, i.e. the horizontal
+   axis in horizontal writing modes and the vertical axis in vertical writing modes", and the block axis is
+   "the axis in the block dimension, i.e. the vertical axis in horizontal writing modes and the horizontal axis
+   in vertical writing modes". WHICH writing mode is not a choice made here: a media query is evaluated OUTSIDE
+   THE CONTEXT OF AN ELEMENT, so there is no box whose `writing-mode` could be read and the property's initial
+   value applies — css-writing-modes-4 §3.2 "Block Flow Direction: the writing-mode property" gives
+   `Initial: horizontal-tb`, whose typographic mode is horizontal.
+   IT IS ONE FUNCTION rather than a `?:` at each reader because the abstract axes are asked for by BOTH families
+   below — css-values-4 §6.1.2.2's `vi` and `vb` in each of their four spellings, and CSS Conditional 5 §7's
+   `cqi` and `cqb` plus the pair §7 defines OVER them — so the day this engine models a vertical writing mode
+   there is one place that answers, and no two of those readers can disagree about it in the meantime. */
+typedef enum { MQ_AXIS_INLINE = 0, MQ_AXIS_BLOCK } MqAxis;
+
+static double mq_axis_size(MqAxis axis, const MqEnv *e)
+{
+    DCHECK(axis == MQ_AXIS_INLINE || axis == MQ_AXIS_BLOCK,
+           "css-writing-modes-4 §6.1's abstract dimensions were asked for an axis that is neither the inline "
+           "one nor the block one — §6.1 defines exactly that pair, so a third value is a caller that composed "
+           "an axis out of arithmetic instead of naming one");
+    return axis == MQ_AXIS_BLOCK ? e->height : e->width;
+}
+
+/* THE EXTENT ONE PERCENT IS TAKEN OF, for each of css-values-4 §6.1.2.2's six viewport-percentage unit names —
+   `u` is the name with §6.1.2.1's variant letter already stripped. FALSE for anything else, which is what makes
+   this a lookup the caller can ask about a candidate rather than a table it must first know the answer for.
+   §6.1.2.2 states each of the six in its own words and they are NOT one rule with six spellings: `*vw` and
+   `*vh` are "1% of the width" and "1% of the height"; `*vi` and `*vb` are "1% of the size ... in the box's
+   inline axis" and "... in the box's block axis", which is the abstract pair above and not the physical one;
+   and `*vmin` and `*vmax` are "the smaller of *vw or *vh" and "the larger of *vw or *vh" — THE WIDTH AND HEIGHT
+   PAIR, never the inline and block one. That last sentence is the whole reason §7's `cqmin` below cannot share
+   this function: §7 pairs its own minimum over `cqi` and `cqb` instead, so reading the two out of one table
+   would be four coincident spellings standing in for two different definitions. */
+static bool mq_viewport_extent(const char *u, const MqEnv *e, double *extent)
+{
+    if (!strcmp(u, "vw"))   { *extent = e->width;  return true; }
+    if (!strcmp(u, "vh"))   { *extent = e->height; return true; }
+    if (!strcmp(u, "vi"))   { *extent = mq_axis_size(MQ_AXIS_INLINE, e); return true; }
+    if (!strcmp(u, "vb"))   { *extent = mq_axis_size(MQ_AXIS_BLOCK, e);  return true; }
+    if (!strcmp(u, "vmin")) { *extent = e->width < e->height ? e->width : e->height; return true; }
+    if (!strcmp(u, "vmax")) { *extent = e->width > e->height ? e->width : e->height; return true; }
+    return false;
+}
+
+/* THE EXTENT ONE PERCENT IS TAKEN OF, for each of CSS Conditional 5 §7 "Container Relative Lengths"'s six
+   units. §7 states what one is worth in two sentences and this engine reaches only the second of them: "The
+   query container for each axis is the nearest ancestor container that accepts container size queries on that
+   axis. If no eligible query container is available, then use the small viewport size for that axis."
+   THERE IS NO ELIGIBLE QUERY CONTAINER IN THIS ENGINE AND THE FALLBACK IS THEREFORE THE WHOLE ANSWER, not an
+   approximation of one. §5.1 "Creating Query Containers: the container-type property" is what makes an element
+   a query container, and `container-type` is not a property this engine cascades at all — `@container` reaches
+   core/css/css_at_rule_prelude.c as a PRELUDE and core/css/css_rule.c as a CSSOM `CSSContainerRule`, and
+   neither of those makes any element answer a size query. So §7's antecedent holds for every element there is.
+   NAMED RESIDUAL — the code is correct and NARROWER than §7, so there is nothing here to crash on:
+     NOT COVERED: a `1cqw` inside an element that IS a query container, which must be 1% of THAT element's
+       width and not of the viewport.
+     THE NEXT DIFF BUILDS: `container-type` as a cascaded property and the nearest-ancestor-container walk
+       §7's first sentence names, which is §5.1's machinery and a component of its own. Grep
+       `"container-type"` across core/css before building it — the day that returns a property table row
+       rather than the two prose hits above, this function has become a silent wrong answer.
+     ITS ABSENCE WOULD SHOW as `@container (inline-size >= 400px) { .card { width: 50cqw } }` computing 50% of
+       the VIEWPORT for a card inside a 400-pixel container — a number that is plausible, never crashes, and
+       is wrong by whatever ratio the container bears to the viewport.
+   AND THE SMALL VIEWPORT SIZE IS THIS RECTANGLE, for the reason the `sv*` arm below rests on and stated once
+   there rather than twice. */
+static bool mq_container_extent(const char *u, const MqEnv *e, double *extent)
+{
+    double inl = mq_axis_size(MQ_AXIS_INLINE, e), blk = mq_axis_size(MQ_AXIS_BLOCK, e);
+
+    if (!strcmp(u, "cqw")) { *extent = e->width;  return true; }   /* §7: "1% of a query container's width"  */
+    if (!strcmp(u, "cqh")) { *extent = e->height; return true; }   /* §7: "1% of a query container's height" */
+    if (!strcmp(u, "cqi")) { *extent = inl; return true; }         /* §7: "... inline size" */
+    if (!strcmp(u, "cqb")) { *extent = blk; return true; }         /* §7: "... block size"  */
+    /* §7's own table: `cqmin` is "The smaller value of cqi or cqb" and `cqmax` "The larger value of cqi or
+       cqb" — the INLINE and BLOCK pair, which is the pairing §6.1.2.2 does NOT use for `vmin`/`vmax`. */
+    if (!strcmp(u, "cqmin")) { *extent = inl < blk ? inl : blk; return true; }
+    if (!strcmp(u, "cqmax")) { *extent = inl > blk ? inl : blk; return true; }
+    return false;
+}
+
+/* A `<length>` in CSS pixels — css-values-4 §6's three families and CSS Conditional 5 §7's, over the modelled
+   environment above.
+   THIS IS AN ABSOLUTIZATION TABLE AND `css_length_is_length_unit` IS §6's `<length>` PRODUCTION. They answer
+   different questions and the production is necessarily the wider one: it admits every unit any specification
+   defines as a length precisely so that one this engine cannot absolutize is a MISSING COMPONENT rather than a
+   syntax error. So the two sets part again the day a specification defines a new length unit, and a census of
+   today's difference written here would be wrong the moment somebody drained it. WHAT THE DIFFERENCE IS IS
+   DERIVED, and one command lists each side. `grep -o 'strcmp(u, "[a-z]*")' core/css/media_query.c` is THIS
+   side — the rows of this function and of the two family helpers above, of which `mq_viewport_extent`'s six
+   each stand for four spellings under §6.1.2.1's variant letter. `css_len_unit_known`'s four tables in
+   core/css/css_length.c are the other — `CSS_ABSOLUTE`, `CSS_FONT_RELATIVE`, `CSS_VIEWPORT_RELATIVE` under
+   that same variant-letter rule, and `CSS_CONTAINER_RELATIVE`. Count with `grep -o`, never with `grep -c`,
+   which counts LINES and answers a smaller number than there are rows.
+   WHAT REACHES `*ok = false` IS THEREFORE NOT A LENGTH AT ALL: `value_ok` admits every DIMENSION for a
+   `<length>` feature, so `(min-width: 3deg)` arrives here and leaves through that arm, which `eval_feature`
+   turns into MQ_FALSE. A unit that IS a `<length>` and has no row is a missing component and is the crash
+   core/html/image_source_set.c states, in the one place a `sizes` attribute can distinguish the two.
+   §6.1.1'S OWN LAST CLAUSE IS WHY THE FONT-RELATIVE UNITS RESOLVE AGAINST INITIAL VALUES and not computed
+   ones: a media query is evaluated outside the context of an element, so there is no element whose `font-size`
+   an `em` could be — "when used outside the context of an element (such as in media queries), the font-relative
+   lengths units refer to the metrics corresponding to the initial values of the font and line-height
+   properties". The `r`-prefixed twins are the same numbers by the SENTENCE THAT FOLLOWS that one, rather than
+   by an entailment this file draws for itself: "Similarly, when specified in a document with no root element,
+   the root font-relative lengths are resolved assuming the initial values of the font and line-height
+   properties."
    THE METRIC RATIOS ARE READ FROM core/css/font_metrics.h AND ARE NOT WRITTEN HERE. They used to be two
    literal halves with §6.1.1's two sentences quoted beside them, which is the same fact answered from two
    places that css_length.h opens by naming and that core/css/font_size_functions.h was created to end for the
@@ -880,24 +1008,26 @@ MediaQuerySet *media_query_parse_one(const char *text)
    copy is what would go on being wrong"). The initial `writing-mode` is `horizontal-tb`, which css-writing-
    modes-4 §5.1 "Orienting Text: the text-orientation property" makes a horizontal typographic mode — the
    property "has no effect in horizontal typographic modes" — so both advance measures below are taken in the
-   HORIZONTAL direction and no orientation has to be resolved to know it; the `r`-prefixed twins are the same
-   numbers because a document with no element has no root element either, which is the case §6.1.1 gives the
-   initial values to.
-   A §6 LENGTH UNIT WITH NO ROW HERE MAKES THE FEATURE EVALUATE FALSE rather than crashing, and that is a
-   DIVERGENCE from core/css/css_length.c, which crashes for the same units. The set is exactly the same one:
-   `vi`/`vb` (an inline axis) and the `sv*`/`lv*`/`dv*` families (three viewport sizes that are three separate
-   facts). `value_ok` admits every DIMENSION for a `<length>` feature, so those reach this table and leave
-   through `*ok = false`. `lh`/`rlh` is NOT among them and is absent here for a reason of its own: §6.1.1
-   resolves it against a computed `line-height`, and outside the context of an element there is none to read —
-   the initial value applies, which is `normal`, which is CSS 2.1 §10.8.1's `AD` at the initial font size. That
-   is one row core/css/font_metrics.h can already answer, and it is left for the turn that has a caller asking
-   for it rather than added here on the strength of the arithmetic being easy.
+   HORIZONTAL direction and no orientation has to be resolved to know it.
+   THIS TABLE ANSWERS THE VIEWPORT VARIANTS AND THE CONTAINER UNITS WHERE core/css/css_length.c's
+   `css_len_unit_px` CRASHES FOR THEM, AND THAT IS NOT ONE OF THE TWO BEING BEHIND — the two seams differ in
+   what the number they produce CARRIES. Here the answer is an EXAMPLE consumed by a C `if`, and the fork is
+   minted below by `mq_source`, which keys a query list's answer on its OWN SERIALIZATION — the unit text
+   included, because `out_value` writes a dimension's unit into it. So `(min-height: 100dvh)` and
+   `(min-height: 100lvh)` are two source keys, two predicates and two independent forks, and a flow that pinned
+   one has said nothing that could decide the other: the arm where the dynamic and large viewport sizes differ
+   survives answering both from one rectangle. In the COMPUTED-VALUE chain it does not — a length crosses to the
+   page there through `viewport_env_derived`'s JOINT over `CssEnvFact`s, where all four spellings would carry
+   the one ICB fact — and that is what that file's own crash is about and why it must be answered THERE, by
+   giving §6.1.2.1's three viewport sizes their own picked facts, rather than by copying these rows across.
    THE TABLE IS SPLIT FROM THE `MqValue` WALK because it has a SECOND caller with no MqValue to hand it, and
    that caller's rule is HTML §4.8.4.3 "Processing model" in one sentence: a source size's units other than the
    viewport-relative ones "must be interpreted THE SAME AS IN MEDIA QUERIES". So `media_query_length_px` below
    is this same table asked from outside, and not a copy of it — the copy is what would go on being wrong. */
 static double mq_unit_px(const char *u, double n, const MqEnv *e, bool *ok)
 {
+    double extent = 0.0;
+
     *ok = true;
     if (!strcmp(u, "px")) return n;
     if (!strcmp(u, "em") || !strcmp(u, "rem")) return n * e->font_size;
@@ -922,10 +1052,30 @@ static double mq_unit_px(const char *u, double n, const MqEnv *e, bool *ok)
     if (!strcmp(u, "in")) return n * 96.0;
     if (!strcmp(u, "pt")) return n * 96.0 / 72.0;
     if (!strcmp(u, "pc")) return n * 16.0;
-    if (!strcmp(u, "vw")) return n * e->width / 100.0;
-    if (!strcmp(u, "vh")) return n * e->height / 100.0;
-    if (!strcmp(u, "vmin")) return n * (e->width < e->height ? e->width : e->height) / 100.0;
-    if (!strcmp(u, "vmax")) return n * (e->width > e->height ? e->width : e->height) / 100.0;
+    /* §6.1.1's twelfth pair, on the base the clause above resolves for it — `line-height: normal` at the
+       initial `font-size`, which `mq_env` reads from the one component that owns CSS 2.1 §10.8.1's `AD`. */
+    if (!strcmp(u, "lh") || !strcmp(u, "rlh")) return n * e->line_height;
+    /* §6.1.2.1's FOUR VARIANTS, resolved by stripping the one letter that names WHICH of its three viewport
+       sizes the unit is a percentage of. The strip is the spec's own naming rule and not a coincidence of
+       spelling: §6.1.2.1 introduces the `lv*`, `sv*` and `dv*` prefixes as the large, small and dynamic
+       families of the same six names, and §6.1.2.2 then writes every definition once over a `*` standing for
+       all four. Tabulating them a second time is what would let one spelling fall out of step.
+       ALL FOUR ANSWER THE ONE MODELLED RECTANGLE, AND THAT IS §6.1.2.1's OWN ARM RATHER THAN A ROUNDING OF IT.
+       It opens by saying there are "four variants of the viewport-percentage length units, corresponding to
+       three (possibly identical) notions of the viewport size", and it then defines the three by what they
+       assume about ONE thing: the large size assumes "any UA interfaces that are dynamically expanded and
+       retracted to be retracted", the small size assumes them "to be expanded", and the dynamic size is "sized
+       with dynamic consideration of" them. core/frame/viewport.h models one viewport and NO dynamically
+       expanded and retracted interface, so the three antecedents are satisfied by the same rectangle and
+       "possibly identical" is the case this engine is in. It is also what CSS Conditional 5 §7's fallback
+       above asks for by name — §7 wants "the small viewport size for that axis", which is this rectangle by
+       this same paragraph, so the coincidence is stated here once and read there rather than argued twice.
+       WHAT MAKES THIS SAFE FOR THE SEARCH rather than a collapsed fork is the source key, which is the
+       serialized query and not the viewport: see the note above this function. */
+    if ((u[0] == 's' || u[0] == 'l' || u[0] == 'd') && mq_viewport_extent(u + 1, e, &extent))
+        return n * extent / 100.0;
+    if (mq_viewport_extent(u, e, &extent)) return n * extent / 100.0;
+    if (mq_container_extent(u, e, &extent)) return n * extent / 100.0;
     *ok = false;
     return 0;
 }

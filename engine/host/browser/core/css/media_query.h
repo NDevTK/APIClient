@@ -80,13 +80,18 @@ MediaQuerySet *media_query_parse_one(const char *text);
    second code path. */
 MediaQuerySet *media_query_parse_condition(const char *text);
 
-/* MQ4 §4's `<length>` in CSS pixels, over a DIMENSION's own number and unit — §6.2's absolute units, §6.1.1's
-   font-relative ones resolved against the INITIAL `font-size` (which §6.1.1 itself prescribes outside the
-   context of an element), and §6.1.2's viewport-percentage ones against THIS realm's viewport. FALSE for a unit
-   this table does not resolve, which is a strictly smaller set than css_length.h's `<length>` units — a caller
-   that has to tell "not a length" from "a length this engine cannot absolutize yet" asks
-   `css_length_is_length_unit` for the difference, because reporting the second as the first turns a missing
-   component into the page's own parse error.
+/* MQ4 §4's `<length>` in CSS pixels, over a DIMENSION's own number and unit — css-values-4 §6.2's absolute
+   units, §6.1.1's font-relative ones resolved against the INITIAL values §6.1.1 itself prescribes outside the
+   context of an element, §6.1.2's viewport-percentage ones in all four of §6.1.2.1's spellings against THIS
+   realm's viewport, and CSS Conditional 5 §7's container-relative ones through §7's own no-eligible-container
+   fallback. FALSE for a unit this table does not resolve.
+   THAT SET IS NOT THE SAME QUESTION AS `css_length_is_length_unit`, WHICH IS §6's `<length>` PRODUCTION, and a
+   production is necessarily the wider of the two: it admits every unit any specification defines as a length
+   precisely so that one this engine cannot absolutize is a MISSING COMPONENT and not a syntax error. So the
+   two part again the day a specification defines a new unit, and a caller that has to tell "not a length" from
+   "a length this engine cannot absolutize yet" asks `css_length_is_length_unit` for the difference — reporting
+   the second as the first turns a missing component into the page's own parse error. What the difference IS at
+   any revision is derived rather than recorded; media_query.c states the two commands beside the table.
    IT IS EXPORTED FOR HTML §4.8.4.3 "Processing model", which states in one sentence that a source size's units
    "must be interpreted the same as in Media Queries" — so core/html/image_source_set.c asks this table rather
    than carrying a second copy of it. `unit_len` 0 is css-values-4 §6's UNITLESS case, which is a `<length>`
