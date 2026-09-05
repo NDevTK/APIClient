@@ -33,7 +33,7 @@ void fetch_free(JSRuntime *rt);
    always needed them to satisfy a real request through the trusted zone. `headers` is the request's own list,
    borrowed; `body`/`body_len` are its bytes, NULL for a request that has none. */
 /* …AND ITS DESTINATION, WHICH IS WHAT THE BYTES ARE FOR. Fetch §2.2.5 "Requests": "A request has an associated
-   destination, which is a destination type. Unless stated otherwise it is the empty string", the type being one
+   destination, which is destination type. Unless stated otherwise it is the empty string", the type being one
    of "", "audio", "audioworklet", "document", "embed", "font", "frame", "iframe", "image", "json", "manifest",
    "object", "paintworklet", "report", "script", "serviceworker", "sharedworker", "style", "text", "track",
    "video", "webidentity", "worker" or "xslt". It is as much a part of the request as the METHOD is, and it is
@@ -127,27 +127,54 @@ typedef struct {
        §2.5.4 "CORS settings attributes"' CORS settings attribute credentials mode answers it for a
        `modulepreload`, XHR §3.5.6 "The send() method" answers it from `withCredentials`, and Fetch §5.4
        "Request class" answers it from `RequestInit`. Those five do not agree — §2.5.1 and §2.5.4 give the No
-       CORS state OPPOSITE answers, which is §2.5.4's own "repurposed to have a slightly different meaning" —
-       so there is no value this record could carry by default that is right for more than one of them.
-       RESIDUAL — CORRECT AND NARROWER, NAMED RATHER THAN CRASHED ON, because every producer that reaches
-       `fetch_owe` states the mode its own algorithm names and there is no case at that seam to abort on.
-       WHAT IS NOT COVERED: the field is stated on the request and does not yet reach the party that decides
-       from it. A park carries `method`, `url`, `destination`, `headers` and `body` onto the pending line and
-       the trusted zone reads them there; the credentials mode has no slot on that line, so the ONLY seam
-       whose credentials mode reaches the zone today is XMLHttpRequest's synchronous host request, whose
-       record is JSON and states it as a member. WHAT THE NEXT DIFF BUILDS: the field on the pending line
-       beside the destination, carried through the split every host performs on that line and read by
-       `extension/lib/safe-fetch.js`'s caller in `bridge.js` — which already speaks these three words on the
-       XHR route and DCHECKs them there. HOW ITS ABSENCE WOULD SHOW: a `<link rel=preload>` and an `<img>`
-       state `include` here and reach the zone with nothing, so a same-origin resource a browser fetches with
-       cookies is fetched without them and a personalised body is learned as the logged-out one.
-       AND TWO PARKS DO NOT PASS THIS SEAM AT ALL, which is the other half of the same residual: a dynamic
-       `import()` and an INJECTED `<script src>` build their own record and reach the park directly rather
-       than through `fetch_owe`, so they carry the unplaced zero and no assert here can see them. Their mode
-       is HTML §4.12.1 "The script element"'s — the CORS settings attribute credentials mode of the element's
-       `crossorigin` content attribute for the injected script, and the referencing script's fetch options for
-       the `import()`. HOW THAT HALF WOULD SHOW: a `<script crossorigin=use-credentials src>` chunk loads
-       uncredentialed the day the field reaches the wire, which is the population @S reaches most. */
+       CORS state OPPOSITE answers, `include` against `same-origin`, which is HTML §2.5.4's own "repurposed
+       to have a slightly different meaning" — so there is no value this record could carry by default that
+       is right for more than one of them. THAT DISAGREEMENT IS WHY `_UNPLACED` EXISTS and why nothing writes
+       §2.2.5's `same-origin` in its place: it is a fact about the standards and it does not expire, so a
+       reader who reaches for a default is re-deriving a question these five algorithms already answered
+       differently.
+
+       AND IT REACHES THE PARTY THAT DECIDES FROM IT. That is the rule now, and it is written here because
+       the absence it replaced is the kind a reader re-derives: the field was stated on this record for
+       several commits while stopping short of the wire, and the sentence describing that gap outlived it.
+       A STATED MODE LEAVES THIS RECORD BY EXACTLY TWO DOORS AND THERE IS NO THIRD — `fetch_owe`
+       (core/fetch/fetch.c), which every browser component that owes the host a request reaches, and
+       `pending_park_request` (solver/engine.c), where the parks that build their own record arrive. BOTH
+       REFUSE THE ZERO, one with the producing component still on the stack and one at the consumer, and the
+       wire spelling is `fetch_credentials_token`'s alone and is FATAL on `_UNPLACED` in release too — so the
+       token that crosses the seam is one of §2.2.5's three or the program is already dead. On the far side
+       it stays a STATEMENT about what the request IS and never a decision about what that zone will DO:
+       `extension/lib/safe-fetch.js` composes it with its own willingness to spend the person's session, and
+       the composition can only ever NARROW, because there is no arm on which a mode stated in this engine
+       turns credentials ON. That asymmetry is the whole licence for the field living here at all — an engine
+       that could turn them on would be holding the network policy SECURITY.md puts in one zone — and it is
+       why carrying the token took no new decision at any call site.
+
+       THE RESIDUAL THAT STOOD HERE IS RETIRED AND ITS `WHAT THE NEXT DIFF BUILDS` CLAUSE WAS WRONG, WHICH IS
+       THE PART WORTH KEEPING. CLAUDE.md rates that clause a HYPOTHESIS about this tree written by someone who
+       knew what was missing and was guessing at what fills it, and says that where it disagrees with what the
+       code needed it is nearly always the clause that yields; this is a worked example in three ways at once.
+       It named the WRONG READER — the field would be "read by `extension/lib/safe-fetch.js`'s caller in
+       `bridge.js`" — and the bridge only RELAYS, because that zone's willingness is ONE BIT while §2.2.5's
+       domain has THREE members, so what was actually owed was a COMPOSITION and a decision about which end
+       gives. Collapsing three to one in THIS engine would have made it answer "is this address same-origin
+       with the page principal", the SOP question SECURITY.md gives to the trusted zone and to nothing else,
+       and no reading of the clause contains that. It named a MODEL THAT DOES NOT HOLD: the XHR route it
+       pointed at as already speaking these three words speaks TWO and is fatal on the third — correctly, since
+       XHR §3.5.6 "The send() method" computes only `include` and `same-origin` — and the third, `omit`, is the
+       one value on which the new path's only new capability, REFUSAL, depends, so a reader copying that model
+       would have built a relay that aborts on the value it was built to carry. And its ENUMERATION WAS SHORT:
+       it said TWO parks build their own record, and there were THREE at the very revision that wrote it, the
+       document's own external `<script src>` being the one no sentence named. The structural fact that would
+       have predicted it, and that does not rot, is that a park building its own record is any park whose
+       reply is a PROGRAM — so the population is the script-bearing kinds and never a list of two.
+       ITS CITATION WAS MIS-AIMED TOO, on the one axis a quotation check is blind to by construction: it put
+       the parks' mode at HTML §4.12.1 "The script element", whose number and title are each exactly right and
+       which does not hold the step. HTML §4.12.1.1 "Processing model" does — "Let module script credentials
+       mode be the CORS settings attribute credentials mode for el's crossorigin content attribute" — and a
+       dynamic `import()` inherits it unchanged through HTML §8.1.4.2 "Fetching scripts"' get the descendant
+       script fetch options. A correctly-numbered, correctly-titled citation of a section that does not GOVERN
+       is the one every instrument here confirms and only a reader can catch. */
     FetchCredentialsMode credentials;
 } FetchRequest;
 
