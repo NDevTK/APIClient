@@ -963,6 +963,79 @@ function _urlList(requested, finalHref, redirected) {
   return redirected ? [requested, finalHref] : [requested];
 }
 
+/* §5.3's BODY, READ AS THE SEQUENCE OF CHUNKS IT ARRIVES IN RATHER THAN AS ONE AWAIT — and the reason is the
+   gate ladder above it rather than a preference about how bytes are moved. This was
+   `new Uint8Array(await resp.arrayBuffer())`, which is Fetch §5.3 "Body mixin"'s consume-body run to
+   completion, and that is the DEGENERATE CASE of this loop: every chunk is accumulated and the assembled
+   sequence is byte-identical, so every gate below and every caller reads exactly what it read before. What
+   changes is that the SEAM EXISTS. An incremental delivery — a `text/event-stream` that never ends, a
+   progressive `responseText`, a `ReadableStream` off a `fetch` body — is this loop with a sink inside it, and
+   the whole of what makes that admissible is WHERE the loop sits: BELOW every gate that reads the response
+   HEAD and ABOVE the one gate that reads the BODY.
+
+   WHICH GATES READ WHICH, BECAUSE A LATER DIFF RESTS ON IT AND IT IS STATED NOWHERE ELSE. The scheme
+   allowlist, both private-host checks (initial and post-redirect), both destructive-path checks, both
+   provenance refusals and the credentialed SOP all read the REQUEST or the response HEAD — the header map and
+   the landed URL — and every one of them has already run by the time this is called. EXACTLY ONE gate reads
+   the body, and it is CORB, scoped to `_isScriptLike` of the request's destination.
+
+   SO A CHUNK RELEASED FROM INSIDE THIS LOOP HAS NOT PASSED CORB, AND THAT IS A DIFFERENT DECISION RATHER THAN
+   A WEAKER ONE. `_sniff` answers over the first 4096 bytes and then, where that prefix will not parse, over
+   the WHOLE body — and the second arm is the one that classifies most real JSON, because a JSON document
+   longer than 4096 bytes fails the prefix parse by construction. A first-chunk sniff cannot reach that arm at
+   all, and the arm it does reach answers `protected: false`, which is CORB's ALLOW arm and `_computedType`'s
+   empty string. The classification therefore does not degrade loudly: it degrades toward admitting a
+   cross-origin data body into a code loader, and toward a record stating that the resource has no type. A
+   script-like destination is not streamable, and the sink a later diff puts in this loop is owed that refusal
+   rather than a partial answer to a question CORB asks of the whole resource.
+
+   AND `computedType` IS THE ONE HEAD FIELD THAT IS BODY-DERIVED, which is the other half of the same fact.
+   `status`, `statusText`, the header map and the URL list are all answerable the instant `fetch` returns; the
+   computed type is the sniff's, so a head delivered before its body cannot carry one. That is a fact about
+   this record rather than about this loop, and it is written here because this is where the two halves part.
+
+   THE CHUNKS ARE FOREIGN OBJECTS AND ARE NEVER `instanceof`-TESTED. `engine/trusted.mjs` runs this file in a
+   vm context whose `fetch` is the OUTER realm's, so a chunk this reader yields is that realm's `Uint8Array`
+   and not this one's — the same cross-realm question that file already names about values travelling the
+   other way. `%TypedArray%.prototype.set` is an internal-slot check rather than a realm check, so the
+   accumulation is realm-agnostic, while an `instanceof` here would answer false for a perfectly good chunk. */
+async function _readBody(resp) {
+  /* A RESPONSE WITH NO BODY IS NOT AN EMPTY ONE, AND THE PLATFORM STATES WHICH THIS IS. Fetch §5.3 "Body
+     mixin" — "The body getter steps are to return null" where there is none — and §2.2.3 "Statuses" says when
+     that arises: "A null body status is a status that is 101, 103, 204, 205, or 304." There is no reader to
+     take, and the `arrayBuffer()` this replaces answered a zero-length sequence for exactly this case, so this
+     arm is what keeps the loop byte-identical with the await it replaces rather than a guard over a hole. */
+  if (resp.body === null) return _NO_BYTES();
+  var reader = resp.body.getReader();
+  var parts = [], total = 0, step, chunk, i, out, off;
+  /* NO BOUND, DELIBERATELY — no chunk cap, no total-size cap, no read count, no timeout. CLAUDE.md §NO
+     BOUNDS: a bound here truncates a reply, and a truncated reply is a WRONG answer about a server rather
+     than a smaller one, which every gate below and the engine's learning both then read as what was served.
+     The floor is the platform's own memory, which is where a floor belongs. */
+  for (;;) {
+    step = await reader.read();
+    if (step.done) break;
+    chunk = step.value;
+    /* THE PLATFORM'S CONTRACT, ASSERTED ON THE SHAPE AND NEVER ON THE CONTENT. The bytes are a stranger's and
+       nothing here may assert about them; that this reader yields a BYTE VIEW is this host's own contract, and
+       a chunk that is not one corrupts SILENTLY rather than loudly — `length` of a string is a character count
+       and `set` would read it as a sequence of zeroes without complaint. It is a DCHECK because no input can
+       reach it: a server states the bytes and never their carrier, so this asserts this host's own logic,
+       which is what a DCHECK is for. `ArrayBuffer.isView` and not `instanceof`, for the cross-realm reason
+       above. */
+    DCHECK(ArrayBuffer.isView(chunk),
+           "the response body reader yielded a chunk that is not a byte view — the bytes themselves are a " +
+           "stranger's and are never asserted on, but the SHAPE of a chunk is this host's contract, and a " +
+           "non-view accumulates as zeroes into the body that every gate below and the engine read as the reply");
+    parts.push(chunk);
+    total += chunk.byteLength;
+  }
+  out = new Uint8Array(total);
+  off = 0;
+  for (i = 0; i < parts.length; i++) { out.set(parts[i], off); off += parts[i].byteLength; }
+  return out;
+}
+
 async function safeFetch(url, opts) {
   opts = opts || {};
   /* THE REQUEST'S SHAPE IS CHECKED BEFORE THE REQUEST IS MADE, which is the difference between an abort and a
@@ -1286,13 +1359,18 @@ async function safeFetch(url, opts) {
   /* §2.2.5's BODY, READ AS THE BYTE SEQUENCE IT IS — after both SSRF checks (the
      initial URL above, and the post-redirect final URL immediately above this), which
      is where they were and where they must stay: nothing internal is ingested before
-     the target is judged. `arrayBuffer()` is Fetch §5.3 "Body mixin"'s "consume
-     body" with NO decode after it — §5.3 defines that algorithm and both methods over
-     it, and §5.2 "BodyInit unions", which stood here, is the EXTRACT that runs in the
-     other direction — which is the whole difference from the `text()` this used to be:
-     what the engine receives is what the server sent, and every standard that has an
-     opinion about how those bytes become characters gets to hold it. */
-  var body = new Uint8Array(await resp.arrayBuffer());
+     the target is judged. `_readBody` runs Fetch §5.3 "Body mixin"'s "consume
+     body" to completion over the response's own stream, with NO decode after it — §5.3
+     defines that algorithm and both methods over it, and §5.2 "BodyInit unions", which
+     stood here, is the EXTRACT that runs in the other direction — which is the whole
+     difference from the `text()` this used to be: what the engine receives is what the
+     server sent, and every standard that has an opinion about how those bytes become
+     characters gets to hold it.
+     WHY IT IS A LOOP AND NOT THE `await resp.arrayBuffer()` IT WAS — which answers the
+     identical byte sequence — is the head/body gate boundary argued at `_readBody`:
+     every gate above this line reads the request or the response HEAD, the one gate
+     below it reads the BODY, and this is where the two halves of a reply part. */
+  var body = await _readBody(resp);
   /* THE ONE SNIFF, AND THE ONE TYPE IT PRODUCES. Both readers below are handed THIS
      pass: the CORB gate reads `protected` and the record reads `type`. That is what
      "safeFetch is the only source of sniffing" means as a shape rather than as a
