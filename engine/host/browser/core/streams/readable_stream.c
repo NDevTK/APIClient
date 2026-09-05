@@ -1866,7 +1866,12 @@ JSValue readable_ctrl_desired_size(JSContext *ctx, JSValueConst ctrl)
    do and changes nothing about `for await`, `tee()` or Fetch's "clone a body".
    PER REALM: a function object carries the realm it was minted in, so one set held for the agent ran a child
    document's every read, cancel and release through the first document's realm. */
-enum { RSF_READ = 0, RSF_RELEASE, RSF_CANCEL, RSF_GET_READER, RSF_TEE, RSF_TEE_CLONE, RSF_N };
+enum { RSF_READ = 0, RSF_RELEASE, RSF_CANCEL, RSF_GET_READER, RSF_TEE, RSF_TEE_CLONE,
+       /* §4.5's ReadableStreamBYOBReader.prototype.read and .releaseLock — the operations §4.9.1's
+          ReadableByteStreamTee performs as it SWAPS reader kinds. They are §4.4's two with the other brand,
+          and they are separate slots because they live on a separate prototype. */
+       RSF_BYOB_READ, RSF_BYOB_RELEASE,
+       RSF_N };
 static int g_rs_fn_slot[RSF_N];
 static int g_ctrl_fn_slot[RS_CTRL_N];
 
@@ -2389,6 +2394,12 @@ enum {
 };
 
 typedef struct {
+    /* THE SOURCE STREAM ITSELF, and not only its reader. §4.9.1's ReadableByteStreamTee SWAPS READER KINDS as
+       its branches are read — its step 15.1.3 is "Set reader to ! AcquireReadableStreamDefaultReader(stream)"
+       and its step 16.1.3 acquires the BYOB one the same way — and by the time either runs, the reader it is
+       replacing has been RELEASED, so that reader's own [[stream]] slot is undefined.
+       ReadableStreamDefaultTee never releases and so never needed this. */
+    JSValue stream;
     JSValue reader;
     JSValue branch[2];
     JSValue ctrl[2];
@@ -2396,8 +2407,15 @@ typedef struct {
     JSValue cancel_funcs[2];
     JSValue reason[2];
     uint8_t reading;
-    uint8_t read_again;
+    /* §4.9.1's readAgain. ReadableStreamDefaultTee has ONE and it is index 0; ReadableByteStreamTee has
+       readAgainForBranch1 and readAgainForBranch2, which is why this is a pair rather than a byte. */
+    uint8_t read_again[2];
     uint8_t canceled[2];
+    /* §4.9.1's ReadableByteStreamTee's pullWithBYOBReader `forBranch2`, for the read-into request in flight.
+       ONE slot serves, because `reading` admits at most one read at a time — steps 17.1 and 18.1 return early
+       while it is set — so the read-into request whose steps read this is always the one that pull issued.
+       Unread by ReadableStreamDefaultTee, which has no BYOB path. */
+    uint8_t byob_for_branch2;
     /* §4.9.1's cloneForBranch2. The public `tee()` never sets it — both branches get the SAME chunk, which is
        what the standard says and what a page teeing its own stream expects. Fetch §2.2.4 "Bodies"'s "clone a body" DOES:
        `response.clone()` must give the second branch a value the first cannot reach, or a page that mutates
@@ -2415,6 +2433,7 @@ static void tee_finalizer(JSRuntime *rt, JSValue val)
     TeeData *t = JS_GetOpaque(val, g_tee_class);
     int i;
     if (!t) return;
+    JS_FreeValueRT(rt, t->stream);
     JS_FreeValueRT(rt, t->reader);
     JS_FreeValueRT(rt, t->cancel_promise);
     for (i = 0; i < 2; i++) {
@@ -2431,6 +2450,7 @@ static void tee_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
     TeeData *t = JS_GetOpaque(val, g_tee_class);
     int i;
     if (!t) return;
+    JS_MarkValue(rt, t->stream, mark_func);
     JS_MarkValue(rt, t->reader, mark_func);
     JS_MarkValue(rt, t->cancel_promise, mark_func);
     for (i = 0; i < 2; i++) {
@@ -2442,6 +2462,7 @@ static void tee_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 }
 
 static const uint16_t TEE_VALS[] = {
+    RS_OFF(TeeData, stream),
     RS_OFF(TeeData, reader), RS_OFF(TeeData, branch[0]), RS_OFF(TeeData, branch[1]),
     RS_OFF(TeeData, ctrl[0]), RS_OFF(TeeData, ctrl[1]), RS_OFF(TeeData, cancel_promise),
     RS_OFF(TeeData, cancel_funcs[0]), RS_OFF(TeeData, cancel_funcs[1]),
@@ -2553,7 +2574,7 @@ static int js_tee_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **ou
             if (t->reading) {
                 /* §4.2: a pull asked for while a read is in flight is REMEMBERED, not dropped — the chunk
                    steps run it when they finish. */
-                t->read_again = 1;
+                t->read_again[0] = 1;
                 return JS_STEP_DONE;
             }
             t->reading = 1;
@@ -2585,7 +2606,7 @@ static int js_tee_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **ou
                 JSValue chunk = JS_GetPropertyStr(ctx, s->value, "value");
                 JS_FreeValue(ctx, s->value);
                 s->value = chunk;
-                t->read_again = 0;
+                t->read_again[0] = 0;
             }
             STEP_GOTO(s->hdr.stage, TS_B0, &s->phase, NULL);
             break;
@@ -2657,10 +2678,10 @@ again:
         }
         if (s->done == 0) {
             t->reading = 0;
-            if (t->read_again) {
+            if (t->read_again[0]) {
                 /* the pull that arrived while this read was in flight, run now — as a fresh READ rather than
                    as a recursive call, so the machine's own stages stay flat */
-                t->read_again = 0;
+                t->read_again[0] = 0;
                 t->reading = 1;
                 STEP_GOTO(s->hdr.stage, TS_READ, &s->phase, NULL);
                 cb_result = JS_UNDEFINED;
@@ -2728,12 +2749,674 @@ static const JSTrampStepDef js_tee_defs[TEE_N] = {
 };
 #undef TEE_DEF
 
+/* ---- §4.9.1's ReadableByteStreamTee ----------------------------------------------------------------------------
+ *
+ * §4.9.1 Working with readable streams' OTHER tee, and it is a different algorithm rather than a
+ * parameterisation of the one above. §4.9.1's ReadableStreamTee step 3 is "If stream.[[controller]] implements ReadableByteStreamController, return ?
+ * ReadableByteStreamTee(stream)", and the standard says in the same paragraph that for such a stream
+ * "cloneForBranch2 is ignored and chunks are cloned unconditionally" — so Fetch's cloning tee and §4.2's plain
+ * `tee()` reach exactly the same algorithm here.
+ *
+ * WHAT MAKES IT ITS OWN ALGORITHM IS THE READER, and it is the one thing to hold on to while reading this file.
+ * The branches are BYTE streams, so each has a §4.7 controller of its own and a consumer of a branch may hand it
+ * MEMORY TO FILL. When a branch's consumer has done that, §4.9.5's GetBYOBRequest on that branch answers a
+ * request, and the tee must read the SOURCE through a BYOB reader into that request's own view, so the bytes
+ * land in the consumer's buffer and are never copied into it. When no branch has memory outstanding, there is
+ * nothing to fill and the source is read through a DEFAULT reader. Which kind is needed is therefore decided
+ * PER PULL (steps 17.3-17.5 and 18.3-18.5), and steps 15.1 and 16.1 RELEASE the reader in hand and acquire the
+ * other kind when the answer has changed. ReadableStreamDefaultTee acquires one reader and keeps it.
+ *
+ * THE SHARED RECORD IS THE SAME ONE. `reading`, `readAgainForBranch1/2`, `canceled1/2`, `reason1/2` and one
+ * cancelPromise are read and written by nine algorithms that run at different times, which is the same list
+ * ReadableStreamDefaultTee shares — so it is the same TeeData, with the two fields only this algorithm reads
+ * (the source stream, because a released reader no longer names it; and `forBranch2` for the read in flight).
+ *
+ * IT REACHES THE OPERATIONS, NOT THE MEMBERS, and for the two responds that is not a stylistic choice: see the
+ * note beside ReadableByteCtrlOp in readable_byte_stream.h for the detached view §4.8's `respond` would throw
+ * on. */
+enum {
+    BTEE_PULL1 = 0,   /* step 17: branch 1's pull algorithm */
+    BTEE_PULL2,       /* step 18: branch 2's */
+    BTEE_CANCEL1,     /* step 19 */
+    BTEE_CANCEL2,     /* step 20 */
+    BTEE_READ_OK,     /* step 15.2's read request, delivered as its read promise's settlement */
+    BTEE_READ_ERR,
+    BTEE_INTO_OK,     /* step 16.4's read-into request, the same way */
+    BTEE_INTO_ERR,
+    BTEE_CLOSED_ERR,  /* step 14's forwardReaderError */
+    BTEE_N
+};
+static int g_btee_stepids[BTEE_N];
+
+/* WHERE THIS MACHINE RESTS, AS §4.9.1 NUMBERS IT. Steps 15.2 and 16.4 each hold THREE sibling item lists (chunk
+   steps, close steps, error steps), so a bare sub-number under either would name three different steps; each
+   label below names the list in the standard's own words instead. */
+#define BTS_STAGES(X) \
+    X(BTS_START, "Streams §4.9.1 ReadableByteStreamTee (which of pull1Algorithm, pull2Algorithm, " \
+                 "cancel1Algorithm, cancel2Algorithm, a request's item list or forwardReaderError this entry " \
+                 "is)") \
+    X(BTS_RELEASE, "Streams §4.9.1 ReadableByteStreamTee's pullWithDefaultReader step 1.2 / " \
+                   "pullWithBYOBReader step 1.2 (releasing the reader of the kind this pull does not need)") \
+    X(BTS_ACQUIRE, "Streams §4.9.1 ReadableByteStreamTee's pullWithDefaultReader steps 1.3-1.4 / " \
+                   "pullWithBYOBReader steps 1.3-1.4 (acquiring the other kind, and forwarding its errors)") \
+    X(BTS_READ, "Streams §4.9.1 ReadableByteStreamTee's pullWithDefaultReader step 3 " \
+                "(ReadableStreamDefaultReaderRead) / pullWithBYOBReader step 5 (ReadableStreamBYOBReaderRead " \
+                "with a minimum of 1)") \
+    X(BTS_DELIVER, "Streams §4.9.1 ReadableByteStreamTee's read request and read-into request item lists (the " \
+                   "enqueues, closes, errors and responds each one makes on the two branches' controllers)") \
+    X(BTS_RESOLVE_CANCEL, "Streams §4.9.1 ReadableByteStreamTee step 14.1.4 and the last item of both close " \
+                          "steps lists (resolve cancelPromise with undefined)") \
+    X(BTS_CANCEL_SOURCE, "Streams §4.9.1 ReadableByteStreamTee's cancelAlgorithm step 3.2, and the chunk " \
+                         "steps' clone-failure arm (ReadableStreamCancel on the source)") \
+    X(BTS_CANCEL_ADOPT, "Streams §4.9.1 ReadableByteStreamTee's cancelAlgorithm step 3.3 (resolve " \
+                        "cancelPromise with what cancelling the source answered)")
+enum { BTS_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const BTS_STEPS[] = { BTS_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+/* A DELIVERY IS A PLAN: an item list of §4.9.1's makes at most FOUR calls on the two branches' controllers, and
+   every one of them can suspend, so the list is COMPUTED where the standard computes it and then executed one
+   entry at a time under a cursor. Writing it as straight-line code would need a stage per call, and the calls
+   differ per item list.
+   `cond` is the standard's OWN guard on that item, and it is decided at the moment the item RUNS rather than at
+   the moment it is planned — "If branch1.[[controller]].[[pendingPullIntos]] is not empty" is asked after the
+   closes ahead of it have run, and a controller call can run a page's `pull`. It is decided ONCE and rewritten
+   to the decision, because a resume must not re-ask a question whose call is already in flight. */
+#define BTEE_PLAN_MAX 4
+enum { BTV_NONE = 0,   /* the call takes no argument (close) */
+       BTV_VALUE,      /* the machine's `value` slot: the chunk, the reason, or a failed clone's exception */
+       BTV_CLONE,      /* §8.3's CloneAsUint8Array answer, for whichever branch gets the copy */
+       BTV_ZERO };     /* the literal 0 a close-steps respond writes */
+/* BTC_PENDING is "[[pendingPullIntos]] is not empty", which two of §4.9.1's items ASK and two more OWE to
+   §4.9.5 as a precondition — see the note at the byte tee's respondWithNewView items. */
+enum { BTC_ALWAYS = 0, BTC_NOT_CANCELED, BTC_PENDING, BTC_SKIP };
+enum { BTT_NONE = 0, BTT_READ_AGAIN, BTT_RESOLVE_CANCEL, BTT_CANCEL_SOURCE };
+
+typedef struct {
+    JSStepHdr hdr;
+    uint8_t   phase;
+    uint8_t   op;          /* which of the nine algorithms is running — a LOCAL copy of hdr.arg, because chunk
+                              steps that end in pullNAlgorithm CONTINUE as that algorithm on this same machine */
+    uint8_t   want_byob;   /* which reader kind the pull in flight needs */
+    uint8_t   tail;        /* how the delivery ends */
+    uint8_t   use_snap;    /* whether the tail reads `snap` or the record's live canceled flags */
+    uint8_t   snap[2];     /* pullWithBYOBReader's byobCanceled and otherCanceled, BY BRANCH — the standard
+                              binds those two with `let`, so nothing after may re-read the record for them */
+    uint8_t   plan_n, plan_i;
+    uint8_t   plan_op[BTEE_PLAN_MAX];
+    uint8_t   plan_br[BTEE_PLAN_MAX];
+    uint8_t   plan_val[BTEE_PLAN_MAX];
+    uint8_t   plan_cond[BTEE_PLAN_MAX];
+    JSValue   tee;
+    JSValue   value;
+    JSValue   clone;
+    JSValue   view;        /* the BYOB request's view the pull in flight is reading into */
+    JSValue   result;      /* what this invocation answers */
+    JSValue   cb[3];
+} JSByteTeeState;
+
+static void js_btee_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    JSByteTeeState *s = st;
+    int k;
+    v->val(ctx, &s->tee);
+    v->val(ctx, &s->value);
+    v->val(ctx, &s->clone);
+    v->val(ctx, &s->view);
+    v->val(ctx, &s->result);
+    for (k = 0; k < 3; k++) v->val(ctx, &s->cb[k]);
+}
+
+static JSValue js_btee_fini(JSContext *ctx, void *st, bool take_result)
+{
+    JSByteTeeState *s = st;
+    JSValue r = take_result ? s->result : JS_UNDEFINED;
+    (void)ctx;
+    if (take_result) s->result = JS_UNDEFINED;
+    return r;
+}
+
+static void bt_plan(JSByteTeeState *s, int op, int branch, int val, int cond)
+{
+    /* ALWAYS FATAL: the bound is a property of THIS file — every caller is one of §4.9.1's item lists and the
+       longest of them is four — so a plan that overran would be writing past the array, and the alternative to
+       stopping is a branch silently missing an enqueue or a close in a release build. */
+    CHECK(s->plan_n < BTEE_PLAN_MAX,
+          "§4.9.1's ReadableByteStreamTee asked for more controller calls than any of its item lists makes — "
+          "the longest are the two close steps lists, at two closes and two responds");
+    s->plan_op[s->plan_n] = (uint8_t)op;
+    s->plan_br[s->plan_n] = (uint8_t)branch;
+    s->plan_val[s->plan_n] = (uint8_t)val;
+    s->plan_cond[s->plan_n] = (uint8_t)cond;
+    s->plan_n++;
+}
+
+/* ONE BRANCH'S CONTROLLER told to take, close, error or respond — a CALL of the operation's function object, so
+   §4.9.5's own machine runs: the enqueue weighs the bytes, answers a parked read and pulls again, and the
+   respond commits a pull-into, none of which a direct write to the queue would do. */
+static int bt_ctrl_run(JSContext *ctx, JSByteTeeState *s, TeeData *t, int i, int which, JSValueConst arg,
+                       int argc, JSValue in, JSValue **out_cb, int *out_argc)
+{
+    JSValue out;
+    int r;
+
+    {
+        JSValue fn = readable_byte_ctrl_op(ctx, (ReadableByteCtrlOp)which);
+        r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), fn, t->ctrl[i], argc, &arg, in, &out,
+                          out_cb, out_argc);
+        JS_FreeValue(ctx, fn);
+    }
+    if (r > 0) return r;
+    if (JS_IsException(out)) {
+        /* §4.9.1 performs every one of these with `!`, and this component reaches them through code that
+           THROWS where the standard asserts. A branch the page has already closed, errored or cancelled is not
+           this algorithm's problem, and the other branch must still be fed — the same reading, and the same
+           line, as ReadableStreamDefaultTee's. */
+        JS_FreeValue(ctx, JS_GetException(ctx));
+        return 0;
+    }
+    JS_FreeValue(ctx, out);
+    return 0;
+}
+
+/* §4.9.1's ReadableByteStreamTee step 14: forwardReaderError, given thisReader. The reaction HOLDS the reader it
+   was given, so step 14.1.1's "If thisReader is not reader, return" can be asked when it fires — a reader this
+   algorithm has since released must not error the branches. */
+static int bt_forward_reader_error(JSContext *ctx, JSValueConst tee_v, JSValueConst reader)
+{
+    ReaderData *rd = rs_reader_data(reader);
+    JSValueConst data[2];
+    JSValue onr, cap;
+
+    DCHECK(rd != NULL, "§4.9.1's byte tee forwarded errors from something that is not a ReadableStream reader");
+    if (!rd) return -1;
+    data[0] = tee_v;
+    data[1] = reader;
+    onr = JS_NewStepClosure(ctx, g_btee_stepids[BTEE_CLOSED_ERR], 1, 2, data);
+    if (JS_IsException(onr)) return -1;
+    cap = JS_PerformPromiseThen(ctx, rd->closed, JS_UNDEFINED, onr);
+    JS_FreeValue(ctx, onr);
+    if (JS_IsException(cap)) return -1;
+    JS_FreeValue(ctx, cap);
+    return 0;
+}
+
+/* §4.9.1's pull1Algorithm and pull2Algorithm (steps 17 and 18), whose body is ONE decision: which reader kind
+   this branch's next read needs.
+   ITS OWN THREE ANSWERS, and not the step machine's: JS_STEP_DONE is 0, and so is the answer that means the
+   caller should carry on at the stage this just set — a predicate whose two answers cannot be told apart is
+   not one. */
+enum { BT_PULL_GO = 0, BT_PULL_REMEMBERED = 1, BT_PULL_THREW = -1 };
+static int bt_begin_pull(JSContext *ctx, JSByteTeeState *s, TeeData *t, int branch)
+{
+    ReaderData *rd;
+    JSValue view;
+
+    if (t->reading) {                     /* steps 17.1 / 18.1 */
+        t->read_again[branch] = 1;
+        return BT_PULL_REMEMBERED;
+    }
+    t->reading = 1;                       /* steps 17.2 / 18.2 */
+    view = readable_byte_byob_view(ctx, t->ctrl[branch]);   /* steps 17.3 / 18.3 */
+    if (JS_IsException(view)) return BT_PULL_THREW;
+    JS_FreeValue(ctx, s->view);
+    if (JS_IsNull(view)) {                /* steps 17.4 / 18.4: pullWithDefaultReader */
+        JS_FreeValue(ctx, view);
+        s->view = JS_UNDEFINED;
+        s->want_byob = 0;
+    } else {                              /* steps 17.5 / 18.5: pullWithBYOBReader, given that view */
+        s->view = view;
+        s->want_byob = 1;
+        t->byob_for_branch2 = (uint8_t)branch;
+    }
+    rd = rs_reader_data(t->reader);
+    DCHECK(rd != NULL, "§4.9.1's byte tee holds something that is not a ReadableStream reader");
+    if (rd && (rd->byob != 0) != (s->want_byob != 0)) {
+        /* pullWithDefaultReader step 1 / pullWithBYOBReader step 1: the reader in hand is the WRONG KIND, so it
+           is released and the other acquired. THE ASSERT IS THE STANDARD'S OWN (each list's step 1.1) and it
+           stands on a count this engine keeps: a reader with a request still parked would lose it to the
+           release, and there is none because `reading` admits one read at a time and this runs between reads. */
+        StreamData *sd = rs_stream_data(t->stream);
+        DCHECK(sd != NULL, "§4.9.1's byte tee holds something that is not a ReadableStream");
+        DCHECK(sd == NULL || rs_read_pending(ctx, sd) == 0,
+               "§4.9.1's ReadableByteStreamTee swapped reader kinds with a request still parked on the reader "
+               "it is about to release — pullWithDefaultReader step 1.1 and pullWithBYOBReader step 1.1 assert "
+               "that list is empty");
+        STEP_GOTO(s->hdr.stage, BTS_RELEASE, &s->phase, NULL);
+    } else {
+        STEP_GOTO(s->hdr.stage, BTS_READ, &s->phase, NULL);
+    }
+    return BT_PULL_GO;
+}
+
+static int js_btee_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    JSByteTeeState *s = st;
+    TeeData *t;
+    JSValue out;
+    int r;
+
+    if (s->hdr.stage == BTS_START) {
+        int k;
+
+        s->op = (uint8_t)s->hdr.arg;
+        s->tee = JS_DupValue(ctx, JS_StepClosureData(&s->hdr, 0));
+        s->value = s->clone = s->view = s->result = JS_UNDEFINED;
+        for (k = 0; k < 3; k++) s->cb[k] = JS_UNDEFINED;
+        s->plan_n = s->plan_i = 0;
+        s->tail = BTT_NONE;
+        s->use_snap = 0;
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        t = tee_of(s->tee);
+        DCHECK(t != NULL, "a byte tee machine captured something that is not a tee record");
+
+        switch (s->op) {
+        case BTEE_PULL1: case BTEE_PULL2:
+            r = bt_begin_pull(ctx, s, t, s->op == BTEE_PULL2);
+            if (r == BT_PULL_THREW) return JS_STEP_ABRUPT;
+            if (r == BT_PULL_REMEMBERED) return JS_STEP_DONE;
+            break;
+
+        case BTEE_CANCEL1: case BTEE_CANCEL2: {
+            /* steps 19 and 20, which are ReadableStreamDefaultTee's cancelAlgorithms word for word. */
+            int i = s->op == BTEE_CANCEL2;
+            t->canceled[i] = 1;                                        /* steps 19.1 / 20.1 */
+            JS_FreeValue(ctx, t->reason[i]);
+            t->reason[i] = JS_DupValue(ctx, s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED);  /* .2 */
+            s->result = JS_DupValue(ctx, t->cancel_promise);           /* steps 19.4 / 20.4 */
+            if (!t->canceled[i ^ 1]) return JS_STEP_DONE;              /* steps 19.3 / 20.3 */
+            s->value = JS_NewArray(ctx);                               /* steps 19.3.1 / 20.3.1 */
+            if (JS_IsException(s->value)) return JS_STEP_ABRUPT;
+            JS_SetPropertyUint32(ctx, s->value, 0, JS_DupValue(ctx, t->reason[0]));
+            JS_SetPropertyUint32(ctx, s->value, 1, JS_DupValue(ctx, t->reason[1]));
+            STEP_GOTO(s->hdr.stage, BTS_CANCEL_SOURCE, &s->phase, NULL);
+            break;
+        }
+
+        case BTEE_READ_ERR: case BTEE_INTO_ERR:
+            /* step 15.2's and step 16.4's ERROR STEPS lists, which are one item each: "Set reading to false".
+               The branches are errored by forwardReaderError, not from here. */
+            t->reading = 0;
+            return JS_STEP_DONE;
+
+        case BTEE_CLOSED_ERR: {
+            /* step 14.1, given the rejection reason r. */
+            JSValueConst this_reader = JS_StepClosureData(&s->hdr, 1);
+            /* step 14.1.1: IDENTITY, asked of the RECORD behind each object — a released reader is still the
+               same reader, and this is the one comparison that stays true across a release. Both sides are
+               readers this algorithm acquired, so a NULL from either is this component's own bug and not a
+               "these are different" answer. */
+            DCHECK(rs_reader_data(this_reader) != NULL && rs_reader_data(t->reader) != NULL,
+                   "§4.9.1's forwardReaderError compared something that is not a ReadableStream reader — both "
+                   "sides are readers this tee acquired through getReader");
+            if (rs_reader_data(this_reader) != rs_reader_data(t->reader)) return JS_STEP_DONE;
+            s->value = JS_DupValue(ctx, s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED);
+            bt_plan(s, RBC_ERROR, 0, BTV_VALUE, BTC_ALWAYS);             /* step 14.1.2 */
+            bt_plan(s, RBC_ERROR, 1, BTV_VALUE, BTC_ALWAYS);             /* step 14.1.3 */
+            s->tail = BTT_RESOLVE_CANCEL;                             /* step 14.1.4 */
+            STEP_GOTO(s->hdr.stage, BTS_DELIVER, &s->phase, NULL);
+            break;
+        }
+
+        default: {
+            /* The two REQUEST item lists, reached as their read promise's fulfilment: `done` picks the CHUNK
+               STEPS list from the CLOSE STEPS one, which is what a read request's two lists are.
+             *
+             * NAMED RESIDUAL — THE MICROTASK BOTH CHUNK STEPS LISTS ARE WRAPPED IN IS NOT PERFORMED.
+             * NOT COVERED: each chunk steps list opens "Queue a microtask to perform the following steps", and
+             *   the items below run DIRECTLY in this fulfilment reaction instead. The close steps and error
+             *   steps lists carry no such wrapper and are complete.
+             * WHAT MUST EXIST AFTERWARD: a suspension that resumes THIS machine on the next microtask, used by
+             *   both chunk steps lists here and by ReadableStreamDefaultTee's single one, which runs its items
+             *   in the same reaction at its own TS_B0 arm. Today a machine parks only on a call, a construct or
+             *   a sub-sequence request — grep JS_STEP_CALL / _CONSTRUCT / _REQUEST in quickjs-step.h and check
+             *   that list before building to this line — so none of them is one, and reaching for a reaction on
+             *   a resolved promise instead would start a SECOND machine and leave the plan, the clone and the
+             *   snapshot below in this one.
+             * HOW ITS ABSENCE WOULD SHOW: the standard's own note gives the case — the delay is necessary
+             *   "because it takes at least a microtask to detect errors, when we use reader.[[closedPromise]]
+             *   below" — so a source that errors in the same turn as a synchronously available chunk enqueues
+             *   that chunk into both branches BEFORE forwardReaderError errors them, and a branch then delivers
+             *   a chunk a conforming implementation never hands out. */
+            int byob_arm = s->op == BTEE_INTO_OK;
+            JSValue result, done_v;
+            int done;
+
+            DCHECK(s->op == BTEE_READ_OK || s->op == BTEE_INTO_OK,
+                   "a byte tee machine ran with an operation this component does not have");
+            result = JS_DupValue(ctx, s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED);
+            done_v = JS_GetPropertyStr(ctx, result, "done");
+            done = JS_ToBool(ctx, done_v);
+            JS_FreeValue(ctx, done_v);
+            s->value = JS_GetPropertyStr(ctx, result, "value");
+            JS_FreeValue(ctx, result);
+            if (JS_IsException(s->value)) { s->value = JS_UNDEFINED; return JS_STEP_ABRUPT; }
+
+            if (!byob_arm && !done) {
+                /* pullWithDefaultReader's readRequest, CHUNK STEPS, given chunk. */
+                t->read_again[0] = t->read_again[1] = 0;               /* items 1-2 */
+                /* item 3: chunk1 and chunk2 are both the chunk, until item 4 gives branch 2 a copy of it. */
+                if (!t->canceled[0] && !t->canceled[1]) {              /* item 4 */
+                    s->clone = readable_byte_clone_as_uint8(ctx, s->value);      /* item 4.1 */
+                    if (JS_IsException(s->clone)) {                    /* item 4.2 */
+                        s->clone = JS_UNDEFINED;
+                        JS_FreeValue(ctx, s->value);
+                        s->value = JS_GetException(ctx);               /* cloneResult.[[Value]] */
+                        bt_plan(s, RBC_ERROR, 0, BTV_VALUE, BTC_ALWAYS);           /* item 4.2.1 */
+                        bt_plan(s, RBC_ERROR, 1, BTV_VALUE, BTC_ALWAYS);           /* item 4.2.2 */
+                        s->tail = BTT_CANCEL_SOURCE;                            /* item 4.2.3 */
+                        /* item 4.2.4's Return leaves `reading` TRUE: the item that clears it is further down
+                           the list and is never reached. That is the standard's own text and not an omission
+                           here — a tee whose clone failed has cancelled its source and is finished. */
+                        STEP_GOTO(s->hdr.stage, BTS_DELIVER, &s->phase, NULL);
+                        break;
+                    }
+                    /* item 4.3: chunk2 is the clone */
+                }
+                bt_plan(s, RBC_ENQUEUE, 0, BTV_VALUE, BTC_NOT_CANCELED);           /* item 5 */
+                bt_plan(s, RBC_ENQUEUE, 1, JS_IsUndefined(s->clone) ? BTV_VALUE : BTV_CLONE,
+                        BTC_NOT_CANCELED);                                        /* item 6 */
+                s->tail = BTT_READ_AGAIN;                                       /* items 7-9 */
+            } else if (!byob_arm) {
+                /* pullWithDefaultReader's readRequest, CLOSE STEPS. */
+                t->reading = 0;                                                  /* item 1 */
+                bt_plan(s, RBC_CLOSE, 0, BTV_NONE, BTC_NOT_CANCELED);              /* item 2 */
+                bt_plan(s, RBC_CLOSE, 1, BTV_NONE, BTC_NOT_CANCELED);              /* item 3 */
+                bt_plan(s, RBC_RESPOND, 0, BTV_ZERO, BTC_PENDING);                 /* item 4 */
+                bt_plan(s, RBC_RESPOND, 1, BTV_ZERO, BTC_PENDING);                 /* item 5 */
+                s->tail = BTT_RESOLVE_CANCEL;                                   /* item 6 */
+            } else {
+                /* pullWithBYOBReader's readIntoRequest. `b` is byobBranch and `o` is otherBranch — steps 2 and
+                   3 of that algorithm, which are `let`s over the forBranch2 the pull in flight was given. */
+                int b = t->byob_for_branch2 ? 1 : 0, o = b ^ 1;
+
+                s->snap[0] = t->canceled[0];
+                s->snap[1] = t->canceled[1];
+                if (!done) {
+                    /* CHUNK STEPS, given chunk. */
+                    t->read_again[0] = t->read_again[1] = 0;                     /* items 1-2 */
+                    /* items 3-4 are the two `let`s snapshotted just above, by branch. */
+                    if (!s->snap[o]) {                                           /* item 5 */
+                        s->clone = readable_byte_clone_as_uint8(ctx, s->value);  /* item 5.1 */
+                        if (JS_IsException(s->clone)) {                          /* item 5.2 */
+                            s->clone = JS_UNDEFINED;
+                            JS_FreeValue(ctx, s->value);
+                            s->value = JS_GetException(ctx);
+                            bt_plan(s, RBC_ERROR, b, BTV_VALUE, BTC_ALWAYS);       /* item 5.2.1 */
+                            bt_plan(s, RBC_ERROR, o, BTV_VALUE, BTC_ALWAYS);       /* item 5.2.2 */
+                            s->tail = BTT_CANCEL_SOURCE;                        /* item 5.2.3 */
+                            STEP_GOTO(s->hdr.stage, BTS_DELIVER, &s->phase, NULL);
+                            break;                                               /* item 5.2.4 */
+                        }
+                        /* item 5.3: clonedChunk is that answer */
+                        /* THE RESPOND ASKS §4.9.5'S OWN PRECONDITION FOR ITSELF, and that is not a second
+                           reading of `byobCanceled`. §4.9.5's ReadableByteStreamControllerRespondWithNewView
+                           step 1 is "Assert: controller.[[pendingPullIntos]] is not empty", and in the
+                           standard that holds because this whole item list is ONE synchronous microtask. In
+                           this engine every controller call SUSPENDS, so a sibling flow can cancel the branch
+                           between two items — which clears that list while the `let`-bound flag above still
+                           says the branch is live. The `let` stays as the standard writes it; the operation
+                           guards the thing it actually needs, which is §Offensive-programming's rule for two
+                           halves of one algorithm that do not share a tempo. */
+                        if (!s->snap[b])
+                            bt_plan(s, RBC_RESPOND_VIEW, b, BTV_VALUE, BTC_PENDING); /* item 5.4 */
+                        bt_plan(s, RBC_ENQUEUE, o, BTV_CLONE, BTC_ALWAYS);          /* item 5.5 */
+                    } else if (!s->snap[b]) {                                     /* item 6 */
+                        bt_plan(s, RBC_RESPOND_VIEW, b, BTV_VALUE, BTC_ALWAYS);
+                    }
+                    s->tail = BTT_READ_AGAIN;                                    /* items 7-9 */
+                } else {
+                    /* CLOSE STEPS, given chunk. */
+                    t->reading = 0;                                               /* item 1 */
+                    /* items 2-3 are the two `let`s snapshotted above. */
+                    if (!s->snap[b]) bt_plan(s, RBC_CLOSE, b, BTV_NONE, BTC_ALWAYS);  /* item 4 */
+                    if (!s->snap[o]) bt_plan(s, RBC_CLOSE, o, BTV_NONE, BTC_ALWAYS);  /* item 5 */
+                    if (!JS_IsUndefined(s->value)) {                                /* item 6 */
+#if APICLIENT_DEV
+                        /* item 6.1's assert, over a view §4.9.5's own respond-in-closed-state built: a
+                           pull-into a CLOSED byte stream gives back is the caller's memory with nothing
+                           written into it. */
+                        {
+                            size_t off_ = 0, len_ = 0, bpe_ = 1;
+                            JSValue vb_ = JS_GetTypedArrayBuffer(ctx, s->value, &off_, &len_, &bpe_);
+                            int ok_ = !JS_IsException(vb_) && len_ == 0;
+                            if (JS_IsException(vb_)) JS_FreeValue(ctx, JS_GetException(ctx));
+                            else JS_FreeValue(ctx, vb_);
+                            DCHECK(ok_,
+                                   "§4.9.1's ReadableByteStreamTee was closed with a partly filled view — its "
+                                   "read-into request's close steps assert the chunk's byte length is 0, and "
+                                   "the view a closed byte stream hands back is built empty by §4.9.5");
+                        }
+#endif
+                        /* the same precondition, and here it is the EXPOSED one: items 4 and 5 above are
+                           closes, and a close suspends. */
+                        if (!s->snap[b])
+                            bt_plan(s, RBC_RESPOND_VIEW, b, BTV_VALUE, BTC_PENDING);  /* item 6.2 */
+                        if (!s->snap[o])
+                            bt_plan(s, RBC_RESPOND, o, BTV_ZERO, BTC_PENDING);        /* item 6.3 */
+                    }
+                    /* item 7's condition is over the two `let`s and not over the record, so the tail reads
+                       the snapshot: a branch cancelled by a page's `pull` while the closes above were running
+                       does not change what this item list asks. */
+                    s->use_snap = 1;
+                    s->tail = BTT_RESOLVE_CANCEL;                                  /* item 7 */
+                }
+            }
+            STEP_GOTO(s->hdr.stage, BTS_DELIVER, &s->phase, NULL);
+            break;
+        }
+        }
+    }
+
+    t = tee_of(s->tee);
+    DCHECK(t != NULL, "a byte tee machine's record stopped being one");
+
+again:
+    if (s->hdr.stage == BTS_RELEASE) {
+        /* pullWithDefaultReader step 1.2 / pullWithBYOBReader step 1.2 — the reader being released is of the
+           kind this pull does NOT want, so its own interface's releaseLock is the operation. */
+        JSValue fn = rs_fn(ctx, s->want_byob ? RSF_RELEASE : RSF_BYOB_RELEASE);
+
+        r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), fn, t->reader, 0, NULL, cb_result, &out,
+                          out_cb, out_argc);
+        JS_FreeValue(ctx, fn);
+        if (r > 0) return r;
+        if (JS_IsException(out)) return JS_STEP_ABRUPT;
+        JS_FreeValue(ctx, out);
+        cb_result = JS_UNDEFINED;
+        STEP_GOTO(s->hdr.stage, BTS_ACQUIRE, &s->phase, NULL);
+    }
+
+    if (s->hdr.stage == BTS_ACQUIRE) {
+        /* pullWithDefaultReader step 1.3 / pullWithBYOBReader step 1.3: AcquireReadableStreamDefaultReader and
+           AcquireReadableStreamBYOBReader — which §4.2's `getReader()` and `getReader({ mode: "byob" })` ARE
+           (§4.2 getReader steps 1 and 3), reached through the function object this component installed. */
+        JSValue reader, opts = JS_UNDEFINED;
+        JSValueConst arg;
+
+        if (s->want_byob && s->phase == 0) {
+            /* A NULL-PROTOTYPE object with one own data property, so the dictionary conversion's [[Get]]
+               cannot reach an accessor a page put on Object.prototype. */
+            opts = JS_NewObjectProto(ctx, JS_NULL);
+            if (JS_IsException(opts)) return JS_STEP_ABRUPT;
+            if (JS_DefinePropertyValueStr(ctx, opts, "mode", JS_NewString(ctx, "byob"), JS_PROP_C_W_E) < 0) {
+                JS_FreeValue(ctx, opts);
+                return JS_STEP_ABRUPT;
+            }
+        }
+        arg = opts;
+        {
+            JSValue fn = rs_fn(ctx, RSF_GET_READER);
+            r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), fn, t->stream, s->want_byob ? 1 : 0, &arg,
+                              cb_result, &reader, out_cb, out_argc);
+            JS_FreeValue(ctx, fn);
+        }
+        JS_FreeValue(ctx, opts);   /* step_call_run holds its own reference to every operand */
+        if (r > 0) return r;
+        if (JS_IsException(reader)) return JS_STEP_ABRUPT;
+        cb_result = JS_UNDEFINED;
+        {
+            JSValue old = t->reader;   /* PUBLISH BEFORE RELEASE, as every write to a traced record here is */
+            t->reader = reader;
+            JS_FreeValue(ctx, old);
+        }
+        if (bt_forward_reader_error(ctx, s->tee, t->reader) < 0) return JS_STEP_ABRUPT;   /* step 1.4 */
+        STEP_GOTO(s->hdr.stage, BTS_READ, &s->phase, NULL);
+    }
+
+    if (s->hdr.stage == BTS_READ) {
+        JSValueConst data[1];
+        JSValueConst arg = s->view;
+
+        {
+            /* pullWithDefaultReader step 3 / pullWithBYOBReader step 5. The BYOB form is
+               ReadableStreamBYOBReaderRead(reader, view, 1, readIntoRequest), and §4.5's
+               `ReadableStreamBYOBReaderReadOptions` declares `min` with `= 1`, so the minimum is the member's
+               own default and there is no options object to build. */
+            JSValue fn = rs_fn(ctx, s->want_byob ? RSF_BYOB_READ : RSF_READ);
+            r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), fn, t->reader, s->want_byob ? 1 : 0, &arg,
+                              cb_result, &out, out_cb, out_argc);
+            JS_FreeValue(ctx, fn);
+        }
+        if (r > 0) return r;
+        if (JS_IsException(out)) return JS_STEP_ABRUPT;
+        data[0] = s->tee;
+        r = stream_react(ctx, out,
+                         g_btee_stepids[s->want_byob ? BTEE_INTO_OK : BTEE_READ_OK],
+                         g_btee_stepids[s->want_byob ? BTEE_INTO_ERR : BTEE_READ_ERR], data, 1);
+        JS_FreeValue(ctx, out);
+        return r < 0 ? JS_STEP_ABRUPT : JS_STEP_DONE;
+    }
+
+    if (s->hdr.stage == BTS_DELIVER) {
+        for (; s->plan_i < s->plan_n; s->plan_i++) {
+            int k = s->plan_i, i = s->plan_br[k];
+            int argc = s->plan_val[k] == BTV_NONE ? 0 : 1;
+            JSValue owned = JS_UNDEFINED;
+            JSValueConst arg;
+
+            if (s->plan_cond[k] != BTC_ALWAYS && s->plan_cond[k] != BTC_SKIP) {
+                /* DECIDED ONCE, HERE: the standard asks each guard at the moment its item runs, and a resume
+                   must not re-ask one whose call is already in flight. */
+                bool go = s->plan_cond[k] == BTC_NOT_CANCELED ? !t->canceled[i]
+                                                             : readable_byte_has_pending(ctx, t->ctrl[i]);
+                s->plan_cond[k] = (uint8_t)(go ? BTC_ALWAYS : BTC_SKIP);
+            }
+            if (s->plan_cond[k] == BTC_SKIP) continue;
+            switch (s->plan_val[k]) {
+            case BTV_CLONE: arg = s->clone; break;
+            case BTV_ZERO:  owned = JS_NewInt32(ctx, 0); arg = owned; break;
+            default:       arg = s->value; break;
+            }
+            r = bt_ctrl_run(ctx, s, t, i, s->plan_op[k], arg, argc, cb_result, out_cb, out_argc);
+            JS_FreeValue(ctx, owned);
+            if (r > 0) return r;
+            if (r < 0) return JS_STEP_ABRUPT;
+            cb_result = JS_UNDEFINED;
+        }
+        if (s->tail == BTT_READ_AGAIN) {
+            /* the chunk steps' last three items: reading is cleared, and whichever branch asked to be read
+               again while this read was in flight is pulled NOW. readAgainForBranch1/2 are NOT cleared here —
+               the next chunk steps' first two items are what clear them, which is where the standard puts it. */
+            t->reading = 0;
+            if (t->read_again[0]) r = bt_begin_pull(ctx, s, t, 0);
+            else if (t->read_again[1]) r = bt_begin_pull(ctx, s, t, 1);
+            else return JS_STEP_DONE;
+            if (r == BT_PULL_THREW) return JS_STEP_ABRUPT;
+            DCHECK(r == BT_PULL_GO,
+                   "§4.9.1's ReadableByteStreamTee remembered a pull it had just been asked to perform — "
+                   "`reading` was cleared one line above, so steps 17.1 and 18.1 cannot be the arm taken");
+            if (r == BT_PULL_REMEMBERED) return JS_STEP_DONE;
+            /* A LOOP, never a call: this machine may not recurse into itself. Everything the delivery just
+               finished with is released here, because the next pass through the stages writes over it. */
+            JS_FreeValue(ctx, s->value);
+            s->value = JS_UNDEFINED;
+            JS_FreeValue(ctx, s->clone);
+            s->clone = JS_UNDEFINED;
+            s->plan_n = s->plan_i = 0;
+            s->tail = BTT_NONE;
+            s->use_snap = 0;
+            cb_result = JS_UNDEFINED;
+            goto again;
+        }
+        if (s->tail == BTT_CANCEL_SOURCE) {
+            STEP_GOTO(s->hdr.stage, BTS_CANCEL_SOURCE, &s->phase, NULL);
+        } else {
+            DCHECK(s->tail == BTT_RESOLVE_CANCEL,
+                   "a byte tee delivery finished with no end — every one of §4.9.1's item lists ends in a "
+                   "read-again, a resolve of cancelPromise, or a cancel of the source");
+            STEP_GOTO(s->hdr.stage, BTS_RESOLVE_CANCEL, &s->phase, NULL);
+        }
+    }
+
+    if (s->hdr.stage == BTS_RESOLVE_CANCEL) {
+        JSValueConst undef = JS_UNDEFINED;
+        int c0 = s->use_snap ? s->snap[0] : t->canceled[0];
+        int c1 = s->use_snap ? s->snap[1] : t->canceled[1];
+
+        if (c0 && c1) { JS_FreeValue(ctx, cb_result); return JS_STEP_DONE; }
+        r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), t->cancel_funcs[0], JS_UNDEFINED, 1, &undef,
+                          cb_result, &out, out_cb, out_argc);
+        if (r > 0) return r;
+        if (JS_IsException(out)) return JS_STEP_ABRUPT;
+        JS_FreeValue(ctx, out);
+        return JS_STEP_DONE;
+    }
+
+    if (s->hdr.stage == BTS_CANCEL_SOURCE) {
+        JSValueConst arg = s->value;
+
+        {
+            JSValue fn = rs_fn(ctx, RSF_CANCEL);
+            r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), fn, t->reader, 1, &arg, cb_result, &out,
+                              out_cb, out_argc);
+            JS_FreeValue(ctx, fn);
+        }
+        if (r > 0) return r;
+        if (JS_IsException(out)) return JS_STEP_ABRUPT;
+        JS_FreeValue(ctx, s->value);
+        s->value = out;
+        cb_result = JS_UNDEFINED;
+        /* TWO CALLS, TWO STAGES — one `phase` byte serves one call at a time; see the same note on
+           ReadableStreamDefaultTee's, where writing the pair under a single byte was a livelock. */
+        STEP_GOTO(s->hdr.stage, BTS_CANCEL_ADOPT, &s->phase, NULL);
+    }
+
+    DCHECK(s->hdr.stage == BTS_CANCEL_ADOPT, "a byte tee machine resumed in a stage it never parks in");
+    {
+        JSValueConst arg = s->value;
+
+        r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), t->cancel_funcs[0], JS_UNDEFINED, 1, &arg,
+                          cb_result, &out, out_cb, out_argc);
+        if (r > 0) return r;
+        if (JS_IsException(out)) return JS_STEP_ABRUPT;
+        JS_FreeValue(ctx, out);
+        return JS_STEP_DONE;
+    }
+}
+
+#define BTEE_DEF(i) { sizeof(JSByteTeeState), js_btee_step, js_btee_fini, (i), \
+                      .algorithm = "Streams §4.9.1 ReadableByteStreamTee's pulls, cancels, request item " \
+                                   "lists and forwarded reader error", \
+                      .steps = BTS_STEPS, \
+                      .catches_abrupt = 1, .visit = js_btee_visit }
+static const JSTrampStepDef js_btee_defs[BTEE_N] = {
+    BTEE_DEF(BTEE_PULL1), BTEE_DEF(BTEE_PULL2), BTEE_DEF(BTEE_CANCEL1), BTEE_DEF(BTEE_CANCEL2),
+    BTEE_DEF(BTEE_READ_OK), BTEE_DEF(BTEE_READ_ERR), BTEE_DEF(BTEE_INTO_OK), BTEE_DEF(BTEE_INTO_ERR),
+    BTEE_DEF(BTEE_CLOSED_ERR),
+};
+#undef BTEE_DEF
+
 /* §4.2's `tee()`. A MACHINE because it acquires a reader, and §4.9.3's GenericInitialize settles `closed` at
    once on a stream that has already finished. */
 typedef struct {
     StreamWork w;
     JSValue  tee;
     JSValue  reader;
+    /* §4.9.1's ReadableStreamTee step 3, decided ONCE at stage 0 and never re-derived: which of the two tees
+       this call is. A stream's controller kind cannot change under it, so re-asking would only be a second
+       place for the answer to come from. */
+    uint8_t  bytes;
 } JSTeeCallState;
 
 static void js_tee_call_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -2764,21 +3447,59 @@ static int tee_branch(JSContext *ctx, TeeData *t, JSValueConst tee_v, int i)
     return 0;
 }
 
+/* A BYTE BRANCH: §4.9.1's CreateReadableByteStream(startAlgorithm, pullNAlgorithm, cancelNAlgorithm), whose
+   high-water mark is 0 and whose autoAllocateChunkSize is undefined — the standard writes both as literals in
+   that operation. The stream half is the same allocation §4.2's constructor uses and the controller half is
+   §4.9.5's SetUpReadableByteStreamController, which REPLACES the §4.6 controller readable_stream_empty attached:
+   the two are alternatives, and a stream carrying both would answer §4.9.2's polymorphic call from whichever a
+   reader happened to find. */
+static int btee_branch(JSContext *ctx, TeeData *t, JSValueConst tee_v, int i)
+{
+    JSValueConst data[1];
+    JSValue pull_fn, cancel_fn;
+    StreamData *d;
+    int r;
+
+    t->branch[i] = readable_stream_empty(ctx);
+    if (JS_IsException(t->branch[i])) return -1;
+    data[0] = tee_v;
+    pull_fn = JS_NewStepClosure(ctx, g_btee_stepids[i ? BTEE_PULL2 : BTEE_PULL1], 0, 1, data);
+    if (JS_IsException(pull_fn)) return -1;
+    cancel_fn = JS_NewStepClosure(ctx, g_btee_stepids[i ? BTEE_CANCEL2 : BTEE_CANCEL1], 1, 1, data);
+    if (JS_IsException(cancel_fn)) { JS_FreeValue(ctx, pull_fn); return -1; }
+    r = readable_byte_ctrl_setup(ctx, t->branch[i], pull_fn, cancel_fn, JS_UNDEFINED, 0, 0);
+    JS_FreeValue(ctx, pull_fn);
+    JS_FreeValue(ctx, cancel_fn);
+    if (r < 0) return -1;
+    d = rs_stream_data(t->branch[i]);
+    DCHECK(d != NULL, "a byte tee branch stopped being a ReadableStream between its two halves");
+    if (!d) return -1;
+    t->ctrl[i] = JS_DupValue(ctx, d->controller);
+    DCHECK(readable_byte_ctrl_is(t->ctrl[i]),
+           "a byte tee branch was set up and kept the §4.6 controller its stream was minted with");
+    return 0;
+}
+
 /* `clone2` is §4.9.1's cloneForBranch2 — false for §4.2's `tee()`, true for Fetch's clone. It is a PARAMETER
    rather than a magic because an IdlStepBody is not handed one, and it is one body rather than two machines
    because the two differ by a single step inside one algorithm. It is read only at stage 0, where the record
    is built, so a resume never re-decides it. */
-/* WHERE THIS MACHINE RESTS. §4.2's `tee()` is one step over §4.9.1's ReadableStreamDefaultTee, whose first
-   step is acquiring the reader — a call — and whose last is the start promise's two reactions. */
+/* WHERE THIS MACHINE RESTS. §4.2's `tee()` is one step over §4.9.1's ReadableStreamTee, whose step 3 chooses
+   between its two tees and whose halves are the same shape either way: acquire the reader — a call — build the
+   two branches, and react to the start promise. The labels name both, because which one a park is inside is a
+   fact about the STREAM and not about the stage. */
 #define TC_STAGES(X) \
     X(TC_BRAND = IDL_STEP_FIRST, \
-      "Streams §4.9.1 ReadableStreamDefaultTee steps 1-2 (the stream, and the record the five algorithms " \
-      "share)") \
-    X(TC_READER, "Streams §4.9.1 ReadableStreamDefaultTee step 3 (AcquireReadableStreamDefaultReader)") \
-    X(TC_BUILD, "Streams §4.9.1 ReadableStreamDefaultTee steps 4-17 (the two branches, built with " \
-                "CreateReadableStream rather than with the page's `ReadableStream`)") \
-    X(TC_STARTED, "Streams §4.9.1 ReadableStreamDefaultTee step 18 (the reader's `closed` reactions and the " \
-                  "two branches, returned as a pair)")
+      "Streams §4.9.1 ReadableStreamTee steps 1-3, and ReadableStreamDefaultTee steps 1-2 / " \
+      "ReadableByteStreamTee steps 1-2 (the stream, which of the two tees it takes, and the record the " \
+      "algorithms share)") \
+    X(TC_READER, "Streams §4.9.1 ReadableStreamDefaultTee step 3 / ReadableByteStreamTee step 3 " \
+                 "(AcquireReadableStreamDefaultReader)") \
+    X(TC_BUILD, "Streams §4.9.1 ReadableStreamDefaultTee steps 4-17 / ReadableByteStreamTee steps 4-23 (the " \
+                "two branches, built with CreateReadableStream or CreateReadableByteStream rather than with " \
+                "the page's `ReadableStream`)") \
+    X(TC_STARTED, "Streams §4.9.1 ReadableStreamDefaultTee step 18 / ReadableByteStreamTee steps 24-25 (the " \
+                  "reader's `closed` reactions and the two branches, returned as a pair)")
 enum { TC_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const TC_STEPS[] = { TC_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -2802,11 +3523,13 @@ static int tee_call_run(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
             JS_ThrowTypeError(ctx, "not a ReadableStream");
             return -1;
         }
-        if (readable_byte_ctrl_is(sd->controller))
-            DFAIL("`tee()` on a BYTE stream reached §4.9.1's ReadableStreamDefaultTee — §4.2 performs "
-                  "ReadableByteStreamTee for one, whose branches are BYTE streams of their own and whose "
-                  "reader switches between default and BYOB as the branches are read: build it beside this "
-                  "one in readable_byte_stream.c");
+        /* §4.9.1's ReadableStreamTee step 3: "If stream.[[controller]] implements ReadableByteStreamController,
+           return ? ReadableByteStreamTee(stream)." That operation takes no cloneForBranch2 — the standard says
+           of a readable byte stream that "cloneForBranch2 is ignored and chunks are cloned unconditionally" —
+           so Fetch's cloning tee and §4.2's plain `tee()` reach the same algorithm and get the same branches.
+           (This ROUTES; it does not select a fallback. Both arms are algorithms the standard defines, and the
+           question survives deleting either one because §4.9.1 still has to be asked which stream this is.) */
+        s->bytes = (uint8_t)readable_byte_ctrl_is(sd->controller);
     }
     if (hdr->stage == TC_READER) {
         {
@@ -2827,15 +3550,27 @@ static int tee_call_run(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
         for (i = 0; i < 2; i++)
             t->branch[i] = t->ctrl[i] = t->cancel_funcs[i] = t->reason[i] = JS_UNDEFINED;
         JS_SetOpaque(obj, t);
-        t->clone_for_branch2 = (uint8_t)clone2;
+        /* §4.9.1's ReadableStreamTee: cloneForBranch2 is IGNORED for a readable byte stream, whose branches
+           are cloned unconditionally by an algorithm that does not take the flag. Recording it as false there
+           keeps the record's own answer true rather than leaving a flag nothing reads set. */
+        t->clone_for_branch2 = (uint8_t)(clone2 && !s->bytes);
         s->tee = obj;                      /* attached before anything that can fail, as everywhere here */
+        t->stream = JS_DupValue(ctx, hdr->this_val);
         t->reader = JS_DupValue(ctx, s->reader);
         t->cancel_promise = JS_NewPromiseCapability(ctx, t->cancel_funcs);
         if (JS_IsException(t->cancel_promise)) return -1;
         for (i = 0; i < 2; i++)
-            if (tee_branch(ctx, t, s->tee, i) < 0) return -1;
-        /* §4.2 step 18: the source's `closed` REJECTING is what errors both branches. */
-        {
+            if ((s->bytes ? btee_branch(ctx, t, s->tee, i)
+                          : tee_branch(ctx, t, s->tee, i)) < 0) return -1;
+        if (s->bytes) {
+            /* §4.9.1 ReadableByteStreamTee step 24: Perform forwardReaderError, given reader — which is the
+               same event ReadableStreamDefaultTee step 18 reacts to, with one difference that is the whole of
+               why it is a named algorithm there: this tee REPLACES its reader, so the reaction has to know
+               which reader it was attached for. */
+            if (bt_forward_reader_error(ctx, s->tee, s->reader) < 0) return -1;
+        } else {
+            /* §4.9.1 ReadableStreamDefaultTee step 18: the source's `closed` REJECTING is what errors both
+               branches. */
             JSValueConst data[1];
             ReaderData *rd = rs_reader_data(s->reader);
             JSValue onr, cap;
@@ -2864,7 +3599,8 @@ static int tee_call_run(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
     t = tee_of(s->tee);
     DCHECK(t != NULL, "the tee call's record stopped being one");
     for (i = 0; i < 2; i++)
-        if (ctrl_react(ctx, s->w.func, t->ctrl[i], RXN_START_OK, RXN_START_ERR) < 0) return -1;
+        if ((s->bytes ? readable_byte_start(ctx, t->branch[i], s->w.func)
+                      : ctrl_react(ctx, s->w.func, t->ctrl[i], RXN_START_OK, RXN_START_ERR)) < 0) return -1;
     arr = JS_NewArray(ctx);
     if (JS_IsException(arr)) return -1;
     JS_SetPropertyUint32(ctx, arr, 0, JS_DupValue(ctx, t->branch[0]));
@@ -4102,6 +4838,11 @@ void readable_stream_init(JSContext *ctx)
             g_tee_stepids[i] = JS_RegisterStepDef(rt, &js_tee_defs[i]);
             CHECK(g_tee_stepids[i] >= 0, "streams: no step id for a tee operation");
         }
+        /* §4.9.1's OTHER tee, which shares this record and this class and nothing else. */
+        for (i = 0; i < BTEE_N; i++) {
+            g_btee_stepids[i] = JS_RegisterStepDef(rt, &js_btee_defs[i]);
+            CHECK(g_btee_stepids[i] >= 0, "streams: no step id for a byte tee operation");
+        }
         g_tee_id = idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_tee_call_decl, 0);
         /* §4.9.1 with cloneForBranch2, which is NOT a page-visible member — it is the operation Fetch's "clone
            a body" performs, so it is a function object this component hands out and nothing installs. */
@@ -4150,6 +4891,7 @@ void readable_stream_init(JSContext *ctx)
         static const char *const FN_NAME[RSF_N] = {
             "reader.read", "reader.releaseLock", "reader.cancel", "ReadableStream.getReader",
             "ReadableStream.tee", "§4.9.1 cloning tee",
+            "byobReader.read", "byobReader.releaseLock",
         };
         static const char *const CTRL_NAME[RS_CTRL_N] = {
             "controller.enqueue", "controller.close", "controller.error",
@@ -4221,6 +4963,11 @@ void readable_stream_install_protos(JSContext *ctx)
         idl_install_step_method(ctx, byob_p, "releaseLock", 0, g_release_stepids[1]);
         idl_install_step_method(ctx, byob_p, "read", 1, readable_byob_read_stepid());
         idl_install_step_method(ctx, byob_p, "cancel", 0, g_cancel_stepids[CANCEL_ON_BYOB]);
+        /* §4.9.1's ReadableByteStreamTee performs these two, so they are captured here and not read back off a
+           prototype the page may since have rewritten — the same rule the six below are captured under. BEFORE
+           realm_value_set takes `byob_p`. */
+        realm_value_set(ctx, g_rs_fn_slot[RSF_BYOB_READ],    JS_GetPropertyStr(ctx, byob_p, "read"));
+        realm_value_set(ctx, g_rs_fn_slot[RSF_BYOB_RELEASE], JS_GetPropertyStr(ctx, byob_p, "releaseLock"));
         realm_value_set(ctx, g_byob_proto_slot, byob_p);
     }
 
@@ -4304,6 +5051,7 @@ void readable_stream_free(JSContext *ctx)
     for (i = 0; i < RSI_RXN_N; i++) g_rsi_stepids[i] = -1;
     g_rs_iter_handle = -1;
     for (i = 0; i < TEE_N; i++) g_tee_stepids[i] = -1;
+    for (i = 0; i < BTEE_N; i++) g_btee_stepids[i] = -1;
     for (i = 0; i < FROM_N; i++) g_from_stepids[i] = -1;
     for (i = 0; i < DRAIN_N; i++) g_drain_stepids[i] = -1;
     g_from_ctor_stepid = -1;

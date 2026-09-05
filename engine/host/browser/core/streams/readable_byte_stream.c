@@ -71,7 +71,12 @@ typedef struct {
 static JSClassID g_bctrl_class, g_byobreq_class;
 static JSRuntime *g_bs_rt;
 static int g_bctrl_stepids[3] = { -1, -1, -1 };
-static int g_byobreq_stepids[2] = { -1, -1 };
+static int g_byobreq_stepids[4] = { -1, -1, -1, -1 };
+/* §4.7's and §4.9.5's operations §4.9.1's ReadableByteStreamTee performs on a branch, as THIS REALM'S function
+   objects — the same discipline readable_stream.c states for §4.6's three: a function object carries the realm
+   it was minted in, so one set held for the agent would run a child document's every enqueue through the first
+   document's realm. */
+static int g_byte_ctrl_fn_slot[RBC_N];
 static int g_byte_rxn_stepids[4] = { -1, -1, -1, -1 };
 static int g_byob_read_stepid = -1;
 
@@ -1075,6 +1080,73 @@ void readable_byte_clear_algorithms(JSContext *ctx, JSValueConst ctrl)
     bc_set(ctx, c, &c->cancel_fn, JS_UNDEFINED);
 }
 
+/* ---- what §4.9.1's ReadableByteStreamTee performs on a BRANCH ----------------------------------------------- */
+
+JSValue readable_byte_ctrl_op(JSContext *ctx, ReadableByteCtrlOp which)   /* OWNED */
+{
+    DCHECK(which >= 0 && which < RBC_N,
+           "a §4.7 controller operation was asked for by a name this component does not map");
+    return realm_value_get(ctx, g_byte_ctrl_fn_slot[which]);
+}
+
+JSValue readable_byte_byob_view(JSContext *ctx, JSValueConst ctrl)
+{
+    ByteCtrlData *c = bctrl_of(ctrl);
+    JSValue req, view;
+    ByobReqData *q;
+
+    DCHECK(c != NULL, "§4.9.5's GetBYOBRequest ran on a value that is not a ReadableByteStreamController");
+    if (!c) return JS_ThrowTypeError(ctx, "not a ReadableByteStreamController");
+    req = byte_get_byob_request(ctx, c, ctrl);
+    if (JS_IsException(req) || JS_IsNull(req)) return req;
+    q = byobreq_of(req);
+    DCHECK(q != NULL, "§4.9.5's GetBYOBRequest answered something that is not a ReadableStreamBYOBRequest");
+    /* THE SLOT, NOT THE ACCESSOR — see the header. A request GetBYOBRequest has just minted holds the view it
+       minted, so this is §4.8's [[view]] and not a property a page could have shadowed. */
+    view = q ? JS_DupValue(ctx, q->view) : JS_NULL;
+    JS_FreeValue(ctx, req);
+    return view;
+}
+
+bool readable_byte_has_pending(JSContext *ctx, JSValueConst ctrl)
+{
+    ByteCtrlData *c = bctrl_of(ctrl);
+
+    DCHECK(c != NULL,
+           "\"[[pendingPullIntos]] is not empty\" was asked of a value that is not a "
+           "ReadableByteStreamController");
+    return c != NULL && byte_pending_n(ctx, c) > 0;
+}
+
+JSValue readable_byte_clone_as_uint8(JSContext *ctx, JSValueConst view)
+{
+    double off = 0, len = 0, elem = 1;
+    int vt = 0;
+    size_t blen = 0;
+    uint8_t *p;
+    JSValue buf, out;
+
+    /* §8.3's first two steps are asserts over a value the CALLER computed — §4.9.1's tee clones a chunk one of
+       this component's own controllers delivered, which is a view by construction. Its THIRD (the buffer is not
+       detached) is left to the read below, because that one is a fact about memory a transfer may have taken
+       and the standard's own answer to it here is an ABRUPT COMPLETION the tee handles. */
+    DCHECK(JS_GetTypedArrayType(view) >= 0 || JS_IsDataView(view),
+           "§8.3's CloneAsUint8Array was handed something that is not an ArrayBufferView — §4.9.1's tee clones "
+           "what a §4.7 controller delivered, and a byte stream delivers views");
+    buf = byte_view_parts(ctx, view, &off, &len, &elem, &vt);
+    if (JS_IsException(buf)) return buf;
+    p = JS_GetArrayBuffer(ctx, &blen, buf);
+    if (!p) { JS_FreeValue(ctx, buf); return JS_EXCEPTION; }
+    CHECK(off >= 0 && len >= 0 && off + len <= (double)blen,
+          "§8.3's CloneAsUint8Array was asked for a range that is not inside its own view's buffer");
+    /* CloneArrayBuffer over the view's range, and then Construct(%Uint8Array%, « buffer ») — the INTRINSIC, so
+       a page that replaced the global sees no difference, which is the same guarantee §4.9.1's branches are
+       built with. */
+    out = JS_NewUint8ArrayCopy(ctx, p + (size_t)off, (size_t)len);
+    JS_FreeValue(ctx, buf);
+    return out;
+}
+
 /* ---- §4.9.5's SetUpReadableByteStreamController ------------------------------------------------------------ */
 
 int readable_byte_ctrl_setup(JSContext *ctx, JSValueConst stream, JSValueConst pull_fn, JSValueConst cancel_fn,
@@ -1476,15 +1548,25 @@ static JSValue js_byobreq_view(JSContext *ctx, JSValueConst this_val, int magic)
 
 /* ---- §4.8's respond(bytesWritten) and respondWithNewView(view) ---------------------------------------------- */
 
-enum { BQ_RESPOND = 0, BQ_RESPOND_VIEW };
+/* §4.8's TWO MEMBERS AND THE TWO §4.9.5 OPERATIONS THEY PERFORM — one body, four entry points, because the
+   operations are all of the members past their own first steps. The member forms take a §4.8 BYOB REQUEST as
+   their receiver and run its steps 1-4 first; the operation forms take the §4.7 CONTROLLER and run §4.9.5's
+   steps only. §4.9.1's ReadableByteStreamTee needs the operation forms and may not use the members — see the
+   note beside ReadableByteCtrlOp in readable_byte_stream.h. */
+enum { BQ_RESPOND = 0, BQ_RESPOND_VIEW, BQ_OP_RESPOND, BQ_OP_RESPOND_VIEW, BQ_N };
+#define BQ_IS_MEMBER(a)   ((a) == BQ_RESPOND || (a) == BQ_RESPOND_VIEW)
+#define BQ_IS_WITH_VIEW(a) ((a) == BQ_RESPOND_VIEW || (a) == BQ_OP_RESPOND_VIEW)
 
 #define BQ_STAGES(X) \
     X(BQ_ENTER, "Web IDL §3.7.7 Operations (the ReadableStreamBYOBRequest brand — \"If jsValue does not " \
-                "implement the interface target, throw a TypeError.\" — before either argument is converted)") \
+                "implement the interface target, throw a TypeError.\" — before either argument is converted; " \
+                "the operation forms have no brand to test, their receiver being this engine's own)") \
     X(BQ_NUM, "Web IDL §3.2.4.8 ([EnforceRange] unsigned long long bytesWritten — ToNumber is the page's code; " \
-              "respondWithNewView's ArrayBufferView needs none)") \
+              "respondWithNewView's ArrayBufferView needs none, and neither does the operation form, whose " \
+              "bytesWritten this engine computed)") \
     X(BQ_START, "Streams §4.8 respond(bytesWritten) / respondWithNewView(view) steps 1-3 and §4.9.5's " \
-                "ReadableByteStreamControllerRespondInternal, up to its first run of the page's code") \
+                "ReadableByteStreamControllerRespond / …RespondWithNewView and …RespondInternal, up to the " \
+                "first run of the page's code") \
     X(BQ_COMMIT, "Streams §4.9.5 ReadableByteStreamControllerCommitPullIntoDescriptor (each filled pull-into " \
                  "answers one parked read-into request)") \
     X(BQ_SETTLE, "Streams §4.9.2 ReadableStreamError (a respond whose remainder could not be cloned errors " \
@@ -1606,14 +1688,23 @@ static int byte_respond_internal(JSContext *ctx, ByteCtrlData *c, StreamData *d,
 static int js_byobreq_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSByobReqState *s = st;
-    ByobReqData *q = byobreq_of(s->hdr.this_val);
+    int member = BQ_IS_MEMBER(s->hdr.arg);
+    ByobReqData *q = member ? byobreq_of(s->hdr.this_val) : NULL;
     ByteCtrlData *c;
     StreamData *d;
     int r;
 
-    if (!q) {
+    /* THE SAME QUESTION AT TWO RECEIVERS: the member's is a page-supplied value and its answer is Web IDL
+       §3.7.7 Operations' TypeError, and the operation's is a controller THIS engine handed itself — which is
+       why one of the two is also an assert. */
+    DCHECK(member || readable_byte_ctrl_is(s->hdr.this_val),
+           "a §4.9.5 respond operation ran on a receiver that is not a ReadableByteStreamController — the "
+           "operation forms are reached from §4.9.1's ReadableByteStreamTee, which passes a branch's own "
+           "controller, and never from a page");
+    if (member ? (q == NULL) : !readable_byte_ctrl_is(s->hdr.this_val)) {
         JS_FreeValue(ctx, cb_result);
-        JS_ThrowTypeError(ctx, "not a ReadableStreamBYOBRequest");
+        JS_ThrowTypeError(ctx, member ? "not a ReadableStreamBYOBRequest"
+                                      : "not a ReadableByteStreamController");
         return JS_STEP_ABRUPT;
     }
 
@@ -1626,6 +1717,16 @@ static int js_byobreq_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
     }
 
     if (s->hdr.stage == BQ_NUM) {
+        if (s->hdr.arg == BQ_OP_RESPOND) {
+            /* §4.9.5's ReadableByteStreamControllerRespond takes a NUMBER its caller computed — there is no
+               Web IDL conversion on an abstract operation, and running one would be a second copy of the
+               member's. */
+            JSValueConst a0 = s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED;
+            DCHECK(JS_IsNumber(a0),
+                   "§4.9.5's ReadableByteStreamControllerRespond was handed a bytesWritten that is not a "
+                   "number — the coercion is §4.8's member's, and this entry's callers are this engine's own");
+            if (JS_IsNumber(a0)) JS_ToFloat64(ctx, &s->n, a0);
+        }
         if (s->hdr.arg == BQ_RESPOND) {
             /* Web IDL converts the argument BEFORE the method's own steps, and `[EnforceRange] unsigned long
                long` is ToNumber (the page's `valueOf`) and then §3.2.4.8's range — a fractional, negative,
@@ -1652,24 +1753,28 @@ static int js_byobreq_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
 
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
-        if (JS_IsUndefined(q->controller)) {
+        if (member && JS_IsUndefined(q->controller)) {   /* §4.8 respond step 1 / respondWithNewView step 1 */
             JS_ThrowTypeError(ctx, "this BYOB request has already been responded to");
             return JS_STEP_ABRUPT;
         }
-        s->ctrl = JS_DupValue(ctx, q->controller);
+        s->ctrl = JS_DupValue(ctx, member ? q->controller : s->hdr.this_val);
         c = bctrl_of(s->ctrl);
         DCHECK(c != NULL, "a BYOB request held something that is not a ReadableByteStreamController");
         d = rs_stream_data(c->stream);
         DCHECK(d != NULL, "a byte controller's stream stopped being a ReadableStream");
         DCHECK(byte_pending_n(ctx, c) > 0, "a BYOB request outlived the pull-into it was made for");
 
-        if (s->hdr.arg == BQ_RESPOND) {
-            /* §4.8 step 2: the view's buffer must still be there — the source may have transferred it away
-               between being handed the request and answering it. */
-            JSValue vb = byte_view_parts(ctx, q->view, &off, &blen, &elem, &vt);
-            if (JS_IsException(vb)) return JS_STEP_ABRUPT;
-            JS_FreeValue(ctx, vb);
-            DCHECK(blen > 0, "a BYOB request was made over an empty view");
+        if (!BQ_IS_WITH_VIEW(s->hdr.arg)) {
+            if (member) {
+                /* §4.8 respond step 2: the view's buffer must still be there — the source may have transferred
+                   it away between being handed the request and answering it. §4.9.5's operation asks nothing
+                   about that view, and MUST NOT: §4.9.1's tee hands its branch's view to the source read,
+                   which transfers it, and then responds through this operation while it is still detached. */
+                JSValue vb = byte_view_parts(ctx, q->view, &off, &blen, &elem, &vt);
+                if (JS_IsException(vb)) return JS_STEP_ABRUPT;
+                JS_FreeValue(ctx, vb);
+                DCHECK(blen > 0, "a BYOB request was made over an empty view");   /* §4.8 respond step 3 */
+            }
             first = byte_first_pending(ctx, c);
             filled = rec_num(ctx, first, D_FILLED);
             if (d->state == RS_CLOSED) {
@@ -1790,9 +1895,12 @@ static int js_byobreq_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
 
 #define BQ_DEF(i) { sizeof(JSByobReqState), js_byobreq_step, NULL, (i), \
                     .catches_abrupt = 1, .visit = js_byobreq_visit, \
-                    .algorithm = "Streams §4.8 respond(bytesWritten) / respondWithNewView(view)", \
+                    .algorithm = "Streams §4.8 respond(bytesWritten) / respondWithNewView(view), and the two " \
+                                 "§4.9.5 operations they perform", \
                     .steps = BQ_STEPS }
-static const JSTrampStepDef js_byobreq_defs[2] = { BQ_DEF(BQ_RESPOND), BQ_DEF(BQ_RESPOND_VIEW) };
+static const JSTrampStepDef js_byobreq_defs[BQ_N] = {
+    BQ_DEF(BQ_RESPOND), BQ_DEF(BQ_RESPOND_VIEW), BQ_DEF(BQ_OP_RESPOND), BQ_DEF(BQ_OP_RESPOND_VIEW),
+};
 #undef BQ_DEF
 
 /* ---- §4.5's read(view, options) ----------------------------------------------------------------------------- */
@@ -2487,7 +2595,7 @@ void readable_byte_stream_init(JSContext *ctx)
         g_bctrl_stepids[i] = JS_RegisterStepDef(rt, &js_byte_ctrl_defs[i]);
         CHECK(g_bctrl_stepids[i] >= 0, "streams: no step id for a byte controller member");
     }
-    for (i = 0; i < 2; i++) {
+    for (i = 0; i < BQ_N; i++) {
         g_byobreq_stepids[i] = JS_RegisterStepDef(rt, &js_byobreq_defs[i]);
         CHECK(g_byobreq_stepids[i] >= 0, "streams: no step id for a BYOB request member");
     }
@@ -2502,6 +2610,13 @@ void readable_byte_stream_init(JSContext *ctx)
        the read is two halves with a suspension between them. idl_dict_declare also runs §3.2.17's
        lexicographic read-order check over the list, which is why it is the way in rather than JS_NewAtom. */
     g_byob_read_options_atoms = idl_dict_declare(ctx, &BYOB_READ_OPTIONS_DECL);
+    {
+        static const char *const RBC_NAME[RBC_N] = {
+            "byteController.enqueue", "byteController.close", "byteController.error",
+            "§4.9.5 ReadableByteStreamControllerRespond", "§4.9.5 ReadableByteStreamControllerRespondWithNewView",
+        };
+        for (i = 0; i < RBC_N; i++) g_byte_ctrl_fn_slot[i] = realm_value_declare(ctx, RBC_NAME[i]);
+    }
 }
 
 void readable_byte_stream_install_protos(JSContext *ctx)
@@ -2523,6 +2638,14 @@ void readable_byte_stream_install_protos(JSContext *ctx)
     idl_install_accessor(ctx, ctrl_p, "desiredSize", js_bctrl_desired, 0, -1);
     for (i = 0; i < 3; i++)
         idl_install_step_method(ctx, ctrl_p, BC_NAMES[i], i == 0 ? 1 : 0, g_bctrl_stepids[i]);
+    /* THE ABSTRACT OPERATIONS, read off the prototype nothing of the page's has touched yet — and BEFORE
+       JS_SetClassProto takes the object, so this reads a reference this function still holds. */
+    for (i = 0; i < 3; i++) {
+        JSValue fn = JS_GetPropertyStr(ctx, ctrl_p, BC_NAMES[i]);
+        CHECK(JS_IsFunction(ctx, fn),
+              "streams: a §4.7 controller member §4.9.1's byte tee performs was not installed before capture");
+        realm_value_set(ctx, g_byte_ctrl_fn_slot[i], fn);
+    }
     JS_SetClassProto(ctx, g_bctrl_class, ctrl_p);
 
     req_p = JS_NewObject(ctx);
@@ -2532,6 +2655,15 @@ void readable_byte_stream_install_protos(JSContext *ctx)
     for (i = 0; i < 2; i++)
         idl_install_step_method(ctx, req_p, BQ_NAMES[i], 1, g_byobreq_stepids[i]);
     JS_SetClassProto(ctx, g_byobreq_class, req_p);
+
+    /* THE TWO §4.9.5 RESPONDS ARE MINTED RATHER THAN READ: they are abstract operations, so no interface
+       declares them and there is no prototype to take them off. */
+    for (i = 0; i < 2; i++) {
+        JSValue fn = JS_NewCFunction2(ctx, NULL, i ? "respondWithNewView" : "respond", 1, JS_CFUNC_step,
+                                      g_byobreq_stepids[i ? BQ_OP_RESPOND_VIEW : BQ_OP_RESPOND]);
+        CHECK(JS_IsFunction(ctx, fn), "streams: a §4.9.5 respond operation could not be minted");
+        realm_value_set(ctx, g_byte_ctrl_fn_slot[i ? RBC_RESPOND_VIEW : RBC_RESPOND], fn);
+    }
 }
 
 void readable_byte_stream_install(JSContext *ctx, JSValueConst global)
@@ -2559,7 +2691,7 @@ void readable_byte_stream_free(void)
     if (!g_bs_rt) return;
     g_bs_rt = NULL;
     for (i = 0; i < 3; i++) g_bctrl_stepids[i] = -1;
-    for (i = 0; i < 2; i++) g_byobreq_stepids[i] = -1;
+    for (i = 0; i < BQ_N; i++) g_byobreq_stepids[i] = -1;
     for (i = 0; i < 4; i++) g_byte_rxn_stepids[i] = -1;
     g_byob_read_stepid = -1;
     /* The atoms belong to the IDL pool, which gives them back with the runtime; what this component owns is

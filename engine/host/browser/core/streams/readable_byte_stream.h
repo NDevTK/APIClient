@@ -68,4 +68,45 @@ void readable_byte_clear_algorithms(JSContext *ctx, JSValueConst ctrl);
    reader class lives. */
 int readable_byob_read_stepid(void);
 
+/* ---- what §4.9.1's ReadableByteStreamTee performs on a BRANCH -------------------------------------------------
+ *
+ * A tee branch is a stream this component set up, and the tee drives its controller the way §4.9.1 says: with
+ * the ABSTRACT OPERATIONS, never with whatever a page has since put on the prototypes. So the three §4.7 members
+ * are captured at each realm's build, exactly as readable_stream.h's ReadableControllerOp captures §4.6's.
+ *
+ * THE TWO RESPONDS ARE §4.9.5 OPERATIONS AND NOT §4.8 MEMBERS, and the difference is observable. §4.8's
+ * `respond(bytesWritten)` step 2 is "If ! IsDetachedBuffer(this.[[view]].[[ArrayBuffer]]) is true, throw a
+ * TypeError exception" — and a tee HANDS ITS BRANCH'S BYOB VIEW TO THE SOURCE READ, which transfers that
+ * buffer, so `this.[[view]]` is detached for as long as the read is outstanding. Routing the tee's
+ * "Perform ! ReadableByteStreamControllerRespond(branch1.[[controller]], 0)" through the member would throw
+ * where the algorithm asserts. The operation forms take the CONTROLLER as their receiver and run §4.9.5's steps
+ * only. */
+typedef enum { RBC_ENQUEUE = 0,       /* §4.7 enqueue(chunk) */
+               RBC_CLOSE,             /* §4.7 close() */
+               RBC_ERROR,             /* §4.7 error(e) */
+               RBC_RESPOND,           /* §4.9.5 ReadableByteStreamControllerRespond(controller, bytesWritten) */
+               RBC_RESPOND_VIEW,      /* §4.9.5 ReadableByteStreamControllerRespondWithNewView(controller, view) */
+               RBC_N } ReadableByteCtrlOp;
+/* THIS REALM'S copy. OWNED: the caller frees. */
+JSValue readable_byte_ctrl_op(JSContext *ctx, ReadableByteCtrlOp which);
+
+/* §4.9.1's ReadableByteStreamTee steps 17.3-17.5 and 18.3-18.5 in ONE answer:
+   ReadableByteStreamControllerGetBYOBRequest, and the [[view]] the tee reads off whatever it answers. One entry
+   because that slot is the tee's only use of the request object, and because reaching it through §4.8's `view`
+   accessor would run a property read off an object a page can reach — a host may not do that from C.
+   The request is MINTED AND CACHED as GetBYOBRequest requires, so a later `controller.byobRequest` is the same
+   object. Answers JS_NULL exactly when GetBYOBRequest answers null, and JS_EXCEPTION when the view could not be
+   constructed. */
+JSValue readable_byte_byob_view(JSContext *ctx, JSValueConst ctrl);
+
+/* "[[pendingPullIntos]] is not empty" — §4.9.1's ReadableByteStreamTee asks it of a BRANCH's controller at the
+   close steps of both of its request kinds, to decide whether a zero-byte respond is owed. */
+bool readable_byte_has_pending(JSContext *ctx, JSValueConst ctrl);
+
+/* §8.3 Miscellaneous' CloneAsUint8Array(O) — the copy §4.9.1's ReadableByteStreamTee gives its second branch.
+   It is not §8.3's StructuredClone, which is what §4.9.1's ReadableStreamDefaultTee uses under cloneForBranch2:
+   a byte stream's chunks are views, and a tee branch must receive its own memory whatever the flag says.
+   Answers JS_EXCEPTION for the standard's ABRUPT COMPLETION, which the tee errors both branches with. */
+JSValue readable_byte_clone_as_uint8(JSContext *ctx, JSValueConst view);
+
 #endif
