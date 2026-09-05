@@ -19,14 +19,28 @@
  * `document.createElement("img")`: HTML gives it its own five steps, its `prototype` property is non-writable
  * and non-configurable and carries no `constructor` back-pointer, and a call without `new` is a TypeError.
  *
- * WHAT THIS BUILD LACKS IS A DECODER, AND THAT IS NOT A LICENCE TO SHRUG. §4.8.4.3.5 offers a UA "cannot
- * support images" exit at its second step which issues no request and fires no event; taking it would delete
- * both halves above for the sake of a shorter file. The request, the image request STATE MACHINE, the queued
- * events and the `complete`/`currentSrc`/`naturalWidth` observables are all defined without a decoder — so
- * this engine fetches, and the reply lands in the algorithm's own "the image data is not in a supported file
- * format" arm: current request state broken, and an `error` event queued on the DOM manipulation task source.
- * That is the honest answer for a user agent that supports no image format, and it is the same one a real
- * browser gives for an image it cannot decode.
+ * THIS BUILD LACKS A PIXEL DECODER AND THAT WAS NEVER THE QUESTION §4.8.4.3.5 ASKS. §4.8.4.3.5 offers a UA
+ * "cannot support images" exit at its second step which issues no request and fires no event; taking it would
+ * delete both halves above for the sake of a shorter file. The request, the image request STATE MACHINE, the
+ * queued events and the `complete`/`currentSrc`/`naturalWidth` observables are all defined without a decoder.
+ *   AND SO IS THE `load` EVENT, which is what the paragraph that stood here got wrong and is worth recording
+ * rather than trimming. It reasoned that every reply lands in the algorithm's not-a-supported-file-format arm,
+ * and that this is the honest answer for a user agent that supports no image format; every clause of that was
+ * true EXCEPT its premise: this agent is not a user agent that supports no image format,
+ * because §4.8.4.3.5's supported-format arm is conditioned on ONE capability — "the user agent is able to
+ * determine image request's image's width and height" — and NOT on decoding a pixel. A PNG, a GIF and a JPEG
+ * each STATE their dimensions as integer fields at defined offsets in their own headers, so determining them
+ * is a header read. core/image/image_header.h is that read.
+ *   WHAT IT COST WHILE IT STOOD is the reason this is written out. Every reply of every image took the third
+ * arm, so the current request went `broken` and an `error` event fired — which made `onerror` reachable and
+ * `load` UNREACHABLE, for every image, in every document. CLAUDE.md §@S names both halves of that sentence in
+ * one breath ("`innerHTML` does not execute `<script>` yet DOES fire `onerror`/`onload`"), and §@S also
+ * forbids reading a non-firing vector as safe — so a whole class of breakout whose firing vector is an
+ * image's `load` handler reported as not firing, which is the one failure mode that section rules out most
+ * directly. It was not a crash and nothing marked it.
+ *   WHAT REMAINS HONESTLY ABSENT IS THE PIXELS, and no member of §4.8.3 reads them: `naturalWidth`,
+ * determine-the-dimensions, `complete` and §15.4.2's rules are all stated over the request's STATE and its
+ * DIMENSIONS. The one member that would need them is `decode()`, which is absent by name below.
  *
  * THE SOURCE SET IS NOT THIS FILE'S PROBLEM AND IS NOT ABSENT EITHER. §4.8.4.3.5's selection step is asked of
  * core/html/image_source_set.h, which owns §4.8.4.3.7 "Selecting an image source" and the five algorithms
@@ -39,28 +53,35 @@
  * queued events.
  *
  * WHAT IS HONESTLY ABSENT, EACH CRASHING WHERE IT IS REACHED RATHER THAN ANSWERING SOMETHING PLAUSIBLE:
- *   - The DECODER itself: `naturalWidth`/`naturalHeight` answer 0 for an image that is not available, which
- *     is §4.8.3's own step 1 and is every image in this build; the step that reads a decoded image's
- *     density-corrected natural dimensions crashes naming what has to exist first.
+ *   - §4.8.4.3.5's PENDING REQUEST half — the second request an element makes while its first is available,
+ *     the "upgrade the pending request to the current request" step and `complete`'s read of it. It became
+ *     REACHABLE the moment an image request could be available, which is what its assert now says.
  *   - §4.8.3's `decode()`, `fetchPriority` and `controls` are ABSENT rather than shape-only, declared as such
- *     per realm (idl_members_excluded) so the gap auditor and the next reader read one answer.
+ *     per realm (idl_members_excluded) so the gap auditor and the next reader read one answer. `decode()` is
+ *     the one member of §4.8.3 that genuinely needs the pixels: its own steps reject unless the img is "fully
+ *     decodable", which §4.8.4.3 defines as the state being completely available AND "the user agent can
+ *     decode the media data without errors".
  *
  * `width` AND `height` ARE NO LONGER AMONG THEM, and the sentence that said they were is the reason this
- * paragraph is worth rewriting rather than trimming: it said they are "§4.8.3's determine the dimensions
- * algorithm, whose first branch is the element's RENDERED size, and this file must not answer a layout
- * question". The second half is still exactly right and is why the members are written the way they are — this
+ * paragraph is worth rewriting rather than trimming: it called them §4.8.3's determine-the-dimensions
+ * algorithm, whose first branch is the element's RENDERED size, and said this file must not answer a layout
+ * question. The second half is still exactly right and is why the members are written the way they are — this
  * file ASKS core/layout/used_value.h for the rendered size and computes none of it — while the first half had
  * become a claim about a component that exists. §4.8.3's determine-the-dimensions has three branches and this
- * build now answers two of them for real: an img that is BEING RENDERED reports its used content extents (CSS
- * 2.1 §10.3.2 through core/layout/replaced_element.h), and one that is neither being rendered nor available
- * reports the algorithm's own final step, 0 by 0. The middle branch is the DECODER's and crashes naming it,
- * which is the same crash `naturalWidth` has always owed.
+ * build now answers ALL THREE for real: an img that is BEING RENDERED reports its used content extents (CSS
+ * 2.1 §10.3.2 through core/layout/replaced_element.h), one that is AVAILABLE reports §4.8.4.3's
+ * density-corrected natural width and height, and one that is neither reports the algorithm's own final step,
+ * 0 by 0. The middle branch used to crash naming a decoder; it is a read of the header dimensions, derived
+ * once for its three readers (this file's two members and §15.4.2's first rule) rather than three times.
  *
- * WHAT IS NOT ABSENT AND LOOKS LIKE IT, twice.
- *   §4.8.4.3.3 "The list of available images" is EMPTY in this build and that is a derived fact, not a missing
- * cache: the only step that adds to it is in the supported-file-format arm of §4.8.4.3.5, which no reply of
- * this user agent can reach, so a lookup in it can never hit. Nothing is stubbed for it and nothing needs to
- * be.
+ * WHAT IS NOT ABSENT AND LOOKS LIKE IT.
+ *   §4.8.4.3.3 "The list of available images" IS NOW A MISSING CACHE, and the sentence that stood here said
+ * the opposite for a reason that has been retired rather than disproved: it argued the list is empty in this
+ * build as a DERIVED fact rather than a missing cache, on the ground that the only step which adds to it sits
+ * in the supported-file-format arm of §4.8.4.3.5, which no reply of this user agent could reach. That arm is
+ * reached now, so the derivation is gone and what is left is an ordinary unbuilt cache — named as a residual at the
+ * add step in the delivery, where the reader who builds it is standing. It costs a repeated REQUEST and never
+ * a wrong answer, which is why it is a residual and not a crash.
  *   §4.8.4.3.5's LAZY BRANCH resumes immediately, and that is this agent's VIEWPORT rather than a step
  * skipped: §2.5.7's lazy load intersection observer runs the resumption steps for an element that is already
  * intersecting, and an agent that presents the whole document at once — no scrolling, so no part of a document
@@ -109,6 +130,19 @@ typedef enum {
    a `getComputedStyle(img).width` that minted an image request would put one entry in the delta of every flow
    that ever measured an image. */
 HtmlImageState html_image_current_request_state(JSContext *ctx, lxb_dom_element_t *el, bool *complete);
+
+/* css-images-3 §4.1 "Object-Sizing Terminology"'s NATURAL WIDTH AND HEIGHT of `el`'s current request, in CSS
+   pixels — HTML §4.8.4.3's "to determine the DENSITY-CORRECTED natural width and height of an img element".
+   False means the element has none, which §4.8.4.3 makes exactly the case of a current request that is not
+   available; `*w`/`*h` are then untouched.
+   IT IS A SECOND ENTRY AND NOT TWO MORE OUT-PARAMETERS ON THE READER ABOVE, deliberately. That reader answers
+   a STATE and a SETTLED bit; these are LENGTHS. Two answers of different kind taken from one call are free to
+   be read into a variable named for the other, and a separate entry makes that mistake a different CALL —
+   which is also why the state reader does not simply return these and let the caller decide.
+   IT DOES NOT CREATE THE RECORD, for the reason spelled out above it: HTML §15.4.2's rules are read from a
+   LAYOUT, core/layout/used_value.h derives every used value per read precisely so that measuring a box writes
+   nothing into the running flow's COW delta, and an element with no record has no available request anyway. */
+bool html_image_natural_dimensions(JSContext *ctx, lxb_dom_element_t *el, double *w, double *h);
 
 /* §4.8.3's AGENT-WIDE DECLARATIONS — the class the per-element state hangs off, the argument declarations of
    the legacy factory function, and the step machine that runs a queued element task. Called once per agent

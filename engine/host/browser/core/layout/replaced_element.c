@@ -145,17 +145,34 @@ static ReplacedElement rep_img(JSContext *ctx, lxb_dom_element_t *el)
     ImgRepresents represents = rep_img_represents(el, state);
 
     /* RULE 1: "If the element represents an image — the user agent is expected to treat the element as a
-       replaced element and render the image according to the rules for doing so defined in CSS." Its natural
-       dimensions are the decoded image's, and there is no decoder. */
-    if (represents == IMG_REPRESENTS_IMAGE)
-        DFAIL("HTML §15.4.2 \"Images\"'s FIRST rule — an `img` that REPRESENTS AN IMAGE — was reached, so an "
-              "image request of this agent became AVAILABLE, which §4.8.4.3 defines as having obtained the "
-              "image data AND AT LEAST THE IMAGE DIMENSIONS. Those dimensions are css-images-3 §4.1's natural "
-              "width and height and they come from a DECODER this agent does not have; core/html/html_image.h "
-              "states outright that every reply lands in the not-a-supported-file-format arm and leaves the "
-              "request BROKEN, so nothing in this build can reach this line. BUILD the decoder and the "
-              "density-corrected natural dimensions together — the same pair §4.8.3's `naturalWidth` crashes "
-              "for — and this arm becomes a read of them");
+       replaced element and render the image according to the rules for doing so defined in CSS."
+       ITS NATURAL DIMENSIONS ARE READ, NOT DECODED, and the crash that stood here is why that sentence is
+       worth writing out: it said they "come from a DECODER this agent does not have" and that
+       "core/html/html_image.h states outright that every reply lands in the not-a-supported-file-format arm",
+       so "nothing in this build can reach this line". The second clause was an accurate quotation of a file
+       that has since changed and the first was never what §4.8.4.3.5 asks for — its supported-format arm
+       turns on the agent being "able to determine image request's image's WIDTH AND HEIGHT", which a PNG, a
+       GIF and a JPEG each state in their own header (core/image/image_header.h).
+       THE NUMBERS ARE ASKED OF core/html/html_image.h AND DERIVED THERE, not recomputed here: §4.8.4.3's
+       density-corrected natural width and height divide by the request's current pixel density, and a second
+       derivation in this file would be the same two-answers-to-one-question this component's own header
+       objects to for the four-state enumeration. */
+    if (represents == IMG_REPRESENTS_IMAGE) {
+        double w = 0.0, h = 0.0;
+        bool have = html_image_natural_dimensions(ctx, el, &w, &h);
+
+        /* THE TWO COMPONENTS MUST AGREE ABOUT AVAILABILITY, and this is where they are compared. §15.4.2's
+           first rule is reached exactly when rep_img_represents saw an AVAILABLE state, and these dimensions
+           exist exactly when html_image.c saw one — two reads of one record through two components, which is
+           precisely the pair the image-request enumeration is shared to keep in step. A disagreement is that
+           sharing having come apart, not an image without a size. */
+        DCHECK(have,
+               "HTML §15.4.2's first rule reached an `img` that REPRESENTS AN IMAGE and whose current request "
+               "reports NO density-corrected natural width and height — §4.8.4.3 defines the two available "
+               "states as having obtained \"at least the image dimensions\", so representing an image and "
+               "having them are the same fact read through two components, and this is those two disagreeing");
+        return rep_sized(w, h);
+    }
 
     /* RULE 2: "If the element does not represent an image and either: the user agent has reason to believe the
        image will become available and be rendered in due course, OR the element has no alt attribute, OR the

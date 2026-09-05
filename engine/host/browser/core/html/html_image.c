@@ -31,6 +31,7 @@
 #include "core/frame/policy_container.h"
 #include "core/html/html_image.h"
 #include "core/html/image_source_set.h"   /* §4.8.4.3.7-.12: what source this element selects, and from what */
+#include "core/image/image_header.h"        /* css-images-3 §4.1's natural dimensions, out of the reply's own header */
 
 /* §4.8.4.3 "Processing model": "An image request's state is one of the following" — and the two composite
    answers the spec gives names to are derived from it rather than stored, because a stored copy of a derived
@@ -110,6 +111,17 @@ static JSValue img_state(JSContext *ctx, JSValueConst el)
        request that exists is named by its current URL, so a null here is the absence the spec defines and
        `complete`'s steps read directly. */
     JS_SetPropertyStr(ctx, st, "pendingURL", JS_NULL);
+    /* css-images-3 §4.1's NATURAL WIDTH AND HEIGHT of this request's image data, and §4.8.4.3's "Each image
+       request has a CURRENT PIXEL DENSITY, which must initially be 1."
+       THE DIMENSIONS CARRY NO PRESENCE FLAG AND MUST NOT GROW ONE: §4.8.4.3 already has the bit, because
+       `partially available` and `completely available` are defined as "obtained ... AND AT LEAST THE IMAGE
+       DIMENSIONS" while the other two states are defined as not having them. So `img_state_available` IS the
+       presence flag, a second one would be free to disagree with it, and the two are asserted equal where the
+       dimensions are read. The zeros here are therefore unreachable as answers rather than defaults — every
+       reader is behind that state test. */
+    JS_SetPropertyStr(ctx, st, "naturalWidth", JS_NewFloat64(ctx, 0.0));
+    JS_SetPropertyStr(ctx, st, "naturalHeight", JS_NewFloat64(ctx, 0.0));
+    JS_SetPropertyStr(ctx, st, "pixelDensity", JS_NewFloat64(ctx, 1.0));
     JS_SetPropertyStr(ctx, st, "gen", JS_NewInt32(ctx, 0));
     JS_DefinePropertyValue(ctx, (JSValue)el, g_atom_state, JS_DupValue(ctx, st),
                            JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE);
@@ -131,6 +143,27 @@ static int32_t st_int(JSContext *ctx, JSValueConst st, const char *name)
 static void st_set_int(JSContext *ctx, JSValueConst st, const char *name, int32_t v)
 {
     JS_SetPropertyStr(ctx, (JSValue)st, name, JS_NewInt32(ctx, v));
+}
+
+/* THE SAME PAIR FOR A REAL NUMBER, because css-images-3 §4.1's natural dimensions and §4.8.4.3's current
+   pixel density are not integers: the density is "1.0" where §4.8.4.3.5 states it and an `x` descriptor may be
+   any positive number, and a natural width DIVIDED by one of those is what §4.8.3's members return. Storing
+   either through `st_set_int` would round the operand before the division that needs it. */
+static double st_num(JSContext *ctx, JSValueConst st, const char *name)
+{
+    JSValue v = JS_GetPropertyStr(ctx, st, name);
+    double d = 0.0;
+
+    DCHECK(JS_IsNumber(v), "§4.8.4.3's image request answered a numeric field with something that is not a "
+                           "number — every field is written by this file and by nothing else");
+    JS_ToFloat64(ctx, &d, v);
+    JS_FreeValue(ctx, v);
+    return d;
+}
+
+static void st_set_num(JSContext *ctx, JSValueConst st, const char *name, double v)
+{
+    JS_SetPropertyStr(ctx, (JSValue)st, name, JS_NewFloat64(ctx, v));
 }
 
 static void st_set_str(JSContext *ctx, JSValueConst st, const char *name, const char *v)
@@ -199,6 +232,46 @@ static bool img_is_complete(JSContext *ctx, lxb_dom_element_t *el, JSValueConst 
     return false;
 }
 
+/* §4.8.4.3's "To determine the DENSITY-CORRECTED NATURAL WIDTH AND HEIGHT of an img element img", which is the
+   ONE derivation every reader of those two numbers goes through — §4.8.3's `naturalWidth`/`naturalHeight`,
+   §4.8.3's determine the dimensions step 2, and HTML §15.4.2 "Images"' first rule in
+   core/layout/replaced_element.c. Three readers deriving it separately is three answers to one question.
+     1. "Let density be img's current request's CURRENT PIXEL DENSITY."
+     2-3. "Let dimensions be img's current request's PREFERRED DENSITY-CORRECTED DIMENSIONS. … If dimensions is
+   not null, then …" — it is null throughout this build and that is §4.8.4.3's own initial value ("It must
+   initially be null"), because the ONLY step that writes it is §4.8.4.3.6 "Preparing an image for
+   presentation", whose whole assignment sits behind a seven-way conjunction over EXIF tags 0xA002, 0xA003,
+   0x011A, 0x011B and 0x0128. This agent reads no EXIF, so every one of those is absent, so the conjunction is
+   false and the struct stays null — a value DERIVED from the algorithm rather than a step skipped.
+     4-6. "Let intrinsicWidth, intrinsicHeight … If intrinsicWidth is not absent, then set intrinsicWidth to
+   intrinsicWidth DIVIDED BY DENSITY", and the same for the height.
+     7. "Return the result of applying the DEFAULT SIZING ALGORITHM with intrinsicWidth, intrinsicHeight, and
+   intrinsicRatio, using a default object size of 300 by 150" — css-images-3 §4.3.1 "Default Sizing Algorithm",
+   whose no-constraints arm is "If the object has a natural height or width, its size is resolved AS IF ITS
+   NATURAL DIMENSIONS WERE GIVEN AS THE SPECIFIED SIZE". Both are present whenever this function answers true
+   (that is what `available` MEANS), so step 7 returns exactly what steps 5 and 6 computed and the 300 by 150
+   default is unreachable from here. It is named rather than dropped because the day a format states only one
+   of the two, that default is where the other comes from.
+   RETURNS FALSE FOR AN IMAGE THAT IS NOT AVAILABLE, which is §4.8.3's step 1 for two of its readers and
+   §15.4.2's rule ordering for the third — never a zero, which is a real answer §15.4.2's fourth rule gives. */
+static bool img_density_corrected(JSContext *ctx, JSValueConst st, double *w, double *h)
+{
+    double density;
+
+    if (!img_state_available(st_int(ctx, st, "state"))) return false;
+    density = st_num(ctx, st, "pixelDensity");
+    /* THE DENSITY IS THIS FILE'S OWN AND IS ASSERTED, unlike anything a server sent: §4.8.4.3 states its
+       initial value as 1 and the only other writer is this file, so a non-positive one is a divide this
+       engine composed wrongly rather than a resource being malformed. */
+    DCHECK(density > 0.0,
+           "§4.8.4.3's current pixel density is not positive — it is 1 initially by the standard's own words "
+           "and is written nowhere else in this build, so a zero or negative here is this file's arithmetic "
+           "and not a property of any image");
+    *w = st_num(ctx, st, "naturalWidth") / density;
+    *h = st_num(ctx, st, "naturalHeight") / density;
+    return true;
+}
+
 /* See html_image.h: the current request's state and §4.8.3's `complete`, WITHOUT minting the record. */
 HtmlImageState html_image_current_request_state(JSContext *ctx, lxb_dom_element_t *el, bool *complete)
 {
@@ -230,6 +303,35 @@ HtmlImageState html_image_current_request_state(JSContext *ctx, lxb_dom_element_
            "§4.8.4.3's image request holds a state that is not one of the four the standard lists — every "
            "write to it is one of this file's four, so a fifth value is a record assembled past them");
     return (HtmlImageState)state;
+}
+
+/* See html_image.h: css-images-3 §4.1's natural dimensions of the current request, WITHOUT minting the
+   record — the same contract, and the same reason, as the state reader above. */
+bool html_image_natural_dimensions(JSContext *ctx, lxb_dom_element_t *el, double *w, double *h)
+{
+    JSValue wrapper, st = JS_UNDEFINED;
+    bool have = false;
+
+    DCHECK(g_ready, "an img element's natural dimensions were read before §4.8.3 was declared");
+    DCHECK(el != NULL && w != NULL && h != NULL,
+           "§4.8.4.3's density-corrected natural dimensions were asked for with no element, or with nowhere "
+           "to report one of the two — they are a PAIR, and a caller holding one of them has an object "
+           "css-images-3 §4.1 has no reading for");
+    DCHECK(img_is_node(lxb_dom_interface_node(el)),
+           "§4.8.4.3's natural dimensions were asked about an element that is not an HTML `img` — every other "
+           "replaced element states its own, and core/layout/replaced_element.c is where each of those lives");
+    wrapper = element_wrap(ctx, el);
+    DCHECK(!JS_IsNull(wrapper),
+           "an `img` element has no wrapper to hold its image requests — §4.8.4.3's state is an own property "
+           "of the element's own JS object, which is what makes it per-flow, so an element without one has "
+           "nowhere for the record to live");
+    /* An element no flow has reached carries no record, and §4.8.4.3's initial state is `unavailable`, so it
+       has no natural dimensions — the same complete answer the absent record gives the state reader. */
+    if (JS_GetOwnSlot(ctx, &st, wrapper, g_atom_state) > 0)
+        have = img_density_corrected(ctx, st, w, h);
+    JS_FreeValue(ctx, st);
+    JS_FreeValue(ctx, wrapper);
+    return have;
 }
 
 /* §4.8.4.3 "Processing model": "An img element is said to use srcset or picture if it has a srcset attribute
@@ -411,17 +513,24 @@ static JSValue img_deliver(JSContext *ctx, JSValueConst this_val, int argc, JSVa
 {
     JSValueConst el = func_data[0];
     JSValueConst url = func_data[1];
-    JSValue st;
+    JSValue st, body;
     int32_t issued = 0, live_gen;
     const char *u;
+    const unsigned char *bytes;
+    size_t blen = 0;
+    ImageHeader hdr;
 
     (void)this_val; (void)magic;
     DCHECK(argc >= 1, "an image reply was delivered with no response — the host calls this with the reply "
                       "record or with null for a network error, and never with nothing");
-    /* THE ENGINE↔HOST CONTRACT, ASSERTED AT THE EDGE IT CROSSES. Every arm below reaches the same broken
-       state, so nothing here READS the record — which is exactly why its shape has to be asserted rather than
-       discovered three frames later by whoever does read it (solver/reply_decode.c learns from this same reply
-       at engine_provide). A network error is the JSON `null`, which is a positive answer and not a hole. */
+    /* THE ENGINE↔HOST CONTRACT, ASSERTED AT THE EDGE IT CROSSES. This assert was written when NOTHING here
+       read the record — every arm reached the same broken state — and its stated reason was that the shape had
+       to be checked at the edge rather than discovered three frames later by whoever did read it. That reader
+       is now this function: the body is taken below and handed to core/image/image_header.h. So the assert has
+       stopped being a guard on a value nobody touches and become the precondition of the read two steps down,
+       which is a stronger reason to keep it and not a reason to move it — solver/reply_decode.c still learns
+       from this same reply at engine_provide, so the edge has two readers rather than one.
+       A network error is the JSON `null`, which is a positive answer and not a hole. */
     DCHECK(argc < 1 || JS_IsObject(argv[0]) || JS_IsNull(argv[0]),
            "an image reply arrived as something other than the host's reply record — every host builds one "
            "with fetch_reply_new or parses the trusted zone's JSON into one, and a bare string here is a host "
@@ -436,10 +545,6 @@ static JSValue img_deliver(JSContext *ctx, JSValueConst this_val, int argc, JSVa
        longer making. Without this a `img.src = a; img.src = b` pair fires two `error` events. */
     if (live_gen != issued) { JS_FreeValue(ctx, st); return JS_UNDEFINED; }
 
-    /* "Set image request's state to broken", and "upgrade the pending request to the current request IF image
-       request is the pending request" — which it never is here: the issue site asserts that this agent's
-       current request is never available, so every request it makes IS the current one. The reply is still
-       matched to the address it was made for, because a stale one is what the generation above discards. */
     u = JS_ToCString(ctx, url);
     CHECK(u != NULL, "§4.8.4.3.5: OOM reading the address an image reply answered");
     DCHECK(strcmp(u, "") != 0,
@@ -447,12 +552,88 @@ static JSValue img_deliver(JSContext *ctx, JSValueConst this_val, int argc, JSVa
            "was issued with, and the empty string is what §4.8.4.3.5's NULL-SOURCE arm writes instead of "
            "fetching, so a reply carrying it is a closure built somewhere other than the issue site");
     JS_FreeCString(ctx, u);
+
+    /* THE THREE-WAY JUMP, ASKED OF THE BYTES. core/image/image_header.h answers MIME Sniffing §6.1's "which
+       image type is this" and then reads css-images-3 §4.1's natural width and height out of that format's own
+       header fields. A network error is the JSON `null`, which carries no record and whose body
+       `fetch_reply_body` answers as the EMPTY byte sequence — so it matches no §6.1 pattern and leaves through
+       the same arm as an undecodable resource, which is what "no data could be obtained" means.
+       THE FIRST OF THE THREE ARMS IS STILL UNREACHABLE AND IS NAMED HERE RATHER THAN FORGOTTEN: a
+       `multipart/x-mixed-replace` resource is a body part STREAM, and this seam is handed one whole body, so
+       there is no second part for its "as each new body part comes in" steps to run on. It arrives with a
+       streaming reply and not before. */
+    body = fetch_reply_body(ctx, argv[0]);
+    bytes = fetch_body_bytes(ctx, body, &blen);
+    hdr = image_header_read(bytes, blen);
+    JS_FreeValue(ctx, body);
+
+    if (hdr.have_dims) {
+        /* "If the resource type and data corresponds to a supported image format": THE NEXT TASK'S SECOND ARM
+           — "Otherwise, if the user agent is able to determine image request's image's width and height, and
+           image request is the CURRENT request, prepare image request for presentation given the img element
+           and set image request's state to partially available."
+           IT IS THE CURRENT REQUEST AND NOT THE PENDING ONE, which the assert at the issue site establishes
+           rather than this arm assuming: while §4.8.4.3.5's pending-request half is unbuilt every request this
+           file makes is the current one, and that assert is what fires the day it is not.
+           "PREPARE IMAGE REQUEST FOR PRESENTATION" IS §4.8.4.3.6 AND IT IS A DERIVED NO-OP HERE, not a step
+           skipped — see img_density_corrected for the seven-way EXIF conjunction that makes it one.
+           THEN THE LAST TASK, which is THIS task: the standard splits "the next task that is queued by the
+           networking task source" from "the last task ... once the resource has been fetched" because a
+           decoder consumes a body incrementally, and this seam is handed the WHOLE body in one delivery — so
+           both tasks are this one and both run, in the standard's order. That is a property of a
+           non-streaming fetch and not a shortcut: there is exactly one networking task, so it is both the next
+           and the last. */
+        st_set_num(ctx, st, "naturalWidth", hdr.width);
+        st_set_num(ctx, st, "naturalHeight", hdr.height);
+        /* "Set image request to the COMPLETELY AVAILABLE state."
+           PARTIALLY AVAILABLE IS PASSED THROUGH AND NOT WRITTEN, and that is a claim about observability
+           rather than a step dropped. The two steps are separated by nothing that runs page code: this
+           function is a data closure, `img_queue_fire` only ENQUEUES a task, and no flow can be scheduled
+           between two statements of one C activation — so a write of `partially available` here would be
+           overwritten on the next line having been read by nobody, which is a dead store that reads as a
+           meaningful transition. The state a page can observe is the one this leaves.
+           IT BECOMES A REAL WRITE THE DAY THE DELIVERY IS INCREMENTAL, because then the two steps land in
+           DIFFERENT networking tasks with the scheduler in between, and `partially available` is exactly what
+           §4.8.3's `complete` and §15.4.2's second rule are meant to see while the rest of the body arrives. */
+        st_set_int(ctx, st, "state", HTML_IMAGE_COMPLETELY_AVAILABLE);
+        /* NAMED RESIDUAL — §4.8.4.3.3 "The list of available images". WHAT IS NOT COVERED: the step between
+           the two above, "Add the image to the list of available images using the key key, with the ignore
+           higher-layer caching flag set", and with it §4.8.4.3.5's earlier lookup in that list. WHAT THE NEXT
+           DIFF BUILDS: the list as an agent-wide map keyed by §4.8.4.3.3's key — the (URL, mode, origin)
+           triple §4.8.4.3.5 composes — plus the cache-hit branch, which is the ONE place §4.8.4.3.5 spells
+           "Set the current request's current pixel density to selected pixel density" and so is where the
+           density below stops being the initial 1. HOW ITS ABSENCE SHOWS: two `img` elements with the same
+           `src` issue two fetches instead of one, and the second fires `load` a task later than a browser
+           would rather than synchronously off the cache. It is a CACHE, so its absence costs a request and
+           never an answer. */
+        /* "If maybe omit events is not set or previousURL is not equal to urlString, then fire an event named
+           load at the img element." The maybe omit events flag is never set in this build — §4.8.4.3.2 sets it
+           only for an element that ALLOWS AUTO-SIZES, which needs `loading=lazy` and `sizes=auto` and so is
+           behind the same absent lazy-loading machinery — so the disjunction's first operand is true at every
+           arrival here and the fire is unconditional. */
+        img_queue_fire(ctx, el, "load");
+        JS_FreeValue(ctx, st);
+        return JS_UNDEFINED;
+    }
+
+    /* THE REMAINING TWO ARMS BOTH END HERE, and they are two arms rather than one because §4.8.4.3.5 words
+       them separately: the supported-format arm's "Otherwise, if the user agent is able to determine that
+       image request's image is CORRUPTED IN SOME FATAL WAY such that the image dimensions cannot be obtained,
+       and image request is the current request: Abort the image request for image request. If maybe omit
+       events is not set … fire an event named error", and the outer "Otherwise / The image data is not in a
+       supported file format; the user agent must set image request's state to broken, abort the image request
+       for the current request and the pending request, upgrade the pending request to the current request if
+       image request is the pending request, and then … fire an event named error".
+       THIS FILE DOES NOT ASK WHICH OF THE TWO A REPLY TOOK, and that is a decision rather than an omission:
+       the two arms differ in no step this build can perform, so a flag distinguishing them would be written
+       here and read nowhere — see core/image/image_header.h, which carried exactly that flag and dropped it.
+       Both are written as `broken` because the state this file leaves an element in must be the one §4.8.3's
+       `complete` and §15.4.2's rules read, and an element whose fetch settled is not `unavailable` — HTML
+       §4.8.4.3 glosses `broken` as "the user agent … cannot even decode the image enough to get the image
+       dimensions", which is precisely what both arms have just established.
+       "UPGRADE THE PENDING REQUEST TO THE CURRENT REQUEST IF image request is the pending request" — which it
+       never is here, for the reason the supported arm above gives and the issue site asserts. */
     st_set_int(ctx, st, "state", HTML_IMAGE_BROKEN);
-    /* "If maybe omit events is not set OR previousURL is not equal to urlString, then … fire an event named
-       error." The maybe omit events flag is never set in this build — §4.8.4.3.2 sets it only for an element
-       that ALLOWS AUTO-SIZES, which needs `loading=lazy` and `sizes=auto` and so is behind the same absent
-       lazy-loading machinery — so the disjunction's first operand is true at every arrival here and the fire
-       is unconditional. */
     img_queue_fire(ctx, el, "error");
     JS_FreeValue(ctx, st);
     return JS_UNDEFINED;
@@ -500,10 +681,21 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
        attribute's value, §4.8.4.3.8 step 4 appends it (there is no 1x and no width descriptor to stop it) and
        §4.8.4.3.12 gives it a 1x — the same single candidate the hand-written branch produced, out of the
        algorithm that is defined to produce it rather than out of a second one that agreed with it.
-       THE PIXEL DENSITY IS NOT CARRIED, and that is a consequence rather than an omission: every consumer of
-       it in §4.8.4.3.5 reads it into the image request's CURRENT PIXEL DENSITY, which is only ever read back
-       by the density-corrected natural dimensions — a decoded image's, which this agent has none of. It comes
-       back with the decoder, beside the dimensions it corrects. */
+       THE SELECTED PIXEL DENSITY IS STILL NOT CARRIED, AND THE REASON IS NOW THE STANDARD'S RATHER THAN THIS
+       BUILD'S. It used to be that the density "is only ever read back by the density-corrected natural
+       dimensions — a decoded image's, which this agent has none of"; those dimensions exist now
+       (core/image/image_header.h), so that argument is retired. What replaces it is a fact about §4.8.4.3.5
+       itself: the algorithm states "Set the current request's CURRENT PIXEL DENSITY to selected pixel
+       density" in exactly ONE place, the branch taken when §4.8.4.3.3's list of available images HITS, and
+       the fetch branch below states no such assignment at all. So an image this agent fetches keeps the
+       current pixel density at §4.8.4.3's own initial value — "Each image request has a current pixel
+       density, which must INITIALLY BE 1" — and img_density_corrected divides by that 1. Writing the selected
+       density here instead would be performing a step §4.8.4.3.5 does not contain.
+       NAMED RESIDUAL. WHAT IS NOT COVERED: an element whose selected source carries a non-1x density
+       descriptor (`srcset="a@2x.png 2x"`) reports natural dimensions 2x larger than a browser does. WHAT THE
+       NEXT DIFF BUILDS: §4.8.4.3.3's list of available images, whose cache-hit branch is where §4.8.4.3.5
+       DOES state the assignment and is therefore where the density stops being 1. HOW ITS ABSENCE SHOWS:
+       `naturalWidth` on a 2x srcset image answers the file's pixel count rather than half of it. */
     image_source_set_select(ctx, el, &ss);
 
     /* EVERY IMAGE SOURCE IN THE SET IS AN ADDRESS THE BUNDLE SHIPPED, and only ONE of them is fetched. The
@@ -603,11 +795,21 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
        asserts use for exactly this. */
 #if APICLIENT_DEV
     DCHECK(!img_state_available(st_int(ctx, st, "state")),
-           "§4.8.4.3.5 reached an img element whose CURRENT REQUEST IS AVAILABLE — that state means decoded "
-           "image dimensions, which this agent has no decoder to produce, so every request here is the current "
-           "one and the pending request is always null. Build §4.8.4.3.5's pending-request half — the second "
-           "request, the `upgrade the pending request to the current request` step and `complete`'s reads of "
-           "it — beside the decoder that makes the state reachable");
+           "§4.8.4.3.5 reached an img element whose CURRENT REQUEST IS AVAILABLE, which is the state this "
+           "algorithm's own next step branches on: \"If the current request's state is unavailable or broken, "
+           "then set the current request to image request. OTHERWISE, set the PENDING REQUEST to image "
+           "request.\" This build takes the first arm unconditionally, so it is correct for an element whose "
+           "first request has not settled and WRONG for one that sets `src` a second time after a `load` — a "
+           "carousel, a hover swap, a srcset re-selection. BUILD §4.8.4.3.5's pending-request half: the second "
+           "image request, the `upgrade the pending request to the current request` step in the delivery, and "
+           "`complete`'s read of it (which this file already performs — the record carries `pendingURL` and "
+           "img_is_complete tests it, so what is missing is the WRITER). THE REASON THIS ASSERT GAVE UNTIL "
+           "NOW IS RETIRED AND IS RECORDED HERE AS A WARNING: it argued that an available state meant decoded "
+           "image dimensions, which this agent had no decoder to produce, and therefore that the case was "
+           "unreachable. That inference never followed, because §4.8.4.3.5 does not ask for a decoder — it "
+           "asks whether the user agent is able to determine an image's WIDTH AND HEIGHT — and "
+           "core/image/image_header.h determines them from the format's own header. So this is now an "
+           "ordinary reachable gap and no longer a statement about what cannot happen");
 #endif
     st_set_str(ctx, st, "currentURL", abs);
 
@@ -905,17 +1107,24 @@ static JSValue img_state_of(JSContext *ctx, JSValueConst this_val, const char *m
 static JSValue js_img_natural(JSContext *ctx, JSValueConst this_val, int magic)
 {
     JSValue st = img_state_of(ctx, this_val, magic == 0 ? "naturalWidth" : "naturalHeight");
-    int state;
+    double w = 0.0, h = 0.0;
+    bool have;
 
     if (JS_IsException(st)) return st;
-    state = st_int(ctx, st, "state");
+    have = img_density_corrected(ctx, st, &w, &h);
     JS_FreeValue(ctx, st);
-    if (!img_state_available(state)) return JS_NewInt32(ctx, 0);   /* step 1 */
-    DFAIL("§4.8.3's naturalWidth/naturalHeight reached its second step — the DENSITY-CORRECTED NATURAL WIDTH "
-          "AND HEIGHT are a decoded image's, and this agent has no image decoder, so no image request of it "
-          "can be available. Build the decoder and the natural dimensions it produces together; a number "
-          "answered here without one would be a measurement of nothing");
-    return JS_NewInt32(ctx, 0);
+    if (!have) return JS_NewInt32(ctx, 0);                         /* step 1 */
+    /* Step 2, WHICH IS NOW A READ. The crash that stood here said the density-corrected natural dimensions
+       "are a decoded image's, and this agent has no image decoder, so no image request of it can be
+       available" — the second clause was true of this build and the FIRST was not, which is the whole of what
+       core/image/image_header.h changes: §4.8.4.3.5's supported-format arm is conditioned on determining an
+       image's WIDTH AND HEIGHT and never on decoding it, and those two numbers are stated in the header of
+       every format that arm now accepts.
+       "IN CSS PIXELS" is what the division by the current pixel density produces, and it is done once for all
+       three readers of these numbers in img_density_corrected.
+       THE IDL TYPE IS `unsigned long`, so the double crosses through the ordinary integral conversion rather
+       than being returned as a float: §4.8.3 declares `readonly attribute unsigned long naturalWidth`. */
+    return JS_NewInt32(ctx, (int32_t)(magic == 0 ? w : h));
 }
 
 /* §4.8.3's "TO DETERMINE THE DIMENSIONS of an img element image", all three steps, and the ONE algorithm both
@@ -943,7 +1152,6 @@ static JSValue js_img_dimension(JSContext *ctx, JSValueConst this_val, int magic
     lxb_dom_element_t *el;
     JSValue st;
     bool vertical = magic != 0;
-    int state;
 
     if (!img_is(this_val))
         return JS_ThrowTypeError(ctx, "%s called on something that is not an img element",
@@ -981,15 +1189,17 @@ static JSValue js_img_dimension(JSContext *ctx, JSValueConst this_val, int magic
         return element_view_length_long(ctx, used_value_content_px(el, vertical));
     }
     st = img_state(ctx, this_val);
-    state = st_int(ctx, st, "state");
-    JS_FreeValue(ctx, st);
-    if (img_state_available(state))                                             /* step 2 */
-        DFAIL("§4.8.3's determine the dimensions reached its SECOND step — an image request became AVAILABLE, "
-              "so this element has a DENSITY-CORRECTED NATURAL WIDTH AND HEIGHT to report and there is no "
-              "decoder to have produced one. It is the same absent component `naturalWidth` crashes for one "
-              "member up, and the same one HTML §15.4.2's first rule crashes for in "
-              "core/layout/replaced_element.c; all three are read from the decoded image and must arrive "
-              "together");
+    /* Step 2: "If image is AVAILABLE and has density-corrected natural width and height, then return its
+       density-corrected natural width and height, in CSS pixels." Both conjuncts are img_density_corrected's
+       answer — being available IS having them, which is what §4.8.4.3's definitions of the two available
+       states say ("obtained ... and at least the image dimensions"). */
+    {
+        double w = 0.0, h = 0.0;
+        bool have = img_density_corrected(ctx, st, &w, &h);
+
+        JS_FreeValue(ctx, st);
+        if (have) return JS_NewInt32(ctx, (int32_t)(vertical ? h : w));
+    }
     /* Step 3: "Return a width of 0 and a height of 0." Not a fallback and not a shrug — it is the algorithm's
        own final step, and it is the answer for every `img` that is not being rendered: one in a document no
        navigable presents, one whose `display` computes to `none`, one that has never been inserted. */

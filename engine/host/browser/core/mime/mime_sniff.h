@@ -69,6 +69,16 @@ typedef struct {
    implementation: every arm that keeps the supplied type is reachable only after step 2 has established that
    the supplied type is defined, and every other arm returns one of §7.1's or §7.2's literal types. `out` is
    therefore always a parsed record and the caller always frees it. */
+/* §6.1 "Matching an image type pattern" ON ITS OWN — the image MIME type a byte sequence matches, or NULL for
+   one that matches no image pattern. §7 uses it internally at steps 3-4 and 9; it is declared here because it
+   is also the question core/image/image_header.h has to answer before it can read an image's natural
+   dimensions out of the format's own header fields, and a second copy of the standard's table living in that
+   component would be two tables free to disagree about what a PNG is.
+   `h`/`n` ARE §5.2's RESOURCE HEADER OR A WHOLE BODY, and unlike §7 this algorithm does not care which: every
+   row's pattern is matched at a fixed offset from the start, so a longer buffer cannot change the answer —
+   which is why this one, alone in this file, carries no MIME_SNIFF_RESOURCE_HEADER_MAX obligation. */
+const char *mime_sniff_image_pattern(const unsigned char *h, size_t n);
+
 void mime_sniff_computed(MimeType *out, const MimeSniffResource *r);
 
 #endif

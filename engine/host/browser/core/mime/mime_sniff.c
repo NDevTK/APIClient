@@ -164,8 +164,13 @@ static const SniffRow IMAGE_TABLE[] = {
     { NULL, false, NULL }
 };
 
-/* §6.1's algorithm is exactly its table, so this is the table's walk under the algorithm's name. */
-static const char *sniff_image_pattern(const unsigned char *h, size_t n)
+/* §6.1's algorithm is exactly its table, so this is the table's walk under the algorithm's name.
+   IT IS EXPORTED because §6.1 has a consumer outside §7: core/image/image_header.h reads an image's natural
+   dimensions out of its own header and must first know WHICH format's header it is holding. That consumer
+   could have carried its own signature table and must not — this file's own opening paragraph is that
+   core/mime owns "which record a resource actually has", and a second copy of the standard's table would be
+   two tables free to drift into disagreeing about what a PNG is. */
+const char *mime_sniff_image_pattern(const unsigned char *h, size_t n)
 {
     return sniff_table(IMAGE_TABLE, h, n);
 }
@@ -485,7 +490,7 @@ static void sniff_unknown(MimeType *out, const MimeSniffResource *r, bool sniff_
     }
     m = sniff_table(UNKNOWN_ALWAYS, r->header, r->header_len);                         /* step 2 */
     if (m) { sniff_literal(out, m); return; }
-    m = sniff_image_pattern(r->header, r->header_len);                                 /* steps 3-4 */
+    m = mime_sniff_image_pattern(r->header, r->header_len);                                 /* steps 3-4 */
     if (!m) m = sniff_av_pattern(r->header, r->header_len);                            /* steps 5-6 */
     if (!m) m = sniff_archive_pattern(r->header, r->header_len);                       /* steps 7-8 */
     if (m) { sniff_literal(out, m); return; }
@@ -593,7 +598,7 @@ static void sniff_computed_run(MimeType *out, const MimeSniffResource *r)
     /* Steps 5-6, then 7-8. The GROUP half of each condition is §4.6's and is asked here; the "supported by the
        user agent" half is the caller's, for the reason mime_sniff.h states. */
     if (r->ua_renders_supplied && mime_type_is_image(r->supplied)) {
-        m = sniff_image_pattern(r->header, r->header_len);
+        m = mime_sniff_image_pattern(r->header, r->header_len);
         if (m) { sniff_literal(out, m); return; }
     }
     if (r->ua_renders_supplied && mime_type_is_audio_or_video(r->supplied)) {
