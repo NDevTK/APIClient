@@ -1,14 +1,20 @@
-/* THE OBSERVABLE MACHINE'S PRIVATE SURFACE — shared by observable.c (§2.1/§2.2/§2.3.1) and observable_ops.c
+/* THE OBSERVABLE MACHINE'S PRIVATE SURFACE — shared by observable.c (§2.1/§2.2/§2.2.1) and observable_ops.c
  * (§2.3.2's Observable-returning operators and §2.3.3's promise-returning ones).
  *
- * WHY THERE IS A HEADER HERE AT ALL, AND WHY IT IS NOT A SECOND MACHINE. §2.3's operators are not a layer above
+ * WHICH SECTION OWNS WHAT, stated once because §2.3.1 is a ONE-STEP SECTION and every stage below used to
+ * cite it. Observable §2.3.1 "from()" is entirely "Return the result of converting value to an Observable.
+ * Rethrow any exceptions." — the convert algorithm it names, its four labelled arms, `nextAlgorithm` and the
+ * Observables they return are all §2.2.1 "Supporting concepts", and §2.3 "Operators" is a stub whose whole
+ * body is a link, so an operator is §2.3.2 or §2.3.3 and never §2.3.
+ *
+ * WHY THERE IS A HEADER HERE AT ALL, AND WHY IT IS NOT A SECOND MACHINE. The operators are not a layer above
  * §2.2 — they are stages of the SAME algorithm graph. `map`'s next steps run the subscriber's next() METHOD;
  * `catch`'s error steps CONVERT a value to an Observable and SUBSCRIBE to it; `finally`'s subscribe callback
  * calls addTeardown. Written as their own machine each of those edges would be a C call into a second machine,
  * which is the re-entry the trampoline exists to remove. So there is ONE state, ONE stage enum and ONE step
  * function, and this header is what lets the operators' half of it live in its own file.
  *
- * WHAT EACH FILE OWNS. observable.c owns the state, the machine loop, and every stage of §2.1/§2.2/§2.3.1.
+ * WHAT EACH FILE OWNS. observable.c owns the state, the machine loop, and every stage of §2.1/§2.2/§2.2.1.
  * observable_ops.c owns the §2.3.2/§2.3.3 METHOD entries and the stages their algorithms rest at, reached
  * through exactly two functions — `obs_ops_entry` (a fresh invocation whose operation is an operator's) and
  * `obs_ops_stage` (a stage the core loop does not have). A stage neither file claims is a DFAIL in each. */
@@ -23,9 +29,9 @@
 #include "core/streams/stream_work.h"
 #include "core/events/report_exception.h"
 
-/* WHICH OPERATION AN INVOCATION IS. §2.1's and §2.2's members, §2.3's operators, plus the algorithms that are
-   reached as CALLABLES rather than as members: the abort algorithm a SubscribeOptions signal carries, the
-   arms of §2.3.1's convert, and every operator's subscribe callback and internal-observer algorithm. */
+/* WHICH OPERATION AN INVOCATION IS. §2.1's and §2.2's members, §2.3.2/§2.3.3's operators, plus the algorithms
+   that are reached as CALLABLES rather than as members: the abort algorithm a SubscribeOptions signal carries,
+   the arms of §2.2.1's convert, and every operator's subscribe callback and internal-observer algorithm. */
 enum {
     OP_CTOR = 0,       /* §2.2 new Observable(callback) */
     OP_SUBSCRIBE,      /* §2.2 subscribe(observer, options) */
@@ -34,16 +40,16 @@ enum {
     OP_COMPLETE,       /* §2.1 complete() */
     OP_ADD_TEARDOWN,   /* §2.1 addTeardown(teardown) */
     OP_UNSUB_ALGO,     /* §2.2.1 "subscribe to an Observable" step 9.2's abort algorithm */
-    OP_FROM,           /* §2.3.1 Observable.from(value) */
-    OP_FROM_ITER,      /* §2.3.1 "From iterable" — the returned Observable's subscribe callback */
-    OP_FROM_ASYNC,     /* §2.3.1 "From async iterable" — likewise */
-    OP_FROM_PROMISE,   /* §2.3.1 "From Promise" — likewise */
-    OP_ITER_CLOSE,     /* §2.3.1's abort algorithm: IteratorClose / AsyncIteratorClose */
-    OP_ASYNC_OK,       /* §2.3.1 nextAlgorithm's fulfilled reaction */
-    OP_ASYNC_ERR,      /* §2.3.1 nextAlgorithm's rejected reaction */
-    OP_PROMISE_OK,     /* §2.3.1 "From Promise" — the fulfilled reaction */
-    OP_PROMISE_ERR,    /* §2.3.1 "From Promise" — the rejected reaction */
-    /* §2.2.1 "SUBSCRIBE TO AN OBSERVABLE" REACHED FROM SPEC PROSE. Every §2.3 operator subscribes with an
+    OP_FROM,           /* §2.3.1 from(value), whose ONE step is §2.2.1's convert — so this IS the convert */
+    OP_FROM_ITER,      /* §2.2.1 "From iterable" — the returned Observable's subscribe callback */
+    OP_FROM_ASYNC,     /* §2.2.1 "From async iterable" — likewise */
+    OP_FROM_PROMISE,   /* §2.2.1 "From Promise" — likewise */
+    OP_ITER_CLOSE,     /* §2.2.1's abort algorithm: IteratorClose / AsyncIteratorClose */
+    OP_ASYNC_OK,       /* §2.2.1 nextAlgorithm's fulfilled reaction */
+    OP_ASYNC_ERR,      /* §2.2.1 nextAlgorithm's rejected reaction */
+    OP_PROMISE_OK,     /* §2.2.1 "From Promise" — the fulfilled reaction */
+    OP_PROMISE_ERR,    /* §2.2.1 "From Promise" — the rejected reaction */
+    /* §2.2.1 "SUBSCRIBE TO AN OBSERVABLE" REACHED FROM SPEC PROSE. Every operator subscribes with an
        INTERNAL OBSERVER it built itself and a signal it chose, never with an ObserverUnion the page passed —
        and the standard splits the algorithm out of the `subscribe()` member for exactly that reason. It is a
        function object of the realm so a nested subscription is a CALL on the trampoline. */
@@ -122,8 +128,8 @@ enum {
 };
 
 /* WHERE THIS MACHINE RESTS, AS THE STANDARD NUMBERS IT. One machine walks §2.1's four members, §2.2's
-   constructor and subscribe, §2.3.1's convert and its arms, and §2.3's operators — so a stage names the
-   OPERATION it is inside rather than a private count. */
+   constructor and subscribe, §2.2.1's convert and its arms, and §2.3.2/§2.3.3's operators — so a stage names
+   the OPERATION it is inside rather than a private count. */
 #define OBS_STAGES(X) \
     X(S_ENTRY, "Observable §2.1/§2.2 (this invocation's entry: which member or algorithm it is, and the " \
                "Observable or Subscriber it acts on)") \
@@ -151,29 +157,34 @@ enum {
     X(S_REPORT, "HTML §8.1.4.6 report an exception (the `error` event fired at the global — the page's " \
                 "onerror runs here), reached from §2.1's error(), its default error algorithm, and every " \
                 "callback the standard invokes with \"report\"") \
-    X(S_EMIT_CALL, "Observable §2.3 (running a Subscriber's next()/error()/complete() METHOD from a native " \
-                   "subscribe callback — the operators and from() are all specified that way)") \
-    X(S_FROM_PROBE_ASYNC, "Observable §2.3.1 convert-to-an-Observable step 3 " \
+    X(S_EMIT_CALL, "Observable §2.2.1/§2.3.2 (running a Subscriber's next()/error()/complete() method from " \
+                   "a native subscribe callback — the convert arms and the operators are all written that " \
+                   "way)") \
+    X(S_FROM_PROBE_ASYNC, "Observable §2.2.1 convert-to-an-Observable step 3 " \
                           "(GetMethod(value, %Symbol.asyncIterator%))") \
-    X(S_FROM_PROBE_SYNC, "Observable §2.3.1 convert-to-an-Observable \"From iterable\" step 1 " \
-                         "(GetMethod(value, %Symbol.iterator%))") \
-    X(S_ITER_METHOD, "Observable §2.3.1 (GetIterator step 1: re-reading the iterator method off the source, " \
-                     "which the standard notes is deliberate)") \
-    X(S_ITER_CALL, "Observable §2.3.1 (GetIterator step 2: calling the iterator method)") \
-    X(S_ITER_NEXTFN, "Observable §2.3.1 (GetIterator step 5: Get(iterator, \"next\"))") \
-    X(S_ITER_WRAP, "Observable §2.3.1 (GetIterator(value, async) step 1.b: CreateAsyncFromSyncIterator over " \
-                   "a source with no %Symbol.asyncIterator%)") \
-    X(S_ITER_STEP, "Observable §2.3.1 (IteratorNext: calling the iterator's `next` — and the yield point of " \
-                   "an unbounded iteration)") \
-    X(S_ITER_DONE, "Observable §2.3.1 (IteratorComplete: Get(iteratorResult, \"done\"))") \
-    X(S_ITER_VALUE, "Observable §2.3.1 (IteratorValue: Get(iteratorResult, \"value\"))") \
-    X(S_ITER_RETURN_FN, "Observable §2.3.1 (IteratorClose step 4: Get(iterator, \"return\"))") \
-    X(S_ITER_RETURN_CALL, "Observable §2.3.1 (IteratorClose step 6: calling `return`)") \
-    X(S_ASYNC_PROMISE, "Observable §2.3.1 nextAlgorithm step 5 (a promise resolved with what the async " \
-                       "iterator's `next` returned — 27.5.1.3 step 2.f's `then` read is the page's)") \
-    X(S_ASYNC_REACT, "Observable §2.3.1 nextAlgorithm step 6 (reacting to nextPromise)") \
-    X(S_PROMISE_REACT, "Observable §2.3.1 \"From Promise\" (reacting to the value)") \
-    X(S_PROMISE_DONE, "Observable §2.3.1 \"From Promise\" (the subscriber's complete(), after its next())") \
+    X(S_FROM_PROBE_SYNC, "Observable §2.2.1 convert-to-an-Observable step 7, the step labeled " \
+                         "\"From iterable\" (GetMethod(value, %Symbol.iterator%))") \
+    X(S_ITER_METHOD, "ECMAScript §7.4.4 GetIterator ( obj, kind ) step 1.a / step 2.a (re-reading the " \
+                     "iterator method off the source, which Observable §2.2.1 notes is deliberate)") \
+    X(S_ITER_CALL, "ECMAScript §7.4.3 GetIteratorFromMethod ( obj, method ) step 1 (Call(method, obj))") \
+    X(S_ITER_NEXTFN, "ECMAScript §7.4.2 GetIteratorDirect ( obj ) step 1 (Get(obj, \"next\"))") \
+    X(S_ITER_WRAP, "ECMAScript §7.4.4 GetIterator ( obj, kind ) step 1.b.iv: §27.1.5.1 " \
+                   "CreateAsyncFromSyncIterator over a source with no %Symbol.asyncIterator%") \
+    X(S_ITER_STEP, "ECMAScript §7.4.6 IteratorNext ( iteratorRecord [ , value ] ) (calling the iterator's " \
+                   "`next` — and the yield point of an unbounded iteration)") \
+    X(S_ITER_DONE, "ECMAScript §7.4.7 IteratorComplete ( iteratorResult ) (Get(iteratorResult, \"done\"))") \
+    X(S_ITER_VALUE, "ECMAScript §7.4.8 IteratorValue ( iteratorResult ) (Get(iteratorResult, \"value\"))") \
+    X(S_ITER_RETURN_FN, "ECMAScript §7.4.11 IteratorClose ( iteratorRecord, completion ) step 3, and " \
+                        "§7.4.15 AsyncIteratorClose's step 3 (GetMethod(iterator, \"return\"))") \
+    X(S_ITER_RETURN_CALL, "ECMAScript §7.4.11 IteratorClose ( iteratorRecord, completion ) step 4.c, and " \
+                          "§7.4.15 AsyncIteratorClose's step 4.c (Call(return, iterator))") \
+    X(S_ASYNC_PROMISE, "Observable §2.2.1 convert step 5.5, nextAlgorithm's \"Otherwise, if nextRecord is " \
+                       "normal completion\" (a promise resolved with what the async iterator's `next` " \
+                       "returned — ECMAScript §27.5.1.3 CreateResolvingFunctions ( toResolve ) step 2.f's " \
+                       "`then` read is the page's)") \
+    X(S_ASYNC_REACT, "Observable §2.2.1 convert step 5.6, nextAlgorithm's \"React to nextPromise\"") \
+    X(S_PROMISE_REACT, "Observable §2.2.1 \"From Promise\" (reacting to the value)") \
+    X(S_PROMISE_DONE, "Observable §2.2.1 \"From Promise\" (the subscriber's complete(), after its next())") \
     X(S_SUB_NATIVE, "Observable §2.2.1 (a spec-prose \"Subscribe to an Observable\" — the operators' " \
                     "subscription, made with an internal observer and a signal of the standard's own choosing)") \
     X(S_OP_CONVERT, "Observable §2.3.2 (calling from() with a value an operator produced: takeUntil's " \
@@ -214,11 +225,11 @@ typedef struct JSObsState {
        pushes that same error to every observer, so the two cannot share `value` — the close would free what
        the walk is about to hand over. */
     JSValue   creason;
-    JSValue   iocb[3];    /* the internal observer's three algorithms as they are read; in §2.3.1's arms,
+    JSValue   iocb[3];    /* the internal observer's three algorithms as they are read; in §2.2.1's arms,
                              [0] is the iterator's `next` method and [1] the iterator result (owned) */
-    /* §2.3'S OPERATOR SLOTS. `src` is the operator's source Observable and `st` its per-subscription state
-       record; `op1`..`op3` are the operands a stage holds across its own request. They are separate from the
-       core's because an operator stage can be reached WHILE the core's are live — catch's error steps run
+    /* §2.3.2/§2.3.3'S OPERATOR SLOTS. `src` is the operator's source Observable and `st` its per-subscription
+       state record; `op1`..`op3` are the operands a stage holds across its own request. They are separate from
+       the core's because an operator stage can be reached WHILE the core's are live — catch's error steps run
        inside §2.1's walk, which owns `list`, `value` and `i`. */
     JSValue   src;
     JSValue   st;
@@ -231,7 +242,7 @@ typedef struct JSObsState {
        dictionary is converted at most once per invocation and no operation here converts two. */
     IdlDictWalk dw;
     AbortSignalWork aw;   /* §3.2 "signal abort", as a request */
-    StreamWork sw;        /* PromiseResolve, for §2.3.1's nextPromise */
+    StreamWork sw;        /* PromiseResolve, for §2.2.1's nextPromise */
     ReportExceptionWork rw;   /* HTML §8.1.4.6 "report an exception", as a request */
     JSValue   rerr;       /* what is being reported, held across that dispatch (owned) */
     int64_t   i;          /* the walk cursor */
@@ -241,7 +252,7 @@ typedef struct JSObsState {
     uint8_t   member;     /* which dictionary member a read is on; the iteration's yield latch */
     uint8_t   has_sig;    /* the SubscribeOptions declared a signal */
     uint8_t   has_reason; /* close was given a reason */
-    /* §2.3.1's ARM: 0 = the sync iterable, 1 = the async one, 2 = the async one whose source turned out to
+    /* §2.2.1's ARM: 0 = the sync iterable, 1 = the async one, 2 = the async one whose source turned out to
        have no %Symbol.asyncIterator% after all, so GetIterator(value, async) falls back to the sync protocol
        wrapped in a CreateAsyncFromSyncIterator. */
     uint8_t   async;
@@ -250,9 +261,9 @@ typedef struct JSObsState {
        owns `next` — the teardown loop's continuation, the close sequence's — so sharing one byte would send
        the walk to the close's exit the first time a callback threw. */
     uint8_t   rnext;
-    /* §2.3'S OWN RETURN STAGES, each its own byte for the same reason `rnext` is: a native subscription can be
-       made from inside an algorithm that has already parked an emit on `next`, and takeUntil makes two of them
-       in a row around one. */
+    /* THE OPERATORS' OWN RETURN STAGES, each its own byte for the same reason `rnext` is: a native
+       subscription can be made from inside an algorithm that has already parked an emit on `next`, and
+       takeUntil makes two of them in a row around one. */
     uint8_t   snext;      /* the stage a spec-prose "Subscribe to an Observable" returns to */
     uint8_t   fnext;      /* the stage "convert to an Observable" returns to */
     uint8_t   kind;       /* K_* — which operator this invocation belongs to */
@@ -293,7 +304,7 @@ void     obs_report_enter(JSContext *ctx, JSObsState *s, JSValue err, int ret);
 /* §2.2.1 "Subscribe to an Observable" from spec prose, returning to `ret`. All three BORROWED. */
 void     obs_subscribe_enter(JSContext *ctx, JSObsState *s, JSValueConst observable, JSValueConst io,
                              JSValueConst signal, int ret);
-/* §2.3.1 "convert to an Observable", as a CALL so its TypeError arrives as a value. `value` BORROWED. */
+/* §2.2.1 "convert to an Observable", as a CALL so its TypeError arrives as a value. `value` BORROWED. */
 void     obs_convert_enter(JSContext *ctx, JSObsState *s, JSValueConst value, int ret);
 
 /* CONVERT `options` AS A `SubscribeOptions` AND PLACE ITS `signal` ON THE STATE — Web IDL §3.2.17 Dictionary
@@ -318,9 +329,9 @@ int      obs_subscribe_options_run(JSContext *ctx, JSObsState *s, JSValueConst o
 int obs_ops_entry(JSContext *ctx, JSObsState *s, int op, int *pr);
 int obs_ops_stage(JSContext *ctx, JSObsState *s, JSValue *pcb_result, JSValue **out_cb, int *out_argc, int *pr);
 
-/* §2.3's METHODS THAT RUN NONE OF THE PAGE'S CODE — map, filter, flatMap, switchMap, catch, finally. Their only
-   Web IDL conversion is a callback-function type, which is a brand check, so they are plain C functions and
-   this is where they are installed from. */
+/* §2.3.2'S METHODS THAT RUN NONE OF THE PAGE'S CODE — map, filter, flatMap, switchMap, catch, finally. Their
+   only Web IDL conversion is a callback-function type, which is a brand check, so they are plain C functions
+   and this is where they are installed from. */
 void obs_ops_install(JSContext *ctx, JSValueConst proto);
 
 /* THE AGENT'S HALF OF THIS FILE: §3's ObservableEventListenerOptions is DECLARED here, so its member names

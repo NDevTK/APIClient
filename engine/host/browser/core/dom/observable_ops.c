@@ -22,10 +22,10 @@
  * callable of the same kind as a page callback: a JS_NewStepClosure over the id of which algorithm it is and
  * the record it operates on. Nothing here calls anything from C.
  *
- * AND WHY THE FILE IS SEPARATE BUT THE MACHINE IS NOT. See observable_impl.h: §2.3's algorithms subscribe,
- * emit, convert and close, so they are stages of §2.1/§2.2's machine rather than a machine beside it. This
- * file owns those stages; observable.c owns the rest and routes to `obs_ops_stage` for anything it does not
- * have. */
+ * AND WHY THE FILE IS SEPARATE BUT THE MACHINE IS NOT. See observable_impl.h: the operators' algorithms
+ * subscribe, emit, convert and close, so they are stages of §2.1/§2.2's machine rather than one beside it.
+ * This file owns those stages; observable.c owns the rest and routes to `obs_ops_stage` for anything it does
+ * not have. */
 #include <string.h>
 
 #include "check.h"
@@ -125,7 +125,7 @@ static JSValue rec_new(JSContext *ctx, JSValueConst sub, JSValueConst arg)
     return rec;
 }
 
-/* §2.3's ubiquitous "Let options be a new SubscribeOptions whose signal is subscriber's subscription
+/* §2.3.2/§2.3.3's ubiquitous "Let options be a new SubscribeOptions whose signal is subscriber's subscription
    controller's signal" — the one line that makes an operator chain unsubscribe itself. OWNED. */
 static JSValue rec_sub_signal(JSContext *ctx, JSValueConst rec)
 {
@@ -331,13 +331,13 @@ int obs_ops_entry(JSContext *ctx, JSObsState *s, int op, int *pr)
 {
     switch (op) {
     case OP_OP_SUBSCRIBE:
-        /* §2.3's "an algorithm that takes a Subscriber subscriber" — the closure captured «kind, source, arg»
-           when the operator method built its Observable. */
+        /* §2.3.2's "an algorithm that takes a Subscriber subscriber" — the closure captured «kind, source,
+           arg» when the operator method built its Observable. */
         s->kind = (uint8_t)JS_VALUE_GET_INT(JS_StepClosureData(&s->hdr, 0));
         s->src  = JS_DupValue(ctx, JS_StepClosureData(&s->hdr, 1));
         s->sub  = JS_DupValue(ctx, step_arg(&s->hdr, 0));
         DCHECK(obs_is_subscriber(s->sub),
-               "§2.3's subscribe callback was invoked with something that is not a Subscriber");
+               "§2.3.2's operator subscribe callback was invoked with a non-Subscriber");
         s->st = rec_new(ctx, s->sub, JS_StepClosureData(&s->hdr, 2));
         obs_goto(s, S_OP_ENTER);
         return 0;
@@ -585,7 +585,7 @@ static int ops_subscribe_callback(JSContext *ctx, JSObsState *s, int *pr)
     }
 
     default:
-        DFAIL("an operator subscribe callback ran for a kind §2.3 does not define");
+        DFAIL("an operator subscribe callback ran for a kind §2.3.2/§2.3.3 does not define");
         *pr = JS_STEP_ABRUPT;
         return 1;
     }
@@ -1166,7 +1166,7 @@ static int ops_stage_enter(JSContext *ctx, JSObsState *s, JSValue *pcb, JSValue 
         return 0;
 
     default:
-        DFAIL("an operator internal-observer algorithm ran with an OA_ id §2.3 does not define");
+        DFAIL("an operator internal-observer algorithm ran with an OA_ id §2.3.2/§2.3.3 does not define");
         *pr = JS_STEP_ABRUPT;
         return 1;
     }

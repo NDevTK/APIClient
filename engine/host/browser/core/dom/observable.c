@@ -221,12 +221,13 @@ JSValue obs_internal_observer_new(JSContext *ctx, JSValueConst n, JSValueConst e
     return internal_observer_new(ctx, n, e, c);
 }
 
-/* §2.3'S PER-SUBSCRIPTION STATE. The standard's operators say "references to all of the following: queue,
-   activeInnerSubscription, outerSubscriptionHasCompleted, and idx" — one mutable record shared by the
-   subscribe callback and every one of its internal observer's algorithms. It is a JS object because
-   §State-isolation says a queue a flow builds is one: its writes are property writes the per-flow COW delta
-   already captures, and it parks to the cold tier with the snapshot for free. Null-prototyped and engine-owned,
-   so reading it back from C runs none of the page's code. */
+/* THE OPERATORS' PER-SUBSCRIPTION STATE. Observable §2.3.2 "Observable-returning operators" says flatMap's
+   subscribe callback holds "references to all of the following: queue, activeInnerSubscription,
+   outerSubscriptionHasCompleted, and idx" — one mutable record shared by the subscribe callback and every
+   one of its internal observer's algorithms. It is a JS object because §State-isolation says a queue a flow
+   builds is one: its writes are property writes the per-flow COW delta already captures, and it parks to the
+   cold tier with the snapshot for free. Null-prototyped and engine-owned, so reading it back from C runs
+   none of the page's code. */
 JSValue obs_record_new(JSContext *ctx)
 {
     JSValue rec = idl_slots_new(ctx);
@@ -372,7 +373,7 @@ static void obs_close_enter(JSContext *ctx, JSObsState *s, int has, JSValue reas
 }
 
 /* §2.1's THREE MEMBERS AS FUNCTION OBJECTS OF THIS REALM, read off Subscriber.prototype at install time.
-   §2.3's operators and §2.3.1's arms are all specified as "run subscriber's next() METHOD", so a native
+   §2.3.2/§2.3.3's operators and §2.2.1's convert arms all say to run a Subscriber's next() METHOD, so a native
    algorithm must reach the same function object the page sees rather than mint a second one — and taking the
    reference HERE is what keeps a page that later replaces the property from redirecting the standard's own
    algorithms. Indexed by EM_NEXT/EM_ERROR/EM_COMPLETE/EM_TEARDOWN. */
@@ -402,8 +403,9 @@ void obs_report_enter(JSContext *ctx, JSObsState *s, JSValue err, int ret)
     obs_goto(s, S_REPORT);
 }
 
-/* The live exception becomes `subscriber.error(E)` — §2.3.1's answer at every one of its throwing steps, and
-   §2.3.2/§2.3.3's at every "if an exception E was thrown, then run subscriber's error() method, given E". */
+/* The live exception becomes `subscriber.error(E)` — §2.2.1's answer at every one of the convert's throwing
+   steps, and §2.3.2/§2.3.3's at every "If an exception E was thrown, then run subscriber's error() method,
+   given E, and abort these steps". */
 void obs_fail_to(JSContext *ctx, JSObsState *s, int ret)
 {
     obs_emit_enter(ctx, s, EM_ERROR, JS_GetException(ctx), ret);
@@ -436,12 +438,14 @@ void obs_subscribe_enter(JSContext *ctx, JSObsState *s, JSValueConst observable,
     obs_goto(s, S_SUB_NATIVE);
 }
 
-/* §2.3.1 "convert to an Observable", as a CALL, returning to `ret` with the answer in `s->op1` — or with the
-   TypeError live and `s->op1` an exception. The standard's own note asks for exactly this ("we shouldn't
-   invoke from() directly … we want to pipe the exceptions to subscriber"), and a call is what gives the
-   caller the throw as a VALUE: this machine declares catches_abrupt, so an abrupt request result is an operand
-   rather than an unwind. The function object is the realm's OWN reference to §2.3.1's machine, never
-   `Observable.from` read off the constructor, which a page may replace. */
+/* §2.2.1 "convert to an Observable", as a CALL, returning to `ret` with the answer in `s->op1` — or with the
+   TypeError live and `s->op1` an exception. The standard asks for exactly this where its OPERATORS reach the
+   algorithm — §2.3.2's flatMap and switchMap each carry the issue note "We shouldn't invoke from() directly.
+   Rather, we should call some internal algorithm that passes-back the exceptions for us to handle properly
+   here, since we want to pipe them to subscriber." — and a call is what gives the caller the throw as a VALUE:
+   this machine declares catches_abrupt, so an abrupt request result is an operand rather than an unwind. The
+   function object is the realm's OWN reference to §2.2.1's convert machine, never `Observable.from` read off
+   the constructor, which a page may replace. */
 static int g_from_fn_slot;
 
 void obs_convert_enter(JSContext *ctx, JSObsState *s, JSValueConst value, int ret)
@@ -558,7 +562,7 @@ static void sub_add_algo(JSContext *ctx, JSObsState *s, JSValue algo)
     JS_FreeValue(ctx, algo);
 }
 
-/* §2.3.1: "return a new Observable whose subscribe callback is an algorithm that takes a Subscriber". The
+/* §2.2.1: "Return a new Observable whose subscribe callback is an algorithm that takes a Subscriber". The
    algorithm is a step closure over the SOURCE, which is the whole of what each arm captures. */
 static JSValue observable_from_arm(JSContext *ctx, int op, JSValueConst source)
 {
@@ -633,7 +637,7 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
                 return JS_STEP_ABRUPT;
             }
             s->sub = JS_DupValue(ctx, s->hdr.this_val);
-            /* §2.1's FULLY-ACTIVE GUARD, which every one of these four members opens with: "If this's
+            /* Observable §2.1's FULLY-ACTIVE GUARD, which all four members open with: "If this's
                relevant global object is a `Window` object, and its associated `Document` is not fully active,
                then return." It is after the brand test and after Web IDL's argument conversion, because
                those precede step 1 —
@@ -673,7 +677,7 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
             break;
 
         case OP_FROM:
-            /* §2.3.1 "convert to an Observable" steps 1-2. Everything after them is a probe, and each probe
+            /* §2.2.1 "convert to an Observable" steps 1-2. Everything after them is a probe, and each probe
                is a [[Get]] of the page's. */
             s->obs = JS_DupValue(ctx, step_arg(&s->hdr, 0));
             if (!JS_IsObject(s->obs)) {
@@ -692,7 +696,7 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
             s->obs = JS_DupValue(ctx, JS_StepClosureData(&s->hdr, 0));   /* the source it captured */
             s->sub = JS_DupValue(ctx, step_arg(&s->hdr, 0));
             DCHECK(subscriber_is(s->sub),
-                   "§2.3.1's subscribe callback was invoked with something that is not a Subscriber");
+                   "§2.2.1's convert arm: its subscribe callback was invoked with a non-Subscriber");
             if (op == OP_FROM_PROMISE) { obs_goto(s, S_PROMISE_REACT); break; }
             /* Both iterable arms begin the same way: an aborted subscription produces nothing at all. */
             if (sub_signal_aborted(ctx, s)) { obs_goto(s, S_DONE); break; }
@@ -713,9 +717,11 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
             s->async = 1;
             if (sub_signal_aborted(ctx, s)) { obs_goto(s, S_DONE); break; }
             if (!JS_IsObject(s->iocb[1])) {
-                /* §2.3.1: "If Type(iteratorResult) is not Object, then run subscriber's error() method with
-                   a TypeError" — which is also where a `next` that threw or answered a non-object lands,
-                   because both were turned into this promise's settlement. */
+                /* §2.2.1 convert step 5.6, nextAlgorithm's "React to nextPromise": its FULFILLED branch is
+                   an UNNUMBERED list, so the branch is named rather than given a sub-number it does not have.
+                   Its first step is "If Type(iteratorResult) is not Object, then run subscriber's error()
+                   method with a TypeError" — which is also where a `next` that threw or answered a non-object
+                   lands, because both were turned into this promise's settlement. */
                 JS_ThrowTypeError(ctx, "an async iterator's next() did not answer an object");
                 obs_fail(ctx, s);
                 break;
@@ -1118,9 +1124,10 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
             continue;
 
         case S_EMIT_CALL: {
-            /* §2.3's "run subscriber's next()/error()/complete() METHOD". It is a CALL of this realm's own
-               reference to that member, so the whole of §2.1 runs — including its close and its walk — as an
-               ordinary machine on the trampoline rather than as C re-entry. */
+            /* Running a Subscriber's next(), error() or complete() METHOD, which is how §2.2.1's convert
+               arms and §2.3.2/§2.3.3's operators are all written. It is a CALL of this realm's own reference
+               to that member, so the whole of §2.1 runs — including its close and its walk — as an ordinary
+               machine on the trampoline rather than as C re-entry. */
             JSValue fn = realm_value_get(ctx, g_sub_fn_slot[s->emit]);
             JSValueConst arg = s->value;
             int n = (s->emit == EM_COMPLETE) ? 0 : 1;
@@ -1140,9 +1147,9 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
         }
 
         case S_FROM_PROBE_ASYNC: case S_FROM_PROBE_SYNC: {
-            /* §2.3.1 steps 3 and "From iterable" step 1. GetMethod, NOT GetIterator: a source with no
-               iterator protocol must fall through rather than throw, and only a PRESENT non-callable is a
-               TypeError. */
+            /* §2.2.1 convert steps 3 and 7, the steps labeled "From async iterable" and "From iterable".
+               GetMethod, NOT GetIterator: a source with no iterator protocol must fall through rather than
+               throw, and only a PRESENT non-callable is a TypeError. */
             bool is_async = (s->hdr.stage == S_FROM_PROBE_ASYNC);
             JSAtom a = JS_WellKnownSymbolAtom(is_async ? JS_WKS_ASYNC_ITERATOR : JS_WKS_ITERATOR);
             JSValue m;
@@ -1242,8 +1249,9 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
         }
 
         case S_ITER_WRAP: {
-            /* 27.1.4.1 CreateAsyncFromSyncIterator — the one step of GetIterator(obj, async) a host cannot
-               perform itself, so the engine owns it. Both operands are CONSUMED. */
+            /* ECMAScript §27.1.5.1 CreateAsyncFromSyncIterator ( syncIteratorRecord ) — step 1.b.iv of
+               §7.4.4 GetIterator ( obj, kind ), the one step a host cannot perform itself, so the engine owns
+               it. Both operands are CONSUMED. */
             JSValue nextfn = JS_UNDEFINED;
             JSValue wrapper = JS_NewAsyncFromSyncIterator(ctx, s->io, s->iocb[0], &nextfn);
             s->io = wrapper;
@@ -1258,7 +1266,7 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
         }
         /* fall through */
         iter_registered:
-            /* §2.3.1: an abort algorithm that closes the iterator, registered only once the record exists. */
+            /* §2.2.1: an abort algorithm that closes the iterator, registered only once the record exists. */
             if (sub_signal_aborted(ctx, s)) { obs_goto(s, S_DONE); continue; }
             {
                 JSValue algo = JS_NewStepClosure(ctx, g_op_stepid[OP_ITER_CLOSE], 0, 1,
@@ -1442,7 +1450,7 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
         }
 
         case S_OP_CONVERT: {
-            /* §2.3.1's convert, AS A CALL — see obs_convert_enter. The answer, or the exception, lands in
+            /* §2.2.1's convert, AS A CALL — see obs_convert_enter. The answer, or the exception, lands in
                `op1`, which is where the operator stage that asked reads it. */
             JSValue fn = realm_value_get(ctx, g_from_fn_slot);
             JSValueConst arg = s->op1;
@@ -1557,14 +1565,14 @@ void observable_init(JSContext *ctx)
             g_sub_fn_slot[i] = realm_value_declare(ctx, FN[i]);
     }
     g_sub_native_slot = realm_value_declare(ctx, "Observable §2.2.1 subscribe-to (spec prose)");
-    g_from_fn_slot    = realm_value_declare(ctx, "Observable §2.3.1 convert-to-an-Observable");
+    g_from_fn_slot    = realm_value_declare(ctx, "Observable §2.2.1 convert-to-an-Observable");
     /* §2.2's SubscribeOptions has no ARGUMENT POSITION to be declared at — every operation in this component
        registers its own step definition, so there is no idl_method_id_* entry for the argument machine to
        convert it at — which is exactly the entry idl_dict_declare is public for. It interns the member names
        once per runtime AND runs §3.2.17's read-order check over the declaration, which is why the walk goes
        through it rather than reaching for JS_NewAtom. */
     g_subscribe_options_atoms = idl_dict_declare(ctx, &SUBSCRIBE_OPTIONS_DECL);
-    obs_ops_init(ctx);   /* §3's ObservableEventListenerOptions, declared where `when()` is implemented */
+    obs_ops_init(ctx);   /* Observable §3's ObservableEventListenerOptions, declared beside `when()` */
     realm_declare_intrinsic(observable_install_protos);
 }
 
@@ -1608,18 +1616,20 @@ void observable_install_protos(JSContext *ctx)
     obs_ops_install(ctx, obs_p);
     JS_SetClassProto(ctx, g_obs_class, obs_p);
 
-    /* §3's `partial interface EventTarget { Observable when(...) }`. A partial interface is the SAME interface,
-       so the member goes on EventTarget.prototype rather than onto anything of this component's — which is
-       what makes `document.when` and `element.when` and `signal.when` one declaration. */
+    /* Observable §3 "EventTarget integration" declares `partial interface EventTarget { Observable
+       when(...); }`. Web IDL §2.2 "Interfaces": a partial interface is the SAME interface, so the member goes
+       on EventTarget.prototype rather than onto anything of this component's — which is what makes
+       `document.when` and `element.when` and `signal.when` one declaration. */
     {
         JSValue etp = event_target_proto(ctx);
-        DCHECK(JS_IsObject(etp), "§3's when() was installed into a realm with no EventTarget.prototype");
+        DCHECK(JS_IsObject(etp),
+               "Observable §3's when() was installed into a realm with no EventTarget.prototype");
         idl_install_step_method(ctx, etp, "when", 1, g_op_stepid[OP_WHEN]);
         JS_FreeValue(ctx, etp);
     }
 
     /* THE TWO ALGORITHMS SPEC PROSE REACHES WITHOUT A MEMBER, as function objects OF THIS REALM. §2.2.1's
-       "subscribe to an Observable" and §2.3.1's "convert to an Observable" are both stated as abstract
+       "subscribe to an Observable" and §2.2.1's "convert to an Observable" are both stated as abstract
        operations precisely so the operators can use them without going through the Web IDL bindings — and a
        page that replaces `Observable.prototype.subscribe` or `Observable.from` must not redirect them. */
     {
@@ -1627,7 +1637,7 @@ void observable_install_protos(JSContext *ctx)
         CHECK(JS_IsFunction(ctx, fn), "observable: §2.2.1's spec-prose subscribe could not be minted");
         realm_value_set(ctx, g_sub_native_slot, fn);
         fn = JS_NewCFunction2(ctx, NULL, "", 1, JS_CFUNC_step, g_op_stepid[OP_FROM]);
-        CHECK(JS_IsFunction(ctx, fn), "observable: §2.3.1's convert could not be minted");
+        CHECK(JS_IsFunction(ctx, fn), "observable: §2.2.1's convert could not be minted");
         realm_value_set(ctx, g_from_fn_slot, fn);
     }
 }
@@ -1645,7 +1655,8 @@ void observable_install(JSContext *ctx, JSValueConst global)
     DCHECK(!JS_IsNull(proto), "Observable was installed into a realm with no proto build");
     JS_SetConstructor(ctx, ctor, proto);
     JS_FreeValue(ctx, proto);
-    /* §2.3.1's `static Observable from(any value)` lives on the interface object. */
+    /* §2.3.1 from(), declared `static Observable from(any value)` in §2.2's IDL, lives on the interface
+       object. */
     JS_SetPropertyStr(ctx, ctor, "from",
                       JS_NewCFunction2(ctx, NULL, "from", 1, JS_CFUNC_step, g_op_stepid[OP_FROM]));
     idl_define_global_property_reference(ctx, global, "Observable", ctor);

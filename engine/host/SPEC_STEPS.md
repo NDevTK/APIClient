@@ -2644,10 +2644,12 @@ an abort algorithm registered on the subscriber's own signal can add nothing to 
 (`addTeardown` on an inactive subscriber fires immediately instead), but it CAN close another
 subscription, so the list is read **after** step 3 has finished, never captured before it.
 
-### 10.4 §2.3.1 `from()` — four arms, and the order they are tried in
+### 10.4 §2.2.1 `convert to an Observable` — four arms, and the order they are tried in
 
-`convert to an Observable` is stated as an abstract operation precisely so the operators can reach it
-without the Web IDL bindings. Its arms, in order:
+§2.3.1 `from()` is ONE step — "Return the result of converting value to an Observable. Rethrow any
+exceptions." — so everything below is §2.2.1 "Supporting concepts", not §2.3.1. `convert to an Observable`
+is stated as an abstract operation precisely so the operators can reach it without the Web IDL bindings.
+Its arms, in the order the algorithm's ten steps try them — numbered below by ARM, not by spec step:
 
 0. If Type(value) is not Object, **throw a TypeError** — no primitive is coerced, so a String is not
    an iterable here. —
@@ -2711,7 +2713,7 @@ the rest of the author code lives:
 | §2.1 `next` / `error` / `complete` / `addTeardown` | 6 | `addTeardown` on an inactive subscription invokes **during** `addTeardown`, FIFO |
 | §2.2.1 `subscribe to an Observable` | 7 | step 10 runs the producer **even when** step 9.1 already closed the subscriber |
 | §2.1 `close a subscription` | 2 (one per teardown) | the teardown list is read **after** the signal abort, and runs in **reverse** order |
-| §2.3.1 `convert to an Observable` | 3 + the arm's own loop | `GetMethod`, never `GetIterator`, for the probe; a sync iterable's loop is unbounded |
+| §2.2.1 `convert to an Observable` | 3 + the arm's own loop | `GetMethod`, never `GetIterator`, for the probe; a sync iterable's loop is unbounded |
 | §2.3.2 an operator's subscribe callback | 1-2 subscriptions + the arm's own | takeUntil's step 5 skips the SOURCE entirely when the notifier already fired |
 | §2.3.2 an operator's `next` steps | 1 callback + 1 emit (+1 convert +1 subscribe for flatMap/switchMap/catch) | the mapper is invoked with «value, idx» and "rethrow"; idx moves only on the NON-throwing path |
 | §2.3.3 the promise operators | 1 read + 1 settle + 1 abort per decision | the settle precedes the abort, and the dependent signal is §3.2's, never an algorithm pair |
@@ -2742,7 +2744,7 @@ suspension point the standard does not have. The four that are machines are mach
 
 | Method | Why it reaches the page's code |
 | --- | --- |
-| `takeUntil(value)` | step 2 **converts** `value` to an Observable — §2.3.1's `GetMethod` on `@@asyncIterator` then `@@iterator`, both the page's |
+| `takeUntil(value)` | step 2 **converts** `value` to an Observable — §2.2.1 convert steps 3 and 7, `GetMethod` on `@@asyncIterator` then `@@iterator`, both the page's |
 | `take(amount)` / `drop(amount)` | Web IDL `unsigned long long` is ToNumber, so `take({valueOf(){…}})` is the page's loop |
 | `inspect(inspectorUnion)` | five dictionary members, read with `[[Get]]` in Web IDL §3.2.18's **lexicographic** order — `abort`, `complete`, `error`, `next`, `subscribe` |
 
