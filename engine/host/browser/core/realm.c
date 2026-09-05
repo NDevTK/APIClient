@@ -87,11 +87,16 @@ static int idl_exposure_row_name_cmp(const void *key, const void *row)
    WHY IT IS SOUND. The subject is a realm this codebase has just finished building, before one byte of page
    script has run, so every property name it reads is a name this codebase wrote — never a value a stranger
    stated, which is the only thing that would make an abort here a switch somebody else holds. The two sets
-   cannot collide by accident either: of the corpus's identifiers exactly ONE begins with a lower-case letter
-   (`console`, a §3.13.1 namespace object, which is in this band and answers to the same descriptor), so a
-   §3.7.6 attribute or §3.7.7 operation of the [Global] interface — which §3.7.6 requires to be ENUMERABLE, and
-   which is spelled `location`, `document`, `fetch` — can never be mistaken for one of these. No ECMAScript
-   intrinsic global name is a Web IDL identifier either, so the JS engine's own globals are outside the set.
+   cannot collide by accident either, and the reason is STRUCTURAL rather than a property of today's corpus: the
+   table is keyed by the identifiers §3.8 puts on a global, so a §3.7.6 attribute or §3.7.7 operation of the
+   [Global] interface — which §3.7.6 requires to be ENUMERABLE, and which is spelled `location`, `document`,
+   `fetch` — HAS NO ROW AT ALL and bsearch answers NULL for it. Case is corroboration and not the argument, and
+   it is deliberately not written here as a count: most of these identifiers are capitalised, some are not
+   (`console`, a §3.13.1 namespace object; a §3.7.2 [LegacyWindowAlias] such as `webkitURL`), every one of the
+   lower-case ones IS in this band and answers to the same descriptor, and the set moves whenever the corpus is
+   regenerated — `grep '^[a-z]' <(…IDL_EXPOSURE identifiers…)` is the derivation, and a number written here
+   would be a claim about a generated file another diff owns. No ECMAScript intrinsic global name is a Web IDL
+   identifier either, so the JS engine's own globals are outside the set.
    WHAT IT DOES NOT SEE, named because a check trusted past its evidence is worse than none: an interface
    object a HOST puts on the global AFTER the platform's own installs finish (a harness global, a solver seam)
    is outside the walk. Those are not §3.8 property references and none of them is named by the corpus; the day
@@ -106,13 +111,55 @@ static int idl_exposure_row_name_cmp(const void *key, const void *row)
    would have been the mirror of that — blind to every worker realm, which is the realm kind §3.3.7 [Exposed]
    step 1 exists to make different — so core/platform.c calls it as well, and this stays where a realm that
    never reaches a document install is still judged. Running twice over one global costs nothing: the walk
-   allocates no state, decides nothing, and the property it asserts is monotone. */
+   allocates no state, decides nothing, and the properties it asserts are monotone.
+   AND IT ASKS BOTH HALVES OF ITS OWN MESSAGE, WHICH USED TO BE ONE HALF AND A CLAIM. The enumeration was
+   `JS_GPN_ENUM_ONLY`, so the walk saw ONLY the enumerable failure — the site that reaches for JS_SetPropertyStr
+   — while the crash it raised went on to say that such an interface "is ALSO present in every realm its
+   exposure set excludes". That second sentence is about §3.3.7 [Exposed] step 1 and the walk was not asking it:
+   a site that bypasses §3.8's door with JS_DefinePropertyValueStr and the RIGHT descriptor skips step 1 exactly
+   as loudly and is INVISIBLE to an enumerable-only walk. An assert whose message claims more than the check
+   performs is the one failure this instrument cannot afford, because it is read as the ground truth for §3.8.
+   So the enumeration is now every own string-keyed property and the row decides which QUESTION is owed:
+   `JS_GPN_SET_ENUM` fills in `is_enumerable` per property (quickjs.h declares that as the flag's whole
+   purpose), the descriptor half is asserted from that field, and the exposure half is asked of
+   idl_exposed_in_realm — §3.3.7 step 1's ONE statement, never re-spelled here as `row->set & global names`,
+   which is why this pays for a second bsearch it could have avoided. core/idl_args.h states that rule from the
+   other side: an auditor that spelled the condition itself would be a second copy of the standard, and two
+   right answers to one question is the shape that drifts.
+   THE ROW IS THE DISCRIMINATOR BETWEEN AN INTERFACE OBJECT AND A [Global] MEMBER, and it is DERIVED. Widening
+   past ENUM_ONLY brings in the §3.7.6 attributes and §3.7.7 operations of the [Global] interface — `document`,
+   `location`, `alert`, `matchMedia` — which §3.7.6 requires to be ENUMERABLE and which would fail the
+   descriptor half if they were in this population at all. They are not, and nothing here decides that:
+   IDL_EXPOSURE is keyed by "the identifier Web IDL §3.8 `define the global property references` puts on a
+   global", so a MEMBER has no row by construction and bsearch answers NULL for it. The two bands cannot
+   collide by accident either, and that is settled by the paragraph above STRUCTURALLY — a member has no row —
+   with one further fact this widening newly leans on: the intersection of the corpus with ECMAScript §19's
+   global object properties is EMPTY, so the JS engine's own intrinsics, every one of them non-enumerable and
+   none of them through §3.8's door, cannot be mistaken for a property reference. Under ENUM_ONLY that was
+   inert, because an intrinsic is not enumerable and the walk never saw one; it is load-bearing now, it is a
+   fact about two generated vocabularies rather than about this file, and it is re-derived by intersecting
+   IDL_EXPOSURE's identifiers with §19's list rather than by trusting this sentence.
+   NAMED RESIDUAL — THE PRECONDITION IS CARRIED BY NOBODY. WHAT IS NOT COVERED: the soundness argument above —
+   that every property name this reads is a name this codebase wrote — is a fact about WHEN it is called, and this
+   function cannot see it. Both callers are inside a realm's construction, before one byte of script has run in
+   the realm being walked — but that is a sentence about the call graph, which is exactly the shape a privilege
+   may not be justified by. A page CAN add own properties to its own global: an ordinary [[Set]] makes an
+   ENUMERABLE one, which is the descriptor half's pre-existing population and not something this widening
+   added, while `Object.defineProperty(globalThis, id, {value: 0})` makes a NON-enumerable one and would reach
+   the exposure half. Either way a page would hold an abort switch over the engine, and only unreachability
+   stops it. WHAT THE NEXT DIFF BUILDS: a per-realm fact recording that script has begun in this realm — none exists today,
+   and `quantum_slice_open` is NOT it, because a child navigable's realm is legitimately constructed inside a
+   parent's open slice, so asserting it here would fire on a correct case — set where a realm first runs a
+   classic script and DCHECKed false at the top of this walk. HOW ITS ABSENCE WOULD SHOW: this walk gains a
+   caller outside realm construction, and the engine then aborts on an identifier NO component in this tree
+   installs, so `git grep '"<identifier>"' engine/host/browser` lands only in the generated table — a crash
+   whose own remedy has no site is the tell that the name came from outside. */
 void realm_assert_global_property_references(JSContext *ctx)
 {
     JSPropertyEnum *tab = NULL;
     uint32_t n = 0, i;
     JSValue global = JS_GetGlobalObject(ctx);
-    int ok = JS_GetOwnPropertyNames(ctx, &tab, &n, global, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY);
+    int ok = JS_GetOwnPropertyNames(ctx, &tab, &n, global, JS_GPN_STRING_MASK | JS_GPN_SET_ENUM);
 
     /* This block only exists in a dev build, so the DCHECK is live here and the failure arm below it is not a
        path: a non-zero status aborts, and `tab`/`n` are never read out of a failed call. */
@@ -121,19 +168,41 @@ void realm_assert_global_property_references(JSContext *ctx)
         const char *name = JS_AtomToCString(ctx, tab[i].atom);
         const IdlExposureRow *row;
 
-        if (name == NULL) continue;
+        /* A SKIPPED NAME IS A HOLE IN A CENSUS, so this is an abort and not a `continue`. The walk's whole
+           worth is that its population is EVERY own property of the finished global; a name quietly dropped
+           because it could not be materialized leaves the audit reporting clean about a property it never
+           looked at, which is the shape this instrument exists to catch happening to the instrument. */
+        DCHECK(name != NULL,
+               "a property name of the realm's global could not be materialized as a string, so Web IDL §3.8's "
+               "descriptor could not be asked of it — the only way this fails is allocation");
         row = bsearch(name, IDL_EXPOSURE, sizeof IDL_EXPOSURE / sizeof IDL_EXPOSURE[0],
                       sizeof IDL_EXPOSURE[0], idl_exposure_row_name_cmp);
-        DCHECKF(row == NULL,
+        /* NO ROW MEANS THIS IS NOT A §3.8 PROPERTY REFERENCE — a §3.7.6 attribute or §3.7.7 operation of the
+           [Global] interface, an ECMAScript intrinsic, or a name a host added — and none of those owes either
+           question below. See the banner for why that classification is the generated table's to make. */
+        if (row == NULL) { JS_FreeCString(ctx, name); continue; }
+        DCHECKF(!tab[i].is_enumerable,
                 "`%s` is an ENUMERABLE own property of this realm's global, and Web IDL §3.8 Platform objects "
                 "implementing interfaces performs DefineMethodProperty(target, id, interfaceObject, false) for "
                 "it — ECMAScript §10.2.8 DefineMethodProperty ( homeObj, name, closure, enumerable ) makes that "
                 "{ [[Writable]]: true, [[Enumerable]]: FALSE, [[Configurable]]: true }, so a browser never "
                 "shows this name to `for (var k in globalThis)` or to `Object.keys(globalThis)`. It got here "
                 "through an ordinary [[Set]] rather than through core/idl_args' "
-                "idl_define_global_property_reference, which is §3.8's one door and also where §3.3.7 "
-                "[Exposed] step 1 is asked — so this interface is ALSO present in every realm its exposure set "
-                "excludes. Route the install: `git grep '\\\"%s\\\"' engine/host/browser` finds it", name, name);
+                "idl_define_global_property_reference, which is §3.8's one door. Route the install: "
+                "`git grep '\\\"%s\\\"' engine/host/browser` finds it", name, name);
+        /* AND THE OTHER HALF OF THAT DOOR. The descriptor above is what a [[Set]] gets wrong; this is what
+           EVERY bypass gets wrong, including one whose descriptor is right — §3.3.7 step 1 is asked INSIDE
+           idl_define_global_property_reference and nowhere else, so a name that reached this global by any
+           other route has never been asked whether it belongs in this realm at all. */
+        DCHECKF(idl_exposed_in_realm(ctx, name),
+                "`%s` is an own property of this realm's global and Web IDL §3.3.7 [Exposed] step 1 says it "
+                "must not be — \"If construct's exposure set is not `*`, and realm.[[GlobalObject]] does not "
+                "implement an interface that is in construct's exposure set, then return false\" — so a "
+                "browser answers `'%s' in globalThis` FALSE for a global object of this kind. The one place "
+                "that step is asked is core/idl_args' idl_define_global_property_reference, which SKIPS the "
+                "define when it answers false, so a name standing here despite it did not come through §3.8's "
+                "door. Its descriptor may well be right, which is why the check above did not catch it. Route "
+                "the install: `git grep '\\\"%s\\\"' engine/host/browser` finds it", name, name, name);
         JS_FreeCString(ctx, name);
     }
     for (i = 0; i < n; i++) JS_FreeAtom(ctx, tab[i].atom);

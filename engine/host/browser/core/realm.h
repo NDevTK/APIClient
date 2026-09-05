@@ -100,7 +100,8 @@ unsigned realm_global_names(JSContext *ctx);
  * URL of the `top-level` environment".
  *
  * IT IS INHERITED, NOT LOOKED UP. A nested navigable's environment takes the field from its PARENT
- * environment at creation, exactly as §7.2.6's policy container is cloned from the creator at creation — so a
+ * environment at creation, exactly as HTML §7.3.2.1 Creating browsing contexts clones the creator's policy
+ * container at creation ("Set document's policy container to a clone of creator's policy container") — so a
  * document does not walk to its top to answer, and a later navigation of the top cannot retroactively change
  * what a child was created under. That inheritance is where the ancestral rule Secure Contexts §4.2 argues for
  * actually lives: an `https` iframe inside an `http` page holds the `http` address here and is correctly NOT a
@@ -118,8 +119,26 @@ unsigned realm_global_names(JSContext *ctx);
  * DCHECK names the question rather than guarding a case anybody meant to reach. */
 JSValue realm_top_level_creation_url(JSContext *ctx);
 
-/* WEB IDL §3.8 Platform objects implementing interfaces' DESCRIPTOR, ASSERTED OVER A REALM'S GLOBAL — see
- * realm.c for what the walk reads and why an assert at §3.8's own entry could not make this statement.
+/* WEB IDL §3.8 Platform objects implementing interfaces' DESCRIPTOR **AND** §3.3.7 [Exposed] STEP 1, ASSERTED
+ * OVER A REALM'S GLOBAL — see realm.c for what the walk reads and why an assert at §3.8's own entry could not
+ * make either statement.
+ *
+ * IT ASKS TWO QUESTIONS OF ONE FACT, AND THE FACT IS THE GENERATED ROW. For every own string-keyed property of
+ * the global that IDL_EXPOSURE names — which is exactly the identifiers §3.8 `define the global property
+ * references` puts there, so a §3.7.6 attribute or §3.7.7 operation of the [Global] interface has no row and is
+ * not in this population at all — it asserts that the property is NOT enumerable (§3.8's descriptor, which an
+ * ordinary [[Set]] gets wrong) and that the identifier IS exposed in this realm (§3.3.7 step 1, which EVERY
+ * bypass gets wrong, including one whose descriptor is right). Splitting them is not two auditors: one walk,
+ * one table, one site, and the exposure half is asked of core/idl_args' idl_exposed_in_realm rather than
+ * re-spelled here, because §3.3.7 step 1 has one statement in this tree and an auditor that restated it would
+ * be the second copy.
+ *
+ * A CALLER MUST BE INSIDE THE REALM'S CONSTRUCTION, and that is a PRECONDITION this function cannot check. The
+ * walk asserts over names it assumes THIS CODEBASE wrote; a page can add own properties to its own global, so
+ * a caller that ran this after script had executed in the realm being walked would hand that page an abort
+ * switch over the engine — an ordinary [[Set]] reaching the descriptor half, an Object.defineProperty reaching
+ * the exposure half. Nothing here can see when it was called. realm.c carries the residual with what the next
+ * diff builds; until it exists, a new caller is a change to that file and not only to this one.
  *
  * IT HAS TWO CALLERS BECAUSE A REALM'S CONSTRUCTION HAS TWO ENDS, AND THAT IS ROUTING RATHER THAN A COPY.
  * The invariant is about a FINISHED global, and which call finishes one depends on what kind of realm it is: a
@@ -129,8 +148,9 @@ JSValue realm_top_level_creation_url(JSContext *ctx);
  * global and reports it as the whole; MOVED to the second end it stops seeing worker realms altogether, which
  * is the realm kind whose surface §3.3.7 [Exposed] step 1 exists to make different. So it is one function
  * asked at both ends, and running twice over a Window's global costs nothing: the walk allocates no state,
- * decides nothing, and asserts a property that is monotone — a name that got there through an ordinary [[Set]]
- * does not stop having been set.
+ * decides nothing, and asserts two properties that are both monotone — a name that got there through an
+ * ordinary [[Set]] does not stop having been set, and an identifier this realm's global names exclude does not
+ * start being exposed.
  *
  * DEV ONLY, like the walk itself: the condition is a full own-property enumeration of the global, which is
  * work rather than a side-effect-free test, so it is the block and not merely the DCHECK that is compiled out.
@@ -185,9 +205,27 @@ JSValue realm_value_get(JSContext *ctx, int slot);              /* OWNED: the ca
  * `crossOriginIsolated`, where the probe fired on the first coarsen of every run one turn after it was written.
  *
  * `path` is resolved from this realm's GLOBAL, dot by dot — `ResizeObserver`, `Document.prototype.activeElement`,
- * `HTMLDialogElement.prototype.showModal`. A dotted path rather than a bare name because the INTERFACE OBJECT is
- * often not the producer: `HTMLDialogElement` exists in this build while `showModal`, the member that puts an
- * element in the top layer, does not. A path names the INTERFACE OBJECT rather than an instance
+ * `HTMLDialogElement.prototype.showModal`. A dotted path rather than a bare name because the INTERFACE OBJECT and
+ * the MEMBER are different questions: a bare `HTMLDialogElement` answers whether the interface is EXPOSED, which
+ * Web IDL §3.7.3 puts on the global whole, while a step is owed work by a MEMBER, which §3.7.6/§3.7.7 declare on
+ * the prototype and which arrives on its own schedule. That gap is why the dot is not decoration — and stating
+ * it as a property of the two SECTIONS rather than as an example from this build is deliberate: this sentence
+ * used to read "`HTMLDialogElement` exists in this build while `showModal` ... does not", which was true when it
+ * was written, went false the day §4.11.4's methods landed, and then taught every reader of this paragraph with
+ * an example that had gone the other way. An illustration drawn from what the tree HAS is a claim about the tree
+ * in the one paragraph whose job is to teach somebody how to aim a probe.
+ *
+ * AND ITS DOMAIN BEING A MEMBER IS ALSO A LIMIT IN THE PRESENT DIRECTION, which is the harder half to see. The
+ * paragraph above records the ABSENT direction — six sites naming `scrollTo` for producers that are internal
+ * algorithms. This is the mirror: a step's operand can have SEVERAL writers, and a probe names ONE. HTML declares
+ * a previously focused element on EVERY HTML element ("Each HTML element has a previously focused element which
+ * is null or an element, and it is initially null"), and §6.12's show popover writes it just as §4.11.4's show a
+ * modal dialog does — so a probe naming only the dialog member reports a REACHABLE step as unreachable for as
+ * long as the other producer exists, and reports nothing when it lands. Before writing a path, ask what else
+ * WRITES the operand, not what would naturally be said to produce it; where the answer is more than one member,
+ * this is the wrong instrument for the same reason an internal algorithm is.
+ *
+ * A path names the INTERFACE OBJECT rather than an instance
  * (`Document.prototype.activeElement`, not `document.activeElement`) because that is where the member is
  * declared, and because resolving through an instance means traversing whatever accessors the instance carries.
  *
