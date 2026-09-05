@@ -5,7 +5,8 @@
  *
  *   node engine/citegen.mjs [path …]      audit (default: engine/host + the fork's own quickjs.c/.h)
  *   node engine/citegen.mjs --all         print every finding rather than the first 120 of each kind
- *   node engine/citegen.mjs --titles      the numbers cited most often that carry no title and no known term
+ *   node engine/citegen.mjs --titles      EVERY row of the NUMBER-ONLY band, which the default run heads at 24 —
+ *                                         each distinct § cited with no title beside it, and what the corpus says that § IS
  *   node engine/citegen.mjs --unanchored  the citations naming no standard that only a file vote placed — the
  *                                         ones inside a DCHECK/DFAIL/CHECK message first, since a crash prints them
  *   node engine/citegen.mjs --gaps        the quotation check's verified/not-found split by distance from the §
@@ -82,7 +83,7 @@
  *     standards the citation's own term evidence names, so `owned` below is false by construction.
  * WHAT THAT LEAVES IS A COUNT, AND A COUNT WITH NO LIST BEHIND IT IS THE SILENT-ZERO SHAPE THIS FILE ALREADY
  * NAMES ELSEWHERE. 8299 cannot be printed — a category that size is read once and never again, which is the
- * muting this whole file is written against. So it is printed the way --titles prints the unverified
+ * muting this whole file is written against. So it is printed the way the NUMBER-ONLY band prints its own
  * population: the count in the summary, the ACTIONABLE HEAD behind a flag. The head is the citations sitting
  * inside a DCHECK/DFAIL/CHECK STRING LITERAL, because that text is what a crash prints and what a reader acts
  * on — a bare number in a comment costs one reading, and a bare number in an abort message sends whoever is
@@ -3043,6 +3044,11 @@ function audit(argv, opts = {}) {
   }
 
   const targets = argv.filter((a) => !a.startsWith("--"));
+  /* WHETHER THE FILE SET WAS NAMED OR WALKED, which is what decides whether a HEAD is a truncation or the
+   * whole answer. A run over one path — or over what `--since` says changed — has a population bounded by
+   * that path, so a band capping its listing there would truncate a list the reader could have had in full,
+   * and the reader standing IN the file is exactly the one the NUMBER-ONLY band exists for. */
+  const explicitFiles = !!opts.files || targets.length > 0;
   let files;
   if (opts.files) files = opts.files;
   else if (targets.length) files = targets.map((t) => (statSync(t).isDirectory() ? walk(t) : [t])).flat();
@@ -3179,6 +3185,7 @@ function audit(argv, opts = {}) {
                  foreignTerm: 0, titleRefused: 0, byTitle: 0, numberRefused: 0,
                  titled: 0, titledQuoted: 0, titledEv: 0, titledOK: 0, titledMis: 0, titledMisInTitle: 0,
                  titledTailEv: 0, titledTailMis: 0, titleDeclined: 0,
+                 noTitle: 0, noTitleDerivable: 0, noTitleNoSection: 0, noTitleCrash: 0,
                  titleBy: { notWords: 0, term: 0, possessive: 0, quotation: 0, oneWord: 0,
                             nearTitle: 0, voted: 0, noCorpus: 0, inSectionText: 0, unplaced: 0 } };
   /* The residue of check (5) — a stated title no channel could place. Listed, never counted as a finding. */
@@ -3189,8 +3196,12 @@ function audit(argv, opts = {}) {
   const byKeyVoted = new Map();
   const voted = [];
   const byOther = new Map();
-  const untitled = new Map();
-  const untitledVoted = new Map();
+  /* THE NUMBER-ONLY POPULATION — a citation that states a § and no title beside it. It is a BAND and never a
+   * finding: nothing here is accused, and the header's rule about the exit code is unchanged. Keyed by
+   * `spec §no` because a TITLE IS A FACT ABOUT THE NUMBER and not about the site, so N sites citing one
+   * number are one row carrying one answer. `sites` holds the first few coordinates for a reader who wants
+   * to stand at one, and `n`/`blind`/`crash` are the counts the census reports. */
+  const numberOnly = new Map();
   const unknownTok = new Map();
   const SEC = "[0-9]+(?:\\.[0-9]+)*|[A-F](?:\\.[0-9]+)+";
   /* A CITATION THE READER CANNOT SEE IS WORSE THAN ONE IT REPORTS WRONG, BECAUSE IT APPEARS IN NO TOTAL. This
@@ -4175,6 +4186,92 @@ function audit(argv, opts = {}) {
         continue;
       }
 
+      /* THE NUMBER-ONLY BAND, RAISED HERE FOR THE REASON THE COMMENT DIRECTLY BELOW GIVES: a MENTION is not a
+       * claim, so it must be in neither the count nor the list, and everything above this line has already
+       * `continue`d the mentions out. A citation that RESOLVED and states no title reaches exactly here.
+       *
+       * WHY THIS IS A BAND AND NOT A CHECK. CLAUDE.md §Browser half requires the section's TITLE beside the
+       * number, and gives the reason: "the title survives an edition the number does not, and a mismatch
+       * between the two is then visible instead of silent." Every channel above can falsify a citation that
+       * states a title — check (2) confirms one, check (4) accuses one, check (5) censuses one it cannot
+       * place. A citation stating a NUMBER ALONE is outside all three BY CONSTRUCTION: there is no claim
+       * beside the number for any of them to read, so the site is ACCEPTED and no line anywhere says it was
+       * never examined. That is this file's own silent zero, arriving at the one shape CLAUDE.md asks
+       * authors to avoid, and it is the shape a renumbering hides in — a wrong number sends a reader to the
+       * wrong place, where they find out, and a number-only citation that RESOLVES tells them they arrived.
+       *
+       * TWO INCIDENTS, HOURS APART, IN DIFFERENT FILES, NEITHER LANE KNOWING OF THE OTHER, AND BOTH WERE
+       * INVISIBLE TO THIS TOOL FOR THE SAME REASON. THE NUMBERS ARE WRITTEN `§N` HERE FOR THE REASON THE
+       * `c.tail` PARAGRAPH GIVES — this file is audited by itself, so a worked example carrying a REAL
+       * number is a REAL citation to PASS 3 and its term evidence would then help decide how every OTHER
+       * citation of that number here resolves. Spelling these two out moved five citations and one
+       * quotation verdict when this band was landed, measured on a frozen tree; the TITLES below are what
+       * make the incidents legible and they are not numbers.
+       * `quickjs.c` cited two ECMAScript Annex B §Ns for `Object.prototype.__lookupGetter__` and
+       * `__lookupSetter__`; in the edition the editors maintain, those two numbers are
+       * `String.prototype.blink ( )` and `String.prototype.bold ( )` — so the citation resolved, read as
+       * authoritative, and sent the reader to a clause about markup. `core/dom/range.c` cited a Web IDL §N
+       * for where an interface's CONSTANTS go; that §N is `Named properties object`, and `Constants` is the
+       * section AFTER it. Both numbers EXIST, so check (1) had nothing to say; neither site stated a title,
+       * so checks (2), (4) and (5) were never asked; and `constant` is not a term the Web IDL corpus
+       * indexes, so check (3) had no phrase to look up. Every channel was silent and every silence was
+       * correct. The population was in no count under any name.
+       *
+       * SO WHAT IS BUILT IS THE REFUSAL'S VISIBILITY AND THE ONE ANSWER THE CORPUS CAN ALREADY GIVE, which
+       * is check (5)'s own settlement applied one axis over: the corpus holds the TITLE of every section its
+       * index has, so for a citation that states only a number this tool can say WHAT THAT NUMBER IS. That
+       * is not an accusation — a bare citation is very often exactly right — it is the two facts a reader
+       * needs on one line. A row reading `idl §N` followed by the heading `Named properties object`,
+       * standing beside a sentence about an interface's constants, is a defect a human sees at a glance and
+       * no channel here can see at all.
+       *
+       * IT IS DELIBERATELY NOT A FINDING, and the reason is landed law rather than caution. CLAUDE.md: an
+       * instrument that cannot see something has not FOUND anything, and a gate states its findings and its
+       * blind spots as SEPARATE verdicts. The worked example is a record-field gate that read FAILED on
+       * every build of an entire session with every real-defect category at zero, purely because its
+       * blindness was summed into its verdict — chronic red and informative red are indistinguishable in the
+       * one line a reader actually sees. This population is five figures; reported as findings it would be
+       * furniture inside a day and would take the four real categories down with it. */
+      {
+        const titledOk = !!verdict && verdict.kind === "OK-TITLED";
+        if (!titledOk) {
+          const crash = inCrashMessage(src, spans, c.at);
+          stat.noTitle++;
+          if (crash) stat.noTitleCrash++;
+          /* THREE STATES AND NOT TWO, kept apart for the reason this file keeps every other triple apart: a
+           * number the corpus can title, a number the standard does not have at all (already reported or
+           * refused above — the corpus has no title to offer and saying "no title" of it would read as the
+           * same fact), and a site where nothing else corroborated the number either. Summing them would
+           * make the band report on a mixture, which is the shape a reader cannot act on. */
+          if (sections[no]) stat.noTitleDerivable++; else stat.noTitleNoSection++;
+          /* `verdict` here is a CONFIRMATION from the term channel or an ACCUSATION from it. Only the sites
+           * nothing corroborated at all enter the listing: where check (3) confirmed the number by the term
+           * standing beside it, the tool HAS evidence and the missing title costs a reader convenience
+           * rather than a check. Counted either way, LISTED only where the tool is blind — which is the same
+           * line the census draws, so the listing's population is one the report names rather than one a
+           * reader has to infer from its length.
+           * A NUMBER THE STANDARD DOES NOT HAVE STAYS IN THE LISTING and says so in its row. It is the one
+           * member of this population the tool holds a real opinion about, and for a TERM-resolved site that
+           * opinion is printed NOWHERE ELSE: check (1) refuses to fire unless the standard is the citation's
+           * own evidence, so `(no such section)` here is the only line in the whole report that says it. */
+          /* NO COUNTER OF ITS OWN: `!verdict` here is the SAME predicate `stat.unverified` is raised on a few
+           * lines below, over the same population at the same point in the loop, so a second tally would be
+           * two right answers to one question — the shape CLAUDE.md says drifts, and the one this file
+           * already routes rather than re-spells. The band reports `stat.unverified` and the identity
+           * between it and this map's own site count is ASSERTED at the report, where both are in one hand. */
+          if (!verdict) {
+            const uk = `${spec} §${no}`;
+            let g = numberOnly.get(uk);
+            if (!g) numberOnly.set(uk, g = { n: 0, crash: 0, voted: 0,
+                                             title: sections[no] ? sections[no].title : null, sites: [] });
+            g.n++;
+            if (crash) g.crash++;
+            if (how === "file") g.voted++;
+            if (g.sites.length < 4) g.sites.push(`${relative(ROOT, file)}:${lineOf(c.at)}`);
+          }
+        }
+      }
+
       /* COUNTED HERE AND NOT AT THE CHECK, because a MENTION is not a claim and must be in neither the count
        * nor the list — the same reason the disclaim block above withholds a verdict rather than a report. */
       if (c.titleBucket) {
@@ -4185,13 +4282,6 @@ function audit(argv, opts = {}) {
 
       if (!verdict) {
         stat.unverified++;
-        const uk = `${spec} §${no}`;
-        untitled.set(uk, (untitled.get(uk) || 0) + 1);
-        /* THE KEY'S LEFT HALF CAN BE A GUESS, and --titles reads that key as an instruction: "a title here
-         * makes the citation checkable". Under a file-voted standard the instruction is half wrong — what is
-         * missing first is the STANDARD'S NAME, and a title written under the inferred one would confirm the
-         * inference instead of testing it. So the row says how much of it is inference. */
-        if (how === "file") untitledVoted.set(uk, (untitledVoted.get(uk) || 0) + 1);
         rec.groupNo = c.no;
         undecided.push(rec);
         continue;
@@ -5020,17 +5110,88 @@ function audit(argv, opts = {}) {
       `; tokens seen fewer than 8 times are not listed`);
   }
 
-  if (argv.includes("--titles")) {
-    /* WHERE A TITLE WOULD BUY THE MOST. The unverified population is a COUNT, not a list of findings — but it
-     * is not uniform: a number cited forty times with no title anywhere is one edit away from being checkable,
-     * and a number cited once is not worth anyone's afternoon. */
-    console.log(`\nnumbers cited most often with neither a title nor a term any index knows — a title here makes the citation checkable:`);
-    for (const [k, v] of [...untitled].sort((a, b) => b[1] - a[1]).slice(0, 40)) {
-      const [key, no] = k.split(" §");
-      const s = idx.get(key).sections[no];
-      const g = untitledVoted.get(k) || 0;
-      console.log(`  ${String(v).padStart(4)}x  ${k}  ${s ? `"${s.title}"` : "(no such section)"}` +
-        (g ? `  — ${g} of them name no standard either, so the "${key}" half of this key is this audit's guess` : ""));
+  /* ===== NUMBER-ONLY CITATIONS — A BAND, NOT A FINDING LIST ==================================================
+   * PRINTED ON EVERY RUN, INCLUDING THE CLEAN DAY, AND THAT IS THE HALF THAT WAS MISSING RATHER THAN THE
+   * COUNT. This listing existed behind `--titles`, over a narrower population and capped at forty, and a line
+   * reached by REMEMBERING a flag catches what it catches by luck — which is the same argument the header
+   * already makes for the quotation check running unconditionally, and the same incident: the CSSOM View
+   * fabrication was found only because one lane happened to pass a flag that day, and the run that found it
+   * turned up an older site making the identical false claim that nobody had passed it for. So the band is
+   * unconditional and `--titles` now widens it rather than enabling it.
+   * WHAT IT IS A FRACTION OF IS STATED IN THE SAME LINE, because CLAUDE.md's rule is that a coverage figure
+   * that does not name its denominator is not a coverage figure — and this one has three populations behind
+   * it that take different work: a number the corpus can title, a number the standard does not have, and a
+   * site the term channel corroborated anyway.
+   * IT DOES NOT MOVE THE EXIT CODE, and neither does anything else here — this auditor reports by design. The
+   * rule it is obeying is the sharper one: an instrument that cannot see something has not FOUND anything, so
+   * the blind spot is a SEPARATE verdict from the findings and is never summed into them. */
+  console.log(`\nNUMBER-ONLY CITATIONS — a § with no title beside it, which is the one shape no check above can falsify`);
+  console.log(`  (CLAUDE.md §Browser half requires the title beside the number, because the title survives an edition the`);
+  console.log(`   number does not and the mismatch is then visible instead of silent. A citation stating a number ALONE`);
+  console.log(`   is outside checks (2), (4) and (5) BY CONSTRUCTION — there is no claim beside the number for any of`);
+  console.log(`   them to read — so it is ACCEPTED. A wrong number sends a reader to the wrong place, where they find`);
+  console.log(`   out; a number-only citation that RESOLVES tells them they have arrived.`);
+  console.log(`   NOTHING BELOW IS ACCUSED. This is a blind spot, reported apart from the findings and never summed into them.)`);
+  console.log(`  ${stat.noTitle} of the ${stat.total - stat.other - stat.skipped} resolved citation(s) state no title this audit could confirm` +
+    ` (${stat.titled} do state one and were confirmed by it); ${stat.noTitleCrash} of them are printed by a CRASH, which is read with no file open`);
+  console.log(`    ${stat.noTitleDerivable} cite a § the committed corpus HOLDS, so this tool can say what that number is — the rows below do` +
+    `; ${stat.noTitleNoSection} cite a § the standard does not have, and the corpus has no title to offer for those`);
+  /* THE IDENTITY THAT DEFINES THE LISTING, ASSERTED WHERE BOTH SIDES ARE IN ONE HAND. CLAUDE.md: a counter
+   * states its kind at the point it is emitted and the conservation identity that defines it is emitted beside
+   * it, because that identity is the one property of a counter a reader can actually check. The map is built
+   * per NUMBER and the census counter is raised per SITE, by two different lines, so their agreement is a real
+   * claim rather than a tautology — and if a later edit moves either predicate, this fires instead of printing
+   * a band whose listing is a different population from the one its own sentence names. */
+  const numberOnlySites = [...numberOnly.values()].reduce((a, g) => a + g.n, 0);
+  if (numberOnlySites !== stat.unverified)
+    throw new Error(`NUMBER-ONLY band: the listing holds ${numberOnlySites} site(s) and the census counted ${stat.unverified} — ` +
+      `these are raised on the same predicate over the same population and must agree; one of the two moved`);
+  console.log(`    ${stat.noTitle - stat.unverified} were corroborated anyway by the TERM standing beside the number (check (3) confirmed or accused them), so the missing title` +
+    ` costs a reader convenience rather than a check; the remaining ${stat.unverified} are what nothing in this run examined at all, and they are the listing`);
+  {
+    /* PER STANDARD, because the band's whole content is which coverage this tool is not getting, and one
+     * five-figure total moves for reasons no reader can attribute. A standard's row falls when its citations
+     * gain titles and rises when it gains citations, and those are different facts about different work. */
+    const by = new Map();
+    for (const [k, g] of numberOnly) {
+      const key = k.slice(0, k.indexOf(" §"));
+      const r = by.get(key) || { n: 0, nos: 0 };
+      r.n += g.n; r.nos++; by.set(key, r);
+    }
+    const all = [...by].sort((a, b) => b[1].n - a[1].n), shown = full ? all : all.slice(0, 14);
+    console.log(`  unexamined by standard (sites/distinct numbers): ${shown.map(([k, v]) => `${k}=${v.n}/${v.nos}`).join(" ")}` +
+      `${all.length > shown.length ? `; ${all.length - shown.length} more standard(s) not listed` : ""}`);
+  }
+  {
+    /* THE CHEAP CLOSE, AND THE UNIT IS THE NUMBER RATHER THAN THE SITE BECAUSE A TITLE IS A FACT ABOUT THE
+     * NUMBER. N sites citing one § are one row carrying one answer, which is what makes a five-figure
+     * population fit on a screen at all — and it is also the honest unit, since the repair at each of those
+     * sites is the same words.
+     * THE ORDER IS FREQUENCY, AND THIS LINE SAYS WHAT THAT ORDERING ANSWERS AND WHAT IT DOES NOT. It answers
+     * "where would writing a title buy the most", which is a real question: a number cited two hundred times
+     * bare is one edit per site away from being checkable and a number cited once is not worth an afternoon.
+     * It does NOT answer "which of these is wrong", and no ordering available here does — the tool has no
+     * evidence about any of them, which is the definition of the band. The Web IDL §N of the incident above
+     * sat six sites deep in this population while nine OTHER sites in this tree stated and confirmed that
+     * number's real title; frequency would not have surfaced it and nothing else here would either. What surfaces a row like that is a
+     * HUMAN reading the number against the sentence beside it, which is exactly what printing the title
+     * makes possible and what no count ever will.
+     * SO THE HEAD IS NOT THE POPULATION, and the line below says so rather than letting a truncated list read
+     * as a whole one: `--titles` prints every row, and `node engine/citegen.mjs <path>` prints every row in
+     * one path, which is the workflow that catches one — a reader already standing in the file. */
+    const all = [...numberOnly].sort((a, b) => b[1].n - a[1].n);
+    const cap = argv.includes("--titles") || full || explicitFiles ? Infinity : 24;
+    const shown = all.slice(0, cap);
+    if (shown.length) {
+      console.log(`  what those numbers ARE, most-cited first — ${all.length} distinct number(s), ${shown.length} printed` +
+        `${all.length > shown.length ? " (--titles prints them all; naming a path prints every row in it)" : ""}.` +
+        ` A row is NOT a defect: read the title against the sentence at the site, which is the check this tool cannot make`);
+      for (const [k, g] of shown) {
+        console.log(`  ${String(g.n).padStart(4)}x  ${k}  ${g.title === null ? "(NO SUCH SECTION — the corpus has no §" + k.slice(k.indexOf("§") + 1) + " for this standard)" : `"${g.title}"`}` +
+          (g.crash ? `  [${g.crash} in a crash message]` : "") +
+          (g.voted ? `  — ${g.voted} of them name no standard either, so the "${k.slice(0, k.indexOf(" §"))}" half of this key is this audit's guess and a title written under it would confirm the inference rather than test it` : "") +
+          `\n        ${g.sites.join("  ")}${g.n > g.sites.length ? `  … and ${g.n - g.sites.length} more` : ""}`);
+      }
     }
   }
 
@@ -5245,8 +5406,8 @@ function audit(argv, opts = {}) {
       `; ${sstat.noList} cite a section holding no list at all — the shape a RIGHT section takes when the algorithm the step belongs to is written one heading away, which this channel counts and never judges`);
     if (stpStale.size) for (const [k, why] of stpStale)
       console.log(`  ${k}: step corpus REFUSED — ${why}; re-run: node engine/citegen.mjs --regen ${k}`);
-    /* THE BAND THIS CHANNEL WILL NOT ACCUSE IS PRINTED THE WAY --titles PRINTS ITS UNVERIFIED POPULATION: the
-     * count in the census, the list behind a flag. A refusal nobody can see is the same silent zero as a list
+    /* THE BAND THIS CHANNEL WILL NOT ACCUSE IS PRINTED THE WAY THE NUMBER-ONLY BAND PRINTS ITS OWN POPULATION:
+     * count and head in the census, the whole list behind a flag. A refusal nobody can see is the same silent zero as a list
      * nobody can see, and these sites were invisible to every check in this file before it existed — so the
      * count says how many there are and the flag says which. Read one and you are reading a citation that may
      * be perfectly right, which is exactly why it is not in the findings. */
