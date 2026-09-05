@@ -664,7 +664,6 @@ static void i_message_event(JSContext *c, JSValueConst g, const PlatformDocument
 static void i_error_event(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; error_event_install(c, g); }
 static void i_performance_observer(JSContext *c, JSValueConst g, const PlatformDocument *d)
 { (void)d; performance_observer_install(c, g); }
-static void i_xhr(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; xhr_install(c, g); }
 static void i_file_reader(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; file_reader_install(c, g); }
 static void i_navigable(JSContext *c, JSValueConst g, const PlatformDocument *d) { navigable_install(c, g, d->origin); }
 static void i_timer(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; timer_install(c, g); }
@@ -923,7 +922,20 @@ static const PlatformComponent PLATFORM[] = {
        for reads as coverage and checks nothing of it; engine/host/test_forced.c's exposure_selftest is the
        oracle for this component, because it is the one place a second realm is actually built. */
     { "worker_global_scope", d_worker_global_scope, NULL,        r_worker_global_scope },
-    { "xml_http_request",    d_xhr,                 i_xhr,       r_xhr },
+    /* NO DOCUMENT HALF. XHR §3 Interface XMLHttpRequest declares `XMLHttpRequestEventTarget`,
+       `XMLHttpRequestUpload` and `XMLHttpRequest` `[Exposed=(Window,DedicatedWorker,SharedWorker)]` and XHR §5
+       Interface ProgressEvent declares `ProgressEvent` `[Exposed=(Window,Worker)]`, and Web IDL §3.8 Platform
+       objects implementing interfaces is "To define the global property references on target, given realm
+       realm" whose step 1 is "Let interfaces be a list that contains every interface that is exposed in realm"
+       — a REALM, with no Document in the algorithm. This component's realm intrinsic places its three
+       interface objects beside the prototypes it already built there, and §5's rides progress_event.c's own
+       intrinsic rather than a tail call from the install that has gone, so a realm that reaches no
+       platform_document_install gets all four.
+       AND THE INSTALL READ NO DOCUMENT: its thunk discarded the `PlatformDocument` outright, because XHR's
+       per-document state — §3.5.1 The open() method's API base URL, §3.5.4 The withCredentials getter and
+       setter's credentials mode — is read from the RUNNING realm when a member is CALLED and never when the
+       interface object is minted. */
+    { "xml_http_request",    d_xhr,                 NULL,        r_xhr },
     /* FILE API §6 Reading Data, AFTER `xml_http_request` and not beside `blob`. Two rows decide it and
        both are the standards' own: §6.4.1 Event Summary makes every event this component fires a
        ProgressEvent, whose interface XHR §5 defines and whose class and per-realm prototype `xhr_init`

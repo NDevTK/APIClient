@@ -5,9 +5,14 @@
 #include "quickjs.h"
 
 void progress_event_init(JSContext *ctx);
-/* §5's PROTOTYPE FOR ONE REALM — run where a realm's other intrinsics are added, exactly once per realm. */
-void progress_event_install_proto(JSContext *ctx);
-void progress_event_install(JSContext *ctx, JSValueConst global);
+/* XHR §5's prototype, its Web IDL §3.7.1 interface object and the §3.8 property reference for it — for ONE
+   realm, declared into core/realm.h's list and run exactly once per realm. ONE entry because Web IDL §3.8
+   `define the global property references` is given "target" and "a realm realm" and its step 1 population is
+   "every interface that is exposed in realm": no Document appears in it. XHR §5 declares
+   `[Exposed=(Window,Worker)]`, so a worker realm is owed the name — and while the interface object was
+   installed from core/platform.c's per-document column, reached from `xhr_install` because §5 has no row of
+   its own, a worker realm reaches no platform_document_install and received neither. */
+void progress_event_install_realm(JSContext *ctx);
 void progress_event_free(JSRuntime *rt);
 
 /* `ProgressEvent.prototype`, OWNED. Per realm, for the reason event.h gives: a C member runs in the realm that

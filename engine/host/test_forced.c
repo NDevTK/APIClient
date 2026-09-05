@@ -6245,6 +6245,50 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
         { "TextEncoderStream",  true, true  },   /* Encoding §7.6 "Interface TextEncoderStream", [Exposed=*] */
         /* Encoding §7.1 "Interface mixin TextDecoderCommon" — a MIXIN, so no Web IDL §3.8 reference anywhere */
         { "TextDecoderCommon",  false, false },
+        /* THE XMLHttpRequest STANDARD'S FOUR, AND THE FIRST GROUP HERE WHOSE EXPOSURE SET IS NOT `*`. XHR §3
+           Interface XMLHttpRequest declares `XMLHttpRequestEventTarget`, `XMLHttpRequestUpload` and
+           `XMLHttpRequest` `[Exposed=(Window,DedicatedWorker,SharedWorker)]`; XHR §5 Interface ProgressEvent
+           declares `ProgressEvent` `[Exposed=(Window,Worker)]`. Those are DIFFERENT SETS, and this realm
+           cannot tell them apart: Web IDL §3.3.7 [Exposed] step 1 intersects each against the §3.3.8 [Global]
+           global names of `DedicatedWorkerGlobalScope`, which are (Worker, DedicatedWorker) — the first three
+           meet it on `DedicatedWorker` and §5 meets it on `Worker`, so all four are owed here. The one realm
+           that WOULD separate them is a `ServiceWorkerGlobalScope` one, whose names are (Worker,
+           ServiceWorker): §5 would still be owed and §3's three would not. THAT REALM IS DELIBERATELY NOT
+           BUILT, because it would not measure this install — which column an interface object is placed from
+           does not touch its exposure set, and the answer would come from browser/idl_exposure.h's generated
+           row through the same door either way. A row that cannot be wrong about the thing under test is
+           coverage wearing a control's clothes.
+           `ProgressEvent` IS THE DISCRIMINATING ROW, and it discriminates against a mistake this group offers
+           and no earlier one did. §5 has NO row of core/platform.c's own: `xhr_init` declares it and
+           `xhr_free` releases it, and its interface object was placed by a `progress_event_install(ctx,
+           global)` tail call at the END of the per-document install being deleted here. A conversion that read
+           the platform row, carried §3's three names into the realm intrinsic and deleted that install with
+           the tail call inside it takes `ProgressEvent` out of EVERY realm, Window included — and NOTHING says
+           so, because §5's prototype is built by its own intrinsic and `progress_event_new` goes on minting
+           every event this component and core/file/file_reader.c fire out of it. Only the page-visible
+           constructor name is gone. That is the `MessagePort` sibling-drop the banner above records, in its
+           worst form: the sibling is in another FILE, reached by a call on the last line of the function being
+           removed. The three §3 rows all pass under that mistake and this one fails.
+           `XMLHttpRequestResponseType` IS `TextDecoderCommon`'S TEST OVER WEB IDL'S OTHER NON-INTERFACE
+           CONSTRUCT, and it is stated as one more instance rather than a second axis. It is an `enum`,
+           declared in xhr.idl BETWEEN `XMLHttpRequestUpload` and `XMLHttpRequest` — the two declarations
+           either side of it DO move here — and Web IDL §3.8 step 1's population is "every interface that is
+           exposed in realm", which an enum is not, so no realm carries the name. It is blind to
+           browser/idl_exposure.h for the same reason the mixin is: an enum gets no row, that header states
+           that a name with no row is EXPOSED, so `idl_exposed_in_realm("XMLHttpRequestResponseType")` answers
+           TRUE and the door would place it in both realms without a word.
+           AT THE PARENT REVISION the four rows below FAIL — §3's three and §5's, in BOTH arms, because this
+           runs after tf_agent_init and before tf_realm_install reaches platform_document_install, so no
+           document column has run over either realm. The enum row passes at the parent and passes here; it is
+           a discriminator against a wrong conversion, never a calibration row, and it is reported as such. */
+        { "XMLHttpRequestEventTarget",  true, true },   /* XHR §3, [Exposed=(Window,DedicatedWorker,SharedWorker)] */
+        { "XMLHttpRequestUpload",       true, true },   /* XHR §3, [Exposed=(Window,DedicatedWorker,SharedWorker)] */
+        { "XMLHttpRequest",             true, true },   /* XHR §3, [Exposed=(Window,DedicatedWorker,SharedWorker)] */
+        /* XHR §5 "Interface ProgressEvent", [Exposed=(Window,Worker)] — placed by progress_event.c's OWN realm
+           intrinsic and never by the row that declares it */
+        { "ProgressEvent",              true, true },
+        /* An `enum` of xhr.idl, so no Web IDL §3.8 property reference exists for it at all */
+        { "XMLHttpRequestResponseType", false, false },
     };
     JSContext *worker = JS_NewContext(JS_GetRuntime(ctx));
     /* THE SECOND WORKER REALM IS THE OTHER ARM OF ONE STEP, and it is a second REALM because that is the only

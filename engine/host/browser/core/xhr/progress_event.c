@@ -184,16 +184,28 @@ void progress_event_init(JSContext *ctx)
     agent_state_class("xml_http_request", &g_pe_class, "§5's ProgressEvent class");
     agent_state_id("xml_http_request", &g_ctor_stepid, "§5's ProgressEvent constructor");
     agent_state_value("xml_http_request", &g_key, "the private Symbol §5's three slots hang off");
-    realm_declare_intrinsic(progress_event_install_proto);
+    realm_declare_intrinsic(progress_event_install_realm);
 }
 
-void progress_event_install_proto(JSContext *ctx)
+/* XHR §5 "Interface ProgressEvent"'s Web IDL §3.7.3 INTERFACE PROTOTYPE OBJECT, its §3.7.1 INTERFACE OBJECT,
+   and §3.8's PROPERTY REFERENCE FOR IT — FOR ONE REALM.
+   THE INTERFACE OBJECT IS HERE BECAUSE §3.8 IS GIVEN A REALM. Web IDL §3.8 "Platform objects implementing
+   interfaces" is "To define the global property references on target, given realm realm", step 1 being "Let
+   interfaces be a list that contains every interface that is exposed in realm" — the population is a REALM's
+   and the algorithm names no Document. §5 declares `[Exposed=(Window,Worker)]`, so every realm whose global
+   object implements an interface with the `Worker` global name is owed this name — and while it was placed
+   from core/platform.c's per-document column (reached from `xhr_install`, since §5 has no row of its own), a
+   worker realm, which reaches no platform_document_install, got neither the object nor the name.
+   AND THE PROTOTYPE IS IN HAND HERE, so `progress_event_proto`'s JS_GetClassProto re-read is gone from this
+   path: re-reading it would be a second answer to a question this function has just settled. The accessor
+   stays for the callers outside this realm-build — `progress_event_new` and file_reader's events. */
+void progress_event_install_realm(JSContext *ctx)
 {
     JSValue proto, prev, base;
 
     DCHECK(g_ready, "a realm asked for ProgressEvent.prototype before progress_event_init declared it");
     prev = JS_GetClassProto(ctx, g_pe_class);
-    DCHECK(JS_IsNull(prev), "progress_event_install_proto ran twice in one realm");
+    DCHECK(JS_IsNull(prev), "progress_event_install_realm ran twice in one realm");
     JS_FreeValue(ctx, prev);
     base = event_proto(ctx);
     proto = JS_NewObjectProto(ctx, base);
@@ -201,27 +213,30 @@ void progress_event_install_proto(JSContext *ctx)
     CHECK(!JS_IsException(proto), "ProgressEvent.prototype could not be allocated");
     idl_interface_tag(ctx, proto, "ProgressEvent");
     JS_SetPropertyFunctionList(ctx, proto, js_pe_proto, (int)(sizeof(js_pe_proto) / sizeof(js_pe_proto[0])));
-    JS_SetClassProto(ctx, g_pe_class, proto);
-}
 
-void progress_event_install(JSContext *ctx, JSValueConst global)
-{
-    JSValue ctor, proto;
+    {
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue ctor;
 
-    DCHECK(g_ready, "ProgressEvent was installed before progress_event_init declared it");
-    ctor = idl_step_constructor(ctx, "ProgressEvent", g_ctor_stepid);
-    CHECK(!JS_IsException(ctor), "the ProgressEvent interface object could not be allocated");
-    proto = progress_event_proto(ctx);
-    JS_SetConstructor(ctx, ctor, proto);
-    JS_FreeValue(ctx, proto);
-    idl_define_global_property_reference(ctx, global, "ProgressEvent", ctor);
+        DCHECK(g_ctor_stepid >= 0, "ProgressEvent was installed before progress_event_init declared its "
+                                   "constructor");
+        ctor = idl_step_constructor(ctx, "ProgressEvent", g_ctor_stepid);
+        CHECK(!JS_IsException(ctor), "the ProgressEvent interface object could not be allocated");
+        JS_SetConstructor(ctx, ctor, proto);
+        /* THE EXPOSURE IS THE DOOR'S ANSWER, NOT A CONDITION HERE: idl_define_global_property_reference asks
+           Web IDL §3.3.7 [Exposed] step 1 against this realm's §3.3.8 [Global] global names, keyed by the
+           identifier it is already handed, so nothing at this site re-derives what the corpus states. */
+        idl_define_global_property_reference(ctx, global, "ProgressEvent", ctor);
+        JS_FreeValue(ctx, global);
+    }
+    JS_SetClassProto(ctx, g_pe_class, proto);   /* the realm owns it from here */
 }
 
 JSValue progress_event_proto(JSContext *ctx)
 {
     JSValue proto = JS_GetClassProto(ctx, g_pe_class);
     DCHECK(!JS_IsNull(proto),
-           "ProgressEvent.prototype was asked for in a realm that never ran progress_event_install_proto");
+           "ProgressEvent.prototype was asked for in a realm that never ran progress_event_install_realm");
     return proto;   /* OWNED */
 }
 

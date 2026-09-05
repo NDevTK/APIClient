@@ -2937,7 +2937,7 @@ void xhr_init(JSContext *ctx)
     agent_state_id("xml_http_request", &g_set_response_type_id, "§3.6.8's responseType setter");
     agent_state_id("xml_http_request", &g_response_getter_id, "§3.6.9's response getter");
     agent_state_id("xml_http_request", &g_response_xml_getter_id, "§3.6.11's responseXML getter");
-    realm_declare_intrinsic(xhr_install_protos);
+    realm_declare_intrinsic(xhr_install_realm);
 }
 
 /* §3's states, as `const unsigned short` on BOTH the interface object and its prototype — which is what Web IDL
@@ -2977,13 +2977,33 @@ static const JSCFunctionListEntry XHR_CONSTANTS[] = {
    WHAT WOULD CHANGE THIS IS THE FEATURE, never the signature. */
 static const char *const XHR_ABSENT[] = { "setPrivateToken" };
 
-void xhr_install_protos(JSContext *ctx)
+/* XHR §3 "Interface XMLHttpRequest"'s THREE Web IDL §3.7.3 INTERFACE PROTOTYPE OBJECTS, their §3.7.1 INTERFACE
+   OBJECTS, AND §3.8's PROPERTY REFERENCES FOR ALL THREE — FOR ONE REALM.
+   THE INTERFACE OBJECTS ARE HERE BECAUSE §3.8 IS GIVEN A REALM. Web IDL §3.8 "Platform objects implementing
+   interfaces" is "To define the global property references on target, given realm realm", step 1 being "Let
+   interfaces be a list that contains every interface that is exposed in realm" — the population is a REALM's
+   and the algorithm names no Document. XHR §3 declares all three of `XMLHttpRequestEventTarget`,
+   `XMLHttpRequestUpload` and `XMLHttpRequest` `[Exposed=(Window,DedicatedWorker,SharedWorker)]`, so a realm
+   whose global object implements a `DedicatedWorker` or `SharedWorker` interface is owed all three — and while
+   they were placed from core/platform.c's per-document column, such a realm reaches no
+   platform_document_install and got none of them.
+   NOTHING THIS COMPONENT READS AT INSTALL TIME IS A DOCUMENT'S. XHR does hold per-document state — XHR §3.5.1
+   The open() method's steps 5-6 parse the URL "against the relevant settings object's API base URL", and
+   XHR §3.5.4 The withCredentials getter and setter feeds §3.5.6 send()'s credentials mode — but every one of
+   those is read from the RUNNING realm when the member is CALLED, not when the interface object is minted, so
+   the move takes no input with it and strands none. The install ignored its `PlatformDocument` argument
+   outright, which is the same fact stated by the column.
+   THE THREE PROTOTYPES ARE IN HAND AT THE MINT, so the three JS_GetClassProto re-reads the per-document entry
+   made are gone — each was a second answer to a question this function had just settled. The three
+   JS_SetClassProto handovers move to the END for that reason: the locals own their objects until the realm
+   does, rather than being borrowed back out of the class slot they were already given to. */
+void xhr_install_realm(JSContext *ctx)
 {
     JSValue et_p, up_p, xhr_p, prev;
 
     DCHECK(g_ready, "a realm asked for XMLHttpRequest.prototype before xhr_init declared it");
     prev = JS_GetClassProto(ctx, g_xhr_class);
-    DCHECK(JS_IsNull(prev), "xhr_install_protos ran twice in one realm");
+    DCHECK(JS_IsNull(prev), "xhr_install_realm ran twice in one realm");
     JS_FreeValue(ctx, prev);
 
     /* `interface XMLHttpRequestEventTarget : EventTarget` — the seven event handler attributes and nothing
@@ -2992,13 +3012,11 @@ void xhr_install_protos(JSContext *ctx)
     et_p = event_target_derived_proto(ctx);
     idl_interface_tag(ctx, et_p, "XMLHttpRequestEventTarget");
     event_target_install_handlers(ctx, et_p, EH_XHR);
-    JS_SetClassProto(ctx, g_xhr_et_class, et_p);
 
     /* `interface XMLHttpRequestUpload : XMLHttpRequestEventTarget` — no members of its own. */
     up_p = JS_NewObjectProto(ctx, et_p);
     CHECK(!JS_IsException(up_p), "XMLHttpRequestUpload.prototype could not be allocated");
     idl_interface_tag(ctx, up_p, "XMLHttpRequestUpload");
-    JS_SetClassProto(ctx, g_upload_class, up_p);
 
     xhr_p = JS_NewObjectProto(ctx, et_p);
     CHECK(!JS_IsException(xhr_p), "XMLHttpRequest.prototype could not be allocated");
@@ -3032,38 +3050,52 @@ void xhr_install_protos(JSContext *ctx)
                          "STATE TOKEN API §8.2 send() monkeypatch, feeding a header field and an issuing and "
                          "redemption protocol this user agent does not ship — so an installed member would "
                          "answer a page's typeof detection yes and then attach no token");
+
+    /* WEB IDL §3.8's STEP 3.1.3 FOR EACH OF THE THREE — "Perform DefineMethodProperty(target, id,
+       interfaceObject, false)" — with each prototype the local this function just built rather than one read
+       back out of a class slot. `XMLHttpRequestEventTarget` and `XMLHttpRequestUpload` declare no constructor,
+       so their §3.7.1 interface objects are minted over idl_illegal_ctor; `XMLHttpRequest` declares one, and
+       its object carries §3's five states a second time because Web IDL §3.7.5 Constants puts a constant on
+       the interface object AND its prototype.
+       THE EXPOSURE IS THE DOOR'S ANSWER, NOT A CONDITION HERE: idl_define_global_property_reference asks Web
+       IDL §3.3.7 [Exposed] step 1 against this realm's §3.3.8 [Global] global names, keyed by the identifier
+       it is already handed, so nothing at this site re-derives what the corpus states — and nothing about
+       WHICH realms carry these three names changed when they left the per-document column. */
+    {
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue ctor;
+
+        idl_define_global_property_reference(ctx, global, "XMLHttpRequestEventTarget",
+                                            idl_interface_object(ctx, "XMLHttpRequestEventTarget", et_p));
+        idl_define_global_property_reference(ctx, global, "XMLHttpRequestUpload",
+                                            idl_interface_object(ctx, "XMLHttpRequestUpload", up_p));
+
+        DCHECK(g_ctor_stepid >= 0, "XMLHttpRequest was installed before xhr_init declared its constructor");
+        ctor = idl_step_constructor(ctx, "XMLHttpRequest", g_ctor_stepid);
+        CHECK(!JS_IsException(ctor), "the XMLHttpRequest interface object could not be allocated");
+        JS_SetPropertyFunctionList(ctx, ctor, XHR_CONSTANTS,
+                                   (int)(sizeof(XHR_CONSTANTS) / sizeof(XHR_CONSTANTS[0])));
+        JS_SetConstructor(ctx, ctor, xhr_p);
+        idl_define_global_property_reference(ctx, global, "XMLHttpRequest", ctor);
+        JS_FreeValue(ctx, global);
+    }
+    /* The realm owns the three from here. */
+    JS_SetClassProto(ctx, g_xhr_et_class, et_p);
+    JS_SetClassProto(ctx, g_upload_class, up_p);
     JS_SetClassProto(ctx, g_xhr_class, xhr_p);
-    /* §5's prototype is NOT built here: progress_event_init declared it as a per-realm intrinsic of its own,
-       and building it a second time would leave everything already chained to the first answering out of a
-       discarded object. */
-}
-
-void xhr_install(JSContext *ctx, JSValueConst global)
-{
-    JSValue proto, ctor;
-
-    DCHECK(g_ready, "XMLHttpRequest was installed before xhr_init declared it");
-    proto = JS_GetClassProto(ctx, g_xhr_et_class);
-    DCHECK(!JS_IsNull(proto), "XMLHttpRequest was installed into a realm that never ran its proto build");
-    idl_define_global_property_reference(ctx, global, "XMLHttpRequestEventTarget",
-                                        idl_interface_object(ctx, "XMLHttpRequestEventTarget", proto));
-    JS_FreeValue(ctx, proto);
-
-    proto = JS_GetClassProto(ctx, g_upload_class);
-    idl_define_global_property_reference(ctx, global, "XMLHttpRequestUpload",
-                                        idl_interface_object(ctx, "XMLHttpRequestUpload", proto));
-    JS_FreeValue(ctx, proto);
-
-    proto = JS_GetClassProto(ctx, g_xhr_class);
-    ctor = idl_step_constructor(ctx, "XMLHttpRequest", g_ctor_stepid);
-    CHECK(!JS_IsException(ctor), "the XMLHttpRequest interface object could not be allocated");
-    JS_SetPropertyFunctionList(ctx, ctor, XHR_CONSTANTS,
-                               (int)(sizeof(XHR_CONSTANTS) / sizeof(XHR_CONSTANTS[0])));
-    JS_SetConstructor(ctx, ctor, proto);
-    JS_FreeValue(ctx, proto);
-    idl_define_global_property_reference(ctx, global, "XMLHttpRequest", ctor);
-
-    progress_event_install(ctx, global);
+    /* XHR §5 IS NOT BUILT OR PLACED HERE, AND THE SECOND HALF OF THAT IS NEW. progress_event_init declared
+       its own per-realm intrinsic, so building XHR §5's prototype a second time would leave everything
+       already chained to the first answering out of a discarded object — and now that its Web IDL §3.7.1
+       Interface object rides that same intrinsic, the `progress_event_install(ctx, global)` this function's
+       per-document half used to end with is gone rather than moved. A conversion that carried the three names
+       above across and dropped that tail call would take `ProgressEvent` out of EVERY realm, Window included,
+       with nothing to say so: XHR §5's prototype would still be built, `progress_event_new` would still mint
+       every event this component and core/file/file_reader.c fire, and only the page-visible constructor name
+       would be missing. engine/host/test_forced.c's exposure_selftest carries the row that catches it.
+       EVERY NUMBER HERE REPEATS ITS STANDARD'S NAME for the reason this file's XHR_ABSENT banner already
+       gives: a bare `§5` in this file is resolved by FILE VOTE, and `§5's INTERFACE OBJECT` was placed on
+       Web IDL — whose §5 is "Extensibility" — because "interface object" is Web IDL's term and not this
+       standard's. */
 }
 
 void xhr_free(JSRuntime *rt)

@@ -9,10 +9,17 @@
    Headers/Response/Request: §5 is part of this standard and every event this component fires is one, so a host
    that installed XMLHttpRequest without it would have a component whose events had no interface. */
 void xhr_init(JSContext *ctx);
-/* §3's, §3's upload's and §5's PROTOTYPES FOR ONE REALM. */
-void xhr_install_protos(JSContext *ctx);
-/* The four interface objects: XMLHttpRequestEventTarget, XMLHttpRequestUpload, XMLHttpRequest, ProgressEvent. */
-void xhr_install(JSContext *ctx, JSValueConst global);
+/* XHR §3's three prototypes, their Web IDL §3.7.1 interface objects and the §3.8 property references for
+   `XMLHttpRequestEventTarget`, `XMLHttpRequestUpload` and `XMLHttpRequest` — for ONE realm, declared into
+   core/realm.h's list. ONE entry because Web IDL §3.8 `define the global property references` is given
+   "target" and "a realm realm" and its step 1 population is "every interface that is exposed in realm": no
+   Document appears in it. XHR §3 declares all three `[Exposed=(Window,DedicatedWorker,SharedWorker)]`, so a
+   worker realm is owed all three — and while the interface objects were installed from core/platform.c's
+   per-document column, such a realm reaches no platform_document_install and received none of them.
+   §5's prototype and interface object are NOT this entry's: progress_event.c declares an intrinsic of its own
+   and now places `ProgressEvent` from it, so the per-document half that used to call progress_event_install
+   at its end is gone rather than moved. */
+void xhr_install_realm(JSContext *ctx);
 void xhr_free(JSRuntime *rt);
 
 #endif
