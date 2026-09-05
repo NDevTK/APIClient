@@ -3991,20 +3991,43 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
            ready el given result", the result is null, and "execute the script element" step 4 is "If el's
            result is null, then fire an event named error at el, and return" — so the element runs NOTHING and
            the page is told. This arm makes that a ROW; the sequence arm in flow_step is where step 4 runs.
-           IT IS ASKED HERE RATHER THAN INSIDE EACH KIND because the three PROGRAM kinds share exactly one
-           thing and it is this: none of them can be answered with bytes that did not arrive.
+           IT IS ASKED HERE RATHER THAN INSIDE EACH KIND because §8.1.4.2 states this test once per algorithm
+           and states it IDENTICALLY, so the three PROGRAM kinds share it whole — and the sentence that stood
+           here narrowed it to one half, saying the thing the three kinds share is that none of them can be
+           answered with bytes that did not arrive, which is exactly the reading under which the status member
+           below went unbuilt.
            WHAT IT REPLACED WAS NOT A CRASH, WHICH IS WHY THIS IS THE ROOT AND NOT THE DECLINE. `reply_source_
            text` reads its bytes through fetch_reply_body, whose network-error arm answers the EMPTY byte
            sequence — so a `<script src>` whose fetch failed decoded to an empty source text, COMPILED as an
            empty program and RAN, with no `error` fired at the element and §4.12.1.1's step 8 `load` owed to
            it instead. A page's `s.onerror = () => loadFrom(FALLBACK_CDN)` could not run, and nothing said so:
            the failure arrived as a plausible datum (a script that "ran" and defined nothing) rather than as
-           an absence. The decline is the same value through a different door and is answered by this line. */
-        if (kind != FLOW_PENDING_RESOLVE && JS_IsNull(pv)) {
+           an absence. The decline is the same value through a different door and is answered by this line.
+           AND IT IS §8.1.4.2's WHOLE DISJUNCTION, NOT ITS FIRST HALF — the second half stood unasked and a
+           404's BODY WAS COMPILED. Each of that section's three fetch algorithms opens the same two-item list
+           ("fetch a classic script" step 5.2, "fetch a classic worker script"'s processResponseConsumeBody
+           step 2, "fetch a single module script" step 13.1): `bodyBytes` "is null or failure", or "response's
+           status is not an ok status" — and then "run onComplete given null, and abort these steps". This
+           engine had only the first member: a network error is JS_NULL and was refused here, while a reply
+           that ARRIVED was handed to reply_source_text whatever the server had said about it, so a `<script
+           src>` answered 404 with an HTML error page reached JS_FlowNew and a dynamic `import()` answered 500
+           settled its promise with the error page's text. The observable was the §4.12.1.1 `load`/`error`
+           pair inverted — a page's `s.onerror = () => loadFrom(FALLBACK_CDN)` never ran, and its `onload`
+           did — plus whatever a SyntaxError over an error page's markup did to the flow that owned it.
+           THE STATUS IS THE ONLY THING ASKED OF THE RECORD HERE, and the range is
+           core/loader/script_fetch.h's rather than a literal, because §8.1.4.2 is what states this test and
+           core/html/html_link.c's modulepreload delivery already asks the same question of the same operand.
+           NO ASSERT STANDS ON THE NUMBER: it is a value a stranger's server chose, so the answer to one this
+           algorithm refuses is the algorithm's own failure and never a crash (script_fetch.c says so at the
+           predicate). THE ORDER MATTERS AND IS THE STANDARD'S: `JS_IsNull` FIRST, because a network error has
+           no record to read a status off at all — fetch_reply_status answers §2.2.6's 0 for one, which is a
+           second correct route to the same arm and not the one this reads. */
+        if (kind != FLOW_PENDING_RESOLVE &&
+            (JS_IsNull(pv) || !script_fetch_status_ok(fetch_reply_status(ctx, pv)))) {
             DCHECK(kind == FLOW_PENDING_SCRIPT || kind == FLOW_PENDING_DOCSCRIPT ||
                    kind == FLOW_PENDING_MODULE,
-                   "a null answer reached the program kinds' failure arm for a kind that is not one of them — "
-                   "the synchronous kind is skipped above and the fetch kind is excluded by this condition, "
+                   "a FAILED answer reached the program kinds' failure arm for a kind that is not one of them "
+                   "— the synchronous kind is skipped above and the fetch kind is excluded by this condition, "
                    "so a fourth answer means a park of some new kind is being delivered with no arm of its own");
             if (kind == FLOW_PENDING_MODULE) {
                 /* AND THE ONE PROGRAM KIND WITH NO ELEMENT TO FIRE AT, WHOSE FAILURE IS THEREFORE A REJECTION

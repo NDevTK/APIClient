@@ -389,6 +389,15 @@ guarantees, in one auditable place:
   was never a check this zone held. `bridge.js` CHECKs that line's INITIATOR and PROVENANCE, the two fields no
   ingestion is decided from; the field it IS decided from is asserted at the chokepoint instead of in either
   host's splitter, which is what makes it one check covering the extension and `engine/trusted.mjs` both.
+  **THE DESTINATION IS THE WHOLE OF THE SCOPE — THE REPLY'S STATUS DECIDES NOTHING HERE**, and the conjunct
+  that made it decide something is gone. Fetch §2.10 "Should response to request be blocked due to its MIME
+  type?" reads the header list, the destination and the essence and never a status, so a status test was a
+  second rule no document states; what it did was skip the gate for every non-2xx reply, which is where an
+  authenticated error page lives. The engine's own refusal of a non-ok script load is a SEPARATE rule in a
+  separate zone — HTML §8.1.4.2 "Fetching scripts"' "response's status is not an ok status", asked at the
+  delivery in `solver/engine.c` through `script_fetch_status_ok` — and neither is the other's guard: this one
+  keeps a cross-origin data body out of the renderer's process, that one keeps a refused response from becoming
+  a program.
 - **per-call principal** (`opts.pageUrl` = the requesting DOCUMENT's own `sender.url`, never the tab's) —
   **not a shared global**: the trusted zone drives many renderers concurrently and interleaves their rounds,
   so a global principal would let one page's origin contaminate another's fetch.
@@ -790,7 +799,7 @@ config-loaded allowlist that no transform-expression or SMT encoding can.
 | Renderer forges `sender.id` | **Not a threat** — already has it; `sender.url` is the real gate |
 | Renderer forges `sender.url`/principal as a localhost origin to defeat SSRF | **Mitigated** — the principal is the browser-set `MessageSender`, never `msg.*`. (This row used to say the principal is `sender.tab.url`, which contradicts the corrected rule two sections above and restates the very bug that rule records: the SSRF principal is the frame's OWN `sender.url`.) |
 | Bundle `import()`s `http://127.0.0.1/…` or an intranet host (public page) | **Mitigated** — `safeFetch` origin-relative SSRF blocks public→private (initial + post-redirect) |
-| Bundle imports a cross-origin HTML/JSON endpoint as a "chunk" | **Mitigated** — the import's Fetch §2.2.5 destination is script-like, which is the question `safeFetch`'s CORB rule asks, so a cross-origin body is ingested JS-typed only. (This row named `as:"script"`, the deleted load-type keyword; a caller that still passes one now aborts at the chokepoint's entry) |
+| Bundle imports a cross-origin HTML/JSON endpoint as a "chunk" | **Mitigated** — the import's Fetch §2.2.5 destination is script-like, which is the question `safeFetch`'s CORB rule asks, so a cross-origin body is ingested JS-typed only. (This row named `as:"script"`, the deleted load-type keyword; a caller that still passes one now aborts at the chokepoint's entry. It was also FALSE FOR A NON-2xx REPLY until the gate's `&& resp.ok` conjunct was removed: the rule was skipped whole whenever the server answered outside 200-299, so the same cross-origin `text/html` refused at 200 was returned entire at 404 — a claim of mitigation that held only for the statuses nobody tests with) |
 | Concurrent localhost-page grind lends its origin to a public page's fetch | **Mitigated** — principal is per-call, not a global shared across the concurrently-driven renderers |
 | A sub-frame in a tab whose TOP is `http://localhost/` reaches the user's intranet | **Mitigated** — the SSRF principal is the frame's own `sender.url`, never `sender.tab.url` (this was a real bug; `sender.tab.url` survives only as `topLevelUrl` for secure-context) |
 | Content script states its own `origin` / `pageUrl` and a future consumer reads one as the principal | **Mitigated** — no principal-shaped field is on the wire at all; every fact comes from `_browserFacts(sender)` and is re-asserted by `_statedFacts` (a release-fatal `CHECK`) |

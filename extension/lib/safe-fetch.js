@@ -1537,7 +1537,29 @@ async function safeFetch(url, opts) {
   // there is no longer a caller that can forget to classify: `opts.as` is GONE rather
   // than accepted alongside, and the entry asserts on a caller still passing it,
   // because silently ignoring the old key is exactly a code load fetched as data.
-  if (_isScriptLike(_destinationOf(opts)) && resp.ok) {
+  /* AND IT IS EVERY REPLY TO SUCH A REQUEST, WHICH `&& resp.ok` MADE UNTRUE. That conjunct stood here with no
+     reasoning beside it — the one decision in this file that carried none — and what it did was skip the gate
+     entirely whenever the server answered outside 200-299: identical cross-origin `text/html` at
+     `destination:"script"` is refused `blocked-corb:protected-type:text/html` at 200 and, at 404, was returned
+     whole with no CORB verdict at all. NOTHING IN THE RULE THIS GATE RELAYS ASKS ABOUT A STATUS. Fetch §2.10
+     "Should response to request be blocked due to its MIME type?" — the one rule in Fetch that refuses a body
+     to a SCRIPT-LIKE destination — reads the header list, the destination and the essence, and no status:
+     its whole text is "let mimeType be the result of extracting a MIME type from response's header list", the
+     failure arm, "let destination be request's destination", the script-like test with its `audio`/`image`/
+     `video`/`text/csv` arms, and "return allowed". So the conjunct was not a narrower reading of the browser's
+     answer; it was a second rule, and one no document states.
+     THE HARM IS NOT COMPILATION AND DOES NOT DEPEND ON IT. What CORB keeps out is a cross-origin data body
+     entering the process that runs the attacker's bundle, and SECURITY.md makes that process the renderer this
+     zone hands bytes to — so a 404 whose body is the site's authenticated error page was crossing that boundary
+     on the server's say-so. That the same bytes ALSO reached a compiler is the engine's own half, and it is
+     fixed where HTML §8.1.4.2 "Fetching scripts" puts it (`script_fetch_status_ok`, and the delivery in
+     solver/engine.c that now asks it) rather than here — the two halves are independent, and neither is the
+     other's guard.
+     REMOVING IT CANNOT WIDEN ANYTHING: this gate only ever REFUSES, so the conjunct's whole effect was to stop
+     it firing. What it can do is refuse a load it did not refuse before, and every such load is one §8.1.4.2
+     answers `onComplete` given null for anyway — so the page sees `error` at its element either way, which is
+     the outcome a browser gives it. */
+  if (_isScriptLike(_destinationOf(opts))) {
     // The DECLARED essence is what CORB's two tables are stated over — the rule is
     // "was this labelled as data", and the sniff is the separate confirmation step
     // for a body whose label lied.

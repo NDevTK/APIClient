@@ -42,6 +42,19 @@
     "is a compiler that refuses an ill-formed byte outright, so the page would lose its whole program to a " \
     "SyntaxError no browser produces"
 
+/* §8.1.4.2's RESPONSE-SIDE FAILURE TEST — see script_fetch.h for which three algorithms state it and why the
+   predicate is over the STATUS alone. Fetch §2.2.3 "Statuses": "An ok status is a status in the range 200 to
+   299, inclusive."
+   NO ASSERT STANDS OVER `status`, AND THAT IS THE RULE RATHER THAN AN OMISSION. The number is one a stranger's
+   server chose, so it is INPUT: §2.2.3 admits "an integer in the range 0 to 999, inclusive" and this engine's
+   own network error is a status of 0 (Fetch §2.2.6 "Responses"), so there is no value here this codebase
+   computed and therefore nothing an assertion could be about except a remote party's choice. The answer to a
+   status this algorithm refuses is the algorithm's own failure — `onComplete` given null — and never a crash. */
+bool script_fetch_status_ok(int status)
+{
+    return status >= 200 && status <= 299;
+}
+
 /* WHAT EVERY SOURCE TEXT THIS FILE PRODUCES IS, asserted once for both entries. Encoding's decoders run in
    "replacement" error mode, so nothing ill-formed can leave one — which means a violation here is the decoder
    contradicting its own error mode, and the thing standing downstream is a COMPILER that refuses the byte
@@ -66,12 +79,12 @@ char *script_fetch_classic_source_text(const char *body_bytes, size_t n, const c
     DCHECK(body_bytes != NULL || n == 0,
            "a classic script's body reached the decode as a null pointer with a length — the two describe one "
            "byte sequence, and a caller with no body at all passes an empty one");
-    /* Step 5.4: "Let potentialMIMETypeForEncoding be the result of extracting a MIME type given response's
+    /* Step 5.3: "Let potentialMIMETypeForEncoding be the result of extracting a MIME type given response's
        header list." A response with no `Content-Type` at all is Fetch's "values is null", which is FAILURE —
-       and failure is a value step 5.5 takes, so it is passed on as one rather than short-circuited here.
+       and failure is a value step 5.4 takes, so it is passed on as one rather than short-circuited here.
        `mime_type_extract` initialises the record whichever way it answers, which is why one call covers both
        the extraction and this record's whole lifetime. */
-    /* Step 5.5: "Set encoding to the result of legacy extracting an encoding given potentialMIMETypeForEncoding
+    /* Step 5.4: "Set encoding to the result of legacy extracting an encoding given potentialMIMETypeForEncoding
        and encoding." The standard's note is what makes this correct for a bundle served under any of the dozen
        JavaScript MIME types, and under the wrong one: "this intentionally ignores the MIME type ESSENCE" — only
        the `charset` parameter is read, so `Content-Type: text/plain;charset=windows-1252` still decides the
@@ -80,7 +93,7 @@ char *script_fetch_classic_source_text(const char *body_bytes, size_t n, const c
     encoding = mime_type_legacy_extract_encoding(mime_type_extract(&mt, content_type) ? &mt : NULL,
                                                  fallback_encoding);
     mime_type_free(&mt);
-    /* Step 5.6: "Let sourceText be the result of decoding bodyBytes to Unicode, using encoding as the fallback
+    /* Step 5.5: "Let sourceText be the result of decoding bodyBytes to Unicode, using encoding as the fallback
        encoding", with the note "the decode algorithm overrides encoding if the file contains a BOM" — which is
        Encoding §6.1's own step 1-2 and the reason the whole byte sequence goes in rather than a BOM-trimmed
        one. A `<script src>` served as UTF-16 with its BOM is decoded as UTF-16 however the header labelled it. */
@@ -97,7 +110,7 @@ char *script_fetch_module_source_text(const char *body_bytes, size_t n, size_t *
     DCHECK(body_bytes != NULL || n == 0,
            "a module script's body reached the decode as a null pointer with a length — the two describe one "
            "byte sequence, and a caller with no body at all passes an empty one");
-    /* Step 12.7.1: "Let sourceText be the result of UTF-8 decoding bodyBytes." §6's UTF-8 DECODE, whose steps
+    /* Step 13.7.1: "Let sourceText be the result of UTF-8 decoding bodyBytes." §6's UTF-8 DECODE, whose steps
        1-2 peek three bytes and discard a UTF-8 BOM — not the without-BOM hook, which would leave the U+FEFF in
        the source, and not §6.1's decode, which has no label to be given. §6 states which caller gets which:
        "for decoding, UTF-8 decode is to be used by new formats. For identifiers or byte sequences within a

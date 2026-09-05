@@ -29,6 +29,8 @@
 #include "solver/flow.h"         /* §4.2.4.3 ends in a FETCH, and a fetch parks on a flow — see link_trigger */
 #include "solver/engine.h"       /* …so the PARSER's own elements are served as a work item — see below */
 #include "core/mime/mime_type.h"    /* §4.6.8.20's "a string type matches a preload destination" */
+#include "core/loader/script_fetch.h" /* §8.1.4.2's own "response's status is not an ok status" — the same
+                                         test the solver's script deliveries make, spelled once */
 #include "solver/concolic.h"        /* §2.5.6's slot holds a JS value, so a nonce can be unknown input */
 #include "core/html/nonce_attribute.h" /* §4.2.4.3 takes the request's nonce from [[CryptographicNonce]] */
 #include "core/html/cors_settings_attribute.h" /* …and its CREDENTIALS MODE from `crossorigin`, by
@@ -963,10 +965,12 @@ static JSValue link_module_deliver(JSContext *ctx, JSValueConst this_val, int ar
         /* "or response's status is not an ok status". Fetch §2.2.3 "Statuses": "An ok status is a status in
            the range 200 to 299, inclusive." A network error is the JSON `null` handled by the test above, and
            §2.2.6 "Responses" gives one "status is 0" — so the two absences are told apart here rather than
-           averaged into one number, which is what a reader of a bare 0 would have to do. */
-        int status = fetch_reply_status(ctx, argv[0]);
-
-        if (status >= 200 && status <= 299) {
+           averaged into one number, which is what a reader of a bare 0 would have to do.
+           THE RANGE IS core/loader/script_fetch.h's AND WAS A LITERAL HERE. §8.1.4.2 states this test in all
+           three of its fetch algorithms and this delivery is one of their consumers, so a second spelling of
+           it beside the solver's — which had no spelling at all and compiled 404 bodies as programs — is two
+           right answers to one question, which is the shape that drifts. */
+        if (script_fetch_status_ok(fetch_reply_status(ctx, argv[0]))) {
             HeaderList hl = { 0 };
             char *content_type;
             MimeType mt;
