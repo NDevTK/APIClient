@@ -428,13 +428,22 @@ static JSValue pin_mint(JSContext *ctx, ConcolicLit kind, const char *val)
 /* THE OPERAND SPELLED — its §7.1.19 ToString, owned by the caller, NULL where it has none. This is also the
    value an equality PINS to, and that is one fact rather than two: `""+x` is what a pinned source contributes
    to a URL the page builds, so the pin and the identity must be the same bytes or a flow's later reads compute
-   a different string from the one the predicate matched. */
-static char *literal_tok(JSContext *ctx, JSValueConst v)
+   a different string from the one the predicate matched.
+   THE KIND COMES BACK WITH THE SPELLING, `pkind` NULL where the caller has no use for it. It is the SAME
+   classification and not a second one, which is the whole reason it is an out-parameter rather than a call the
+   caller makes for itself: `operand_kind` is pure, so a caller asking it again about the same unchanged value
+   gets an answer that CANNOT differ — and an invariant whose two sides cannot disagree is a non-check that
+   reports as a passing one (CLAUDE.md §AN-ASSERT-WHOSE-TWO-SIDES-CANNOT-DISAGREE). concolic_shape_of asserted
+   exactly that disagreement and could not be falsified by any state of the program; with one classification
+   the state it named is impossible rather than checked. */
+static char *literal_tok(JSContext *ctx, JSValueConst v, ConcolicLit *pkind)
 {
+    ConcolicLit kind = operand_kind(v);
     const char *s;
     char *r;
 
-    if (operand_kind(v) == CONCOLIC_LIT_NONE) return NULL;
+    if (pkind) *pkind = kind;
+    if (kind == CONCOLIC_LIT_NONE) return NULL;
     s = JS_ToCString(ctx, v);
     if (!s) return NULL;
     r = strdup(s);
@@ -546,7 +555,7 @@ static char *literal_ident(JSContext *ctx, JSValueConst v)
         free(nm);
         return r;
     }
-    tok = literal_tok(ctx, v);
+    tok = literal_tok(ctx, v, NULL);   /* the kind is this function's own, read and gated on above */
     if (!tok) return NULL;
     f[0] = lit_tag(kind); f[1] = tok;
     r = concolic_ident_compose("k", f, 2);
@@ -615,8 +624,7 @@ static char *derived_operand_shape(JSContext *ctx, JSValueConst v)
         const char *sh = concolic_shape_c(v);
         return shapef("%s", sh ? sh : "{}");
     }
-    kind = operand_kind(v);
-    tok = literal_tok(ctx, v);
+    tok = literal_tok(ctx, v, &kind);
     /* AN INTRINSIC RENDERS AS ITS OWN NAME, AND IT IS THE SAME NAME literal_ident COMPOSED ITS IDENTITY FROM —
        which is this pair's whole invariant restated for one more kind of operand. Naming the identity without
        moving the display would put two intrinsics under ONE shape and two identities, and keyname_record's
@@ -641,10 +649,21 @@ static char *derived_operand_shape(JSContext *ctx, JSValueConst v)
            one token, so the token alone already separates what the identity separates. */
         r = shapef("%s", tok);
         break;
+    /* UNREACHABLE BY CONSTRUCTION, AND LISTED SO THE SWITCH STAYS EXHAUSTIVE — the same reason
+       concolic_lit_report_name and lit_tag carry no `default`: a kind added to ConcolicLit must fail to
+       compile here rather than be rendered under a neighbour's word. NONE is a NULL token and the `!tok` arm
+       above has already returned for one, so nothing reaches this line; the shape is the unspellable `?` the
+       intrinsic-less path answers with, so a reader who somehow stands here is handed that answer and not a
+       different one.
+       A DFAIL STOOD HERE AND WAS A NON-CHECK. It read "the two classifications of one operand have
+       disagreed", and there was only ever ONE: this function called `operand_kind(v)` and then `literal_tok`,
+       which called `operand_kind(v)` again on the same unchanged value, and that function is a chain of pure
+       tag tests. No state of the program could make those two answers differ, so the assert held under every
+       state including the one it was written to forbid — which is worse than a weak guard, because a check
+       nothing can falsify certifies what it never examined (CLAUDE.md §AN-ASSERT-WHOSE-TWO-SIDES-CANNOT-
+       DISAGREE). literal_tok now hands the kind back with the spelling, so the two are one value and the
+       impossible state is impossible instead of asserted. */
     case CONCOLIC_LIT_NONE:
-        DFAIL("a concrete operand spelled a token under the kind operand_kind reserves for values it refuses "
-              "to spell — literal_tok answers NULL for exactly that kind, so a token arriving with it means "
-              "the two classifications of one operand have disagreed");
         r = shapef("?");
         break;
     }
@@ -2899,9 +2918,11 @@ int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq, JSConcolicEqOp op
     /* THE KIND IS TAKEN FROM THE SAME CLASSIFICATION AND ON THE SAME LINE AS THE SPELLING, because it is the
        spelling's other half: §7.1.19 ToString flattens `undefined`, `null`, `0` and `false` onto text that is
        also a legal STRING operand, so a token travelling alone reaches decide.c as a string whatever the page
-       compared against. `operand_kind` is what literal_tok already consults to decide there is a token at
-       all, so asking it here cannot disagree with that answer. */
-    if (!concolic_is(other)) { tok = literal_tok(ctx, other); kind = operand_kind(other); }
+       compared against. It is TAKEN FROM literal_tok rather than asked of `operand_kind` a second time, which
+       is what this comment's last sentence used to concede: it said the second ask could not disagree with
+       the first, which is a statement that it was not a second fact at all, and a value read twice because it
+       cannot differ is one value with two spellings. */
+    if (!concolic_is(other)) tok = literal_tok(ctx, other, &kind);
     /* EQUALITY IS SYMMETRIC, so `x === 'a'` and `'a' === x` compose to ONE identity: the unknown operand is
        written first, and where BOTH are unknown the two identities are ordered between themselves. Without
        that the same predicate written the other way round would be a second fact and fork a second time —
@@ -3069,7 +3090,7 @@ static JSValue concolic_call(JSContext *ctx, JSValueConst func_obj, JSValueConst
                 spelled = reclaim_calloc((size_t)argc, sizeof *spelled);
                 CHECK(spelled, "concolic: OOM spelling the arguments a gate passed over an unknown");
                 for (i = 0; i < argc; i++) {
-                    spelled[i] = literal_tok(ctx, argv[i]);
+                    spelled[i] = literal_tok(ctx, argv[i], NULL);
                     if (!spelled[i]) { ok = 0; break; }
                 }
             }
@@ -3147,7 +3168,7 @@ int concolic_rel_hook(JSContext *ctx, JSValue *sp, int op) {
                               "the conversion disagreeing about what the operand is");
             if (gotn == 0 && isfinite(num)) {
                 char *subj = concolic_hole_key(concolic_shape_c(opq));
-                char *txt = subj ? literal_tok(ctx, other) : NULL;
+                char *txt = subj ? literal_tok(ctx, other, NULL) : NULL;
                 /* NORMALISED SUBJECT-LEFT EXACTLY ONCE. `700 < x` is `x > 700`; recording the relation as
                    written would make every consumer downstream re-derive which operand the page put first,
                    and the first one to forget reports the bound inverted. */
