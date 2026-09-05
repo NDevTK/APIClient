@@ -288,9 +288,14 @@ typedef struct {
  * AN `inline-table` HAS ITS INLINE SIZE: CSS 2.1 §17.5.2 Table width algorithms: the 'table-layout' property
  * is built (core/layout/table_width.h) and core/layout/used_value.c routes a table box's width to it, so what
  * keeps this one out is the OTHER axis — CSS 2.2 §10.8.1 "Leading and half-leading" makes its baseline "the
- * baseline of the first row of the table", and a row's baseline is CSS 2.1 §17.5.3 Table height algorithms',
- * which has no component. The two absences are not one, and a reader taking them for one would build §17.5.2
- * a second time.
+ * baseline of the first row of the table", and a row's baseline is CSS 2.1 §17.5.3 Table height algorithms'.
+ * WHAT IS MISSING THERE IS THE NUMBER AND NOT THE SECTION, AND THIS LINE USED TO SAY §17.5.3 HAD NO COMPONENT
+ * AT ALL: core/layout/table_height.h answers the row HEIGHTS and core/layout/used_value.c routes a table box's
+ * `height` to it on both arms, while the BASELINE that section's alignment procedure establishes on the way to
+ * a row's maximum is reported nowhere — and is not even computed on the arm this engine takes for a row with
+ * at most one baseline-aligned cell, which needs none for the height. So the export is a real derivation and
+ * not a field to plumb. The two absences were never one, and a reader taking them for one would build §17.5.2
+ * a second time or §17.5.3 a first.
  *
  * IT FINDS THE FORMATTING CONTEXT ITSELF, and that is why it takes an element where the two entries above take
  * a run: the question "which inline formatting context is this box in" is answered by walking PAST every inline

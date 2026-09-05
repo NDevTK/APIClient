@@ -96,8 +96,10 @@
  * module's layout, an `inline-table` waits on NEITHER OF THOSE AND THIS LIST USED TO GROUP IT WITH THEM — its
  * inline size is CSS 2.1 §17.5.2 Table width algorithms: the 'table-layout' property's and is built
  * (core/layout/table_width.h, routed by core/layout/used_value.c), so what it waits on is the baseline CSS 2.2
- * §10.8.1 "Leading and half-leading" makes its first row's, which is CSS 2.1 §17.5.3 Table height algorithms'
- * and has no component, and a box whose
+ * §10.8.1 "Leading and half-leading" makes its first row's, which is CSS 2.1 §17.5.3 Table height algorithms' —
+ * and §17.5.3 IS a component (core/layout/table_height.h, routed for a table box's height on both arms) that
+ * REPORTS ROW HEIGHTS AND NO BASELINE, which is a narrower absence than the one this line used to name, and a
+ * box whose
  * computed `writing-mode` is not `horizontal-tb` waits on
  * css-writing-modes-4 §7.4's flow-relative restatement of the two rules this file implements physically.
  *

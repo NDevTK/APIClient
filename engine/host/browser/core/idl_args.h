@@ -323,8 +323,8 @@ typedef enum {
        which is where that ask lives. */
     IDL_SEQUENCE_STRING_OR_DICT,
     /* `(DOMString or D)` where D is a DICTIONARY — §3.2.25 over the union HTML §8.6.2's seven name-taking
-       modifiers take (`allowElement(SanitizerElementWithAttributes)` and its six siblings), and the union the
-       Sanitizer constructor's `(SanitizerConfig or SanitizerPresets)` is. Its rule is the union algorithm's own
+       modifiers take (`allowElement(SanitizerElementWithAttributes)` and its six siblings). Its rule is the
+       union algorithm's own
        ORDER, and the order is observable: null and undefined take the DICTIONARY arm (step 4, which then throws
        for a `required` member the page did not write), ANY Object takes it too (step 11 — a function and a
        String object included, since these unions name no callback type and step 10's callback clause therefore
@@ -343,7 +343,33 @@ typedef enum {
        AND ITS ARM IS FORKED FOR UNKNOWN EXTERNAL INPUT — see idl_concolic_rule, which is where the reason
        lives, and idl_args.c's TWO resolution sites, which is where the fork is asked: the ARGUMENT position,
        and §3.2.21.1 step 3.3's ELEMENT conversion inside IDL_SEQUENCE_STRING_OR_DICT, whose element type is
-       this union. One type, one rule, and every site that resolves it asks the same fork. */
+       this union. One type, one rule, and every site that resolves it asks the same fork.
+       NAMED RESIDUAL — A `(D or E)` UNION IS NOT ONE OF THESE, AND THIS ROW USED TO CLAIM THE Sanitizer
+       CONSTRUCTOR'S AS AN INSTANCE. `(SanitizerConfig or SanitizerPresets)`'s other arm is an ENUMERATION, and
+       Web IDL §2.13 Types puts an enumeration among the STRING TYPES outright — "The string types are
+       DOMString, all enumeration types, ByteString and USVString" — so what differs is not the STEP but the
+       type step 15 names: this row converts V to §3.2.10 DOMString where that union owes §3.2.18 Enumeration
+       types. WHAT IS NOT COVERED is therefore a union whose string arm carries a value list. On a value the
+       flow DETERMINED the two agree in what a page can see — a body re-spelling the membership test by hand
+       throws the same TypeError one algorithm step later — and over UNKNOWN EXTERNAL INPUT they do not agree
+       at all: §3.2.10 CROSSES, so the arm fork PLACES THE UNKNOWN ITSELF, where §3.2.18 forks N+1 ways and
+       places one of the declared strings.
+       WHAT THE NEXT DIFF BUILDS IS TWO THINGS, AND THE ROW IS THE SMALLER OF THEM. The row is necessary: an
+       `IDL_ENUM_OR_DICT` whose dictionary arm is this one's and whose other arm is IDL_ENUM, listed by
+       idl_type_has_dict and answering IDL_CONCOLIC_FORKS here, with the value list stated per POSITION by
+       idl_arg_enum exactly as a bare IDL_ENUM's is. IT IS NOT SUFFICIENT, and the reason is at the ARGUMENT
+       SITE rather than in this rule: that site asks the arm fork afresh on every entry to the position,
+       guarded only by the dictionary walk's `started`, because on the string arm NOTHING PARKS — the value is
+       placed and the position is done. AN ENUMERATION ARM PARKS. So the resume that carries §3.2.18's own
+       answer re-enters, re-asks the ARM fork first, and quickjs-step.h's `fork_ask_key` check refuses it: the
+       outstanding answer belongs to the enumeration's question and is being consumed at the union's, which is
+       the one thing that check exists to catch. What closes it is a PER-POSITION RECORD of the resolved arm
+       that survives a park — what `uni_phase` already is for the @@iterator unions, which is why
+       idl_union_seq_arm keeps one and this site does not.
+       HOW ITS ABSENCE WOULD SHOW: a page building a sanitizer out of injected state reaches HTML §8.6.2 The
+       Sanitizer interface's constructor STILL CARRYING the unknown, so the enumeration's worlds have to be
+       asked at the MEMBER's seam by a plain C body that has none — an abort that names a fork at the member
+       where the TYPE is what owes it. */
     IDL_STRING_OR_DICT,
     /* THE POSITION AT WHICH TWO OVERLOADS SPLIT, one of them ending here and the other continuing — §3.6's
        resolution algorithm rather than §3.2.25's union, and the difference between the two is why this is its

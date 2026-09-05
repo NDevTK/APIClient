@@ -1282,15 +1282,21 @@ static void ev_require_enumerable_fragments(const EvTarget *t)
               "core/layout/table_box.h answers §17.2.1's first two stages, and `table_box_captions` answers "
               "exactly the CAPTION BOX half of the sentence above — the anonymous container this step excludes "
               "is CSS 2.1 §17.4 Tables in the visual formatting model's table wrapper box, which nothing here "
-              "has to produce. Its extents are not §10's either, AND ONLY ONE OF THE TWO IS STILL MISSING — "
-              "this line used to name both. CSS 2.1 §17.5.2 Table width algorithms: the 'table-layout' "
-              "property owns the table's WIDTH and is BUILT (core/layout/table_width.h), so "
-              "core/layout/used_value.c ANSWERS a table box's used width on its declared arm and its `auto` "
-              "arm alike rather than crashing there. CSS 2.1 §17.5.3 Table height algorithms owns its HEIGHT "
-              "and has no component, and that is what core/layout/used_value.c still crashes for — its "
-              "`height: auto` arm and its declared-`height` arm each name §17.5.3 by itself. BUILD §17.5.3 "
-              "over table_box.h's rows and the used column widths §17.5.2 now reports; the two fragments this "
-              "step wants then have edges");
+              "has to produce. ITS EXTENTS ARE NOT §10's EITHER AND BOTH AXES ARE NOW ANSWERED — this line "
+              "used to name the block axis as the one still missing, and then told its reader to BUILD it. "
+              "CSS 2.1 §17.5.2 Table width algorithms: the 'table-layout' property owns the table's WIDTH "
+              "and CSS 2.1 §17.5.3 Table height algorithms owns its HEIGHT, and BOTH are components "
+              "(core/layout/table_width.h, core/layout/table_height.h) that core/layout/used_value.c routes "
+              "a table box to on the declared arm and the `auto` arm alike — each section takes the "
+              "declaration as an INPUT to its own comparison rather than as the used value, so there is no "
+              "declared-height arm left for it to crash in. WHAT IS STILL MISSING IS THIS STEP'S OWN "
+              "ENUMERATION AND NOT AN EXTENT: one ELEMENT's entry has to answer SEVERAL rectangles — the "
+              "table box's, which is the single-fragment arm below, and one per element `table_box_captions` "
+              "reports, each of which CSS 2.1 §17.4 Tables in the visual formatting model makes an ordinary "
+              "block-level box — \"The caption boxes are block-level boxes that retain their own content, "
+              "padding, margin, and border areas, and are rendered as normal block boxes inside the table "
+              "wrapper box\". Emit that LIST here, the way "
+              "the line-box arm above emits one rectangle per fragment");
 }
 
 /* §6's getClientRects() STEPS, AS THE INTERNAL ALGORITHM. §2 is explicit that a member "said to call another

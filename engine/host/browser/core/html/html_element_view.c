@@ -375,14 +375,20 @@ static JSValue hev_offset_extent(JSContext *ctx, const HevTarget *t, bool vertic
               "wrapper box that contains the table box itself and any caption boxes\" — and no element in the "
               "tree names it — THOUGH §17.4's SPLIT IS ANSWERED AND THIS LINE USED TO ASK FOR IT: "
               "core/layout/table_wrapper.h says which declarations land on the wrapper and which on the table "
-              "box, and whether the wrapper is block-level. Its EXTENTS are not §10's "
-              "either, AND ONLY ONE HALF OF THAT IS STILL MISSING: CSS 2.1 §17.5.2 Table width algorithms: the "
-              "'table-layout' property owns the table's WIDTH and is BUILT (core/layout/table_width.h), so "
-              "core/layout/used_value.c ANSWERS a table box's used width rather than crashing there, and "
-              "§17.4 states the wrapper's own width over that number. CSS 2.1 §17.5.3 Table height algorithms "
-              "owns the HEIGHT and has no component, and that is what core/layout/used_value.c still crashes "
-              "for — its `height: auto` arm and its declared-`height` arm each name §17.5.3 by itself. BUILD "
-              "§17.5.3 over table_box.h's rows and the used column widths §17.5.2 now reports");
+              "box, and whether the wrapper is block-level. Its EXTENTS are not §10's either, AND BOTH AXES "
+              "ARE NOW ANSWERED — this line used to name the block axis as the half still missing, and then "
+              "told its reader to BUILD it. CSS 2.1 §17.5.2 Table width algorithms: the 'table-layout' "
+              "property owns the table's WIDTH and CSS 2.1 §17.5.3 Table height algorithms owns its HEIGHT, "
+              "and BOTH are components (core/layout/table_width.h, core/layout/table_height.h) that "
+              "core/layout/used_value.c routes a table box to on the declared arm and the `auto` arm alike — "
+              "each section takes the declaration as an INPUT to its own comparison rather than as the used "
+              "value, so there is no declared-height arm left for it to crash in; CSS 2.1 §17.4 Tables in the "
+              "visual formatting model states the wrapper's own width over the first number. WHAT IS STILL MISSING IS STEP 2's OWN ENUMERATION AND NOT AN "
+              "EXTENT: the principal box here is the WRAPPER, whose fragments are the table box and every "
+              "caption box CSS 2.1 §17.4 Tables in the visual formatting model renders \"as normal block "
+              "boxes inside the table wrapper box\", and this entry answers ONE extent. Assemble the "
+              "wrapper's from those, the way CSSOM VIEW §6's entry has to "
+              "assemble its rectangle list");
     /* step 2, for a principal box of one fragment */
     return element_view_length_long(ctx, used_value_border_edge_px(el, vertical));
 }
