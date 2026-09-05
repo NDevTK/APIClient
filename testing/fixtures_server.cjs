@@ -13,8 +13,24 @@ const ROOT = path.resolve(__dirname, "fixtures");
 const PORT = parseInt(process.env.FIX_PORT || "8765", 10);
 const LOCK = path.resolve(__dirname, "fixtures.lock");
 
+/* THE DEFAULT ROUTE IS RESOLVED ONCE, AGAINST THE DISK, AND ITS ABSENCE IS SAID OUT LOUD.
+ *
+ * This mapped `/` to a fixture unconditionally and the banner below announced the mapping, while the file it
+ * named was in no revision and on no disk — so the one route this server advertises answered 404, and a 404 for
+ * a fixture reads as the SUBJECT failing rather than as a route that was never provisioned. CLAUDE.md's rule is
+ * that a value the producer can legitimately omit is a POSITIVE statement the consumer reads as one, never a
+ * hole: the absence is stated here and printed at startup, rather than being discovered per request as a status
+ * code that names nothing.
+ *
+ * IT IS ASKED ONCE rather than per request because the answer is a fact about the checkout, not about the
+ * request — and because a per-request `existsSync` would make the banner and the behaviour able to disagree.
+ * `/` falling through to the ordinary path handling is the correct arm when the default is absent: the request
+ * still gets this server's own 404 for a path that is genuinely not here, and the banner has already said why. */
+const DEFAULT_ROUTE = "/poc_multi.html";
+const DEFAULT_ROUTE_PRESENT = fs.existsSync(path.join(ROOT, DEFAULT_ROUTE.slice(1)));
+
 function pick(p) {
-  if (p === "/" || p === "") return "/poc_multi.html";
+  if ((p === "/" || p === "") && DEFAULT_ROUTE_PRESENT) return DEFAULT_ROUTE;
   return p;
 }
 const CT = { ".html": "text/html; charset=utf-8", ".js": "application/javascript", ".json": "application/json", ".css": "text/css" };
@@ -83,7 +99,9 @@ srv.listen(PORT, "127.0.0.1", () => {
   const lock = { pid: process.pid, port: PORT, startedAt: Date.now() };
   fs.writeFileSync(LOCK, JSON.stringify(lock, null, 2), "utf8");
   console.log(`fixtures server listening on http://127.0.0.1:${PORT}/`);
-  console.log(`  GET / -> /poc_multi.html`);
+  console.log(DEFAULT_ROUTE_PRESENT
+    ? `  GET / -> ${DEFAULT_ROUTE}`
+    : `  GET / -> UNMAPPED: ${DEFAULT_ROUTE} is not in this checkout, so / answers 404`);
   console.log(`  lock: ${LOCK}`);
 });
 
