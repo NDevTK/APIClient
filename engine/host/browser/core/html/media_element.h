@@ -59,15 +59,16 @@ void media_element_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const cha
    immediately invoke the media element's resource selection algorithm" — for the elements a PARSE created with
    their attributes, which lexbor builds with no per-token hook to run it at. Called at the two seams this
    engine already treats as a parse boundary: the document's, and every fragment's. Seeds one job per media
-   element that carries a `src` OR has a `source` element child — the second being §4.8.12's source element
+   element that carries a `src` OR has a `source` element child — the second being §4.8.2's source element
    insertion steps for the same parse, since a parser-inserted `<source>` reaches no mutation chokepoint.
    Costs a tag test per node and allocates for nothing else. */
 void media_element_parsed(JSContext *ctx, lxb_dom_node_t *root);
-/* §4.8.12's SOURCE HTML ELEMENT INSERTION STEPS — "let parent be insertedNode's parent; if parent is a media
-   element that has no src attribute and whose networkState has the value NETWORK_EMPTY, then invoke that media
-   element's resource selection algorithm". Called from core/dom/element.c's §4.2.3 insertion-steps drain,
-   beside the other HTML element insertion steps and in the inserted node's own document realm; it asks whether
-   `el` is a `source` itself, so the drain states no brand it would have to keep in step with this file. */
+/* §4.8.2 The source element's SOURCE HTML ELEMENT INSERTION STEPS — "Let parent be insertedNode's parent. If
+   parent is a media element that has no src attribute and whose networkState has the value NETWORK_EMPTY, then
+   invoke that media element's resource selection algorithm." Called from core/dom/element.c's DOM §4.2.3
+   Mutation algorithms insertion-steps drain, beside the other HTML element insertion steps and in the inserted
+   node's own document realm; it asks whether `el` is a `source` itself, so the drain states no brand it would
+   have to keep in step with this file. */
 void media_element_source_inserted(JSContext *ctx, lxb_dom_element_t *el);
 
 #endif

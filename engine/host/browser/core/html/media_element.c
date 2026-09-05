@@ -140,7 +140,7 @@ bool media_element_is(const lxb_dom_node_t *n)
     return media_is_node(n);
 }
 
-/* WHICH NODES ARE `source` ELEMENTS — §4.8.11.5 step 10's "source element child" and §4.8.12's insertion
+/* WHICH NODES ARE `source` ELEMENTS — §4.8.11.5 step 10's "source element child" and §4.8.2's insertion
    steps, over the interned tag id and the namespace for media_is_node's two reasons: an SVG `<source>` is not
    one, and the question is asked of every child of every media element and of every inserted node. */
 static bool media_source_is(const lxb_dom_node_t *n)
@@ -149,7 +149,7 @@ static bool media_source_is(const lxb_dom_node_t *n)
 }
 
 /* §4.8.11.5 step 10's "the first source element child in tree order", or NULL — ONE walker, so the mode
-   selection and the parse boundary's §4.8.12 sweep cannot disagree about what a candidate is. */
+   selection and the parse boundary's §4.8.2 sweep cannot disagree about what a candidate is. */
 static lxb_dom_node_t *media_first_source(const lxb_dom_node_t *el)
 {
     lxb_dom_node_t *c;
@@ -203,7 +203,7 @@ static JSValue media_state(JSContext *ctx, JSValueConst el)
     JS_SetPropertyStr(ctx, st, "muted", JS_NewInt32(ctx, MUTED_DEFAULT));
     JS_SetPropertyStr(ctx, st, "loadedData", JS_FALSE);   /* §4.8.11.7's "first time … since load()" latch */
     /* §4.8.11.5 step 14's CHILDREN MODE parked this element at its WAITING step, whose only wake is a `source`
-       inserted into it — so the flag is read by §4.8.12's source element insertion steps and by nothing else.
+       inserted into it — so the flag is read by §4.8.2's source element insertion steps and by nothing else.
        It is a POSITIVE statement and not a hole: false is "this element is not waiting at a pointer", which is
        a different fact from NETWORK_NO_SOURCE, since step 1 and the dedicated media source failure steps both
        leave that same network state behind without any wait. */
@@ -860,7 +860,7 @@ static void media_set_ready_state(JSContext *ctx, JSValueConst el, JSValueConst 
  * SOURCE ELEMENT, and NETWORK_NO_SOURCE — and the old scan, which returned the first `source` child carrying a
  * non-empty `src` and NULL otherwise, produced step 11's silent NETWORK_EMPTY for all of it. It also skipped
  * over an unusable candidate rather than FAILING at it, so the `error` the standard fires at each rejected
- * `source` (the event the fallback idiom in §4.8.12's own example listens for) never fired at all. Object mode
+ * `source` (the event the fallback idiom in §4.8.2's own example listens for) never fired at all. Object mode
  * was the third state the one string carried: a malloc'd "" meaning "currentSrc is the empty string, go and
  * fetch the provider object".
  *
@@ -1215,7 +1215,7 @@ static int media_select_step(JSContext *ctx, void *stp, JSValue cb_result, JSVal
            element's show poster flag to true." The algorithm then waits "until the node after pointer is a
            node other than the end of the list", and the standard says out loud that this "might wait
            forever": the ONLY thing that can end the wait is a `source` inserted into this element, which is
-           where §4.8.12's source element insertion steps stand. So the wait is RECORDED where its waker can
+           where §4.8.2's source element insertion steps stand. So the wait is RECORDED where its waker can
            read it and this flow ENDS rather than spinning — a JS_STEP_YIELD loop over a condition no code in
            this flow can change is a monopolizer, not a park. media_element_source_inserted below crashes by
            name on the insertion that would have to resume it. */
@@ -1240,7 +1240,7 @@ static const JSTrampStepDef media_select_def = {
  * is what the algorithm's own first paragraph says — "one of the first steps in the algorithm is to return and
  * continue running the remaining steps in parallel", and the step that returns is step 4, not step 1.
  *
- * AND THE PLACEMENT IS LOAD-BEARING, NOT A TIDY-UP. §4.8.12's source element insertion steps invoke this only
+ * AND THE PLACEMENT IS LOAD-BEARING, NOT A TIDY-UP. §4.8.2's source element insertion steps invoke this only
  * "if parent is a media element that has no src attribute and whose networkState has the value NETWORK_EMPTY",
  * so `<video><source src=a><source src=b></video>` must invoke it from the FIRST child's insertion and not
  * from the second. With step 1 inside the enqueued job the network state was still NETWORK_EMPTY when the
@@ -1414,7 +1414,7 @@ void media_element_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const cha
  * attribute mode is where the empty string is answered — with a `loadstart` and an `error`, which is exactly
  * what a producer that could not tell an empty `src` from no candidate at all used to deny it.
  *
- * AND IT CARRIES §4.8.12's SOURCE ELEMENT INSERTION STEPS FOR THE SAME PARSE, because those are what start a
+ * AND IT CARRIES §4.8.2's SOURCE ELEMENT INSERTION STEPS FOR THE SAME PARSE, because those are what start a
  * `<video>` that has no `src` and only `<source>` children — the shape every page that ships more than one
  * codec is written in. A parser-inserted `<source>` reaches no mutation chokepoint, so the insertion steps
  * that would have invoked the algorithm from the FIRST such child never ran and that whole family of elements
@@ -1440,11 +1440,19 @@ void media_element_parsed(JSContext *ctx, lxb_dom_node_t *root)
     }
 }
 
-/* ---- §4.8.12's SOURCE ELEMENT INSERTION STEPS ----------------------------------------------------------------
+/* ---- §4.8.2 The source element's SOURCE ELEMENT INSERTION STEPS ---------------------------------------------
  *
- * "The source HTML element insertion steps, given insertedNode, are: 1. Let parent be insertedNode's parent.
- * 2. If parent is a media element that has no src attribute and whose networkState has the value
- * NETWORK_EMPTY, then invoke that media element's resource selection algorithm."
+ * "The source HTML element insertion steps, given insertedNode, are: Let parent be insertedNode's parent. If
+ * parent is a media element that has no src attribute and whose networkState has the value NETWORK_EMPTY, then
+ * invoke that media element's resource selection algorithm. …"
+ *
+ * THE ELLIPSIS IS A THIRD STEP AND NOT A TRIM FOR WIDTH: "If parent is a picture element, then for each child
+ * of parent's children, if child is an img element, then count this as a relevant mutation for child." It is
+ * BUILT, one component over — core/html/html_image.c runs it from the same drain entry, one line after this
+ * one — so the quotation stops here because the step belongs to that file and not because nothing does it.
+ * This banner carried §4.8.12 for eight of its ten citations, which is HTML §4.8.12 The map element; the one
+ * site below that spelled it §4.8.2 with the section's own title beside it was the file's only correct one,
+ * and diffing the siblings against each other is what found the other eight.
  *
  * IT IS NOT A node_add_tree_hook, AND THAT IS A STATEMENT ABOUT WHAT THAT LIST IS. Its members are the DOM's
  * own step families — §5.5's live-range pre-remove, §6.1's NodeIterator pre-remove, §4.2.2's slot steps,

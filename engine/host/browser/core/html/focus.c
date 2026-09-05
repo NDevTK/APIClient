@@ -213,7 +213,17 @@ static JSValue navigable_container_of(JSContext *child)
                            "set) that suspends the flow. Build it in core/frame/window_proxy.c");
     if (!parent) return JS_UNDEFINED;
     root = document_root_node(parent);
-    for (n = root; n; n = node_next_in(n, root)) {
+    /* SHADOW-INCLUDING, and that is the difference between finding the container and aborting on a page that
+       did nothing wrong. An `<iframe>` inside a shadow tree IS browsing-context connected — DOM §4.4 states
+       `isConnected` over the SHADOW-INCLUDING root — so core/dom/element.c's post-connection steps run for it
+       and §4.8.5's create a new child navigable gives it one. A light-tree walk from the document node never
+       reaches it, so the reverse lookup came back empty for a navigable that exists and the DFAIL below fired
+       on `host.attachShadow({mode:"open"}).appendChild(document.createElement("iframe"))`, which is the
+       ordinary way a component ships a frame. `node_next_in` is the light-tree walker by construction (it
+       steps `first_child`/`next`/`parent` and nothing else); the shadow-including one is the canonical
+       spelling of this question and the walk that MINTS these navigables — media_element.c's parsed-tree
+       sweep and eight other components — already asks it that way. */
+    for (n = root; n; n = shadow_root_next_in_shadow_including(parent, n, root)) {
         JSValueConst wrap;
         JSValue nav;
         bool mine;
@@ -226,9 +236,18 @@ static JSValue navigable_container_of(JSContext *child)
         JS_FreeValue(parent, nav);
         if (mine) return JS_DupValue(parent, wrap);
     }
+    /* THE ONE CAUSE LEFT once the walk above crosses shadow boundaries, and it is a capability rather than a
+       state to eliminate here: this engine does not run HTML §7.3.1.6 Navigable destruction's destroy a
+       navigable, so removing the container leaves the child's navigable alive and answering. The message used
+       to name that as the ONLY way here while the light-tree walk made a shadow-tree frame reach it too — the
+       diagnosis was right about the standard and wrong about this tree, which is the shape that survives
+       review. */
     DFAIL("HTML §6.6.2's focus chain found no navigable container for a document whose navigable HAS a parent "
-          "— every child navigable is created by §4.8.5's insertion steps from an element that keeps it, so a "
-          "parent holding no such element means the element was removed without its navigable being destroyed");
+          "— in this tree every child navigable comes from §4.8.5's iframe post-connection steps (html_iframe.c "
+          "is navigable_create's only caller for a child), and the walk above crosses shadow boundaries, so a "
+          "parent holding no such element means the element was REMOVED and its navigable outlived it. Build "
+          "HTML §7.3.1.6 Navigable destruction's destroy a navigable, driven from the removing steps, so the "
+          "child stops being reachable when its container goes");
     return JS_UNDEFINED;
 }
 
