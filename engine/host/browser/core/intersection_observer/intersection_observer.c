@@ -13,7 +13,6 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/agent_state.h"
-#include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
 #include "core/dom/document.h"
 #include "core/dom/element.h"
