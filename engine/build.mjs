@@ -191,9 +191,11 @@ const loadNow = () => {
    ratio and its denomination, `programCursorReading` states what `deepest` and `completed` are read against,
    `coldPartition` states the two population splits). A second copy of either, kept in the file whose whole
    subject is what a second copy costs, is the thing being deleted here.
-   THE OBJECT ROWS ARE NOT NUMBERS AND ARE NOT IN THIS SET — `stepUnits`, `stepUnitRuns` and `programCursors`
-   are spliced with `%s` and are validated as PARTITIONS by `censusHistRows`, a contract a numeric-presence
-   loop cannot state and would refuse outright. The split is taken from the CONVERSION in the format string
+   THE OBJECT ROWS ARE NOT NUMBERS AND ARE NOT IN THIS SET — `stepUnits`, `stepUnitRuns`,
+   `outOfProgramsAtTheLadderUnits` and `programCursors` are spliced with `%s` and are validated as PARTITIONS
+   by `censusHistRows`, a contract a numeric-presence loop cannot state and would refuse outright. Three of the
+   four are partitions of the FRONTIER or of the run; the third is a partition of ONE ROW on the same line,
+   which `censusHistRows` already expresses because its total is a parameter rather than `live`. The split is taken from the CONVERSION in the format string
    and never from an exclusion list beside it, and `censusRowSet` is what refuses the day a fourth object
    arrives with no reader.
    MEMOIZED BECAUSE IT IS A FILE READ AND THE ANSWER CANNOT CHANGE UNDER ONE BUILD — and never evaluated at
@@ -202,7 +204,7 @@ const loadNow = () => {
 let g_coldFields = null;
 const coldFields = () => (g_coldFields ??= censusRowSet(
   "solver/result.c", "char *result_cold_json(void)", "\n}\n",
-  ["stepUnits", "stepUnitRuns", "programCursors"],
+  ["stepUnits", "stepUnitRuns", "outOfProgramsAtTheLadderUnits", "programCursors"],
   "the @COLD reader states which rows it requires of the frontier census, and it takes that set from the " +
   "composer rather than from a list beside it"));
 /* THE POPULATION SPLITS ARE PARTITIONS AND THE PARTITION IS THE CONTRACT, checked here for the reason
@@ -1840,6 +1842,50 @@ function stepUnitRunReading(b) {
            : ` — every arm has run at least once`);
 }
 
+/* AND WHICH ARM THE MEMBERS STANDING AT THE ORPHAN LADDER ARE STOPPING AT — the row that separates the two
+   readings of a frozen orphan `asked`, which no number on this line could separate before it existed.
+   THE READING IT REPLACES WAS WRONG AND IS NAMED HERE BECAUSE IT IS THE ONE A READER RE-DERIVES.
+   `outOfProgramsAtTheLadder` beside a flat `asked` was rendered as "a statement about the PICK", and that is
+   one of two possibilities the pair cannot tell apart. A member picked on EVERY round and taken every time by
+   an arm ABOVE the orphan seed — a queued job, an answered reply, a microtask checkpoint, a lifecycle stage —
+   is dispatched, makes progress, and comes back with no frame and no row: it stands in that row at every
+   census while `asked` never moves. "Not picked" and "picked, and something above the rung is due every time"
+   take OPPOSITE work, and the arm each member last returned through is what says which.
+   IT NAMES THE ARM AND DOES NOT CLASSIFY IT, AND THAT REFUSAL IS THE DESIGN RATHER THAN A GAP. Rendering
+   "above the rung" / "below the rung" would need this file to know where each arm sits in flow_step's chain,
+   and there are only two ways to get that: a list of names here — which solver/step_unit.h is the one place to
+   hold, and which `stepUnitReading` refuses for that reason — or a derivation from engine.c's source. THE
+   DERIVATION WAS TRIED AND IS UNSOUND, which is worth writing down so it is not tried again: flow_step is one
+   function containing MORE THAN ONE block, so `g_step_unit = STEP_UNIT_…` assignments appearing after the
+   `engine_orphan_seed(ctx, f)` call in SOURCE ORDER are not all below it in LADDER order — `no-compile` and
+   `evaluate-module` sit in the program-start block further down the file and are reached before the ladder is
+   entered at all. A position-derived split would have reported both as "past the seed", which is the reading
+   inverted rather than degraded. So the arm is NAMED, and where it sits is read off flow_step by whoever opens
+   it — one file, one chain, and no second copy of the order.
+   IT DECIDES NOTHING (§NO BOUNDS). No verdict branches on it and nothing throws on a value; it is a report
+   beside the count it partitions, exactly as the three histograms above it are. */
+function ladderUnitReading(b) {
+  const rows = censusHistRows(b, "outOfProgramsAtTheLadderUnits", "outOfProgramsAtTheLadder",
+                              STEP_UNIT_EXTENT);
+  const at = rows.filter((r) => r[1] > 0).sort((x, y) => y[1] - x[1]);
+  /* NOBODY STANDING AT THE LADDER IS A MEASUREMENT AND IS SAID AS ONE, for `stepUnitReading`'s reason: an
+     all-zero histogram here is the first of the two readings outright — nobody is standing where the rung
+     could be asked — and rendering it as an empty list would read as a composer that failed. */
+  if (at.length === 0)
+    return `orphan-ladder arms: no member is standing at the ladder (\`outOfProgramsAtTheLadder\` ` +
+           `${b.outOfProgramsAtTheLadder}), so all ${rows.length} arms read 0 — which is the reading that a ` +
+           `zero orphan-ask count is a fact about WHERE THE MEMBERS ARE and not about the take or the page`;
+  return `orphan-ladder arms (${b.outOfProgramsAtTheLadder} member` +
+         `${b.outOfProgramsAtTheLadder === 1 ? "" : "s"} whose next dispatch descends it, by the arm each ` +
+         `LAST returned through): ` + at.map((r) => `${r[1]} ${r[0]}`).join(", ") +
+         ` — largest ${at[0][1]} at \`${at[0][0]}\`. Read that arm's position in flow_step's chain against ` +
+         `\`engine_orphan_seed\`: an arm ABOVE the seed says these members ARE being dispatched and that ` +
+         `work the page arranged falls due ahead of the take on every round, which is the ladder's ` +
+         `precondition and not the pick; an arm BELOW it says the member went PAST the seed, so the seed RAN ` +
+         `and found nothing to take, which is a fact about the heap. Those two take opposite work and ` +
+         `\`outOfProgramsAtTheLadder\` beside \`asked\` cannot choose between them (solver/cold.h)`;
+}
+
 /* WHAT A TURN OF THE DISPATCH LOOP COST — the row every reading above is structurally silent about, and the
    one the question "why did this run make so few choices" actually needs.
    THE TWO READINGS ABOVE ARE ABOUT WHERE THE STEPS WENT AND THIS IS ABOUT HOW MANY THERE COULD BE. A run's
@@ -1998,8 +2044,12 @@ function programCursorReading(b) {
             `orphan-ask count is a fact about where the members are, not about what is due`
           : `That number is what the orphan census's \`asked\` is to be read against — never ` +
             `\`outOfPrograms\` — and it does NOT say a rung is holding them: a member here may equally be ` +
-            `one the pick has not returned to. A large count beside an \`asked\` that is not moving is a ` +
-            `statement about the PICK`);
+            `one the pick has not returned to. AND IT DOES NOT SAY THE PICK IS AT FAULT EITHER, which is ` +
+            `what this sentence used to end with ("a large count beside an \`asked\` that is not moving is ` +
+            `a statement about the PICK") and is retired here rather than deleted, because it is the ` +
+            `inference the pair invites: a member picked on every round and taken every time by an arm ABOVE ` +
+            `the seed stands here at every census while \`asked\` never moves. \`outOfProgramsAtTheLadderUnits\` ` +
+            `is the row that separates those two`);
   return `program cursors at the last census (${b.live} live member${b.live === 1 ? "" : "s"} over ` +
          `${rows.length} cursor slot${rows.length === 1 ? "" : "s"} — a CURSOR is one-past-the-program-it-left, ` +
          `so the slots run one wider than the document's programs; ` +
@@ -2600,7 +2650,10 @@ function censusReading(out) {
               + `after the rung moved and is corrected.) So no flow of this session has reached the end of `
               + `its own work. That is the SCHEDULE and says nothing whatever about the take, the drive, or `
               + `whether this bundle ships uncalled code — and @COLD's \`outOfProgramsAtTheLadder\` is what `
-              + `separates "nobody is standing there" from "they are standing there and are not being picked"`
+              + `separates "nobody is standing there" from "they are standing there", with `
+              + `\`outOfProgramsAtTheLadderUnits\` beside it separating "and are not being picked" from `
+              + `"and are picked, with something ABOVE the rung due every round" — two readings that take `
+              + `opposite work and that the ask count alone cannot choose between`
               + (liveMoved === null
                   ? ` (no @COLD line in this run, so there is no frontier reading to say whether it was moving)`
                   : liveMoved > 0
@@ -2878,7 +2931,7 @@ function hungCauseCensus(out) {
                   because its yardstick is the slice THAT RUN was scheduled on and because the measure decides
                   which readings of the number are available; both are facts of the run and neither is this
                   tree's to supply. */
-               stepUnitReading(b) + "; " + stepUnitRunReading(b) + "; " +
+               stepUnitReading(b) + "; " + stepUnitRunReading(b) + "; " + ladderUnitReading(b) + "; " +
                stepCostReading(a, b, quantumDenomination(out)) + "; " + programCursorReading(b);
   /* AND WHICH OF THE STILL-0 ROWS WERE EVER ANYTHING ELSE, which is the distinction `flipped.length === 0`
      cannot draw and which decides what "still advancing" is worth. Measured across six builds: the rows that

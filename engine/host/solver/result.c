@@ -952,8 +952,10 @@ char *result_swap_json(void) {
      `live`, `framed`, `blocked`, `stackEmpty`, `canDeliver`, `pend`, `pendReady`, `outOfPrograms` and the
      three rows that partition it (`outOfProgramsUnrun`, `outOfProgramsFramed`, `outOfProgramsAtTheLadder`,
      which are gauges for the same reason and sum to it at every census, empty frontier included), every
-     `*Entries`/`*KiB` row, `dynBodies`, `pinSegs`/`decSegs` and their entry counts, and the two histograms
-     `stepUnits` and `programCursors`. `owed` is `flow_host_owed_count()`, a second walk of the same frontier
+     `*Entries`/`*KiB` row, `dynBodies`, `pinSegs`/`decSegs` and their entry counts, and the three histograms
+     `stepUnits`, `outOfProgramsAtTheLadderUnits` and `programCursors` — the second of which partitions
+     `outOfProgramsAtTheLadder` rather than the frontier, so it is the one histogram here whose sum is a row
+     on this line and not `live`. `owed` is `flow_host_owed_count()`, a second walk of the same frontier
      and a gauge for the same reason. `perFlowKiB` and `sharedKiB` are SUMS OF GAUGES taken in that one walk.
      From `engine_frontier_census` — LIFETIME COUNTS over this session, the only rows here a reader may
      difference: `finished`/`finishedFlows`/`finishedCands`, `sold`/`soldFlows`/`soldCands`, `forks`,
@@ -1259,34 +1261,44 @@ static char *cursor_hist_json(const long *counts, int n)
 
 char *result_cold_json(void) {
     ColdCensus c;
-    /* THE TWO PER-ARM HISTOGRAMS, EACH COMPOSED INTO ITS OWN BUFFER AND SPLICED AS ONE `%s`. Their width is
-       STEP_UNITS_JSON_MAX, an expansion of solver/step_unit.h's list, so an arm ADDED there widens both
+    /* THE THREE PER-ARM HISTOGRAMS, EACH COMPOSED INTO ITS OWN BUFFER AND SPLICED AS ONE `%s`. Their width is
+       STEP_UNITS_JSON_MAX, an expansion of solver/step_unit.h's list, so an arm ADDED there widens all three
        automatically. These are the only fixed buffers left in this composer and they stay fixed for a reason
        the deleted ones did not have: their width is DERIVED from the list they render rather than counted off
        the string that renders them, which is the same property solver/compose.h's `composef` gives the
        document around them.
-       THEY ARE TWO ROWS BECAUSE THEY ARE TWO QUESTIONS, and this is the whole reason the second exists.
+       THEY ARE SEPARATE ROWS BECAUSE THEY ARE SEPARATE QUESTIONS, and this is the whole reason the second and
+       third exist.
        `hist` is a census of the MEMBERS STANDING at this instant, so a zero there says nobody is sitting in
        that arm right now; `runs` is a count of the STEPS this instance has run, so a zero there says the
        ladder has never once reached that arm. A reader holding only the first cannot tell "the arm is never
        entered" from "it is entered constantly and left again before every census" — opposite diagnoses with
        opposite fixes — and a reader holding only the second cannot tell where the frontier is parked. Neither
        is derivable from the other and neither may be defaulted into the other.
+       AND THE THIRD ASKS THE FIRST'S QUESTION OF A SUBSET, which is a third question and not a slice of one
+       already answered. `ladder` is `hist` restricted to the members standing at the orphan ladder, and it
+       exists because `hist` is over the WHOLE frontier and therefore cannot be attributed to them — the
+       cross-reference solver/cold.h names twice as the thing it could not make. Its identity is a SUBSET sum
+       and not `flows`, which is asserted below and is what keeps a partition from becoming a selection.
        EVERY ROW IS EMITTED, INCLUDING THE ZEROES, and that is the contract rather than a courtesy: an ABSENT
        row and a ZERO row are different facts (this composer changed, against this frontier had nobody in that
        arm), and a reader that cannot tell them apart is the defect that made `@RESUMED` read 0 for every
        session there has ever been. The consumer asserts the row's presence and reads its value; neither side
        may default the other's hole.
-       THE THIRD HISTOGRAM ON THIS DOCUMENT IS NOT ONE OF THESE TWO AND IS NOT SIZED HERE. `programCursors` is
+       THE FOURTH HISTOGRAM ON THIS DOCUMENT IS NOT ONE OF THESE THREE AND IS NOT SIZED HERE. `programCursors` is
        keyed on the members' own CURSOR — solver/flow.h's `script_i`, whose range is closed at `dyn_n` and so
        runs one wider than the program indices `deepest` and `completed` are maxima over — rather than on
        solver/step_unit.h's arms, so its extent is the frontier's own and there is nothing to expand a width
        from: cursor_hist_json measures what it is about to write, which is the same discipline
-       STEP_UNITS_JSON_MAX gives these two by derivation. */
+       STEP_UNITS_JSON_MAX gives these three by derivation. */
     char hist[STEP_UNITS_JSON_MAX];
     char runs[STEP_UNITS_JSON_MAX];
-    /* AND THE THIRD HISTOGRAM, ON THE HEAP FOR THE ONE REASON THE TWO ABOVE ARE ON THE STACK: its extent is
-       the FRONTIER's and not a list's, so there is no width to derive. See cursor_hist_json. */
+    /* AND THE THIRD EXPANSION OF THAT SAME LIST, sized by the same derivation for the same reason — it is
+       solver/step_unit.h's arms again, restricted to the members standing at the orphan ladder, so its width
+       is the list's and not the frontier's. See solver/cold.h for what it separates. */
+    char ladder[STEP_UNITS_JSON_MAX];
+    /* AND THE FOURTH HISTOGRAM, ON THE HEAP FOR THE ONE REASON THE THREE ABOVE ARE ON THE STACK: its extent
+       is the FRONTIER's and not a list's, so there is no width to derive. See cursor_hist_json. */
     char *cursors;
     char *out;
     ColdResumed resumed;
@@ -1310,6 +1322,8 @@ char *result_cold_json(void) {
            comparison is asserted. */
         long standing = cold_hist_json(hist, sizeof hist, c.step_units, "stepUnits");
         long stepped  = cold_hist_json(runs, sizeof runs, r.arms, "stepUnitRuns");
+        long atladder = cold_hist_json(ladder, sizeof ladder, c.at_the_ladder_units,
+                                       "outOfProgramsAtTheLadderUnits");
         long atcursor = 0;
         int k;
         for (k = 0; k < c.program_cursor_n; k++) atcursor += c.program_cursors[k];
@@ -1342,6 +1356,18 @@ char *result_cold_json(void) {
                "flow stands at exactly one cursor, so a total that is not `flows` means the census walk and "
                "the histogram disagree about who is standing, and this is the one row a reader consults to "
                "decide whether the mass advanced or a few members ran deep ahead of it");
+        /* AND THE ORPHAN LADDER'S OWN PARTITION, WHICH IS `standing`'s IDENTITY OVER A SUBSET RATHER THAN
+           OVER THE FRONTIER — the one difference that matters here, because a histogram of a SUBSET is the
+           shape that silently becomes a SELECTION. `step_units` sums to `flows` and cannot be short without
+           losing a member outright; this one sums to a row raised on the SAME if/else chain that raises it,
+           so a disagreement is that chain having gained an arm without a row, at which point every reading
+           of which rung the ladder stops at is being composed from a population nobody enumerated. That is
+           the state solver/cold.h says this row exists to end, so it is asserted rather than assumed. */
+        DCHECK(atladder == c.out_of_programs_at_the_ladder,
+               "the orphan-ladder step-unit histogram does not account for every member standing at the "
+               "ladder — the two are raised in one pass over one if/else arm, so a total that is not "
+               "`outOfProgramsAtTheLadder` means the breakdown is a SELECTION being read as a partition and "
+               "the arm the members are actually stopping at is not the one this row names");
     }
     cold_resumed(&resumed);
     engine_frontier_census(&e);
@@ -1500,6 +1526,7 @@ char *result_cold_json(void) {
                  "\"outOfPrograms\":%ld,"
                  "\"outOfProgramsUnrun\":%ld,\"outOfProgramsFramed\":%ld,"
                  "\"outOfProgramsAtTheLadder\":%ld,"
+                 "\"outOfProgramsAtTheLadderUnits\":%s,"
                  "\"stepUnits\":%s,\"programCursors\":%s}",
                  c.flows, c.framed, c.blocked, flow_host_owed_count(),
                  e.finished, e.finished_flows, e.finished_cands,
@@ -1525,7 +1552,7 @@ char *result_cold_json(void) {
                  r.steps, (long long)r.step_us, runs,
                  c.out_of_programs,
                  c.out_of_programs_unrun, c.out_of_programs_framed, c.out_of_programs_at_the_ladder,
-                 hist, cursors);
+                 ladder, hist, cursors);
     free(cursors);
     cold_census_release(&c);
     return out;

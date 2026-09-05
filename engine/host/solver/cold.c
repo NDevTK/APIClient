@@ -98,7 +98,18 @@ void cold_census(ColdCensus *out)
                THE IDENTITY IS ASSERTED BELOW THE WALK rather than here, where only one member is in hand. */
             if (f->step_unit == STEP_UNIT_NONE) out->out_of_programs_unrun++;
             else if (f->frame)                  out->out_of_programs_framed++;
-            else                                out->out_of_programs_at_the_ladder++;
+            else {
+                out->out_of_programs_at_the_ladder++;
+                /* …AND WHICH ARM THIS ONE LAST RETURNED THROUGH, which is the only row that says whether a
+                   member standing here is one the PICK has not returned to or one a rung ABOVE the orphan
+                   seed takes on every round. cold.h carries the two readings and why the count alone cannot
+                   choose between them.
+                   NO SECOND RANGE GUARD, DELIBERATELY. The `CHECK` at the top of this iteration already
+                   established `f->step_unit` is in range and the `step_units` store above already indexed on
+                   it — same field, same member, same pass — so a guard here would be an assert whose two
+                   sides cannot disagree, which is a non-check that reads as diligence. */
+                out->at_the_ladder_units[f->step_unit]++;
+            }
         }
         if (f->script_i >= out->program_cursor_n) {
             int want = f->script_i + 1;

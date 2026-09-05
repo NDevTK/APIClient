@@ -193,10 +193,54 @@ typedef struct {
     /* … stepped, no frame, no row: the members whose NEXT dispatch descends the ladder, and therefore the
        only population of which "which of the four rungs is due" is even a question. It is NOT the population
        a rung IS holding — a member here may equally be one the pick has not returned to, and this row cannot
-       tell those apart on its own. What tells them apart is the ORPHAN CENSUS beside it: `asked` counts
-       arrivals at the last rung, so a large number here against an `asked` that is not moving says the
-       members are not being PICKED, and the file to open is the scheduler rather than any of the four. */
+       tell those apart on its own.
+       AND WHAT TELLS THEM APART IS NOT THE ORPHAN CENSUS, which is what this note used to say and is RETIRED
+       HERE RATHER THAN DELETED, because it is the inference the next reader re-derives from the pairing. It
+       said: "`asked` counts arrivals at the last rung, so a large number here against an `asked` that is not
+       moving says the members are not being PICKED, and the file to open is the scheduler rather than any of
+       the four." THAT IS ONE OF TWO READINGS AND THIS PAIR CANNOT SEPARATE THEM. A member that is picked on
+       every round and taken EVERY TIME by a rung ABOVE the orphan one — a queued job, an answered reply, a
+       microtask checkpoint, a lifecycle stage — is dispatched, makes progress, and returns with no frame and
+       no row: it stands in THIS row at every census while `asked` never moves, because the seed sits below
+       the arm that took it. So a large count beside a frozen `asked` is equally "these members are not being
+       picked" and "these members ARE picked and something above the rung is due every time", and the two take
+       opposite work — the first is the scheduler's pick, the second is this ladder's own preconditions. The
+       row below is what separates them, and is why it exists. */
     long  out_of_programs_at_the_ladder;
+    /* …AND WHICH ARM EACH OF THOSE MEMBERS LAST RETURNED THROUGH — solver/step_unit.h's list again, over the
+       `out_of_programs_at_the_ladder` population ALONE. Emitted as `outOfProgramsAtTheLadderUnits`, and a
+       PARTITION of that row: the counts sum to it, which is the identity that says the walk classified every
+       member standing there and left none over.
+       IT EXISTS BECAUSE `step_units` CANNOT BE ASKED THIS QUESTION, which this block says twice above and then
+       does not act on: that histogram is over the WHOLE frontier, so an arm cannot be attributed to the
+       members that have run out of programs — the same defect `framed` has one row up, and the stated reason
+       this block was counts rather than a cross-reference. What was missing was the cross-reference; what
+       fixes it is not building one but raising the row where the discriminator is ALREADY IN HAND, since the
+       walk reads `f->step_unit` one line above to ask whether the member was ever stepped at all.
+       HOW IT IS READ, AND IT IS THE ONLY ROW HERE THAT ANSWERS "WHICH OF THE FOUR". Mass on an arm ABOVE the
+       orphan rung (`deliver-one-reply`, `run-a-task`, `microtask-checkpoint`, `host-blocked`,
+       `document-lifecycle-stage`) says the members ARE dispatched and that work the page arranged falls due
+       ahead of the take on every round — a statement about this ladder's precondition and not about the pick.
+       Mass on an arm BELOW it (`queue-rendering-opportunity`, `fire-due-timer`, `await-owed-reply`,
+       `close-request`) says the member went PAST the seed, so the seed RAN and found nothing to take, which is
+       a fact about the HEAP and not about the frontier at all.
+       AND THE SECOND OF THOSE HAS A CONSEQUENCE FOR THE ORPHAN CENSUS WORTH STATING AND NOT ASSERTING: `asked`
+       is a LIFETIME count and this is a GAUGE, so a member reading a below-rung arm says only that SOME member
+       passed the seed at SOME past instant. That is enough to make a nonzero below-rung mass beside `asked` 0
+       mean the session declared itself non-forking (solver/engine.h's `engine_session_forks`, which is the
+       FOURTH reading of a zero `asked` and the one engine.c names as public), and it is NOT enough to be an
+       identity between the two numbers — comparing a gauge with a lifetime counter is arithmetic over no
+       quantity. It is a READING, and there is deliberately no assert.
+       `none` IS STRUCTURALLY ZERO HERE AND IS EMITTED ANYWAY, for the reason solver/step_unit.h gives for
+       `stepUnitRuns`' own `none` row: the arm above tests `STEP_UNIT_NONE` FIRST and sends those members to
+       `out_of_programs_unrun`, so nothing can land in this one — and a row dropped from one expansion of that
+       list for being structurally zero would make the two key sets differ, which every reader of either would
+       then have to know about. It is not ASSERTED, because an assert whose two sides cannot disagree is a
+       non-check that certifies what it never examined.
+       A GAUGE, and A REPORT AND NEVER A BOUND, exactly as the four rows above it: nothing in the engine reads
+       it, and a per-arm breakdown of who could have asked is precisely what a starvation detector would be
+       built out of. */
+    long  at_the_ladder_units[STEP_UNIT_N];
 
     /* PER-FLOW rows — these multiply by the number of parked flows, so they are what a pager pays for. */
     long dec_entries;        /* decision-vector slots the flows STAND ON — a chain total, so this counts the
