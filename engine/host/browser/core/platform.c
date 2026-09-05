@@ -1097,6 +1097,14 @@ static const int PLATFORM_N = (int)(sizeof PLATFORM / sizeof PLATFORM[0]);
  * standards rooted there). And a row whose component is renamed or removed leaves a name nobody installs, which
  * fires from the other direction — so a witness cannot outlive its component the way a comment does.
  *
+ * ITS COMPONENT, AND NOT ITS ATTRIBUTION — the sentence above is right about a RENAME and says more than it
+ * can. What fires from the other direction is `platform_check_table`'s row lookup, which asks whether the
+ * named component still EXISTS; a name whose install MOVES from one component to another leaves a row naming
+ * a component that still exists, installing a name that is still on the global, so both directions pass and
+ * the attribution is stale with nothing to say so. Where the move ADDS a row instead of editing the one it
+ * moved from, the duplicate check below is what sees it. Where it adds nothing, nothing here does — the cost
+ * is that a later absence is blamed on the wrong component, and the repair is to edit the row at the move.
+ *
  * THE THIRD COLUMN IS WEB IDL §3.3.7 [Exposed]'s CONDITION, AND WITHOUT IT THIS LIST ASSERTED A FALSEHOOD.
  * A row used to say only "this name is on the global", which is true of a name whose IDL carries no exposure
  * condition and FALSE of one that does: §3.3.13 [SecureContext]'s own example is verbatim "In such a context,
@@ -1293,6 +1301,19 @@ static const struct { const char *name, *component; IdlExposure exposure; } PLAT
     { "IDBVersionChangeEvent", "idb_version_change_event" },
     { "Observable",            "observable" },
     { "DOMParser",             "domparser" },
+    /* HTML §8.5.8 "The XMLSerializer interface", beside §8.5.1 "The DOMParser interface" above, and owed for
+       exactly the reason `CSS` and `performance` are. `XMLSerializer` is on browser/platform_names.h, so
+       solver/absent.c DECLINES to mint a concolic for it — a name the platform owns is a component this
+       engine owes — and a `window.XMLSerializer` that resolves to nothing therefore answers a CONCRETE
+       `undefined` rather than unknown input. `if (window.XMLSerializer)` is then DECIDED with no fork, and
+       every serialization path a bundle puts behind that guard is code the forced execution cannot reach, in
+       a browser where the guard is always true. An install that silently stopped happening would not throw
+       one frame away; it would delete an arm of the program with nothing anywhere to say so.
+       ITS IDL CARRIES NO EXPOSURE CONDITION — `[Exposed=Window] interface XMLSerializer` — so this row asserts
+       the unconditional case, and the ABSENT direction is the half that earns it: a realm whose install did
+       not run has no `XMLSerializer`, which is precisely the state in which `new XMLSerializer()` is the
+       ReferenceError this row exists to stop a page meeting. */
+    { "XMLSerializer",         "xml_serializer" },
     /* FILE SYSTEM ACCESS §3's three factories, whose whole partial interface is `[SecureContext]`. They are
        the other end of the column from every interface object above: a Window MEMBER rather than an interface
        object, gated by the same attribute and therefore witnessed by the same two directions — and the reason
@@ -1352,12 +1373,49 @@ static void platform_check_table(void)
                    "second pool entry, and everything already chained to the first would answer out of an "
                    "object the realm has thrown away");
     }
-    for (i = 0; i < PLATFORM_WITNESS_N; i++)
+    /* AND THE SECOND LIST IS A KEYED LIST TOO, WHICH IS THE PART THAT WAS TAKEN ON TRUST. Everything above
+       makes PLATFORM well-formed as a list keyed by COMPONENT — it has a name, it builds something, it is
+       listed once — and the witness table is keyed by GLOBAL NAME and got none of it. Its key reaches a reader
+       exactly as the other's does, as the `%s` of an abort telling somebody which name to go and install, and
+       it decides which row the probe loop answers a question out of. */
+    for (i = 0; i < PLATFORM_WITNESS_N; i++) {
+        /* THE ROW NAMES THE GLOBAL IT IS AN ORACLE ABOUT, and an empty one does not merely check nothing — it
+           FIRES. `idl_exposed_in_realm` answers TRUE for an identifier the corpus has no row for
+           (browser/idl_exposure.h: "A NAME WITH NO ROW IS EXPOSED", because absence of evidence must not remove
+           a property), so an unnamed row is OWED, `[[HasProperty]]` over the global answers false, and the
+           probe below aborts with a `@WHY` whose subject is the empty string. That is the one shape
+           §Offensive-programming rules out by name: a crash naming a remedy and no site, which is rediscovered
+           rather than fixed. It is caught HERE, at the table, because here the row still has a COMPONENT to be
+           named by — by the time the probe runs, the name is all it has. */
+        DCHECKF(PLATFORM_WITNESS[i].name != NULL && *PLATFORM_WITNESS[i].name,
+                "a platform witness row names NO GLOBAL and says the component `%s` owes it — the probe at the "
+                "end of the per-document install would still run it (an identifier with no row in the corpus "
+                "is EXPOSED, so an unnamed row is owed and absent) and would abort naming nothing a reader "
+                "could install. State the identifier Web IDL §3.8 `define the global property references` puts "
+                "on the global, or delete the row",
+                PLATFORM_WITNESS[i].component);
         DCHECKF(platform_has_row(PLATFORM_WITNESS[i].component),
                 "the platform witness for `%s` names the component `%s`, and this list does not have it — the "
                 "component was renamed or removed and the name it used to install is now owed by nobody, "
                 "which is the state a stale exclusion rots into",
                 PLATFORM_WITNESS[i].name, PLATFORM_WITNESS[i].component);
+        /* ONE NAME, ONE ANSWER. This table is an ORACLE and its key is the name, so two rows for one name are
+           two answers to one question — and the way it happens is not carelessness: an install MOVES from one
+           component to another and the row is ADDED rather than edited. Nothing else in this file can see that.
+           The banner above claims a witness cannot outlive its component, and it is right about a RENAME (the
+           check directly above fires) and wrong about a MOVE, because the stale row still names a component
+           that still exists and the name is still on the global — so both rows pass, and the day the install
+           does break, whichever row the probe reaches first decides which component the abort blames. Where the
+           two rows differ in their `exposure` column it is worse and not better: the probe then asserts both
+           `owed` and `not owed` of one name in one realm, so one of them fires on a correct program. */
+        for (k = 0; k < i; k++)
+            DCHECKF(strcmp(PLATFORM_WITNESS[k].name, PLATFORM_WITNESS[i].name) != 0,
+                    "the global `%s` has TWO witness rows, owed by `%s` and by `%s` — this list is an oracle "
+                    "keyed by the name, so one of those components does not install it and the abort a later "
+                    "reader gets names whichever row this loop reached first. An install that MOVED between "
+                    "components edits the row it moved from; it does not add a second one",
+                    PLATFORM_WITNESS[i].name, PLATFORM_WITNESS[k].component, PLATFORM_WITNESS[i].component);
+    }
 }
 
 /* THE THIRD COLUMN'S OWN OTHER SIDE. The witness table above asserts what a component INSTALLS; this asserts
