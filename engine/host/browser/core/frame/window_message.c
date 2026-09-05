@@ -211,7 +211,7 @@ static int js_window_deliver_step(JSContext *ctx, void *st, JSValue cb_result, J
     {
         JSValueConst entry = step_arg(&s->hdr, 1);
         StructuredWithTransfer swt;
-        JSValue buf, want, data, source, sender_origin, ports = JS_UNDEFINED;
+        JSValue buf, want, data, source, sender_origin, noid, ports = JS_UNDEFINED;
         const char *want_s = NULL;
         size_t blen = 0;
         int k;
@@ -280,10 +280,20 @@ static int js_window_deliver_step(JSContext *ctx, void *st, JSValue cb_result, J
            while the arm the real message took keeps the bytes that peer actually sent. */
         if (concolic_is(sender_origin) && !JS_IsException(data))
             data = concolic_source_wrap(tctx, MESSAGE_DATA_SHAPE, MESSAGE_DATA_SRC, data);
+        /* §9.1's `lastEventId`, which §9.3.3's window post message steps do not set — steps 8.2 and 8.3 name
+           `data`, `origin` and `source`, so the member keeps the empty string its IDL gives it. Minted once,
+           before the branch, because it is the same fact on both arms; stated at the call rather than
+           defaulted inside the mint, because having no last event ID is a statement about §9.3.3 and not a
+           hole. It is NOT the sender's origin re-used: they are different members of §9.1, and one
+           local standing for both is the shape where a later diff giving one of them a value gives it to the
+           other. */
+        noid = JS_NewString(tctx, "");
+        CHECK(!JS_IsException(noid), "§9.3.3: a delivered message's empty last event ID could not be allocated");
         if (JS_IsException(data)) {
             JS_FreeValue(tctx, JS_GetException(tctx));
             JS_FreeValue(tctx, ports);
-            s->ev = message_event_new(tctx, "messageerror", JS_UNDEFINED, sender_origin, source, JS_UNDEFINED);
+            s->ev = message_event_new(tctx, "messageerror", JS_UNDEFINED, sender_origin, noid, source,
+                                      JS_UNDEFINED);
         } else {
             /* §9.3.3 steps 8.2 and 8.3: the origin is the SENDER'S and the source is the sender's WindowProxy
                — which is what a handler's `event.origin` check is about, and the whole reason this event is
@@ -294,14 +304,16 @@ static int js_window_deliver_step(JSContext *ctx, void *st, JSValue cb_result, J
             if (JS_IsException(new_ports)) {
                 delivery_end(ctx, s, ROUTED_TASK_THREW);
                 JS_FreeValue(tctx, data);
+                JS_FreeValue(tctx, noid);
                 JS_FreeValue(ctx, sender_origin);
                 JS_FreeValue(ctx, source);
                 return JS_STEP_ABRUPT;
             }
-            s->ev = message_event_new(tctx, "message", data, sender_origin, source, new_ports);
+            s->ev = message_event_new(tctx, "message", data, sender_origin, noid, source, new_ports);
             JS_FreeValue(tctx, data);
             JS_FreeValue(tctx, new_ports);
         }
+        JS_FreeValue(tctx, noid);
         JS_FreeValue(ctx, sender_origin);
         JS_FreeValue(ctx, source);
         if (JS_IsException(s->ev)) {

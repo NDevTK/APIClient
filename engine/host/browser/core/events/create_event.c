@@ -59,10 +59,19 @@ static JSValue make_message_event(JSContext *ctx)
        engine may not decide, so the slot holds a value rather than a C string, and the three callers that DO
        have a serialization say so here rather than through a second entry point. */
     JSValue origin = JS_NewString(ctx, "");
-    JSValue ev;
+    JSValue noid, ev;
 
     CHECK(!JS_IsException(origin), "§4.5 createEvent: the default MessageEvent's origin could not be allocated");
-    ev = message_event_new(ctx, "", JS_NULL, origin, JS_NULL, JS_UNDEFINED);
+    /* §9.1's `lastEventId` is a DOMString whose initial value is the empty string, and §4.5's default
+       instance carries it — stated here, at the call, for the reason the origin above is: the mint takes
+       §9.1's five members and a caller with none says so rather than leaving the slot to a default. It is a
+       SECOND empty string and not the origin passed twice: they are different members, and one local standing
+       for both is the shape where a later diff giving one of them a value gives it to the other. */
+    noid = JS_NewString(ctx, "");
+    CHECK(!JS_IsException(noid), "§4.5 createEvent: the default MessageEvent's last event ID could not be "
+                                 "allocated");
+    ev = message_event_new(ctx, "", JS_NULL, origin, noid, JS_NULL, JS_UNDEFINED);
+    JS_FreeValue(ctx, noid);
     JS_FreeValue(ctx, origin);
     return ev;
 }

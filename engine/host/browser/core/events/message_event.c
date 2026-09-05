@@ -195,9 +195,9 @@ static int me_init_slots(JSContext *ctx, JSValueConst ev, JSValueConst data, JSV
 }
 
 JSValue message_event_new(JSContext *ctx, const char *type, JSValueConst data, JSValueConst origin,
-                          JSValueConst source, JSValueConst ports_in)
+                          JSValueConst last_event_id, JSValueConst source, JSValueConst ports_in)
 {
-    JSValue t, ev, ports, empty;
+    JSValue t, ev, ports;
 
     DCHECK(g_ready, "a MessageEvent was minted before message_event_init ran");
     /* §9.1 declares `origin` a USVString, and the two inhabitants this engine produces are a real string and
@@ -209,6 +209,15 @@ JSValue message_event_new(JSContext *ctx, const char *type, JSValueConst data, J
            "a MessageEvent was minted with an `origin` that is neither a serialization nor unknown external "
            "input — §9.1 declares it a USVString, and a page distinguishes an absent origin from every value "
            "it could have had");
+    /* §9.1 declares `lastEventId` a DOMString, and the same two inhabitants reach it for the same reason:
+       §9.2.6's last event ID buffer is filled from an event stream's `id` field, which is a server's bytes.
+       The assert is over a value THIS codebase computed at every call — three callers hand over an empty
+       string they just built and the fourth hands over the event source's own field — so it is this engine's
+       logic being checked and never the stream's content. */
+    DCHECK(JS_IsString(last_event_id) || concolic_is(last_event_id),
+           "a MessageEvent was minted with a `lastEventId` that is neither a string nor unknown external "
+           "input — §9.1 declares it a DOMString whose initial value is the empty string, and a caller with "
+           "no last event ID states that empty string rather than leaving the slot unwritten");
     t = JS_NewString(ctx, type);
     if (JS_IsException(t)) return t;
     /* §9.1's events do not bubble and are not cancelable — the standard fires them with neither flag, and a
@@ -218,11 +227,9 @@ JSValue message_event_new(JSContext *ctx, const char *type, JSValueConst data, J
     if (JS_IsException(ev)) return ev;
     ports = ports_from_sequence(ctx, ports_in);
     if (JS_IsException(ports)) { JS_FreeValue(ctx, ev); return JS_EXCEPTION; }
-    empty = JS_NewString(ctx, "");
-    {
-        int r = me_init_slots(ctx, ev, data, origin, empty, source, ports);
-        JS_FreeValue(ctx, empty);
-        if (r < 0) { JS_FreeValue(ctx, ev); return JS_EXCEPTION; }
+    if (me_init_slots(ctx, ev, data, origin, last_event_id, source, ports) < 0) {
+        JS_FreeValue(ctx, ev);
+        return JS_EXCEPTION;
     }
     return ev;
 }

@@ -135,7 +135,7 @@ static int js_chan_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JSV
     {
         JSValueConst buf = step_arg(&s->hdr, 1);
         StructuredData sd;
-        JSValue data, org;
+        JSValue data, org, noid;
         size_t blen = 0;
         int k;
 
@@ -168,14 +168,26 @@ static int js_chan_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JSV
            origin is the same fact whichever of them runs. */
         org = JS_NewString(rctx, origin_serialized(origin_agent()));
         CHECK(!JS_IsException(org), "§9.5: a broadcast event's origin string could not be allocated");
+        /* §9.1's `lastEventId`, which none of the three in-agent deliveries has — §9.4.4 Message ports'
+           port message queue, §9.3.3 Posting messages' window post message steps and §9.5's own bus all
+           dispatch an event whose last event ID is the empty string. Those two section numbers were shifted
+           by one slot each in the sentence this replaces (§9.4.2 is Message channels, §9.4.4 is Message
+           ports), and a shifted PAIR reads as consistent, which is why they are stated here against the
+           standard's own heading list rather than carried across. Stated at the call rather than defaulted
+           inside the mint: the mint takes §9.1's five members, and having no last event ID is a positive
+           statement about this algorithm rather than a hole for the mint to fill. */
+        noid = JS_NewString(rctx, "");
+        CHECK(!JS_IsException(noid), "§9.5: a broadcast event's empty last event ID could not be allocated");
         if (JS_IsException(data)) {
             JS_FreeValue(rctx, JS_GetException(rctx));
-            s->ev = message_event_new(rctx, "messageerror", JS_UNDEFINED, org, JS_UNDEFINED, JS_UNDEFINED);
+            s->ev = message_event_new(rctx, "messageerror", JS_UNDEFINED, org, noid, JS_UNDEFINED,
+                                      JS_UNDEFINED);
         } else {
-            s->ev = message_event_new(rctx, "message", data, org, JS_UNDEFINED, JS_UNDEFINED);
+            s->ev = message_event_new(rctx, "message", data, org, noid, JS_UNDEFINED, JS_UNDEFINED);
             JS_FreeValue(rctx, data);
         }
         JS_FreeValue(rctx, org);
+        JS_FreeValue(rctx, noid);
         if (JS_IsException(s->ev)) { s->ev = JS_UNDEFINED; return JS_STEP_ABRUPT; }
         STEP_GOTO(s->hdr.stage, BD_FIRE, &s->fphase, NULL);
         return JS_STEP_YIELD;
