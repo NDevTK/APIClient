@@ -3206,9 +3206,39 @@ static JSValue js_node_insert(JSContext *ctx, JSValueConst this_val, int argc, J
    exists to remove. The two prefixes Namespaces in XML §3 binds BY DEFINITION (`xml`, `xmlns`) were absent
    too, so `lookupNamespaceURI("xml")` was null on every element in every document.
    magic 0 = lookupPrefix, 1 = lookupNamespaceURI, 2 = isDefaultNamespace. */
-static JSValue js_node_lookup_ns(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+/* THESE THREE ARE A MACHINE, AND THE REASON IS ONE SEAM RATHER THAN A WALK. Both locate algorithms are O(depth)
+   over a document's own ancestors, so nothing here is of the page's size and nothing here needs a rest point in
+   order to be preemptible. What needs one is isDefaultNamespace step 3: it is a COMPARISON, and a comparison
+   one of whose operands is unknown external input has two feasible answers over one document. Only a machine
+   can ask that question, because step_fork_run takes a JSStepHdr and a plain C body has none — so the
+   conversion IS the capability rather than scaffolding in front of it. */
+#define NODE_NS_STAGES(X) \
+    X(NODE_NS_ASK, "DOM §4.4 Interface Node isDefaultNamespace step 3 (the comparison with the located " \
+                   "default namespace, and the outcome fork when the argument is unknown external input " \
+                   "carrying no example)")
+enum { IDL_STEP_STAGE_BASE(NODE_NS_STAGES) NODE_NS_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const NODE_NS_STEPS[] = { NODE_NS_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+/* THIS MACHINE HOLDS NOTHING ACROSS ITS ONE REST POINT, and the field below is what C requires of a struct
+   rather than state anyone reads. Every operand is RE-DERIVED on re-entry: the receiver off the header, the
+   argument off the machine's own argument vector — idl_args.c re-presents that vector at every resume, which is
+   what lets this body read argv[0] on the far side of a fork — and the located default namespace off the flow's
+   own tree, which is what a resumed flow is asked to do rather than carry. So there is nothing for a fork to
+   copy, and the state is trivially the complete-or-empty step_fork_run requires at the instant it snapshots the
+   sibling. */
+typedef struct { unsigned char none; } NodeNsState;
+
+static void node_ns_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
-    lxb_dom_node_t *n = node_of(this_val);
+    /* NOTHING OWNED — see NodeNsState. */
+    (void)ctx; (void)st; (void)v;
+}
+
+static int js_node_lookup_ns(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                             JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    int magic = idl_step_magic(hdr);
+    lxb_dom_node_t *n = node_of(hdr->this_val);
     /* TWO NAMES FOR ONE STRING, and they are not redundant. `owned` is what JS_ToCStringLen handed back and is
        what must be freed; `arg` is the STANDARD'S ARGUMENT, which each member's step 1 may set to null without
        the string ceasing to exist. Freeing through `arg` after that coercion frees nothing and leaks the
@@ -3218,7 +3248,15 @@ static JSValue js_node_lookup_ns(JSContext *ctx, JSValueConst this_val, int argc
     JSValue example = JS_UNDEFINED;
     JSValue r;
 
-    if (!n) return magic == 2 ? JS_FALSE : JS_NULL;
+    (void)st; (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    /* ONE STAGE, AND THE BODY NEVER ASSIGNS hdr->stage — so every entry, first or resumed, rests here. A stage
+       this machine does not declare is a cross-session resume that resolved a label this build no longer spells
+       the same way, which is the one thing NODE_NS_STEPS exists to make impossible rather than silent. */
+    DCHECK(hdr->stage == NODE_NS_ASK,
+           "§4.4's namespace lookups were entered at a stage this machine does not declare — it has exactly "
+           "one, so there is no step for any other number to be a label in");
+    if (!n) { *presult = magic == 2 ? JS_FALSE : JS_NULL; return JS_STEP_DONE; }
     /* THE ARGUMENT'S ABSENCE AND ITS IDL NULL ARE THE DECLARATION'S ANSWER AND ARE ASKED AS SUCH — never its
        TAG. The test here was `JS_IsString(argv[0])`, and unknown external input FAILS that by construction:
        the position is `DOMString?`, whose conversion crosses an unknown AS ITSELF (core/idl_args.h's
@@ -3248,20 +3286,61 @@ static JSValue js_node_lookup_ns(JSContext *ctx, JSValueConst this_val, int argc
             if (JS_IsUndefined(example)) {
                 const char *shape = concolic_shape_c(argv[0]);
 
-                DFAILF("DOM §4.4 Interface Node's namespace lookups were given an argument that is UNKNOWN "
-                       "EXTERNAL INPUT WITH NO EXAMPLE (`%s`, magic %d), and every question the three of them "
-                       "ask is a BYTE COMPARISON against this document's own declarations — locate a "
-                       "namespace matches a prefix against `xmlns:` attribute names, locate a namespace "
-                       "prefix matches a namespace against their values, and isDefaultNamespace compares the "
-                       "argument with the located default. Each has at least two feasible answers for an "
-                       "unpinned string and this member decides none of them. WHAT IS MISSING is the OUTCOME "
-                       "FORK at this member's own seam — js_node_lookup_ns is a plain C body, so building it "
-                       "means declaring these three with idl_method_id_step instead of idl_method_id and "
-                       "asking quickjs-step.h's step_fork_run which completion the lookup reached. ITS "
-                       "ABSENCE WOULD SHOW as a page resolving a namespace out of injected state "
-                       "(`el.lookupNamespaceURI(__CFG.ns)`) exploring neither world — which until now it did "
-                       "not even do THAT, because the tag test above sent every one of them down the `null` "
-                       "arm and reported a real answer to a question nobody asked.",
+                /* ONE OF THE THREE IS BUILT AND TWO ARE NOT, AND THE SPLIT IS NOT A CONVENIENCE — the three
+                   ask questions of two different SHAPES over the same unknown. isDefaultNamespace step 3
+                   compares the argument with ONE located default namespace, so its completions are a FIXED
+                   pair this engine spells itself: the argument is that namespace, or it is not.
+                   lookupNamespaceURI and lookupPrefix match the argument against the SET of declarations in
+                   scope — xmlns: attribute NAMES for one, their VALUES for the other — and that is a set the
+                   page mutates with setAttribute between any two asks.
+                   THE RETIRED CLAUSE IS RECORDED HERE BECAUSE IT WAS WRONG ABOUT EXACTLY THAT, and a
+                   next-diff clause is read once, by someone who has already decided to do the work. It said,
+                   in full — de-quoted, because these are this file's own retired words and not a standard's:
+                   js_node_lookup_ns is a plain C body, so building it means declaring these three with
+                   idl_method_id_step instead of idl_method_id and asking quickjs-step.h's step_fork_run which
+                   completion the lookup reached. THE FIRST HALF WAS RIGHT and is what this diff did. THE
+                   SECOND HALF IS RIGHT FOR isDefaultNamespace AND WRONG FOR THE OTHER TWO: step_fork_run's
+                   completions are NUMBERED, and numbering the in-scope declarations is the defect
+                   CLAUDE.md's §AN-INDEX-NAMES-A-THING-ONLY-WHILE-THE-SET-IS-FIXED names — a replayed rank
+                   silently renames its referent once the page has added or removed a declaration in between,
+                   with every arm still in range and every assert on the path satisfied. What those two need
+                   is core/idl_name_chain.h, whose whole subject is that rule: a link asks whether the unknown
+                   is the member called N and files that question under a key composed of the member's own
+                   NAME. */
+                if (magic == 2) {
+                    int arm = 0, rc;
+
+                    JS_FreeValue(ctx, example);
+                    /* OUTCOME 0 IS THE ORDINARY COMPLETION — the argument is NOT the default namespace, which
+                       is what a concrete run of step 3 over an arbitrary string reaches and therefore what the
+                       @S candidate re-fire must take. Outcome 1 is the world in which the unknown IS that
+                       namespace, and the PIN is the solver's: this seam states the question keyed by the
+                       operand and the operation and holds no policy about either arm.
+                       REAL IS UNSTATED BECAUSE THERE IS NO EXAMPLE, which is this branch's own precondition —
+                       so the machine cannot say which completion the operand's example reaches and must not
+                       guess one from the name. Both arms still run and neither is marked forced.
+                       THE OPERAND IS BORROWED for the length of the request: the driver reads h->fork_over on
+                       the line after this machine returns, and the machine's own argument vector holds the
+                       reference for as long as this invocation lives. */
+                    rc = step_fork_run(ctx, hdr, argv[0],
+                                       "DOM §4.4 isDefaultNamespace step 3: is this unknown the located "
+                                       "default namespace", 2, JS_OUTCOME_REAL_UNSTATED, &arm);
+                    if (rc) return rc;
+                    *presult = JS_NewBool(ctx, arm == 1);
+                    return JS_STEP_DONE;
+                }
+                DFAILF("DOM §4.4 Interface Node's lookupPrefix and lookupNamespaceURI were given an argument "
+                       "that is UNKNOWN EXTERNAL INPUT WITH NO EXAMPLE (`%s`, magic %d). Each matches the "
+                       "argument against the SET of namespace declarations in scope — locate a namespace "
+                       "against `xmlns:` attribute NAMES, locate a namespace prefix against their VALUES — "
+                       "and that set is one the page mutates, so the answer is an ELIMINATION CHAIN keyed by "
+                       "each declaration's own NAME and never by its rank. BUILD core/idl_name_chain.h's "
+                       "IdlNameChainSuppliedKey over core/dom/node_ns.h's two walks, one link per "
+                       "declaration in scope, with the walk's own null as the past-the-end answer; a "
+                       "page-supplied prefix has no width, which is what chooses that storage over the "
+                       "inline key. ITS ABSENCE SHOWS as a page resolving a namespace out of injected state "
+                       "(`el.lookupNamespaceURI(__CFG.ns)`) exploring neither world, while "
+                       "`el.isDefaultNamespace(__CFG.ns)` over the same unknown already explores both.",
                        shape ? shape : "{}", magic);
             }
             DCHECK(!JS_IsObject(example),
@@ -3277,7 +3356,7 @@ static JSValue js_node_lookup_ns(JSContext *ctx, JSValueConst this_val, int argc
            undeclared never exploring the world in which it is bound. */
         owned = arg = JS_ToCStringLen(ctx, &arg_len, JS_IsUndefined(example) ? argv[0] : (JSValueConst)example);
         JS_FreeValue(ctx, example);
-        if (!owned) return JS_EXCEPTION;
+        if (!owned) return JS_STEP_ABRUPT;
     }
 
     switch (magic) {
@@ -3327,8 +3406,14 @@ static JSValue js_node_lookup_ns(JSContext *ctx, JSValueConst this_val, int argc
     }
     }
     if (owned) JS_FreeCString(ctx, owned);
-    return r;
+    *presult = r;
+    return JS_STEP_DONE;
 }
+
+static const IdlStepDecl NODE_NS_STEP = {
+    js_node_lookup_ns, sizeof(NodeNsState), node_ns_visit, NULL,
+    "DOM §4.4 Node.lookupPrefix / lookupNamespaceURI / isDefaultNamespace", NODE_NS_STEPS, 0, NULL
+};
 
 /* DOM §4.2.8 Mixin ChildNode — `Element includes ChildNode`, `CharacterData includes ChildNode` and
    `DocumentType includes ChildNode`, which is why it is a table the interfaces that DECLARE it ask for rather
@@ -4416,9 +4501,12 @@ void node_init(JSContext *ctx)
     }
     /* §4.4 the three namespace lookups. Each takes a `DOMString?`, so each goes on the shared IDL machine —
        `n.lookupPrefix({toString(){ … }})` is the page's code exactly like every other DOMString argument. */
-    g_id_lookup_prefix = idl_method_id(ctx, IDL_1NSTR, 1, js_node_lookup_ns, 0);
-    g_id_lookup_ns = idl_method_id(ctx, IDL_1NSTR, 1, js_node_lookup_ns, 1);
-    g_id_default_ns = idl_method_id(ctx, IDL_1NSTR, 1, js_node_lookup_ns, 2);
+    /* THE THREE ARE ONE DECLARATION PER MEMBER OVER ONE MACHINE, which is what a magic is for — the three
+       algorithms share step 1's coercion and differ only in which walk they call and what they do with its
+       answer. They are STEP declarations because isDefaultNamespace's step 3 forks; see NODE_NS_STEP. */
+    g_id_lookup_prefix = idl_method_id_step(ctx, IDL_1NSTR, 1, NULL, 0, &NODE_NS_STEP, 0);
+    g_id_lookup_ns = idl_method_id_step(ctx, IDL_1NSTR, 1, NULL, 0, &NODE_NS_STEP, 1);
+    g_id_default_ns = idl_method_id_step(ctx, IDL_1NSTR, 1, NULL, 0, &NODE_NS_STEP, 2);
     g_id_root = idl_method_id_dict(ctx, ROOT_ARGS, 1, ROOT_OPTS,
                                    (int)(sizeof(ROOT_OPTS) / sizeof(ROOT_OPTS[0])), js_node_root, 0);
     idl_optional_from(0);   /* §4.4: `getRootNode(optional GetRootNodeOptions options = {})` */
