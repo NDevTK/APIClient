@@ -1371,7 +1371,7 @@ JSValue element_view_client_rects(lxb_dom_element_t *el)
    rectangle is an OPERAND rather than a result. See element_view.h.
    IT IS THE SAME FOUR STEPS `ev_bounding_rect` performs and it takes the same two roads, which is the only way
    this can be a second ENTRY without being a second ANSWER: step 1's list is empty exactly when the element has
-   no associated box, so step 2's "a DOMRect whose x, y, width and height members are zero" is reached by the
+   no associated box, so step 2's "a DOMRect object whose x, y, width and height members are zero" is reached by the
    one predicate element_view.h states and not by counting a list that was built to be counted; and a list of
    one is what steps 3 and 4 both answer with, which is the derivation `ev_bounding_rect` writes out. What is
    deliberately NOT reachable here is that function's multi-fragment crash — the two gates below fire first, for

@@ -9,6 +9,8 @@
  *                                         each distinct § cited with no title beside it, and what the corpus says that § IS
  *   node engine/citegen.mjs --unanchored  the citations naming no standard that only a file vote placed — the
  *                                         ones inside a DCHECK/DFAIL/CHECK message first, since a crash prints them
+ *   node engine/citegen.mjs --agree       the passages this tree quotes SEVERAL WAYS where the difference is NOT one
+ *                                         inserted clause — counted on every run, listed only here, never accused
  *   node engine/citegen.mjs --gaps        the quotation check's verified/not-found split by distance from the §
  *   node engine/citegen.mjs --steps       the step numbers the step checks counted and REFUSED to accuse — those
  *                                         whose cited section holds no list reaching them, which is not the same
@@ -2768,7 +2770,7 @@ function fragmentsOf(quote) {
         addForm(String(quote).replace(BRACKETED_ALTERATION, dropContents ? "" : "$1")
           .split(ELLIDED).map((p) => quoteTokens(p, dropMarkers)).filter(Boolean)
           .filter((f) => f.split(" ").length >= MIN_FRAGMENT_WORDS));
-  return { all, big, forms: forms.length ? forms : [big],
+  return { all, big, bigCut, forms: forms.length ? forms : [big],
            words, compared, elided: all.length - big.length };
 }
 
@@ -2881,6 +2883,245 @@ function divergence(hay, frags) {
     if (n < w.length) return { frag: i, matched: n, of: w.length, head: w.slice(0, n).join(" "), next: w[n] };
   }
   return null;
+}
+
+/* ---- the AGREEMENT axis: when N sites quote ONE sentence, does this tree say the same thing twice? -------- */
+
+/* EVERY CHECK ABOVE JUDGES ONE QUOTATION AGAINST A STANDARD, INDEPENDENTLY, AND NONE OF THEM ASKS WHETHER THIS
+ * TREE AGREES WITH ITSELF. CLAUDE.md names the gap and calls the check free: "a spec sentence that GAINS A
+ * CLAUSE produces a state the instruments cannot report — the tree DISAGREEING WITH ITSELF, one site right and
+ * the rest carrying a retired version — and it survives precisely because each site is judged alone." Its
+ * measured instance is Fetch §4.1 Main fetch step 7, whose fourth disjunct four copies here had never
+ * transcribed while a fifth had; nobody found it by auditing, and it surfaced only when a diff RELOCATED a
+ * quotation to a fresh site and the per-site checker judged it there.
+ *
+ * SO THE EVIDENCE IS ENTIRELY INTERNAL, AND THAT IS THE WHOLE ARGUMENT FOR THIS CHANNEL EXISTING BESIDE THE
+ * OTHERS RATHER THAN INSIDE THEM. It needs no corpus, no section index and no resolution, so it is asked of
+ * every quotation the check SAW — including every one the resolver refused (FOREIGN, UNRESOLVED, VOTED,
+ * NO-CORPUS, NO-SECTION), where no other channel here can speak at all. Measured on the pair that seeded this:
+ * of the three sites quoting CSSOM View §6's get-the-bounding-box answer, one was VERIFIED, one was reported
+ * MIS-TRANSCRIBED, and the third sat in UNJUDGEABLE / UNCORROBORATED because nothing placed its bare §3.1 —
+ * so the per-site channel saw two thirds of a three-site disagreement and could name none of it as one.
+ *
+ * IT NEVER RANKS THE SITES BY HOW MANY THERE ARE, which is CLAUDE.md's own instruction: "a site that differs
+ * from its siblings is either the only correct one or the only wrong one and BOTH are findings." Adopting the
+ * MAJORITY spelling would be exactly the confirmation-by-inference this file refuses one channel over — a
+ * spelling chosen BECAUSE it is common is not a spelling anybody checked, and the measured shape of getting
+ * that backwards is recorded here already: a section retitled between two regens leaves the tree with the
+ * DILIGENT author in the minority. What decides a row is the COMMITTED CORPUS and never a count of sites, and
+ * the whole group is printed either way so a reader can see what was compared with what.
+ *
+ * GROUPING IS BY QUOTATION AND NEVER BY CITATION, AND THAT IS LOAD-BEARING RATHER THAN CONVENIENT. Two sites
+ * quoting one sentence may cite different numbers, different standards, or no standard at all — one of them
+ * possibly wrong, which is the very case a disagreement is most likely to accompany — so a grouping keyed on
+ * the section would miss exactly the population it exists for. Nothing in here reads `spec` or `no`.
+ *
+ * AND IT IS DERIVED FROM THE QUOTATIONS THE TOOL ALREADY EXTRACTS: there is no list of sentences to watch, no
+ * table of phrases, and nothing to keep in step with the tree. The passage relation is computed out of the same
+ * `fragmentsOf` token stream every other quotation check compares, so a sentence this tool cannot read is a
+ * sentence this channel does not pretend to have grouped.
+ *
+ * WHAT MAKES TWO QUOTATIONS ONE PASSAGE — two rules, both the file's own floors rather than new thresholds.
+ *   (a) A SHARED CONTIGUOUS RUN OF `MIN_COMPARED_WORDS` TOKENS. That is the floor this file already sets for a
+ *       quoted run being a QUOTATION rather than a collocation, and the measurement behind it is the one in
+ *       fragmentsOf's paragraph: at six words, 6 of 400 phrases from HTML and 32 of 400 from DOM occur in some
+ *       other standard at all.
+ *   (b) THE TWO SPELLINGS DIFFER BY EXACTLY ONE CONTIGUOUS RUN THAT ONE OF THEM DOES NOT HAVE. That is the
+ *       defect's own shape rather than a similarity threshold, and getting there took two wrong rules whose
+ *       corrections are the argument for this one.
+ *       THE FIRST WAS A SHARED RUN THAT IS A MAJORITY OF THE SHORTER, and it grouped two different sentences
+ *       of one standard through a STOCK CLAUSE the standard repeats: CSSOM View ends both getClientRects'
+ *       step 3 and clientTop's step 2 on the same nine words about transforms applying to an element, so an
+ *       11-token quotation of the first and a 42-token quotation of the second shared nine tokens — a majority
+ *       of the shorter, a fifth of the longer — and were reported as one passage quoted two ways.
+ *       THE SECOND WAS A MAJORITY OF BOTH, and it survived that and not the shape underneath it. A standard
+ *       writes PARALLEL SENTENCES — one per attribute, one per row-and-column, one per arm of a union
+ *       conversion — and two correct quotations of two of them are near-identical by construction. Measured
+ *       tree-wide on the first honest run: 215 passages, and the head of it was CSS 2.1's row-group sentence
+ *       against its column-group one — identical but for `row`/`column group box` and `rows`/`columns` — the
+ *       must-return-the-value-it-was-initialized-to sentence written once per ATTRIBUTE NAME, and six arms of
+ *       Web IDL §3.2.25's union conversion. (Spelled out rather than quoted, for the reason the residual at the
+ *       end of this block records: a worked example between double quotes is a QUOTATION to PASS 4.) Every one of
+ *       them is two RIGHT quotations of two DIFFERENT sentences, and a category that size made of those is
+ *       furniture inside a day — which costs every real finding beside it.
+ *       WHAT SEPARATES THE TWO POPULATIONS IS SUBSTITUTION VERSUS INSERTION. A parallel sentence differs by a
+ *       word SWAPPED (`row`/`column`, `detail`/`persisted`, `string`/`numeric`); the defect CLAUDE.md names is
+ *       a sentence that GAINS A CLAUSE — Fetch §4.1 Main fetch step 7's fourth disjunct, absent from four
+ *       copies and present in a fifth; CSSOM View's `a DOMRect object` against `a DOMRect`. So a DISAGREEMENT
+ *       is a pair with a common PREFIX and a common SUFFIX, both non-empty, together at least
+ *       `MIN_COMPARED_WORDS`, where ONE side has nothing between them at all — one spelling is exactly the
+ *       other with a run inserted in the middle. Both ends non-empty is what makes it a middle rather than a
+ *       CUT, and a cut is caught by containment below and is not a finding.
+ *   (c) AN ELIDED QUOTATION IS ALWAYS THE CUT SIDE AND NEVER THE DISAGREEING ONE. A run carrying an ellipsis —
+ *       the shape ELLIDED reads, a phrase, a `…`, another phrase — has a hole its AUTHOR MARKED, so its
+ *       fragments joined look exactly like the short side of an insertion, and reporting the author's own
+ *       ellipsis as a disagreement would be this file manufacturing a finding out of its own normalizer, which the
+ *       STEP_MARKER paragraph already calls this checker's one unacceptable failure. A multi-fragment spelling
+ *       may be CONTAINED in another and may never disagree with one.
+ * WHAT MAKES ONE PASSAGE A DISAGREEMENT is that neither spelling CONTAINS the other, asked with the same
+ * `containsFragments` word-boundary matcher the verification uses, and that the pair meets (b). A quotation
+ * that is a CUT of a longer one — the common and legitimate case, an author quoting the clause they need — is
+ * a member of the passage where it is at least half of it, and is printed inside the group so a reader can see
+ * what was compared with what.
+ * AND WHAT MAKES A DISAGREEMENT A FINDING IS THE COMMITTED CORPUS, ASKED BY THE CALLER RATHER THAN HERE. This
+ * function is pure text and knows nothing about any standard, which is what keeps the grouping honest; the
+ * split that follows is in `audit`, beside the corpora it needs — see heldBy. A pair that is one clause apart
+ * is one of two things, and only the corpus can say which: BOTH spellings are real sentences a standard writes
+ * in parallel, in which case nothing is wrong; or exactly one of them is any indexed standard's words, in
+ * which case the other is the mis-transcription its own sibling names the repair for. Only the second is
+ * accused.
+ * WHAT THAT COSTS, STATED RATHER THAN DISCOVERED — three silences, none of them a wrong answer, and the first
+ * is the one a later reader will want to close. A SUBSTITUTION is not judged — Web IDL's shortest-argument-list
+ * sentence, standing at one site with `in the entries` and at another with `of the entries`, is one of these and
+ * one of the two is the standard's; this channel cannot tell it from the parallel-sentence population it is
+ * buried in. THE QUOTATION MARKS ARE DELIBERATELY ABSENT FROM THAT EXAMPLE, and the reason is this channel's own
+ * subject: a worked example written between DOUBLE QUOTES is a QUOTATION to PASS 4, charged to the nearest
+ * citation BEFORE it — a Fetch number, four lines up — so writing it out planted a QUOTE-WRONG-SECTION in the
+ * auditor itself. Measured on the first frozen run of this diff, and repaired at the prose rather than by
+ * narrowing the checker, which is what this file does with every finding it makes about itself. It is COUNTED and listed under
+ * --agree rather than accused, which is the same split every other band here draws between what the tool can
+ * demonstrate and what it can only notice. A SHORT quotation whose spellings diverge EARLY shares too few
+ * tokens to reach the floor. And a disagreement one of whose sites quotes a MUCH LONGER passage around the
+ * disputed sentence fails the majority the grouping needs. */
+const AGREE_RUN = MIN_COMPARED_WORDS;
+
+/* The longest run of tokens the two quotations share, contiguously, WITHIN one fragment of each. An elision is
+ * a hole the author cut, so a run that spans one is a run neither author typed — the same reason
+ * `containsFragments` matches fragment by fragment rather than joining them. */
+function longestSharedRun(a, b) {
+  let best = 0;
+  for (const fa of a) {
+    const x = fa.split(" ");
+    for (const fb of b) {
+      const y = fb.split(" ");
+      let prev = new Int32Array(y.length + 1);
+      for (let i = 1; i <= x.length; i++) {
+        const cur = new Int32Array(y.length + 1);
+        for (let j = 1; j <= y.length; j++)
+          if (x[i - 1] === y[j - 1]) { cur[j] = prev[j - 1] + 1; if (cur[j] > best) best = cur[j]; }
+        prev = cur;
+      }
+    }
+  }
+  return best;
+}
+
+/* ONE SPELLING IS THE OTHER WITH A RUN INSERTED IN THE MIDDLE — the shape of a sentence that gained a clause,
+ * and the only shape this channel accuses. Both shared ends must be non-empty (an empty end is a CUT, which the
+ * caller has already excluded by containment and which is not a defect), they must together reach the floor
+ * this file sets for a run being a quotation at all, and ONE side must have nothing whatever between them. A
+ * spelling the author ELIDED is refused outright: its own ellipsis is an insertion the author declared. */
+function clauseEdit(A, B) {
+  if (A.cut || B.cut) return null;
+  const x = A.hay.split(" "), y = B.hay.split(" ");
+  const n = Math.min(x.length, y.length);
+  let p = 0; while (p < n && x[p] === y[p]) p++;
+  let q = 0; while (q < n - p && x[x.length - 1 - q] === y[y.length - 1 - q]) q++;
+  const ra = x.length - p - q, rb = y.length - p - q;
+  if (!p || !q || p + q < MIN_COMPARED_WORDS) return null;
+  if (Math.min(ra, rb) !== 0 || Math.max(ra, rb) === 0) return null;
+  return { prefix: p, suffix: q,
+           inserted: (ra ? x : y).slice(p, p + Math.max(ra, rb)).join(" ") };
+}
+
+/* THE SPELLINGS, THE PASSAGES THEY FALL INTO, AND WHICH PASSAGES DISAGREE. Candidate pairs come from a shingle
+ * index rather than from every pair of spellings: a pair whose longest shared run reaches AGREE_RUN must share
+ * at least one run of exactly AGREE_RUN tokens, so the index is EXACT and not a heuristic filter — it excludes
+ * only pairs the relation would have refused anyway. */
+function agreementPassages(records) {
+  const spellings = new Map();
+  for (const r of records) {
+    const frags = r.frags.bigCut.length ? r.frags.bigCut : r.frags.big;
+    if (!frags.length) continue;
+    const key = frags.join(" … ");
+    let sp = spellings.get(key);
+    if (!sp) spellings.set(key, sp = { key, frags, hay: frags.join(" "), cut: false,
+                                       n: frags.reduce((t, f) => t + f.split(" ").length, 0), sites: [] });
+    if (r.frags.all.length > 1) sp.cut = true;   /* the author elided: never the disagreeing side */
+    sp.sites.push(r);
+  }
+  const all = [...spellings.values()];
+
+  const shingle = new Map();
+  all.forEach((sp, i) => {
+    const seen = new Set();
+    for (const f of sp.frags) {
+      const w = f.split(" ");
+      for (let k = 0; k + AGREE_RUN <= w.length; k++) {
+        const sh = w.slice(k, k + AGREE_RUN).join(" ");
+        if (seen.has(sh)) continue;
+        seen.add(sh);
+        if (!shingle.has(sh)) shingle.set(sh, []);
+        shingle.get(sh).push(i);
+      }
+    }
+  });
+
+  const parent = all.map((_, i) => i);
+  const find = (i) => { while (parent[i] !== i) i = parent[i] = parent[parent[i]]; return i; };
+  const union = (i, j) => { const a = find(i), b = find(j); if (a !== b) parent[a] = b; };
+  const disagree = new Set();               /* the i<j pairs that differ by ONE inserted run — the findings */
+  const differ = new Set();                 /* one passage, neither contains the other, some OTHER difference */
+  const asked = new Set();
+  for (const list of shingle.values()) {
+    if (list.length < 2) continue;
+    for (let a = 0; a < list.length; a++) for (let b = a + 1; b < list.length; b++) {
+      const i = Math.min(list[a], list[b]), j = Math.max(list[a], list[b]);
+      const pk = i * all.length + j;
+      if (asked.has(pk)) continue;
+      asked.add(pk);
+      const A = all[i], B = all[j];
+      /* A CUT FIRST, because a quotation that is another one shortened is the legitimate case and must never
+         reach the shape test — where the shortening is at an END it looks exactly like an insertion. */
+      if (containsFragments(A.hay, B.frags) || containsFragments(B.hay, A.frags)) {
+        if (2 * Math.min(A.n, B.n) > Math.max(A.n, B.n)) union(i, j);
+        continue;
+      }
+      const e = clauseEdit(A, B);
+      if (!e) {
+        /* not a single inserted clause — a passage only if the two are near-identical anyway, and then a
+           DIFFERENCE this channel counts and does not accuse. */
+        const run = longestSharedRun(A.frags, B.frags);
+        if (run >= AGREE_RUN && 2 * run > Math.max(A.n, B.n)) { union(i, j); differ.add(pk); }
+        continue;
+      }
+      union(i, j);
+      disagree.add(pk);
+    }
+  }
+
+  const byRoot = new Map();
+  all.forEach((sp, i) => {
+    const r = find(i);
+    if (!byRoot.has(r)) byRoot.set(r, []);
+    byRoot.get(r).push(i);
+  });
+  const passages = [], noticed = [];
+  for (const members of byRoot.values()) {
+    if (members.length < 2) continue;
+    let bad = false, odd = false;
+    for (let a = 0; a < members.length; a++)
+      for (let b = a + 1; b < members.length; b++) {
+        const pk = Math.min(members[a], members[b]) * all.length + Math.max(members[a], members[b]);
+        if (disagree.has(pk)) bad = true;
+        else if (differ.has(pk)) odd = true;
+      }
+    const g = members.map((i) => all[i]).sort((x, y) => y.sites.length - x.sites.length || (x.key < y.key ? -1 : 1));
+    if (bad) passages.push(g); else if (odd) noticed.push(g);
+  }
+  /* A PASSAGE QUOTED AT SEVERAL SITES IN ONE SPELLING IS THE HEALTHY CASE AND IS COUNTED, because a channel
+   * that prints only its findings says nothing about the population they were drawn from — which is the one
+   * line CLAUDE.md requires on every run including the clean day. `multiSite` is every passage this tree
+   * quotes more than once, whether the copies agree or not, and it is the denominator the disagreements are a
+   * fraction OF: a repair moves a passage from `passages` into the agreeing remainder and moves neither out of
+   * `multiSite`, so the two numbers cannot drift apart the way a bare finding count does. */
+  const multiSite = [...byRoot.values()]
+    .filter((m) => m.reduce((t, i) => t + all[i].sites.length, 0) > 1).length;
+  const sitesIn = (gs) => gs.reduce((t, g) => t + g.reduce((n, sp) => n + sp.sites.length, 0), 0);
+  noticed.sort((x, y) => sitesIn([y]) - sitesIn([x]));
+  passages.sort((x, y) => sitesIn([y]) - sitesIn([x]));
+  return { spellings: all.length, candidates: passages, noticed, multiSite,
+           agreed: multiSite - passages.length - noticed.length, noticedSites: sitesIn(noticed) };
 }
 
 /* ONE WORDING FOR A QUOTATION FINDING, READ BY BOTH ITS READERS. The full report prints it and --since prints
@@ -3134,6 +3375,12 @@ function audit(argv, opts = {}) {
    * standing in the file. Only the two site-drainable states are collected; FOREIGN is not, because no edit at
    * that site can fix it, and NO-SECTION is a citation this run already reports as wrong somewhere else. */
   const unjudgedQuotes = [];
+  /* EVERY QUOTATION THIS RUN SAW, FOR THE AGREEMENT CHANNEL — see agreementPassages. It is filled BEFORE the
+   * five refusals below and never after, because this channel's evidence is other SITES rather than a
+   * standard: a quotation whose citation nothing placed is one this tree may still be quoting twice, and it is
+   * the population no other check here can speak about at all. A record here is not a finding and not a
+   * refusal; it is a member of the denominator, which is `qstat.seen` by construction. */
+  const agreeSeen = [];
   /* Every refusal field below carries a `<name>Crash` twin, and `refuse` in PASS 4 throws if a name arrives
    * without one — so a state added here cannot silently lose the who-pays axis that orders the queue. */
   /* `single*` are not a refusal state and take no `Crash` twin from `refuse`: they say which MARK carried a
@@ -4339,6 +4586,9 @@ function audit(argv, opts = {}) {
                         how: c.how, quote: q.text.trim(), words: f.words, elided: f.elided, gap: q.at,
                         mark: q.mark, crash: inCrashMessage(src, spans, c.at) };
           if (q.mark === "'") { qstat.single++; if (rec.crash) qstat.singleCrash++; }
+          /* BEFORE EVERY REFUSAL BELOW — the agreement channel is asked of the whole `qstat.seen` population,
+             and half its value is the sites the resolver could not place. */
+          agreeSeen.push({ ...rec, frags: f });
           /* THE FIVE STATES ARE KEPT APART, because CLAUDE.md's recurring defect is several states behind one
            * answer and a search cannot be directed toward a gap it cannot see. Each refusal below is a
            * DIFFERENT fact about why this quotation was not judged, and each is counted under its own name.
@@ -4951,6 +5201,76 @@ function audit(argv, opts = {}) {
    * quotations under one citation can diverge identically, and a delta that could not tell them apart would
    * report a repaired one as still standing. */
   const quoteFindings = quotes.map((q) => ({ ...q, msg: quoteMsg(q), text: `"${q.quote}"`, qtext: q.quote }));
+  /* AND THE AGREEMENT CHANNEL, WHOSE FINDING IS A GROUP AND WHOSE FINDINGS ARE ITS SITES. A disagreement is
+   * repaired at ONE site and the other members of the group go with it, so a per-group count would understate
+   * what a reader has to read and a per-site count states exactly the places a reader must look. Each row
+   * carries the group's other spellings in its own message, because a finding that says "this disagrees with
+   * something" and does not say WITH WHAT is one the reader has to re-derive.
+   *
+   * AND --since SEES IT, WITH A LIMIT THAT MUST BE STATED RATHER THAN DISCOVERED. The delta mode audits only
+   * the files a diff touched, and this channel's evidence is OTHER SITES — so a disagreement whose sibling
+   * stands in an untouched file forms in neither the base run nor the tip run and is reported by neither. That
+   * is a COVERAGE hole and not a wrong answer: both runs read the same file set, so nothing can be reported as
+   * introduced that was not, and what --since does catch is the shape that put this channel here — one diff
+   * relocating or re-typing a sentence it already quotes elsewhere in the same diff. The full run is where the
+   * whole-tree question is asked, and the report says so in the channel's own header. */
+  const agreement = agreementPassages(agreeSeen);
+  const clipQ = (t) => (t.length > 110 ? t.slice(0, 110) + "…" : t);
+  /* WHICH STANDARD, IF ANY, CARRIES THIS SPELLING ANYWHERE IN ITS OWN TEXT — the evidence that separates the two
+   * populations the text relation alone cannot, and the reason this channel is small enough to read.
+   *
+   * A NEAR-IDENTICAL PAIR IS ONE OF TWO THINGS AND THE CORPUS KNOWS WHICH. Either both spellings are REAL
+   * sentences a standard writes in parallel — one per attribute, one per union arm, `preferred width` beside
+   * `preferred minimum width` — in which case nothing is wrong and accusing them is this file committing its own
+   * subject; or exactly ONE of them is any indexed standard's words, and the other is the mis-transcription its
+   * own sibling names the repair for. That is a fact with its own proof, which is the form this file's header
+   * endorses over an inference, and it is asked over the WHOLE of each standard rather than the cited section,
+   * because a disagreement is a claim about the WORDS and says nothing about anybody's number.
+   * IT IS ASKED ONLY OF THE CANDIDATE PASSAGES, not of all 7000-odd spellings: a whole-corpus scan is a
+   * multi-megabyte indexOf and the population that reaches here is two orders of magnitude smaller.
+   * AND IT IS GENEROUS ON PURPOSE — every site's own fragment forms are tried, and the first corpus that holds
+   * any of them answers — because ABSENCE is the half that accuses, and this file pays its errors in recall. */
+  const holdsCache = new Map();
+  const heldBy = (sp) => {
+    if (holdsCache.has(sp.key)) return holdsCache.get(sp.key);
+    let at = null;
+    for (const [k] of txt) {
+      if (sp.sites.some((site) => containsAnyForm(wholeOf(k), site.frags))) { at = k; break; }
+    }
+    holdsCache.set(sp.key, at);
+    return at;
+  };
+  const agreeGroups = [], agreeBoth = [], agreeNeither = [];
+  for (const g of agreement.candidates) {
+    const ev = g.map((sp) => ({ sp, at: heldBy(sp) }));
+    const present = ev.filter((e) => e.at), absent = ev.filter((e) => !e.at);
+    if (present.length && absent.length) agreeGroups.push({ g, ev, present, absent });
+    else if (present.length) agreeBoth.push(g);
+    else agreeNeither.push(g);
+  }
+  /* THE FINDING IS THE SITE THAT HAS TO BE EDITED, AND THE GROUP IS PRINTED WHOLE SO A READER CAN SEE WHY.
+   * CLAUDE.md's instruction is to report a disagreement as a disagreement rather than as a verdict, and what is
+   * reported here IS one — the row's claim is that this spelling occurs in NO indexed standard while a SIBLING
+   * SITE quoting the same passage carries one that does, which is a statement about two sites and a corpus and
+   * not a ruling. The two ways it can still be wrong are named in the row rather than left to be discovered:
+   * the site's real standard may be one this tool indexes no text for, and the committed corpus can be OLDER
+   * than the document its editors are writing — the fourth reading of a failed quotation, where the diligent
+   * author who pasted current bytes is the one who reads as wrong. */
+  const agreeFindings = [];
+  for (const { g, present, absent } of agreeGroups) {
+    const total = g.reduce((n, sp) => n + sp.sites.length, 0);
+    for (const { sp } of absent) {
+      for (const site of sp.sites) {
+        const { frags, ...row } = site;
+        agreeFindings.push({ ...row, kind: "QUOTE-DISAGREEMENT",
+          msg: `this tree quotes this passage ${g.length} ways at ${total} site(s) and this spelling is in NO indexed` +
+               ` standard, while ${present.map((e) => `${e.at} has "${clipQ(e.sp.key)}"`).join("; ")}` +
+               ` — the sibling names the repair; a standard this tool indexes no text for, or a corpus older than the` +
+               ` live edition, are the two ways this row can still be wrong`,
+          text: `"${site.quote}"`, qtext: site.quote });
+      }
+    }
+  }
   /* A STEP FINDING IS A FINDING, SO --since MUST SEE IT, for the reason the line above gives about quotations:
    * the number a lane gets wrong is the number that lane is writing right now. It needs no extra key field the
    * way a quotation does: one citation can carry several step references, and each one's `msg` names its own
@@ -4962,7 +5282,7 @@ function audit(argv, opts = {}) {
    * check — the number resolves, the section is right, and only the standard's own words disagree. */
   const stepFindings = [...stepsOut.map((v) => ({ ...v, kind: "STEP-OUT-OF-RANGE" })),
                         ...stepsSays.map((v) => ({ ...v, kind: "STEP-SAYS-OTHERWISE" }))];
-  if (opts.quiet) return [...findings, ...quoteFindings, ...stepFindings];
+  if (opts.quiet) return [...findings, ...quoteFindings, ...agreeFindings, ...stepFindings];
   /* WHAT THE OTHER SITES ON THIS NUMBER RESOLVED TO IS THE ONE THING THE READER NEEDS AND THE ONE THING THIS
    * CAN PROVE. A file writing `7.4.9 IteratorClose` six times and `7.4.9 IteratorStepValue` four times has
    * §the numbering of an older edition — and it is ALSO a file in which that one number means TWO different
@@ -5368,6 +5688,102 @@ function audit(argv, opts = {}) {
     }
   }
 
+  /* THE AGREEMENT REPORT. ITS DENOMINATOR IS PRINTED ON EVERY RUN INCLUDING THE CLEAN ONE, for the reason
+   * CLAUDE.md gives about the direction nobody checks: a rising count invites scrutiny and a FALLING one does
+   * not, so a channel that lost half its population reads as a channel that got the tree repaired. Here the two
+   * numbers cannot come apart — a passage quoted at several sites stays in `multiSite` whether its copies agree
+   * or not — which is exactly what makes them worth printing together.
+   *
+   * WHERE THIS LANDS IN THE VERDICT, DECIDED RATHER THAN INHERITED. It is a FINDING CHANNEL and not a census
+   * band, and the discriminator is the one CLAUDE.md draws between a finding and a blind spot: a blind spot is
+   * a construct the instrument CANNOT SEE, and this instrument sees everything it needs — a disagreement is
+   * demonstrated entirely out of the tree's own bytes, needs no corpus, no resolution and no inference, and
+   * cannot be true of a tree that is right. It is a fourth channel rather than a widening of the quotation
+   * channel because the two have different DENOMINATORS: that one is a fraction of the quotations COMPARED
+   * against a corpus, this one of every quotation SEEN, and summing two populations is the shape this file
+   * refuses everywhere else.
+   * A SITE MAY THEREFORE BE COUNTED IN BOTH, and that is two different claims about one line rather than one
+   * claim counted twice: the quotation channel says the words are not the cited section's, and this says the
+   * tree does not agree with itself about them. Measured on the pair that seeded this channel, one of the three
+   * sites is in both and one is in this channel alone. */
+  {
+    console.log(`\nQUOTATION AGREEMENT — when this tree quotes one passage at several sites, do the sites AGREE?`);
+    console.log(`  (this asks about THE TREE. It is asked of EVERY quotation this check saw — including every one the resolver`);
+    console.log(`   refused, where no other channel here can speak at all — because a disagreement is a claim about the WORDS`);
+    console.log(`   and needs nobody's section number. It does NOT rank the sites: what a row asserts is that ONE spelling is`);
+    console.log(`   in no indexed standard while a SIBLING SITE's is, which is a fact about two sites and a corpus.)`);
+    console.log(`  ${qstat.seen} quotation(s) seen in ${agreement.spellings} distinct spelling(s); ${agreement.multiSite} passage(s) are quoted at more than one site.` +
+      ` ${agreement.agreed} of those AGREE — one spelling, or one spelling and a CUT of it.`);
+    console.log(`  THE REST DIFFER, AND THE THREE WAYS THEY DIFFER TAKE THREE DIFFERENT ACTIONS, so they are counted apart:` +
+      ` ${agreeGroups.length} passage(s) where the spellings are ONE INSERTED CLAUSE apart and the corpus holds SOME of them and not others` +
+      ` — ${agreeFindings.length} site(s), the findings below;` +
+      ` ${agreeBoth.length} where EVERY spelling is some standard's own words, which is a standard writing PARALLEL SENTENCES` +
+      ` (one per attribute, one per union arm, \`preferred width\` beside \`preferred minimum width\`) and is not a defect at all;` +
+      ` ${agreeNeither.length} where NO spelling is any indexed standard's, which is where this tree quoting its OWN prose lands and` +
+      ` where a citation of an unindexed standard lands beside it;` +
+      ` and ${agreement.noticed.length} (${agreement.noticedSites} site(s)) that differ some OTHER way than one inserted clause.` +
+      ` The last three are NOT findings and are listed under --agree.`);
+    console.log(`  HOW A PASSAGE IS BUILT, and it never reads a section number: two quotations are ONE PASSAGE when one CONTAINS` +
+      ` the other and is at least half of it (a CUT — the legitimate case, an author quoting the clause they need), or when they` +
+      ` share a contiguous run of ${AGREE_RUN}+ tokens that is a strict majority of BOTH. A passage is ACCUSED only where two of its` +
+      ` spellings have a common non-empty PREFIX and SUFFIX totalling ${MIN_COMPARED_WORDS}+ tokens with ONE side holding nothing between them` +
+      ` — a sentence that GAINED A CLAUSE, which is the defect's own shape, not a similarity score.`);
+    console.log(`  BLIND SPOTS, STATED — all silences, none a wrong answer. A SUBSTITUTED word ("…IN the entries in S" against` +
+      ` "…OF the entries in S") is not one inserted clause and is counted, never accused. An early divergence in a SHORT quotation` +
+      ` shares too few tokens to reach the floor. A site whose quotation wraps a MUCH LONGER passage around the disputed sentence` +
+      ` fails the majority. An ELIDED quotation is always the CUT side and never the disagreeing one, because its own ellipsis` +
+      ` looks exactly like an insertion. And this channel is WHOLE-TREE: a path-scoped or --since run compares only the sites it` +
+      ` read, so a disagreement whose sibling stands outside that set forms in neither run and is SILENT rather than clean.`);
+
+    const gcap = argv.includes("--all") ? Infinity : 25;
+    console.log(`\nQUOTE-DISAGREEMENT: ${agreeFindings.length} site(s) in ${agreeGroups.length} passage(s)`);
+    let shown = 0;
+    for (const { g, ev } of agreeGroups) {
+      if (shown >= gcap) break;
+      shown++;
+      console.log(`  passage ${shown}: ${g.length} spellings at ${g.reduce((n, sp) => n + sp.sites.length, 0)} site(s)`);
+      for (const { sp, at } of ev) {
+        console.log(`    [${sp.sites.length} site(s)] ${at ? `IS ${at}'s own words` : `in NO indexed standard`}: "${clipQ(sp.sites[0].quote.trim())}"`);
+        for (const site of sp.sites) {
+          named.add(site.file);
+          console.log(`        ${site.file}:${site.line}  ${site.spec ? `${site.spec} §${site.no}` : `§${site.no} (nothing placed this citation)`}` +
+            (site.how === "file" ? " [placed by a FILE VOTE]" : "") + (site.crash ? "  [in a crash message]" : ""));
+        }
+      }
+    }
+    if (agreeGroups.length > shown)
+      console.log(`  … ${agreeGroups.length - shown} more passage(s) NOT PRINTED — the head above is in site-count order.` +
+        ` \`--all\` prints every one; a path argument prints every one inside that path.`);
+
+    /* THE THREE BANDS THIS CHANNEL NOTICES AND DOES NOT ACCUSE, behind a flag for the reason every large band here
+     * is: printed by default they are furniture inside a day and would take the accused band down with them. Their
+     * COUNTS are on the census line above on EVERY run including the clean one, which is the half a reader must
+     * not be able to miss — a channel whose findings fall while its population falls with them has lost coverage
+     * and not gained repairs, and only the denominator says which. */
+    if (argv.includes("--agree")) {
+      for (const [label, gs, why] of [
+        ["EVERY SPELLING IS A STANDARD'S OWN WORDS", agreeBoth,
+         ` — two RIGHT quotations of two DIFFERENT sentences. This is what a standard's PARALLEL prose looks like from here` +
+         ` and it is not a defect; the band exists so its size is readable rather than inferred from the accused band's smallness`],
+        ["NO SPELLING IS ANY INDEXED STANDARD'S", agreeNeither,
+         ` — this tree's own prose in quotation marks, a standard nothing here indexes, or two fabrications. Nothing mechanical` +
+         ` separates those, which is why it is a queue and not a finding`],
+        ["DIFFERS SOME OTHER WAY THAN ONE INSERTED CLAUSE", agreement.noticed,
+         ` — a word SUBSTITUTED, a reordering, two edits. A mis-transcribed word is in here and so is every parallel sentence` +
+         ` that differs by a noun; the corpus is not asked, because the shape that makes the question answerable is absent`]]) {
+        console.log(`\nQUOTATION AGREEMENT / ${label}: ` +
+          `${gs.reduce((t, g) => t + g.reduce((n, sp) => n + sp.sites.length, 0), 0)} site(s) in ${gs.length} passage(s) — NOT findings${why}`);
+        for (const g of gs) {
+          console.log(`  ${g.length} spellings at ${g.reduce((n, sp) => n + sp.sites.length, 0)} site(s):`);
+          for (const sp of g) {
+            console.log(`    [${sp.sites.length}] "${clipQ(sp.sites[0].quote.trim())}"`);
+            for (const site of sp.sites) console.log(`        ${site.file}:${site.line}  ${site.spec ? `${site.spec} §${site.no}` : `§${site.no}`}`);
+          }
+        }
+      }
+    }
+  }
+
   /* THE STEP REPORT STATES ITS DENOMINATOR IN THE SAME LINE AS ITS NUMBER, and it has more denominators than
    * any other check here because more things can stop it: a step reference is judged only where the citation
    * over it resolved on its own evidence, the standard has a committed step corpus at the same edition, the
@@ -5609,6 +6025,7 @@ function audit(argv, opts = {}) {
    * SAME LINE; this is that rule applied to the one line two runs are actually compared on. */
   const findingChannels = [["section/term/title", findings, () => judged, "resolved citations"],
                            ["quotation", quoteFindings, () => qstat.checked, "compared"],
+                           ["quotation agreement", agreeFindings, () => qstat.seen, "quotations grouped"],
                            ["step", stepFindings, () => sstat.checked, "compared"]];
   const allFindings = findingChannels.flatMap(([, g]) => g);
   const allFiles = new Set(allFindings.map((f) => f.file));
@@ -5625,7 +6042,7 @@ function audit(argv, opts = {}) {
       `A resolution outcome was added without a counter, and the coverage line below would understate its own denominator.`);
   console.log(`\n${allFindings.length} finding(s) = ${findingChannels.map(([n, g, d, lbl]) => `${g.length} ${n} of ${d()} ${lbl}`).join(" + ")}` +
     ` — the total over EVERY channel this run judges, which is the set --since compares. The four category headers above` +
-    ` (UNKNOWN-SECTION, MISATTRIBUTED, TITLE-MISMATCH, RETIREMENT-NOTE-WRONG) sum to ${findings.length} and are one of the three.`);
+    ` (UNKNOWN-SECTION, MISATTRIBUTED, TITLE-MISMATCH, RETIREMENT-NOTE-WRONG) sum to ${findings.length} and are one of the four.`);
   /* AND THE CORPUS STATE IS PRINTED HERE AND NOT ONLY MID-REPORT, because it is the one condition under which
    * a FALLING finding total means LOST COVERAGE rather than repair, and it is invisible in every other number
    * on this line. It arises from a PARTIAL corpus: `--regen` writes a standard's section index, its text and

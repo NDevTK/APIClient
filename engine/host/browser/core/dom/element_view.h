@@ -124,7 +124,7 @@
  * AND A RECTANGLE IS THE SAME SPLIT AGAIN, WHICH IS WHY `getClientRects` AND `getBoundingClientRect` ARE HERE
  * RATHER THAN ON THE ABSENT LIST. getClientRects' STEP 1 — "if the element does not have an associated box
  * return an empty DOMRectList" — is decided by the predicate above and by nothing else, and get-the-bounding-box
- * then answers an empty list with "a DOMRect whose x, y, width and height members are zero". That is a value
+ * then answers an empty list with "a DOMRect object whose x, y, width and height members are zero". That is a value
  * the SPEC computes, identically in every user agent, for every element that generates no box; it is not a zero
  * standing in for a number this engine does not have, and it is CONCRETE for viewport.h's reason — a domain of
  * one point has no arm to explore. That branch is most of what a lazy-loading bundle measures before it
