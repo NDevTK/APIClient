@@ -56,6 +56,7 @@
 #include "quickjs-step.h"
 #include "core/idl_args.h"
 #include "core/idl_index_arg.h"   /* §4.10 / §4.11's `unsigned long` operands, known and unknown */
+#include "core/idl_name_chain.h"   /* §4.4's namespace lookups, over an unknown the page must name */
 #include "core/realm.h"
 #include "core/dom/document.h"
 #include "core/dom/element.h"   /* element_create_ns / element_free — §4.4 "clone a node"'s element half */
@@ -3219,25 +3220,190 @@ static JSValue js_node_insert(JSContext *ctx, JSValueConst this_val, int argc, J
 enum { IDL_STEP_STAGE_BASE(NODE_NS_STAGES) NODE_NS_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const NODE_NS_STEPS[] = { NODE_NS_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-/* THIS MACHINE HOLDS NOTHING ACROSS ITS ONE REST POINT, and the field below is what C requires of a struct
-   rather than state anyone reads. Every operand is RE-DERIVED on re-entry: the receiver off the header, the
-   argument off the machine's own argument vector — idl_args.c re-presents that vector at every resume, which is
-   what lets this body read argv[0] on the far side of a fork — and the located default namespace off the flow's
-   own tree, which is what a resumed flow is asked to do rather than carry. So there is nothing for a fork to
-   copy, and the state is trivially the complete-or-empty step_fork_run requires at the instant it snapshots the
-   sibling. */
-typedef struct { unsigned char none; } NodeNsState;
+/* WHAT THIS MACHINE RE-DERIVES AND WHAT IT MUST CARRY, WHICH ARE TWO DIFFERENT LISTS AND USED TO BE ONE.
+   Every OPERAND is re-derived on re-entry and none of them is here: the receiver off the header, the argument
+   off the machine's own argument vector — idl_args.c re-presents that vector at every resume, which is what
+   lets this body read argv[0] on the far side of a fork — and every namespace off the flow's own tree, which
+   is what a resumed flow is asked to do rather than carry.
+   WHAT IT CARRIES IS THE ELIMINATION CHAIN, and it carries it for a reason re-derivation cannot serve: the
+   chain's cursor names a position in a CANDIDATE LIST, and that list is drawn from a tree the page mutates —
+   with `setAttribute` and its six siblings, with the `Attr.value` setter, and with every tree write, since an
+   `appendChild` or a `remove()` changes which elements are in scope without touching an attribute at all. So
+   the list is snapshotted ONCE, at the first link, into storage the fork copies and the park carries; from
+   that instant the set is this machine's own and fixed, which is the only condition under which CLAUDE.md's
+   §AN-INDEX-NAMES-A-THING-ONLY-WHILE-THE-SET-IS-FIXED permits a rank to name anything. The QUESTIONS the
+   chain asks are keyed by the candidate's own NAME regardless, so a rank never crosses a session; the
+   snapshot is what makes the parent and the sibling forked at link k ask about the same string.
+   `cands` HOLDS ATOM REFERENCES and `ncands` is how many — the pair the `props` visit copies and frees, so
+   they are written together and never separately. `taken` IS NOT REDUNDANT WITH A NON-NULL `cands`, which is
+   the reading a snapshot that always holds at least one candidate invites: quickjs-step.h's props visit
+   answers a failed fork COPY by leaving the slot NULL and saying so — "the copy walks no keys rather than
+   sharing the original's" — so a sibling can arrive holding `taken` and a count with no array, and a chain
+   that re-derived "have I started" from the pointer would silently re-snapshot with a cursor into the old
+   set. `taken` says the set was fixed; the array is asserted separately, where its absence is fatal rather
+   than answered. `key` is the composed constraint key and belongs to core/idl_name_chain.h. */
+typedef struct {
+    JSPropertyEnum         *cands;
+    uint32_t                ncands;
+    uint32_t                next;
+    uint8_t                 taken;
+    IdlNameChainSuppliedKey key;
+} NodeNsState;
 
 static void node_ns_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
-    /* NOTHING OWNED — see NodeNsState. */
-    (void)ctx; (void)st; (void)v;
+    NodeNsState *s = st;
+
+    DCHECK(s != NULL && v != NULL,
+           "DOM §4.4's namespace machine was visited with no state or no visitor — the visit is how a fork "
+           "copies the candidate snapshot and the composed key, so a machine that skips it hands its sibling "
+           "pointers into storage the parent's discharge frees");
+    DCHECK(s->cands != NULL || s->ncands == 0,
+           "DOM §4.4's namespace machine holds a candidate count with no candidate array — the snapshot writes "
+           "the two together and always writes at least the empty string, so NULL and 0 is the state of a "
+           "chain that has not started and a positive count with no array is a snapshot half taken");
+    v->props(ctx, &s->cands, s->ncands);
+    idl_name_chain_supplied_visit(ctx, &s->key, v);
+}
+
+/* THE PREDICATE, AND IT NAMES NEITHER MEMBER AND NEITHER WALK — which is the whole reason `lookupPrefix` and
+ * `lookupNamespaceURI` share it.
+ *
+ * A LINK ASKS `arg === N` AND NOTHING ELSE. Both walks decide every one of their steps by comparing the
+ * argument with a string out of the tree, by CODE POINTS (node_ns.c quotes Namespaces in XML §2.3 on that),
+ * so the fact a link establishes is that the string this unknown denotes is exactly N — a fact about the
+ * VALUE, with no member, no walk and no element in it. CLAUDE.md's §Solver-half requires a constraint to be
+ * keyed by the PREDICATE's own identity, the operator and both operands, so that a flow's record of one
+ * predicate decides that predicate and never its neighbour; putting either member's name in would give one
+ * predicate two identities. `el.lookupNamespaceURI(x)` and `el.lookupPrefix(x)` over one `x` asking whether
+ * it is the string `p` are ONE question asked twice, and the second must find the first's answer rather than
+ * re-ask it and mint a sibling standing on a vector that says `x === "p"` AND `x !== "p"`.
+ * IT HAS NO WIDTH, which is why there is no IDL_NAME_CHAIN_SPELLS beside it: a candidate is an attribute's
+ * local name or an attribute's value, both spelled by the PAGE, so there is nothing for a static assertion to
+ * check and a cap on how long one may be would be a §NO BOUNDS violation that silently merged two members'
+ * questions at the limit. IdlNameChainSuppliedKey grows to the composition instead. */
+#define NODE_NS_PREDICATE "DOM §4.4 Interface Node's namespace lookups (this DOMString is"
+
+/* THE CANDIDATE SNAPSHOT — taken ONCE, in one uninterrupted stretch, which is what core/dom/node_ns.h's
+   iterator requires of every caller and what makes the cursor above a sound name for a position.
+   CANDIDATE 0 IS THE EMPTY STRING AND IT IS THE MEMBER'S OWN STEP, NOT THE WALK'S. §4.4's
+   "lookupNamespaceURI(prefix)" step 1 is "If prefix is the empty string, then set it to null", and
+   "lookupPrefix(namespace)" step 1 is "If namespace is null or the empty string, then return null" — so an
+   unknown that is the empty string is a world neither walk can reach and node_ns.h deliberately does not
+   list. Folding it into the remainder would answer it for the wrong reason: the remainder's answer is null
+   BECAUSE no comparison matched, and this one is null (or the default namespace) because the member mapped
+   it before any comparison ran. */
+static void node_ns_snapshot(JSContext *ctx, NodeNsState *st, lxb_dom_node_t *n, bool prefixes)
+{
+    NodeNsCandidates it;
+    const char *c;
+    size_t len = 0;
+    uint32_t count = 1, i = 0;
+
+    node_ns_candidates_begin(&it, n, prefixes);
+    while ((c = node_ns_candidates_next(&it, &len)) != NULL) count++;
+
+    st->cands = js_malloc(ctx, sizeof(*st->cands) * count);
+    CHECK(st->cands != NULL,
+          "DOM §4.4's namespace lookups could not allocate the candidate snapshot their elimination chain is "
+          "asked over — a dropped flow corrupts the frontier, and there is no arm here that could carry on "
+          "with a set it cannot fix");
+    st->cands[i].is_enumerable = 0;
+    st->cands[i].atom = JS_NewAtomLen(ctx, "", 0);
+    CHECK(st->cands[i].atom != JS_ATOM_NULL,
+          "DOM §4.4's namespace lookups could not intern the EMPTY STRING their members' own step 1 is about");
+    i++;
+    node_ns_candidates_begin(&it, n, prefixes);
+    while ((c = node_ns_candidates_next(&it, &len)) != NULL) {
+        /* THE TWO PASSES ARE OVER ONE TREE AND NOTHING RAN BETWEEN THEM, so a disagreement is not a page
+           mutating the set — it is the iterator answering two different sequences for one node, which is the
+           one way this component can be wrong about the set it has just fixed. IT IS FATAL IN BOTH BUILDS in
+           this direction and not the other, because a second enumeration that runs LONGER writes past the
+           allocation: a guard here that merely stopped would be the truncation the assert below exists to
+           catch, silently performed. */
+        CHECKF(i < count,
+               "DOM §4.4's namespace lookups counted %u candidates and then listed more — the count and the "
+               "fill are the same enumeration over the same tree with nothing between them", count);
+        st->cands[i].is_enumerable = 0;
+        st->cands[i].atom = JS_NewAtomLen(ctx, c, len);
+        CHECK(st->cands[i].atom != JS_ATOM_NULL,
+              "DOM §4.4's namespace lookups could not intern a candidate their own walk compares against — it "
+              "is a borrowed slice of a tree this flow is standing in, so the only failing arm is allocation");
+        i++;
+    }
+    DCHECKF(i == count,
+            "DOM §4.4's namespace lookups counted %u candidates and then listed only %u — the count and the "
+            "fill are the same enumeration over the same tree with nothing between them",
+            count, i);
+    st->ncands = count;
+    st->taken  = 1;
+}
+
+/* WHICH STRING THE UNKNOWN IS, ASKED ONE CANDIDATE AT A TIME — the elimination chain, and it is the SAME
+ * elimination the walk performs rather than a second mechanism standing beside it. Every link is one of the
+ * walk's own comparisons, asked of the FLOW because the flow is what holds the answer; the moment a link says
+ * yes the argument is a known string and node_ns.c's ordinary walk answers the member.
+ *
+ * RETURNS 0 with `*ppin` holding an atom the CALLER OWNS AND FREES, or JS_ATOM_NULL for the remainder — or a
+ * STEP CODE the caller must return unchanged, the flow being parked at the fork with the sibling's snapshot
+ * taken there, which is why the state must be complete at the call.
+ *
+ * THE PARENT WALKS TO THE REMAINDER AND ONE SIBLING CARRIES EACH CANDIDATE'S WORLD. Every link is asked with
+ * JS_OUTCOME_REAL_UNSTATED because this arm's own precondition is that the operand carries NO example — that
+ * is a POSITIVE fact and never a value to fall back on — so neither arm is marked forced and nothing is
+ * contradicted. */
+static int node_ns_pin(JSContext *ctx, JSStepHdr *hdr, NodeNsState *st, JSValueConst arg,
+                       const char *algorithm, JSAtom *ppin)
+{
+    for (;;) {
+        const char *name;
+        JSAtom cand;
+        int rc;
+        bool yes = false;
+
+        CHECKF(st->cands != NULL || st->ncands == 0,
+               "%s holds a candidate count with no candidate array — the snapshot writes the two together, so "
+               "this is a fork whose props copy could not allocate and left the slot NULL while the count "
+               "rode across intact; there is no arm here that could carry on over a set it cannot read",
+               algorithm);
+        if (st->next >= st->ncands) {
+            /* EVERY CANDIDATE ELIMINATED, WHICH IS BOTH WALKS' OWN "Return null" AND IS DERIVED RATHER THAN
+               CHOSEN. locate a namespace reaches its end only by failing steps 1, 2, 3 and 4 at every element
+               in the chain, and those four comparisons are exactly the candidates listed for `prefixes`;
+               locate a namespace prefix reaches its "Return null" by failing its steps 1 and 2 at every
+               element, which are exactly the candidates listed for the other. So an argument that is none of
+               them makes both walks fall through, and the answer is the standard's null for both members —
+               which is the caller's to state, per core/idl_name_chain.h, and is stated at the caller. */
+            *ppin = JS_ATOM_NULL;
+            return 0;
+        }
+        cand = st->cands[st->next].atom;
+        /* THE CANDIDATE'S NAME, READ OUT OF THE SNAPSHOT'S ATOM. An atom is already a string, so this runs
+           none of the page's code; it is BORROWED for the length of the ask, which copies its bytes into the
+           composed key, and released before this body returns through any arm. */
+        name = JS_AtomToCString(ctx, cand);
+        CHECKF(name != NULL, "%s could not read the name of a candidate its own snapshot holds", algorithm);
+        rc = idl_name_chain_ask_supplied(ctx, hdr, &st->key, arg, NODE_NS_PREDICATE, name,
+                                         JS_OUTCOME_REAL_UNSTATED, algorithm, &yes);
+        JS_FreeCString(ctx, name);
+        if (rc)
+            return rc;
+        if (yes) {
+            *ppin = JS_DupAtom(ctx, cand);
+            return 0;
+        }
+        /* ELIMINATED. The cursor advances AFTER the answer and never before the ask, which is what makes the
+           two arms agree: the sibling's snapshot was taken with the cursor still at `next`, so it re-asks
+           about the same candidate and answers the other way. */
+        st->next++;
+    }
 }
 
 static int js_node_lookup_ns(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                              JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
     int magic = idl_step_magic(hdr);
+    NodeNsState *nsst = st;
     lxb_dom_node_t *n = node_of(hdr->this_val);
     /* TWO NAMES FOR ONE STRING, and they are not redundant. `owned` is what JS_ToCStringLen handed back and is
        what must be freed; `arg` is the STANDARD'S ARGUMENT, which each member's step 1 may set to null without
@@ -3248,7 +3414,7 @@ static int js_node_lookup_ns(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
     JSValue example = JS_UNDEFINED;
     JSValue r;
 
-    (void)st; (void)out_cb; (void)out_argc;
+    (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
     /* ONE STAGE, AND THE BODY NEVER ASSIGNS hdr->stage — so every entry, first or resumed, rests here. A stage
        this machine does not declare is a cross-session resume that resolved a label this build no longer spells
@@ -3284,9 +3450,8 @@ static int js_node_lookup_ns(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
             /* AN UNKNOWN WITH NO EXAMPLE CANNOT BE ASKED ANY OF THESE QUESTIONS, and each of them has more
                than one feasible answer over the same document. */
             if (JS_IsUndefined(example)) {
-                const char *shape = concolic_shape_c(argv[0]);
-
-                /* ONE OF THE THREE IS BUILT AND TWO ARE NOT, AND THE SPLIT IS NOT A CONVENIENCE — the three
+                /* THE THREE ASK QUESTIONS OF TWO DIFFERENT SHAPES OVER THE SAME UNKNOWN, AND THE SPLIT IS NOT
+                   A CONVENIENCE — the three
                    ask questions of two different SHAPES over the same unknown. isDefaultNamespace step 3
                    compares the argument with ONE located default namespace, so its completions are a FIXED
                    pair this engine spells itself: the argument is that namespace, or it is not.
@@ -3329,19 +3494,52 @@ static int js_node_lookup_ns(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
                     *presult = JS_NewBool(ctx, arm == 1);
                     return JS_STEP_DONE;
                 }
-                DFAILF("DOM §4.4 Interface Node's lookupPrefix and lookupNamespaceURI were given an argument "
-                       "that is UNKNOWN EXTERNAL INPUT WITH NO EXAMPLE (`%s`, magic %d). Each matches the "
-                       "argument against the SET of namespace declarations in scope — locate a namespace "
-                       "against `xmlns:` attribute NAMES, locate a namespace prefix against their VALUES — "
-                       "and that set is one the page mutates, so the answer is an ELIMINATION CHAIN keyed by "
-                       "each declaration's own NAME and never by its rank. BUILD core/idl_name_chain.h's "
-                       "IdlNameChainSuppliedKey over core/dom/node_ns.h's two walks, one link per "
-                       "declaration in scope, with the walk's own null as the past-the-end answer; a "
-                       "page-supplied prefix has no width, which is what chooses that storage over the "
-                       "inline key. ITS ABSENCE SHOWS as a page resolving a namespace out of injected state "
-                       "(`el.lookupNamespaceURI(__CFG.ns)`) exploring neither world, while "
-                       "`el.isDefaultNamespace(__CFG.ns)` over the same unknown already explores both.",
-                       shape ? shape : "{}", magic);
+                /* THE ELIMINATION CHAIN, WHICH IS THE SAME QUESTION THE WALK ASKS, ASKED OF THE FLOW.
+                   Neither of these two members can run its walk over an operand carrying no example, because
+                   every step of both walks decides by COMPARING that operand with a string out of the tree —
+                   so the walk has no answer until the flow has one. The chain asks about each of those
+                   strings in the walk's own order, keyed by the string's own NAME, and the moment a link says
+                   yes the argument is KNOWN and the ordinary walk below answers it. Nothing here answers a
+                   namespace; core/dom/node_ns.c still does, on a real string, exactly as it does for a page
+                   that wrote one.
+                   WHY IT IS NOT step_fork_run OVER THE SET, WHICH IS THE RETIRED CLAUSE'S ERROR RECORDED
+                   ABOVE: step_fork_run's completions are NUMBERED, and this set is one the page mutates —
+                   with `setAttribute`, `setAttributeNS`, `removeAttribute`, `removeAttributeNS`,
+                   `toggleAttribute`, `setAttributeNode`, `removeAttributeNode` and the `Attr.value` setter,
+                   which renames a member of `lookupPrefix`'s set without adding or removing one, and with
+                   every TREE write (`appendChild`, `insertBefore`, `removeChild`, `replaceChild`, ChildNode's
+                   `remove`/`before`/`after`/`replaceWith`, the `innerHTML` and `outerHTML` setters), which
+                   changes WHICH ELEMENTS are in scope at all without touching an attribute. A replayed rank
+                   over that names a different declaration at the second ask, with every arm in range and
+                   every assert on the path satisfied. The NAME is what survives it. */
+                {
+                    /* THE ADDRESS THE CHAIN'S ASSERTS REPORT — the member's own spec identity, because a
+                       should-never-happen stamps the line it is WRITTEN at and every check made on this
+                       chain's behalf lives in a file shared with every other chain. Only magic 0 and 1 reach
+                       here; magic 2 returned above. */
+                    const char *algorithm = (magic == 1) ? "DOM §4.4 Interface Node's lookupNamespaceURI(prefix)"
+                                                         : "DOM §4.4 Interface Node's lookupPrefix(namespace)";
+                    JSAtom pin = JS_ATOM_NULL;
+                    int rc;
+
+                    if (!nsst->taken) node_ns_snapshot(ctx, nsst, n, magic == 1);
+                    rc = node_ns_pin(ctx, hdr, nsst, argv[0], algorithm, &pin);
+                    if (rc) return rc;
+                    if (pin == JS_ATOM_NULL) {
+                        /* THE REMAINDER — see node_ns_pin: the argument is none of the strings either walk
+                           compares against, so both fall through to their own "Return null", and `DOMString?`
+                           is what each member returns it as. */
+                        *presult = JS_NULL;
+                        return JS_STEP_DONE;
+                    }
+                    /* THE PIN IS THIS FLOW'S EXAMPLE FROM HERE ON, which is what CLAUDE.md's §Solver-half
+                       calls concretize-on-pin and is why it is written into `example` rather than into a
+                       fourth local: the flow has determined the value by running a real comparison this run
+                       made, so every step below reads it exactly as it reads a value the page computed. */
+                    example = JS_AtomToString(ctx, pin);
+                    JS_FreeAtom(ctx, pin);
+                    if (JS_IsException(example)) return JS_STEP_ABRUPT;
+                }
             }
             DCHECK(!JS_IsObject(example),
                    "a namespace argument's unknown carries an OBJECT as its concrete example — an example is "

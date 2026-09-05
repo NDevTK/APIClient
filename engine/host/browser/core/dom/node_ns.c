@@ -257,3 +257,138 @@ const char *node_locate_namespace_prefix(lxb_dom_element_t *element, const char 
     *out_len = 0;
     return NULL;
 }
+
+/* DOM §4.4's TWO WALKS READ AS A LIST OF QUESTIONS RATHER THAN AS AN ANSWER — see node_ns.h for who needs
+ * that and why the walk itself cannot serve them.
+ *
+ * IT SITS HERE, AT THE WALKS, BECAUSE THE ONE WAY IT CAN BE WRONG IS BY DISAGREEING WITH THEM. Every entry
+ * below is the argument-side operand of an `ns_eq`/`ns_eq_n` call above, and each names the call it lists;
+ * a site added to a walk and not to this list is a world its member never asks about, which is silent —
+ * the member answers null and nothing anywhere says a question was skipped. Reading the two together is the
+ * whole of the defence, so a diff that adds a comparison to either walk adds a site here in the same hunk.
+ *
+ * DUPLICATES ARE LISTED AND ARE NOT A DEFECT. One prefix declared on two ancestors is two sites, so it is
+ * yielded twice — and because each question is filed under the string's own NAME rather than its rank, the
+ * second ask is the SAME question and the flow answers it from its own record instead of minting a second
+ * world. Collapsing them would need a set, and a set here would be a second fact about the tree to keep
+ * true; the mechanism already makes the repetition free. */
+enum { NS_CAND_XML = 0, NS_CAND_XMLNS, NS_CAND_ELEMENT, NS_CAND_ATTR, NS_CAND_END };
+
+void node_ns_candidates_begin(NodeNsCandidates *it, lxb_dom_node_t *node, bool prefixes)
+{
+    DCHECK(it != NULL,
+           "DOM §4.4's candidate listing was begun with nowhere to keep its cursor — the cursor is a position "
+           "in the page's own tree and is the caller's C local, so an absent one is a caller that has nothing "
+           "to enumerate into");
+    it->el       = node_ns_start_element(node);
+    it->attr     = NULL;
+    it->prefixes = prefixes;
+    /* Locate a namespace's steps 1 and 2 are asked ONCE and not per level. The walk re-asks them at every
+       element because the standard's recursion does, and they are level-INDEPENDENT — an argument that is
+       "xml" returns at the first element and never reaches the second — so a second listing of them would be
+       one question asked twice with the first answer already recorded. Locate a namespace prefix has no such
+       steps, which is why it starts at the element. */
+    it->site     = prefixes ? NS_CAND_XML : NS_CAND_ELEMENT;
+}
+
+const char *node_ns_candidates_next(NodeNsCandidates *it, size_t *out_len)
+{
+    DCHECK(it != NULL && out_len != NULL,
+           "DOM §4.4's candidate listing was advanced with no cursor or nowhere to write a LENGTH — every "
+           "string it yields is a borrowed slice of the tree and is not NUL-terminated, exactly like the "
+           "walks' own answers");
+    *out_len = 0;
+    for (;;) {
+        switch (it->site) {
+        /* Locate a namespace step 1 — `ns_eq(prefix, prefix_len, "xml")`. */
+        case NS_CAND_XML:
+            it->site = NS_CAND_XMLNS;
+            *out_len = strlen("xml");
+            return "xml";
+
+        /* Locate a namespace step 2 — `ns_eq(prefix, prefix_len, "xmlns")`. */
+        case NS_CAND_XMLNS:
+            it->site = NS_CAND_ELEMENT;
+            *out_len = strlen("xmlns");
+            return "xmlns";
+
+        /* THE ELEMENT'S OWN NAME — locate a namespace step 3's `ns_eq_n(px, pxlen, prefix, prefix_len)`, and
+           locate a namespace prefix step 1's `ns_eq_n(ens, enslen, ns, ns_len)`. Both are GUARDED on the
+           element's namespace being non-null and the prefix walk's is additionally guarded on the element
+           having a prefix at all, and those guards are transcribed rather than dropped: a site the walk does
+           not reach is a world that cannot exist, and listing it would mint a sibling standing on a
+           comparison the algorithm never makes. */
+        case NS_CAND_ELEMENT: {
+            lxb_dom_element_t *el = it->el;
+            const char *ns;
+            size_t nslen = 0;
+
+            if (el == NULL) { it->site = NS_CAND_END; return NULL; }
+            it->site = NS_CAND_ATTR;
+            it->attr = lxb_dom_element_first_attribute(el);
+            ns = element_ns(el, &nslen);
+            if (ns == NULL) break;
+            if (it->prefixes) {
+                size_t pxlen = 0;
+                const char *px = element_prefix(el, &pxlen);
+
+                if (px == NULL || pxlen == 0) break;
+                *out_len = pxlen;
+                return px;
+            }
+            *out_len = nslen;
+            return ns;
+        }
+
+        /* THE DECLARATIONS ON THAT ELEMENT — locate a namespace step 4's first shape, whose comparison is
+           element_declaration's `ns_eq_n(al, allen, prefix, prefix_len)`, and locate a namespace prefix step
+           2's `ns_eq_n(val, vlen, ns, ns_len)`. THE TWO DO NOT ASK THE SAME THING OF THE ATTRIBUTE and the
+           asymmetry is the standard's: step 4 tests the attribute's NAMESPACE as well as its namespace
+           prefix, and step 2 tests only the prefix. node_locate_namespace_prefix's own note says a reader who
+           smooths that has changed which attribute a page's `lookupPrefix` finds, and it is the same here.
+           A ZERO-LENGTH LOCAL NAME OR VALUE IS SKIPPED because the walk's comparison cannot match one: the
+           argument reaching either walk from a member is non-empty (the empty string was mapped to null at
+           the member's step 1), and `ns_eq_n` answers false whenever the lengths differ. */
+        case NS_CAND_ATTR: {
+            lxb_dom_attr_t *a = it->attr;
+            const lxb_char_t *apx;
+            size_t apxlen = 0;
+
+            if (a == NULL) {
+                it->el   = parent_element(lxb_dom_interface_node(it->el));
+                it->site = NS_CAND_ELEMENT;
+                break;
+            }
+            it->attr = lxb_dom_element_next_attribute(a);
+            apx = dom_attr_prefix(a, &apxlen);
+            if (!ns_eq((const char *)apx, apxlen, "xmlns")) break;
+            if (it->prefixes) {
+                const lxb_char_t *ans, *al;
+                size_t anslen = 0, allen = 0;
+
+                ans = dom_attr_ns(a, &anslen);
+                if (!ns_eq((const char *)ans, anslen, XML_NS_XMLNS_NAMESPACE)) break;
+                al = lxb_dom_attr_local_name(a, &allen);
+                if (al == NULL || allen == 0) break;
+                *out_len = allen;
+                return (const char *)al;
+            } else {
+                const lxb_char_t *val;
+                size_t vlen = 0;
+
+                val = lxb_dom_attr_value(a, &vlen);
+                if (val == NULL || vlen == 0) break;
+                *out_len = vlen;
+                return (const char *)val;
+            }
+        }
+
+        /* Both walks' own "Return null", which is the answer for an argument that matched no site above. */
+        default:
+            DCHECK(it->site == NS_CAND_END,
+                   "DOM §4.4's candidate listing stood at a comparison site it does not name — the sites are "
+                   "the walks' own and this cursor is written nowhere but here");
+            return NULL;
+        }
+    }
+}
