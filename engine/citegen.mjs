@@ -1842,6 +1842,25 @@ const OTHER_SPECS = [
      a standard whose text this audit does not hold; an index row would be better and is a fetch away
      (drafts.csswg.org/resize-observer-1/, a bikeshed document). */
   "resize observer",
+  /* GEOMETRY INTERFACES AND INTERSECTION OBSERVER — the two standards `resize observer` above left behind, and
+     they are here because a correct citation of one was reported as a WRONG one. This tree spells them
+     `GEOMETRY INTERFACES §3` and `Intersection Observer §2.3` — the number WITH its standard, which is what
+     CLAUDE.md asks for — and neither tail word was on any list, so every one of them fell to its file's
+     dominant anchor. The vote is not a coverage gap here, it is the wrong-answer shape: `core/platform.c`'s
+     geometry rows sit two hundred lines from its HR-TIME row, so `§4 "The DOMRectList interface"` was judged
+     out of High Resolution Time, whose §4 is "Time Origin"; the same sentence in `test_forced.c` was judged
+     out of Web IDL, whose §4 is "Common definitions". Both are real numbers of documents Geometry never
+     names, and because the citation STATES ITS TITLE the title check then reported the correct citation as a
+     mismatch — an ACCUSATION manufactured by a vote, which is the one direction this audit must not fail in.
+     A bare `§4` in the same place is the same mis-vote with nothing printed.
+     THE TITLE IS WHAT MADE IT VISIBLE AND THE MIS-VOTE PREDATED IT: `geometry/dom_rect_list.h` has opened with
+     `GEOMETRY INTERFACES §4` for as long as it has existed, silently filed under whatever its neighbours cite.
+     Not indexed, so both are counted and never checked, which is the honest state for standards whose text
+     this audit does not hold; index rows would be better and are a fetch away — Geometry Interfaces is a
+     bikeshed document that MOVED, `drafts.fxtf.org/geometry/` now answering a redirect stub to
+     `drafts.csswg.org/geometry/`, and Intersection Observer is `w3c.github.io/IntersectionObserver/`, 372 KB
+     of rendered output with numbered `secno` headings and no `respecConfig`. */
+  "geometry interfaces", "intersection observer",
   /* COOPERATIVE SCHEDULING OF BACKGROUND TASKS (requestIdleCallback), AND IT IS THE FIRST ENTRY ON THIS LIST
      WHOSE INDEX ROW IS NOT "A FETCH AWAY" — which is the sentence three neighbours above this one carry, so
      it is worth stating why it is false here rather than leaving the next reader to re-derive it.

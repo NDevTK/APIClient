@@ -55,10 +55,14 @@
 /* Declared ONCE PER AGENT — the class, the member declarations and §5.3's task machine. It also declares
    §4.2.2's component, which shares this row on core/platform.h's three columns. */
 void performance_observer_init(JSContext *ctx);
-/* §3.7's per-realm objects and this realm's §4/§5 state; declared into core/realm.h's intrinsic list. */
-void performance_observer_install_protos(JSContext *ctx);
-/* §3.7.1's interface object on this realm's global. */
-void performance_observer_install(JSContext *ctx, JSValueConst global);
+/* Web IDL §3.7's per-realm objects for PERFORMANCE TIMELINE §4 and §4.2.2 — the two interface prototype
+   objects, the two Web IDL §3.7.1 interface objects, Web IDL §3.8's property references for both names, and
+   this realm's §4/§5 state; declared into core/realm.h's intrinsic list.
+   IT IS ONE FUNCTION AND NOT TWO because Web IDL §3.8's `define the global property references` is "To define
+   the global property references on target, given realm realm" and names no Document, and §4 is
+   `[Exposed=(Window,Worker)]`: an interface object placed from core/platform.c's per-document column reaches
+   no realm that has no Document over it. §4.2.2's name was already placed here; §4's was not. */
+void performance_observer_install_realm(JSContext *ctx);
 void performance_observer_free(JSRuntime *rt);
 
 /* WHICH ENTRY TYPES THIS BUILD SUPPORTS — §4.5's "the sequence of strings among the registry that are

@@ -3,10 +3,14 @@
  *
  * IT IS A COMPONENT OF ITS OWN, IN A SPEC-NAMED DIRECTORY, because a rectangle belongs to NEITHER of the
  * standards that will read it: CSSOM VIEW §6 returns one from `getBoundingClientRect`, Intersection Observer
- * §3.1 puts three on every entry, Resize Observer's box sizes are built out of them, and Geometry Interfaces
- * is where all three go to find out what one IS. Writing it inside the first caller would put §3's own
- * algorithms — the NaN-safe edges, `fromRect`, the default `toJSON` — behind whichever component happened to
- * need a rectangle first.
+ * §2.3 "The IntersectionObserverEntry interface" puts three on every entry, Resize Observer's box sizes are
+ * built out of them, and Geometry Interfaces is where all three go to find out what one IS.
+ * THAT NUMBER READ §3.1, which is Intersection Observer "Internal Slot Definitions" — internal slots of a
+ * Document, an Element and an IntersectionObserver, and no entry and no rectangle in it. The declaration of
+ * `rootBounds`, `boundingClientRect` and `intersectionRect` is §2.3's, which is what this same header already
+ * said sixty lines down: one equation written at two sites with the checkable half wrong.
+ * Writing it inside the first caller would put §3's own algorithms — the NaN-safe edges, `fromRect`, the
+ * default `toJSON` — behind whichever component happened to need a rectangle first.
  *
  * NOTHING HERE IS LAYOUT. §3 defines a rectangle as four numbers and four derivations over them; it says
  * nothing about where a box is, and it is complete without a layout engine. That is why this component has no
@@ -20,13 +24,18 @@
 #include "quickjs.h"
 
 /* Declared once per AGENT: the two classes, the constructors, the statics and the four setters. It REGISTERS
-   the per-realm prototype install, so no host has a line to remember. */
+   the per-realm install below — which is now the whole of what a realm owes this component, prototypes and
+   interface objects together — so no host has a line to remember. */
 void dom_rect_init(JSContext *ctx);
-/* §3's two interface prototype objects for ONE realm, chained `DOMRect.prototype -> DOMRectReadOnly.prototype`
-   the way the IDL's `interface DOMRect : DOMRectReadOnly` says. */
-void dom_rect_install_protos(JSContext *ctx);
-/* The two interface objects on one realm's global. */
-void dom_rect_install(JSContext *ctx, JSValueConst global);
+/* Geometry Interfaces §3's two interface prototype objects for ONE realm, chained
+   `DOMRect.prototype -> DOMRectReadOnly.prototype` the way the IDL's `interface DOMRect : DOMRectReadOnly`
+   says, their two Web IDL §3.7.1 interface objects, and Web IDL §3.8's property references for all THREE
+   names this component owes a realm — `DOMRectReadOnly`, `DOMRect` and §3's `LegacyWindowAlias=SVGRect`.
+   IT IS ONE FUNCTION AND NOT TWO because §3.8's `define the global property references` is "To define the
+   global property references on target, given realm realm" and names no Document: an interface object placed
+   from core/platform.c's per-document column reaches no realm that has no Document over it, and §3 is
+   `[Exposed=(Window,Worker)]`. */
+void dom_rect_install_realm(JSContext *ctx);
 void dom_rect_free(void);
 
 /* §3's DOMRect CONSTRUCTOR STEPS, reached from C — "let rect be a new DOMRect, set its four internal member

@@ -107,7 +107,7 @@ static JSValue po_reg_list(JSContext *ctx)
 
     DCHECK(JS_IsArray(list),
            "a realm was asked for §2's list of registered performance observer objects before "
-           "performance_observer_install_protos built one — it is built EAGERLY with the realm precisely so "
+           "performance_observer_install_realm built one — it is built EAGERLY with the realm precisely so "
            "that no flow's own `observe` is what creates it");
     return list;
 }
@@ -827,7 +827,7 @@ void performance_observer_init(JSContext *ctx)
     g_id_take = idl_method_id(ctx, NULL, 0, js_po_take, 0);
     g_id_disconnect = idl_method_id(ctx, NULL, 0, js_po_disconnect, 0);
 
-    realm_declare_intrinsic(performance_observer_install_protos);
+    realm_declare_intrinsic(performance_observer_install_realm);
     g_ready = 1;
 
     agent_state_flag("performance_observer", &g_ready, "the declaration latch");
@@ -847,14 +847,32 @@ void performance_observer_init(JSContext *ctx)
     agent_state_id("performance_observer", &g_id_disconnect, "§4.4's disconnect declaration");
 }
 
-void performance_observer_install_protos(JSContext *ctx)
+/* PERFORMANCE TIMELINE §4 The PerformanceObserver interface, FOR ONE REALM — its per-global state, its
+   Web IDL §3.7.3 interface prototype object, its §3.7.1 interface object and §3.8's property reference for
+   its name, plus §4.2.2's whole realm half through the call below.
+
+   THE INTERFACE OBJECT IS HERE BECAUSE WEB IDL §3.8 IS GIVEN A REALM. `define the global property references`
+   is "To define the global property references on target, given realm realm", and its step 1 is "Let
+   interfaces be a list that contains every interface that is exposed in realm" — the population is a REALM's
+   and the algorithm names no Document. §4 declares `[Exposed=(Window,Worker)]`, so a realm whose global object
+   implements a worker scope owes the name; while it was placed from core/platform.c's per-DOCUMENT column,
+   which such a realm never reaches, it got nothing, and nor did a Window realm until a Document was installed
+   over it. The prototype is in hand here, so the separate per-document entry's JS_GetClassProto re-read is
+   gone: re-reading it would be a second answer to a question this function has just settled.
+
+   §4.2.2's SIBLING WAS ALREADY RIGHT AND IS WHY THIS IS A MERGE RATHER THAN A MOVE.
+   performance_observer_entry_list_install places `PerformanceObserverEntryList` through the same door on this
+   realm's own global and is called from HERE — so of the two names core/platform.c's `performance_observer`
+   row witnesses, one already reached every realm and one reached only a Window with a Document over it. That
+   asymmetry is the whole defect, and it was invisible from the row, which names both. */
+void performance_observer_install_realm(JSContext *ctx)
 {
-    JSValue proto, prev, list, types;
+    JSValue proto, prev, list, types, ctor, global;
     int i, j;
 
     DCHECK(g_class != 0, "a realm asked for PerformanceObserver.prototype before the class was declared");
     prev = JS_GetClassProto(ctx, g_class);
-    DCHECK(JS_IsNull(prev), "performance_observer_install_protos ran twice in one realm");
+    DCHECK(JS_IsNull(prev), "performance_observer_install_realm ran twice in one realm");
     JS_FreeValue(ctx, prev);
     performance_observer_entry_list_install(ctx);
 
@@ -905,24 +923,22 @@ void performance_observer_install_protos(JSContext *ctx)
     idl_install_method(ctx, proto, "observe", g_id_observe);
     idl_install_method(ctx, proto, "disconnect", g_id_disconnect);
     idl_install_method(ctx, proto, "takeRecords", g_id_take);
-    JS_SetClassProto(ctx, g_class, proto);
-}
 
-void performance_observer_install(JSContext *ctx, JSValueConst global)
-{
-    JSValue ctor, proto;
-
+    /* WEB IDL §3.7.1's INTERFACE OBJECT AND §3.8's STEP 3.1.3 FOR ITS NAME. §4 declares no
+       [LegacyWindowAlias], so step 3.1.4 has nothing to do for this interface. */
     DCHECK(g_id_ctor >= 0, "PerformanceObserver was installed before performance_observer_init declared it");
     ctor = idl_step_constructor(ctx, "PerformanceObserver", g_id_ctor);
     CHECK(!JS_IsException(ctor), "the PerformanceObserver interface object could not be allocated");
-    proto = JS_GetClassProto(ctx, g_class);
-    DCHECK(!JS_IsNull(proto), "PerformanceObserver was installed in a realm that never ran its proto build");
     JS_SetConstructor(ctx, ctor, proto);
-    JS_FreeValue(ctx, proto);
-    /* §4's `[SameObject] static readonly attribute FrozenArray<DOMString> supportedEntryTypes` — a STATIC
-       attribute, so §3.7.6 puts it on the INTERFACE OBJECT rather than on the prototype. */
+    /* PERFORMANCE TIMELINE §4.5's `[SameObject] static readonly attribute FrozenArray<DOMString>
+       supportedEntryTypes` — a STATIC attribute, so Web IDL §3.7.6 Attributes puts it on the INTERFACE OBJECT
+       rather than on the prototype. */
     idl_install_accessor(ctx, ctor, "supportedEntryTypes", js_po_supported, 0, -1);
+    global = JS_GetGlobalObject(ctx);
     idl_define_global_property_reference(ctx, global, "PerformanceObserver", ctor);
+    JS_FreeValue(ctx, global);
+
+    JS_SetClassProto(ctx, g_class, proto);   /* the realm owns it from here */
 }
 
 void performance_observer_free(JSRuntime *rt)

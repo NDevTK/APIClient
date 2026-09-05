@@ -655,12 +655,12 @@ static void r_simple_dialogs(JSRuntime *rt) { (void)rt; simple_dialogs_free(); }
 /* ---- the document half ---------------------------------------------------------------------------------- */
 
 static void i_form_data(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; form_data_install(c, g); }
+static void i_blob(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; blob_install(c, g); }
 /* THE ADDRESS, NOT THE ORIGIN. `window.origin` is §4.7's serialization OF the address, so a host that handed
    this the origin got a `location`-free Window whose own `origin` was re-derived from a string that was
    already one — and the WPT runner, the one host whose whole job is measuring fidelity, did exactly that. */
 static void i_window(JSContext *c, JSValueConst g, const PlatformDocument *d) { window_install(c, g, d->url); }
-static void i_performance_observer(JSContext *c, JSValueConst g, const PlatformDocument *d)
-{ (void)d; performance_observer_install(c, g); }
+static void i_file_reader(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; file_reader_install(c, g); }
 static void i_navigable(JSContext *c, JSValueConst g, const PlatformDocument *d) { navigable_install(c, g, d->origin); }
 static void i_timer(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; timer_install(c, g); }
 static void i_window_message(JSContext *c, JSValueConst g, const PlatformDocument *d) { window_message_install(c, g, d->origin); }
@@ -675,7 +675,6 @@ static void i_simple_dialogs(JSContext *c, JSValueConst g, const PlatformDocumen
 static void i_fetch(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; fetch_install(c, g); }
 static void i_abort(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; abort_install(c, g); }
 static void i_observable(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; observable_install(c, g); }
-static void i_dom_rect(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; dom_rect_install(c, g); }
 static void i_dom_rect_list(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; dom_rect_list_install(c, g); }
 static void i_intersection_observer(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; intersection_observer_install(c, g); }
 static void i_resize_observer(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; resize_observer_install(c, g); }
@@ -747,16 +746,7 @@ static const PlatformComponent PLATFORM[] = {
     { "queuing_strategy",    d_queuing_strategy,    NULL },
     { "writable_stream",     d_writable_stream,     NULL },
     { "transform_stream",    d_transform_stream,    NULL },
-    /* NO DOCUMENT HALF. File API §3 "The Blob Interface and Binary Data" declares Blob and File API §4 "The
-       File Interface" declares File, both `[Exposed=(Window,Worker)]`, and Web IDL §3.8 Platform objects
-       implementing interfaces is "To define the global property references on target, given realm realm" whose
-       step 1 is "Let interfaces be a list that contains every interface that is exposed in realm" — a REALM,
-       with no Document in the algorithm. blob_install_protos now places both interface objects beside the two
-       prototypes it already built, so a realm that reaches no platform_document_install gets both. This row
-       also DECLARES File API §5 "The FileList Interface" (blob_init calls file_list_init), whose own realm intrinsic
-       had been placing its interface object that way all along — which is the shape the two above are now on
-       rather than a new one. */
-    { "blob",                d_blob,                NULL },
+    { "blob",                d_blob,                i_blob },
     /* NO DOCUMENT HALF. Encoding §7.2 Interface TextDecoder, §7.4 Interface TextEncoder, §7.5 Interface
        TextDecoderStream and §7.6 Interface TextEncoderStream all declare `[Exposed=*]`, and Web IDL §3.8
        Platform objects implementing interfaces is "To define the global property references on target, given
@@ -787,8 +777,16 @@ static const PlatformComponent PLATFORM[] = {
        rows above them and fixed from both sides. It reads §3's record (PerfEntry's `entryType` and `name`) at
        §5.1 step 3 and §5.5, so it follows `performance_entry`; and USER TIMING §2.1.1 step 2 calls §5.1 while
        user_timing_init declares `mark` as a §4.5 supported entry type, so `user_timing` follows THIS. Its own
-       prototype chains to %Object.prototype% — §4 inherits nothing — so it adds no constraint of its own. */
-    { "performance_observer", d_performance_observer, i_performance_observer, r_performance_observer },
+       prototype chains to %Object.prototype% — §4 inherits nothing — so it adds no constraint of its own.
+
+       NO DOCUMENT HALF. Performance Timeline §4 and §4.2.2 both declare `[Exposed=(Window,Worker)]`, and Web
+       IDL §3.8 Platform objects implementing interfaces is "To define the global property references on
+       target, given realm realm" whose step 1 is "Let interfaces be a list that contains every interface that
+       is exposed in realm" — a REALM, with no Document in the algorithm. §4.2.2's name was ALREADY placed by
+       this component's realm intrinsic and §4's was not, so one of the two names this row witnesses reached
+       every realm and the other reached only a Window with a Document over it; both go through the realm
+       intrinsic now. */
+    { "performance_observer", d_performance_observer, NULL,      r_performance_observer },
     { "user_timing",         d_user_timing,         NULL,        r_user_timing },
     /* HTML §7.2.6.5's NavigationHistoryEntry, whose prototype chains to §2.7's and whose CLASS is what
        §7.2.7.1's `required NavigationHistoryEntry from` brands against — so it is declared before `event`,
@@ -970,14 +968,7 @@ static const PlatformComponent PLATFORM[] = {
        declares — so a row before it would build a FileReader whose events had no interface. It reads §3's
        Blob (its byte sequence, its type and the source identity a File carries), which the `blob` row far
        above has already declared. */
-    /* NO DOCUMENT HALF. File API §6.2 "The FileReader API" declares FileReader `[Exposed=(Window,Worker)]`,
-       and Web IDL §3.8 Platform objects implementing interfaces is given a REALM with no Document in the
-       algorithm, so file_reader_install_proto places the interface object beside the prototype it already
-       built. File API §6.5.1 "The FileReaderSync API" is `[Exposed=(DedicatedWorker,SharedWorker)]` and is
-       honestly
-       ABSENT — core/file/file_reader.c states that at its own banner, and this row does not acquire it by
-       reaching a worker realm. */
-    { "file_reader",         d_file_reader,         NULL,        r_file_reader },
+    { "file_reader",         d_file_reader,         i_file_reader, r_file_reader },
     { "location",            d_location,            NULL,        r_location },
     /* §7.4.1's state machine BEFORE §7.2.5's History, whose every member reads the record it builds. */
     { "session_history",     d_session_history,     NULL,        r_session_history },
@@ -1050,27 +1041,26 @@ static const PlatformComponent PLATFORM[] = {
        already built: abort_init allocates a symbol and two classes, and its per-realm install chains
        AbortSignal.prototype to EventTarget.prototype, whose row is far above both of these. */
     { "abort",               d_abort,               i_abort },
-    /* THE DOCUMENT HALF SURVIVES HERE FOR ONE MEMBER AND NO INTERFACE OBJECT, which is why this row keeps a
-       third column where `blob` and `file_reader` above lost theirs. Fetch §5.1 "Headers class", §5.4 "Request
-       class" and §5.5 "Response class" all declare `[Exposed=(Window,Worker)]`, and Web IDL §3.8 Platform
-       objects implementing interfaces is "To define the global property references on target, given realm
-       realm" whose step 1 is "Let interfaces be a list that contains every interface that is exposed in realm"
-       — a REALM, with no Document in the algorithm — so each of the three is now minted by its own component's
-       per-realm intrinsic. What fetch_install still does is §5.6 "Fetch methods"' `fetch`, which §5.6 declares
-       on `partial interface mixin WindowOrWorkerGlobalScope`: a MEMBER, so Web IDL §3.7.7 Operations over a
-       [Global] object's own interface chain rather than a Web IDL §3.8 property reference, and
-       browser/idl_exposure.h answers for it out of IDL_MEMBER_EXPOSURE and not IDL_EXPOSURE. A worker realm is
-       owed it and does not get it — core/workers/worker_global_scope.c's item (7) records that by name, this
-       component's `fetch` included — and taking this column away with the three interface objects would remove
-       the member from EVERY realm, which the PLATFORM_WITNESS row `{ "fetch", "fetch" }` below is what
-       catches. */
     { "fetch",               d_fetch,               i_fetch,     r_fetch },
     { "observable",          d_observable,          i_observable },
     /* GEOMETRY INTERFACES §3 and §4, before the component that returns one. Neither reads anything of the DOM's
        — a rectangle is four numbers — so their position is decided only by their CONSUMER: CSSOM VIEW §6's
        `getBoundingClientRect` is installed on Element.prototype by the row below, and it mints a DOMRect out of
-       the element's own realm, so both prototypes must already be in every realm the list has built. */
-    { "dom_rect",            d_dom_rect,            i_dom_rect,  r_dom_rect },
+       the element's own realm, so both prototypes must already be in every realm the list has built.
+
+       ONE OF THE TWO HAS NO DOCUMENT HALF AND THE OTHER STILL DOES, AND THE EXPOSURE SETS ARE WHY. Web IDL
+       §3.8 Platform objects implementing interfaces is "To define the global property references on target,
+       given realm realm" whose step 1 is "Let interfaces be a list that contains every interface that is
+       exposed in realm" — a REALM, with no Document in the algorithm. Geometry Interfaces §3 "The DOMRect
+       interfaces" declares DOMRectReadOnly and DOMRect `[Exposed=(Window,Worker)]`, so a realm that reaches no
+       platform_document_install is owed both names and got neither; dom_rect.c's own realm intrinsic now
+       places them, and Geometry Interfaces §3's `LegacyWindowAlias=SVGRect` with them.
+       Geometry Interfaces §4 "The DOMRectList interface" declares DOMRectList `[Exposed=Window]`, so the ONLY
+       realms that owe the name are the ones a Document is installed over — its per-document column is not a
+       defect and moving it would be a change with nothing behind it. The two rows sit one line apart in one
+       directory under one banner, which is exactly the reading that would take both; the exposure sets are the
+       thing that decides, and browser/idl_exposure.h states each straight out of the corpus. */
+    { "dom_rect",            d_dom_rect,            NULL,        r_dom_rect },
     { "dom_rect_list",       d_dom_rect_list,       i_dom_rect_list, r_dom_rect_list },
     { "element",             d_element,             NULL,        r_element },
     /* CSSOM §8.1 The CSS.escape() Method's `CSS` NAMESPACE and CSS Conditional Rules 3 §7.5 The CSS namespace,

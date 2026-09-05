@@ -448,17 +448,35 @@ void dom_rect_init(JSContext *ctx)
     agent_state_class("dom_rect", &g_rect_class, "§4's DOMRect class");
     agent_state_id("dom_rect", &g_id_ctor_ro, "§3's constructor declaration");
     agent_state_id("dom_rect", &g_id_ctor_rect, "§4's constructor declaration");
-    realm_declare_intrinsic(dom_rect_install_protos);
+    realm_declare_intrinsic(dom_rect_install_realm);
 }
 
-void dom_rect_install_protos(JSContext *ctx)
+/* Web IDL §3.7.3 Interface prototype object's OBJECTS FOR GEOMETRY INTERFACES §3 The DOMRect interfaces, THEIR
+   §3.7.1 INTERFACE OBJECTS, AND WEB IDL §3.8's PROPERTY REFERENCES FOR ALL THREE NAMES — FOR ONE REALM.
+
+   THE INTERFACE OBJECTS ARE HERE BECAUSE WEB IDL §3.8 IS GIVEN A REALM. Web IDL §3.8 Platform objects
+   implementing interfaces' `define the global property references` is "To define the global property
+   references on target, given realm realm", and its step 1 is "Let interfaces be a list that contains every
+   interface that is exposed in realm" — the population is a REALM's and the algorithm names no Document.
+   Geometry Interfaces §3 declares both interfaces `[Exposed=(Window,Worker)]`, so a realm whose global object
+   implements a worker scope owes both names; while they were placed from core/platform.c's per-DOCUMENT
+   column, which such a realm never reaches, it got neither, and nor did a Window realm until a Document was
+   installed over it. Both prototypes are in hand here, so the separate per-document entry's two
+   JS_GetClassProto re-reads are gone: re-reading either would be a second answer to a question this function
+   has just settled.
+
+   THE TWO JS_SetClassProto HANDOVERS MOVED TO THE END. They were early, and `rp` was then built over an `rop`
+   whose only owner was the class slot it had already been given to — correct, and a borrow-after-transfer that
+   the two interface-object mints would have extended across twice as many lines. The locals own their objects
+   until the realm does; this is the same repair core/xhr/xml_http_request.c made for §3's three prototypes. */
+void dom_rect_install_realm(JSContext *ctx)
 {
-    JSValue rop, rp, prev;
+    JSValue rop, rp, prev, ro_ctor, ctor, global;
     int i;
 
     DCHECK(g_ro_class != 0, "a realm asked for DOMRectReadOnly.prototype before the interface was declared");
     prev = JS_GetClassProto(ctx, g_ro_class);
-    DCHECK(JS_IsNull(prev), "dom_rect_install_protos ran twice in one realm");
+    DCHECK(JS_IsNull(prev), "dom_rect_install_realm ran twice in one realm");
     JS_FreeValue(ctx, prev);
 
     rop = JS_NewObject(ctx);
@@ -467,7 +485,6 @@ void dom_rect_install_protos(JSContext *ctx)
     for (i = 0; i < DR_MEMBER_COUNT; i++)
         idl_install_accessor(ctx, rop, DR_MEMBER_NAMES[i], js_dr_get, i, -1);
     idl_install_method(ctx, rop, "toJSON", g_id_tojson);
-    JS_SetClassProto(ctx, g_ro_class, rop);
 
     /* `interface DOMRect : DOMRectReadOnly` — the prototype chain IS the inheritance. */
     rp = JS_NewObjectProto(ctx, rop);
@@ -479,33 +496,60 @@ void dom_rect_install_protos(JSContext *ctx)
        chain, which is what makes them one implementation rather than two. */
     for (i = DR_X; i <= DR_HEIGHT; i++)
         idl_install_accessor(ctx, rp, DR_MEMBER_NAMES[i], js_dr_get, i, g_id_set[i]);
-    JS_SetClassProto(ctx, g_rect_class, rp);
-}
 
-void dom_rect_install(JSContext *ctx, JSValueConst global)
-{
-    JSValue proto, ro_ctor, ctor;
-
-    proto = JS_GetClassProto(ctx, g_ro_class);
-    DCHECK(!JS_IsNull(proto), "DOMRectReadOnly was installed in a realm that never ran its prototype install");
+    global = JS_GetGlobalObject(ctx);
+    DCHECK(g_id_ctor_ro >= 0 && g_id_ctor_rect >= 0,
+           "Geometry Interfaces §3's interface objects were built before dom_rect_init declared their "
+           "constructors");
     ro_ctor = idl_step_constructor(ctx, "DOMRectReadOnly", g_id_ctor_ro);
-    JS_SetConstructor(ctx, ro_ctor, proto);
+    CHECK(!JS_IsException(ro_ctor), "the DOMRectReadOnly interface object could not be allocated");
+    JS_SetConstructor(ctx, ro_ctor, rop);
     idl_install_method(ctx, ro_ctor, "fromRect", g_id_from_ro);
-    JS_FreeValue(ctx, proto);
 
-    proto = JS_GetClassProto(ctx, g_rect_class);
-    DCHECK(!JS_IsNull(proto), "DOMRect was installed in a realm that never ran its prototype install");
     ctor = idl_step_constructor(ctx, "DOMRect", g_id_ctor_rect);
-    JS_SetConstructor(ctx, ctor, proto);
+    CHECK(!JS_IsException(ctor), "the DOMRect interface object could not be allocated");
+    JS_SetConstructor(ctx, ctor, rp);
     idl_install_method(ctx, ctor, "fromRect", g_id_from_rect);
-    /* §3.7.1: the interface object of an interface that inherits has the inherited interface object as its
-       [[Prototype]], which is what makes `DOMRect.fromRect` its own and `Object.getPrototypeOf(DOMRect)` the
-       other constructor. */
+    /* Web IDL §3.7.1 Interface object: the interface object of an interface that inherits has the inherited
+       interface object as its [[Prototype]], which is what makes `DOMRect.fromRect` its own and
+       `Object.getPrototypeOf(DOMRect)` the other constructor. */
     JS_SetPrototype(ctx, ctor, ro_ctor);
-    JS_FreeValue(ctx, proto);
 
-    idl_define_global_property_reference(ctx, global, "DOMRectReadOnly", ro_ctor);
-    idl_define_global_property_reference(ctx, global, "DOMRect", ctor);
+    /* WEB IDL §3.8's STEP 3.1.3 FOR EACH INTERFACE, THEN STEP 3.1.4 FOR THE ALIAS — in that order, because
+       that is the order the algorithm performs them in and the alias's value is the object step 3.1.3 has
+       already defined. Geometry Interfaces §3 declares `[Exposed=(Window,Worker), Serializable,
+       LegacyWindowAlias=SVGRect]` on DOMRect, and Web IDL §3.8 step 3.1.4 reads "If the interface is declared
+       with a [LegacyWindowAlias] extended attribute, and target implements the Window interface" — so the
+       alias is a WINDOW realm's alone where the interface it aliases is owed to a worker's as well.
+
+       `SVGRect` IS A NAME NO REALM CARRIED BEFORE THIS. Its IDL_GLOBAL_WINDOW row in
+       browser/idl_exposure.h and its entry in browser/platform_names.h were both generated from the same
+       declaration, and nothing in this tree ever placed it — so the alias half of §3.8 step 3.1 was unbuilt
+       for this interface while its step 3.1.3 half ran on every document. It is placed here rather than left
+       for a later diff because it is a step of the very algorithm this function now performs, over the very
+       object it has just built, and leaving it out would be finishing one arm of one loop.
+
+       THE DUP COMES FIRST BECAUSE THE DOOR CONSUMES. Both entries take ownership of the reference they are
+       handed (core/idl_args.h says so of the door and the alias follows it), so the second reference is taken
+       while `ctor` is still this function's, and the two names then share ONE object — which is what §3.8 step
+       3.1.4.1.1 means by defining the alias over `interfaceObject`: `SVGRect === DOMRect` is true in a
+       browser, `SVGRect.name` is "DOMRect", and `new SVGRect(...)` runs §3's constructor because it IS §3's
+       constructor.
+
+       NOTHING HERE DECIDES WHICH REALM GETS WHICH NAME. §3.8 step 3.1.4's Window condition is asked inside
+       idl_define_legacy_window_alias and §3.3.7 [Exposed] step 1 inside the door, off browser/idl_exposure.h's
+       generated rows — this component states three names and nothing about which realms they reach. */
+    {
+        JSValue alias = JS_DupValue(ctx, ctor);
+
+        idl_define_global_property_reference(ctx, global, "DOMRectReadOnly", ro_ctor);
+        idl_define_global_property_reference(ctx, global, "DOMRect", ctor);
+        idl_define_legacy_window_alias(ctx, global, "SVGRect", alias);
+    }
+    JS_FreeValue(ctx, global);
+
+    JS_SetClassProto(ctx, g_ro_class, rop);     /* the realm owns them from here */
+    JS_SetClassProto(ctx, g_rect_class, rp);
 }
 
 void dom_rect_free(void)
