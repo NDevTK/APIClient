@@ -8127,11 +8127,30 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        forbids by name: server-injected absent state stays SYMBOLIC and "a loaded `features.admin:false` must
        NOT concretize the gate, or the admin endpoint is lost". A concretized gate is not a slow arm — it is
        the headline claim of this tool, "learn the LOGGED-IN API surface WHILE LOGGED OUT", not happening.
-       AND IT IS A BIT THE SCHEDULE CANNOT MOVE, which is the whole reason it is worth a row of its own. The
+       IT IS A BIT THE SCHEDULE CANNOT MOVE ONLY IN ONE DIRECTION, AND THIS PARAGRAPH USED TO CLAIM BOTH. The
        fork census is keyed by the PREDICATE (solver/decide.h: "two forks at one source and operation are one
-       row however many call sites spell it"), so a row appears the instant the branch forks and stands there
-       whether the sibling ever runs, emits, parks or is outranked. A 1 here beside a 0 on `role-public`
-       separates (fork happened, arm did not arrive) from (no fork) with nothing left folded between them.
+       row however many call sites spell it"), so a row APPEARS the instant the branch forks — that half is
+       true and is what makes a 1 here mean the fork happened whatever the sibling later does. What stood
+       beside it was "and stands there whether the sibling ever runs, emits, parks or is outranked", and that
+       is FALSE: it enumerates four ways a row might be thought to vanish and misses the one the table is
+       built on. `g_fork_keys` is SPACE-SAVING at DECIDE_FORK_KEYS=64 rows, and ss_admit's third case is that
+       on a full table "the LIGHTEST row gives up its NAME" — so residency is a frequency question, and the
+       schedule decides which OTHER predicates run how often, which decides what evicts what.
+       AND THIS KEY IS THE MOST EVICTABLE ROW THE TABLE CAN HOLD, which is why the omission lands exactly
+       here rather than somewhere harmless. `state.admin` is minted ONCE (absent.c reads it at `var cfg = {
+       admin: state.admin };` and the object literal holds that one value), so every later `cfg.admin` site
+       shares its key and the FIRST fork is the only one that files: a flow that has decided the branch does
+       not re-ask it. A count-1 row admitted during boot is the argmin of a filling table, so it is the first
+       name evicted — the one row of this census whose absence a reader must NOT read as never-filed.
+       SO ABSENCE IS THREE STATES AND THE CENSUS PUBLISHES THE DISCRIMINATOR FOR TWO OF THEM. decide_fork_json
+       writes `_the most any site this table is not holding can have taken` on every object that has rows at
+       all, and its own note states the bit this row needs: "`spill == 0` IS `every key ever seen is
+       resident`". Above zero, absence is Space-Saving's silence and this row may say nothing about the
+       branch. And a fork whose question this engine could not SPELL is filed by decide_branch's `else` arm
+       into a DIFFERENT table under `~<shape>` — 26.9-37.2% of all forks on the real page fork_site_name
+       measures — so a branch can have forked, twice over, without its constraint key existing at all.
+       A 1 here beside a 0 on `role-public` still separates (fork happened, arm did not arrive) from (no
+       fork); what the clauses below add is that a 0 no longer collapses those last three into the first.
        THE NEEDLES ARE COMPOSED BY THE ENGINE'S OWN SPELLER, never typed as bytes: `concolic_ident_compose` is
        the ONE encoding every constraint key is written in, so a probe that restated `<len>:<bytes>` here would
        be the second copy of a fact concolic.c owns and would silently read a name nothing writes the day the
@@ -8156,12 +8175,27 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        says it did not, which is impossible if the composed key is right. That combination is the falsifier to
        check FIRST if this row ever reads 0 on a run where any arm of this gate emitted. */
     const char *bootfork_why = NULL; int bootfork_tt = 1;
+    /* THE ONE OF `boot-fork`'s FAILING STATES THAT SPEAKS FOR THE ROWS BELOW IT, hoisted because they
+       must ROUTE on it rather than on the row. A branch this run DECIDED has no sibling, so every
+       schedule sentence under `role-public` is about nothing; a branch that forked and was EVICTED
+       from a full census, or filed under a shape, has one — and reading those two as `no sibling`
+       is the misdirection this repair exists to remove, since it withholds the schedule reading in
+       exactly the state where the schedule is the answer. */
+    int bootfork_decided = 0;
     {
         char *fa = decide_fork_json();
         const char *sfield[1], *mfield[2], *bfield[1];
         char *sid, *mid, *key;
-        char q[256];
-        int qn;
+        char q[256], qs[128];
+        int qn, qsn;
+        /* THE CENSUS'S OWN STATEMENT ABOUT THE KEYS IT IS NOT HOLDING, and it is READ rather than assumed
+           because the alternative is this row accusing the engine of concretizing §Boot's gate on the
+           evidence that a 64-slot table evicted a count-1 name. It is decide_fork_json's own literal and is
+           the one fact this block restates from that file — see the residual under the ladder. */
+        static const char BOUND[] =
+            "\"_the most any site this table is not holding can have taken\":";
+        const char *bp;
+        int complete, named, resident, sited;
 
         CHECK(fa, "the fork census could not render — this row's whole claim is a function of that table, and "
                   "the question it answers (did §Boot's own gate fork) has no other statement anywhere in "
@@ -8188,18 +8222,77 @@ static int probes_eval(const char *js, Probe *out, int cap) {
                "the quoted constraint key did not fit its needle buffer — a truncated key is a PREFIX match "
                "against a table whose keys are length-prefixed, so this row would answer about some other "
                "predicate; raise q[] here");
-        fold_row(&bootfork_tt, &bootfork_why, !!strstr(fa, sid),
+        /* …AND THE SECOND NAMESPACE, WHICH IS THE ONE `keyed by the PREDICATE` DOES NOT REACH. decide_branch
+           files a predicate row only where `key != NULL`; where this engine cannot spell the question it
+           files into g_fork_sites under the value's DISPLAY SHAPE with decide.c's FORK_SITE_PREFIX written in
+           front at the emission. So this needle is composed from the same two literals the key is —
+           absent.c's ns_member_spell braces the src and concolic_exotic_get appends `.<field>`, which is
+           `{state}.admin` — and a hit on it says the branch FORKED while recording no constraint. */
+        qsn = snprintf(qs, sizeof qs, "\"~{%s}.%s\"", sfield[0], mfield[1]);
+        DCHECK(qsn > 0 && (size_t)qsn < sizeof qs,
+               "the quoted site shape did not fit its needle buffer — a truncated shape is a PREFIX match "
+               "against a table holding the page's own bytes, so this clause would answer about whatever "
+               "shape happens to extend it; raise qs[] here");
+        named    = !!strstr(fa, sid);
+        resident = !!strstr(fa, q);
+        sited    = !!strstr(fa, qs);
+        bp       = strstr(fa, BOUND);
+        /* decide_fork_json emits that member with EVERY non-empty object — its own comment says a member
+           that came and went "cannot be told from a member a PRODUCER PREDATING IT never wrote" — and rows
+           exist only where forks were counted. So rows without the bound is this probe and that writer
+           disagreeing about the object's shape, not a census with nothing to say. */
+        DCHECK(!named || bp != NULL,
+               "the fork census published ROWS and not the bound on the keys it is not holding — that member "
+               "is written with every non-empty object precisely so a reader can tell an EVICTED key from one "
+               "never seen, so its absence beside rows means this probe is reading a census shape "
+               "decide_fork_json no longer writes, and the clauses below would silently go back to reading "
+               "Space-Saving's silence as a concretized gate");
+        complete = bp != NULL && strtol(bp + sizeof BOUND - 1, NULL, 10) == 0;
+        fold_row(&bootfork_tt, &bootfork_why, named,
                  "NO PREDICATE OVER THE `state` SOURCE FORKED IN THIS RUN: the fork census names that source "
                  "in no key at all. Either the whole injected-state surface is being DECIDED rather than "
                  "forked — which §Solver-half forbids and which would cost this document every gated arm it "
                  "has, not just the boot one — or this probe composed a source identity the engine does not "
-                 "use, and the clause below is then silent about the branch rather than negative about it");
-        fold_row(&bootfork_tt, &bootfork_why, !!strstr(fa, q),
-                 "the `state` source forks elsewhere and `state.admin` is NOT among the predicates this run "
-                 "forked over: §Boot's own `if(cfg.admin)` was DECIDED by a concrete operand rather than "
-                 "forked into two arms. That is the concretized gate §Solver-half forbids for server-injected "
-                 "absent state, and it is upstream of every `*fork` row in this file — a sibling that was "
-                 "never created cannot be starved, lost or short of its sink");
+                 "use, and the clauses below are then silent about the branch rather than negative about it");
+        /* THE ACCUSATION IS NOW THE NARROWEST CLAUSE AND NOT THE WIDEST, which is the whole of this repair.
+           It stood as `strstr(fa, q)` alone and therefore fired on THREE states — a gate that was decided, a
+           branch filed under a shape, and a name a full table evicted — of which only the first is the thing
+           it names. `fold_row` keeps the FIRST failing clause, so the order below is what routes each of them
+           to its own sentence: this clause can only be reached when the census is COMPLETE (nothing has ever
+           been excluded) and the branch is in NEITHER namespace, which is the one state in which "it did not
+           fork" is the only reading left. */
+        bootfork_decided = named && !resident && !sited && complete;
+        fold_row(&bootfork_tt, &bootfork_why, resident || sited || !complete,
+                 "the `state` source forks elsewhere, this census has NEVER EXCLUDED A KEY, and `state.admin` "
+                 "is in neither the predicate table nor the unnamed-site one: §Boot's own `if(cfg.admin)` was "
+                 "DECIDED by a concrete operand rather than forked into two arms. That is the concretized "
+                 "gate §Solver-half forbids for server-injected absent state, and it is upstream of every "
+                 "`*fork` row in this file — a sibling that was never created cannot be starved, lost or "
+                 "short of its sink");
+        fold_row(&bootfork_tt, &bootfork_why, resident || sited,
+                 "THIS RUN CANNOT SAY: `state.admin` is in neither fork table and the census reports that it "
+                 "has EXCLUDED keys, so Space-Saving's silence and a branch that never forked are the same "
+                 "absence here. This key is the most evictable row the table can hold — it is filed once, at "
+                 "boot, and every later `cfg.admin` site shares it — so an eviction is the LIKELIER of the "
+                 "two and the concretized-gate reading above is withheld rather than published. Read the "
+                 "census's own bound beside this row; raise DECIDE_FORK_KEYS to resolve it");
+        fold_row(&bootfork_tt, &bootfork_why, resident,
+                 "the branch FORKED and its question was never SPELLED: `state.admin` is absent from the "
+                 "predicate table and present in the unnamed-site one, so decide_branch took its `else` arm, "
+                 "recorded no constraint and handed the sibling its arm one-shot. §Boot's gate is not "
+                 "concretized — but it claims no replay slot, so it re-forks at every reach and no resumed "
+                 "flow can re-ask it. That is an identity concolic.c could not spell for `state.admin`, "
+                 "which every other row of this family depends on");
+        /* RESIDUAL. WHAT IS NOT COVERED: `BOUND` and the `~`/`{}` of the site needle are decide.c's and
+           absent.c's literals RESTATED here, which is the second copy of a fact those files own — the same
+           debt the three tags above carry, one level out. WHAT THE NEXT DIFF BUILDS: `decide_fork_bound()` on
+           solver/decide.h, answering the excluded-mass bound as a long from the table itself, and
+           `decide_fork_site_name()` composing the site needle through the same fork_site_name the emission
+           uses. HOW ITS ABSENCE WOULD SHOW: the bound half is LOUD — the DCHECK above fires the day
+           decide_fork_json renames that member, because rows without it is a shape that writer does not
+           produce. The site half is SILENT and is the one to check by hand: rename FORK_SITE_PREFIX or change
+           how ns_member_spell braces a src, and the last clause simply stops matching, after which a fork
+           filed as a site reads as one that never happened again. */
         free(key); free(mid); free(sid); free(fa);
     }
 
@@ -8235,12 +8328,17 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         /* …AND THE RUNG THAT NOW STANDS ABOVE THE SCHEDULE ONES, because it names a state they cannot: a
            sibling that was never CREATED is not one that is unserved, and every sentence below this line is
            about serving. `boot-fork` carries the diagnosis; this clause only routes to it, so the two cannot
-           drift into two paraphrases of one finding. */
-        else if (!bootfork_tt)
-            role_public_why = "the public arm is missing and the branch it would have come from is not in the "
-                              "fork census: read `boot-fork` on this same line, which names which of the two "
-                              "states that is. Nothing below here is about the schedule, because there is no "
-                              "sibling for the schedule to have failed to run";
+           drift into two paraphrases of one finding.
+           IT ASKS THE STATE AND NOT THE ROW, WHICH IS THE HALF THAT WAS WRONG. `!bootfork_tt` stood here, and
+           it is 0 for a branch that forked and was EVICTED from a full census and for one filed under a
+           shape — in both of which a sibling EXISTS and the schedule clauses below are exactly the right
+           reading. Routing on the row therefore withheld them in two of the three states they are for, and
+           told the reader there was no sibling in the two where there was one. */
+        else if (bootfork_decided)
+            role_public_why = "the public arm is missing and the branch it would have come from was DECIDED "
+                              "rather than forked — `boot-fork` on this same line carries the diagnosis. "
+                              "Nothing below here is about the schedule, because there is no sibling for the "
+                              "schedule to have failed to run";
         else if (state == 1) {
             int k = snprintf(role_public_buf, sizeof role_public_buf,
                      "the admin arm emitted and the public arm has not — AND THIS RUN CANNOT SAY WHY: %ld of "
@@ -8276,7 +8374,23 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        exactly the state that refutes it — measured, in 170 of one log's 171 samples: `merged=1` beside
        `role-public=0`, one record carrying one arm, reported as the merge of two. The merge is ONE record
        carrying BOTH values; anything weaker is the two rows above, which say it better. */
-    int merged = (data_count == 1 && role_admin && role_public);
+    /* …AND THE `why` THIS ROW STILL DID NOT HAVE, which is the same rung its neighbours were all given and
+       is why it is a THIRD 0 for two facts. `merged` is a strict conjunction of `role-admin` and
+       `role-public` plus ONE new bit, so whenever either neighbour is 0 this row is 0 FOR THEIR REASON and
+       says nothing whatever about the merge — and it printed as a bare digit beside them, which is exactly
+       how a reader comes to count three independent mechanism readings where there is one. This file already
+       DELETED `dom-tt` for being "the AND of the two rows either side of it"; the difference here is that the
+       extra conjunct is a real claim, so the repair is the ladder rather than the deletion. The last clause
+       is the only one of the three that is about the merge. */
+    const char *merged_why = NULL; int merged = 1;
+    fold_row(&merged, &merged_why, role_admin,
+             "the admin arm has not emitted, so there is no second value for a merge to have joined — this "
+             "row is `role-admin` restated and is not about the merge");
+    fold_row(&merged, &merged_why, role_public, role_public_why);
+    fold_row(&merged, &merged_why, data_count == 1,
+             "BOTH arms emitted and `/api/data` stands in this document MORE THAN ONCE — the two flows wrote "
+             "SEPARATE records where the merge is one record carrying both values. This is the only clause "
+             "of this row that is a finding about the merge");
 
     int pinned = strstr(js, "/api/region/us-east-1") != NULL;   /* EQ gate concretized region to the REAL value */
     int lazy = strstr(js, "/api/admin/audit-log") != NULL;   /* endpoint reachable ONLY via the admin-arm lazy chunk */
@@ -11221,7 +11335,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "body-param", body_param, "firstPost", SESS_EXPLORE, body_param_why },
         { "path-example", path_example, "/v1/vis/", SESS_EXPLORE, path_example_why },
         { "role-public", role_public, "/api/data?role=", SESS_EXPLORE, role_public_why },
-        { "merged", merged, "/api/data?role=", SESS_EXPLORE },
+        { "merged", merged, "/api/data?role=", SESS_EXPLORE, merged_why },
         { "pinned", pinned, "/api/region/", SESS_EXPLORE },
         /* THE KEY IS THE STATEMENT THAT REACHES THE ENDPOINT, WHICH IS NOT ALWAYS THE ENDPOINT. This row reads
            `/api/admin/audit-log`, an address that is in a CHUNK the provider serves and in no document at all;
