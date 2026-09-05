@@ -422,10 +422,24 @@ void cookie_store_init(JSContext *ctx)
     realm_declare_intrinsic(cs_install_realm);
 }
 
+/* THE REFERENCES THIS COMPONENT HOLDS, GIVEN BACK — and ONLY those. Every HANDLE it declared is undone by the
+   last line, out of the declarations themselves, because a release written as a second copy of the declaration
+   list is a list kept in step by whoever remembers: this one reset THREE of its four slots and left
+   `g_cs_class`, which agent_state_check_released reports as a component that "reports itself built and whose
+   every other handle is null" in the next agent of the process. See core/agent_state.h's agent_state_undo for
+   why the two halves are split — only the component knows a slot holds a source claim rather than a handle,
+   and only the registry can be relied on to name all four.
+   THE CLASS ID WAS THE ONE THAT WENT MISSING, AND ITS SHAPE IS WHY. It is the only handle here with no
+   reference to free beside it — a realm-value id, an atom or a JSValue puts the author's eye on its own line
+   by needing a `_free` call there, and a class id owns nothing, so nothing in this body ever pointed at it.
+   It is not a process-lifetime handle to be carried: it names a JS_NewClass registration in the runtime that
+   is going away with it, and a second agent reading a non-zero `g_cs_class` would answer §3.7.7's brand check
+   in cs_brand against a class of the dead runtime.
+   THE ORDER IS PART OF THE CONTRACT and the undo is LAST. The attacker-source claim above is keyed by the
+   component NAME and reads none of these four slots, so it is free to run first; a line that read one — a
+   release handing another component's claim back, or asserting a claimant already has — would HAVE to. */
 void cookie_store_free(void)
 {
     concolic_undeclare_sources(CS_COMPONENT);
-    g_obj_slot = -1;
-    g_id_get = -1;
-    g_id_get_all = -1;
+    agent_state_undo(CS_COMPONENT);
 }
