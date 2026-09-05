@@ -45,9 +45,9 @@
  * CRASHES naming the section it is waiting on.
  *
  * WHAT THIS ENGINE CANNOT READ, AND HOW EVERY MEMBER HERE FINDS OUT. §7's walk branches on facts that come from
- * properties core/css/css_computed_value.h does not model, and there are exactly two of them:
+ * properties core/css/css_computed_value.h does not model, and there are exactly two SOURCES of them:
  *   - css-position-3 §2.1 "Containing Blocks of Positioned Boxes" names what makes a box establish an absolute
- *     or a fixed positioning containing block, and its own Note is an OPEN LIST: "properties that can cause a
+ *     or a fixed positioning containing block, and its own Note is an OPEN LIST: "Properties that can cause a
  *     box to establish an absolute positioning containing block include position, transform, will-change,
  *     contain …". `position` is modelled here; the rest are not.
  *   - CSS Viewport §4 "The zoom property": "the effective zoom of an element is the product of its computed
@@ -61,6 +61,22 @@
  *   is 1 so every used value in CSS pixels is already the unscaled value. Reading the CASCADED value to decide
  *   whether to crash is not the specified-value-under-the-word-computed that css_computed_value.h forbids: it
  *   is a DETECTOR for an input this component cannot read, and its only outcome is the crash.
+ *
+ * BUT WHICH MEMBER EACH OF THOSE PROPERTIES IS AN OPERAND OF IS TWO QUESTIONS, AND ASKING THEM AS ONE COST THE
+ * EXTENTS. A single list of the four gated all five members alike, so an ancestor declaring `transform` aborted
+ * `offsetHeight` — CLAUDE.md's two-question predicate, where the STRICTER question decides and the LOOSER one
+ * pays a cost that reads as correctness. §2.1's own opening sentence is what separates them, and it is a SCOPE
+ * statement: "The containing block of a static, relative, or sticky box is as defined by its formatting
+ * context. For fixed and absolute boxes, it is defined as follows". So `transform` and `will-change` — whose
+ * only other effects are a stacking context and the same containing blocks, per css-transforms-1 §2 "The
+ * Transform Rendering Model" and css-will-change-1 §2 "Hinting at Future Behavior: the will-change property" —
+ * reach a used value ONLY where some box on the chain is `absolute` or `fixed`. `contain` and `zoom` do not
+ * split that way and stay unconditional: css-contain-2 §3.1 "Size Containment" makes `contain` a fact about a
+ * box's own intrinsic sizes rather than about anyone's containing block, and every number §7 reports is
+ * unscaled. §7's own text is the third witness for the members that matter: an extent is returned "ignoring any
+ * transforms that apply to the element and its ancestors". The consequence is the ordinary infinite-scroll
+ * read: `el.offsetHeight` under a transformed or will-changed ancestor now answers instead of aborting the
+ * document, wherever nothing on the chain is absolutely or fixed positioned.
  *
  * AND THE FLAT TREE IS THE THIRD, ANSWERED THE SAME WAY. §7's walk is over "the parent of the element in the
  * flat tree" — CSS Scoping §4.1 "Flattening the DOM into an Element Tree" — and its second clause is DOM §4.8's
@@ -87,9 +103,10 @@
 
 #include "quickjs.h"
 
-/* §7's `partial interface HTMLElement`, for ONE realm — installed on the prototype html_element.c has just
-   built, beside every other member of it. It is per realm because its answers are: a child navigable's initial
-   containing block is 300 CSS pixels wide and the top-level traversable's is 1280, every used value below
+/* CSSOM VIEW §7 "Extensions to the HTMLElement Interface"'s `partial interface HTMLElement`, for ONE realm —
+   installed on the prototype html_element.c has just built, beside every other member of it. It is per realm
+   because its answers are: a child navigable's initial containing block is 300 CSS pixels wide and the
+   top-level traversable's is 1280, every used value below
    bottoms out in one of them, and a C member runs in the realm that DEFINED it.
    THERE IS NO `_init` BESIDE IT, and that is a statement rather than an omission: §7 declares six readonly
    attributes and no operation and no setter, so there is nothing to declare once per agent — the accessor
