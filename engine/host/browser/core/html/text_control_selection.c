@@ -491,6 +491,47 @@ void text_control_selection_move_to_end(JSContext *ctx, JSValueConst wrap)
     JS_FreeValue(ctx, none);
 }
 
+void text_control_selection_type_changed(JSContext *ctx, lxb_dom_element_t *el, HtmlInputState was)
+{
+    JSValue none;
+
+    /* THE RECEIVER IS AN `input`, asserted rather than classified. §4.10.5's steps are the `input` element's,
+       so a `textarea` — whose `type` is not an enumerated attribute at all — and every other element are
+       equally outside them. It matters because the state read below answers INPUT_STATE_NONE for anything that
+       is not an `input`, and tcs_offsets_apply answers FALSE for that state: a non-input would take step 9's
+       "nowSelectable is false" arm and return in silence, which is a real answer given to a question that was
+       never this function's. The one caller today cannot reach this — it returns on INPUT_STATE_NONE before
+       calling — so this guards the SECOND caller, which is what an exported entry's receiver check is for. */
+    DCHECK(html_form_input_state(lxb_dom_interface_node(el)) != INPUT_STATE_NONE,
+           "§4.10.5's type change steps ran over an element that is not an `input` — those steps are the "
+           "`input` element's, so this receiver came from somewhere that is not §4.9's attribute change steps "
+           "asking about an `input`'s `type`");
+    /* STEP 7: "Let previouslySelectable be true if setRangeText() previously applied to the element, and false
+       otherwise", and step 9's FIRST conjunct, "If previouslySelectable is false". `setRangeText()` is one of
+       the five offset members, so this is tcs_offsets_apply asked of the state the element has just LEFT —
+       which is why that state is an argument: §4.9's attribute change steps fire AFTER the write, so it cannot
+       be read off the element any more. */
+    if (tcs_offsets_apply(was)) return;
+    /* STEP 8: "Let nowSelectable be true if setRangeText() now applies to the element, and false otherwise",
+       and step 9's SECOND conjunct, "and nowSelectable is true". Read off the element, which is where the new
+       state now is. */
+    if (!tcs_offsets_apply(html_form_input_state(lxb_dom_interface_node(el)))) return;
+    /* STEP 9: "set the element's text entry cursor position to the BEGINNING of the text control, and set its
+       selection direction to \"none\"". The cursor is a selection whose start and end are equal — this agent
+       supports empty selection, which is why text_control_selection_value_changed clamps both offsets to
+       perform the selection branch and the cursor branch identically — so the beginning is 0 and 0.
+       IT DOES NOT SAY "unselecting any selected text", which the value setters' move-to-end does say, and the
+       difference costs nothing here: writing the cursor as an empty selection is what collapses any selection
+       there was, so the two sentences have one effect on this state. */
+    tcs_store_offset(ctx, el, TCS_START, 0);
+    tcs_store_offset(ctx, el, TCS_END, 0);
+    none = JS_NewString(ctx, TCS_DIR_NONE);
+    CHECK(!JS_IsException(none), "text control selection: the `none` direction could not be allocated for "
+                                 "§4.10.5's type change step 9");
+    dom_cow_set_prop_taint(ctx, el, TCS_DIR, none);
+    JS_FreeValue(ctx, none);
+}
+
 /* ---- the members ------------------------------------------------------------------------------------------ */
 
 /* THE OFFSET AN ARGUMENT DENOTES. §3.2's conversion has already run, so this argument is a Number or unknown

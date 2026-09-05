@@ -36,8 +36,16 @@
  *     ITS `value` CONTENT ATTRIBUTE, and that attribute is read through doors this component does not own:
  *     `getAttribute("value")` answers out of core/dom, so a transfer performed at the next `.value` read would
  *     leave an unrelated subsystem giving a plausible wrong answer in between. It is therefore performed
- *     EAGERLY, at the change, by input_value_attr_changed below. What makes the composition possible either
- *     way is the one extra fact recorded beside the value: the state it was sanitized in.
+ *     EAGERLY, at the change, by input_value_attr_changed below, which core/dom/element.c registers.
+ *
+ * AND THE EAGER ANSWER DELETED THE LAZY ONE RATHER THAN JOINING IT. While moment 3 had no site, the getter
+ * composed a type change's two algorithms at READ time and a third slot recorded the state each value had been
+ * sanitized in so that it could; a narrower crash stood in front of the cross-mode case, which no read-time
+ * answer can reach at all because the transfer is to an attribute another component owns. With the steps
+ * running at the change, the value in the slot is ALREADY the composition, the recorded state has no reader,
+ * and the crash guards a state the steps make impossible. All three are gone in the diff that registered the
+ * hook: a superseded path kept beside a live one hides the live one's gaps, and here it would also have hidden
+ * WHICH of the two answers a page was getting.
  *
  * THE DIRTY VALUE FLAG is what decides which of the two candidates the getter answers — the element's own value,
  * or the content attribute. Once a script assigns, the flag is true and the attribute is the DEFAULT, which is
@@ -82,11 +90,14 @@
 #include "solver/concolic.h"
 #include "solver/dom_cow.h"
 
-/* The three per-element slots this component keeps, in the per-flow property shadow the control's value already
-   used — so all three TIME-TRAVEL: a forked arm's assignment, the state it was sanitized under, and the files
-   it selected are that flow's, and its sibling sees the markup's. */
+/* The two per-element slots this component keeps, in the per-flow property shadow the control's value already
+   used — so both TIME-TRAVEL: a forked arm's assignment and the files it selected are that flow's, and its
+   sibling sees the markup's.
+   THERE WAS A THIRD, recording the `type` state the value was sanitized in. It existed to let the getter
+   compose a type change's two algorithms LAZILY, at read time, because §4.10.5's type change steps had no site
+   to run at; with those steps running eagerly on §4.9's attribute change steps nothing reads it, and a field
+   written at four sites and read at none is the broken contract CLAUDE.md §A-FIELD-A-CONSUMER-DEFAULTS names. */
 #define IV_VALUE  "value"            /* §4.10.5.1's ELEMENT'S VALUE, already sanitized */
-#define IV_STATE  "valueSanitizedAs" /* the `type` state that value was sanitized in — see the header comment */
 #define IV_FILES  "selectedFiles"    /* §4.10.5.1.17's LIST OF SELECTED FILES, as the FileList that IS one */
 
 /* §4.10.5.4's `files` setter, declared once per AGENT — see input_value_declare. */
@@ -122,51 +133,6 @@ HtmlInputValueMode input_value_mode(HtmlInputState st)
         /* Every remaining state — the text family, the date/time family, Number, Range and Color. */
         return INPUT_VALUE_MODE_VALUE;
     }
-}
-
-/* -1 when nothing has recorded a state for this element's value yet. */
-static int iv_recorded_state(JSContext *ctx, lxb_dom_element_t *el)
-{
-    int i = attr_shadow_find(el, ATTR_SLOT_PROPERTY, NULL, IV_STATE);
-    int32_t st = 0;
-
-    if (i < 0) return -1;
-    JS_ToInt32(ctx, &st, attr_shadow_opaque(i));
-    return (int)st;
-}
-
-static void iv_record_state(JSContext *ctx, lxb_dom_element_t *el, HtmlInputState st)
-{
-    JSValue v = JS_NewInt32(ctx, (int)st);
-
-    dom_cow_set_prop_taint(ctx, el, IV_STATE, v);   /* BORROWED by the shadow, which dups it */
-    JS_FreeValue(ctx, v);
-}
-
-/* THE TRIGGER THAT IS NOT WIRED, NAMED WHERE IT BECOMES AN ANSWER. §4.10.5's type change steps are BUILT — see
-   input_value_attr_changed — and they record the new state as their last act, so reaching this function with a
-   recorded state that is not the current one means those steps DID NOT RUN, which can only be because nothing
-   called them. That is why this crash is about a REGISTRATION and no longer about an algorithm.
-   IT IS DELIBERATELY NARROWER THAN THAT REASONING, and the narrowing is a decomposition rather than a hedge.
-   A within-mode disagreement means the hook did not run too, but this file still ANSWERS that case correctly on
-   its own — the getter re-sanitizes and re-stores — so crashing on it while the registration is absent would
-   turn documents this engine handles today into aborts for no gain. Across modes there is no correct answer to
-   give from here, because the steps move the value between the element and its `value` CONTENT ATTRIBUTE and
-   `getAttribute` does not come through this file. The diff that adds the registration is therefore also the
-   diff that deletes this function AND the getter's lazy re-sanitize branch: with the steps running eagerly both
-   are unreachable, and a superseded path kept beside a live one is the dual system this project bans. */
-static void iv_check_type_change(JSContext *ctx, lxb_dom_element_t *el, HtmlInputState st)
-{
-    int was = iv_recorded_state(ctx, el);
-
-    if (was < 0 || (HtmlInputState)was == st) return;
-    if (input_value_mode((HtmlInputState)was) == input_value_mode(st)) return;
-    DFAIL("an input's `type` changed between two states whose `value` IDL attribute is in DIFFERENT modes while "
-          "the element held a value, and §4.10.5's TYPE CHANGE steps did not run over it — those steps are "
-          "built, in this file, as input_value_attr_changed; what is missing is the one line that registers "
-          "them on §4.9's attribute change steps, in core/dom/element.c's element_attr_changed, beside "
-          "media_element_attr_changed and html_option_attr_changed. Add it and this function goes, together "
-          "with the getter's lazy re-sanitize branch that it guards");
 }
 
 /* §4.10.5.4's default and default/on getters read the `value` CONTENT ATTRIBUTE. Presence is a question about
@@ -498,40 +464,23 @@ JSValue input_value_get(JSContext *ctx, JSValueConst wrap)
     DCHECK(st != INPUT_STATE_NONE, "§4.10.5.4's `value` getter ran on something that is not an `input` — the "
                                    "member is HTMLInputElement's and its brand check is the caller's");
     if (!el) return JS_NewStringLen(ctx, "", 0);
-    iv_check_type_change(ctx, el, st);
     switch (input_value_mode(st)) {
     case INPUT_VALUE_MODE_VALUE:
         /* "On getting, return the CURRENT VALUE of the element" — and the DIRTY VALUE FLAG is what decides
            which of the two candidates that is. */
         i = iv_dirty(el);
-        if (i >= 0) {
-            int was = iv_recorded_state(ctx, el);
-            JSValue held = JS_DupValue(ctx, attr_shadow_opaque(i)), now;
-            bool changed = false;
-
-            if (was < 0 || (HtmlInputState)was == st) return held;
-            /* The state changed within mode value, so §4.10.5.1's type-change steps owed this value the new
-               state's sanitization algorithm. Run it and STORE the result: the value the standard holds is the
-               composition of every algorithm that has run over it, and re-deriving it from the original bytes
-               on the next read would drop whichever one ran in between. */
-            now = iv_sanitize(ctx, el, st, held, &changed);
-            if (changed) dom_cow_set_prop_taint(ctx, el, IV_VALUE, now);
-            iv_record_state(ctx, el, st);
-            return now;
-        }
+        /* THE STORED VALUE IS RETURNED AS IT STANDS, with no algorithm run over it. Every operation that gives
+           the element a value of its own sanitizes AT THE ASSIGNMENT under the state it is assigned in
+           (§4.10.5.4's setter step 4), and §4.10.5's type change steps re-sanitize it under the new state at
+           the change (their step 6) — so the slot always already holds the composition of every algorithm that
+           has run, and sanitizing again here could only re-run the current state's algorithm over its own
+           output. This used to be a lazy re-sanitize keyed off a recorded state, which was the composition
+           performed at READ time because moment 3 had no site; the hook is that site. */
+        if (i >= 0) return JS_DupValue(ctx, attr_shadow_opaque(i));
         /* The flag is false, so §4.10.5.1's `value` CONTENT ATTRIBUTE steps decide the element's value: it IS
            that attribute (or the empty string), sanitized — which is what those steps store at every change to
            it, and therefore what the element's value is at every moment between them. */
-        {
-            JSValue raw = iv_content_attr(ctx, el, "");
-            bool changed = false;
-            JSValue san = iv_sanitize(ctx, el, st, raw, &changed);
-
-            /* Recorded only when the algorithm DECIDED something: that is exactly when a later type change
-               would have composed two algorithms and this engine would answer with one. */
-            if (changed) iv_record_state(ctx, el, st);
-            return san;
-        }
+        return iv_sanitize(ctx, el, st, iv_content_attr(ctx, el, ""), NULL);
     case INPUT_VALUE_MODE_DEFAULT:
         return iv_content_attr(ctx, el, "");
     case INPUT_VALUE_MODE_DEFAULT_ON:
@@ -597,10 +546,8 @@ void input_value_set_relevant(JSContext *ctx, JSValueConst wrap, JSValueConst va
     if (!el) return;
     /* Storing the element's own value IS setting the dirty value flag — see iv_dirty — which is §4.10.20's
        step 2. The sanitization the `value` setter runs at its step 4 is deliberately NOT run here; see the
-       header. The state is still recorded, because the value now stored belongs to THIS state and a later type
-       change composes its algorithm with this one exactly as it does for an assignment. */
+       header. */
     dom_cow_set_prop_taint(ctx, el, IV_VALUE, val);
-    iv_record_state(ctx, el, st);
 }
 
 JSValue input_value_set(JSContext *ctx, JSValueConst wrap, JSValueConst val)
@@ -610,7 +557,6 @@ JSValue input_value_set(JSContext *ctx, JSValueConst wrap, JSValueConst val)
 
     DCHECK(st != INPUT_STATE_NONE, "§4.10.5.4's `value` setter ran on something that is not an `input`");
     if (!el) return JS_UNDEFINED;
-    iv_check_type_change(ctx, el, st);
     switch (input_value_mode(st)) {
     case INPUT_VALUE_MODE_VALUE: {
         JSValue now;
@@ -627,9 +573,6 @@ JSValue input_value_set(JSContext *ctx, JSValueConst wrap, JSValueConst val)
         if (has_cursor) old = input_value_get(ctx, wrap);              /* step 1 */
         now = iv_sanitize(ctx, el, st, JS_DupValue(ctx, val), NULL);
         dom_cow_set_prop_taint(ctx, el, IV_VALUE, now);
-        /* Recorded unconditionally on this path — the value now stored was sanitized in THIS state, and it is
-           the composition with a LATER state's algorithm that has no site to run at. */
-        iv_record_state(ctx, el, st);
         JS_FreeValue(ctx, now);
         if (has_cursor) {
             /* §4.10.20's clamp, which runs "whenever the relevant value changes" and preserves a selection
@@ -835,10 +778,14 @@ void input_value_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char 
         if (changed) dom_cow_set_prop_taint(ctx, el, IV_VALUE, now_v);
         JS_FreeValue(ctx, now_v);
     }
-    /* The value the element now holds was sanitized under `now`, which is the fact iv_check_type_change reads
-       to decide that these steps ran. Recorded LAST, so a step above that aborts leaves the element looking
-       like what it is: one whose type change did not complete. */
-    iv_record_state(ctx, el, now);
+    /* STEPS 7-9 — the text entry cursor, which belongs to §4.10.20 and is that component's to answer: whether
+       `setRangeText()` applied in a state is its per-state bookkeeping, so the two `let`s and the move are one
+       call rather than a predicate exported for this file to guard. The OLD state goes with it for the reason
+       it is a parameter here: step 7 is a question about the state the element has already left.
+       LAST, and after step 6, because step 9 is a statement about the value the earlier steps settled: a cursor
+       is an offset into the relevant value, and moving it before the value it indexes is final would be an
+       offset into a string the next step replaces. */
+    text_control_selection_type_changed(ctx, el, was);
 }
 
 /* ---- §4.10.5.1.17's LIST OF SELECTED FILES, and §4.10.5.4's `files` ------------------------------------------

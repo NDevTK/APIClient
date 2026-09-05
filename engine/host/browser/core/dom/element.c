@@ -57,6 +57,7 @@
 #include "core/html/html_image.h"
 #include "core/html/html_link.h"
 #include "core/html/html_option.h"
+#include "core/html/input_value.h"   /* HTML §4.10.5's type change steps, in the family below */
 #include "core/html/fragment_parser.h"
 #include "core/html/fragment_serializer.h"
 #include "core/html/sanitizer.h"
@@ -2841,6 +2842,16 @@ static void element_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const ch
        reparse) and an IDL setter answers for exactly one of them — and it needs BOTH values because the steps
        turn on ADDED and REMOVED: a `selected=""` overwritten with `selected="x"` is neither of those. */
     html_option_attr_changed(rctx, el, ns, local, old_val, val);
+    /* HTML §4.10.5 The input element's OWN type change steps: "When an input element's type attribute changes
+       state, the user agent must run the following steps". Here for the reason `src` and `selected` above are —
+       a content attribute has more than one spelling (`i.type = "radio"`, `setAttribute`, `removeAttribute`, an
+       `innerHTML` reparse) and an IDL setter answers for exactly one of them — and it needs THE OLD VALUE
+       rather than the new one, because every branch of those steps is a condition on the PREVIOUS state and
+       this hook fires after the write, so that state is no longer on the element.
+       IT IS WHAT MAKES `i.value = "t"; i.type = "radio"` ANSWER — the sequence jQuery's support.radioValue
+       probe runs on every page that loads it, which reaches step 1's transfer of the element's value to its
+       `value` content attribute. */
+    input_value_attr_changed(rctx, el, ns, local, old_val, old_len);
     /* HTML §2.5.6 Nonce attributes' OWN attribute change steps — the family's members are DOM §4.9's and this
        standard states this one for every element that includes HTMLOrSVGOrMathMLElement. It is here for a
        SHARPER version of the reason its neighbours are: they moved out of an IDL setter that answered for one

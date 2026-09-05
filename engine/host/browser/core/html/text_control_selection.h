@@ -1,7 +1,7 @@
 /* THE TEXT CONTROL SELECTION — HTML §4.10.20 "APIs for the text control selections". See
  * text_control_selection.c.
  *
- * ONE PROBLEM: WHERE THE SELECTION IS IN A TEXT CONTROL, AND WHAT MOVES IT. §4.10.20 opens by saying it is one
+ * ONE PROBLEM: WHERE THE SELECTION IS IN A TEXT CONTROL, AND WHAT MOVES IT. HTML §4.10.20 opens by saying it is one
  * problem and not two — "The input and textarea elements define several attributes and methods for handling
  * their selection. THEIR SHARED ALGORITHMS ARE DEFINED HERE" — so the six members go in one component reached
  * from two prototypes, exactly as §4.10.21's constraint validation does. Written inside either element's own
@@ -29,6 +29,7 @@
 #include <lexbor/dom/dom.h>
 
 #include "quickjs.h"
+#include "core/html/html_form.h"
 
 /* Declared once per AGENT (the member ids and the `select` task's machine), installed per realm on the two
    interfaces that DECLARE §4.10.20's members. Both are reached from §4.10's declaration point in html_form.c,
@@ -54,9 +55,40 @@ void text_control_selection_value_changed(JSContext *ctx, JSValueConst wrap);
  * only that algorithm queues the task. */
 void text_control_selection_move_to_end(JSContext *ctx, JSValueConst wrap);
 
+/* HTML §4.10.5 The input element's TYPE CHANGE STEPS 7-9, as ONE operation, over the state the control is
+ * LEAVING — the state it is arriving in is on the element, because §4.9's attribute change steps fire after
+ * the write.
+ *
+ *   7. "Let previouslySelectable be true if setRangeText() previously applied to the element, and false
+ *      otherwise."
+ *   8. "Let nowSelectable be true if setRangeText() now applies to the element, and false otherwise."
+ *   9. "If previouslySelectable is false and nowSelectable is true, set the element's text entry cursor
+ *      position to the beginning of the text control, and set its selection direction to \"none\"."
+ *
+ * WHY THE THREE STEPS ARE ONE ENTRY AND NOT A `move_to_start` PRIMITIVE ITS CALLER GUARDS. Steps 7 and 8 ask
+ * whether §4.10.20's `setRangeText()` APPLIED IN A STATE, which is this file's per-state bookkeeping and
+ * nobody else's; handing that question out as a second exported predicate would put a second public spelling
+ * of applicability beside text_control_selection_applies, which is the shape two answers to one question
+ * drift from. And the move itself has EXACTLY ONE call site in the whole standard — step 9 is the only place
+ * in HTML that moves a text entry cursor to the beginning of a text control — so splitting it from its own
+ * condition buys no reuse and costs a second file that has to know `setRangeText()` is an offset member.
+ * Contrast text_control_selection_move_to_end, which is exported as a bare move BECAUSE it genuinely has two
+ * callers writing one sentence twice.
+ *
+ * IT TAKES THE ELEMENT AND NOT A WRAPPER, unlike the two operations above, and the difference is exactly what
+ * each one needs: those two move the cursor to the END of the relevant value, which is read through the `value`
+ * IDL getter and therefore through a wrapper, while the BEGINNING is 0 and needs no value at all. It matters
+ * because §4.9's attribute change steps fire during an `innerHTML` PARSE as well as for `i.type = "radio"`, so
+ * a wrapper minted here would be one JS object per parsed `<input type=...>` for a question that never reads it
+ * — and text_control_selection_applies already takes a node, so this is that spelling and not a third one.
+ *
+ * IT FIRES NO `select` EVENT, for the same reason move_to_end does not: step 9 moves the state directly and is
+ * not one of set the selection range's callers. */
+void text_control_selection_type_changed(JSContext *ctx, lxb_dom_element_t *el, HtmlInputState was);
+
 /* Whether §4.10.20's five offset members apply to an `input` in this state — the standard's own per-state
    bookkeeping lists, read as ONE predicate so the twenty-one states are answered from one place. Exported
-   because §4.10.5.4's value setter has to know whether the element HAS a text entry cursor position before it
+   because HTML §4.10.5.4's value setter has to know whether the element HAS a text entry cursor position before it
    runs its step 5 ("...and the element has a text entry cursor position"), and that is this question. */
 bool text_control_selection_applies(const lxb_dom_node_t *n);
 
