@@ -3505,9 +3505,12 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
          * not step 3's brand.
          * WHAT IS NOT COVERED IS NOW THE PROTOTYPE HALF ONLY. A plain getter installed as an own property of
          * the realm's [Global] object HAS both steps: idl_mint_plain_getter routes it through §3.7.6's own
-         * opening steps, because there the TARGET settles the interface (Window is this engine's only [Global]
-         * interface) with nothing for the member to state. On a PROTOTYPE the interface is the member's to
-         * declare and this machine is where it would be asked, which is what leaves the shape standing.
+         * opening steps, because there the TARGET settles that the member belongs to the realm's own [Global]
+         * interface, with nothing for the member to state. WHICH interface that is is the REALM's answer and
+         * not the target's — this parenthetical used to read `Window is this engine's only [Global] interface`
+         * and that is retired, `DedicatedWorkerGlobalScope` being the second — so idl_attribute_this asserts it
+         * at the read. On a PROTOTYPE the interface is the member's to declare and this machine is where it
+         * would be asked, which is what leaves the shape standing.
          * AND EVERY INTERFACE CONVERTED TO idl_this_iface LEAVES EXACTLY ITS ATTRIBUTE GETTERS BEHIND, which is
          * why this names the SHAPE and not a list of them: converting a component deletes its operations' and
          * setters' own brand tests and cannot touch its getters', so each conversion adds members to this
@@ -6211,8 +6214,14 @@ static JSValue idl_mint_plain_getter(JSContext *ctx, JSValueConst target, const 
 /* IS THIS INSTALL PUTTING AN OWN PROPERTY ON THE REALM'S [Global] OBJECT? Web IDL §3.7.6's opening prose —
    "Regular attributes are exposed on the interface prototype object, unless the attribute is unforgeable or if
    the interface was declared with the [Global] extended attribute, in which case they are exposed on every
-   object that implements the interface" — is what makes this question answer "which interface is `target`":
-   Window is the only [Global] interface this engine has, so an own property of the global is a Window member.
+   object that implements the interface" — is what makes this the PLACEMENT question: an own property of the
+   realm's global object is a member of that realm's [Global] interface, and a property on a prototype is not.
+   IT ANSWERS WHERE AND NOT WHICH, WHICH IS THE HALF THAT USED TO BE FREE. This once read `Window is the only
+   [Global] interface this engine has, so an own property of the global is a Window member`, and the second
+   clause no longer follows from the first: `DedicatedWorkerGlobalScope` is `[Global=(Worker,DedicatedWorker)]`
+   and core/realm.c builds a realm on it, so a TRUE answer here identifies the realm's global and says nothing
+   about which interface that global implements. Which one it is is the REALM's to state — idl_global_names_are_window
+   over realm_global_names is where that is asked, and idl_attribute_this asserts it at the read.
    IT COMPARES THE REALM'S GLOBAL AND NEVER READS A `globalThis` PROPERTY. The binding is a writable data
    property a page may reassign, so a receiver or a target taken from it is not necessarily the Window;
    JS_GetGlobalObject answers the realm's own object, which is the value §3.7.6 means by "realm's global
@@ -6602,17 +6611,40 @@ int idl_replace_with_value(JSContext *ctx, JSValueConst obj, const char *name, J
  * lives. A page tells the two refusals apart by name — "SecurityError" against TypeError — which is exactly
  * what cross-origin-objects.html asserts.
  *
- * THE INTERFACE IS Window FOR EVERY MEMBER THAT REACHES HERE, and that is ASSERTED AT THE INSTALL rather than
- * assumed at the read: every call site that routes here targets the realm's global, so `target` is Window and
- * window_proxy.c owns the test. A brand parameter every existing caller would pass identically is a field
- * nobody would notice going wrong; IDL_CHECK_GLOBAL_TARGET below is what names the brand this file has to be
- * TOLD the day a component declares one of these attributes on some other interface.
+ * THE WHOLE OF THIS ALGORITHM IS Window'S, AND THAT IS NOW A CLAIM ABOUT THE REALM RATHER THAN ABOUT THE
+ * ENGINE. All three lines below name one interface: 1.1.2.1's resolution unwraps a WindowProxy, 1.1.2.2's
+ * check is §7.2.1's Window/Location list, and 1.1.2.3's `target` is Window. That used to be justified by
+ * there being no other [Global] interface to be, and it no longer is — `DedicatedWorkerGlobalScope` is
+ * `[Global=(Worker,DedicatedWorker)]`, core/realm.c builds a realm on it, and Web IDL §3.3.7 [Exposed] step 1
+ * then exposes into that realm every construct whose exposure set meets its §3.3.8 [Global] names.
+ * SO THE FACT THAT MAKES THE THREE RIGHT IS ASSERTED AT THE HEAD, AGAINST THE REALM THAT IS ASKING. It is not
+ * asserted at the install: IDL_CHECK_GLOBAL_TARGET below answers whether `target` is the realm's global, which
+ * was the whole question while there was one kind of global and is half of it now — a worker realm's global
+ * PASSES that check and is not a Window, so the install-side guard cannot carry this and the read must.
+ * THIS IS REACHABLE AND IT IS NOT HYPOTHETICAL: core/timing/performance.c installs `performance` on the
+ * realm's global with no §3.3.7 gate, and HR-TIME exposes `Performance` to `Worker`, so a worker realm's
+ * global already carries a `performance` accessor whose read arrives here.
+ * IN RELEASE THE DFAIL IS COMPILED OUT AND THE TypeError BELOW IS WHAT A NON-Window REALM GETS — a DEFINED
+ * wrong answer naming the wrong interface, which is the state this crash exists to stop a reader diagnosing
+ * from. It is a crash and not a named residual because the code is WRONG here rather than narrower: a browser
+ * answers `self.performance` inside a worker.
  *
  * Returns the resolved jsValue OWNED, or JS_EXCEPTION with §3.7.6's TypeError or §3.5's SecurityError pending. */
 static JSValue idl_attribute_this(JSContext *ctx, JSValueConst this_val, const char *name,
                                   WindowProxySecurityType type)
 {
-    JSValue js = window_proxy_this_object(ctx, this_val);   /* 1.1.2.1 / 4.5.1, written once */
+    JSValue js;
+
+    DCHECKF(idl_global_names_are_window(realm_global_names(ctx)),
+            "Web IDL §3.7.6 Attributes' opening steps were asked for `%s` in a realm whose §3.3.8 [Global] "
+            "interface is not Window — all three steps below are Window's: 1.1.2.1 unwraps a WindowProxy, "
+            "1.1.2.2 runs §7.2.1's Window/Location security check, and 1.1.2.3's `target` is Window, so this "
+            "realm's own global object fails a brand it was never meant to be asked. Build §3.7.6 step "
+            "1.1.2.3's `target` as THIS realm's [Global] interface: the realm already states it "
+            "(core/realm.c's global names, read by realm_global_names just above), and the receiver "
+            "resolution and the brand must come from that interface rather than from core/frame/window_proxy.c",
+            name);
+    js = window_proxy_this_object(ctx, this_val);   /* 1.1.2.1 / 4.5.1, written once */
 
     /* 1.1.2.2 / 4.5.2. window_proxy_security_check's own step 1 is "If platformObject is not a Window or
        Location object, then return", so handing it a plain object is the standard's own no-op and not a
@@ -6631,10 +6663,14 @@ static JSValue idl_attribute_this(JSContext *ctx, JSValueConst this_val, const c
  * A plain-C getter is an `IdlGetter` — a raw JS_CFUNC_getter_magic with no pool entry — so it reaches neither
  * js_idl_args_step's implementation-check nor idl_attribute_this above, and NEITHER of §3.7.6's opening steps
  * was performed for any of them. On a PROTOTYPE that is the residual js_idl_args_step names by shape; on the
- * [Global] object it is decidable HERE, because the target settles the interface: Window is the only [Global]
- * interface this engine has (idl_args.h's §3.3.7 note states the same thing from the other side), so an
- * accessor installed as an own property of the realm's global is a Window attribute and `target` is Window.
- * That is a fact about the INSTALL, which is why the routing is made there and not asked at the read.
+ * [Global] object the PLACEMENT is decidable HERE, because the target settles that an own property of the
+ * realm's global is a member of that realm's [Global] interface — so the routing below is made at the install.
+ * WHICH INTERFACE IT IS IS NOT DECIDABLE HERE, AND THIS SENTENCE USED TO SAY IT WAS. It read `Window is the
+ * only [Global] interface this engine has … so an accessor installed as an own property of the realm's global
+ * is a Window attribute and target is Window`, and that argument is retired: `DedicatedWorkerGlobalScope` is
+ * `[Global=(Worker,DedicatedWorker)]` and core/realm.c builds a realm on it. The mint below is one C function
+ * shared by every realm, so it cannot carry an answer that differs per realm anyway — §3.7.6 step 1.1.2.3's
+ * `target` is a per-REALM fact and is asserted where the realm is in hand, at idl_attribute_this's head.
  *
  * THE MEMBER TRAVELS WITH THE OPERATION. One shared body serves every global attribute, so a DCHECK or a
  * TypeError written in it would name this file and none of the ~20 components that install one — the shape
@@ -6828,17 +6864,20 @@ static JSValue idl_held_value_get(JSContext *ctx, JSValueConst this_val, int arg
     return JS_DupValue(ctx, data[0]);
 }
 
-/* THE STATEMENT THAT MAKES idl_attribute_this's Window BRAND THE RIGHT ONE, asserted where the interface is
- * DECIDED rather than where the receiver arrives. §3.7.6's TypeError is about `target`, and this file mints
- * the accessor without being told which interface that is — so what it relies on is that every member reaching
- * it belongs to the one [Global] interface this engine has. `target` being the realm's global object IS that
- * fact — and it is the fact rather than the ARGUMENT that used to sit beside it: idl_args.h's §3.3.7 note no
- * longer says "one global kind" makes the question moot, because §3.3.7 step 1 is asked now (a realm STATES
- * which [Global] interface its global object implements). What has not changed is that this build's realms are
- * Window ones, so `target` is still the one global there is — the day that stops being true, this assert is
- * what says so. And the day a component declares a [Replaceable] or a
- * held-value attribute on an ordinary interface this fires and names the brand that must then become data the
- * component states — the way IdlExposure and IdlAttrForge already are.
+/* THE STATEMENT THAT AN ATTRIBUTE MINTED HERE IS A MEMBER OF THE REALM'S [Global] INTERFACE, asserted where
+ * the placement is DECIDED rather than where the receiver arrives. §3.7.6's TypeError is about `target`, and
+ * this file mints the accessor without being told which interface that is — so what it relies on is that every
+ * member reaching it is installed on the realm's global object, which is what this asks.
+ * IT ANSWERS WHERE AND NOT WHICH, AND THE SENTENCE THAT STOOD HERE CLAIMED OTHERWISE. It said that this build's
+ * realms are Window ones `so target is still the one global there is — the day that stops being true, this
+ * assert is what says so`, and that day has come without this assert saying anything: core/realm.c builds a
+ * `DedicatedWorkerGlobalScope` realm, and such a realm's global object PASSES the test below, because it IS
+ * its realm's global. A guard whose predicate cannot fail on the case its own message is about certifies that
+ * case instead of catching it, so the second half of the question is asked where the realm is in hand —
+ * idl_attribute_this's head, at the READ — and this one keeps only the half it can actually decide.
+ * WHAT IT STILL CATCHES IS THE PROTOTYPE CASE, and that remedy is unchanged: the day a component declares a
+ * [Replaceable] or a held-value attribute on an ordinary interface this fires and names the brand that must
+ * then become data the component states — the way IdlExposure and IdlAttrForge already are.
  *
  * IT IS NOT window_proxy_implements_window(target), and the reason is an ORDERING that would have made the
  * stricter-looking assert simply wrong: realm_install_intrinsics runs BEFORE the per-document install column,
@@ -6853,10 +6892,12 @@ static JSValue idl_held_value_get(JSContext *ctx, JSValueConst this_val, int arg
 static void idl_check_global_target(JSContext *ctx, JSValueConst target, const char *name, const char *form)
 {
     if (idl_target_is_realm_global(ctx, target)) return;
-    DFAILF("the %s attribute `%s` was installed on something that is not the realm's global object — its "
-           "accessor applies Web IDL §3.7.6's TypeError against the Window brand, which is right only "
-           "because Window is the only [Global] interface in this engine. Give the install the interface's "
-           "own brand as data, the way IdlExposure and IdlAttrForge are stated", form, name);
+    DFAILF("the %s attribute `%s` was installed on something that is not the realm's global object — Web IDL "
+           "§3.7.6 Attributes places a regular attribute on the interface prototype object unless its "
+           "interface is [Global], so an accessor minted here for an ordinary interface is placed by the "
+           "wrong arm, and its read resolves a receiver through the realm's [Global] interface rather than "
+           "through the one that declared it. Give the install the declaring interface's own brand as data, "
+           "the way IdlExposure and IdlAttrForge are stated", form, name);
 }
 #define IDL_CHECK_GLOBAL_TARGET(c, t, n, f) idl_check_global_target((c), (t), (n), (f))
 #else
