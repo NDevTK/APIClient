@@ -5,11 +5,19 @@
  * WHAT THIS COMPONENT IS, AND WHY IT IS THE FIRST THING A WORKER REALM OWES. Every member of both sections
  * lands on one of exactly three objects: WorkerGlobalScope.prototype, DedicatedWorkerGlobalScope.prototype, or
  * the global object itself. Web IDL decides which, and it decides it by whether the declaring interface
- * carries [Global] — §3.7.3 Interface prototype object's last conditional is "If interface is NOT declared with
- * the [Global] extended attribute, then: Define the regular attributes of interface on interfaceProtoObj given
- * realm", and §3.8 Platform objects implementing interfaces' internally create a new object takes the other
- * arm: "If interface is declared with the [Global] extended attribute, then: Define the regular operations of
- * interface on instance, given realm. Define the regular attributes of interface on instance, given realm."
+ * carries [Global] — §3.7.3 Interface prototype object's [Global] conditional reads "If interface is not
+ * declared with the [Global] extended attribute, then: Define the regular attributes of interface on
+ * interfaceProtoObj, given realm", and §3.8 Platform objects implementing interfaces' internally create a new
+ * object takes the other arm: "If interface is declared with the [Global] extended attribute, then: Define
+ * the regular operations of interface on instance, given realm. Define the regular attributes of interface on
+ * instance, given realm."
+ * IT IS NOT §3.7.3's LAST CONDITIONAL, AND THIS SENTENCE SAID IT WAS. The one after it is
+ * "If the [LegacyNoInterfaceObject] extended attribute was not specified on interface, then …", which is what
+ * defines `constructor` on an interface prototype object — so the paragraph below, which says
+ * DedicatedWorkerGlobalScope.prototype "carries nothing but `constructor`", rests on the very conditional
+ * this one called last. Corrected rather than deleted, because a reader who re-derives the ordering from the
+ * two arms alone will re-introduce it: §3.7.3 has TWO conditionals after the [Unscopable] block, and the
+ * [Global] one is the first of them.
  * `WorkerGlobalScope` is `[Exposed=Worker]` and NOT [Global], so its members are on ITS PROTOTYPE;
  * `DedicatedWorkerGlobalScope` is `[Global=(Worker,DedicatedWorker),Exposed=DedicatedWorker]`, so its own
  * members are OWN PROPERTIES OF THE GLOBAL and its prototype carries nothing but `constructor`. None of those
@@ -218,8 +226,43 @@ static void wgs_assert_placed(JSContext *ctx, const char *member, WgsPlacement w
                 member, WHAT[i], WHAT[(int)where]);
 }
 #define WGS_ASSERT_PLACED(c, m, w, g, d, p) wgs_assert_placed((c), (m), (w), (g), (d), (p))
+
+/* §10.2.1.1's SIX EVENT HANDLER IDL ATTRIBUTES, AUDITED BY DERIVING THE SET FROM THE ROWS THAT CARRY THE BIT
+ * rather than by naming them here. The install below passes a MIXIN — one bit — because that is what an
+ * install is allowed to know; naming the six in this function would put a second copy of core/events/'s own
+ * table in this file, which is the thing every note in that enum argues against and which the `onmessage`
+ * pair below does anyway. Walking the rows asks the list that OWNS the set which members the bit named, so a
+ * seventh row given the bit is audited the day it lands rather than the day somebody remembers to add a line
+ * here for it.
+ *
+ * HOW MANY MEMBERS THAT BIT NAMES IS NOT ASKED HERE, and the reason is that this function does not run. The
+ * exposure gate at the top of the install returns first in a Window realm, so everything below it — this
+ * audit included — waits on a realm whose global names contain `DedicatedWorkerGlobalScope`, which HTML
+ * §10.2.4 Processing model's run a worker will build and nothing in this build does. A count kept here would
+ * therefore be a check that has never executed. It lives in core/events/event_target.c's row validation
+ * instead, beside the two §8.1.8.2 table counts it is the same kind of claim as, where it runs at every
+ * agent's init today; what is left here is the PLACEMENT question, which needs the three objects this
+ * function is holding and can be asked nowhere else. */
+static void wgs_assert_handlers_placed(JSContext *ctx, JSValueConst g, JSValueConst dwgs_p, JSValueConst wgs_p)
+{
+    int n = event_target_handler_attribute_count(), i;
+
+    /* AND THE EMPTY WALK NEEDS NO ASSERT OF ITS OWN, which was written here and removed rather than kept:
+       a bit no row carries would make this loop run zero times and pass in silence, and the state that
+       produces it CANNOT REACH HERE — event_target_install_handlers aborts on exactly that mask a few lines
+       above, in the same dev build this function only exists in, and in a release build neither check is
+       compiled at all. An assert whose failing state an earlier assert has already stopped is a check with
+       no program behind it, however well its message reads. */
+    for (i = 0; i < n; i++) {
+        if (!(event_target_handler_attribute_mask(i) & EH_WORKER_GLOBAL_SCOPE))
+            continue;
+        wgs_assert_placed(ctx, event_target_handler_attribute_at(i), WGS_ON_WGS_PROTO, g, dwgs_p, wgs_p);
+    }
+}
+#define WGS_ASSERT_HANDLERS_PLACED(c, g, d, p) wgs_assert_handlers_placed((c), (g), (d), (p))
 #else
 #define WGS_ASSERT_PLACED(c, m, w, g, d, p) ((void)0)
+#define WGS_ASSERT_HANDLERS_PLACED(c, g, d, p) ((void)0)
 #endif
 
 /* ---- THE REALM ---------------------------------------------------------------------------------------- */
@@ -255,10 +298,41 @@ static void worker_global_scope_install_realm(JSContext *ctx)
        string the PARENT already carries against browser/idl_inheritance.h's row. */
     wgs_p = event_target_derived_proto(ctx);
     idl_interface_tag(ctx, wgs_p, "WorkerGlobalScope");
-    /* §3.7.3's last conditional, taken because WorkerGlobalScope is NOT [Global]. `self` is the one member of
-       §10.2.1.1 whose value this engine can compute; the residuals at the bottom of this file say what the
-       other five are blocked on and how each absence shows. */
+    /* Web IDL §3.7.3 Interface prototype object's [Global] CONDITIONAL, taken in its NOT arm because
+       WorkerGlobalScope is not the [Global] interface: "If interface is not declared with the [Global]
+       extended attribute, then: Define the regular attributes of interface on interfaceProtoObj, given
+       realm". It is NOT §3.7.3's last conditional — the one after it is [LegacyNoInterfaceObject]'s, which is
+       what puts `constructor` on both prototypes here, and this comment called the [Global] one last while
+       relying on that next one two objects further down.
+       WHAT THIS ENGINE CAN COMPUTE OF §10.2.1.1 is `self` and the six event handler IDL attributes below; the
+       residuals at the bottom of this file say what each remaining member is blocked on and how its absence
+       shows. THE COUNT THAT STOOD HERE — "the other five" — matched no enumeration: §10.2.1.1 declares TEN
+       members, so nine were owed when it was written and three are owed now, and the number is dropped rather
+       than corrected because a count beside a list is a number nobody adds up. */
     idl_install_accessor(ctx, wgs_p, "self", js_wgs_self, 0, -1);
+    /* HTML §10.2.1.1 The WorkerGlobalScope common interface's OWN EVENT HANDLER TABLE — "The following are
+       the event handlers (and their corresponding event handler event types) that must be supported, as
+       event handler IDL attributes, by objects implementing the WorkerGlobalScope interface" — installed by
+       the ONE bit that names exactly that set.
+       Spelling the six names here instead would be the hand-copied list core/realm.h exists to abolish, and a
+       second copy of core/events/event_target.c's table; what this file states is WHICH SET, and the audit
+       below reads back which members that set turned out to name.
+       ON `wgs_p` AND NOT ON THE GLOBAL, which is the same §3.7.3 arm `self` takes and the opposite object
+       from §10.2.1.2's `onmessage` pair further down. The discriminator is never where a handler ends up in a
+       browser, it is WHICH INTERFACE DECLARES IT: these six are WorkerGlobalScope's, and WorkerGlobalScope is
+       not [Global].
+       IT REACHES §8.1.8.1's SPECIAL ERROR EVENT HANDLING, which is what the member buys beyond its own
+       descriptor. That algorithm's step 4 — "Let special error event handling be true if event is an
+       ErrorEvent object, event's type is `error`, and event's currentTarget implements the
+       WindowOrWorkerGlobalScope mixin" — reads the mixin through
+       event_target_implements_window_or_worker_global_scope, whose WorkerGlobalScope half this file registers
+       at its own init; until now no worker global held an `onerror` entry in its event handler map, so that
+       third conjunct was never asked with one and the five-argument invocation was unreachable. The map is
+       written on the object the page assigns THROUGH — §8.1.8.1's determine the target of an event handler
+       returns its argument for anything that is not a body or frameset element — so `self.onerror = f` in a
+       worker writes the GLOBAL's map through an accessor that lives on the prototype, which is the object
+       HTML §8.1.4.6 Runtime script errors fires `error` at. */
+    event_target_install_handlers(ctx, wgs_p, EH_WORKER_GLOBAL_SCOPE);
 
     dwgs_p = JS_NewObjectProto(ctx, wgs_p);
     CHECK(!JS_IsException(dwgs_p), "DedicatedWorkerGlobalScope.prototype could not be allocated");
@@ -289,6 +363,10 @@ static void worker_global_scope_install_realm(JSContext *ctx)
     /* §10.2.1.1's `self` LANDED WHERE §3.7.3 PUT IT — asserted at the install, over the three objects this
        function has in hand, because the target of an install is an argument and a wrong one is silent. */
     WGS_ASSERT_PLACED(ctx, "self", WGS_ON_WGS_PROTO, g, dwgs_p, wgs_p);
+    /* …AND §10.2.1.1's SIX, over whichever rows the bit turned out to name rather than over a list restated
+       here. It runs at the same place and for the same reason `self`'s does: the target of an install is an
+       ARGUMENT, a wrong one is silent, and this function is where all three objects are in hand. */
+    WGS_ASSERT_HANDLERS_PLACED(ctx, g, dwgs_p, wgs_p);
 
     /* ---- §10.2.1.2's MEMBERS: THE OTHER ARM OF THE SAME SPLIT, ON THE INSTANCE -----------------------------
        WEB IDL §2.3 "Interface mixins" MAKES A MIXIN'S MEMBERS THIS INTERFACE'S OWN: "An includes statement is
@@ -412,25 +490,38 @@ void worker_global_scope_free(JSRuntime *rt)
  *     `typeof importScripts` is `"undefined"`, so a classic worker's first line throws.
  *
  * (4) §10.2.1.1's SIX EVENT HANDLER IDL ATTRIBUTES — `onerror`, `onlanguagechange`, `onoffline`, `ononline`,
- *     `onrejectionhandled`, `onunhandledrejection`. NOT COVERED: none of the six is installed. NEXT DIFF: a
- *     NEW bit in core/events/event_target.h's mask — EH_WORKER_GLOBAL_SCOPE — for the set §10.2.1.1's own
- *     table declares, which is the way that file already takes an interface's or a mixin's membership. It has
- *     to be a NEW bit and cannot reuse one: WorkerGlobalScope declares these six ON ITSELF (its IDL writes
- *     them in the interface, it includes no mixin that carries them), and every existing bit that holds any of
- *     the six holds dozens of names beside them — `EH_GLOBAL | EH_WINDOW` would put the whole of
- *     GlobalEventHandlers and WindowEventHandlers on a prototype whose IDL declares neither.
- *     `onerror` USED TO NEED A SECOND THING AND NO LONGER DOES — this entry said it "additionally needs
- *     `OnErrorEventHandler`'s five-argument invocation, which core/events/event_handler.c has for §8.1.8.1's
- *     Window `onerror` and which is a DIFFERENT member on a different interface", and that argument is
- *     RETIRED rather than deleted, because a reader who re-derives it will re-introduce it. It was true of a
- *     step 4 that asked the Window brand; §8.1.8.1's third conjunct is "event's currentTarget implements the
- *     WindowOrWorkerGlobalScope mixin", event_target_implements_window_or_worker_global_scope is that
- *     question, and this file registers the WorkerGlobalScope half of it at its own init — so the invocation
- *     and step 6's inverted reading are already waiting for the day the member is installed. What remains
- *     unbuilt here is the BIT and its rows, and nothing else. ABSENCE SHOWS AS:
- *     `self.onerror = f` creates an ordinary own data property on the global instead of writing §8.1.8.1's
- *     event handler map, so `Object.getOwnPropertyDescriptor(WorkerGlobalScope.prototype,"onerror")` is
- *     undefined and the handler never runs.
+ *     `onrejectionhandled`, `onunhandledrejection` — ARE BUILT, and this entry is kept because two of the
+ *     three things it said are now false and a reader who re-derives them will re-introduce them. It said
+ *     "none of the six is installed" and that the NEXT DIFF was a new EH_WORKER_GLOBAL_SCOPE bit; that bit
+ *     exists, it is carried by exactly those six rows of core/events/event_target.c's handler list, and the
+ *     install is at §3.7.3's not-[Global] arm above with a placement audit that DERIVES the set from those
+ *     rows. Its third claim was RIGHT and is why the member was worth building: `onerror` needed nothing
+ *     beyond the bit, because §8.1.8.1's step 4 had already stopped asking the Window brand.
+ *     WHAT IS STILL OWED IS NOT A MEMBER, IT IS A REALM. No host in this build calls
+ *     realm_install_intrinsics with `DedicatedWorkerGlobalScope`, so the exposure gate at the top of
+ *     worker_global_scope_install_realm returns before anything it builds is built — the six accessors, the
+ *     `self` accessor, the two prototypes, the two interface objects and every placement assert alike. What
+ *     DOES run today is worker_global_scope_init, which declares the class and hands the events layer HTML
+ *     §8.2's WorkerGlobalScope brand; the install itself has never executed in any realm. NEXT DIFF:
+ *     HTML §10.2.4 Processing model's run a worker, reached from §10.2.6.3 Dedicated workers and the Worker
+ *     interface's constructor, which is what builds such a realm; residual (5)(b) and (5)(c) name the same
+ *     two algorithms, so it is ONE subproblem and not three. HOW ITS ABSENCE SHOWS: `Worker` is not a
+ *     declared name in a Window realm, so a page's `new Worker(u)` throws ReferenceError on its first line
+ *     and there is no object for any of this to be a member of.
+ *     AND ONE ARM OF §8.1.8.1 STAYS UNEXERCISED FOR THAT REASON AND NOT FOR THIS ONE, which is worth
+ *     separating because the two look alike from outside. Special error event handling — step 4's
+ *     five-argument invocation and step 6's inverted reading — needs an ErrorEvent of type `error` whose
+ *     currentTarget is a worker global holding an `onerror` entry. The entry is now possible; the fire is
+ *     not, because HTML §8.1.4.6 Runtime script errors fires at the realm's global and no script runs in a
+ *     worker realm yet. So the member is a necessary step and not a sufficient one, and a report that says
+ *     the arm is now reachable is over-claiming by exactly one algorithm.
+ *     WHAT IS NOT A RESIDUAL HERE, stated because the reflex is to read it as one: `languagechange`,
+ *     `offline` and `online` are dispatched by no algorithm in this build — but nor are they for `Window`,
+ *     where the identical three rows have carried EH_WINDOW all along, so installing them on a second
+ *     declaring interface adds no shape-only member that was not already this list's standing state. The
+ *     three that DO have a producer reach the worker global unchanged: core/events/report_exception.c fires
+ *     `error` and core/html/unhandled_rejection.c fires `unhandledrejection` and `rejectionhandled`, each at
+ *     JS_GetGlobalObject of the running realm rather than at a Window.
  *
  * (5) §10.2.1.2's `name`, `postMessage` and `close` — the three members the interface DECLARES, as against the
  *     two its MessageEventTarget include brings, which are installed above. NOT COVERED: none of the three.

@@ -255,7 +255,25 @@ enum { EH_GLOBAL = 1, EH_WINDOW = 2, EH_DOCUMENT = 4, EH_SIGNAL = 8, EH_PORT = 1
           well, so each is one more bit on an entry that already exists — a name declared by two mixins is
           installed by both, which is exactly what the mask is for. A bit of its own is what keeps the pair off
           every other prototype: a CloseWatcher includes no mixin at all. */
-       EH_CLOSE_WATCHER = 1048576 };
+       EH_CLOSE_WATCHER = 1048576,
+       /* HTML §10.2.1.1 The WorkerGlobalScope common interface's OWN SIX, which that interface writes in its
+          own IDL block and reaches through no mixin at all: "The following are the event handlers (and their
+          corresponding event handler event types) that must be supported, as event handler IDL attributes, by
+          objects implementing the WorkerGlobalScope interface". Its two includes statements are
+          `WorkerGlobalScope includes WindowOrWorkerGlobalScope` (HTML §8.2 The WindowOrWorkerGlobalScope
+          mixin) and `WorkerGlobalScope includes FontFaceSource`, and NEITHER mixin declares an event handler
+          — so unlike EH_XHR or EH_PORT this bit is an interface's own set rather than a mixin's.
+          A BIT OF ITS OWN IS THE ONLY WAY TO SPELL THAT SET, and the reason is arithmetic rather than taste.
+          All six names already ride a bit here — `onerror` on EH_GLOBAL (GlobalEventHandlers') and the other
+          five on EH_WINDOW (WindowEventHandlers') — and each of those two carries DOZENS of names beside
+          them, so installing by either would put a whole mixin's set on WorkerGlobalScope.prototype, whose
+          IDL includes neither mixin. A name declared by two interfaces is installed by both and each carries
+          only its own set, which is exactly what a bitmask over names is for.
+          IT INSTALLS, which EH_MESSAGE_PORT's note above already states of every bit here but
+          EH_WINDOW_REFLECTING: core/workers/worker_global_scope.c passes
+          it alone, at Web IDL §3.7.3 Interface prototype object's not-[Global] arm, because WorkerGlobalScope
+          is `[Exposed=Worker]` and is not the [Global] interface — DedicatedWorkerGlobalScope is. */
+       EH_WORKER_GLOBAL_SCOPE = 2097152 };
 /* HTML §6.5 Activation behavior of elements' click() — whose step 4, "Fire a synthetic pointer event named
    click at this element, with the not trusted flag set", IS DOM §2.9 dispatch, so it is the same machine under
    a second entry rather than a second implementation of it. The method's other four steps ride that entry:
@@ -293,6 +311,16 @@ bool event_target_is_handler_attribute(const char *name);
    above make. The names are static. */
 int         event_target_handler_attribute_count(void);
 const char *event_target_handler_attribute_at(int i);
+/* …AND WHICH MIXINS ROW `i` CARRIES, so a component that installed by a bit can AUDIT WHAT THAT BIT PLACED
+   without restating the names. An install names a MIXIN and never a member list — that is the whole point of
+   the mask — so a caller checking Web IDL §3.7.3 Interface prototype object's placement of what it installed
+   has no set to walk unless it spells the names again, and a hand-copied list beside this file's own table is
+   the second copy every note in this enum argues against. Reading the rows back is the same derivation the
+   mask assertion at event_target_install_handlers makes: the rule is DERIVED from the list that owns it.
+   IT IS NOT A SECOND `event_target_is_handler_attribute`. That entry answers a question about §8.1.8.1 Event
+   handlers' CONTENT attributes and deliberately says no for the rows its own note enumerates; this hands back
+   the row's mixin membership unchanged, which is the only thing a placement audit can key on. */
+int         event_target_handler_attribute_mask(int i);
 
 /* ---- THE CONTENT-ATTRIBUTE HALF OF §8.1.8.1, whose ALGORITHM lives in core/html/event_handler_attribute.c ---
  *

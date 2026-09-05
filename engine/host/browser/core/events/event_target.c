@@ -1370,8 +1370,8 @@ static const IdlStepDecl AEL_DECL = { ael_step, sizeof(AelState), ael_visit, NUL
     X("ondurationchange", "durationchange", EH_GLOBAL)                                                           \
     X("onemptied", "emptied", EH_GLOBAL)                                                                         \
     X("onended", "ended", EH_GLOBAL)                                                                             \
-    X("onerror", "error", EH_GLOBAL | EH_WINDOW_REFLECTING | EH_XHR | EH_IDB_REQUEST | EH_IDB_TRANSACTION |      \
-                          EH_FILE_READER)                                                                        \
+    X("onerror", "error", EH_GLOBAL | EH_WINDOW_REFLECTING | EH_XHR | EH_IDB_REQUEST |                           \
+                          EH_IDB_TRANSACTION | EH_FILE_READER | EH_WORKER_GLOBAL_SCOPE)                          \
     X("onfocus", "focus", EH_GLOBAL | EH_WINDOW_REFLECTING)                                                      \
     X("onformdata", "formdata", EH_GLOBAL)                                                                       \
     X("oninput", "input", EH_GLOBAL)                                                                             \
@@ -1528,19 +1528,19 @@ static const IdlStepDecl AEL_DECL = { ael_step, sizeof(AelState), ael_visit, NUL
     X("onbeforeprint", "beforeprint", EH_WINDOW)                                                                 \
     X("onbeforeunload", "beforeunload", EH_WINDOW)                                                               \
     X("onhashchange", "hashchange", EH_WINDOW)                                                                   \
-    X("onlanguagechange", "languagechange", EH_WINDOW)                                                           \
+    X("onlanguagechange", "languagechange", EH_WINDOW | EH_WORKER_GLOBAL_SCOPE)                                  \
     X("onmessage", "message", EH_WINDOW | EH_PORT)                                                               \
     X("onmessageerror", "messageerror", EH_WINDOW | EH_PORT)                                                     \
-    X("onoffline", "offline", EH_WINDOW)                                                                         \
-    X("ononline", "online", EH_WINDOW)                                                                           \
+    X("onoffline", "offline", EH_WINDOW | EH_WORKER_GLOBAL_SCOPE)                                                \
+    X("ononline", "online", EH_WINDOW | EH_WORKER_GLOBAL_SCOPE)                                                  \
     X("onpagehide", "pagehide", EH_WINDOW)                                                                       \
     X("onpagereveal", "pagereveal", EH_WINDOW)                                                                   \
     X("onpageshow", "pageshow", EH_WINDOW)                                                                       \
     X("onpageswap", "pageswap", EH_WINDOW)                                                                       \
     X("onpopstate", "popstate", EH_WINDOW)                                                                       \
-    X("onrejectionhandled", "rejectionhandled", EH_WINDOW)                                                       \
+    X("onrejectionhandled", "rejectionhandled", EH_WINDOW | EH_WORKER_GLOBAL_SCOPE)                              \
     X("onstorage", "storage", EH_WINDOW)                                                                         \
-    X("onunhandledrejection", "unhandledrejection", EH_WINDOW)                                                   \
+    X("onunhandledrejection", "unhandledrejection", EH_WINDOW | EH_WORKER_GLOBAL_SCOPE)                          \
     X("onunload", "unload", EH_WINDOW)                                                                           \
     /* Document's own — §3.1.1 and the Page Visibility API. */                                                   \
     X("onreadystatechange", "readystatechange", EH_DOCUMENT | EH_XHR_READYSTATE)                                 \
@@ -1667,7 +1667,7 @@ static int g_handler_set_id[] = {
    written and a typo in either is a handler that never fires with nothing to say so. */
 static void eh_assert_types(void)
 {
-    int i, j, reflecting = 0, window = 0;
+    int i, j, reflecting = 0, window = 0, worker_global = 0;
 
     for (i = 0; i < EH_COUNT; i++) {
         const char *n = EH_NAME[i], *t = EH_TYPE[i];
@@ -1713,6 +1713,7 @@ static void eh_assert_types(void)
                "section and no name appears in both");
         if (EH_MASK[i] & EH_WINDOW_REFLECTING) reflecting++;
         if (EH_MASK[i] & EH_WINDOW) window++;
+        if (EH_MASK[i] & EH_WORKER_GLOBAL_SCOPE) worker_global++;
     }
     /* THE TWO SETS §8.1.8.1 STEP 2 TESTS AGAINST, COUNTED. Both are closed lists in §8.1.8.2 — its second table
        has SIX rows (onblur, onerror, onfocus, onload, onresize, onscroll) and §8.1.8.2.1's WindowEventHandlers
@@ -1729,6 +1730,26 @@ static void eh_assert_types(void)
            "§8.1.8.2.1's `interface mixin WindowEventHandlers` declares eighteen attribute members and this "
            "list marks a different number — the mixin is what §8.1.8.1's determine the target of an event "
            "handler step 2 names, and it is also the set a body and a frameset element expose");
+    /* AND THE THIRD CLOSED LIST A BIT HERE STANDS FOR, counted for the same reason and with one difference
+       worth stating: this one runs where the other two do — at the agent's own init — while the component
+       that INSTALLS by it (core/workers/worker_global_scope.c) is gated on a realm whose global names contain
+       `DedicatedWorkerGlobalScope`, and no host in this build creates one. So a count kept beside the install
+       would never execute; kept here it fires on every agent, which is what makes it a check rather than a
+       comment. The install site keeps the PLACEMENT audit, which needs the three objects and cannot live
+       here.
+       BOTH OPERANDS ARE INDEPENDENT: `worker_global` is walked out of the rows above, and SIX is the number
+       of rows HTML §10.2.1.1 The WorkerGlobalScope common interface's own table has. That interface reaches
+       these six through no mixin — its two includes statements are WindowOrWorkerGlobalScope and
+       FontFaceSource and neither declares an event handler — which is why the bit is one interface's own set
+       and why its size is a fact about that one table. */
+    DCHECK(worker_global == 6,
+           "HTML §10.2.1.1 The WorkerGlobalScope common interface's event handler table declares SIX event "
+           "handler IDL attributes — `onerror`, `onlanguagechange`, `onoffline`, `ononline`, "
+           "`onrejectionhandled`, `onunhandledrejection` — and a different number of this list's rows carries "
+           "EH_WORKER_GLOBAL_SCOPE. One too few and that member is silently absent from "
+           "WorkerGlobalScope.prototype; one too many and a name §10.2.1.1 does not declare is installed on a "
+           "prototype whose IDL has no such member, which no read a page makes by name can tell from the "
+           "member being there legitimately");
 }
 
 
@@ -2740,6 +2761,13 @@ const char *event_target_handler_attribute_at(int i)
 {
     DCHECK(i >= 0 && i < EH_COUNT, "an event handler content attribute was asked for by an out-of-range index");
     return EH_NAME[i];
+}
+
+int event_target_handler_attribute_mask(int i)
+{
+    DCHECK(i >= 0 && i < EH_COUNT,
+           "an event handler attribute's mixin mask was asked for by an out-of-range index");
+    return EH_MASK[i];
 }
 
 int event_target_handler_attribute_index(const char *name, size_t name_len)
