@@ -2399,9 +2399,17 @@ static const char *const EHG_STEPS[] = { EHG_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
     JSStepHdr hdr;
+    /* THE ONE-TIME PROLOGUE'S LATCH, A FIELD RATHER THAN THE STAGE, and it is not optional bookkeeping: a step
+       state is js_mallocz'd, and a ZEROED JSValue IS THE INTEGER 0 rather than JS_UNDEFINED — the engine says
+       so at tramp_step_state_new, where it declines to leave its own header slots to the same allocator. So
+       every owned slot below is placed HERE, before the first thing that could leave through the teardown,
+       which is §C-stack's rule that an init completes the state before anything that can throw. `ehc` cannot
+       serve as this latch even though it is also zero on entry: handler_compile_run RESETS it to zero when the
+       compile completes, so it answers "not started" again at exactly the moment the machine is finishing. */
+    uint8_t   started;
     /* handler_compile_run's OWN stage byte, which it documents as zero exactly when no compile is in flight —
-       so it doubles as this machine's "have I parked inside step 3" test and there is no second flag to keep
-       in step with it. */
+       so it is this machine's "have I parked inside step 3" test and there is no second flag to keep in step
+       with it. */
     uint8_t   ehc;
     uint8_t   cphase;   /* the program evaluation's call phase, borrowed by handler_compile_run */
     /* STEP 1's eventTarget, OWNED ACROSS THE PARK. It is re-derivable from the receiver — determine the target
@@ -2444,6 +2452,14 @@ static int ehg_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_c
     DCHECK(magic >= 0 && magic < EH_COUNT,
            "an event handler getter machine was minted over a magic the attribute list does not name");
     DCHECK(s->hdr.stage == EHG_GET, "§8.1.8.1's event handler getter resumed into a stage it does not have");
+
+    if (!s->started) {
+        int k;
+
+        s->started = 1;
+        s->target = s->result = JS_UNDEFINED;
+        STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
+    }
 
     /* THE RESUME COMES BACK INSIDE STEP 3, NOT AT STEP 1. `ehc` is non-zero exactly while the compile is in
        flight, so it is the whole of the routing: steps 1-2 are performed once, on the entry that finds it
