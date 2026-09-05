@@ -207,31 +207,122 @@ export async function loadIdl() {
            dictByName, dictInheritanceOf, dictChain, dictMembers, dictionaryTypesIn };
 }
 
-/* EVERY GLOBAL NAME WEB IDL EXPOSES ON WINDOW. Three sources, all spec text, and each was missing from an
+/* ONE READER FOR AN EXTENDED ATTRIBUTE'S RIGHT-HAND SIDE, because Web IDL gives every one of them the SAME
+ * two forms and this index used to answer that one question three different ways.
+ *
+ * Web IDL §2.14 Extended attributes is where the forms are given, and the ones that name identifiers are
+ * `ExtendedAttributeIdent` (`[Global=Window]`) and `ExtendedAttributeIdentList` (`[Exposed=(Window,Worker)]`),
+ * beside `ExtendedAttributeWildcard` (`[Exposed=*]`), which names no identifier and is not the absence of one.
+ * `ExtendedAttributeNamedArgList` is the shape `[LegacyFactoryFunction=Image(optional unsigned long w)]` takes,
+ * and webidl2 hands ITS rhs back as an `identifier` with the argument list carried separately — which is the
+ * one non-obvious fact this reader depends on and the reason source 3 below needs no special case. Checked by
+ * parsing one declaration of each form rather than by reading the grammar, because what this function must
+ * agree with is the PARSER's rendering of §2.14 and not §2.14 itself.
+ * (An earlier draft of this paragraph cited §2.12 and said there were four forms. §2.12 is "Objects
+ * implementing interfaces" and there are six. Both were written from recollection and both were wrong, which
+ * is the whole of why a number and a section go into a comment only after they have been fetched.)
+ * `windowGlobals` below had a hand-rolled reader per SOURCE: one inside `exposedOnWindow` that
+ * open-coded the string/array split, and one inside `legacyFactoryNames` that accepted `typeof rhs.value ===
+ * "string"` and would therefore have DROPPED an identifier list had one ever been written. That is two right
+ * answers to one question, which is the shape CLAUDE.md records as the one that drifts — and it is not a
+ * hypothetical here: it is exactly WHY the fourth source below was missing. A source whose reader is spelled
+ * at the source is a source somebody has to remember to spell, and §3.4.11's identifiers were the one nobody
+ * did. Routing all four through one spelling is the root fix; adding a fifth hand-rolled reader would have
+ * reproduced the cause while closing the symptom.
+ *
+ * IT LIVES HERE AND NOT IN idlgen.mjs, WHICH IS THE ONLY PLACE IT CAN LIVE. idlgen.mjs imports this file, so a
+ * helper kept there is unreachable from the index that needs it and the choice is between moving it up and
+ * writing a second copy. The same argument this file's own header makes for the corpus parse makes it for the
+ * corpus's extended attributes: there is exactly one thing this question can be answered from, so there is
+ * exactly one reader of it.
+ *
+ * NULL IS NOT THE EMPTY LIST AND NEITHER IS EXPOSED_STAR, and collapsing any pair of the three loses a fact a
+ * caller decides on: `null` is "the construct carries no such attribute at all", which §3.3.7 answers by
+ * walking outward rather than by defaulting; `[]` is "it carries one with no right-hand side", which §3.3.8
+ * [Global] reads as naming the interface's own identifier; and EXPOSED_STAR is `*`, which is every global
+ * rather than none. */
+export const EXPOSED_STAR = Symbol("[Exposed=*]");
+export const rhsNames = (ext) => {
+  if (!ext) return null;
+  if (!ext.rhs) return [];                                       // a bare [Global] names the interface itself
+  if (ext.rhs.type === "*") return EXPOSED_STAR;
+  if (ext.rhs.type === "identifier") return [ext.rhs.value];
+  if (ext.rhs.type === "identifier-list") return ext.rhs.value.map((v) => (v && v.value !== undefined ? v.value : v));
+  return null;
+};
+export const extOf = (node, name) => (node && node.extAttrs || []).find((a) => a.name === name);
+
+/* EVERY GLOBAL NAME WEB IDL EXPOSES ON WINDOW. FOUR sources, all spec text, and each was missing from an
  * earlier answer to this question with a measured cost:
  *   1. Every interface / namespace / callback interface DECLARED `[Exposed=Window]` (or `[Exposed=*]`). Web IDL
- *      §3.7 puts its interface OBJECT on the global, so `Node`, `Element`, `DOMException`, `WebSocket` are
- *      properties of Window that Window's own member list does not mention.
+ *      §3.7 Interfaces puts its interface OBJECT on the global, so `Node`, `Element`, `DOMException`,
+ *      `WebSocket` are properties of Window that Window's own member list does not mention.
  *   2. Every member of the Window interface itself, flattened through its mixins — `fetch`, `setTimeout`,
  *      `onload`, `location`.
- *   3. §3.7.2's legacy factory functions: `[LegacyFactoryFunction=Image(…)]` puts `Image` on the global as a
+ *   3. §3.7.2 Legacy factory functions: `[LegacyFactoryFunction=Image(…)]` puts `Image` on the global as a
  *      built-in function object under a name that is neither the interface's nor a member of Window. The corpus
  *      has three — Image, Option, Audio — and each is a name a page reaches for by writing `new Image()`.
- * Taken only where the interface carrying it is itself exposed on Window, because that is what decides whether
- * the function object is created in this global at all. */
+ *   4. §3.4.11 [LegacyWindowAlias]'s IDENTIFIERS, which is the same fact one legacy form over and was the one
+ *      this list was written without. Web IDL §3.7 Interfaces: "If the [LegacyWindowAlias] extended attribute
+ *      was specified on an exposed interface, then for each identifier in [LegacyWindowAlias]'s identifiers
+ *      there exists a corresponding property on the Window global object. The name of the property is the given
+ *      identifier, and its value is a reference to the interface object for the interface." The corpus declares
+ *      five across four interfaces — `webkitURL` for URL, and `SVGPoint`, `SVGRect`, `SVGMatrix`,
+ *      `WebKitCSSMatrix` for the geometry trio — and `webkitURL` is the ordinary blob-URL shim, which is to say
+ *      the single most frequently feature-detected name in this whole population.
+ *
+ * WHAT ITS ABSENCE COST, WHICH IS NOT THE COST THE OTHER THREE HAD. Sources 1-3 decide whether a name reaches
+ * browser/platform_names.h, and solver/absent.c's read hook does NOT throw on a name it finds there — it
+ * LEAVES THE READ ALONE, so ordinary ECMAScript semantics run and `if (window.webkitURL)` takes §10.1.8.1
+ * OrdinaryGet ( O, P, Receiver ) step 2.b's `undefined` arm. A name the table is MISSING takes the other arm:
+ * the hook mints an example-free concolic under the source identity of server-injected app state, and the
+ * guard FORKS. So the loss was not a missing throw. It was a fabricated world — an arm in which this engine
+ * pretends to hold an API it has not built, whose very next member call has nothing to reach, which is the
+ * mirror of the honest-absence silence and is the direction CLAUDE.md rates worse, because it manufactures a
+ * flow that dies one line later instead of one that quietly does not run.
+ *
+ * TAKEN ONLY WHERE THE INTERFACE CARRYING IT IS ITSELF EXPOSED ON WINDOW — one gate for sources 3 and 4 alike,
+ * and it is the spec's own gate for both: §3.8 Platform objects implementing interfaces step 3.2 puts a
+ * factory function wherever its interface goes, and §3.7's alias sentence quoted above says "on an exposed
+ * interface". §3.4.11 additionally requires Window to be in that exposure set ("The [LegacyWindowAlias]
+ * extended attribute must not be specified on an interface that does not include the Window interface in its
+ * exposure set"), so for an alias the gate is redundant with the conformance requirement rather than a
+ * narrowing of it.
+ *
+ * AND THE ALIAS'S EXPOSURE SET IS NOT ITS INTERFACE'S — A DISTINCTION THAT IS LOAD-BEARING ONE FILE OVER AND
+ * INERT HERE, SO IT IS NAMED RATHER THAN COPIED. idlgen.mjs's IDL_EXPOSURE rows carry a per-name SET, and
+ * there the alias row must be Window ALONE: three of the four aliased interfaces are `[Exposed=(Window,Worker)]`,
+ * so a row spelled from the interface's own set would put `SVGPoint` and its siblings in every worker realm.
+ * THIS table asks a single Window-only membership question, so the set never appears in the answer and the
+ * three `(Window,Worker)` interfaces pass the gate on their Window half exactly as they should. Copying the
+ * IDL_EXPOSURE line's shape here would be answering a question this table does not ask. */
 const exposedOnWindow = (node) => {
-  const ext = (node.extAttrs || []).find((a) => a.name === "Exposed");
-  if (!ext || !ext.rhs) return false;           // no [Exposed] at all: not a global constructor
-  const v = ext.rhs.value;
-  if (ext.rhs.type === "*") return true;        // [Exposed=*]
-  if (typeof v === "string") return v === "Window";
-  return Array.isArray(v) && v.some((x) => (x.value || x) === "Window");
+  const v = rhsNames(extOf(node, "Exposed"));
+  if (v === null) return false;                 // no [Exposed] at all: not a global constructor
+  if (v === EXPOSED_STAR) return true;          // [Exposed=*]
+  return v.includes("Window");
 };
 
-const legacyFactoryNames = (node) =>
-  (node.extAttrs || [])
-    .filter((a) => a.name === "LegacyFactoryFunction" && a.rhs && typeof a.rhs.value === "string")
-    .map((a) => a.rhs.value);
+/* §3.7.2's names. `rhsNames` is what reads them now: the reader that stood here required the rhs value to be a
+   string, which is `identifier` and silently not `identifier-list`. No corpus declaration takes the list form
+   today, so this is not a behaviour change — it is the removal of a second answer to a question that already
+   had one, and of the way this function would have gone quietly wrong on the day one did. */
+const legacyFactoryNames = (node) => {
+  const v = rhsNames(extOf(node, "LegacyFactoryFunction"));
+  return v === null || v === EXPOSED_STAR ? [] : v;
+};
+
+/* §3.4.11's identifiers, read through the same one reader. A bare `[LegacyWindowAlias]` gives `[]` and a `*`
+   gives EXPOSED_STAR; neither names an identifier, so neither can name a property, and both yield nothing here
+   rather than an empty name on the global. §3.4.11's own conformance requirements — the rhs form, at most one
+   attribute per interface, Window in the exposure set — are CHECKED where a row is EMITTED from them, in
+   idlgen.mjs's IDL_EXPOSURE derivation, because a violated one there changes what a row CLAIMS; this index
+   answers a membership question that a violation can only ever under-answer, and staying silent is the sound
+   direction for it. */
+const legacyWindowAliasNames = (node) => {
+  const v = rhsNames(extOf(node, "LegacyWindowAlias"));
+  return v === null || v === EXPOSED_STAR ? [] : v;
+};
 
 /* Walk the DECLARATIONS, not the merged map: `byName` keeps the first node it saw for a name and folds later
    members into it, so an interface first met as a `partial` (which carries no [Exposed]) loses the real
@@ -245,6 +336,7 @@ export function windowGlobals(idl) {
       continue;
     out.add(n.name);
     for (const f of legacyFactoryNames(n)) out.add(f);
+    for (const a of legacyWindowAliasNames(n)) out.add(a);
   }
   for (const m of idl.members("Window")) out.add(m);
   return out;
