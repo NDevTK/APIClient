@@ -1537,6 +1537,42 @@ static const char *HTML =
     "mbP2.moveBefore(mbEl, null);"
     "fetch('/api/movebeforece?v=' + (mbCe.join('') === 'cm' && mbEl.parentNode === mbP2"
     " ? 'ispreserved' : mbCe.join('') || 'none'));"
+    /* THE OTHER SIDE OF THE SAME MOVE — §4.13.6 "enqueue a custom element callback reaction" STEP 3, which is
+       what a class with NO `connectedMoveCallback` gets. Step 3.4 synthesizes a callback that calls
+       disconnectedCallback and then connectedCallback, so the move that reads 'm' above reads 'dc' here, and
+       the three arms below are step 3's three outcomes. It is the same tree edit either way, which is why the
+       callback trace is the only thing that can tell them apart.
+       ONE: the synthesis fires, in order. Appended is 'c', moved is 'd' then 'c' — 'cdc'.
+       TWO: step 3.3's "If connectedCallback and disconnectedCallback are null, then return" — a class with
+       none of the three is a move that enqueues NOTHING, and the counter proves it by staying 0 rather than
+       by nothing being observed.
+       THREE: step 3.4.1's call has no exception behavior stated, so Web IDL § 3.12 supplies rethrow — the
+       throw leaves the synthesized steps, step 1.3.1's own "report" reports it once, and 3.4.2 NEVER RUNS.
+       That is the assertion that separates ONE reaction holding two calls from TWO queued reactions, which
+       would run connectedCallback anyway and read 'cdc'. This one reads 'cd'. */
+    "var mbSyn = [];"
+    "customElements.define('x-synmoved', class extends HTMLElement {"
+      "connectedCallback(){ mbSyn.push('c'); }"
+      "disconnectedCallback(){ mbSyn.push('d'); } });"
+    "var mbS = document.createElement('x-synmoved'); mbP1.appendChild(mbS);"
+    "mbP2.moveBefore(mbS, null);"
+    "var mbNone = 0;"
+    "customElements.define('x-nonemoved', class extends HTMLElement {"
+      "adoptedCallback(){ mbNone++; } });"
+    "var mbN = document.createElement('x-nonemoved'); mbP1.appendChild(mbN);"
+    "mbP2.moveBefore(mbN, null);"
+    "var mbThrow = [];"
+    "customElements.define('x-throwmoved', class extends HTMLElement {"
+      "connectedCallback(){ mbThrow.push('c'); }"
+      "disconnectedCallback(){ mbThrow.push('d'); throw new Error('synmove'); } });"
+    "var mbT = document.createElement('x-throwmoved'); mbP1.appendChild(mbT);"
+    "mbP2.moveBefore(mbT, null);"
+    /* ONE VALUE AND NOT FOUR PARAMS, because the row that reads this is `emitted_record_has` — a substring
+       test inside the ONE record — so four params are four needles a row cannot ask for together. Joined with
+       `-`, which survives the query unencoded, the way /api/ifacestep's chain does. */
+    "fetch('/api/movebeforesyn?v=' + (mbSyn.join('') || 'none') + '-' + mbNone"
+    " + '-' + (mbThrow.join('') || 'none')"
+    " + '-' + (mbS.parentNode === mbP2 && mbT.parentNode === mbP2 ? 'moved' : 'wrong'));"
     /* §13.4 A PARSE OF THE PAGE'S SIZE. The tokeniser is fed ONE BYTE per step, so this assignment suspends
        about two thousand times — and a resume that loses the tokeniser's position gives a DIFFERENT TREE, not
        a slower one, which is what the counts below catch. The markup is built by doubling rather than by a
@@ -10064,6 +10100,11 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "/api/movebeforethrow",
           "HierarchyRequestError%3AHierarchyRequestError%3ANotFoundError%3AHierarchyRequestError" },
         { "/api/movebeforece",    "ispreserved" },   /* connectedMoveCallback ONLY — not the c/d pair */
+        /* §4.13.6 enqueue step 3 — the SAME move for a class with no connectedMoveCallback. `pair` is step
+           3.4's synthesis in order (append 'c', move 'd' then 'c'); `none` is step 3.3's return, which
+           enqueues nothing; `abandon` is 3.4.1's rethrow ending the synthesized callback, so 3.4.2 does not
+           run and the trace stops at 'd' — 'cdc' there would be two queued reactions instead of one. */
+        { "/api/movebeforesyn", "cdc-0-cd-moved" },
         { "/api/named",      "isnamed" },
         /* §4.2.6 installed from ONE place: Document gets the reads it never had, and the lookups scope to
            whichever node they were called on rather than to the global document */

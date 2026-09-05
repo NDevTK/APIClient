@@ -34,7 +34,13 @@ typedef enum {
    CONSTRUCTS a class. Stored as the reaction's own first element rather than inferred from whether entry 0
    happens to be callable, because a definition and a callback are both objects and a shape sniff would make
    the two arms one bug apart. */
-enum { CE_REACTION_CALLBACK = 0, CE_REACTION_UPGRADE = 1 };
+/* THE THIRD TYPE IS §4.13.6 ENQUEUE STEP 3'S SYNTHESIZED CALLBACK, and it is a type rather than two queued
+   reactions because step 3.4 makes ONE callback out of two calls. Web IDL § 3.12 Invoking callback functions
+   supplies "rethrow" wherever a specification states none — verbatim, "specifications which fail to provide a
+   value here when it would be mandatory should be understood as supplying \"rethrow\"" — so step 3.4.1's bare
+   "call disconnectedCallback with no arguments" ABANDONS step 3.4.2 when it throws, and the outer invoke's
+   "report" reports it ONCE. Two queued callback reactions would run the second anyway and report twice. */
+enum { CE_REACTION_CALLBACK = 0, CE_REACTION_UPGRADE = 1, CE_REACTION_MOVE_PAIR = 2 };
 
 /* HTML §4.13.5 "Upgrades"' UPGRADE AN ELEMENT, AS A CURSOR ITS CALLERS EMBED — the same shape as the drain
    below and for the same reason: its step 10.3 CONSTRUCTS the page's class, so the algorithm PARKS, and a
@@ -106,6 +112,13 @@ typedef struct {
     JSValue  cur;
     JSValue  cur_el;
     JSValue  cb[2 + CE_MAX_REACTION_ARGS];   /* the call request buffer: [this, callback, args…] */
+    /* WHICH OF §4.13.6 ENQUEUE STEP 3.4'S TWO CALLS A CE_REACTION_MOVE_PAIR REACTION IS ON — 0 before 3.4.1,
+       1 before 3.4.2, 2 when the synthesized callback has returned. `phase` cannot answer this: step_call_run
+       RESETS it to 0 when it hands back a result, so being about to issue the first call and being about to
+       issue the second are the same phase byte, and the resume would re-run disconnectedCallback for ever.
+       It is a CURSOR and not a second phase for that reason — the two calls share one request buffer and one
+       phase, in sequence, which is what makes them one reaction with two rest points. */
+    uint8_t  syn;
 } CustomElementQueue;
 
 /* WHICH ARM OF §4.13.6 step 1.3.1 THE DRAIN IS PARKED IN, so the calling machine can name its resume point as

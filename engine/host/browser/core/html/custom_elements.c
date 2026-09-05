@@ -1083,6 +1083,7 @@ void custom_elements_queue_init(CustomElementQueue *q)
     q->reporting = 0;
     q->exc = JS_UNDEFINED;
     q->cur = q->cur_el = JS_UNDEFINED;
+    q->syn = 0;
     report_exception_work_start(&q->rep);
     for (k = 0; k < 2 + CE_MAX_REACTION_ARGS; k++) q->cb[k] = JS_UNDEFINED;
 }
@@ -1103,7 +1104,21 @@ void custom_elements_queue_visit(JSContext *ctx, CustomElementQueue *q, JSStepVi
    calls: what it owes at a teardown is that algorithm's step 10 regardless-list, so it is unreadable away
    from the enter it undoes. */
 
-/* Which of §4.13.6 step 1.3.1's arms the drain last parked in — see custom_elements.h. */
+/* Which of §4.13.6 step 1.3.1's arms the drain last parked in — see custom_elements.h.
+   THREE ARMS AND NOT FOUR, ALTHOUGH THERE ARE NOW FOUR REST POINTS. An arm names WHERE a park is, and a
+   CE_REACTION_MOVE_PAIR reaction parks in exactly the place a CE_REACTION_CALLBACK one does: inside a
+   lifecycle callback, reached by step_call_run on `q->phase`. §4.13.6 enqueue step 6 says so in the spec's own
+   words — it adds "a new CALLBACK reaction … with callback function callback", callback being step 3.4's
+   synthesized steps — so step 1.3.1 dispatches it down the callback arm and CE_ARM_CALLBACK is the truthful
+   label. WHICH OF THE TWO CALLS is a cursor (`q->syn`), and a cursor is not an arm.
+   THE CRASH THAT USED TO STAND AT §4.13.6 ENQUEUE STEP 3 ASKED FOR THE FOURTH ARM, AND IT WAS WRONG ABOUT
+   THAT. Its remedy clause asked for a stage of its own in three enumerations it named — CE_ARM_* here,
+   CE_BACKUP_STAGES below, and IDL_EPILOGUE_STEPS in core/idl_args.c. All three exist and none of them needed
+   to grow, because an arm is a question about the resume POINT and the pair's two calls share one. The clause
+   asked for a second phase byte too, and one is enough: step_call_run resets it to 0 when it hands a result
+   back, so the two calls run through it in sequence. Only the reaction type and the cursor were real.
+   Recorded here rather than dropped, because the next reader to add a reaction type will reach for the same
+   clause and should reach for the resume point instead. */
 int custom_elements_queue_arm(const CustomElementQueue *q)
 {
     if (q->reporting) return CE_ARM_REPORT;
@@ -1465,6 +1480,10 @@ int custom_elements_reactions_invoke(JSContext *ctx, CustomElementQueue *q, JSVa
                 DCHECK(q->up.stage == CE_UP_IDLE,
                        "the drain finished its element queue while an upgrade was still in flight — §4.13.5 "
                        "completes or reports before the reaction that started it is released");
+                DCHECK(q->syn == 0,
+                       "the drain finished its element queue standing inside §4.13.6 enqueue step 3.4's "
+                       "synthesized callback — the cursor is cleared with the reaction it belongs to, so a "
+                       "queue that empties while it is set has released a reaction with a call still to make");
                 ce_array_set_len(ctx, q->queue, 0);
                 JS_FreeValue(ctx, cb_result);
                 JS_FreeValue(ctx, q->queue);
@@ -1521,6 +1540,46 @@ int custom_elements_reactions_invoke(JSContext *ctx, CustomElementQueue *q, JSVa
                 q->exc = thrown;
                 q->reporting = 1;
             }
+        } else if (type == CE_REACTION_MOVE_PAIR) {
+            /* §4.13.6 ENQUEUE STEP 3.4'S SYNTHESIZED CALLBACK, WHICH IS ONE REACTION WITH TWO REST POINTS.
+               3.4.1 calls disconnectedCallback and 3.4.2 calls connectedCallback, each "with no arguments" and
+               each only when it is not null — so this arm is a two-position cursor over the pair rather than a
+               second machine: `q->syn` says which call is next and `q->phase` is step_call_run's own, RESET to
+               0 every time it hands a result back, which is what lets one buffer serve both calls in turn.
+               A THROW FROM 3.4.1 ABANDONS 3.4.2. Web IDL § 3.12 Invoking callback functions supplies "rethrow"
+               where a specification states no exception behavior, so the throw leaves the synthesized steps
+               and is caught by step 1.3.1's own "report" — once, for the reaction, not once per call. */
+            JSValue con = JS_GetPropertyUint32(ctx, q->cur, 2);
+            int parked = 0;
+
+            /* AT LEAST ONE OF THE TWO IS CALLABLE, which is enqueue step 3.3's return stated from the other
+               end: a pair reaction is only ever built past it, and the two functions are captured INTO the
+               reaction rather than re-read off the definition, so nothing between the enqueue and here can
+               empty them. It is asserted and not merely relied on because the loop below consumes `cb_result`
+               through the request, and a pair that made no call at all would carry it out unfreed. */
+            DCHECK(JS_IsFunction(ctx, target) || JS_IsFunction(ctx, con),
+                   "HTML §4.13.6 enqueue step 3.4's synthesized callback reached the drain with neither a "
+                   "disconnectedCallback nor a connectedCallback — step 3.3 returns before building one");
+            while (q->syn < 2) {
+                JSValueConst callee = q->syn == 0 ? (JSValueConst)target : (JSValueConst)con;
+
+                if (!JS_IsFunction(ctx, callee)) { q->syn++; continue; }   /* "if … is not null" */
+                r = step_call_run(ctx, &q->phase, q->cb, 2 + CE_MAX_REACTION_ARGS, callee, q->cur_el, 0, NULL,
+                                  cb_result, &ignored, out_cb, out_argc);
+                cb_result = JS_UNDEFINED;         /* consumed by the request, on the ask and on the answer */
+                if (r > 0) { parked = 1; break; }      /* parked on the page's code */
+                q->syn++;
+                if (JS_IsException(ignored)) {
+                    ignored = JS_UNDEFINED;
+                    q->exc = JS_GetException(ctx);
+                    q->reporting = 1;
+                    q->syn = 2;                        /* the rethrow: 3.4.2 does not run */
+                }
+                JS_FreeValue(ctx, ignored);
+            }
+            JS_FreeValue(ctx, con);
+            JS_FreeValue(ctx, target);
+            if (parked) return JS_STEP_CALL;
         } else {
             DCHECK(type == CE_REACTION_CALLBACK,
                    "an element's reaction queue holds a reaction of a type §4.13.6 does not switch on");
@@ -1547,6 +1606,9 @@ int custom_elements_reactions_invoke(JSContext *ctx, CustomElementQueue *q, JSVa
         JS_FreeValue(ctx, q->cur);
         JS_FreeValue(ctx, q->cur_el);
         q->cur = q->cur_el = JS_UNDEFINED;
+        /* CLEARED WHERE THE REACTION IS RELEASED, and in no arm of its own — the three arms all reach here, so
+           a cursor reset written inside the arm that sets it is a reset the next arm added forgets. */
+        q->syn = 0;
     }
 }
 
@@ -2267,7 +2329,41 @@ static void ce_enqueue_args(JSContext *ctx, JSValueConst wrap, JSValueConst def,
     DCHECK(JS_IsObject(cbs), "a custom element definition carries no step 14.4 callback map — every definition "
                              "this component commits builds one, so a missing map is a definition it did not "
                              "make");
-    fn = JS_GetPropertyUint32(ctx, cbs, (uint32_t)callback);
+    fn = JS_GetPropertyUint32(ctx, cbs, (uint32_t)callback);                             /* step 2 */
+    /* §4.13.6 ENQUEUE STEP 3 — "If callbackName is "connectedMoveCallback" and callback is null:". It lives
+       HERE, in the enqueue, because that is the algorithm the spec puts it in: a step performed at the one
+       caller that happens to pass this callback name today is a step the next caller does not get. Its four
+       sub-steps: 3.1 and 3.2 read the "disconnectedCallback" and "connectedCallback" entries, 3.3 returns when
+       both are null, and 3.4 sets callback to a two-step body.
+       BOTH-NULL IS A RETURN AND IT IS THE COMMON CASE — a class with none of the three costs one map read. */
+    if (callback == CE_CB_CONNECTED_MOVE && !JS_IsFunction(ctx, fn)) {
+        JSValue dis = JS_GetPropertyUint32(ctx, cbs, (uint32_t)CE_CB_DISCONNECTED);      /* step 3.1 */
+        JSValue con = JS_GetPropertyUint32(ctx, cbs, (uint32_t)CE_CB_CONNECTED);         /* step 3.2 */
+
+        JS_FreeValue(ctx, fn);
+        JS_FreeValue(ctx, cbs);
+        if (!JS_IsFunction(ctx, dis) && !JS_IsFunction(ctx, con)) {                      /* step 3.3 */
+            JS_FreeValue(ctx, dis);
+            JS_FreeValue(ctx, con);
+            return;
+        }
+        /* STEP 3.4'S SYNTHESIZED CALLBACK IS ONE REACTION HOLDING TWO CALLS — see CE_REACTION_MOVE_PAIR in
+           custom_elements.h for why it is not two queued reactions. Both of 3.4's calls are "with no
+           arguments", so the reaction carries the two functions where a callback reaction carries its args. */
+        DCHECK(argc == 0, "a connectedMoveCallback reaction was enqueued with arguments — §4.13.6's one "
+                          "caller enqueues it with « », and step 3.4's synthesized body calls each of its "
+                          "two callbacks with no arguments");
+        reaction = JS_NewArray(ctx);
+        CHECK(!JS_IsException(reaction), "a custom element callback reaction could not be allocated");
+        JS_SetPropertyUint32(ctx, reaction, 0, JS_NewInt32(ctx, CE_REACTION_MOVE_PAIR));
+        JS_SetPropertyUint32(ctx, reaction, 1, dis);                                     /* 3.4.1's callee */
+        JS_SetPropertyUint32(ctx, reaction, 2, con);                                     /* 3.4.2's callee */
+        rq = ce_reaction_queue(ctx, wrap, 1);                                            /* step 6 */
+        ce_array_push(ctx, rq, reaction);
+        JS_FreeValue(ctx, rq);
+        ce_enqueue_element(ctx, wrap);                                                   /* step 7 */
+        return;
+    }
     JS_FreeValue(ctx, cbs);
     if (!JS_IsFunction(ctx, fn)) { JS_FreeValue(ctx, fn); return; }   /* step 4: the entry is null */
     if (callback == CE_CB_ATTR_CHANGED) {                             /* step 5 */
@@ -2527,7 +2623,7 @@ void custom_elements_disconnected(JSContext *ctx, lxb_dom_element_t *el)
 
 void custom_elements_moved(JSContext *ctx, lxb_dom_element_t *el)
 {
-    JSValue wrap, def, cbs, fn, dis, con;
+    JSValue wrap, def;
 
     if (!g_ready || !ce_upgradable_name(ctx, el)) return;
     wrap = node_wrap(ctx, lxb_dom_interface_node(el));
@@ -2538,50 +2634,14 @@ void custom_elements_moved(JSContext *ctx, lxb_dom_element_t *el)
        of about the move. */
     if (ce_state_of(ctx, wrap) != CE_STATE_CUSTOM) { JS_FreeValue(ctx, wrap); return; }
     def = ce_definition_of(ctx, wrap);
-    if (!JS_IsObject(def)) { JS_FreeValue(ctx, def); JS_FreeValue(ctx, wrap); return; }   /* enqueue step 1 */
-    cbs = JS_GetProperty(ctx, def, g_atom_callbacks);
-    DCHECK(JS_IsObject(cbs), "a custom element definition carries no step 14.4 callback map — every definition "
-                             "this component commits builds one");
-    fn = JS_GetPropertyUint32(ctx, cbs, (uint32_t)CE_CB_CONNECTED_MOVE);                  /* enqueue step 2 */
-    if (JS_IsFunction(ctx, fn)) {
-        JS_FreeValue(ctx, fn);
-        JS_FreeValue(ctx, cbs);
-        /* Steps 6-7 of §4.13.6's "enqueue a custom element callback reaction", through the one enqueue —
-           "connectedMoveCallback … and « »", no arguments. This is the whole point of the operation: the
-           element is told it moved and its connected state, its observers, its tab index and its internals
-           are all untouched. */
-        ce_enqueue(ctx, wrap, def, CE_CB_CONNECTED_MOVE);
-        JS_FreeValue(ctx, def);
-        JS_FreeValue(ctx, wrap);
-        return;
-    }
-    JS_FreeValue(ctx, fn);
-    /* §4.13.6 ENQUEUE STEP 3 — "If callbackName is "connectedMoveCallback" and callback is null:". Its four
-       sub-steps: 3.1 and 3.2 let disconnectedCallback and connectedCallback be the entries with those keys;
-       3.3 "If connectedCallback and disconnectedCallback are null, then return"; 3.4 sets callback to a
-       two-step body that calls disconnectedCallback then connectedCallback, each "with no arguments" and each
-       only when it is not null.
-       BOTH-NULL IS A RETURN AND IT IS THE COMMON CASE — a class with none of the three costs nothing here. */
-    dis = JS_GetPropertyUint32(ctx, cbs, (uint32_t)CE_CB_DISCONNECTED);
-    con = JS_GetPropertyUint32(ctx, cbs, (uint32_t)CE_CB_CONNECTED);
-    JS_FreeValue(ctx, cbs);
-    if (JS_IsFunction(ctx, dis) || JS_IsFunction(ctx, con))
-        /* THE SYNTHESIZED CALLBACK IS ONE REACTION THAT MAKES TWO CALLS, and §4.13.6's drain has ONE rest
-           point per reaction: `q->phase` is step_call_run's single phase and `q->cur` is the one reaction in
-           flight, so there is nowhere for "I have run the first of two and am parked inside it" to live. It is
-           not two reactions either — a throw from disconnectedCallback must ABORT the synthesized callback and
-           be reported once, where two queued reactions would run the second anyway.
-           WHAT TO BUILD: a third reaction type beside CE_REACTION_CALLBACK and CE_REACTION_UPGRADE holding
-           « disconnectedCallback, connectedCallback », a second phase and a two-step cursor on
-           CustomElementQueue, and its own stage in the three enumerations that must stay paired —
-           CE_ARM_* (custom_elements.h), CE_BACKUP_STAGES (this file, static-asserted against CE_ARM_*) and
-           IDL_EPILOGUE_STEPS (core/idl_args.c). */
-        DFAIL("HTML §4.13.6 enqueue a custom element callback reaction step 3: a custom element with a "
-              "connectedCallback or a disconnectedCallback and no connectedMoveCallback was moved into a "
-              "connected parent, and the synthesized disconnected-then-connected callback is a reaction that "
-              "makes TWO calls — §4.13.6's drain holds one rest point per reaction, so build the second one");
-    JS_FreeValue(ctx, dis);
-    JS_FreeValue(ctx, con);
+    /* "connectedMoveCallback … and « »", no arguments, through the ONE enqueue — which is the whole of this
+       operation and the whole of what it may do: the element is told it moved, and its connected state, its
+       observers, its tab index and its internals are all untouched. §4.13.6's enqueue owns step 2's map read,
+       step 3's synthesized disconnected-then-connected callback and step 1's no-definition return, so this
+       caller reads none of them. It USED TO read step 2's entry itself in order to decide between calling the
+       enqueue and aborting on step 3, and that arrangement put a step of the enqueue algorithm at its one
+       caller — where a second caller would not have found it. */
+    ce_enqueue(ctx, wrap, def, CE_CB_CONNECTED_MOVE);
     JS_FreeValue(ctx, def);
     JS_FreeValue(ctx, wrap);
 }

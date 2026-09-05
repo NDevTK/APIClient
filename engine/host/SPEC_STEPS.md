@@ -3716,7 +3716,12 @@ exceptions* list — is written `10.n` here and in the code; the other two are c
    `catch (e) { e instanceof TypeError }` answers false for it, and so does the corpus.
 2. **The upgrade is ENQUEUED, never performed, by "try to upgrade".** §4.13.5's "try to upgrade an
    element" is two steps — look the definition up, then *enqueue a custom element upgrade reaction* —
-   and §4.13.6's reaction queue therefore holds TWO KINDS of entry, which its invoke SWITCHES on.
+   and §4.13.6's reaction queue therefore holds MORE THAN ONE KIND of entry, which its invoke SWITCHES
+   on. There are THREE: the callback reaction, the upgrade reaction, and §4.13.6 enqueue step 3.4's
+   *synthesized* `disconnectedCallback`-then-`connectedCallback` callback, which is one reaction making
+   two calls (see §14.2 below). This said "TWO KINDS" while the third was an unbuilt capability the
+   component crashed on; the count is stated as the switch's shape rather than as a number for the
+   reason a number here is the thing that goes stale.
    This is not bookkeeping: the insertion that triggers an upgrade happens inside a C tree walk, and
    step 10.3 CONSTRUCTS the page's class. An upgrade performed at the insertion point would be a
    `JS_CallConstructor` from C, which is the drive-to-completion this engine aborts on.
@@ -3794,7 +3799,17 @@ in flight, which is what `custom_elements_queue_arm` reads.
 
 So the drain rests at **three** distinct spec steps, and each is a declared stage: the callback, the
 construct, and the report. One label for all three would name a resume point that means three
-things, which a cold-tier resume cannot report and a `step_stage_check` cannot assert. Those stages
+things, which a cold-tier resume cannot report and a `step_stage_check` cannot assert.
+
+**Three STAGES is not three REST POINTS, and the difference is what keeps the enumeration from
+growing.** §4.13.6 enqueue step 3.4's synthesized callback rests TWICE — once inside
+`disconnectedCallback` and once inside `connectedCallback` — and both rests are at the SAME spec
+step, because step 6 adds it as *a callback reaction* whose callback function is the synthesized
+steps, so step 1.3.1 dispatches it down the callback arm. WHICH of the two calls is in flight is a
+cursor on `CustomElementQueue` (`syn`), not a stage: a stage names where a park is and these two
+parks are in one place. A reaction type added later asks the same question — *does it rest anywhere
+the three stages do not name* — and only an answer of yes grows `CE_ARM_*`, `CE_BACKUP_STAGES` and
+`IDL_EPILOGUE_STEPS` together. Those stages
 are appended to EVERY declared member's list by `idl_method_id_step` (`IDL_EPILOGUE_STEPS`) and
 declared again for the backup queue's own machine, which static-asserts that its three enum values
 ARE `CE_ARM_CALLBACK`/`CE_ARM_UPGRADE`/`CE_ARM_REPORT`.
