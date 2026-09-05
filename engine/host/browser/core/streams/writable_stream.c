@@ -2055,10 +2055,12 @@ void writable_stream_init(JSContext *ctx)
     g_wr_ctor_stepid = idl_method_id_step(ctx, ONE_ANY, 1, NULL, 0, &js_gw_decl, GW_CTOR);
 }
 
-/* §5.2's, §5.3's AND §5.4's INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM, and the abstract operations read off
-   them while they are still the ones just installed. */
+/* §5.2's, §5.3's AND §5.4's INTERFACE PROTOTYPE OBJECTS AND INTERFACE OBJECTS, FOR ONE REALM, and the abstract
+   operations read off them while they are still the ones just installed — see the Web IDL §3.8 note below for
+   why the interface objects are here rather than in a per-document entry. */
 void writable_stream_install_protos(JSContext *ctx)
 {
+    JSValue global = JS_GetGlobalObject(ctx);
     JSValue ws_p, wr_p, wc_p, prev;
     int i;
 
@@ -2074,7 +2076,30 @@ void writable_stream_install_protos(JSContext *ctx)
     idl_install_step_method(ctx, ws_p, "abort", 0, g_op_stepid[OP_WS_ABORT]);
     idl_install_step_method(ctx, ws_p, "close", 0, g_op_stepid[OP_WS_CLOSE]);
     idl_install_method(ctx, ws_p, "getWriter", g_getwriter_stepid);
-    JS_SetClassProto(ctx, g_ws_class, ws_p);
+    /* WEB IDL §3.8 "Platform objects implementing interfaces" IS GIVEN A REALM, WHICH IS WHY THIS FILE'S THREE
+       INTERFACE OBJECTS ARE MINTED HERE. That algorithm opens "To define the global property references on
+       target, given realm realm" and its step 1 is "Let interfaces be a list that contains every interface
+       that is exposed in realm" — the population is a REALM's, and no Document appears in it. Streams §5.2
+       "The WritableStream class", §5.3 "The WritableStreamDefaultWriter class" and §5.4 "The
+       WritableStreamDefaultController class" all declare `[Exposed=*]`, so every realm owes all three; while
+       they were placed from core/platform.c's per-document column, a realm that reaches no
+       platform_document_install — a worker realm always, and a Window realm until a Document is installed over
+       it — carried none of them.
+       ALL THREE PROTOTYPES ARE IN HAND AT THE LINES THAT NEED THEM. The entry that used to place these read
+       each one back with JS_GetClassProto, one statement after this function had settled it. Nothing gains a
+       condition: Web IDL §3.3.7 "[Exposed]" step 1 is asked inside the door, off browser/idl_exposure.h's
+       generated row, exactly as it was from the other column. */
+    {
+        JSValue ctor;
+
+        DCHECK(g_ws_ctor_stepid >= 0, "WritableStream's interface object was minted before its constructor "
+                                      "was declared");
+        ctor = idl_step_constructor(ctx, "WritableStream", g_ws_ctor_stepid);
+        CHECK(!JS_IsException(ctor), "the WritableStream interface object could not be allocated");
+        JS_SetConstructor(ctx, ctor, ws_p);   /* borrows `ws_p`, which this function still owns */
+        idl_define_global_property_reference(ctx, global, "WritableStream", ctor);
+    }
+    JS_SetClassProto(ctx, g_ws_class, ws_p);   /* the realm owns it from here */
 
     wr_p = JS_NewObject(ctx);
     CHECK(!JS_IsException(wr_p), "WritableStreamDefaultWriter.prototype could not be allocated");
@@ -2086,6 +2111,17 @@ void writable_stream_install_protos(JSContext *ctx)
     idl_install_step_method(ctx, wr_p, "close", 0, g_op_stepid[OP_WR_CLOSE]);
     idl_install_step_method(ctx, wr_p, "write", 0, g_op_stepid[OP_WR_WRITE]);
     idl_install_step_method(ctx, wr_p, "releaseLock", 0, g_op_stepid[OP_WR_RELEASE]);
+    /* Streams §5.3 "The WritableStreamDefaultWriter class", over the prototype built just above. */
+    {
+        JSValue ctor;
+
+        DCHECK(g_wr_ctor_stepid >= 0, "WritableStreamDefaultWriter's interface object was minted before its "
+                                      "constructor was declared");
+        ctor = idl_step_constructor(ctx, "WritableStreamDefaultWriter", g_wr_ctor_stepid);
+        CHECK(!JS_IsException(ctor), "the writer interface object could not be allocated");
+        JS_SetConstructor(ctx, ctor, wr_p);
+        idl_define_global_property_reference(ctx, global, "WritableStreamDefaultWriter", ctor);
+    }
     JS_SetClassProto(ctx, g_wr_class, wr_p);
 
     wc_p = JS_NewObject(ctx);
@@ -2093,6 +2129,15 @@ void writable_stream_install_protos(JSContext *ctx)
     idl_interface_tag(ctx, wc_p, "WritableStreamDefaultController");
     idl_install_accessor(ctx, wc_p, "signal", js_wc_signal, 0, -1);
     idl_install_step_method(ctx, wc_p, "error", 0, g_op_stepid[OP_WC_ERROR]);
+    /* Streams §5.4 "The WritableStreamDefaultController class", which declares no constructor: Web IDL
+       §3.7.1 "Interface object" gives such an interface a function that throws — js_illegal_ctor. */
+    {
+        JSValue ctor = JS_NewCFunction2(ctx, js_illegal_ctor, "WritableStreamDefaultController", 0,
+                                        JS_CFUNC_constructor, 0);
+        CHECK(!JS_IsException(ctor), "the §5.4 controller interface object could not be allocated");
+        JS_SetConstructor(ctx, ctor, wc_p);
+        idl_define_global_property_reference(ctx, global, "WritableStreamDefaultController", ctor);
+    }
     JS_SetClassProto(ctx, g_wc_class, wc_p);
 
     realm_value_set(ctx, g_op_fn_slot[WS_OP_GET_WRITER],   JS_GetPropertyStr(ctx, ws_p, "getWriter"));
@@ -2107,42 +2152,7 @@ void writable_stream_install_protos(JSContext *ctx)
         CHECK(JS_IsFunction(ctx, fn), "a §5 abstract operation was not installed before it was captured");
         JS_FreeValue(ctx, fn);
     }
-}
-
-void writable_stream_install(JSContext *ctx, JSValueConst global)
-{
-    JSValue ctor;
-    DCHECK(g_ws_ctor_stepid >= 0, "WritableStream was installed before its constructor was declared");
-    ctor = idl_step_constructor(ctx, "WritableStream", g_ws_ctor_stepid);
-    CHECK(!JS_IsException(ctor), "the WritableStream interface object could not be allocated");
-    {
-        JSValue proto = JS_GetClassProto(ctx, g_ws_class);
-        DCHECK(!JS_IsNull(proto), "WritableStream was installed into a realm with no proto build");
-        JS_SetConstructor(ctx, ctor, proto);
-        JS_FreeValue(ctx, proto);
-    }
-    idl_define_global_property_reference(ctx, global, "WritableStream", ctor);
-
-    ctor = idl_step_constructor(ctx, "WritableStreamDefaultWriter", g_wr_ctor_stepid);
-    CHECK(!JS_IsException(ctor), "the writer interface object could not be allocated");
-    {
-        JSValue proto = JS_GetClassProto(ctx, g_wr_class);
-        DCHECK(!JS_IsNull(proto), "WritableStreamDefaultWriter was installed into a realm with no proto build");
-        JS_SetConstructor(ctx, ctor, proto);
-        JS_FreeValue(ctx, proto);
-    }
-    idl_define_global_property_reference(ctx, global, "WritableStreamDefaultWriter", ctor);
-
-    ctor = JS_NewCFunction2(ctx, js_illegal_ctor, "WritableStreamDefaultController", 0,
-                            JS_CFUNC_constructor, 0);
-    CHECK(!JS_IsException(ctor), "the §5.4 controller interface object could not be allocated");
-    {
-        JSValue proto = JS_GetClassProto(ctx, g_wc_class);
-        DCHECK(!JS_IsNull(proto), "WritableStreamDefaultController was installed into a realm with no proto build");
-        JS_SetConstructor(ctx, ctor, proto);
-        JS_FreeValue(ctx, proto);
-    }
-    idl_define_global_property_reference(ctx, global, "WritableStreamDefaultController", ctor);
+    JS_FreeValue(ctx, global);
 }
 
 void writable_stream_free(JSContext *ctx)

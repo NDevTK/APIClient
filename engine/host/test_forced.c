@@ -6334,6 +6334,70 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
            FALSE in the Window arm because that global has no §3.7.3 chain until window_install runs, TRUE in
            the worker arm because that global's chain reaches §2.7's prototype from its own realm intrinsic. */
         { "addEventListener",  false, true },
+        /* THE STREAMS STANDARD'S THIRTEEN, WHICH IS EVERY INTERFACE IT DECLARES, AND THE MIXIN THAT IS NOT
+           ONE OF THEM. §4.2 "The ReadableStream class", §4.4 "The ReadableStreamDefaultReader class", §4.5
+           "The ReadableStreamBYOBReader class", §4.6 "The ReadableStreamDefaultController class", §4.7 "The
+           ReadableByteStreamController class", §4.8 "The ReadableStreamBYOBRequest class", §5.2 "The
+           WritableStream class", §5.3 "The WritableStreamDefaultWriter class", §5.4 "The
+           WritableStreamDefaultController class", §6.2 "The TransformStream class", §6.3 "The
+           TransformStreamDefaultController class", §7.2 "The ByteLengthQueuingStrategy class" and §7.3 "The
+           CountQueuingStrategy class" are ALL `[Exposed=*]` — there is no Window-only member of this group and
+           no member whose set differs from any other's, which is not what the XHR group above looked like and
+           is why every row here runs in the same direction. All thirteen were placed from core/platform.c's
+           per-document column, which a realm whose global implements DedicatedWorkerGlobalScope never reaches.
+           THE THIRTEEN SPAN FIVE COMPONENTS AND FOUR core/platform.c ROWS, which is why all thirteen are
+           listed rather than one per row: the banner above records `MessagePort` for exactly this reason — a
+           component that carried one Web IDL §3.8 property reference across a change and dropped its sibling
+           passed — and this group offers that mistake in every one of the five files at once.
+           §4.7's AND §4.8's PAIR IS THE DISCRIMINATING ONE, and it discriminates against the SAME mistake
+           `ProgressEvent` above does, in a second and sharper instance rather than on a new axis.
+           core/streams/readable_byte_stream.c has NO ROW of core/platform.c's own — `readable_stream`'s
+           declare half registers its prototype intrinsic, and its two interface objects were placed by a
+           `readable_byte_stream_install(ctx, global)` call on the LAST LINE of the per-document install being
+           deleted here. A conversion that read the `readable_stream` row, carried §4's four names into
+           readable_stream_install_protos and deleted that function with the tail call inside it takes §4.7's
+           and §4.8's names out of EVERY realm, Window included, and NOTHING says so: both prototypes are
+           still built by their own intrinsic and every byte controller this engine mints still wears the right
+           one, so only the two page-visible constructor names are gone. The other eleven rows pass under that
+           mistake and these two fail. WHAT IS SHARPER THAN THE `ProgressEvent` CASE is that the sibling file's
+           prototype builder is itself an already-registered realm intrinsic, so the merge has a SECOND wrong
+           spelling — folding §4.7's and §4.8's mints into readable_stream_install_protos, whose intrinsic runs
+           FIRST — and only the tail-call one is silent: the other reaches for a class prototype that does not
+           exist yet and stops at that file's own DCHECK.
+           `ReadableStreamGenericReader` IS `TextDecoderCommon`'S TEST OVER THIS STANDARD, AND IT IS STRONGER
+           HERE BECAUSE TWO OF THE MOVED INTERFACES INCLUDE IT. §4.3 "The ReadableStreamGenericReader mixin" is
+           an `interface mixin`, and Web IDL §3.7.1 "Interface object" is written of an interface, so a mixin
+           has no interface object and Web IDL §3.8's step 1 population ("every interface that is exposed in
+           realm") does not contain it — while `ReadableStreamDefaultReader includes
+           ReadableStreamGenericReader` and `ReadableStreamBYOBReader includes ReadableStreamGenericReader` put
+           it one declaration away from two names that DO move, in the same IDL file. A conversion that placed
+           what its component's IDL declares rather than what §3.8 enumerates passes all thirteen rows above
+           and fails this one. It is also blind to browser/idl_exposure.h for the reason that header states in
+           as many words — a name with no row is EXPOSED, and a mixin gets no row — so
+           `idl_exposed_in_realm("ReadableStreamGenericReader")` answers TRUE and the door would place the name
+           in BOTH realms without a word.
+           AT THE PARENT REVISION the thirteen rows below FAIL in BOTH arms, because this runs after
+           tf_agent_init and before tf_realm_install reaches platform_document_install, so no document column
+           has run over either realm. The mixin row passes at the parent and passes here; it is a discriminator
+           against a wrong conversion, never a calibration row, and it is reported as such. */
+        { "ReadableStream",                   true, true },   /* Streams §4.2, [Exposed=*] */
+        { "ReadableStreamDefaultReader",      true, true },   /* Streams §4.4, [Exposed=*] */
+        { "ReadableStreamBYOBReader",         true, true },   /* Streams §4.5, [Exposed=*] */
+        { "ReadableStreamDefaultController",  true, true },   /* Streams §4.6, [Exposed=*] */
+        /* Streams §4.7 and §4.8 — the two whose component has no core/platform.c row and whose placement was
+           a tail call on the last line of the install being deleted */
+        { "ReadableByteStreamController",     true, true },
+        { "ReadableStreamBYOBRequest",        true, true },
+        { "WritableStream",                   true, true },   /* Streams §5.2, [Exposed=*] */
+        { "WritableStreamDefaultWriter",      true, true },   /* Streams §5.3, [Exposed=*] */
+        { "WritableStreamDefaultController",  true, true },   /* Streams §5.4, [Exposed=*] */
+        { "TransformStream",                  true, true },   /* Streams §6.2, [Exposed=*] */
+        { "TransformStreamDefaultController", true, true },   /* Streams §6.3, [Exposed=*] */
+        { "ByteLengthQueuingStrategy",        true, true },   /* Streams §7.2, [Exposed=*] */
+        { "CountQueuingStrategy",             true, true },   /* Streams §7.3, [Exposed=*] */
+        /* Streams §4.3 "The ReadableStreamGenericReader mixin" — a MIXIN that BOTH readers above include, so
+           no Web IDL §3.8 property reference exists for it anywhere */
+        { "ReadableStreamGenericReader",      false, false },
     };
     JSContext *worker = JS_NewContext(JS_GetRuntime(ctx));
     /* THE SECOND WORKER REALM IS THE OTHER ARM OF ONE STEP, and it is a second REALM because that is the only
@@ -6539,6 +6603,51 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
         JS_FreeValue(worker, wgs_c);
         JS_FreeValue(worker, dwgs_c);
         JS_FreeValue(worker, wg);
+    }
+    /* STREAMS §4.4 AND §4.5 ARE ONE CLASS AND TWO INTERFACES, SO THEIR PROTOTYPES MUST BE TWO OBJECTS — the
+       one thing about this group the EXPECT table above cannot ask. That table is [[HasProperty]], so it sees
+       a NAME and never the OBJECT behind it: every row of it passes over a `ReadableStreamBYOBReader` whose
+       `prototype` is `ReadableStreamDefaultReader.prototype`.
+       AND THAT IS THE WRONG ANSWER THIS PARTICULAR CONVERSION OFFERS. §4.4 "The ReadableStreamDefaultReader
+       class" and §4.5 "The ReadableStreamBYOBReader class" wear ONE class in this engine — one reader record,
+       one lock — so §4.5's prototype cannot live in the class slot and sits in a per-realm value slot inside a
+       nested block of readable_stream_install_protos. A mint written where the eye naturally puts it, after
+       that block closes, has `reader_p` in scope and the BYOB prototype not, and quietly hands §4.5's
+       constructor the prototype §4.4 owns. Web IDL §3.7.1 "Interface object" defines the slot this reads —
+       "PropertyDescriptor{[[Value]]: proto, [[Writable]]: false, [[Enumerable]]: false, [[Configurable]]:
+       false}" — so the two objects are readable without running any of the page's code, and the identity is
+       decidable here where a name is not.
+       A PAGE READS THE DIFFERENCE AS A BRAND TEST: `reader instanceof ReadableStreamBYOBReader` is true of
+       EVERY reader under the wrong answer, because §3.7.1's `prototype` is the object ECMAScript §7.3.21
+       "OrdinaryHasInstance ( ctor, instance )" reads — its step 4 is "Let proto be ? Get(ctor, "prototype")",
+       and every step after it walks the instance's chain looking for THAT object — and
+       §4.4.3 "Constructor, methods, and properties"'s `read()` and §4.5.3 "Constructor, methods, and
+       properties"'s `read(view)` are different operations behind those two prototypes. It is measured in the
+       WORKER realm because that is the realm this conversion adds the two names to; the Window realm's answer
+       is the same object graph built by the same intrinsic. */
+    {
+        JSValue wg2 = JS_GetGlobalObject(worker);
+        JSValue byob_c = tf_own_data_value(worker, wg2, "ReadableStreamBYOBReader", "global object");
+        JSValue def_c = tf_own_data_value(worker, wg2, "ReadableStreamDefaultReader", "global object");
+        JSValue byob_p = tf_own_data_value(worker, byob_c, "prototype",
+                                           "ReadableStreamBYOBReader interface object");
+        JSValue def_p = tf_own_data_value(worker, def_c, "prototype",
+                                          "ReadableStreamDefaultReader interface object");
+
+        CHECK(JS_VALUE_GET_PTR(byob_p) != JS_VALUE_GET_PTR(def_p),
+              "Streams §4.5 The ReadableStreamBYOBReader class and §4.4 The ReadableStreamDefaultReader class "
+              "share ONE interface prototype object in this realm, and they are two interfaces: Web IDL §3.7.3 "
+              "Interface prototype object creates one per interface per realm, and §3.7.1 Interface object "
+              "hangs each interface object's `prototype` on its own. The two wear one CLASS here — one reader "
+              "record and one lock — so §4.5's prototype is a per-realm value slot rather than the class slot, "
+              "and an interface object minted where only the default reader's prototype is in scope takes that "
+              "one. A page reads it as `reader instanceof ReadableStreamBYOBReader` answering true for every "
+              "reader, and as §4.5.3's `read(view)` and §4.4.3's `read()` sharing a prototype they do not share");
+        JS_FreeValue(worker, byob_p);
+        JS_FreeValue(worker, def_p);
+        JS_FreeValue(worker, byob_c);
+        JS_FreeValue(worker, def_c);
+        JS_FreeValue(worker, wg2);
     }
     /* AND THE §8.1.3.5 MEASUREMENT RUNS AFTER THE LOOP ABOVE, WHICH IS AN ORDERING AND NOT A TIDY-UP. The
        EXPECT table is this fixture's CONTROL: it exists so a build whose per-realm intrinsics stopped

@@ -2623,6 +2623,7 @@ void readable_byte_stream_install_protos(JSContext *ctx)
 {
     static const char *const BC_NAMES[3] = { "enqueue", "close", "error" };
     static const char *const BQ_NAMES[2] = { "respond", "respondWithNewView" };
+    JSValue global = JS_GetGlobalObject(ctx);
     JSValue ctrl_p, req_p, prev;
     int i;
 
@@ -2646,6 +2647,25 @@ void readable_byte_stream_install_protos(JSContext *ctx)
               "streams: a §4.7 controller member §4.9.1's byte tee performs was not installed before capture");
         realm_value_set(ctx, g_byte_ctrl_fn_slot[i], fn);
     }
+    /* WEB IDL §3.8 "Platform objects implementing interfaces" IS GIVEN A REALM, so §4.7's interface object is
+       minted where its prototype was built. That algorithm opens "To define the global property references on
+       target, given realm realm" and its step 1 is "Let interfaces be a list that contains every interface
+       that is exposed in realm" — the population is a REALM's, and no Document appears in it. Streams §4.7
+       "The ReadableByteStreamController class" declares `[Exposed=*]`, so every realm owes the name; it was
+       placed from core/platform.c's per-document column, which a worker realm never reaches.
+       THIS COMPONENT HAS NO ROW OF core/platform.c's OWN, which is what made the old placement fragile rather
+       than merely misplaced: readable_stream.c's init registers this intrinsic and the per-document entry that
+       used to place these two names was a call on the LAST LINE of readable_stream_install. A conversion that
+       moved §4's four names into readable_stream_install_protos and deleted that function with the tail call
+       inside it would have taken §4.7's and §4.8's names out of EVERY realm, Window included, with nothing to
+       say so — every prototype here is still built, and only the page-visible constructor names are gone.
+       Nothing gains a condition: Web IDL §3.3.7 "[Exposed]" step 1 is asked inside the door, off
+       browser/idl_exposure.h's generated row, exactly as it was from the other column. */
+    {
+        JSValue ctor = idl_interface_object(ctx, "ReadableByteStreamController", ctrl_p);
+        CHECK(!JS_IsException(ctor), "the byte controller interface object could not be allocated");
+        idl_define_global_property_reference(ctx, global, "ReadableByteStreamController", ctor);
+    }
     JS_SetClassProto(ctx, g_bctrl_class, ctrl_p);
 
     req_p = JS_NewObject(ctx);
@@ -2654,6 +2674,14 @@ void readable_byte_stream_install_protos(JSContext *ctx)
     idl_install_accessor(ctx, req_p, "view", js_byobreq_view, 0, -1);
     for (i = 0; i < 2; i++)
         idl_install_step_method(ctx, req_p, BQ_NAMES[i], 1, g_byobreq_stepids[i]);
+    /* Streams §4.8 "The ReadableStreamBYOBRequest class" is `[Exposed=*]` too, and it is the SIBLING the note
+       above is about: one component, two Web IDL §3.8 property references, and a conversion that carried one
+       across and dropped the other would leave a realm holding half of what this file owes it. */
+    {
+        JSValue ctor = idl_interface_object(ctx, "ReadableStreamBYOBRequest", req_p);
+        CHECK(!JS_IsException(ctor), "the BYOB request interface object could not be allocated");
+        idl_define_global_property_reference(ctx, global, "ReadableStreamBYOBRequest", ctor);
+    }
     JS_SetClassProto(ctx, g_byobreq_class, req_p);
 
     /* THE TWO §4.9.5 RESPONDS ARE MINTED RATHER THAN READ: they are abstract operations, so no interface
@@ -2664,25 +2692,7 @@ void readable_byte_stream_install_protos(JSContext *ctx)
         CHECK(JS_IsFunction(ctx, fn), "streams: a §4.9.5 respond operation could not be minted");
         realm_value_set(ctx, g_byte_ctrl_fn_slot[i ? RBC_RESPOND_VIEW : RBC_RESPOND], fn);
     }
-}
-
-void readable_byte_stream_install(JSContext *ctx, JSValueConst global)
-{
-    JSValue proto, ctor;
-
-    proto = JS_GetClassProto(ctx, g_bctrl_class);
-    DCHECK(!JS_IsNull(proto), "ReadableByteStreamController was installed into a realm with no proto build");
-    ctor = idl_interface_object(ctx, "ReadableByteStreamController", proto);
-    JS_FreeValue(ctx, proto);
-    CHECK(!JS_IsException(ctor), "the byte controller interface object could not be allocated");
-    idl_define_global_property_reference(ctx, global, "ReadableByteStreamController", ctor);
-
-    proto = JS_GetClassProto(ctx, g_byobreq_class);
-    DCHECK(!JS_IsNull(proto), "ReadableStreamBYOBRequest was installed into a realm with no proto build");
-    ctor = idl_interface_object(ctx, "ReadableStreamBYOBRequest", proto);
-    JS_FreeValue(ctx, proto);
-    CHECK(!JS_IsException(ctor), "the BYOB request interface object could not be allocated");
-    idl_define_global_property_reference(ctx, global, "ReadableStreamBYOBRequest", ctor);
+    JS_FreeValue(ctx, global);
 }
 
 void readable_byte_stream_free(void)

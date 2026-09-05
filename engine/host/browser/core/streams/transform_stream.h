@@ -6,8 +6,9 @@
 #include "quickjs.h"
 
 void transform_stream_init(JSContext *ctx);
-void transform_stream_install_protos(JSContext *ctx);   /* §6's two prototypes, for ONE realm */
-void transform_stream_install(JSContext *ctx, JSValueConst global);
+/* §6.2's and §6.3's prototypes and INTERFACE OBJECTS, for ONE realm — Web IDL §3.8 "Platform objects
+   implementing interfaces" is given a realm, so there is no per-document half to declare here. */
+void transform_stream_install_protos(JSContext *ctx);
 void transform_stream_free(JSContext *ctx);
 
 /* IS THIS A TransformStream? A brand test, for the same reason §4's and §5's exist. */

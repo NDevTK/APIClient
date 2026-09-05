@@ -655,10 +655,6 @@ static void r_simple_dialogs(JSRuntime *rt) { (void)rt; simple_dialogs_free(); }
 /* ---- the document half ---------------------------------------------------------------------------------- */
 
 static void i_form_data(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; form_data_install(c, g); }
-static void i_readable_stream(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; readable_stream_install(c, g); }
-static void i_queuing_strategy(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; queuing_strategy_install(c, g); }
-static void i_writable_stream(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; writable_stream_install(c, g); }
-static void i_transform_stream(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; transform_stream_install(c, g); }
 static void i_blob(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; blob_install(c, g); }
 /* THE ADDRESS, NOT THE ORIGIN. `window.origin` is §4.7's serialization OF the address, so a host that handed
    this the origin got a `location`-free Window whose own `origin` was re-derived from a string that was
@@ -732,10 +728,27 @@ static const PlatformComponent PLATFORM[] = {
     { "url",                 d_url,                 NULL },
     { "url_search_params",   d_usp,                 NULL },
     { "form_data",           d_form_data,           i_form_data },
-    { "readable_stream",     d_readable_stream,     i_readable_stream },
-    { "queuing_strategy",    d_queuing_strategy,    i_queuing_strategy },
-    { "writable_stream",     d_writable_stream,     i_writable_stream },
-    { "transform_stream",    d_transform_stream,    i_transform_stream },
+    /* NO DOCUMENT HALF. The Streams Standard declares THIRTEEN interfaces and every one of them is
+       `[Exposed=*]` — §4.2 "The ReadableStream class", §4.4 "The ReadableStreamDefaultReader class", §4.5 "The
+       ReadableStreamBYOBReader class", §4.6 "The ReadableStreamDefaultController class", §4.7 "The
+       ReadableByteStreamController class", §4.8 "The ReadableStreamBYOBRequest class", §5.2 "The
+       WritableStream class", §5.3 "The WritableStreamDefaultWriter class", §5.4 "The
+       WritableStreamDefaultController class", §6.2 "The TransformStream class", §6.3 "The
+       TransformStreamDefaultController class", §7.2 "The ByteLengthQueuingStrategy class" and §7.3 "The
+       CountQueuingStrategy class" — and Web IDL §3.8 "Platform objects implementing interfaces" is "To define
+       the global property references on target, given realm realm" whose step 1 is "Let interfaces be a list
+       that contains every interface that is exposed in realm" — a REALM, with no Document in the algorithm.
+       Each component's own realm intrinsic now places its interface objects beside the prototypes it already
+       built there, so a realm that reaches no platform_document_install gets all thirteen.
+       THE COUNT IS THIRTEEN AND THE ROWS ARE FOUR, which is the thing to know before touching one of them:
+       §4.7's and §4.8's belong to core/streams/readable_byte_stream.c, which has NO ROW HERE AT ALL — its
+       prototypes come from a second realm intrinsic that `readable_stream`'s declare half registers, and its
+       two interface objects used to be placed by a call on the last line of the per-document install this
+       comment replaces. */
+    { "readable_stream",     d_readable_stream,     NULL },
+    { "queuing_strategy",    d_queuing_strategy,    NULL },
+    { "writable_stream",     d_writable_stream,     NULL },
+    { "transform_stream",    d_transform_stream,    NULL },
     { "blob",                d_blob,                i_blob },
     /* NO DOCUMENT HALF. Encoding §7.2 Interface TextDecoder, §7.4 Interface TextEncoder, §7.5 Interface
        TextDecoderStream and §7.6 Interface TextEncoderStream all declare `[Exposed=*]`, and Web IDL §3.8

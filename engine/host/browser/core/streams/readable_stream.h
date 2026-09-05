@@ -7,8 +7,9 @@
 #include "quickjs.h"
 
 void readable_stream_init(JSContext *ctx);
-void readable_stream_install_protos(JSContext *ctx);   /* §4's four prototypes, for ONE realm */
-void readable_stream_install(JSContext *ctx, JSValueConst global);
+/* §4.2's, §4.4's, §4.5's and §4.6's prototypes and INTERFACE OBJECTS, for ONE realm — Web IDL §3.8 "Platform
+   objects implementing interfaces" is given a realm, so there is no per-document half to declare here. */
+void readable_stream_install_protos(JSContext *ctx);
 void readable_stream_free(JSContext *ctx);
 
 /* A STREAM OVER BYTES THE HOST ALREADY HAS — `blob.stream()`, and every other place a spec answers with a

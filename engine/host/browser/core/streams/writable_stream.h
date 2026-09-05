@@ -6,8 +6,9 @@
 #include "quickjs.h"
 
 void writable_stream_init(JSContext *ctx);
-void writable_stream_install_protos(JSContext *ctx);   /* §5's three prototypes, for ONE realm */
-void writable_stream_install(JSContext *ctx, JSValueConst global);
+/* §5.2's, §5.3's and §5.4's prototypes and INTERFACE OBJECTS, for ONE realm — Web IDL §3.8 "Platform objects
+   implementing interfaces" is given a realm, so there is no per-document half to declare here. */
+void writable_stream_install_protos(JSContext *ctx);
 void writable_stream_free(JSContext *ctx);
 
 /* IS THIS A WritableStream? §4.2's `pipeTo` takes one, and a union arm is a brand test. */

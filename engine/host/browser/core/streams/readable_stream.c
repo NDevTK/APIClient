@@ -4915,6 +4915,7 @@ void readable_stream_init(JSContext *ctx)
 void readable_stream_install_protos(JSContext *ctx)
 {
     static const char *const CTRL_NAMES[RS_CTRL_N] = { "enqueue", "close", "error" };
+    JSValue global = JS_GetGlobalObject(ctx);
     JSValue stream_p, reader_p, ctrl_p, prev;
     int i;
 
@@ -4938,7 +4939,35 @@ void readable_stream_install_protos(JSContext *ctx)
        another, so it belongs to neither half — but `pipeTo` and `pipeThrough` are §4.2's MEMBERS, and this is
        the prototype they go on. The declaration is piping's; the placement is this interface's. */
     pipe_install(ctx, stream_p);
-    JS_SetClassProto(ctx, g_stream_class, stream_p);
+    /* WEB IDL §3.8 "Platform objects implementing interfaces" IS GIVEN A REALM, WHICH IS WHY THE FOUR
+       INTERFACE OBJECTS OF THIS FILE ARE MINTED HERE. That algorithm opens "To define the global property
+       references on target, given realm realm" and its step 1 is "Let interfaces be a list that contains every
+       interface that is exposed in realm" — the population is a REALM's, and no Document appears in it.
+       Streams §4.2 "The ReadableStream class", §4.4 "The ReadableStreamDefaultReader class", §4.5 "The
+       ReadableStreamBYOBReader class" and §4.6 "The ReadableStreamDefaultController class" all declare
+       `[Exposed=*]`, so every realm owes all four; while they were placed from core/platform.c's per-document
+       column, a realm that reaches no platform_document_install — a worker realm always, and a Window realm
+       until a Document is installed over it — carried none of them.
+       EACH PROTOTYPE IS IN HAND AT THE LINE THAT NEEDS IT, which is the other half of the argument: the entry
+       that used to place these read all four back with JS_GetClassProto or readable_byob_reader_proto, one
+       statement after this function had settled them. §4.5's is the one that shows why that matters — it is
+       the SAME CLASS as §4.4's reader, so it does not live in the class slot at all, and a mint written where
+       only `reader_p` is in scope gives the BYOB reader §4.4's prototype and is silent about it.
+       Nothing gains a condition: Web IDL §3.3.7 "[Exposed]" step 1 is asked inside the door, off
+       browser/idl_exposure.h's generated row, exactly as it was from the other column. */
+    {
+        JSValue ctor;
+
+        DCHECK(g_ctor_stepid >= 0, "ReadableStream's interface object was minted before its constructor was "
+                                   "declared");
+        ctor = idl_step_constructor(ctx, "ReadableStream", g_ctor_stepid);
+        CHECK(!JS_IsException(ctor), "the ReadableStream interface object could not be allocated");
+        JS_SetConstructor(ctx, ctor, stream_p);   /* borrows `stream_p`, which this function still owns */
+        /* §4.2's `from` is STATIC, so it lives on the interface object rather than the prototype. */
+        idl_install_method(ctx, ctor, "from", g_from_ctor_stepid);
+        idl_define_global_property_reference(ctx, global, "ReadableStream", ctor);
+    }
+    JS_SetClassProto(ctx, g_stream_class, stream_p);   /* the realm owns it from here */
 
     ctrl_p = JS_NewObject(ctx);
     CHECK(!JS_IsException(ctrl_p), "the controller prototype could not be allocated");
@@ -4947,6 +4976,15 @@ void readable_stream_install_protos(JSContext *ctx)
     for (i = 0; i < RS_CTRL_N; i++)
         JS_SetPropertyStr(ctx, ctrl_p, CTRL_NAMES[i],
                           JS_NewCFunction2(ctx, NULL, CTRL_NAMES[i], 1, JS_CFUNC_step, g_ctrl_stepids[i]));
+    /* Streams §4.6 "The ReadableStreamDefaultController class", which declares no constructor: Web IDL §3.7.1
+       "Interface object" gives such an interface a function that throws, which is what js_illegal_ctor is. */
+    {
+        JSValue ctor = JS_NewCFunction2(ctx, js_illegal_ctor, "ReadableStreamDefaultController", 0,
+                                        JS_CFUNC_constructor, 0);
+        CHECK(!JS_IsException(ctor), "the controller interface object could not be allocated");
+        JS_SetConstructor(ctx, ctor, ctrl_p);   /* .prototype and .constructor, both directions */
+        idl_define_global_property_reference(ctx, global, "ReadableStreamDefaultController", ctor);
+    }
     JS_SetClassProto(ctx, g_ctrl_class, ctrl_p);
 
     reader_p = JS_NewObject(ctx);
@@ -4956,6 +4994,17 @@ void readable_stream_install_protos(JSContext *ctx)
     idl_install_step_method(ctx, reader_p, "releaseLock", 0, g_release_stepids[0]);
     idl_install_step_method(ctx, reader_p, "read", 0, g_read_stepid);
     idl_install_step_method(ctx, reader_p, "cancel", 0, g_cancel_stepids[CANCEL_ON_DEFAULT]);
+    /* Streams §4.4 "The ReadableStreamDefaultReader class", over the prototype built two lines up. */
+    {
+        JSValue ctor;
+
+        DCHECK(g_reader_ctor_stepid >= 0, "ReadableStreamDefaultReader's interface object was minted before "
+                                          "its constructor was declared");
+        ctor = idl_step_constructor(ctx, "ReadableStreamDefaultReader", g_reader_ctor_stepid);
+        CHECK(!JS_IsException(ctor), "the reader interface object could not be allocated");
+        JS_SetConstructor(ctx, ctor, reader_p);
+        idl_define_global_property_reference(ctx, global, "ReadableStreamDefaultReader", ctor);
+    }
     JS_SetClassProto(ctx, g_reader_class, reader_p);
 
     /* §4.5's ReadableStreamBYOBReader, whose THREE machine members — §4.5's own `read(view, options)` and
@@ -4975,6 +5024,20 @@ void readable_stream_install_protos(JSContext *ctx)
            realm_value_set takes `byob_p`. */
         realm_value_set(ctx, g_rs_fn_slot[RSF_BYOB_READ],    JS_GetPropertyStr(ctx, byob_p, "read"));
         realm_value_set(ctx, g_rs_fn_slot[RSF_BYOB_RELEASE], JS_GetPropertyStr(ctx, byob_p, "releaseLock"));
+        /* §4.5's interface object, MINTED INSIDE THIS BLOCK BECAUSE ITS PROTOTYPE ONLY EXISTS HERE. `byob_p`
+           is not a class prototype — §4.4's reader and §4.5's are one class, so this one is a per-realm value
+           slot — and a mint written after this block closes has `reader_p` in scope and `byob_p` not, which is
+           §4.4's prototype under §4.5's name and reads as correct from every angle a name-level check has. */
+        {
+            JSValue ctor;
+
+            DCHECK(g_byob_ctor_stepid >= 0, "ReadableStreamBYOBReader's interface object was minted before "
+                                            "its constructor was declared");
+            ctor = idl_step_constructor(ctx, "ReadableStreamBYOBReader", g_byob_ctor_stepid);
+            CHECK(!JS_IsException(ctor), "the BYOB reader interface object could not be allocated");
+            JS_SetConstructor(ctx, ctor, byob_p);
+            idl_define_global_property_reference(ctx, global, "ReadableStreamBYOBReader", ctor);
+        }
         realm_value_set(ctx, g_byob_proto_slot, byob_p);
     }
 
@@ -4996,57 +5059,7 @@ void readable_stream_install_protos(JSContext *ctx)
               "streams: a controller member the tee performs was not installed before it was captured");
         realm_value_set(ctx, g_ctrl_fn_slot[i], fn);
     }
-}
-
-void readable_stream_install(JSContext *ctx, JSValueConst global)
-{
-    JSValue ctor;
-    DCHECK(g_ctor_stepid >= 0, "ReadableStream was installed before its constructor was declared");
-    ctor = idl_step_constructor(ctx, "ReadableStream", g_ctor_stepid);
-    CHECK(!JS_IsException(ctor), "the ReadableStream interface object could not be allocated");
-    {
-        JSValue proto = JS_GetClassProto(ctx, g_stream_class);
-        DCHECK(!JS_IsNull(proto), "ReadableStream was installed into a realm with no proto build");
-        JS_SetConstructor(ctx, ctor, proto);
-        JS_FreeValue(ctx, proto);
-    }
-    /* §4.2's `from` is STATIC, so it lives on the interface object rather than the prototype. */
-    idl_install_method(ctx, ctor, "from", g_from_ctor_stepid);
-    idl_define_global_property_reference(ctx, global, "ReadableStream", ctor);
-
-    ctor = idl_step_constructor(ctx, "ReadableStreamDefaultReader", g_reader_ctor_stepid);
-    CHECK(!JS_IsException(ctor), "the reader interface object could not be allocated");
-    {
-        JSValue proto = JS_GetClassProto(ctx, g_reader_class);
-        DCHECK(!JS_IsNull(proto), "ReadableStreamDefaultReader was installed into a realm with no proto build");
-        JS_SetConstructor(ctx, ctor, proto);
-        JS_FreeValue(ctx, proto);
-    }
-    idl_define_global_property_reference(ctx, global, "ReadableStreamDefaultReader", ctor);
-
-    ctor = idl_step_constructor(ctx, "ReadableStreamBYOBReader", g_byob_ctor_stepid);
-    CHECK(!JS_IsException(ctor), "the BYOB reader interface object could not be allocated");
-    {
-        JSValue proto = readable_byob_reader_proto(ctx);
-        DCHECK(JS_IsObject(proto), "ReadableStreamBYOBReader was installed into a realm with no proto build");
-        JS_SetConstructor(ctx, ctor, proto);
-        JS_FreeValue(ctx, proto);
-    }
-    idl_define_global_property_reference(ctx, global, "ReadableStreamBYOBReader", ctor);
-
-    ctor = JS_NewCFunction2(ctx, js_illegal_ctor, "ReadableStreamDefaultController", 0,
-                            JS_CFUNC_constructor, 0);
-    CHECK(!JS_IsException(ctor), "the controller interface object could not be allocated");
-    {
-        JSValue proto = JS_GetClassProto(ctx, g_ctrl_class);
-        DCHECK(!JS_IsNull(proto), "ReadableStreamDefaultController was installed into a realm with no proto build");
-        JS_SetConstructor(ctx, ctor, proto);
-        JS_FreeValue(ctx, proto);
-    }   /* .prototype and .constructor, both directions */
-    idl_define_global_property_reference(ctx, global, "ReadableStreamDefaultController", ctor);
-
-    /* §4.7's and §4.8's interface objects are their component's. */
-    readable_byte_stream_install(ctx, global);
+    JS_FreeValue(ctx, global);
 }
 
 void readable_stream_free(JSContext *ctx)

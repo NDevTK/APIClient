@@ -1487,10 +1487,12 @@ void transform_stream_init(JSContext *ctx)
     realm_declare_intrinsic(transform_stream_install_protos);
 }
 
-/* §6.2's AND §6.3's INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM, and §9.3's four operations read off them. */
+/* §6.2's AND §6.3's INTERFACE PROTOTYPE OBJECTS AND INTERFACE OBJECTS, FOR ONE REALM, and §9.3's four
+   operations read off them — see the Web IDL §3.8 note below for why the interface objects are here. */
 void transform_stream_install_protos(JSContext *ctx)
 {
     static const char *const CN[3] = { "enqueue", "terminate", "error" };
+    JSValue global = JS_GetGlobalObject(ctx);
     JSValue ts_p, tc_p, prev;
     int k;
 
@@ -1504,7 +1506,29 @@ void transform_stream_install_protos(JSContext *ctx)
     idl_interface_tag(ctx, ts_p, "TransformStream");
     idl_install_accessor(ctx, ts_p, "readable", js_ts_get, TS_READABLE, -1);
     idl_install_accessor(ctx, ts_p, "writable", js_ts_get, TS_WRITABLE, -1);
-    JS_SetClassProto(ctx, g_ts_class, ts_p);
+    /* WEB IDL §3.8 "Platform objects implementing interfaces" IS GIVEN A REALM, WHICH IS WHY THIS FILE'S TWO
+       INTERFACE OBJECTS ARE MINTED HERE. That algorithm opens "To define the global property references on
+       target, given realm realm" and its step 1 is "Let interfaces be a list that contains every interface
+       that is exposed in realm" — the population is a REALM's, and no Document appears in it. Streams §6.2
+       "The TransformStream class" and §6.3 "The TransformStreamDefaultController class" both declare
+       `[Exposed=*]`, so every realm owes both names; while they were placed from core/platform.c's
+       per-document column, a realm that reaches no platform_document_install — a worker realm always, and a
+       Window realm until a Document is installed over it — carried neither.
+       BOTH PROTOTYPES ARE IN HAND AT THE LINES THAT NEED THEM. The entry that used to place these read each
+       one back with JS_GetClassProto, one statement after this function had settled it. Nothing gains a
+       condition: Web IDL §3.3.7 "[Exposed]" step 1 is asked inside the door, off browser/idl_exposure.h's
+       generated row, exactly as it was from the other column. */
+    {
+        JSValue ctor;
+
+        DCHECK(g_ctor_stepid >= 0, "TransformStream's interface object was minted before its constructor was "
+                                   "declared");
+        ctor = idl_step_constructor(ctx, "TransformStream", g_ctor_stepid);
+        CHECK(!JS_IsException(ctor), "the TransformStream interface object could not be allocated");
+        JS_SetConstructor(ctx, ctor, ts_p);   /* borrows `ts_p`, which this function still owns */
+        idl_define_global_property_reference(ctx, global, "TransformStream", ctor);
+    }
+    JS_SetClassProto(ctx, g_ts_class, ts_p);   /* the realm owns it from here */
 
     tc_p = JS_NewObject(ctx);
     CHECK(!JS_IsException(tc_p), "the §6.3 controller prototype could not be allocated");
@@ -1513,6 +1537,15 @@ void transform_stream_install_protos(JSContext *ctx)
     idl_install_step_method(ctx, tc_p, "enqueue", 0, g_op_stepid[OP_CTRL_ENQUEUE]);
     idl_install_step_method(ctx, tc_p, "error", 0, g_op_stepid[OP_CTRL_ERROR]);
     idl_install_step_method(ctx, tc_p, "terminate", 0, g_op_stepid[OP_CTRL_TERMINATE]);
+    /* Streams §6.3 "The TransformStreamDefaultController class", which declares no constructor: Web IDL
+       §3.7.1 "Interface object" gives such an interface a function that throws — js_illegal_ctor. */
+    {
+        JSValue ctor = JS_NewCFunction2(ctx, js_illegal_ctor, "TransformStreamDefaultController", 0,
+                                        JS_CFUNC_constructor, 0);
+        CHECK(!JS_IsException(ctor), "the §6.3 controller interface object could not be allocated");
+        JS_SetConstructor(ctx, ctor, tc_p);
+        idl_define_global_property_reference(ctx, global, "TransformStreamDefaultController", ctor);
+    }
     JS_SetClassProto(ctx, g_tc_class, tc_p);
 
     /* §9.3's four operations as FUNCTION OBJECTS. The three controller ones are read off the prototype rather
@@ -1529,6 +1562,7 @@ void transform_stream_install_protos(JSContext *ctx)
               "streams: a §6.4 controller member this component just installed is not a function");
         realm_value_set(ctx, g_ts_fn_slot[TS_OP_ENQUEUE + k], fn);
     }
+    JS_FreeValue(ctx, global);
 }
 
 JSValue transform_stream_op(JSContext *ctx, TransformStreamOp which)
@@ -1550,33 +1584,6 @@ JSValueConst transform_stream_writable(JSValueConst stream)
     TsData *t = ts_of(stream);
     DCHECK(t != NULL, "the writable half of something that is not a TransformStream was asked for");
     return t->writable;
-}
-
-void transform_stream_install(JSContext *ctx, JSValueConst global)
-{
-    JSValue ctor;
-
-    DCHECK(g_ctor_stepid >= 0, "TransformStream was installed before its constructor was declared");
-    ctor = idl_step_constructor(ctx, "TransformStream", g_ctor_stepid);
-    CHECK(!JS_IsException(ctor), "the TransformStream interface object could not be allocated");
-    {
-        JSValue proto = JS_GetClassProto(ctx, g_ts_class);
-        DCHECK(!JS_IsNull(proto), "TransformStream was installed into a realm with no proto build");
-        JS_SetConstructor(ctx, ctor, proto);
-        JS_FreeValue(ctx, proto);
-    }
-    idl_define_global_property_reference(ctx, global, "TransformStream", ctor);
-
-    ctor = JS_NewCFunction2(ctx, js_illegal_ctor, "TransformStreamDefaultController", 0,
-                            JS_CFUNC_constructor, 0);
-    CHECK(!JS_IsException(ctor), "the §6.3 controller interface object could not be allocated");
-    {
-        JSValue proto = JS_GetClassProto(ctx, g_tc_class);
-        DCHECK(!JS_IsNull(proto), "the §6.3 controller was installed into a realm with no proto build");
-        JS_SetConstructor(ctx, ctor, proto);
-        JS_FreeValue(ctx, proto);
-    }
-    idl_define_global_property_reference(ctx, global, "TransformStreamDefaultController", ctor);
 }
 
 void transform_stream_free(JSContext *ctx)

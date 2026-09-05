@@ -192,10 +192,12 @@ void queuing_strategy_init(JSContext *ctx)
     realm_declare_intrinsic(queuing_strategy_install_protos);
 }
 
-/* §7's TWO INTERFACE PROTOTYPE OBJECTS AND THEIR SIZE FUNCTIONS, FOR ONE REALM. */
+/* §7's TWO INTERFACE PROTOTYPE OBJECTS, THEIR SIZE FUNCTIONS AND THEIR TWO INTERFACE OBJECTS, FOR ONE
+   REALM — see the Web IDL §3.8 note at the loop for why the last of those three is here. */
 void queuing_strategy_install_protos(JSContext *ctx)
 {
     static const char *const NAMES[QS_N] = { "CountQueuingStrategy", "ByteLengthQueuingStrategy" };
+    JSValue global = JS_GetGlobalObject(ctx);
     JSValue size[QS_N];
     int i;
 
@@ -225,34 +227,38 @@ void queuing_strategy_install_protos(JSContext *ctx)
                "`strategy.size.length`");
     }
 #endif
+    /* WEB IDL §3.8 "Platform objects implementing interfaces" IS GIVEN A REALM, WHICH IS WHY THE INTERFACE
+       OBJECT IS MINTED HERE AND NOT FROM A DOCUMENT. That algorithm opens "To define the global property
+       references on target, given realm realm" and its step 1 is "Let interfaces be a list that contains every
+       interface that is exposed in realm" — the population is a REALM's, and no Document appears in it.
+       Streams §7.3 "The CountQueuingStrategy class" and §7.2 "The ByteLengthQueuingStrategy class" both
+       declare `[Exposed=*]`, so every realm owes both names; while these two were placed from
+       core/platform.c's per-document column, a realm that reaches no platform_document_install — a worker
+       realm always, and a Window realm until a Document is installed over it — carried neither.
+       THE PROTOTYPE IS IN HAND AT THIS LINE, which is the other half of the argument. The entry that used to
+       place them read each prototype back out of this realm's value slot with realm_value_get, one statement
+       after the loop below had put it there — a second answer to a question already settled, and the reason
+       the mint belongs inside the loop that builds the object it needs rather than beside it.
+       NOTHING GAINS A CONDITION: Web IDL §3.3.7 "[Exposed]" step 1 is asked inside the door, off
+       browser/idl_exposure.h's generated row, exactly as it was from the other column. */
     for (i = 0; i < QS_N; i++) {
         JSValue proto = JS_NewObject(ctx);
+        JSValue ctor;
+
         CHECK(!JS_IsException(proto), "a queuing strategy prototype could not be allocated");
         idl_interface_tag(ctx, proto, NAMES[i]);
         idl_install_accessor(ctx, proto, "highWaterMark", js_qs_hwm, 0, -1);
         idl_install_accessor(ctx, proto, "size", js_qs_size, 0, -1);
-        realm_value_set(ctx, g_qs_proto_slot[i], proto);
-        realm_value_set(ctx, g_size_fn_slot[i], size[i]);
-    }
-}
-
-void queuing_strategy_install(JSContext *ctx, JSValueConst global)
-{
-    static const char *const NAMES[QS_N] = { "CountQueuingStrategy", "ByteLengthQueuingStrategy" };
-    int i;
-
-    for (i = 0; i < QS_N; i++) {
-        JSValue ctor;
-        DCHECK(g_qs_ctor_stepid[i] >= 0, "a queuing strategy was installed before it was declared");
+        DCHECK(g_qs_ctor_stepid[i] >= 0, "a queuing strategy interface object was minted before its "
+                                         "constructor was declared");
         ctor = idl_step_constructor(ctx, NAMES[i], g_qs_ctor_stepid[i]);
         CHECK(!JS_IsException(ctor), "a queuing strategy interface object could not be allocated");
-        {
-            JSValue proto = realm_value_get(ctx, g_qs_proto_slot[i]);
-            JS_SetConstructor(ctx, ctor, proto);
-            JS_FreeValue(ctx, proto);
-        }
+        JS_SetConstructor(ctx, ctor, proto);   /* borrows `proto`, which this loop still owns */
         idl_define_global_property_reference(ctx, global, NAMES[i], ctor);
+        realm_value_set(ctx, g_qs_proto_slot[i], proto);   /* the realm owns it from here */
+        realm_value_set(ctx, g_size_fn_slot[i], size[i]);
     }
+    JS_FreeValue(ctx, global);
 }
 
 void queuing_strategy_free(JSContext *ctx)

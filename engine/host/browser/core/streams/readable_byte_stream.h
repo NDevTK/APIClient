@@ -14,8 +14,14 @@
 #include "core/streams/stream_work.h"
 
 void readable_byte_stream_init(JSContext *ctx);            /* from readable_stream_init */
-void readable_byte_stream_install_protos(JSContext *ctx);  /* from readable_stream_install_protos */
-void readable_byte_stream_install(JSContext *ctx, JSValueConst global);
+/* §4.7's and §4.8's prototypes and INTERFACE OBJECTS, per realm. IT IS ITS OWN REALM INTRINSIC and is NOT
+   called from readable_stream_install_protos, which is what the comment here used to say: readable_stream.c's
+   init registers the two side by side with realm_declare_intrinsic, in that order, so this one runs SECOND and
+   over a realm the first has already finished with. The distinction is load-bearing rather than pedantic — a
+   reader who believes the two are one function has every reason to mint these two names in the other one, and
+   there the byte controller's class prototype does not exist yet. Web IDL §3.8 "Platform objects implementing
+   interfaces" is given a realm, so there is no per-document half to declare here. */
+void readable_byte_stream_install_protos(JSContext *ctx);
 void readable_byte_stream_free(void);
 
 /* IS THIS A §4.7 CONTROLLER? The one question §4.9.2's polymorphic call is: `getReader({mode:"byob"})` is a
