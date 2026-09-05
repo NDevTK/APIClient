@@ -1917,13 +1917,14 @@ static JSValue handler_current(JSContext *ctx, JSValueConst target, const char *
                  stood here said the opposite. RETIRED TEXT, unquoted because it is this file's and not a
                  standard's: the primitive to reach for is js_parse_fn_ctor_source's end-of-input pin, asked
                  for by whichever flag this compile ends up carrying — never a plain Script eval of a
-                 synthesized wrapper — so the pin goes first. THAT PIN CANNOT BE ASKED FOR HERE. js_parse_fn_ctor_source is reached only from JS_EVAL_FLAG_FUNCTION_CTOR, and
-                 its first act is js_parse_expect(s, '(') followed by a DCHECK that the next token is
-                 `function` or the `async` pseudo-keyword — so a source beginning with a `with` head is one it
-                 refuses by construction, and no flag makes it accept one. The clause named a mechanism as
-                 reachable when it is not, which is the direction CLAUDE.md says a next-diff clause goes wrong
-                 in; a lane obeying it literally would have gone to widen a parser entry that has no business
-                 knowing what an event handler is.
+                 synthesized wrapper — so the pin goes first.
+                 THAT PIN CANNOT BE ASKED FOR HERE. js_parse_fn_ctor_source is reached only from
+                 JS_EVAL_FLAG_FUNCTION_CTOR, and its first act is js_parse_expect(s, '(') followed by a DCHECK that
+                 the next token is `function` or the `async` pseudo-keyword — so a source beginning with a `with`
+                 head is one it refuses by construction, and no flag makes it accept one. The clause named a mechanism
+                 as reachable when it is not, which is the direction CLAUDE.md says a next-diff clause goes wrong in;
+                 a lane obeying it literally would have gone to widen a parser entry that has no business knowing what
+                 an event handler is.
                  THE ESCAPE IT WORRIED ABOUT IS REAL AND STEP 3.7 IS WHAT KILLS IT. A body of `}); alert(1); ({`
                  closes the wrapper and everything after it is then ordinary program source a Script is
                  entitled to run — and the standard rejects that one algorithm EARLIER, at step 3.7, because
