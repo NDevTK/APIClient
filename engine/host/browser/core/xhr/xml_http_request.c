@@ -2539,9 +2539,25 @@ static int js_xhr_send_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
                than hidden — building it is "serialize a Document", which the DOM half owes. */
             /* §3.5.6 step 4 extracts with no keepalive flag — XHR has no such concept, which is exactly what
                §5.2's `= false` default states for every caller that does not name one. */
+            const char *bbytes = NULL;
+            size_t blen = 0;
             if (body_extract(ctx, &b, s->body, /*keepalive*/ false, &mime) < 0) { free(mime); return -1; }
-            xhr_set(ctx, d, &d->request_body, JS_NewStringLen(ctx, b.bytes ? b.bytes : "", b.len));
-            s->body_len = (double)b.len;
+            /* WHAT THE BODY IS, ASKED OF THE UNION RATHER THAN OF `bytes == NULL`. `b.bytes ? b.bytes : ""`
+               stood here and answered a body built out of UNKNOWN EXTERNAL INPUT as the EMPTY STRING, so
+               `xhr.send(cfg.payload)` recorded a POST this engine reported as bodyless.
+               NAMED RESIDUAL — the taint does not survive this slot. WHAT IS NOT COVERED: `request_body` is
+               declared "a JS string, or JS_NULL" and three sites downstream `JS_ToCString` it (the host's
+               request JSON, §3.5.6's endpoint record, and the upload progress lengths), so an unknown body
+               reaches them as its DISPLAY SHAPE and its LENGTH is that shape's — a spelling of a hole, not the
+               body's length, which is what `loadstart`/`progress` then report. WHAT THE NEXT DIFF BUILDS: this
+               slot carrying the VALUE, with each of those three asking core/fetch/body.h's question the way
+               core/fetch/fetch.c's host edge now does, and §3.5.6's requestBodyLength stating UNKNOWN rather
+               than a number. HOW ITS ABSENCE SHOWS: an `xhr.send(unknown)` whose progress events carry the
+               character count of "{cfg.payload}", and a re-fire that cannot substitute the hole because the
+               value's identity was dropped here. */
+            body_state_content(&b, &bbytes, &blen);
+            xhr_set(ctx, d, &d->request_body, JS_NewStringLen(ctx, bbytes ? bbytes : "", blen));
+            s->body_len = (double)blen;
             body_state_free(JS_GetRuntime(ctx), &b);
             /* Step 4's Content-Type: the author's own wins, and only an absent one takes the extracted type. */
             if (mime) {

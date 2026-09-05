@@ -47,12 +47,17 @@ static int g_body_iface_n;
 void body_state_mark(JSRuntime *rt, BodyState *b, JS_MarkFunc *mark_func)
 {
     JS_MarkValue(rt, b->stream, mark_func);
+    /* AND THE UNKNOWN, which is the second JSValue this state owns. A field added to the struct creates an
+       obligation at every mark, free and copy site at once; the three are written together for that reason. */
+    JS_MarkValue(rt, b->unknown, mark_func);
 }
 
 void body_state_free(JSRuntime *rt, BodyState *b)
 {
     JS_FreeValueRT(rt, b->stream);
     b->stream = JS_UNDEFINED;
+    JS_FreeValueRT(rt, b->unknown);
+    b->unknown = JS_UNDEFINED;
     js_free_rt(rt, b->bytes);
     b->bytes = NULL;
     b->len = 0;
@@ -78,6 +83,12 @@ int body_state_set(JSContext *ctx, BodyState *b, const char *bytes, size_t len)
        not come through here at all and states its own answer. A null body (`new Response()`) is never asked:
        §5.4 step 39 is guarded by "inputOrInitBody is non-null" before it reads this. */
     b->source_null = 0;
+    /* A BODY FILLED FROM BYTES HAS NO UNKNOWN CONTENT. The two are the disjoint arms body_state_content tells
+       apart, so the slot is RELEASED here rather than left standing beside bytes that disagree with it — and
+       it needs no zeroed-state guard of its own, because freeing the INTEGER 0 a js_mallocz'd record starts
+       with is a no-op where `JS_IsUndefined` on it would have answered a lie. */
+    JS_FreeValue(ctx, b->unknown);
+    b->unknown = JS_UNDEFINED;
     if (!bytes) return 0;
     /* +1 and a NUL past the end, so the bytes can still be handed to a C string consumer; `len` is what every
        read here uses, and it is what an interior NUL no longer truncates. */
@@ -86,6 +97,85 @@ int body_state_set(JSContext *ctx, BodyState *b, const char *bytes, size_t len)
     if (len) memcpy(b->bytes, bytes, len);
     b->len = len;
     return 0;
+}
+
+/* WHAT THIS BODY IS — the four arms body.h declares, asked once so no consumer re-derives them from
+   `bytes == NULL`. */
+BodyContent body_state_content(const BodyState *b, const char **bytes, size_t *len)
+{
+    DCHECK(b != NULL, "a body was asked what its content is with no state to ask about");
+    DCHECK(!(b->bytes && concolic_is(b->unknown)),
+           "a body holds BOTH bytes and unknown external input — §5.2 BodyInit unions' arms are exclusive and "
+           "these are the two representations this function exists to tell apart, so a state carrying both is "
+           "a fill that did not release the one it superseded");
+    DCHECK(b->has || !b->bytes,
+           "a NULL body carries bytes — `has` is `bytes != NULL` at body_state_set, which is the one place a "
+           "body is filled, so the two disagreeing is a field written past that fill");
+    DCHECK(!concolic_is(b->unknown) || b->has,
+           "a body holds unknown external input with `has` unset — §5.2's string arm produces a body, so an "
+           "unknown body that reports itself absent is a fill that set one field and not the other");
+    *bytes = NULL;
+    *len = 0;
+    if (!b->has)
+        return BODY_NONE;
+    if (b->bytes) {
+        *bytes = b->bytes;
+        *len = b->len;
+        return BODY_BYTES;
+    }
+    if (concolic_is(b->unknown)) {
+        /* ALWAYS FATAL rather than a DCHECK, and the promotion is this function's own doing: it is the ONE
+           door every consumer of an unknown body reads its bytes through, so the pointer below is a RELEASE
+           dereference at each of them. A live concolic always HAS a shape (solver/concolic.c mints it with the
+           value); a fallback here would hand the @H surface the two characters an unnameable hole prints as
+           and record that as the request the page made. */
+        const char *sh = concolic_shape_c(b->unknown);
+        CHECK(sh != NULL, "an unknown request body reached the surface with no display shape — the shape is "
+                          "the whole of what an unknown payload contributes to what this tool reports");
+        *bytes = sh;
+        *len = strlen(sh);
+        return BODY_SHAPE;
+    }
+    return BODY_STREAM;
+}
+
+/* §5.2's STRING ARM WHERE ITS OBJECT IS UNKNOWN — see body.h's `unknown`. */
+int body_state_set_unknown(JSContext *ctx, BodyState *b, JSValueConst v)
+{
+    DCHECK(concolic_is(v),
+           "a body was filled from an unknown with a value that is not one — this slot answers `concolic_is` "
+           "and nothing else, so a plain value here would read as a stream-backed body at every consumer");
+    /* THE BYTE FILL FIRST, for its clearing: it releases the previous `unknown`, drops any bytes, and states
+       §5.2's `source`. What is left for this entry is the two fields that make the body the unknown one. */
+    if (body_state_set(ctx, b, NULL, 0) < 0)
+        return -1;
+    b->unknown = JS_DupValue(ctx, v);
+    b->has = 1;
+    return 0;
+}
+
+/* §2.2.4's "other members are copied from body" for a CONTENT copy — see body.h. */
+int body_state_copy(JSContext *ctx, BodyState *dst, const BodyState *src)
+{
+    const char *bytes = NULL;
+    size_t len = 0;
+
+    switch (body_state_content(src, &bytes, &len)) {
+    case BODY_NONE:  return body_state_set(ctx, dst, NULL, 0);
+    case BODY_BYTES: return body_state_set(ctx, dst, bytes, len);
+    case BODY_SHAPE: return body_state_set_unknown(ctx, dst, src->unknown);
+    case BODY_STREAM:
+        DFAIL("a STREAM-BACKED body reached a content copy: §5.2 BodyInit unions' ReadableStream arm leaves "
+              "the bytes in the stream and there is nothing here to copy. §5.4's clone() answered a body with "
+              "NO CONTENT for one before this entry existed, so `new Request(u, {body: stream}).clone()` "
+              "carried an empty POST. Build the full read — acquire a reader, read to the end, accumulate — "
+              "as a stage of the machine that needs the bytes, and copy those");
+        JS_ThrowTypeError(ctx, "this engine cannot yet copy the content of a stream-backed body");
+        return -1;
+    }
+    DFAIL("body_state_content answered an arm this copy does not have");
+    JS_ThrowTypeError(ctx, "unreachable body content");
+    return -1;
 }
 
 /* §2.2.4 "Bodies"' "clone a body" — the tee, and the reason body.h gives for it being one. */
@@ -107,7 +197,20 @@ int body_clone_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_cap, Body
         /* In the spec a body IS a stream; here one is built on demand from the bytes, so the tee's operand has
            to exist before the tee can be asked for. Building it runs none of the page's code. */
         if (JS_IsUndefined(src->stream)) {
-            src->stream = readable_stream_from_bytes(ctx, src->bytes ? src->bytes : "", src->len);
+            const char *cb_bytes = NULL;
+            size_t cb_len = 0;
+            if (body_state_content(src, &cb_bytes, &cb_len) == BODY_SHAPE) {
+                /* §5.2's string arm over UNKNOWN EXTERNAL INPUT has no bytes to enqueue, and enqueuing its
+                   DISPLAY SHAPE would hand the page a stream whose chunk is a string it never wrote. */
+                DFAIL("§2.2.4 Bodies' clone-a-body was asked to tee the stream of a body that is UNKNOWN "
+                      "EXTERNAL INPUT. Build §5.3 Body mixin's readers over core/fetch/body.h's `unknown` "
+                      "first — a stream whose one chunk IS that value — and this tee then has an operand");
+                JS_FreeValue(ctx, in);
+                JS_ThrowTypeError(ctx, "this engine cannot yet clone a body whose bytes are unknown external "
+                                       "input");
+                return -1;
+            }
+            src->stream = readable_stream_from_bytes(ctx, cb_bytes ? cb_bytes : "", cb_len);
             if (JS_IsException(src->stream)) {
                 src->stream = JS_UNDEFINED;
                 JS_FreeValue(ctx, in);
@@ -167,13 +270,13 @@ int body_create_proxy(JSContext *ctx, JSValueConst src_obj, BodyState *src, Body
 {
     DCHECK(src->has, "§5.4 step 41 asked for a proxy of a NULL body — step 41 is guarded by \"inputBody is "
                      "non-null\", so a caller reaching here with none skipped that guard");
-    DCHECK(src->bytes != NULL,
+    DCHECK(src->bytes != NULL || concolic_is(src->unknown),
            "a STREAM-BACKED body reached Fetch §5.4 step 41's create-a-proxy: §5.2's ReadableStream arm leaves "
            "the bytes in the stream, and Streams §9.5 Piping's create-a-proxy pipes it through an identity "
            "TransformStream — which this engine has no body representation for. It is the SAME unbuilt "
            "capability fetch()'s host edge names: read the stream to the end as a stage of the machine that "
            "needs the bytes, and hand those bytes on");
-    if (body_state_set(ctx, dst, src->bytes, src->len) < 0)
+    if (body_state_copy(ctx, dst, src) < 0)
         return -1;
     /* §5.2's `source` IS ONE OF THE MEMBERS A PROXY CARRIES OVER, and it is stated here rather than left to
        the byte fill above because the byte fill is this ENGINE's representation of a proxy and not the
@@ -230,28 +333,24 @@ int body_extract(JSContext *ctx, BodyState *b, JSValueConst init, bool keepalive
      * that message would have built fetch()'s missing declaration and watched the abort stay exactly where it
      * was. CLAUDE.md rates a wrong diagnosis above a missing one, so the union's own rule answers first.
      *
-     * WHAT IS NOT COVERED: the string arm itself. §5.2's USVString arm sets the body's source to the UTF-8
-     * encoding of the object, and a BodyState's `bytes` is a `char *`, which cannot BE the unknown any more
-     * than a `const char *` can carry one at a ToString boundary. WHAT THE NEXT DIFF BUILDS: §2.2.5 Requests'
-     * body source on BodyState as a JSValue, so the unknown rides it and §5.3 Body mixin's `text()` resolves
-     * WITH it (opaque-infectious, so a page's own `JSON.parse(await r.text())` forks where the spec says it
-     * does) — together with the readers that today take `bytes` straight off the struct, since each of those
-     * would otherwise read a NULL as an empty body and report a POST as bodyless. HOW ITS ABSENCE SHOWS: this
-     * abort, on any document whose request body is not a value the run computed.
+     * THE ARM'S OWN STEP IS THE ONE THING THAT CANNOT BE PERFORMED: "Set source to the UTF-8 encoding of
+     * object". §2.2.4 Bodies states the source's type — "null, a byte sequence, a Blob object, or a FormData
+     * object" — so the source is a BYTE SEQUENCE, and the UTF-8 encoding of a value nobody knows is not one.
+     * The value itself is held instead (core/fetch/body.h's `unknown`), which is what an engine can carry
+     * where a `char *` cannot, and every consumer that needs bytes asks body_state_content for the DISPLAY
+     * SHAPE — the same answer solver/endpoint.c already gives a concolic URL.
      *
-     * IN RELEASE the throw below is what a page sees, which is a wrong answer and a DEFINED one — where
-     * falling into the BufferSource arm produced whichever refusal `JS_GetArrayBufferView` happened to make
-     * about a value that is not a buffer at all. */
+     * THE TYPE IS THE ARM'S, NOT AN INVENTION: §5.2's string arm sets it to `text/plain;charset=UTF-8`
+     * unconditionally, and it does so before knowing anything about the string, so it is as true of an
+     * unknown one as of a literal. core/frame/navigator_beacon.c held a second copy of this arm — its own
+     * `concolic_is(data)` pre-check, its own shape read and its own BEACON_STRING_MIME — and that copy is
+     * DELETED with this diff: the union's rule is answered here, once, which is the argument this file's own
+     * header makes for the extraction existing at all. */
     if (concolic_is(init)) {
-        DFAIL("Fetch §5.2 BodyInit unions' extract a body was handed UNKNOWN EXTERNAL INPUT. Web IDL §3.2.25 "
-              "Union types step 15 decides its arm — the USVString one — so this is not a fork and not a "
-              "union the caller failed to resolve: it is §5.2's string arm needing a body source that can BE "
-              "the unknown, where core/fetch/body.h declares a `char *`. Build §2.2.5 Requests' body source "
-              "as a JSValue on BodyState, with §5.3 Body mixin's readers resolving with it, and bring every "
-              "reader that takes `bytes` off the struct with it in the same diff");
-        JS_ThrowTypeError(ctx, "this engine cannot yet carry a request body whose bytes are unknown external "
-                               "input");
-        return -1;
+        r = body_state_set_unknown(ctx, b, init);
+        *out_mime = strdup("text/plain;charset=UTF-8");
+        CHECK(*out_mime != NULL, "body: OOM naming §5.2's string arm type");
+        return r;
     }
 
     {
@@ -396,7 +495,13 @@ int body_extract(JSContext *ctx, BodyState *b, JSValueConst init, bool keepalive
         return r;
     }
     {
-        /* The USVString arm: the declaration already ran ToString, so this is the string's bytes. */
+        /* The USVString arm: the declaration already ran ToString, so this is the string's bytes.
+           ITS TYPE IS LOAD-BEARING DOWNSTREAM AND IS STATED ONCE, HERE. core/frame/navigator_beacon.c held a
+           second spelling of it and recorded, beside it, why: solver/endpoint.c reads `text/plain;charset=
+           UTF-8` as an UNDECLARED body and runs the real JSON parser over the bytes, which is what makes
+           `sendBeacon(u, JSON.stringify(x))` and `fetch(u, {body: JSON.stringify(x)})` contribute their
+           FIELDS and not just their address. That copy is gone; the argument is not, so it lives at the one
+           arm that decides the type. */
         const char *str = JS_ToCStringLen(ctx, &len, init);
         if (!str) return -1;
         r = body_state_set(ctx, b, str, len);
@@ -466,8 +571,44 @@ static int body_take(JSContext *ctx, JSValueConst this_val, const char **pbody, 
         return -1;
     }
     b = f->of(this_val);
-    *pbody = b->bytes ? b->bytes : "";
-    *plen  = b->bytes ? b->len : 0;
+    {
+        const char *tb = NULL;
+        size_t tlen = 0;
+
+        if (body_state_content(b, &tb, &tlen) == BODY_SHAPE) {
+            /* NAMED RESIDUAL — §5.3's readers over an UNKNOWN body.
+               WHAT IS NOT COVERED: `text()`, `json()`, `arrayBuffer()`, `bytes()`, `blob()` and `formData()`
+               on a body whose content is unknown external input. Handing them the DISPLAY SHAPE would resolve
+               the page's own promise with a string it never wrote, which is worse than this abort: it is a
+               fabricated value that then propagates.
+               WHAT THE NEXT DIFF BUILDS: a VALUE answer beside `*pstream` on core/byte_reader.h's `take`.
+               That slot is already the precedent — its own header calls it the other answer `take` can give,
+               for a body that IS a stream — and beside it goes a per-reader decision, because only `text()`
+               has a free one: §5.2 encodes a scalar value string to UTF-8 and §5.3 decodes it back, so the
+               round trip is the identity and `text()` resolves WITH the unknown, opaque-infectious, so a
+               page's own `JSON.parse(await r.text())` forks where the spec says it does. `json()` must run
+               the REAL parser over the unknown, which forks on its throw arm (CLAUDE.md §a-JS-engine-
+               encoding-builtin-is-modeled-faithfully), and the three container readers owe a container over
+               bytes of unknown LENGTH, which is a separate question none of them can answer today.
+               HOW ITS ABSENCE SHOWS: this abort, on a page that reads back a Request or Response it built out
+               of unknown external input — `new Response(cfg.payload).text()`. It does NOT show on a reply
+               read from the network, whose bytes are real and whose provenance byte_reader_content already
+               carries. */
+            DFAIL("Fetch §5.3 Body mixin's consume body was asked for the bytes of a body that is UNKNOWN "
+                  "EXTERNAL INPUT — §5.2's string arm held the VALUE because its UTF-8 encoding is not a byte "
+                  "sequence this engine can spell. Build a value answer beside `*pstream` on "
+                  "core/byte_reader.h's `take`, with text() resolving WITH the unknown (the encode/decode "
+                  "round trip is the identity on a scalar value string) and json() running the real parser "
+                  "over it");
+            JS_ThrowTypeError(ctx, "this engine cannot yet read back a body whose bytes are unknown external "
+                                   "input");
+            return -1;
+        }
+        /* THE EMPTY STRING RATHER THAN NULL for the two arms that have no bytes, because the readers below
+           run §6's UTF-8 decode over whatever this hands them and a NULL is not a zero-length byte sequence. */
+        *pbody = tb ? tb : "";
+        *plen  = tlen;
+    }
     /* A NULL BODY IS NEVER DISTURBED. §5.3's consume returns an empty byte sequence without touching the
        stream when the body is null, so `new Response()` reads as "" as many times as it is asked and its
        `bodyUsed` stays FALSE — where `new Response("")`, whose body is EMPTY rather than null, latches on the
@@ -601,10 +742,24 @@ static JSValue js_body_get_used(JSContext *ctx, JSValueConst this_val, int magic
    Returns 0, or -1 with a throw live. The caller has already established the body is non-null. */
 static int body_stream_ensure(JSContext *ctx, BodyState *b)
 {
+    const char *sb = NULL;
+    size_t slen = 0;
+
     DCHECK(b->has, "a null body was asked for its stream — §5.3 answers null for one, and every caller of this "
                    "checks `has` first because that is the distinction the flag exists to keep");
     if (!JS_IsUndefined(b->stream)) return 0;
-    b->stream = readable_stream_from_bytes(ctx, b->bytes ? b->bytes : "", b->len);
+    if (body_state_content(b, &sb, &slen) == BODY_SHAPE) {
+        /* The same residual `body_take` above names, arriving through `.body` and `textStream()` instead of
+           through a reader: a stream built out of the DISPLAY SHAPE would enqueue a chunk the page can read
+           as a string it never wrote. */
+        DFAIL("Fetch §5.3 Body mixin's `body` was asked for the stream of a body that is UNKNOWN EXTERNAL "
+              "INPUT — see the residual at this file's consume-body take. The stream this owes is one whose "
+              "single chunk IS core/fetch/body.h's `unknown`, which is the same value answer that residual "
+              "names");
+        JS_ThrowTypeError(ctx, "this engine cannot yet stream a body whose bytes are unknown external input");
+        return -1;
+    }
+    b->stream = readable_stream_from_bytes(ctx, sb ? sb : "", slen);
     if (JS_IsException(b->stream)) { b->stream = JS_UNDEFINED; return -1; }
     return 0;
 }

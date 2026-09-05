@@ -1009,6 +1009,10 @@ static int js_fetch_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
     JSValueConst init  = argc > 1 ? argv[1] : JS_UNDEFINED;
     HeadersGuard guard;
     int r, prov;
+    /* THE HOST EDGE'S ONE READING OF WHAT THIS REQUEST'S BODY IS — see the switch at the edge below. */
+    const char *body_bytes = NULL;
+    size_t body_bytes_len = 0;
+    BodyContent body_kind = BODY_NONE;
 
     if (hdr->stage == FETCH_URL) {
         /* THE ONE-TIME CAPTURE, GATED ON A FLAG AND NOT ON A SLOT. This stage can PARK — §5.4 step 6's read of
@@ -1225,6 +1229,12 @@ static int js_fetch_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
         if (m) { header_list_append(&s->hdrs, "content-type", m); JS_FreeCString(ctx, m); }
         free(have);
     }
+    /* WHAT THE BODY IS, READ ONCE FOR THE WHOLE EDGE. Three of core/fetch/body.h's four arms reach here and
+       they are three different facts this edge used to average into `bytes == NULL`:
+       BODY_BYTES is the ordinary request; BODY_SHAPE is a body built out of UNKNOWN EXTERNAL INPUT, whose
+       DISPLAY SHAPE is what the @H surface records for exactly the reason fetch_park above records a concolic
+       URL's; and BODY_STREAM has no bytes at all yet. */
+    body_kind = body_state_content(&s->body, &body_bytes, &body_bytes_len);
     /* A STREAM-BACKED BODY HAS NO BYTES YET, AND THE PARK TAKES BYTES. §5.2's ReadableStream arm sets the
        body's stream and leaves `source` null — there is nothing to send until the stream is READ — while every
        other arm produces the bytes during extraction. This park read `bytes`, which the stream arm never
@@ -1232,8 +1242,10 @@ static int js_fetch_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
        the endpoint surface recorded that request as the one the page made. What to build is §5.2's
        transmission: fully read the body's stream BEFORE this point — a stage of this machine that acquires a
        reader and reads to the end, the way body.c's readers do, driven as a FLOW because each read answers a
-       promise — and hand the park the bytes it produced. */
-    DCHECK(!(s->body.has && !s->body.bytes),
+       promise — and hand the park the bytes it produced.
+       IT IS ASKED OF THE ARM AND NO LONGER OF `bytes == NULL`, which was true of an UNKNOWN body too — so the
+       commonest POST a bundle writes aborted here under a message about a stream it does not have. */
+    DCHECK(body_kind != BODY_STREAM,
            "fetch() reached the host edge with a STREAM-BACKED request body: §5.2's ReadableStream arm leaves "
            "the bytes in the stream and this edge takes bytes. Build the full read as a stage of this machine "
            "(acquire a reader, read to the end, accumulate) and park with those bytes");
@@ -1264,12 +1276,25 @@ static int js_fetch_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
                 eh[i].value = s->hdrs.e[i].value;
             }
         }
-        if (s->body.has && s->body.bytes) {
+        /* BOTH ARMS THAT HAVE SOMETHING TO SAY. A BODY_SHAPE contributes its display form, which is what a
+           reviewer replays a derived POST with and what a sniffer can never produce — CLAUDE.md
+           §What-the-tool-produces' "what the bundle CAN do but didn't". Recording nothing for it, which is
+           what testing `s->body.bytes` did, reported the POST as BODYLESS.
+           NAMED RESIDUAL — the surface cannot tell a shape from bytes. WHAT IS NOT COVERED: solver/endpoint.h's
+           EndpointBody is `{mime, bytes, len}` with no grade on it, so a display shape arrives at
+           body_params looking like a payload; it is read as an UNDECLARED body (§5.2's string arm type) and
+           run through the real JSON parser, where `{cfg.payload}` fails to parse and records no fields —
+           which is the true statement, reached by accident rather than by statement. WHAT THE NEXT DIFF
+           BUILDS: the body's own provenance on EndpointBody beside its bytes, the way the record already
+           carries `prov` for the sighting, so a shape body states that its FIELDS are unknown instead of
+           parsing as if they might not be. HOW ITS ABSENCE SHOWS: the day a source's display spelling happens
+           to be a JSON text, its holes would be reported as this POST's field names. */
+        if (body_kind == BODY_BYTES || body_kind == BODY_SHAPE) {
             body_ct = header_list_get(&s->hdrs, "content-type");
             if (!body_ct && !JS_IsUndefined(s->body_mime)) ext_mime = JS_ToCString(ctx, s->body_mime);
             eb.mime = body_ct ? body_ct : ext_mime;
-            eb.bytes = s->body.bytes;
-            eb.len = s->body.len;
+            eb.bytes = body_bytes;
+            eb.len = body_bytes_len;
             ebp = &eb;
         }
         endpoint_record(ctx, s->rec.method, s->url, eh, s->hdrs.n, ebp, prov);
@@ -1284,10 +1309,20 @@ static int js_fetch_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
        AND AT THE OUTER REQUEST'S OWN GRADE, handed down rather than re-read: a sub-request is written inside
        a body this same running code composed, so it is evidence of exactly what the request carrying it is
        evidence of. */
-    multipart_batch_learn(ctx, &s->hdrs, s->body_mime, s->body.bytes, s->body.len, prov);
+    /* BODY_BYTES ONLY, AND THAT IS A STATEMENT RATHER THAN A GUARD. A batch parse reads addresses OUT of a
+       body; run over a DISPLAY SHAPE it would read them out of a spelling of a hole and record sub-requests
+       the page never composed — the fabrication CLAUDE.md §@H forbids, arriving one layer in. An unknown body
+       genuinely names no sub-requests THIS RUN KNOWS OF, which is what passing none says. */
+    multipart_batch_learn(ctx, &s->hdrs, s->body_mime,
+                          body_kind == BODY_BYTES ? body_bytes : NULL,
+                          body_kind == BODY_BYTES ? body_bytes_len : 0, prov);
     /* Fetch §5.6 "Fetch methods" STEP 12's "fetch given request", and steps 1 and 13's promise: the endpoint the flow parks on. */
-    *presult = fetch_park(ctx, s->url, &s->rec, s->input, &s->hdrs,
-                          s->body.has ? s->body.bytes : NULL, s->body.len);
+    /* THE SHAPE GOES TO THE PARK TOO, exactly as fetch_park sends a concolic URL's shape in place of an
+       address it cannot know — one rule for both halves of a request built out of unknown external input, so
+       a derived POST is not half-spelled. Nothing fires it: `safeFetchMethodRefusal` declines every non-GET
+       at the call site, so what this reaches is the RECORD, which is what CLAUDE.md
+       §A-REQUEST-CARRIES-THE-PROVENANCE calls the report. */
+    *presult = fetch_park(ctx, s->url, &s->rec, s->input, &s->hdrs, body_bytes, body_bytes_len);
     if (JS_IsException(*presult)) { *presult = JS_UNDEFINED; return -1; }
     return 0;
 }
@@ -1334,13 +1369,22 @@ static const char *js_fetch_unforkable(const void *st)
     const JSFetchState *s = st;
 
     DCHECK(s != NULL, "the fetch machine was asked whether it may be forked with no state to ask about");
+    /* `has` IS WHAT REFUSES AN UNKNOWN BODY'S FORK, and it refuses it for a second reason the message below
+       now names: `unknown` is a JSValue this machine's `visit` does not name either, so a byte-copied fork
+       would hold one reference and drop two. The pairing is asserted rather than re-tested, because a second
+       term over one fact is a term that can never independently fire. */
+    DCHECK(!concolic_is(s->body.unknown) || s->body.has,
+           "a fetch state holds an UNKNOWN request body with `has` unset — the fork guard below refuses that "
+           "body through `has`, so the two disagreeing would let a state carrying a JSValue the visit cannot "
+           "name be byte-copied into two arms that both release it");
     if (!request_record_holds(&s->rec) && !s->body.has && !s->body.bytes && !s->hdrs.e)
         return NULL;
     return "Fetch §5.6 Fetch methods' fetch(input, init) was forked while holding C memory its `visit` "
            "cannot name — §5.4's request record, the extracted body, or the parsed header list. A "
            "step state is BYTE-COPIED at a deep fork and only what `visit` names is re-taken, and this "
-           "machine's record (nine engine-allocated strings), extracted body (`bytes`, and a `stream` the "
-           "visit does not name either) and parsed header list are freed by its `release` instead — so both "
+           "machine's record (nine engine-allocated strings), extracted body (`bytes`, and a `stream` and "
+           "an `unknown` the visit does not name either) and parsed header list are freed by its `release` "
+           "instead — so both "
            "arms would hold one set of pointers and free it twice. Build §2.2.5's request record out of "
            "JSValues the visit can name, which is the same conversion §5.4 step 25's method needs before it "
            "can carry unknown external input, and delete this refusal with it";

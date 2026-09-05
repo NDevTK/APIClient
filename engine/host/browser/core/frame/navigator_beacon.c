@@ -76,12 +76,6 @@
    rather than as a network error, which is why the number lives here once and is compared with `>`. */
 #define BEACON_KEEPALIVE_QUOTA_BYTES (64 * 1024)
 
-/* §5.2 "BodyInit unions"' scalar-value-string arm sets the type to `text/plain;charset=UTF-8`, and that is the
-   type an UNKNOWN body carries too: a concolic is none of the union's interface arms, so it IS the string arm.
-   solver/endpoint.c reads that type as an undeclared body and runs the real JSON parser over the bytes, which
-   is what makes `sendBeacon(u, JSON.stringify(x))` contribute its FIELDS and not just its address. */
-#define BEACON_STRING_MIME "text/plain;charset=UTF-8"
-
 static int g_id_send_beacon = -1;
 
 /* WEB IDL §3.7.7 "Operations"' BRAND CHECK — "If jsValue does not implement the interface target, throw a
@@ -235,56 +229,57 @@ static JSValue js_nav_send_beacon(JSContext *ctx, JSValueConst this_val, int arg
 
     /* ---- §3 step 6: extract the body ---------------------------------------------------------------------- */
     if (!JS_IsNull(data) && !JS_IsUndefined(data)) {
-        if (concolic_is(data)) {
-            /* UNKNOWN EXTERNAL INPUT TAKES §5.2's STRING ARM, because it is none of the union's interface
-               arms — and its bytes are unknown, so what the surface records is the SHAPE, the same answer
-               solver/endpoint.c already gives a concolic URL and core/html/form_data.c gives an unknown entry.
-               Its LENGTH is unknown too, so step 6.2's comparison is undecided and the return stays the
-               concolic below rather than collapsing to either answer. */
-            const char *shape = concolic_shape_c(data);
+        const char *bbytes = NULL;
+        size_t blen = 0;
+        BodyContent bkind;
 
-            DCHECK(shape != NULL, "a concolic body reached §3 step 6.1 with no display shape — the shape is "
-                                  "the whole of what an unknown payload contributes to the @H surface");
-            eb.mime = BEACON_STRING_MIME;
-            eb.bytes = shape;
-            eb.len = strlen(shape);
-            ebp = &eb;
-            hdrs[nhdrs].name = "Content-Type";           /* step 6.3.3 */
-            hdrs[nhdrs].value = BEACON_STRING_MIME;
+        /* THE UNION'S RULE IS ASKED ONCE, IN THE UNION. A `concolic_is(data)` pre-check stood here with its
+           own shape read and its own `text/plain;charset=UTF-8`, which was §5.2's string arm written a second
+           time — the exact duplication core/fetch/body.c's header gives as the reason the extraction exists at
+           all, and the reason `new Response(blob)` once carried the thirteen bytes of "[object Blob]". The
+           extraction now carries an unknown itself (core/fetch/body.h's `unknown`), so this member asks for a
+           body like every other caller and reads what it got. */
+        /* §3 step 6.1: "extract data's byte stream WITH THE KEEPALIVE FLAG SET". The flag is §5.2's own
+           argument and it is not decorative: the ReadableStream arm throws a TypeError when it is set, so
+           `navigator.sendBeacon(u, someStream)` must throw where the page wrote it. */
+        if (body_extract(ctx, &b, data, /*keepalive*/ true, &mime) < 0) {
+            free(mime);
+            body_state_free(JS_GetRuntime(ctx), &b);
+            JS_FreeValue(ctx, url_str);
+            free(url_owned);
+            return JS_EXCEPTION;
+        }
+        DCHECK(b.has, "§5.2's extraction answered NO BODY for a `data` that is neither null nor undefined "
+                      "— every arm of the union produces one, so an absent body here is an arm that was "
+                      "taken and produced nothing");
+        bkind = body_state_content(&b, &bbytes, &blen);
+        DCHECK(bkind != BODY_STREAM,
+               "§3 step 6.1 extracted a STREAM-BACKED body with the keepalive flag SET — §5.2's ReadableStream "
+               "arm's first step throws a TypeError for exactly that, so this arm is unreachable and reaching "
+               "it means the flag did not travel");
+        /* §3 step 6.2, which Fetch §4.6 states as the sum against 64 KiB. A body over the quota on its own
+           exceeds it in EVERY world (the sum is never smaller than contentLength), so that arm is concrete
+           and the algorithm terminates there: step 7 never builds a request, so there is nothing to record.
+           IT IS ASKED OF BODY_BYTES AND OF NOTHING ELSE, and that is a POSITIVE STATEMENT rather than a guard:
+           an UNKNOWN body's length is unknown, so step 6.2's comparison is UNDECIDED and CLAUDE.md's rule for
+           an undecided predicate is that uncertainty KEEPS the arm — the request is derived and recorded. A
+           `blen` read off a display shape would be the length of a spelling of a hole, and comparing it here
+           would terminate or continue on an accident of how the hole is printed. */
+        if (bkind == BODY_BYTES && blen > BEACON_KEEPALIVE_QUOTA_BYTES) {
+            free(mime);
+            body_state_free(JS_GetRuntime(ctx), &b);
+            JS_FreeValue(ctx, url_str);
+            free(url_owned);
+            return JS_FALSE;
+        }
+        eb.mime = mime;                    /* NULL for §5.2's arms that carry no type — a BufferSource */
+        eb.bytes = bbytes;                 /* the bytes, or an unknown body's DISPLAY SHAPE — body.h */
+        eb.len = blen;
+        ebp = &eb;
+        if (mime) {                        /* step 6.3.3, run only "if contentType is not null" */
+            hdrs[nhdrs].name = "Content-Type";
+            hdrs[nhdrs].value = mime;
             nhdrs++;
-        } else {
-            /* §3 step 6.1: "extract data's byte stream WITH THE KEEPALIVE FLAG SET". The flag is §5.2's own
-               argument and it is not decorative: the ReadableStream arm throws a TypeError when it is set, so
-               `navigator.sendBeacon(u, someStream)` must throw where the page wrote it. */
-            if (body_extract(ctx, &b, data, /*keepalive*/ true, &mime) < 0) {
-                free(mime);
-                body_state_free(JS_GetRuntime(ctx), &b);
-                JS_FreeValue(ctx, url_str);
-                free(url_owned);
-                return JS_EXCEPTION;
-            }
-            DCHECK(b.has, "§5.2's extraction answered NO BODY for a `data` that is neither null nor undefined "
-                          "— every arm of the union produces one, so an absent body here is an arm that was "
-                          "taken and produced nothing");
-            /* §3 step 6.2, which Fetch §4.6 states as the sum against 64 KiB. A body over the quota on its own
-               exceeds it in EVERY world (the sum is never smaller than contentLength), so this arm is concrete
-               and the algorithm terminates here: step 7 never builds a request, so there is nothing to record. */
-            if (b.len > BEACON_KEEPALIVE_QUOTA_BYTES) {
-                free(mime);
-                body_state_free(JS_GetRuntime(ctx), &b);
-                JS_FreeValue(ctx, url_str);
-                free(url_owned);
-                return JS_FALSE;
-            }
-            eb.mime = mime;                    /* NULL for §5.2's arms that carry no type — a BufferSource */
-            eb.bytes = b.bytes;
-            eb.len = b.len;
-            ebp = &eb;
-            if (mime) {                        /* step 6.3.3, run only "if contentType is not null" */
-                hdrs[nhdrs].name = "Content-Type";
-                hdrs[nhdrs].value = mime;
-                nhdrs++;
-            }
         }
     }
 

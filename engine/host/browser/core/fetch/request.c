@@ -294,8 +294,12 @@ static JSValue js_request_clone(JSContext *ctx, JSValueConst this_val, int argc,
     /* §5.4 clone(): every field of the request comes with it, through the one copy of the record — a field
        added to §2.2.5's record is then carried here without this site being touched, which is the whole
        reason the record is a record. */
+    /* §5.4 clone()'s body, through core/fetch/body.h's ONE content copy. The `d->body.has ? d->body.bytes :
+       NULL` that stood here was §5.2's arm list re-spelled at this site, and it answered a body built out of
+       UNKNOWN EXTERNAL INPUT as a NULL one — so `new Request(u, {method:"POST", body: cfg.payload}).clone()`
+       carried a POST with no body at all. */
     if (!c->url || request_record_copy(ctx, &c->rec, &d->rec) < 0 ||
-        body_state_set(ctx, &c->body, d->body.has ? d->body.bytes : NULL, d->body.len) < 0) {
+        body_state_copy(ctx, &c->body, &d->body) < 0) {
         JS_FreeValue(ctx, obj);
         return JS_EXCEPTION;
     }

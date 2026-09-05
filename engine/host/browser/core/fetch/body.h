@@ -23,7 +23,46 @@
    page has read once is indistinguishable from a stream-sourced one by that slot. Deriving it either way
    answers step 39 for a body the page never streamed.
    §2.2.4 Bodies' clone-a-body says "other members are copied from body", so it rides a clone and a proxy. */
-typedef struct { char *bytes; size_t len; int used; int has; int source_null; JSValue stream; } BodyState;
+/* `unknown` IS §5.2 BodyInit unions' SCALAR VALUE STRING ARM'S `object` WHERE THAT OBJECT IS UNKNOWN EXTERNAL
+   INPUT, and it is a JSValue because the arm's own step cannot be performed over one: "Set source to the UTF-8
+   encoding of object" names a byte sequence, and the UTF-8 encoding of a value nobody knows is not one.
+   `bytes` is a `char *` and a `char *` cannot BE an unknown, so before this slot existed the commonest POST a
+   bundle writes — `fetch(u, {method:"POST", body: cfg.payload})` over server-injected state — aborted at the
+   extraction and the whole request went unreported, which is precisely the surface CLAUDE.md §Attacker-sources
+   says forced execution derives and a sniffer cannot.
+   IT HOLDS THE VALUE AND NEVER ITS DISPLAY SHAPE. The shape is what a consumer that needs bytes is handed
+   (body_state_content below); storing it here instead would make this body indistinguishable from a page that
+   literally wrote those characters, which is the de-tainting core/fetch/fetch.c's fetch_park describes at the
+   ToString boundary it makes the same exception for.
+   IT IS NOT §2.2.4's `source`, AND THE RESIDUAL THAT ASKED FOR THIS CALLED IT THAT — in its prose, in its
+   abort message, and citing §2.2.5 Requests, which is the section defining a REQUEST's `body` and says nothing
+   about a body's members. §2.2.4 Bodies is where the member lives and it states a CLOSED type — "A source
+   (null, a byte sequence, a Blob object, or a FormData object), initially null" — which a string is not in.
+   What §5.2 sets for this arm is that string's UTF-8 ENCODING, so the source is a byte sequence this engine
+   cannot spell and this is the value whose encoding it would be. `source_null` therefore stays exactly as it
+   was and still answers 0 here, because §5.2's string arm does set a source.
+   A ZEROED STATE READS AS ABSENT WITH NO GUARD, unlike `stream`: an including interface allocates its record
+   with js_mallocz and a zeroed JSValue is the INTEGER 0, which `concolic_is` answers 0 for — so the question
+   asked of this slot is "is it a concolic", which is also the only thing it is ever set to. */
+typedef struct {
+    char *bytes; size_t len; int used; int has; int source_null; JSValue stream; JSValue unknown;
+} BodyState;
+
+/* WHAT A BODY IS, FOR A CONSUMER THAT NEEDS BYTES — ONE question with FOUR answers, because they are four
+   different facts and a consumer that averages any two of them reports something that did not happen.
+   `*bytes`/`*len` are written on every arm and are never a hole a default fills:
+     BODY_NONE   — there is no body (`new Response()`); `*bytes` is NULL. It is not an EMPTY body, which is
+                   BODY_BYTES with a zero length, and `.body` reports null for exactly one of the two.
+     BODY_BYTES  — `*bytes`/`*len` ARE the body.
+     BODY_SHAPE  — the body is UNKNOWN EXTERNAL INPUT, and `*bytes`/`*len` are its DISPLAY SHAPE
+                   ("{cfg.payload}") — what the @H surface records, the same answer solver/endpoint.c already
+                   gives a concolic URL. It is NEVER a value the page computed, so a consumer that hands it to
+                   the PAGE rather than to the SURFACE has de-tainted the body.
+     BODY_STREAM — §5.2's ReadableStream arm: the bytes do not exist yet; `*bytes` is NULL.
+   THE THREE WAYS THERE ARE NO BYTES ARE TOLD APART HERE and not by `bytes == NULL` at each consumer, which is
+   what let a stream-backed body and an unknown one arrive at one abort under one message about the other. */
+typedef enum { BODY_NONE, BODY_BYTES, BODY_SHAPE, BODY_STREAM } BodyContent;
+BodyContent body_state_content(const BodyState *b, const char **bytes, size_t *len);
 
 /* RELEASE EVERYTHING A BodyState OWNS — the bytes AND the stream. It takes a RUNTIME because the place that
    must call it is an including interface's FINALIZER, which has no context; the two that free the bytes by
@@ -41,8 +80,19 @@ void body_state_free(JSRuntime *rt, BodyState *b);
    Beacon §3 step 6.1 is the one caller that sets it; everything else extracts with the flag unset, which is
    what `keepalive`'s IDL default already says for a Request that never declared one. */
 int  body_extract(JSContext *ctx, BodyState *b, JSValueConst init, bool keepalive, char **out_mime);
-/* Copy `len` bytes in, or NULL for the spec's null body. Returns -1 on OOM with an exception live. */
+/* Copy `len` bytes in, or NULL for the spec's null body. Returns -1 on OOM with an exception live.
+   It also RELEASES any `unknown` the state held: a body filled from bytes has no unknown content, and the two
+   are the disjoint arms body_state_content tells apart. */
 int  body_state_set(JSContext *ctx, BodyState *b, const char *bytes, size_t len);
+/* Fill from §5.2's string arm where the arm's object is UNKNOWN EXTERNAL INPUT — see `unknown` above. `v` is
+   BORROWED. Returns -1 on OOM with an exception live. */
+int  body_state_set_unknown(JSContext *ctx, BodyState *b, JSValueConst v);
+/* §2.2.4 Bodies' "other members are copied from body", for the two operations that copy a body's CONTENT
+   rather than teeing its stream — §5.4's `clone()` and its step 41 proxy. ONE entry, because the alternative
+   is every such site re-spelling §5.2's arms as `src->has ? src->bytes : NULL`, which is the union's rule
+   written a second time and which answers an UNKNOWN body as a NULL one. `dst` keeps its own `used` latch.
+   Returns -1 with an exception live. */
+int  body_state_copy(JSContext *ctx, BodyState *dst, const BodyState *src);
 
 /* §2.2.4's "CLONE A BODY", which is a TEE and nothing else: « out1, out2 » are the result of teeing the source
    body's stream, the source keeps out1 and the clone gets out2. Copying the bytes instead is not a cheaper
