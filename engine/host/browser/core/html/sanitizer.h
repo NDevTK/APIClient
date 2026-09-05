@@ -47,8 +47,8 @@ bool sanitizer_is(JSValueConst v);
                    "that it is one of the five kinds, the DocumentType/Text continue, and a comment's and a " \
                    "processing instruction's own list tests)") \
     X(SAN_ELEMENT, "HTML §8.6.4 inner sanitize steps 1.5.1-1.5.5 (this element's name and namespace against " \
-                   "the configuration's element lists, and the descent into a <template>'s template " \
-                   "contents)") \
+                   "the configuration's element lists, the descent step 1.5.2.2 makes into an element that " \
+                   "is replaced by its children, and the descent into a <template>'s template contents)") \
     X(SAN_SHADOW,  "HTML §8.6.4 inner sanitize step 1.5.6 (the descent into a shadow host's shadow root)") \
     X(SAN_ATTRS,   "HTML §8.6.4 inner sanitize steps 1.5.7-1.5.9.5.3 (one attribute of this element's " \
                    "attribute list against the global and per-element lists, and the javascript: URL and " \
@@ -59,18 +59,22 @@ bool sanitizer_is(JSValueConst v);
     X(SAN_REMOVE,  "HTML §8.6.4 inner sanitize steps 1.3.1 / 1.4.2.1 / 1.4.3.1 / 1.5.3.1 / 1.5.4.1 (remove " \
                    "child — one node of its subtree per step, deepest first)") \
     X(SAN_POP,     "HTML §8.6.4 inner sanitize step 1 (this level's children are exhausted, so the recursive " \
-                   "invocation it belongs to returns)")
+                   "invocation it belongs to returns) and steps 1.5.2.3-1.5.2.6 (the POST-ORDER splice of a " \
+                   "replaced element's now-sanitized children into its own place)")
 
 /* A LEVEL of the walk: the element a descent was made from, the PRIVATE TREE that was in effect when it was
-   made, and what the algorithm does when that descent returns. The three `after` values are the three descents
-   §8.6.4 makes — a template's contents (step 1.5.5), a shadow root (step 1.5.6) and the element's own children
-   (step 1.5.10) — and each resumes at a different step.
-   THE ROOT IS PART OF THE LEVEL because two of those three descents leave the tree: a `<template>`'s template
+   made, and what the algorithm does when that descent returns. The four `after` values are the four descents
+   §8.6.4 makes — a template's contents (step 1.5.5), a shadow root (step 1.5.6), the element's own children
+   (step 1.5.10) and the REPLACED element's own children (step 1.5.2.2) — and each resumes at a different step.
+   THE FOURTH IS A DESCENT WHOSE RETURN DOES WORK, which is why it is a level and not a flag: step 1.5.2 runs
+   the inner sanitize steps on the child FIRST and splices only on the way back out, so the splice is what
+   happens when THIS descent returns and nothing else in the algorithm resumes there.
+   THE ROOT IS PART OF THE LEVEL because two of those four descents leave the tree: a `<template>`'s template
    contents and a shadow root are each a DETACHED node of their own, so a node inside one belongs to THAT
    private tree and not to the fragment — and dom_cow's private operations are declared over the root the node
    is actually in. Restoring it with the level is what makes a removal inside a template's contents legal and a
    removal after that descent still name the fragment. */
-enum { SAN_AFTER_TEMPLATE = 0, SAN_AFTER_SHADOW, SAN_AFTER_CHILDREN };
+enum { SAN_AFTER_TEMPLATE = 0, SAN_AFTER_SHADOW, SAN_AFTER_CHILDREN, SAN_AFTER_REPLACED_CHILDREN };
 typedef struct { lxb_dom_node_t *node; lxb_dom_node_t *root; uint8_t after; } SanLevel;
 
 typedef struct {

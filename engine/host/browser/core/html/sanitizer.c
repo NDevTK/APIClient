@@ -2127,15 +2127,22 @@ int sanitizer_walk_step(JSContext *ctx, JSStepHdr *hdr, SanitizerWalk *w)
                    "§8.6.3: a valid configuration's replaceWithChildrenElements cannot name one of the "
                    "built-in non-replaceable elements, and this one does — replacing it with its children "
                    "re-parses into a different tree");
-            if (drop)
-                DFAIL("§8.6.4 step 1.5.2 replaces an element with its children IN ITS PLACE, and the ORDER of "
-                      "its five steps is what is left to build: the standard runs the INNER SANITIZE STEPS on "
-                      "the child FIRST and splices only on the way back out, so this walk has to carry the "
-                      "decision down and perform the splice POST-ORDER — deciding it here and splicing here "
-                      "would hoist an unsanitized subtree into the parent. The positional primitive it needs "
-                      "now exists (dom_cow_move_before_private moves each of the child's children before the "
-                      "child, then dom_cow_discard_private drops the emptied element), which is the whole of "
-                      "the spec's fragment-and-replace over a tree nothing else can see");
+            if (drop) {
+                /* STEP 1.5.2.1, and it is the reason this is a descent rather than a splice taken here: the
+                   standard runs the inner sanitize steps on the child at step 1.5.2.2 and performs the
+                   fragment-and-replace at 1.5.2.3-1.5.2.5, so the splice is POST-ORDER. Deciding it here and
+                   splicing here would hoist an UNSANITIZED subtree into the parent — the children would land
+                   in `node` having been visited by nothing, which is the one ordering an XSS filter cannot
+                   get wrong. The level carries the decision down; SAN_POP performs it on the way back out. */
+                DCHECK(w->cur->parent != NULL && w->cur->parent->type != LXB_DOM_NODE_TYPE_DOCUMENT,
+                       "§8.6.4 step 1.5.2.1 asserts the node whose children are being sanitized is not a "
+                       "Document, and replacing a child of one with a fragment cannot preserve the single "
+                       "document element a Document is allowed");
+                san_push(ctx, w, w->cur, w->tree_root, SAN_AFTER_REPLACED_CHILDREN);
+                w->cur = w->cur->first_child;                                   /* step 1.5.2.2 */
+                hdr->stage = w->stage_base + SAN_CHILD;
+                return JS_STEP_YIELD;
+            }
         }
         if (san_has(ctx, w->config, "elements")) {                                  /* step 1.5.3 */
             list = san_get(ctx, w->config, "elements");
@@ -2356,6 +2363,29 @@ int sanitizer_walk_step(JSContext *ctx, JSStepHdr *hdr, SanitizerWalk *w)
         } else if (lv.after == SAN_AFTER_SHADOW) {
             w->attr = lxb_dom_element_first_attribute(lxb_dom_interface_element(w->cur));
             hdr->stage = w->stage_base + SAN_ATTRS;
+        } else if (lv.after == SAN_AFTER_REPLACED_CHILDREN) {
+            /* STEPS 1.5.2.3-1.5.2.5. The standard builds a document fragment, appends each of the child's
+               children to it and replaces the child with it; over a tree NOTHING ELSE CAN SEE, that fragment
+               is unobservable, so the three steps are the one move they amount to — each child taken to the
+               position the child itself occupies, in order, which is what leaves the spliced run where the
+               replaced element was. Their sanitization already happened: this arm runs only when the descent
+               step 1.5.2.2 pushed has returned.
+               THE REMOVAL OF THE EMPTIED ELEMENT ROUTES THROUGH san_begin_remove RATHER THAN DISCARDING IT
+               HERE, and that is not a detour. An element replaced by its children may be a `<template>`,
+               whose CONTENTS are not its children and would be freed with it by lexbor's destructor — leaving
+               the identity map naming freed memory — and may be a SHADOW HOST, whose shadow root is not a
+               child either. §8.6.3's non-replaceable list is `html`, `svg` and `math`, so it forbids neither:
+               `replaceWithChildrenElements: ["template"]` is a VALID configuration. The removal entry already
+               unwinds a template's contents as their own private tree and already asserts the shadow-host
+               case, so routing to it is what stops this becoming a second, weaker answer to the question that
+               file already answers. It also captures `next_sib` BEFORE the detach and resumes at SAN_CHILD,
+               which IS step 1.5.2.6's Continue: the spliced children were sanitized at 1.5.2.2 and the
+               standard's iteration moves past them to the child that followed the replaced one. */
+            lxb_dom_node_t *inner;
+
+            while ((inner = w->cur->first_child) != NULL)                       /* steps 1.5.2.3-1.5.2.5 */
+                dom_cow_move_before_private(w->tree_root, w->cur, inner);
+            san_begin_remove(ctx, hdr, w, w->cur);                              /* step 1.5.2.6 */
         } else {
             hdr->stage = w->stage_base + SAN_NEXT;
         }
