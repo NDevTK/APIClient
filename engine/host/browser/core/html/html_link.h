@@ -29,20 +29,40 @@
  * algorithm" — and §4.6.8 gives each type its OWN "appropriate times to fetch and process the linked resource".
  * A type whose times nothing registers is therefore not a case falling through to some other behavior; it has
  * no behavior anywhere, exactly as it had none before this file existed. What this file adds is §4.6.8.20 Link
- * type "preload", whose steps are a plain fetch and whose two events are the ones the idiom above hangs on.
+ * type "preload", whose steps are a plain fetch and whose two events are the ones the idiom above hangs on,
+ * and §4.6.8.12 Link type "modulepreload", whose steps are the module-script fetch behavior and whose events
+ * are the same two. The pair is what a bundler's chunk loader chooses between, and it chooses by asking:
+ * core/dom/dom_token_list.c records that `relList.supports("modulepreload")` and `.supports("preload")` are
+ * how it decides which `rel` to emit, and §4.2.4 makes that answer the set of types whose processing model
+ * this file implements — so building the second one is also what stops a loader being told the first is all
+ * there is.
  * `link_external_type_of` names the other states rather than folding them into one, because "no keyword here
  * creates an external resource link" and "an external resource link this engine has no steps for" are
  * different facts and a single value for both is the defect CLAUDE.md counts seven of, one layer up.
  *
- * THE TWO IT NAMES AND DOES NOT RUN, each for its own reason and neither of them a fallback:
- *   §4.6.8.12 Link type "modulepreload" is a GENUINELY DIFFERENT ALGORITHM — "Fetch a modulepreload module
- *   script graph given url, destination, settings object, options", which is core/loader/module_loader.c's
- *   graph and not a fetch — so it is not preload's slow path and must not be tracked as debt against it. It
- *   arrives with a caller in that component.
+ * WHY THE TWO IT RUNS ARE TWO FUNCTIONS AND NOT ONE WITH A FLAG. §4.6.8.12 says of itself that it "is a
+ * specialized alternative to the preload keyword, with a processing model geared toward preloading module
+ * scripts", and every difference is one of those: `as` defaults to "script" where preload makes its absence an
+ * error, the destination is tested against module preload destinations rather than preload destinations, the
+ * request is created by §8.1.4.2's "fetch a single module script" rather than by §4.2.4.3's create a link
+ * request, the parser metadata is stated rather than left at Fetch §2.2.5's initial value, three appropriate
+ * times are registered rather than five, and the response steps decide on a MODULE SCRIPT — so a 404 or an
+ * unlabelled body fires `error` where preload's steps fire `load`. What the two genuinely share is Fetch §4.1
+ * "Main fetch" step 7 and the park, and that IS one function (link_fetch_request), because four hand-written
+ * copies of step 7 is the shape core/fetch/fetch.h records going wrong.
+ *
+ * THE ONE IT NAMES AND DOES NOT RUN, which is not a fallback and not debt against either of them:
  *   §4.6.8.23 Link type "stylesheet" needs a CSS style sheet to APPLY the response to, and
  *   core/css/css_rule.h already records that there is none ("there is no `@import` fetch and no
  *   `<link rel=stylesheet>` sheet either"). Building the fetch without the consumer would be a response nothing
  *   reads, which is the mirror of the read-with-no-writer defect and is what §NO STUBS forbids.
+ *
+ * AND NEITHER IS §4.6.8.12's MODULE MAP, WHICH IS THE SAME RULE AGAIN AND IS A NAMED RESIDUAL AT
+ * link_modulepreload: this engine's module loading is ECMAScript §16.2.1.10 HostLoadImportedModule parking
+ * each specifier as the importing flow asks for it (core/loader/module_loader.c), so there is no map for
+ * "fetch a single module script" to set. Its absence shows as a document that preloads `app.mjs` and then
+ * `import()`s it issuing TWO requests — a preload MISS, which is a modelled behavior — while the `load` the
+ * page's own handler waits for still fires and the chunk's address still reaches the @H surface.
  *
  * THE PRELOAD CACHE IS NOT BUILT, AND THAT IS THE SAME RULE APPLIED AGAIN. §4.6.8.20 commits a preload entry
  * into the Document's "map of preloaded resources", whose only reader is "consume a preloaded resource" — an
