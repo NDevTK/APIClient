@@ -2773,7 +2773,14 @@ static const JSTrampStepDef js_tee_defs[TEE_N] = {
  *
  * IT REACHES THE OPERATIONS, NOT THE MEMBERS, and for the two responds that is not a stylistic choice: see the
  * note beside ReadableByteCtrlOp in readable_byte_stream.h for the detached view §4.8's `respond` would throw
- * on. */
+ * on.
+ *
+ * WHY IT IS HERE AND NOT IN readable_byte_stream.c. §4.9.1 defines both tees, so the standard already puts them
+ * together; and the algorithm STRADDLES the two files, so neither could hold it alone — the branch's stream
+ * half, the reader operations, the record and its class are this file's, and everything a BRANCH'S CONTROLLER
+ * is asked comes over readable_byte_stream.h as the exports below the BYOB read declaration. The crash this
+ * replaced named readable_byte_stream.c as the place to build it; that half of it was wrong, and the shape it
+ * should have named is the split rather than a file. */
 enum {
     BTEE_PULL1 = 0,   /* step 17: branch 1's pull algorithm */
     BTEE_PULL2,       /* step 18: branch 2's */
