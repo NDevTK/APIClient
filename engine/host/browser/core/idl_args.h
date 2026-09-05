@@ -2236,9 +2236,10 @@ void idl_async_iterator_tag(JSContext *ctx, JSValueConst aproto, const char *ifa
    rewrite. Returns <0 with an exception pending. */
 int idl_freeze_array(JSContext *ctx, JSValueConst arr);
 
-/* WEB IDL §3.3.7 [Exposed]'s EXPOSURE CONDITIONS — the extended attributes that decide whether a member EXISTS
- * in a realm, as opposed to what it answers. The "is exposed in realm" algorithm defined under that heading is
- * four steps and this is the one of them that is not about which global the member is on. (It read §3.9 here
+/* WEB IDL §3.3.7 [Exposed]'s CONDITIONAL EXPOSURE ATTRIBUTES — the extended attributes that decide whether a
+ * member EXISTS in a realm, as opposed to what it answers. The "is exposed in realm" algorithm defined under
+ * that heading is four steps and this enum is the ones that are not about which global the member is on; the
+ * one that IS, step 1, is `idl_exposed_in_realm` below. (It read §3.9 here
  * and in idl_args.c, which is "Legacy platform objects" — see the note at idl_exposed for why a number that
  * RESOLVES to the wrong real section is the one shape engine/citegen.mjs cannot see without a title beside it.)
  *
@@ -2256,9 +2257,22 @@ int idl_freeze_array(JSContext *ctx, JSValueConst arr);
  * member converges on — is where the condition is asked. A component that states the attribute has done
  * everything the IDL asks of it.
  *
- * THE OTHER TWO §3.3.7 CONDITIONS ARE HONESTLY ABSENT, and their absence is not a default. [Exposed] is decided
- * by WHICH global a component installs on and this engine has exactly one global kind (there is no
- * WorkerGlobalScope), so every member's exposure set is trivially satisfied. [CrossOriginIsolated] is decided
+ * STEP 1 IS NOT IN THIS ENUM AND IS NOT ABSENT EITHER — it is `idl_exposed_in_realm` below, and the reason it
+ * is a SEPARATE question rather than another value here is that §3.3.7's conditions are ORTHOGONAL: an
+ * interface is routinely `[Exposed=(Window,Worker), SecureContext]`, so a single scalar could not state both
+ * and one of the two would have to be dropped at every such member. This enum is the CONDITIONAL-ATTRIBUTE
+ * axis (steps 2 and 3); the EXPOSURE-SET axis (step 1) is decided by an identifier and a realm, and neither of
+ * those is a thing a component has to state.
+ *
+ * WHAT THIS PARAGRAPH USED TO ARGUE, because it was true and it was also the blocker: that [Exposed] is
+ * decided by which global a component installs on, that this engine has exactly one global kind — no
+ * WorkerGlobalScope — and that every member's exposure set was therefore trivially satisfied. Trivially
+ * satisfied is what an unasked question looks like from inside the only realm that ever asked it. With step 1 unasked there was no
+ * way to BUILD a realm that gets the `[Exposed=Worker]` surface and not Window's, so the only way to run a
+ * worker script was in a Window realm, where `document` exists — a fidelity bug, not a slice. The engine still
+ * has no WorkerGlobalScope; what it has now is the axis one has to be built on.
+ *
+ * [CrossOriginIsolated] is decided
  * by HTML §7.2.2's cross-origin isolated capability, which core/frame/agent_cluster.h now ANSWERS — false for
  * every environment this build makes, because §7.1.3.2's browsing context group switch is what would set the
  * group's isolation mode to `concrete` and nothing performs it yet (the COOP and COEP headers themselves DO
@@ -2284,6 +2298,41 @@ typedef enum {
  * auditor must never contain. See idl_args.c for the full argument, including why the oracle states each name's
  * exposure itself instead of reading back what the gate did. */
 bool idl_exposed(JSContext *ctx, IdlExposure exposure);
+
+/* WEB IDL §3.3.7 [Exposed]'s STEP 1, ASKED OF ONE IDENTIFIER — "If construct's exposure set is not `*`, and
+ * realm.[[GlobalObject]] does not implement an interface that is in construct's exposure set, then return
+ * false".
+ *
+ * IT TAKES AN IDENTIFIER AND NOT AN ANNOTATION, WHICH IS THE WHOLE DIFFERENCE FROM `idl_exposed` ABOVE. A
+ * conditional attribute is a fact about a MEMBER that only the component knows it carries, so the component
+ * states it as data. An exposure SET is a fact about a NAMED CONSTRUCT that the corpus already states, and
+ * §3.8 `define the global property references` is handed that name — so a C table repeating it per install
+ * site would be the third copy of a fact whose first copy is the `.idl` this project already reads. Both sides
+ * of the intersection are therefore GENERATED: browser/idl_exposure.h holds §3.3.7's exposure set per
+ * identifier and §3.3.8 [Global]'s global names per global interface, both emitted by engine/idlgen.mjs from
+ * the same derivation its own NOT-EXPOSED category is computed with, so the audit and the engine cannot
+ * disagree about what §3.3.7 says.
+ *
+ * A NAME WITH NO ROW IS EXPOSED. Absence of evidence must not remove a property from a realm — an identifier
+ * the corpus does not declare keeps what it has today — so the rows that carry information are the ones that
+ * can EXCLUDE, and a table that lost a row makes the engine no stricter than it was.
+ *
+ * WHERE IT IS ASKED IS §3.8's ONE ENTRY, `idl_define_global_property_reference`, which every interface object,
+ * legacy factory function and namespace object in this engine already converges on. That is the same rule the
+ * `_exposed` installers state from the other side — the question is asked at the one place, never at eighty
+ * call sites — with the difference that here no caller states anything at all. */
+bool idl_exposed_in_realm(JSContext *ctx, const char *identifier);
+
+/* WEB IDL §3.3.8 [Global]'s GLOBAL NAMES of one global interface — "The [Global] extended attribute also
+ * defines the global names for the interface" — which is the REALM side of §3.3.7 step 1's intersection. (The
+ * requirement that an exposure set name only these is §3.3.7's own, "Each of the identifiers mentioned must be
+ * a global name of some interface and be unique"; it is a real sentence and it belongs to [Exposed].)
+ *
+ * IT IS RESOLVED ONCE PER REALM, BY core/realm.c, from the interface name the host stated. A realm that named
+ * an interface the corpus does not declare [Global] ABORTS here rather than at the first member that would
+ * have been wrong about it, because a realm whose global names are zero is a realm every non-`*` construct is
+ * absent from — a whole platform surface silently missing, which is the shape §3.3.7 step 1 can fail in. */
+unsigned idl_global_names_of(const char *global_interface);
 
 /* WEB IDL §3.7.6 Attributes' NAME FOR AN ACCESSOR'S FUNCTION OBJECT — "Let name be the string \"get \"
  * prepended to attribute's identifier" for create an attribute getter, and "Let name be the string \"set \"

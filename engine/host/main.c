@@ -246,7 +246,9 @@ static JSContext *engine_realm_new(JSRuntime *rt, const char *top_level_url)
           "in core/frame/navigable.c is what releases a realm's Document, and the tree a joined document was "
           "parsed into has to travel with it rather than staying on this host's array");
     CHECK(JS_AddIntrinsicDOMException(ctx) == 0, "the DOMException intrinsic failed to install in a realm");
-    realm_install_intrinsics(ctx, top_level_url);
+    /* §3.3.7 [Exposed] step 1's realm side: every realm this host builds is a NAVIGABLE's, and a navigable's
+       global object is a Window. */
+    realm_install_intrinsics(ctx, top_level_url, "Window");
     return ctx;
 }
 

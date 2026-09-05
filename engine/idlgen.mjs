@@ -866,8 +866,14 @@ const ownExposure = (node) => {
   const v = rhsNames(extOf(node, "Exposed"));
   return v === null ? null : v === EXPOSED_STAR ? EXPOSED_STAR : new Set(v);
 };
-/* THE GLOBAL NAMES THE CORPUS DEFINES, per §3.3.8 [Global]: "Each of the identifiers mentioned must be a
-   global name of some interface". A bare [Global] takes the interface's own identifier. */
+/* THE GLOBAL NAMES THE CORPUS DEFINES, per §3.3.8 [Global] "[Global]": "The [Global] extended attribute also
+   defines the global names for the interface" — the given identifier, or the identifier list, and a bare
+   [Global] takes the interface's own identifier.
+   THE SENTENCE THAT USED TO BE QUOTED HERE IS §3.3.7's, NOT §3.3.8's. "Each of the identifiers mentioned must
+   be a global name of some interface and be unique" is a constraint [Exposed] places on ITS identifiers; it is
+   real, it is quoted correctly, and it was attributed to the section one along — the mis-aimed citation this
+   project rates as the harder half of a fabrication, since the words check out and the section does not
+   govern them. */
 const globalNamesOf = new Map();
 for (const n of idl.declarations) {
   if (n.type !== "interface" || !n.name) continue;
@@ -896,8 +902,21 @@ const exposureIntersect = (c, h) => {
   if (h === EXPOSED_STAR) return c;
   return new Set([...c].filter((x) => h.has(x)));
 };
+/* THE ORIGINAL DEFINITION, WHICH `byName` IS NOT — and reading [Exposed] off the wrong one fails in the ONE
+   direction an exposure answer must never fail in. `byName` keeps the FIRST node it saw for a name and folds
+   later members into it (idl_members.mjs says so), and across a corpus of many specs that first node is often
+   a PARTIAL, which carries no [Exposed] of its own. §3.3.7's own walk ends at "set C to the original
+   interface, interface mixin or namespace definition of C", so the ORIGINAL is what the algorithm asks about.
+   Measured before this map existed: `Window` and `HTMLImageElement` both answered [Exposed=*] — exposed in
+   every realm, from a declaration that says Window. */
+const originalOf = new Map();
+for (const n of idl.declarations)
+  if (!n.partial && n.name && !originalOf.has(n.name) &&
+      (n.type === "interface" || n.type === "interface mixin" || n.type === "callback interface" ||
+       n.type === "namespace"))
+    originalOf.set(n.name, n);
 const ifaceExposure = (name) => {
-  const node = byName.get(name);
+  const node = originalOf.get(name) || byName.get(name);
   const own = node ? ownExposure(node) : null;
   return own === null ? EXPOSED_STAR : own;   // no [Exposed] anywhere: this index has nothing to narrow with
 };
@@ -1954,6 +1973,125 @@ emitGenerated("idl_inheritance.h", inheritH,
               `${inheritRows.length} interface prototype objects and the §3.7.3 [[Prototype]] each must have`,
               "idl_args.c asserts each realm's chain against it, and this file's own gap audit credits a " +
               "base's members to everything that inherits it only because that assertion holds.");
+
+/* ---------------------------------------------------------------------------------------------------------
+ * WEB IDL §3.3.7 [Exposed]'s STEP 1, GENERATED — the two sets that step intersects, and NEITHER of them is
+ * this engine's to state.
+ *
+ * Step 1 is "If construct's exposure set is not `*`, and realm.[[GlobalObject]] does not implement an
+ * interface that is in construct's exposure set, then return false". It has a CONSTRUCT side (a set of global
+ * names, from the construct's own [Exposed]) and a REALM side (the global names the realm's global object's
+ * interface is declared with, from that interface's §3.3.8 [Global]). Both are extended attributes in the
+ * corpus, so both are read from it: a C table restating either would be the third copy of a fact whose first
+ * copy is the artifact this tool exists to read, and it would go stale the way a hand-kept column always does.
+ *
+ * IT IS THE SAME DERIVATION THE AUDIT ABOVE ALREADY RUNS, and that is deliberate rather than convenient. The
+ * NOT-EXPOSED category is computed from `ifaceExposure`/`memberExposure` and `globalNamesOf`; emitting the
+ * engine's runtime answer from those same functions means the audit and the engine cannot disagree about what
+ * §3.3.7 says. Two derivations of one algorithm is the shape that drifts.
+ *
+ * WHY THE ENGINE NEEDS IT AT ALL: until this landed, `IdlExposure` modelled step 2 ([SecureContext]) and
+ * idl_args.h recorded step 1 as honestly absent, on the argument that this engine has exactly one global kind
+ * — no WorkerGlobalScope — so every member's exposure set was trivially satisfied. That argument was true and
+ * it was also the blocker: with no way to build a realm that gets the [Exposed=Worker] surface and not
+ * Window's, a worker script could only be run in a Window realm, where `document` exists.
+ *
+ * A NAME WITH NO ROW IS EXPOSED, which is this file's own sound direction stated for a consumer rather than a
+ * count: absence of evidence must never REMOVE something, so a name the corpus does not declare (a legacy
+ * factory function of an interface webref does not ship, an engine-only name) keeps the property it has today.
+ * The rows that carry information are the ones that can EXCLUDE, and every one of them is a corpus fact. */
+const exposureBitNames = [...new Set([...globalNamesOf.values()].flatMap((s) => [...s]))].sort();
+/* §3.3.7: "each of the identifiers mentioned must be a global name of some interface". A name in an [Exposed]
+   that no [Global] declares would get no bit, and a set of no bits is how `*` is spelled below — so it would
+   read as EXPOSED EVERYWHERE, which is the one direction this table must never fail in. It crashes instead. */
+const exposureBit = new Map(exposureBitNames.map((n, i) => [n, 1 << i]));
+if (exposureBitNames.length > 31)
+  throw new Error(`[idl-audit] the corpus declares ${exposureBitNames.length} §3.3.8 [Global] names and the ` +
+                  `generated set is a 32-bit mask — the mask has to grow before the table can be emitted`);
+const exposureMask = (set, what) => {
+  if (set === EXPOSED_STAR) return null;
+  let m = 0;
+  for (const n of set) {
+    const b = exposureBit.get(n);
+    if (b === undefined)
+      throw new Error(`[idl-audit] ${what} is [Exposed=…${n}…] and no interface in the corpus is declared ` +
+                      `[Global=${n}] — Web IDL §3.3.7 requires every identifier in an exposure set to be a ` +
+                      `global name of some interface, and a name with no bit would silently read as \`*\``);
+    m |= b;
+  }
+  return m;
+};
+const maskSpelling = (m) => (m === null ? "IDL_EXPOSED_STAR"
+  : exposureBitNames.filter((n) => m & exposureBit.get(n)).map((n) => `IDL_GLOBAL_${n.toUpperCase()}`)
+      .join(" | "));
+/* EVERY IDENTIFIER §3.8 CAN DEFINE ON A GLOBAL: an interface, a namespace, a callback interface — §3.7.1 and
+   §3.13.1 each put one property on the global under the construct's own identifier — and every
+   §3.7.2 LEGACY FACTORY FUNCTION, whose name is on the global too and is no interface's, so a table keyed by
+   interface name alone would leave `Image`, `Audio` and `Option` in a worker. */
+const exposureRows = [];
+for (const [name, node] of byName) {
+  const kind = (originalOf.get(name) || node).type;
+  if (!["interface", "namespace", "callback interface"].includes(kind)) continue;
+  exposureRows.push([name, exposureMask(ifaceExposure(name), name)]);
+}
+for (const [factory, iface] of legacyFactoryOf)
+  if (byName.has(iface))
+    exposureRows.push([factory, exposureMask(ifaceExposure(iface), `${iface}'s [LegacyFactoryFunction=${factory}]`)]);
+exposureRows.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+const globalRows = [...globalNamesOf].map(([iface, names]) =>
+  [iface, [...names].reduce((m, n) => m | exposureBit.get(n), 0)]);
+globalRows.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+const expW = Math.max(...exposureRows.map((r) => r[0].length + 2));
+const globW = Math.max(...globalRows.map((r) => r[0].length + 2));
+const exposureH =
+  "/* GENERATED by engine/idlgen.mjs from @webref/idl — DO NOT EDIT.\n" +
+  " * Web IDL §3.3.7 [Exposed]'s STEP 1 — \"If construct's exposure set is not `*`, and realm.[[GlobalObject]]\n" +
+  " * does not implement an interface that is in construct's exposure set, then return false\" — as the two\n" +
+  " * sets that step intersects, both straight out of the corpus's own extended attributes.\n" +
+  " *\n" +
+  " * IDL_EXPOSURE is the CONSTRUCT side, keyed by the identifier Web IDL §3.8 `define the global property\n" +
+  " * references` puts on a global: every interface, namespace and callback interface, plus every §3.7.2\n" +
+  " * legacy factory function name. IDL_GLOBALS is the REALM side: each §3.3.8 [Global] interface and the\n" +
+  " * global names its global object implements. core/idl_args.c intersects them; core/realm.c is where a\n" +
+  " * realm states which of the IDL_GLOBALS rows its global object is.\n" +
+  " *\n" +
+  " * A NAME WITH NO ROW IS EXPOSED. Absence of evidence must not remove a property, so an identifier the\n" +
+  " * corpus does not declare keeps the global property it would have had — the rows that carry information\n" +
+  " * are the ones that can EXCLUDE. Regenerate after `npm install @webref/idl webidl2`, and commit the\n" +
+  " * result — the build has no network and this table is not optional. */\n" +
+  "#ifndef APICLIENT_IDL_EXPOSURE_H\n#define APICLIENT_IDL_EXPOSURE_H\n\n" +
+  "/* WEB IDL §3.3.8 [Global]'s GLOBAL NAMES, one bit each — \"The [Global] extended attribute also defines\n" +
+  "   the global names for the interface\", so this vocabulary is exactly the corpus's [Global] annotations.\n" +
+  "   §3.3.7 [Exposed] requires every identifier in an exposure set to be one of them (\"Each of the\n" +
+  "   identifiers mentioned must be a global name of some interface and be unique\"), so a name outside this\n" +
+  "   enum is a corpus error the generator refuses rather than a bit nobody set. */\n" +
+  "enum {\n" +
+  exposureBitNames.map((n, i) =>
+    `    IDL_GLOBAL_${n.toUpperCase()}${" ".repeat(Math.max(...exposureBitNames.map((x) => x.length)) - n.length)}` +
+    ` = 1u << ${i},`).join("\n") + "\n};\n\n" +
+  "/* `*` — §3.3.7's wildcard own exposure set, which step 1 tests for BEFORE it looks at the realm. Zero is\n" +
+  "   the right spelling of it and not a hole: an exposure set of no global names is a construct exposed\n" +
+  "   nowhere, which §3.3.7 forbids (the generator crashes on one), so the value cannot mean anything else. */\n" +
+  "#define IDL_EXPOSED_STAR 0u\n\n" +
+  "typedef struct IdlExposureRow {\n" +
+  "    const char *name;   /* the identifier §3.8 defines on the global */\n" +
+  "    unsigned    set;    /* §3.3.7's exposure set of the construct that identifier names */\n" +
+  "} IdlExposureRow;\n\n" +
+  "typedef struct IdlGlobalRow {\n" +
+  "    const char *iface;  /* a §3.3.8 [Global] interface */\n" +
+  "    unsigned    names;  /* the global names its global object implements */\n" +
+  "} IdlGlobalRow;\n\n" +
+  "static const IdlExposureRow IDL_EXPOSURE[] = {\n" +
+  exposureRows.map(([n, m]) =>
+    `    { ${`"${n}",`.padEnd(expW + 1)} ${maskSpelling(m)} },`).join("\n") + "\n};\n\n" +
+  "static const IdlGlobalRow IDL_GLOBALS[] = {\n" +
+  globalRows.map(([n, m]) =>
+    `    { ${`"${n}",`.padEnd(globW + 1)} ${maskSpelling(m)} },`).join("\n") + "\n};\n\n#endif\n";
+emitGenerated("idl_exposure.h", exposureH,
+              `${exposureRows.length} identifiers §3.8 can define on a global and the ${globalRows.length} ` +
+              `[Global] interfaces §3.3.7 step 1 measures them against`,
+              "idl_args.c answers §3.3.7 step 1 off it at every global property reference, so a stale table " +
+              "is a name present in a realm the standard says it is absent from, or absent from one it is in.");
 
 /* ---------------------------------------------------------------------------------------------------------
  * THE VERDICT, PER INTERFACE FIRST. §Testing: a gate reports per AREA as well as in total, because one number

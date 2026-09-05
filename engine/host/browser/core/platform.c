@@ -1461,7 +1461,15 @@ void platform_agent_init(JSContext *ctx, const char *origin, const char *top_lev
     /* THE AGENT'S FIRST REALM IS A REALM. Every per-realm intrinsic the components above declared is built
        here, through the same one call a child navigable's realm makes — so the first document cannot get a
        different set from the rest, which is the whole failure mode this file and core/realm.h exist to end. */
-    realm_install_intrinsics(ctx, agent->top_level_url);
+    /* AND IT IS A WINDOW REALM, WHICH IS THIS FILE'S STATEMENT TO MAKE AND NOT THE HOST'S. Web IDL §3.3.7
+       [Exposed] step 1 asks which [Global] interface a realm's global object implements, and every realm
+       `platform_agent_init` brings up is one the install column below gives `document`, `location`, `history`
+       and `navigator` — HTML §7.2.2's Window, by construction rather than by a host's choice. A field on
+       PlatformAgent would be a fact a host could state WRONGLY about a surface it does not assemble; the
+       component that assembles the surface is the one that knows. The day this engine grows a
+       WorkerGlobalScope it is a second entry beside this one, with its own install column, and not an
+       argument that makes this one answer two questions. */
+    realm_install_intrinsics(ctx, agent->top_level_url, "Window");
 }
 
 void platform_agent_free(void)
@@ -1620,7 +1628,20 @@ void platform_document_install(JSContext *ctx, JSValueConst global, lxb_html_doc
            written here. core/idl_args.h states why an oracle may ask that predicate where an install may not:
            spelling step 2 out at this line — `exposure == IDL_EXPOSED || secure_context_is(ctx)` — would be a
            second copy of the algorithm, and the copy that drifts is the one nobody runs against reality. */
-        bool owed = idl_exposed(ctx, PLATFORM_WITNESS[i].exposure);
+        /* BOTH CONDITIONS, BECAUSE AN ORACLE THAT STATES HALF OF ONE IS WRONG ABOUT EVERY REALM THE OTHER
+           HALF DECIDES. §3.3.7's "is exposed in realm" is four steps: step 1 is the EXPOSURE SET against this
+           realm's global names, step 2 is [SecureContext], and the row's `exposure` column states only the
+           second. Asking the first as well is what makes this list an oracle over a realm rather than over a
+           WINDOW — a `[Exposed=Window]` interface object is a name this table would otherwise DEMAND of a
+           realm the standard says it is absent from, which is the same falsehood the [SecureContext] column
+           was added to end, one step up the same algorithm.
+           IT IS ASKED BY NAME AND ANSWERS `true` FOR THE MEMBERS ON THIS LIST, deliberately and not by
+           accident: `fetch`, `onload`, `document` and `setTimeout` are Window MEMBERS, and the generated table
+           is keyed by the identifiers §3.8 defines on a global, so a member has no row and takes the sound
+           silent direction. The rows it does decide are the interface objects — `Performance`,
+           `PerformanceObserver`, `NavigateEvent` — which is exactly the population §3.8 puts there. */
+        bool owed = idl_exposed(ctx, PLATFORM_WITNESS[i].exposure) &&
+                    idl_exposed_in_realm(ctx, PLATFORM_WITNESS[i].name);
         int has;
         CHECK(a != JS_ATOM_NULL, "a platform witness name could not be interned");
         has = JS_HasProperty(ctx, global, a);

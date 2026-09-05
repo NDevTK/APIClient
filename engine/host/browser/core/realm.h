@@ -37,7 +37,26 @@ void realm_declare_intrinsic(RealmIntrinsic install);
  * has to exist before the intrinsics do. A component cannot supply it (a realm intrinsic has no document in
  * front of it), and a line each host writes before this call is the hand-copied list this whole file exists to
  * abolish; an ARGUMENT is the version a host cannot forget, because forgetting it does not compile. */
-void realm_install_intrinsics(JSContext *ctx, const char *top_level_creation_url);
+void realm_install_intrinsics(JSContext *ctx, const char *top_level_creation_url,
+                              const char *global_interface);
+
+/* WEB IDL §3.3.8 [Global]'s GLOBAL NAMES this realm's global object implements — the REALM side of §3.3.7
+ * [Exposed] step 1's "realm.[[GlobalObject]] does not implement an interface that is in construct's exposure
+ * set". Resolved ONCE, from the interface name the host stated above, into the bit set
+ * browser/idl_exposure.h generates from the corpus's own [Global] annotations.
+ *
+ * IT IS AN ARGUMENT TO THE CALL ABOVE FOR THE SAME REASON THE TOP-LEVEL CREATION URL IS, and the reason is
+ * worth restating because this is the second field to arrive by it: a realm's platform SURFACE is decided
+ * before its intrinsics are built, a component cannot supply the fact (a realm intrinsic has no host in front
+ * of it), and a line each host writes before the call is the hand-copied list this whole file exists to
+ * abolish. An argument is the version a host cannot forget, because forgetting it does not compile.
+ *
+ * WHY A NAME AND NOT A BIT SET: the vocabulary of global names is the corpus's, so a host spelling one out of
+ * a generated enum would be a host that has to include a generated table to build a realm. The interface's own
+ * identifier — "Window", "DedicatedWorkerGlobalScope" — is what the IDL calls it and what §3.3.8 keys, and a
+ * name the corpus does not declare [Global] aborts at the realm rather than at the first member that would
+ * have been wrong about it. */
+unsigned realm_global_names(JSContext *ctx);
 
 /* HTML §8.1.3.1's TOP-LEVEL CREATION URL of THIS realm's environment — "a URL that represents the creation
  * URL of the `top-level` environment".

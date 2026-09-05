@@ -27,6 +27,12 @@
 #include "quickjs-step.h"
 #include "solver/concolic.h"
 #include "core/idl_args.h"
+/* GENERATED from @webref/idl — Web IDL §3.3.7 [Exposed] step 1's two sets. UNCONDITIONAL, unlike
+   idl_inheritance.h below: that table is an ASSERTION and compiles out with the DCHECK that reads it, while
+   this one decides which interface objects exist on a realm's global, which is the platform surface itself
+   and is the same in every build. */
+#include "idl_exposure.h"
+#include "core/realm.h"          /* §3.3.7 [Exposed] step 1: the global names THIS realm's global implements */
 #include "core/frame/secure_context.h"   /* §3.3.7 [Exposed]'s conditions: HTML §8.1.3.5 Secure contexts' answer
                                             for this realm */
 #include "core/frame/window_proxy.h"     /* §3.7.6's `jsValue`: the receiver resolution and its Window brand */
@@ -6337,6 +6343,59 @@ void idl_install_accessor_step(JSContext *ctx, JSValueConst target, const char *
    thing it is checking asserts nothing: derived, a gate silently REMOVED would leave the record and the realm
    agreeing, and the direction that catches it — a [SecureContext] name PRESENT on a non-secure global — could
    not fire at all. */
+/* WEB IDL §3.3.7 [Exposed] STEP 1's TWO SETS, READ — see idl_args.h for why both are generated and why this
+   takes an identifier where `idl_exposed` takes an annotation.
+   BOTH TABLES ARE SORTED BY THE GENERATOR, so both are reached with bsearch; the generator sorts with a plain
+   code-unit comparison and Web IDL identifiers are ASCII, so that order and strcmp's are the same order and
+   there is nothing to keep in step (idl_inheritance.h's own comment says the same of its rows). */
+static int idl_exposure_row_cmp(const void *key, const void *row)
+{
+    return strcmp((const char *)key, ((const IdlExposureRow *)row)->name);
+}
+
+static int idl_global_row_cmp(const void *key, const void *row)
+{
+    return strcmp((const char *)key, ((const IdlGlobalRow *)row)->iface);
+}
+
+unsigned idl_global_names_of(const char *global_interface)
+{
+    const IdlGlobalRow *r;
+
+    DCHECK(global_interface != NULL && *global_interface,
+           "a realm was built stating no [Global] interface — Web IDL §3.3.7 step 1 asks which interface this "
+           "realm's global object implements, and a realm that does not say has no answer to give");
+    r = bsearch(global_interface, IDL_GLOBALS, sizeof IDL_GLOBALS / sizeof IDL_GLOBALS[0],
+                sizeof IDL_GLOBALS[0], idl_global_row_cmp);
+    /* CHECK AND NOT DCHECK, WHICH IS THE SAME CALL THE DEFINE BELOW ALREADY MAKES AND FOR THE SAME REASON. An
+       unknown name gives this realm an EMPTY set of global names, and step 1 then fails for every construct
+       whose exposure set is not `*` — so a release build would come up with its WHOLE PLATFORM SURFACE
+       missing, silently, from one misspelt string. That is not "this engine's own logic is wrong", which is
+       what a DCHECK asserts; it is a state production must not proceed from. The value is one this codebase
+       computes (a host's literal), never bytes a stranger stated, so asserting on it hands nobody an abort
+       switch. */
+    CHECKF(r != NULL,
+           "a realm was built stating it implements `%s`, which the platform's IDL does not declare with Web "
+           "IDL §3.3.8 [Global] — browser/idl_exposure.h's IDL_GLOBALS is that corpus's own list, so either "
+           "the name is misspelt or the interface this realm's global object implements is one webref does "
+           "not ship", global_interface);
+    return r->names;
+}
+
+bool idl_exposed_in_realm(JSContext *ctx, const char *identifier)
+{
+    const IdlExposureRow *r;
+
+    DCHECK(identifier != NULL && *identifier,
+           "Web IDL §3.3.7 step 1 was asked about no identifier — the exposure set is a property of a NAMED "
+           "construct, and there is nothing else to key it by");
+    r = bsearch(identifier, IDL_EXPOSURE, sizeof IDL_EXPOSURE / sizeof IDL_EXPOSURE[0],
+                sizeof IDL_EXPOSURE[0], idl_exposure_row_cmp);
+    /* A NAME WITH NO ROW IS EXPOSED — idl_args.h states why the silent direction is the sound one. */
+    if (r == NULL || r->set == IDL_EXPOSED_STAR) return true;
+    return (r->set & realm_global_names(ctx)) != 0u;
+}
+
 bool idl_exposed(JSContext *ctx, IdlExposure exposure)
 {
     switch (exposure) {
@@ -6714,8 +6773,11 @@ static JSValue idl_held_value_get(JSContext *ctx, JSValueConst this_val, int arg
  * DECIDED rather than where the receiver arrives. §3.7.6's TypeError is about `target`, and this file mints
  * the accessor without being told which interface that is — so what it relies on is that every member reaching
  * it belongs to the one [Global] interface this engine has. `target` being the realm's global object IS that
- * fact (idl_args.h's §3.3.7 note states the same thing from the other side: there is no WorkerGlobalScope here,
- * so one global kind means one [Global] interface), and the day a component declares a [Replaceable] or a
+ * fact — and it is the fact rather than the ARGUMENT that used to sit beside it: idl_args.h's §3.3.7 note no
+ * longer says "one global kind" makes the question moot, because §3.3.7 step 1 is asked now (a realm STATES
+ * which [Global] interface its global object implements). What has not changed is that this build's realms are
+ * Window ones, so `target` is still the one global there is — the day that stops being true, this assert is
+ * what says so. And the day a component declares a [Replaceable] or a
  * held-value attribute on an ordinary interface this fires and names the brand that must then become data the
  * component states — the way IdlExposure and IdlAttrForge already are.
  *
@@ -6900,6 +6962,26 @@ void idl_define_global_property_reference(JSContext *ctx, JSValueConst global, c
     DCHECK(JS_IsObject(object), "§3.8 defines the global's property over an interface object, a legacy factory "
                                 "function, a legacy callback interface object or a namespace object, and every "
                                 "one of those is an object — this was not one");
+    /* WEB IDL §3.3.7 [Exposed] STEP 1, AT THE ONE PLACE A NAME REACHES A GLOBAL. §3.7 Interfaces says the
+       property exists "For every interface that is exposed in a given realm", so a construct whose exposure
+       set does not meet this realm's global names has no property here to define — `'X' in globalThis` is
+       false, which is the same removal §3.3.13 performs one step further down the same algorithm.
+       IT IS ASKED HERE AND NOT AT THE EIGHTY CALLERS for the reason idl_args.h gives for the whole family: a
+       condition asked per install site is a condition each site re-derives, and every site added afterwards is
+       exposed everywhere by default with nothing to say so. Here there is nothing to re-derive either — the
+       exposure set comes from the corpus, keyed by the identifier this entry is already handed.
+       THE OBJECT IS FREED RATHER THAN DEFINED, because this entry OWNS it on every path and a caller that
+       could get it back would have two shapes to write instead of one.
+       NAMED RESIDUAL — THE MINT STILL RUNS. WHAT IS NOT COVERED: the caller has already built the interface
+       object and this realm's prototype for it, so a construct absent from this realm still costs its objects;
+       `idl_install_interface_object_exposed`'s own note ("not exposed means not built") holds for the
+       conditional-attribute axis and not yet for this one. WHAT THE NEXT DIFF BUILDS: the exposure question
+       asked at the component's per-realm install, before the prototype is built, which is where the whole
+       §3.7.3/§3.7.1 pair for an unexposed interface should be skipped. HOW ITS ABSENCE WOULD SHOW: a realm
+       whose global names exclude most of the platform still allocates every interface prototype object in it,
+       so its heap looks like a Window's while its global does not — measurable as allocation, never as a
+       property a page can read, since nothing names an object no global property points at. */
+    if (!idl_exposed_in_realm(ctx, id)) { JS_FreeValue(ctx, object); return; }
     defined = JS_DefinePropertyValueStr(ctx, global, id, object, IDL_INTERFACE_OBJECT_PROP_FLAGS);
     /* CHECK rather than DCHECK: the define consumes `object` on every path, so a release build that carried on
        past a failure would leave the interface UNREACHABLE under a name a page feature-detects, and the only

@@ -6090,10 +6090,76 @@ static JSContext *tf_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const 
        themselves into, so a component added anywhere is installed in every realm with no host to edit.
        §7.4 decided this child's top-level creation URL and handed it over — using `url` would make an
        about:blank iframe of an http page a secure context. */
-    realm_install_intrinsics(ctx, top_level_url);
+    realm_install_intrinsics(ctx, top_level_url, "Window");   /* §3.3.7 step 1: a child navigable is a Window */
     tf_realm_install(ctx, dom, url, origin, kind, policy, permissions_policy, sandbox_flags, doc_id,
                      nav_proxy);
     return ctx;
+}
+
+/* WEB IDL §3.3.7 [Exposed] STEP 1, MEASURED — the consumer that makes the exposure axis falsifiable.
+ *
+ * WHAT THIS IS NOT: a worker. It builds no WorkerGlobalScope, runs no worker script and creates no agent —
+ * HTML §10.2.1.1 is unbuilt and this fixture does not pretend otherwise. What it builds is a REALM THAT STATES
+ * A DIFFERENT [Global] INTERFACE, which is the one thing §3.3.7 step 1 reads, so it measures exactly the axis
+ * and claims nothing above it. That axis was the blocker under `Worker`: with step 1 unasked there was no way
+ * to build a realm that gets the `[Exposed=Worker]` surface and not Window's, so a worker script could only
+ * have run in a realm where `document` exists.
+ *
+ * IT IS THREE ASSERTIONS AND NOT ONE, because a gate that only ever checks the ABSENT direction passes for a
+ * realm in which nothing was installed at all — the vacuous check this project keeps meeting. So:
+ *   `DOMParser`      is `[Exposed=Window]`               — ABSENT here, PRESENT in the Window realm beside it;
+ *   `Event`          is `[Exposed=*]`                    — PRESENT in both, so the install ran;
+ *   `MessageChannel` is `[Exposed=(Window,Worker)]`      — PRESENT in both, and it is the row that separates
+ *                                                          "the worker realm keeps everything" from "the
+ *                                                          worker realm keeps what its own IDL names".
+ * The Window control is read from the caller's realm rather than assumed, so a run in which the intrinsics
+ * silently stopped installing anything fails on the control instead of passing on the absence. */
+static void exposure_selftest(JSContext *ctx, const char *top_level_url)
+{
+    static const struct { const char *name; bool in_window, in_worker; } EXPECT[] = {
+        { "DOMParser",      true, false },   /* [Exposed=Window] */
+        { "Event",          true, true  },   /* [Exposed=*] */
+        { "MessageChannel", true, true  },   /* [Exposed=(Window,Worker)] */
+    };
+    JSContext *worker = JS_NewContext(JS_GetRuntime(ctx));
+    JSValue win_global, worker_global;
+    int i;
+
+    CHECK(worker != NULL, "a realm for the §3.3.7 [Exposed] step 1 measurement could not be created");
+    CHECK(JS_AddIntrinsicDOMException(worker) == 0, "the DOMException intrinsic failed to install in a realm");
+    /* THE SAME ONE CALL EVERY REALM GOES THROUGH, with one argument different — which is the whole claim. A
+       second builder here would be the hand-copied intrinsic list core/realm.h exists to abolish, and it would
+       also measure a realm no host can build. */
+    realm_install_intrinsics(worker, top_level_url, "DedicatedWorkerGlobalScope");
+    win_global = JS_GetGlobalObject(ctx);
+    worker_global = JS_GetGlobalObject(worker);
+    for (i = 0; i < (int)(sizeof EXPECT / sizeof EXPECT[0]); i++) {
+        JSAtom a = JS_NewAtom(ctx, EXPECT[i].name);
+        int in_win, in_worker;
+
+        CHECK(a != JS_ATOM_NULL, "an exposure witness name could not be interned");
+        in_win = JS_HasProperty(ctx, win_global, a);
+        in_worker = JS_HasProperty(worker, worker_global, a);
+        JS_FreeAtom(ctx, a);
+        CHECK(in_win >= 0 && in_worker >= 0,
+              "an exposure probe threw — [[HasProperty]] over a realm's global runs no page code");
+        CHECKF((in_win == 1) == EXPECT[i].in_window,
+               "the Window realm's global %s `%s`, and Web IDL §3.3.7 [Exposed] says it %s — this is the "
+               "CONTROL half of the step 1 measurement, so it failing means the intrinsic that installs `%s` "
+               "did not run rather than that step 1 is wrong",
+               in_win ? "carries" : "does not carry", EXPECT[i].name,
+               EXPECT[i].in_window ? "must be there" : "must not", EXPECT[i].name);
+        CHECKF((in_worker == 1) == EXPECT[i].in_worker,
+               "a realm whose global object implements `DedicatedWorkerGlobalScope` %s `%s`, and Web IDL "
+               "§3.3.7 [Exposed] step 1 says it %s: the construct's exposure set is intersected with the "
+               "global names §3.3.8 [Global] gives that interface (Worker, DedicatedWorker), and "
+               "browser/idl_exposure.h states both sides straight out of the corpus",
+               in_worker ? "carries" : "does not carry", EXPECT[i].name,
+               EXPECT[i].in_worker ? "must be there" : "must not");
+    }
+    JS_FreeValue(ctx, win_global);
+    JS_FreeValue(worker, worker_global);
+    JS_FreeContext(worker);
 }
 
 /* INDEXED DATABASE §2.1's DATABASE AND §2.2's OBJECT STORE — the state a store IS, before anything schedules
@@ -17446,6 +17512,7 @@ int main(int argc, char **argv) {
        address it is installed at below — and `https:` makes it a SECURE CONTEXT, which is what a real bundle
        runs in and therefore what the fixture must exercise. */
     tf_agent_init(ctx, "https://x.test", "https://x.test/p");
+    exposure_selftest(ctx, "https://x.test/p");   /* §3.3.7 [Exposed] step 1 discriminates, measured both ways */
     navigable_set_realm_builder(tf_child_realm);
     int min_doc = arg_has(argc, argv, "--min");   /* fast per-change memory gate: the minimal clone/COW doc */
     /* THE CLOSE-REQUEST DOCUMENT, which is a document and not a flag on another one: its whole verdict is an
