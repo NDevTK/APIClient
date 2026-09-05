@@ -88,9 +88,9 @@ static JSValue g_uncompiled_key;
    here, beside the other three slots another component claims, because event_target_init declares all four to
    core/agent_state.h and a declaration needs the address. */
 static void (*g_handler_set_hook)(JSContext *ctx, JSValueConst target, const char *name);
-/* HTML §8.1.8.1's determine the target of an event handler — the three terms the HTML layer answers. Declared
-   here beside the other slots another component claims, for the same reason they are. */
-static const EventHandlerTargetTerms *g_handler_terms;
+/* HTML §8.1.8.1's DEFINED TERMS — the six questions that section's algorithms ask of the tree and the HTML
+   layer answers. Declared here beside the other slots another component claims, for the same reason they are. */
+static const EventHandlerTerms *g_handler_terms;
 /* The DISPATCH_PAIR step declaration — the one door a C caller has into the §2.9 machine. The FUNCTION OBJECT
    is minted per fire, in the FIRING REALM, and is never installed anywhere the page can reach: a C function
    runs in the realm that DEFINED it (js_call_c_function does `ctx = p->u.cfunc.realm`), so one object held in a
@@ -410,25 +410,28 @@ void event_target_set_click_terms(bool (*is_disabled_form_control)(JSContext *ct
     g_is_disabled_form_control = is_disabled_form_control;
 }
 
-void event_target_set_handler_target_terms(const EventHandlerTargetTerms *terms)
+void event_target_set_handler_terms(const EventHandlerTerms *terms)
 {
     /* NULL IS THE RELEASE — see event_target_set_tree for why the two are one call. */
     if (terms == NULL) {
         DCHECK(g_handler_terms != NULL,
-               "HTML §8.1.8.1's determine the target of an event handler terms were released by a component "
-               "that never registered them");
+               "HTML §8.1.8.1's defined terms were released by a component that never registered them");
         g_handler_terms = NULL;
         return;
     }
     DCHECK(g_handler_terms == NULL,
-           "a second component registered HTML §8.1.8.1's determine the target of an event handler terms — "
-           "there is ONE answer to `is this a body element`, and a second registration silently decides which "
-           "object every `body.onload = f` in the agent lands on");
+           "a second component registered HTML §8.1.8.1's defined terms — there is ONE answer to `is this a "
+           "body element`, and a second registration silently decides which object every `body.onload = f` in "
+           "the agent lands on");
     DCHECK(terms->is_body_or_frameset != NULL && terms->node_document_is_active != NULL &&
-           terms->node_document_global != NULL,
-           "half of §8.1.8.1's determine the target of an event handler was registered — steps 1, 3 and 4 are "
-           "one algorithm, and a host that can say an element is a body but not whether its node document is "
-           "active would delegate a handler to a Window that its own step 3 forbids reaching");
+           terms->node_document_global != NULL && terms->is_element != NULL &&
+           terms->node_document != NULL && terms->form_owner != NULL,
+           "half of §8.1.8.1's defined terms were registered — determine the target's steps 1, 3 and 4 are one "
+           "algorithm, and a host that can say an element is a body but not whether its node document is "
+           "active would delegate a handler to a Window that its own step 3 forbids reaching; get the current "
+           "value's step 3.1 partition and step 3.9's scope are the other three, and a host that can name an "
+           "element but not its node document would compile an inline handler with a scope chain missing the "
+           "layer its own step 3.9 substep 3 adds");
     g_handler_terms = terms;
 }
 
@@ -454,8 +457,8 @@ void event_target_free(JSRuntime *rt)
            "HTML §8.1.8.1's handler-set hook was still registered when the event machinery was released — "
            "core/events/message_port.c claimed it and must give it back at message_port_free");
     DCHECK(g_handler_terms == NULL,
-           "HTML §8.1.8.1's determine the target of an event handler terms were still registered when the "
-           "event machinery was released — core/html/html_element.c claimed them and must give them back at "
+           "HTML §8.1.8.1's defined terms were still registered when the event machinery was released — "
+           "core/html/html_element.c claimed them and must give them back at "
            "html_element_free, which reverse-declaration order runs first");
     DCHECK(g_is_disabled_form_control == NULL,
            "HTML §6.5's click() step 1 predicate was still registered when the event machinery was released — "
@@ -1709,6 +1712,21 @@ static JSValue uncompiled_body(JSContext *ctx, JSValueConst h)
     return b;
 }
 
+/* THE MEMBERS OF §8.1.8.1 STEP 3.9's SCOPE — one bit per substep that ADDS a NewObjectEnvironment, and the bit
+   number is the carrier slot the source text reads. Substeps 1 and 2 (the realm, and realm.[[GlobalEnv]]) add
+   no layer and have no bit: globalEnv is what a JS_EVAL_TYPE_GLOBAL program already has, and substep 6 returns
+   the scope. Each condition is the standard's own and is decided at the compile, never here:
+     EH_SCOPE_DOCUMENT  substep 3, "If eventHandler is an element's event handler". Its own note is what makes
+                        that the same question as step 3.1's partition: "(Otherwise, eventHandler is a Window
+                        object's event handler.)" — there is no third kind of handler for the algorithm to be
+                        about, so the element arm of step 3.1 IS this condition.
+     EH_SCOPE_FORM      substep 4, "If form owner is not null" — step 3.5's form owner, which is null for an
+                        element that has none and for every Window.
+     EH_SCOPE_ELEMENT   substep 5, "If element is not null" — step 3.1's element. */
+#define EH_SCOPE_DOCUMENT (1u << 0)
+#define EH_SCOPE_FORM     (1u << 1)
+#define EH_SCOPE_ELEMENT  (1u << 2)
+
 /* §8.1.8.1 step 3.9's SOURCE TEXT, PARENTHESISED — the string that step concatenates out of the name, the
    parameter list, a U+000A LF, the body, a U+000A LF and a closing brace, with step 3.9's own parameterList
    spelled into it: "Let the function have a single argument called event", and for `onerror` on a Window
@@ -1726,29 +1744,85 @@ static JSValue uncompiled_body(JSContext *ctx, JSValueConst h)
    binding instead of to the element. The residual is [[SourceText]]: `String(el.onclick)` omits the name.
      THE PARENTHESES ARE THIS ENGINE'S, for js_parse_fn_ctor_source's reason — what this engine needs is the
    closure the expression evaluates to, and a parenthesised FunctionExpression pinned to end of input admits
-   exactly the texts the bare FunctionExpression goal admits. */
-static char *handler_source(JSContext *ctx, JSValueConst body, bool five, size_t *plen)
+   exactly the texts the bare FunctionExpression goal admits.
+     `layers` IS STEP 3.9's SCOPE, SPELLED RATHER THAN SIMULATED, and it is a set over substeps 3, 4 and 5 —
+   EH_SCOPE_DOCUMENT, EH_SCOPE_FORM, EH_SCOPE_ELEMENT — each of which is one NewObjectEnvironment. ECMAScript
+   §14.11.2 Runtime Semantics: Evaluation step 4 is "Let newEnv be NewObjectEnvironment(obj, true, oldEnv)":
+   the SAME abstract operation with the SAME isWithEnv that §9.1.2.3 NewObjectEnvironment ( obj, isWithEnv,
+   outerEnv ) takes, so a `with` head IS the layer and not a stand-in for one. Empty gives the pinned bare
+   expression above, which is the Window case; a non-empty set gives
+
+       with (this[0]) with (this[1]) with (this[2]) (function (event) {\n<body>\n});
+
+   whose OUTERMOST head is substep 3's and whose innermost is substep 5's, because each substep re-assigns
+   `scope` with the previous one as its outer environment. The heads are emitted only for the members of the
+   set, and the SLOT NUMBER stays the substep's whatever the set is: an absent form owner drops the head, never
+   renumbers the two that remain. An ordinal is admissible here for the one reason §CLAUDE.md allows it — the
+   set is the STANDARD's, fixed at three by the text, and it is the carrier's own indices rather than a
+   position in anything a page can mutate.
+     `this` IS THE ONE CHANNEL A LAYER CANNOT SHADOW, which is what makes the heads readable at all. A named
+   temporary would be resolved through the object environments the earlier heads just installed, so a page with
+   `<form name=x>` could re-point the second head; `this` is a PSEUDO VARIABLE in quickjs's own resolver
+   (resolve_scope_var's `is_pseudo_var` names JS_ATOM_this and the `__with_` arm is guarded by !is_pseudo_var),
+   so no `with` layer is consulted for it, and `this[0]` is then an ordinary property read on an object no page
+   holds. The carrier is built with a NULL prototype for the second half of that: an inherited slot would be a
+   scope layer the standard does not name.
+     THE PROGRAM'S VALUE IS STILL THE FUNCTION EXPRESSION with the heads present, and that is quickjs's own
+   emission rather than an inference: the `with` statement emits set_eval_ret_undefined before its body and the
+   ExpressionStatement arm writes the program's hidden completion slot, which is §14.11.2 step 8's
+   UpdateEmpty(stmtCompletion, undefined) — a non-empty inner completion passes straight out. So there is no
+   wrapper call to make and no function environment between the innermost layer and the handler, which there
+   would be if the heads sat inside a synthesized function.
+     THE HEADED SHAPE CANNOT CARRY THE END-OF-INPUT PIN, and what makes it sound instead is STEP 3.7.
+   js_parse_fn_ctor_source's first act is js_parse_expect(s, '(') under a DCHECK that the next token is
+   `function`, so a source beginning `with` is refused by construction and no flag changes that. It does not
+   need it: a body that could close the wrapper — `}); alert(1); ({` — is not a FunctionBody ALONE, so step
+   3.7 answered NOT PARSABLE and handler_current returned null instead of the record. Every body that reaches
+   the compile has been through that pinned probe, over the identical `(function (event) {` prefix and the
+   identical following token, so its token stream here is the one the pin accepted and it is balanced. The
+   compile asserts that rather than assuming it. */
+static char *handler_source(JSContext *ctx, JSValueConst body, bool five, unsigned layers, size_t *plen)
 {
     static const char PRE1[] = "(function (event) {\n";
     static const char PRE5[] = "(function (event, source, lineno, colno, error) {\n";
     static const char POST[] = "\n})";
+    static const char *const HEAD[3] = { "with (this[0]) ", "with (this[1]) ", "with (this[2]) " };
     const char *pre = five ? PRE5 : PRE1;
     size_t npre = (five ? sizeof PRE5 : sizeof PRE1) - 1;
-    size_t nbody = 0;
+    size_t nbody = 0, nhead = 0, at = 0;
     const char *b = JS_ToCStringLen(ctx, &nbody, body);
+    /* The ExpressionStatement's semicolon, present only where there are heads — see the banner. */
+    size_t ntail = (sizeof POST - 1) + (layers != 0 ? 1u : 0u);
     char *out;
+    int k;
 
     /* THE BODY IS A STRING THIS FILE MINTED (uncompiled_new writes it and nothing else may), so a failure here
        is an allocation failure and not a coercion the page can steer — which is why it is a CHECK. */
     CHECK(b != NULL, "the uncompiled script body could not be read as bytes — it is a String uncompiled_new "
                      "minted, so this is an allocation failure");
-    out = malloc(npre + nbody + sizeof POST);
+    DCHECK((layers & ~7u) == 0,
+           "§8.1.8.1 step 3.9's scope was asked for a layer that is not one of substeps 3, 4 and 5 — the "
+           "argument is a set over exactly those three and the carrier this source reads has three slots");
+    for (k = 0; k < 3; k++)
+        if (layers & (1u << k))
+            nhead += strlen(HEAD[k]);
+    out = malloc(nhead + npre + nbody + ntail + 1);
     CHECK(out != NULL, "§8.1.8.1 step 3.9's source text could not be allocated");
-    memcpy(out, pre, npre);
-    memcpy(out + npre, b, nbody);
-    memcpy(out + npre + nbody, POST, sizeof POST);   /* sizeof counts the NUL, which the parser never reads */
+    for (k = 0; k < 3; k++)
+        if (layers & (1u << k)) {
+            memcpy(out + at, HEAD[k], strlen(HEAD[k]));
+            at += strlen(HEAD[k]);
+        }
+    DCHECK(at == nhead, "§8.1.8.1 step 3.9's scope heads were measured and written at different lengths");
+    memcpy(out + at, pre, npre);
+    memcpy(out + at + npre, b, nbody);
+    memcpy(out + at + npre + nbody, POST, sizeof POST - 1);
+    at += npre + nbody + sizeof POST - 1;
+    if (layers != 0)
+        out[at++] = ';';
+    out[at] = '\0';   /* the parser never reads it; the length below is what it is given */
     JS_FreeCString(ctx, b);
-    *plen = npre + nbody + sizeof POST - 1;
+    *plen = at;
     return out;
 }
 
@@ -1785,7 +1859,12 @@ static char *handler_source(JSContext *ctx, JSValueConst body, bool five, size_t
 static bool handler_body_parsable(JSContext *ctx, JSValueConst body, bool five)
 {
     size_t n = 0;
-    char *src = handler_source(ctx, body, five, &n);
+    /* NO SCOPE LAYERS, AND THAT IS THE STEP'S OWN SHAPE: 3.7 asks whether the body "is not parsable as
+       FunctionBody", which is a question about the body and its parameter list ALONE. The layers are step
+       3.9's, they are a SCOPE rather than a grammar, and a probe carrying them would be asking a different
+       question — and could not be pinned, since a source beginning with a `with` head is one
+       js_parse_fn_ctor_source refuses by construction. */
+    char *src = handler_source(ctx, body, five, 0, &n);
     JSValue bc = JS_Eval(ctx, src, n, "<event handler>",
                          JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_FUNCTION_CTOR | JS_EVAL_FLAG_COMPILE_ONLY);
 
@@ -1892,15 +1971,19 @@ static JSValue handler_current(JSContext *ctx, JSValueConst target, const char *
            covered:
              STEP 3.2 — "If document's active sandboxing flag set has its sandboxed scripts browsing context
                  flag set, then return null." The engine HAS that set (core/frame/sandboxing.h's
-                 SANDBOX_SCRIPTS, core/dom/document.h's document_active_sandbox_flags) and the missing piece is
-                 not the flag, it is WHOSE document: step 3.1's document is the ELEMENT'S NODE DOCUMENT, and an
-                 origin-keyed agent cluster holds more than one Document per realm, so reading the realm's
-                 would be right for the common case and a plausible datum for a node from another of this
-                 agent's documents. HOW ITS ABSENCE SHOWS: an inline handler inside `<iframe sandbox>` (no
-                 `allow-scripts`) compiles and runs here, where a browser answers null.
-             STEPS 3.5 AND 3.6 — the form owner and the settings object — are INPUTS to step 3.9's scope and to
-                 step 3.7.2's report, and both are named where they are owed: the scope at
-                 handler_compile_run, the report at the unparsable arm above. */
+                 SANDBOX_SCRIPTS, core/dom/document.h's document_active_sandbox_flags). THIS USED TO SAY the
+                 missing piece was WHOSE document — that step 3.1's document is the ELEMENT's node document and
+                 nothing here could name it — and step 3.9's scope retired HALF of that argument: this
+                 section's defined terms now answer an element's node document, so the element arm of step 3.1
+                 is nameable. What is still missing is the OTHER arm, "eventTarget's associated Document" for a
+                 Window, and step 3.2 is asked BEFORE the partition is used for anything else, so half of it is
+                 not a step — one arm answered and one guessed is the plausible datum the old sentence was
+                 about, moved one arm over. HOW ITS ABSENCE SHOWS: an inline handler inside `<iframe sandbox>`
+                 (no `allow-scripts`) compiles and runs here, where a browser answers null.
+             STEP 3.5 — the form owner — IS PERFORMED, and not here: it is an input to step 3.9's scope substep
+                 4 and is taken at handler_compile_run, on the arm that has an element to ask about.
+             STEP 3.6 — the settings object — is an input to step 3.7.2's report, and is named where that is
+                 owed, at the unparsable arm above. */
         (void)i;
         return h;   /* the RECORD, for the caller to compile — see the contract on this function */
     }
@@ -1936,28 +2019,27 @@ static bool handler_compile_owed(JSContext *ctx, JSValueConst h)
  * to, because a rule that exempted bodies believed to be trivial is a rule whose next reader widens it. So the
  * call is a REQUEST like every other, through step_call_run.
  *
- * STEP 3.9's SCOPE IS THE WHOLE OF WHAT THIS FUNCTION CAN AND CANNOT DO, and the split is exact rather than
- * convenient. The scope argument is six substeps: realm, realm.[[GlobalEnv]], then NewObjectEnvironment layers
- * for the DOCUMENT ("if eventHandler is an element's event handler"), the FORM OWNER ("if form owner is not
- * null") and the ELEMENT ("if element is not null"), innermost last. Step 3.1 partitions the target: an
- * ELEMENT, or else a Window. For a WINDOW's event handler element is null and form owner is null and the
- * document substep's own condition is false, so all three layers fall away BY THEIR OWN CONDITIONS and the
- * scope is realm.[[GlobalEnv]] and nothing else — which is exactly the scope of a plain global program, so
- * that case is built here EXACTLY and not approximately. `<body onload="…">` is that case and not an
- * exotic one: §8.1.8.1's determine the target of an event handler moves a body element's WindowEventHandlers
- * attributes onto the Window, so the commonest inline handler on the web is a Window's.
- *
- * RESIDUAL: AN ELEMENT'S EVENT HANDLER IS NOT COMPILED AND CRASHES INSTEAD. WHAT IS NOT COVERED: scope
- * substeps 3, 4 and 5 — the document, form-owner and element layers. WHAT THE NEXT DIFF BUILDS: three terms on
- * event_target.h's EventHandlerTargetTerms (the element's NODE DOCUMENT, its FORM OWNER, and a positive
- * IS-AN-ELEMENT test — `is_body_or_frameset` is too narrow and `is_window` false does not imply element, since
- * a Document target takes that arm too), provided by whoever registers EH_TARGET_TERMS, after which the layers
- * are spelled as `with` heads over a null-prototype carrier and this same program evaluation returns the
- * closure with them in its chain. HOW ITS ABSENCE SHOWS: `<img src=x onerror="X9()">` aborts here naming the
- * three terms, where a Window's handler compiles and runs. IT IS A CRASH AND NOT A FLATTENED CHAIN because a
- * chain missing those layers is not narrower, it is WRONG: `<body onclick="write('x')">` resolves `write` on
- * the Document layer, and compiling with globalEnv alone would silently assign a global instead — the
- * mis-scoping that is observable and that nothing downstream would report.
+ * STEP 3.9's SCOPE IS SIX SUBSTEPS AND EACH LAYER IS TAKEN ON ITS OWN CONDITION, never on a summary of them.
+ * Substep 1 is the realm and substep 2 is realm.[[GlobalEnv]] — what a JS_EVAL_TYPE_GLOBAL program already
+ * has, so those two are the compile below and nothing more. Substeps 3, 4 and 5 each add ONE
+ * NewObjectEnvironment, for the DOCUMENT "if eventHandler is an element's event handler", the FORM OWNER "if
+ * form owner is not null" and the ELEMENT "if element is not null", innermost last; substep 6 returns the
+ * scope. Step 3.1 partitions the target into an ELEMENT or a Window, and that partition decides all three:
+ *   A WINDOW's HANDLER takes none of them — element is null, form owner is null, and substep 3's own note
+ *     ("Otherwise, eventHandler is a Window object's event handler.") is what makes its condition false — so
+ *     the scope is realm.[[GlobalEnv]] and nothing else, exactly the scope of a plain global program.
+ *     `<body onload="…">` is that case and not an exotic one: determine the target of an event handler moves a
+ *     body element's WindowEventHandlers attributes onto the Window, so the commonest inline handler on the
+ *     web is a Window's.
+ *   AN ELEMENT's HANDLER takes substeps 3 and 5 unconditionally on this arm and substep 4 only where step
+ *     3.5's form owner is non-null, so `<img onerror>` gets two layers and `<input onchange>` inside a form
+ *     gets three. THE LAYERS ARE NOT OPTIONAL AND FLATTENING THEM IS NOT A NARROWING: `<body onclick="write(
+ *     'x')">` is an ELEMENT's handler — `onclick` is in NEITHER set determine the target of an event handler
+ *     step 2 tests against, neither §8.1.8.2's six-row Window-reflecting body element event handler set nor
+ *     §8.1.8.2.1's WindowEventHandlers mixin — and it resolves `write` on the DOCUMENT layer, where with
+ *     globalEnv alone the same source silently assigns a global and nothing downstream reports it. Each layer
+ *     is a `with` head; see handler_source's banner for why that IS the abstract operation and not a stand-in
+ *     for it, and for what makes the headed shape sound without the end-of-input pin.
  *
  * RESIDUAL: STEP 3.11 IS NOT PERFORMED. WHAT IS NOT COVERED: "Set function.[[ScriptOrModule]] to null". WHAT
  * THE NEXT DIFF BUILDS: a per-function script-or-module slot to null out — this engine has none, deriving the
@@ -1978,11 +2060,13 @@ static int handler_compile_run(JSContext *ctx, uint8_t *stage, uint8_t *cphase, 
     int r;
 
     if (*stage == 0) {
-        JSValue map = handler_map(ctx, target, 0), h, body, prog, global;
+        JSValue map = handler_map(ctx, target, 0), h, body, prog, recv;
+        JSValue carrier = JS_UNDEFINED;
+        unsigned layers = 0;
         size_t n = 0;
         char *src;
         int i = eh_index_of_type(type);
-        bool five;
+        bool five, is_win;
 
         DCHECK(JS_IsObject(map),
                "§8.1.8.1 step 3's compile was entered for a target with no event handler map — the record it "
@@ -1994,31 +2078,92 @@ static int handler_compile_run(JSContext *ctx, uint8_t *stage, uint8_t *cphase, 
                "uncompiled handler — handler_current answers the RECORD exactly when steps 3.8-3.12 are owed, "
                "so this is a caller that decided the compile was owed some other way");
 
-        /* STEP 3.9's parameterList, and STEP 3.1's partition, decided by the ONE question this engine can ask
-           of a target. The five-argument form is step 3.9's own condition verbatim — "if name is onerror and
-           eventTarget is a Window object" — and the same predicate decides whether the scope has layers. */
-        five = (i >= 0 && strcmp(EH_NAME[i], "onerror") == 0);
-        if (!event_target_is_window(ctx, target)) {
-            JS_FreeValue(ctx, body); JS_FreeValue(ctx, h); JS_FreeValue(ctx, map);
-            JS_FreeValue(ctx, in);   /* the request that would have consumed it is not going to be issued */
-            DFAILF("the event handler content attribute `%s` was reached by HTML §8.1.8.1 \"Event handlers\"'s "
-                   "\"get the current value of the event handler\" step 3.9 on a target that is NOT a Window, "
-                   "so step 3.1 makes it an ELEMENT's event handler and step 3.9's scope needs the three "
-                   "NewObjectEnvironment layers substeps 3, 4 and 5 add — the node document, the form owner "
-                   "and the element. This file's EventHandlerTargetTerms carries none of the three and cannot "
-                   "ask for them, so the chain would have to be FLATTENED to globalEnv, which is not narrower "
-                   "but WRONG: a body resolving a Document or element property would silently bind a global. "
-                   "Build the three terms and the layers are `with` heads over the same program evaluation. "
-                   "The banner above handler_compile_run is the design",
-                   i >= 0 ? EH_NAME[i] : type);
-            /* RELEASE, WHERE THE DFAIL ABOVE IS COMPILED OUT: the capability is still absent, so this still
-               FAILS — it just may not abort. The abrupt is a real pending exception rather than a bare -1
-               because the caller's arm hands it to §2.9 inner invoke step 2.11, which REPORTS it, and a report
-               with nothing pending reports null. */
-            JS_ThrowInternalError(ctx, "HTML §8.1.8.1 step 3.9's scope for an element's event handler is not "
-                                       "built (the document, form-owner and element layers)");
-            return -1;
+        /* STEP 3.1's PARTITION — "If eventTarget is an element, then let element be eventTarget, and document
+           be element's node document. Otherwise, eventTarget is a Window object, let element be null, and
+           document be eventTarget's associated Document." It is asked ONCE and decides two different things
+           below, which is why it is a local and not two calls: step 3.9's parameterList, and which of step
+           3.9's scope substeps have anything to add. */
+        is_win = event_target_is_window(ctx, target);
+        /* STEP 3.9's parameterList — its own condition verbatim, "if name is onerror and eventTarget is a
+           Window object". BOTH CONJUNCTS, and the second is not decoration: `<img onerror>` is the commonest
+           element handler on the web and takes ONE argument, while step 3.7's probe asked the parse question
+           with this same pair, so a compile that dropped the Window conjunct would build a five-parameter
+           function out of a body that was accepted as a one-parameter one. */
+        five = (i >= 0 && strcmp(EH_NAME[i], "onerror") == 0 && is_win);
+        if (!is_win) {
+            JSValue doc, form;
+
+            /* STEP 3.1 HAS TWO ARMS AND A TARGET THAT IS NEITHER IS NOT ONE OF THEM. `!is_win` does not imply
+               element — a Document is neither — so the partition is asserted with the POSITIVE test rather
+               than inferred from the absence of a Window. It cannot arise: an internal raw uncompiled handler
+               is minted only by §8.1.8.1's attribute change steps, whose subject is an ELEMENT, and determine
+               the target moves a body or frameset's WindowEventHandlers attributes onto the Window — so the
+               only two objects that can hold one are the two arms this step names. */
+            DCHECK(g_handler_terms != NULL,
+                   "§8.1.8.1 step 3.1's partition was asked of a target on a host that registered none of "
+                   "this section's defined terms — an element's inline handler cannot be compiled without "
+                   "step 3.9's scope, and the scope is built out of terms only the HTML layer can answer");
+            DCHECK(g_handler_terms->is_element(ctx, target),
+                   "§8.1.8.1's get the current value of the event handler reached step 3 on a target that is "
+                   "neither an element nor a Window — step 3.1 has no third arm, and an internal raw "
+                   "uncompiled handler can only have been minted by the attribute change steps on an element "
+                   "or moved to a Window by determine the target of an event handler");
+
+            /* STEP 3.9's SCOPE, SUBSTEPS 3, 4 AND 5 — each ONE NewObjectEnvironment over the previous scope,
+               so the carrier holds them OUTERMOST FIRST and handler_source emits one `with` head apiece. See
+               that function's banner for why a `with` head IS the layer and why `this` is the only channel a
+               layer cannot shadow. */
+            carrier = JS_NewObjectProto(ctx, JS_NULL);
+            CHECK(JS_IsObject(carrier),
+                  "§8.1.8.1 step 3.9's scope carrier could not be allocated");
+
+            /* SUBSTEP 3 — "If eventHandler is an element's event handler, then set scope to
+               NewObjectEnvironment(document, true, scope)", where `document` is step 3.1's, the ELEMENT's node
+               document. The condition is the step 3.1 arm this branch is: the substep's own note says
+               "(Otherwise, eventHandler is a Window object's event handler.)", so there is nothing else it
+               could be asking. */
+            doc = g_handler_terms->node_document(ctx, target);
+            DCHECK(JS_IsObject(doc),
+                   "§8.1.8.1 step 3.1's `document` is not an object for a target its own is_element answered "
+                   "yes for — every element has a node document, and a scope layer over a non-object is a "
+                   "TypeError at the `with` head rather than the environment the step names");
+            JS_SetPropertyUint32(ctx, carrier, 0, doc);
+            layers |= EH_SCOPE_DOCUMENT;
+
+            /* SUBSTEP 4 — "If form owner is not null, then set scope to NewObjectEnvironment(form owner, true,
+               scope)", over step 3.5's form owner. NULL IS A POSITIVE ANSWER and not an absence to default
+               past: "Otherwise, let form owner be null" is the standard's own arm for an element that has
+               none, and it means this layer is NOT ADDED — which is why the head is dropped rather than
+               emitted over undefined. */
+            form = g_handler_terms->form_owner(ctx, target);
+            if (JS_IsNull(form)) {
+                JS_FreeValue(ctx, form);
+            } else {
+                DCHECK(JS_IsObject(form),
+                       "§8.1.8.1 step 3.5's form owner is neither null nor an object — the term answers a form "
+                       "element's wrapper or JS_NULL, and substep 4 layers whatever it answered");
+                JS_SetPropertyUint32(ctx, carrier, 1, form);
+                layers |= EH_SCOPE_FORM;
+            }
+
+            /* SUBSTEP 5 — "If element is not null, then set scope to NewObjectEnvironment(element, true,
+               scope)". On this arm step 3.1 set element to eventTarget, so the condition holds and the layer
+               is the target itself. INNERMOST, which is what makes `<button onclick="value = 'x'">` write the
+               button's own IDL attribute instead of a global. */
+            JS_SetPropertyUint32(ctx, carrier, 2, JS_DupValue(ctx, target));
+            layers |= EH_SCOPE_ELEMENT;
         }
+
+        /* EVERY BODY THAT REACHES THE COMPILE HAS PASSED STEP 3.7, AND THE HEADED SOURCE'S SOUNDNESS RESTS ON
+           IT — see handler_source's banner. handler_current answers the RECORD only on its parsable arm, so
+           this re-asks the same question of the same body with the same parameter list, and a disagreement is
+           a caller that reached the compile some other way rather than a body that changed. It is dev-only and
+           runs once per handler, because step 3.12's write is what makes the compile happen once. */
+        DCHECK(handler_body_parsable(ctx, body, five),
+               "§8.1.8.1 step 3.9 is compiling a body that is NOT parsable as a FunctionBody alone — step 3.7 "
+               "is the whole of what stops `}); alert(1); ({` from closing the wrapper and running as program "
+               "source, and the element arm's `with`-headed shape cannot carry js_parse_fn_ctor_source's "
+               "end-of-input pin, so a body that never went through 3.7's probe is an escape");
 
         /* STEPS 3.8 AND 3.10 — the realm execution context pushed for the create and popped after — are the
            REALM this compile happens in, and the note beside 3.8 says so: "This is necessary so the subsequent
@@ -2027,45 +2172,62 @@ static int handler_compile_run(JSContext *ctx, uint8_t *stage, uint8_t *cphase, 
            can reach, and there is no second realm to push. That makes 3.8/3.10 a pair with nothing to perform
            rather than a pair that is skipped — the day a cross-realm target reaches here, the compile takes a
            realm argument and step_program_run's own `realm` parameter is the shape to copy. */
-        src = handler_source(ctx, body, five, &n);
+        src = handler_source(ctx, body, five, layers, &n);
         JS_FreeValue(ctx, body);
         /* STEP 3.9's OrdinaryFunctionCreate, PERFORMED AS THE EVALUATION OF A PROGRAM WHOSE VALUE IS THE
            FUNCTION — which is not a paraphrase of the step but the entry quickjs already has for it, and the
            one §20.2.1.1.1 CreateDynamicFunction reaches for the same reason. js_parse_fn_ctor_source emits
            `OP_put_loc eval_ret_idx; OP_get_loc eval_ret_idx; return`, so the program's completion value IS the
            closure the parenthesised FunctionExpression evaluates to.
-           THE THREE FLAGS EACH DECIDE ONE THING AND NOTHING ELSE. JS_EVAL_TYPE_GLOBAL makes the program's
-           scope realm.[[GlobalEnv]], which is step 3.9's scope for this case, and keeps the compile OFF the @S
-           seam — §19.2.1.2 HostEnsureCanCompileStrings is performed by DIRECT and INDIRECT eval and by
-           CreateDynamicFunction, never by a global program, and announcing this one would report every inline
-           handler on every page as a code-execution sink. JS_EVAL_FLAG_FUNCTION_CTOR selects
-           js_parse_fn_ctor_source's END-OF-INPUT pin, which is what makes the wrapper unforgeable: a body of
-           `}); alert(1); ({` would be three source elements a Script may hold, and pinned as one parenthesised
-           FunctionExpression it has nowhere to put what follows. JS_EVAL_FLAG_TRAMP_CLOSURE hands the program
-           CLOSURE back instead of running it here, which is what lets the call be a request.
-           IT CANNOT FAIL, AND THAT IS ASSERTED RATHER THAN HANDLED: step 3.7 has already compiled this exact
-           source with this exact pin under JS_EVAL_FLAG_COMPILE_ONLY and answered that it parses, so a parse
-           error here is the two probes disagreeing about one text. */
+           EACH FLAG DECIDES ONE THING AND NOTHING ELSE. JS_EVAL_TYPE_GLOBAL makes the program's own scope
+           realm.[[GlobalEnv]], which is step 3.9's scope substep 2 and the whole of the scope where substeps
+           3-5 add nothing, and it keeps the compile OFF the @S seam — §19.2.1.2 HostEnsureCanCompileStrings is
+           performed by DIRECT and INDIRECT eval and by CreateDynamicFunction, never by a global program, and
+           announcing this one would report every inline handler on every page as a code-execution sink.
+           JS_EVAL_FLAG_TRAMP_CLOSURE hands the program CLOSURE back instead of running it here, which is what
+           lets the call be a request. JS_EVAL_FLAG_FUNCTION_CTOR selects js_parse_fn_ctor_source's
+           END-OF-INPUT pin and is CARRIED ONLY BY THE LAYERLESS SHAPE, because that entry's first act is
+           js_parse_expect(s, '(') under a DCHECK that the next token is `function` — a source beginning with a
+           `with` head is one it refuses by construction, and no flag makes it accept one.
+           RETIRED TEXT, unquoted because it is this file's and not a standard's: this used to say the pin is
+           what makes the wrapper unforgeable, and that was an OVER-CLAIM the headed shape refutes. What makes
+           a wrapper unforgeable is that its body is a FunctionBody ALONE, and the algorithm establishes that
+           at step 3.7, over the pinned probe, before either shape is built —
+           `}); alert(1); ({` is rejected there and never reaches this line. The pin is still taken wherever it
+           can be, because a second independent stop costs nothing; it is not what the argument rests on, and
+           the DCHECK above is where the argument is checked.
+           IT CANNOT FAIL, AND THAT IS ASSERTED RATHER THAN HANDLED: step 3.7 has already compiled this body
+           with this parameter list under JS_EVAL_FLAG_COMPILE_ONLY and answered that it parses, and the heads
+           this shape adds are this file's own fixed text over a carrier it built, so a parse error here is the
+           two probes disagreeing about one text. */
         prog = JS_Eval(ctx, src, n, "<event handler>",
-                       JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_FUNCTION_CTOR | JS_EVAL_FLAG_TRAMP_CLOSURE);
+                       JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_TRAMP_CLOSURE |
+                       (layers == 0 ? JS_EVAL_FLAG_FUNCTION_CTOR : 0));
         free(src);
         JS_FreeValue(ctx, h);
         JS_FreeValue(ctx, map);
         if (JS_IsException(prog)) {
             JS_FreeValue(ctx, JS_GetException(ctx));
+            JS_FreeValue(ctx, carrier);
             DFAIL("§8.1.8.1 step 3.9's compile of an event handler body FAILED on a body step 3.7 had already "
-                  "answered was parsable — the two parses are the same source under the same end-of-input pin "
-                  "and differ only in JS_EVAL_FLAG_COMPILE_ONLY, so they cannot disagree about one text");
+                  "answered was parsable — the body and its parameter list are the text 3.7's pinned probe "
+                  "accepted, and everything else in this source is fixed text this file wrote over a carrier "
+                  "it built, so the two parses cannot disagree about one body");
             JS_FreeValue(ctx, in);   /* as above: no request is issued, so nothing else consumes it */
             JS_ThrowInternalError(ctx, "HTML §8.1.8.1 step 3.9's compile failed on a body step 3.7 accepted");
             return -1;
         }
         *stage = 1;
-        /* THE RECEIVER IS THE GLOBAL OBJECT, which is what a global program's evaluation is given — the same
-           value step_program_run puts in its own request buffer's `this` slot. */
-        global = JS_GetGlobalObject(ctx);
-        r = step_call_run(ctx, cphase, cb, cb_cap, prog, global, 0, NULL, in, &fn, out_cb, out_argc);
-        JS_FreeValue(ctx, global);
+        /* THE RECEIVER IS THE GLOBAL OBJECT WHERE THE SCOPE HAS NO LAYERS, which is what a global program's
+           evaluation is given — the same value step_program_run puts in its own request buffer's `this` slot
+           — and THE CARRIER where it has them, because `this[0..2]` is how the heads name their objects.
+           SWAPPING IT IS NOT OBSERVABLE TO THE HANDLER: the function expression is an ordinary function with
+           thisMode non-lexical-this, so its own `this` is whatever the DISPATCH passes at invoke time and
+           never the program's. What reads the program's `this` is the head text this file wrote. */
+        recv = (layers == 0) ? JS_GetGlobalObject(ctx) : JS_DupValue(ctx, carrier);
+        r = step_call_run(ctx, cphase, cb, cb_cap, prog, recv, 0, NULL, in, &fn, out_cb, out_argc);
+        JS_FreeValue(ctx, recv);
+        JS_FreeValue(ctx, carrier);   /* the request holds the layers through `recv`, which it dup'd into cb[] */
         JS_FreeValue(ctx, prog);   /* step_call_run dup'd both into cb[] */
     } else {
         DCHECK(*stage == 1, "§8.1.8.1 step 3's compile resumed in a stage it never parks in");
@@ -2084,8 +2246,9 @@ static int handler_compile_run(JSContext *ctx, uint8_t *stage, uint8_t *cphase, 
     *stage = 0;
     DCHECK(JS_IsFunction(ctx, fn),
            "§8.1.8.1 step 3.9's program evaluated to something that is not a function — the program is one "
-           "parenthesised FunctionExpression pinned to end of input and its emitted tail returns exactly that "
-           "closure, so anything else means the pin admitted a second source element");
+           "parenthesised FunctionExpression, under any scope heads step 3.9 asked for, and a program's "
+           "completion value is its last ExpressionStatement's whether or not that statement is inside a "
+           "`with` body, so anything else means a second source element got in");
     /* STEP 3.12 — "Set eventHandler's value to the result of creating a Web IDL EventHandler callback function
        object whose object reference is function and whose callback context is settings object." The WRITE is
        what makes this compile happen ONCE: the next dispatch reads a function out of the map and step 3 does

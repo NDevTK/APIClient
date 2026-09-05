@@ -727,10 +727,12 @@ static JSValue js_template_content(JSContext *ctx, JSValueConst this_val, int ma
     return node_wrap(ctx, &t->content->node);
 }
 
-/* HTML §8.1.8.1 Event handlers' DETERMINE THE TARGET OF AN EVENT HANDLER — the three DEFINED TERMS its steps
- * ask of the tree, answered here because they are HTML's and the DOM cannot answer the first of them: which
- * ELEMENT TYPE a local name is, is exactly what this file's table IS. The algorithm that composes them stays in
- * core/events/event_target.c, where its step numbers are visible.
+/* HTML §8.1.8.1 Event handlers' DEFINED TERMS — the SIX questions that section's algorithms ask of the tree,
+ * answered here because they are HTML's and the DOM cannot answer the first of them: which ELEMENT TYPE a
+ * local name is, is exactly what this file's table IS. The algorithms that compose them stay in
+ * core/events/event_target.c, where their step numbers are visible. The first three below are DETERMINE THE
+ * TARGET OF AN EVENT HANDLER's; the last three are GET THE CURRENT VALUE OF THE EVENT HANDLER's — step 3.1's
+ * partition and the two objects step 3.9's scope layers over.
  *
  * Step 1's test is the ELEMENT TYPE and not `document.body`. §8.1.8.1's own note is explicit that "a body
  * element created in an active document (perhaps with document.createElement()) but not connected will also
@@ -775,8 +777,55 @@ static JSValueConst eh_node_document_global(JSContext *ctx, JSValueConst target)
     return document_window_of(n);
 }
 
-static const EventHandlerTargetTerms EH_TARGET_TERMS = {
+/* §8.1.8.1's GET THE CURRENT VALUE OF THE EVENT HANDLER step 3.1's FIRST ARM, asked positively — "If
+   eventTarget is an element". The events layer has `is_window` and its negation is a DIFFERENT question: a
+   Document is neither, and step 3.1 has no arm for one, so the compile asserts the partition with this rather
+   than inferring an element from the absence of a Window. It is DOM's node type and not an HTML tag list —
+   every element there is can carry an event handler content attribute, which is §8.1.8.1's own second table. */
+static bool eh_is_element(JSContext *ctx, JSValueConst target)
+{
+    lxb_dom_node_t *n = node_of(target);
+
+    (void)ctx;
+    return n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT;
+}
+
+/* Step 3.1's `document` on that arm — "document be element's node document" — as the OBJECT step 3.9's scope
+   substep 3 layers, which is why this answers a wrapper and eh_node_document_global answers a Window. OWNED.
+   NOT the running realm's document: an origin-keyed agent cluster holds more than one Document per realm
+   (createHTMLDocument, a DOMParser parse, XHR's responseXML), so a handler on a node from another of this
+   agent's documents must resolve its unqualified names against ITS document and not against whoever is
+   running — the same reason eh_node_document_global does not read `ctx`. */
+static JSValue eh_node_document(JSContext *ctx, JSValueConst target)
+{
+    lxb_dom_node_t *n = node_of(target);
+
+    (void)ctx;
+    DCHECK(n != NULL && n->owner_document != NULL,
+           "§8.1.8.1 step 3.1's `document` was asked of a node with no node document — the caller has already "
+           "established this is an ELEMENT, and every element lexbor builds carries the document that "
+           "created it");
+    return node_wrap(ctx, lxb_dom_interface_node(n->owner_document));
+}
+
+/* STEP 3.5 — "If element is not null and element has a form owner, let form owner be that form owner.
+   Otherwise, let form owner be null." OWNED, and JS_NULL is the standard's own second arm rather than an
+   absence: step 3.9's scope substep 4 reads it as "this layer is not added".
+   THE TAG IS ASKED FIRST, and that is §4.10.18.3's own shape rather than a fast path: html_form_owner_of
+   answers for a FORM-ASSOCIATED element, and "has a form owner" is false for every element that could not be
+   one — a `<div>`, a `<span>`, the `<img>` that carries most of the web's inline handlers. */
+static JSValue eh_form_owner(JSContext *ctx, JSValueConst target)
+{
+    lxb_dom_node_t *n = node_of(target);
+
+    if (n == NULL || !html_form_maybe_associated(n))
+        return JS_NULL;
+    return html_form_owner_of(ctx, target);
+}
+
+static const EventHandlerTerms EH_TERMS = {
     eh_is_body_or_frameset, eh_node_document_is_active, eh_node_document_global,
+    eh_is_element, eh_node_document, eh_form_owner,
 };
 
 /* HTML §6.5 Activation behavior of elements' click() STEP 1: "If this element is a form control that is
@@ -945,7 +994,7 @@ void html_element_init(JSContext *ctx)
     /* HTML §8.1.8.1's determine the target of an event handler, whose step 1 asks which element type this is —
        this file's table is what knows. Claimed per AGENT beside the element resolver below, and given back at
        html_element_free, which core/platform.c's reverse-declaration order runs before event_target_free. */
-    event_target_set_handler_target_terms(&EH_TARGET_TERMS);
+    event_target_set_handler_terms(&EH_TERMS);
     /* HTML §6.5's click() step 1, whose subject is a form control — this file's table is what knows which
        elements those are, and click() is installed from here. Claimed per AGENT beside the terms above and
        given back at html_element_free for the same reason. */
@@ -1316,7 +1365,7 @@ void html_element_free(JSRuntime *rt)
        found in idb_transaction. All four receivers assert at their own release that the claim is gone. */
     hyperlink_free();
     node_set_element_resolver(NULL);
-    event_target_set_handler_target_terms(NULL);
+    event_target_set_handler_terms(NULL);
     event_target_set_click_terms(NULL);
     dom_string_map_free(rt);
     nonce_attribute_free();   /* §2.5.6's setter id, reset like core/html/html_base_element.c's */

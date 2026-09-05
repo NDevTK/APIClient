@@ -260,7 +260,7 @@ const char *event_target_handler_attribute_at(int i);
  * their numbers are all visible in one function, and what crosses is the three algorithms §8.1.8.1 names in
  * their own right — determine the target, deactivate, and the map write that "activate an event handler"
  * follows. A hook answering "is this element a body" would have put HTML's algorithm here with nothing naming
- * its steps, which is the shape event_target_set_handler_target_terms below was written to avoid. */
+ * its steps, which is the shape event_target_set_handler_terms below was written to avoid. */
 /* WHICH ROW OF §8.1.8.2's TABLES `name` IS, or -1. ASCII case-insensitive, because `setAttributeNS` performs
    none of DOM §4.9 step 2's lowercasing and `onClick` in an XML document is not one of these names.
    (name, name_len) AND NEVER A NUL-TERMINATED NAME ALONE, because an attribute's local name is a (pointer,
@@ -307,13 +307,14 @@ void event_target_set_uncompiled_handler(JSContext *ctx, JSValueConst target, in
    decides with its own brand test rather than this file knowing what a MessagePort is. */
 void event_target_set_handler_hook(void (*after_set)(JSContext *ctx, JSValueConst target, const char *name));
 
-/* HTML §8.1.8.1 Event handlers' DETERMINE THE TARGET OF AN EVENT HANDLER — the three DEFINED TERMS its four
- * steps are composed of, registered the way §2.9's propagation path is and for the same reason: the ALGORITHM
- * stays here where its step numbers are visible, and the questions it asks of the tree are answered by the
- * component that can answer them. A hook that answered "does this delegate" instead would put HTML's algorithm
- * in the HTML layer with nothing naming the steps.
+/* HTML §8.1.8.1 Event handlers' DEFINED TERMS — the questions that section's algorithms ask of the TREE,
+ * registered the way §2.9's propagation path is and for the same reason: the ALGORITHMS stay here where their
+ * step numbers are visible, and the questions they ask of the tree are answered by the component that can
+ * answer them. A hook that answered "does this delegate" instead would put HTML's algorithm in the HTML layer
+ * with nothing naming the steps.
  *
- * WHAT IT IS FOR. "Most of the time, the object that exposes an event handler is the same as the object on
+ * THE FIRST THREE ARE DETERMINE THE TARGET OF AN EVENT HANDLER'S, and what THAT is for: "Most of the time, the
+ * object that exposes an event handler is the same as the object on
  * which the corresponding event listener is added. However, the body and frameset elements expose several
  * event handlers that ACT UPON THE ELEMENT'S Window OBJECT, if one exists." Without the determination,
  * `document.body.onload = f` registers a `load` listener ON THE BODY — and §13.2.7 "The end" step 9.5 fires
@@ -332,15 +333,36 @@ void event_target_set_handler_hook(void (*after_set)(JSContext *ctx, JSValueCons
  *   `node_document_global` is step 4's answer — "eventTarget's node document's relevant global object".
  *     BORROWED; the realm owns its global.
  *
- * ALL THREE OR NONE, and a host that registers none has no body elements to ask about, which is the same
- * answer event_target_is_window takes for a host with no tree. */
-typedef struct EventHandlerTargetTerms {
+ * THE OTHER THREE BELONG TO A DIFFERENT ALGORITHM OF THE SAME SECTION, and the struct is named for the
+ * SECTION rather than for either of them because that is what it now holds. §8.1.8.1's GET THE CURRENT VALUE
+ * OF THE EVENT HANDLER step 3.1 partitions its target — "If eventTarget is an element, then let element be
+ * eventTarget, and document be element's node document. Otherwise, eventTarget is a Window object, let element
+ * be null, and document be eventTarget's associated Document." — and step 3.9's SCOPE is built from what that
+ * partition names. This struct used to be called EventHandlerTargetTerms; three terms about the element half of
+ * step 3.1 would have made that name a claim about the wrong algorithm.
+ *
+ *   `is_element` is step 3.1's FIRST arm, asked POSITIVELY. `!event_target_is_window` is not the same question:
+ *     a Document is neither, and step 3.1 has no arm for one. The compile asserts the partition with this
+ *     rather than inferring an element from the absence of a Window.
+ *   `node_document` is the same arm's `document` — the ELEMENT's node document, which step 3.9's scope substep
+ *     3 layers. OWNED; the caller frees. It is deliberately not `node_document_global`'s Document: that one is
+ *     borrowed and answers about a Window, and this one is the object the scope layer is BUILT OVER.
+ *   `form_owner` is step 3.5 — "If element is not null and element has a form owner, let form owner be that
+ *     form owner. Otherwise, let form owner be null." OWNED, and JS_NULL is the standard's own answer for an
+ *     element that has none, which step 3.9's scope substep 4 then reads as "no layer".
+ *
+ * ALL SIX OR NONE, and a host that registers none has no elements to ask about, which is the same answer
+ * event_target_is_window takes for a host with no tree. */
+typedef struct EventHandlerTerms {
     bool         (*is_body_or_frameset)(JSContext *ctx, JSValueConst target);
     bool         (*node_document_is_active)(JSContext *ctx, JSValueConst target);
     JSValueConst (*node_document_global)(JSContext *ctx, JSValueConst target);
-} EventHandlerTargetTerms;
+    bool         (*is_element)(JSContext *ctx, JSValueConst target);
+    JSValue      (*node_document)(JSContext *ctx, JSValueConst target);
+    JSValue      (*form_owner)(JSContext *ctx, JSValueConst target);
+} EventHandlerTerms;
 /* ONE CLAIMANT, AND NULL GIVES IT BACK — see event_target_set_tree for why the two are one call. */
-void event_target_set_handler_target_terms(const EventHandlerTargetTerms *terms);
+void event_target_set_handler_terms(const EventHandlerTerms *terms);
 
 /* §2.7's "add an event listener" AND "remove an event listener", reached from C with the type already a real
    string. The callers are members of OTHER standards that the spec DEFINES as those algorithms rather than as
