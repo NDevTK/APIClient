@@ -868,7 +868,31 @@ static void media_set_ready_state(JSContext *ctx, JSValueConst el, JSValueConst 
  * because they are no longer one value. The three failure LABELS the standard writes are three stages, and
  * which one a failed load reaches is the MODE's to say — failed with media provider and failed with attribute
  * run the dedicated media source failure steps at the media element, and failed with elements does something
- * else entirely (it fires at the candidate and never touches `error` or the play promises). */
+ * else entirely (it fires at the candidate and never touches `error` or the play promises).
+ *
+ * HOW THIS ALGORITHM'S SUB-STEPS ARE CITED, STATED ONCE HERE BECAUSE STEP 14 HOLDS THREE SIBLING LISTS. The
+ * algorithm itself is one list of FOURTEEN top-level steps; step 14 is "Run the appropriate steps from the
+ * following list:" over a description list with three terms — object, attribute and children — so each of the
+ * three modes owns a list that restarts at 1 and a bare `14.2` names three different steps. Every citation
+ * below therefore says which MODE it is in ("step 14's children mode step 16"), never a bare sub-number.
+ * Children mode's own list is ONE list of TWENTY-SIX top-level steps, counted with list depth tracked: step 1
+ * defines `pointer`, steps 2-7 are Process candidate, 8-9 the fetch, 10 Failed with elements, 11 the await, 12
+ * the forget, 13-17 Find next candidate and its Search loop, 18-20 Waiting, 21 the end of the synchronous
+ * section, 22 the wait itself, 23 its await, and 24-26 the continuation that ends the wait.
+ *
+ * A NAMED RESIDUAL: THIS ELEMENT NEVER DELAYS ITS DOCUMENT'S LOAD EVENT. Children mode step 20 is "queue a
+ * media element task given the media element to set the element's delaying-the-load-event flag to false" and
+ * step 24 is "set the element's delaying-the-load-event flag back to true"; NEITHER IS PERFORMED HERE, because
+ * the flag has no consumer — core/dom/document.c's §13.2.7 The end step 8 spin names this very flag as one of
+ * the three sources its predicate does not carry, and says the honest place for its absence is the element's own
+ * component rather than a guess in its own `||` chain. WHAT IS NOT COVERED: the media element is never a
+ * delayer, at any point of this algorithm, in either direction. WHAT THE NEXT DIFF BUILDS: the per-element
+ * flag on the state record beside `sourceWait`, raised through document.c's `document_load_event_delayed`
+ * predicate so a document with a loading media element spins at §13.2.7 The end step 8 — grep that entry before
+ * building to this clause, because it is a claim about a file this component does not own. HOW ITS ABSENCE
+ * WOULD SHOW: a document whose only outstanding work is a `<video>` still walking its `source` children
+ * reaches `load` while the walk is running, so a page listening for `load` and then reading `currentSrc` sees
+ * the empty string where a real browser has already picked a resource. */
 enum { MEDIA_MODE_NONE = 0, MEDIA_MODE_OBJECT, MEDIA_MODE_ATTRIBUTE, MEDIA_MODE_CHILDREN };
 
 typedef struct {
@@ -879,6 +903,27 @@ typedef struct {
        holds two, because the tree a parked flow names is that flow's own through the DOM COW delta — there is
        no reference to take and the fork's byte copy is the whole contract. */
     lxb_dom_node_t *candidate;
+    /* §4.8.11.5 step 14's CHILDREN MODE step 1's `pointer`, HELD AS ITS NODE-BEFORE AND NEVER AS AN INDEX.
+       The standard defines it as a position rather than a node — "let pointer be a position defined by two
+       adjacent nodes in the media element's child list", "treating the start of the list before the first
+       child in the list, if any, and end of the list after the last child in the list, if any, as nodes in
+       their own right" — so NULL here IS that start-of-list node, which is the one endpoint a page cannot
+       remove, and is not an absent value.
+       ONE ENDPOINT IS ENOUGH BECAUSE TWO OF STEP 1'S THREE UPDATE RULES PRESERVE THIS ONE. "If a new node is
+       inserted or moved between the two nodes that define pointer, let pointer be the point between the node
+       before pointer and the new node" leaves the node BEFORE pointer where it was, and so does "if the node
+       after pointer is removed, let pointer be the point between the node before pointer and the node after
+       the node before pointer". So the node AFTER pointer is not state at all — it is this node's `next`, READ
+       AT THE STEP THAT ASKS (media_pointer_after), which is also what makes a `source` that arrives between
+       two rest points visible to the search loop instead of stepped over. The rule that does move this
+       endpoint is "if the node before pointer is removed, let pointer be the point between the node after
+       pointer and the node before the node after pointer", and that one is what MEDIA_POINTER_RESOLVE names.
+       IT IS NOT `candidate`, AND THE TWO WERE ONE FIELD. Children mode step 16 advances pointer over EVERY
+       node the search loop passes while step 15 sets candidate only for a `source`, so the two disagree the
+       moment a media element holds any non-`source` child after its last `source` — and a waiting step whose
+       pointer is the last SOURCE is at a different position from one at the end of the list, which is a
+       different set of insertions to be woken by. */
+    lxb_dom_node_t *before;
     uint8_t   mode;
 } MediaSelect;
 
@@ -892,6 +937,9 @@ typedef struct {
    the standard forbids the page from running there at all. Every boundary below is an "end the synchronous
    section", an "await a stable state", or the fetch. */
 #define MEDIA_SELECT_STAGES(X) \
+    X(MS_ENTRY,      "HTML §4.8.11.5 the resource selection algorithm's ENTRY — ONE O(1) dispatch onto step 5 " \
+                     "for an invocation and onto step 14's children mode step 24 for a resumption of the " \
+                     "waiting step; it performs no step of the algorithm itself") \
     X(MS_SELECT,     "HTML §4.8.11.5 steps 5-13 and step 14's per-mode synchronous steps, to the first \"end " \
                      "the synchronous section\" (the mode, the candidate, step 11's otherwise, " \
                      "NETWORK_LOADING, the queued loadstart, and currentSrc)") \
@@ -899,9 +947,14 @@ typedef struct {
                      "(whether the resource is usable)") \
     X(MS_FAILED_SRC, "HTML §4.8.11.5 step 14's failed with media provider / failed with attribute step") \
     X(MS_FAILED_EL,  "HTML §4.8.11.5 step 14's failed with elements step") \
-    X(MS_RESELECT,   "HTML §4.8.11.5 step 14's children mode second synchronous section (forget the " \
-                     "media-resource-specific tracks, find next candidate, the search loop, and the waiting " \
-                     "step)")
+    X(MS_RESELECT,   "HTML §4.8.11.5 step 14's children mode steps 12-20, its SECOND synchronous section " \
+                     "(forget the media-resource-specific tracks, find next candidate, the search loop, and " \
+                     "the waiting step)") \
+    X(MS_WAKE,       "HTML §4.8.11.5 step 14's children mode steps 24-26, its THIRD synchronous section — the " \
+                     "one step 23 awaits a stable state for once step 22's \"wait until the node after " \
+                     "pointer is a node other than the end of the list\" has ended (the delaying-the-load-" \
+                     "event flag back to true, the networkState back to NETWORK_LOADING) and the jump back to " \
+                     "the find next candidate step")
 enum { MEDIA_SELECT_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const MEDIA_SELECT_STEPS[] = { MEDIA_SELECT_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -957,6 +1010,44 @@ static int media_select_mode(JSContext *ctx, JSValueConst el, JSValueConst st, l
     if (*candidate) return MEDIA_MODE_CHILDREN;
     return MEDIA_MODE_NONE;                                                     /* step 11 */
 }
+
+/* THE NODE AFTER §4.8.11.5 step 14's children mode step 1's `pointer`, or NULL for the standard's "end of the
+   list". DERIVED AND NEVER STORED — MediaSelect::before carries the other endpoint and step 1's update rules
+   keep that one true across an insertion at pointer and across the removal of this one, so asking here is how
+   the algorithm sees a child the page added between two of its rest points. */
+static lxb_dom_node_t *media_pointer_after(const MediaSelect *s, const lxb_dom_node_t *parent)
+{
+    DCHECK(parent != NULL, "§4.8.11.5's pointer was asked for its node-after with no media element to be a "
+                           "position inside");
+    return s->before ? s->before->next : parent->first_child;
+}
+
+/* STEP 1'S THIRD UPDATE RULE, WHICH IS THE ONE THIS ENGINE CANNOT PERFORM: "if the node before pointer is
+   removed, let pointer be the point between the node after pointer and the node before the node after
+   pointer". Performing it needs to know WHEN the removal happened, which is the DOM mutation chokepoint and
+   not anything a stage can ask afterwards — so this is where its absence is named, at each of the two rest
+   points children mode resumes across.
+   IT IS A MACRO SO THE ABORT NAMES THE STAGE THAT LOST THE POINTER: a function here would stamp one line for
+   both callers and its remedy would name an action with no object.
+   THE RELEASE ARM IS THE ONE THE STANDARD ALREADY DEFINES FOR A POINTER AT THE END OF A LIST, and it is
+   chosen so the two builds disagree about the diagnostic and never about where the algorithm goes: putting
+   the pointer at the end of the list sends the search loop straight to the waiting step, which is the state
+   this element was already in, rather than walking the sibling chain of a node the page has detached. */
+#define MEDIA_POINTER_RESOLVE(s_, parent_) do {                                                          \
+        MediaSelect *mpr_s_ = (s_);                                                                      \
+        lxb_dom_node_t *mpr_p_ = (parent_);                                                              \
+                                                                                                         \
+        if (mpr_s_->before != NULL && mpr_s_->before->parent != mpr_p_) {                                 \
+            DFAIL("§4.8.11.5 step 14's children mode step 1's pointer had the node BEFORE it removed from " \
+                  "the media element while this algorithm was at a rest point, and step 1's third update "  \
+                  "rule — \"if the node before pointer is removed, let pointer be the point between the "   \
+                  "node after pointer and the node before the node after pointer\" — needs the node that "  \
+                  "was AFTER pointer at the instant of the removal, which is a fact only the DOM mutation "  \
+                  "chokepoint holds. Build the pointer as a position that chokepoint maintains, the way "    \
+                  "core/dom/element.c's tree-steps cursor is maintained, and delete this");                 \
+            mpr_s_->before = mpr_p_->last_child;                                                          \
+        }                                                                                                \
+    } while (0)
 
 /* §4.8.11.5 step 14's CHILDREN MODE steps 2-7, "Process candidate" — the span the find next candidate step
    JUMPS BACK INTO, and therefore a function rather than an arm: the two synchronous sections that reach it are
@@ -1039,6 +1130,67 @@ static int media_process_candidate(JSContext *ctx, MediaSelect *s, JSValueConst 
     return MS_FETCH;
 }
 
+/* §4.8.11.5 step 14's CHILDREN MODE steps 13-17, "Find next candidate" and its "Search loop" — the second span
+   both of the mode's resuming synchronous sections jump into, and a function for media_process_candidate's
+   reason: step 12's forget belongs to one of those two sections and step 26's jump target is step 13, so the
+   two stages share this span and differ in what precedes it. Returns the stage to rest at, or -1 when the
+   search loop has reached the waiting step.
+   THE WALK IS THE STANDARD'S OWN AND RESTS NOWHERE INSIDE IT: every step from 12 to 20 is ⌛-marked, so a rest
+   between two of them would run the page inside a span the standard declares atomic. Its length is the media
+   element's child list, which the standard walks synchronously for the same reason. */
+static int media_find_next_candidate(JSContext *ctx, MediaSelect *s, JSValueConst el, JSValueConst st)
+{
+    lxb_dom_node_t *parent = lxb_dom_interface_node(element_of_value(el));
+    lxb_dom_node_t *cand;
+
+    DCHECK(s->mode == MEDIA_MODE_CHILDREN,
+           "§4.8.11.5 step 14's find next candidate step ran in another mode — the search loop and its pointer "
+           "are children mode's and are declared by that mode's step 1");
+    cand = NULL;                          /* Step 13: "Find next candidate: let candidate be null." */
+    for (;;) {
+        lxb_dom_node_t *after = media_pointer_after(s, parent);
+
+        /* Step 14: "Search loop: if the node after pointer is the end of the list, then jump to the waiting
+           step below." */
+        if (after == NULL) return -1;
+        /* Step 15: "If the node after pointer is a source element, let candidate be that element." */
+        if (media_source_is(after)) cand = after;
+        /* Step 16: "Advance pointer so that the node before pointer is now the node that was after pointer,
+           and the node after pointer is the node after the node that used to be after pointer, if any" — the
+           second half is not written because the node after pointer is not stored; see MediaSelect::before. */
+        s->before = after;
+        /* Step 17: "If candidate is null, jump back to the search loop step. Otherwise, jump back to the
+           process candidate step." */
+        if (cand != NULL) {
+            s->candidate = cand;
+            return media_process_candidate(ctx, s, st);
+        }
+    }
+}
+
+/* §4.8.11.5 step 14's CHILDREN MODE steps 18-20, "Waiting" — the same three steps whichever synchronous
+   section's search loop reached them, so they are written once.
+   AND THE FLOW ENDS HERE RATHER THAN SPINNING. Step 22 is "wait until the node after pointer is a node other
+   than the end of the list", of which the standard itself says "this step might wait forever": no code in
+   this flow can change that condition, so a JS_STEP_YIELD loop over it would be a monopolizer and not a park.
+   What the wait IS, is recorded where its waker can read it — and the record is `sourceWait` and nothing
+   else, because at this step the pointer is provably the END OF THE CHILD LIST and stays there under every
+   one of step 1's update rules that is not the wake itself. The search loop only reaches here with the node
+   after pointer being the end of the list; removing the node before pointer leaves pointer between the new
+   last child and the end of the list; the node after pointer is not a node and so cannot be removed; and an
+   insertion anywhere but at pointer moves nothing. The one rule left is "if a new node is inserted or moved
+   between the two nodes that define pointer" — "in other words, insertions at pointer go after pointer" —
+   which is the wake. So there is no position to record and no ordinal to go stale: media_element_source_
+   inserted below asks the one question this leaves open, which is whether an insertion landed at the end. */
+static void media_waiting_step(JSContext *ctx, JSValueConst st)
+{
+    st_set_int(ctx, st, "networkState", NETWORK_NO_SOURCE);   /* step 18 */
+    st_set_bool(ctx, st, "showPoster", true);                 /* step 19 */
+    /* Step 20's queued task is the delaying-the-load-event flag, which this component does not carry — the
+       named residual at this algorithm's banner says what is not covered and how its absence shows. */
+    st_set_bool(ctx, st, "sourceWait", true);
+}
+
 static int media_select_step(JSContext *ctx, void *stp, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     MediaSelect *s = stp;
@@ -1051,11 +1203,44 @@ static int media_select_step(JSContext *ctx, void *stp, JSValue cb_result, JSVal
 
     STEP_DISPATCH(MEDIA_SELECT_STAGES, s->hdr.stage, s->hdr.def->algorithm, JS_STEP_ABRUPT);
 
+    /* THE ENTRY IS A DISPATCH AND PERFORMS NO STEP. Two things reach this machine — an invocation, which is
+       step 4's await-a-stable-state microtask and begins at step 5, and a RESUMPTION of step 14's children
+       mode step 22 wait, which is step 23's await-a-stable-state microtask and begins at step 24. The driver
+       enters every machine at its first stage, so which of the two this is has to be asked here; it is asked
+       of an ARGUMENT rather than of the element, because by the time this microtask runs the element's own
+       state has moved on and the answer would be a different one. What it crosses is an arm boundary and one
+       O(1) assignment, which is the one thing STEP_JUMP is for. */
+    STEP_ARM(MS_ENTRY); {
+        JSValueConst resume = step_arg(&s->hdr, 1);
+
+        /* FIRST, before anything that can throw: the teardown frees exactly what the state holds. */
+        s->over = JS_UNDEFINED;
+        s->candidate = NULL;
+        s->before = NULL;
+        s->mode = MEDIA_MODE_NONE;
+        if (JS_IsUndefined(resume)) {
+            STEP_GOTO(s->hdr.stage, MS_SELECT, NULL);
+            STEP_JUMP(MS_SELECT);
+        }
+        /* A RESUMPTION. THE MODE IS CARRIED AND NOT RE-DERIVED, and that is the whole of why it is a field:
+           step 26 jumps back INSIDE children mode, so re-running steps 6-11 here would let a `src` attribute
+           the page added while this element was waiting flip the mode to attribute — a mode change the
+           standard reaches only by starting the algorithm again, which media_invoke_selection does and this
+           does not. Only the children mode waiting step can park, so `sourceWait` was the carried mode and
+           media_element_source_inserted consumed it. */
+        s->mode = MEDIA_MODE_CHILDREN;
+        s->before = node_of(resume);
+        DCHECK(JS_IsNull(resume) || s->before != NULL,
+               "§4.8.11.5's resumption was handed a `pointer` that is not a node wrapper. "
+               "media_resume_selection is the only site that mints one, and it passes either JS_NULL for the "
+               "standard's start-of-the-list node or the wrapper of the node BEFORE pointer");
+        STEP_GOTO(s->hdr.stage, MS_WAKE, NULL);
+        STEP_JUMP(MS_WAKE);
+    }
+
     STEP_ARM(MS_SELECT); {
         int next;
 
-        s->over = JS_UNDEFINED;
-        s->candidate = NULL;
         /* Step 5: "if the media element's blocked-on-parser flag is false, then populate the list of pending
            text tracks." */
         realm_awaits(ctx, "HTMLMediaElement.prototype.textTracks",
@@ -1075,6 +1260,10 @@ static int media_select_step(JSContext *ctx, void *stp, JSValue cb_result, JSVal
         st_set_int(ctx, st, "networkState", NETWORK_LOADING);
         media_queue_fire(ctx, el, "loadstart");
         if (s->mode == MEDIA_MODE_CHILDREN) {
+            /* Step 14's children mode step 1: "initially let pointer be the position between the candidate
+               node and the next node, if there are any, or the end of the list if it is the last node" — the
+               node BEFORE pointer is the candidate step 10 chose, and the node after it is not stored. */
+            s->before = s->candidate;
             next = media_process_candidate(ctx, s, st);
         } else if (s->mode == MEDIA_MODE_OBJECT) {
             /* Object mode step 1: "set the currentSrc attribute to the empty string" — an assigned media
@@ -1180,50 +1369,64 @@ static int media_select_step(JSContext *ctx, void *stp, JSValue cb_result, JSVal
     }
 
     STEP_ARM(MS_RESELECT); {
-        lxb_dom_node_t *n;
+        int next;
 
+        /* Step 12: "forget the media element's media-resource-specific tracks" — the step that belongs to
+           THIS synchronous section and not to the one step 26 jumps into, which is why MS_WAKE below does not
+           share this arm. */
         realm_awaits(ctx, "HTMLMediaElement.prototype.textTracks",
-                     "HTML §4.8.11.5 step 14's children mode must FORGET the media element's "
+                     "HTML §4.8.11.5 step 14's children mode step 12 must FORGET the media element's "
                      "media-resource-specific tracks before it looks for the next candidate — write that "
                      "step here");
-        /* "⌛ Find next candidate: let candidate be null. ⌛ Search loop: if the node after pointer is the end
-           of the list, then jump to the waiting step below. ⌛ If the node after pointer is a source element,
-           let candidate be that element. ⌛ Advance pointer… ⌛ If candidate is null, jump back to the search
-           loop step. Otherwise, jump back to the process candidate step." Pointer is the position immediately
-           after the node this run last processed, so the search loop IS the sibling chain from it, and the
-           jump back into process candidate is a jump back into the FIRST synchronous section — which is why
-           that span is a function both stages call and not an arm one of them owns. */
-        DCHECK(s->candidate->parent == lxb_dom_interface_node(element_of_value(el)),
-               "§4.8.11.5's pointer is no longer between two children of the media element. The standard's "
-               "pointer update rules — \"if the node before pointer is removed, let pointer be the point "
-               "between the node after pointer and the node before the node after pointer\" — are not built, "
-               "and the `error` the failed with elements step queued at the candidate has a listener that can "
-               "remove exactly that node. Build the pointer as a position the DOM mutation chokepoint "
-               "maintains, the way core/dom/element.c's tree-steps cursor is maintained");
-        for (n = s->candidate->next; n; n = n->next)
-            if (media_source_is(n)) break;
-        if (n) {
-            int next;
-
-            s->candidate = n;
-            next = media_process_candidate(ctx, s, st);
-            STEP_GOTO(s->hdr.stage, next, NULL);
+        /* The `error` step 10 queued at the candidate has a listener, and step 11's await let it run — so the
+           pointer is resolved against step 1's update rules before the search loop reads it. THIS ASSERTION
+           USED TO BE ABOUT `candidate`, and the argument it carried — that the removable node is the one the
+           `error` fired at — is retired rather than deleted: the node the search loop walks from is the node
+           BEFORE POINTER, which after a candidate has been processed IS that candidate but after a run of
+           non-`source` children is not, so the old assert was silent about exactly the positions this arm can
+           actually be standing at. */
+        MEDIA_POINTER_RESOLVE(s, lxb_dom_interface_node(element_of_value(el)));
+        next = media_find_next_candidate(ctx, s, el, st);
+        if (next < 0) {
+            media_waiting_step(ctx, st);
             JS_FreeValue(ctx, st);
-            return JS_STEP_YIELD;
+            return JS_STEP_DONE;
         }
-        /* "⌛ Waiting: set the element's networkState attribute to the NETWORK_NO_SOURCE value. ⌛ Set the
-           element's show poster flag to true." The algorithm then waits "until the node after pointer is a
-           node other than the end of the list", and the standard says out loud that this "might wait
-           forever": the ONLY thing that can end the wait is a `source` inserted into this element, which is
-           where §4.8.2's source element insertion steps stand. So the wait is RECORDED where its waker can
-           read it and this flow ENDS rather than spinning — a JS_STEP_YIELD loop over a condition no code in
-           this flow can change is a monopolizer, not a park. media_element_source_inserted below crashes by
-           name on the insertion that would have to resume it. */
-        st_set_int(ctx, st, "networkState", NETWORK_NO_SOURCE);
-        st_set_bool(ctx, st, "showPoster", true);
-        st_set_bool(ctx, st, "sourceWait", true);
+        STEP_GOTO(s->hdr.stage, next, NULL);
         JS_FreeValue(ctx, st);
-        return JS_STEP_DONE;
+        return JS_STEP_YIELD;
+    }
+
+    /* STEP 22'S WAIT HAS ENDED AND STEP 23 HAS AWAITED A STABLE STATE — this is the synchronous section that
+       resumes the algorithm, and the flow standing in it is a member of the ONE frontier like any other: it
+       was enqueued by media_resume_selection as step 23's microtask, and nothing drove it here.
+       WHAT THIS ARM MAY NOT DO IS RE-READ THE ELEMENT. Every field it needs was fixed when the wait ended and
+       is carried: the MODE (children, set at the entry, because step 26 jumps back inside children mode and
+       re-deriving it would let a `src` added during the wait change it), and the POINTER (the node before it,
+       handed over as an argument, because what pointer stood before was the element's last child AT THE
+       INSTANT the insertion landed, and that is a different node by the time this microtask runs). */
+    STEP_ARM(MS_WAKE); {
+        int next;
+
+        /* Step 24: "set the element's delaying-the-load-event flag back to true" — the second half of this
+           algorithm's named residual; see the banner. */
+        /* Step 25: "set the networkState back to NETWORK_LOADING". */
+        st_set_int(ctx, st, "networkState", NETWORK_LOADING);
+        MEDIA_POINTER_RESOLVE(s, lxb_dom_interface_node(element_of_value(el)));
+        /* Step 26: "jump back to the find next candidate step above" — step 13, which is where this span
+           starts and is why step 12's forget is NOT in it. */
+        next = media_find_next_candidate(ctx, s, el, st);
+        if (next < 0) {
+            /* The search loop reached the waiting step again, which is what the standard does when the node
+               that ended the wait is not a usable `source`: the element re-parks at the end of its child
+               list and waits for the next insertion there. */
+            media_waiting_step(ctx, st);
+            JS_FreeValue(ctx, st);
+            return JS_STEP_DONE;
+        }
+        STEP_GOTO(s->hdr.stage, next, NULL);
+        JS_FreeValue(ctx, st);
+        return JS_STEP_YIELD;
     }
 }
 
@@ -1258,6 +1461,7 @@ static const JSTrampStepDef media_select_def = {
  * reach the page after them rather than before. */
 static void media_invoke_selection(JSContext *ctx, JSValueConst el)
 {
+    JSValueConst argv[2];
     JSValue fn, st = media_state(ctx, el);
 
     DCHECK(g_select_stepid >= 0, "§4.8.11.5 was invoked before its machine was registered");
@@ -1280,10 +1484,51 @@ static void media_invoke_selection(JSContext *ctx, JSValueConst el)
        pointer that run was waiting on is not this one's to be woken at. */
     st_set_bool(ctx, st, "sourceWait", false);
     JS_FreeValue(ctx, st);
-    fn = JS_NewCFunction2(ctx, NULL, "mediaResourceSelection", 1, JS_CFUNC_step, g_select_stepid);
+    fn = JS_NewCFunction2(ctx, NULL, "mediaResourceSelection", 2, JS_CFUNC_step, g_select_stepid);
     CHECK(!JS_IsException(fn), "§4.8.11.5: the resource selection task's callee could not be allocated");
-    JS_EnqueueCallJob(ctx, fn, 1, &el);
+    /* THE SECOND ARGUMENT IS THE ENTRY'S QUESTION, and undefined is an INVOCATION rather than an absent
+       value: this machine has two entries and the other one is media_resume_selection's resumption, which
+       passes a pointer there. A machine that had to ask the ELEMENT which it was would be asking at the wrong
+       time — by the time this microtask runs the element's state has moved on. */
+    argv[0] = el;
+    argv[1] = JS_UNDEFINED;
+    JS_EnqueueCallJob(ctx, fn, 2, argv);
     JS_FreeValue(ctx, fn);
+}
+
+/* THE OTHER ENTRY: §4.8.11.5 step 14's children mode step 23, "await a stable state", once step 22's "wait
+ * until the node after pointer is a node other than the end of the list" has ended. It is the SAME algorithm
+ * continuing — the same mode, the same pointer, the same element — and the flow it seeds is a work item on the
+ * ONE frontier, ranked, preemptible and parkable exactly like the flow the invocation seeds. There is no
+ * second queue here and no driver: this enqueues, and the scheduler decides.
+ *
+ * IT IS A MICROTASK FOR media_invoke_selection'S REASON, WHICH IS THE STANDARD'S. Step 23 is an AWAIT A
+ * STABLE STATE, and HTML §8.1.7.3 "Processing model" defines that as a queued microtask — not §4.8.11's media
+ * element task source, which is what media_queue_task is and which would put this behind every task already
+ * standing.
+ *
+ * `before` IS THE NODE BEFORE POINTER AND IS CARRIED BECAUSE IT IS READ AT THE WRONG TIME OTHERWISE. At the
+ * instant the insertion landed, pointer was between the element's then-last-child and the end of the list, so
+ * the node before pointer is the inserted node's previous sibling AS IT WAS THEN; asking for the media
+ * element's last child inside the microtask names the inserted node itself, or something appended after it
+ * since, and the search loop would then start PAST the very node that ended the wait. NULL is not an absent
+ * value here either: it is the standard's start-of-the-list node, which is what a media element that had no
+ * children at all before this insertion leaves behind. */
+static void media_resume_selection(JSContext *ctx, JSValueConst el, lxb_dom_node_t *before)
+{
+    JSValueConst argv[2];
+    JSValue fn, ptr;
+
+    DCHECK(g_select_stepid >= 0, "§4.8.11.5 was resumed before its machine was registered");
+    ptr = node_wrap(ctx, before);   /* JS_NULL for the start of the list */
+    CHECK(!JS_IsException(ptr), "§4.8.11.5: OOM wrapping the node before children mode's pointer");
+    fn = JS_NewCFunction2(ctx, NULL, "mediaResourceSelection", 2, JS_CFUNC_step, g_select_stepid);
+    CHECK(!JS_IsException(fn), "§4.8.11.5: the resource selection resumption's callee could not be allocated");
+    argv[0] = el;
+    argv[1] = ptr;
+    JS_EnqueueCallJob(ctx, fn, 2, argv);
+    JS_FreeValue(ctx, fn);
+    JS_FreeValue(ctx, ptr);
 }
 
 /* ---- §4.8.11.5's MEDIA ELEMENT LOAD ALGORITHM ------------------------------------------------------------- */
@@ -1488,15 +1733,45 @@ void media_element_source_inserted(JSContext *ctx, lxb_dom_element_t *el)
     if (!has_src && st_int(ctx, st, "networkState") == NETWORK_EMPTY) {
         media_invoke_selection(ctx, wrap);
     } else if (st_bool(ctx, st, "sourceWait")) {
-        /* THE OTHER CONSUMER OF THIS EVENT, which the standard states inside §4.8.11.5 rather than here. */
-        DFAIL("a `source` was inserted into a media element parked at HTML §4.8.11.5 step 14's children mode "
-              "WAITING step, and that insertion is the wake the step is waiting for: \"wait until the node "
-              "after pointer is a node other than the end of the list\", then set the delaying-the-load-event "
-              "flag back to true, set the networkState back to NETWORK_LOADING, and jump back to the find "
-              "next candidate step. This engine ENDS that flow at the wait rather than parking it, so the "
-              "pointer it stopped at was never recorded and there is nothing here to resume. Build it: record "
-              "the pointer beside `sourceWait` where MS_RESELECT sets that flag, and re-enter the machine at "
-              "MS_RESELECT from here");
+        /* THE OTHER CONSUMER OF THIS EVENT, which the standard states inside §4.8.11.5 rather than here:
+           §4.8.11.5 step 14's children mode step 22, "wait until the node after pointer is a node other than
+           the end of the list". This element is parked at that step, and this insertion is the only thing
+           that can end it.
+           WHAT THE PARKED POINTER IS, AND WHY THERE IS NOTHING RECORDED TO COMPARE AGAINST. The search loop
+           reaches step 18 only when the node after pointer is the end of the list, and step 1's update rules
+           keep it there: removing the node before pointer leaves pointer between the new last child and the
+           end of the list, the end of the list is not a node and so cannot be removed, and an insertion
+           anywhere else moves nothing. So the pointer of a WAITING media element is the END OF ITS CHILD
+           LIST, and `sourceWait` alone states it — there is no ordinal here to be renamed by a page that
+           mutates the list, which is the one thing a recorded position could not have survived.
+           SO THE WAKE CONDITION IS ONE QUESTION: DID THIS INSERTION LAND AT THE POINTER. Step 1's remaining
+           rule is "if a new node is inserted or moved between the two nodes that define pointer, let pointer
+           be the point between the node before pointer and the new node" — "in other words, insertions at
+           pointer go after pointer" — and the two nodes defining pointer here are the last child and the end
+           of the list, so an insertion between them is exactly an insertion that becomes the last child. A
+           `source` inserted anywhere else leaves the node after pointer the end of the list and the standard
+           goes on waiting, which is why this is a test and not an unconditional resume.
+           `sourceWait` IS CLEARED HERE, SYNCHRONOUSLY, AND NOT IN THE RESUMED FLOW. The wait has ended at
+           this instant; leaving the flag up until the microtask ran would let a second `source` appended in
+           this same task seed a SECOND resumption of ONE algorithm — media_invoke_selection's banner records
+           the same defect one step up, and it is the same defect: a step that became a work item read at the
+           wrong time.
+           A NAMED RESIDUAL. WHAT IS NOT COVERED: step 22 waits for the node after pointer to be "a node other
+           than the end of the list" and says NODE, so appending a `<div>` to a waiting media element ends the
+           wait too — the search loop then walks past it, finds no `source`, and re-parks, having queued step
+           20's task and flickered networkState through NETWORK_LOADING on the way. This function is §4.8.2's
+           SOURCE element insertion steps, so it never sees that insertion. WHAT THE NEXT DIFF BUILDS: the
+           same call from the insertion steps of any node whose parent is a media element, which is a question
+           for the node-insertion drain core/dom/element.c owns rather than for this entry — grep that drain
+           before building to this clause. HOW ITS ABSENCE WOULD SHOW: a page that appends a non-`source`
+           child to a waiting `<video>` and reads `networkState` on the next turn sees NETWORK_NO_SOURCE where
+           a real browser has already been through NETWORK_LOADING and back. */
+        lxb_dom_node_t *ins = lxb_dom_interface_node(el);
+
+        if (ins->next == NULL) {
+            st_set_bool(ctx, st, "sourceWait", false);
+            media_resume_selection(ctx, wrap, ins->prev);
+        }
     }
     JS_FreeValue(ctx, st);
     JS_FreeValue(ctx, wrap);
