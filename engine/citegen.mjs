@@ -2715,8 +2715,21 @@ const C_ESCAPE = /\\(u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|x[0-9a-fA-F]{1,2}|[0-7]{1,3
 function unescapeC(s) {
   return s.replace(C_ESCAPE, (m, e) => {
     const c = e[0];
-    if (c === "u" || c === "U") return String.fromCodePoint(parseInt(e.slice(1), 16));
-    if (c === "x") return String.fromCharCode(parseInt(e.slice(1), 16));
+    /* A MALFORMED ESCAPE IS TEXT, NOT A CODE POINT — and the length test is what tells them apart, because the
+       alternation above cannot. Its `u`/`U`/`x` arms demand their exact digit counts, so a `\u` NOT followed by
+       four hex digits does not match them; it falls to the final `[\s\S]` arm, which captures the bare letter
+       and arrives here with `c === "u"` and NOTHING to parse. `parseInt("", 16)` is NaN and
+       `String.fromCodePoint(NaN)` THROWS, so one such sequence anywhere in the audited corpus aborted the whole
+       run — every file, for every lane, with a stack rather than a finding.
+       THE INPUT IS LEGITIMATE AND THAT IS WHY THIS MAY NOT CRASH. This scanner reads PROSE as well as string
+       literals, and prose is entitled to write `\u{1F308}` (ECMAScript's spelling, which C does not have) while
+       discussing escapes — which is exactly what an instrument's comment about astral characters did. It is
+       not a broken invariant of this codebase, it is text this normalizer does not decode, and the honest
+       answer is to leave it as it stands rather than to invent a character for it or to stop.
+       So the numeric arms require a payload; anything else yields the character itself, which is what the final
+       arm already does for every other undecodable escape. */
+    if ((c === "u" || c === "U") && e.length > 1) return String.fromCodePoint(parseInt(e.slice(1), 16));
+    if (c === "x" && e.length > 1) return String.fromCharCode(parseInt(e.slice(1), 16));
     if (c >= "0" && c <= "7") return String.fromCharCode(parseInt(e, 8));
     return c === "n" || c === "t" || c === "r" || c === "f" || c === "v" ? " " : c;
   });
