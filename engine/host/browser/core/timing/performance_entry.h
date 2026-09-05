@@ -40,19 +40,28 @@
  *   HOW ITS ABSENCE WOULD SHOW. `'id' in performance.mark('x')` is false where a browser that has shipped
  *     these answers true, and `entry.toJSON()` has four keys where §3.7.7.1.1 over the full IDL gives six.
  *
- * NOT BUILT — §5.1 Queue a PerformanceEntry AND THE PERFORMANCE ENTRY BUFFER. There is deliberately no buffer
- * in this component, and the reason is a rule rather than a shortage of effort. The buffer's only readers in
- * the platform are §2.1.1 getEntries(), §2.1.2 getEntriesByType(), §2.1.3 getEntriesByName() and §4's
- * PerformanceObserver, and every one of them is ABSENT from this build — so a buffer added now would be a
- * write with no reader, which CLAUDE.md's §A-FIELD-A-CONSUMER-DEFAULTS rates as a broken contract in its own
- * right. AND ADDING THE READERS WITH IT WOULD BE WORSE, not better: this build mints exactly one entry type,
- * so `performance.getEntries()` would hand a page a timeline containing marks and NOTHING ELSE, and a page
- * cannot tell that from a page on which nothing else happened. core/timing/performance.h already states the
- * shape of that defect for this exact surface, in its own words: an empty list is the plausible datum that
- * makes a page conclude there was no navigation to time. It is the same sentence here with entries in it.
- *   WHAT THE NEXT DIFF BUILDS: §5.1 and the per-global performance entry buffer map it appends to, TOGETHER
- *     WITH at least one non-mark entry type (Navigation Timing §5 Creating a navigation timing entry is the
- *     one every page has), so the first reader installed answers about a timeline rather than about marks.
+ * NOT BUILT — THE PERFORMANCE ENTRY BUFFER. §5.1 Queue a PerformanceEntry EXISTS, in
+ * core/timing/performance_observer.c: its observer half (steps 2, 3, 4, 7, 8 and 13) is what delivers an entry
+ * to a §4 PerformanceObserver. What is still absent is the per-global performance entry BUFFER MAP that steps
+ * 9-12 append into, and the reason is a rule rather than a shortage of effort.
+ *   THIS PARAGRAPH USED TO SAY §5.1 WAS ABSENT TOO, on the argument that the buffer's readers were all absent
+ *     — which included "§4's PerformanceObserver". That half of the argument has stopped being true, and the
+ *     half that has not is what the residual is now written over: an OBSERVER names the entry types it wants
+ *     and §4.5 states which of them this build can mint, so it is never handed an empty answer to a question
+ *     this build cannot answer, while §2.1.1-§2.1.3 would be.
+ *   WHAT IS NOT COVERED. The buffer's remaining readers are §2.1.1 getEntries(), §2.1.2 getEntriesByType() and
+ *     §2.1.3 getEntriesByName(), and all three are ABSENT from this build — so a buffer added now would be a
+ *     write with no reader, which CLAUDE.md's §A-FIELD-A-CONSUMER-DEFAULTS rates as a broken contract in its
+ *     own right. AND ADDING THOSE READERS WITH IT WOULD BE WORSE, not better: this build mints exactly one
+ *     entry type, so `performance.getEntries()` would hand a page a timeline containing marks and NOTHING
+ *     ELSE, and a page cannot tell that from a page on which nothing else happened. core/timing/performance.h
+ *     already states the shape of that defect for this exact surface, in its own words: an empty list is the
+ *     plausible datum that makes a page conclude there was no navigation to time.
+ *   WHAT THE NEXT DIFF BUILDS: the per-global performance entry buffer map and §5.1 steps 9-12 that append
+ *     into it, TOGETHER WITH at least one non-mark entry type (Navigation Timing §5 Creating a navigation
+ *     timing entry is the one every page has), so the first §2.1 reader installed answers about a timeline
+ *     rather than about marks. §4.2 step 7.5's `buffered` flag and §5.3 step 3.3.7's dropped-entries count
+ *     read that same map and are named as residuals at core/timing/performance_observer.h.
  *   HOW ITS ABSENCE WOULD SHOW: `performance.mark('a')` returns a real PerformanceMark and
  *     `performance.getEntriesByName('a')` is a TypeError naming the absent operation — which is the forcing
  *     function, and is what a page that stores marks and reads them back trips over.

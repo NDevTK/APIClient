@@ -15,6 +15,7 @@
 #include "core/frame/window.h"
 #include "core/timing/performance.h"
 #include "core/timing/performance_entry.h"
+#include "core/timing/performance_observer.h"
 #include "core/timing/user_timing.h"
 #include "solver/concolic.h"   /* an unknown NAME denotes its SHAPE — see concolic_name_cstr */
 #include "solver/cow.h"
@@ -256,8 +257,9 @@ static const char *const UT_CTOR_STEPS[] = { UT_CTOR_STAGES(JS_STEP_STAGE_LABEL)
 
 #define UT_MARK_STAGES(X) \
     X(UT_MARK_BUILD = IDL_STEP_FIRST, \
-      "USER TIMING §2.1.1 mark() steps 1 and 4 (run the PerformanceMark constructor, and return the entry); " \
-      "steps 2 and 3 queue it onto a timeline this build does not have — see user_timing.h")
+      "USER TIMING §2.1.1 mark() steps 1, 2 and 4 (run the PerformanceMark constructor, queue a " \
+      "PerformanceEntry, and return the entry); step 3's performance entry buffer is user_timing.h's " \
+      "named residual")
 enum { UT_MARK_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const UT_MARK_STEPS[] = { UT_MARK_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -284,8 +286,8 @@ static int js_mark_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
 }
 
 /* USER TIMING §2.1.1's door: "Stores a timestamp with the associated name (a "mark"). It MUST run these
-   steps:" — step 1 is the constructor above, step 4 is the return, and steps 2 and 3 are user_timing.h's
-   named residual. */
+   steps:" — step 1 is the constructor above, step 2 is PERFORMANCE TIMELINE §5.1, step 4 is the return, and
+   step 3 alone is user_timing.h's named residual. */
 static int js_perf_mark_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                              JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
@@ -301,6 +303,11 @@ static int js_perf_mark_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
         return JS_ThrowTypeError(ctx, "mark requires a name"), -1;
     obj = mark_construct(ctx, argv[0], argc > 1 ? argv[1] : JS_UNDEFINED);   /* STEP 1 */
     if (JS_IsException(obj)) return -1;
+    /* STEP 2: "Queue a PerformanceEntry entry". It is HERE and not in §2.2.1's constructor above, which is the
+       standard's own split: `new PerformanceMark('a')` mints an entry and puts it on no timeline, while
+       `performance.mark('a')` queues it — so a PerformanceObserver observing `mark` sees the second and not
+       the first. STEP 3, "Add entry to the performance entry buffer", is the residual user_timing.h names. */
+    performance_observer_queue_entry(ctx, obj);
     *presult = obj;   /* STEP 4 */
     return 0;
 }
@@ -395,6 +402,13 @@ void user_timing_init(JSContext *ctx)
                       "USER TIMING §2.2's PerformanceMark per-realm prototype slot, and this component's "
                       "declaration latch");
     agent_state_id("user_timing", &g_ctor_stepid, "§2.2.1's constructor machine");
+    /* PERFORMANCE TIMELINE §4.5's SET, DECLARED BY THE PRODUCER — see core/timing/performance_observer.h for
+       why the membership is stated here and not listed there. This build's mint for the type is §2.2.1's
+       constructor, reached through both of this component's doors; the TIMING ENTRY TYPES REGISTRY's row for
+       "mark" reads PerformanceMark, availableFromTimeline True, maxBufferSize Infinite and should add entry
+       "Return true", which is what §5.1 step 7.1.1 answers with. The literal is a static, which is what lets
+       §4.5's array keep the pointer rather than a copy. */
+    performance_observer_declare_entry_type("mark");
     agent_state_id("user_timing", &g_id_mark, "§2.1.1's mark() machine");
     realm_declare_intrinsic(user_timing_install);
 }

@@ -106,6 +106,10 @@ const INTERFACES = {
   ResizeObserverEntry:  "core/resize_observer/resize_observer_entry.c",
   ResizeObserverSize:   "core/resize_observer/resize_observer_size.c",
   PerformanceObserver:  "core/timing/performance_observer.c",
+  /* PERFORMANCE TIMELINE §4.2.2, its own component in the same directory for the reason
+     IntersectionObserverEntry's row above gives: it is its own interface with its own three members, and
+     what they filter is §5.5's algorithm over a list the observer hands it. */
+  PerformanceObserverEntryList: "core/timing/performance_observer_entry_list.c",
   /* An interface that includes the BODY mixin has its readers and `bodyUsed` installed by the shared
      component, so body.c is where the audit finds them — naming only the interface's own file reported six
      members absent that both including interfaces have. */
@@ -726,7 +730,11 @@ const UNBUILT = {
      CSS 2.1 §10 defines and this engine does not compute crashes there naming its own section, so §3.4.8
      "Calculate box size, given target and observed box" had everything it needed. What was left to build was
      §3.4's DELIVERY seam and HTML §8.1.7.3 update the rendering's step 16 loop over it, not the geometry. */
-  PerformanceObserver:  "no performance timeline to observe — rendering.c's realm_awaits names it",
+  /* PerformanceObserver's row is GONE, and its reason had gone stale in exactly the way the two rows above
+     record: "no performance timeline to observe" was true about this tree until PERFORMANCE TIMELINE §5.1
+     Queue a PerformanceEntry landed beside §4 in core/timing/performance_observer.c, and USER TIMING
+     §2.1.1 step 2 now calls it. rendering.c's realm_awaits no longer names this interface either — it
+     names PerformancePaintTiming, which is the entry these steps would actually mint. */
   Notification:         "no notification surface; nothing in the tree constructs one",
   /* HTML §7.2.6.10's REMAINING neighbours. §7.2.6.10.1's NavigateEvent and §7.2.6.10.3's NavigationDestination
      have LEFT this list — both are built, and NavigateEvent's row above reports its two operations as the

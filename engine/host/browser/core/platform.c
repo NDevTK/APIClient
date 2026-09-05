@@ -100,6 +100,7 @@
 #include "core/timing/hr_time.h"
 #include "core/timing/performance.h"
 #include "core/timing/performance_entry.h"
+#include "core/timing/performance_observer.h"
 #include "core/timing/user_timing.h"
 #include "core/timing/timer.h"
 #include "core/url/origin.h"
@@ -201,6 +202,7 @@ static void d_idb_open(JSContext *c, const PlatformAgent *a) { (void)a; idb_open
 static void d_hr_time(JSContext *c, const PlatformAgent *a) { (void)a; hr_time_init(c); }
 static void d_performance(JSContext *c, const PlatformAgent *a) { (void)a; performance_init(c); }
 static void d_performance_entry(JSContext *c, const PlatformAgent *a) { (void)a; performance_entry_init(c); }
+static void d_performance_observer(JSContext *c, const PlatformAgent *a) { (void)a; performance_observer_init(c); }
 static void d_user_timing(JSContext *c, const PlatformAgent *a) { (void)a; user_timing_init(c); }
 static void d_input_device_capabilities(JSContext *c, const PlatformAgent *a)
 { (void)a; input_device_capabilities_init(c); }
@@ -265,6 +267,7 @@ static void r_css_unit_value(JSRuntime *rt) { (void)rt; css_unit_value_free(); }
 static void r_hr_time(JSRuntime *rt) { (void)rt; hr_time_free(); }
 static void r_performance(JSRuntime *rt) { (void)rt; performance_free(); }
 static void r_performance_entry(JSRuntime *rt) { (void)rt; performance_entry_free(); }
+static void r_performance_observer(JSRuntime *rt) { performance_observer_free(rt); }
 static void r_user_timing(JSRuntime *rt) { (void)rt; user_timing_free(); }
 static void r_cookie_jar(JSRuntime *rt) { (void)rt; cookie_jar_free(); }
 static void r_navigate_event_fire(JSRuntime *rt) { (void)rt; navigate_event_fire_free(); }
@@ -655,6 +658,8 @@ static void i_event(JSContext *c, JSValueConst g, const PlatformDocument *d) { (
 static void i_message_event(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; message_event_install(c, g); }
 static void i_error_event(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; error_event_install(c, g); }
 static void i_message_port(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; message_port_install(c, g); }
+static void i_performance_observer(JSContext *c, JSValueConst g, const PlatformDocument *d)
+{ (void)d; performance_observer_install(c, g); }
 static void i_xhr(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; xhr_install(c, g); }
 static void i_file_reader(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; file_reader_install(c, g); }
 static void i_navigable(JSContext *c, JSValueConst g, const PlatformDocument *d) { navigable_install(c, g, d->origin); }
@@ -741,6 +746,12 @@ static const PlatformComponent PLATFORM[] = {
        realm-intrinsic order IS this declaration order, which is what makes both dependencies hold for a
        child navigable's realm and not only for the first one built. */
     { "performance_entry",   d_performance_entry,   NULL,        r_performance_entry },
+    /* PERFORMANCE TIMELINE §4's PerformanceObserver and §4.2.2's PerformanceObserverEntryList, BETWEEN the two
+       rows above them and fixed from both sides. It reads §3's record (PerfEntry's `entryType` and `name`) at
+       §5.1 step 3 and §5.5, so it follows `performance_entry`; and USER TIMING §2.1.1 step 2 calls §5.1 while
+       user_timing_init declares `mark` as a §4.5 supported entry type, so `user_timing` follows THIS. Its own
+       prototype chains to %Object.prototype% — §4 inherits nothing — so it adds no constraint of its own. */
+    { "performance_observer", d_performance_observer, i_performance_observer, r_performance_observer },
     { "user_timing",         d_user_timing,         NULL,        r_user_timing },
     /* HTML §7.2.6.5's NavigationHistoryEntry, whose prototype chains to §2.7's and whose CLASS is what
        §7.2.7.1's `required NavigationHistoryEntry from` brands against — so it is declared before `event`,
@@ -1114,6 +1125,12 @@ static const struct { const char *name, *component; IdlExposure exposure; } PLAT
        install did not run has no `PerformanceMark`, which is precisely the state in which
        `performance.mark(...)` is the TypeError this pair was built to stop a page meeting. */
     { "PerformanceEntry",      "performance_entry" },
+    /* PERFORMANCE TIMELINE §4 and §4.2.2's interface objects. `PerformanceObserver` is the one name on this
+       table a real bundle reads BEFORE it does anything else with the timeline — the guard is
+       `PerformanceObserver.supportedEntryTypes.includes(t)`, so an install that stopped happening is a
+       ReferenceError on the first line of the arm and not a member answering undefined one frame later. */
+    { "PerformanceObserver",   "performance_observer" },
+    { "PerformanceObserverEntryList", "performance_observer" },
     { "PerformanceMark",       "user_timing" },
     { "postMessage",           "window_message" },
     { "structuredClone",       "structured_clone" },

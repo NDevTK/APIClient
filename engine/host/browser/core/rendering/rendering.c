@@ -417,18 +417,26 @@ static void steps_20_to_23(JSContext *docctx)
        stale-`DFAIL` failure mode running in the direction that is hardest to catch: a crash claiming a
        capability EXISTS sends its reader looking for something to call, and finding nothing teaches them to
        distrust the crash rather than the claim.
-       WHAT IS ACTUALLY THERE NOW is PERFORMANCE TIMELINE §3's PerformanceEntry (core/timing/performance_entry.c)
-       and USER TIMING §2.2's PerformanceMark over it — the ENTRY, which is the object these two steps would
-       construct. What is still absent is where an entry GOES: §5.1 Queue a PerformanceEntry, the per-global
-       performance entry buffer map, and §4's PerformanceObserver, which is the interface this probe is named
-       for and the one that would observe what these steps queued. performance_entry.h states that absence
-       where the buffer would live, and states what the next diff builds. */
-    realm_awaits(docctx, "PerformanceObserver",
+       AND THE SUBJECT HAS MOVED, WHICH IS WHY THIS PROBE NOW NAMES A DIFFERENT INTERFACE. The paragraph above
+       is still exactly right about the failure mode and was WRONG about two of the three things it listed as
+       absent: PERFORMANCE TIMELINE §5.1 Queue a PerformanceEntry and §4's PerformanceObserver are both built
+       (core/timing/performance_observer.c), so a probe asking about `PerformanceObserver` would fire on every
+       document while naming steps whose real prerequisite is somewhere else entirely — the stale-probe defect
+       arriving through the instrument that exists to catch it.
+       WHAT IS ACTUALLY THERE NOW is PERFORMANCE TIMELINE §3's PerformanceEntry (core/timing/performance_entry.c),
+       USER TIMING §2.2's PerformanceMark over it, §5.1 and §4's observer. What is still absent is the ENTRY
+       THESE TWO STEPS WOULD MINT: PerformancePaintTiming, whose entry type nothing in this build produces and
+       whose interface object is on no realm's global — so these steps have no object to construct and §5.1 has
+       nothing to receive. That interface is the member whose ARRIVAL gives these steps work, which is what
+       core/realm.h says a probe's path must name; the buffer map is a separate absence that
+       core/timing/performance_entry.h states where the buffer would live. */
+    realm_awaits(docctx, "PerformancePaintTiming",
                 "update the rendering steps 20 and 21 RECORD RENDERING TIME and MARK PAINT TIMING queue "
-                "performance entries, and PERFORMANCE TIMELINE §5.1 Queue a PerformanceEntry — the operation "
-                "that receives one — is not built, nor is the performance entry buffer map it appends to. The "
-                "ENTRY these steps would mint exists (§3's PerformanceEntry); build §5.1 and the buffer, then "
-                "both steps");
+                "performance entries of the `paint` entry type, and this build has no producer for one: "
+                "PerformancePaintTiming is absent, so there is no object for these steps to mint. What "
+                "receives one already exists — PERFORMANCE TIMELINE §5.1 Queue a PerformanceEntry, in "
+                "core/timing/performance_observer.c — so build the interface, declare its entry type through "
+                "performance_observer_declare_entry_type, then both steps");
     /* STEP 22 — "update the rendering or user interface of doc and its node navigable to reflect the current
        state". THE PAINT, and the only step of the twenty-three with no headless equivalent: everything before
        it computes values that exist whether or not anything is drawn, and this one draws. There is no
