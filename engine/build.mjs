@@ -4937,15 +4937,21 @@ STAGES.push(runProgram("record-field contract audit", [join(ENGINE, "fieldgate.m
    gates it — it compiles no C and reads no artifact, so it asks its question of the SOURCES whatever the two
    programs above did, and a link failure can never take the member census out of the run with it.
    IT IS LAST IN STAGE ORDER AND THAT NOW DECIDES ONLY A TIE. report() ranks by STAGE_KIND, and this stage's
-   non-zero is a CENSUS — a count of finding categories, whose magnitude is a work queue and whose only news is
-   a move nothing here can see — so a program that does not build, does not run, or aborts keeps its own exit
+   non-zero is a CENSUS — categories, whose magnitude is a work queue and whose only news is
+   a move nothing here can see; and the categories are of TWO KINDS taking OPPOSITE work, which is why the line
+   below states both rather than one remedy for three populations. It said one for years, and the third —
+   a construct the audit cannot read — is closed in the AUDIT and never by implementing anything in a
+   component, so that sentence sent every reader of the third population to the wrong file — so a program that does not build, does not run, or aborts keeps its own exit
    code and the member gap does not stand in front of it wherever either is pushed. Every stage still reports,
    which is the whole point of the list, and the count is still a non-zero exit: there is no baseline to update
    and none is grown here, so the gap is never forgiven and is never called a regression either. */
 STAGES.push(runProgram("Web IDL gap audit", [join(ENGINE, "idlgen.mjs")],
-                       "each category above is a spec member no component installs, a stub where a real value " +
-                       "belongs, or an install construct the audit cannot resolve — implement it at the root " +
-                       "in its real component. There is no baseline to update: the count IS the gap."));
+                       "this stage prints TWO LEDGERS and they are NEVER SUMMED. A FINDING is one disagreement " +
+                       "between the platform's IDL and this engine, closed at the ROOT IN THE ENGINE by the action " +
+                       "ITS OWN line names — they are not all members to write, and never a js_noop stub. A BLIND " +
+                       "SPOT is a construct THIS RUN COULD NOT READ, so it found nothing about the engine there: it " +
+                       "is closed IN THE AUDIT, never by implementing anything in a component, and until it is the " +
+                       "finding count is a FLOOR. There is no baseline to update: the findings ARE the gap."));
 report(STAGES);
 
 /* A THIRD DRIVE STOOD HERE — the driver for the deleted second program, which put the RENDERER REGISTRY's
