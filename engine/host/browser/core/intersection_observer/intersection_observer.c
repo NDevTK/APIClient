@@ -26,6 +26,7 @@
 #include "core/idl_args.h"
 #include "core/intersection_observer/intersection_observer.h"
 #include "core/intersection_observer/intersection_observer_entry.h"
+#include "core/layout/scroll_container.h"
 #include "core/layout/used_value.h"
 #include "core/realm.h"
 #include "core/timing/hr_time.h"
@@ -427,26 +428,22 @@ static IoRect io_viewport_rect(JSContext *ctx)
     return r;
 }
 
-/* CSSOM VIEW's "CONTENT CLIP" as §2.2 uses it — "an Element is defined as having a content clip if its computed
-   style has overflow properties that cause its content to be clipped to the element's padding edge". The
-   computed values are the cascade's (core/css/css_computed_value.h); everything but `visible` clips. */
-static bool io_has_content_clip(lxb_dom_element_t *el)
-{
-    static const char *const AXES[2] = { "overflow-x", "overflow-y" };
-    int i;
-
-    for (i = 0; i < 2; i++) {
-        char *v = css_computed_value(el, AXES[i]);
-        bool clips;
-
-        DCHECK(v != NULL, "the cascade produced no computed `overflow-x`/`overflow-y` for an element — every "
-                          "property this engine asks for has an initial value in the UA sheet");
-        clips = strcmp(v, "visible") != 0;
-        free(v);
-        if (clips) return true;
-    }
-    return false;
-}
+/* CSSOM VIEW's CONTENT CLIP is asked of core/layout/scroll_container.h and is not read out of the cascade
+   here. WHAT STOOD IN ITS PLACE WAS A SECOND ANSWER TO THAT COMPONENT'S QUESTION, and it was wrong in three
+   ways that all pointed the same direction — it reported a clip where there is none:
+     - it read the computed `overflow-x`/`overflow-y` with NO `Applies to:` line, which is the mistake
+       core/css/css_transform.h's header names in as many words. css-overflow-3 §3.1's line is "block
+       containers, flex containers, grid containers, and table grid boxes", so `overflow: hidden` on a
+       `display: inline` element has a computed value and clips nothing;
+     - it ignored §3.1.4 "Overflow Viewport Propagation", under which the root element — or the body, for the
+       ordinary `<html>` whose own overflow is `visible` — has a USED overflow of `visible` because the value
+       was given to the VIEWPORT. `<html style="overflow-x:hidden">` and `body { overflow-x: hidden }` are two
+       of the commonest declarations on the web, and both were read here as a content clip on an ancestor of
+       every target in the document;
+     - it asked nothing about whether the element generates a BOX, so a `display: none` ancestor clipped too.
+   The consequence was not a wrong number: §3.2.7's walk CRASHES at a container with a content clip, so each
+   false positive took the whole document down, and the first two are ordinary page-authoring rather than edge
+   cases. The predicate is one component's to own for exactly the reason that header gives. */
 
 /* §6's get-the-bounding-box for `n`, in this engine's own vocabulary. */
 static IoRect io_bounding_box(lxb_dom_node_t *n)
@@ -488,15 +485,23 @@ static IoRect io_root_bounds(JSContext *ctx, JSValueConst state)
                    "§2.2's root intersection rectangle was asked for a DOCUMENT root that is not the document "
                    "being walked — §3.2.10 step 1 collects only observers whose root is in this tree");
             r = io_viewport_rect(ctx);
-        } else if (io_has_content_clip(lxb_dom_interface_element(n))) {
+        } else if (scroll_container_content_clip_is(lxb_dom_interface_element(n))) {
             DFAIL("INTERSECTION OBSERVER §2.2's root intersection rectangle for an EXPLICIT ELEMENT ROOT WITH "
-                  "A CONTENT CLIP is 'the element's PADDING AREA' — one box's padding extent (CSS 2.1 §8.1, "
-                  "which core/layout/used_value.h's `used_value_padding_edge_px` already computes) at that "
-                  "box's padding-edge POSITION, which is its border-box origin plus §8.1's leading border "
-                  "width. core/dom/element_view.c has both halves for the BORDER area and neither is exported "
-                  "for the padding one. BUILD the padding area beside `element_view_bounding_box_px`, in "
-                  "element_view.c where §6's box model already is, and read it here — an unclipped root takes "
-                  "get-the-bounding-box below and is already answered");
+                  "A CONTENT CLIP is 'the element's PADDING AREA' — one box's padding extent at that box's "
+                  "padding-edge POSITION. BOTH HALVES ARE BUILT AND THIS CRASH USED TO SAY OTHERWISE: it told "
+                  "its reader to compose the position as 'its border-box origin plus §8.1's leading border "
+                  "width', and core/layout/flow_position.h's `flow_padding_box_origin` IS that composition "
+                  "already, derived from `flow_border_box_origin` so that a box this engine cannot place "
+                  "crashes there by its own section first. The extent is core/layout/used_value.h's "
+                  "`used_value_padding_edge_px` on each axis. WHAT IS MISSING IS ONE ENTRY joining them in "
+                  "CLIENT coordinates — the same subtraction of core/frame/viewport.h's "
+                  "`viewport_window_scroll` that core/dom/element_view.c's border area makes — and it belongs "
+                  "BESIDE `element_view_bounding_box_px` in element_view.c, not at a caller: that function "
+                  "carries the transform refusal, the multi-fragment inline refusal and the no-box arm that "
+                  "any box area owes, and this root is read at §3.2.10 step 2.1 before any target's step 1 has "
+                  "run those guards for it. core/layout/scrolling_area.c and core/dom/element_scrolling.c "
+                  "already compose the padding box privately, so that entry has three callers waiting rather "
+                  "than one. An unclipped root takes get-the-bounding-box below and is already answered");
             r = io_bounding_box(n);
         } else {
             r = io_bounding_box(n);
@@ -609,21 +614,44 @@ static IoRect io_compute_intersection(JSContext *ctx, lxb_dom_node_t *target, JS
             break;
         }
         if (lxb_dom_interface_node(container) == rootn) break;            /* step 3's own condition */
-        /* STEP 3.3 AND STEP 3.4 ARE ONE QUESTION IN THIS MODEL, because CSSOM VIEW defines a SCROLL CONTAINER
-           by the same overflow properties a CONTENT CLIP is defined by — so `[[scrollMargin]]`, which §3.2.1
-           parses and §2.2 serializes, is applied at exactly the container this crash stands on and nowhere
-           else. A reader looking for where scrollMargin is APPLIED finds the answer here. */
-        if (io_has_content_clip(container))
-            DFAIL("INTERSECTION OBSERVER §3.2.7 steps 3.3 and 3.4: a container that is a SCROLL CONTAINER has "
-                  "the observer's [[scrollMargin]] applied to its clip rect ('apply scroll margin to a "
-                  "scrollport', §2.2), and a container with a CONTENT CLIP or a `clip-path` updates the "
-                  "rectangle 'by applying container's clip' — CSSOM VIEW's clip to the PADDING EDGE, which is "
-                  "one box's padding extent at its padding-edge position. core/layout/used_value.h computes "
-                  "the extent (`used_value_padding_edge_px`) and core/layout/flow_position.h the border-box "
-                  "origin; what is missing is the PADDING AREA as one rectangle, which §2.2's explicit-root "
-                  "branch in this file names the same absence for. A `clip-path` needs the computed value "
-                  "core/css/css_computed_value.c crashes for. BUILD the padding area in element_view.c beside "
-                  "`element_view_bounding_box_px`, then apply the scroll margin to it and intersect here");
+        /* STEPS 3.3 AND 3.4 ARE TWO QUESTIONS AND NOT ONE, AND THIS FILE USED TO SAY THEY WERE ONE. The
+           retired claim was that "CSSOM VIEW defines a SCROLL CONTAINER by the same overflow properties a
+           CONTENT CLIP is defined by", so one predicate could stand for both. `overflow: clip` refutes it:
+           css-overflow-3 §3.1 puts `clip` among the NON-scrollable values, so such a box is NOT a scroll
+           container and takes no `[[scrollMargin]]` — and it clips its content to the padding edge, so step
+           3.4 applies to it in full. That is the value css-overflow added so an author could clip WITHOUT a
+           scroll container, which is precisely the case the fused predicate could not express. Both questions
+           are now asked of core/layout/scroll_container.h, which reads ONE computed keyword and answers each
+           over it, so they cannot drift apart. */
+        if (scroll_container_is(container))                               /* step 3.3 */
+            DFAIL("INTERSECTION OBSERVER §3.2.7 step 3.3: this container IS a css-overflow-3 §3.1 SCROLL "
+                  "CONTAINER, so the observer's [[scrollMargin]] — which §3.2.1 parses and §2.2 serializes — "
+                  "is applied to its clip rect, by §2.2's 'apply scroll margin to a scrollport'. THIS IS THE "
+                  "ONE PLACE SCROLLMARGIN IS EVER APPLIED, so a reader looking for where it is spent finds it "
+                  "here and nowhere else. The clip rect it dilates is the container's PADDING AREA, which step "
+                  "3.4 below needs too and which this engine can now nearly compose: "
+                  "core/layout/flow_position.h's `flow_padding_box_origin` IS the padding-box origin (it "
+                  "already moves the border-box origin inward by §8.1's leading border, so do not re-derive "
+                  "that) and core/layout/used_value.h's `used_value_padding_edge_px` is the extent on each "
+                  "axis. WHAT IS MISSING IS ONE ENTRY answering the padding area in CLIENT coordinates, and it "
+                  "belongs beside `element_view_bounding_box_px` in core/dom/element_view.c rather than here, "
+                  "because that is where the three guards a box area needs already stand — the transform "
+                  "refusal, the multi-fragment inline refusal and the has-box arm — and composing it at a "
+                  "caller would be a fourth private copy of a composition core/layout/scrolling_area.c and "
+                  "core/dom/element_scrolling.c already carry. Then dilate it by [[scrollMargin]] with the "
+                  "same four-sided arithmetic `io_root_bounds` already applies to [[rootMargin]], and "
+                  "intersect");
+        if (scroll_container_content_clip_is(container))                  /* step 3.4 */
+            DFAIL("INTERSECTION OBSERVER §3.2.7 step 3.4: this container has a CONTENT CLIP, so the rectangle "
+                  "is updated 'by applying container's clip' — CSSOM VIEW's clip to the element's PADDING "
+                  "EDGE. It needs the same one entry step 3.3 above names, and nothing else: the two halves "
+                  "of the padding area are built (`flow_padding_box_origin`, `used_value_padding_edge_px`) "
+                  "and only the client-coordinate entry that joins them is not. THE OTHER HALF OF THIS STEP "
+                  "IS A `clip-path` AND IS FURTHER AWAY: core/css/css_computed_value.c crashes for that "
+                  "property's computed value, so this engine cannot yet ask whether one is even declared — "
+                  "which means a container with a clip-path and no content clip walks past here today and its "
+                  "clip is silently not applied. That is the narrower half of this crash and it is stated so "
+                  "the next reader does not mistake this DFAIL for covering it");
         /* STEP 3.2 — "map intersectionRect to the coordinate space of container" — is an IDENTITY in this
            model and is written as the derivation rather than omitted: every rectangle here is already in
            CLIENT coordinates (element_view.c reports the border area there), and what would make two boxes'

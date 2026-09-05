@@ -14,30 +14,56 @@
 #include "core/dom/element_view.h"
 #include "core/layout/scroll_container.h"
 
-/* §3.1's SCROLLABLE VALUES, as the spec lists them: "The scroll, auto, and hidden values are known as the
-   scrollable values of overflow." `visible` and `clip` are its "non-scrollable values" and there is no sixth
-   keyword — §3.1's `Value:` line is `visible | hidden | clip | scroll | auto` — so a value outside the five is
-   a cascade that produced something css-overflow does not define, and it crashes rather than being read as
-   non-scrollable. `overlay` is a LEGACY ALIAS of `auto` ("User agents must also support the overlay keyword as
-   a legacy value alias of auto") and is therefore a value the COMPUTED value can never be: an alias is
-   resolved at parse time, which lexbor's own value table does, so meeting one here is that resolution having
-   been skipped rather than a sixth keyword to model. */
-static bool sc_axis_value_is_scrollable(lxb_dom_element_t *el, bool vertical)
+/* THERE IS NO SIXTH KEYWORD — §3.1's `Value:` line is `visible | hidden | clip | scroll | auto` — so a value
+   outside the five is a cascade that produced something css-overflow does not define, and it crashes rather
+   than being read as non-clipping. `overlay` is a LEGACY ALIAS of `auto` ("User agents must also support the
+   overlay keyword as a legacy value alias of auto") and is therefore a value the COMPUTED value can never be:
+   an alias is resolved at parse time, which lexbor's own value table does, so meeting one here is that
+   resolution having been skipped rather than a sixth keyword to model. */
+/* THE COMPUTED KEYWORD ON ONE AXIS, CLASSIFIED ONCE. Two different questions are asked of this one fact and
+   they do NOT have the same answer, which is why the read and the keyword table are here and each predicate
+   below is a question over the result rather than its own `strcmp`. `clip` is the whole of the difference:
+   §3.1 puts it among the NON-scrollable values, so a `clip` box is not a scroll container — and it clips its
+   content to the padding edge, which is exactly what CSSOM VIEW's CONTENT CLIP is. A component that reads one
+   bit for both questions answers one of them wrongly for the one value css-overflow added so that an author
+   could clip WITHOUT a scroll container. */
+typedef enum { SC_OVERFLOW_VISIBLE = 0, SC_OVERFLOW_CLIP, SC_OVERFLOW_SCROLLABLE } ScOverflow;
+
+static ScOverflow sc_axis_overflow(lxb_dom_element_t *el, bool vertical)
 {
     char *v = css_computed_value(el, vertical ? "overflow-y" : "overflow-x");
-    bool scrollable;
+    ScOverflow k;
 
     DCHECK(v != NULL, "the cascade produced no computed `overflow-x`/`overflow-y` — css-overflow-3 §3.1 gives "
                       "the properties an `Initial:` value of `visible`, so the cascade's last layer answers for "
                       "every element");
-    scrollable = strcmp(v, "scroll") == 0 || strcmp(v, "auto") == 0 || strcmp(v, "hidden") == 0;
-    DCHECK(scrollable || strcmp(v, "visible") == 0 || strcmp(v, "clip") == 0,
+    if (strcmp(v, "scroll") == 0 || strcmp(v, "auto") == 0 || strcmp(v, "hidden") == 0)
+        k = SC_OVERFLOW_SCROLLABLE;
+    else if (strcmp(v, "clip") == 0)
+        k = SC_OVERFLOW_CLIP;
+    else
+        k = SC_OVERFLOW_VISIBLE;
+    DCHECK(k != SC_OVERFLOW_VISIBLE || strcmp(v, "visible") == 0,
            "a computed `overflow-x`/`overflow-y` is none of the five keywords css-overflow-3 §3.1's `Value:` "
            "line declares (`visible | hidden | clip | scroll | auto`). `overlay` is that section's legacy ALIAS "
            "of `auto` and is resolved before a computed value exists, so this is a declaration the cascade "
            "should have refused or an alias that was carried through");
     free(v);
-    return scrollable;
+    return k;
+}
+
+/* §3.1's SCROLLABLE VALUES, as the spec lists them: "The scroll, auto, and hidden values are known as the
+   scrollable values of overflow." `visible` and `clip` are its "non-scrollable values". */
+static bool sc_axis_value_is_scrollable(lxb_dom_element_t *el, bool vertical)
+{
+    return sc_axis_overflow(el, vertical) == SC_OVERFLOW_SCROLLABLE;
+}
+
+/* CSSOM VIEW's CONTENT CLIP on one axis — every keyword except `visible`, because every one of the other four
+   clips the box's content to its padding edge and `visible` is the only one that does not. */
+static bool sc_axis_value_clips(lxb_dom_element_t *el, bool vertical)
+{
+    return sc_axis_overflow(el, vertical) != SC_OVERFLOW_VISIBLE;
 }
 
 /* §3.1's `Applies to:` line — "block containers [CSS2], flex containers [CSS-FLEXBOX-1], grid containers
@@ -113,4 +139,22 @@ bool scroll_container_is(lxb_dom_element_t *el)
        and §3.1's own single-axis case ("If only one axis computes to a scrollable value … the box is a
        single-axis scroll container") is why this is a disjunction rather than a conjunction. */
     return sc_axis_value_is_scrollable(el, false) || sc_axis_value_is_scrollable(el, true);
+}
+
+/* CSSOM VIEW's CONTENT CLIP. See scroll_container.h — the same three preconditions as the scroll-container
+   question above, over the same computed keyword, differing in exactly one value. */
+bool scroll_container_content_clip_is(lxb_dom_element_t *el)
+{
+    DCHECK(el != NULL, "CSSOM VIEW's content-clip question was asked with no element");
+    /* A CONTENT CLIP IS A BOX'S. An element that generates none has no padding edge for its content to be
+       clipped to, so it clips nothing whatever its `overflow` computed to. */
+    if (!element_view_has_box(lxb_dom_interface_node(el))) return false;
+    /* §3.1.4 AGAIN, AND IT IS THE HALF A CALLER READING THE COMPUTED VALUE ALONE GETS WRONG — the element the
+       value was propagated FROM "must then have a used overflow value of visible", so it clips nothing and the
+       VIEWPORT does the clipping in its place. `<html style="overflow-x:hidden">` and the `<body>` spelling of
+       the same thing are the two commonest overflow declarations on the web, and a component that read the
+       computed value would report a content clip on the root or the body of a large fraction of all pages. */
+    if (sc_propagates_overflow_to_viewport(el)) return false;
+    if (!sc_overflow_applies(el)) return false;
+    return sc_axis_value_clips(el, false) || sc_axis_value_clips(el, true);
 }

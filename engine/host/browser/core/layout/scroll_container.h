@@ -58,4 +58,22 @@
 /* Does `el` establish a SCROLLING BOX — is its principal box a css-overflow-3 §3.1 SCROLL CONTAINER. */
 bool scroll_container_is(lxb_dom_element_t *el);
 
+/* Does `el` have a CONTENT CLIP — CSSOM VIEW's "computed style has overflow properties that cause its content
+ * to be clipped to the element's padding edge", which INTERSECTION OBSERVER §2.2 uses to decide an explicit
+ * element root's intersection rectangle and §3.2.7 to decide whether a container clips the walk's rectangle.
+ *
+ * IT IS A SECOND ENTRY AND NOT A SECOND ANSWER, and the reason is the one value the two questions disagree
+ * about. §3.1 lists the SCROLLABLE values as `scroll`, `auto` and `hidden` and calls `visible` and `clip`
+ * non-scrollable, so `overflow: clip` establishes NO scroll container — and it is the value css-overflow added
+ * precisely so that an author could clip WITHOUT one, so it does have a content clip. Every other input to the
+ * two questions is identical: the box precondition, §3.1's `Applies to:` line and §3.1.4's used value are all
+ * read once, in this file, from the same computed keyword. A caller that asked `scroll_container_is` and meant
+ * this would be wrong for `clip`; a caller that spelled `overflow != visible` itself would be wrong for the
+ * other three, and this component exists because that is four readings of a rule none of them cites.
+ *
+ * A CALLER THAT ASKS THIS IS ASKING WHETHER THE CLIP RECTANGLE IS THE ELEMENT'S PADDING BOX, and the padding
+ * box is core/layout/flow_position.h's `flow_padding_box_origin` with core/layout/used_value.h's
+ * `used_value_padding_edge_px` on each axis — this entry answers WHETHER, never WHAT. */
+bool scroll_container_content_clip_is(lxb_dom_element_t *el);
+
 #endif
