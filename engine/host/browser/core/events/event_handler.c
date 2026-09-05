@@ -71,10 +71,20 @@ void event_handler_work_visit(JSContext *ctx, EventHandlerWork *w, JSStepVisit *
    `<img>` is not an ErrorEvent (so `img.onerror` takes the event, exactly as in a browser); a `navigateerror`
    ErrorEvent is one but is not typed `error`; and an ErrorEvent of type `error` at a Document or an
    XMLHttpRequest has a currentTarget that is not a global, which is why `xhr.onerror` is a one-argument
-   handler while `window.onerror` is a five-argument one. */
+   handler while `window.onerror` is a five-argument one.
+   THE THIRD CONJUNCT IS THE MIXIN AND NOT THE WINDOW BRAND, and the two are a different set. HTML §8.2 The
+   WindowOrWorkerGlobalScope mixin declares TWO includes statements for it, `Window` and `WorkerGlobalScope`,
+   and this used to be spelled `event_target_is_window` — the same engine bit that answers get the current
+   value of the event handler step 3.1's "Otherwise, eventTarget is a Window object" and step 3.9's "If name
+   is onerror and eventTarget is a Window object". Those steps are RIGHT to be the narrow question; this one
+   is not, and one predicate could not be both. A WorkerGlobalScope, whose §10.2.1.1 The WorkerGlobalScope
+   common interface IDL declares `attribute OnErrorEventHandler onerror`, took the ONE-argument invocation and
+   step 6's ordinary reading (false cancels) where the standard gives it the five-argument one and the
+   inverted reading (true cancels) — silently the wrong answer rather than a narrower one. */
 static bool eh_special_error(JSContext *ctx, JSValueConst event, JSValueConst current_target)
 {
-    return error_event_is(ctx, event) && event_target_is_window(ctx, current_target) &&
+    return error_event_is(ctx, event) &&
+           event_target_implements_window_or_worker_global_scope(ctx, current_target) &&
            event_type_is(ctx, event, "error");
 }
 

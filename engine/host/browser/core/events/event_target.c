@@ -71,6 +71,11 @@ static int (*g_run_activation)(JSContext *ctx, JSValueConst el, JSValueConst ev,
 /* HTML §6.5 Activation behavior of elements' click() STEP 1's question, declared by whoever owns form controls
    — see event_target_set_click_terms. */
 static bool (*g_is_disabled_form_control)(JSContext *ctx, JSValueConst el);
+/* THE SECOND IMPLEMENTER OF HTML §8.2 The WindowOrWorkerGlobalScope mixin, declared by whoever owns the worker
+   interfaces — see event_target_set_worker_global_scope_terms. The FIRST is the tree's `is_window`, and the
+   two are separate slots because they are separate BRANDS owned by separate components, never two copies of
+   one answer. */
+static bool (*g_is_worker_global_scope)(JSContext *ctx, JSValueConst target);
 /* HTML §8.1.8.1's handler map key, and the MARKER that holds the handler's place in a listener list — see the
    event-handler section below. Declared here because event_target_init mints them. */
 static JSValue g_handler_key;
@@ -271,17 +276,23 @@ void event_target_init(JSContext *ctx)
     agent_state_id("event_target", &g_dispatch_stepid, "§2.7's dispatchEvent machine");
     agent_state_id("event_target", &g_dispatch_pair_stepid, "§2.9's internal dispatch machine");
     agent_state_id("event_target", &g_click_stepid, "§2.9's synthetic-click dispatch machine");
-    /* THE FIVE SLOTS OTHER COMPONENTS CLAIM — four claims, since §2.9's activation behaviour is a PAIR. Each
-       slot is this component's static and another component's obligation, so each is declared here, where the
-       state lives, and cleared by whoever claimed it. The release below asserts all five are back, which is
-       what puts the claimants BEFORE this row in core/platform.c's reverse-declaration order rather than
-       leaving that ordering to be remembered. */
+    /* THE SLOTS OTHER COMPONENTS CLAIM. Each is this component's static and another component's obligation, so
+       each is declared here, where the state lives, and cleared by whoever claimed it. The release below
+       asserts they are all back, which is what puts the claimants BEFORE this row in core/platform.c's
+       reverse-declaration order rather than leaving that ordering to be remembered.
+       THE LIST CARRIES NO COUNT, and it used to say FIVE. A count beside an enumeration is a number nobody
+       adds up: `g_handler_terms` is a sixth claimed slot and had no row here at all, so the figure agreed
+       with the list and disagreed with the component. The list is what a reader can act on. */
     agent_state_ptr("event_target", &g_tree, "§2.9's tree walk, claimed by core/dom/node.c");
     agent_state_ptr("event_target", &g_has_activation, "§2.9's activation predicate, claimed by core/html/hyperlink.c");
     agent_state_ptr("event_target", &g_run_activation, "§2.9's activation behaviour, claimed by core/html/hyperlink.c");
     agent_state_ptr("event_target", &g_handler_set_hook, "§9.4.2's handler-set hook, claimed by core/events/message_port.c");
+    agent_state_ptr("event_target", &g_handler_terms,
+                    "HTML §8.1.8.1's defined terms, claimed by core/html/html_element.c");
     agent_state_ptr("event_target", &g_is_disabled_form_control,
                     "HTML §6.5's click() step 1 predicate, claimed by core/html/html_element.c");
+    agent_state_ptr("event_target", &g_is_worker_global_scope,
+                    "HTML §8.2's second mixin implementer, claimed by core/workers/worker_global_scope.c");
 }
 
 /* §2.7's prototype FOR THIS REALM. Owned — the caller frees. */
@@ -389,6 +400,36 @@ bool event_target_is_window(JSContext *ctx, JSValueConst target)
     return g_tree != NULL && g_tree->is_window(ctx, target);
 }
 
+void event_target_set_worker_global_scope_terms(bool (*implements)(JSContext *ctx, JSValueConst target))
+{
+    /* NULL IS THE RELEASE — see event_target_set_tree for why the two are one call. */
+    if (implements == NULL) {
+        DCHECK(g_is_worker_global_scope != NULL,
+               "HTML §8.2 The WindowOrWorkerGlobalScope mixin's WorkerGlobalScope implementer test was "
+               "released by a component that never registered one");
+        g_is_worker_global_scope = NULL;
+        return;
+    }
+    DCHECK(g_is_worker_global_scope == NULL,
+           "a second component registered HTML §8.2's WorkerGlobalScope implementer test — Web IDL §3.8 "
+           "Platform objects implementing interfaces makes that one question about one brand, and the second "
+           "claim silently decides which globals §8.1.8.1 step 4's special error event handling is true for");
+    g_is_worker_global_scope = implements;
+}
+
+bool event_target_implements_window_or_worker_global_scope(JSContext *ctx, JSValueConst target)
+{
+    /* HTML §8.2 declares exactly two includes statements for this mixin, so its implementer set is exactly
+       these two brands. THE WINDOW HALF IS READ THROUGH THE OTHER PREDICATE rather than through `g_tree`
+       directly: there is ONE Window fact and both questions ask it, which is what stops a split of one
+       predicate into two from becoming two bits that can drift apart.
+       A HOST THAT REGISTERED NO WORKER TERM HAS NO WorkerGlobalScope, so the mixin's implementers there are
+       Window and nothing else and this answers exactly `is_window` — the same shape as a host with no tree,
+       and a positive statement rather than a hole a default fills. */
+    return event_target_is_window(ctx, target) ||
+           (g_is_worker_global_scope != NULL && g_is_worker_global_scope(ctx, target));
+}
+
 void event_target_set_activation(bool (*has)(JSContext *ctx, JSValueConst el),
                                  int (*run)(JSContext *ctx, JSValueConst el, JSValueConst ev,
                                             uint8_t *phase, uint32_t *req))
@@ -454,11 +495,13 @@ void event_target_free(JSRuntime *rt)
        row has a declare — so a release reaching here undeclared is a host tearing this component down with
        something that is not the platform's list. */
     DCHECK(g_ready, "§2.7's event machinery was released in an agent that never declared it");
-    /* THE FIVE SLOTS OTHER COMPONENTS CLAIM ARE EMPTY BY NOW, AND THAT IS AN ORDERING STATEMENT. Each
+    /* THE SLOTS OTHER COMPONENTS CLAIM ARE EMPTY BY NOW, AND THAT IS AN ORDERING STATEMENT. Each
        claimant holds a C function pointer INTO its own component; this row is about to give back the state
        those functions read, so a claimant still holding one is a component released AFTER the thing it points
-       into. core/platform.c's reverse-declaration order is what puts node/hyperlink/message_port/html_element
-       first, and this is where that order stops being something a reader has to reconstruct. */
+       into. core/platform.c's reverse-declaration order is what puts node/hyperlink/message_port/html_element/
+       worker_global_scope first, and this is where that order stops being something a reader has to
+       reconstruct. The count that stood at the head of this sentence is gone for the reason the declaration
+       list's is: it said FIVE over six claimed slots. */
     DCHECK(g_tree == NULL,
            "§2.9's tree walk was still registered when the event machinery was released — core/dom/node.c "
            "claimed it and must give it back at node_free, which reverse-declaration order runs first");
@@ -476,6 +519,10 @@ void event_target_free(JSRuntime *rt)
            "HTML §6.5's click() step 1 predicate was still registered when the event machinery was released — "
            "core/html/html_element.c claimed it and must give it back at html_element_free, which "
            "reverse-declaration order runs first");
+    DCHECK(g_is_worker_global_scope == NULL,
+           "HTML §8.2 The WindowOrWorkerGlobalScope mixin's WorkerGlobalScope implementer test was still "
+           "registered when the event machinery was released — core/workers/worker_global_scope.c claimed it "
+           "and must give it back at worker_global_scope_free, which reverse-declaration order runs first");
     JS_FreeValueRT(rt, g_key);
     JS_FreeValueRT(rt, g_click_flag_key);
     JS_FreeValueRT(rt, g_handler_key);

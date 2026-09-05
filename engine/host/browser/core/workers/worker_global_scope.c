@@ -98,6 +98,17 @@ bool worker_global_scope_implements(JSValueConst v)
     return JS_IsObject(v) && g_dwgs_class != 0 && JS_GetClassID(v) == g_dwgs_class;
 }
 
+/* THE SAME BRAND, IN THE SHAPE core/events/event_target.h REGISTERS PREDICATES IN — a named forwarder that
+   drops the realm, exactly as core/dom/node.c writes one per tree term. The events layer may not name this
+   directory (a host that installs events would then link the worker interfaces), so the fact travels as data
+   the owning component states, and the `ctx` the hook carries is the shape every other term of that header
+   has rather than something this answer reads: an interface brand is a property of the OBJECT. */
+static bool wgs_event_implements(JSContext *ctx, JSValueConst target)
+{
+    (void)ctx;
+    return worker_global_scope_implements(target);
+}
+
 /* ---- §10.2.1.1's `self` -----------------------------------------------------------------------------------
  *
  * "The self attribute must return the WorkerGlobalScope object itself."
@@ -354,12 +365,25 @@ void worker_global_scope_init(JSContext *ctx)
     agent_state_class("worker_global_scope", &g_dwgs_class,
                       "HTML §10.2.1.2's DedicatedWorkerGlobalScope — the class the worker realm's global "
                       "object carries and the per-realm slot its prototype lives in");
+    /* HTML §8.2 The WindowOrWorkerGlobalScope mixin's SECOND includes statement, handed to the component that
+       asks it. §8.1.8.1 Event handlers' event handler processing algorithm step 4 reads "event's
+       currentTarget implements the WindowOrWorkerGlobalScope mixin", and the events layer holds the Window
+       half through its tree; this is the other half, and without it that step answers the mixin question with
+       the Window brand and denies a worker global the five-argument invocation §10.2.1.1's `attribute
+       OnErrorEventHandler onerror` gives it.
+       AGENT-SCOPED, NOT PER REALM: the brand is the class id declared on the line above, which is the agent's,
+       so a second registration per worker realm would be the second claimant that entry aborts on. */
+    event_target_set_worker_global_scope_terms(wgs_event_implements);
     realm_declare_intrinsic(worker_global_scope_install_realm);
 }
 
 void worker_global_scope_free(JSRuntime *rt)
 {
     (void)rt;
+    /* GIVEN BACK BEFORE core/events/event_target.c's own release, which asserts it: this row is declared AFTER
+       `event_target` in core/platform.c's list, and its reverse-declaration order is what makes that ordering
+       a checked fact rather than a remembered one. */
+    event_target_set_worker_global_scope_terms(NULL);
     /* The prototype is the REALM's — quickjs frees the per-context class-proto array with the context — so
        there is no reference here to give back, only the handle. THE LAST LINE, per core/agent_state.h. */
     agent_state_undo("worker_global_scope");
@@ -394,10 +418,16 @@ void worker_global_scope_free(JSRuntime *rt)
  *     to be a NEW bit and cannot reuse one: WorkerGlobalScope declares these six ON ITSELF (its IDL writes
  *     them in the interface, it includes no mixin that carries them), and every existing bit that holds any of
  *     the six holds dozens of names beside them — `EH_GLOBAL | EH_WINDOW` would put the whole of
- *     GlobalEventHandlers and WindowEventHandlers on a prototype whose IDL declares neither. `onerror`
- *     additionally needs
+ *     GlobalEventHandlers and WindowEventHandlers on a prototype whose IDL declares neither.
+ *     `onerror` USED TO NEED A SECOND THING AND NO LONGER DOES — this entry said it "additionally needs
  *     `OnErrorEventHandler`'s five-argument invocation, which core/events/event_handler.c has for §8.1.8.1's
- *     Window `onerror` and which is a DIFFERENT member on a different interface. ABSENCE SHOWS AS:
+ *     Window `onerror` and which is a DIFFERENT member on a different interface", and that argument is
+ *     RETIRED rather than deleted, because a reader who re-derives it will re-introduce it. It was true of a
+ *     step 4 that asked the Window brand; §8.1.8.1's third conjunct is "event's currentTarget implements the
+ *     WindowOrWorkerGlobalScope mixin", event_target_implements_window_or_worker_global_scope is that
+ *     question, and this file registers the WorkerGlobalScope half of it at its own init — so the invocation
+ *     and step 6's inverted reading are already waiting for the day the member is installed. What remains
+ *     unbuilt here is the BIT and its rows, and nothing else. ABSENCE SHOWS AS:
  *     `self.onerror = f` creates an ordinary own data property on the global instead of writing §8.1.8.1's
  *     event handler map, so `Object.getOwnPropertyDescriptor(WorkerGlobalScope.prototype,"onerror")` is
  *     undefined and the handler never runs.

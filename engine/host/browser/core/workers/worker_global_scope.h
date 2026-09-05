@@ -20,7 +20,12 @@ void worker_global_scope_free(JSRuntime *rt);
  * in this build whose inclusive inherited interfaces contain WorkerGlobalScope is DedicatedWorkerGlobalScope,
  * so one class id answers it; §10.2.1.3's SharedWorkerGlobalScope and Service Workers' ServiceWorkerGlobalScope
  * are two more, and each is a second id this predicate must accept. One place to change is what keeps a member
- * of the BASE interface from silently answering "not a WorkerGlobalScope" to a shared worker. */
+ * of the BASE interface from silently answering "not a WorkerGlobalScope" to a shared worker.
+ * IT LEAVES THIS DIRECTORY AS DATA. core/events/ cannot name this header — a host that installs events would
+ * then link the worker interfaces — so worker_global_scope_init hands the events layer a forwarder over this
+ * predicate, which is how HTML §8.1.8.1 Event handlers' event handler processing algorithm step 4 gets the
+ * second implementer of HTML §8.2 The WindowOrWorkerGlobalScope mixin. A third worker global interface therefore
+ * reaches that step through this one function too. */
 bool worker_global_scope_implements(JSValueConst v);
 
 #endif

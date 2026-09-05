@@ -76,14 +76,45 @@ typedef struct EventTargetTree {
 void event_target_set_tree(const EventTargetTree *tree);
 
 /* THE `is_window` PREDICATE ABOVE, ASKED OF ONE TARGET — the registered answer, reachable by the algorithms
-   that need it rather than only by the walk that happens to hold the struct. HTML §8.1.8.1's event handler
-   processing algorithm step 4 is the second caller: its `special error event handling` is true only when the
-   event's currentTarget "implements the WindowOrWorkerGlobalScope mixin", and the mixin's implementers are
-   Window and WorkerGlobalScope — a worker global being a different agent with its own dispatch, which never
-   reaches this walk. That is why the five-argument invocation is `window.onerror`'s and not `img.onerror`'s.
+   that need it rather than only by the walk that happens to hold the struct. IT ANSWERS ONE QUESTION AND THE
+   STANDARD ASKS IT IN THOSE WORDS: HTML §8.1.8.1 Event handlers' get the current value of the event handler
+   step 3.1 partitions its target with "Otherwise, eventTarget is a Window object", and that step's 3.9 selects
+   the five-parameter sourceText and ParameterList "If name is onerror and eventTarget is a Window object" —
+   twice, once for each. Determine the target of an event handler's step 4 answers "eventTarget's node
+   document's relevant global object", which is a Window and is asserted to be one.
+   IT IS NOT §8.1.8.1 STEP 4's QUESTION, and the pair below is why: that step reads "event's currentTarget
+   implements the WindowOrWorkerGlobalScope mixin", whose implementers HTML §8.2 The WindowOrWorkerGlobalScope
+   mixin declares as TWO — `Window includes WindowOrWorkerGlobalScope;` and `WorkerGlobalScope includes
+   WindowOrWorkerGlobalScope;`. One predicate for both sentences answers the wider one with the narrower one's
+   brand.
    False when no component has claimed the tree, which is the same answer §2.9's walk takes for a host with no
    tree at all: a target that is not in anyone's tree is not a global either. */
 bool event_target_is_window(JSContext *ctx, JSValueConst target);
+/* THE OTHER IMPLEMENTER OF HTML §8.2's MIXIN, STATED BY THE COMPONENT THAT OWNS THE BRAND — Web IDL §3.8 Platform
+   objects implementing interfaces' does-this-value-implement-this-interface test, asked of WorkerGlobalScope.
+   It arrives as a registered predicate for the reason HTML §6.5 Activation behavior of elements' click()
+   step 1 term does: naming core/workers/ from this file would make every host that installs events link the
+   worker interfaces, and a host with no worker realms has no object the question is about. NULL is the
+   RELEASE and there is one claimant at a time; the answer is a brand and runs none of the page's code.
+   UNREGISTERED IS A POSITIVE ANSWER, not a hole: a host with no WorkerGlobalScope has no second implementer,
+   so the mixin's set is Window alone and the predicate below is `is_window`. */
+void event_target_set_worker_global_scope_terms(bool (*implements)(JSContext *ctx, JSValueConst target));
+/* HTML §8.1.8.1's event handler processing algorithm STEP 4, THIRD CONJUNCT — "event's currentTarget
+   implements the WindowOrWorkerGlobalScope mixin". THE DISJUNCTION OF THE TWO FACTS ABOVE, because HTML
+   §8.2 declares exactly two includes statements for that mixin and each brand is owned by a different component:
+   the Window one by the tree core/dom/node.c registers, the WorkerGlobalScope one by core/workers/.
+   IT READS THE FIRST QUESTION'S FACT RATHER THAN COPYING IT, which is what keeps a split from becoming two
+   bits that can disagree: there is one Window brand and both predicates ask it. The second fact is a
+   DIFFERENT brand, not a second copy of the first, so no object can make the pair inconsistent.
+   WHY A SPLIT AND NOT A WIDENING OF `event_target_is_window`. Its three callers each quote the narrower
+   sentence, and one of them is an ASSERT — determine the target of an event handler's step 4 answer is a
+   Document's relevant global object, which is never a WorkerGlobalScope, so a widened predicate would have
+   left that DCHECK strictly weaker while nothing anywhere said the question had changed. What the wider
+   question buys is what the narrower one cannot say: special error event handling selects
+   `OnErrorEventHandlerNonNull`'s FIVE-argument invocation and step 6's INVERTED reading (true cancels), and
+   HTML §10.2.1.1 The WorkerGlobalScope common interface declares `attribute OnErrorEventHandler onerror` on
+   WorkerGlobalScope, so a worker global's `onerror` is owed both and the Window brand denies it both. */
+bool event_target_implements_window_or_worker_global_scope(JSContext *ctx, JSValueConst target);
 
 /* DOM §4.8's RETARGETING ALGORITHM — "to retarget an object A against an object B", the operation that decides
    what an object inside a shadow tree is CALLED when it is reported to something outside it. It is not an event
@@ -202,8 +233,14 @@ enum { EH_GLOBAL = 1, EH_WINDOW = 2, EH_DOCUMENT = 4, EH_SIGNAL = 8, EH_PORT = 1
        EH_WINDOW_REFLECTING = 262144,
        /* HTML §9.4.4 Message ports' OWN `onclose`, which is not the MessageEventTarget mixin's set:
           EH_PORT is `onmessage`/`onmessageerror`, which §9.5 Broadcasting to other browsing contexts
-          includes on BroadcastChannel too, and no BroadcastChannel declares an `onclose`. A membership
-          bit of its own is what keeps one name off a prototype whose IDL does not declare it. */
+          includes on BroadcastChannel too, and no BroadcastChannel declares an `onclose`. A bit of its own
+          is what keeps one name off a prototype whose IDL does not declare it.
+          IT INSTALLS, AND IS THEREFORE NOT A "MEMBERSHIP BIT" IN EH_WINDOW_REFLECTING's SENSE — that phrase
+          stood here and blurred the one distinction this enum's notes turn on. core/events/message_port.c
+          passes `EH_PORT | EH_MESSAGE_PORT`, and this bit is what puts `onclose` on MessagePort.prototype;
+          EH_WINDOW_REFLECTING adds no member to any prototype anywhere and marks SET MEMBERSHIP for one
+          algorithm's test. Every other bit in this enum is an install bit like this one, which is why the
+          reflecting note calls itself THE ONE BIT NOBODY INSTALLS BY. */
        EH_MESSAGE_PORT = 524288,
        /* HTML §6.10.3 The CloseWatcher interface's OWN two, `oncancel` and `onclose`, which that interface
           declares on itself ("the event handlers … that must be supported, as event handler IDL attributes, by
