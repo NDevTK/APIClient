@@ -2117,6 +2117,15 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
        can be standing at rather than a sentinel this initialisation invents. */
     f->imm_at = -1; f->imm_next = 0;
     f->world = w;
+    /* THE SLOT AND THE MEMBER ARE WRITTEN AS ONE STATEMENT, because they are one fact (flow.h's `reg_i`) and
+       because this is the only line the frontier ever gains a member on. Establishing the handle anywhere but
+       adjacent to the store would be a second writer for a relation whose whole value is that it has one.
+       IT IS ASSIGNED HERE AND NOT AT THE calloc ABOVE, and the difference is not cosmetic: `reclaim_calloc`
+       can PAGE A FLOW OUT (the capacity comment above says so), and the pager departs through flow_remove's
+       swap-remove — so `g_flows_n` may have FALLEN between the capacity check and this line. It can never
+       have risen, because this line is the only thing that raises it. Reading it here is therefore reading it
+       at the instant the store happens, which is the only instant at which it names this flow's slot. */
+    f->reg_i = g_flows_n;
     g_flows[g_flows_n++] = f;
     /* …AND THE ARRIVAL COUNTED AS AN ARRIVAL. This line is the only place the frontier ever GAINS a member,
        which is what lets `g_arrivals` be a definition rather than an estimate; the rank change below is
@@ -4746,41 +4755,108 @@ void flow_remove(JSContext *ctx, Flow *f) {
            f->dyn_pos == NULL && f->dec_blob == NULL && f->pin_blob == NULL,
            "a flow was removed with its lazily-loaded chunk bodies or its suspended decision/pin blobs still "
            "attached — the flow's own allocations, freed by nothing else");
-    for (int i = 0; i < g_flows_n; i++) {
-        if (g_flows[i] == f) {
-            JS_FreeValue(ctx, f->fn);
-            /* THE ROUTED RECORD AND ITS ORIGIN STAMP USED TO BE FREED HERE, and that free is gone rather than
-               converted: it ran on a work item the frontier was dropping and made the drop invisible, which is
-               the one thing this file's asserts exist to stop. The queue is released in flow_release beside
-               the operation queue, and its emptiness is asserted just above. */
-            /* THE CANDIDATE IT WAS VERIFYING. Both strings are this flow's own copies, and the only other place
-               that frees them is the frontier's teardown — which walks the flows that are STILL THERE, so a
-               flow removed here took them with it into nothing. `cand_sink` is static text and is not one. */
-            free(f->cand_src); free(f->cand_payload);
-            /* AND ITS PLACE IN THE FORK TREE. THE THREAD TIME IT BURNED IS ALREADY WHERE IT BELONGS — every
-               microsecond went onto the family's account as it was consumed (flow_age_running), so a departing
-               arm has nothing left to hand anybody and the hand-up that used to stand here would bill the
-               family twice for work it has already been charged for. What is left is the node's LIFETIME: the
-               owner mark comes down so a compression can walk past it, and the reference goes. This is the ONE
-               exit a Flow has, which is what makes it the one place that can be said. */
-            acct_depart(f);
-            free(f);
-            g_flows[i] = g_flows[--g_flows_n];   /* swap-remove; order is by weight, not position */
-            /* …AND THE DEPARTURE COUNTED AS ONE, on the line that performs it. This decrement and the
-               registry coming up are the only two ways `g_flows_n` falls, and the second is asserted to
-               happen only on an already-drained frontier, so the pair's conservation identity is exact. */
-            g_departures++;
-            frontier_rank_changed();   /* frontier changed */
-            return;
-        }
+    /* THE SLOT IS READ OFF THE MEMBER AND THE WALK THAT USED TO FIND IT IS GONE (flow.h's `reg_i`). A
+       departure was one scan of every member standing, on a frontier that reaches thousands and whose
+       departures are as many as its forks — so removing was quadratic in the frontier over a run, for a
+       question that is not about any other member. This changes NOTHING about the order: the frontier's array
+       is arrival order, the queue is weight order, and no comparison anywhere reads a slot.
+       THE GUARD IS A `CHECK` AND NOT A `DCHECK`, AND THIS DIFF IS WHAT PROMOTED IT. The scan it replaces was
+       an address comparison, so in RELEASE a stale or double-removed pointer simply found nothing and this
+       function returned having done nothing; the handle makes `f->reg_i` decide which slot gets overwritten,
+       which is a WRITE into the registry in every build. §Offensive programming's rule is that a diff making
+       a checked value load-bearing in release carries the promotion with it, and the invariant here is data
+       integrity — a swap-remove at a slot that does not hold this flow drops whichever member does hold it,
+       and §scheduler's razor makes a dropped flow a cap. Both sides are read from live storage and neither
+       can be optimised away, so this cannot be the assert whose two sides agree by construction.
+       IT SUPERSEDES THE `DFAIL` THAT STOOD BELOW THE WALK rather than standing beside it: that abort said
+       "double remove or a dangling Flow*" and fired only in dev, and this says the same thing at the same
+       states in every build. Keeping both would be the weaker copy running in the build that ships.
+       AND IT READS ONE INT THROUGH `f` WHERE THE WALK READ NONE, WHICH IS A REAL TRADE AND IS STATED RATHER
+       THAN GLOSSED. The scan compared addresses, so on a dangling pointer it dereferenced nothing — and what
+       it then DID was return having done nothing at all: no departure counted, the `arrivals - departures ==
+       members` identity silently false, and the caller believing a flow left the frontier that is still in
+       it. This reads `f->reg_i` first, so a genuinely freed pointer is a read of freed memory; every outcome
+       of that read but one aborts here by name, and the one that would not — the array still holding this
+       exact pointer at that slot — cannot arise, because the removal that freed it overwrote its slot. A
+       loud abort on a state that was silently corrupting the registry is the trade §Offensive programming
+       asks for, and under the Asan §Architecture prescribes for memory crashes the read itself is the
+       report. */
+    {
+        int slot = f->reg_i;
+        CHECK(slot >= 0 && slot < g_flows_n && g_flows[slot] == f,
+              "engine: a flow was removed from the frontier at a registry slot that does not hold it — this "
+              "is a double remove, a dangling Flow*, or a member whose slot was not re-keyed by the swap "
+              "that moved it. Proceeding would swap-remove whichever member IS at that slot, dropping a work "
+              "item the WFQ may never drop");
+        JS_FreeValue(ctx, f->fn);
+        /* THE ROUTED RECORD AND ITS ORIGIN STAMP USED TO BE FREED HERE, and that free is gone rather than
+           converted: it ran on a work item the frontier was dropping and made the drop invisible, which is
+           the one thing this file's asserts exist to stop. The queue is released in flow_release beside
+           the operation queue, and its emptiness is asserted just above. */
+        /* THE CANDIDATE IT WAS VERIFYING. Both strings are this flow's own copies, and the only other place
+           that frees them is the frontier's teardown — which walks the flows that are STILL THERE, so a
+           flow removed here took them with it into nothing. `cand_sink` is static text and is not one. */
+        free(f->cand_src); free(f->cand_payload);
+        /* AND ITS PLACE IN THE FORK TREE. THE THREAD TIME IT BURNED IS ALREADY WHERE IT BELONGS — every
+           microsecond went onto the family's account as it was consumed (flow_age_running), so a departing
+           arm has nothing left to hand anybody and the hand-up that used to stand here would bill the
+           family twice for work it has already been charged for. What is left is the node's LIFETIME: the
+           owner mark comes down so a compression can walk past it, and the reference goes. This is the ONE
+           exit a Flow has, which is what makes it the one place that can be said. */
+        acct_depart(f);
+        free(f);
+        g_flows[slot] = g_flows[--g_flows_n];   /* swap-remove; order is by weight, not position */
+        /* …AND THE ONE MEMBER THE SWAP MOVED, RE-KEYED ON THE LINE THAT MOVED IT. A departure renumbers
+           EXACTLY ONE other member and this is it; the guard is `slot < g_flows_n` and not a comparison of
+           pointers because the decrement above has already run, so removing the LAST member self-assigns and
+           there is nobody to re-key — writing `g_flows[slot]->reg_i` unguarded would then dereference the
+           slot one past the end, which the flow just freed used to occupy. */
+        if (slot < g_flows_n) g_flows[slot]->reg_i = slot;
+        /* …AND THE DEPARTURE COUNTED AS ONE, on the line that performs it. This decrement and the
+           registry coming up are the only two ways `g_flows_n` falls, and the second is asserted to
+           happen only on an already-drained frontier, so the pair's conservation identity is exact. */
+        g_departures++;
+        frontier_rank_changed();   /* frontier changed */
     }
-    DFAIL("flow_remove: flow not in the registry — double remove or a dangling Flow*");
 }
 
 int flow_count(void) { return g_flows_n; }
 
+/* IS THIS POINTER ONE OF THE FLOWS STANDING? — AND IT MAY NOT ANSWER THROUGH flow.h's `reg_i`, WHICH IS THE
+   WHOLE REASON THIS WALK SURVIVES A DIFF THAT DELETED ITS TWIN AT flow_remove.
+   THE TWO CALLERS ASK DIFFERENT QUESTIONS OF ONE PREDICATE AND THE STRICTER ONE DECIDES IT. flow_pick asks
+   "is my seed still a member", of a pointer it believes is live; engine.c's hook and this file's two guards
+   ask "is this pointer DANGLING" — `g_rival` is cached across opcodes and its own comment says the cached
+   rival goes stale, and flow_remove FREES the flow, so the pointer under those asserts may name memory that
+   is gone. An address comparison never dereferences `f` and so answers correctly for both; the handle would
+   have to LOAD `f->reg_i` to answer either, which reads freed memory in exactly the state the strict question
+   exists to catch. So the guard would be destroyed by making it cheap, and that is a §A-PREDICATE-THAT-ANSWERS
+   -TWO-QUESTIONS split to make with a second entry when a caller is known live — never a conversion of this
+   one.
+   AND THE WALK PAYS FOR ITSELF BY CHECKING THE HANDLE. It has the linear answer in hand at no extra cost, so
+   it re-derives `reg_i` over the whole frontier at every call, and flow_pick calls it on every dispatch — so
+   in the APICLIENT_DEV builds every smoke runs, the handle is cross-checked against the walk it replaces on
+   every pick of every run, on whatever states the frontier actually reaches. It is two-sided (the field
+   against the array, both read from live storage) and it is placed AFTER the address match, so it
+   dereferences `f` only once the walk has PROVEN the pointer live — the assert is exactly as dangling-safe as
+   the function holding it.
+   NAMED RESIDUAL — flow_pick's SEED TEST IS STILL A FULL WALK, in every build, once per dispatch. Not
+   covered: making the pick's own membership question O(1). What must exist before that can be built is a
+   statement that flow_pick's `seed` is LIVE — today engine.c hands it an incumbent that this file's own
+   assert at flow_arrive_at_virtual_time only checks in dev, so the shipped pick is relying on this walk's
+   dangling-tolerance and nothing says so anywhere else. How its absence shows: `scanNextRuns` (flow.h's
+   FLOW_SCANS) counts one dispatch pick per step and each of them still costs a second walk of the frontier
+   that no weight counter prices, because `g_scan_weights` counts weight EVALUATIONS and this walk evaluates
+   none — so the frontier-weighing rows understate what asking the order costs by one whole walk per pick. */
 int flow_is_member(const Flow *f) {
-    for (int i = 0; i < g_flows_n; i++) if (g_flows[i] == f) return 1;
+    for (int i = 0; i < g_flows_n; i++) if (g_flows[i] == f) {
+        DCHECK(f->reg_i == i,
+               "a flow's registry handle names a slot the registry does not hold it at — the frontier gains a "
+               "member on exactly one line and loses one on exactly one line, so the two writers of this "
+               "relation have come apart, and flow_remove will swap-remove at the handle's slot and drop "
+               "whichever member is standing there");
+        return 1;
+    }
     return 0;
 }
 

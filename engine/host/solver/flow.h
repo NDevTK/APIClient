@@ -99,6 +99,29 @@ typedef struct FlowAcct FlowAcct;
 #define FLOW_STEP_OWED  2
 
 typedef struct Flow {
+    /* WHERE THIS FLOW STANDS IN THE FRONTIER'S ARRAY — the registry's own handle on the member, so asking
+       WHERE ONE FLOW IS costs a load instead of a walk of every member standing.
+       IT NAMES A SLOT AND NEVER A RANK, AND NO TERM OF flow_weight MAY EVER READ IT. The array is in ARRIVAL
+       order and the ORDER is by weight — flow.c's swap-remove says exactly that on its own line, "order is by
+       weight, not position" — so this is a fact about the registry's storage and not about the queue. A weight
+       term keyed on it would be ranking by birth position, which is the defect moving the reward onto the
+       family was landed to remove, and it would be carried by a fork as a number the arm did not earn.
+       EXACTLY TWO WRITERS, WHICH IS WHAT MAKES THE RELATION CHECKABLE RATHER THAN HOPEFUL. flow_new's append
+       is the only line the frontier ever GAINS a member on and flow_remove's swap-remove is the only line it
+       ever loses one on (the same pair `g_arrivals`/`g_departures` are defined over, so this field's
+       correctness rests on a claim this file already asserts elsewhere). There is no third site: no Flow is
+       ever copied — `reclaim_calloc(1, sizeof(Flow))` in flow_new is the only construction in the tree — and
+       the registry's `reclaim_realloc` moves the POINTER ARRAY, which relocates no member's slot.
+       IT IS CROSS-CHECKED AGAINST THE WALK IT REPLACES, AT THE ONE CALLER THAT STILL WALKS. flow_is_member
+       must answer for a pointer that MAY BE DANGLING, so it compares addresses and cannot use this field to
+       answer; it therefore has the linear answer in hand at no extra cost and asserts this field against it on
+       every call. In the APICLIENT_DEV builds every smoke runs that re-derives the handle over the whole
+       frontier at every pick, which is a two-sided check on real states rather than an argument.
+       A SWAP-REMOVE RE-KEYS EXACTLY ONE OTHER MEMBER — the one moved from the end into the departing member's
+       slot — and nothing else moves. That is a fact about the registry, stated here because it is the property
+       any incremental structure over this frontier has to hold, and because a reader who assumes a departure
+       renumbers the array will write the walk this field exists to delete. */
+    int reg_i;
     /* THIS FLOW'S WORLD — its name in the ONE timeline it owns, valid in every document it touches. `delta`
        below is only this instance's SEGMENT of that world; a flow that scripts an iframe or a popup writes in
        another WASM instance, and that instance keys ITS segment by this id. A delta cannot travel (it names
