@@ -337,9 +337,18 @@ static JSValue js_event_target_ctor(JSContext *ctx, JSValueConst new_target, int
     return obj;
 }
 
-void event_target_install_interface(JSContext *ctx, JSValueConst global)
+/* WEB IDL §3.7.3 Interface prototype object's [Global] MEMBERS, AND NOTHING ELSE — THE HALF THAT IS A
+   DOCUMENT'S. This function used to
+   place §3.8's `EventTarget` property reference too, and the two are DIFFERENT QUESTIONS asked of different
+   things, which is why the conversion that moved §3.8 to the per-realm column split them rather than moving
+   the function. §3.8 `define the global property references` is "To define the global property references on
+   target, given realm realm" — a REALM, answered for every realm by event_target_install below. What is left
+   here is a claim about ONE GLOBAL OBJECT: that it IMPLEMENTS an interface whose chain reaches §2.7's, which
+   is a fact about the object and not about the realm it lives in, and which only core/frame/window.c is in a
+   position to state. Moving both halves to the realm column would have put `addEventListener` on the global of
+   every realm this engine builds — including one whose global object implements no such interface. */
+void event_target_install_global_members(JSContext *ctx, JSValueConst global)
 {
-    JSValue ctor = JS_NewCFunction2(ctx, js_event_target_ctor, "EventTarget", 0, JS_CFUNC_constructor, 0);
     JSValue proto = event_target_proto(ctx);
     int i;
     /* Web IDL §3.7.3's [Global] RULE REACHES THE INHERITED INTERFACES TOO. Window is declared [Global], and the
@@ -351,8 +360,36 @@ void event_target_install_interface(JSContext *ctx, JSValueConst global)
        names, or reads a descriptor off `window`, sees nothing there. */
     static const char *const GLOBAL_MEMBERS[3] = { "addEventListener", "removeEventListener", "dispatchEvent" };
 
-    CHECK(!JS_IsException(ctor), "the EventTarget interface object could not be allocated");
-    JS_SetConstructor(ctx, ctor, proto);
+
+#if APICLIENT_DEV
+    /* AND WEB IDL §3.8's PROPERTY REFERENCE FOR THIS INTERFACE IS ALREADY STANDING, which is what makes the
+       split above a CHECKED fact rather than a remembered one. core/realm.h's intrinsic list runs
+       event_target_install over this realm before core/platform.c's per-document column reaches window_install,
+       and DOM §2.7 Interface EventTarget is `[Exposed=*]`, so Web IDL §3.3.7 [Exposed] step 1 at the door
+       cannot have declined it in any realm — a global arriving here without the name is a realm whose
+       intrinsics never ran, or a diff that removed §3.8's placement from the per-realm column and left this
+       half standing. Asked in a BLOCK rather than inside the DCHECK's own condition because interning an atom
+       allocates, and a should-never-happen's condition must not.
+       BOTH OPERANDS ARE IN SCOPE, which is what the assert is worth: `global` is the object the caller is
+       about to write three members onto, and `EventTarget` is the identifier the other half placed. */
+    {
+        JSAtom et = JS_NewAtom(ctx, "EventTarget");
+        int placed;
+
+        CHECK(et != JS_ATOM_NULL, "`EventTarget` could not be interned");
+        placed = JS_HasProperty(ctx, global, et);
+        JS_FreeAtom(ctx, et);
+        DCHECK(placed == 1,
+               "a global is being given DOM §2.7 Interface EventTarget's Web IDL §3.7.3 Interface prototype "
+               "object [Global] members in a "
+               "realm that carries no `EventTarget` property — Web IDL §3.8 Platform objects implementing "
+               "interfaces places that property reference from this component's per-realm intrinsic, which "
+               "core/realm.h runs before core/platform.c's per-document column, and §2.7 is `[Exposed=*]` so "
+               "the door refuses it nowhere. The two halves were split precisely because they answer different "
+               "questions; this says they still ran in the one order that makes sense of them");
+    }
+#endif
+
     for (i = 0; i < 3; i++) {
         JSAtom a = JS_NewAtom(ctx, GLOBAL_MEMBERS[i]);
         JSValue fn = JS_GetProperty(ctx, proto, a);
@@ -366,7 +403,6 @@ void event_target_install_interface(JSContext *ctx, JSValueConst global)
         JS_FreeAtom(ctx, a);
     }
     JS_FreeValue(ctx, proto);
-    idl_define_global_property_reference(ctx, global, "EventTarget", ctor);
 }
 
 void event_target_set_tree(const EventTargetTree *tree)
@@ -4418,5 +4454,33 @@ static void event_target_install(JSContext *ctx)
     idl_install_method(ctx, proto, "addEventListener", g_add_stepid);
     idl_install_method(ctx, proto, "removeEventListener", g_remove_stepid);
     idl_install_step_method(ctx, proto, "dispatchEvent", 1, g_dispatch_stepid);
+
+    /* AND WEB IDL §3.8's PROPERTY REFERENCE FOR §2.7, IN THIS REALM — the half of the old
+       `event_target_install_interface` that is a REALM's rather than a global object's. Web IDL §3.8 Platform
+       objects implementing interfaces' `define the global property references` is "To define the global
+       property references on target, given realm realm", step 1 being "Let interfaces be a list that contains
+       every interface that is exposed in realm" — the population is a REALM's and the algorithm names no
+       Document. dom.idl declares `[Exposed=*] interface EventTarget`, so EVERY realm owes this name; it was
+       placed from core/frame/window.c's window_install, which core/platform.c reaches only from its
+       per-DOCUMENT column, so a worker realm — which reaches no platform_document_install — had neither the
+       interface object nor the name, and nor did a Window realm until a Document was installed over it.
+       WHAT STAYED BEHIND IS THE §3.7.3 [Global] MEMBER HALF, and it stayed because it answers a different
+       question: `addEventListener` on the global is a claim that THIS GLOBAL OBJECT implements an interface
+       whose chain reaches §2.7's, which is a fact about the object rather than about the realm — see
+       event_target_install_global_members, whose own assert is what ties the two back together.
+       THE PROTOTYPE IS IN HAND, so there is no event_target_proto re-read here: the old per-document entry
+       asked the class-proto slot for the object this function had just built. */
+    {
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue ctor = JS_NewCFunction2(ctx, js_event_target_ctor, "EventTarget", 0, JS_CFUNC_constructor, 0);
+
+        CHECK(!JS_IsException(ctor), "the EventTarget interface object could not be allocated");
+        JS_SetConstructor(ctx, ctor, proto);
+        /* THE EXPOSURE IS THE DOOR'S ANSWER, NOT A CONDITION HERE: idl_define_global_property_reference asks
+           Web IDL §3.3.7 [Exposed] step 1 against this realm's Web IDL §3.3.8 [Global] global names, keyed by
+           the identifier it is already handed, so nothing at this site re-derives what the corpus states. */
+        idl_define_global_property_reference(ctx, global, "EventTarget", ctor);
+        JS_FreeValue(ctx, global);
+    }
     JS_SetClassProto(ctx, g_et_class, proto);   /* the realm owns it from here */
 }

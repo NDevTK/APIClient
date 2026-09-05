@@ -417,16 +417,31 @@ void message_event_init(JSContext *ctx)
     agent_state_id("event", &g_init_me_id,
                    "HTML §9.1 The MessageEvent interface's legacy `initMessageEvent(type, bubbles, cancelable, "
                    "data, origin, lastEventId, source, ports)`");
-    realm_declare_intrinsic(message_event_install_proto);
+    realm_declare_intrinsic(message_event_install_realm);
 }
 
-void message_event_install_proto(JSContext *ctx)
+/* HTML §9.1 The MessageEvent interface's Web IDL §3.7.3 Interface prototype object's OBJECT, its Web IDL
+   §3.7.1 Interface object's INTERFACE OBJECT, AND Web IDL §3.8 Platform objects implementing interfaces'
+   PROPERTY REFERENCE FOR IT — FOR ONE REALM.
+   THE INTERFACE OBJECT IS HERE BECAUSE Web IDL §3.8 Platform objects implementing interfaces IS GIVEN A REALM. Web IDL §3.8 Platform objects
+   implementing interfaces' `define the global property references` is "To define the global property
+   references on target, given realm realm", step 1 being "Let interfaces be a list that contains every
+   interface that is exposed in realm" — the population is a REALM's and the algorithm names no Document.
+   html.idl declares this interface `[Exposed=(Window,Worker,AudioWorklet)]`, so a WORKER realm owes this name
+   as much as a Window one does — and while it was placed from core/platform.c's per-document column, a worker
+   realm, which reaches no platform_document_install, got neither the object nor the name. The prototype is in
+   hand here, so the separate per-document entry's message_event_proto re-read is gone: re-reading the
+   class-proto slot would be a second answer to a question this function has just settled. */
+void message_event_install_realm(JSContext *ctx)
 {
-    JSValue proto, prev, base;
+    JSValue proto, prev, base, global, ctor;
 
     DCHECK(g_ready, "a realm asked for MessageEvent.prototype before message_event_init declared it");
+    DCHECK(g_ctor_stepid >= 0,
+           "a realm asked for the MessageEvent interface object before message_event_init declared its "
+           "constructor");
     prev = JS_GetClassProto(ctx, g_me_class);
-    DCHECK(JS_IsNull(prev), "message_event_install_proto ran twice in one realm");
+    DCHECK(JS_IsNull(prev), "message_event_install_realm ran twice in one realm");
     JS_FreeValue(ctx, prev);
     /* THE PROTOTYPE CHAIN IS THE SUBCLASSING. `MessageEvent.prototype.__proto__ === Event.prototype` is what a
        page walks and what `instanceof Event` reads; a flat prototype would answer false for both. THIS realm's
@@ -439,29 +454,28 @@ void message_event_install_proto(JSContext *ctx)
     JS_SetPropertyFunctionList(ctx, proto, js_me_proto,
                                (int)(sizeof(js_me_proto) / sizeof(js_me_proto[0])));
     idl_install_method(ctx, proto, "initMessageEvent", g_init_me_id);
-    JS_SetClassProto(ctx, g_me_class, proto);
-}
 
-void message_event_install(JSContext *ctx, JSValueConst global)
-{
-    JSValue ctor;
-
-    DCHECK(g_ready, "MessageEvent was installed before message_event_init built its prototype");
     ctor = idl_step_constructor(ctx, "MessageEvent", g_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the MessageEvent interface object could not be allocated");
-    {
-        JSValue proto = message_event_proto(ctx);
-        JS_SetConstructor(ctx, ctor, proto);
-        JS_FreeValue(ctx, proto);
-    }
+    JS_SetConstructor(ctx, ctor, proto);
+    /* THE EXPOSURE IS THE DOOR'S ANSWER, NOT A CONDITION HERE: idl_define_global_property_reference asks
+       Web IDL §3.3.7 [Exposed] step 1 against this realm's Web IDL §3.3.8 [Global] global names, keyed by the
+       identifier it is already handed, so nothing at this site re-derives what the corpus states. This is the
+       interface whose exposure set is NOT `*`, and it is still not asked here: a worker realm keeps the name
+       because §3.3.7 step 1 intersects `Worker` with this realm's global names, never because this file
+       looked. */
+    global = JS_GetGlobalObject(ctx);
     idl_define_global_property_reference(ctx, global, "MessageEvent", ctor);
+    JS_FreeValue(ctx, global);
+
+    JS_SetClassProto(ctx, g_me_class, proto);   /* the realm owns it from here */
 }
 
 JSValue message_event_proto(JSContext *ctx)
 {
     JSValue proto = JS_GetClassProto(ctx, g_me_class);
     DCHECK(!JS_IsNull(proto),
-           "MessageEvent.prototype was asked for in a realm that never ran message_event_install_proto");
+           "MessageEvent.prototype was asked for in a realm that never ran message_event_install_realm");
     return proto;   /* OWNED */
 }
 

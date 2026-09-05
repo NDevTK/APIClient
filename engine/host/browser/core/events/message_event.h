@@ -6,7 +6,6 @@
 #include "quickjs.h"
 
 void message_event_init(JSContext *ctx);
-void message_event_install(JSContext *ctx, JSValueConst global);
 /* Undone ONCE PER AGENT. The RUNTIME, not a realm: what it gives back is the agent's — a private
    Symbol, a class id and this interface's member declarations — and every prototype it built is in
    some realm's class-proto slot and goes with that realm. Reached from core/events/event.c's
@@ -16,8 +15,14 @@ void message_event_free(JSRuntime *rt);
 /* `MessageEvent.prototype`, for an interface derived from THIS one to chain from. */
 /* PER REALM — see event.h. OWNED: the caller frees. */
 JSValue message_event_proto(JSContext *ctx);
-/* §9.1's prototype for ONE realm; run beside the realm's other intrinsics, once per realm. */
-void message_event_install_proto(JSContext *ctx);
+/* HTML §9.1 The MessageEvent interface's prototype, its Web IDL §3.7.1 Interface object's interface object and
+   the Web IDL §3.8 property reference for it — for ONE realm, declared into core/realm.h's list. ONE entry
+   because Web IDL §3.8 Platform objects implementing interfaces' `define the global property references` is
+   given "target" and "a realm realm" and its step 1 population is "every interface that is exposed in realm":
+   no Document appears in it. html.idl declares the interface `[Exposed=(Window,Worker,AudioWorklet)]`, so a
+   WORKER realm owes the name too — and while the interface object was installed from core/platform.c's
+   per-document column, a worker realm, which reaches no platform_document_install, received neither. */
+void message_event_install_realm(JSContext *ctx);
 
 /* IS THIS A MessageEvent? The brand every 9.4 algorithm that hands one on performs — a private-symbol slot, so
    a page cannot forge it. */

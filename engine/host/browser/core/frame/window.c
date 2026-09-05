@@ -935,7 +935,12 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
        "[object global]" where every browser answers "[object Window]". That own property is the plain-host
        global's, not a Window's: HTML's global IS the Window, and the tag it carries is the interface's. */
     JS_DeleteProperty(ctx, g, JS_WellKnownSymbolAtom(JS_WKS_TO_STRING_TAG), 0);
-    event_target_install_interface(ctx, g);   /* §2.7's interface object, now that its prototype is in a chain */
+    /* DOM §2.7 Interface EventTarget's Web IDL §3.7.3 [Global] members on THIS global, now that its prototype
+       is in the chain above. Its Web IDL §3.8 Platform objects implementing interfaces property reference is NOT
+       placed here any more: that algorithm is given a REALM and DOM §2.7 Interface EventTarget is `[Exposed=*]`,
+       so core/realm.h's intrinsic list has already put `EventTarget` on every realm — including the ones no
+       Document is ever installed over. */
+    event_target_install_global_members(ctx, g);
     idl_define_global_property_reference(ctx, g, "Window", idl_interface_object(ctx, "Window", gp));
 
     /* 7.2.2: window, self and frames all return THIS Window's proxy, and the global object IS that proxy here —

@@ -170,9 +170,16 @@ JSValue event_target_proto(JSContext *ctx);
    idl_args.c's §3.7.3 proto-step assertion — which reads the parent's class string at the tag — is what made
    that window matter. */
 JSValue event_target_derived_proto(JSContext *ctx);
-/* §2.7's interface object. CONSTRUCTIBLE — `new EventTarget()` is a plain event target, which is how a page
-   gives an ordinary object a listener list. */
-void event_target_install_interface(JSContext *ctx, JSValueConst global);
+/* DOM §2.7 Interface EventTarget's Web IDL §3.7.3 [Global] MEMBERS, placed on ONE GLOBAL OBJECT — the three
+   operations `addEventListener`, `removeEventListener` and `dispatchEvent`, each the SAME function object as
+   the one on this realm's `EventTarget.prototype`.
+   THIS USED TO PLACE §2.7's INTERFACE OBJECT TOO, and the two are different questions. Web IDL §3.8 Platform
+   objects implementing interfaces' `define the global property references` is "To define the global property
+   references on target, given realm realm" — a REALM — and §2.7 is `[Exposed=*]`, so every realm this engine
+   builds owes the name `EventTarget`; that half now sits in this component's per-realm intrinsic, where a
+   worker realm reaches it. What is left here is a claim about ONE GLOBAL OBJECT rather than about a realm, so
+   its caller is the component that knows what kind of global it is holding. */
+void event_target_install_global_members(JSContext *ctx, JSValueConst global);
 
 /* HTML §8.1.8.1 Event handlers' EVENT HANDLER IDL ATTRIBUTES — `onclick`, `onload`, `onabort`. Which set a
    target carries is which MIXIN its IDL includes (§8.1.8.2.1 IDL definitions), so the caller names the mixin

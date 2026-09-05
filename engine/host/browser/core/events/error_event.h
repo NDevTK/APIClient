@@ -1,4 +1,10 @@
-/* ErrorEvent — HTML "Interface ErrorEvent". See error_event.c. */
+/* ErrorEvent — HTML §8.1.4.6 "Runtime script errors", which is where the standard both DECLARES
+   `[Exposed=*] interface ErrorEvent : Event` and fires it. See error_event.c.
+   THIS LINE STATED A TITLE OF "Interface ErrorEvent", AND HTML CARRIES NO SECTION SO TITLED — every one
+   of this component's own citations already says HTML §8.1.4.6 "Runtime script errors" and says it correctly,
+   so the banner was one
+   equation written at two sites with the checkable half of it fabricated. A title a standard does not
+   carry is worse than an absent one: it reads as authoritative and there is nothing to look up. */
 #ifndef ENGINE_HOST_BROWSER_CORE_EVENTS_ERROR_EVENT_H
 #define ENGINE_HOST_BROWSER_CORE_EVENTS_ERROR_EVENT_H
 #include <stdbool.h>
@@ -7,8 +13,15 @@
 #include "quickjs.h"
 
 void error_event_init(JSContext *ctx);              /* the slot key + the IDL declarations (agent init) */
-void error_event_install_proto(JSContext *ctx);     /* §3.7: one prototype per REALM */
-void error_event_install(JSContext *ctx, JSValueConst global);
+/* HTML §8.1.4.6 Runtime script errors' ErrorEvent prototype, its Web IDL §3.7.1 Interface object's interface
+   object and the Web IDL §3.8 Platform objects implementing interfaces property reference for it — for ONE
+   realm, declared into core/realm.h's list.
+   ONE entry because Web IDL §3.8 Platform objects implementing interfaces' `define the global property
+   references` is given "target" and "a realm realm" and its step 1 population is "every interface that is
+   exposed in realm": no Document appears in it. html.idl declares the interface `[Exposed=*]`, so EVERY realm
+   owes the name — and while the interface object was installed from core/platform.c's per-document column, a
+   worker realm, which reaches no platform_document_install, received neither. */
+void error_event_install_realm(JSContext *ctx);
 /* Undone ONCE PER AGENT. The RUNTIME, not a realm: what it gives back is the agent's — a private
    Symbol, a class id and this interface's member declarations — and every prototype it built is in
    some realm's class-proto slot and goes with that realm. Reached from core/events/event.c's

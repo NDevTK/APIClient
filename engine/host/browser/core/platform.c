@@ -19,11 +19,9 @@
 #include "core/encoding/encoding.h"
 #include "core/encoding/text_stream.h"
 #include "core/events/broadcast_channel.h"
-#include "core/events/error_event.h"
 #include "core/events/event.h"
 #include "core/events/input_device_capabilities.h"
 #include "core/events/event_target.h"
-#include "core/events/message_event.h"
 #include "core/events/message_port.h"
 #include "core/workers/worker_global_scope.h"
 #include "core/events/report_exception.h"
@@ -481,11 +479,17 @@ static void r_event(JSRuntime *rt) { event_free(rt); }
    declared to core/agent_state.h either, and the component's own file said so IN PROSE: "the only reason this
    one is not declared there is that this component's row carries no release for that column to check". A
    comment explaining why a component is exempt from a check is the check's own hole, written down.
-   ITS POSITION IS ALREADY DECIDED AND THE ROW ONLY OBEYS IT. `report_exception` is declared AFTER `error_event`
-   and `message_event`, and it DEPENDS on the first (extract_error_information mints §8.1.4.6's ErrorEvent
-   through error_event_new), so reverse declaration order releases it BEFORE the `event` row that gives that
-   family's state back — dependent first, which is what the hand-written lists got right by accident and what
-   this column decides. Nothing in its release reads any other component's state at all: it frees one Symbol
+   ITS POSITION IS ALREADY DECIDED AND THE ROW ONLY OBEYS IT. `report_exception` is declared AFTER `event`, and
+   it DEPENDS on that row (extract_error_information mints HTML §8.1.4.6 Runtime script errors' ErrorEvent
+   through error_event_new, and
+   core/events/event.c's event_init is what declares that interface), so reverse declaration order releases it
+   BEFORE the `event` row that gives that family's state back — dependent first, which is what the
+   hand-written lists got right by accident and what this column decides.
+   THIS NAMED `error_event` AND `message_event` AS THE ROWS IT FOLLOWS, and that was already only half true
+   when it was written: both rows carried a NULL declare column, so neither declared anything for this one to
+   follow — the family's declaration was the `event` row's the whole time. They have since stopped being rows
+   at all, their per-document install having moved to their own realm intrinsics, so the sentence named two
+   rows a reader could not find while resting on an order it did not describe. Nothing in its release reads any other component's state at all: it frees one Symbol
    against the runtime and returns three statics to their pre-init values. */
 static void r_report_exception(JSRuntime *rt) { report_exception_free(rt); }
 static void r_event_target(JSRuntime *rt) { event_target_free(rt); }
@@ -660,15 +664,12 @@ static void i_blob(JSContext *c, JSValueConst g, const PlatformDocument *d) { (v
    this the origin got a `location`-free Window whose own `origin` was re-derived from a string that was
    already one — and the WPT runner, the one host whose whole job is measuring fidelity, did exactly that. */
 static void i_window(JSContext *c, JSValueConst g, const PlatformDocument *d) { window_install(c, g, d->url); }
-static void i_message_event(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; message_event_install(c, g); }
-static void i_error_event(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; error_event_install(c, g); }
 static void i_performance_observer(JSContext *c, JSValueConst g, const PlatformDocument *d)
 { (void)d; performance_observer_install(c, g); }
 static void i_file_reader(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; file_reader_install(c, g); }
 static void i_navigable(JSContext *c, JSValueConst g, const PlatformDocument *d) { navigable_install(c, g, d->origin); }
 static void i_timer(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; timer_install(c, g); }
 static void i_window_message(JSContext *c, JSValueConst g, const PlatformDocument *d) { window_message_install(c, g, d->origin); }
-static void i_broadcast_channel(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; broadcast_channel_install(c, g); }
 static void d_structured_clone(JSContext *c, const PlatformAgent *a) { (void)a; structured_clone_init(c); }
 static void i_structured_clone(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; structured_clone_install(c, g); }
 static void i_unhandled_rejection(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; unhandled_rejection_install(c, g); }
@@ -901,9 +902,16 @@ static const PlatformComponent PLATFORM[] = {
        two rendezvous idb_connection and idb_transaction declare, so both must already exist. */
     { "idb_version_change_event", d_idb_vce,        NULL,        r_idb_vce },
     { "idb_open",            d_idb_open,            NULL,        r_idb_open },
-    /* Declared by the components that own the events they carry; the interface objects are this realm's. */
-    { "message_event",       NULL,                  i_message_event },
-    { "error_event",         NULL,                  i_error_event },
+    /* NO ROWS FOR `message_event` AND `error_event` AT ALL, WHICH IS WHAT THE THIRD COLUMN LEAVING MEANT HERE.
+       Both were declared by the `event` row above (event_init calls their inits) and existed on this list for
+       their PER-DOCUMENT install alone, so once HTML §9.1 The MessageEvent interface's and §8.1.4.6 Runtime
+       script errors' interface objects moved to those components' own realm intrinsics — Web IDL §3.8 Platform
+       objects implementing interfaces' `define the global property references` is "To define the global property
+       references on target, given realm realm" whose step 1 is "Let interfaces be a list that contains every
+       interface that is exposed in realm", a REALM with no Document in the algorithm — a row with every column
+       NULL was left, and platform_check_table aborts on exactly that: a row that builds neither half is a
+       component that is not in this browser and is deleted rather than listed. The two PLATFORM_WITNESS rows below moved with the install, to `event`, which
+       is the banner's own remedy for a name whose install changes component. */
     { "report_exception",    d_report_exception,    NULL,        r_report_exception },
     { "message_port",        d_message_port,        NULL,        r_message_port },
     /* HTML §10.2.1.1 The WorkerGlobalScope common interface and §10.2.1.2 Dedicated workers and the
@@ -979,7 +987,13 @@ static const PlatformComponent PLATFORM[] = {
     { "remote_location",     d_remote_location,     NULL,        r_remote_location },
     /* AFTER window_proxy: §9.4.4's `postMessage` is installed on the WindowProxy PROTOTYPE. */
     { "window_message",      d_window_message,      i_window_message, r_window_message },
-    { "broadcast_channel",   d_broadcast_channel,   i_broadcast_channel, r_broadcast_channel },
+    /* NO DOCUMENT HALF. html.idl declares `[Exposed=(Window,Worker)] interface BroadcastChannel : EventTarget`,
+       and Web IDL §3.8 Platform objects implementing interfaces is "To define the global property references on
+       target, given realm realm" whose step 1 is "Let interfaces be a list that contains every interface that
+       is exposed in realm" — a REALM, with no Document in the algorithm. HTML §9.5 Broadcasting to other
+       browsing contexts' interface object is placed by this component's own realm intrinsic beside the
+       prototype it already built there, so a realm that reaches no platform_document_install gets it. */
+    { "broadcast_channel",   d_broadcast_channel,   NULL,        r_broadcast_channel },
     { "structured_clone",    d_structured_clone,    i_structured_clone, r_structured_clone },
     { "unhandled_rejection", d_unhandled_rejection, i_unhandled_rejection, r_unhandled_rejection },
     /* §8.12 Animation frames's map before §8.1.7.3 step 14 consumes it, and §7.4.6.3's reveal after Event. */
@@ -1067,8 +1081,9 @@ static const PlatformComponent PLATFORM[] = {
        before `element` would hand those two a class id of zero. Everything else this component touches it
        touches at RUNTIME rather than at declaration: §3.4.4 step 6's contentRect is a DOMRectReadOnly minted
        while a frame is being broadcast, and §3.4.6's ErrorEvent is minted while a loop error is delivered, so
-       neither `dom_rect` nor `error_event` constrains where this row sits — standing beside
-       `intersection_observer` satisfies the one constraint that is real.
+       neither `dom_rect` nor the `event` row that declares ErrorEvent constrains where this row sits — standing
+       beside `intersection_observer` satisfies the one constraint that is real. (This said `error_event`, which
+       was a row with a per-document install and no declare column, and is now not a row at all.)
        ONE ROW FOR THREE INTERFACES. §2.3's ResizeObserverEntry and ResizeObserverSize are declared and
        installed from this component's own `_init` and `_install`, which is why all three of the witness names
        below map here: the three are one component's surface and an install that stopped happening would take
@@ -1252,8 +1267,11 @@ static const struct { const char *name, *component; IdlExposure exposure; } PLAT
     { "CountQueuingStrategy",  "queuing_strategy" },
     { "InputDeviceCapabilities", "input_device_capabilities" },
     { "Event",                 "event" },
-    { "MessageEvent",          "message_event" },
-    { "ErrorEvent",            "error_event" },
+    /* BOTH OWED BY THE `event` ROW. Their interface objects are placed by message_event_install_realm and
+       error_event_install_realm, which core/events/event.c's event_init declares — so `event` is the row that
+       owes these two names, and the components they used to name are no longer rows at all. */
+    { "MessageEvent",          "event" },
+    { "ErrorEvent",            "event" },
     { "MessageChannel",        "message_port" },
     { "XMLHttpRequest",        "xml_http_request" },
     { "FileReader",            "file_reader" },

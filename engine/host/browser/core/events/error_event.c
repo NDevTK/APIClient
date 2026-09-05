@@ -247,16 +247,30 @@ void error_event_init(JSContext *ctx)
     agent_state_id("event", &g_ctor_stepid,
                    "HTML §8.1.4.6 Runtime script errors' `constructor(DOMString type, optional ErrorEventInit "
                    "eventInitDict = {})`");
-    realm_declare_intrinsic(error_event_install_proto);
+    realm_declare_intrinsic(error_event_install_realm);
 }
 
-void error_event_install_proto(JSContext *ctx)
+/* HTML §8.1.4.6 Runtime script errors' ErrorEvent — ITS Web IDL §3.7.3 Interface prototype object's OBJECT,
+   ITS Web IDL §3.7.1 Interface object's INTERFACE OBJECT, AND Web IDL §3.8 Platform objects implementing
+   interfaces' PROPERTY REFERENCE FOR IT — FOR ONE REALM.
+   THE INTERFACE OBJECT IS HERE BECAUSE Web IDL §3.8 Platform objects implementing interfaces IS GIVEN A REALM. Web IDL §3.8 Platform objects
+   implementing interfaces' `define the global property references` is "To define the global property
+   references on target, given realm realm", step 1 being "Let interfaces be a list that contains every
+   interface that is exposed in realm" — the population is a REALM's and the algorithm names no Document.
+   html.idl declares this interface `[Exposed=*]`, so EVERY realm owes this name — and while it was placed
+   from core/platform.c's per-document column, a worker realm, which reaches no platform_document_install, got
+   neither the object nor the name. The prototype is in hand here, so the separate per-document entry's
+   error_event_proto re-read is gone: re-reading the class-proto slot would be a second answer to a question
+   this function has just settled. */
+void error_event_install_realm(JSContext *ctx)
 {
-    JSValue proto, prev, base;
+    JSValue proto, prev, base, global, ctor;
 
     DCHECK(g_ready, "a realm asked for ErrorEvent.prototype before error_event_init declared it");
+    DCHECK(g_ctor_stepid >= 0,
+           "a realm asked for the ErrorEvent interface object before error_event_init declared its constructor");
     prev = JS_GetClassProto(ctx, g_ee_class);
-    DCHECK(JS_IsNull(prev), "error_event_install_proto ran twice in one realm");
+    DCHECK(JS_IsNull(prev), "error_event_install_realm ran twice in one realm");
     JS_FreeValue(ctx, prev);
     base = event_proto(ctx);
     proto = JS_NewObjectProto(ctx, base);
@@ -265,29 +279,25 @@ void error_event_install_proto(JSContext *ctx)
     idl_interface_tag(ctx, proto, "ErrorEvent");
     JS_SetPropertyFunctionList(ctx, proto, js_ee_proto,
                                (int)(sizeof(js_ee_proto) / sizeof(js_ee_proto[0])));
-    JS_SetClassProto(ctx, g_ee_class, proto);
-}
 
-void error_event_install(JSContext *ctx, JSValueConst global)
-{
-    JSValue ctor;
-
-    DCHECK(g_ready, "ErrorEvent was installed before error_event_init declared it");
     ctor = idl_step_constructor(ctx, "ErrorEvent", g_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the ErrorEvent interface object could not be allocated");
-    {
-        JSValue proto = error_event_proto(ctx);
-        JS_SetConstructor(ctx, ctor, proto);
-        JS_FreeValue(ctx, proto);
-    }
+    JS_SetConstructor(ctx, ctor, proto);
+    /* THE EXPOSURE IS THE DOOR'S ANSWER, NOT A CONDITION HERE: idl_define_global_property_reference asks
+       Web IDL §3.3.7 [Exposed] step 1 against this realm's Web IDL §3.3.8 [Global] global names, keyed by the
+       identifier it is already handed, so nothing at this site re-derives what the corpus states. */
+    global = JS_GetGlobalObject(ctx);
     idl_define_global_property_reference(ctx, global, "ErrorEvent", ctor);
+    JS_FreeValue(ctx, global);
+
+    JS_SetClassProto(ctx, g_ee_class, proto);   /* the realm owns it from here */
 }
 
 JSValue error_event_proto(JSContext *ctx)
 {
     JSValue proto = JS_GetClassProto(ctx, g_ee_class);
     DCHECK(!JS_IsNull(proto),
-           "ErrorEvent.prototype was asked for in a realm that never ran error_event_install_proto");
+           "ErrorEvent.prototype was asked for in a realm that never ran error_event_install_realm");
     return proto;   /* OWNED */
 }
 

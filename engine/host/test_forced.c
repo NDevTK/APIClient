@@ -6289,6 +6289,51 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
         { "ProgressEvent",              true, true },
         /* An `enum` of xhr.idl, so no Web IDL §3.8 property reference exists for it at all */
         { "XMLHttpRequestResponseType", false, false },
+        /* THE EVENTS GROUP'S FOUR, AND THE MEMBER THAT IS NOT ONE OF THEM. DOM §2.7 Interface EventTarget is
+           `[Exposed=*]` and HTML §8.1.4.6 Runtime script errors' ErrorEvent is too, HTML §9.1 The MessageEvent
+           interface is `[Exposed=(Window,Worker,AudioWorklet)]` and HTML §9.5 Broadcasting to other browsing
+           contexts' BroadcastChannel is `[Exposed=(Window,Worker)]` — so every one of the four is owed by a
+           realm whose global names are a DedicatedWorkerGlobalScope's, and all four were placed from
+           core/platform.c's per-document column, which such a realm never reaches.
+           `EventTarget` IS THE ONE THAT CAME THROUGH A DIFFERENT DOOR. The other three sat in an ordinary
+           per-document install thunk; this one was placed inside core/frame/window.c's window_install, which
+           reaches this list only because window_install is itself the `window` row's per-document half — the
+           same column wearing a different spelling, and the reason a placement census keyed on the COLUMN
+           rather than on the thunk is what found it.
+           `addEventListener` IS THE DISCRIMINATING ROW, AND ITS DISCRIMINATION IS IN THE WINDOW ARM. DOM §2.7
+           declares it as an operation, and the function that placed `EventTarget` on the global ALSO placed
+           `addEventListener`, `removeEventListener` and `dispatchEvent` there as OWN properties — Web IDL
+           §3.7.3 Interface prototype object's [Global] half, which is a claim about ONE GLOBAL OBJECT and its
+           interface chain rather than about a realm. The obvious conversion moves that whole function to the
+           per-realm column, and it passes all four rows above; what it also does is define `addEventListener`
+           as an own property of the WINDOW realm's global at intrinsic time, and this table runs before
+           core/frame/window.c has built that global a prototype chain at all — so the Window arm reads `true`
+           where §3.7.3 owes nothing yet, and the row fails.
+           THE WORKER ARM IS `true` AND CANNOT DISCRIMINATE, WHICH IS WHY IT IS SAID HERE RATHER THAN ASSUMED.
+           `[[HasProperty]]` WALKS THE PROTOTYPE CHAIN, and core/workers/worker_global_scope.c's own realm
+           intrinsic performs Web IDL §3.7.3's proto step twice — `WorkerGlobalScope : EventTarget` and
+           `DedicatedWorkerGlobalScope : WorkerGlobalScope` — and chains the worker global to the result, so
+           `addEventListener` is REACHABLE there through §2.7's prototype exactly as it is in a browser. A
+           conversion that wrongly made it an OWN property of that global would still read `true` here: this
+           table measures `'X' in globalThis`, which is Web IDL §3.3.13 [SecureContext]'s own vocabulary and a
+           different axis from §3.7.3's own-versus-inherited placement.
+           AND IT IS A ROW NEITHER GENERATED TABLE CAN BACK UP, WHICH IS THE OTHER REASON IT IS HERE. It is not
+           an identifier Web IDL §3.8 defines, so browser/idl_exposure.h's IDL_EXPOSURE has no row for it; its
+           IDL_MEMBER_EXPOSURE row is omitted too, because that table drops a member whose union over the
+           [Global] interfaces is `*` and §2.7 is `[Exposed=*]`. Both tables' rule is that a name with no row is
+           EXPOSED, so `idl_exposed_in_realm("addEventListener")` answers TRUE — this row is a statement about
+           the INSTALL alone, in a place the exposure tables are silent by construction, exactly as
+           `TextDecoderCommon` is one interface-shaped step above it.
+           IT IS A DISCRIMINATOR AND NEVER A CALIBRATION ROW: it reads the same before this conversion and
+           after it, so it is reported as such rather than counted with the four. */
+        { "EventTarget",       true, true },   /* DOM §2.7 "Interface EventTarget", [Exposed=*] */
+        { "ErrorEvent",        true, true },   /* HTML §8.1.4.6 "Runtime script errors", [Exposed=*] */
+        { "MessageEvent",      true, true },   /* HTML §9.1 "The MessageEvent interface" */
+        { "BroadcastChannel",  true, true },   /* HTML §9.5 "Broadcasting to other browsing contexts" */
+        /* DOM §2.7's OPERATION, not an interface — no Web IDL §3.8 property reference exists for it anywhere.
+           FALSE in the Window arm because that global has no §3.7.3 chain until window_install runs, TRUE in
+           the worker arm because that global's chain reaches §2.7's prototype from its own realm intrinsic. */
+        { "addEventListener",  false, true },
     };
     JSContext *worker = JS_NewContext(JS_GetRuntime(ctx));
     /* THE SECOND WORKER REALM IS THE OTHER ARM OF ONE STEP, and it is a second REALM because that is the only

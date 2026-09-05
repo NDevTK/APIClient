@@ -418,19 +418,34 @@ void broadcast_channel_init(JSContext *ctx)
     agent_state_value("broadcast_channel", &g_deliver_fn, "§9.5's delivery-task callee, one per agent");
     agent_state_id("broadcast_channel", &g_ctor_stepid, "§9.5's constructor machine");
     agent_state_id("broadcast_channel", &g_deliver_stepid, "§9.5's delivery task machine");
-    realm_declare_intrinsic(broadcast_channel_install_proto);
+    realm_declare_intrinsic(broadcast_channel_install_realm);
 }
 
-/* §9.5's INTERFACE PROTOTYPE OBJECT, FOR ONE REALM — §3.7 gives every realm its own, and here it decides the
-   ANSWER: a `postMessage` shared between documents would run with the defining realm's ctx, so every channel's
-   broadcast would carry that document's origin rather than its own. */
-void broadcast_channel_install_proto(JSContext *ctx)
+/* HTML §9.5 Broadcasting to other browsing contexts' INTERFACE PROTOTYPE OBJECT, its Web IDL §3.7.1 Interface
+   object's INTERFACE OBJECT, AND Web IDL §3.8 Platform objects implementing interfaces' PROPERTY REFERENCE
+   FOR IT — FOR ONE REALM. Web IDL §3.7.3
+   Interface prototype object gives every realm its own prototype, and here that decides the ANSWER: a
+   `postMessage` shared between documents would run with the defining realm's ctx, so every channel's broadcast
+   would carry that document's origin rather than its own.
+   THE INTERFACE OBJECT IS HERE BECAUSE Web IDL §3.8 Platform objects implementing interfaces IS GIVEN A REALM. Web IDL §3.8 Platform objects
+   implementing interfaces' `define the global property references` is "To define the global property
+   references on target, given realm realm", step 1 being "Let interfaces be a list that contains every
+   interface that is exposed in realm" — the population is a REALM's and the algorithm names no Document.
+   html.idl declares this interface `[Exposed=(Window,Worker)]`, so a WORKER realm owes this name — and while
+   it was placed from core/platform.c's per-document column, a worker realm, which reaches no
+   platform_document_install, got neither the object nor the name. The prototype is in hand here, so the
+   separate per-document entry's JS_GetClassProto re-read is gone: re-reading the class-proto slot would be a
+   second answer to a question this function has just settled. */
+void broadcast_channel_install_realm(JSContext *ctx)
 {
-    JSValue proto, prev;
+    JSValue proto, prev, global, ctor;
 
     DCHECK(g_chan_class != 0, "a realm asked for BroadcastChannel.prototype before the class was declared");
+    DCHECK(g_ctor_stepid >= 0,
+           "a realm asked for the BroadcastChannel interface object before broadcast_channel_init declared its "
+           "constructor");
     prev = JS_GetClassProto(ctx, g_chan_class);
-    DCHECK(JS_IsNull(prev), "broadcast_channel_install_proto ran twice in one realm");
+    DCHECK(JS_IsNull(prev), "broadcast_channel_install_realm ran twice in one realm");
     JS_FreeValue(ctx, prev);
 
     /* §9.5: `interface BroadcastChannel : EventTarget`, with the same two handler attributes a port has. */
@@ -440,23 +455,18 @@ void broadcast_channel_install_proto(JSContext *ctx)
     idl_install_accessor(ctx, proto, "name", js_chan_name, 0, -1);
     idl_install_method(ctx, proto, "postMessage", g_id_post);
     idl_install_method(ctx, proto, "close", g_id_close);
-    JS_SetClassProto(ctx, g_chan_class, proto);
-}
 
-void broadcast_channel_install(JSContext *ctx, JSValueConst global)
-{
-    JSValue ctor;
-
-    DCHECK(g_ctor_stepid >= 0, "BroadcastChannel was installed before broadcast_channel_init declared it");
     ctor = idl_step_constructor(ctx, "BroadcastChannel", g_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the BroadcastChannel interface object could not be allocated");
-    {
-        JSValue proto = JS_GetClassProto(ctx, g_chan_class);
-        DCHECK(!JS_IsNull(proto), "BroadcastChannel was installed into a realm that never ran its proto build");
-        JS_SetConstructor(ctx, ctor, proto);
-        JS_FreeValue(ctx, proto);
-    }
+    JS_SetConstructor(ctx, ctor, proto);
+    /* THE EXPOSURE IS THE DOOR'S ANSWER, NOT A CONDITION HERE: idl_define_global_property_reference asks
+       Web IDL §3.3.7 [Exposed] step 1 against this realm's Web IDL §3.3.8 [Global] global names, keyed by the
+       identifier it is already handed, so nothing at this site re-derives what the corpus states. */
+    global = JS_GetGlobalObject(ctx);
     idl_define_global_property_reference(ctx, global, "BroadcastChannel", ctor);
+    JS_FreeValue(ctx, global);
+
+    JS_SetClassProto(ctx, g_chan_class, proto);   /* the realm owns it from here */
 }
 
 void broadcast_channel_free(JSRuntime *rt)
