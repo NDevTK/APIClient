@@ -176,9 +176,12 @@ typedef struct {
 typedef struct {
     char *src; char *root; int sink; int tried; int reached; int turns; int fires;
     /* HOW MANY TIMES THIS SEARCH'S BYTES HAVE ENTERED THE PAGE'S OWN PROGRAM — the report's bottom rung, and
-       the ONE fact here whose observation site is not a sink. Written from solve_observe_substitution, which
-       solver/concolic.c calls at the moment it performs the substitution, so it is strictly before every other
-       number on this entry and it is the only one that can be about a candidate still on the runway.
+       the lowest fact here whose observation site is a point in the page's OWN program. Written from
+       solve_observe_substitution, which solver/concolic.c calls at the moment it performs the substitution, so
+       it is strictly before every SINK-side number on this entry. It is no longer the only one that can be
+       about a candidate still on the runway — `replay_pm` below is, and that is the whole reason it exists:
+       this field's site is AT the source read, so `substituted:0` is where the runway BEGINS to be a question
+       rather than a number that can answer one.
        `substituted:0` BESIDE `turns:N` IS A POSITIVE STATEMENT AND THE WHOLE REASON THE FIELD EXISTS: these
        candidates have held the thread and not one of them reached its own SOURCE READ, so the question is
        about the PATH in front of the source — a gate turning the flows away — and not about the payload, the
@@ -195,6 +198,38 @@ typedef struct {
        crossings, the flow's comparator keeps FLOW_RUNG_DELIVERED, and this is the REPORT's copy of the same
        event — the third accounting unit, and the only one a reader ever sees. */
     int substituted;
+    /* …AND THE ONE RUNG BENEATH *THAT*, WHICH THE COMPARATOR HAS BEEN READING AND THE REPORT COULD NOT SAY.
+       `substituted:0` beside `turns:N` is a positive statement — these runs ended before their own source
+       read — and it is structurally silent about HOW FAR they got, which on a runway of hundreds of
+       statements is the whole remaining question. The two states it has been saying at once are
+         runway 0     — the candidates were given the thread and consumed none of their own recorded path:
+                        a question about what is turning them back at the very start of the replay, and
+                        nothing whatever about the distance to the source.
+         runway ~1000 — they walked their recorded path and the source read is still in front of them: the
+                        distance question, and the one the fitness rung below FLOW_RUNG_DELIVERED exists to
+                        direct. Those take opposite work and were one number.
+       THE OBSERVATION IS flow.c's AND IS NOT RE-DERIVED HERE. `Flow.cand_replay` is the fraction of a
+       candidate's own recorded decision path that this run has REPLAYED, written by flow_observe_replay from
+       dec_replay one arm at a time and asserted monotone there; flow_distance reads it as the ladder's bottom
+       rung and flow_observe_rung PINS it to 1.0 at the delivery. Until now that was the whole of its
+       readership — a value computed and asserted on every replayed arm and visible in no document, which
+       §@S names as the mirror of the read-with-no-writer defect and which this file has already had to fix
+       twice (`survivedAt`/`survivedTo`, and the derivations' own return values).
+       THOUSANDTHS AND NOT A FRACTION, with the unit in the KEY. json_buf writes numbers through snprintf and
+       every other count on this entry is an `int`; emitting a float here would put a locale-dependent
+       spelling into a document three consumers parse. The unit is stated in the name for the reason
+       CLAUDE.md gives about a counter's kind — a bare `runway` reads as a count of runways.
+       A BEST-SO-FAR OVER THE SEARCH, like `surv_run`, because the record outlives every flow that produced
+       it: the flow-side value is per FLOW and re-earned across a park, and what the card has to be able to
+       say is the furthest ANY candidate of this search has been observed at. Nothing about the WFQ moves at
+       the write — this is the REPORT's third accounting unit exactly as `substituted` is.
+       WHAT IT IS A FRACTION OF IS DECISION ARMS AND NOT STATEMENTS, which is the reading a consumer must not
+       get wrong: a candidate whose recorded path is short saturates this at 1000 while still far from its
+       source read in program order. That is not a defect in the number, it is the same fact about the
+       comparator — so `runwayPerMille:1000` standing beside `substituted:0` says the ladder's bottom rung is
+       SATURATED and the remaining runway is unmeasured by it, which is §@S(i)'s objection one level out and
+       is exactly what this field exists to be able to state. */
+    int replay_pm;
     /* …AND HOW MANY STRINGS A CODE-EXECUTION SINK WAS HANDED WHILE THEY WERE LIVE — the observation COUNT that
        `surv_run` is the best of, and the half a ratchet cannot state. A best-so-far records the furthest
        anything got and says nothing about how often it looked, so `surv_run:0` meant either "no sink ran at
@@ -726,6 +761,11 @@ static Cand *sink_search(const char *src, int sink, int *created) {
        thread, which is the confident-wrong-instruction direction this pair exists to remove. */
     e->substituted = 0;
     e->sink_strings = 0;
+    /* AND THE RUNWAY RATCHET TAKES THE SAME LINE FOR THE REASON THE SENTENCE ABOUT `surv_len` GIVES, which is
+       the sharper one of the two: a best-so-far left holding garbage does not merely misreport — it makes
+       every real observation compare against a maximum nothing ever reached, so the field never moves again
+       and reads as a candidate that consumed none of its path for the rest of the session. */
+    e->replay_pm = 0;
     /* THE TWO NEW RUNGS TAKE THE SAME LINE AS THE OTHER FOUR, and the comment above this block is why: the
        array is realloc'd and never zeroed, so a field left out here reads whatever the allocator held. For a
        best-so-far ratchet that is not merely a wrong report — a garbage `surv_len` makes the first real
@@ -2342,6 +2382,35 @@ void solve_observe_substitution(Flow *f) {
     e->substituted++;
 }
 
+/* THE RUNWAY READING, TAKEN AT THE TWO MOMENTS THIS FILE HAS AND NOT AT A THIRD IT WOULD HAVE TO INVENT.
+   `Flow.cand_replay` moves inside dec_replay, arm by arm, in a component this file does not call and cannot
+   be called back by; what solve.c holds are the two seams engine.c already routes through it — the switch-IN
+   (solve_flow_begin, which is where `turns` is counted) and the FINISH (solve_flow_end). So the reading is
+   taken there, and the ratchet is what makes two sparse samples add up to the search's furthest: a per-flow
+   value that only ever rises, sampled at every switch-in of every candidate and once more when one ends.
+   THE RESIDUAL IS NAMED BECAUSE IT IS REAL AND SMALL. A candidate that takes the thread, walks part of its
+   runway and is then PARKED or is still live when the document is emitted contributes only what its last
+   switch-in saw — engine.c has no solve-side switch-OUT seam, and inventing one to close this would be a
+   second door into the candidate state for a report counter's benefit. It shows as a `runwayPerMille` that
+   under-reads a search whose flows are long-lived and rarely switched; it can never over-read, because every
+   value sampled is one this flow had already reached. The next diff that needs the tighter number takes the
+   reading where flow.c already has it — flow_observe_replay's signature is `(Flow *, long consumed, long
+   total)`, so the numerator and denominator the pair form is available at that site and at no other.
+   READ THROUGH THE FIELD AND NOT THROUGH flow_distance, deliberately: flow_distance is the whole comparator
+   (`(cand_replay + cand_surv + cand_rung) / FLOW_RUNGS_N`) and taking the runway out of it would be this file
+   re-deriving another component's arithmetic — the thing an auditor is forbidden to do, one level down. */
+static void observe_runway(Cand *e, const Flow *f) {
+    int pm;
+
+    DCHECK(f->cand_replay >= 0.0 && f->cand_replay <= 1.0,
+           "an @S candidate's runway position is not a fraction of its own recorded path — flow.c's "
+           "flow_observe_replay asserts [0,1] at every write and flow_observe_rung pins it to exactly 1.0 at "
+           "the delivery, so a value outside that range is the ladder's bottom rung carrying something other "
+           "than the fraction this record is about to publish as one");
+    pm = (int)(f->cand_replay * 1000.0 + 0.5);
+    if (pm > e->replay_pm) e->replay_pm = pm;
+}
+
 void solve_flow_begin(Flow *f) {
     concolic_set_candidate(f ? f->cand_src : NULL, f ? f->cand_payload : NULL);
     endpoint_suppress(f && f->cand_src ? 1 : 0);
@@ -2376,6 +2445,12 @@ void solve_flow_begin(Flow *f) {
                "standing over `tried:0` is a candidate assembled outside them and the parked card is about "
                "to report turns with nothing behind them");
         if (e) e->turns++;
+        /* AND THE RUNWAY THIS CANDIDATE HAD ALREADY WALKED WHEN IT LAST HELD THE THREAD — taken at the same
+           moment `turns` is raised because they are the two halves of one reading: `turns` says the WFQ gave
+           this search the thread and this says how far the thread got it. Sampled BEFORE the quantum rather
+           than after it, which is what makes it a fact about runs that have finished rather than a promise
+           about the one about to start. */
+        if (e) observe_runway(e, f);
     }
 }
 
@@ -2390,6 +2465,17 @@ void solve_flow_begin(Flow *f) {
    with them. */
 void solve_flow_end(Flow *f) {
     if (!f || !f->cand_src) return;
+    /* THE LAST RUNWAY READING THIS CANDIDATE WILL EVER OFFER, and the one the switch-in sampling structurally
+       cannot take: a flow that holds the thread from its final switch-in to its own end contributes nothing
+       through solve_flow_begin, and that is exactly the candidate that walked furthest. Taken before
+       `cand_verifying` is cleared so the two statements about this flow are made in one place. */
+    Cand *e = search_of(f->cand_src, sink_class_of_name(f->cand_sink));
+    DCHECK(e != NULL,
+           "a candidate flow ended for a sink search this session has no entry for — a candidate exists only "
+           "because detection opened one and a cold-resumed one re-registers before it runs an opcode, so an "
+           "absent entry here is the search having been dropped under a flow that was still running it, and "
+           "the runway this candidate walked is about to be lost with it");
+    if (e) observe_runway(e, f);
     f->cand_verifying = 0;
 }
 
@@ -2623,6 +2709,24 @@ char *solve_json_array(JSContext *ctx) {
         snprintf(t, sizeof t, "%d", g_pending[i].substituted); json_buf_raw(&b, t);
         json_buf_raw(&b, ","); json_buf_key(&b, "sinkStrings");
         snprintf(t, sizeof t, "%d", g_pending[i].sink_strings); json_buf_raw(&b, t);
+        /* …AND THE RUNG BENEATH BOTH OF THEM, WHICH IS THE ONE `substituted:0` COULD NOT SAY ANYTHING ABOUT.
+           The three states above all begin at or past the source read; this one is the approach to it, and
+           it is what splits `substituted:0` — a positive statement that these runs ended before their own
+           source read — into the two things it has been saying at once:
+             `runwayPerMille:0`     — the candidates were given the thread and consumed NONE of their own
+                                      recorded path. A question about what turns a replay back at its first
+                                      arm, and nothing about the distance to the source.
+             `runwayPerMille:~1000` — they consumed the whole of it and the source read is still ahead. The
+                                      distance question, and a statement that the fitness rung below
+                                      FLOW_RUNG_DELIVERED is SATURATED and is directing nothing further.
+           THOUSANDTHS, WITH THE UNIT IN THE KEY, for the reason the field's own declaration gives: every
+           other number on this entry is a count, and a bare `runway` would be read as one.
+           UNCONDITIONAL AND 0 IS THE LOAD-BEARING READING, exactly as for the two above — a search whose
+           candidates have never been switched in reports 0 here beside `turns:0`, and one whose candidates
+           ran and replayed nothing reports 0 beside `turns:N`. Those are told apart by `turns`, which is why
+           this field is emitted next to it and not instead of it. */
+        json_buf_raw(&b, ","); json_buf_key(&b, "runwayPerMille");
+        snprintf(t, sizeof t, "%d", g_pending[i].replay_pm); json_buf_raw(&b, t);
         /* …AND THE TWO MIDDLE RUNGS, WHICH IS WHAT SPLITS `reached:0` AND `reached:N` INTO THE FOUR STATES THEY
            REALLY ARE. `survived`/`survivedOf` is the FURTHEST any candidate of this search has got its own
            bytes through the page's own transforms to ANY sink, so `turns:900,reached:0,survived:11,

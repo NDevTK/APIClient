@@ -7824,6 +7824,28 @@ static int s_sinkstrings(const char *js, const char *sink, const char *src, int 
     return s_num(js, sink, src, "sinkStrings") > 0;
 }
 
+/* AND THE ONE RUNG BELOW `-substituted`, WHICH IS THE FIRST THING IN THIS FILE OBSERVED STRICTLY BEFORE THE
+ * SOURCE READ. Every rung above it — the delivery, the survival fraction, the two sink booleans — has its site
+ * AT or PAST a point the candidate has to arrive at, so with all of them at 0 this fixture could say only that
+ * the runs "ended before their own source read" and nothing whatever about how far they got. On a runway of
+ * hundreds of statements that is the whole remaining question, and it is §@S(i)'s own objection ("a candidate
+ * 800 gates into its replay and one that has not yet reached its own SOURCE READ both stand at exactly 0")
+ * arriving in the instrument rather than in the comparator.
+ * THE FACT IS THE PRODUCER'S. solve.c emits `runwayPerMille` as the search's BEST reading of flow.h's
+ * `cand_replay` — the fraction of a candidate's own recorded decision path that a run has REPLAYED, written by
+ * flow.c's flow_observe_replay one arm at a time and pinned to 1.0 at the delivery — so this row is a read and
+ * not a re-derivation. THE BOOLEAN IS `> 0` AND NOT `== 1000` because the two states that take opposite work
+ * are "the replay was turned back at its first arm" and "it moved at all"; a saturation row would be a second
+ * question and the number itself is in the document for whoever is asking it.
+ * THE FIRED AND UNSEEN ARMS ARE s_substituted's, on its ground exactly: a fired record carries the reproduction
+ * envelope instead of the counters, and a search that fired has by construction delivered, which pins this rung
+ * to its ceiling; S_UNSEEN has no record to ask and s_num would abort rather than default. */
+static int s_runway(const char *js, const char *sink, const char *src, int stage) {
+    if (stage == S_FIRED)  return 1;
+    if (stage == S_UNSEEN) return 0;
+    return s_num(js, sink, src, "runwayPerMille") > 0;
+}
+
 /* AND THE LADDER IS MONOTONE, ASSERTED AT EACH SEARCH RATHER THAN ONCE FOR ALL OF THEM. Every implication below
  * is an invariant the ENGINE already asserts at the site that establishes it, read back off the emitted
  * document — breakout_arrived DCHECKs `npl > nprobe` at the arrival, derive_from_witness runs only on a stored
@@ -10671,6 +10693,18 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     int s_park_str    = s_sinkstrings(ss, "innerHTML", LOCATION_HASH_SRC, st_lpark);
     int s_attr_sub    = s_substituted(ss, "innerHTML", ATTR_SRC,          st_attr);
     int s_attr_str    = s_sinkstrings(ss, "innerHTML", ATTR_SRC,          st_attr);
+    /* …AND THE RUNG BELOW ALL FOURTEEN OF THOSE, FOR EVERY ONE OF THE SEVEN SEARCHES. It is read here rather
+       than for a chosen few for the reason the block above states about `-witnessed`: a rung computed for one
+       search out of seven is a rung whose ABSENCE and whose ZERO read alike for the other six, which is the
+       tell §@S names and which this file has already committed once. The seven are the whole of what the
+       fixture drives, and `runwayPerMille` is emitted unconditionally on every parked entry. */
+    int s_eval_way    = s_runway(ss, "eval",      "{state}.code",    st_eval);
+    int s_evalc_way   = s_runway(ss, "eval",      "{state}.note",    st_evalc);
+    int s_html_way    = s_runway(ss, "innerHTML", "{state}.html",    st_html);
+    int s_url_way     = s_runway(ss, "location",  "{state}.next",    st_url);
+    int s_loc_way     = s_runway(ss, "eval",      LOCATION_HASH_SRC, st_loc);
+    int s_park_way    = s_runway(ss, "innerHTML", LOCATION_HASH_SRC, st_lpark);
+    int s_attr_way    = s_runway(ss, "innerHTML", ATTR_SRC,          st_attr);
     /* AND THE DELIVERY PROBE'S OWN ARRIVAL COUNT FOR THE TWO SEARCHES WHOSE ROWS TURNED ON IT. `-nodeliver`
        asks whether the MEASURED set is present and empty, and 0 there was three states: the search holds no
        delivery probe, it holds one that has never reached a sink, and it holds one that arrived and found some
@@ -11582,6 +11616,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            code-execution sink has run while they were live" from "sinks RAN and none of their strings held a
            byte of this search's probe". See s_substituted for the producer facts and why every class has both.
         */
+        { "s-eval-runway", s_eval_way, "state.code", SESS_EXPLORE },
         { "s-eval-substituted", s_eval_sub, "state.code", SESS_EXPLORE },
         { "s-eval-sinkstrings", s_eval_str, "state.code", SESS_EXPLORE },
         { "s-eval-witnessed", s_eval_wit, "state.code", SESS_EXPLORE },
@@ -11589,6 +11624,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "s-eval-atsink", st_eval >= S_ARRIVED, "state.code", SESS_EXPLORE },
         { "s-evalc-seen", st_evalc >= S_SEEN, "state.note", SESS_EXPLORE },
         { "s-evalc-ran", st_evalc >= S_RAN, "state.note", SESS_EXPLORE },
+        { "s-evalc-runway", s_evalc_way, "state.note", SESS_EXPLORE },
         { "s-evalc-substituted", s_evalc_sub, "state.note", SESS_EXPLORE },
         { "s-evalc-sinkstrings", s_evalc_str, "state.note", SESS_EXPLORE },
         { "s-evalc-witnessed", s_evalc_wit, "state.note", SESS_EXPLORE },
@@ -11596,6 +11632,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "s-evalc-atsink", st_evalc >= S_ARRIVED, "state.note", SESS_EXPLORE },
         { "s-html-seen", st_html >= S_SEEN, "state.html", SESS_EXPLORE },
         { "s-html-ran", st_html >= S_RAN, "state.html", SESS_EXPLORE },
+        { "s-html-runway", s_html_way, "state.html", SESS_EXPLORE },
         { "s-html-substituted", s_html_sub, "state.html", SESS_EXPLORE },
         { "s-html-sinkstrings", s_html_str, "state.html", SESS_EXPLORE },
         { "s-html-witnessed", s_html_wit, "state.html", SESS_EXPLORE },
@@ -11609,11 +11646,13 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            is already a breakout. These two are emitted unconditionally for every parked entry, so here they say
            the most they can say anywhere: with no derivation to wait on, `-ran=1, -substituted=0` is a pure
            statement about the path in front of the source read. */
+        { "s-url-runway", s_url_way, "state.next", SESS_EXPLORE },
         { "s-url-substituted", s_url_sub, "state.next", SESS_EXPLORE },
         { "s-url-sinkstrings", s_url_str, "state.next", SESS_EXPLORE },
         { "s-url-atsink", st_url >= S_ARRIVED, "state.next", SESS_EXPLORE },
         { "s-loc-seen", st_loc >= S_SEEN, "location.hash", SESS_EXPLORE },
         { "s-loc-ran", st_loc >= S_RAN, "location.hash", SESS_EXPLORE },
+        { "s-loc-runway", s_loc_way, "location.hash", SESS_EXPLORE },
         { "s-loc-substituted", s_loc_sub, "location.hash", SESS_EXPLORE },
         { "s-loc-sinkstrings", s_loc_str, "location.hash", SESS_EXPLORE },
         { "s-loc-witnessed", s_loc_wit, "location.hash", SESS_EXPLORE },
@@ -11633,6 +11672,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            probes the WFQ runs first. What replaces it as the statement of a genuine failure is
            `s-park-nodeliver`, which is the observation itself. */
         { "s-park-ran", st_lpark >= S_RAN, "location.hash", SESS_EXPLORE },
+        { "s-park-runway", s_park_way, "location.hash", SESS_EXPLORE },
         { "s-park-substituted", s_park_sub, "location.hash", SESS_EXPLORE },
         { "s-park-sinkstrings", s_park_str, "location.hash", SESS_EXPLORE },
         /* …AND THE REST OF THAT PREMISE, WHICH `-ran` ALONE DOES NOT MAKE. `s-park` says this search emits no
@@ -11678,6 +11718,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "s-attr-seen", st_attr >= S_SEEN, "location.hash", SESS_EXPLORE },
         { "s-attr-seeded", st_attr >= S_SEEDED, "location.hash", SESS_EXPLORE },
         { "s-attr-ran", st_attr >= S_RAN, "location.hash", SESS_EXPLORE },
+        { "s-attr-runway", s_attr_way, "location.hash", SESS_EXPLORE },
         { "s-attr-substituted", s_attr_sub, "location.hash", SESS_EXPLORE },
         { "s-attr-sinkstrings", s_attr_str, "location.hash", SESS_EXPLORE },
         { "s-attr-witnessed", s_attr_wit, "location.hash", SESS_EXPLORE },

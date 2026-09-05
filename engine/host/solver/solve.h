@@ -174,7 +174,7 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
                       ,"searched":N[,"sourceEncodes":".."][,"sourceDelivers":".."][,"delivery":".."]
                       [,"deliveryPrefix":"#"]}`
      parked search  `{"sink":..,"source":..,"search":"parked","tried":N,"resumed":R,"reached":M,"turns":T,
-                      "substituted":D,"sinkStrings":X,"survived":S,
+                      "substituted":D,"sinkStrings":X,"runwayPerMille":R2,"survived":S,
                       "survivedOf":L[,"survivedAt":A,"survivedTo":O],"escaped":E[,"fires":F][,"witnessed":W]
                       [,"deliveryProbed":B],"probes":P,"payloads":[..],
                       "survivedBy":[..],"withdrawn":[..]
@@ -244,8 +244,24 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
                                       they were handed. A question about the PAYLOAD, and the opposite work
                                       from the line above it.
    §@S names that tell exactly — a rung whose ABSENCE and whose ZERO read alike — and `survived:0` was both.
-   `substituted` IS OBSERVED AT THE SOURCE READ and is the only number on this entry whose site is not a sink,
-   which is what §@S(i) asks for; `sinkStrings` is observed where the survival fraction is, class-independently,
+   `runwayPerMille` IS THE ONE BENEATH BOTH OF THEM AND IS THE ONLY NUMBER HERE OBSERVED STRICTLY BEFORE THE
+   SOURCE READ. All three states above begin at or past it, so `substituted:0` — the positive statement that
+   these runs ended before their own source read — was itself two facts under one spelling:
+     `runwayPerMille:0`     — the candidates held the thread and consumed NONE of their own recorded path. A
+                              question about what turns a replay back at its first arm.
+     `runwayPerMille:~1000` — they consumed all of it and the source read is still ahead. The distance
+                              question, AND the statement that the fitness rung below FLOW_RUNG_DELIVERED is
+                              saturated and directing nothing further, which is §@S(i)'s objection one level out.
+   It is the report's copy of flow.h's `cand_replay` — the fraction of a candidate's recorded decision path
+   this run has REPLAYED, written by flow.c's flow_observe_replay from dec_replay one arm at a time, monotone
+   per flow, pinned to 1.0 at the delivery by flow_observe_rung, and until now read by flow_distance and by
+   NOTHING ELSE. Held as the search's BEST over its candidates, like `survived`, because the record outlives
+   every flow; sampled where solve.c has a seam on a candidate (the switch-in and the finish), which under-reads
+   a candidate parked mid-runway and can never over-read. IN THOUSANDTHS, with the unit in the key, because
+   every other number here is a count. A FRACTION OF DECISION ARMS AND NOT OF STATEMENTS: a short recorded path
+   saturates it while the source read is still far away in program order, which is a property of the comparator
+   itself and is exactly what the saturated reading above says out loud.
+   `substituted` IS OBSERVED AT THE SOURCE READ, which is what §@S(i) asks for of everything above it; `sinkStrings` is observed where the survival fraction is, class-independently,
    so it counts every code-execution sink write during this search's candidate runs and not only its own class's.
    BOTH ARE COUNTS AND NEITHER IS A RUNG: nothing about the WFQ moves at either write, so §@S(ii)'s ledger and
    the flow's comparator are untouched. `substituted` counts SUBSTITUTIONS rather than distinct candidates (a

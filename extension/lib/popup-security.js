@@ -254,8 +254,8 @@ function _parkedProgress(item) {
          + (item.tried === 1 ? " is" : "s are") + ' seeded and queued and NOTHING has run yet, so this is a '
          + 'scheduling state and not a search that failed';
   // THE RUNWAY STATE, CHECKED BEFORE EVERY SINK ONE BECAUSE ALL OF THEM ARE WRONG ABOUT IT — INCLUDING THE
-  // PROBE BRANCH BELOW. `substituted` is the only number on this record whose observation site is not a sink
-  // (solve.h): it is raised where the page's own source read hands back the candidate's bytes. A zero here is
+  // PROBE BRANCH BELOW. `substituted` is raised where the page's own source read hands back the candidate's
+  // bytes (solve.h), so its site is the lowest one in the page's own program. A zero here is
   // not a thinner reading of the distance question further down, it is a DIFFERENT question — about the path
   // in front of the SOURCE — and every sentence below names the wrong distance for it. It also subsumes the
   // probe branch's own `witnessed === 0` arm rather than competing with it: a context is READ off a string a
@@ -266,8 +266,18 @@ function _parkedProgress(item) {
     return held + ' and NOT ONE of them reached its own SOURCE READ — the substitution is performed where the '
          + 'page reads the attacker source, and it has never once happened for this search, so these bytes '
          + 'have never been in the page\'s program at all. That is a question about the PATH in front of the '
-         + 'source: a gate is turning these flows away before they get to the read. Nothing here is about the '
-         + 'payload, the page\'s own filter or the sink';
+         + 'source: something is turning these flows away before they get to the read. Nothing here is about '
+         + 'the payload, the page\'s own filter or the sink';
+  // AND THIS SENTENCE IS STILL TWO STATES UNDER ONE READING, WHICH IS A NAMED RESIDUAL AND NOT AN OVERSIGHT.
+  // solve.c now emits `runwayPerMille` — the report's copy of the ladder rung BELOW the delivery (flow.h's
+  // `cand_replay`, the fraction of a candidate's recorded decision path a run has replayed) — and it splits
+  // the branch above into "the replay was turned back at its first arm" (0) and "it consumed its whole
+  // recorded path and the source read is still ahead" (~1000), which take opposite work. This card does not
+  // read it yet DELIBERATELY: the field is emitted by C that is live only after a build, while this file is
+  // interpreted from the tree and deploys on write, so a reader here would speak a protocol the shipped wasm
+  // does not implement (CLAUDE.md §A-CROSS-BOUNDARY-DIFF). The next diff lands both halves together and
+  // branches this sentence on the number. Its absence shows as this card telling a user "something is turning
+  // these flows away" for a search whose candidates walked their whole runway and simply ran out of thread.
   // THE STATE THE OTHER FOUR CANNOT SAY, AND IT IS CHECKED BEFORE THEM BECAUSE THEY ARE WRONG ABOUT IT. When
   // every candidate this search has run is an inert probe, no breakout has been CONSTRUCTED — so `reached:0`
   // is not a distance question and not a filter question, and the two branches below state both of those as
