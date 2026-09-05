@@ -622,9 +622,8 @@ static IoRect io_compute_intersection(JSContext *ctx, lxb_dom_node_t *target, JS
            §3.2.7's own step 3.4 applies to it in full. That is the value css-overflow added so an author could
            clip WITHOUT a scroll container, which is precisely the case the fused predicate could not express.
            (Every bare sub-number in this paragraph is INTERSECTION OBSERVER §3.2.7's, not the css-overflow-3
-           section named beside it.) Both questions
-           are now asked of core/layout/scroll_container.h, which reads ONE computed keyword and answers each
-           over it, so they cannot drift apart. */
+           section named beside it.) Both questions are now asked of core/layout/scroll_container.h, which
+           reads ONE computed keyword and answers each over it, so they cannot drift apart. */
         if (scroll_container_is(container))                               /* step 3.3 */
             DFAIL("INTERSECTION OBSERVER §3.2.7 step 3.3: this container IS a css-overflow-3 §3.1 SCROLL "
                   "CONTAINER, so the observer's [[scrollMargin]] — which §3.2.1 parses and §2.2 serializes — "
