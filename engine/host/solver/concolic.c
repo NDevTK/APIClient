@@ -5,6 +5,7 @@
 #include "solver/flow.h"
 #include "solver/decide.h"    /* the ONE speller of a constraint key — see concolic_exotic_own_names' read */
 #include "solver/solve.h"     /* …and the SEARCH is told a substitution happened — see concolic_deliver */
+#include "solver/solve_filter.h" /* …and the SEARCH is told which bytes its carrier refuses, before it builds one */
 #include "solver/reclaim.h"   /* the engine's own allocations ask for a flow back before they fail */
 #include "check.h"
 #include <stdarg.h>
@@ -1943,6 +1944,62 @@ static CarrierKind root_carrier(const char *root)
     return CARRIER_VERBATIM;
 }
 
+/* THE BYTES NO ROW DECLARES AND EVERY MECHANISM MUST ANSWER FOR — the question root_carrier's tri-state is an
+   answer TO, spelled once because it has two readers that must not drift: the delivery loop below, which
+   applies the mechanism to a candidate's bytes as they enter the page's program, and
+   concolic_source_carrier_bytes, which states the same fact to a search BEFORE an escape carrying one of them
+   is ever constructed. Two right answers to one question is the shape that drifts, so there is one.
+   `< 0x20` is Infra's C0 control exactly ("a code point in the range U+0000 NULL to U+001F INFORMATION
+   SEPARATOR ONE, inclusive"), and `> 0x7E` is URL §1.3 "Percent-encoded bytes"'s "all code points greater than
+   U+007E (~)" — which is why DEL needs no clause of its own: 0x7F is greater than 0x7E, and the `*p == 0x7F`
+   that stood at the loop was this set's high range implemented for ONE of its 129 members. Byte-wise `%XX`
+   over a UTF-8 payload IS §1.3's UTF-8 percent-encode, whose own loop runs "for each byte of encodeOutput"
+   and percent-encodes each one under a set it asserts "includes all non-ASCII code points". */
+static int carrier_shared_byte(unsigned char b) { return b < 0x20 || b > 0x7E; }
+
+/* WHICH OF A ROOT'S BYTES CANNOT ARRIVE AT ALL — the declaration's half of an @S search's delivery table, and
+ * the only half of it that is a FACT rather than a PRIOR.
+ *
+ * THE DECLARED ENCODE SET IS NOT SEEDED HERE, AND THAT IS THE WHOLE OF THE DESIGN. solve_filter.h states why:
+ * a page that runs `decodeURIComponent` over its own fragment receives the `<` the browser encoded, and this
+ * engine already FIRES a markup PoC through exactly that round trip, so the encode column decides only WHICH
+ * BYTES ARE WORTH ASKING ABOUT — solve.c builds its delivery probe out of exactly that set — and a RUN decides
+ * the answer. Seeding it would decline that PoC, and it would refuse the instrument as well: the delivery
+ * probe carries those very bytes, so a table that pre-cleared them would withdraw the measurement it exists
+ * to take.
+ * WHAT A CONSTRAINED CARRIER REFUSES IS A DIFFERENT KIND OF FACT, which is why it may be seeded when the
+ * column beside it may not. A byte outside printable US-ASCII reaching SRC_DELIVER_PLANT is neither
+ * percent-encoded nor carried — root_carrier says why, and concolic_deliver crashes on it by name — so there
+ * is no encoded form of it anywhere in the page's program for the page's own decoding to recover. Nothing a
+ * run can observe widens that.
+ * THE ANSWER IS RETURNED AND NOT INFERRED FROM THE TABLE. A table narrowed by a declaration and one narrowed
+ * by a run are the same 256 bytes, so a caller reading the answer off the table could not tell them apart —
+ * §Architecture's defaulted field, arriving as a silence a consumer would read as a measurement. `0` is the
+ * positive statement that this root's declaration constrains no byte, and it is reached by two routes that
+ * are ONE instruction for the caller: a root with no row, which is the state concolic_deliver states by
+ * handing the payload back untouched (nothing carries these bytes), and a row whose mechanism percent-encodes
+ * or carries every byte it is given.
+ * IT ONLY EVER CLEARS, which is what makes it safe at a seam a search reaches once per detection: the second
+ * call for one root is the same table, and it can never widen one a run has narrowed. */
+int concolic_source_carrier_bytes(const char *root, struct SolveDelivered *d)
+{
+    int b;
+
+    DCHECK(d != NULL,
+           "the @S delivery table was seeded from a source declaration into nothing — the table is the "
+           "caller's and this call is the only thing that can state the carrier's half of it, so a NULL here "
+           "is a search about to construct escapes out of bytes its carrier refuses");
+    /* ASKED OF THE ROW FIRST, AND NOT OF root_carrier ALONE, which DFAILs on a root with no row. That assert
+       is concolic_deliver's and it is right there: a payload is ALREADY being delivered under a mechanism
+       nothing states. Here an undeclared root is an ordinary answer rather than an error — server-injected
+       page state (`window.__FLAGS`) is written by the attacker directly and no component transforms it. */
+    if (!root || root_declared_row(root) < 0) return 0;
+    if (root_carrier(root) != CARRIER_CONSTRAINED) return 0;
+    for (b = 0; b < 256; b++)
+        if (carrier_shared_byte((unsigned char)b)) d->ok[b] = 0;
+    return 1;
+}
+
 /* JSConcolicHooks.lead — the DOMAIN fact the delivery declaration already holds, read by a builtin that has to
    decide whether one of its completions is feasible at all. The prefix is what the component states its
    component's value carries (`#` for a fragment, `?` for a query), so this is not a guess about the value: it
@@ -2083,28 +2140,29 @@ static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *roo
     if (at && at->prefix) out[o++] = at->prefix;
     for (p = (const unsigned char *)payload; *p; p++) {
         /* THE BYTE IS OUTSIDE PRINTABLE US-ASCII, so what happens to it is the MECHANISM's to say and not this
-           row's — see root_carrier. `< 0x20` is Infra's C0 control exactly ("a code point in the range U+0000
-           NULL to U+001F INFORMATION SEPARATOR ONE, inclusive"), and `> 0x7E` is URL §1.3's "all code points
-           greater than U+007E (~)" — which is why DEL needs no clause of its own: 0x7F is greater than 0x7E,
-           and the `*p == 0x7F` that stood here was this set's high range implemented for ONE of its 129
-           members. Byte-wise `%XX` over a UTF-8 payload IS §1.3's UTF-8 percent-encode, whose own loop runs
-           "for each byte of encodeOutput" and percent-encodes each one under a set it asserts "includes all
-           non-ASCII code points". */
-        int shared = *p < 0x20 || *p > 0x7E;
+           row's — see root_carrier. The predicate is carrier_shared_byte's and not this loop's, because
+           concolic_source_carrier_bytes answers the same question to a search one stage earlier and the two
+           must not be able to disagree about which bytes those are; its definition carries the URL §1.3 and
+           Infra text this comment used to hold. */
+        int shared = carrier_shared_byte(*p);
 
         if (shared && carrier == CARRIER_CONSTRAINED) {
             /* NEITHER ANSWER IS AVAILABLE, so neither is given. Percent-encoding it claims a transform the
                carrier does not perform (a `;` does not reach a cookie as `%3B`, and a CTL does not reach one at
                all), and passing it raw claims a plant RFC 6265 §4.1.1's cookie-octet forbids — so the candidate
                would be recorded as a search that failed rather than as one that was never deliverable.
-               WHAT THE NEXT DIFF BUILDS: the derivation's own constraint table (solver/solve_filter.h's
-               SolveDelivered, which solve.c seeds with solve_delivered_all and narrows only from an observed
-               run) starts from the DECLARATION for a constrained carrier, so solve_html.c's and solve_js.c's
-               emitters decline such an escape at construction — the site the two-sided constraint already runs
-               at — instead of it arriving here with no delivery to give it. HOW ITS ABSENCE SHOWS: this abort,
-               reached today by a cookie-sourced JS-context search whose hole sits in a §12.4 SingleLineComment,
-               because that state's exit escape is the one derived breakout in this engine carrying a byte
-               outside printable US-ASCII. */
+               THIS IS A BACKSTOP NOW AND NOT A RESIDUAL, and the residual that stood here is deleted with the
+               diff that built what it asked for: concolic_source_carrier_bytes states this same refusal to a
+               search at the moment it learns its root, so solve_html.c's and solve_js.c's emitters decline such
+               an escape where it is CONSTRUCTED and solve_seed_candidates withdraws one already queued. The
+               case it named — a cookie-sourced JS-context search whose hole sits in a §12.4 SingleLineComment,
+               whose exit escape is the one derived breakout in this engine carrying a byte outside printable
+               US-ASCII — is refused at construction and reported as a parked search.
+               IT STAYS BECAUSE THE SEED IS NOT THE ONLY DOOR ONTO A CANDIDATE FLOW. A candidate rebuilt from
+               the cold tier carries a payload read out of a park document rather than one this session
+               constructed, and solve_resume_candidate is handed its search's root and NOT those bytes — so a
+               record written by a build that predates this refusal resumes without being asked. That is the
+               one route left to this abort, and it is what the abort now names. */
             DFAILF("an @S candidate carries the byte 0x%02X to a source whose carrier can neither encode it nor "
                    "hold it — the declared set lists only the PRINTABLE bytes the carrier's own production "
                    "excludes, so a byte outside US-ASCII has no delivery this component can state and both "

@@ -438,6 +438,19 @@ int         concolic_source_delivery(const char *root, const char **kind, char *
    over as-is). A PARKED @S search reports it because it is the constraint every candidate had to survive, and
    it is a FACT read from the declaration rather than a guess at why nothing fired. */
 const char *concolic_source_encodes(const char *root);
+/* …AND THE BYTES THAT ROOT'S CARRIER CANNOT DELIVER IN ANY FORM, cleared from an @S search's delivery table.
+   The two are DIFFERENT KINDS OF FACT and the caller may not substitute one for the other: what the component
+   PERCENT-ENCODES is a prior, because the page may decode it back and this engine already fires a markup PoC
+   through exactly that round trip, so only a run settles it; what the carrier REFUSES never enters the page's
+   program at all, so no run can widen it and it is the half a search may start from.
+   ANSWERS 1 WHEN THE DECLARATION NARROWED THE TABLE and 0 when it constrains no byte, which is a positive
+   statement and not a silence — a caller cannot read that answer off the table, because a table narrowed by a
+   declaration and one narrowed by a run are the same 256 bytes. Only ever clears, so calling it twice for one
+   root is the same table. The tag is solver/solve_filter.h's; forward-declared at file scope rather than
+   included so a browser component that declares a source does not acquire the @S filter's header, and at file
+   scope rather than in the parameter list so the two spellings are ONE type. */
+struct SolveDelivered;
+int         concolic_source_carrier_bytes(const char *root, struct SolveDelivered *d);
 
 /* Comparison constraint domain: `x === 'admin'` on a concolic must FORK (not collapse to concrete false), and
    the taken arm pins/negates. */

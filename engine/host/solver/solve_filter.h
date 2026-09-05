@@ -99,13 +99,31 @@ void solve_filter_survival(const char *out, const char *cand, FilterObs *o);
  * engine already fires. What the declaration decides is WHICH BYTES ARE WORTH MEASURING (solve.c builds its
  * delivery probe out of exactly that set); what the run decides is the answer.
  *
- * SOUND-ONLY, IN THE SAME DIRECTION §Solver-half prunes branches: every byte starts DELIVERABLE and is cleared
- * only by an observation that the byte did not arrive, so a source whose probe has not come back yet keeps
- * every arm. An over-tight table declines an escape that would have fired; an over-loose one merely spends a
- * document re-run. */
-typedef struct { unsigned char ok[256]; } SolveDelivered;
+ * SOUND-ONLY, IN THE SAME DIRECTION §Solver-half prunes branches: a byte is cleared only by something that
+ * CONTRADICTS its arrival, so a source whose probe has not come back yet keeps every arm. An over-tight table
+ * declines an escape that would have fired; an over-loose one merely spends a document re-run.
+ * TWO THINGS CONTRADICT AN ARRIVAL AND THEY ARE NOT THE SAME KIND OF FACT, which is why the paragraph above
+ * refuses the declaration and this one does not contradict it. A RUN is what settles the ENCODE column, for
+ * exactly the reason given: the browser percent-encoded the byte on the way in and the page may decode it
+ * back, so the declaration is a prior. What a CARRIER REFUSES is settled by the declaration alone — a byte
+ * RFC 6265 §4.1.1's cookie-octet excludes and which the plant does not percent-encode either never enters the
+ * page's program in ANY form, so there is nothing for a page-side transform to recover and no run can widen
+ * it. concolic.c owns that distinction (it owns the column both halves are read from) and states it
+ * at one call, concolic_source_carrier_bytes; solve.c asks it where a search learns its root. The declared
+ * ENCODE bytes are still never cleared here, and solve.c asserts that after every seed — pre-clearing them
+ * would refuse the delivery probe, which is BUILT out of exactly those bytes.
+ * A SEEDED TABLE IS NOT A MEASURED ONE, and nothing may read it as one: `deliv_seen` remains the search's
+ * answer to whether a run has observed anything, and the report's measured set is emitted only under it.
+ * (Neither paragraph above may gain a double quote. The fragment-set listing beside the URL §1.3 citation
+ * higher up spells U+0022 inside a code span, which is an UNBALANCED quote to any reader that pairs them, so
+ * the next quotation added below it is swallowed as a several-hundred-word continuation of that citation and
+ * reported as fabricated. Both paragraphs above therefore say cookie-octet and delivery-probe without
+ * quoting either.) */
+typedef struct SolveDelivered { unsigned char ok[256]; } SolveDelivered;
 
-/* EVERYTHING DELIVERS, UNTIL A RUN SAYS OTHERWISE — the initial state of a search's table. */
+/* EVERYTHING DELIVERS — the initial state of a search's table, and all a search can honestly hold before it
+   knows its own source: the carrier half is seeded from the declaration the moment the root arrives, and the
+   encode half waits for a run. */
 void solve_delivered_all(SolveDelivered *d);
 /* Does this one byte reach the sink as itself? Used where a derivation CHOOSES between two spellings of one
    §13.2.5 / §12 exit transition. */

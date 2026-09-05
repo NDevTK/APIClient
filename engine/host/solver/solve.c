@@ -356,11 +356,15 @@ typedef struct {
        whichever write happened last, which is the single-slot defect `reached` and `survivedBy` were each
        split out of. Deduped by text, because two writes of the same template produce the same witness and
        re-deriving it twice can only produce breakouts push_breakout already holds. */
-    /* AND WHETHER THE TABLE IS A MEASUREMENT YET, which is not the same question as what it holds. It starts
-       permissive, so "every byte arrives" and "no delivery probe has run" have the same contents and opposite
-       meanings — the defaulted-field defect exactly: a permissive table read as an observation would report a
-       page that decodes its own fragment for one that has never been asked. The report emits the measured set
-       only when this says there IS one, and its absence is the positive statement that none was taken. */
+    /* AND WHETHER THE TABLE IS A MEASUREMENT YET, which is not the same question as what it holds and is not
+       answerable from it. The table starts permissive and is narrowed by TWO things that are not the same kind
+       of fact — a run (observe_delivery) and the root's own carrier declaration (cand_learn_root) — so its
+       contents alone cannot say whether anybody has been asked anything: "every byte arrives", "no delivery
+       probe has run" and "the carrier refuses bytes no escape here happens to carry" are three states one
+       reading cannot separate. That is the defaulted-field defect exactly, and a permissive table read as an
+       observation would report a page that decodes its own fragment for one that has never been asked. This
+       latch is raised ONLY by a run, the report emits the measured set only when it says there is one, and its
+       absence is the positive statement that none was taken. */
     /* …AND HOW MANY TIMES THE DELIVERY PROBE ITSELF REACHED A SINK, WHICH IS A DIFFERENT FACT FROM THE ONE
        ABOVE AND WAS READING AS THE SAME ONE. `deliv_seen` is raised only where a probe TOKEN was found in the
        output, so a probe that arrived and whose every token the page destroyed leaves it at 0 — and
@@ -775,10 +779,15 @@ static Cand *sink_search(const char *src, int sink, int *created) {
        own pair: 0 is a real offset, so a zeroed pair states that a run this search has never observed begins
        at the candidate's first byte. Same realloc'd-and-never-zeroed line as every field around it. */
     e->surv_at = -1; e->surv_out = -1;
-    /* EVERYTHING DELIVERS UNTIL A RUN SAYS OTHERWISE — the sound-only direction (solve_filter.h): a search
-       whose delivery probe has not come back keeps every arm, exactly as a branch whose domain permits both
-       outcomes keeps both. The array is realloc'd and never zeroed, so an omission here would read a
-       constraint out of whatever the allocator held and decline escapes at random. */
+    /* EVERYTHING DELIVERS UNTIL SOMETHING CONTRADICTS IT — the sound-only direction (solve_filter.h): a search
+       that has been told nothing keeps every arm, exactly as a branch whose domain permits both outcomes keeps
+       both. The array is realloc'd and never zeroed, so an omission here would read a constraint out of
+       whatever the allocator held and decline escapes at random.
+       THE PERMISSIVE FILL IS ALL THIS LINE CAN HONESTLY DO, and the narrowing is not deferred to a run alone:
+       the root's carrier refuses some bytes outright and that is knowable without any run, but the root is not
+       known HERE — this is find-or-create over (source, class), whose callers reach the root by routes of their
+       own, which is exactly what the `e->root = NULL` above says. cand_learn_root is where that fact arrives,
+       so cand_learn_root is where the declaration's half of this table is seeded. */
     solve_delivered_all(&e->deliv);
     e->deliv_seen = 0;
     e->deliv_runs = 0;
@@ -905,18 +914,67 @@ static int cand_arrival_is_attack(const Cand *e, const Flow *f) {
     return kind == CAND_ESCAPE || (kind == 0 && f->cand_resumed);
 }
 
+/* THE FIRST OF A SOURCE'S DECLARED BYTES THAT ITS OWN DELIVERY TABLE REFUSES, or 0 — the whole of
+   cand_learn_root's two-sided check, held as ONE call so it can be spelled inside the DCHECKF rather than run
+   as a loop the shipped build would walk for an assert it does not make (the same shape and the same reason as
+   cand_arrival_is_attack). Side-effect-free, which is what a DCHECK condition must be (check.h). 0 is not a
+   byte a component can declare: bytes_probe indexes the set by one decimal digit appended to its token, so a
+   NUL in it would end the probe string, and every declared set in the tree is printable by construction. */
+static int declared_byte_refused(const SolveDelivered *d, const char *enc) {
+    int i;
+    for (i = 0; enc && enc[i]; i++)
+        if (!d->ok[(unsigned char)enc[i]]) return (unsigned char)enc[i];
+    return 0;
+}
+
 /* THE SEARCH LEARNS HOW THE ATTACKER'S BYTES ARRIVE — once, from the value that arrived. A source reaching a
    sink twice reaches it by the same route both times: the root is inherited unchanged through every derivation,
    so two values with the same injection identity cannot have entered by two. Asserted rather than overwritten,
    because if it ever were two the report would state whichever detection ran last. */
 static void cand_learn_root(Cand *e, const char *root) {
     DCHECK(e && root, "a sink search was told how its bytes arrive by nothing, or was told nothing");
-    if (!e->root) { e->root = strdup(root); CHECK(e->root, "solve: OOM recording a sink's delivery root"); return; }
-    DCHECK(!strcmp(e->root, root),
+    if (!e->root) { e->root = strdup(root); CHECK(e->root, "solve: OOM recording a sink's delivery root"); }
+    else DCHECK(!strcmp(e->root, root),
            "one sink search has been handed two different delivery ROOTS for one injection identity — the root "
            "is inherited unchanged through every derivation, so two values spelling the same source cannot have "
            "entered the program by two different components, and the envelope would report whichever detection "
            "ran last");
+    /* …AND THE DELIVERY TABLE TAKES THE HALF OF ITS ANSWER THAT NO RUN CAN GIVE IT, HERE, because this is the
+       one moment the root becomes known and BOTH of the search's doors pass through it — detection
+       (add_pending) and the cold tier's rebuild (solve_resume_candidate). The `return` that stood on the
+       first branch is gone for exactly that reason: on a found entry this call is the equality assert, and it
+       must still be the seed, or the search whose slot a resume created would be seeded by whichever door
+       happened to run second.
+       WHAT IT SEEDS IS NOT THE DECLARED ENCODE SET, and the distinction is concolic.c's to make rather than
+       this file's — which is why this is a call and not a table. §@S(2) is measured, so what the browser
+       percent-encodes on the way IN is a PRIOR (a page that decodes its own fragment receives the byte, and
+       this engine already fires a markup PoC through that round trip) and only a run settles it. What a
+       CONSTRAINED carrier refuses is not a prior: the byte never enters the page's program in any form, so no
+       page-side transform recovers it and no run can widen it. The registry owns the column both halves are
+       read from, so the registry answers, and this line asks.
+       ORDER MATTERS AND IS WHY IT IS AT THE TOP OF ITS CALLERS: add_pending pushes a class's written-down
+       vectors and its probes AFTER this, and solve_seed_candidates withdraws an escape the table refuses — so
+       the table is complete before anything is queued against it rather than being narrowed underneath a list
+       that was built while everything still delivered.
+       IT IS NOT A MEASUREMENT AND DOES NOT PRETEND TO BE ONE: `deliv_seen` stays where it was, so
+       `sourceDelivers` still reports only what a probe RAN and observed, and a declaration-narrowed table is
+       not emitted as a measured set. */
+    /* THE TWO-SIDED HALF, AND IT IS NOT A RESTATEMENT OF THE CALL — it reads the OTHER column of the same row.
+       A carrier that refuses a byte its own row also DECLARES would be a declaration contradicting itself
+       (root_carrier: the row lists the PRINTABLE bytes the production excludes, and the refusal covers
+       everything outside printable US-ASCII, so the two cannot name one byte), and the cost of that landing
+       quietly is the instrument itself: the delivery probe is BUILT out of the declared bytes (bytes_probe),
+       so a seed that cleared one would have solve_seed_candidates withdraw the probe that was going to measure
+       it — a search that can never learn the thing its own report is about. Asked only where the seed FIRED,
+       so it is a question about a state that exists rather than one that cannot arise. */
+    if (concolic_source_carrier_bytes(e->root, &e->deliv))
+        DCHECKF(declared_byte_refused(&e->deliv, concolic_source_encodes(e->root)) == 0,
+                "an @S source's carrier refuses byte 0x%02X while the same row DECLARES it as one the "
+                "component percent-encodes — the declared set is the PRINTABLE bytes the carrier's own "
+                "production excludes and the refusal covers everything outside printable US-ASCII, so the two "
+                "cannot name one byte. The delivery probe is built out of the declared set, so this seed has "
+                "just withdrawn the instrument that was going to measure it",
+                (unsigned)declared_byte_refused(&e->deliv, concolic_source_encodes(e->root)));
 }
 
 /* A DETECTED SINK OPENS ITS SEARCH. A single-context class states its breakouts; every other class states the
@@ -2226,12 +2284,13 @@ int solve_seed_candidates(JSContext *ctx) {
                outcome is the candidate arriving transformed — the exact cost queue_derived's own assert says
                it exists to prevent, arriving one moment later through a door that never re-asked.
                IT IS PRUNING A CONTRADICTED ARM, WHICH §Solver-half LICENSES, AND IT IS NOT A BOUND. There is
-               no count, no age, no retry limit and no seen-set here: the ONE question is whether a positive
-               observation of this search's own says these bytes do not arrive. The table narrows only on
-               evidence (a token that never showed up says nothing about its byte, so uncertainty keeps the
-               arm) and it never widens, so a withdrawal is permanent and the cursor stays a cursor — nothing
-               is re-examined, nothing is seeded twice, and a spelling the tightened table still permits is
-               seeded exactly as before.
+               no count, no age, no retry limit and no seen-set here: the ONE question is whether something
+               POSITIVE contradicts these bytes arriving — this search's own delivery run, or the refusal its
+               root's carrier declares (cand_learn_root), which are two facts of different kinds and one
+               instruction here. The table narrows only on evidence (a token that never showed up says nothing
+               about its byte, so uncertainty keeps the arm) and it never widens, so a withdrawal is permanent
+               and the cursor stays a cursor — nothing is re-examined, nothing is seeded twice, and a spelling
+               the tightened table still permits is seeded exactly as before.
                THE ENTRY STAYS IN `pl`, AND THAT IS THE REPORT'S HALF OF THE SAME FACT. A search that
                CONSTRUCTED an escape and withdrew it is not a search that constructed none — `probes ==
                payloads` means the second, and compacting the list would say it. `withdrawn` (solve_json_array)
