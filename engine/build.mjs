@@ -3545,6 +3545,63 @@ function dialogText(out) {
          `${n.prompt} prompt, first: ${JSON.stringify(first)}`;
 }
 
+/* ── WHAT A NON-ZERO STAGE IS A STATEMENT ABOUT ────────────────────────────────────────────────────────────
+   ONE VERDICT WAS SUMMING POPULATIONS THAT TAKE OPPOSITE WORK, WHICH IS THE DEFECT `fieldgate.mjs` FIXED ONE
+   LAYER DOWN AND THIS FILE THEN RE-CREATED ONE LAYER UP. That file's own paragraph says it: "I FOUND A DEFECT"
+   and "I CANNOT SEE THIS CONSTRUCT" take opposite work and one exit code cannot carry both — so it split them,
+   and `report()` below then folded its two verdicts back into a single `BUILD FAILED` beside a budget kill and
+   a source census, which is the same collapse with more populations in it.
+   MEASURED, ON TWO FROZEN-SNAPSHOT BUILDS AT TWO REVISIONS: every link stage PASS, both contract audits' own
+   findings PASS or standing, ZERO `@WHY` in either run — and both ended `BUILD FAILED — smoke test: CPU BUDGET
+   SPENT`, because the verdict was the FIRST non-zero stage in push order and a budget kill sits third. A lane
+   reading that line cannot tell "my change broke the build" from "the tree is red as usual", which is the one
+   question a build verdict exists to answer. AND THE MASKING IS STRUCTURAL RATHER THAN COSMETIC: `smoke test`
+   is pushed ahead of `two-instance ABI drive`, `browser-process layer` and both audits, so an ABORT in any of
+   those four — code 3, a DCHECK naming an invariant to fix or a capability to build — is not named in the one
+   line a reader sees, on every build where the smoke spends its budget. Both measured builds were that build.
+   THE AXIS IS WHAT THE VERDICT IS A STATEMENT ABOUT, WHICH IS THE ONE THING THIS FILE CAN ESTABLISH. It is not
+   "regression versus known gap": that is a claim about a TREND, a trend needs two runs, and this build holds no
+   baseline and must not grow one — a stored expected count is the change detector §Testing bans twice, and the
+   IDL audit's own closing line ("There is no baseline to update: the count IS the gap") is correct and stands.
+   So the four categories below say where they send a reader and NOTHING about whether a count moved:
+     DEFECT   — this build's own programs or declarations disagree, or a run ABORTED at an assertion. A fact
+                about the revision, and the stage names what to fix or build.
+     NOT ASKED— the stage never put its question (an upstream stage did not produce its subject, the child
+                refused to measure, the budget would not install). A HOLE IN THE REPORT and not a verdict:
+                §Testing's excluded test, which must never read like a stage that asked and liked the answer.
+     CENSUS   — a stage that read the SOURCES and reported N finding categories. A fact about the revision, and
+                a COUNT: its magnitude is a work queue, only a MOVE is news, and no run of this file can see a
+                move. Said in those words rather than implied.
+     TERMINAL — the run ended on its CPU budget or the deadlock backstop. §Testing: "a statement about THIS RUN
+                and this interleaving, never about the revision", and the stage's own verdict already says so
+                at length.
+   THE RANK IS WHAT A READER SHOULD OPEN FIRST and nothing else. DEFECT above NOT ASKED because a hole is
+   usually the CONSEQUENCE of one; NOT ASKED above CENSUS because a question nobody asked outranks a count
+   everybody has; CENSUS above TERMINAL because a census is about the tree and a budget kill is not. Within one
+   rank the FIRST stage in push order decides, which is exactly the tie-break `report()` has always used.
+   NOTHING HERE IS FORGIVEN AND NO CATEGORY EXITS 0 — see `report()`. */
+const STAGE_KIND = {
+  DEFECT:    { rank: 0, tag: "DEFECT" },
+  NOT_ASKED: { rank: 1, tag: "NOT ASKED" },
+  CENSUS:    { rank: 2, tag: "CENSUS" },
+  TERMINAL:  { rank: 3, tag: "TERMINAL" },
+};
+
+/* A SOURCE CENSUS IS RECOGNISED BY THE SENTENCE THE STAGE ITSELF PRINTS, NEVER BY ITS FILE NAME. A list here of
+   which stages are "allowed" to be red would be the hand-kept list this file spends its length warning about,
+   and it fails in silence: a gate added without an entry is classified by nobody. The audits state their own
+   verdict kind in their own words — `[idl-audit] FAILED — N category(ies)` and `[field-gate] FAILED — N
+   FINDING category(ies)` — so the shape of that sentence is the witness, which is the same move `abortRecord`
+   and `REFUSED_WITNESS` already make over a child's bytes and is a derivation from the code that owns the fact.
+   IT FAILS LOUD RATHER THAN QUIET, WHICH IS WHY THE WITNESS MAY BE PROSE AT ALL. A gate that changes its
+   wording stops matching and its stage falls back to DEFECT — the LOUDEST category — so drift makes this build
+   noisier and can never make a red stage read as a smaller one. That is the direction §Testing requires of a
+   falling number: it must not be readable as accuracy by anyone, including whoever made it fall.
+   SINGLE-LINE BY CONSTRUCTION. Both sentences are one template literal with no newline in them, so this is a
+   substring of ONE output line — the wrapped-phrase hazard that makes a grep answer 0 at every revision does
+   not reach it. Anchored at line start because a stage that QUOTES another gate's verdict is not that gate. */
+const CENSUS_WITNESS = /^\[[a-z][a-z-]*\] FAILED — (\d+) (?:FINDING )?category\(ies\)/m;
+
 function runOutcome(label, t, hint) {
   /* APPENDED TO EVERY VERDICT THIS FUNCTION PRODUCES, which is why it is computed once here and folded into
      `bad` rather than added at each arm — an arm added later would otherwise be the one that drops it, and
@@ -3582,7 +3639,18 @@ function runOutcome(label, t, hint) {
      than only for the outcomes whose detail block happened to be reached. */
   const q = quantumDenomination(t.captured);
   const rd = runDependenceText(q, stand, aborted);
-  const bad = (verdict, code, why) => {
+  /* THE KIND IS A REQUIRED ARGUMENT AND ITS ABSENCE THROWS AT THE ARM THAT DROPPED IT. Every other fact this
+     closure folds in — `pe`, `rd`, the standing rows — was added because "the arm most likely to be added
+     later is another failure arm and it would be the one that drops it", and a DEFAULT here would be exactly
+     the concealment §Architecture names: an unclassified arm would land in whichever category the default
+     picked and read as a deliberate answer. This is a contract between this function and itself, not a state
+     of the run, so it is asserted at its origin like any other invariant of this file's own logic — and it
+     names the arm, because a crash that says "some arm" is one nobody can act on. */
+  const bad = (verdict, code, kind, why) => {
+    if (!kind || typeof kind.rank !== "number")
+      throw new Error(`[build] ${label}: an outcome arm produced the verdict ${JSON.stringify(verdict)} with ` +
+                      `no STAGE_KIND — every non-zero stage states what its verdict is a statement about, or ` +
+                      `report() cannot rank it and would have to guess a category for it.`);
     console.error(`[build] ${label} ${why}`);
     console.error(runNumbers(t, q));
     if (hint) console.error(`[build]   ${hint}`);
@@ -3592,13 +3660,13 @@ function runOutcome(label, t, hint) {
                     `[build]   each of those is EITHER a statement this run answered wrongly OR one it never ` +
                     `reached — read them against the standing in the verdict above, and never read a single ` +
                     `0 as a verdict on the mechanism its row names while the others beside it are 0 too.`);
-    return { label, verdict: verdict + pe + rd, code };
+    return { label, verdict: verdict + pe + rd, code, kind };
   };
   /* THE BUDGET INSTALL, WHICH MUST NEVER FAIL QUIETLY. A run without its rlimit is an UNMEASURED run wearing a
      measured one's report, so the shell says so in the log and this reads the marker rather than trusting a
      bare 125 — which is also a code a program may legitimately exit with. */
   if (t.status === 125 && t.captured.includes(BUDGET_NOT_INSTALLED))
-    return bad("CPU BUDGET NOT INSTALLED", 5,
+    return bad("CPU BUDGET NOT INSTALLED", 5, STAGE_KIND.NOT_ASKED,
       `could not install its ${RUN_CPU_BUDGET_S} s RLIMIT_CPU — \`ulimit -S -t\` was refused, which happens ` +
       `when this process already sits under a LOWER hard limit. Nothing was run: a run under an unknown ` +
       `budget would report a number about no budget at all.`);
@@ -3607,7 +3675,7 @@ function runOutcome(label, t, hint) {
      fixture's own standing both belong in the verdict rather than in a hint under it. */
   if (t.signal === "SIGXCPU") {
     const cause = hungCause(t.captured);
-    return bad(`CPU BUDGET SPENT — ${standingText(stand)} — ${causeName(cause)}`, 2,
+    return bad(`CPU BUDGET SPENT — ${standingText(stand)} — ${causeName(cause)}`, 2, STAGE_KIND.TERMINAL,
       `SPENT ITS WHOLE ${RUN_CPU_BUDGET_S / 60} min CPU BUDGET — killed by the KERNEL at the rlimit, which is ` +
       `the verdict measure and is invariant to what else this box was doing.\n` +
       `[build]   the census says it was ${cause}`);
@@ -3618,7 +3686,7 @@ function runOutcome(label, t, hint) {
      minutes was STARVED of the thread rather than deadlocked on it, and the reader can see which. */
   if (t.error && t.error.code === "ETIMEDOUT") {
     const cause = hungCause(t.captured);
-    return bad(`DEADLOCK BACKSTOP — ${standingText(stand)} — ${causeName(cause)}`, 4,
+    return bad(`DEADLOCK BACKSTOP — ${standingText(stand)} — ${causeName(cause)}`, 4, STAGE_KIND.TERMINAL,
       `RAN ${RUN_DEADLOCK_MS / 60000} min OF WALL CLOCK WITHOUT REACHING ITS ${RUN_CPU_BUDGET_S / 60} min CPU ` +
       `BUDGET — killed by the harness, NOT by the kernel. Read the CPU figure below: near the budget means ` +
       `this child was starved of the thread, near zero means it was waiting on something that never came.\n` +
@@ -3635,6 +3703,7 @@ function runOutcome(label, t, hint) {
   const standWith = (v) => v + (stand ? " — " + standingText(stand) : "");
   if (t.signal) {
     return bad(standWith("CRASHED on " + t.signal + (aborted ? " — " + causeName(aborted) : "")), 3,
+               STAGE_KIND.DEFECT,
       `DIED ON ${t.signal} — an abort is a DCHECK naming either an invariant to fix at its root or a ` +
       `capability to build, and it is the RESULT of this run rather than an interruption of it.\n` +
       `[build]   ` + (aborted ? aborted
@@ -3644,7 +3713,7 @@ function runOutcome(label, t, hint) {
   /* THE ABORT THAT ARRIVES AS AN ORDINARY EXIT STATUS — the wasm smoke's only shape. Same class and same code
      as the signal above, because it IS that event; only the transport differs. */
   if (t.status !== 0 && aborted)
-    return bad(standWith("ABORTED — " + causeName(aborted)), 3,
+    return bad(standWith("ABORTED — " + causeName(aborted)), 3, STAGE_KIND.DEFECT,
       `ABORTED at an assertion and exited rc=${t.status} — under emscripten an abort() is a thrown ` +
       `RuntimeError rather than a signal, so this is the same event the native targets report as SIGABRT. ` +
       `The line below names what to fix or build; it is the RESULT of this run.\n` +
@@ -3655,7 +3724,7 @@ function runOutcome(label, t, hint) {
      artifact was linked from. */
   const refused = t.captured.match(REFUSED_WITNESS);
   if (t.status !== 0 && refused)
-    return bad("NOT MEASURED — " + causeName(refused[1]), 7,
+    return bad("NOT MEASURED — " + causeName(refused[1]), 7, STAGE_KIND.NOT_ASKED,
       `REFUSED TO MEASURE and exited rc=${t.status} — it declined to ask its question, so this is NOT a ` +
       `verdict on what it measures and nothing below its first check ran.\n[build]   ${refused[1]}`);
   /* AND THE PROGRAM'S OWN VERDICT CARRIES WHERE IT GOT TO. This is the arm the smoke reaches when its
@@ -3667,16 +3736,33 @@ function runOutcome(label, t, hint) {
        prints it for EVERY verdict now, which is what put it in front of the two killing arms that never had
        it. Keeping a second copy here would print it twice and would be the per-arm plumbing folding it into
        `bad` exists to end. */
-    return bad("FAILED rc=" + t.status + (stand ? " — " + standingText(stand) : ""), t.status || 1,
-      `FAILED rc=${t.status} with NO assertion line in its output — this is the program's own verdict on ` +
-      `itself (for the smoke, test_forced.c's probe table reporting INCOMPLETE), not a crash`);
+    /* AND WHOSE VERDICT IT IS DECIDES WHAT IT IS A STATEMENT ABOUT. This arm is reached by two populations that
+       have nothing else in common: a PROGRAM this build compiled reporting on itself (the smoke's probe table
+       INCOMPLETE), and a SOURCE SCAN reporting how many finding categories it found. Both exit 1 and neither
+       prints an assertion, so the exit code cannot tell them apart and for as long as it was the whole answer
+       it did not have to — every one of them was `BUILD FAILED` and the line said no more than that.
+       THE WITNESS IS THE SCAN'S OWN SENTENCE, so the classification is the scan's rather than this file's, and
+       its absence lands the stage in DEFECT — the loud direction, which is what makes a prose witness safe. */
+    const census = t.captured.match(CENSUS_WITNESS);
+    return bad("FAILED rc=" + t.status + (stand ? " — " + standingText(stand) : "") +
+                 (census ? ` — ${census[1]} finding category(ies), each with its own count and denominator in ` +
+                           `this stage's own output above` : ""),
+      t.status || 1, census ? STAGE_KIND.CENSUS : STAGE_KIND.DEFECT,
+      census
+        ? `FAILED rc=${t.status} having read the SOURCES and found ${census[1]} finding category(ies) — its ` +
+          `own output above states each category, its count and the surface that count is a fraction of. This ` +
+          `is a COUNT and not a crash: its magnitude is a work queue, only a MOVE in it is news, and NOTHING ` +
+          `in this build can see a move — there is no baseline here and there must not be one, so a reader ` +
+          `who wants the trend compares two runs and this file states none.`
+        : `FAILED rc=${t.status} with NO assertion line in its output — this is the program's own verdict on ` +
+          `itself (for the smoke, test_forced.c's probe table reporting INCOMPLETE), not a crash`);
   }
   /* A ZERO EXIT OVER AN ABORT WITNESS IS AN IMPOSSIBLE STATE. Every emitter of those two shapes aborts on its
      next statement, so a run that printed one and exited 0 either swallowed the abort or something else is
      writing the tag — and both are worth a non-pass rather than a green stage. Reported rather than thrown,
      because a stage that throws is a door in front of every stage behind it. */
   if (aborted)
-    return bad("ABORT WITNESS OVER A ZERO EXIT", 6,
+    return bad("ABORT WITNESS OVER A ZERO EXIT", 6, STAGE_KIND.DEFECT,
       `EXITED 0 having printed an assertion line — check.h and quickjs-check.h both abort() on the next ` +
       `statement, so either an abort was swallowed on the way out or something other than those two macros ` +
       `is writing the tag. Both are defects and neither is a pass.\n[build]   ${aborted}`);
@@ -3690,7 +3776,8 @@ function runOutcome(label, t, hint) {
   /* THE PASS ARM CARRIES IT TOO, AND IT IS THE ARM THAT NEEDS IT MOST — see pageErrorText. A run that answers
      every statement it makes while one of the page's scripts died is still a PASS of the probe table and is
      not a clean run of the document, and those two are the same green line without this. */
-  return { label, verdict: (stand ? `PASS — ${standingText(stand)}` : "PASS") + pe + rd, code: 0 };
+  return { label, verdict: (stand ? `PASS — ${standingText(stand)}` : "PASS") + pe + rd, code: 0,
+           kind: null };
 }
 
 /* A STAGE THAT CANNOT RUN IS REPORTED AS SKIPPED WITH ITS REASON, AND IT CARRIES A NON-ZERO CODE. Absorbing it
@@ -3700,13 +3787,22 @@ function runOutcome(label, t, hint) {
    makes quietly false. */
 function skipped(label, why) {
   console.error(`[build] ${label} SKIPPED — ${why}`);
-  return { label, verdict: "SKIPPED (" + why + ")", code: 1 };
+  /* NOT ASKED AND NOT A DEFECT, WHICH IS THE WHOLE POINT OF KEEPING IT NON-ZERO. A skip is a HOLE in the
+     report — the question was never put — and it is usually the CONSEQUENCE of a stage in front of it, which
+     is why DEFECT outranks it: the reader is sent to the cause and not to the casualty. */
+  return { label, verdict: "SKIPPED (" + why + ")", code: 1, kind: STAGE_KIND.NOT_ASKED };
 }
 
 /* PER STAGE, IN ONE REPORT — §Testing: a gate reports PER AREA, never one number in which one area drowns the
    rest. Every stage this run reached is named with its own verdict, so "the smoke failed" and "the two-instance
-   drive was never asked" can never again be the same line. The exit code is the FIRST non-zero in stage order,
-   which is exactly what each single-stage target exited with before. */
+   drive was never asked" can never again be the same line.
+   THE EXIT CODE WAS THE FIRST NON-ZERO IN STAGE ORDER AND IS NOW THE DECIDING STAGE'S OWN CODE, the deciding
+   stage being the worst STAGE_KIND present and, within one kind, the first in stage order. That is the same
+   integer each single-stage target exited with before — the vocabulary is untouched — taken from the stage
+   whose category a reader must open first rather than from whichever happened to be pushed earliest. The
+   argument the old rule rested on ("push order already keeps a program that did not build ahead of a
+   source-scan finding") is TRUE and is now carried by the RANK instead of by the list, which is what makes it
+   survive a stage being pushed somewhere else. */
 /* THE REVISION THIS BUILD IS OF, TAKEN BEFORE THE FIRST COMPILER RUNS. This file STAMPED the artifact and
    never SAID anything, so the one program every other gate then measures arrived with no revision on it and
    each reader restated the pair from memory — which is the recovery-by-forensics failure gate_revision.mjs
@@ -3734,10 +3830,116 @@ function report(stages) {
                            "the sources as they were read, which no revision now describes.");
   else console.log("[rev] the tree did not move under this build");
   console.log("[build] ── stages ──");
-  for (const s of stages) console.log("[build]   " + s.label.padEnd(w) + "  " + s.verdict);
-  const bad = stages.find((s) => s.code !== 0);
-  if (bad) { console.error("[build] BUILD FAILED — " + bad.label + ": " + bad.verdict); process.exit(bad.code); }
-  process.exit(0);
+  /* THE KIND IS IN THE ROW, WHICH IS THE LINE A READER ACTUALLY SEES PER STAGE. Both audits already band their
+     own populations apart in their own bodies and it did not help while this table printed one undifferentiated
+     column of verdicts above one undifferentiated `BUILD FAILED`; banding in the body is only useful if the
+     summary carries the band. Padded to a fixed width so the column is scannable rather than a word buried in
+     a sentence — the verdicts are long and the tag is the part that must survive a paste. */
+  /* THE TAG IS KEYED ON THE CODE AND NOT ON THE KIND, and the difference is a defect this table had for the
+     length of one scratch run: `s.kind ? s.kind.tag : "PASS"` renders a stage that FAILED with no kind as
+     PASS, in the one line a reader actually sees, and the refusal below fires only after the rows are out. A
+     consumer defaulting a producer's absent field into a plausible datum is the defect this file is largely
+     about, and the plausible datum available here is the word PASS. The code is the authority on whether a
+     stage passed; the kind is the authority only on what a non-zero one is a statement about, and where it is
+     missing the row says UNRANKED rather than inventing a category or borrowing a green one. */
+  const tagw = Math.max("UNRANKED".length, ...Object.values(STAGE_KIND).map((k) => k.tag.length));
+  const tagOf = (s) => s.code === 0 ? "PASS" : (s.kind && s.kind.tag) || "UNRANKED";
+  for (const s of stages)
+    console.log("[build]   " + s.label.padEnd(w) + "  [" + tagOf(s).padEnd(tagw) + "]  " + s.verdict);
+  /* THE COUNTS ARE A PARTITION AND THE PARTITION IS THE CONTRACT — the same shape `coldFields` states one
+     screen up, and for the same reason: replacing one ambiguous number with several is only an improvement if
+     something says the several are the whole of it. A category count is a SHARE of the stage list, and
+     §Testing's rule for a share is that its containment is asserted where both are in one hand — which is
+     here, and nowhere else, because this is the only point at which the categories and the list they are
+     drawn from exist together.
+     IT IS NOT AN ASSERT WHOSE TWO SIDES CANNOT DISAGREE, which is the failure that would make it a comment
+     with a pipeline in it. Three constructible states of THIS program break it and every one is a producer
+     defect: a non-zero stage with no kind (counted in nothing, sum SHORT); a PASSING stage carrying a kind
+     (counted twice, sum LONG); a producer handing in a bespoke object that is not one of the four (counted in
+     nothing again). The first was already refused separately and this subsumes it; the second was not refused
+     by anything and is the state a later edit most easily creates, since adding a kind to a pass arm looks
+     like tidying.
+     WHAT IS EMITTED AND NOT ASSERTED IS A CATEGORY BEING EMPTY. A build with no source-scan stage at all is
+     the `native` target and is legitimate, so demanding a non-zero CENSUS would assert a fact about which
+     stages this file happens to run rather than about the partition — and a structurally-zero row is printed
+     as 0 for the reason the clean day is printed at all: a line that appears only on the bad day is one nobody
+     learns to look for.
+     IT REFUSES AFTER THE ROWS ARE OUT. The rows are what a reader needs and this is the last thing in the
+     run — there is no stage left for it to be a door in front of, which is the only reason a throw is
+     admissible here at all. */
+  const n = (k) => stages.filter((s) => s.kind === k).length;
+  const part = { DEFECT: n(STAGE_KIND.DEFECT), "NOT ASKED": n(STAGE_KIND.NOT_ASKED),
+                 CENSUS: n(STAGE_KIND.CENSUS), TERMINAL: n(STAGE_KIND.TERMINAL),
+                 /* PASS IS A FACT ABOUT THE CODE ALONE, AND THE FIRST SPELLING OF IT MADE THIS ASSERTION
+                    VACUOUS FOR THE ONE STATE IT NAMES. It read `s.code === 0 && !s.kind`, which EXCLUDES a
+                    passing stage that carries a kind from the PASS count and leaves it counted exactly once
+                    in its category — so the sum still reached the list length and the check passed while the
+                    paragraph above claimed it caught precisely that. Measured, on a scratch copy of this
+                    function: a `{code: 0, kind: CENSUS}` stage produced `BUILD FAILED … deciding stage: a
+                    tidied pass [CENSUS] — PASS` AND EXITED 0. A verdict that says FAILED and exits 0 is the
+                    worst outcome this file can produce, and the assertion written to prevent it was the thing
+                    that let it through — an assert whose two sides had been quietly taught to agree.
+                    Spelled on the code alone, that stage is counted twice and the sum runs LONG. */
+                 PASS: stages.filter((s) => s.code === 0).length };
+  const summed = Object.values(part).reduce((a, b) => a + b, 0);
+  if (summed !== stages.length) {
+    const wrong = stages.filter((s) => (s.code === 0) !== (s.kind === null || s.kind === undefined) ||
+                                       (s.kind && !Object.values(STAGE_KIND).includes(s.kind)));
+    throw new Error(`[build] the stage categories sum to ${summed} over ${stages.length} stage(s), so they ` +
+                    `are not a partition of the list and no count in the verdict below is a share of ` +
+                    `anything: ${wrong.map((s) => `${s.label} (code ${s.code}, kind ` +
+                    `${s.kind ? JSON.stringify(s.kind.tag) : "absent"})`).join("; ") || "no single row " +
+                    `explains it, so read the whole list`}. Every stage either PASSES with no kind or carries ` +
+                    `exactly one STAGE_KIND saying what its verdict is a statement about; this report will ` +
+                    `not pick a category for a producer that states none, and will not count one twice.`);
+  }
+  /* THE COUNTS AND THE DENOMINATOR ON ONE LINE, ON EVERY RUN INCLUDING THE CLEAN DAY — §Testing, and the
+     direction it is actually about: a total that FALLS reads as accuracy and nobody scrutinises it, so the
+     population it is drawn from is printed beside it whether or not anything is wrong. Composed from the same
+     `part` the assertion above is over, so the sentence and the check can never state different numbers for
+     one list. */
+  const census = `${part.DEFECT} DEFECT, ${part["NOT ASKED"]} NOT ASKED, ${part.CENSUS} CENSUS, ` +
+                 `${part.TERMINAL} TERMINAL of ${stages.length} stage(s) — ${part.PASS} PASS`;
+  /* THE VERDICT IS THE WORST CATEGORY PRESENT AND NOT THE FIRST ROW IN THE LIST. Push order was the whole
+     ranking and it is a fact about how this file is written rather than about what happened: `smoke test` sits
+     ahead of the two-instance drive, the browser-process layer and both audits, so on every build where the
+     smoke spends its budget — which is both of the frozen-snapshot builds this was measured on — a DEFECT in
+     any of those four could not appear in this line. Within one category push order still decides, which keeps
+     the old tie-break exactly where it was and keeps a program that did not build ahead of one that did. */
+  const rank = [STAGE_KIND.DEFECT, STAGE_KIND.NOT_ASKED, STAGE_KIND.CENSUS, STAGE_KIND.TERMINAL];
+  const bad = rank.map((k) => stages.find((s) => s.kind === k)).find(Boolean);
+  if (!bad) { console.log("[build] BUILD CLEAN — " + census); process.exit(0); }
+  /* WHAT THE DECIDING CATEGORY MEANS, IN THE LINE, because the tag alone is a word and the reader's next act
+     is what this is for. Four sentences, one per category, and the one printed is the one that was reached. */
+  const says = {
+    [STAGE_KIND.DEFECT.tag]:
+      "a DEFECT decided this verdict: this build's own programs or declarations disagree, or a run aborted at " +
+      "an assertion. That is a fact about the revision and the stage above names what to fix or to build.",
+    [STAGE_KIND.NOT_ASKED.tag]:
+      "NO DEFECT IN THIS BUILD. What decided the verdict is a stage that never put its question — a hole in " +
+      "the report rather than a finding, and usually the consequence of the stage in front of it.",
+    [STAGE_KIND.CENSUS.tag]:
+      "NO DEFECT IN THIS BUILD. What decided the verdict is a source census: a COUNT of finding categories, " +
+      "whose magnitude is a work queue and whose only news is a MOVE. THIS BUILD CANNOT SEE A MOVE — it holds " +
+      "no baseline and must not grow one — so read the stage's own body for the categories and compare two " +
+      "runs yourself if you want the trend. A count is not a regression and this line does not claim one.",
+    [STAGE_KIND.TERMINAL.tag]:
+      "NO DEFECT IN THIS BUILD. What decided the verdict is a TERMINAL EVENT — a run that ended on its CPU " +
+      "budget or the deadlock backstop, which §Testing makes a statement about THIS RUN and this interleaving " +
+      "and never about the revision. A repeat is what addresses it; a diff is not.",
+  }[bad.kind.tag];
+  /* EVERY CATEGORY KEEPS THE DECIDING STAGE'S OWN NON-ZERO CODE, AND NOT ONE OF THEM EXITS 0. Softening the
+     census to a pass is choosing a green result over the forcing function — the count IS the gap and the gap
+     is the queue — and softening a terminal event would hide that a run did not finish. What changes is WHICH
+     stage's code is handed out, never that a non-zero one is: the code is the same integer that stage would
+     have exited with had it been run alone, so a caller reading `$?` gets the same vocabulary it always got
+     and gets it from the most consequential stage instead of the earliest-pushed one. */
+  console.error("[build] BUILD FAILED — " + census);
+  console.error("[build]   " + says);
+  console.error("[build]   deciding stage: " + bad.label + " [" + bad.kind.tag + "] — " + bad.verdict);
+  console.error("[build]   exiting " + bad.code + ", which is that stage's own code — every category above " +
+                "keeps a non-zero exit and none of them is forgiven here.");
+  process.exit(bad.code);
 }
 
 const ENGINE = dirname(fileURLToPath(import.meta.url));
@@ -4218,9 +4420,13 @@ function abiCheck(program, entrySrc, marker, prefix, list) {
                   "[build] of nothing (" + entrySrc + "):\n" +
                   (missing.length ? "[build]   defined in the entry, missing from the list: " + missing.join(", ") + "\n" : "") +
                   (phantom.length ? "[build]   named in the list, defined nowhere:          " + phantom.join(", ") + "\n" : ""));
-    return { label: program + " ABI list", verdict: "FAILED (list vs " + marker + " bodies)", code: 1 };
+    /* A DEFECT AND NOT A CENSUS: this is TWO OF THIS TREE'S OWN FILES DISAGREEING about one fact, so it names
+       what to fix and a change is what causes it. It is a count of nothing — the list either IS the ABI or is
+       not. */
+    return { label: program + " ABI list", verdict: "FAILED (list vs " + marker + " bodies)", code: 1,
+             kind: STAGE_KIND.DEFECT };
   }
-  return { label: program + " ABI list", verdict: "PASS", code: 0 };
+  return { label: program + " ABI list", verdict: "PASS", code: 0, kind: null };
 }
 /* IT FAILS THE RUN AND IT IS NOT A DOOR EITHER. This check is about ONE program's export list, and it used to
    exit before anything was compiled — so a name added to main.c and not to QJS_ABI took the SMOKE gate, which
@@ -4590,10 +4796,11 @@ function link(what, entryObjs, ldflags, out) {
                       { stdio: "inherit", shell: true, cwd: QJS });
   if (l.status !== 0) {
     console.error("[build] " + what + " LINK FAILED rc=" + l.status);
-    return { label: what + " link", verdict: "FAILED rc=" + l.status, code: l.status || 1 };
+    return { label: what + " link", verdict: "FAILED rc=" + l.status, code: l.status || 1,
+             kind: STAGE_KIND.DEFECT };
   }
   console.log("[build] OK -> " + out);
-  return { label: what + " link", verdict: "PASS", code: 0 };
+  return { label: what + " link", verdict: "PASS", code: 0, kind: null };
 }
 const SMOKE_LINK = link("smoke", [mustObj(ENTRY_SMOKE), mustObj(ENTRY_ABI)], LDFLAGS_SMOKE, join(OUT, "qjs.js"));
 const ABI_LINK = ABI_LIST.code
@@ -4714,8 +4921,11 @@ STAGES.push(ABI_LINK.code
    that only prints is a gate somebody has to remember to read.
    IT SITS WITH THE AUDITS AND NOT IN FRONT OF THE PROGRAMS, on the same argument as the one below: it compiles
    no C and reads no artifact, so it asks its question of the SOURCES whatever the programs did, and a link
-   failure can never take it out of the run — while report() exiting on the FIRST non-zero code keeps a program
-   that did not build or did not run ahead of a source-scan finding. */
+   failure can never take it out of the run — while report() ranking a DEFECT and a NOT-ASKED stage above a
+   CENSUS one keeps a program that did not build or did not run ahead of a source-scan finding. THAT USED TO
+   BE A PROPERTY OF THIS PUSH POSITION and is now a property of the kind: it held only while every program
+   stage happened to sit above every audit, which made a correct rule depend on the order two lines were
+   written in. */
 STAGES.push(runProgram("record-field contract audit", [join(ENGINE, "fieldgate.mjs")],
                        "each category above is one side of a contract with nothing on the other: a field read " +
                        "off a record no producer emits, a field emitted and never read, a default that stops " +
@@ -4726,9 +4936,12 @@ STAGES.push(runProgram("record-field contract audit", [join(ENGINE, "fieldgate.m
 /* THE THIRD AREA: does each component install the surface its Web IDL declares. It gates nothing and nothing
    gates it — it compiles no C and reads no artifact, so it asks its question of the SOURCES whatever the two
    programs above did, and a link failure can never take the member census out of the run with it.
-   IT IS LAST IN STAGE ORDER, AND THAT IS THE ONE THING THIS PLACEMENT DECIDES: report() exits with the first
-   non-zero code, so a program that does not build or does not run keeps its own exit code and the member gap
-   does not stand in front of it. Every stage still reports, which is the whole point of the list. */
+   IT IS LAST IN STAGE ORDER AND THAT NOW DECIDES ONLY A TIE. report() ranks by STAGE_KIND, and this stage's
+   non-zero is a CENSUS — a count of finding categories, whose magnitude is a work queue and whose only news is
+   a move nothing here can see — so a program that does not build, does not run, or aborts keeps its own exit
+   code and the member gap does not stand in front of it wherever either is pushed. Every stage still reports,
+   which is the whole point of the list, and the count is still a non-zero exit: there is no baseline to update
+   and none is grown here, so the gap is never forgiven and is never called a regression either. */
 STAGES.push(runProgram("Web IDL gap audit", [join(ENGINE, "idlgen.mjs")],
                        "each category above is a spec member no component installs, a stub where a real value " +
                        "belongs, or an install construct the audit cannot resolve — implement it at the root " +
