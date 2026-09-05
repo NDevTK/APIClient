@@ -52,22 +52,37 @@
  *   remove excess     — §5.3's two "the user agent MAY remove excess cookies" paragraphs are a CAP on how much
  *                       distinct state a run may hold, and CLAUDE.md's §NO BOUNDS forbids one. This user agent
  *                       takes the MAY-not.
- *   public suffixes   — §5.3 step 5 is conditional on the user agent being "configured to reject public
- *                       suffixes". This one is not, so the step's condition is false.
- *                       THAT REASON USED TO BE "the Public Suffix List is data this engine is not given", AND
- *                       IT WAS FALSE WHEN READ: core/url/public_suffix.h answers URL §3.2's "obtain the public
- *                       suffix of a host" over a vendored 10239-rule table. It is corrected rather than
- *                       deleted because a reader who re-derives the retired reason re-introduces it — and
- *                       because it had already cost something: a lane building the Cookie Store API took this
- *                       sentence as its evidence that §7.2 "Set a cookie" step 12.3 was blocked on missing
- *                       data, and wrote that into a landed commit message. The step is a CHOICE now, and the
- *                       residual below is what makes it a falsifiable one.
- *                       NAMED RESIDUAL. NOT COVERED: a `Domain` attribute that IS a public suffix
- *                       (`Domain=com`, `Domain=github.io`) is stored here and is refused by a real browser.
- *                       NEXT DIFF: call public_suffix_of on the lowercased cookie-domain in cookie_jar_receive
- *                       between §5.3 steps 4 and 6, and take step 5's reject arm when the whole domain matches
- *                       it. HOW ITS ABSENCE SHOWS: `document.cookie = "a=1; Domain=com"` on any http(s)
- *                       document stores a cookie every browser drops, and a later read returns it. */
+ *   public suffixes   — §5.3 Storage Model's step 5 is conditional on the user agent being configured to
+ *                       reject "public suffixes". THIS ONE IS, and the step is built below. That is a CHOICE
+ *                       and it is the one every browser makes: the standard's own note calls the step
+ *                       "essential for preventing attacker.com from disrupting the integrity of example.com
+ *                       by setting a cookie with a Domain attribute of "com"", and core/url/public_suffix.h
+ *                       holds the list it answers over.
+ *                       THE REASON THIS LINE GAVE HAS NOW BEEN WRONG TWICE, AND BOTH ARE KEPT because a
+ *                       reader who re-derives a retired reason re-introduces it. It first said "the Public
+ *                       Suffix List is data this engine is not given", which was FALSE WHEN READ and had
+ *                       already reached a landed commit message by way of a lane building the Cookie Store
+ *                       API. It then said the step's condition is false because this agent is not configured
+ *                       to reject public suffixes — true as written, and a configuration nobody had chosen on
+ *                       the merits once the list was present.
+ *                       AND THE RESIDUAL THAT REPLACED IT WAS WRONG IN ITS NEXT-DIFF CLAUSE, which is the
+ *                       clause §THE-ASYMMETRY-IS-STRUCTURAL says is the half a reader may not check. Its NOT
+ *                       COVERED and HOW ITS ABSENCE SHOWS were exact — `Domain=com` was stored here and is
+ *                       dropped by every browser. Its remedy said to "take step 5's reject arm when the whole
+ *                       domain matches it", and STEP 5 HAS TWO ARMS: a domain-attribute identical to the
+ *                       canonicalized request-host is EMPTIED, not refused, which demotes the cookie to
+ *                       host-only through step 6's own else-branch. Building the single arm that clause named
+ *                       would have dropped `Domain=localhost` on `localhost` — and every intranet
+ *                       single-label host with it — because the PSL's prevailing rule `*` makes a
+ *                       single-label host its OWN public suffix, so step 5's condition is TRUE for exactly
+ *                       the hosts a person develops on. A regression delivered as a fix. The spec half of
+ *                       that residual was evidence and its remedy was a hypothesis; the hypothesis yielded.
+ *                       AND THE QUOTATION BESIDE IT WAS FLATTENED THE SAME WAY, which is the co-occurrence
+ *                       CLAUDE.md's §THE-CHEAPEST-TELL names: this line used to put its quotes round
+ *                       `configured to reject public suffixes`, where the RFC quotes only the term — "If the
+ *                       user agent is configured to reject "public suffixes" and the domain-attribute is a
+ *                       public suffix". The mis-placed span and the collapsed two-arm step were one error
+ *                       written twice, three lines apart. */
 #include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -79,6 +94,7 @@
 #include "quickjs.h"
 #include "core/agent_state.h"
 #include "core/loader/cookie_jar.h"
+#include "core/url/public_suffix.h"
 #include "core/url/url.h"
 
 /* ---- the agent's store ------------------------------------------------------------------------------------ */
@@ -127,6 +143,29 @@ static char *cj_request_host(const UrlRecord *u, bool *is_host_name)
 }
 
 /* §5.1.3 DOMAIN MATCHING, both conditions. */
+/* §5.3 STEP 5's CONDITION, "the domain-attribute is a public suffix", over PAGE-SUPPLIED BYTES — which is the
+   whole of why it is written this way. The domain-attribute is whatever a `Set-Cookie` or a `document.cookie`
+   assignment put there, so an empty, malformed, over-long or IP-address value must produce an ANSWER and never
+   an abort: this engine's own parser decides whether those bytes name a domain at all, and a value it refuses
+   is not a public suffix, which leaves step 6's domain-match to dispose of it exactly as it does today.
+
+   THE PARSE IS THE ENGINE'S AND THE ASSERTION RIDES ON IT: `host_is_public_suffix` is asked about a UrlHost
+   this function built, never about the raw attribute, so the list is consulted on a lowercased A-label host in
+   the one representation §Algorithm requires both sides to be in. */
+static bool cj_domain_attribute_is_public_suffix(const char *dom, size_t dlen)
+{
+    UrlHost h;
+    bool r;
+
+    if (!url_parse_host(&h, dom, dlen, /*is_opaque*/ false)) {
+        url_host_free(&h);
+        return false;
+    }
+    r = host_is_public_suffix(&h);
+    url_host_free(&h);
+    return r;
+}
+
 static bool cj_domain_match(const char *s, size_t slen, const char *d, size_t dlen, bool s_is_host_name)
 {
     if (slen == dlen && memcmp(s, d, dlen) == 0)
@@ -553,7 +592,7 @@ static void cj_parse_attrs(const char *attrs, size_t attrs_len, CjAttrs *a)
 void cookie_jar_receive(JSContext *ctx, const UrlRecord *uri, const char *s, size_t len)
 {
     const char *nv = s, *attrs = NULL, *name, *value, *eq;
-    size_t nvlen = len, attrs_len = 0, name_len, value_len, dlen, plen, klen;
+    size_t nvlen = len, attrs_len = 0, name_len, value_len, dlen = 0, plen, klen, hostlen;
     const char *semi = memchr(s, ';', len);
     CjAttrs a;
     char *host, *dom = NULL, *path = NULL, *key;
@@ -586,8 +625,9 @@ void cookie_jar_receive(JSContext *ctx, const UrlRecord *uri, const char *s, siz
     if (a.http_only) return;
 
     host = cj_request_host(uri, &host_is_name);
-    /* §5.3 STEPS 4 and 6. Step 5's public-suffix rejection is conditional on a configuration this engine does
-       not have; see the file header. */
+    hostlen = strlen(host);
+    /* §5.3 STEP 4 — the domain-attribute, which §5.2.3 has already stripped of a leading U+002E and which is
+       lowercased here. Steps 5 and 6 both read it, and step 5 may EMPTY it. */
     if (a.domain_len) {
         size_t i;
         dom = malloc(a.domain_len + 1);
@@ -598,7 +638,34 @@ void cookie_jar_receive(JSContext *ctx, const UrlRecord *uri, const char *s, siz
         }
         dom[a.domain_len] = 0;
         dlen = a.domain_len;
-        if (!cj_domain_match(host, strlen(host), dom, dlen, host_is_name)) {
+    }
+    /* §5.3 Storage Model's STEP 5, whose condition is "If the user agent is configured to reject "public
+       suffixes" and the domain-attribute is a public suffix". THIS USER AGENT IS SO CONFIGURED, which is a
+       choice and is the one every browser makes: the standard's own note calls the step "essential for
+       preventing attacker.com from disrupting the integrity of example.com by setting a cookie with a Domain
+       attribute of "com"", and the engine holds the list (core/url/public_suffix.h) that answers it.
+
+       IT HAS TWO ARMS AND BOTH ARE BUILT, because the reject arm alone is not this step. "If the domain-
+       attribute is identical to the canonicalized request-host: let the domain-attribute be the empty string.
+       Otherwise: ignore the cookie entirely and abort these steps." The first arm demotes the cookie to
+       host-only through step 6's own else-branch below; it is not a refusal at all. Taking only the second
+       would drop `Domain=localhost` on `localhost` — and every intranet single-label host with it — because
+       §Algorithm's prevailing rule `*` makes a single-label host its OWN public suffix, so the condition above
+       is TRUE for exactly the hosts a person develops on. */
+    if (dom && cj_domain_attribute_is_public_suffix(dom, dlen)) {
+        if (dlen != hostlen || memcmp(dom, host, dlen) != 0) {
+            free(dom);
+            free(host);
+            return;                   /* "Ignore the cookie entirely and abort these steps." */
+        }
+        free(dom);                    /* "Let the domain-attribute be the empty string." */
+        dom = NULL;
+        dlen = 0;
+    }
+    /* §5.3 STEP 6, branching on "if the domain-attribute is non-empty" — which step 5 may just have made
+       false for a value that arrived non-empty. */
+    if (dom) {
+        if (!cj_domain_match(host, hostlen, dom, dlen, host_is_name)) {
             free(dom);
             free(host);
             return;                   /* "Ignore the cookie entirely and abort these steps." */

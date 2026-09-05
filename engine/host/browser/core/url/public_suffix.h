@@ -22,6 +22,8 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_URL_PUBLIC_SUFFIX_H
 #define ENGINE_HOST_BROWSER_CORE_URL_PUBLIC_SUFFIX_H
 
+#include <stdbool.h>
+
 #include "core/url/url.h"
 
 /* URL §3.2: "To obtain the public suffix of a host host: 1. If host is not a domain, then return null. 2. Let
@@ -35,5 +37,17 @@
    so it is always a suffix of the input — including its trailing dot, which is how step 4's assertion holds
    without a second string being built (`example.com.` answers `com.`, and §Note 3 says it must). */
 const char *public_suffix_of(const UrlHost *h);
+
+/* "HOST IS A PUBLIC SUFFIX" — one question, two standards, so ONE spelling of it. HTML §7.1.1.2 Relaxing the
+   same-origin restriction's step 4.3 has as its first disjunct "hostSuffix equals hostSuffix's public suffix";
+   RFC 6265 §5.3 Storage Model's step 5 has as its condition "the domain-attribute is a public suffix". They
+   are the same question about the same list, and the intuitive way to ask it — call public_suffix_of and
+   strcmp the answer against the host's own domain — is a spelling each caller would write for itself, which
+   is how two right answers to one question come to disagree.
+
+   FALSE FOR A HOST THAT HAS NO PUBLIC SUFFIX AT ALL, which is a computed answer and not a hole: an IP address
+   and an opaque host are §3.2 step 1's null, and neither is a public suffix. The host is a value THIS codebase
+   parsed, so its shape may be asserted; what it CONTAINS came from a page and may not. */
+bool host_is_public_suffix(const UrlHost *h);
 
 #endif

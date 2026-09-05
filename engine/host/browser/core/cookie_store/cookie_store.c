@@ -1,22 +1,25 @@
 /* COOKIE STORE API §3 The CookieStore interface — §3.1's get and §3.2's getAll over §7.1 "Query cookies".
  * See cookie_store.h for which standard this is, where it moved to, and what this component deliberately is not.
  *
- * WHY THE QUERY HALF LANDS ALONE, AND IT IS A SUBPROBLEM ORDER RATHER THAN A CONVENIENCE. §7.2 "Set a cookie"
+ * WHY THE QUERY HALF LANDED ALONE, AND IT IS A SUBPROBLEM ORDER RATHER THAN A CONVENIENCE. §7.2 "Set a cookie"
  * step 12.3 refuses a Domain that "is not a registrable domain suffix of and is not equal to host". That
- * predicate is HTML's `is a registrable domain suffix of or is equal to`, and in THIS tree it exists and is
- * PRIVATE: core/url/public_suffix.h answers URL §3.2 over a vendored table, and the predicate itself is static
- * inside core/dom/document_domain.c, whose header exports only init, install and free. So §7.2 is blocked on
- * EXTRACTING that predicate into a component both callers share, and §7.1 is blocked on nothing — it reads RFC
- * 6265 §5.4, which the jar implements whole. Writing a second copy of the predicate here is the answer that
- * must not be taken: it is one fact stated twice over a 10239-rule table that changes several times a week,
- * which is the shape that drifts, and a wrong answer about which registrable domain a host belongs to is a
- * security answer rather than a near miss.
+ * predicate is HTML §7.1.1.2's `is a registrable domain suffix of or is equal to`, and it was PRIVATE — static
+ * inside core/dom/document_domain.c, whose header exports only init, install and free — so §7.2 was blocked on
+ * extracting it into a component both callers share, while §7.1 was blocked on nothing because it reads RFC
+ * 6265 §5.4, which the jar implements whole.
  *
- * THAT REASON IS THE SECOND ONE THIS COMPONENT HAD. The first said the Public Suffix List was data this engine
- * is not given, which is what cookie_jar.c's header said at the time and was false when read; it reached a
- * landed commit message before a grep of the clause caught it. The conclusion survived the correction and the
- * argument did not, which is why the argument is written out here rather than summarised: a reader who checks
- * a wrong argument discards the conclusion with it.
+ * THAT BLOCKER IS GONE: the predicate is core/url/registrable_domain.h and it is reached, not re-stated.
+ * WRITING A SECOND COPY HERE REMAINS THE ANSWER THAT MUST NOT BE TAKEN, and the reason outlives the blocker —
+ * it is one fact stated twice over a 10239-rule table that changes several times a week, which is the shape
+ * that drifts, and a wrong answer about which registrable domain a host belongs to is a security answer rather
+ * than a near miss.
+ *
+ * THAT REASON IS THE SECOND ONE THIS COMPONENT HAD, AND THE FIRST IS KEPT BECAUSE A READER WHO RE-DERIVES IT
+ * RE-INTRODUCES IT. The first said the Public Suffix List was data this engine is not given, which is what
+ * cookie_jar.c's header said at the time and was false when read; it reached a landed commit message before a
+ * grep of the clause caught it. The conclusion survived the correction and the argument did not, which is why
+ * the argument is written out here rather than summarised: a reader who checks a wrong argument discards the
+ * conclusion with it.
  *
  * NOTHING HERE SUSPENDS, AND THAT IS WHY NONE OF IT IS A STEP MACHINE. §3.1 step 6 runs its work "in parallel"
  * and settles a promise; in this engine the work is a walk of an in-memory jar, so it completes within the call
@@ -329,11 +332,13 @@ static void cs_install_realm(JSContext *ctx)
        decision — see the file header.
        NAMED RESIDUAL. NOT COVERED: §3.3's `set` and §3.4's `delete`, so a page can read this store through
        this API and cannot write it through this API; `document.cookie` remains the only writer, and because
-       both reach ONE jar a cookie written there IS read back here. NEXT DIFF: give the registrable-domain-
-       suffix predicate a component of its own (it is static in core/dom/document_domain.c today and
-       core/url/public_suffix.h already answers the list half), then §7.2 over cookie_jar_receive. HOW ITS
-       ABSENCE SHOWS: `cookieStore.set` is undefined, so a page calling it throws a TypeError at its own line
-       rather than at anything of this engine's, and `node engine/idlgen.mjs` prints
+       both reach ONE jar a cookie written there IS read back here. NEXT DIFF: §7.2 "Set a cookie" over
+       cookie_jar_receive, whose step 12.3 now has a predicate to call —
+       `registrable_domain_suffix_or_equal` in core/url/registrable_domain.h. THAT CLAUSE USED TO SAY THE
+       PREDICATE HAD FIRST TO BE EXTRACTED, and it was right when written and is spent; a reader who acts on
+       the retired half writes a second copy of the one thing this component's header says must not be copied.
+       HOW ITS ABSENCE SHOWS: `cookieStore.set` is undefined, so a page calling it throws a TypeError at its
+       own line rather than at anything of this engine's, and `node engine/idlgen.mjs` prints
        `CookieStore (core/cookie_store/cookie_store.c): ABSENT 3 — set, delete, onchange`. */
     idl_install_method_exposed(ctx, proto, "get", g_id_get, IDL_SECURE_CONTEXT);
     idl_install_method_exposed(ctx, proto, "getAll", g_id_get_all, IDL_SECURE_CONTEXT);

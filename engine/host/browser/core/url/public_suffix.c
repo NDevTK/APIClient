@@ -97,3 +97,18 @@ const char *public_suffix_of(const UrlHost *h)
        is why `document.domain = "example"` on the host `example` is allowed while `= "com"` is not. */
     return d + last;
 }
+
+/* THE PREVAILING RULE `*` IS WHY THIS PREDICATE ANSWERS TRUE FOR A SINGLE-LABEL HOST. `localhost`, an intranet
+   name and every made-up TLD match no rule, so §Algorithm's second bullet makes each its OWN public suffix —
+   which is a fact about the list and not an edge case to route around. Its two callers then differ in what
+   they do with it, and each is right: HTML §7.1.1.2 Relaxing the same-origin restriction reaches step 4.3 only
+   AFTER step 4's equality test has already returned true for a value equal to the host, and RFC 6265 §5.3
+   Storage Model's step 5 asks that equality itself, in its own first arm, precisely so that `Domain=localhost`
+   on `localhost` is stored host-only rather than dropped. A caller that takes only a reject arm here breaks
+   every single-label host there is. */
+bool host_is_public_suffix(const UrlHost *h)
+{
+    const char *ps = public_suffix_of(h);
+
+    return ps != NULL && strcmp(h->domain, ps) == 0;
+}
