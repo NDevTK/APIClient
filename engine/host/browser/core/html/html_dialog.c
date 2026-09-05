@@ -1,7 +1,7 @@
 /* THE dialog ELEMENT — HTML §4.11.4.
  *
  * WHAT IS HERE AND WHY IT IS ONLY THIS. HTMLDialogElement's IDL declares seven members; this file builds the
- * two the platform's own algorithms reach through, and nothing shaped like the rest:
+ * three the platform's own algorithms reach through, and nothing shaped like the rest:
  *
  *   - §4.11.4's CLOSE THE DIALOG, because §4.10.22.3 step 11.6 performs it. A `method=dialog` form submission
  *     makes NO REQUEST — it closes the dialog its form sits in, sets the dialog's return value from the
@@ -10,8 +10,30 @@
  *   - `returnValue`, because step 9 of that algorithm WRITES it and the page reads it back: "the returnValue
  *     IDL attribute, on getting, must return the last value to which it was set. On setting, it must be set to
  *     the new value. When the element is created, it must be set to the empty string."
+ *   - `closedBy` and the COMPUTED CLOSED-BY STATE behind it, because that state is what §4.11.4's set the
+ *     dialog close watcher hands to §6.10.2's establish as the third of its three algorithms. It is the
+ *     deepest thing under show a modal dialog's step 12 that nothing in this build supplied; see the section
+ *     that builds it for why it lands before the four methods rather than after them.
  *
- * `show()`, `showModal()`, `close()`, `requestClose()` and `closedBy` are ABSENT, honestly — a page calling one
+ * A NAMED RESIDUAL, because the code below is CORRECT for what it does and NARROWER than §4.11.4.
+ *   NOT COVERED: no close watcher is established from a dialog yet, so §6.10.2's manager still has no dialog
+ *     establisher. Between `closedBy` and that stand four things this build does not have — the DIALOG entry
+ *     in core/html/close_watcher.h's `CloseWatcherKind` and its three algorithms; the per-Document OPEN
+ *     DIALOGS LIST; the dialog setup steps and cleanup steps; and the `open` attribute change steps that run
+ *     them. The IS MODAL boolean has no storage either, which is a `showModal()` obligation and is asserted at
+ *     the one step that reads it rather than described here.
+ *   THE NEXT DIFF: set the dialog close watcher, 3 steps, whose step 3 calls `close_watcher_establish` with a
+ *     new appended `CloseWatcherKind` — that header already names §4.11.4 as the entry that appends next, and
+ *     already quotes this dialog's getEnabledState as the reason its dispatch asks the kind instead of
+ *     answering `true` from one place. Its closeAction is close the dialog, which this file already builds as
+ *     `html_dialog_close_run`; its cancelAction fires `cancel`. That entry is APPENDED and never inserted, for
+ *     the reason that header states: a parked watcher resumes holding its kind number.
+ *   HOW ITS ABSENCE SHOWS: `document.createElement("dialog").closedBy` answers "none" and a page's Esc closes
+ *     nothing, because with no watcher there is nothing for §6.10.1's close request to reach — and every
+ *     Window's close watcher manager stays permanently empty, which is the state close_watcher_interface.c's
+ *     own header records as the reason §6.10.2's arithmetic had never run.
+ *
+ * `show()`, `showModal()`, `close()` and `requestClose()` are ABSENT, honestly — a page calling one
  * gets its own TypeError, which is this engine's forcing function, rather than a shape-only method. Their
  * absence is also LOAD-BEARING here rather than a footnote, and it is asserted rather than assumed: three of
  * close-the-dialog's steps read state that only those members can produce (the is-modal flag, the previously
@@ -32,9 +54,11 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/dom/attr_list.h"
+#include "core/dom/element.h"
 #include "core/dom/node.h"
 #include "core/events/event.h"
 #include "core/events/event_target.h"
+#include "core/html/enumerated_attribute.h"
 #include "core/html/html_dialog.h"
 #include "core/html/toggle_event.h"
 #include "core/idl_args.h"
@@ -60,6 +84,7 @@ static JSValue g_tracker_task_key = JS_UNDEFINED;
 static JSAtom  g_atom_tracker_task = JS_ATOM_NULL;
 static int     g_toggle_stepid = -1;
 static int     g_id_return_value = -1;
+static int     g_id_closed_by = -1;
 
 bool html_dialog_is_dialog(const lxb_dom_node_t *n)
 {
@@ -125,6 +150,132 @@ static JSValue js_dialog_set_return_value(JSContext *ctx, JSValueConst this_val,
         return JS_ThrowTypeError(ctx, "HTMLDialogElement.returnValue set on something that is not a <dialog> "
                                       "element");
     dialog_set_return_value(ctx, this_val, val);
+    return JS_UNDEFINED;
+}
+
+/* ---- §4.11.4's `closedby` CONTENT ATTRIBUTE, its COMPUTED CLOSED-BY STATE, and the `closedBy` member --------
+ *
+ * WHY THIS MEMBER AND NOT `showModal()`, WHICH IS THE ONE EVERY BUNDLE CALLS. Because `showModal()` sits on top
+ * of this and not beside it. §4.11.4's show a modal dialog is 20 steps whose step 12 is "Assert: subject's close
+ * watcher is not null" — it does not ESTABLISH the watcher, it asserts one is already there, because its step 11
+ * adds the `open` attribute and §4.11.4's attribute change steps step 6 runs the dialog setup steps, whose step 5
+ * is "Set the dialog close watcher with subject". Set the dialog close watcher is 3 steps whose step 3 establishes
+ * the watcher with three algorithms, and the third of them is, whole: "getEnabledState being to return true if
+ * dialog's enable close watcher for request close is true or dialog's computed closed-by state is not None;
+ * otherwise false."
+ *
+ * So the COMPUTED CLOSED-BY STATE is a hard input to the establish that §6.10.2's manager arithmetic runs on, and
+ * it is the deepest thing under showModal's step 12 that nothing in this build supplies. Landing it first is
+ * §Do-subproblems-IN-ORDER, and it is also §4.11.4's OWN IDL ORDER: the interface declares `open`, `returnValue`,
+ * `closedBy`, `show()`, `showModal()`, `close()`, `requestClose()`, and `closedBy` is the next member after the
+ * two this file already builds.
+ *
+ * STEP NUMBERS HERE ARE DEPTH-TRACKED AND NOT `<li>` COUNTS, and for this algorithm the two disagree. Retrieve a
+ * dialog's computed closed-by state is TWO steps, whose step 1 CONTAINS a nested two-item list; a flat count of
+ * `<li>`s reports four and would renumber "step 2" as "step 4". The committed step corpus agrees at two, and
+ * agrees at 20 for show a modal dialog, 11 for `show()`, 3 for set the dialog close watcher, 5 for the dialog
+ * setup steps and 13 for close the dialog — which is the number this file's close-the-dialog run already uses. */
+
+/* §4.11.4's keyword/state table, verbatim in the standard's own order and brief descriptions: `any` is the Any
+   state ("Close requests or clicks outside close the dialog."), `closerequest` is the Close Request state
+   ("Close requests close the dialog."), and `none` is the None state ("No user actions automatically close the
+   dialog.").
+   AUTO IS A STATE WITH NO KEYWORD, which is why it is not a row here: "The closedby attribute's invalid value
+   default and missing value default are both the Auto state." §2.3.3's canonical keyword of a state with no
+   keyword does not exist, and the getter below asserts it never has to ask for one. */
+enum {
+    DIALOG_CLOSEDBY_AUTO = 0,
+    DIALOG_CLOSEDBY_ANY,
+    DIALOG_CLOSEDBY_CLOSE_REQUEST,
+    DIALOG_CLOSEDBY_NONE
+};
+static const EnumeratedKeyword DIALOG_CLOSEDBY_KW[] = {
+    { "any",          DIALOG_CLOSEDBY_ANY },
+    { "closerequest", DIALOG_CLOSEDBY_CLOSE_REQUEST },
+    { "none",         DIALOG_CLOSEDBY_NONE },
+    { NULL, 0 }
+};
+
+/* §4.11.4's "To retrieve a dialog's computed closed-by state, given a dialog dialog:", 2 steps.
+   THE EMPTY VALUE DEFAULT IS THE INVALID ONE because §4.11.4 declares no empty value default — which is
+   core/html/enumerated_attribute.h's own stated reduction of §2.3.3 for an attribute that names only two of the
+   three special states, and not a guess made here. */
+static int dialog_computed_closed_by_state(JSContext *ctx, lxb_dom_element_t *el)
+{
+    int state;
+
+    DCHECK(el != NULL, "§4.11.4's computed closed-by state was asked of a null element — its one caller in "
+                       "this build reaches it through dialog_elem_of, which answers NULL for anything that is "
+                       "not a <dialog>, and every caller added later owes the same");
+    state = enumerated_attribute_state(el, "closedby", DIALOG_CLOSEDBY_KW,
+                                       DIALOG_CLOSEDBY_AUTO,   /* missing value default */
+                                       DIALOG_CLOSEDBY_AUTO,   /* no empty value default: §2.3.3 step 4 runs */
+                                       DIALOG_CLOSEDBY_AUTO);  /* invalid value default */
+    if (state == DIALOG_CLOSEDBY_AUTO) {                                                          /* step 1 */
+        /* Step 1.1 is "If dialog's is modal is true, then return Close Request." §4.11.4 says "Each dialog
+           element has an is modal boolean, initially false", and `showModal()` is the only thing that sets it
+           true — so the boolean is false for every dialog this build can produce and step 1.1 does not fire.
+           That is a condition EVALUATED at the step that asks it, not a skipped step, which is the same shape
+           and the same argument as close-the-dialog's steps 6-8 below; and like those, it is ASSERTED rather
+           than believed, so the day showModal lands this fires AT the step that must then be written. */
+        realm_awaits(ctx, "HTMLDialogElement.prototype.showModal",
+                     "§4.11.4 retrieve a dialog's computed closed-by state step 1.1 reads the dialog's IS "
+                     "MODAL boolean and returns Close Request when it is true. `showModal()` is what sets it, "
+                     "so with that member in this build the boolean needs real per-element storage and this "
+                     "step must read it — and until it does, every modal dialog's computed closed-by state "
+                     "answers None, which is exactly the value that makes its close watcher's getEnabledState "
+                     "false and so makes an Esc on a modal dialog do nothing");
+        return DIALOG_CLOSEDBY_NONE;                                                              /* step 1.2 */
+    }
+    return state;                                                                                 /* step 2 */
+}
+
+/* §4.11.4: "The closedBy getter steps are to return the keyword corresponding to the computed closed-by state
+   given this."
+   THE TWO ASSERTS ARE TWO-SIDED AND NEITHER STANDS ON PAGE INPUT. The attribute's VALUE is the page's, and it is
+   never asserted on: §2.3.3's determine the state maps every unrecognised value to the invalid value default, so
+   `<dialog closedby=nonsense>` is Auto and not an error. What IS asserted is the answer THIS file computed —
+   the algorithm above returns Close Request or None from step 1 and a keyword-bearing state from step 2, so Auto
+   can never reach here and a canonical keyword always exists. */
+static JSValue js_dialog_get_closed_by(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    lxb_dom_element_t *el;
+    int state;
+
+    (void)magic;
+    /* Web IDL §3.7.6 Attributes' BRAND CHECK, a THROW and not an assert for the reason `returnValue`'s getter
+       states above: the receiver is whatever the page called the accessor with. */
+    if (!(el = dialog_elem_of(this_val)))
+        return JS_ThrowTypeError(ctx, "HTMLDialogElement.closedBy read on something that is not a <dialog> "
+                                      "element");
+    state = dialog_computed_closed_by_state(ctx, el);
+    DCHECK(state != DIALOG_CLOSEDBY_AUTO,
+           "§4.11.4's computed closed-by state answered Auto — its step 1 exists precisely to replace Auto "
+           "with Close Request or None, so an Auto here means that step stopped running");
+    DCHECK(enumerated_attribute_state_has_keyword(DIALOG_CLOSEDBY_KW, state),
+           "§4.11.4's computed closed-by state answered a state with no canonical keyword — the getter must "
+           "return one, and §2.3.3 has no keyword to give for a state no row of the table names");
+    return JS_NewString(ctx, enumerated_attribute_canonical_keyword(DIALOG_CLOSEDBY_KW, state));
+}
+
+/* The IDL is `[CEReactions, ReflectSetter] attribute DOMString closedBy`, so the SETTER is §2.6.1's plain "set
+   the content attribute with the given value" while the getter above is §4.11.4's own algorithm — the same
+   asymmetry `autocapitalize` has, and the same reason neither can be a reflection-registry row.
+   IT HANDS OVER THE VALUE AND NEVER A `char *`. core/dom/element.h's two accessor pairs differ in exactly this,
+   and its own prose says so at length: the JSValue form records the taint and stores the shape, while the
+   `char *` form runs a ToString that provenance does not survive — so that form ASSERTS on a concolic rather
+   than silently flattening one. (Paraphrased and deliberately NOT quoted: a quoted run standing beside a
+   citation is read as the STANDARD's words, and engine/citegen.mjs cannot tell a fabricated sentence from a
+   piece of this tree quoting itself — which is the note core/html/close_watcher.c's own close-action arm
+   leaves for the same reason.) `dialog.closedBy = location.hash.slice(1)` is an ordinary thing for a page to
+   write, so taking the C-string form here would trade a solved attacker-source derivation for an abort. */
+static JSValue js_dialog_set_closed_by(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+{
+    (void)magic;
+    if (!dialog_elem_of(this_val))
+        return JS_ThrowTypeError(ctx, "HTMLDialogElement.closedBy set on something that is not a <dialog> "
+                                      "element");
+    element_attr_set_value(ctx, this_val, "closedby", val);
     return JS_UNDEFINED;
 }
 
@@ -464,17 +615,34 @@ void html_dialog_declare(JSContext *ctx)
     CHECK(!JS_IsException(g_tracker_task_key), "the dialog toggle-task handle slot key allocation failed");
     g_atom_tracker_task = JS_ValueToAtom(ctx, g_tracker_task_key);
     CHECK(g_atom_tracker_task != JS_ATOM_NULL, "the dialog toggle-task handle slot key could not be interned");
-    /* §4.11.5's ToggleEvent, which both of §4.11.4's fires use — declared from here because this file is the
-       only thing in the build that mints one, and §4.11.4 is where the standard first reaches it. */
+    /* HTML §6.5.1 The ToggleEvent interface's ToggleEvent, which both of §4.11.4's fires use — declared from
+       here because this file is the only thing in the build that mints one, and §4.11.4 is where the standard
+       first reaches it.
+       THE NUMBER STOOD HERE AS §4.11.5 AND WAS MIS-AIMED: §4.11.5 is "Dialog light dismiss", and the eight
+       sites in the component that OWNS this interface (core/html/toggle_event.c and its header) all cite
+       §6.5.1. citegen is blind to this by construction — it asks whether a quotation's words occur in the
+       cited section, never whether that section GOVERNS the code beneath it — so the outlier was found by
+       diffing the siblings, which is the check CLAUDE.md's §N-SITES-QUOTING-ONE-SENTENCE prescribes and the
+       only one that could have found it. */
     toggle_event_init(ctx);
     g_id_return_value = idl_setter_id(ctx, IDL_DOMSTRING, false, js_dialog_set_return_value, 0);
+    /* `[CEReactions, ReflectSetter] attribute DOMString closedBy` — no `[LegacyNullToEmptyString]`, so a page
+       assigning null gets Web IDL §3.2.10 DOMString's ordinary ToString and the attribute reads "null", which
+       is what `null_to_empty` being false means here — Web IDL §3.4.6 [LegacyNullToEmptyString] is the
+       extended attribute that would make it the empty string instead, and this member does not carry it. */
+    g_id_closed_by = idl_setter_id(ctx, IDL_DOMSTRING, false, js_dialog_set_closed_by, 0);
 }
 
 void html_dialog_install(JSContext *ctx, JSValueConst dialog_proto)
 {
     DCHECK(g_id_return_value >= 0, "§4.11.4's members were installed before they were declared");
+    DCHECK(g_id_closed_by >= 0, "§4.11.4's `closedBy` was installed before html_dialog_declare minted its "
+                                "setter id");
     DCHECK(JS_IsObject(dialog_proto), "the dialog members were installed with no HTMLDialogElement.prototype");
+    /* IN §4.11.4's OWN IDL ORDER — `returnValue` then `closedBy` — because that is the order the interface
+       declares them in and there is no other order to prefer. */
     idl_install_accessor(ctx, dialog_proto, "returnValue", js_dialog_get_return_value, 0, g_id_return_value);
+    idl_install_accessor(ctx, dialog_proto, "closedBy", js_dialog_get_closed_by, 0, g_id_closed_by);
 }
 
 void html_dialog_free(JSRuntime *rt)
@@ -496,4 +664,5 @@ void html_dialog_free(JSRuntime *rt)
     g_tracker_task_key = JS_UNDEFINED;
     g_toggle_stepid = -1;
     g_id_return_value = -1;
+    g_id_closed_by = -1;
 }
