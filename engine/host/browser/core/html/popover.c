@@ -586,6 +586,27 @@ static JSValue popover_topmost_ancestor(JSContext *ctx, JSValueConst subject, JS
     /* Step 4 — EXTENDED WITH, so the whole hint list follows the whole auto list. */
     autos = popover_showing_list(ctx, doc, POPOVER_STATE_AUTO);
     hints = popover_showing_list(ctx, doc, POPOVER_STATE_HINT);
+    /* STEP 3'S DOCUMENT IS RELEASED AT ITS LAST READ, which is here and not at either of the two returns
+       below. popover_document_of MINTS a reference (node_wrap), and its own header says OWNED, so a caller
+       that reads it as borrowed leaks THE DOCUMENT WRAPPER — and a Document is what its realm hangs off, so
+       the leak is never reported as a Document: it is reported at teardown as a realm that survived
+       JS_FreeRuntime's collection, because that collection breaks a realm's own cycle and a counted reference
+       from OUTSIDE the heap is what it cannot break.
+       THE SHAPE, which is what makes this worth a paragraph: this function is show popover step 15.1, entered
+       once per Auto or Hint show and NEVER for a Manual one, and every one of its shows named the SAME object
+       — so the symptom was one heap root, of one class, whose refcount was the number of times the page had
+       called showPopover(). Nothing was wrong per element and nothing scaled with the DOM; N shows of N
+       different popovers still left exactly one leaked object with N references on it, which is the reading
+       that says the holder is the document and not the subject.
+       WHAT IT COST IS THE WHOLE RUN AND NOT SOME MEMORY: a document that shows an Auto popover — which is
+       what plain `<div popover>` is, because HTML §6.12 The popover attribute's own table says "its empty
+       value default is the Auto state" (its MISSING value default is the No Popover state and its INVALID
+       value default is Manual, so the empty one is the arm a bare attribute takes) — took the runtime down at
+       teardown and emitted NOTHING, so the finding set for every such page was empty rather than short.
+       Released at the last READ because this function has two exits and the next edit would have added a
+       third; the acquisition and the release are three lines apart, which is the only arrangement of them
+       that a reader checks by looking rather than by tracing. */
+    JS_FreeValue(ctx, doc);
     na = popover_list_len(ctx, autos);
     nh = popover_list_len(ctx, hints);
     combined = JS_NewArray(ctx);
