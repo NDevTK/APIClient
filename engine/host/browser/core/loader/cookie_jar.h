@@ -61,4 +61,18 @@ void cookie_jar_receive(JSContext *ctx, const UrlRecord *uri, const char *set_co
    Returns an OWNED JS string. */
 JSValue cookie_jar_cookie_string(JSContext *ctx, const UrlRecord *uri);
 
+/* §5.4's COOKIE-LIST for `uri` — steps 1 and 2 alone, which is the half Cookie Store API §7.1 "Query cookies"
+   step 1 asks for in those words: the cookie-string "itself is ignored, but the intermediate cookie-list is
+   used in subsequent steps". Same filtering and same order as the string above, because it is the same walk.
+
+   THE SHAPE IS A JS ARRAY OF TWO-ELEMENT ARRAYS, « name, value », in §5.4 step 2's order. It is a JS value for
+   the reason the store itself is one (see above): it crosses no C lifetime, and a flow that parks between
+   building it and reading it parks with it. It carries the two fields §7.1's "create a CookieListItem" reads
+   and NOT the other five §5.3 stores, because that algorithm's step 3 returns exactly «[ "name" → name,
+   "value" → value ]» — the wider CookieListItem of earlier drafts is gone, and that standard's own Note says
+   so: "One implementation is known to expose information beyond _name_ and _value_." A jar that handed back
+   `domain` or `expires` here would be offering a caller a field no member of that API may return.
+   OWNED — the caller frees. */
+JSValue cookie_jar_cookie_list(JSContext *ctx, const UrlRecord *uri);
+
 #endif

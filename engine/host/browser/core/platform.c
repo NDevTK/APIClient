@@ -80,6 +80,7 @@
 #include "core/indexeddb/idb_transaction.h"
 #include "core/indexeddb/idb_version_change_event.h"
 #include "core/indexeddb/indexed_db.h"
+#include "core/cookie_store/cookie_store.h"
 #include "core/loader/cookie_jar.h"
 #include "core/loader/module_loader.h"
 #include "core/platform.h"
@@ -249,6 +250,7 @@ static void d_resize_observer(JSContext *c, const PlatformAgent *a) { (void)a; r
 static void d_iframe(JSContext *c, const PlatformAgent *a) { (void)a; iframe_init(c); }
 static void d_document(JSContext *c, const PlatformAgent *a) { (void)a; document_init(c); }
 static void d_cookie_jar(JSContext *c, const PlatformAgent *a) { (void)a; cookie_jar_init(c); }
+static void d_cookie_store(JSContext *c, const PlatformAgent *a) { (void)a; cookie_store_init(c); }
 static void d_simple_dialogs(JSContext *c, const PlatformAgent *a) { (void)a; simple_dialogs_init(c); }
 static void d_domparser(JSContext *c, const PlatformAgent *a) { (void)a; domparser_init(c); }
 static void d_xml_serializer(JSContext *c, const PlatformAgent *a) { (void)a; xml_serializer_init(c); }
@@ -272,6 +274,7 @@ static void r_performance_entry(JSRuntime *rt) { (void)rt; performance_entry_fre
 static void r_performance_observer(JSRuntime *rt) { performance_observer_free(rt); }
 static void r_user_timing(JSRuntime *rt) { (void)rt; user_timing_free(); }
 static void r_cookie_jar(JSRuntime *rt) { (void)rt; cookie_jar_free(); }
+static void r_cookie_store(JSRuntime *rt) { (void)rt; cookie_store_free(); }
 static void r_navigate_event_fire(JSRuntime *rt) { (void)rt; navigate_event_fire_free(); }
 /* §8.1.3.3's about-to-be-notified rejected promises list is a live Array a C static holds for the agent, so it is
    agent state and belongs on this column. It was a line in each host's own teardown instead, the WPT runner's
@@ -1040,6 +1043,9 @@ static const PlatformComponent PLATFORM[] = {
        standard's own words and an instance is one origin-keyed agent cluster, so it belongs to the JSRuntime
        and not to any JSContext — which means nothing frees it when a realm goes. */
     { "cookie_jar",          d_cookie_jar,          NULL,        r_cookie_jar },
+    /* AFTER event_target, because core/realm.h runs the per-realm installs in DECLARATION order and
+       `interface CookieStore : EventTarget` creates its prototype OVER this realm's EventTarget.prototype. */
+    { "cookie_store",        d_cookie_store,        NULL,        r_cookie_store },
     { "document",            d_document,            i_document,  r_document },
     /* HTML §8.9.1's SIMPLE DIALOGS, AFTER `document` for the reason the row below is: its install needs
        nothing (three methods on the global) but every one of its members opens on §8.9.1's "we cannot show

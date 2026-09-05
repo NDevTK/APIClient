@@ -651,16 +651,30 @@ typedef struct {
     size_t      plen;             /* §5.4 step 2's sort key: the cookie-path's length */
 } CjHit;
 
-JSValue cookie_jar_cookie_string(JSContext *ctx, const UrlRecord *uri)
+/* §5.4 STEPS 1 AND 2 — THE PART TWO STANDARDS SHARE. Collected and sorted once, with step 4's serialization
+   and Cookie Store API §7.1's step 3 both reading the result.
+
+   THE SPLIT IS THE OTHER STANDARD'S OWN WORDS AND NOT A REFACTOR FOR ITS CONVENIENCE. Cookie Store API §7.1
+   "Query cookies" step 1 says to perform the steps of this section "to compute the `cookie-string from a given
+   cookie store` with url as request-uri", and then states exactly which half it wants: "The cookie-string
+   itself is ignored, but the INTERMEDIATE COOKIE-LIST is used in subsequent steps." So the cookie-list is a
+   thing that standard names and reads, and the cookie-string is one of two answers computed FROM it.
+
+   WHICH IS WHY THE LIST IS WHAT THIS FILE EXPOSES. The other way round — §7.1 taking the string and splitting
+   it back into pairs — is a SECOND PARSER for a syntax this component just serialized, and its inverse would
+   have to re-derive a codec that is private to this file. Two answers to one question is the shape that
+   drifts, and the drift would be silent: a cookie whose value contains "=" round-trips through the first
+   split correctly today and stops the day §5.4 step 4's join changes. The list has no syntax to disagree
+   about. Returns the cookie-list, `*out_nhit` long, OWNED — released by cj_hits_free. */
+static CjHit *cj_collect(JSContext *ctx, const UrlRecord *uri, uint32_t *out_nhit)
 {
     JSValueConst jar = cj_jar();
-    JSValue out;
     JSPropertyEnum *tab = NULL;
     uint32_t n = 0, i;
     CjHit *hits;
     uint32_t nhit = 0;
-    char *host, *req_path, *acc = NULL;
-    size_t hostlen, req_len, acc_len = 0;
+    char *host, *req_path;
+    size_t hostlen, req_len;
     bool host_is_name, secure_ok;
 
     cj_assert_one_principal(uri);
@@ -672,7 +686,7 @@ JSValue cookie_jar_cookie_string(JSContext *ctx, const UrlRecord *uri)
     secure_ok = cj_secure_scheme(uri);
 
     CHECK(JS_GetOwnPropertyNames(ctx, &tab, &n, jar, JS_GPN_STRING_MASK) == 0,
-          "document.cookie: the cookie store could not be enumerated, and nothing of the page's is on it");
+          "the cookie store could not be enumerated, and nothing of the page's is on it");
     hits = n ? calloc(n, sizeof *hits) : NULL;
     CHECK(n == 0 || hits != NULL, "OOM collecting §5.4 step 1's cookie-list");
     /* STEP 1: the set of cookies that meet all of the requirements. */
@@ -685,10 +699,10 @@ JSValue cookie_jar_cookie_string(JSContext *ctx, const UrlRecord *uri)
         size_t nlen, dlen, plen, vlen;
         bool secure, host_only, expired, keep;
 
-        CHECK(!JS_IsException(v), "document.cookie: a stored cookie could not be read back");
+        CHECK(!JS_IsException(v), "a stored cookie could not be read back");
         e = JS_ToCStringLen(ctx, &elen, v);
         JS_FreeValue(ctx, v);
-        CHECK(k != NULL && e != NULL, "document.cookie: a stored cookie could not be read as a string");
+        CHECK(k != NULL && e != NULL, "a stored cookie could not be read as a string");
         cj_key_parse(k, klen, &name, &nlen, &dom, &dlen, &path, &plen);
         cj_entry_parse(e, elen, &secure, &host_only, &expired, &value, &vlen);
         keep = !expired &&
@@ -713,6 +727,8 @@ JSValue cookie_jar_cookie_string(JSContext *ctx, const UrlRecord *uri)
         nhit++;
     }
     JS_FreePropertyEnum(ctx, tab, n);
+    free(req_path);
+    free(host);
 
     /* STEP 2: "Cookies with longer paths are listed before cookies with shorter paths. Among cookies that have
        equal-length path fields, cookies with earlier creation-times are listed before cookies with later
@@ -725,6 +741,28 @@ JSValue cookie_jar_cookie_string(JSContext *ctx, const UrlRecord *uri)
         while (j > 0 && hits[j - 1].plen < h.plen) { hits[j] = hits[j - 1]; j--; }
         hits[j] = h;
     }
+    *out_nhit = nhit;
+    return hits;
+}
+
+static void cj_hits_free(JSContext *ctx, CjHit *hits, uint32_t nhit)
+{
+    uint32_t i;
+
+    for (i = 0; i < nhit; i++) {
+        JS_FreeCString(ctx, hits[i].key);
+        JS_FreeCString(ctx, hits[i].entry);
+    }
+    free(hits);
+}
+
+JSValue cookie_jar_cookie_string(JSContext *ctx, const UrlRecord *uri)
+{
+    uint32_t nhit = 0, i;
+    CjHit *hits = cj_collect(ctx, uri, &nhit);
+    char *acc = NULL;
+    size_t acc_len = 0;
+    JSValue out;
 
     /* STEP 4: `name=value`, joined by "; ". */
     for (i = 0; i < nhit; i++) {
@@ -739,17 +777,40 @@ JSValue cookie_jar_cookie_string(JSContext *ctx, const UrlRecord *uri)
         memcpy(acc + acc_len, hits[i].value, hits[i].vlen); acc_len += hits[i].vlen;
         acc[acc_len] = 0;
     }
-    for (i = 0; i < nhit; i++) {
-        JS_FreeCString(ctx, hits[i].key);
-        JS_FreeCString(ctx, hits[i].entry);
-    }
-    free(hits);
-    free(req_path);
-    free(host);
+    cj_hits_free(ctx, hits, nhit);
     out = JS_NewStringLen(ctx, acc ? acc : "", acc_len);
     free(acc);
     CHECK(!JS_IsException(out), "document.cookie: the cookie string could not be allocated");
     return out;
+}
+
+JSValue cookie_jar_cookie_list(JSContext *ctx, const UrlRecord *uri)
+{
+    uint32_t nhit = 0, i;
+    CjHit *hits = cj_collect(ctx, uri, &nhit);
+    JSValue list = JS_NewArray(ctx);
+
+    CHECK(!JS_IsException(list), "OOM building §5.4 step 1's cookie-list");
+    for (i = 0; i < nhit; i++) {
+        JSValue pair = JS_NewArray(ctx);
+        JSValue name, value;
+
+        CHECK(!JS_IsException(pair), "OOM building a cookie-list entry");
+        name = JS_NewStringLen(ctx, hits[i].name, hits[i].nlen);
+        value = JS_NewStringLen(ctx, hits[i].value, hits[i].vlen);
+        CHECK(!JS_IsException(name) && !JS_IsException(value),
+              "OOM building a cookie-list entry's name and value");
+        /* §5.3's stored fields, decoded where the standard that reads them decodes: Cookie Store API §7.1's
+           "create a CookieListItem" runs UTF-8 decode without BOM on each of the two, and JS_NewStringLen is
+           that decode. The other five stored fields are deliberately not here — see cookie_jar.h. */
+        CHECK(JS_DefinePropertyValueUint32(ctx, pair, 0, name, JS_PROP_C_W_E) >= 0 &&
+              JS_DefinePropertyValueUint32(ctx, pair, 1, value, JS_PROP_C_W_E) >= 0,
+              "a cookie-list entry refused its own name and value");
+        CHECK(JS_DefinePropertyValueUint32(ctx, list, i, pair, JS_PROP_C_W_E) >= 0,
+              "§5.4 step 1's cookie-list refused an entry");
+    }
+    cj_hits_free(ctx, hits, nhit);
+    return list;
 }
 
 /* ---- the agent's declaration and teardown ------------------------------------------------------------------ */
