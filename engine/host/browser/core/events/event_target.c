@@ -100,9 +100,8 @@ static int g_dispatch_pair_stepid = -1;
 /* The ids JS_RegisterStepDef handed this runtime for add/removeEventListener. `type` is a Web IDL DOMString,
    so it is ToString on whatever the page passed and cannot be a JS_ToCString from C. */
 static int g_add_stepid = -1, g_remove_stepid = -1, g_dispatch_stepid = -1;
-/* HTML §8.1.8.1's event handler IDL attribute GETTER, as one machine minted once per attribute per realm.
-   Runtime-lifetime like every other step id here, and given back at this component's release. */
-static int g_handler_get_stepid = -1;
+/* §8.1.8.1's TWO ACCESSORS PER ATTRIBUTE are declared with the handler table they are indexed by — see
+   handler_declare_members, far below — because the table is what gives an index its meaning. */
 /* §2.9's SYNTHETIC CLICK, whose declaration is beside its own step def far below. The ID is here with the
    other four because event_target_init declares all five to core/agent_state.h and the release gives all five
    back, and a slot named in one place and defined in another is how one of them came to be left set. */
@@ -128,9 +127,14 @@ static JSClassID g_et_class;
    thing this function passes to the pool. */
 static const IdlStepDecl AEL_DECL;
 /* HTML §8.1.8.1's event handler getter machine, for the same reason and by the same tentative definition: the
-   definition sits beside the algorithm and its stage list, and event_target_init hands the runtime this one
-   object. */
-static const JSTrampStepDef EHG_DEF;
+   definition sits beside the algorithm and its stage list, and event_target_init declares it to the pool. */
+static const IdlStepDecl EHG_DECL;
+/* §8.1.8.1's ~90 attributes DECLARED — both accessors of every row, into the one args pool. It is a function
+   rather than a loop in event_target_init because the ids are indexed by the handler table and belong beside
+   it, and EH_COUNT is not in scope this far up the file. */
+static void handler_declare_members(JSContext *ctx);
+/* Their inverse, for the same reason: the release column runs a thousand lines above the table. */
+static void handler_release_members(void);
 static void event_target_install(JSContext *ctx);
 
 /* §8.1.8.2's handler list is AGENT state, so its two hand-written columns are checked where it is declared. */
@@ -246,12 +250,9 @@ void event_target_init(JSContext *ctx)
                                              &AEL_DECL, 1);
         idl_optional_from(2);   /* §2.7: `removeEventListener(type, callback, optional options)` */
     }
-    /* §8.1.8.1's getter machine. A RAW registration and not an idl_args pool member: the pool's accessor
-       installs mint through idl_mint_accessor, which takes a getter step id AND a setter step id, and
-       js_handler_set is an ordinary C setter — idl_args.h carries that as its own named residual over these
-       very attributes. So this family stays at its raw JS_DefinePropertyGetSet until that installer form
-       exists, and what changes here is only that the GETTER half is now a machine. */
-    g_handler_get_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &EHG_DEF);
+    /* §8.1.8.1's ~90 attributes, BOTH ACCESSORS EACH, declared into the one args pool — which is what makes
+       them ordinary installed members rather than a family defined at a raw JS_DefinePropertyGetSet. */
+    handler_declare_members(ctx);
     JS_NewClassID(JS_GetRuntime(ctx), &g_et_class);
     JS_NewClass(JS_GetRuntime(ctx), g_et_class, &d);
     /* §2.7's PROTOTYPE IS A PER-REALM INTRINSIC LIKE EVERY OTHER ONE, and it goes in the same list — which is
@@ -267,7 +268,6 @@ void event_target_init(JSContext *ctx)
     agent_state_value("event_target", &g_handler_marker, "HTML §8.1.8.1's handler placeholder in a listener list");
     agent_state_value("event_target", &g_uncompiled_key, "HTML §8.1.8.1's internal raw uncompiled handler brand");
     agent_state_class("event_target", &g_et_class, "§2.7's interface prototype slot and brand");
-    agent_state_id("event_target", &g_handler_get_stepid, "HTML §8.1.8.1's event handler getter machine");
     agent_state_id("event_target", &g_add_stepid, "§2.7's addEventListener machine");
     agent_state_id("event_target", &g_remove_stepid, "§2.7's removeEventListener machine");
     agent_state_id("event_target", &g_dispatch_stepid, "§2.7's dispatchEvent machine");
@@ -494,6 +494,11 @@ void event_target_free(JSRuntime *rt)
     g_add_stepid = g_remove_stepid = g_dispatch_stepid = -1;
     g_dispatch_pair_stepid = -1;
     g_click_stepid = -1;
+    /* §8.1.8.1's ~90 pairs, given back for the same reason as the five above and asserted by the same walk —
+       each one is declared to core/agent_state.h, so a row left set here is named individually. It is a call
+       rather than a loop because the ids are indexed by the handler table and live beside it, which is a
+       thousand lines below this release. */
+    handler_release_members();
     g_ready = 0;
 }
 
@@ -1553,6 +1558,26 @@ static const int EH_MASK[] = {
 #undef X
 };
 
+/* THE TWO ACCESSORS OF EVERY ROW, AS ARGS-POOL MEMBERS — one declaration per attribute, because a pool entry
+   is what carries the attribute's INDEX (idl_step_magic reads it back off the header) and a member is minted
+   once per realm over one entry. Runtime-lifetime like every other step id in this file, indexed by the table
+   above, and given back at this component's release.
+   THE INITIALISER IS THE X-LIST AND NOT A ZERO FILL, which is core/agent_state.h's pre-init value rather than
+   a style: a step id's is -1, a static's default is 0, and 0 is a REAL id — so a zero-filled row would read as
+   a declared member in a fresh process and be handed to a mint that would answer some other component's
+   machine. Driving the initialiser off EVENT_HANDLERS is also what makes the length agree with EH_COUNT by
+   construction, the way the three tables above already do. */
+static int g_handler_get_id[] = {
+#define X(n, t, m) -1,
+    EVENT_HANDLERS(X)
+#undef X
+};
+static int g_handler_set_id[] = {
+#define X(n, t, m) -1,
+    EVENT_HANDLERS(X)
+#undef X
+};
+
 /* THE TYPE IS THE NAME PAST THE `on` EXCEPT WHERE §8.1.8.2's TABLE SAYS OTHERWISE, and the exceptions are
    exactly the four legacy webkit aliases. Asserted here rather than trusted, because the two columns are hand
    written and a typo in either is a handler that never fires with nothing to say so. */
@@ -2380,25 +2405,30 @@ static JSValue handler_determine_target(JSContext *ctx, JSValueConst target, int
  * SAME function serves both is the point: a getter compiling a handler by a second route is two answers to
  * §8.1.8.1 step 3, and the day one of them gained step 3.11 the other would not have.
  *
- * THE MAGIC TRAVELS AS CLOSURE DATA BECAUSE A MACHINE'S MAGIC IS ITS STEPID. JS_CFUNC_step spends the function
- * object's magic slot on the step id, so the ~90 handler attributes cannot be ~90 magics over one machine the
- * way they were over one C getter. They are one machine minted ~90 times, each carrying its index — which is
- * what JS_NewStepClosure is for, and the reason the mint below is the NAMED form: Web IDL §3.7.6 Attributes
- * mints an attribute getter with "the string \"get \" prepended to attribute's identifier", and a closure
- * minted without a name answers `Object.getOwnPropertyDescriptor(el, "onerror").get.name` with the empty
- * string. That name is not decoration — it is the property the corpus's own idlharness reads off every
- * member, and this is the largest attribute family in the engine. */
-enum { EHG_CD_MAGIC, EHG_CD_N };
-
+ * THE MAGIC IS THE POOL ENTRY'S, WHICH IS WHY THERE ARE ~90 DECLARATIONS AND NOT ~90 CLOSURES. A machine's
+ * magic slot is spent on its step id, so the ~90 handler attributes cannot be ~90 magics over one machine the
+ * way they were over one C getter, and the index has to travel some other way.
+ *   RETIRED ARGUMENT, rewritten rather than deleted because a reader who re-derives it will re-introduce it:
+ * this said the index travels as CLOSURE DATA, minted by the named step-closure form so Web IDL §3.7.6's
+ * "get onerror" survived. That was true while the family was defined at a raw JS_DefinePropertyGetSet, and it
+ * is what the raw site cost — a closure mint carries data and the args pool's mint does not, so choosing the
+ * closure was choosing to decide §3.7.6's descriptor and name at the call site and to state §3.5's security
+ * kind nowhere at all.
+ * The pool answers the same question one level up: `idl_getter_id_step` takes the magic AT THE DECLARATION and
+ * `idl_step_magic` reads it back off the header, so each attribute is its own pool entry over ONE IdlStepDecl
+ * and nothing has to ride on the function object at all. The name then comes from idl_mint_step, which
+ * composes §3.7.6's prefix for every accessor in the engine through the one composer. */
 #define EHG_STAGES(X)                                                                                          \
     X(EHG_GET, "HTML §8.1.8.1 the getter of an event handler IDL attribute steps 1-3 (determine the target, "   \
                "then get the current value, whose steps 3.8-3.12 evaluate the program that produces the "       \
                "handler and therefore park)")
-enum { EHG_STAGES(JS_STEP_STAGE_ENUM) };
+enum { IDL_STEP_STAGE_BASE(EHG_STAGES) EHG_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const EHG_STEPS[] = { EHG_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
-    JSStepHdr hdr;
+    /* NO `JSStepHdr` FIELD. A raw JSTrampStepDef's state begins with the header; a pool member's does not —
+       the args machine owns the header and hands it to the body as its own argument, which is also how
+       idl_step_magic reads this member's attribute index. */
     /* THE ONE-TIME PROLOGUE'S LATCH, A FIELD RATHER THAN THE STAGE, and it is not optional bookkeeping: a step
        state is js_mallocz'd, and a ZEROED JSValue IS THE INTEGER 0 rather than JS_UNDEFINED — the engine says
        so at tramp_step_state_new, where it declines to leave its own header slots to the same allocator. So
@@ -2432,26 +2462,30 @@ static void ehg_visit(JSContext *ctx, void *st, JSStepVisit *v)
     STEP_CB_FOREACH(s->cb, i) v->val(ctx, &s->cb[i]);
 }
 
-static JSValue ehg_fini(JSContext *ctx, void *st, bool take_result)
+/* THE ANSWER LEAVES THROUGH `presult`, WHICH IS WHY THERE IS NO `fini` HERE. A raw machine hands its result
+   back from a teardown hook that is told whether to take it; a pool member writes it at the one exit that has
+   one and the pool's own teardown discharges exactly what `ehg_visit` names. `s->result` is still a STATE
+   slot rather than a local, because step 3's compile PARKS and the answer has to survive the park. */
+static void ehg_done(EhGetState *s, JSValue *presult)
 {
-    EhGetState *s = st;
-    JSValue r = take_result ? s->result : JS_UNDEFINED;
-
-    (void)ctx;
-    if (take_result) s->result = JS_UNDEFINED;
-    return r;
+    *presult = s->result;
+    s->result = JS_UNDEFINED;   /* HANDED OVER — the visit must not free what the caller now owns */
 }
 
-static int ehg_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+static int ehg_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                    JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
     EhGetState *s = st;
-    int magic = JS_VALUE_GET_INT(JS_StepClosureData(&s->hdr, EHG_CD_MAGIC));
+    int magic = idl_step_magic(hdr);
     JSValue h;
     int r;
 
+    (void)argv;
+    DCHECK(argc == 0, "§8.1.8.1's event handler getter was called with an argument — Web IDL §3.7.6 Attributes "
+                      "mints an attribute getter with length 0 and declares no argument position for one");
     DCHECK(magic >= 0 && magic < EH_COUNT,
-           "an event handler getter machine was minted over a magic the attribute list does not name");
-    DCHECK(s->hdr.stage == EHG_GET, "§8.1.8.1's event handler getter resumed into a stage it does not have");
+           "an event handler getter machine was declared over a magic the attribute list does not name");
+    DCHECK(hdr->stage == EHG_GET, "§8.1.8.1's event handler getter resumed into a stage it does not have");
 
     if (!s->started) {
         int k;
@@ -2468,11 +2502,17 @@ static int ehg_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_c
         goto compile;
 
     /* STEP 1 — "Let eventTarget be the result of determining the target of an event handler given this object
-       and name." The receiver is the header's, which is where a machine's `this` lives. */
-    s->target = handler_determine_target(ctx, s->hdr.this_val, magic);
+       and name." The receiver is the header's, which is where a machine's `this` lives.
+       IT IS THE RAW RECEIVER, NOT A SUBSTITUTED ONE, and that is unchanged by this family becoming pool
+       members: Web IDL §3.7.6 step 1.1.2.1's "the this value, if it is not null or undefined, or realm's
+       global object otherwise" is a NAMED RESIDUAL of the args machine itself — idl_args.c states that this
+       engine does not substitute — so what routing bought here is that the family is now COVERED BY that
+       residual instead of sitting outside the machine with no statement about it at all. */
+    s->target = handler_determine_target(ctx, hdr->this_val, magic);
     /* STEP 2 — "If eventTarget is null, then return null." */
     if (JS_IsNull(s->target)) {
         s->result = JS_NULL;
+        ehg_done(s, presult);
         return JS_STEP_DONE;
     }
     /* STEP 3 — "Return the result of getting the current value of the event handler given eventTarget and
@@ -2482,6 +2522,7 @@ static int ehg_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_c
     h = handler_current(ctx, s->target, EH_TYPE[magic]);
     if (!handler_compile_owed(ctx, h)) {
         s->result = h;
+        ehg_done(s, presult);
         return JS_STEP_DONE;
     }
     /* The RECORD is not the answer and must never leave this function — the compile below replaces it, and
@@ -2505,13 +2546,15 @@ compile:
            "§8.1.8.1 step 3's compile answered the getter with something that is not a function — step 3.12 "
            "writes a Web IDL EventHandler callback function object, and this getter hands its caller exactly "
            "what the next dispatch would invoke");
+    ehg_done(s, presult);
     return JS_STEP_DONE;
 }
 
-static const JSTrampStepDef EHG_DEF = {
-    sizeof(EhGetState), ehg_step, ehg_fini, 0, .visit = ehg_visit,
-    .algorithm = "HTML §8.1.8.1 the getter of an event handler IDL attribute",
-    .steps = EHG_STEPS
+static const IdlStepDecl EHG_DECL = {
+    /* No release: `target`, `result` and the call pair are ehg_visit's, discharged with the rest of the state,
+       and the compile's own stage byte and call phase are plain bytes that hold nothing. */
+    ehg_step, sizeof(EhGetState), ehg_visit, NULL,
+    "HTML §8.1.8.1 the getter of an event handler IDL attribute", EHG_STEPS
 };
 
 /* HTML §8.1.8.1's handler attributes are ordinarily pure state — assign a function, it is called when the event
@@ -2535,7 +2578,20 @@ void event_target_set_handler_hook(void (*after_set)(JSContext *ctx, JSValueCons
    and every step after it names THAT object — "Let handlerMap be eventTarget's event handler map", "activate an
    event handler given eventTarget and name" — so the map, the listener and the §9.4.2 hook all take it. Reading
    `this_val` for any one of them is what put a `load` handler on the body: the map would live on the element
-   while the listener lived on the Window, or the reverse, and either half alone never fires. */
+   while the listener lived on the Window, or the reverse, and either half alone never fires.
+
+   IT IS AN `IdlSetter` — a pool member's BODY, run once the assigned value has crossed the declaration — and
+   not a JS_CFUNC_setter_magic function object. `magic` is therefore the POOL ENTRY'S, declared at
+   handler_declare_members, rather than the function object's magic slot; `this_val` is the same raw receiver
+   it always was, because §3.7.6's null-or-undefined substitution is a residual the args machine names and
+   does not yet perform. What the pool adds ahead of this body is §3.5 Security's check, which
+   idl_implementation_check runs for every member whose mint stated a kind.
+
+   IT STAYS A PLAIN C BODY AND THAT IS THE SPEC'S ANSWER RATHER THAN A CONCESSION. A body is declared a MACHINE
+   so it can suspend; none of these four steps can. The value is not coerced on the way in either — Web IDL
+   §3.2.20 Nullable types returns null outright for a non-object under `[LegacyTreatNonObjectAsNull]` — so
+   there is no page `toString` here to park on, which is the one thing a setter usually has and this one does
+   not. See handler_declare_members for the declaration that states it. */
 static JSValue js_handler_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
     const char *type;
@@ -2719,50 +2775,75 @@ void event_target_set_uncompiled_handler(JSContext *ctx, JSValueConst target, in
     JS_FreeValue(ctx, map);
 }
 
+/* §8.1.8.1's ~90 ATTRIBUTES, DECLARED — both accessors of every row, into the one args pool, once per agent.
+ *
+ * THE GETTER IS A MACHINE AND THE SETTER IS A PLAIN C BODY, which is not an inconsistency but the two halves
+ * answering different questions — and BOTH are pool members either way, so neither is a second mechanism.
+ * §8.1.8.1's SETTER is four top-level steps (its step 4 is ONE step holding a nested list of four, which a
+ * flat count reads as eight): determine the target, return if it is null, deactivate for a null value, and
+ * otherwise write the handler map and activate a listener. Not one of them runs the page's code, and neither
+ * does the CONVERSION above it: the type is `EventHandler`, a nullable callback annotated
+ * `[LegacyTreatNonObjectAsNull]`, and Web IDL §3.2.20 Nullable types says of a value that is not an object
+ * "then return the IDL nullable type T? value null" — an OBJECT TEST, never a coercion, so `el.onclick = {
+ * toString(){ throw 1 } }` stores the object and throws nothing. So the setter has nothing to park on and
+ * declares as a body. Its GETTER ends in get the current value, whose steps 3.8-3.12 EVALUATE a program, and a
+ * call is the one thing a C accessor may not make below a live flow — so it declares as a machine.
+ *
+ * IDL_ANY IS THE DECLARED TYPE FOR THE SAME REASON. That arm is the pool's pass-through — unconverted, and
+ * idl_args.h's own list of what takes it names a callback alongside `any` and an interface type. (Unquoted
+ * because those are idl_args.h's words and not a standard's; the standard's sentence is §3.2.20's above.)
+ * §3.2.20's arm is then performed where it always was, by js_handler_set's own `JS_IsObject` test, which is
+ * one implementation of one rule rather than a declared type that would have to restate it. */
+static void handler_declare_members(JSContext *ctx)
+{
+    int i;
+
+    for (i = 0; i < EH_COUNT; i++) {
+        g_handler_get_id[i] = idl_getter_id_step(ctx, &EHG_DECL, i);
+        /* ONE ARGUMENT, WHICH IS WEB IDL §3.7.6 Attributes' OWN NUMBER for every attribute setter there is —
+           idl_mint_accessor asserts the declaration derives it, so a setter declared with any other arity is
+           an operation wearing an attribute's install. */
+        g_handler_set_id[i] = idl_setter_id(ctx, IDL_ANY, /*null_to_empty*/ false, js_handler_set, i);
+        /* DECLARED TO core/agent_state.h ROW BY ROW, because the enforcement is per SLOT: a single row would
+           leave the other ~179 unasserted, and a stale step id is exactly what the next agent's `_init` reads
+           to decide it need not declare again. Nothing is printed for these on the clean path — the registry
+           walk only speaks when a slot is still set after the release column ran. */
+        agent_state_id("event_target", &g_handler_get_id[i],
+                       "HTML §8.1.8.1's event handler IDL attribute getter machine, one per attribute");
+        agent_state_id("event_target", &g_handler_set_id[i],
+                       "HTML §8.1.8.1's event handler IDL attribute setter, one per attribute");
+    }
+}
+
+static void handler_release_members(void)
+{
+    int i;
+
+    for (i = 0; i < EH_COUNT; i++)
+        g_handler_get_id[i] = g_handler_set_id[i] = -1;
+}
+
 void event_target_install_handlers(JSContext *ctx, JSValueConst target, int mask)
 {
     int i;
 
     DCHECK(JS_IsObject(target), "event handlers were installed on something that is not an object");
     for (i = 0; i < EH_COUNT; i++) {
-        /* WEB IDL §3.7.6 Attributes NAMES THE FUNCTIONS, NOT THE PROPERTY. An event handler is an ordinary IDL
-           attribute — HTML §8.1.8.1 Event handlers declares each as `attribute EventHandler onfoo` — so its
-           accessors are named by §3.7.6 like every other attribute's: "get onclick" and "set onclick", never
-           the bare handler name. Both mints took EH_NAME[i], which is the PROPERTY key and is right for the
-           atom below and wrong for the two functions. This is the largest attribute family in the engine and
-           it is defined here rather than through idl_install_accessor only because js_handler_set is a plain C
-           setter and no installer form takes one — see idl_args.h's residual. Until that exists, the prefix
-           comes from the same composer every installed accessor uses, so the two cannot drift. */
-        char gb[IDL_ACCESSOR_NAME_MAX], sb[IDL_ACCESSOR_NAME_MAX];
-        JSAtom a;
         if (!(EH_MASK[i] & mask))
             continue;
-        a = JS_NewAtom(ctx, EH_NAME[i]);
-        CHECK(a != JS_ATOM_NULL, "an event handler name could not be interned");
-        /* THE GETTER IS A MACHINE AND THE SETTER IS A PLAIN C FUNCTION, which is not an inconsistency but the
-           two halves answering different questions. §8.1.8.1's SETTER runs no page code — it writes the
-           handler map and activates a listener — so it has nothing to park on. Its GETTER ends in get the
-           current value, whose steps 3.8-3.12 EVALUATE a program, and a call is the one thing a C accessor
-           may not make below a live flow. So the getter is minted as a step closure carrying its attribute
-           index, and the setter keeps the magic-function cast every JS_CGETSET_MAGIC_DEF performs.
-           WEB IDL §3.7.6's NAME IS ON BOTH, from the one composer, which is why the mint is the `2` form:
-           a step closure minted by the unnamed entry answers `.name` with the empty string. */
-        JSValueConst gdata[EHG_CD_N];
-
-        DCHECK(g_handler_get_stepid >= 0,
-               "an event handler attribute was installed before event_target_init declared its getter machine");
-        gdata[EHG_CD_MAGIC] = JS_NewInt32(ctx, i);
-        JS_DefinePropertyGetSet(ctx, (JSValue)target, a,
-                                JS_NewStepClosure2(ctx, g_handler_get_stepid,
-                                                   idl_accessor_name(gb, sizeof gb, EH_NAME[i],
-                                                                     IDL_ACCESSOR_GET), 0,
-                                                   EHG_CD_N, gdata),
-                                JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_handler_set,
-                                                     idl_accessor_name(sb, sizeof sb, EH_NAME[i],
-                                                                       IDL_ACCESSOR_SET), 1,
-                                                     JS_CFUNC_setter_magic, i),
-                                JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
-        JS_FreeAtom(ctx, a);
+        DCHECK(g_handler_get_id[i] >= 0 && g_handler_set_id[i] >= 0,
+               "an event handler attribute was installed before event_target_init declared its accessors");
+        /* AN ORDINARY INSTALLED ATTRIBUTE, through the installer every other accessor in the engine uses.
+           WHAT THE RAW JS_DefinePropertyGetSet DECIDED FOR ITSELF AND THIS DOES NOT: §3.7.6's descriptor
+           ([[Enumerable]] true, [[Configurable]] true) is now the installer's one answer rather than this
+           line's; §3.7.6's accessor NAME is composed at idl_mint_step for every accessor in the engine, so
+           "get onclick" and "set onclick" cannot drift from the rest; and the mint states §3.5 Security's
+           kind, which is what HTML §7.2.1.1 Integration with IDL matches against CrossOriginProperties's
+           [[NeedsGetter]]/[[NeedsSetter]] — these ARE Window attributes, and until this they were installed on
+           the global with no such statement, so a cross-origin read of one answered out of the reading realm
+           where a browser throws SecurityError. The consumer is idl_implementation_check, which calls
+           window_proxy_security_check for every member whose mint stated a kind and for no other. */
+        idl_install_accessor_step(ctx, target, EH_NAME[i], g_handler_get_id[i], g_handler_set_id[i]);
     }
 }
 

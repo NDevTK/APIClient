@@ -2346,23 +2346,58 @@ unsigned idl_global_names_of(const char *global_interface);
  * never for a property key, a pool entry, or data a getter carries to name its member in a TypeError. See
  * idl_args.c for why those four readers must keep the bare identifier.
  *
- * NAMED RESIDUAL — THE RAW SITES THEMSELVES. WHAT IS NOT COVERED: an event-handler IDL attribute and
- * HTMLTemplateElement's `content` are defined by JS_DefinePropertyGetSet rather than by an installer, so they
- * get §3.7.6's descriptor and its name from their own call site and nothing checks that they agree with the
- * installers. They are there because no installer form accepts a PLAIN C SETTER — `idl_install_accessor` takes
- * a setter STEP id, and `js_handler_set` is an ordinary C function. WHAT THE NEXT DIFF BUILDS: an installer
- * form taking a plain-C setter beside the IdlGetter, after which those call sites become ordinary installs and
- * this declaration has no callers left and goes. HOW ITS ABSENCE SHOWS: a member added at a raw site keeps
- * §3.7.6's [[Enumerable]]/[[Configurable]] pair and its name under whoever wrote that line, so it can differ
- * from every installed member without any gate saying so — which is how `content` came to answer
+ * ITS NEXT-DIFF CLAUSE WAS WRONG, AND THAT IS RECORDED HERE BECAUSE A CRASH-OR-RESIDUAL CLAUSE IS READ ONCE,
+ * BY SOMEBODY WHO HAS ALREADY DECIDED TO DO THE WORK. RETIRED TEXT, unquoted because it is this header's own
+ * and not a standard's — it said the raw sites are there because no installer form accepts a PLAIN C SETTER,
+ * that idl_install_accessor takes a setter STEP id while js_handler_set is an ordinary C function, and that
+ * the next diff builds an installer form taking a plain-C setter beside the IdlGetter. Its SPEC half was exact
+ * and its remedy named a mechanism that must not be built.
+ *   A PLAIN C SETTER ALREADY REACHES EVERY INSTALLER, one level up from where the clause was looking:
+ * `idl_setter_id` takes an `IdlSetter` — a plain C body — and RETURNS a setter step id, which is precisely
+ * what every installer's `setter_stepid` wants. core/dom/aria_mixin.c had been installing a step getter beside
+ * an `idl_setter_id` plain-C setter through `idl_install_accessor_step` the whole time the clause stood. So
+ * the named installer was not missing, it was redundant, and building it would have been the "second way of
+ * doing this" that `idl_install_accessor_step`'s own declaration forbids further down in this header — a
+ * second install shape for a case the pool already answers, which is exactly the drift this composer was
+ * extracted to end.
+ *   THE TELL WAS AVAILABLE WITHOUT LEAVING THIS FILE: the clause reasons about what an INSTALLER accepts, and
+ * the question is what a DECLARATION accepts. "Takes a setter STEP id" is true and is not an obstacle, because
+ * a step id is what a declaration hands you and never something a body has to already be.
+ *
+ * NAMED RESIDUAL — THE RAW SITES THEMSELVES. WHAT IS NOT COVERED: HTMLTemplateElement's `content`, and
+ * AbortSignal's `aborted` and `reason` and AbortController's `signal`, are defined by JS_DefinePropertyGetSet
+ * rather than by an installer, so they get §3.7.6's descriptor and its name from their own call site and
+ * nothing checks that they agree with the installers.
+ *   ALL FOUR ARE READONLY, so the plain-C-SETTER premise this residual was originally written on does not
+ * describe a single one of the surviving sites — they have no setter to install. What actually separates them
+ * is the GETTER'S C SHAPE against `IdlGetter`, which is `(ctx, this_val, magic)`. `js_template_content` and
+ * `js_ctrl_get_signal` ALREADY HAVE EXACTLY THAT SHAPE and are minted JS_CFUNC_getter_magic, so those two can
+ * install through `idl_install_accessor(..., getter, 0, -1)` — the readonly form, since a negative setter id
+ * mints no setter — with no new mechanism whatever. `js_sig_get_aborted` and `js_sig_get_reason` are
+ * JS_CFUNC_generic `(ctx, this_val, argc, argv)` and need that one-line shape change first.
+ *   WHAT THE NEXT DIFF BUILDS: nothing in this file. It converts `content` and `signal` to
+ * `idl_install_accessor` as they stand, then changes `aborted`/`reason` to the `IdlGetter` shape and does the
+ * same, after which this declaration has no callers left and goes.
+ *   HOW ITS ABSENCE SHOWS: a member added at a raw site keeps
+ * §3.7.6's [[Enumerable]]/[[Configurable]] pair and its name under whoever wrote that line, so it can
+ * differ from every installed member without any gate saying so — which is how `content` came to answer
  * `Object.getOwnPropertyDescriptor(HTMLTemplateElement.prototype,"content").get.name` with "content".
+ *   AND THE ENUMERATION ABOVE HAS ALREADY BEEN WRONG ONCE, IN THE DIRECTION THAT MAKES THE WORK LOOK SMALLER.
+ * It named two sites and there were five: core/dom/abort.c's three were missing from it for as long as it
+ * stood, and they are the ones that hand-spell "get aborted"/"get reason"/"get signal" as string literals
+ * instead of reaching this composer — so the very defect the clause describes was being committed by sites
+ * the clause did not list. Re-derive the list before working from it; it is
+ * `grep -rn JS_DefinePropertyGetSet engine/host --include=*.c` minus idl_args.c's own, and that command is
+ * the durable half of this paragraph.
  * AND THE DESCRIPTOR IS NO LONGER THE ONLY THING A RAW SITE DECIDES FOR ITSELF. The installers mint every
  * plain-C attribute getter at one point, and that mint is what gives an attribute installed on the realm's
  * [Global] object §3.7.6's opening steps — the receiver resolution, §3.5's "getter" security check and the
- * Window brand. HTML §8.1.8.1's event handlers ARE Window attributes and are defined at the raw site, so the
- * whole family is installed on the global without them: `Object.getOwnPropertyDescriptor(window, "onload")
- * .get.call(crossOriginWindowProxy)` answers out of the reading realm where `onload` is absent from HTML
- * §7.2.1.3.1 CrossOriginProperties and a browser throws "SecurityError". */
+ * Window brand. HTML §8.1.8.1's event handlers ARE Window attributes and WERE defined at the raw site, so the
+ * whole family was installed on the global without them: `Object.getOwnPropertyDescriptor(window, "onload")
+ * .get.call(crossOriginWindowProxy)` answered out of the reading realm where `onload` is absent from HTML
+ * §7.2.1.3.1 CrossOriginProperties and a browser throws "SecurityError". That family now installs through
+ * `idl_install_accessor_step`, which states §3.5's kind at the mint; the four remaining raw sites still do
+ * not, and none of them is on a [Global] object, which is why this is the weaker half of their absence. */
 #define IDL_ACCESSOR_NAME_MAX 96
 typedef enum { IDL_ACCESSOR_GET, IDL_ACCESSOR_SET } IdlAccessorKind;
 const char *idl_accessor_name(char *buf, size_t cap, const char *id, IdlAccessorKind kind);
