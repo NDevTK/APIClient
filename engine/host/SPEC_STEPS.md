@@ -5170,11 +5170,23 @@ which is what the standard says happens and is not a should-never-happen.
   `focus_event.c` are the interfaces. What is left is the TOUCH TARGET LIST, whose `TouchEvent` is
   the one of the three still absent; SPEC_STEPS §11.11 names each piece and what lands with it.
 - **A `<script>` inside a declarative shadow root does not run.** `document_scripts.c` collects a
-  document's executable scripts by walking its CHILD links, and a shadow root is not a child of its
-  host — so a script the parser put in a shadow tree is parsed and never executed. The same walk is
-  what `iframe_document_parsed` uses, so an `<iframe>` in a declarative shadow root gets no child
-  navigable either. Both are the one missing walk: "shadow-including descendants, in shadow-including
-  tree order", which §17's event-path work is building.
+  document's executable scripts with `lxb_selectors_find`, and lexbor's selector engine knows nothing
+  about shadow roots — so a script the parser put in a shadow tree is parsed and never executed. What
+  it needs is the same sentence the rest of this family already uses: "shadow-including descendants,
+  in shadow-including tree order".
+  **THE `<iframe>` HALF OF THIS ENTRY IS FIXED AND THE "SAME WALK" CLAIM WAS NEVER RIGHT.** It read
+  "The same walk is what `iframe_document_parsed` uses, so an `<iframe>` in a declarative shadow root
+  gets no child navigable either", and the two were never one walk — the script collector is a lexbor
+  selector search and the iframe walk was `node_next_in`. The OUTCOME it described was real: measured
+  3/3 on the artifact stamped `df1e5157`, `<template shadowrootmode=open><iframe src=x></template>` in
+  a page's own markup issued no request for `x` while the same markup in the light tree did.
+  `iframe_document_parsed` now walks HTML §4.8.5 "The iframe element"'s post-connection steps in
+  shadow-including tree order, which is what that section's own note requires ("Although iframes are
+  processed while in a shadow tree, per the above, several other aspects of their behavior are not
+  well-defined with regards to shadow trees"). `window.length` is unaffected in both directions and
+  must stay so: HTML §7.3.1.5 "Related navigable collections" states document-tree child navigables
+  over "all descendants of document that are navigable containers, in tree order", light-tree by
+  construction and deliberately unlike the descendant navigables one paragraph above it.
 - **`slotchange` on a slot in a document with no shadow root**, which cannot happen — a slot outside a
   shadow tree has no assigned nodes by construction — and is named here only because it is the one
   case the guarded tree walk in 17.5 skips.
